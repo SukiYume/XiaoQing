@@ -12,28 +12,28 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _ALLOWED_SCHEMA_COLUMNS: dict[str, dict[str, str]] = {
     "users": {
-        "total_feed_count": "INTEGER DEFAULT 0",
-        "total_clean_count": "INTEGER DEFAULT 0",
-        "total_play_count": "INTEGER DEFAULT 0",
-        "total_train_count": "INTEGER DEFAULT 0",
-        "total_explore_count": "INTEGER DEFAULT 0",
-        "total_visit_count": "INTEGER DEFAULT 0",
-        "total_gift_count": "INTEGER DEFAULT 0",
-        "titles": "TEXT DEFAULT '[]'",
+        "total_feed_count"     : "INTEGER DEFAULT 0",
+        "total_clean_count"    : "INTEGER DEFAULT 0",
+        "total_play_count"     : "INTEGER DEFAULT 0",
+        "total_train_count"    : "INTEGER DEFAULT 0",
+        "total_explore_count"  : "INTEGER DEFAULT 0",
+        "total_visit_count"    : "INTEGER DEFAULT 0",
+        "total_gift_count"     : "INTEGER DEFAULT 0",
+        "titles"               : "TEXT DEFAULT '[]'",
         "today_free_feed_count": "INTEGER DEFAULT 0",
-        "today_message_count": "INTEGER DEFAULT 0",
+        "today_message_count"  : "INTEGER DEFAULT 0",
         "total_free_feed_count": "INTEGER DEFAULT 0",
-        "total_message_count": "INTEGER DEFAULT 0",
-        "version": "INTEGER NOT NULL DEFAULT 0",
+        "total_message_count"  : "INTEGER DEFAULT 0",
+        "version"              : "INTEGER NOT NULL DEFAULT 0",
     },
     "pets": {
         "decay_remainders": "TEXT NOT NULL DEFAULT '{}'",
-        "likes": "INTEGER DEFAULT 0",
-        "dress_hat": "TEXT",
-        "dress_clothes": "TEXT",
-        "dress_accessory": "TEXT",
+        "likes"           : "INTEGER DEFAULT 0",
+        "dress_hat"       : "TEXT",
+        "dress_clothes"   : "TEXT",
+        "dress_accessory" : "TEXT",
         "dress_background": "TEXT",
-        "version": "INTEGER NOT NULL DEFAULT 0",
+        "version"         : "INTEGER NOT NULL DEFAULT 0",
     },
     "group_configs": {
         "sensitive_words": "TEXT DEFAULT '[]'",
@@ -45,21 +45,22 @@ _ALLOWED_SCHEMA_COLUMNS: dict[str, dict[str, str]] = {
         "status": "TEXT DEFAULT 'active'",
     },
     "pet_shows": {
-        "status": "TEXT DEFAULT 'active'",
+        "status"    : "TEXT DEFAULT 'active'",
         "settled_at": "TEXT",
     },
     "inventories": {
         "version": "INTEGER NOT NULL DEFAULT 0",
     },
     "scheduler_runs": {
-        "status": "TEXT NOT NULL DEFAULT 'completed'",
-        "lease_until": "TEXT",
+        "status"       : "TEXT NOT NULL DEFAULT 'completed'",
+        "lease_until"  : "TEXT",
         "attempt_count": "INTEGER NOT NULL DEFAULT 1",
-        "completed_at": "TEXT",
+        "completed_at" : "TEXT",
     },
 }
 
 _CURRENT_SCHEMA_VERSION   = 6
+CURRENT_SCHEMA_VERSION    = _CURRENT_SCHEMA_VERSION
 _LEGACY_COLUMN_MIGRATIONS = (
     ("pets", "decay_remainders", "TEXT NOT NULL DEFAULT '{}'"),
     ("users", "total_feed_count", "INTEGER DEFAULT 0"),
@@ -377,6 +378,8 @@ def initialize_schema(
     """在一个事务中初始化或升级全部 Qingpet 数据库结构。"""
 
     cursor = conn.cursor()
+    # sqlite3 模块不会为 DDL 隐式开启事务；显式 BEGIN 后建表、触发器与迁移失败时一起回滚。
+    cursor.execute("BEGIN IMMEDIATE")
     try:
         _create_schema_migration_table(cursor)
         _create_identity_schema(cursor)

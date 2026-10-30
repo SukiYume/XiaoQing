@@ -29,13 +29,13 @@ def _build_manager(tmp_path: Path) -> PluginManager:
 def _manifest_payload(name: str, version: str = "1.0.0") -> bytes:
     return json.dumps(
         {
-            "name": name,
-            "version": version,
-            "entry": "main.py",
-            "commands": [],
-            "schedule": [],
+            "name"       : name,
+            "version"    : version,
+            "entry"      : "main.py",
+            "commands"   : [],
+            "schedule"   : [],
             "concurrency": "parallel",
-            "enabled": True,
+            "enabled"    : True,
         },
         separators=(",", ":"),
     ).encode()
@@ -66,7 +66,7 @@ def _audit_manifest_open(
     manifest_path: Path,
 ) -> tuple[list[str], list[int]]:
     real_open              = Path.open
-    modes: list[str]       = []
+    modes      : list[str] = []
     read_limits: list[int] = []
 
     def audited_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]

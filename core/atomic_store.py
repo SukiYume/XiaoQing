@@ -20,7 +20,7 @@ _ATOMIC_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
 
 @dataclass
 class _LockEntry:
-    lock: threading.RLock
+    lock : threading.RLock
     users: int = 0
 
 

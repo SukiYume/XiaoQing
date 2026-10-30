@@ -41,7 +41,7 @@ async def complete_raw(
     *,
     secrets: Mapping[str, Any],
     messages: list[dict[str, Any]],
-    route: str                              = "chat",
+    route: str | None                       = None,
     required_modalities: tuple[str, ...]    = ("text",),
     temperature: float | None               = None,
     top_p: float | None                     = None,
@@ -56,22 +56,24 @@ async def complete_raw(
 ) -> AICompletionResult:
     """调用一个统一 route，并保留 raw response 供工具调用和复杂解析使用。"""
 
-    service = _service(secrets)
+    service        = _service(secrets)
+    context_route  = _route(secrets, "chat")
+    resolved_route = context_route if route is None else route
     return await service.complete(
-        _route(secrets, route),
+        resolved_route,
         messages,
-        required_modalities    = required_modalities,
-        pinned_model           = _pinned_model(secrets),
-        temperature            = temperature,
-        top_p                  = top_p,
-        max_tokens             = max_tokens,
-        timeout_seconds        = timeout_seconds,
-        total_timeout_seconds  = total_timeout_seconds,
-        max_retry              = max_retry,
-        retry_interval_seconds = retry_interval_seconds,
-        tools                  = tools,
-        tool_choice            = tool_choice,
-        extra_payload          = extra_payload,
+        required_modalities=required_modalities,
+        pinned_model=_pinned_model(secrets) if resolved_route == context_route else None,
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        total_timeout_seconds=total_timeout_seconds,
+        max_retry=max_retry,
+        retry_interval_seconds=retry_interval_seconds,
+        tools=tools,
+        tool_choice=tool_choice,
+        extra_payload=extra_payload,
     )
 
 

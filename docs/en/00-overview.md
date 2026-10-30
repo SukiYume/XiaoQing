@@ -31,9 +31,10 @@ Python 3.11 or later is necessary. Maintainers use a common code formatter and b
 | Astronomy research | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | Astronomy images, paper selection, literature search, calculations, dictionary, FRB data |
 | Execution and operations | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | Background agent, controlled terminal, SSH, Python REPL, RCON |
 | Content and services | `url_parser`, `github`, `earthquake`, `flickr`, `twitter`, `signin`, `adnmb` | Link parsing, trends, alerts, public photography, media extraction, sign-in, community browsing |
+| Smart home | `xiaoai` | Xiaomi Home device queries and control, XiaoAi speaker bridge, weather |
 | Tools and entertainment | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | Random selection, colors, calculations, games, pets, echo |
 
-The project has 31 plugins. The [plugin manual](09-plugins.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
+The project has 32 plugins. The [plugin manual](09-plugins.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
 
 ## ✨ Core concepts
 

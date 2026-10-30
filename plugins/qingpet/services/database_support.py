@@ -11,10 +11,10 @@ _SAFE_OPERATION_RE  = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SAFE_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
 _PET_ACTION_COUNTERS = {
-    "feed": ("today_feed_count", "total_feed_count"),
-    "clean": ("today_clean_count", "total_clean_count"),
-    "play": ("today_play_count", "total_play_count"),
-    "train": ("today_train_count", "total_train_count"),
+    "feed"   : ("today_feed_count", "total_feed_count"),
+    "clean"  : ("today_clean_count", "total_clean_count"),
+    "play"   : ("today_play_count", "total_play_count"),
+    "train"  : ("today_train_count", "total_train_count"),
     "explore": ("today_explore_count", "total_explore_count"),
 }
 _DAILY_TASK_TEMPLATES = (

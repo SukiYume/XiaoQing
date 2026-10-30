@@ -29,11 +29,12 @@ function toCount(value) {
     return Math.max(0, Math.trunc(toFiniteNumber(value)));
 }
 
-function formatPercent(value, focusLabel) {
+function formatPercent(value, focusLabel, firstOccurrence = false) {
+    // 首次发生由后端单独标记；比例 1 就是正常的 +100%。
+    if (firstOccurrence) return `首次有${focusLabel}`;
     if (value == null) return '无对比';
     const number = toFiniteNumber(value, null);
     if (number == null) return '无对比';
-    if (number === 1) return `首次有${focusLabel}`;
 
     const percent = Math.abs(number) * 100;
     if (!Number.isFinite(percent)) return '无对比';
@@ -419,9 +420,10 @@ export function renderLedgerInsightsPanel(data) {
     const peakLabel = String(summary.peak_bucket_label ?? '').trim() || '暂无峰值';
     const peakTotal = toNonNegativeNumber(summary.peak_bucket_total);
     const deltaValue = summary.delta_vs_previous == null ? null : toFiniteNumber(summary.delta_vs_previous, null);
-    const deltaText = formatPercent(deltaValue, focusLabel);
+    const firstOccurrence = summary.first_occurrence === true;
+    const deltaText = formatPercent(deltaValue, focusLabel, firstOccurrence);
     const deltaLabel = String(summary.delta_label ?? '').trim() || '较上一周期';
-    const deltaClass = deltaValue == null ? '' : deltaValue >= 0 ? 'is-up' : 'is-down';
+    const deltaClass = firstOccurrence ? 'is-up' : deltaValue == null ? '' : deltaValue >= 0 ? 'is-up' : 'is-down';
 
     const trendCard = timeline.some((point) => point.total > 0)
         ? `

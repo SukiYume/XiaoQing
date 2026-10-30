@@ -19,6 +19,7 @@ from core.atomic_store import AtomicJsonStore
 from core.clock import now_in_configured_timezone
 from core.dispatcher import AdjustableSemaphore
 from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
+from core.lifecycle import to_thread_owned
 from core.plugin_base import (
     build_action,
     image,
@@ -44,6 +45,8 @@ logger                  = logging.getLogger(__name__)
 SESSION_STATE_VERSION   = 1
 MAX_SESSION_STATE_BYTES = 8 * 1024 * 1024
 MAX_PERSISTED_SESSIONS  = 10_000
+# 保留期清理的最长间隔：配置不变的常驻进程也按这个频率执行维护。
+_MAINTENANCE_INTERVAL_SECONDS = 3600.0
 
 
 def _warn_dangerous_config(config: CodexPluginConfig) -> None:
@@ -129,52 +132,52 @@ def _load_config_generation(
 
 @dataclass
 class CodexSession:
-    label: str
-    cwd: str
-    owner_user_id: int | None
-    target_group_id: int | None
-    thread_id: str | None = None
-    created_at: float = field(default_factory=time.time)
-    updated_at: float = field(default_factory=time.time)
-    total_jobs: int          = 0
-    input_tokens: int        = 0
+    label              : str
+    cwd                : str
+    owner_user_id      : int | None
+    target_group_id    : int | None
+    thread_id          : str | None = None
+    created_at         : float = field(default_factory=time.time)
+    updated_at         : float = field(default_factory=time.time)
+    total_jobs         : int = 0
+    input_tokens       : int = 0
     cached_input_tokens: int = 0
-    output_tokens: int       = 0
+    output_tokens      : int = 0
 
 
 @dataclass
 class RuntimeJob:
-    job_id: int
-    label: str
-    prompt: str
-    user_id: int | None
-    group_id: int | None
-    context: PluginContextProtocol
-    delivery_targets: tuple[DeliveryTarget, ...] | None = None
-    status: str                                         = "queued"
-    created_at: float = field(default_factory=time.time)
-    started_at: float | None      = None
-    finished_at: float | None     = None
-    result: CodexRunResult | None = None
-    image_artifacts: list[CodexImageArtifact] = field(default_factory=list)
-    artifact_dropped_count: int = 0
-    artifact_drop_reasons: dict[str, int] = field(default_factory=dict)
-    artifact_scan_truncated: bool              = False
-    process: asyncio.subprocess.Process | None = None
-    cancel_requested: bool                     = False
-    prompt_started: bool                       = False
-    cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    spawn_handoff: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    finished_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    execution_config: CodexPluginConfig | None = field(default=None, repr=False)
+    job_id                 : int
+    label                  : str
+    prompt                 : str
+    user_id                : int | None
+    group_id               : int | None
+    context                : PluginContextProtocol
+    delivery_targets       : tuple[DeliveryTarget, ...] | None = None
+    status                 : str                               = "queued"
+    created_at             : float = field(default_factory=time.time)
+    started_at             : float | None          = None
+    finished_at            : float | None          = None
+    result                 : CodexRunResult | None = None
+    image_artifacts        : list[CodexImageArtifact] = field(default_factory=list)
+    artifact_dropped_count : int = 0
+    artifact_drop_reasons  : dict[str, int] = field(default_factory=dict)
+    artifact_scan_truncated: bool                              = False
+    process                : asyncio.subprocess.Process | None = None
+    cancel_requested       : bool                              = False
+    prompt_started         : bool                              = False
+    cancel_event           : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    spawn_handoff          : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    finished_event         : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    metadata               : dict[str, Any] = field(default_factory=dict)
+    execution_config       : CodexPluginConfig | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
 class _JobStart:
     config: CodexPluginConfig
     runner: Any
-    cwd: Path
+    cwd   : Path
 
 
 class CodexQueueManager:
@@ -186,8 +189,9 @@ class CodexQueueManager:
         runner: CodexRunner | None       = None,
         settings_revision: int | None    = None,
     ) -> None:
-        self.context = context
-        self.config  = config or load_plugin_config(context)
+        self.context             = context
+        self.config              = config or load_plugin_config(context)
+        self.last_maintenance_at = time.monotonic()
         _warn_dangerous_config(self.config)
         self.data_dir = Path(getattr(context, "data_dir", Path("data") / "codex"))
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -386,7 +390,7 @@ class CodexQueueManager:
     def _session_state_payload(self) -> dict[str, Any]:
         return {
             "schema_version": SESSION_STATE_VERSION,
-            "sessions": {label: asdict(session) for label, session in self.sessions.items()},
+            "sessions"      : {label: asdict(session) for label, session in self.sessions.items()},
         }
 
     def _rewrite_state_with_backup(self) -> None:
@@ -469,7 +473,16 @@ class CodexQueueManager:
             session_dirs = tuple(self.session_root.iterdir())
         except OSError:
             return
+        referenced = {
+            str(Path(artifact.absolute_path))
+            for job in (
+                *self.running.values(),
+                *(queued for queue in self.queues.values() for queued in queue),
+            )
+            for artifact in getattr(job, "image_artifacts", ())
+        }
         for session_dir in session_dirs:
+            self._prune_session_images(session_dir / "images", cutoff, referenced)
             jobs_dir = session_dir / "jobs"
             if (
                 not session_dir.is_dir()
@@ -487,6 +500,19 @@ class CodexQueueManager:
                 jobs_dir.rmdir()
             except OSError:
                 pass
+
+    def _prune_session_images(self, images_dir: Path, cutoff: float, referenced: set[str]) -> None:
+        """归档图片同样受保留期约束；仍被待投递结果引用的文件保留。"""
+
+        if not images_dir.is_dir() or images_dir.is_symlink():
+            return
+        try:
+            entries = tuple(images_dir.iterdir())
+        except OSError:
+            return
+        for path in entries:
+            if str(path) not in referenced and self._is_expired_path(path, cutoff):
+                self._remove_owned_path(path, images_dir)
 
     def _prune_retention_paths(self, cutoff: float) -> None:
         if not self.running:
@@ -524,6 +550,7 @@ class CodexQueueManager:
 
         now                                         = time.time()
         cancelled_workers: list[asyncio.Task[None]] = []
+        self.last_maintenance_at                    = time.monotonic()
         async with self.lock:
             retention_days = self.config.artifact_retention_days
             if retention_days > 0:
@@ -609,8 +636,9 @@ class CodexQueueManager:
         group_id: int | None,
         metadata: dict[str, Any] | None = None,
     ) -> CodexSession:
-        user_id  = _optional_positive_id(user_id, "user_id")
-        group_id = _optional_positive_id(group_id, "group_id")
+        user_id       = _optional_positive_id(user_id, "user_id")
+        group_id      = _optional_positive_id(group_id, "group_id")
+        had_tombstone = label in self.tombstones
         self.tombstones.discard(label)
         session = CodexSession(
             label           = label,
@@ -619,12 +647,19 @@ class CodexQueueManager:
             target_group_id = group_id,
         )
         self.sessions[label] = session
-        self._save()
+        try:
+            self._save()
+        except BaseException:
+            # 发布失败时恢复内存状态：否则后续 create 报已存在，下次其他保存还会把它写进磁盘。
+            self.sessions.pop(label, None)
+            if had_tombstone:
+                self.tombstones.add(label)
+            raise
         payload: dict[str, Any] = {
-            "type": "session.created",
-            "label": label,
-            "cwd": str(cwd),
-            "owner_user_id": user_id,
+            "type"           : "session.created",
+            "label"          : label,
+            "cwd"            : str(cwd),
+            "owner_user_id"  : user_id,
             "target_group_id": group_id,
         }
         if metadata:
@@ -694,18 +729,18 @@ class CodexQueueManager:
             self._append_history(
                 session.label,
                 {
-                    "type": "message",
-                    "role": "user",
-                    "job_id": job.job_id,
-                    "content": prompt,
-                    "user_id": user_id,
+                    "type"    : "message",
+                    "role"    : "user",
+                    "job_id"  : job.job_id,
+                    "content" : prompt,
+                    "user_id" : user_id,
                     "group_id": group_id,
                     "delivery_targets": (
                         [asdict(target) for target in delivery_targets]
                         if delivery_targets is not None
                         else None
                     ),
-                    "status": "queued",
+                    "status"  : "queued",
                     "metadata": job.metadata,
                 },
             )
@@ -899,12 +934,12 @@ class CodexQueueManager:
 
         result = job.result
         return {
-            "status": "timeout" if wait_timed_out else job.status,
-            "session": label,
-            "job_id": job.job_id,
-            "cwd": session_cwd,
-            "exit_code": result.exit_code if result is not None else None,
-            "timed_out": wait_timed_out or bool(result is not None and result.timed_out),
+            "status"    : "timeout" if wait_timed_out else job.status,
+            "session"   : label,
+            "job_id"    : job.job_id,
+            "cwd"       : session_cwd,
+            "exit_code" : result.exit_code if result is not None else None,
+            "timed_out" : wait_timed_out or bool(result is not None and result.timed_out),
             "final_text": result.final_text if result is not None else "",
             "stderr_tail": (
                 result.stderr_tail
@@ -1293,7 +1328,10 @@ class CodexQueueManager:
                     job.job_id,
                     type(exc).__name__,
                 )
-            self._collect_job_artifacts(label, session, job, result, artifact_dir)
+            # 图片归档会遍历、复制、完整解码并 fsync；放进工作线程，完成后才继续发布结果。
+            await to_thread_owned(
+                self._collect_job_artifacts, label, session, job, result, artifact_dir
+            )
             if label not in self.tombstones:
                 try:
                     self._append_job_history(session, job, result)
@@ -1502,7 +1540,23 @@ class CodexQueueManager:
                 if action and hasattr(job.context, "send_action"):
                     action[ACTION_BYPASS_SINK_KEY] = True
                     try:
-                        await job.context.send_action(action)
+                        sent = await job.context.send_action(action)
+                        if sent is False:
+                            # 明确失败写进会话历史，后续可以查询或重发；不再静默当成已投递。
+                            logger.warning(
+                                "Codex result delivery rejected: label=%s job_id=%s target_kind=%s",
+                                job.label,
+                                job.job_id,
+                                target.kind,
+                            )
+                            self._append_history(
+                                job.label,
+                                {
+                                    "type"       : "job.delivery_failed",
+                                    "job_id"     : job.job_id,
+                                    "target_kind": target.kind,
+                                },
+                            )
                     except Exception as exc:  # 一个目标失败不能阻断其他目标和后续队列。
                         logger.error(
                             "Codex result delivery failed: label=%s job_id=%s target_kind=%s "
@@ -1638,7 +1692,7 @@ class CodexQueueManager:
                         self._append_history(
                             label,
                             {
-                                "type": "job.cancelled",
+                                "type"  : "job.cancelled",
                                 "job_id": job_id,
                                 "status": "queued",
                             },
@@ -1666,7 +1720,7 @@ class CodexQueueManager:
                 self._append_history(
                     label,
                     {
-                        "type": "job.cancelled",
+                        "type"  : "job.cancelled",
                         "job_id": queued.job_id,
                         "status": "queued",
                     },
@@ -1716,7 +1770,7 @@ class CodexQueueManager:
             self._append_history(
                 label,
                 {
-                    "type": "session.deleted",
+                    "type" : "session.deleted",
                     "label": label,
                     "force": force,
                 },
@@ -1764,8 +1818,8 @@ class CodexQueueManager:
             self._save()
 
 
-_MANAGER: CodexQueueManager | None = None
-_MANAGER_LOCK: asyncio.Lock | None = None
+_MANAGER     : CodexQueueManager | None = None
+_MANAGER_LOCK: asyncio.Lock | None      = None
 
 
 def _manager_lock() -> asyncio.Lock:
@@ -1792,7 +1846,9 @@ async def get_manager(context: PluginContextProtocol) -> CodexQueueManager:
                 config,
                 settings_revision=settings_revision,
             )
-            if changed:
+            # 配置稳定的长期运行进程也要按有界频率执行保留期清理。
+            stale = time.monotonic() - _MANAGER.last_maintenance_at >= _MAINTENANCE_INTERVAL_SECONDS
+            if changed or stale:
                 await _MANAGER.maintenance()
             return _MANAGER
 

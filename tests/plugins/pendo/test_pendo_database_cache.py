@@ -45,7 +45,6 @@ class TestUpdateItemCacheInvalidation:
         from plugins.pendo.services.db import Database
 
         db = Database(":memory:")
-        db._init_database()
         return db
 
     @pytest.fixture
@@ -59,9 +58,9 @@ class TestUpdateItemCacheInvalidation:
     def test_update_without_owner_id_invalidates_user_list_cache(self, db):
         item_id = db.insert_item(
             {
-                "title": "原始标题",
+                "title"   : "原始标题",
                 "owner_id": "user1",
-                "type": "note",
+                "type"    : "note",
             }
         )
         assert db.get_items("user1", {"type": "note"}, 100)[0].title == "原始标题"

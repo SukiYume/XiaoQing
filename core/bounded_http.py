@@ -68,11 +68,11 @@ class RedirectPolicyError(BoundedHttpError):
 
 @dataclass(frozen=True, slots=True)
 class BodyLimits:
-    max_wire_bytes: int          = 2 * 1024 * 1024
-    max_decoded_bytes: int       = 4 * 1024 * 1024
+    max_wire_bytes         : int = 2 * 1024 * 1024
+    max_decoded_bytes      : int = 4 * 1024 * 1024
     max_decompression_ratio: int = 20
-    ratio_grace_bytes: int       = 64 * 1024
-    chunk_bytes: int             = 64 * 1024
+    ratio_grace_bytes      : int = 64 * 1024
+    chunk_bytes            : int = 64 * 1024
 
     def __post_init__(self) -> None:
         for name in (
@@ -88,10 +88,10 @@ class BodyLimits:
 
 @dataclass(frozen=True, slots=True)
 class MimePolicy:
-    exact: frozenset[str]               = frozenset()
-    type_prefixes: frozenset[str]       = frozenset()
+    exact              : frozenset[str] = frozenset()
+    type_prefixes      : frozenset[str] = frozenset()
     structured_suffixes: frozenset[str] = frozenset()
-    allow_missing: bool                 = False
+    allow_missing      : bool           = False
 
     def __post_init__(self) -> None:
         for media_type in self.exact:
@@ -118,11 +118,11 @@ class MimePolicy:
 
 @dataclass(frozen=True, slots=True)
 class RedirectPolicy:
-    max_hops: int                          = 0
-    allowed_schemes: frozenset[str]        = frozenset({"https"})
-    allowed_origins: frozenset[str] | None = None
-    same_origin_only: bool                 = True
-    allow_https_upgrade_same_host: bool    = False
+    max_hops                     : int                   = 0
+    allowed_schemes              : frozenset[str]        = frozenset({"https"})
+    allowed_origins              : frozenset[str] | None = None
+    same_origin_only             : bool                  = True
+    allow_https_upgrade_same_host: bool                  = False
 
     def __post_init__(self) -> None:
         if self.max_hops < 0:
@@ -139,9 +139,9 @@ class RedirectPolicy:
 
 @dataclass(frozen=True, slots=True)
 class JsonLimits:
-    max_bytes: int        = 4 * 1024 * 1024
-    max_depth: int        = 32
-    max_nodes: int        = 20_000
+    max_bytes       : int = 4 * 1024 * 1024
+    max_depth       : int = 32
+    max_nodes       : int = 20_000
     max_string_chars: int = 256_000
     max_number_chars: int = 4_096
 
@@ -159,13 +159,13 @@ class JsonLimits:
 
 @dataclass(frozen=True, slots=True)
 class XmlLimits:
-    max_bytes: int           = 8 * 1024 * 1024
-    max_depth: int           = 64
-    max_nodes: int           = 50_000
-    max_attributes: int      = 100_000
+    max_bytes          : int = 8 * 1024 * 1024
+    max_depth          : int = 64
+    max_nodes          : int = 50_000
+    max_attributes     : int = 100_000
     max_attribute_chars: int = 1_000_000
-    max_name_chars: int      = 512
-    max_text_chars: int      = 1_000_000
+    max_name_chars     : int = 512
+    max_text_chars     : int = 1_000_000
 
     def __post_init__(self) -> None:
         for name in (
@@ -183,13 +183,13 @@ class XmlLimits:
 
 @dataclass(frozen=True, slots=True)
 class BoundedHttpResponse:
-    url: str
-    status: int
-    body: bytes
-    media_type: str | None
-    charset: str | None
-    headers: Mapping[str, str]
-    wire_bytes: int
+    url          : str
+    status       : int
+    body         : bytes
+    media_type   : str | None
+    charset      : str | None
+    headers      : Mapping[str, str]
+    wire_bytes   : int
     decoded_bytes: int
 
 
@@ -424,6 +424,44 @@ def decode_limited_chunks(
     return decoder.finish(), decoder.wire_bytes
 
 
+def _raw_chunks(raw: Any, chunk_bytes: int, deadline_monotonic: float | None) -> Iterable[bytes]:
+    """逐次取出已到达的原始字节。
+
+    ``stream(n)`` 要凑满 ``n`` 字节或读到 EOF 才返回；远端以小块持续滴入时，每次 socket
+    等待都满足读取超时，总截止时间迟迟得不到检查。``read1`` 每次最多一次底层读取，
+    截止时间因此在每个到达的小块之间都会生效；同时把 socket 超时压到剩余预算以内。
+    """
+
+    read1 = getattr(raw, "read1", None)
+    if not callable(read1):
+        yield from raw.stream(chunk_bytes, decode_content=False)
+        return
+    while True:
+        _shrink_socket_timeout(raw, deadline_monotonic)
+        chunk = read1(chunk_bytes, decode_content=False)
+        if not chunk:
+            return
+        yield chunk
+
+
+def _shrink_socket_timeout(raw: Any, deadline_monotonic: float | None) -> None:
+    if deadline_monotonic is None:
+        return
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        raise ResponseTransportError("response total timeout exceeded")
+    sock = getattr(getattr(getattr(raw, "_fp", None), "fp", None), "raw", None)
+    sock = getattr(sock, "_sock", None)
+    if sock is None or not hasattr(sock, "gettimeout"):
+        return
+    try:
+        current = sock.gettimeout()
+        if current is None or current > remaining:
+            sock.settimeout(max(0.001, remaining))
+    except OSError:
+        return
+
+
 def _ensure_before_deadline(deadline_monotonic: float | None) -> None:
     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
         raise ResponseTransportError("response total timeout exceeded")
@@ -492,7 +530,7 @@ def read_requests_response(
         pass
     try:
         body, wire_bytes = decode_limited_chunks(
-            stream(limits.chunk_bytes, decode_content=False),
+            _raw_chunks(raw, limits.chunk_bytes, deadline_monotonic),
             encoding            = encoding,
             limits              = limits,
             declared_wire_bytes = _content_length(response),

@@ -472,9 +472,9 @@ async def test_checker_preserves_route_thinking_during_json_compatibility_fallba
     monkeypatch.setattr(reply_checker, "chat_completions_raw_with_fallback_paths", fake_request)
     options = {
         "checker_secrets": {"_route": "checker"},
-        "prompt": "审查规则",
-        "materials": "{}",
-        "request_policy": reply_checker._LLMRequestPolicy(
+        "prompt"         : "审查规则",
+        "materials"      : "{}",
+        "request_policy" : reply_checker._LLMRequestPolicy(
             max_tokens=1536, timeout_seconds=30, max_retry=0, retry_interval_seconds=0
         ),
     }

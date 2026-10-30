@@ -48,18 +48,18 @@ def temp_app_root(temp_dir: Path) -> Path:
     # Create config.json
     config_file = config_dir / "config.json"
     config_data = {
-        "bot_name": "小青",
-        "command_prefixes": ["/"],
-        "onebot_http_base": "",
-        "enable_ws_client": False,
+        "bot_name"             : "小青",
+        "command_prefixes"     : ["/"],
+        "onebot_http_base"     : "",
+        "enable_ws_client"     : False,
         "enable_inbound_server": False,
-        "max_concurrency": 5,
+        "max_concurrency"      : 5,
         "enable_plugin_watcher": False,
-        "session_timeout": 300,
-        "timezone": "Asia/Shanghai",
-        "default_group_ids": [],
-        "admin_user_ids": [],
-        "plugins": {},
+        "session_timeout"      : 300,
+        "timezone"             : "Asia/Shanghai",
+        "default_group_ids"    : [],
+        "admin_user_ids"       : [],
+        "plugins"              : {},
     }
     with open(config_file, "w") as f:
         json.dump(config_data, f, indent=2)
@@ -68,8 +68,8 @@ def temp_app_root(temp_dir: Path) -> Path:
     secrets_file = config_dir / "secrets.json"
     secrets_data = {
         "admin_user_ids": [12345, 67890],
-        "onebot_token": "",
-        "inbound_token": "",
+        "onebot_token"  : "",
+        "inbound_token" : "",
     }
     with open(secrets_file, "w") as f:
         json.dump(secrets_data, f, indent=2)
@@ -92,10 +92,10 @@ def temp_app_root(temp_dir: Path) -> Path:
 def mock_dependencies():
     """Create mock dependencies for XiaoQingApp"""
     return {
-        "router": MagicMock(),
-        "plugin_manager": MagicMock(),
-        "dispatcher": MagicMock(),
-        "scheduler": MagicMock(),
+        "router"         : MagicMock(),
+        "plugin_manager" : MagicMock(),
+        "dispatcher"     : MagicMock(),
+        "scheduler"      : MagicMock(),
         "session_manager": MagicMock(),
     }
 
@@ -159,11 +159,11 @@ def _publish_command(
     catalog = build_command_catalog_node(
         plugin,
         {
-            "name": name,
-            "triggers": [name],
-            "help": "测试命令",
+            "name"      : name,
+            "triggers"  : [name],
+            "help"      : "测试命令",
             "permission": permission,
-            "contexts": list(contexts),
+            "contexts"  : list(contexts),
         },
         root=True,
     )

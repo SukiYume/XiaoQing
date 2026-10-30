@@ -17,7 +17,7 @@ from core.bounded_http import (
     parse_bounded_json,
     requests_request_bounded,
 )
-from core.plugin_base import PluginContextProtocol
+from core.plugin_base import PluginContextProtocol, run_sync
 from core.public_errors import public_error_message
 
 SIMBAD_TAP_SYNC_URL                    = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
@@ -53,11 +53,11 @@ _SIMBAD_JSON_LIMITS = JsonLimits(
 class SimbadRow:
     """``handle_obj`` 实际使用且已通过边界验证的一行 SIMBAD 数据。"""
 
-    ra_deg: float
-    dec_deg: float
-    otype: str | None
+    ra_deg     : float
+    dec_deg    : float
+    otype      : str | None
     v_magnitude: float | None
-    sp_type: str | None
+    sp_type    : str | None
 
 
 def _build_simbad_query(name: str) -> str:
@@ -179,10 +179,10 @@ def _query_simbad_object(name: str) -> SimbadRow | None:
         request_kwargs = {
             "data": {
                 "REQUEST": "doQuery",
-                "LANG": "ADQL",
-                "FORMAT": "json",
-                "MAXREC": "1",
-                "QUERY": query,
+                "LANG"   : "ADQL",
+                "FORMAT" : "json",
+                "MAXREC" : "1",
+                "QUERY"  : query,
             },
             "timeout": (
                 SIMBAD_CONNECT_TIMEOUT_SECONDS,
@@ -442,7 +442,8 @@ async def handle_obj(args: str, context: PluginContextProtocol) -> str:
     # 避免同步网络或首次导入科学计算库阻塞 Bot 的事件循环。
     try:
         rendered = await asyncio.wait_for(
-            asyncio.to_thread(_query_and_render_simbad, args),
+            # 走插件的有界同步执行入口：超时只放弃等待，线程真实结束前仍占用本插件配额。
+            run_sync(_query_and_render_simbad, args),
             timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
         )
         if rendered is None:

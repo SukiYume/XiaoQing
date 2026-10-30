@@ -180,7 +180,7 @@ _MIN_PLUGIN_POLL_INTERVAL_SECONDS                    = 0.01
 _DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS                = 3600.0
 _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS                 = 5.0
 _PLUGIN_IMPORT_LOCK                                  = threading.RLock()
-_PLUGIN_NAMESPACE_OWNERS: dict[str, object]          = {}
+_PLUGIN_NAMESPACE_OWNERS : dict[str, object]         = {}
 _WATCH_MANIFEST_LOG_OWNER: ContextVar[object | None] = ContextVar(
     "xiaoqing_watch_manifest_log_owner",
     default=None,
@@ -196,8 +196,8 @@ class _ProcessImportPathLease:
     """Reference-count one path entry while preserving pre-existing entries."""
 
     container: Any
-    owners: int
-    inserted: _OwnedImportPath | None
+    owners   : int
+    inserted : _OwnedImportPath | None
 
 
 _ProcessImportPathLeaseKey = tuple[int, str]
@@ -307,10 +307,10 @@ def _install_namespace_tombstone_locked(
 class _PluginContentFingerprint(int):
     """Integer digest carrying the immutable Python sources it authorized."""
 
-    sources: Mapping[str, bytes]
+    sources         : Mapping[str, bytes]
     manifest_payload: bytes
-    file_identities: Mapping[str, tuple[int, int, int, int]]
-    captured_at: float
+    file_identities : Mapping[str, tuple[int, int, int, int]]
+    captured_at     : float
 
     def __new__(
         cls,
@@ -716,17 +716,17 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
 
 @dataclass(slots=True)
 class _ModuleImportBarrierJob:
-    names: tuple[str, ...]
-    callback: Callable[[], None] | None = None
+    names    : tuple[str, ...]
+    callback : Callable[[], None] | None = None
     completed: threading.Event = field(default_factory=threading.Event)
-    errors: list[BaseException] = field(default_factory=list)
-    state: str = "waiting"
+    errors   : list[BaseException] = field(default_factory=list)
+    state    : str = "waiting"
 
 
 @dataclass(frozen=True, slots=True)
 class _ModuleImportBarrierCapability:
     available: bool
-    reason: str | None = None
+    reason   : str | None = None
 
 
 class _ModuleImportBarrierCoordinator:
@@ -985,47 +985,47 @@ def _validate_plugin_name(name: str) -> bool:
 
 @dataclass
 class PluginDefinition:
-    name: str
-    version: str
-    entry: str
-    commands: list[dict[str, Any]]
-    schedule: list[dict[str, Any]]
-    concurrency: PluginConcurrency
-    enabled: bool                                   = True  # 插件是否启用
-    description: str | None                         = None
-    author: str | None                              = None
-    dependencies: list[str] | None                  = None
-    services: tuple["PluginServiceDefinition", ...] = ()
-    uses_services: frozenset[str]                   = frozenset()
-    capabilities: frozenset[str]                    = frozenset()
-    watch_files: tuple[str, ...]                    = ()
+    name            : str
+    version         : str
+    entry           : str
+    commands        : list[dict[str, Any]]
+    schedule        : list[dict[str, Any]]
+    concurrency     : PluginConcurrency
+    enabled         : bool                                  = True  # 插件是否启用
+    description     : str | None                            = None
+    author          : str | None                            = None
+    dependencies    : list[str] | None                      = None
+    services        : tuple["PluginServiceDefinition", ...] = ()
+    uses_services   : frozenset[str]                        = frozenset()
+    capabilities    : frozenset[str]                        = frozenset()
+    watch_files     : tuple[str, ...]                       = ()
     manifest_payload: bytes | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class PluginServiceDefinition:
-    name: str
-    callback: str
-    callers: frozenset[str]
+    name               : str
+    callback           : str
+    callers            : frozenset[str]
     required_capability: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class LoadedPluginService:
-    owner: str
+    owner     : str
     definition: PluginServiceDefinition
-    callback: Callable[..., Any]
+    callback  : Callable[..., Any]
 
 
 @dataclass
 class LoadedPlugin:
-    definition: PluginDefinition
-    module: ModuleType
-    mtime: int | float
-    execution_gate: PluginExecutionGate | None = None
-    shutdown_attempted: bool                   = False
-    shutdown_completed: bool                   = False
-    shutdown_task: asyncio.Task[Any] | None    = field(
+    definition        : PluginDefinition
+    module            : ModuleType
+    mtime             : int | float
+    execution_gate    : PluginExecutionGate | None = None
+    shutdown_attempted: bool                       = False
+    shutdown_completed: bool                       = False
+    shutdown_task     : asyncio.Task[Any] | None   = field(
         default = None,
         repr    = False,
         compare = False,
@@ -1034,15 +1034,15 @@ class LoadedPlugin:
         default_factory=lambda: MappingProxyType({}),
     )
     authorized_entry: Path | None = None
-    data_dir: Path | None         = None
+    data_dir        : Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _PluginDataDirectory:
     """Exact filesystem identities captured for one writable data directory."""
 
-    data_root: Path
-    path: Path
+    data_root    : Path
+    path         : Path
     root_identity: os.stat_result
     data_identity: os.stat_result
 
@@ -1051,26 +1051,26 @@ class _PluginDataDirectory:
 class _PluginLoadTransaction:
     """Strong references owned by one imported-but-not-yet-live generation."""
 
-    definition: PluginDefinition
-    gate: PluginExecutionGate
-    mtime: float
-    track_init_task: bool             = True
-    import_attempted: bool            = False
-    import_completed: bool            = False
-    uncertain_external_code: bool     = False
-    unowned_canonical_namespace: bool = False
-    namespace_claim_new: bool         = False
-    authorized_entry: Path | None     = None
-    module: ModuleType | None         = None
+    definition                 : PluginDefinition
+    gate                       : PluginExecutionGate
+    mtime                      : float
+    track_init_task            : bool              = True
+    import_attempted           : bool              = False
+    import_completed           : bool              = False
+    uncertain_external_code    : bool              = False
+    unowned_canonical_namespace: bool              = False
+    namespace_claim_new        : bool              = False
+    authorized_entry           : Path | None       = None
+    module                     : ModuleType | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _ReloadAuthorization:
     """Manifest and source fingerprint authorized for one reload attempt."""
 
-    plugin_dir: Path
-    definition: PluginDefinition
-    mtime: int | float
+    plugin_dir        : Path
+    definition        : PluginDefinition
+    mtime             : int | float
     definition_changed: bool
 
 
@@ -1078,21 +1078,21 @@ class _ReloadAuthorization:
 class _RetiredPluginGeneration:
     """A cleanly stopped generation retained until candidate publication."""
 
-    plugin: LoadedPlugin
-    state: dict[str, Any]
+    plugin        : LoadedPlugin
+    state         : dict[str, Any]
     state_snapshot: dict[str, Any]
-    gate: PluginExecutionGate
-    modules: Mapping[str, ModuleType]
+    gate          : PluginExecutionGate
+    modules       : Mapping[str, ModuleType]
 
 
 @dataclass(slots=True)
 class _ReloadCandidateGeneration:
     """Mutable candidate facts needed for deterministic rollback."""
 
-    gate: PluginExecutionGate
-    transaction: _PluginLoadTransaction
-    plugin: LoadedPlugin | None               = None
-    authorization: bool | None                = None
+    gate               : PluginExecutionGate
+    transaction        : _PluginLoadTransaction
+    plugin             : LoadedPlugin | None  = None
+    authorization      : bool | None          = None
     authorization_error: BaseException | None = None
 
 
@@ -1115,8 +1115,8 @@ class _PluginDirectoryScan:
     ``uncertain_names`` for the same reason.
     """
 
-    directories: tuple[Path, ...]
+    directories    : tuple[Path, ...]
     uncertain_names: frozenset[str]
-    complete: bool
-    errors: tuple[tuple[Path | None, OSError], ...]
-    error_count: int
+    complete       : bool
+    errors         : tuple[tuple[Path | None, OSError], ...]
+    error_count    : int

@@ -23,9 +23,9 @@ async def test_claimed_reminder_distinguishes_rejection_from_unknown_outcome(
             return {
                 "messages": [
                     {
-                        "user_id": "1001",
-                        "message": "due",
-                        "item_id": "evt-1",
+                        "user_id"    : "1001",
+                        "message"    : "due",
+                        "item_id"    : "evt-1",
                         "remind_time": "2030-01-01T00:00:00+00:00",
                         "claim_token": "lease-1",
                     }
@@ -56,18 +56,18 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
             return {
                 "messages": [
                     {
-                        "user_id": "1001",
-                        "message": "private due",
-                        "item_id": "evt-private",
+                        "user_id"    : "1001",
+                        "message"    : "private due",
+                        "item_id"    : "evt-private",
                         "remind_time": "2030-01-01T00:00:00+00:00",
                         "claim_token": "lease-private",
                     }
                 ]
             }
 
-    completed: list[tuple]   = []
-    sent_actions: list[dict] = []
-    db                       = SimpleNamespace(
+    completed   : list[tuple] = []
+    sent_actions: list[dict]  = []
+    db                        = SimpleNamespace(
         complete_reminder_claim=lambda *args: completed.append(args) or True,
     )
 
@@ -107,7 +107,7 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
     async def settings_map(_users, _db):
         return {
             "1001": {
-                "settings": {"timezone": "UTC", "daily_report_time": "00:00"},
+                "settings"       : {"timezone": "UTC", "daily_report_time": "00:00"},
                 "custom_settings": {"daily_briefing_enabled": True},
             }
         }
@@ -115,13 +115,13 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
     async def content(_user, _db, **_kwargs):
         return "daily-secret"
 
-    saved: list[tuple]     = []
+    saved    : list[tuple] = []
     completed: list[tuple] = []
-    released: list[tuple]  = []
+    released : list[tuple] = []
     db                     = SimpleNamespace(
         get_due_scheduled_delivery_periods = lambda *_args, **_kwargs: [],
         claim_scheduled_delivery           = lambda task, owner, period, **_kwargs: {
-            "claim_token": "lease-1",
+            "claim_token" : "lease-1",
             "delivery_key": f"{task}:{owner}:{period}",
         },
         complete_scheduled_delivery = lambda *args: completed.append(args) or True,
@@ -156,7 +156,7 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
 @pytest.mark.asyncio
 async def test_unknown_periodic_delivery_retains_claim_without_completing() -> None:
     completed: list[tuple] = []
-    released: list[tuple]  = []
+    released : list[tuple] = []
     db                     = SimpleNamespace(
         complete_scheduled_delivery = lambda *args: completed.append(args) or True,
         release_scheduled_delivery  = lambda *args: released.append(args) or True,
@@ -253,9 +253,9 @@ async def test_invalid_reminder_owner_releases_claim(monkeypatch) -> None:
             return {
                 "messages": [
                     {
-                        "user_id": "demo_web_TEST",
-                        "message": "due",
-                        "item_id": "evt-1",
+                        "user_id"    : "demo_web_TEST",
+                        "message"    : "due",
+                        "item_id"    : "evt-1",
                         "remind_time": "2030-01-01T00:00:00+00:00",
                         "claim_token": "lease-1",
                     }

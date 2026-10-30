@@ -5,22 +5,18 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
 
 _VALID_PLATFORMS = frozenset({"all", "posix", "windows"})
 
 
 @dataclass(frozen=True, slots=True)
 class SkipAllowance:
-    nodeid: str
-    reason: str
+    nodeid   : str
+    reason   : str
     platforms: frozenset[str]
 
     def matches(self, *, nodeid: str, reason: str, platform: str) -> bool:

@@ -86,12 +86,12 @@ def _build_extra_data(sid: str) -> dict[str, str | int]:
     timestamp = int(time.time() * 1000)
     return {
         "is_weapp": 1,
-        "sid": sid,
-        "version": _CLIENT_VERSION,
-        "client": "weapp",
-        "bizEnv": "wsc",
-        "uuid": f"{_UUID_PREFIX}{timestamp}",
-        "ftime": timestamp,
+        "sid"     : sid,
+        "version" : _CLIENT_VERSION,
+        "client"  : "weapp",
+        "bizEnv"  : "wsc",
+        "uuid"    : f"{_UUID_PREFIX}{timestamp}",
+        "ftime"   : timestamp,
     }
 
 

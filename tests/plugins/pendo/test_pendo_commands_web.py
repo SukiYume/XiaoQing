@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from types import SimpleNamespace
+
 from tests.helpers.pendo_test_support import (
     ROOT,
-    SimpleNamespace,
-    asyncio,
-    json,
 )
 
 
 class TestBatchDeleteRefactor:
     def test_task_category_delete_uses_shared_batch_helper(self, monkeypatch):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
 
@@ -36,10 +34,7 @@ class TestBatchDeleteRefactor:
         assert calls == [(["t1", "t2"], "u1", "task", "delete_task", None)]
 
     def test_note_category_delete_uses_shared_batch_helper(self, monkeypatch):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
 
@@ -68,9 +63,6 @@ class TestBatchDeleteRefactor:
 
 class TestCommandValidationRegression:
     def test_note_add_invalid_category_returns_validation_error(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -93,9 +85,6 @@ class TestCommandValidationRegression:
             db.cleanup()
 
     def test_todo_add_invalid_priority_is_rejected(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.services.db import Database
@@ -156,9 +145,6 @@ class TestTriggerConflictRegression:
 
 class TestSessionRegression:
     def test_simple_session_types_dispatch_directly_to_cached_handlers(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import session as session_module
         from plugins.pendo.config import PendoConfig
@@ -183,8 +169,8 @@ class TestSessionRegression:
                 self.state = {
                     "pendo_runtime": {
                         "services": {
-                            "diary_handler": _DiaryHandler(),
-                            "task_handler": _StepHandler("task"),
+                            "diary_handler" : _DiaryHandler(),
+                            "task_handler"  : _StepHandler("task"),
                             "ledger_handler": _StepHandler("ledger"),
                         }
                     }
@@ -210,9 +196,6 @@ class TestSessionRegression:
         ]
 
     def test_unknown_session_type_is_ended_so_user_can_restart(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import session as session_module
 
@@ -233,15 +216,12 @@ class TestSessionRegression:
         )
 
         assert result == {
-            "status": "error",
+            "status" : "error",
             "message": "未知的会话类型: removed_session_type",
         }
         assert end_calls == [True]
 
     def test_event_sessions_with_corrupt_data_end_session(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import session as session_module
 
@@ -275,9 +255,6 @@ class TestSessionRegression:
         assert end_calls == [True, True]
 
     def test_event_info_only_fills_missing_fields_and_uses_original_offsets(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import session as session_module
 
@@ -294,9 +271,9 @@ class TestSessionRegression:
             async def parse_event_with_ai(self, text, user_id, *, partial=False):
                 assert partial is True
                 return {
-                    "title": "补充消息不应覆盖标题",
-                    "content": "补充消息不应覆盖正文",
-                    "start_time": "2030-01-02T09:00:00",
+                    "title"         : "补充消息不应覆盖标题",
+                    "content"       : "补充消息不应覆盖正文",
+                    "start_time"    : "2030-01-02T09:00:00",
                     "remind_offsets": ["提前1小时"],
                 }
 
@@ -310,7 +287,7 @@ class TestSessionRegression:
                     "pendo_runtime": {
                         "services": {
                             "event_handler": _EventHandler(),
-                            "ai_parser": _AiParser(),
+                            "ai_parser"    : _AiParser(),
                         }
                     }
                 }
@@ -325,10 +302,10 @@ class TestSessionRegression:
                 "明天九点",
                 {
                     "data": {
-                        "owner_id": "forged-owner",
-                        "parse_source": "old",
-                        "title": "原始标题",
-                        "content": "原始正文",
+                        "owner_id"      : "forged-owner",
+                        "parse_source"  : "old",
+                        "title"         : "原始标题",
+                        "content"       : "原始正文",
                         "remind_offsets": [" 提前30分钟 "],
                     }
                 },
@@ -341,11 +318,11 @@ class TestSessionRegression:
             (
                 "1001",
                 {
-                    "title": "原始标题",
-                    "content": "原始正文",
-                    "start_time": "2030-01-02T09:00:00",
+                    "title"       : "原始标题",
+                    "content"     : "原始正文",
+                    "start_time"  : "2030-01-02T09:00:00",
                     "remind_times": ["2030-01-02T08:30:00"],
-                    "type": "event",
+                    "type"        : "event",
                 },
                 False,
             )
@@ -354,9 +331,6 @@ class TestSessionRegression:
         assert end_calls == [True]
 
     def test_active_session_with_missing_raw_message_routes_explicit_command(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo import main as pendo_main
 
@@ -388,8 +362,8 @@ class TestSessionRegression:
                 "pendo",
                 "todo add CX_RAW_FALLBACK",
                 {
-                    "user_id": "u-raw",
-                    "group_id": 42,
+                    "user_id"    : "u-raw",
+                    "group_id"   : 42,
                     "raw_message": None,
                 },
                 _Context(),
@@ -401,9 +375,6 @@ class TestSessionRegression:
         assert routed == [("u-raw", "todo add CX_RAW_FALLBACK", 42)]
 
     def test_event_info_session_keeps_new_conflict_session_active(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import session as session_module
 
@@ -422,7 +393,7 @@ class TestSessionRegression:
             async def create_event(self, user_id, parsed_data, context, allow_conflict=False):
                 return {
                     "status": "need_confirm",
-                    "data": {"title": parsed_data.get("title", "会议")},
+                    "data"  : {"title": parsed_data.get("title", "会议")},
                 }
 
         class _AiParser:
@@ -451,11 +422,8 @@ class TestSessionRegression:
 
 class TestOperationAndExportRegression:
     def test_confirm_handles_aware_reminder_times(self, monkeypatch):
-        import sys
         from datetime import datetime
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import operations
         from plugins.pendo.commands.operations import handle_confirm
@@ -490,11 +458,8 @@ class TestOperationAndExportRegression:
         )
 
     def test_snooze_keeps_future_aware_reminders(self, monkeypatch):
-        import sys
         from datetime import datetime
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import operations
         from plugins.pendo.commands.operations import handle_snooze
@@ -530,12 +495,15 @@ class TestOperationAndExportRegression:
         assert result["status"] == "success"
         assert "已将提醒延后到: 2030-01-01T11:00:00+08:00" in result["message"]
         db.update_item.assert_called_once()
+        assert db.update_item.call_args.args[1] == {
+            "remind_times": [
+                "2030-01-01T10:00:00+08:00",
+                "2030-01-01T11:00:00+08:00",
+            ]
+        }
         reminder_service.confirm_reminder.assert_not_called()
 
     def test_snooze_missing_args_returns_error_result(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands.operations import handle_snooze
 
@@ -545,9 +513,6 @@ class TestOperationAndExportRegression:
         assert "请指定要延后的条目ID和时间" in result["message"]
 
     def test_export_markdown_writes_single_file_and_filters_types(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.exporter import ExporterService
 
@@ -594,8 +559,8 @@ class TestOperationAndExportRegression:
         )
 
         class _Repo:
-            def get_items(self, user_id, filters, limit, *, use_cache):
-                assert use_cache is False
+            def get_all_items(self, user_id, filters, *, page_size):
+                assert page_size == 500
                 item_type = filters.get("type")
                 if item_type == "event":
                     return [event_item]
@@ -628,9 +593,6 @@ class TestOperationAndExportRegression:
         assert "研究想法" not in exported
 
     def test_export_markdown_includes_note_references(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.exporter import ExporterService
 
@@ -645,17 +607,17 @@ class TestOperationAndExportRegression:
             content    = "正文",
             references = [
                 {
-                    "kind": "item",
-                    "id": "1234abcd" + "0" * 24,
-                    "type": "task",
+                    "kind" : "item",
+                    "id"   : "1234abcd" + "0" * 24,
+                    "type" : "task",
                     "title": "整理卡片",
                 }
             ],
         )
 
         class _Repo:
-            def get_items(self, user_id, filters, limit, *, use_cache):
-                assert use_cache is False
+            def get_all_items(self, user_id, filters, *, page_size):
+                assert page_size == 500
                 return [note_item] if filters.get("type") == "note" else []
 
         _repo              = _Repo()
@@ -670,9 +632,6 @@ class TestOperationAndExportRegression:
         assert "1234abcd" + "0" * 24 not in exported
 
     def test_export_markdown_requires_filename(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.exporter import ExporterService
 
@@ -683,9 +642,6 @@ class TestOperationAndExportRegression:
         assert "请提供导出文件名" in result["message"]
 
     def test_export_markdown_uses_event_collection_context(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.exporter import ExporterService
 
@@ -709,18 +665,18 @@ class TestOperationAndExportRegression:
         )
 
         class _Repo:
-            def get_items(self, user_id, filters, limit, *, use_cache):
-                assert use_cache is False
+            def get_all_items(self, user_id, filters, *, page_size):
+                assert page_size == 500
                 return [event_item] if filters.get("type") == "event" else []
 
             def get_event_collection(self, collection_id, owner_id=None):
                 return {
-                    "id": collection_id,
-                    "kind": "multi_node",
-                    "title": "FRB2026会议",
+                    "id"      : collection_id,
+                    "kind"    : "multi_node",
+                    "title"   : "FRB2026会议",
                     "category": "学术",
                     "location": "上海",
-                    "notes": "整体备注",
+                    "notes"   : "整体备注",
                 }
 
         _repo              = _Repo()

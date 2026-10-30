@@ -82,15 +82,15 @@ class AppPluginContextMixin:
     """集中管理插件可见配置、身份能力和声明式跨插件服务。"""
 
     if TYPE_CHECKING:
-        config_manager: ConfigManager
-        identity_service: AppIdentityService
-        http_session: aiohttp.ClientSession | None
-        router: CommandRouter
-        plugin_manager: PluginManager
-        metrics: MetricsCollector
-        session_manager: SessionManager
-        dispatcher: Dispatcher
-        _plugin_settings_cache: dict[tuple[str, int], PluginSettingsSnapshot]
+        config_manager                 : ConfigManager
+        identity_service               : AppIdentityService
+        http_session                   : aiohttp.ClientSession | None
+        router                         : CommandRouter
+        plugin_manager                 : PluginManager
+        metrics                        : MetricsCollector
+        session_manager                : SessionManager
+        dispatcher                     : Dispatcher
+        _plugin_settings_cache         : dict[tuple[str, int], PluginSettingsSnapshot]
         _plugin_settings_cache_revision: int | None
 
         @property

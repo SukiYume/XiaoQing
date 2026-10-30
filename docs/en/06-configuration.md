@@ -101,6 +101,7 @@ For a non-loopback host, also set `inbound_trusted_tls_proxy: true` and restrict
 | `max_concurrency` | integer | `5`, `1..1024` | Live reload | Dispatcher global active-message limit |
 | `data_root` | path string | `"data"` | Restart | Plugin runtime-data root |
 | `enable_plugin_watcher` | boolean | `false` | Live reload | Plugin file-watcher switch |
+| `enable_plugin_schedules` | boolean | `true` | Reload | Master switch for plugin schedules; isolated runs (such as the full UAT) set it to `false` so passing a schedule time never calls external accounts or delivers messages |
 | `plugin_poll_interval` | number | `3600`, `0.01..86400` | Live reload | Plugin file-polling interval in seconds |
 | `session_timeout` | number | `300`, `0 < value <= 604800` | Live reload | Default session idle timeout in seconds |
 | `timezone` | IANA timezone | `"Asia/Shanghai"` | Live reload | Scheduler and business-clock timezone |
@@ -295,6 +296,20 @@ The common AI configuration has four layers:
 | `fallback_on` | Core default error set | Error categories that trigger the next profile |
 | `request_defaults` | `{}` | Additional route request fields |
 
+### Single source of AI parameters
+
+`chat-latest` uses fixed sampling defaults. Core omits `temperature` and `top_p` for this model and maps the shared `max_tokens` budget to the upstream `max_completion_tokens` field. Other models retain route sampling settings.
+
+`gpt-6-luna` also uses `max_completion_tokens`. For tool calling through the current Chat Completions endpoint, set `"reasoning_effort": "none"` in the model's `request_defaults`; this mode retains the route's `temperature` and `top_p`.
+
+Configure sampling, token limits, request and aggregate timeouts, and retries in `config.plugins.<plugin>.ai.routes.<route>`. Provider connections remain in `config.ai.providers`, model definitions in `config.ai.models`, and credentials in `secrets.ai.providers`. Optional `model_aliases` provide command shortcuts. `/xc model default` selects the first available profile in `routes.chat.models`.
+
+XiaoQing Chat loads a typed snapshot of the main routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution and delivery review use `agent`; task classification uses `triage`. Routine calls inherit route settings. Explicit long-form requests can increase output and time budgets; truncated image analysis can increase its output budget. Workflow deadlines still bound optional work and whole Agent tasks.
+
+Move retired behavior-file AI fields into the corresponding main routes: sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings. Deep-chat mode uses chat-route sampling. Remove `default_model_alias`; route order defines the default. The behavior file rejects retired AI fields and a nested `ai` registry with a migration error.
+
+DEBUG logs record resolved model profiles and request settings. These records contain parameter metadata; keys and message content remain private.
+
 ### Provider secret
 
 ```json
@@ -313,11 +328,14 @@ Each provider stores its API key at `secrets.ai.providers.<provider_name>.api_ke
 Model `request_defaults` enter the request first. Route defaults override them next.
 Call parameters finally override sampling and budget fields.
 
-AI Service first calls the route's first profile.
+AI Service first calls the route's first available profile.
 It applies bounded retries and ordered fallback for transport, timeout, rate-limit, server, model-unavailable, invalid-response, and empty-response errors.
 `fallback_on` can also include `request_timeout` and `conflict`.
 The calling plugin handles authentication, permission, request-parameter, and configuration errors.
 `total_timeout_seconds` covers the complete model chain.
+
+Missing provider credentials, absent `api_key`, empty strings and whitespace-only keys make that model unavailable. Core skips unavailable entries in order before sending requests, and model lists show available entries. Pinning a model with a missing key or using a route with no usable keys produces an explicit configuration error. Malformed URLs, unknown model references and invalid key types remain validation errors. Upstream authentication failures retain their existing error behavior.
+
 
 ## ⚙️ Plugin configuration namespaces
 
@@ -374,7 +392,6 @@ See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, dem
 | `plugins.xiaoqing_chat.ai.routes.checker` | Reply-checking route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | Planning and reasoning route |
 | `plugins.xiaoqing_chat.ai.routes.vision` | Image-understanding route. Profiles must include `image` modality. |
-| `plugins.xiaoqing_chat.ai.default_model_alias` | Alias used by `/xc model default` |
 | `plugins.xiaoqing_chat.ai.model_aliases` | User-alias to route-profile mapping |
 
 Each of the four XiaoQing Chat routes has its own model order, request timeout, total timeout, and retry policy.
@@ -421,8 +438,17 @@ Public budgets are under `plugins.qingssh`:
 | Delivery | `qq_send_interval_seconds=0.35`, `qq_send_timeout_seconds=5` | Action interval and per-send wait budget |
 | Archives | `archive_max_bytes=67108864`, `archive_tail_bytes=1048576`, `archive_retention_files=20` | Archive-size, tail-size, and count budgets |
 
-Connection definitions, host keys, authentication material, and jump-host settings are under `secrets.plugins.qingssh`.
-Administrator commands such as `/ssh add` manage them.
+The remaining data lives in these places; back them all up together:
+
+| Data | Location | Managed by |
+|---|---|---|
+| Server index (host, port, user, auth type, key path) | `data/qingssh/servers.json` | Administrator commands such as `/ssh add` and `/ssh remove` |
+| Passwords | Plugin secret store; the index keeps only a `password_ref` | Written by `/ssh add`, reclaimed when a server is removed |
+| Private keys | Local files referenced by `key_path` | Managed by the deployer |
+| Host keys | `~/.ssh/known_hosts` of the current OS user | Written after the first confirmed connection |
+| Hosts and jump settings from `~/.ssh/config` | `~/.ssh/config` of the current OS user | Read by `/ssh import` and `/sshconfig` |
+
+If `servers.json` cannot be read, the plugin blocks further writes so an empty snapshot cannot overwrite the file; repair it and reload the plugin.
 See [QingSSH configuration (Chinese)](../../plugins/qingssh/README.md) for the connection schema.
 
 ### Codex
@@ -453,7 +479,7 @@ See [Codex configuration (Chinese)](../../plugins/codex/README.md) for working d
 
 The Shell allowed-command list, working directory, and audit switch are under `secrets.plugins.shell`.
 See [Shell configuration (Chinese)](../../plugins/shell/README.md) for both backends.
-The [plugin manual](09-plugins.md) lists configuration entry points and data locations for all 31 plugins.
+The [plugin manual](09-plugins.md) lists configuration entry points and data locations for all 32 plugins.
 
 ## ⚙️ Secrets
 

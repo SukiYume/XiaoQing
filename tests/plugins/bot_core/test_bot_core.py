@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
-from core.router import CommandCatalogNode
+from core.router import CommandCatalogNode, CommandRouter, CommandSpec
 from plugins.bot_core import main as bot_core
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -189,12 +189,12 @@ def mock_context_with_metrics():
         async def get_summary(self):
             return {
                 "uptime_seconds": 3600,
-                "global": {
-                    "total_calls": 1000,
+                "global"        : {
+                    "total_calls" : 1000,
                     "success_rate": 0.95,
-                    "avg_time": 0.123,
-                    "slow_calls": 5,
-                    "errors": 50,
+                    "avg_time"    : 0.123,
+                    "slow_calls"  : 5,
+                    "errors"      : 50,
                 },
                 "top_slow_plugins": [
                     {"plugin": "xiaoqing_chat", "avg_time": 1.5},
@@ -581,14 +581,9 @@ class TestSetSecretCommand:
 
     @pytest.mark.asyncio
     async def test_set_secret_invalid_path(self, mock_context):
-        """测试带空格的路径（实际上会解析成功，将空格前的部分作为路径）"""
-        result = await bot_core.handle("set_secret", "invalid path value", {}, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        # 由于split(maxsplit=1)，实际路径是"invalid"，值是"path value"
-        # 路径"invalid"不存在时会报错
-        assert "不存在" in result_text or "❌" in result_text or "更新" in result_text
+        result = await bot_core.handle("set_secret", "plugins..key value", {}, mock_context)
+        assert "路径格式错误" in result[0]["data"]["text"]
+        mock_context.capabilities.secret_admin.set.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_set_secret_no_config_manager(self):
@@ -801,12 +796,12 @@ class TestMetricsCommand:
             get_summary=AsyncMock(
                 return_value={
                     "uptime_seconds": float("nan"),
-                    "global": {
-                        "total_calls": True,
+                    "global"        : {
+                        "total_calls" : True,
                         "success_rate": 2.0,
-                        "avg_time": -1,
-                        "slow_calls": "many",
-                        "errors": float("inf"),
+                        "avg_time"    : -1,
+                        "slow_calls"  : "many",
+                        "errors"      : float("inf"),
                     },
                     "top_slow_plugins": [
                         None,
@@ -956,23 +951,28 @@ class TestUnknownCommand:
 # ============================================================
 
 
-class TestCommandAliases:
-    """测试命令别名"""
-
-    @pytest.mark.asyncio
-    async def test_help_alias_h(self, mock_context):
-        """测试help别名h"""
-        result = await bot_core.handle("help", "", {}, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_reload_alias_chinese(self, mock_context):
-        """测试reload中文别名"""
-        # handle函数通过command参数判断，所以传入reload命令名
-        result = await bot_core.handle("reload", "", {}, mock_context)
-        assert result is not None
-        assert len(result) > 0
+@pytest.mark.parametrize(("alias", "name"), [("h", "help"), ("重载", "reload")])
+@pytest.mark.asyncio
+async def test_command_aliases_route_through_manifest(mock_context, alias, name):
+    manifest = json.loads((ROOT / "plugins/bot_core/plugin.json").read_text(encoding="utf-8"))
+    router = CommandRouter()
+    for command in manifest["commands"]:
+        router.register(
+            CommandSpec(
+                plugin     = "bot_core",
+                name       = command["name"],
+                triggers   = command["triggers"],
+                help_text  = command.get("help", ""),
+                admin_only = command.get("admin_only", False),
+                handler    = bot_core.handle,
+            )
+        )
+    matched = router.resolve(alias)
+    assert matched is not None
+    spec, args = matched
+    assert spec.name == name
+    result = await spec.handler(spec.name, args, {}, mock_context)
+    assert result
 
 
 # ============================================================

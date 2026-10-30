@@ -45,15 +45,15 @@ CommandHandler  = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse
 
 # 子命令只在这里绑定业务处理器；名称、别名、权限和帮助仍以 manifest 目录为准。
 _HANDLERS: dict[str, CommandHandler] = {
-    "reset": lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
-    "stats": lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
-    "brain": lambda rest, ev, ctx: handle_internal("深度对话", rest, ev, ctx),
-    "config": handle_config,
-    "memory": handle_memory,
+    "reset"     : lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
+    "stats"     : lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
+    "brain"     : lambda rest, ev, ctx: handle_internal("深度对话", rest, ev, ctx),
+    "config"    : handle_config,
+    "memory"    : handle_memory,
     "expression": handle_expression,
-    "jargon": handle_jargon,
-    "model": handle_provider,
-    "review": handle_review,
+    "jargon"    : handle_jargon,
+    "model"     : handle_provider,
+    "review"    : handle_review,
 }
 
 

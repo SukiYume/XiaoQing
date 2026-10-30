@@ -67,7 +67,7 @@ async def commit_planner_snapshot(state, runtime: ChatRuntime, chat_id: str, sna
 
 # 规划器要求“告别”或“再补一条”时附加的语气约束。
 _PLANNER_MODE_NOTES = {
-    "say_goodbye": "说一句很短很自然的告别收尾，不要延伸话题。",
+    "say_goodbye"     : "说一句很短很自然的告别收尾，不要延伸话题。",
     "send_new_message": "你刚发过一条消息，如果要继续发一条新消息，短一点，别轰炸。",
 }
 
@@ -216,11 +216,11 @@ class _TurnGenerator:
         self.log(
             "smalltalk.pfc.done",
             {
-                "action": result.action,
-                "ended": bool(result.ended),
-                "reason": result.reason,
+                "action"      : result.action,
+                "ended"       : bool(result.ended),
+                "reason"      : result.reason,
                 "wait_seconds": float(result.wait_seconds),
-                "reply_chars": len(generated.reply),
+                "reply_chars" : len(generated.reply),
             },
         )
 
@@ -286,9 +286,20 @@ async def generate_smalltalk_turn(
     except ReplyRejected:
         generated.cancel_speculative_memory()
         if not prepared.forced and generated.pfc_state_snapshot is not None:
+            committed = False
             async with chat_lock(chat_id):
-                await commit_planner_snapshot(state, runtime, chat_id, generated.pfc_state_snapshot)
-            schedule_pfc_state_flush(context, runtime, chat_id=chat_id)
+                # 生成在锁外进行：会话被重置后，旧轮次的规划快照不能把已清除的目标写回去。
+                current_generation = get_profile_generation(context.data_dir, chat_id)
+                if (
+                    generated.session_generation is None
+                    or generated.session_generation == current_generation
+                ):
+                    await commit_planner_snapshot(
+                        state, runtime, chat_id, generated.pfc_state_snapshot
+                    )
+                    committed = True
+            if committed:
+                schedule_pfc_state_flush(context, runtime, chat_id=chat_id)
         raise
     finally:
         task = generated.speculative_memory_task

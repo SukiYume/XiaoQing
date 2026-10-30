@@ -17,20 +17,16 @@ class AdminService:
 
     def enable_plugin(self, group_id: int) -> bool:
         """启用指定群的宠物系统。"""
-        config         = self.db.get_group_config(group_id)
-        config.enabled = True
-        return self.db.update_group_config(config)
+        # 只改目标字段：整份旧快照写回会覆盖并发请求刚提交的其他配置。
+        return self.db.update_group_config_field(group_id, "enabled", True)
 
     def disable_plugin(self, group_id: int) -> bool:
         """停用指定群的宠物系统。"""
-        config         = self.db.get_group_config(group_id)
-        config.enabled = False
-        return self.db.update_group_config(config)
+        return self.db.update_group_config_field(group_id, "enabled", False)
 
     def set_config(self, group_id: int, key: str, value: str) -> bool:
-        """校验并更新一个允许公开配置的群级字段。"""
-        config = self.db.get_group_config(group_id)
-
+        """校验并原子更新一个允许公开配置的群级字段。"""
+        new_value: float | bool
         if key in _MULTIPLIER_KEYS:
             try:
                 multiplier = float(value)
@@ -38,7 +34,7 @@ class AdminService:
                 return False
             if not 0.1 <= multiplier <= 10.0:
                 return False
-            setattr(config, key, multiplier)
+            new_value = multiplier
         elif key in _BOOLEAN_KEYS:
             normalized_value = value.strip().casefold()
             if normalized_value in _TRUE_VALUES:
@@ -47,11 +43,11 @@ class AdminService:
                 enabled = False
             else:
                 return False
-            setattr(config, key, enabled)
+            new_value = enabled
         else:
             return False
 
-        return self.db.update_group_config(config)
+        return self.db.update_group_config_field(group_id, key, new_value)
 
     def get_config(self, group_id: int) -> GroupConfig:
         """返回指定群的当前配置。"""

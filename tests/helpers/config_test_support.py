@@ -39,11 +39,11 @@ def config_file(temp_config_dir: Path) -> Path:
     """创建配置文件"""
     config_path = temp_config_dir / "config.json"
     config_data = {
-        "bot_name": "测试机器人",
-        "command_prefixes": ["/", "!"],
+        "bot_name"                 : "测试机器人",
+        "command_prefixes"         : ["/", "!"],
         "require_bot_name_in_group": True,
-        "plugins": {
-            "echo": {"enabled": True},
+        "plugins"                  : {
+            "echo"  : {"enabled": True},
             "choice": {"enabled": False},
         },
     }
@@ -58,8 +58,8 @@ def secrets_file(temp_config_dir: Path) -> Path:
     secrets_path = temp_config_dir / "secrets.json"
     secrets_data = {
         "admin_user_ids": [12345, 67890],
-        "plugins": {
-            "echo": {"api_key": "test_key"},
+        "plugins"       : {
+            "echo"  : {"api_key": "test_key"},
             "choice": {},
         },
     }

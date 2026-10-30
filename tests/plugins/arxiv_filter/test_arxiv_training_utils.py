@@ -107,7 +107,7 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
     frame = pd.DataFrame({"title": ["a", "b", "c", "d"], "label": [0, 1, 0, 1]})
     train_frame = frame.iloc[:2].copy()
     validation_frame = frame.iloc[2:].copy()
-    logs: list[str] = []
+    logs        : list[str] = []
     loader_calls: list[dict[str, object]] = []
     sampler = object()
     optimizer = object()
@@ -130,10 +130,10 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
         training_utils,
         "get_runtime_settings",
         lambda _device: {
-            "use_amp": False,
+            "use_amp"   : False,
             "pin_memory": False,
-            "use_fused": False,
-            "amp_dtype": torch.float32,
+            "use_fused" : False,
+            "amp_dtype" : torch.float32,
         },
     )
     monkeypatch.setattr(training_utils, "create_optimizer", lambda *_args, **_kwargs: optimizer)
@@ -279,9 +279,9 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     )
     frame = pd.DataFrame(
         {
-            "Title": ["positive", "negative"],
+            "Title"   : ["positive", "negative"],
             "Abstract": ["wanted", "ignored"],
-            "label": [1, 0],
+            "label"   : [1, 0],
         }
     )
     model.fit(
@@ -312,7 +312,7 @@ def test_knn_backend_builds_normalized_text_and_applies_negative_penalty(
     knn_backend = inference_modules.knn_backend
     frame       = pd.DataFrame(
         {
-            "Title": ["  First\n title ", None],
+            "Title"   : ["  First\n title ", None],
             "Abstract": [" abstract\tvalue ", "second"],
         }
     )
@@ -408,9 +408,9 @@ def test_inference_runner_copies_input_and_publishes_backend_results(
 def test_inference_params_reject_invalid_runtime_values(field: str, value: object) -> None:
     values = {
         "model_path": "model",
-        "threshold": 0.5,
+        "threshold" : 0.5,
         "batch_size": 2,
-        "max_len": 32,
+        "max_len"   : 32,
         "input_mode": "title_abstract",
         "model_type": "knn",
     }
@@ -448,10 +448,10 @@ def test_inference_runner_rejects_malformed_backend_results(
 def test_interest_column_resolution_preserves_alias_order_and_required_errors() -> None:
     frame = pd.DataFrame(columns=["Paper Title", "Summary", "Target", "Article ID"])
     aliases = {
-        "id": ["arxivid", "articleid"],
-        "title": ["title", "papertitle"],
+        "id"      : ["arxivid", "articleid"],
+        "title"   : ["title", "papertitle"],
         "abstract": ["abstract", "summary"],
-        "label": ["label", "target"],
+        "label"   : ["label", "target"],
     }
 
     assert interest_utils.resolve_columns(
@@ -460,10 +460,10 @@ def test_interest_column_resolution_preserves_alias_order_and_required_errors() 
         required_fields = {"title", "abstract"},
         error_prefix    = "missing columns",
     ) == {
-        "id": "Article ID",
-        "title": "Paper Title",
+        "id"      : "Article ID",
+        "title"   : "Paper Title",
         "abstract": "Summary",
-        "label": "Target",
+        "label"   : "Target",
     }
 
     with pytest.raises(ValueError, match=r"missing columns.*候选：\['abstract', 'summary'\]"):
@@ -478,13 +478,13 @@ def test_interest_column_resolution_preserves_alias_order_and_required_errors() 
 def test_interest_split_supports_deterministic_random_and_time_policies() -> None:
     frame = pd.DataFrame(
         {
-            "id": list(range(8)),
+            "id"   : list(range(8)),
             "label": [0, 1] * 4,
-            "date": [f"2030-01-{day:02d}" for day in range(8, 0, -1)],
+            "date" : [f"2030-01-{day:02d}" for day in range(8, 0, -1)],
         }
     )
     common = {
-        "missing_date_error": "date required",
+        "missing_date_error"       : "date required",
         "stratify_fallback_message": "fallback",
     }
 

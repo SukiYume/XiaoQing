@@ -48,7 +48,7 @@ from .commands.scheduled import (
     send_weekly_finance_summaries,
 )
 from .commands.session import handle_session_message
-from .commands.settings import handle_settings
+from .commands.settings import handle_settings_result
 from .config import PendoConfig, PendoRuntimeSettings
 from .core.exceptions import (
     InvalidDateRangeException,
@@ -76,7 +76,7 @@ from .services.db import Database
 from .services.exporter import ExporterService
 from .services.reminder import ReminderService
 from .services.runtime import PendoRuntimeService
-from .utils.error_handlers import handle_command_errors, success_result
+from .utils.error_handlers import error_result, handle_command_errors, success_result
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
@@ -767,8 +767,8 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                 "action": "upload_private_file",
                 "params": {
                     "user_id": target_user,
-                    "file": file_path,
-                    "name": file_name,
+                    "file"   : file_path,
+                    "name"   : file_name,
                 },
             }
         )
@@ -793,7 +793,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
             return _success_message(_show_help("import"))
         if requested:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ /pendo import 不接收文件路径或其他参数\n用法: /pendo import",
             }
         runtime = PendoConfig.runtime()
@@ -816,8 +816,8 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         )
 
     async def _settings_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        message = await handle_settings(user_id, args, db)
-        return _success_message(message)
+        ok, message = await handle_settings_result(user_id, args, db)
+        return _success_message(message) if ok else cast(dict[str, Any], error_result(message))
 
     async def _confirm_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         # confirm 返回结构化状态，直接透传，不能从展示文本前缀推断成功与否。
@@ -846,19 +846,19 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         return _wrapper
 
     handlers = {
-        "event": _help_or_exec(event_handler.handle, "event"),
-        "todo": _help_or_exec(task_handler.handle, "todo"),
-        "note": _help_or_exec(note_handler.handle, "note"),
-        "diary": _help_or_exec(diary_handler.handle, "diary"),
-        "search": _search_cmd,
-        "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
-        "export": _export_cmd,
-        "import": _import_cmd,
+        "event"   : _help_or_exec(event_handler.handle, "event"),
+        "todo"    : _help_or_exec(task_handler.handle, "todo"),
+        "note"    : _help_or_exec(note_handler.handle, "note"),
+        "diary"   : _help_or_exec(diary_handler.handle, "diary"),
+        "search"  : _search_cmd,
+        "ledger"  : _help_or_exec(ledger_handler.handle, "ledger"),
+        "export"  : _export_cmd,
+        "import"  : _import_cmd,
         "settings": _settings_cmd,
-        "confirm": _confirm_cmd,
-        "snooze": _snooze_cmd,
-        "undo": _undo_cmd,
-        "web": _help_or_exec(web_handler.handle, "web"),
+        "confirm" : _confirm_cmd,
+        "snooze"  : _snooze_cmd,
+        "undo"    : _undo_cmd,
+        "web"     : _help_or_exec(web_handler.handle, "web"),
     }
 
     router = CommandRouter(_catalog_root(context), handlers, help_provider=_show_help)
@@ -871,7 +871,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 
 HELP_MAP = {
     "header": "🗓️ Pendo · 个人时间与信息管理中枢",
-    "quick": [
+    "quick" : [
         "⚡ 快速记录",
         "• /pendo event add <内容> - 添加单次/重复/多节点日程(AI解析)",
         "  - 例: /pendo event add 明天9点组会，提前30分钟提醒",
@@ -1136,16 +1136,16 @@ def _show_help(subcommand: str = "") -> str:
 
     # 别名映射
     aliases = {
-        "task": "todo",
+        "task"    : "todo",
         "calendar": "event",
-        "idea": "note",
-        "journal": "diary",
-        "config": "settings",
-        "bill": "ledger",
-        "finance": "ledger",
-        "confirm": "reminder",
-        "snooze": "reminder",
-        "undo": "common",
+        "idea"    : "note",
+        "journal" : "diary",
+        "config"  : "settings",
+        "bill"    : "ledger",
+        "finance" : "ledger",
+        "confirm" : "reminder",
+        "snooze"  : "reminder",
+        "undo"    : "common",
     }
     target_key = aliases.get(subcommand, subcommand)
 
@@ -1212,17 +1212,17 @@ def _get_services(context: PendoContext) -> PendoServices:
     web_handler    = WebHandler(db)
 
     services: PendoServices = {
-        "db": db,
-        "ai_parser": ai_parser,
+        "db"              : db,
+        "ai_parser"       : ai_parser,
         "reminder_service": reminder_service,
-        "exporter": exporter,
-        "event_handler": event_handler,
-        "task_handler": task_handler,
-        "note_handler": note_handler,
-        "diary_handler": diary_handler,
-        "search_handler": search_handler,
-        "ledger_handler": ledger_handler,
-        "web_handler": web_handler,
+        "exporter"        : exporter,
+        "event_handler"   : event_handler,
+        "task_handler"    : task_handler,
+        "note_handler"    : note_handler,
+        "diary_handler"   : diary_handler,
+        "search_handler"  : search_handler,
+        "ledger_handler"  : ledger_handler,
+        "web_handler"     : web_handler,
     }
 
     get_plugin_runtime_state(context)["services"] = services

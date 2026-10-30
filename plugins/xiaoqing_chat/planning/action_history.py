@@ -16,12 +16,12 @@ from ..store_base import coerce_finite_float, coerce_json_bool, delete_json_arti
 
 @dataclass(frozen=True)
 class ActionRecord:
-    ts: float
+    ts          : float
     local_target: str
-    action: str
-    reasoning: str
-    detail: dict[str, Any]
-    executed: bool
+    action      : str
+    reasoning   : str
+    detail      : dict[str, Any]
+    executed    : bool
 
 
 class ActionHistoryStore:
@@ -38,6 +38,10 @@ class ActionHistoryStore:
         self._state_version: dict[str, int]        = {}
         self._lock                                 = threading.RLock()
         self._write_lock                           = threading.Lock()
+        # clear 的代际：冷加载期间发生过重置时，磁盘旧历史不能再并回来。
+        self._clear_generation: dict[str, int] = {}
+        # 已经并入过磁盘历史的会话；并发的第二次冷加载不能再合并一遍。
+        self._disk_merged: set[str] = set()
 
     def bind(self, data_dir: Path) -> None:
         with self._lock:
@@ -51,6 +55,7 @@ class ActionHistoryStore:
                 else:
                     loaded               = self._load(chat_id)
                     self._cache[chat_id] = loaded or []
+                    self._disk_merged.add(chat_id)
             self._cache[chat_id].append(record)
             del self._cache[chat_id][:-200]
             self._dirty.add(chat_id)
@@ -62,8 +67,10 @@ class ActionHistoryStore:
             with self._lock:
                 self._cache.pop(chat_id, None)
                 self._dirty.discard(chat_id)
-                self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
-                path                         = self._path(chat_id)
+                self._state_version[chat_id]    = self._state_version.get(chat_id, 0) + 1
+                self._clear_generation[chat_id] = self._clear_generation.get(chat_id, 0) + 1
+                self._disk_merged.discard(chat_id)
+                path = self._path(chat_id)
             if path:
                 delete_json_artifacts(path)
 
@@ -79,14 +86,22 @@ class ActionHistoryStore:
 
     async def get_recent_async(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
         if chat_id not in self._cache:
-            start_version = self._state_version.get(chat_id, 0)
+            start_clear = self._clear_generation.get(chat_id, 0)
             self._async_loading.add(chat_id)
             try:
                 loaded = await asyncio.to_thread(self._load, chat_id)
             finally:
                 self._async_loading.discard(chat_id)
-            if chat_id not in self._cache and self._state_version.get(chat_id, 0) == start_version:
-                self._cache[chat_id] = loaded or []
+            with self._lock:
+                if (
+                    self._clear_generation.get(chat_id, 0) == start_clear
+                    and chat_id not in self._disk_merged
+                ):
+                    self._disk_merged.add(chat_id)
+                    # 加载期间追加的记录先进了空缓存：与磁盘历史合并，不能丢掉已有历史。
+                    appended             = self._cache.get(chat_id, [])
+                    merged               = [*(loaded or []), *appended]
+                    self._cache[chat_id] = merged[-200:]
         if max_items <= 0:
             return []
         return list(self._cache.get(chat_id, [])[-max_items:])

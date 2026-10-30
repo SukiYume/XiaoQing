@@ -97,10 +97,10 @@ COMMAND_RUNNER_EVENT_KEY = "_command_runner"
 class PluginSettingsSnapshot:
     """One atomic, plugin-scoped view of public config and private settings."""
 
-    config: Mapping[str, Any]
-    secrets: Mapping[str, Any]
-    revision: int
-    config_status: str  = "valid"
+    config        : Mapping[str, Any]
+    secrets       : Mapping[str, Any]
+    revision      : int
+    config_status : str = "valid"
     secrets_status: str = "valid"
 
     @staticmethod
@@ -129,7 +129,7 @@ class PluginSettingsSnapshot:
 class DeliveryTarget:
     """A core-validated immutable private or group delivery destination."""
 
-    kind: Literal["private", "group"]
+    kind     : Literal["private", "group"]
     target_id: int
 
     def __post_init__(self) -> None:
@@ -160,13 +160,13 @@ class PluginPrincipal:
     能冒充原票据。字段组合在构造时收紧，避免私聊/群聊范围互相矛盾。
     """
 
-    kind: Literal["user", "scheduled_system", "lifecycle"]
-    user_id: int | None                            = None
-    group_id: int | None                           = None
-    is_bot_admin: bool                             = False
-    is_private: bool                               = False
-    group_role: PluginGroupRole                    = "unknown"
-    delivery_targets: tuple[DeliveryTarget, ...]   = ()
+    kind             : Literal["user", "scheduled_system", "lifecycle"]
+    user_id          : int | None                  = None
+    group_id         : int | None                  = None
+    is_bot_admin     : bool                        = False
+    is_private       : bool                        = False
+    group_role       : PluginGroupRole             = "unknown"
+    delivery_targets : tuple[DeliveryTarget, ...]  = ()
     schedule_delivery: ScheduleDeliveryMode | None = None
 
     def __post_init__(self) -> None:
@@ -359,40 +359,40 @@ class AICapability(Protocol):
 
 @dataclass(frozen=True)
 class PluginCapabilities:
-    is_bot_admin: bool                                      = False
-    is_system: bool                                         = False
-    secret_admin: SecretAdminCapability | None              = None
-    onebot_media: OneBotMediaCapability | None              = None
+    is_bot_admin       : bool                               = False
+    is_system          : bool                               = False
+    secret_admin       : SecretAdminCapability | None       = None
+    onebot_media       : OneBotMediaCapability | None       = None
     config_subscription: PluginConfigSubscription | None    = None
     codex_arxiv_summary: CodexArxivSummaryCapability | None = None
-    voice_synthesis: VoiceSynthesisCapability | None        = None
-    chat_reply: ChatReplyCapability | None                  = None
-    agent_turn: AgentTurnCapability | None                  = None
-    codex_agent: CodexAgentTaskCapability | None            = None
-    ssh_agent: SSHAgentCommandCapability | None             = None
-    command_runner: CommandRunnerCapability | None          = None
-    local_tools: LocalToolsCapability | None                = None
-    ai: AICapability | None                                 = None
+    voice_synthesis    : VoiceSynthesisCapability | None    = None
+    chat_reply         : ChatReplyCapability | None         = None
+    agent_turn         : AgentTurnCapability | None         = None
+    codex_agent        : CodexAgentTaskCapability | None    = None
+    ssh_agent          : SSHAgentCommandCapability | None   = None
+    command_runner     : CommandRunnerCapability | None     = None
+    local_tools        : LocalToolsCapability | None        = None
+    ai                 : AICapability | None                = None
 
 
 class PluginConfig(Protocol):
-    config: Mapping[str, Any]
+    config : Mapping[str, Any]
     secrets: Mapping[str, Any]
 
 
 class PluginRuntime(Protocol):
     # 应用拥有并在插件上下文间共享会话；插件只可借用，不能主动关闭。
-    http_session: Any
-    send_action: SendAction
-    reload_config: Callable[[], Any]
-    reload_plugins: Callable[[], Any]
+    http_session       : Any
+    send_action        : SendAction
+    reload_config      : Callable[[], Any]
+    reload_plugins     : Callable[[], Any]
     get_command_catalog: Callable[[], tuple[CommandCatalogNode, ...]]
-    list_plugins: Callable[[], list[str]]
+    list_plugins       : Callable[[], list[str]]
 
 
 class SessionAccess(Protocol):
-    session_manager: Any
-    current_user_id: int | None
+    session_manager : Any
+    current_user_id : int | None
     current_group_id: int | None
 
     async def create_session(
@@ -413,17 +413,17 @@ class SessionAccess(Protocol):
 
 
 class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol):
-    plugin_name: str
-    plugin_dir: Path
-    data_dir: Path
-    logger: Any
-    metrics: Any
-    request_id: str | None
+    plugin_name       : str
+    plugin_dir        : Path
+    data_dir          : Path
+    logger            : Any
+    metrics           : Any
+    request_id        : str | None
     command_invocation: CommandInvocation | None
     # One dictionary is shared by events for the current plugin generation.
     # Unload/reload or process restart discards it.
-    state: dict[str, Any]
-    principal: PluginPrincipal
+    state       : dict[str, Any]
+    principal   : PluginPrincipal
     capabilities: PluginCapabilities
 
     def now(self) -> Any: ...

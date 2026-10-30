@@ -1,4 +1,3 @@
-# mypy: disable-error-code=attr-defined
 """OneBot action delivery and inbound event collection."""
 
 from __future__ import annotations
@@ -8,7 +7,7 @@ import heapq
 import logging
 import time
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .app_identity import AppIdentityService
 from .app_support import _parse_group_ids, current_action_sink
@@ -28,6 +27,7 @@ from .delivery import (
 from .dispatcher import Dispatcher
 from .interfaces import ACTION_BYPASS_SINK_KEY, ACTION_RESULT_MESSAGE_ID_KEY
 from .onebot import (
+    OneBotActionCancelledAfterCommit,
     OneBotActionOutcomeUnknown,
     OneBotHttpSender,
     OneBotWsClient,
@@ -69,19 +69,35 @@ def _message_length(message: Any) -> int:
 
 
 class AppDeliveryMixin:
-    dispatcher: Dispatcher
-    http_sender: OneBotHttpSender | None
-    inbound_manager: InboundManager | None
-    plugin_manager: PluginManager
-    ws_client: OneBotWsClient | None
-    _last_connect_notification_ts: float
-    _onebot_auth_generation: int
-    identity_service: AppIdentityService
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+        _event_dedupe_expirations: list[tuple[float, int, tuple[tuple[str, str], ...]]]
+
+        _event_dedupe_lock: Any
+
+        _event_dedupe_sequence: int
+
+        _recent_event_ids: dict[tuple[tuple[str, str], ...], float]
+
+        _runtime_auth_lock: Any
+
+        @property
+        def config(self) -> Mapping[str, Any]:
+            raise NotImplementedError
+
+    dispatcher                         : Dispatcher
+    http_sender                        : OneBotHttpSender | None
+    inbound_manager                    : InboundManager | None
+    plugin_manager                     : PluginManager
+    ws_client                          : OneBotWsClient | None
+    _last_connect_notification_ts      : float
+    _onebot_auth_generation            : int
+    identity_service                   : AppIdentityService
     _runtime_onebot_credentials_trusted: bool
-    _runtime_onebot_token: str
-    _stopping: bool
-    _ws_client_auth_generation: int
-    _ws_client_auth_quarantine: OneBotWsClient | None
+    _runtime_onebot_token              : str
+    _stopping                          : bool
+    _ws_client_auth_generation         : int
+    _ws_client_auth_quarantine         : OneBotWsClient | None
 
     async def _on_ws_connected(self) -> None:
         """WebSocket 连接成功回调"""
@@ -124,7 +140,7 @@ class AppDeliveryMixin:
                 "action": "send_group_msg",
                 "params": {
                     "group_id": int(group_id),
-                    "message": message,
+                    "message" : message,
                 },
             }
             await self._send_action(action)
@@ -249,34 +265,51 @@ class AppDeliveryMixin:
             and getattr(sink, "is_active", True)
         )
         sent_all: bool | None = True
-        for i, act in enumerate(actions):
-            try:
-                if i > 0:
-                    await asyncio.sleep(MESSAGE_SPLIT_DELAY)
-                sent = await self._send_single_action(
-                    act,
-                    wait_ws_seconds=wait_ws_seconds,
-                )
-            except BaseException:
+        settled               = 0
+        any_delivered         = False
+        try:
+            for i, act in enumerate(actions):
+                try:
+                    if i > 0:
+                        await asyncio.sleep(MESSAGE_SPLIT_DELAY)
+                    sent = await self._send_single_action(
+                        act,
+                        wait_ws_seconds=wait_ws_seconds,
+                    )
+                except BaseException as exc:
+                    if receipt is not None and not captured_by_sink:
+                        settled += 1
+                        # 已写入传输层后才被取消的动作可能已经发出；之前的片段已经送达时，
+                        # 整条回复只发了一部分。两种情况都记为未知，不能回滚业务预留，
+                        # 否则后续重试会重复投递。
+                        committed = isinstance(exc, OneBotActionCancelledAfterCommit)
+                        await asyncio.shield(
+                            receipt.record(None if committed or any_delivered else False)
+                        )
+                    raise
+                settled += 1
                 if receipt is not None and not captured_by_sink:
-                    await asyncio.shield(receipt.record(False))
-                raise
-            if receipt is not None and not captured_by_sink:
-                if sent is True:
-                    # 拆分后的每一条都登记消息 ID，提交回调拿到整条回复的全部 ID。
-                    receipt.add_message_id(act.get(ACTION_RESULT_MESSAGE_ID_KEY))
-                # The transport result is the delivery boundary.  Observer
-                # cancellation/failure after this point must not roll back a
-                # reply that OneBot already accepted.
-                await asyncio.shield(receipt.record(sent))
-            if sent is True and not captured_by_sink:
-                await self._notify_outgoing_action_observers(
-                    {key: value for key, value in act.items() if key != DELIVERY_RECEIPT_KEY}
-                )
-            if sent is False:
-                sent_all = False
-            elif sent is None and sent_all is True:
-                sent_all = None
+                    if sent is True:
+                        any_delivered = True
+                        # 拆分后的每一条都登记消息 ID，提交回调拿到整条回复的全部 ID。
+                        receipt.add_message_id(act.get(ACTION_RESULT_MESSAGE_ID_KEY))
+                    # The transport result is the delivery boundary.  Observer
+                    # cancellation/failure after this point must not roll back a
+                    # reply that OneBot already accepted.
+                    await asyncio.shield(receipt.record(sent))
+                if sent is True and not captured_by_sink:
+                    await self._notify_outgoing_action_observers(
+                        {key: value for key, value in act.items() if key != DELIVERY_RECEIPT_KEY}
+                    )
+                if sent is False:
+                    sent_all = False
+                elif sent is None and sent_all is True:
+                    sent_all = None
+        finally:
+            if receipt is not None and not captured_by_sink and settled < len(actions):
+                # 观察回调或拆分间隔被取消时，剩余片段不会再发：终结这份逻辑回执。
+                # 已有片段送达时整条回复只发了一部分，记为未知。
+                await asyncio.shield(receipt.record(None if any_delivered else False))
         return sent_all
 
     def _prepare_action_delivery(self, action: dict[str, Any]) -> list[dict[str, Any]]:
@@ -535,7 +568,7 @@ class AppDeliveryMixin:
             collected.append(action)
 
         # 标记 sink 为活动状态
-        _collect.is_active = True
+        setattr(_collect, "is_active", True)  # noqa: B010 - 函数对象上的动态标记
 
         token = current_action_sink.set(_collect)
         try:
@@ -544,7 +577,7 @@ class AppDeliveryMixin:
                 collected.append(action)
         finally:
             # 标记 sink 为失效，使后续（后台任务）调用能直通发送逻辑
-            _collect.is_active = False
+            setattr(_collect, "is_active", False)  # noqa: B010 - 函数对象上的动态标记
             current_action_sink.reset(token)
 
         return [

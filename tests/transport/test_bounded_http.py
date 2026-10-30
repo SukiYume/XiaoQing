@@ -172,11 +172,11 @@ SMALL_LIMITS = BodyLimits(
 )
 def test_body_limits_require_positive_values(field: str) -> None:
     values = {
-        "max_wire_bytes": 1,
-        "max_decoded_bytes": 1,
+        "max_wire_bytes"         : 1,
+        "max_decoded_bytes"      : 1,
         "max_decompression_ratio": 1,
-        "ratio_grace_bytes": 1,
-        "chunk_bytes": 1,
+        "ratio_grace_bytes"      : 1,
+        "chunk_bytes"            : 1,
     }
     values[field] = 0
 
@@ -227,7 +227,7 @@ async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None
     payload = b'{"value":"bounded"}'
     compressed = gzip.compress(payload, mtime=0)
     headers = {
-        "Content-Type": "application/problem+json; charset=utf-8",
+        "Content-Type"    : "application/problem+json; charset=utf-8",
         "Content-Encoding": "gzip",
     }
     async_response = AsyncResponse(headers=headers, chunks=[compressed[:4], compressed[4:]])
@@ -643,8 +643,8 @@ def test_cross_origin_redirect_strips_credentials_when_explicitly_allowed() -> N
         redirect_policy=RedirectPolicy(max_hops=1, same_origin_only=False),
         headers={
             "Author" + "ization": "Bearer canary",
-            "Coo" + "kie": "secret=canary",
-            "X-Request-ID": "safe",
+            "Coo" + "kie"       : "secret=canary",
+            "X-Request-ID"      : "safe",
         },
         session=session,
     )
@@ -688,7 +688,7 @@ def test_redirect_hop_limit_is_enforced() -> None:
 
 def test_json_valid_payload_and_utf8_bom() -> None:
     assert parse_bounded_json(b'\xef\xbb\xbf{"ok":true,"items":[1,null]}') == {
-        "ok": True,
+        "ok"   : True,
         "items": [1, None],
     }
 

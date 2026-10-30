@@ -31,18 +31,18 @@ logger = logging.getLogger(__name__)
 # 空结果的列定义（避免魔法字面量重复）
 _EMPTY_COLUMNS  = ["arXiv ID", "Title", "Abstract"]
 _ENGLISH_MONTHS = {
-    "january": 1,
-    "february": 2,
-    "march": 3,
-    "april": 4,
-    "may": 5,
-    "june": 6,
-    "july": 7,
-    "august": 8,
+    "january"  : 1,
+    "february" : 2,
+    "march"    : 3,
+    "april"    : 4,
+    "may"      : 5,
+    "june"     : 6,
+    "july"     : 7,
+    "august"   : 8,
     "september": 9,
-    "october": 10,
-    "november": 11,
-    "december": 12,
+    "october"  : 10,
+    "november" : 11,
+    "december" : 12,
 }
 _HTML_BODY_LIMITS = BodyLimits(
     max_wire_bytes          = 4 * 1024 * 1024,
@@ -141,7 +141,7 @@ def _fetch_arxiv_page(
             request_kwargs  = {
                 "timeout": timeout,
                 "proxies": proxies,
-                "verify": verify,
+                "verify" : verify,
             },
         )
     except (requests.RequestException, BoundedHttpError) as err:

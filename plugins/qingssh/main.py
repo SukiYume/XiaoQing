@@ -31,23 +31,23 @@ CommandHandler = Callable[
 
 _MAIN_COMMANDS                                       = {"ssh"}
 _SUBCOMMAND_ROUTES: dict[str, CommandHandler | None] = {
-    "help": None,
-    "list": handle_ssh_list,
-    "add": handle_ssh_add,
-    "remove": handle_ssh_remove,
-    "import": handle_ssh_import,
-    "config": handle_ssh_config_list,
-    "status": handle_ssh_status,
+    "help"      : None,
+    "list"      : handle_ssh_list,
+    "add"       : handle_ssh_add,
+    "remove"    : handle_ssh_remove,
+    "import"    : handle_ssh_import,
+    "config"    : handle_ssh_config_list,
+    "status"    : handle_ssh_status,
     "disconnect": handle_ssh_disconnect,
 }
 _LEGACY_ROUTES: dict[str, CommandHandler] = {
-    "ssh断开": handle_ssh_disconnect,
-    "ssh列表": handle_ssh_list,
-    "ssh添加": handle_ssh_add,
-    "ssh删除": handle_ssh_remove,
-    "ssh导入": handle_ssh_import,
+    "ssh断开"    : handle_ssh_disconnect,
+    "ssh列表"    : handle_ssh_list,
+    "ssh添加"    : handle_ssh_add,
+    "ssh删除"    : handle_ssh_remove,
+    "ssh导入"    : handle_ssh_import,
     "sshconfig": handle_ssh_config_list,
-    "ssh状态": handle_ssh_status,
+    "ssh状态"    : handle_ssh_status,
 }
 
 
@@ -151,9 +151,9 @@ async def agent_command_service(request: dict[str, Any], context: Context) -> An
     server = str(request.get("server") or "").strip()
     if manager.get_server(server) is None:
         return {
-            "ok": False,
+            "ok"       : False,
             "exit_code": None,
-            "output": f"未找到服务器: {server}；可用: {', '.join(sorted(manager.servers)) or '无'}",
+            "output"   : f"未找到服务器: {server}；可用: {', '.join(sorted(manager.servers)) or '无'}",
             "timed_out": False,
         }
     # 远端命令可能运行很久：QingSSH 是串行插件，这里只启动并交回 Task，由调用方在

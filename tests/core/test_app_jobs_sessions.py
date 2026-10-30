@@ -2,26 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.app_test_support as _fixture_support
 from core.delivery import ScheduledDelivery
 from tests.helpers.app_test_support import (
-    AsyncMock,
     BlockingConcurrencyProbe,
     DeliveryReceipt,
     DeliverySegments,
     LoadedPlugin,
-    MagicMock,
-    Mock,
-    Path,
     PluginDefinition,
-    SimpleNamespace,
     XiaoQingApp,
     _plugin_context_for,
     _set_app_config,
-    asyncio,
     current_action_sink,
-    patch,
-    pytest,
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
@@ -99,12 +98,14 @@ def test_app_reload_plugins_already_in_progress(temp_app_root: Path):
     app._reload_task.done = Mock(return_value=False)
 
     # Mock plugin manager
-    app.plugin_manager.unload_plugin = AsyncMock()
+    original                              = app._reload_task
+    app.plugin_manager.reload_all_plugins = AsyncMock()
 
     app._reload_plugins()
 
     # Should not create new task
-    assert app._reload_task.done.called is False or app.plugin_manager.unload_plugin.call_count == 0
+    assert app._reload_task is original
+    app.plugin_manager.reload_all_plugins.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -372,7 +373,7 @@ async def test_send_action_resolves_declared_observer_for_external_plugin_text(
         "action": "send_group_msg",
         "params": {
             "group_id": 123,
-            "message": [{"type": "text", "data": {"text": "地震播报"}}],
+            "message" : [{"type": "text", "data": {"text": "地震播报"}}],
         },
         "_source_plugin": "earthquake",
     }
@@ -399,22 +400,30 @@ async def test_send_action_resolves_declared_observer_for_external_plugin_text(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_send_action_does_not_notify_xiaoqing_for_xiaoqing_source(temp_app_root: Path):
-    app                                = XiaoQingApp(temp_app_root)
-    app.plugin_manager.resolve_service = Mock()
+async def test_send_action_passes_own_source_to_declared_observer(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    observer = AsyncMock(return_value=[])
+    app.plugin_manager.resolve_service = Mock(
+        return_value=(SimpleNamespace(), SimpleNamespace(owner="xiaoqing_chat", callback=observer))
+    )
 
-    await app._send_action(
+    app.plugin_manager.build_context = Mock(return_value=MagicMock())
+    app._send_single_action = AsyncMock(return_value=True)
+    result = await app._send_action(
         {
             "action": "send_group_msg",
             "params": {
                 "group_id": 123,
-                "message": [{"type": "text", "data": {"text": "小青回复"}}],
+                "message" : [{"type": "text", "data": {"text": "小青回复"}}],
             },
             "_source_plugin": "xiaoqing_chat",
         }
     )
 
-    app.plugin_manager.resolve_service.assert_not_called()
+    assert result is True
+    app._send_single_action.assert_awaited_once()
+    observer.assert_awaited_once()
+    assert observer.await_args.kwargs["source_plugin"] == "xiaoqing_chat"
 
 
 @pytest.mark.asyncio
@@ -512,9 +521,9 @@ def test_app_reschedule_skips_manifest_disabled_schedule(temp_app_root: Path):
         commands = [],
         schedule = [
             {
-                "id": "disabled",
+                "id"     : "disabled",
                 "handler": "scheduled",
-                "cron": {"minute": "*"},
+                "cron"   : {"minute": "*"},
                 "enabled": False,
             }
         ],
@@ -541,11 +550,11 @@ def test_app_reschedule_preserves_manifest_schedule_description(temp_app_root: P
         commands = [],
         schedule = [
             {
-                "id": "enabled",
-                "handler": "scheduled",
-                "cron": {"minute": "*"},
+                "id"         : "enabled",
+                "handler"    : "scheduled",
+                "cron"       : {"minute": "*"},
                 "description": "visible scheduler metadata",
-                "enabled": True,
+                "enabled"    : True,
             }
         ],
         concurrency="parallel",
@@ -584,10 +593,10 @@ async def test_manifest_schedule_group_ids_reach_plugin_context(temp_app_root: P
         commands = [],
         schedule = [
             {
-                "id": "targeted",
-                "handler": "scheduled",
-                "cron": {"minute": "*"},
-                "delivery": "targeted",
+                "id"       : "targeted",
+                "handler"  : "scheduled",
+                "cron"     : {"minute": "*"},
+                "delivery" : "targeted",
                 "group_ids": [101, 202],
             }
         ],
@@ -629,9 +638,9 @@ def test_app_reschedule_validates_every_manifest_before_replacement(temp_app_roo
         schedule = [
             {"id": "valid", "handler": "scheduled", "cron": {"minute": "*"}},
             {
-                "id": "invalid",
-                "handler": "scheduled",
-                "cron": {"minute": "*"},
+                "id"       : "invalid",
+                "handler"  : "scheduled",
+                "cron"     : {"minute": "*"},
                 "group_ids": [0],
             },
         ],

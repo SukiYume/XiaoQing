@@ -20,7 +20,6 @@ from ..utils.formatters import (
     TAG_TOKEN_RE,
     ItemFormatter,
     extract_tags,
-    paginate,
 )
 from ..utils.identifiers import public_id
 from ..utils.settings_utils import resolve_default_category
@@ -36,21 +35,21 @@ if TYPE_CHECKING:
 
 
 _ITEM_TYPE_LABELS: Final = {
-    "event": "日程",
-    "task": "待办",
-    "note": "笔记",
-    "diary": "日记",
+    "event" : "日程",
+    "task"  : "待办",
+    "note"  : "笔记",
+    "diary" : "日记",
     "ledger": "账目",
 }
 _QUOTED_OR_TOKEN_PATTERN: Final = r"""(?:"[^"]*"|'[^']*'|“[^”]*”|\S+)"""
-_TITLE_CONTENT_RE: Final        = re.compile(
+_TITLE_CONTENT_RE       : Final = re.compile(
     r"^([^\n]+?)\s+content(?::\s*|\s+)(.*)$", re.IGNORECASE | re.DOTALL
 )
 _INLINE_TITLE_RE: Final = re.compile(
     rf"(^|\s)(title:{_QUOTED_OR_TOKEN_PATTERN})(?=\s|$)", re.IGNORECASE
 )
 _INLINE_REFERENCE_RE: Final = re.compile(rf"(?<!\S)ref:({_QUOTED_OR_TOKEN_PATTERN})", re.IGNORECASE)
-_METADATA_SUFFIX_RE: Final  = re.compile(
+_METADATA_SUFFIX_RE : Final = re.compile(
     rf"(?:^|\s)(cat:{_QUOTED_OR_TOKEN_PATTERN}|ref:{_QUOTED_OR_TOKEN_PATTERN}|#[\w\u4e00-\u9fa5-]+)\s*$",
     re.IGNORECASE,
 )
@@ -65,41 +64,41 @@ _MALFORMED_METADATA_SUFFIX_RE: Final = re.compile(
 
 
 class NoteExplicitFields(TypedDict):
-    category: bool
-    tags: bool
+    category  : bool
+    tags      : bool
     references: bool
 
 
 class NoteMetadata(TypedDict):
-    text: str
-    category: str | None
-    tags: list[str]
+    text         : str
+    category     : str | None
+    tags         : list[str]
     reference_ids: list[str]
 
 
 class ParsedNoteText(TypedDict):
-    title: str
-    content: str
-    category: str
-    tags: list[str]
-    reference_ids: list[str]
-    _title_provided: bool
+    title            : str
+    content          : str
+    category         : str
+    tags             : list[str]
+    reference_ids    : list[str]
+    _title_provided  : bool
     _content_provided: bool
-    _explicit_fields: NoteExplicitFields
+    _explicit_fields : NoteExplicitFields
 
 
 @dataclass(frozen=True, slots=True)
 class NoteListFilters:
     """笔记列表筛选；日期边界采用用户本地墙钟时间。"""
 
-    category: str | None   = None
-    tag: str | None        = None
-    start_date: str | None = None
-    end_date: str | None   = None
-    time_label: str | None = None
-    show_all: bool         = False
-    page: int              = 1
-    page_explicit: bool    = False
+    category     : str | None = None
+    tag          : str | None = None
+    start_date   : str | None = None
+    end_date     : str | None = None
+    time_label   : str | None = None
+    show_all     : bool       = False
+    page         : int        = 1
+    page_explicit: bool       = False
 
     @property
     def has_semantic_filter(self) -> bool:
@@ -136,8 +135,8 @@ def _split_note_control_tokens(tokens: list[str]) -> tuple[list[str], bool, int,
 
 def _split_note_named_tokens(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
     """提取 cat:、since: 与单个 #tag，保留裸时间/分类参数。"""
-    remaining: list[str]  = []
-    named: dict[str, str] = {}
+    remaining: list[str]      = []
+    named    : dict[str, str] = {}
     for token in tokens:
         normalized = token.casefold()
         prefix, separator, value = token.partition(":")
@@ -196,13 +195,13 @@ class NoteHandler(DbOpsMixin):
             return await self.create_note(user_id, rest, context, group_id)
 
         handlers: dict[str, Callable[[str, str, PendoContext], Awaitable[CommandMessage]]] = {
-            "list": self.list_notes,
-            "view": self.view_note,
-            "edit": self.edit_note,
+            "list"  : self.list_notes,
+            "view"  : self.view_note,
+            "edit"  : self.edit_note,
             "append": self.append_note,
-            "tag": self.tag_note,
-            "untag": self.untag_note,
-            "link": self.link_note,
+            "tag"   : self.tag_note,
+            "untag" : self.untag_note,
+            "link"  : self.link_note,
             "delete": self.delete_note,
         }
         if handler := handlers.get(command):
@@ -250,11 +249,11 @@ class NoteHandler(DbOpsMixin):
         try:
             normalized = normalize_note_fields(
                 {
-                    "title": parsed["title"],
-                    "content": parsed["content"],
-                    "category": parsed["category"],
-                    "tags": parsed["tags"],
-                    "references": references,
+                    "title"        : parsed["title"],
+                    "content"      : parsed["content"],
+                    "category"     : parsed["category"],
+                    "tags"         : parsed["tags"],
+                    "references"   : references,
                     "related_items": related_items,
                 },
                 partial=False,
@@ -300,7 +299,7 @@ class NoteHandler(DbOpsMixin):
         new_refs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         merged: list[dict[str, Any]] = []
-        seen: set[str]               = set()
+        seen  : set[str]             = set()
         for ref in [*(existing_refs or []), *new_refs]:
             if not isinstance(ref, dict):
                 continue
@@ -314,7 +313,7 @@ class NoteHandler(DbOpsMixin):
     @staticmethod
     def _related_from_references(refs: list[dict[str, Any]]) -> list[str]:
         related: list[str] = []
-        seen: set[str]     = set()
+        seen   : set[str]  = set()
         for ref in refs:
             ref_id = str(ref.get("id") or "").strip()
             if ref_id and ref_id not in seen:
@@ -329,7 +328,7 @@ class NoteHandler(DbOpsMixin):
         source_note_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         references: list[dict[str, Any]] = []
-        seen: set[str]                   = set()
+        seen      : set[str]             = set()
         for raw_id in ref_ids:
             ref_id = str(raw_id or "").strip()
             if not ref_id:
@@ -346,9 +345,9 @@ class NoteHandler(DbOpsMixin):
             item_type = get_item_type_value(target.type, default="item")
             references.append(
                 {
-                    "kind": "item",
-                    "id": resolved_ref_id,
-                    "type": item_type,
+                    "kind" : "item",
+                    "id"   : resolved_ref_id,
+                    "type" : item_type,
                     "title": target.title or "无标题",
                 }
             )
@@ -383,16 +382,16 @@ class NoteHandler(DbOpsMixin):
             title = content_text
 
         return {
-            "title": title,
-            "content": content_text,
-            "category": meta["category"] or "",
-            "tags": meta["tags"],
-            "reference_ids": meta["reference_ids"],
-            "_title_provided": explicit_title or content_provided,
+            "title"            : title,
+            "content"          : content_text,
+            "category"         : meta["category"] or "",
+            "tags"             : meta["tags"],
+            "reference_ids"    : meta["reference_ids"],
+            "_title_provided"  : explicit_title or content_provided,
             "_content_provided": content_provided,
-            "_explicit_fields": {
-                "category": bool(meta["category"]),
-                "tags": bool(meta["tags"]),
+            "_explicit_fields" : {
+                "category"  : bool(meta["category"]),
+                "tags"      : bool(meta["tags"]),
                 "references": bool(meta["reference_ids"]),
             },
         }
@@ -400,17 +399,12 @@ class NoteHandler(DbOpsMixin):
     @staticmethod
     def _normalize_title_token(raw_value: str) -> str | None:
         """清洗 title token 值，支持中英文及单双引号。"""
-        value = (raw_value or "").strip()
-        if not value:
-            return None
-
-        quote_pairs = {'"': '"', "'": "'", "“": "”"}
-        if value[0] in quote_pairs:
-            if not value.endswith(quote_pairs[value[0]]):
-                raise ValueError("title: 标题引号未闭合")
-            value = value[1:-1].strip()
-
-        return value or None
+        return (
+            NoteHandler._normalize_metadata_token_value(
+                raw_value, quote_error="title: 标题引号未闭合"
+            )
+            or None
+        )
 
     @classmethod
     def _split_explicit_title(cls, text: str) -> tuple[str | None, str]:
@@ -507,9 +501,9 @@ class NoteHandler(DbOpsMixin):
         if not lines:
             return {"text": "", "category": None, "tags": [], "reference_ids": []}
 
-        category: str | None     = None
-        tags: list[str]          = []
-        reference_ids: list[str] = []
+        category     : str | None = None
+        tags         : list[str]  = []
+        reference_ids: list[str]  = []
 
         for idx in range(len(lines) - 1, -1, -1):
             current = lines[idx].rstrip()
@@ -542,26 +536,28 @@ class NoteHandler(DbOpsMixin):
         reference_ids = cls._dedupe_reference_ids([*reference_ids, *inline_refs])
 
         return {
-            "text": return_text,
-            "category": category,
-            "tags": tags,
+            "text"         : return_text,
+            "category"     : category,
+            "tags"         : tags,
             "reference_ids": reference_ids,
         }
 
     @staticmethod
-    def _normalize_metadata_token_value(raw_value: str) -> str:
+    def _normalize_metadata_token_value(
+        raw_value: str, *, quote_error: str = "元数据参数中的引号未闭合"
+    ) -> str:
         value       = (raw_value or "").strip()
         quote_pairs = {'"': '"', "'": "'", "“": "”"}
         if value and value[0] in quote_pairs:
             if not value.endswith(quote_pairs[value[0]]):
-                raise ValueError("元数据参数中的引号未闭合")
+                raise ValueError(quote_error)
             value = value[1:-1].strip()
         return value
 
     @staticmethod
     def _dedupe_reference_ids(values: list[str]) -> list[str]:
         result: list[str] = []
-        seen: set[str]    = set()
+        seen  : set[str]  = set()
         for value in values:
             ref_id = str(value or "").strip()
             if ref_id and ref_id not in seen:
@@ -576,7 +572,7 @@ class NoteHandler(DbOpsMixin):
         """从单行尾部反复剥离 cat:、ref: 与 #tag token。"""
         remaining                = line.rstrip()
         category                 = None
-        tags: list[str]          = []
+        tags         : list[str] = []
         reference_ids: list[str] = []
         had_metadata             = False
 
@@ -619,7 +615,7 @@ class NoteHandler(DbOpsMixin):
         remaining              = list(tokens)
         category               = named.get("cat")
         start_date: str | None = None
-        end_date: str | None   = None
+        end_date  : str | None = None
         time_label: str | None = None
 
         if since_value := named.get("since"):
@@ -668,8 +664,10 @@ class NoteHandler(DbOpsMixin):
             page_explicit = page_explicit,
         )
 
-    async def _load_notes(self, user_id: str, filters: NoteListFilters) -> list[NoteItem]:
-        database_filters: dict[str, Any] = {"type": ItemType.NOTE.value}
+    async def _load_notes(
+        self, user_id: str, filters: NoteListFilters, *, overview: bool
+    ) -> tuple[list[NoteItem], int, dict[str, tuple[int, set[str]]]]:
+        database_filters: dict[str, object] = {"type": ItemType.NOTE.value}
         if filters.category:
             database_filters["category"] = filters.category
         if filters.tag:
@@ -681,19 +679,15 @@ class NoteHandler(DbOpsMixin):
         if filters.end_date:
             database_filters["end_date"] = filters.end_date
 
-        notes = cast(
-            list[NoteItem],
-            await run_sync(self.db.get_all_items, user_id, database_filters),
+        notes, total, categories = await run_sync(
+            self.db.get_note_command_list,
+            user_id,
+            database_filters,
+            limit    = None if filters.show_all else PendoConfig.LIST_PAGE_SIZE,
+            offset   = (filters.page - 1) * PendoConfig.LIST_PAGE_SIZE,
+            overview = overview,
         )
-        notes.sort(
-            key=lambda note: (
-                note.updated_at or "",
-                note.created_at or "",
-                str(note.id),
-            ),
-            reverse=True,
-        )
-        return notes
+        return cast(list[NoteItem], notes), total, categories
 
     @staticmethod
     def _format_list_filter_text(filters: NoteListFilters) -> str:
@@ -712,28 +706,21 @@ class NoteHandler(DbOpsMixin):
         return suffix
 
     @staticmethod
-    def _format_category_overview(notes: list[NoteItem]) -> str:
-        grouped: dict[str, list[NoteItem]] = {}
-        for note in notes:
-            grouped.setdefault(note.category or "未分类", []).append(note)
-
+    def _format_category_overview(categories: dict[str, tuple[int, set[str]]]) -> str:
         lines = ["分类概览", ""]
-        for category in sorted(grouped, key=str.casefold):
-            category_notes = grouped[category]
-            tags           = {tag for note in category_notes for tag in (note.tags or [])}
-            tag_text       = (
+        for category in sorted(categories, key=str.casefold):
+            count, tags = categories[category]
+            tag_text = (
                 f" {ItemFormatter.format_tags(sorted(tags, key=str.casefold))}" if tags else ""
             )
-            lines.append(f"📂 {category} ({len(category_notes)}项){tag_text}")
+            lines.append(f"📂 {category} ({count}项){tag_text}")
         lines.extend(("", "💡 用 /pendo note list <分类名> 查看该分类的笔记"))
         return "\n".join(lines)
 
     @staticmethod
-    def _format_note_rows(notes: list[NoteItem], filters: NoteListFilters) -> str:
-        display_raw, _, has_more = paginate(
-            notes, filters.page, PendoConfig.LIST_PAGE_SIZE, filters.show_all
-        )
-        display_notes = cast(list[NoteItem], display_raw)
+    def _format_note_rows(notes: list[NoteItem], filters: NoteListFilters, total: int) -> str:
+        display_notes = notes
+        has_more      = not filters.show_all and filters.page * PendoConfig.LIST_PAGE_SIZE < total
         if not display_notes and filters.page > 1:
             raise ValueError(f"第 {filters.page} 页没有笔记")
 
@@ -771,23 +758,23 @@ class NoteHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        notes       = await self._load_notes(user_id, filters)
-        filter_text = self._format_list_filter_text(filters)
-        if not notes:
-            return {"status": "success", "message": f"📝 没有找到笔记{filter_text}"}
-
-        message       = f"📝 笔记列表{filter_text} (共{len(notes)}项)\n\n"
         overview_only = (
             not filters.has_semantic_filter and not filters.show_all and not filters.page_explicit
         )
+        notes, total, categories = await self._load_notes(user_id, filters, overview=overview_only)
+        filter_text = self._format_list_filter_text(filters)
+        if not total:
+            return {"status": "success", "message": f"📝 没有找到笔记{filter_text}"}
+
+        message = f"📝 笔记列表{filter_text} (共{total}项)\n\n"
         if overview_only:
             return {
-                "status": "success",
-                "message": message + self._format_category_overview(notes),
+                "status" : "success",
+                "message": message + self._format_category_overview(categories),
             }
 
         try:
-            rows = self._format_note_rows(notes, filters)
+            rows = self._format_note_rows(notes, filters, total)
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
         message += f"{rows}\n\n💡 用 /pendo note view <id> 查看详情"
@@ -853,7 +840,8 @@ class NoteHandler(DbOpsMixin):
                 ref_title = ref.get("title") or "无标题"
                 message += f"• {ref_type}: {ref_title} {public_id(ref_id)}\n"
 
-        backlinks = await self._find_note_backlinks(user_id, note_id)
+        # 反向引用按完整 ID 精确匹配；页面展示的短 ID 直接查询会漏掉已有引用。
+        backlinks = await self._find_note_backlinks(user_id, str(note.id))
         if backlinks:
             message += "\n↩️ 被这些笔记引用\n"
             for backlink in backlinks:
@@ -992,7 +980,7 @@ class NoteHandler(DbOpsMixin):
         if not tags:
             tags = [part.lstrip("#") for part in (text or "").split() if part.strip()]
         clean: list[str] = []
-        seen: set[str]   = set()
+        seen : set[str]  = set()
         for tag in tags:
             tag = tag.strip()
             key = tag.casefold()
@@ -1045,7 +1033,7 @@ class NoteHandler(DbOpsMixin):
             expected_version = note.version,
         )
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"✅ 已更新标签: {ItemFormatter.format_tags(saved_tags)}",
         }
 
@@ -1089,7 +1077,7 @@ class NoteHandler(DbOpsMixin):
             expected_version = note.version,
         )
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"✅ 已更新标签: {ItemFormatter.format_tags(saved_tags) or '无'}",
         }
 
@@ -1112,8 +1100,9 @@ class NoteHandler(DbOpsMixin):
             return wrong_type
         note = cast(NoteItem, note)
         try:
+            # 身份判断使用取到笔记后的完整 ID：用户可能输入短 ID。
             new_refs, _ = await self._resolve_note_references(
-                user_id, [target_id], source_note_id=note_id
+                user_id, [target_id], source_note_id=str(note.id)
             )
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
@@ -1124,9 +1113,9 @@ class NoteHandler(DbOpsMixin):
         try:
             updates = normalize_note_fields(
                 {
-                    "references": merged_refs,
+                    "references"   : merged_refs,
                     "related_items": self._related_from_references(merged_refs),
-                    "type": ItemType.NOTE.value,
+                    "type"         : ItemType.NOTE.value,
                 },
                 partial=True,
             )
@@ -1165,14 +1154,14 @@ class NoteHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 删除参数中的引号未闭合"}
         if len(tokens) != 1:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 删除笔记只接受一个ID或一个 cat:分类 参数",
             }
 
         target = tokens[0]
         if target.startswith("#"):
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 不支持按标签删除，请使用 /pendo note delete <id> 或 /pendo note delete cat:xxx",
             }
 
@@ -1193,7 +1182,7 @@ class NoteHandler(DbOpsMixin):
         await self._db_soft_delete_with_log(note_id, user_id, item_type=ItemType.NOTE.value)
 
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"🗑️ 已删除: {note.title or '无标题'}\n\n{PendoConfig.UNDO_HINT}",
         }
 

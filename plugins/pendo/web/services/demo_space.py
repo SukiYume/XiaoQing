@@ -16,14 +16,14 @@ from ...utils.identifiers import new_internal_id
 from ..auth import AuthError
 from .bundle_import import inspect_bundle_bytes
 
-_DEMO_PREFIX: Final          = "demo_web_"
-_DEMO_TEMPLATE_PATH: Final   = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
+_DEMO_PREFIX         : Final = "demo_web_"
+_DEMO_TEMPLATE_PATH  : Final = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
 _DEMO_TEMPLATE_ANCHOR: Final = date(2026, 4, 8)
-_DEMO_SEED_VERSION: Final    = 2
-_DEMO_ITEM_TYPES: Final      = ("event", "task", "ledger", "note", "diary")
+_DEMO_SEED_VERSION   : Final = 2
+_DEMO_ITEM_TYPES     : Final = ("event", "task", "ledger", "note", "diary")
 _MAX_CLIENT_KEY_CHARS: Final = 128
-_DATE_FIELDS: Final          = ("ledger_date", "diary_date", "plan_date")
-_DATETIME_FIELDS: Final      = (
+_DATE_FIELDS         : Final = ("ledger_date", "diary_date", "plan_date")
+_DATETIME_FIELDS     : Final = (
     "created_at",
     "updated_at",
     "start_time",
@@ -87,11 +87,11 @@ def _demo_settings(expires_at: datetime) -> dict[str, Any]:
     """构造最小且关闭主动通知能力的演示用户设置。"""
 
     return {
-        "reminder_enabled": False,
+        "reminder_enabled"      : False,
         "daily_briefing_enabled": False,
-        "demo_mode": True,
-        "demo_expires_at": _iso(expires_at),
-        "demo_seed_version": _DEMO_SEED_VERSION,
+        "demo_mode"             : True,
+        "demo_expires_at"       : _iso(expires_at),
+        "demo_seed_version"     : _DEMO_SEED_VERSION,
     }
 
 
@@ -324,9 +324,9 @@ def create_demo_session(
         db.update_user_settings(
             owner_id,
             {
-                "timezone": PendoConfig.DEFAULT_TIMEZONE,
+                "timezone"        : PendoConfig.DEFAULT_TIMEZONE,
                 "default_category": "未分类",
-                "settings_json": _demo_settings(expires_at),
+                "settings_json"   : _demo_settings(expires_at),
             },
         )
         try:
@@ -338,7 +338,7 @@ def create_demo_session(
         _DEMO_REQUESTS[normalized_client] = request_times
 
     return {
-        "owner_id": owner_id,
+        "owner_id"  : owner_id,
         "expires_at": _iso(expires_at),
-        "demo": True,
+        "demo"      : True,
     }

@@ -26,17 +26,17 @@ def test_normalize_import_payload_replaces_explicit_empty_timestamps_and_copies_
     attachments = [{"name": "proof.txt"}]
     ai_meta     = {"model": "external"}
     payload     = {
-        "type": "task",
-        "title": "done",
-        "status": "done",
-        "created_at": None,
-        "updated_at": "",
+        "type"        : "task",
+        "title"       : "done",
+        "status"      : "done",
+        "created_at"  : None,
+        "updated_at"  : "",
         "completed_at": None,
-        "deleted": "false",
-        "version": 99,
-        "context": context,
-        "attachments": attachments,
-        "ai_meta": ai_meta,
+        "deleted"     : "false",
+        "version"     : 99,
+        "context"     : context,
+        "attachments" : attachments,
+        "ai_meta"     : ai_meta,
         "_bundle_line": 12,
     }
 
@@ -71,9 +71,9 @@ def test_normalize_import_event_uses_source_zone_for_times_and_default_timezone(
 
     normalized = normalize_import_payload(
         {
-            "type": "event",
-            "title": "New York morning",
-            "start_time": "2026-01-15T09:00:00",
+            "type"        : "event",
+            "title"       : "New York morning",
+            "start_time"  : "2026-01-15T09:00:00",
             "remind_times": ["2026-01-15T08:30:00", None, ""],
         },
         source_zone = ZoneInfo("America/New_York"),
@@ -162,26 +162,26 @@ def test_normalize_import_event_collection_normalizes_storage_fields():
     context    = {"origin": "external"}
     normalized = normalize_import_event_collection(
         {
-            "id": "source-collection",
-            "kind": " recurring ",
-            "title": "  Weekly sync  ",
-            "category": "工作",
-            "location": " Room 1 ",
-            "tags": ["weekly", "weekly", None, ""],
-            "context": context,
-            "visibility": "group_scope",
+            "id"            : "source-collection",
+            "kind"          : " recurring ",
+            "title"         : "  Weekly sync  ",
+            "category"      : "工作",
+            "location"      : " Room 1 ",
+            "tags"          : ["weekly", "weekly", None, ""],
+            "context"       : context,
+            "visibility"    : "group_scope",
             "reminder_rules": [
                 {"offset_seconds": "60"},
                 {"offset_seconds": 60},
             ],
-            "rrule": " FREQ=WEEKLY ",
+            "rrule"         : " FREQ=WEEKLY ",
             "source_item_id": " source-event ",
-            "start_time": "2026-01-15T09:00:00",
-            "end_time": "2026-01-15T10:00:00",
-            "created_at": None,
-            "updated_at": "",
-            "deleted": "false",
-            "_bundle_line": 8,
+            "start_time"    : "2026-01-15T09:00:00",
+            "end_time"      : "2026-01-15T10:00:00",
+            "created_at"    : None,
+            "updated_at"    : "",
+            "deleted"       : "false",
+            "_bundle_line"  : 8,
         },
         source_zone = ZoneInfo("Asia/Tokyo"),
         now         = FIXED_NOW,
@@ -215,7 +215,7 @@ def test_normalize_import_event_collection_normalizes_storage_fields():
         ({"reminder_rules": "soon"}, "reminder_rules must be a list"),
         (
             {"start_time": "2026-01-15T10:00:00", "end_time": "2026-01-15T09:00:00"},
-            "end_time must be after start_time",
+            "end_time must not be before start_time",
         ),
     ],
 )
@@ -249,9 +249,9 @@ def test_inspect_bundle_bytes_merges_row_errors_and_keeps_only_valid_records(mon
         ],
         errors=[
             {
-                "path": "data/tasks.ndjson",
-                "line": 1,
-                "type": "task",
+                "path"   : "data/tasks.ndjson",
+                "line"   : 1,
+                "type"   : "task",
                 "message": "bad json",
             }
         ],

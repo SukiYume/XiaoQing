@@ -1,5 +1,6 @@
 """共享常量的边界和相互关系测试。"""
 
+import math
 import re
 
 import pytest
@@ -60,7 +61,7 @@ def test_default_bot_name_responses_are_available() -> None:
 def test_plugin_init_timeout_is_finite() -> None:
     """插件初始化必须有正的有限截止时间。"""
 
-    assert constants.PLUGIN_INIT_TIMEOUT_SECONDS > 0
+    assert 0 < constants.PLUGIN_INIT_TIMEOUT_SECONDS < math.inf
 
 
 @pytest.mark.unit

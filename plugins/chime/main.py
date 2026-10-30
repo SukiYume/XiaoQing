@@ -30,6 +30,7 @@ from core.durable_fanout import (
     mark_delivered,
 )
 from core.interfaces import PluginContextProtocol
+from core.lifecycle import to_thread_owned
 from core.plugin_base import (
     Segments,
     bounded_external_text,
@@ -88,7 +89,7 @@ HELP_TEXT = """
 /chime help
   显示本帮助
 
-定时任务每天 9:00 和 21:00 检查；只有全部目标群确认收到通知后，才会推进本地历史记录。
+定时任务每天 9:00 和 21:00 检查；全部目标群都有结论（确认送达，或已提交但回执未知）后才推进本地历史记录。结果未知按不重复公告处理，可能漏收；明确失败的群下一轮重试。
 """.strip()
 
 
@@ -282,9 +283,9 @@ def parse_frb_data(
         context.logger.error("CHIME 目录条目数超过安全上限")
         return []
 
-    parsed: list[FRBData] = []
-    seen_names: set[str]  = set()
-    invalid_count         = 0
+    parsed    : list[FRBData] = []
+    seen_names: set[str]      = set()
+    invalid_count             = 0
     for name, info in data.items():
         frb = FRBData(name, info)
         if not frb.is_valid():
@@ -358,7 +359,7 @@ def find_updates(
 ) -> tuple[list[FRBData], list[FRBData]]:
     """只把新增源或严格晚于基线的观测视为更新。"""
     new_repeaters: list[FRBData] = []
-    new_pulses: list[FRBData]    = []
+    new_pulses   : list[FRBData] = []
     regressed                    = 0
     for frb in frb_list:
         old_timestamp = old_mapping.get(frb.name)
@@ -501,7 +502,7 @@ async def handle(
         if direct_response is not None:
             return direct_response
 
-        old_mapping = load_history(context)
+        old_mapping = await to_thread_owned(load_history, context)
         new_repeaters, new_pulses = find_updates(frb_list, old_mapping, context)
         if new_repeaters or new_pulses:
             return segments(format_update_message(new_repeaters, new_pulses, is_scheduled=False))
@@ -538,7 +539,8 @@ async def _deliver_pending(
             context.logger.error("CHIME 通知无法构造目标动作")
             continue
 
-        confirm_target = partial(mark_delivered, path, pending, target)
+        # 确认状态在线程里落盘；回执回调等到真实写完才返回，事件循环不被逐目标写盘阻塞。
+        confirm_target = partial(to_thread_owned, mark_delivered, path, pending, target)
 
         receipt = DeliveryReceipt(
             expected_actions = 1,
@@ -571,11 +573,11 @@ async def _deliver_pending(
 
     if not pending.complete:
         return False
-    if not save_history(context, pending.commit.get("history")):
+    if not await to_thread_owned(save_history, context, pending.commit.get("history")):
         context.logger.warning("CHIME 历史提交失败，已完成的通知仍保留")
         return False
     try:
-        clear_pending(path)
+        await to_thread_owned(clear_pending, path)
     except Exception as exc:
         public_error_message(
             context,
@@ -607,7 +609,7 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
 
     # 有未完成 outbox 时只重试投递，不重新请求目录或生成另一份通知。
     try:
-        pending = load_pending(_fanout_path(context))
+        pending = await to_thread_owned(load_pending, _fanout_path(context))
     except Exception as exc:
         public_error_message(
             context,
@@ -631,7 +633,7 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
     # 手动查询不与定时投递共用发送锁；目录读取是只读的，最多观察到已提交历史
     # 之前的快照，不会改变 outbox 的提交顺序。
     try:
-        old_mapping = load_history(context)
+        old_mapping = await to_thread_owned(load_history, context)
     except Exception as exc:
         public_error_message(
             context,
@@ -666,7 +668,8 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
             separators   = (",", ":"),
         )
         event_id = f"chime:{hashlib.sha256(canonical_history.encode('utf-8')).hexdigest()}"
-        pending  = create_pending(
+        pending  = await to_thread_owned(
+            create_pending,
             _fanout_path(context),
             event_id = event_id,
             payload  = list(segments(message)),

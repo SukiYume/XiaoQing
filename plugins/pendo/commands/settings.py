@@ -26,10 +26,10 @@ Formatter: TypeAlias = Callable[[Any], str]
 class _SettingSpec:
     """单值设置的存储位置、校验器和成功文案。"""
 
-    key: str
+    key      : str
     validator: Validator
     formatter: Formatter
-    custom: bool = True
+    custom   : bool = True
 
 
 _HHMM_RE: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
@@ -74,28 +74,28 @@ async def _update_setting(
     value: str,
     db: Database,
     spec: _SettingSpec,
-) -> str:
+) -> tuple[bool, str]:
     """校验单值设置，并写入自定义 JSON 或顶层设置列。"""
 
     is_valid, processed_value = spec.validator(value)
     if not is_valid:
-        return processed_value if isinstance(processed_value, str) else f"无效的设置值: {value}"
+        message = processed_value if isinstance(processed_value, str) else f"无效的设置值: {value}"
+        return False, message
 
     if spec.custom:
         await run_sync(save_user_setting, user_id, spec.key, processed_value, db)
     else:
-        settings           = cast(dict[str, Any], await run_sync(db.get_user_settings, user_id))
-        settings[spec.key] = processed_value
-        await run_sync(db.update_user_settings, user_id, settings)
+        # 只提交这一个键：数据库在同一事务里合并，读取后其他入口提交的设置不会被旧快照覆盖。
+        await run_sync(db.update_user_settings, user_id, {spec.key: processed_value})
 
-    return spec.formatter(processed_value)
+    return True, spec.formatter(processed_value)
 
 
-async def _set_quiet_hours(user_id: str, value: str, db: Database) -> str:
+async def _set_quiet_hours(user_id: str, value: str, db: Database) -> tuple[bool, str]:
     """校验并一次写入静默时段的开始、结束时间。"""
 
     if value.count("-") != 1:
-        return "请指定静默时段，格式: <开始时间>-<结束时间>，例如: 23:00-07:00"
+        return False, "请指定静默时段，格式: <开始时间>-<结束时间>，例如: 23:00-07:00"
 
     raw_start, raw_end = value.split("-", 1)
     start_time = raw_start.strip()
@@ -103,17 +103,18 @@ async def _set_quiet_hours(user_id: str, value: str, db: Database) -> str:
 
     ok, msg = _validate_hhmm(start_time)
     if not ok:
-        return f"开始时间格式错误: {msg}"
+        return False, f"开始时间格式错误: {msg}"
     ok, msg = _validate_hhmm(end_time)
     if not ok:
-        return f"结束时间格式错误: {msg}"
+        return False, f"结束时间格式错误: {msg}"
 
-    settings = cast(dict[str, Any], await run_sync(db.get_user_settings, user_id))
-    settings["quiet_hours_start"] = start_time
-    settings["quiet_hours_end"] = end_time
-    await run_sync(db.update_user_settings, user_id, settings)
+    await run_sync(
+        db.update_user_settings,
+        user_id,
+        {"quiet_hours_start": start_time, "quiet_hours_end": end_time},
+    )
 
-    return f"⚙️ 设置已更新\n🔕 静默时段: {start_time} - {end_time}\n💡 这段时间内提醒会更克制"
+    return True, f"⚙️ 设置已更新\n🔕 静默时段: {start_time} - {end_time}\n💡 这段时间内提醒会更克制"
 
 
 _AI_CONSENT_SPEC: Final = _SettingSpec(
@@ -173,10 +174,17 @@ _SETTING_SPECS: Final[dict[str, _SettingSpec]] = {
 
 
 async def handle_settings(user_id: str, args: str, db: Database) -> str:
-    """分发查看、静默时段和单值设置命令。"""
+    """分发查看、静默时段和单值设置命令，只返回展示文本。"""
+
+    _ok, message = await handle_settings_result(user_id, args, db)
+    return message
+
+
+async def handle_settings_result(user_id: str, args: str, db: Database) -> tuple[bool, str]:
+    """分发设置命令，返回 (是否成功, 展示文本)；校验失败和未知设置项为失败。"""
 
     if not args.strip():
-        return await _show_settings(user_id, db)
+        return True, await _show_settings(user_id, db)
 
     parsed = parse(args)
     action = parsed.first.lower()
@@ -184,14 +192,14 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
 
     if action in {"view", "show"}:
         if value:
-            return "❌ 查看设置不接受额外参数\n用法: /pendo settings view"
-        return await _show_settings(user_id, db)
+            return False, "❌ 查看设置不接受额外参数\n用法: /pendo settings view"
+        return True, await _show_settings(user_id, db)
     if action == "quiet_hours":
         return await _set_quiet_hours(user_id, value, db)
     spec = _SETTING_SPECS.get(action)
     if spec is not None:
         return await _update_setting(user_id, value, db, spec)
-    return (
+    return False, (
         f"❌ 未知的设置项: {action}\n\n"
         "可用设置:\n"
         "• reminder - 开关提醒\n"

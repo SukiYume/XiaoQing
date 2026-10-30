@@ -44,8 +44,8 @@ RepositoryData = dict[str, str]
 
 VALID_RANGES                      = frozenset({"daily", "weekly", "monthly"})
 RANGE_NAMES: dict[TimeRange, str] = {
-    "daily": "每日",
-    "weekly": "每周",
+    "daily"  : "每日",
+    "weekly" : "每周",
     "monthly": "每月",
 }
 
@@ -64,7 +64,8 @@ _REPOSITORY_PATH_PATTERN = re.compile(
     r"/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/"
     r"([A-Za-z0-9_.-]{1,100})/?\Z"
 )
-_COUNT_PATTERN = re.compile(r"([0-9]+(?:,[0-9]{3})*)([kKmM]?)")
+# 整数（可带千分位）或带 k/M 后缀的小数缩写，例如 1,234、123k、1.2k、12.5M。
+_COUNT_PATTERN = re.compile(r"([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)([kKmM]?)")
 _GAIN_PATTERN  = re.compile(
     r"\b([0-9]+(?:,[0-9]{3})*)\s+stars?\s+(today|this week|this month)\b",
     re.IGNORECASE,
@@ -108,7 +109,7 @@ HELP_TEXT = """📈 GitHub Trending
 
 
 class _GitHubContext(Protocol):
-    data_dir: Path
+    data_dir    : Path
     http_session: Any
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
@@ -305,9 +306,10 @@ def _normalize_count(value: str) -> str:
     if match is None:
         return "0"
     digits = match.group(1).replace(",", "")
-    if len(digits) > 15:
+    suffix = match.group(2).casefold()
+    if len(digits) > 15 or ("." in digits and not suffix):
         return "0"
-    return f"{digits}{match.group(2).casefold()}"
+    return f"{digits}{suffix}"
 
 
 def _extract_link_count(article: Tag, repository_path: str, suffix: str) -> str:
@@ -338,10 +340,10 @@ def _parse_repository_article(article: Tag) -> RepositoryData | None:
         return None
     repository_path = f"/{owner}/{name}"
     return {
-        "owner": owner,
-        "name": name,
-        "full_name": f"{owner}/{name}",
-        "url": f"https://github.com{repository_path}",
+        "owner"      : owner,
+        "name"       : name,
+        "full_name"  : f"{owner}/{name}",
+        "url"        : f"https://github.com{repository_path}",
         "description": _clean_element_text(
             article.select_one("p"),
             fallback  = "无描述",
@@ -352,8 +354,8 @@ def _parse_repository_article(article: Tag) -> RepositoryData | None:
             fallback  = "未知",
             max_chars = MAX_LANGUAGE_CHARS,
         ),
-        "stars": _extract_link_count(article, repository_path, "stargazers"),
-        "forks": _extract_link_count(article, repository_path, "forks"),
+        "stars"       : _extract_link_count(article, repository_path, "stargazers"),
+        "forks"       : _extract_link_count(article, repository_path, "forks"),
         "stars_gained": _extract_gained_stars(article),
     }
 
@@ -369,7 +371,7 @@ def _parse_trending_html(html: str) -> list[RepositoryData]:
     for hidden in soup.find_all(("script", "style", "template", "noscript")):
         hidden.decompose()
     repositories: list[RepositoryData] = []
-    seen: set[str]                     = set()
+    seen        : set[str]             = set()
     for article in soup.select("article.Box-row")[:MAX_REPOSITORIES]:
         repository = _parse_repository_article(article)
         if repository is None:
@@ -448,9 +450,9 @@ def _save_history(
 
     current = now if now is not None else now_in_configured_timezone(context)
     payload = {
-        "date": current.isoformat(),
-        "time_range": normalized_range,
-        "count": len(repositories),
+        "date"        : current.isoformat(),
+        "time_range"  : normalized_range,
+        "count"       : len(repositories),
         "repositories": [dict(repository) for repository in repositories],
     }
     date = current.strftime("%Y-%m-%d")

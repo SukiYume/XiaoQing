@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { captureFormDraft, reopenWithDraft } from '../components/form.js';
 import { renderPagination } from '../components/pagination.js';
 import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
@@ -63,27 +64,29 @@ const LEDGER_FIELDS = [
 
 // ── 页面状态 ─────────────────────────────────────────────────────────────────
 
-let _container              = null;
-let _items                  = [];
-let _total                  = 0;
-let _page                   = 1;
-let _dateFilter             = 'month';
-let _currency               = 'CNY';
-let _allRange               = null;
-let _transactionTypeFilter  = '';
-let _categoryFilter         = '';
-let _accountFilter          = '';
-let _amountMin              = '';
-let _amountMax              = '';
-let _sortMode               = 'date';
-let _customDateStart        = '';
-let _customDateEnd          = '';
-let _summaryData            = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
-let _insightsData           = null;
-let _allCategories          = [];
-let _allAccounts            = [];
-let _amountDebounceTimer    = null;
-let _quickAddSaving         = false;
+let _container             = null;
+let _items                 = [];
+let _total                 = 0;
+let _page                  = 1;
+let _dateFilter            = 'month';
+let _currency              = 'CNY';
+let _allRange              = null;
+let _transactionTypeFilter = '';
+let _categoryFilter        = '';
+let _accountFilter         = '';
+let _amountMin             = '';
+let _amountMax             = '';
+let _sortMode              = 'date';
+let _customDateStart       = '';
+let _customDateEnd         = '';
+let _summaryData           = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
+let _insightsData          = null;
+let _allCategories         = [];
+let _allAccounts           = [];
+let _amountDebounceTimer   = null;
+let _quickAddSaving        = false;
+// 快速记账草稿：查询、分页、排序或数据变更会整页重绘，重绘前先记下用户正在填写的内容。
+let _quickAddDraft          = null;
 let _loadVersion            = 0;
 let _unsubscribeDataChanges = null;
 
@@ -1208,12 +1211,30 @@ function renderSummaryCards() {
         </div>`;
 }
 
+function captureQuickAddDraft() {
+    const root = _container?.querySelector('#ledger-quick-add');
+    if (!root) return;
+    const read = (selector) => String(root.querySelector(selector)?.value ?? '');
+    _quickAddDraft = {
+        type: root.querySelector('#qa-transaction-type')?.dataset.value || 'expense',
+        amount: read('#qa-amount'),
+        title: read('#qa-title'),
+        category: read('#qa-category'),
+        account: read('#qa-account'),
+        counter: read('#qa-counter'),
+        merchant: read('#qa-merchant'),
+        date: read('#qa-date'),
+    };
+}
+
 function renderQuickAdd() {
     const today      = todayRangeKey();
+    const draft      = _quickAddDraft || {};
+    const keep       = (key) => escapeHtml(draft[key] ?? '');
     const typeSelect = renderCustomSelect({
         id: 'qa-transaction-type',
         options: TRANSACTION_TYPE_OPTIONS,
-        selected: 'expense',
+        selected: draft.type || 'expense',
         className: 'pselect-block pselect-theme-ledger ledger-qa-transaction-type',
         labelledBy: 'qa-transaction-type-label',
     });
@@ -1225,31 +1246,31 @@ function renderQuickAdd() {
             </div>
             <div class="ledger-qa-field ledger-qa-field--amount">
                 <label class="ledger-qa-label" for="qa-amount">金额 · ${escapeHtml(_currency)}</label>
-                <input type="number" class="ledger-qa-amount" id="qa-amount" placeholder="0.00" step="0.01" min="0" aria-label="金额">
+                <input type="number" class="ledger-qa-amount" id="qa-amount" value="${keep('amount')}" placeholder="0.00" step="0.01" min="0" aria-label="金额">
             </div>
             <div class="ledger-qa-field ledger-qa-field--title">
                 <label class="ledger-qa-label" for="qa-title">摘要</label>
-                <input type="text" class="ledger-qa-title" id="qa-title" placeholder="餐饮、交通、工资..." aria-label="摘要">
+                <input type="text" class="ledger-qa-title" id="qa-title" value="${keep('title')}" placeholder="餐饮、交通、工资..." aria-label="摘要">
             </div>
             <div class="ledger-qa-field ledger-qa-field--category">
                 <label class="ledger-qa-label" for="qa-category">分类</label>
-                <input type="text" class="ledger-qa-category" id="qa-category" placeholder="其他" aria-label="分类">
+                <input type="text" class="ledger-qa-category" id="qa-category" value="${keep('category')}" placeholder="其他" aria-label="分类">
             </div>
             <div class="ledger-qa-field ledger-qa-field--account">
                 <label class="ledger-qa-label" for="qa-account">账户</label>
-                <input type="text" class="ledger-qa-account" id="qa-account" placeholder="现金" aria-label="账户">
+                <input type="text" class="ledger-qa-account" id="qa-account" value="${keep('account')}" placeholder="现金" aria-label="账户">
             </div>
             <div class="ledger-qa-field ledger-qa-field--counter">
                 <label class="ledger-qa-label" for="qa-counter">转入账户</label>
-                <input type="text" class="ledger-qa-counter" id="qa-counter" placeholder="仅转账填写" aria-label="转入账户">
+                <input type="text" class="ledger-qa-counter" id="qa-counter" value="${keep('counter')}" placeholder="仅转账填写" aria-label="转入账户">
             </div>
             <div class="ledger-qa-field ledger-qa-field--merchant">
                 <label class="ledger-qa-label" for="qa-merchant">商户/对方</label>
-                <input type="text" class="ledger-qa-merchant" id="qa-merchant" placeholder="可选" aria-label="商户或对方">
+                <input type="text" class="ledger-qa-merchant" id="qa-merchant" value="${keep('merchant')}" placeholder="可选" aria-label="商户或对方">
             </div>
             <div class="ledger-qa-field ledger-qa-field--date">
                 <label class="ledger-qa-label" for="qa-date">日期</label>
-                <input type="text" class="ledger-qa-date" id="qa-date" value="${escapeHtml(today)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="记账日期">
+                <input type="text" class="ledger-qa-date" id="qa-date" value="${escapeHtml(draft.date || today)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="记账日期">
             </div>
             <div class="ledger-qa-action">
                 <button type="button" class="ledger-qa-submit" id="qa-submit">+ 记录</button>
@@ -1399,6 +1420,7 @@ function renderList(items) {
 function renderPage() {
     if (!_container) return;
     ensureStyles();
+    captureQuickAddDraft();
 
     _container.innerHTML = `
         <div class="ledger-page">
@@ -1659,6 +1681,7 @@ async function handleQuickAdd() {
 
     _quickAddSaving = true;
     submitButton.disabled = true;
+    const submitted = { amount: amountInput.value, title: titleInput.value, merchant: merchantInput.value };
     try {
         await api.post('/items', {
             type: 'ledger',
@@ -1673,9 +1696,17 @@ async function handleQuickAdd() {
             currency: _currency,
         });
         showToast('记录已添加', 'success');
-        amountInput.value = '';
-        titleInput.value = '';
-        merchantInput.value = '';
+        // 只清理本次已提交的字段；请求期间用户接着输入的新草稿保留（输入框可能已随重绘替换）。
+        const live = _container?.querySelector('#ledger-quick-add');
+        for (const [key, selector, original] of [
+            ['amount', '#qa-amount', amountInput],
+            ['title', '#qa-title', titleInput],
+            ['merchant', '#qa-merchant', merchantInput],
+        ]) {
+            const input = live?.querySelector(selector) || original;
+            if (input.value === submitted[key]) input.value = '';
+        }
+        captureQuickAddDraft();
         _page = 1;
         window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'ledger' } }));
     } catch (err) {
@@ -1777,8 +1808,10 @@ function openEditModal(existing) {
     bindFormSubmit(form, saveButton);
     content.querySelector('#modal-cancel').onclick = closeModal;
     content.querySelector('#modal-delete').onclick = async () => {
+        const draft  = captureFormDraft(form);
+        const reopen = () => reopenWithDraft(() => openEditModal(existing), draft, '#ledger-edit-form');
         closeModal(content);
-        await handleDelete(normalizedItem.id);
+        await handleDelete(normalizedItem.id, reopen);
     };
     let saving = false;
     saveButton.onclick = async () => {
@@ -1834,7 +1867,7 @@ function openEditModal(existing) {
 
 // ── 删除记录 ─────────────────────────────────────────────────────────────────
 
-async function handleDelete(id) {
+async function handleDelete(id, reopenEditor = null) {
     const normalizedId = String(id ?? '');
     if (!normalizedId) {
         showToast('无法删除缺少编号的账目记录', 'error');
@@ -1846,16 +1879,20 @@ async function handleDelete(id) {
         title: '删除记录',
         message: `确定要删除“${label}”吗？删除后这条账目会从当前列表和统计中移除。`,
         confirmText: '删除',
-        cancelText: '取消',
+        cancelText: reopenEditor ? '返回编辑' : '取消',
         tone: 'danger',
     });
-    if (!confirmed) return;
+    if (!confirmed) {
+        if (reopenEditor) await reopenEditor();
+        return;
+    }
     try {
         await api.delete(`/items/${encodeURIComponent(normalizedId)}`);
         showToast('记录已删除', 'success');
         window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'ledger' } }));
     } catch (err) {
         showToast(`删除失败：${err?.message || '未知错误'}`, 'error');
+        if (reopenEditor) await reopenEditor();
     }
 }
 
@@ -1930,6 +1967,7 @@ export async function render(container) {
     _allCategories = [];
     _allAccounts = ['现金'];
     _quickAddSaving = false;
+    _quickAddDraft = null;
 
     renderPage();
     _unsubscribeDataChanges = subscribeDataChanges('ledger', () => loadAndRender(true));

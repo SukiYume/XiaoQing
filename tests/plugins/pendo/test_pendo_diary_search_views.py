@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import threading
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
 from tests.helpers.pendo_review_test_support import (
-    Any,
     Database,
     NoteHandler,
-    Path,
-    SimpleNamespace,
     TaskHandler,
     _make_temp_db,
-    asyncio,
-    datetime,
-    pytest,
-    shutil,
-    threading,
 )
 
 
@@ -27,29 +29,46 @@ def test_diary_list_supports_cat_tag_and_rejects_invalid_range():
     try:
         db.insert_item(
             {
-                "id": "diary-a",
-                "owner_id": owner_id,
-                "type": "diary",
-                "title": "CmdAudit 日记",
-                "content": "CmdAudit 今天完成接口巡检",
-                "category": "日记",
-                "tags": ["cmdaudit", "复盘"],
+                "id"        : "diary-a",
+                "owner_id"  : owner_id,
+                "type"      : "diary",
+                "title"     : "CmdAudit 日记",
+                "content"   : "CmdAudit 今天完成接口巡检",
+                "category"  : "日记",
+                "tags"      : ["cmdaudit", "复盘"],
                 "diary_date": "2026-05-10",
                 "entry_time": "2026-05-10T22:10:00",
-                "mood": "happy",
+                "mood"      : "happy",
                 "created_at": "2026-05-10T22:10:00",
                 "updated_at": "2026-05-10T22:10:00",
             }
         )
 
+        for item_id, category, tags in [
+            ("other-cat", "工作", ["cmdaudit"]),
+            ("other-tag", "日记", ["other"]),
+        ]:
+            db.insert_item(
+                {
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "diary",
+                    "title"     : item_id,
+                    "category"  : category,
+                    "tags"      : tags,
+                    "diary_date": "2026-05-10",
+                }
+            )
         handler = DiaryHandler(db)
         by_tag = asyncio.run(handler.list_diaries(owner_id, "2026-05 #cmdaudit", SimpleNamespace()))
         assert by_tag["status"] == "success"
         assert "diary-a" in by_tag["message"]
+        assert "other-tag" not in by_tag["message"]
 
         by_cat = asyncio.run(handler.list_diaries(owner_id, "2026-05 cat:日记", SimpleNamespace()))
         assert by_cat["status"] == "success"
         assert "diary-a" in by_cat["message"]
+        assert "other-cat" not in by_cat["message"]
 
         invalid = asyncio.run(handler.list_diaries(owner_id, "not-a-range", SimpleNamespace()))
         assert invalid["status"] == "error"
@@ -67,32 +86,32 @@ def test_search_supports_tag_filter_and_ledger_category_filter():
     try:
         db.insert_item(
             {
-                "id": "note-cmd",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "CmdAudit RustDesk",
-                "content": "CmdAudit note body",
-                "category": "资料",
-                "tags": ["cmdaudit"],
+                "id"        : "note-cmd",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "CmdAudit RustDesk",
+                "content"   : "CmdAudit note body",
+                "category"  : "资料",
+                "tags"      : ["cmdaudit"],
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "ledger-cmd",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "CmdAudit 超市采购",
-                "content": "CmdAudit receipt",
-                "category": "记账",
-                "ledger_category": "餐饮",
+                "id"              : "ledger-cmd",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "CmdAudit 超市采购",
+                "content"         : "CmdAudit receipt",
+                "category"        : "记账",
+                "ledger_category" : "餐饮",
                 "transaction_type": "expense",
-                "amount": 57,
-                "amount_cents": 5700,
-                "ledger_date": "2026-05-10",
-                "created_at": "2026-05-10T09:00:00",
-                "updated_at": "2026-05-10T09:00:00",
+                "amount"          : 57,
+                "amount_cents"    : 5700,
+                "ledger_date"     : "2026-05-10",
+                "created_at"      : "2026-05-10T09:00:00",
+                "updated_at"      : "2026-05-10T09:00:00",
             }
         )
 
@@ -212,7 +231,7 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
             calls["collections"] = (owner_id, collection_ids, threading.get_ident())
             return {
                 "search-collection": {
-                    "id": "search-collection",
+                    "id"   : "search-collection",
                     "title": "集合\n标题",
                 }
             }
@@ -255,11 +274,11 @@ def test_search_handler_reports_exact_total_and_limits_display(tmp_path: Path) -
             timestamp = f"2032-01-{index + 1:02d}T09:00:00"
             db.insert_item(
                 {
-                    "id": f"search-note-{index:02d}",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": f"Needle result {index}",
-                    "content": "Needle body",
+                    "id"        : f"search-note-{index:02d}",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : f"Needle result {index}",
+                    "content"   : "Needle body",
                     "created_at": timestamp,
                     "updated_at": timestamp,
                 }
@@ -318,10 +337,10 @@ def test_view_commands_reject_extra_arguments():
     try:
         db.insert_item(
             {
-                "id": "view-event",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "CmdAudit 日程",
+                "id"        : "view-event",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "CmdAudit 日程",
                 "start_time": "2026-05-10T09:00:00",
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
@@ -329,47 +348,47 @@ def test_view_commands_reject_extra_arguments():
         )
         db.insert_item(
             {
-                "id": "view-task",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "CmdAudit 待办",
-                "status": TaskStatus.OPEN.value,
+                "id"        : "view-task",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "CmdAudit 待办",
+                "status"    : TaskStatus.OPEN.value,
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "view-note",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "CmdAudit 笔记",
-                "content": "正文",
+                "id"        : "view-note",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "CmdAudit 笔记",
+                "content"   : "正文",
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "view-ledger",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "CmdAudit 账目",
-                "amount": 57,
-                "amount_cents": 5700,
+                "id"             : "view-ledger",
+                "owner_id"       : owner_id,
+                "type"           : "ledger",
+                "title"          : "CmdAudit 账目",
+                "amount"         : 57,
+                "amount_cents"   : 5700,
                 "ledger_category": "餐饮",
-                "ledger_date": "2026-05-10",
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "ledger_date"    : "2026-05-10",
+                "created_at"     : "2026-05-01T09:00:00",
+                "updated_at"     : "2026-05-01T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "view-diary",
-                "owner_id": owner_id,
-                "type": "diary",
-                "title": "CmdAudit 日记",
-                "content": "正文",
+                "id"        : "view-diary",
+                "owner_id"  : owner_id,
+                "type"      : "diary",
+                "title"     : "CmdAudit 日记",
+                "content"   : "正文",
                 "diary_date": "2026-05-10",
                 "entry_time": "2026-05-10T22:10:00",
                 "created_at": "2026-05-01T09:00:00",
@@ -378,17 +397,14 @@ def test_view_commands_reject_extra_arguments():
         )
 
         checks = [
-            EventHandler(db, SimpleNamespace(), SimpleNamespace()).view_event(
-                owner_id, "view-event extra", SimpleNamespace()
-            ),
-            TaskHandler(db).view_task(owner_id, "view-task extra", SimpleNamespace()),
-            NoteHandler(db).view_note(owner_id, "view-note extra", SimpleNamespace()),
-            LedgerHandler(db).view_ledger(owner_id, "view-ledger extra", SimpleNamespace()),
-            DiaryHandler(db).view_diary(owner_id, "view-diary extra", SimpleNamespace()),
+            (EventHandler(db, SimpleNamespace(), SimpleNamespace()).view_event, "view-event extra"),
+            (TaskHandler(db).view_task, "view-task extra"),
+            (NoteHandler(db).view_note, "view-note extra"),
+            (LedgerHandler(db).view_ledger, "view-ledger extra"),
+            (DiaryHandler(db).view_diary, "view-diary extra"),
         ]
-
-        for coro in checks:
-            result = asyncio.run(coro)
+        for view, item_id in checks:
+            result = asyncio.run(view(owner_id, item_id, SimpleNamespace()))
             assert result["status"] == "error"
             assert "只接受" in result["message"]
     finally:

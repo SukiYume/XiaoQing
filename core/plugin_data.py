@@ -1,5 +1,4 @@
 # 插件数据目录：明确可写路径归属和历史数据迁移边界。
-# mypy: disable-error-code=attr-defined
 """Plugin writable-data directory ownership and migration."""
 
 from __future__ import annotations
@@ -29,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 class PluginDataMixin:
-    data_root: Path
-    plugins_dir: Path
+    data_root        : Path
+    plugins_dir      : Path
     _data_directories: dict[str, _PluginDataDirectory]
 
     def _plugin_data_dir(self, plugin_name: str) -> Path:

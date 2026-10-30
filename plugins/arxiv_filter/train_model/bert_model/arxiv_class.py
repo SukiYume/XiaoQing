@@ -84,29 +84,29 @@ class TrainingConfig:
         output_dir: 最佳模型保存目录
     """
 
-    data_path: Path          = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
-    model_name: str          = "bert-base-cased"
-    max_len: int             = 512
-    batch_size: int          = 128
-    num_epochs: int          = 20
-    learning_rate: float     = 2e-5
-    warmup_proportion: float = 0.1
-    validation_size: float   = 0.1
-    random_seed: int         = 42
-    num_workers: int | None  = 16
-    threshold_beta: float    = 2.0
-    output_dir: Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model")
+    data_path        : Path       = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
+    model_name       : str        = "bert-base-cased"
+    max_len          : int        = 512
+    batch_size       : int        = 128
+    num_epochs       : int        = 20
+    learning_rate    : float      = 2e-5
+    warmup_proportion: float      = 0.1
+    validation_size  : float      = 0.1
+    random_seed      : int        = 42
+    num_workers      : int | None = 16
+    threshold_beta   : float      = 2.0
+    output_dir       : Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model")
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationMetrics:
-    accuracy: float
-    average_loss: float
-    report: str
-    cm: np.ndarray
-    positive_recall: float
-    positive_f1: float
-    threshold_score: float
+    accuracy         : float
+    average_loss     : float
+    report           : str
+    cm               : np.ndarray
+    positive_recall  : float
+    positive_f1      : float
+    threshold_score  : float
     optimal_threshold: float
 
 
@@ -143,7 +143,7 @@ def prepare_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     """
     renamed = df.rename(
         columns={
-            "Title": "title",
+            "Title"   : "title",
             "Abstract": "abstract",
         }
     )
@@ -224,10 +224,10 @@ class TitleAbstractDataset(Dataset[dict[str, Any]]):
             }
         """
         return {
-            "input_ids": self.input_ids[idx],
+            "input_ids"     : self.input_ids[idx],
             "attention_mask": self.attention_mask[idx],
             "token_type_ids": self.token_type_ids[idx],
-            "labels": self.labels[idx],
+            "labels"        : self.labels[idx],
         }
 
 
@@ -324,8 +324,8 @@ def eval_model(
         - cm: 混淆矩阵
     """
     model.eval()
-    losses: list[float]             = []
-    all_labels: list[int]           = []
+    losses            : list[float] = []
+    all_labels        : list[int]   = []
     all_positive_probs: list[float] = []
     loss_fn                         = torch.nn.CrossEntropyLoss()
 
@@ -434,14 +434,14 @@ def save_training_config(
         best_accuracy: 最佳验证准确率
     """
     payload = {
-        "model_name": config.model_name,
-        "max_len": config.max_len,
+        "model_name"              : config.model_name,
+        "max_len"                 : config.max_len,
         "best_validation_accuracy": float(best_accuracy),
-        "best_positive_f1": float(best_positive_f1),
-        "optimal_threshold": float(optimal_threshold),
-        "threshold_beta": float(config.threshold_beta),
-        "train_version": "title_abstract_v2",
-        "input_mode": "title_abstract",
+        "best_positive_f1"        : float(best_positive_f1),
+        "optimal_threshold"       : float(optimal_threshold),
+        "threshold_beta"          : float(config.threshold_beta),
+        "train_version"           : "title_abstract_v2",
+        "input_mode"              : "title_abstract",
     }
     with output_dir.joinpath("training_config.json").open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)

@@ -50,9 +50,9 @@ def person_fact_doc_id(
 @dataclass(frozen=True)
 class RetrievedItem:
     doc_id: str
-    text: str
-    score: float
-    meta: dict[str, Any]
+    text  : str
+    score : float
+    meta  : dict[str, Any]
 
 
 class MemoryDB(LockedDirtyStateMixin):
@@ -114,9 +114,9 @@ class MemoryDB(LockedDirtyStateMixin):
 
             meta.update(
                 {
-                    "type": "person_info",
-                    "chat_id": chat_id,
-                    "subject_id": subject_id,
+                    "type"          : "person_info",
+                    "chat_id"       : chat_id,
+                    "subject_id"    : subject_id,
                     "schema_version": 2,
                 }
             )
@@ -197,12 +197,11 @@ class MemoryDB(LockedDirtyStateMixin):
     def replace_configured_knowledge(self, documents: Sequence[VectorDoc]) -> bool:
         """原子替换完整的 ``kb:`` 文档命名空间。
 
-        调用方进入本方法前必须完成文件读取、解码、分块和预算检查。替代存储先在锁外
-        完整构造，再于同一把锁下发布，因此校验或构建失败不会暴露只刷新了一部分的
-        知识集合。
+        调用方进入本方法前必须完成文件读取、解码、分块和预算检查。替代存储在存储锁内
+        完整构造并发布，构建失败时保留原知识集合。
         """
-        requested: list[VectorDoc] = []
-        requested_ids: set[str]    = set()
+        requested    : list[VectorDoc] = []
+        requested_ids: set[str]        = set()
         for document in documents:
             if not document.doc_id.startswith(_CONFIGURED_KNOWLEDGE_PREFIX):
                 raise ValueError("configured knowledge document has an invalid namespace")

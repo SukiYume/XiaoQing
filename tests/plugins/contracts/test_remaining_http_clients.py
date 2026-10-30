@@ -131,7 +131,7 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
                         "timeline": {
                             "instructions": [
                                 {
-                                    "type": "TimelineAddEntries",
+                                    "type"   : "TimelineAddEntries",
                                     "entries": [
                                         {"entryId": "tweet-1"},
                                         {
@@ -158,7 +158,7 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
                         "user_id": "1",
                         "headers": {"author" + "ization": "Bearer token"},
                         "cookies": {"ct0": "csrf"},
-                        "proxy": "http://127.0.0.1:7890",
+                        "proxy"  : "http://127.0.0.1:7890",
                     }
                 }
             },
@@ -287,7 +287,7 @@ async def test_apod_always_uses_pinned_public_fetch_for_configured_url(
                 config={
                     "plugins": {
                         "apod": {
-                            "url": apod.DEFAULT_APOD_URL,
+                            "url"          : apod.DEFAULT_APOD_URL,
                             "allowed_hosts": ["images.example"],
                         }
                     }

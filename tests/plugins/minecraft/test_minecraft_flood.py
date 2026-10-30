@@ -348,6 +348,7 @@ async def test_group_outside_schedule_targets_is_not_polled(
     await mc_main.scheduled(cast(Any, context))
 
     context.send_action.assert_not_awaited()
+    assert monitor.calls == 0
     assert not monitor.committed
 
 

@@ -42,10 +42,10 @@ class QualityCase:
 class ProbeResult(TypedDict):
     """一次 HTTP 事件请求的稳定观测结构。"""
 
-    status: int | None
+    status    : int | None
     latency_ms: float
-    error: str | None
-    payload: dict[str, Any]
+    error     : str | None
+    payload   : dict[str, Any]
 
 
 class JsonDataError(ValueError):
@@ -84,32 +84,32 @@ CASES: tuple[QualityCase, ...] = (
 class Turn:
     """剧本中的一条群消息；``hours_ago`` 让旧对话带上真实的 OneBot 时间戳。"""
 
-    speaker: str
-    text: str
+    speaker  : str
+    text     : str
     hours_ago: float = 0.0
-    image: str       = ""
+    image    : str   = ""
 
 
 @dataclass(frozen=True, slots=True)
 class Scenario:
     """多轮群聊剧本。点名剧本评估最后一条回复；未点名剧本观察小青是否主动加入。"""
 
-    case_id: str
-    turns: tuple[Turn, ...]
-    criteria: tuple[str, ...]
+    case_id        : str
+    turns          : tuple[Turn, ...]
+    criteria       : tuple[str, ...]
     forbidden_terms: tuple[str, ...] = ()
-    expected_any: tuple[str, ...]    = ()
-    addressed: bool                  = True
-    pace_seconds: float              = 0.0
-    expect_silence: bool             = False
+    expected_any   : tuple[str, ...] = ()
+    addressed      : bool            = True
+    pace_seconds   : float           = 0.0
+    expect_silence : bool            = False
 
 
 @dataclass(frozen=True, slots=True)
 class CheckerProbe:
     """人工写定的候选回复，用于校准审查器的误杀与漏放。"""
 
-    label: str
-    reply: str
+    label     : str
+    reply     : str
     acceptable: bool
 
 
@@ -117,15 +117,15 @@ class CheckerProbe:
 class CheckerCase:
     case_id: str
     history: tuple[tuple[str, str], ...]
-    sender: str
+    sender : str
     current: str
-    probes: tuple[CheckerProbe, ...] = field(default_factory=tuple)
+    probes : tuple[CheckerProbe, ...] = field(default_factory=tuple)
 
 
 # 回归图片使用运行时绘制的英文海报，避免依赖系统 CJK 字体和外部图床。
 IMAGE_FIXTURES: dict[str, tuple[str, ...]] = {
     "bubble_tea_sale": ("BUBBLE TEA", "BUY 1 GET 1 FREE", "TODAY ONLY"),
-    "library_notice": ("LIBRARY CLOSED", "OCT 18 - OCT 20", "MAINTENANCE"),
+    "library_notice" : ("LIBRARY CLOSED", "OCT 18 - OCT 20", "MAINTENANCE"),
 }
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -519,29 +519,29 @@ class EventProbe:
         self._sequence += 1
         actor_id = self.admin_id if admin else user_id
         payload  = {
-            "time": int(time.time() if event_time is None else event_time),
-            "post_type": "message",
+            "time"        : int(time.time() if event_time is None else event_time),
+            "post_type"   : "message",
             "message_type": "group",
-            "sub_type": "normal",
-            "message_id": self.message_id_seed + self._sequence,
-            "user_id": actor_id,
-            "group_id": group_id,
-            "message": message,
-            "raw_message": message if isinstance(message, str) else _raw_message(message),
-            "font": 0,
-            "sender": {
-                "user_id": actor_id,
+            "sub_type"    : "normal",
+            "message_id"  : self.message_id_seed + self._sequence,
+            "user_id"     : actor_id,
+            "group_id"    : group_id,
+            "message"     : message,
+            "raw_message" : message if isinstance(message, str) else _raw_message(message),
+            "font"        : 0,
+            "sender"      : {
+                "user_id" : actor_id,
                 "nickname": nickname,
-                "card": nickname,
-                "role": "owner" if admin else "member",
+                "card"    : nickname,
+                "role"    : "owner" if admin else "member",
             },
         }
         request = urllib.request.Request(
             self.endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json; charset=utf-8",
+                "Authorization"           : f"Bearer {self.token}",
+                "Content-Type"            : "application/json; charset=utf-8",
                 "X-XiaoQing-Response-Mode": "actions",
             },
             method="POST",
@@ -558,10 +558,10 @@ class EventProbe:
             request_error = f"HTTPError: {exc.code} {exc.reason}"
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return {
-                "status": None,
+                "status"    : None,
                 "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
-                "error": f"{type(exc).__name__}: {exc}",
-                "payload": {},
+                "error"     : f"{type(exc).__name__}: {exc}",
+                "payload"   : {},
             }
         try:
             response_payload = _decode_json_object(body.decode("utf-8"))
@@ -570,10 +570,10 @@ class EventProbe:
             if request_error is None:
                 request_error = f"响应解析失败: {type(exc).__name__}: {exc}"
         return {
-            "status": status,
+            "status"    : status,
             "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "error": request_error,
-            "payload": response_payload,
+            "error"     : request_error,
+            "payload"   : response_payload,
         }
 
 
@@ -626,14 +626,14 @@ def _semantic_review_material(
             ]
         )
     return {
-        "case_id": case_id,
-        "status": "pending",
-        "reviewer": None,
-        "verdict": None,
-        "criteria": criteria,
-        "message": message,
+        "case_id"      : case_id,
+        "status"       : "pending",
+        "reviewer"     : None,
+        "verdict"      : None,
+        "criteria"     : criteria,
+        "message"      : message,
         "prior_message": prior_message,
-        "reply": reply,
+        "reply"        : reply,
     }
 
 
@@ -646,11 +646,13 @@ def _cleanup(probe: EventProbe, *, user_id: int, group_id: int) -> dict[str, Any
         group_id = group_id,
         admin    = True,
     )
+    reply = _reply_text(result)
+    # 只有明确的重置成功回复才算清理完成：200 状态下的“权限不足”或空动作同样是失败。
     return {
         "status": result["status"],
-        "reply": _reply_text(result),
-        "error": result["error"],
-        "ok": result["status"] == 200 and result["error"] is None,
+        "reply" : reply,
+        "error" : result["error"],
+        "ok"    : result["status"] == 200 and result["error"] is None and "已重置会话记忆" in reply,
     }
 
 
@@ -696,11 +698,11 @@ def _run_stale_topic_case(
         )
         old_reply                      = _reply_text(old_result)
         attempt_result: dict[str, Any] = {
-            "attempt": attempt,
-            "group_id": group_id,
+            "attempt"   : attempt,
+            "group_id"  : group_id,
             "old_status": old_result["status"],
-            "old_error": old_result["error"],
-            "old_reply": old_reply,
+            "old_error" : old_result["error"],
+            "old_reply" : old_reply,
         }
 
         # 网络/协议失败不是“模型选择不插话”，必须单独留下证据并让门禁失败。
@@ -723,39 +725,39 @@ def _run_stale_topic_case(
         stored        = _wait_for_store(data_dir, group_id)
         serialized = json.dumps(stored, ensure_ascii=False)
         checks = {
-            "old_request_ok": old_request_ok,
+            "old_request_ok"                     : old_request_ok,
             "old_turn_was_observed_without_reply": not old_reply,
             "current_request_ok": (
                 current_result["status"] == 200 and current_result["error"] is None
             ),
-            "current_turn_has_reply": bool(current_reply),
-            "full_store_keeps_old_turn": old_message in serialized,
+            "current_turn_has_reply"       : bool(current_reply),
+            "full_store_keeps_old_turn"    : old_message in serialized,
             "full_store_keeps_current_turn": "KIMI" in serialized,
         }
         cleanup = _cleanup(probe, user_id=user_id, group_id=group_id)
         attempt_result.update(
             {
                 "current_status": current_result["status"],
-                "current_error": current_result["error"],
-                "current_reply": current_reply,
-                "cleanup": cleanup,
+                "current_error" : current_result["error"],
+                "current_reply" : current_reply,
+                "cleanup"       : cleanup,
             }
         )
         attempts.append(attempt_result)
         return {
-            "attempt": attempt,
-            "group_id": group_id,
-            "old_reply": old_reply,
-            "current_reply": current_reply,
-            "status": current_result["status"],
-            "error": current_result["error"],
-            "latency_ms": current_result["latency_ms"],
-            "checks": checks,
+            "attempt"        : attempt,
+            "group_id"       : group_id,
+            "old_reply"      : old_reply,
+            "current_reply"  : current_reply,
+            "status"         : current_result["status"],
+            "error"          : current_result["error"],
+            "latency_ms"     : current_result["latency_ms"],
+            "checks"         : checks,
             "semantic_review": _semantic_review_material(
                 "stale_topic", current_message, current_reply, prior_message=old_message
             ),
-            "cleanup": cleanup,
-            "attempts": attempts,
+            "cleanup"        : cleanup,
+            "attempts"       : attempts,
             "all_requests_ok": all(
                 row["old_status"] == 200 and row["old_error"] is None for row in attempts
             )
@@ -764,13 +766,13 @@ def _run_stale_topic_case(
             "all_cleanups_ok": all(row["cleanup"]["ok"] for row in attempts),
         }
     return {
-        "attempt": None,
-        "checks": {"found_non_reply_seed": False},
+        "attempt"        : None,
+        "checks"         : {"found_non_reply_seed": False},
         "semantic_review": _semantic_review_material(
             "stale_topic", current_message, "", prior_message=old_message
         ),
-        "cleanup": {},
-        "attempts": attempts,
+        "cleanup"        : {},
+        "attempts"       : attempts,
         "all_requests_ok": all(
             row["old_status"] == 200 and row["old_error"] is None for row in attempts
         ),
@@ -788,15 +790,15 @@ def _run_forced_cases(probe: EventProbe) -> list[dict[str, Any]]:
         response = probe.send(case.message, user_id=user_id, group_id=group_id)
         reply  = _reply_text(response)
         result = {
-            "case_id": case.case_id,
-            "message": case.message,
-            "reply": reply,
-            "status": response["status"],
-            "error": response["error"],
-            "latency_ms": response["latency_ms"],
-            "checks": _automatic_checks(case.case_id, reply),
+            "case_id"        : case.case_id,
+            "message"        : case.message,
+            "reply"          : reply,
+            "status"         : response["status"],
+            "error"          : response["error"],
+            "latency_ms"     : response["latency_ms"],
+            "checks"         : _automatic_checks(case.case_id, reply),
             "semantic_review": _semantic_review_material(case.case_id, case.message, reply),
-            "cleanup": _cleanup(probe, user_id=user_id, group_id=group_id),
+            "cleanup"        : _cleanup(probe, user_id=user_id, group_id=group_id),
         }
         results.append(result)
         print(f"{case.case_id}: {reply or '<NO_REPLY>'}")
@@ -820,14 +822,14 @@ def _run_participation_case(probe: EventProbe) -> dict[str, Any]:
         reply = _reply_text(response)
         attempts.append(
             {
-                "attempt": attempt,
-                "message": message,
-                "reply": reply,
+                "attempt"        : attempt,
+                "message"        : message,
+                "reply"          : reply,
                 "semantic_review": _semantic_review_material("participation", message, reply),
-                "status": response["status"],
-                "error": response["error"],
-                "latency_ms": response["latency_ms"],
-                "cleanup": _cleanup(probe, user_id=user_id, group_id=group_id),
+                "status"         : response["status"],
+                "error"          : response["error"],
+                "latency_ms"     : response["latency_ms"],
+                "cleanup"        : _cleanup(probe, user_id=user_id, group_id=group_id),
             }
         )
         if reply:
@@ -896,7 +898,7 @@ def _scenario_checks(scenario: Scenario, reply: str) -> dict[str, bool]:
 
     lowered = reply.lower()
     checks  = {
-        "has_reply": bool(reply),
+        "has_reply"             : bool(reply),
         "not_exhausted_fallback": reply not in _exhausted_fallbacks(),
     }
     if scenario.forbidden_terms:
@@ -944,36 +946,36 @@ def _run_scenarios(probe: EventProbe) -> list[dict[str, Any]]:
             )
             transcript.append(
                 {
-                    "speaker": turn.speaker,
-                    "text": turn.text,
-                    "image": turn.image,
-                    "hours_ago": turn.hours_ago,
-                    "reply": _reply_text(response),
-                    "status": response["status"],
-                    "error": response["error"],
+                    "speaker"   : turn.speaker,
+                    "text"      : turn.text,
+                    "image"     : turn.image,
+                    "hours_ago" : turn.hours_ago,
+                    "reply"     : _reply_text(response),
+                    "status"    : response["status"],
+                    "error"     : response["error"],
                     "latency_ms": response["latency_ms"],
                 }
             )
         reply = transcript[-1]["reply"]
         results.append(
             {
-                "case_id": scenario.case_id,
-                "group_id": group_id,
-                "transcript": transcript,
-                "reply": reply,
+                "case_id"    : scenario.case_id,
+                "group_id"   : group_id,
+                "transcript" : transcript,
+                "reply"      : reply,
                 "requests_ok": all(
                     row["status"] == 200 and row["error"] is None for row in transcript
                 ),
-                "checks": _scenario_checks(scenario, reply) if scenario.addressed else {},
-                "observations": _scenario_observations(scenario, transcript),
+                "checks"         : _scenario_checks(scenario, reply) if scenario.addressed else {},
+                "observations"   : _scenario_observations(scenario, transcript),
                 "semantic_review": {
-                    "case_id": scenario.case_id,
-                    "status": "pending",
+                    "case_id" : scenario.case_id,
+                    "status"  : "pending",
                     "reviewer": None,
-                    "verdict": None,
+                    "verdict" : None,
                     "criteria": ["回答切合最后一条消息，像群友一样自然", *scenario.criteria],
-                    "message": scenario.turns[-1].text,
-                    "reply": reply,
+                    "message" : scenario.turns[-1].text,
+                    "reply"   : reply,
                 },
                 "cleanup": _cleanup(
                     probe, user_id=speakers[scenario.turns[0].speaker], group_id=group_id
@@ -1070,14 +1072,14 @@ async def _calibrate_checker_async(config_path: Path, secrets_path: Path) -> dic
                 )
                 rows.append(
                     {
-                        "case_id": case.case_id,
-                        "label": probe.label,
-                        "reply": probe.reply,
-                        "acceptable": probe.acceptable,
-                        "suitable": result.suitable,
-                        "severity": result.severity,
+                        "case_id"     : case.case_id,
+                        "label"       : probe.label,
+                        "reply"       : probe.reply,
+                        "acceptable"  : probe.acceptable,
+                        "suitable"    : result.suitable,
+                        "severity"    : result.severity,
                         "failure_code": result.failure_code,
-                        "reason": result.reason,
+                        "reason"      : result.reason,
                     }
                 )
 
@@ -1101,13 +1103,13 @@ def _checker_calibration_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     blocked     = sum(not row["suitable"] for row in rejectable)
     accept_rate = accepted / len(acceptable) if acceptable else 0.0
     return {
-        "probes": rows,
-        "infra_failures": len(rows) - len(measured),
-        "acceptable_passed": accepted,
-        "acceptable_total": len(acceptable),
+        "probes"            : rows,
+        "infra_failures"    : len(rows) - len(measured),
+        "acceptable_passed" : accepted,
+        "acceptable_total"  : len(acceptable),
         "rejectable_blocked": blocked,
-        "rejectable_total": len(rejectable),
-        "accept_rate": round(accept_rate, 3),
+        "rejectable_total"  : len(rejectable),
+        "accept_rate"       : round(accept_rate, 3),
         "passed": (
             len(measured) == len(rows)
             and blocked == len(rejectable)
@@ -1183,13 +1185,13 @@ def _run_quality_suite(
         "scenarios": scenarios,
         "checker_calibration": checker_calibration,
         "aggregate": {
-            "forced_replies": forced_replies,
-            "forced_cases": len(results),
-            "question_endings": question_endings,
+            "forced_replies"           : forced_replies,
+            "forced_cases"             : len(results),
+            "question_endings"         : question_endings,
             "all_machine_checks_passed": all_machine_checks_passed,
-            "all_requests_ok": all_requests_ok,
-            "all_cleanups_ok": all_cleanups_ok,
-            "unaddressed_observations": {
+            "all_requests_ok"          : all_requests_ok,
+            "all_cleanups_ok"          : all_cleanups_ok,
+            "unaddressed_observations" : {
                 scenario["case_id"]: scenario["observations"]
                 for scenario in scenarios
                 if scenario["observations"]
@@ -1273,11 +1275,11 @@ def main(argv: list[str] | None = None) -> int:
         _write_report(
             args.output,
             {
-                "schema_version": 2,
-                "generated_at": datetime.now(UTC).isoformat(),
+                "schema_version"     : 2,
+                "generated_at"       : datetime.now(UTC).isoformat(),
                 "checker_calibration": calibration,
                 "machine_gate_passed": calibration["passed"],
-                "gate_passed": calibration["passed"],
+                "gate_passed"        : calibration["passed"],
             },
         )
         return 0 if calibration["passed"] else 1

@@ -89,9 +89,9 @@ def redact_url_for_log(value: str, *, max_length: int = 256) -> str:
 class SafeHttpResponse:
     """The bounded, decoded body returned by :func:`fetch_public_html`."""
 
-    url: str
-    status: int
-    body: bytes
+    url    : str
+    status : int
+    body   : bytes
     charset: str | None
     headers: Mapping[str, str]
 

@@ -125,15 +125,15 @@ def write_render_cache_entry(
     if prompt_version is None:
         prompt_version = MEDIA_ANALYSIS_PROMPT_VERSION if normalized_source == "llm" else 0
     cache_payload = {
-        "kind": rendered.kind,
-        "description": rendered.description,
-        "emotion_tags": list(rendered.emotion_tags),
-        "marker": rendered.marker,
-        "analysis_source": normalized_source,
-        "analysis_quality": str(quality or "").strip(),
+        "kind"                   : rendered.kind,
+        "description"            : rendered.description,
+        "emotion_tags"           : list(rendered.emotion_tags),
+        "marker"                 : rendered.marker,
+        "analysis_source"        : normalized_source,
+        "analysis_quality"       : str(quality or "").strip(),
         "analysis_prompt_version": int(prompt_version or 0),
-        "cultural_hint": rendered.cultural_hint.strip(),
-        "updated_at": time.time(),
+        "cultural_hint"          : rendered.cultural_hint.strip(),
+        "updated_at"             : time.time(),
     }
     with render_cache_lock(data_dir):
         cache = load_render_cache(data_dir, max_bytes=max_bytes)

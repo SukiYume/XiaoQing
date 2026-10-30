@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 from tests.helpers.qingssh_test_support import (
-    Any,
-    AsyncMock,
-    Mock,
-    Path,
     SessionKeys,
     SessionManager,
     _command_parent,
@@ -17,10 +20,7 @@ from tests.helpers.qingssh_test_support import (
     _SessionStub,
     _TransactionalContext,
     _wait_for,
-    asyncio,
-    cast,
     inspect,
-    pytest,
     qingssh_main,
     ssh_manager_module,
     ssh_session_handlers,
@@ -39,12 +39,12 @@ def test_qingssh_session_does_not_store_task_object():
 
         session = _SessionStub(
             {
-                SessionKeys.STATE: "connected",
-                SessionKeys.SERVER_NAME: "srv1",
+                SessionKeys.STATE        : "connected",
+                SessionKeys.SERVER_NAME  : "srv1",
                 SessionKeys.COMMAND_COUNT: 0,
-                SessionKeys.CWD: None,
-                SessionKeys.ENV_VARS: {},
-                SessionKeys.HISTORY: [],
+                SessionKeys.CWD          : None,
+                SessionKeys.ENV_VARS     : {},
+                SessionKeys.HISTORY      : [],
             }
         )
 
@@ -328,7 +328,7 @@ async def test_session_replacement_before_commit_never_opens_ssh(tmp_path: Path)
 async def test_old_job_cannot_overwrite_new_generation_or_unregister_it(tmp_path: Path) -> None:
     await ssh_session_handlers.shutdown_tasks()
     context = _TransactionalContext(_connected_session())
-    manager = _CommandGateManager(tmp_path, output="/old/cwd\n")
+    manager = _CommandGateManager(tmp_path, output="__XQ_CWD__/old/cwd\n")
 
     await context.run_parent(_command_parent("cd /old/cwd", context, manager))
     await asyncio.wait_for(manager.started.wait(), timeout=1)
@@ -400,7 +400,7 @@ async def test_stale_job_checks_do_not_touch_replacement_session_metadata() -> N
         50001,
         "qingssh",
         {
-            SessionKeys.STATE: "other",
+            SessionKeys.STATE      : "other",
             SessionKeys.SERVER_NAME: "new-server",
         },
     )
@@ -550,8 +550,8 @@ async def test_close_cancels_only_the_exact_session_generation(
     ssh_session_handlers._register_job(current_job)
     session = _SessionStub(
         {
-            SessionKeys.SERVER_NAME: "srv1",
-            SessionKeys.STATE: "executing",
+            SessionKeys.SERVER_NAME : "srv1",
+            SessionKeys.STATE       : "executing",
             SessionKeys.CURRENT_TASK: old_job.job_id,
         }
     )
@@ -587,8 +587,8 @@ async def test_close_cancels_exact_job_before_manager_initialization_failure(
     ssh_session_handlers._register_job(job)
     session = _SessionStub(
         {
-            SessionKeys.SERVER_NAME: "srv1",
-            SessionKeys.STATE: "executing",
+            SessionKeys.SERVER_NAME : "srv1",
+            SessionKeys.STATE       : "executing",
             SessionKeys.CURRENT_TASK: job.job_id,
         }
     )
@@ -647,7 +647,7 @@ async def test_stop_reply_does_not_claim_remote_exit_when_only_local_cleanup_suc
     context.end_session = AsyncMock()
     session             = _SessionStub(
         {
-            SessionKeys.STATE: "executing",
+            SessionKeys.STATE      : "executing",
             SessionKeys.SERVER_NAME: "srv1",
         }
     )

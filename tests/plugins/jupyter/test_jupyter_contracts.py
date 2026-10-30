@@ -41,7 +41,7 @@ def _session(
         group_id    = 2,
         plugin_name = plugin_name,
         data        = {
-            "code_buffer": [] if lines is None else lines,
+            "code_buffer"    : [] if lines is None else lines,
             "execution_count": execution_count,
         },
     )

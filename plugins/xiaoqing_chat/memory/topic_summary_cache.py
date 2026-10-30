@@ -13,10 +13,10 @@ from ..store_base import delete_json_artifacts
 
 @dataclass(frozen=True)
 class TopicSummaryCacheEntry:
-    topic_id: str
-    topic: str
-    summary: str
-    keywords: list[str]
+    topic_id  : str
+    topic     : str
+    summary   : str
+    keywords  : list[str]
     key_points: list[str]
     updated_at: float
 

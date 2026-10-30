@@ -287,14 +287,14 @@ class TestAstroToolsErrorHandling:
         # 不应该抛出未捕获的异常
 
     @pytest.mark.asyncio
-    async def test_obj_query_runs_in_to_thread(self, mock_context, monkeypatch):
+    async def test_obj_query_runs_through_plugin_bulkhead(self, mock_context, monkeypatch):
         calls = {"count": 0}
 
-        async def _fake_to_thread(func, *args, **kwargs):
+        async def _fake_run_sync(func, *args, **kwargs):
             calls["count"] += 1
             return None
 
-        monkeypatch.setattr(loaded_modules["obj"].asyncio, "to_thread", _fake_to_thread)
+        monkeypatch.setattr(loaded_modules["obj"], "run_sync", _fake_run_sync)
 
         result = await loaded_modules["obj"].handle_obj("Crab Pulsar", mock_context)
 

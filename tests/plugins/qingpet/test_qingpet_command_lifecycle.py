@@ -21,9 +21,9 @@ async def test_real_command_entry_reuses_one_pet_and_invalid_steps_do_not_mutate
     user_id  = "880721002"
     event    = {
         "message_type": "group",
-        "group_id": group_id,
-        "user_id": int(user_id),
-        "message_id": 1,
+        "group_id"    : group_id,
+        "user_id"     : int(user_id),
+        "message_id"  : 1,
     }
     assert AdminService(qingpet_db).enable_plugin(group_id) is True
 

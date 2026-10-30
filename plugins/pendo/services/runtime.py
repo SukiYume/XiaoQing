@@ -42,7 +42,7 @@ def _load_web_backend() -> _WebBackend:
 @dataclass(frozen=True, slots=True)
 class RuntimeCleanupFailure:
     component: str
-    error: Exception
+    error    : Exception
 
 
 class PendoRuntimeService:
@@ -132,7 +132,7 @@ class PendoRuntimeService:
         self._database_path                   = None
         singleton                             = detach_database_singleton()
         failures: list[RuntimeCleanupFailure] = []
-        seen: set[int]                        = set()
+        seen    : set[int]                    = set()
         for component, database in (
             ("runtime_db", owned),
             ("singleton_db", singleton),

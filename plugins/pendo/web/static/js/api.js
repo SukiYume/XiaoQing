@@ -49,24 +49,50 @@ function sessionHeaders(options = {}) {
     return headers;
 }
 
-async function fetchApi(path, options = {}) {
+const READ_TIMEOUT_MS = 20000;
+
+// 读取期限覆盖响应头和响应体：服务器发完响应头后停住正文，页面也不会一直停在加载中。
+// 写操作不设期限，结果未知时不能自动重试或当作失败。
+async function withReadDeadline(isRead, run) {
     const controller = new AbortController();
-    const isRead     = SAFE_METHODS.has(String(options.method || 'GET').toUpperCase());
-    const timeout    = isRead ? setTimeout(() => controller.abort(), 20000) : null;
-    let res;
+    if (!isRead) return run(controller.signal);
+    let timer     = null;
+    const expired = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('请求超时，请重试'));
+        }, READ_TIMEOUT_MS);
+    });
+    const work = Promise.resolve().then(() => run(controller.signal));
+    work.catch(() => {});
     try {
-        res = await fetch(`api${path}`, {
-            ...options,
-            signal: options.signal || controller.signal,
-            headers: sessionHeaders(options),
-            credentials: 'same-origin',
-        });
-    } catch (error) {
-        if (controller.signal.aborted) throw new Error('请求超时，请重试');
-        throw error;
+        return await Promise.race([work, expired]);
     } finally {
-        if (timeout !== null) clearTimeout(timeout);
+        clearTimeout(timer);
     }
+}
+
+async function fetchApi(path, options = {}, consume = (res) => res) {
+    const isRead = SAFE_METHODS.has(String(options.method || 'GET').toUpperCase());
+    return withReadDeadline(isRead, async (signal) => {
+        let res;
+        try {
+            res = await fetch(`api${path}`, {
+                ...options,
+                signal: options.signal || signal,
+                headers: sessionHeaders(options),
+                credentials: 'same-origin',
+            });
+        } catch (error) {
+            if (signal.aborted) throw new Error('请求超时，请重试');
+            throw error;
+        }
+        checkSession(res);
+        return consume(res);
+    });
+}
+
+function checkSession(res) {
     if (res.status === 401) {
         csrfToken = '';
         if (sessionOwnerId && !sessionExpiredNotified && typeof window !== 'undefined') {
@@ -77,7 +103,6 @@ async function fetchApi(path, options = {}) {
         error.status = 401;
         throw error;
     }
-    return res;
 }
 
 async function parseErrorResponse(res) {
@@ -89,22 +114,23 @@ async function parseErrorResponse(res) {
     }
 }
 
-async function request(path, options = {}) {
-    const res = await fetchApi(path, options);
-    if (!res.ok) {
-        throw new Error(await parseErrorResponse(res));
-    }
+function request(path, options = {}) {
+    return fetchApi(path, options, async (res) => {
+        if (!res.ok) {
+            throw new Error(await parseErrorResponse(res));
+        }
 
-    let data;
-    try {
-        data = await res.json();
-    } catch {
-        throw new Error('Request failed');
-    }
-    if (!data?.ok) {
-        throw new Error(formatErrorDetail(data?.message) || formatErrorDetail(data?.detail) || 'Request failed');
-    }
-    return data;
+        let data;
+        try {
+            data = await res.json();
+        } catch {
+            throw new Error('Request failed');
+        }
+        if (!data?.ok) {
+            throw new Error(formatErrorDetail(data?.message) || formatErrorDetail(data?.detail) || 'Request failed');
+        }
+        return data;
+    });
 }
 
 // 优先采用 RFC 5987 的 UTF-8 文件名，再回退到传统 filename 参数。
@@ -134,12 +160,17 @@ function downloadFilename(disposition) {
 }
 
 async function requestSession(path, options, invalidMessage, connectionMessage = invalidMessage) {
+    const isRead = SAFE_METHODS.has(String(options.method || 'GET').toUpperCase());
     try {
-        const res = await fetch(path, {
-            ...options,
-            credentials: 'same-origin',
+        // 会话读取同样有期限：启动时连接挂起会回到可重试的登录界面，而不是一直空白。
+        const [res, data] = await withReadDeadline(isRead, async (signal) => {
+            const response = await fetch(path, {
+                ...options,
+                signal,
+                credentials: 'same-origin',
+            });
+            return [response, await response.json().catch(() => ({}))];
         });
-        const data = await res.json().catch(() => ({}));
         if (!res.ok || !data?.ok) {
             csrfToken = '';
             return {

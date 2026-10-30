@@ -29,41 +29,41 @@ _TASK_PRIORITY_SQL = "CASE WHEN priority BETWEEN 1 AND 5 THEN priority ELSE 3 EN
 class _TaskRecord:
     """页面和 Widget 实际需要的任务字段及缓存计划日。"""
 
-    id: str
-    title: str
-    content: str
-    category: str
-    status: str
-    priority: int
-    plan_date: str | None
-    deadline_at: str | None
-    completed_at: str | None
-    cancelled_at: str | None
-    created_at: str
-    updated_at: str
-    version: int
-    plan_key: str
+    id           : str
+    title        : str
+    content      : str
+    category     : str
+    status       : str
+    priority     : int
+    plan_date    : str | None
+    deadline_at  : str | None
+    completed_at : str | None
+    cancelled_at : str | None
+    created_at   : str
+    updated_at   : str
+    version      : int
+    plan_key     : str
     deadline_sort: datetime | None
-    created_sort: datetime | None
+    created_sort : datetime | None
 
     def to_payload(self) -> JsonObject:
         """只公开任务页规范化器消费的字段。"""
 
         return {
-            "id": self.id,
-            "display_id": public_id(self.id),
-            "title": self.title,
-            "content": self.content,
-            "category": self.category,
-            "status": self.status,
-            "priority": self.priority,
-            "plan_date": self.plan_date,
-            "deadline_at": self.deadline_at,
+            "id"          : self.id,
+            "display_id"  : public_id(self.id),
+            "title"       : self.title,
+            "content"     : self.content,
+            "category"    : self.category,
+            "status"      : self.status,
+            "priority"    : self.priority,
+            "plan_date"   : self.plan_date,
+            "deadline_at" : self.deadline_at,
             "completed_at": self.completed_at,
             "cancelled_at": self.cancelled_at,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "version": self.version,
+            "created_at"  : self.created_at,
+            "updated_at"  : self.updated_at,
+            "version"     : self.version,
         }
 
 
@@ -72,7 +72,7 @@ def _normalize_task(item: TaskItem, user_timezone: tzinfo) -> _TaskRecord:
 
     plan_day                       = parse_iso_date(item.plan_date)
     deadline_sort: datetime | None = None
-    created_sort: datetime | None  = None
+    created_sort : datetime | None = None
     if item.deadline_at:
         try:
             deadline_sort = TimezoneHelper.parse(item.deadline_at, user_timezone)
@@ -222,17 +222,17 @@ def build_task_widget_overview(
         LIMIT :limit
         """,
         {
-            "owner_id": owner_id,
-            "timezone": timezone_name,
-            "today": today_key,
+            "owner_id" : owner_id,
+            "timezone" : timezone_name,
+            "today"    : today_key,
             "next_week": next_week_key,
-            "limit": limit,
+            "limit"    : limit,
         },
     ).fetchall()
     return {
         "summary": {
-            "active_count": int(summary_row["active_count"] or 0),
-            "focus_count": int(summary_row["focus_count"] or 0),
+            "active_count" : int(summary_row["active_count"] or 0),
+            "focus_count"  : int(summary_row["focus_count"] or 0),
             "overdue_count": int(summary_row["overdue_count"] or 0),
         },
         "items": [dict(row) for row in rows],
@@ -253,9 +253,9 @@ def build_task_overview(
     active = [task for task in tasks if task.status == "open"]
 
     overdue_tasks: list[_TaskRecord] = []
-    focus_tasks: list[_TaskRecord]   = []
+    focus_tasks  : list[_TaskRecord] = []
     up_next_tasks: list[_TaskRecord] = []
-    later_tasks: list[_TaskRecord]   = []
+    later_tasks  : list[_TaskRecord] = []
     backlog_tasks: list[_TaskRecord] = []
     for task in active:
         if task.plan_key and task.plan_key < today_key:
@@ -276,13 +276,13 @@ def build_task_overview(
     backlog_tasks.sort(key=_task_sort_key)
     return {
         "summary": {
-            "active_count": len(active),
-            "focus_count": len(focus_tasks),
+            "active_count" : len(active),
+            "focus_count"  : len(focus_tasks),
             "overdue_count": len(overdue_tasks),
         },
-        "focus_tasks": [task.to_payload() for task in focus_tasks],
+        "focus_tasks"  : [task.to_payload() for task in focus_tasks],
         "up_next_tasks": [task.to_payload() for task in up_next_tasks[:8]],
-        "later_tasks": [task.to_payload() for task in later_tasks[:8]],
+        "later_tasks"  : [task.to_payload() for task in later_tasks[:8]],
         "backlog_tasks": [task.to_payload() for task in backlog_tasks[:8]],
-        "all_tasks": [task.to_payload() for task in tasks],
+        "all_tasks"    : [task.to_payload() for task in tasks],
     }

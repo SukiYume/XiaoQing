@@ -1024,6 +1024,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `url_parser` | 无命令，单 URL 消息自动触发 | 公开 | 私聊、群聊 |
 | `voice` | `/语音`、`/念`、`/tts` | 公开 | 私聊、群聊 |
 | `wolframalpha` | `/alpha`、`/wolfram`、`/wa`、`/计算` | 公开 | 私聊、群聊 |
+| `xiaoai` | `/米家`、`/小爱`、`/xiaoai` | Bot 管理员 | 私聊 |
 | `xiaoqing_agent` | `/agent` | 公开（工具按发起人权限） | 私聊、群聊 |
 | `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
 

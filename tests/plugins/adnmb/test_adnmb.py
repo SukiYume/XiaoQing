@@ -190,7 +190,7 @@ def test_adnmb_models_normalize_fields_and_ignore_malformed_replies():
     post   = adnmb_adapi.Post.from_json({"id": 1, "now": 2, "user_hash": 3, "content": None})
     thread = adnmb_adapi.Thread.from_json(
         {
-            "id": "10",
+            "id"     : "10",
             "content": "main",
             "Replies": [
                 None,

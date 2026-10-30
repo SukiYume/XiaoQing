@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.app_test_support as _fixture_support
 from tests.helpers.app_test_support import (
-    Any,
     ApplicationLifecycleFatalError,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    Path,
     XiaoQingApp,
-    asyncio,
-    json,
-    patch,
-    pytest,
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
@@ -80,17 +79,17 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     old_config = {
         **app.config,
-        "onebot_http_base": "",
-        "enable_ws_client": False,
-        "onebot_ws_uri": "",
+        "onebot_http_base"     : "",
+        "enable_ws_client"     : False,
+        "onebot_ws_uri"        : "",
         "enable_inbound_server": True,
-        "inbound_http_base": "http://127.0.0.1:12000",
-        "inbound_ws_uri": "",
+        "inbound_http_base"    : "http://127.0.0.1:12000",
+        "inbound_ws_uri"       : "",
     }
     new_config = {
         **old_config,
         "enable_inbound_server": False,
-        "inbound_http_base": "",
+        "inbound_http_base"    : "",
     }
     old_snapshot = ConfigSnapshot(
         config   = old_config,

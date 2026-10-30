@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
+import secrets
 import sqlite3
+import time
+from collections import OrderedDict
 from contextlib import AbstractAsyncContextManager
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Final, Literal, cast
@@ -44,9 +48,44 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _IMPORT_LOCK_POOL = AsyncKeyedLockPool(max_keys=2_048, max_key_length=256)
 
+# 预检结果的短期样例缓存：翻看样例只用预检令牌取页，不再重新上传并全量校验整个备份。
+# 令牌绑定所有者，过期或被挤出后前端回退到重新上传；执行导入仍做完整校验。
+_PREVIEW_TTL_SECONDS: Final                                                 = 15 * 60
+_PREVIEW_MAX_ENTRIES: Final                                                 = 32
+_PREVIEWS           : OrderedDict[str, tuple[str, float, list[JsonObject]]] = OrderedDict()
+
+
+def _remember_preview(owner_id: str, samples: list[JsonObject]) -> str:
+    now = time.monotonic()
+    for token, (_owner, expires_at, _samples) in list(_PREVIEWS.items()):
+        if expires_at <= now:
+            _PREVIEWS.pop(token, None)
+    token            = secrets.token_urlsafe(24)
+    _PREVIEWS[token] = (owner_id, now + _PREVIEW_TTL_SECONDS, samples)
+    while len(_PREVIEWS) > _PREVIEW_MAX_ENTRIES:
+        _PREVIEWS.popitem(last=False)
+    return token
+
+
+def _recall_preview(owner_id: str, token: str) -> list[JsonObject] | None:
+    entry = _PREVIEWS.get(token)
+    if entry is None:
+        return None
+    owner, expires_at, samples = entry
+    if owner != owner_id or expires_at <= time.monotonic():
+        if expires_at <= time.monotonic():
+            _PREVIEWS.pop(token, None)
+        return None
+    return samples
+
+
+def _sample_rows(records: list[JsonObject]) -> list[JsonObject]:
+    return [{"type": r["type"], "id": r.get("id"), "title": r.get("title", "")} for r in records]
+
+
 # 上传大小限制：100 MB；同时约束记录数量，防止小体积压缩包展开成
 # 不受控的 Python/SQLite 工作量。
-MAX_UPLOAD_SIZE: Final  = 100 * 1024 * 1024
+MAX_UPLOAD_SIZE : Final = 100 * 1024 * 1024
 DEFAULT_TIMEZONE: Final = "Asia/Shanghai"
 
 JsonObject      = dict[str, Any]
@@ -64,10 +103,10 @@ class ExportSelection(BaseModel):  # type: ignore[misc]
 
     model_config = ConfigDict(extra="forbid")
 
-    types: list[str] = Field(default_factory=list)
-    preset: str = Field(default="all", max_length=20)
-    start: str | None = Field(default=None, max_length=10)
-    end: str | None = Field(default=None, max_length=10)
+    types   : list[str] = Field(default_factory=list)
+    preset  : str = Field(default="all", max_length=20)
+    start   : str | None = Field(default=None, max_length=10)
+    end     : str | None = Field(default=None, max_length=10)
     timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=128)
 
 
@@ -90,17 +129,17 @@ class ImportOptionsModel(BaseModel):  # type: ignore[misc]
 
     model_config = ConfigDict(extra="forbid")
 
-    types: list[StrictStr] | None                    = None
-    conflict_policy: ConflictPolicy                  = "isolate"
-    invalid_policy: Literal["abort", "skip_invalid"] = "abort"
-    force: StrictBool                                = False
+    types          : list[StrictStr] | None           = None
+    conflict_policy: ConflictPolicy                   = "isolate"
+    invalid_policy : Literal["abort", "skip_invalid"] = "abort"
+    force          : StrictBool                       = False
 
 
 def _is_unique_constraint_failure(exc: BaseException) -> bool:
     """沿有限异常链识别 SQLite 唯一约束，不解析可能变化的错误文本。"""
 
     current: BaseException | None = exc
-    seen: set[int]                = set()
+    seen   : set[int]             = set()
     unique_codes                  = {
         getattr(sqlite3, "SQLITE_CONSTRAINT_PRIMARYKEY", -1),
         getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", -2),
@@ -119,9 +158,14 @@ def _get_import_lock(
     owner_id: str,
     bundle_id: str | None,
 ) -> AbstractAsyncContextManager[None]:
-    """同一所有者和 bundle 的导入规划、事务必须串行执行。"""
+    """同一所有者和 bundle 的导入规划、事务必须串行执行。
 
-    key = f"{owner_id}:{bundle_id or '__no_bundle__'}"
+    锁键是所有者与包身份的定长摘要：清单允许 256 字符的 bundle_id，直接拼接会超出锁池的
+    键长上限；以 NUL 分隔后散列，不同的 (owner, bundle) 组合也不会互相混淆。
+    """
+
+    identity = f"{owner_id}\0{bundle_id or ''}\0{'bundle' if bundle_id else 'none'}"
+    key      = "import:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return cast(AbstractAsyncContextManager[None], _IMPORT_LOCK_POOL.hold(key))
 
 
@@ -153,11 +197,11 @@ def resolve_range(
     quarter_month = ((today.month - 1) // 3) * 3 + 1
     last_year = today.year - 1
     preset_bounds: dict[str, tuple[date | None, date | None]] = {
-        "all": (None, None),
-        "week": (today - timedelta(days=today.weekday()), today),
-        "month": (today.replace(day=1), today),
-        "quarter": (date(today.year, quarter_month, 1), today),
-        "year": (date(today.year, 1, 1), today),
+        "all"      : (None, None),
+        "week"     : (today - timedelta(days=today.weekday()), today),
+        "month"    : (today.replace(day=1), today),
+        "quarter"  : (date(today.year, quarter_month, 1), today),
+        "year"     : (date(today.year, 1, 1), today),
         "last_year": (date(last_year, 1, 1), date(last_year, 12, 31)),
     }
     preset = selection.preset.strip()
@@ -257,22 +301,8 @@ def query_items_for_types(
     for item_type in selected_types:
         if item_type not in SUPPORTED_TYPES:
             raise HTTPException(status_code=422, detail=f"Unsupported item type: {item_type}")
-        batch_size       = 1000
-        offset           = 0
-        items: list[Any] = []
-        while True:
-            batch = db.get_items(
-                owner_id,
-                filters   = {"type": item_type},
-                limit     = batch_size,
-                offset    = offset,
-                use_cache = False,
-            )
-            items.extend(batch)
-            if len(batch) < batch_size:
-                break
-            offset += batch_size
-        result[item_type] = items
+        # 共用数据库的完整分页读取契约：坏记录被跳过时也不会提前结束、漏掉后续正常数据。
+        result[item_type] = db.get_all_items(owner_id, {"type": item_type}, page_size=1000)
     return result
 
 
@@ -341,7 +371,7 @@ def _build_export_dataset(
     items_by_type = query_items_for_types(db, owner_id, selected_types)
 
     records_by_type: dict[str, list[JsonObject]] = {}
-    counts: dict[str, int]                       = {}
+    counts         : dict[str, int]              = {}
     export_warnings: list[str]                   = []
     for item_type, items in items_by_type.items():
         matched: list[JsonObject] = []
@@ -385,18 +415,18 @@ def _build_bundle_bytes(
                 "path": EVENT_COLLECTION_FILE_NAME
                 if item_type == EVENT_COLLECTION_TYPE
                 else TYPE_FILE_NAMES[item_type],
-                "type": item_type,
-                "count": len(records),
+                "type"  : item_type,
+                "count" : len(records),
                 "sha256": compute_sha256(content),
             }
         )
 
     manifest = build_manifest(
         {
-            "types": list(records_by_type.keys()),
+            "types" : list(records_by_type.keys()),
             "preset": selection.preset,
-            "start": start.isoformat() if start else None,
-            "end": end.isoformat() if end else None,
+            "start" : start.isoformat() if start else None,
+            "end"   : end.isoformat() if end else None,
         },
         file_entries,
         selection.timezone,
@@ -446,14 +476,20 @@ async def _read_upload_body(request: Request) -> bytes:
                 detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
             )
 
-    file_bytes = cast(bytes, await request.body())
+    # 边接收边累计：缺少或谎报 Content-Length 时，越界即停止读取，超限流量不会先整体驻留内存。
+    chunks: list[bytes] = []
+    received            = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code = 413,
+                detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
+            )
+        chunks.append(chunk)
+    file_bytes = b"".join(chunks)
     if not file_bytes:
         raise HTTPException(status_code=422, detail="Uploaded bundle is empty")
-    if len(file_bytes) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code = 413,
-            detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
-        )
     return file_bytes
 
 
@@ -509,10 +545,10 @@ def _get_item_identity(db: Database, item_id: str | None) -> dict[str, Any] | No
     if not row:
         return None
     return {
-        "id": row["id"],
+        "id"      : row["id"],
         "owner_id": row["owner_id"],
-        "type": row["type"],
-        "deleted": int(row["deleted"] or 0),
+        "type"    : row["type"],
+        "deleted" : int(row["deleted"] or 0),
     }
 
 
@@ -592,7 +628,8 @@ def _attach_import_metadata(
     assigned                    = dict(payload)
     context                     = assigned.get("context")
     assigned["context"]         = dict(context) if isinstance(context, dict) else {}
-    import_context              = dict(assigned["context"].get("import") or {})
+    existing_import             = assigned["context"].get("import")
+    import_context              = dict(existing_import) if isinstance(existing_import, dict) else {}
     import_context["source_id"] = source_id
     import_context["policy"]    = conflict_policy
     if conflict_policy == "isolate":
@@ -639,10 +676,10 @@ def _get_event_collection_identity(
     if not row:
         return None
     return {
-        "id": row["id"],
+        "id"      : row["id"],
         "owner_id": row["owner_id"],
-        "kind": row["kind"],
-        "deleted": int(row["deleted"] or 0),
+        "kind"    : row["kind"],
+        "deleted" : int(row["deleted"] or 0),
     }
 
 
@@ -709,9 +746,9 @@ def _prepare_collection_import_operations(
         if conflict_policy in {"skip", "overwrite"}
         else {}
     )
-    operations: list[ImportOperation] = []
-    collection_id_map: dict[str, str] = {}
-    decisions: list[ImportDecision]   = []
+    operations       : list[ImportOperation] = []
+    collection_id_map: dict[str, str]        = {}
+    decisions        : list[ImportDecision]  = []
     for index, collection in enumerate(collections, start=1):
         payload     = dict(collection)
         original_id = _import_source_key({"type": "event_collection", **payload}, index)
@@ -767,8 +804,8 @@ def _result_entry(record: JsonObject, reason: str | None = None) -> JsonObject:
     """生成不暴露内部主键的导入结果摘要。"""
 
     entry: JsonObject = {
-        "type": record.get("type"),
-        "id": record.get("id"),
+        "type" : record.get("type"),
+        "id"   : record.get("id"),
         "title": record.get("title") or "无标题",
     }
     if reason:
@@ -844,16 +881,16 @@ def preview_export(
         db, owner_id, body.selection
     )
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "selection": {
-                "types": list(records_by_type.keys()),
+                "types" : list(records_by_type.keys()),
                 "preset": body.selection.preset,
-                "start": start.isoformat() if start else None,
-                "end": end.isoformat() if end else None,
+                "start" : start.isoformat() if start else None,
+                "end"   : end.isoformat() if end else None,
             },
-            "counts": counts,
-            "total": sum(counts.values()),
+            "counts"  : counts,
+            "total"   : sum(counts.values()),
             "warnings": export_warnings,
         },
         "message": "",
@@ -908,13 +945,12 @@ async def inspect_import(
         await run_in_threadpool(db.has_imported_bundle, owner_id, bundle_id) if bundle_id else False
     )
 
-    sample_limit = 5
-    samples      = [
-        {"type": record["type"], "id": record.get("id"), "title": record.get("title", "")}
-        for record in valid_records[:sample_limit]
-    ]
+    sample_limit  = 5
+    all_samples   = _sample_rows(valid_records)
+    samples       = all_samples[:sample_limit]
+    preview_token = _remember_preview(owner_id, all_samples)
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "summary": {
                 "types": [
@@ -924,17 +960,18 @@ async def inspect_import(
                 ],
                 "files": len(parsed.file_summaries),
             },
-            "files": parsed.file_summaries,
+            "files" : parsed.file_summaries,
             "counts": {
-                "valid": len(valid_records) + len(parsed.event_collections),
-                "errors": len(errors),
+                "valid"        : len(valid_records) + len(parsed.event_collections),
+                "errors"       : len(errors),
                 "total_samples": len(valid_records),
             },
-            "bundle_id": bundle_id,
+            "bundle_id"       : bundle_id,
             "already_imported": already_imported,
-            "warnings": parsed.warnings,
-            "errors": errors,
-            "samples": samples,
+            "warnings"        : parsed.warnings,
+            "errors"          : errors,
+            "samples"         : samples,
+            "preview_token"   : preview_token,
         },
         "message": "",
     }
@@ -946,10 +983,21 @@ async def import_samples(
     owner_id: str = Depends(get_current_user),
     db: Database  = Depends(get_db),
 ) -> JsonObject:
-    """分页获取 bundle 样例；认证和数据库依赖仍是访问控制边界。"""
+    """分页获取 bundle 样例；认证和数据库依赖仍是访问控制边界。
 
-    file_bytes = await _read_upload_body(request)
-    _parsed, valid_records, _errors = await run_in_threadpool(_inspect_bundle_data, file_bytes)
+    带有效预检令牌时直接从预检结果取页；没有令牌或令牌已失效时才读取上传的完整文件。
+    """
+
+    token  = str(request.headers.get("x-transfer-preview-token", "") or "").strip()
+    cached = _recall_preview(owner_id, token) if token else None
+    if cached is not None:
+        sample_rows = cached
+    else:
+        if token:
+            raise HTTPException(status_code=410, detail="预检结果已过期，请重新预检")
+        file_bytes = await _read_upload_body(request)
+        _parsed, valid_records, _errors = await run_in_threadpool(_inspect_bundle_data, file_bytes)
+        sample_rows = _sample_rows(valid_records)
 
     page_str      = request.headers.get("x-transfer-page", "1")
     page_size_str = request.headers.get("x-transfer-page-size", "20")
@@ -959,19 +1007,15 @@ async def import_samples(
     except (ValueError, TypeError):
         page, page_size = 1, 20
 
-    start_idx    = (page - 1) * page_size
-    end_idx      = start_idx + page_size
-    page_records = valid_records[start_idx:end_idx]
-    samples      = [
-        {"type": r["type"], "id": r.get("id"), "title": r.get("title", "")} for r in page_records
-    ]
+    start_idx = (page - 1) * page_size
+    samples   = sample_rows[start_idx : start_idx + page_size]
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "samples": samples,
-            "page": page,
+            "samples"  : samples,
+            "page"     : page,
             "page_size": page_size,
-            "total": len(valid_records),
+            "total"    : len(sample_rows),
         },
         "message": "",
     }
@@ -995,7 +1039,7 @@ def _validate_import_request(
         raise HTTPException(
             status_code = 409,
             detail      = {
-                "message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
+                "message"  : "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
                 "bundle_id": bundle_id,
             },
         )
@@ -1041,9 +1085,9 @@ def _plan_item_imports(
         else {}
     )
     selected_records = [record for record in valid_records if record["type"] in selected_types]
-    planned: list[PlannedItem] = []
+    planned    : list[PlannedItem] = []
     item_id_map: dict[str, str] = {}
-    decisions: list[ImportDecision] = []
+    decisions  : list[ImportDecision] = []
     for index, record in enumerate(selected_records, start=1):
         source_id = _import_source_key(record, index)
         if source_id in item_id_map:
@@ -1084,9 +1128,9 @@ def _insert_reason(conflict_policy: ConflictPolicy) -> str:
     """返回新增记录对应的用户可读策略说明。"""
 
     return {
-        "isolate": "已生成隔离命名空间内的 UUID；原 ID 仅作为来源元数据",
+        "isolate"  : "已生成隔离命名空间内的 UUID；原 ID 仅作为来源元数据",
         "duplicate": "已生成副本 UUID；原 ID 仅作为来源元数据",
-        "skip": "未发现同来源记录，已生成内部 UUID",
+        "skip"     : "未发现同来源记录，已生成内部 UUID",
         "overwrite": "未发现同来源记录，已生成内部 UUID",
     }[conflict_policy]
 
@@ -1102,7 +1146,7 @@ def _build_item_import_operations(
     """从规划生成入库载荷，并在内部 ID 全部分配后重写关系。"""
 
     operations: list[ImportOperation] = []
-    decisions: list[ImportDecision]   = []
+    decisions : list[ImportDecision]  = []
     for action, record, source_id, internal_id in planned:
         payload = _assign_import_identity(
             record,
@@ -1155,7 +1199,7 @@ def _commit_import_plan(
         raise HTTPException(
             status_code = 409,
             detail      = {
-                "message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
+                "message"  : "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
                 "bundle_id": bundle_id or "",
             },
         ) from exc
@@ -1234,18 +1278,18 @@ def _execute_import_sync(
     )
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "summary": {"types": sorted(selected_types)},
-            "counts": {
-                "valid": len(valid_records) + len(parsed.event_collections),
+            "counts" : {
+                "valid" : len(valid_records) + len(parsed.event_collections),
                 "errors": len(errors),
             },
             "bundle_id": bundle_id,
-            "warnings": parsed.warnings,
-            "errors": errors,
-            "results": results,
-            "details": details,
+            "warnings" : parsed.warnings,
+            "errors"   : errors,
+            "results"  : results,
+            "details"  : details,
         },
         "message": "",
     }
@@ -1300,7 +1344,7 @@ def get_transfer_logs(
         raise HTTPException(status_code=422, detail="Invalid transfer log pagination")
     logs = db.get_transfer_logs(owner_id, limit=limit, offset=offset)
     return {
-        "ok": True,
-        "data": {"logs": logs},
+        "ok"     : True,
+        "data"   : {"logs": logs},
         "message": "",
     }

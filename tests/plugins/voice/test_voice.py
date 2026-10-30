@@ -18,11 +18,11 @@ from tests.helpers.settings_snapshot import with_settings_reader
 ROOT         = REPOSITORY_ROOT
 VALID_CONFIG = {
     "subscription_key": "test-key",
-    "region": "southeastasia",
-    "voice_name": "zh-CN-XiaomoNeural",
-    "style": "cheerful",
-    "role": "Girl",
-    "proxy": "",
+    "region"          : "southeastasia",
+    "voice_name"      : "zh-CN-XiaomoNeural",
+    "style"           : "cheerful",
+    "role"            : "Girl",
+    "proxy"           : "",
 }
 
 
@@ -93,11 +93,11 @@ def test_settings_reject_malformed_layers_and_missing_key(tmp_path: Path) -> Non
 def test_settings_use_safe_defaults_and_validate_proxy(tmp_path: Path) -> None:
     config = {
         "subscription_key": " key ",
-        "region": "../../evil",
-        "voice_name": "bad voice",
-        "style": "bad<style",
-        "role": 42,
-        "proxy": "https://proxy.test:8443/",
+        "region"          : "../../evil",
+        "voice_name"      : "bad voice",
+        "style"           : "bad<style",
+        "role"            : 42,
+        "proxy"           : "https://proxy.test:8443/",
     }
     settings = voice._get_settings(_context(tmp_path, config))
 

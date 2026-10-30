@@ -77,6 +77,13 @@ export function renderCustomSelect({
 
     const normalized  = normalizeOptions(options);
     let selectedIndex = normalized.findIndex((option) => String(option.value) === String(selected));
+    const keptValue   = String(selected ?? '').trim();
+    if (selectedIndex < 0 && keptValue) {
+        // 已有值不在固定选项里（例如聊天端保存的自定义天气）：保留为一个可选项，
+        // 不能静默改选第一项，否则保存其他字段时会把这个值清掉。
+        normalized.push({ value: keptValue, label: keptValue });
+        selectedIndex = normalized.length - 1;
+    }
     if (selectedIndex < 0 && normalized.length) selectedIndex = 0;
     const current       = normalized[selectedIndex] ?? { value: '', label: placeholder };
     const disabled      = normalized.length === 0;

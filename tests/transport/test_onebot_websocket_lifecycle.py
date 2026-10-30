@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from tests.helpers.onebot_test_support import (
-    AsyncMock,
-    MagicMock,
     OneBotWsClient,
     _ConnectionAttemptResult,
     _jittered_reconnect_delay,
     _UnsupportedWebSocketAuthentication,
-    asyncio,
     cancellation_resistant_callback,
-    patch,
-    pytest,
-    threading,
 )
 
 
@@ -67,7 +66,7 @@ class TestOneBotWebSocketLifecycle:
 
         await client._dispatch_event(handler, {"user_id": 1})
         await client._dispatch_event(handler, {"user_id": 2})
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         tasks = list(client._queue_tasks.values())
 
         await client.stop()
@@ -92,7 +91,7 @@ class TestOneBotWebSocketLifecycle:
         task                             = asyncio.create_task(resistant_worker())
         client._queue_tasks["user:1"]    = task
         client._message_queues["user:1"] = asyncio.Queue()
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
 
         with pytest.raises(RuntimeError, match="ignored cancellation"):
             await asyncio.wait_for(client.stop(), timeout=0.5)
@@ -259,7 +258,7 @@ class TestOneBotWebSocketLifecycle:
 
         monkeypatch.setattr(client, "_connect_once", block_connect)
         listen_task = asyncio.create_task(client.connect_and_listen(AsyncMock()))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
 
         await client.stop()
 
@@ -341,25 +340,26 @@ class TestOneBotWebSocketLifecycle:
 
         monkeypatch.setattr(client, "_connect_once", cancellation_resistant_attempt)
         listener = asyncio.create_task(client.connect_and_listen(AsyncMock()))
-        await attempt_entered.wait()
+        try:
+            await asyncio.wait_for(attempt_entered.wait(), 5)
 
-        listener.cancel()
-        await asyncio.wait_for(second_attempt_cancel.wait(), timeout=1)
-        listener.cancel()
-        await asyncio.gather(listener, return_exceptions=True)
+            listener.cancel()
+            await asyncio.wait_for(second_attempt_cancel.wait(), timeout=1)
+            listener.cancel()
+            await asyncio.gather(listener, return_exceptions=True)
 
-        assert listener.cancelled()
-        assert client._cleanup_task is None
-        assert client._main_task is None
-        assert client._event_loop is None
-        assert client._reconnect_wakeup is None
-
-        release_attempt.set()
-        for _ in range(20):
-            if not client._connection_attempt_tasks:
-                break
-            await asyncio.sleep(0)
-        await client.stop()
+            assert listener.cancelled()
+            assert client._cleanup_task is None
+            assert client._main_task is None
+            assert client._event_loop is None
+            assert client._reconnect_wakeup is None
+        finally:
+            release_attempt.set()
+            for _ in range(20):
+                if not client._connection_attempt_tasks:
+                    break
+                await asyncio.sleep(0)
+            await client.stop()
 
         assert client._connection_attempt_tasks == set()
         assert client._quarantined_connection_attempt_tasks == set()

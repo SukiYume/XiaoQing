@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _ack_reply_delivery,
     _make_hctx,
     _reply_draft,
     _set_context_principal,
     active_review_sessions,
-    asyncio,
     handle_errors,
-    patch,
     patch_turn,
-    pytest,
-    time,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -613,7 +612,7 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
         await _ack_reply_delivery(result)
         assert result == [{"type": "text", "data": {"text": "planner-ok"}}]
         assert state.goal_store.set_async.await_args_list[-1].kwargs == {
-            "goal": "新规划目标",
+            "goal"  : "新规划目标",
             "source": "planner",
         }
 
@@ -1192,7 +1191,7 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
             new=AsyncMock(
                 return_value=[
                     {
-                        "goal": "帮用户选一家合适的火锅店",
+                        "goal" : "帮用户选一家合适的火锅店",
                         "focus": "预算与口味偏好",
                     }
                 ]

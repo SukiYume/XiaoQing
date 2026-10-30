@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
 import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
     FakeContext,
     FakeRunner,
-    Path,
     _install_fake_manager,
     _wait_until,
-    asyncio,
     codex_main,
-    json,
-    pytest,
 )
 
 reset_codex_manager = _fixture_support.reset_codex_manager
@@ -132,9 +134,9 @@ async def test_agent_task_rejects_bad_labels_and_empty_prompts(tmp_path: Path):
     )
     outside = await _run(
         {
-            "session": "agent-u4",
-            "prompt": "x",
-            "cwd": "C:/definitely/outside",
+            "session"        : "agent-u4",
+            "prompt"         : "x",
+            "cwd"            : "C:/definitely/outside",
             "timeout_seconds": 5,
         },
         context,

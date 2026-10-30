@@ -17,12 +17,12 @@ segments = cast(Callable[[Any], MessageSegments], _core_segments)
 class Context(Protocol):
     """命令、会话和清理入口实际使用的 core 上下文接口。"""
 
-    current_user_id: int | None
+    current_user_id : int | None
     current_group_id: int | None
-    plugin_dir: Path
-    data_dir: Path
-    state: dict[str, Any]
-    session_manager: Any | None
+    plugin_dir      : Path
+    data_dir        : Path
+    state           : dict[str, Any]
+    session_manager : Any | None
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 

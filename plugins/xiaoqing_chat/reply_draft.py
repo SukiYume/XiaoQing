@@ -27,12 +27,12 @@ if TYPE_CHECKING:
 class ReplyDraft:
     """已规范化、可进入审查和媒体合并阶段的回复草稿。"""
 
-    text: str
-    text_parts: tuple[str, ...]
-    parts: tuple[dict[str, Any], ...]
-    raw_text: str                       = ""
-    rewritten_text: str                 = ""
-    media_marker: ResolvedMarker | None = None
+    text          : str
+    text_parts    : tuple[str, ...]
+    parts         : tuple[dict[str, Any], ...]
+    raw_text      : str                   = ""
+    rewritten_text: str                   = ""
+    media_marker  : ResolvedMarker | None = None
 
 
 def _normalize_reply_text_parts(values: Any) -> tuple[str, ...]:
@@ -119,20 +119,20 @@ def reply_checker_inputs(draft: ReplyDraft) -> tuple[str, str]:
 
 @dataclass
 class ReplyAttemptState:
-    max_items: int
+    max_items        : int
     prefetched_memory: asyncio.Task[str] | None = None
-    cached_memory: str | None                   = None
-    regen_used: int                             = 0
-    extra_check_hint: str                       = ""
+    cached_memory    : str | None               = None
+    regen_used       : int                      = 0
+    extra_check_hint : str                      = ""
     # 本轮对话的独立阅读与候选无关，各次尝试共用。
     turn_reading: TurnReadingCache | None = None
 
 
 @dataclass(frozen=True)
 class RejectedCandidate:
-    text: str
+    text  : str
     result: ReplyCheckResult
-    draft: ReplyDraft | None = None
+    draft : ReplyDraft | None = None
     # 只有明确标记为 soft 的风格拒绝才允许在强制回复的重生成耗尽后采用。
     # 上下文、说话人、人物经历、事实、结构和媒体错误都属于 hard，绝不放行。
     allow_after_regen_exhausted: bool = False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
@@ -9,8 +10,8 @@ from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_client_source import replace_js_source
 from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
-ROOT: Final            = REPOSITORY_ROOT
-TASKS_CLIENT: Final    = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js"
+ROOT           : Final = REPOSITORY_ROOT
+TASKS_CLIENT   : Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js"
 TIMEZONE_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
 )
@@ -112,6 +113,11 @@ const showConfirmModal = async (...args) => {
 const safeHtml = (value) => value;""",
         ),
         (
+            "import { captureFormDraft, reopenWithDraft } from '../components/form.js';",
+            """const captureFormDraft = () => ({ fields: [], groups: [] });
+const reopenWithDraft = async (open) => { await open(); };""",
+        ),
+        (
             "import { buildFormHTML, getFormData, initFormInteractions } "
             "from '../components/form.js';",
             r"""const buildFormHTML = (fields) => JSON.stringify(fields);
@@ -129,22 +135,15 @@ const initCustomSelects = (root, handlers) => { globalThis.__selectHandlers = ha
     errorMessage,
     isRecord,
     pad2,
+    isoDate,
     parseDate,
     trimmedTextValue as textValue,
 } from '../utils/format.js';""",
-            r"""const isRecord = (value) => value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value);
-const textValue = (value, fallback = '') =>
-    typeof value === 'string' ? value.trim() : fallback;
-const errorMessage = (error, fallback = '未知错误') => textValue(error?.message, fallback);
-const pad2 = (value) => String(value).padStart(2, '0');
-const parseDate = (value) => {
-    if (!value) return null;
-    const text = typeof value === 'string' ? value.trim() : value;
-    const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T00:00:00` : text);
-    return Number.isNaN(date.getTime()) ? null : date;
-};""",
+            "import { errorMessage, isRecord, pad2, isoDate, parseDate, trimmedTextValue as textValue } from 'data:text/javascript;base64,"
+            + base64.b64encode(
+                (TASKS_CLIENT.parents[1] / "utils" / "format.js").read_bytes()
+            ).decode("ascii")
+            + "';",
         ),
         (
             "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, "
@@ -175,6 +174,7 @@ const subscribeDataChanges = (type, refresh) => {
 } from '../utils/timezone.js';""",
             timezone_runtime,
         ),
+        ("import { createInstantMemory } from '../utils/timezone.js';", ""),
         (
             "const TODAY = () => parseDate(todayInUserTimeZone());",
             "const TODAY = () => parseDate(todayInUserTimeZone(globalThis.__now));",

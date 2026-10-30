@@ -13,7 +13,6 @@ import pytest
 
 from core.plugin_base import has_control_characters
 from plugins.dict import main as dict_main
-from plugins.dict import main as dict_plugin
 from tests.helpers.assertions import text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -34,26 +33,26 @@ async def test_help_does_not_load_dictionary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        dict_plugin,
+        dict_main,
         "_load_direction",
         MagicMock(side_effect=AssertionError("help must not load assets")),
     )
 
-    response = await dict_plugin.handle("dict", args, {}, context)
+    response = await dict_main.handle("dict", args, {}, context)
 
-    assert text_segments_text(response) == dict_plugin.HELP_TEXT
+    assert text_segments_text(response) == dict_main.HELP_TEXT
 
 
 def test_help_prioritizes_direct_queries_and_readable_long_options() -> None:
-    assert "/dict <词汇>  直接查询" in dict_plugin.HELP_TEXT
-    assert "/dict <词汇> --exact" in dict_plugin.HELP_TEXT
-    assert "/dict <词汇> --page <页码>" in dict_plugin.HELP_TEXT
-    assert "/dict <词汇> --size <1-100>" in dict_plugin.HELP_TEXT
+    assert "/dict <词汇>  直接查询" in dict_main.HELP_TEXT
+    assert "/dict <词汇> --exact" in dict_main.HELP_TEXT
+    assert "/dict <词汇> --page <页码>" in dict_main.HELP_TEXT
+    assert "/dict <词汇> --size <1-100>" in dict_main.HELP_TEXT
 
 
 def test_common_dictionary_terms_are_not_reserved_as_help_aliases() -> None:
     for query in ("H", "h", "list", "l"):
-        request = dict_plugin._parse_request(query)
+        request = dict_main._parse_request(query)
 
         assert request.action == "query"
         assert request.query == query
@@ -73,7 +72,7 @@ async def test_real_assets_support_both_directions_and_current_terms(
     expected: str,
     context: SimpleNamespace,
 ) -> None:
-    response = await dict_plugin.handle("dict", query, {}, context)
+    response = await dict_main.handle("dict", query, {}, context)
     rendered = text_segments_text(response)
 
     assert expected in rendered
@@ -84,7 +83,7 @@ async def test_real_assets_support_both_directions_and_current_terms(
 async def test_fuzzy_query_counts_all_matches_and_offers_next_page(
     context: SimpleNamespace,
 ) -> None:
-    response = await dict_plugin.handle("dict", "galaxy --size 1", {}, context)
+    response = await dict_main.handle("dict", "galaxy --size 1", {}, context)
     rendered = text_segments_text(response)
 
     assert rendered.startswith("📖 “galaxy”｜英译中\n\n1. galaxy → 星系")
@@ -97,7 +96,7 @@ async def test_fuzzy_query_counts_all_matches_and_offers_next_page(
 async def test_exact_miss_offers_ranked_fuzzy_suggestions_and_command(
     context: SimpleNamespace,
 ) -> None:
-    response = await dict_plugin.handle("dict", "fast radio --exact", {}, context)
+    response = await dict_main.handle("dict", "fast radio --exact", {}, context)
     rendered = text_segments_text(response)
 
     assert rendered.startswith("❌ 没有完全匹配“fast radio”的词条（英译中）")
@@ -128,9 +127,9 @@ async def test_exact_limit_and_page_options_preserve_the_complete_query(
         )
         return "ok"
 
-    monkeypatch.setattr(dict_plugin, "query_astrodict", fake_query)
+    monkeypatch.setattr(dict_main, "query_astrodict", fake_query)
 
-    response = await dict_plugin.handle(
+    response = await dict_main.handle(
         "dict",
         '"fast radio burst" --size 20 --exact --page 3',
         {},
@@ -139,15 +138,15 @@ async def test_exact_limit_and_page_options_preserve_the_complete_query(
 
     assert text_segments_text(response) == "ok"
     assert captured == {
-        "query": "fast radio burst",
+        "query"      : "fast radio burst",
         "exact_match": True,
         "max_results": 20,
-        "page": 3,
+        "page"       : 3,
     }
 
 
 def test_page_size_alias_remains_available() -> None:
-    assert dict_plugin._parse_request("star --page-size 25") == dict_plugin.DictionaryRequest(
+    assert dict_main._parse_request("star --page-size 25") == dict_main.DictionaryRequest(
         "query",
         query       = "star",
         max_results = 25,
@@ -166,16 +165,16 @@ async def test_option_terminator_allows_option_like_query(
         captured.update(kwargs)
         return "ok"
 
-    monkeypatch.setattr(dict_plugin, "query_astrodict", fake_query)
+    monkeypatch.setattr(dict_main, "query_astrodict", fake_query)
 
-    response = await dict_plugin.handle("dict", "-e -- --nova", {}, context)
+    response = await dict_main.handle("dict", "-e -- --nova", {}, context)
 
     assert text_segments_text(response) == "ok"
     assert captured == {
-        "query": "--nova",
+        "query"      : "--nova",
         "exact_match": True,
         "max_results": 10,
-        "page": 1,
+        "page"       : 1,
     }
 
 
@@ -183,7 +182,7 @@ async def test_option_terminator_allows_option_like_query(
 async def test_second_page_uses_global_numbering_and_bidirectional_navigation(
     context: SimpleNamespace,
 ) -> None:
-    response = await dict_plugin.handle("dict", "galaxy -p 2 -n 3", {}, context)
+    response = await dict_main.handle("dict", "galaxy -p 2 -n 3", {}, context)
     rendered = text_segments_text(response)
 
     assert rendered.startswith("📖 “galaxy”｜英译中\n\n4. galaxy bar")
@@ -195,7 +194,7 @@ async def test_second_page_uses_global_numbering_and_bidirectional_navigation(
 
 @pytest.mark.asyncio
 async def test_page_beyond_matches_reports_the_real_range(context: SimpleNamespace) -> None:
-    response = await dict_plugin.handle("dict", "-p 37 galaxy", {}, context)
+    response = await dict_main.handle("dict", "-p 37 galaxy", {}, context)
 
     assert text_segments_text(response) == (
         "❌ 第 37 页超出范围（共 36 页）\n最后一页：/dict galaxy --page 36"
@@ -203,7 +202,7 @@ async def test_page_beyond_matches_reports_the_real_range(context: SimpleNamespa
 
 
 def test_generated_navigation_command_round_trips_option_like_quoted_query() -> None:
-    command = dict_plugin._query_command(
+    command = dict_main._query_command(
         '-nova\'s "field"',
         exact_match = True,
         max_results = 20,
@@ -211,9 +210,7 @@ def test_generated_navigation_command_round_trips_option_like_quoted_query() -> 
     )
 
     assert command == "/dict --exact --size 20 --page 2 -- '-nova'\"'\"'s \"field\"'"
-    assert dict_plugin._parse_request(
-        command.removeprefix("/dict ")
-    ) == dict_plugin.DictionaryRequest(
+    assert dict_main._parse_request(command.removeprefix("/dict ")) == dict_main.DictionaryRequest(
         "query",
         query       = '-nova\'s "field"',
         exact_match = True,
@@ -237,13 +234,13 @@ def test_generated_navigation_command_round_trips_option_like_quoted_query() -> 
         ("-p 2 --page 3 galaxy", "页码选项不能重复"),
         ("-p", "页码选项缺少数值"),
         ("-p 0 galaxy", "ASCII 整数"),
-        (f"-p {dict_plugin.MAX_PAGE + 1} galaxy", f"1 到 {dict_plugin.MAX_PAGE}"),
+        (f"-p {dict_main.MAX_PAGE + 1} galaxy", f"1 到 {dict_main.MAX_PAGE}"),
         ("-p ２ galaxy", "ASCII 整数"),
         ('"galaxy', "引号没有闭合"),
         ("help extra", "不接受额外参数"),
         ("galaxy\nstar", "控制字符"),
-        ("a" * (dict_plugin.MAX_QUERY_CHARS + 1), "查询词不能超过"),
-        ("a" * (dict_plugin.MAX_ARGUMENT_CHARS + 1), "命令参数不能超过"),
+        ("a" * (dict_main.MAX_QUERY_CHARS + 1), "查询词不能超过"),
+        ("a" * (dict_main.MAX_ARGUMENT_CHARS + 1), "命令参数不能超过"),
     ],
 )
 async def test_malformed_commands_fail_closed(
@@ -253,9 +250,9 @@ async def test_malformed_commands_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     query = MagicMock(side_effect=AssertionError("invalid command must not search"))
-    monkeypatch.setattr(dict_plugin, "query_astrodict", query)
+    monkeypatch.setattr(dict_main, "query_astrodict", query)
 
-    response = await dict_plugin.handle("dict", args, {}, context)
+    response = await dict_main.handle("dict", args, {}, context)
 
     assert expected in text_segments_text(response)
     query.assert_not_called()
@@ -263,12 +260,12 @@ async def test_malformed_commands_fail_closed(
 
 def test_parser_rejects_non_string_arguments() -> None:
     with pytest.raises(TypeError, match="must be a string"):
-        dict_plugin._parse_request(True)
+        dict_main._parse_request(True)
 
 
 @pytest.mark.asyncio
 async def test_existing_200_character_query_remains_valid(context: SimpleNamespace) -> None:
-    response = await dict_plugin.handle("dict", "a" * 200, {}, context)
+    response = await dict_main.handle("dict", "a" * 200, {}, context)
 
     assert text_segments_text(response) == (
         f"❌ 没有找到与“{'a' * 200}”相关的词条（英译中）\n"
@@ -287,7 +284,7 @@ async def test_existing_200_character_query_remains_valid(context: SimpleNamespa
         ("galaxy", False, True, 1, "每页条数必须是 1 到 100 的整数"),
         ("galaxy", False, 101, 1, "每页条数必须是 1 到 100 的整数"),
         ("galaxy", False, 10, True, "页码必须是"),
-        ("galaxy", False, 10, dict_plugin.MAX_PAGE + 1, "页码必须是"),
+        ("galaxy", False, 10, dict_main.MAX_PAGE + 1, "页码必须是"),
     ],
 )
 async def test_public_query_api_validates_exact_types(
@@ -298,7 +295,7 @@ async def test_public_query_api_validates_exact_types(
     expected: str,
     context: SimpleNamespace,
 ) -> None:
-    result = await dict_plugin.query_astrodict(
+    result = await dict_main.query_astrodict(
         query,
         context,
         exact_match = exact_match,  # type: ignore[arg-type]
@@ -313,7 +310,7 @@ async def test_public_query_api_validates_exact_types(
 async def test_public_query_api_hides_missing_context_details() -> None:
     context = SimpleNamespace(logger=MagicMock(), request_id="dict-missing-context")
 
-    result = await dict_plugin.query_astrodict("galaxy", context)
+    result = await dict_main.query_astrodict("galaxy", context)
 
     assert "XQ-PLUGIN-UNEXPECTED" in result
     assert "dict-missing-context" in result
@@ -324,7 +321,7 @@ async def test_public_query_api_hides_missing_context_details() -> None:
 async def test_logs_do_not_include_query_text(context: SimpleNamespace) -> None:
     canary = "DICT-PRIVATE-CANARY-2d84f7"
 
-    await dict_plugin.handle("dict", canary, {}, context)
+    await dict_main.handle("dict", canary, {}, context)
 
     assert canary not in repr(context.logger.mock_calls)
     context.logger.info.assert_called_once_with(
@@ -361,16 +358,16 @@ def test_manifest_and_every_packaged_row_are_consistent() -> None:
             assert source and destination
             assert source == source.strip()
             assert destination == destination.strip()
-            assert len(source) <= dict_plugin.MAX_SOURCE_CHARS
-            assert len(destination) <= dict_plugin.MAX_DESTINATION_CHARS
+            assert len(source) <= dict_main.MAX_SOURCE_CHARS
+            assert len(destination) <= dict_main.MAX_DESTINATION_CHARS
             assert not has_control_characters(source + destination)
             assert (source, destination) not in pairs
             pairs.add((source, destination))
 
 
-def _resource_for_payload(path: Path, payload: bytes, entries: int) -> dict_plugin.ResourceSpec:
+def _resource_for_payload(path: Path, payload: bytes, entries: int) -> dict_main.ResourceSpec:
     path.write_bytes(payload)
-    return dict_plugin.ResourceSpec(
+    return dict_main.ResourceSpec(
         path.name,
         hashlib.sha256(payload).hexdigest(),
         len(payload),
@@ -388,7 +385,7 @@ def _resource_for_payload(path: Path, payload: bytes, entries: int) -> dict_plug
         (b"one\ttwo\none\ttwo\n", 2),
         (b"\xff\n", 1),
         (b"\n", 1),
-        (("a" * (dict_plugin.MAX_DICTIONARY_LINE_CHARS + 1) + "\tb\n").encode(), 1),
+        (("a" * (dict_main.MAX_DICTIONARY_LINE_CHARS + 1) + "\tb\n").encode(), 1),
     ],
     ids=["columns", "empty", "outer", "control", "duplicate", "utf8", "blank", "overlong"],
 )
@@ -401,8 +398,8 @@ def test_dictionary_parser_rejects_malformed_payloads(
     spec = _resource_for_payload(path, payload, entries)
     info = path.stat()
 
-    with pytest.raises(dict_plugin.DictionaryDataError, match="数据校验失败"):
-        dict_plugin._load_dictionary(
+    with pytest.raises(dict_main.DictionaryDataError, match="数据校验失败"):
+        dict_main._load_dictionary(
             path,
             spec,
             (info.st_mtime_ns, info.st_ctime_ns, info.st_size),
@@ -411,9 +408,9 @@ def test_dictionary_parser_rejects_malformed_payloads(
 
 def test_dictionary_loader_rejects_missing_digest_and_count_mismatches(tmp_path: Path) -> None:
     missing      = tmp_path / "missing.txt"
-    missing_spec = dict_plugin.ResourceSpec("missing.txt", "0" * 64, 1, 1)
-    with pytest.raises(dict_plugin.DictionaryDataError, match="数据校验失败"):
-        dict_plugin._load_dictionary(missing, missing_spec, (0, 0, 1))
+    missing_spec = dict_main.ResourceSpec("missing.txt", "0" * 64, 1, 1)
+    with pytest.raises(dict_main.DictionaryDataError, match="数据校验失败"):
+        dict_main._load_dictionary(missing, missing_spec, (0, 0, 1))
 
     path        = tmp_path / "dictionary.txt"
     payload     = b"one\ttwo\n"
@@ -421,44 +418,44 @@ def test_dictionary_loader_rejects_missing_digest_and_count_mismatches(tmp_path:
     info        = path.stat()
     fingerprint = (info.st_mtime_ns, info.st_ctime_ns, info.st_size)
 
-    wrong_digest = dict_plugin.ResourceSpec(path.name, "0" * 64, len(payload), 1)
-    with pytest.raises(dict_plugin.DictionaryDataError, match="数据校验失败"):
-        dict_plugin._load_dictionary(path, wrong_digest, fingerprint)
+    wrong_digest = dict_main.ResourceSpec(path.name, "0" * 64, len(payload), 1)
+    with pytest.raises(dict_main.DictionaryDataError, match="数据校验失败"):
+        dict_main._load_dictionary(path, wrong_digest, fingerprint)
 
-    wrong_count = dict_plugin.ResourceSpec(
+    wrong_count = dict_main.ResourceSpec(
         path.name,
         valid_spec.sha256,
         len(payload),
         2,
     )
-    with pytest.raises(dict_plugin.DictionaryDataError, match="数据校验失败"):
-        dict_plugin._load_dictionary(path, wrong_count, fingerprint)
+    with pytest.raises(dict_main.DictionaryDataError, match="数据校验失败"):
+        dict_main._load_dictionary(path, wrong_count, fingerprint)
 
 
 def test_resource_manifest_rejects_paths_and_unbounded_sizes() -> None:
     base = {
         "schema_version": 1,
-        "files": {
+        "files"         : {
             "english_to_chinese": {
                 "filename": "../outside.txt",
-                "sha256": "0" * 64,
-                "bytes": 1,
-                "entries": 1,
+                "sha256"  : "0" * 64,
+                "bytes"   : 1,
+                "entries" : 1,
             }
         },
     }
-    with pytest.raises(dict_plugin.DictionaryDataError, match="资源清单无效"):
-        dict_plugin._resource_spec(base, "english_to_chinese")
+    with pytest.raises(dict_main.DictionaryDataError, match="资源清单无效"):
+        dict_main._resource_spec(base, "english_to_chinese")
 
     base["files"]["english_to_chinese"]["filename"] = "dictionary.txt"
-    base["files"]["english_to_chinese"]["bytes"]    = dict_plugin.MAX_DICTIONARY_BYTES + 1
-    with pytest.raises(dict_plugin.DictionaryDataError, match="资源清单无效"):
-        dict_plugin._resource_spec(base, "english_to_chinese")
+    base["files"]["english_to_chinese"]["bytes"]    = dict_main.MAX_DICTIONARY_BYTES + 1
+    with pytest.raises(dict_main.DictionaryDataError, match="资源清单无效"):
+        dict_main._resource_spec(base, "english_to_chinese")
 
     base["schema_version"]                       = True
     base["files"]["english_to_chinese"]["bytes"] = 1
-    with pytest.raises(dict_plugin.DictionaryDataError, match="资源清单无效"):
-        dict_plugin._resource_spec(base, "english_to_chinese")
+    with pytest.raises(dict_main.DictionaryDataError, match="资源清单无效"):
+        dict_main._resource_spec(base, "english_to_chinese")
 
 
 @pytest.mark.parametrize(
@@ -466,7 +463,7 @@ def test_resource_manifest_rejects_paths_and_unbounded_sizes() -> None:
     [
         b"[]",
         b"{",
-        b"x" * (dict_plugin.MAX_MANIFEST_BYTES + 1),
+        b"x" * (dict_main.MAX_MANIFEST_BYTES + 1),
     ],
     ids=["non-object", "invalid-json", "oversized"],
 )
@@ -475,7 +472,7 @@ def test_invalid_manifest_files_fail_closed(tmp_path: Path, payload: bytes) -> N
     assets.mkdir()
     (assets / "manifest.json").write_bytes(payload)
 
-    result = dict_plugin._query_astrodict_sync("galaxy", tmp_path, False, 10)
+    result = dict_main._query_astrodict_sync("galaxy", tmp_path, False, 10)
 
     assert result == "天文学词典资源清单无效；请重新安装完整发行包"
 
@@ -485,18 +482,18 @@ def test_missing_resource_returns_installation_message(tmp_path: Path) -> None:
     assets.mkdir()
     manifest = {
         "schema_version": 1,
-        "files": {
+        "files"         : {
             "english_to_chinese": {
                 "filename": "missing.txt",
-                "sha256": "0" * 64,
-                "bytes": 1,
-                "entries": 1,
+                "sha256"  : "0" * 64,
+                "bytes"   : 1,
+                "entries" : 1,
             }
         },
     }
     (assets / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    result = dict_plugin._query_astrodict_sync("galaxy", tmp_path, False, 10)
+    result = dict_main._query_astrodict_sync("galaxy", tmp_path, False, 10)
 
     assert result == ("天文学词典数据文件不存在: missing.txt；请重新安装包含 package data 的发行包")
 
@@ -507,18 +504,18 @@ def test_resource_with_wrong_size_returns_validation_message(tmp_path: Path) -> 
     (assets / "dictionary.txt").write_bytes(b"x")
     manifest = {
         "schema_version": 1,
-        "files": {
+        "files"         : {
             "english_to_chinese": {
                 "filename": "dictionary.txt",
-                "sha256": hashlib.sha256(b"xx").hexdigest(),
-                "bytes": 2,
-                "entries": 1,
+                "sha256"  : hashlib.sha256(b"xx").hexdigest(),
+                "bytes"   : 2,
+                "entries" : 1,
             }
         },
     }
     (assets / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    result = dict_plugin._query_astrodict_sync("galaxy", tmp_path, False, 10)
+    result = dict_main._query_astrodict_sync("galaxy", tmp_path, False, 10)
 
     assert result == "天文学词典数据校验失败: dictionary.txt"
 
@@ -526,13 +523,10 @@ def test_resource_with_wrong_size_returns_validation_message(tmp_path: Path) -> 
 ROOT = REPOSITORY_ROOT
 
 
-def test_dictionary_query_runs_without_optional_dataframe_dependency(monkeypatch):
-    monkeypatch.setitem(sys.modules, "pandas", None)
-    dict_main._load_dictionary.cache_clear()
-    try:
-        result = dict_main._query_astrodict_sync(
-            "1-mirror telescope", ROOT / "plugins" / "dict", True, 10
-        )
-        assert "单反光面望远镜" in result
-    finally:
-        dict_main._load_dictionary.cache_clear()
+def test_dictionary_query_runs_without_optional_dataframe_dependency():
+    import subprocess
+
+    code = "import sys; sys.modules['pandas'] = None; from pathlib import Path; from plugins.dict.main import _query_astrodict_sync; assert '单反光面望远镜' in _query_astrodict_sync('1-mirror telescope', Path('plugins/dict'), True, 10)"
+    subprocess.run(
+        [sys.executable, "-B", "-c", code], cwd=ROOT, check=True, timeout=20, capture_output=True
+    )

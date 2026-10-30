@@ -70,16 +70,15 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
     parts = raw_args.split(maxsplit=1)
 
     if not parts:
-        sections = await asyncio.to_thread(storage.list_writing_sections, user_id)
-        if not sections:
+        counts = await asyncio.to_thread(storage.writing_section_counts, user_id)
+        if not counts:
             return segments(
                 "💡 写作灵感箱暂无内容\n\n提示: 使用 '/paper writing <章节> <想法>' 添加灵感"
             )
 
         lines = ["💡 写作灵感箱:\n"]
-        for section in sections:
-            ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
-            lines.append(f"  • {section} ({len(ideas)} 条)")
+        for section, count in counts.items():
+            lines.append(f"  • {section} ({count} 条)")
 
         return segments("\n".join(lines))
 
@@ -206,7 +205,8 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
 
         # 存储层只负责原子读写，命令层先拒绝不稳定的自由格式日期。
         try:
-            datetime.strptime(date, DATE_FORMAT)
+            # strptime 接受 2026-2-1 这类不补零写法；统一保存为标准 ISO 日期。
+            date = datetime.strptime(date, DATE_FORMAT).strftime(DATE_FORMAT)
         except ValueError:
             return segments("❌ 日期格式错误，请使用 YYYY-MM-DD 格式（如：2026-03-15）")
 

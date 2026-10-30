@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+import asyncio
+import json
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from tests.helpers.pendo_test_support import (
     ROOT,
-    SimpleNamespace,
     _ReminderMessageService,
     _with_scheduled_delivery_contract,
-    asyncio,
-    datetime,
-    json,
-    timezone,
 )
 
 
 class TestScheduledRegression:
     def test_check_reminders_returns_messages_without_send_action(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -43,9 +38,6 @@ class TestScheduledRegression:
         assert db.logged == []
 
     def test_check_reminders_does_not_confirm_onebot_rejection(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -95,7 +87,7 @@ class TestScheduledRegression:
             claim_repeat_count = 0,
             delivery_key       = "delivery-1",
         )
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
 
         asyncio.run(scheduled_module._settle_reminder_delivery(db, delivery, delivered=False))
 
@@ -108,11 +100,8 @@ class TestScheduledRegression:
         )
 
     def test_daily_briefing_respects_user_timezone_and_configured_time(self, monkeypatch):
-        import sys
         from datetime import datetime
         from typing import Any, cast
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -126,18 +115,18 @@ class TestScheduledRegression:
 
         settings_map = {
             "1001": {
-                "timezone": "Asia/Shanghai",
+                "timezone"         : "Asia/Shanghai",
                 "daily_report_time": "08:00",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {"daily_briefing_enabled": True},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {"daily_briefing_enabled": True},
             },
             "1002": {
-                "timezone": "America/New_York",
+                "timezone"         : "America/New_York",
                 "daily_report_time": "08:00",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {"daily_briefing_enabled": True},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {"daily_briefing_enabled": True},
             },
         }
         batch_calls = []
@@ -185,11 +174,8 @@ class TestScheduledRegression:
         assert batch_calls == [["1001", "1002"]]
 
     def test_daily_briefing_returns_messages_without_send_action(self, monkeypatch):
-        import sys
         from datetime import datetime
         from typing import Any, cast
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -204,9 +190,9 @@ class TestScheduledRegression:
         def get_user_settings_batch(user_ids):
             return {
                 user_id: {
-                    "timezone": "Asia/Shanghai",
+                    "timezone"         : "Asia/Shanghai",
                     "daily_report_time": "08:00",
-                    "settings_json": {"daily_briefing_enabled": True},
+                    "settings_json"    : {"daily_briefing_enabled": True},
                 }
                 for user_id in user_ids
             }
@@ -244,10 +230,7 @@ class TestScheduledRegression:
     def test_generate_daily_briefing_includes_today_multi_node_leaf_events(
         self, tmp_path, monkeypatch
     ):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.models.item import EventItem
@@ -275,13 +258,13 @@ class TestScheduledRegression:
             monkeypatch.setattr(db, "get_event_collection", reject_single_lookup)
             db.create_event_collection(
                 {
-                    "id": "milebrief",
-                    "owner_id": "u1",
-                    "kind": "multi_node",
-                    "title": "学术会议",
-                    "category": "未分类",
+                    "id"        : "milebrief",
+                    "owner_id"  : "u1",
+                    "kind"      : "multi_node",
+                    "title"     : "学术会议",
+                    "category"  : "未分类",
                     "start_time": "2030-01-01T09:00:00",
-                    "end_time": "2030-01-03T18:00:00",
+                    "end_time"  : "2030-01-03T18:00:00",
                 }
             )
             event = EventItem(
@@ -311,10 +294,7 @@ class TestScheduledRegression:
             db.cleanup()
 
     def test_generate_daily_briefing_ignores_malformed_overdue_deadline(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.models.item import TaskItem
@@ -341,9 +321,6 @@ class TestScheduledRegression:
         assert "(截止:" not in briefing
 
     def test_migrate_todos_returns_messages_without_send_action(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -372,11 +349,8 @@ class TestScheduledRegression:
         assert migration_calls == [("1001", "2030-01-01", "2030-01-02")]
 
     def test_diary_reminder_respects_user_timezone_and_existing_diary(self, monkeypatch):
-        import sys
         from datetime import datetime
         from typing import Any, cast
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -390,25 +364,25 @@ class TestScheduledRegression:
 
         settings_map = {
             "2001": {
-                "timezone": "Asia/Shanghai",
+                "timezone"         : "Asia/Shanghai",
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {},
             },
             "2002": {
-                "timezone": "Asia/Shanghai",
+                "timezone"         : "Asia/Shanghai",
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {},
             },
             "2003": {
-                "timezone": "America/New_York",
+                "timezone"         : "America/New_York",
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {},
             },
         }
 
@@ -461,7 +435,7 @@ class TestScheduledRegression:
         assert manifest.name == "pendo"
 
         expected = {
-            "pendo_reminders": ("scheduled", "targeted", {"minute": "*"}),
+            "pendo_reminders"     : ("scheduled", "targeted", {"minute": "*"}),
             "pendo_daily_briefing": (
                 "scheduled_daily_briefing",
                 "targeted",
@@ -475,7 +449,8 @@ class TestScheduledRegression:
             "pendo_migrate_todos": (
                 "scheduled_migrate_todos",
                 "targeted",
-                {"hour": 0, "minute": 5},
+                # 每小时检查，按用户本地日期跨天后迁移；数据库标记保证每天只迁移一次。
+                {"minute": 5},
             ),
             "pendo_prune_operation_logs": (
                 "scheduled_prune_operation_logs",
@@ -509,9 +484,6 @@ class TestScheduledRegression:
         assert all(hasattr(pendo_main, handler) for handler, _delivery, _cron in expected.values())
 
     def test_cleanup_expired_demo_data_runs_periodic_purge(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 

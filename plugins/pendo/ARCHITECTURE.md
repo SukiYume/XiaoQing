@@ -138,9 +138,9 @@ sequenceDiagram
 
 日程处理器内部按职责分为：
 
-- `event.py`：入口、提醒操作和跨模块编排。
-- `event_editing.py`：编辑、删除与集合修改。
-- `event_views.py`：列表、详情和展示查询。
+- `event.py`：入口、列表、删除、集合修改、提醒操作和跨模块编排。
+- `event_editing.py`：单条日程编辑及其字段处理。
+- `event_views.py`：详情和展示查询。
 - `event_support.py`：共享解析和格式化辅助。
 
 ---
@@ -268,7 +268,7 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 
 Markdown 导出使用调用用户的时区上下文。日期范围与渲染采用同一时区，时间字符串包含偏移。Widget 日历字段提供带偏移的 ISO 时间，展示日期仍使用用户自然日。
 
-`web/services/transfer_bundle.py` 负责导出版本化 `.pendo.zip`，`bundle_import.py` 负责检查、样例预览和事务执行。导入过程包括：
+`web/services/transfer_bundle.py` 负责导出版本化 `.pendo.zip`，`bundle_import.py` 负责检查和样例预览，`web/api/transfer.py` 编排事务执行。导入过程包括：
 
 1. 校验 ZIP 条目、大小、路径和 manifest。
 2. 校验文件 SHA-256 与 JSON 结构。

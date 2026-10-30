@@ -28,14 +28,14 @@ PanelSection                        = Literal["tasks", "ledger", "notes"]
 WidgetSection                       = Literal["tasks", "ledger", "notes", "all"]
 PanelBuilder                        = Callable[[Database, str, datetime], JsonObject]
 
-_WEEKDAY_LABELS: Final                          = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-_SECTION_ORDER: Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
-_LINKS: Final                                   = {
+_WEEKDAY_LABELS: Final                           = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+_SECTION_ORDER : Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
+_LINKS         : Final                           = {
     "dashboard": "#/dashboard",
-    "events": "#/events",
-    "tasks": "#/tasks",
-    "ledger": "#/ledger",
-    "notes": "#/notes",
+    "events"   : "#/events",
+    "tasks"    : "#/tasks",
+    "ledger"   : "#/ledger",
+    "notes"    : "#/notes",
 }
 
 
@@ -114,16 +114,16 @@ def _event_item_payload(entry: JsonObject) -> JsonObject:
     """把展开后的日程行收敛为 Widget 与日历同步共用的公开字段。"""
 
     return {
-        "id": str(entry.get("id") or "").strip(),
+        "id"        : str(entry.get("id") or "").strip(),
         "display_id": public_id(entry.get("id")),
-        "title": str(entry["title"] or "无标题").strip() or "无标题",
-        "subtitle": entry["subtitle"],
-        "meta": _format_event_meta(entry),
-        "day": entry["day"],
+        "title"     : str(entry["title"] or "无标题").strip() or "无标题",
+        "subtitle"  : entry["subtitle"],
+        "meta"      : _format_event_meta(entry),
+        "day"       : entry["day"],
         "start_time": str(entry.get("start_time") or ""),
-        "end_time": str(entry.get("end_time") or ""),
-        "location": str(entry.get("location") or ""),
-        "path": _LINKS["events"],
+        "end_time"  : str(entry.get("end_time") or ""),
+        "location"  : str(entry.get("location") or ""),
+        "path"      : _LINKS["events"],
     }
 
 
@@ -135,8 +135,8 @@ def _format_task_meta(
     """拼接任务状态与计划/截止日期。"""
 
     status_map = {
-        "open": "待办",
-        "done": "已完成",
+        "open"     : "待办",
+        "done"     : "已完成",
         "cancelled": "已取消",
     }
     status      = status_map.get(str(task.get("status") or ""), "待办")
@@ -195,11 +195,11 @@ def _flatten_event_entries(
                     entry_title = f"{collection.get('title') or '多节点日程'} · {entry_title}"
                 rows.append(
                     {
-                        "id": str(getattr(event, "id", "") or "").strip(),
+                        "id"        : str(getattr(event, "id", "") or "").strip(),
                         "display_id": public_id(getattr(event, "id", "")),
-                        "day": day,
-                        "title": entry_title,
-                        "subtitle": row.get("subtitle") or "",
+                        "day"       : day,
+                        "title"     : entry_title,
+                        "subtitle"  : row.get("subtitle") or "",
                         # 使用展示层保留的真实时间轴，夏令时回拨的重叠墙钟仍保持原始偏移。
                         "start_time": datetime.fromtimestamp(
                             row["start_epoch_ms"] / 1000, user_timezone
@@ -215,6 +215,8 @@ def _flatten_event_entries(
                         "category": row.get("category") or (collection or {}).get("category") or "",
                         "entry_kind": row.get("kind") or "",
                         "sort_time": row_start,
+                        "end_sort_time": ensure_datetime(row.get("end_time"), user_timezone)
+                        or row_start,
                     }
                 )
     rows.sort(key=lambda item: item["sort_time"])
@@ -234,21 +236,31 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
         today_start.strftime("%Y-%m-%dT%H:%M:%S"),
         range_end.strftime("%Y-%m-%dT%H:%M:%S"),
     )
-    rows         = _flatten_event_entries(db, owner_id, raw_events, today_start, range_end)
-    upcoming     = [row for row in rows if row["sort_time"] >= now][:5]
+    rows = _flatten_event_entries(db, owner_id, raw_events, today_start, range_end)
+    # 跨天日程逐日展开成多行；摘要按发生身份只保留一条，仍在进行中的日程按结束时刻判断是否展示。
+    upcoming: list[dict[str, Any]]      = []
+    seen    : set[tuple[str, str, str]] = set()
+    for row in rows:
+        identity = (row["id"], row["start_time"], row["end_time"])
+        if identity in seen or row["end_sort_time"] < now:
+            continue
+        seen.add(identity)
+        upcoming.append(row)
+        if len(upcoming) == 5:
+            break
     today_key    = today_start.strftime("%Y-%m-%d")
     tomorrow_key = tomorrow_start.strftime("%Y-%m-%d")
 
     return {
         "date": {
             "weekday": _WEEKDAY_LABELS[now.weekday()],
-            "month": now.month,
-            "day": now.day,
+            "month"  : now.month,
+            "day"    : now.day,
         },
-        "today_count": sum(1 for row in rows if row["day"] == today_key),
+        "today_count"   : sum(1 for row in rows if row["day"] == today_key),
         "tomorrow_count": sum(1 for row in rows if row["day"] == tomorrow_key),
-        "items": [_event_item_payload(item) for item in upcoming],
-        "empty_text": "最近没有安排",
+        "items"         : [_event_item_payload(item) for item in upcoming],
+        "empty_text"    : "最近没有安排",
     }
 
 
@@ -292,8 +304,8 @@ def build_widget_calendar(
 
     # 跨天日程会为页面生成多个自然日展示行。日历同步按 Pendo 条目 ID
     # 收敛同一条日程的跨天行，同时保留同名、同开始时刻的不同条目。
-    unique_rows: list[JsonObject] = []
-    seen: set[tuple[str, ...]]    = set()
+    unique_rows: list[JsonObject]     = []
+    seen       : set[tuple[str, ...]] = set()
     for row in rows:
         payload  = _event_item_payload(row)
         event_id = str(payload["id"])
@@ -314,9 +326,9 @@ def build_widget_calendar(
         unique_rows.append(payload)
 
     return {
-        "start_date": start_day.isoformat(),
-        "end_date": end_day.isoformat(),
-        "timezone": TimezoneHelper.get_user_timezone(owner_id, db).key,
+        "start_date"  : start_day.isoformat(),
+        "end_date"    : end_day.isoformat(),
+        "timezone"    : TimezoneHelper.get_user_timezone(owner_id, db).key,
         "window_start": range_start.replace(
             tzinfo=TimezoneHelper.get_user_timezone(owner_id, db)
         ).isoformat(),
@@ -348,16 +360,16 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
 
     return {
         "section": "tasks",
-        "title": "待办",
-        "path": _LINKS["tasks"],
+        "title"  : "待办",
+        "path"   : _LINKS["tasks"],
         "summary": {
-            "primary": f"{summary['active_count']} 项待办",
+            "primary"  : f"{summary['active_count']} 项待办",
             "secondary": " · ".join(secondary_bits),
         },
         "items": [
             {
                 "title": _title_text(task.get("title"), limit=18),
-                "meta": _format_task_meta(task, today_key, user_timezone),
+                "meta" : _format_task_meta(task, today_key, user_timezone),
             }
             for task in items
         ],
@@ -379,10 +391,10 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
     recent_ledger = db.get_items(
         owner_id,
         filters={
-            "type": "ledger",
+            "type"      : "ledger",
             "date_field": "ledger_date",
             "start_date": month_start,
-            "end_date": today_key,
+            "end_date"  : today_key,
             "sort_field": "ledger_date",
             "sort_order": "DESC",
         },
@@ -403,12 +415,12 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
     )
 
     return {
-        "section": "ledger",
-        "title": "财务",
-        "currency": "CNY",
+        "section"    : "ledger",
+        "title"      : "财务",
+        "currency"   : "CNY",
         "by_currency": insights["by_currency"],
-        "path": _LINKS["ledger"],
-        "summary": {
+        "path"       : _LINKS["ledger"],
+        "summary"    : {
             "primary": f"支出 {_format_amount(summary['expense_total'])}",
             "secondary": f"收入 {_format_amount(summary['income_total'])} · 结余 {_format_amount(balance, signed=True)}"
             + (f" · {other_currencies}" if other_currencies else ""),
@@ -416,7 +428,7 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
         "items": [
             {
                 "title": _title_text(getattr(item, "title", None), fallback="未命名账目", limit=18),
-                "meta": " · ".join(
+                "meta" : " · ".join(
                     part
                     for part in [
                         getattr(item, "ledger_category", None) or "未分类",
@@ -460,16 +472,16 @@ def _build_note_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
 
     return {
         "section": "notes",
-        "title": "笔记",
-        "path": _LINKS["notes"],
+        "title"  : "笔记",
+        "path"   : _LINKS["notes"],
         "summary": {
-            "primary": f"{summary['total_count']} 条笔记",
+            "primary"  : f"{summary['total_count']} 条笔记",
             "secondary": f"近 7 天新增 {summary['week_new_count']} 条",
         },
         "items": [
             {
-                "title": _title_text(note.get("title"), limit=18),
-                "meta": note.get("category") or "未分类",
+                "title"  : _title_text(note.get("title"), limit=18),
+                "meta"   : note.get("category") or "未分类",
                 "preview": _preview_text(note.get("content"), limit=22),
             }
             for note in notes
@@ -486,16 +498,16 @@ def build_widget_summary(
     current                                          = _parse_now(now, owner_id, db)
     resolved_section                                 = _section_for(section, current)
     panel_builders: dict[PanelSection, PanelBuilder] = {
-        "tasks": _build_task_panel,
+        "tasks" : _build_task_panel,
         "ledger": _build_ledger_panel,
-        "notes": _build_note_panel,
+        "notes" : _build_note_panel,
     }
     base: JsonObject = {
-        "generated_at": current.isoformat(),
+        "generated_at"     : current.isoformat(),
         "section_requested": str(section or "auto").strip().lower() or "auto",
-        "section": resolved_section,
-        "agenda": _build_agenda(db=db, owner_id=owner_id, now=current),
-        "links": dict(_LINKS),
+        "section"          : resolved_section,
+        "agenda"           : _build_agenda(db=db, owner_id=owner_id, now=current),
+        "links"            : dict(_LINKS),
     }
     if resolved_section == "all":
         base["panels"] = {
@@ -516,8 +528,8 @@ def get_widget_summary(
     """返回经认证所有者的小组件摘要。"""
 
     return {
-        "ok": True,
-        "data": build_widget_summary(db=db, owner_id=owner_id, section=section, now=now),
+        "ok"     : True,
+        "data"   : build_widget_summary(db=db, owner_id=owner_id, section=section, now=now),
         "message": "",
     }
 
@@ -532,7 +544,7 @@ def get_widget_calendar(
     """返回 Scriptable 覆盖游标指定窗口内的完整日程。"""
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": build_widget_calendar(
             db,
             owner_id,

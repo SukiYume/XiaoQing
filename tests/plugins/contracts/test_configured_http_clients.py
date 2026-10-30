@@ -25,14 +25,14 @@ def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
             "ai": {
                 "providers": {
                     "local": {
-                        "api_base": api_base,
+                        "api_base"     : api_base,
                         "endpoint_path": "/chat/completions",
                     }
                 },
                 "models": {
                     "local-model": {
-                        "provider": "local",
-                        "model": "local-model",
+                        "provider"  : "local",
+                        "model"     : "local-model",
                         "modalities": ["text"],
                     }
                 },
@@ -42,11 +42,11 @@ def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     "ai": {
                         "routes": {
                             "summary": {
-                                "models": ["local-model"],
-                                "temperature": 0.7,
-                                "max_tokens": 1200,
+                                "models"         : ["local-model"],
+                                "temperature"    : 0.7,
+                                "max_tokens"     : 1200,
                                 "timeout_seconds": 60,
-                                "max_retry": 0,
+                                "max_retry"      : 0,
                             }
                         }
                     }
@@ -55,11 +55,11 @@ def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     "ai": {
                         "routes": {
                             "parse": {
-                                "models": ["local-model"],
-                                "temperature": 0.3,
-                                "max_tokens": 1000,
+                                "models"         : ["local-model"],
+                                "temperature"    : 0.3,
+                                "max_tokens"     : 1000,
                                 "timeout_seconds": 17,
-                                "max_retry": 0,
+                                "max_retry"      : 0,
                             }
                         }
                     }
@@ -68,11 +68,11 @@ def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     "ai": {
                         "routes": {
                             "chat": {
-                                "models": ["local-model"],
-                                "temperature": 0.2,
-                                "max_tokens": 50,
+                                "models"         : ["local-model"],
+                                "temperature"    : 0.2,
+                                "max_tokens"     : 50,
                                 "timeout_seconds": 19,
-                                "max_retry": 0,
+                                "max_retry"      : 0,
                             }
                         }
                     }
@@ -169,11 +169,11 @@ def _voice_context(tmp_path: Path, session: _Session) -> SimpleNamespace:
                 "plugins": {
                     "voice": {
                         "subscription_key": "secret",
-                        "region": "eastasia",
-                        "voice_name": "zh-CN-XiaomoNeural",
-                        "style": "cheerful",
-                        "role": "Girl",
-                        "proxy": "http://127.0.0.1:7890",
+                        "region"          : "eastasia",
+                        "voice_name"      : "zh-CN-XiaomoNeural",
+                        "style"           : "cheerful",
+                        "role"            : "Girl",
+                        "proxy"           : "http://127.0.0.1:7890",
                     }
                 }
             },
@@ -276,9 +276,9 @@ async def test_chat_preserves_proxy_and_parses_chunked_json() -> None:
         _json_response(
             {
                 "data": {
-                    "id": "chat-123",
+                    "id"             : "chat-123",
                     "conversation_id": "conversation-456",
-                    "status": "completed",
+                    "status"         : "completed",
                 }
             },
             compressed=True,
@@ -427,7 +427,7 @@ async def test_tts_declared_overflow_is_rejected_before_stream_read(tmp_path: Pa
         status  = 200,
         chunks  = [b"x"],
         headers = {
-            "Content-Type": "audio/mpeg",
+            "Content-Type"  : "audio/mpeg",
             "Content-Length": str(voice.MAX_AUDIO_BYTES + 1),
         },
         poison=True,

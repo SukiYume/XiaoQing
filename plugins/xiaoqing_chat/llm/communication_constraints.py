@@ -15,18 +15,18 @@ def extract_local_term_definitions(
     records: dict[str, str], *, latest_only: bool = True
 ) -> list[dict[str, Any]]:
     """明示命名句保留定义原文，采用当前对话中最后一次明确定义。"""
-    definitions: dict[str, dict[str, Any]] = {}
-    all_definitions: list[dict[str, Any]]  = []
+    definitions    : dict[str, dict[str, Any]] = {}
+    all_definitions: list[dict[str, Any]]      = []
     for identifier, source in records.items():
         for match in _EXPLICIT_GROUP_DEFINITION_RE.finditer(source):
             term    = match["term"].strip(" \t‘’“”\"'「」『』")
             meaning = match["meaning"].strip(" \t，,‘’“”\"'「」『』")
             if term and meaning:
                 definitions[term] = {
-                    "term": term,
-                    "meaning": meaning,
+                    "term"      : term,
+                    "meaning"   : meaning,
                     "source_ids": [identifier],
-                    "evidence": [source],
+                    "evidence"  : [source],
                 }
                 all_definitions.append(definitions[term])
     return list(definitions.values()) if latest_only else all_definitions
@@ -55,10 +55,10 @@ def explicit_output_allocation(text: str) -> dict[str, str]:
     if re.search(r"别|不要|不用|不必|无需", clause_prefix):
         return {}
     return {
-        "受众原文": match["audience"],
+        "受众原文"  : match["audience"],
         "条目数量原文": match["quantity"] + match["unit"],
         "条目内容原文": match["item"],
-        "分配范围": "每人分别交付" if match["distribution"] else "向这些受众共同交付",
+        "分配范围"  : "每人分别交付" if match["distribution"] else "向这些受众共同交付",
     }
 
 
@@ -160,7 +160,9 @@ def requested_sentence_count(text: str) -> int | None:
 # “800字”“八百字左右”“不超过100字”这类篇幅要求。字数由本地数，不交给模型估：模型数中文字数常差上百。
 _CHAR_COUNT_RE = re.compile(
     r"(?P<prefix>不超过|不多于|别超过|最多|至多|至少|不少于|起码|最少)?"
-    r"(?P<number>\d{2,5}|[一二两三四五六七八九十百千万]{2,6})\s*个?字"
+    # 数字片段要完整：前面不能紧挨着别的数字字符，否则“一千零五十字”会只取到“五十字”。
+    r"(?<![零一二两三四五六七八九十百千万\d])"
+    r"(?P<number>\d{2,5}|[零一二两三四五六七八九十百千万]{2,8})\s*个?字"
     r"(?P<suffix>左右|上下|以内|之内|以下|以上|内)?"
 )
 _AT_MOST_WORDS = frozenset(
@@ -184,15 +186,24 @@ _CN_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
 # 太短的不算篇幅要求（“十字路口”“八字”），太长的群聊里也写不了。
 _MIN_REQUESTED_CHARS = 20
 _MAX_REQUESTED_CHARS = 20000
-_MARKER_RE           = re.compile(r"\[[^\]\n]*\]")
+_MARKER_RE           = re.compile(
+    r"\[(?:想发表情|想发图片|想发语音|表情包|QQ表情|图片|语音|视频|文件)[:：][^\]\n]*\]"
+)
 
 
 def _chinese_number(text: str) -> int | None:
-    """“八百”“一千五”“三百五十” → 数字；“一千五”按口语读作 1500。"""
+    """“八百”“一千五”“三百五十”“一百零五” → 数字。
+
+    “一千五”按口语读作 1500；中间有“零”占位时（“一百零五”“一千零五十”）末位按原值计。
+    """
 
     total, current, last_unit = 0, 0, 0
+    zero_placeholder = False
     for char in text:
-        if char in _CN_DIGITS:
+        if char == "零":
+            zero_placeholder = True
+            current          = 0
+        elif char in _CN_DIGITS:
             current = _CN_DIGITS[char]
         elif char in _CN_UNITS:
             last_unit = _CN_UNITS[char]
@@ -200,7 +211,7 @@ def _chinese_number(text: str) -> int | None:
             current = 0
         else:
             return None
-    if current and last_unit >= 100 and text[-1] in _CN_DIGITS:
+    if current and last_unit >= 100 and text[-1] in _CN_DIGITS and not zero_placeholder:
         current *= last_unit // 10
     return total + current
 
@@ -210,7 +221,7 @@ class CharTarget:
     """一条明确的篇幅要求：约多少字、至少多少字或不超过多少字。"""
 
     count: int
-    mode: str  # about | at_least | at_most
+    mode : str  # about | at_least | at_most
 
     def bounds(self) -> tuple[float, float]:
         if self.mode == "at_most":

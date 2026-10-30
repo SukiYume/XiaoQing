@@ -50,34 +50,34 @@ class _ActionSender(Protocol):
 class _ReminderDelivery:
     """通过校验的单条提醒投递。"""
 
-    user_id: str
-    message: str
-    item_id: str | None
-    remind_time: str | None
-    claim_token: str | None
-    claim_kind: ReminderClaimKind
+    user_id           : str
+    message           : str
+    item_id           : str | None
+    remind_time       : str | None
+    claim_token       : str | None
+    claim_kind        : ReminderClaimKind
     claim_repeat_count: int
-    delivery_key: str | None
+    delivery_key      : str | None
 
 
 @dataclass(slots=True)
 class _ScheduleRun:
     """一次周期任务共享的数据库、发送上下文、时钟和返回动作。"""
 
-    context: object
-    db: Database
+    context    : object
+    db         : Database
     current_utc: datetime
-    messages: ActionList = field(default_factory=list)
+    messages   : ActionList = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
 class _PeriodicClaim:
     """数据库周期投递租约的最小必需字段。"""
 
-    task_name: str
-    owner_id: str
-    period_key: str
-    claim_token: str
+    task_name   : str
+    owner_id    : str
+    period_key  : str
+    claim_token : str
     delivery_key: str
 
 
@@ -85,41 +85,41 @@ class _PeriodicClaim:
 class _FinancePeriod:
     """一次财务总结的查询范围和展示信息。"""
 
-    key: str
+    key       : str
     start_date: str
-    end_date: str
-    label: str
-    title: str
+    end_date  : str
+    label     : str
+    title     : str
 
 
 @dataclass(frozen=True, slots=True)
 class _FinanceSchedule:
     """周报/月报之间唯一不同的调度常量。"""
 
-    kind: FinancePeriodKind
-    task_name: str
+    kind       : FinancePeriodKind
+    task_name  : str
     marker_name: str
-    component: str
-    title: str
+    component  : str
+    title      : str
 
 
 @dataclass(slots=True)
 class _FinanceMetrics:
     """单次遍历账目后得到的财务总结指标。"""
 
-    currency: str = "CNY"
-    by_currency: dict[str, _FinanceMetrics] = field(default_factory=dict)
-    item_count: int       = 0
-    total_income: float   = 0.0
-    total_expense: float  = 0.0
-    total_transfer: float = 0.0
-    transfer_count: int   = 0
+    currency           : str = "CNY"
+    by_currency        : dict[str, _FinanceMetrics] = field(default_factory=dict)
+    item_count         : int   = 0
+    total_income       : float = 0.0
+    total_expense      : float = 0.0
+    total_transfer     : float = 0.0
+    transfer_count     : int   = 0
     expense_by_category: dict[str, float] = field(default_factory=dict)
-    income_by_category: dict[str, float] = field(default_factory=dict)
-    account_flow: dict[str, dict[str, float]] = field(default_factory=dict)
-    transfer_flow: dict[str, float] = field(default_factory=dict)
-    top_expense: LedgerItem | None = None
-    top_expense_amount: float      = 0.0
+    income_by_category : dict[str, float] = field(default_factory=dict)
+    account_flow       : dict[str, dict[str, float]] = field(default_factory=dict)
+    transfer_flow      : dict[str, float] = field(default_factory=dict)
+    top_expense        : LedgerItem | None = None
+    top_expense_amount : float             = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,8 +128,8 @@ class _BriefingEvent:
 
     sort_time: datetime
     time_text: str
-    title: str
-    location: str
+    title    : str
+    location : str
 
 
 _WEEKLY_FINANCE: Final = _FinanceSchedule(

@@ -75,7 +75,7 @@ def _table_payload(
 ) -> dict[str, object]:
     return {
         "metadata": [{"name": name} for name in names],
-        "data": [list(row) for row in rows],
+        "data"    : [list(row) for row in rows],
     }
 
 
@@ -117,10 +117,10 @@ def test_simbad_tap_post_is_streamed_bounded_and_explicit(
     assert captured["timeout"].read_timeout == obj.SIMBAD_REQUEST_TIMEOUT_SECONDS
     assert captured["data"] == {
         "REQUEST": "doQuery",
-        "LANG": "ADQL",
-        "FORMAT": "json",
-        "MAXREC": "1",
-        "QUERY": "SELECT TOP 1 ra",
+        "LANG"   : "ADQL",
+        "FORMAT" : "json",
+        "MAXREC" : "1",
+        "QUERY"  : "SELECT TOP 1 ra",
     }
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["Accept-Encoding"] == "gzip, deflate"

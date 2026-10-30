@@ -117,11 +117,11 @@ async def test_sequential_gate_allows_only_one_active_operation():
         active += 1
         max_active = max(max_active, active)
         first_started.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
         active -= 1
 
     first = asyncio.create_task(gate.run(slow_operation))
-    await first_started.wait()
+    await asyncio.wait_for(first_started.wait(), timeout=10)
     second = asyncio.create_task(gate.run(slow_operation))
     await asyncio.sleep(0)
 
@@ -145,12 +145,12 @@ async def test_parallel_gate_preserves_parallel_execution():
         max_active = max(max_active, active)
         if active == 2:
             both_started.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
         active -= 1
 
     first  = asyncio.create_task(gate.run(slow_operation))
     second = asyncio.create_task(gate.run(slow_operation))
-    await both_started.wait()
+    await asyncio.wait_for(both_started.wait(), timeout=10)
     assert max_active == 2
     release.set()
     await asyncio.gather(first, second)
@@ -163,10 +163,10 @@ async def test_close_cancels_active_and_queued_work_then_rejects_new_work():
 
     async def never_finishes() -> None:
         entered.set()
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
 
     active = asyncio.create_task(gate.run(never_finishes))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=10)
     queued = asyncio.create_task(gate.run(never_finishes))
     await asyncio.sleep(0)
 
@@ -205,14 +205,14 @@ async def test_timeout_cancels_callback_and_opens_circuit():
 
     async def slow_operation() -> None:
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         except asyncio.CancelledError:
             cancelled.set()
             raise
 
     with pytest.raises(PluginExecutionTimeout):
         await gate.run(slow_operation)
-    await cancelled.wait()
+    await asyncio.wait_for(cancelled.wait(), timeout=10)
     with pytest.raises(PluginExecutionUnavailable):
         await gate.run(lambda: asyncio.sleep(0))
 
@@ -258,11 +258,11 @@ async def test_parallel_limit_bounds_parallel_plugin_callbacks():
         active += 1
         max_active = max(max_active, active)
         entered.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
         active -= 1
 
     first = asyncio.create_task(gate.run(slow_operation))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=10)
     second = asyncio.create_task(gate.run(slow_operation))
     await asyncio.sleep(0)
     assert max_active == 1
@@ -282,22 +282,22 @@ async def test_timeout_quarantines_callback_that_ignores_cancellation():
 
     async def ignores_cancel() -> None:
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         except asyncio.CancelledError:
             ignored_cancel.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=10)
         finally:
             finished.set()
 
     with pytest.raises(PluginExecutionTimeout):
         await gate.run(ignores_cancel)
-    await ignored_cancel.wait()
+    await asyncio.wait_for(ignored_cancel.wait(), timeout=10)
     await asyncio.sleep(0.02)
     with pytest.raises(PluginExecutionUnavailable):
         await gate.run(lambda: asyncio.sleep(0))
 
     release.set()
-    await finished.wait()
+    await asyncio.wait_for(finished.wait(), timeout=10)
     await asyncio.sleep(0)
     await gate.run(lambda: asyncio.sleep(0))
 
@@ -484,8 +484,9 @@ async def test_sync_bulkhead_allows_other_plugin_to_progress() -> None:
     try:
         assert await asyncio.to_thread(started.wait, 1)
         second = asyncio.create_task(gate_a.run(lambda: call_plugin_callback(blocking)))
-        while broker.queued_callbacks < 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks < 1:
+                await asyncio.sleep(0)
 
         result = await asyncio.wait_for(
             gate_b.run(lambda: call_plugin_callback(lambda: "b")),
@@ -521,13 +522,14 @@ async def test_gate_admission_queue_overflow_is_fast_and_bounded() -> None:
         nonlocal calls
         calls += 1
         entered.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
 
     first = asyncio.create_task(gate.run(blocking))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=10)
     second = asyncio.create_task(gate.run(blocking))
-    while gate.admitted_operations != 2:
-        await asyncio.sleep(0)
+    async with asyncio.timeout(10):
+        while gate.admitted_operations != 2:
+            await asyncio.sleep(0)
 
     with pytest.raises(PluginExecutionOverloaded):
         await gate.run(blocking)
@@ -570,8 +572,9 @@ async def test_sync_lane_queue_overflow_is_fast_and_does_not_count_as_failure() 
     try:
         assert await asyncio.to_thread(started.wait, 1)
         second = asyncio.create_task(gate.run(lambda: call_plugin_callback(blocking)))
-        while broker.queued_callbacks != 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 1:
+                await asyncio.sleep(0)
         with pytest.raises(PluginExecutionOverloaded):
             await gate.run(lambda: call_plugin_callback(must_not_run))
         assert late_calls == 0
@@ -609,8 +612,9 @@ async def test_global_sync_queue_limit_bounds_many_plugin_backlog() -> None:
     try:
         assert await asyncio.to_thread(started.wait, 1)
         queued = asyncio.create_task(gates[1].run(lambda: call_plugin_callback(blocking)))
-        while broker.queued_callbacks != 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 1:
+                await asyncio.sleep(0)
         with pytest.raises(PluginExecutionOverloaded):
             await gates[2].run(lambda: call_plugin_callback(rejected))
         assert broker.queued_callbacks == 1
@@ -650,11 +654,13 @@ async def test_broker_round_robin_runs_waiting_lane_before_same_lane_backlog() -
         assert await asyncio.to_thread(started.wait, 1)
         tasks.append(asyncio.create_task(gate_a.run(lambda: call_plugin_callback(record, "a2"))))
         tasks.append(asyncio.create_task(gate_a.run(lambda: call_plugin_callback(record, "a3"))))
-        while broker.queued_callbacks != 2:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 2:
+                await asyncio.sleep(0)
         tasks.append(asyncio.create_task(gate_b.run(lambda: call_plugin_callback(record, "b"))))
-        while broker.queued_callbacks != 3:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 3:
+                await asyncio.sleep(0)
         release.set()
         await asyncio.gather(*tasks)
         assert order.index("b") < order.index("a2")
@@ -689,21 +695,24 @@ async def test_cancelled_queued_sync_callback_never_runs_and_frees_capacity() ->
 
     first = asyncio.create_task(gate.run(lambda: call_plugin_callback(blocking)))
     second: asyncio.Task[None] | None = None
-    third: asyncio.Task[None] | None = None
+    third : asyncio.Task[None] | None = None
     try:
         assert await asyncio.to_thread(started.wait, 1)
         second = asyncio.create_task(gate.run(lambda: call_plugin_callback(record, "cancelled")))
-        while broker.queued_callbacks != 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 1:
+                await asyncio.sleep(0)
         second.cancel()
         with pytest.raises(asyncio.CancelledError):
             await second
-        while broker.queued_callbacks:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks:
+                await asyncio.sleep(0)
 
         third = asyncio.create_task(gate.run(lambda: call_plugin_callback(record, "third")))
-        while broker.queued_callbacks != 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 1:
+                await asyncio.sleep(0)
         release.set()
         await asyncio.gather(first, third)
         assert calls == ["third"]
@@ -801,8 +810,9 @@ async def test_running_sync_timeout_retains_own_slot_without_blocking_other_plug
         )
     finally:
         release.set()
-        while gate_a.pending_sync_callbacks:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while gate_a.pending_sync_callbacks:
+                await asyncio.sleep(0)
         await gate_a.close()
         await gate_b.close()
         await broker.close(timeout_seconds=1)
@@ -821,7 +831,7 @@ async def test_closed_gate_allows_sync_lifecycle_callback_but_rejects_detached_s
 
     async def spawn_detached() -> asyncio.Task[str]:
         async def child() -> str:
-            await child_release.wait()
+            await asyncio.wait_for(child_release.wait(), timeout=10)
             return await call_plugin_callback(lambda: "too-late")
 
         return asyncio.create_task(child())
@@ -855,7 +865,7 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
 
     async def operation(index: int) -> None:
         entered[index].set()
-        await releases[index].wait()
+        await asyncio.wait_for(releases[index].wait(), timeout=10)
 
     tasks = [asyncio.create_task(gate.run(lambda index=i: operation(index))) for i in range(2)]
     await asyncio.gather(entered[0].wait(), entered[1].wait())
@@ -872,7 +882,7 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
     await asyncio.sleep(0)
     assert entered[2].is_set() is False
     releases[1].set()
-    await entered[2].wait()
+    await asyncio.wait_for(entered[2].wait(), timeout=10)
     releases[2].set()
     await asyncio.gather(*tasks)
 
@@ -890,14 +900,14 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
 
     async def first_operation() -> None:
         first_entered.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
 
     async def second_operation() -> None:
         second_entered.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
 
     first = asyncio.create_task(increase_gate.run(first_operation))
-    await first_entered.wait()
+    await asyncio.wait_for(first_entered.wait(), timeout=10)
     second = asyncio.create_task(increase_gate.run(second_operation))
     await asyncio.sleep(0)
     increase_gate.set_policy(
@@ -1170,8 +1180,9 @@ async def test_gate_close_physically_cancels_queued_sync_job_before_worker_relea
     try:
         assert await asyncio.to_thread(started.wait, 1)
         queued = asyncio.create_task(gate.run(lambda: call_plugin_callback(queued_callback)))
-        while broker.queued_callbacks != 1:
-            await asyncio.sleep(0)
+        async with asyncio.timeout(10):
+            while broker.queued_callbacks != 1:
+                await asyncio.sleep(0)
 
         first_close = await gate.close(timeout_seconds=0.01)
         assert first_close.drained is False

@@ -59,9 +59,9 @@ class _BoundedJsonSession:
 def _completed_chat_payload():
     return {
         "data": {
-            "id": "chat-123",
+            "id"             : "chat-123",
             "conversation_id": "conversation-456",
-            "status": "completed",
+            "status"         : "completed",
         }
     }
 
@@ -80,7 +80,7 @@ class TestChatPlugin:
         context.secrets = {
             "plugins": {
                 "chat": {
-                    "token": "test_token_123",
+                    "token" : "test_token_123",
                     "bot_id": "test_bot_456",
                 }
             }
@@ -142,9 +142,9 @@ class TestChatPlugin:
             {"data": {"id": "chat", "conversation_id": "conversation", "status": ""}},
             {
                 "data": {
-                    "id": "chat",
+                    "id"             : "chat",
                     "conversation_id": "conversation",
-                    "status": "failed\nFORGED_LOG",
+                    "status"         : "failed\nFORGED_LOG",
                 }
             },
         ],
@@ -221,7 +221,7 @@ class TestChatPlugin:
             secrets = {
                 "plugins": {
                     "chat": {
-                        "token": "frozen-token",
+                        "token" : "frozen-token",
                         "bot_id": "frozen-bot",
                     }
                 }
@@ -379,9 +379,9 @@ class TestChatPlugin:
         mock_context.http_session = _BoundedJsonSession(
             {
                 "data": {
-                    "id": "chat-123",
+                    "id"             : "chat-123",
                     "conversation_id": "conversation-456",
-                    "status": "in_progress",
+                    "status"         : "in_progress",
                 }
             },
             _completed_chat_payload(),
@@ -488,9 +488,9 @@ class TestChatPlugin:
         mock_context.http_session = _BoundedJsonSession(
             {
                 "data": {
-                    "id": "chat-123",
+                    "id"             : "chat-123",
                     "conversation_id": "conversation-456",
-                    "status": "failed",
+                    "status"         : "failed",
                 }
             }
         )
@@ -533,9 +533,9 @@ class TestChatPlugin:
                 await asyncio.sleep(0.02)
                 return {
                     "data": {
-                        "id": "chat-123",
+                        "id"             : "chat-123",
                         "conversation_id": "conversation-456",
-                        "status": "in_progress",
+                        "status"         : "in_progress",
                     }
                 }
             if url == chat.COZE_RETRIEVE_URL:

@@ -102,9 +102,9 @@ def test_reminder_rules_derive_and_rebuild_remind_times():
 def test_normalize_event_fields_keeps_rules_and_cache_in_sync():
     normalized = normalize_event_fields(
         {
-            "title": "会议",
-            "category": "工作",
-            "start_time": "2030-01-02T09:00:00",
+            "title"         : "会议",
+            "category"      : "工作",
+            "start_time"    : "2030-01-02T09:00:00",
             "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
         }
     )
@@ -120,9 +120,9 @@ def test_normalize_event_fields_keeps_rules_and_cache_in_sync():
 
     normalized_from_times = normalize_event_fields(
         {
-            "title": "会议",
-            "category": "工作",
-            "start_time": "2030-01-02T09:00:00",
+            "title"       : "会议",
+            "category"    : "工作",
+            "start_time"  : "2030-01-02T09:00:00",
             "remind_times": ["2030-01-01T09:00:00", "2030-01-02T09:00:00"],
         }
     )
@@ -136,8 +136,8 @@ def test_normalize_event_fields_keeps_rules_and_cache_in_sync():
 def test_normalize_event_fields_defaults_leaf_to_start_time_reminder():
     normalized = normalize_event_fields(
         {
-            "title": "无显式提醒",
-            "category": "工作",
+            "title"     : "无显式提醒",
+            "category"  : "工作",
             "start_time": "2030-01-02T09:00:00",
         }
     )
@@ -149,9 +149,9 @@ def test_normalize_event_fields_defaults_leaf_to_start_time_reminder():
 def test_normalize_event_fields_allows_explicit_reminder_clear():
     normalized = normalize_event_fields(
         {
-            "title": "清空提醒",
-            "category": "工作",
-            "start_time": "2030-01-02T09:00:00",
+            "title"         : "清空提醒",
+            "category"      : "工作",
+            "start_time"    : "2030-01-02T09:00:00",
             "reminder_rules": [],
         }
     )
@@ -167,13 +167,13 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
     try:
         collection_id = db.create_event_collection(
             {
-                "id": "col00001",
-                "owner_id": "u1",
-                "kind": "multi_node",
-                "title": "大会",
-                "category": "工作",
-                "start_time": "2030-01-01T09:00:00",
-                "end_time": "2030-01-03T18:00:00",
+                "id"            : "col00001",
+                "owner_id"      : "u1",
+                "kind"          : "multi_node",
+                "title"         : "大会",
+                "category"      : "工作",
+                "start_time"    : "2030-01-01T09:00:00",
+                "end_time"      : "2030-01-03T18:00:00",
                 "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
             }
         )
@@ -305,10 +305,10 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
             handler.create_event(
                 "u1",
                 {
-                    "title": "学术会议",
-                    "category": "会议",
-                    "location": "北京",
-                    "notes": "全局备注",
+                    "title"     : "学术会议",
+                    "category"  : "会议",
+                    "location"  : "北京",
+                    "notes"     : "全局备注",
                     "milestones": [
                         {"name": "注册截止", "time": "2030-04-01T09:00:00"},
                         {"name": "会议开始", "time": "2030-04-03T09:00:00", "notes": "带证件"},
@@ -354,23 +354,23 @@ def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_
     db            = Database(str(tmp_path / "pendo_event_graph_atomic_rollback.db"))
     collection_id = "c" * 32
     child         = {
-        "owner_id": "u1",
-        "type": "event",
-        "title": "节点",
-        "category": "工作",
-        "start_time": "2030-04-01T09:00:00",
-        "event_role": "multi_node_child",
-        "event_collection_id": collection_id,
+        "owner_id"             : "u1",
+        "type"                 : "event",
+        "title"                : "节点",
+        "category"             : "工作",
+        "start_time"           : "2030-04-01T09:00:00",
+        "event_role"           : "multi_node_child",
+        "event_collection_id"  : collection_id,
         "event_collection_kind": "multi_node",
     }
     try:
         try:
             db.create_event_collection(
                 {
-                    "id": collection_id,
+                    "id"      : collection_id,
                     "owner_id": "u1",
-                    "kind": "multi_node",
-                    "title": "原子集合",
+                    "kind"    : "multi_node",
+                    "title"   : "原子集合",
                 },
                 [("duplicate-child", child), ("duplicate-child", child)],
             )
@@ -397,9 +397,9 @@ def test_ai_recurring_event_recovers_explicit_reminders_for_every_child(tmp_path
     ai._call_llm = AsyncMock(
         return_value=json.dumps(
             {
-                "title": "与华为讨论",
-                "start_time": "2030-09-24T16:00:00",
-                "rrule": "FREQ=WEEKLY;BYDAY=TU;COUNT=5",
+                "title"         : "与华为讨论",
+                "start_time"    : "2030-09-24T16:00:00",
+                "rrule"         : "FREQ=WEEKLY;BYDAY=TU;COUNT=5",
                 "remind_offsets": ["PT1H"],
             }
         )
@@ -441,11 +441,11 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
             handler.create_event(
                 "u1",
                 {
-                    "title": "晨会",
-                    "category": "工作",
-                    "start_time": "2030-01-01T09:00:00",
-                    "end_time": "2030-01-01T10:00:00",
-                    "rrule": "FREQ=DAILY;COUNT=2",
+                    "title"         : "晨会",
+                    "category"      : "工作",
+                    "start_time"    : "2030-01-01T09:00:00",
+                    "end_time"      : "2030-01-01T10:00:00",
+                    "rrule"         : "FREQ=DAILY;COUNT=2",
                     "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
                 },
                 {},
@@ -498,8 +498,8 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
             handler.create_event(
                 "u1",
                 {
-                    "title": "项目发布",
-                    "category": "工作",
+                    "title"     : "项目发布",
+                    "category"  : "工作",
                     "milestones": [
                         {"name": "提审", "time": "2030-05-01T10:00:00"},
                         {"name": "上线", "time": "2030-05-02T18:00:00"},
@@ -628,13 +628,13 @@ def test_grouped_leaf_reminder_message_uses_collection_context(tmp_path: Path):
     try:
         collection_id = db.create_event_collection(
             {
-                "id": "conf2030",
-                "owner_id": "u1",
-                "kind": "multi_node",
-                "title": "学术会议",
-                "category": "工作",
+                "id"        : "conf2030",
+                "owner_id"  : "u1",
+                "kind"      : "multi_node",
+                "title"     : "学术会议",
+                "category"  : "工作",
                 "start_time": "2030-04-01T09:00:00",
-                "end_time": "2030-04-03T18:00:00",
+                "end_time"  : "2030-04-03T18:00:00",
             }
         )
         leaf = EventItem(

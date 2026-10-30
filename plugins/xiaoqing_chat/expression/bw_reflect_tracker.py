@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from core.lifecycle import to_thread_owned
 
 from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
 from ..memory.memory import MemoryStore
@@ -43,10 +46,10 @@ _JUDGE_PROMPT = """
 
 @dataclass
 class ReflectTrackerState:
-    operator_chat_id: str
-    expression_id: str
-    created_time: float
-    last_check_count: int     = 0
+    operator_chat_id  : str
+    expression_id     : str
+    created_time      : float
+    last_check_count  : int   = 0
     last_consumed_time: float = 0.0
 
 
@@ -116,10 +119,10 @@ class ReflectTrackerStore(StoreBase):
             for chat_id, queue in self._cache.items():
                 payload[chat_id] = [
                     {
-                        "operator_chat_id": state.operator_chat_id,
-                        "expression_id": state.expression_id,
-                        "created_time": state.created_time,
-                        "last_check_count": state.last_check_count,
+                        "operator_chat_id"  : state.operator_chat_id,
+                        "expression_id"     : state.expression_id,
+                        "created_time"      : state.created_time,
+                        "last_check_count"  : state.last_check_count,
                         "last_consumed_time": state.last_consumed_time,
                     }
                     for state in queue
@@ -245,22 +248,26 @@ async def _tick_reflect_tracker_once(
     max_retry: int,
     retry_interval_seconds: float,
     bot_name: str,
-    max_duration_seconds: float = 15 * 60,
-    max_message_count: int      = 30,
+    total_timeout_seconds: float = 60.0,
+    max_duration_seconds: float  = 15 * 60,
+    max_message_count: int       = 30,
 ) -> bool:
     if time.time() - tracker.created_time > float(max_duration_seconds):
-        tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
+        await to_thread_owned(tracker_store.remove_tracker, operator_chat_id, tracker.expression_id)
         return True
 
+    # 用户消息时间是 OneBot 整数秒，询问登记用的是小数秒本机时间：按同一精度（整秒）比较，
+    # 询问后同一秒内到达的答复不会被过滤掉。
+    asked_second  = math.floor(tracker.created_time)
     since_tracker = [
         message
         for message in await memory_store.get_async(operator_chat_id)
-        if float(message.ts or 0.0) >= tracker.created_time
+        if float(message.ts or 0.0) >= asked_second
         and float(message.ts or 0.0) > tracker.last_consumed_time
     ]
     new_msgs = [message for message in since_tracker if message.role == "user"]
     if len(new_msgs) > int(max_message_count):
-        tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
+        await to_thread_owned(tracker_store.remove_tracker, operator_chat_id, tracker.expression_id)
         return True
 
     if len(new_msgs) <= int(tracker.last_check_count):
@@ -268,10 +275,10 @@ async def _tick_reflect_tracker_once(
     # 仅在处理成功后更新计数，因此放在函数末尾。
     current_msg_count = len(new_msgs)
 
-    expr_items = expr_store.load()
+    expr_items = await to_thread_owned(expr_store.load)
     expr       = _find_expression(expr_items, tracker.expression_id)
     if not expr:
-        tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
+        await to_thread_owned(tracker_store.remove_tracker, operator_chat_id, tracker.expression_id)
         return True
 
     if "_ai" in secrets and secrets.get("_ai") is None:
@@ -285,12 +292,11 @@ async def _tick_reflect_tracker_once(
         situation=expr.situation, style=expr.style, context_block=context_block
     )
     resp, _path = await chat_completions_raw_with_fallback_paths(
+        route                  = "reasoning",
         secrets                = secrets,
         messages               = [{"role": "user", "content": prompt}],
-        temperature            = 0.1,
-        top_p                  = 0.8,
-        max_tokens             = 400,
         timeout_seconds        = float(timeout_seconds),
+        total_timeout_seconds  = total_timeout_seconds,
         max_retry              = int(max_retry),
         retry_interval_seconds = float(retry_interval_seconds),
     )
@@ -298,8 +304,9 @@ async def _tick_reflect_tracker_once(
         expr, parse_first_json_object(extract_response_content(resp)) or {}
     )
     if resolved:
-        expr_store.save(expr_items)
-        tracker_store.consume_tracker(
+        await to_thread_owned(expr_store.save, expr_items)
+        await to_thread_owned(
+            tracker_store.consume_tracker,
             operator_chat_id,
             tracker.expression_id,
             consumed_message_time=max(float(message.ts or 0.0) for message in new_msgs),
@@ -307,7 +314,7 @@ async def _tick_reflect_tracker_once(
         return True
     # 只有未找到结论时才更新 last_check_count，避免重置到相同值后下一轮死循环。
     tracker.last_check_count = current_msg_count
-    tracker_store.save()
+    await to_thread_owned(tracker_store.save)
     return False
 
 
@@ -322,11 +329,12 @@ async def tick_reflect_tracker(
     max_retry: int,
     retry_interval_seconds: float,
     bot_name: str,
-    max_duration_seconds: float = 15 * 60,
-    max_message_count: int      = 30,
+    total_timeout_seconds: float = 60.0,
+    max_duration_seconds: float  = 15 * 60,
+    max_message_count: int       = 30,
 ) -> bool:
     """检查待反思队列，且一条用户回复最多消费一道题。"""
-    for tracker in tracker_store.get_trackers(operator_chat_id):
+    for tracker in await to_thread_owned(tracker_store.get_trackers, operator_chat_id):
         changed = await _tick_reflect_tracker_once(
             operator_chat_id       = operator_chat_id,
             tracker                = tracker,
@@ -335,6 +343,7 @@ async def tick_reflect_tracker(
             tracker_store          = tracker_store,
             secrets                = secrets,
             timeout_seconds        = timeout_seconds,
+            total_timeout_seconds  = total_timeout_seconds,
             max_retry              = max_retry,
             retry_interval_seconds = retry_interval_seconds,
             max_duration_seconds   = max_duration_seconds,

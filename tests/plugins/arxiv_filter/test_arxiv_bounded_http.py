@@ -194,7 +194,7 @@ def test_runtime_html_success_preserves_article_and_date_behavior(
     assert frame.to_dict(orient="records") == [
         {
             "arXiv ID": "2607.00001",
-            "Title": "Bounded transport",
+            "Title"   : "Bounded transport",
             "Abstract": "Safe bounded HTML payload.",
         }
     ]
@@ -267,7 +267,7 @@ def test_step2_preserves_paging_and_validates_xml_before_feedparser(
     assert result.papers == [
         {
             "arxiv_id": "2607.00001",
-            "title": "Bounded transport",
+            "title"   : "Bounded transport",
             "abstract": "Safe Atom payload.",
         }
     ]
@@ -392,13 +392,13 @@ def test_step3_single_fetch_preserves_max_results_and_feed_fields(
 
     assert result == {
         "2607.00001": {
-            "title": "Bounded transport",
+            "title"   : "Bounded transport",
             "abstract": "Safe Atom payload.",
         }
     }
     assert parsed == [_VALID_ATOM]
     assert calls[0]["request_kwargs"]["params"] == {
-        "id_list": "2607.00001",
+        "id_list"    : "2607.00001",
         "max_results": 1,
     }
     assert calls[0]["request_kwargs"]["timeout"] == module.API_TIMEOUT

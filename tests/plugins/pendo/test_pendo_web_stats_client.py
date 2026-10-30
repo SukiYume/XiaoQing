@@ -8,7 +8,7 @@ from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_client_source import replace_js_source
 
-ROOT: Final         = REPOSITORY_ROOT
+ROOT        : Final = REPOSITORY_ROOT
 STATS_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js"
 
 STATS_SETUP: Final = r"""
@@ -274,8 +274,9 @@ def test_stats_numeric_boundaries_and_sampling_are_finite() -> None:
             ),
             ['05/01', '05/05', '05/09', '05/12', '05/16', '05/20'],
         );
+        // 压缩结果带原始横坐标，折线按真实时间距离绘制。
         assert.deepEqual(client.compressSeries(['a', 'b', 'c'], [1, 9, 3], 2), {
-            labels: ['a', 'c'], values: [1, 3],
+            labels: ['a', 'c'], values: [1, 3], positions: [0, 2], span: 3,
         });
         assert.equal(client.diffDays('2026-03-07', '2026-03-09'), 2);
         assert.equal(client.diffDays('bad', '2026-03-09'), 0);

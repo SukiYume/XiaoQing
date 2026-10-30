@@ -32,17 +32,17 @@ from ..training_common import (
 class ClassifierTrainingRuntime:
     """一次训练运行已经装配好的共享资源。"""
 
-    runtime: dict[str, Any]
-    frame: pd.DataFrame
-    train_frame: pd.DataFrame
-    validation_frame: pd.DataFrame
-    tokenizer: Any
-    model: Any
-    train_loader: DataLoader[Any]
+    runtime          : dict[str, Any]
+    frame            : pd.DataFrame
+    train_frame      : pd.DataFrame
+    validation_frame : pd.DataFrame
+    tokenizer        : Any
+    model            : Any
+    train_loader     : DataLoader[Any]
     validation_loader: DataLoader[Any]
-    optimizer: Any
-    scheduler: Any
-    loss_fn: Any
+    optimizer        : Any
+    scheduler        : Any
+    loss_fn          : Any
 
 
 def seed_everything(seed: int) -> None:
@@ -70,10 +70,10 @@ def get_runtime_settings(device: torch.device) -> dict[str, Any]:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32       = True
     return {
-        "use_amp": use_amp,
+        "use_amp"   : use_amp,
         "pin_memory": use_amp,
-        "use_fused": use_amp,
-        "amp_dtype": torch.bfloat16 if use_amp else torch.float32,
+        "use_fused" : use_amp,
+        "amp_dtype" : torch.bfloat16 if use_amp else torch.float32,
     }
 
 
@@ -93,8 +93,8 @@ def build_loader_kwargs(num_workers: int, pin_memory: bool) -> dict[str, object]
     """Build only the DataLoader options valid for the selected worker count."""
 
     kwargs: dict[str, object] = {
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
+        "num_workers"       : num_workers,
+        "pin_memory"        : pin_memory,
         "persistent_workers": num_workers > 0,
     }
     if num_workers > 0:
@@ -122,7 +122,7 @@ def forward_logits(
 
     batch        = move_batch_to_device(batch, device)
     model_inputs = {
-        "input_ids": batch["input_ids"],
+        "input_ids"     : batch["input_ids"],
         "attention_mask": batch["attention_mask"],
     }
     if "token_type_ids" in batch:
@@ -193,10 +193,10 @@ def dynamic_pad_collate(
     # 同一 DataLoader 的样本字段必须一致，只检查首项即可；混合 schema 应由数据集
     # 构造阶段暴露，而不是在每个 batch 内静默补造 token_type_ids。
     include_token_types              = "token_type_ids" in batch[0]
-    input_ids: list[list[int]]       = []
+    input_ids      : list[list[int]] = []
     attention_masks: list[list[int]] = []
-    token_type_ids: list[list[int]]  = []
-    labels: list[int]                = []
+    token_type_ids : list[list[int]] = []
+    labels         : list[int]       = []
 
     for sample in batch:
         sample_input_ids      = list(sample["input_ids"])
@@ -209,7 +209,7 @@ def dynamic_pad_collate(
         labels.append(sample["labels"])
 
     collated = {
-        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "input_ids"     : torch.tensor(input_ids, dtype=torch.long),
         "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
     }
     if include_token_types:

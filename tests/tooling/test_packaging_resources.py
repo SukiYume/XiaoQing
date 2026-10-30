@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from tests.helpers.git import run_git
 from tests.helpers.paths import REPOSITORY_ROOT
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
-    import tomli as tomllib
 
 ROOT             = REPOSITORY_ROOT
 _SOURCE_SUFFIXES = {".py", ".pyi"}

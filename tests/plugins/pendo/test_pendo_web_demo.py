@@ -22,7 +22,9 @@ try:
     from plugins.pendo.web.auth import AuthError, create_web_session, issue_login_code
     from plugins.pendo.web.deps import SESSION_COOKIE_NAME
     from plugins.pendo.web.services import demo_space as demo_space_module
-except ModuleNotFoundError:
+except ModuleNotFoundError as exc:
+    if exc.name != "jwt":
+        raise
     pytest.skip("pendo web demo requires PyJWT", allow_module_level=True)
 
 
@@ -44,21 +46,21 @@ def expired_demo_owner(temp_db: Database) -> str:
         owner_id,
         {
             "settings_json": {
-                "demo_mode": True,
-                "demo_expires_at": "2026-04-08T09:00:00",
-                "reminder_enabled": False,
+                "demo_mode"             : True,
+                "demo_expires_at"       : "2026-04-08T09:00:00",
+                "reminder_enabled"      : False,
                 "daily_briefing_enabled": False,
             },
         },
     )
     temp_db.insert_item(
         {
-            "id": "demo_expired_task",
-            "owner_id": owner_id,
-            "type": "task",
-            "title": "过期演示任务",
-            "status": "open",
-            "priority": 3,
+            "id"        : "demo_expired_task",
+            "owner_id"  : owner_id,
+            "type"      : "task",
+            "title"     : "过期演示任务",
+            "status"    : "open",
+            "priority"  : 3,
             "created_at": "2026-04-08T08:00:00",
             "updated_at": "2026-04-08T08:00:00",
         }
@@ -119,7 +121,7 @@ def test_server_rejects_public_binding_without_secure_session_cookie(
 
     PendoConfig.configure(
         {
-            "web_host": "0.0.0.0",
+            "web_host"                 : "0.0.0.0",
             "web_session_cookie_secure": False,
         }
     )
@@ -298,7 +300,7 @@ def test_recent_demo_requests_prunes_stale_buckets_and_normalizes_client_key() -
     now = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
     demo_space_module._DEMO_REQUESTS.update(
         {
-            "stale": deque([datetime(2029, 12, 31, 0, 0)]),
+            "stale" : deque([datetime(2029, 12, 31, 0, 0)]),
             "active": deque([now - timedelta(minutes=30)]),
         }
     )
@@ -321,11 +323,13 @@ def test_demo_seed_failure_removes_partial_owner_and_does_not_consume_rate_limit
 ) -> None:
     """模板写入失败时应回滚演示所有者，且失败请求不计入限流。"""
 
-    monkeypatch.setattr(
-        demo_space_module,
-        "_seed_demo_items",
-        Mock(side_effect=RuntimeError("seed failed")),
-    )
+    def seed_then_fail(db, owner_id, now):
+        db.insert_item(
+            {"owner_id": owner_id, "type": "note", "title": "partial demo", "content": "temporary"}
+        )
+        raise RuntimeError("seed failed")
+
+    monkeypatch.setattr(demo_space_module, "_seed_demo_items", seed_then_fail)
 
     with pytest.raises(RuntimeError, match="seed failed"):
         demo_space_module.create_demo_session(
@@ -340,17 +344,23 @@ def test_demo_seed_failure_removes_partial_owner_and_does_not_consume_rate_limit
     )
     assert remaining.fetchone()[0] == 0
     assert demo_space_module._DEMO_REQUESTS == {}
+    assert (
+        temp_db.get_connection()
+        .execute("SELECT COUNT(*) FROM items WHERE title = ?", ("partial demo",))
+        .fetchone()[0]
+        == 0
+    )
 
 
 def test_demo_record_transform_shifts_dates_and_rewrites_only_string_references() -> None:
     """模板转换应复制原记录、平移时间并安全重写字符串形式的内部引用。"""
 
     record = {
-        "id": "source-task",
-        "type": "task",
-        "plan_date": "2026-01-01",
-        "start_time": "2026-01-01T09:00:00.123456",
-        "remind_times": ["2026-01-01T08:30:00", "bad-time"],
+        "id"           : "source-task",
+        "type"         : "task",
+        "plan_date"    : "2026-01-01",
+        "start_time"   : "2026-01-01T09:00:00.123456",
+        "remind_times" : ["2026-01-01T08:30:00", "bad-time"],
         "related_items": ["source-task", ["unhashable"]],
     }
 
@@ -507,12 +517,12 @@ def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) ->
         )
         temp_db.insert_item(
             {
-                "id": f"{owner}-task",
-                "owner_id": owner,
-                "type": "task",
-                "title": "清理验证",
-                "status": "open",
-                "priority": 3,
+                "id"        : f"{owner}-task",
+                "owner_id"  : owner,
+                "type"      : "task",
+                "title"     : "清理验证",
+                "status"    : "open",
+                "priority"  : 3,
                 "created_at": "2030-01-01T12:00:00",
                 "updated_at": "2030-01-01T12:00:00",
             }
@@ -622,10 +632,10 @@ def test_purge_expired_demo_users_fails_closed_for_malformed_settings(
             {"demo_mode": True, "demo_expires_at": "2029-12-31T00:00:00"}
         ),
         "demo_web_missing_expiry": json.dumps({"demo_mode": True}),
-        "demo_web_fake_mode": json.dumps(
+        "demo_web_fake_mode"     : json.dumps(
             {"demo_mode": "true", "demo_expires_at": "2031-01-01T00:00:00"}
         ),
-        "demo_web_scalar": "[]",
+        "demo_web_scalar"  : "[]",
         "demo_web_bad_json": "{",
     }
     conn = temp_db.get_connection()
@@ -658,7 +668,7 @@ def test_ensure_demo_access_rejects_non_boolean_demo_marker(temp_db: Database) -
         owner_id,
         {
             "settings_json": {
-                "demo_mode": "true",
+                "demo_mode"      : "true",
                 "demo_expires_at": "2031-01-01T00:00:00",
             }
         },

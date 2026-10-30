@@ -38,9 +38,10 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 | 天文科研 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、文献检索、计算、词典、FRB 数据 |
 | 执行与运维 | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | 后台代理、受控终端、SSH、Python REPL、RCON |
 | 内容与服务 | `url_parser`, `github`, `earthquake`, `flickr`, `twitter`, `signin`, `adnmb` | 链接解析、趋势、快讯、公共摄影、媒体提取、签到、社区浏览 |
+| 智能家居 | `xiaoai` | 米家设备查询与控制、小爱音箱桥接、天气 |
 | 工具与娱乐 | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | 随机选择、颜色、计算、游戏、宠物、回显 |
 
-以上共 31 个插件。
+以上共 32 个插件。
 [插件使用手册](09-plugins.md) 介绍每个插件的命令、配置和数据，并提供全部命令入口速查与定时任务总表。
 
 ---

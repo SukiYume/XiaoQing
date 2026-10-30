@@ -28,12 +28,12 @@ CommandAction = Literal["start", "status", "restart", "help"]
 class Difficulty:
     """一份难度配置，同时作为命令别名和会话状态的唯一真相源。"""
 
-    key: DifficultyKey
-    label: str
-    minimum: int
-    maximum: int
+    key         : DifficultyKey
+    label       : str
+    minimum     : int
+    maximum     : int
     max_attempts: int
-    aliases: frozenset[str]
+    aliases     : frozenset[str]
 
 
 EASY   = Difficulty("easy", "简单 ⭐", 1, 50, 10, frozenset({"easy", "e", "简单"}))
@@ -114,19 +114,19 @@ class InvalidGameState(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class CommandRequest:
-    action: CommandAction
+    action    : CommandAction
     difficulty: Difficulty = NORMAL
 
 
 @dataclass(frozen=True, slots=True)
 class GameState:
-    target: int
-    minimum: int
-    maximum: int
-    attempts: int
+    target      : int
+    minimum     : int
+    maximum     : int
+    attempts    : int
     max_attempts: int
-    history: tuple[int, ...]
-    difficulty: Difficulty
+    history     : tuple[int, ...]
+    difficulty  : Difficulty
 
     @property
     def remaining(self) -> int:
@@ -166,7 +166,7 @@ def _parse_request(args: object) -> CommandRequest:
 
 
 def _owns_session(session: _GameSession) -> bool:
-    return type(session.plugin_name) is str and session.plugin_name == PLUGIN_NAME
+    return session.plugin_name == PLUGIN_NAME
 
 
 def _read_state_int(session: _GameSession, key: str) -> int:
@@ -272,13 +272,13 @@ async def _start_game(
     target = secrets.randbelow(difficulty.maximum - difficulty.minimum + 1) + difficulty.minimum
     await context.create_session(
         initial_data={
-            "target": target,
-            "min": difficulty.minimum,
-            "max": difficulty.maximum,
-            "attempts": 0,
+            "target"      : target,
+            "min"         : difficulty.minimum,
+            "max"         : difficulty.maximum,
+            "attempts"    : 0,
             "max_attempts": difficulty.max_attempts,
-            "history": [],
-            "difficulty": difficulty.key,
+            "history"     : [],
+            "difficulty"  : difficulty.key,
         },
         timeout=SESSION_TIMEOUT_SECONDS,
     )

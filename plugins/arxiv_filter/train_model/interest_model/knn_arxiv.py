@@ -85,24 +85,24 @@ class KNNConfig:
 
     # 负样本惩罚：score = top_k_pos_mean - neg_weight * top_k_neg_mean
     # neg_weight=0 表示不使用负样本惩罚
-    neg_k: int        = 5
+    neg_k     : int   = 5
     neg_weight: float = 0.5
 
     # 存储负样本子集的数量（全量 ~98k 没必要，3000 足以代表负样本空间）
     neg_sample_size: int = 3000
 
-    batch_size: int = 256
-    val_size: float = 0.15
+    batch_size: int   = 256
+    val_size  : float = 0.15
 
     # beta=1.0 → F1（Precision/Recall 对等）
     # beta=2.0 → 偏向 Recall（更多召回，threshold 更低）
     # beta=0.5 → 偏向 Precision（更精准，threshold 更高）
-    beta: float          = 2.0
+    beta         : float = 2.0
     min_threshold: float = 0.30  # 阈值下限，防止被极端不平衡压太低
 
-    split_mode: str  = "random"
+    split_mode : str = "random"
     random_seed: int = 42
-    max_len: int     = 512
+    max_len    : int = 512
 
     def __post_init__(self) -> None:
         """在耗时编码开始前校验全部训练超参数。"""
@@ -148,10 +148,10 @@ CONFIG = KNNConfig()
 # ── per-topic 评估关键词（title 模糊匹配，大小写不敏感）────────────────────
 # 每个 topic 匹配其中任意一个关键词即算作该 topic 的正样本
 TOPIC_KEYWORDS: dict[str, list[str]] = {
-    "FRB": ["fast radio burst", r"\bfrb\b", "repeating burst"],
-    "Pulsar": [r"\bpulsar\b", "magnetar", r"\bneutron star\b", "spin-down", "timing noise"],
-    "WD": ["white dwarf", r"\bwd\b", r"\bdwd\b", "cataclysmic variable", "AM CVn"],
-    "Gaia": [r"\bgaia\b", "astrometry", "parallax catalog", "dr[23456]"],
+    "FRB"      : ["fast radio burst", r"\bfrb\b", "repeating burst"],
+    "Pulsar"   : [r"\bpulsar\b", "magnetar", r"\bneutron star\b", "spin-down", "timing noise"],
+    "WD"       : ["white dwarf", r"\bwd\b", r"\bdwd\b", "cataclysmic variable", "AM CVn"],
+    "Gaia"     : [r"\bgaia\b", "astrometry", "parallax catalog", "dr[23456]"],
     "ML/Method": [
         "machine learning",
         "neural network",
@@ -190,11 +190,11 @@ def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
     return _training.resolve_columns(
         df,
         {
-            "id": ["arxivid", "id", "paperid"],
-            "title": ["title", "papertitle"],
+            "id"      : ["arxivid", "id", "paperid"],
+            "title"   : ["title", "papertitle"],
             "abstract": ["abstract", "summary", "description"],
-            "label": ["label", "interest", "target", "y"],
-            "date": ["date", "created", "submitted", "published", "updated"],
+            "label"   : ["label", "interest", "target", "y"],
+            "date"    : ["date", "created", "submitted", "published", "updated"],
         },
         required_fields = {"title", "abstract"},
         error_prefix    = "找不到列名",
@@ -282,7 +282,8 @@ def load_or_encode(
     abstract_col: str,
     encoder_name: str,
     cache_dir: Path,
-    batch_size: int = 256,
+    batch_size: int     = 256,
+    max_len: int | None = None,
 ) -> np.ndarray:
     """
     返回 df 中每一行对应的 normalized embedding，shape = (len(df), D)。
@@ -290,13 +291,15 @@ def load_or_encode(
     首次调用会编码全部文本并写入缓存；后续调用直接从缓存加载。
     缓存失效条件：编码器、数据行数，或标题/摘要内容发生变化。
     """
-    npy_path, meta_path = _cache_paths(cache_dir, encoder_name)
+    # 有效输入长度是嵌入身份的一部分：改了 max_len 不能复用按旧长度截断的缓存。
+    encoder_identity = encoder_name if max_len is None else f"{encoder_name}@max_len={max_len}"
+    npy_path, meta_path = _cache_paths(cache_dir, encoder_identity)
     data_fingerprint = _data_fingerprint(df, title_col, abstract_col)
 
     if _cache_is_valid(
         meta_path,
         npy_path,
-        encoder_name,
+        encoder_identity,
         len(df),
         data_fingerprint,
     ):
@@ -316,16 +319,16 @@ def load_or_encode(
     _log("[encode] 预计耗时（CPU ~5-15 min；GPU ~1 min）")
 
     SentenceTransformer = _training.load_sentence_transformer_class()
-    model               = SentenceTransformer(encoder_name)
+    model               = _training.apply_max_len(SentenceTransformer(encoder_name), max_len)
     fp16                = torch.cuda.is_available()
     if fp16:
         _log("[encode] CUDA 可用，启用 fp16")
 
     texts              = _training.build_title_abstract_texts(df, title_col, abstract_col)
     kw: dict[str, Any] = {
-        "batch_size": batch_size,
-        "show_progress_bar": True,
-        "convert_to_numpy": True,
+        "batch_size"          : batch_size,
+        "show_progress_bar"   : True,
+        "convert_to_numpy"    : True,
         "normalize_embeddings": True,
     }
     if fp16:
@@ -345,9 +348,9 @@ def load_or_encode(
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(
             {
-                "encoder_name": encoder_name,
-                "n_rows": len(df),
-                "embed_dim": emb.shape[1],
+                "encoder_name"    : encoder_identity,
+                "n_rows"          : len(df),
+                "embed_dim"       : emb.shape[1],
                 "data_fingerprint": data_fingerprint,
             },
             f,
@@ -383,7 +386,7 @@ def evaluate_per_topic(
     preds  = (scores >= threshold).astype(int)
 
     results: dict[str, dict[str, float]] = {}
-    lines: list[str]                     = []
+    lines  : list[str]                   = []
 
     header = f"\n{'=' * 72}\n[{name}] Per-topic Recall Breakdown\n{'=' * 72}"
     lines.append(header)
@@ -404,12 +407,12 @@ def evaluate_per_topic(
         max_s        = float(topic_scores.max())
 
         results[topic] = {
-            "n_pos": n_pos,
-            "n_passed": n_passed,
-            "pass_rate": pass_rate,
+            "n_pos"     : n_pos,
+            "n_passed"  : n_passed,
+            "pass_rate" : pass_rate,
             "mean_score": mean_s,
-            "min_score": min_s,
-            "max_score": max_s,
+            "min_score" : min_s,
+            "max_score" : max_s,
         }
         lines.append(
             f"  {topic:<22}: {n_pos:4d} pos | {n_passed:4d} passed | "
@@ -433,12 +436,12 @@ def evaluate_per_topic(
             f"mean={unc_scores.mean():.4f} min={unc_scores.min():.4f} max={unc_scores.max():.4f}"
         )
         results["Other"] = {
-            "n_pos": n_unc,
-            "n_passed": n_unc_pass,
-            "pass_rate": n_unc_pass / n_unc,
+            "n_pos"     : n_unc,
+            "n_passed"  : n_unc_pass,
+            "pass_rate" : n_unc_pass / n_unc,
             "mean_score": float(unc_scores.mean()),
-            "min_score": float(unc_scores.min()),
-            "max_score": float(unc_scores.max()),
+            "min_score" : float(unc_scores.min()),
+            "max_score" : float(unc_scores.max()),
         }
 
     lines.append("─" * 72)
@@ -553,7 +556,7 @@ class KNNInterestModel:
 
         _log(f"Loading encoder: {self.encoder_name}")
         encoder_class = _training.load_sentence_transformer_class()
-        encoder       = encoder_class(self.encoder_name)
+        encoder       = _training.apply_max_len(encoder_class(self.encoder_name), self.max_len)
         actual_dim    = int(encoder.get_sentence_embedding_dimension())
         if actual_dim <= 0:
             raise ValueError("encoder returned an invalid embedding dimension")
@@ -580,9 +583,9 @@ class KNNInterestModel:
             return np.zeros((0, embed_dim), dtype=np.float32)
         encoder            = self._load_encoder()
         kw: dict[str, Any] = {
-            "batch_size": self.batch_size,
-            "show_progress_bar": True,
-            "convert_to_numpy": True,
+            "batch_size"          : self.batch_size,
+            "show_progress_bar"   : True,
+            "convert_to_numpy"    : True,
             "normalize_embeddings": True,
         }
         if self._fp16:
@@ -620,15 +623,10 @@ class KNNInterestModel:
             name          = "query embeddings",
         )
 
-        # (n_query, n_pos)
-        pos_sims = query_emb @ self.pos_embeddings.T
-        k        = min(self.k, pos_sims.shape[1])
-        top_k_pos = np.sort(pos_sims, axis=1)[:, -k:].mean(axis=1)  # (n,)
+        top_k_pos = _training.topk_mean_similarity(query_emb, self.pos_embeddings, self.k)
 
         if self.neg_embeddings is not None and self.neg_k > 0 and self.neg_weight > 0:
-            neg_sims = query_emb @ self.neg_embeddings.T  # (n_query, n_neg)
-            nk       = min(self.neg_k, neg_sims.shape[1])
-            top_k_neg = np.sort(neg_sims, axis=1)[:, -nk:].mean(axis=1)
+            top_k_neg = _training.topk_mean_similarity(query_emb, self.neg_embeddings, self.neg_k)
             return cast(
                 np.ndarray,
                 (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
@@ -720,8 +718,13 @@ class KNNInterestModel:
         threshold, fbeta = _training.best_fbeta_threshold(y_true, y_score, self.threshold_beta)
 
         if threshold < min_threshold:
-            _log(f"  阈值 {threshold:.4f} 低于下限 {min_threshold:.4f}，已抬升")
+            _log(
+                f"  阈值 {threshold:.4f} 低于下限 {min_threshold:.4f}，已抬升；"
+                f"最优候选 F{self.threshold_beta:.1f}={fbeta:.4f}"
+            )
             threshold = min_threshold
+            # 返回的分数必须对应最终部署阈值，而不是被下限替换掉的候选阈值。
+            fbeta = _training.fbeta_at_threshold(y_true, y_score, threshold, self.threshold_beta)
 
         self.threshold = threshold
         return threshold, fbeta
@@ -840,16 +843,16 @@ class KNNInterestModel:
 
         # training_config.json（与推理层约定的格式）
         tcfg = {
-            "model_type": "knn",
+            "model_type"        : "knn",
             "runtime_model_path": ".",
-            "model_name": self.encoder_name,
-            "max_len": self.max_len,
-            "optimal_threshold": self.threshold,
-            "input_mode": "title_abstract",
-            "k": self.k,
-            "neg_k": self.neg_k,
-            "neg_weight": self.neg_weight,
-            "train_version": "knn_v1",
+            "model_name"        : self.encoder_name,
+            "max_len"           : self.max_len,
+            "optimal_threshold" : self.threshold,
+            "input_mode"        : "title_abstract",
+            "k"                 : self.k,
+            "neg_k"             : self.neg_k,
+            "neg_weight"        : self.neg_weight,
+            "train_version"     : "knn_v1",
         }
         (model_dir / "training_config.json").write_text(
             json.dumps(tcfg, indent=2), encoding="utf-8"
@@ -923,6 +926,7 @@ def main(config: KNNConfig = CONFIG) -> None:
         encoder_name = config.encoder_name,
         cache_dir    = config.resolved_emb_cache_dir,
         batch_size   = config.batch_size,
+        max_len      = config.max_len,
     )
 
     train_emb = all_emb[train_df["_orig_idx"].to_numpy()]

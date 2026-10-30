@@ -47,27 +47,27 @@ if TYPE_CHECKING:
 class EmojiLibraryEntry:
     """单个有效表情库条目的不可变、提示词安全视图。"""
 
-    media_hash: str
-    file_path: str
-    description: str
-    emotion_tags: tuple[str, ...]
-    usage_count: int
-    last_used_ts: float
-    marker: str
+    media_hash     : str
+    file_path      : str
+    description    : str
+    emotion_tags   : tuple[str, ...]
+    usage_count    : int
+    last_used_ts   : float
+    marker         : str
     source_chat_ids: tuple[str, ...] = ()
-    owner_id: str                    = ""
-    visibility: str                  = "chat"
+    owner_id       : str             = ""
+    visibility     : str             = "chat"
     global_approved: bool            = False
 
 
 @dataclass(frozen=True)
 class _ScannedEmojiFile:
-    file_path: Path
-    media_hash: str
+    file_path      : Path
+    media_hash     : str
     existing_record: dict[str, Any] | None
     perceptual_hash: str
-    file_size: int
-    file_mtime_ns: int
+    file_size      : int
+    file_mtime_ns  : int
 
 
 def _emoji_library_task_key(context) -> str:
@@ -379,14 +379,10 @@ def _read_library_snapshot(
 
     scanned: list[_ScannedEmojiFile] = []
     for file_path in _iter_library_files(library_dir):
-        if not _is_valid_library_image(
-            file_path,
-            max_bytes  = max_bytes,
-            max_pixels = max_pixels,
-            max_frames = max_frames,
-        ):
+        try:
+            file_size, file_mtime_ns = _file_identity(file_path)
+        except OSError:
             continue
-        file_size, file_mtime_ns = _file_identity(file_path)
         matched        = records_by_path.get(str(file_path.resolve()))
         matched_key    = matched[0] if matched else ""
         matched_record = matched[1] if matched else None
@@ -396,6 +392,14 @@ def _read_library_snapshot(
             and str(matched_record.get("media_hash", matched_key) or "").strip() == matched_key
             and _record_matches_file_identity(matched_record, file_size, file_mtime_ns)
         )
+        # 大小和修改时间都没变的文件上次已经完整校验过：使用计数更新引起的重扫不再逐张解码。
+        if not unchanged and not _is_valid_library_image(
+            file_path,
+            max_bytes  = max_bytes,
+            max_pixels = max_pixels,
+            max_frames = max_frames,
+        ):
+            continue
         media_hash      = matched_key if unchanged else _hash_file(file_path)
         existing        = existing_entries.get(media_hash)
         existing_record = existing if isinstance(existing, dict) else None
@@ -475,26 +479,26 @@ def _normalize_entry_record(
         except OSError:
             file_size, file_mtime_ns = -1, -1
     return {
-        "media_hash": entry.media_hash,
-        "file_path": _to_data_relative_path(context, file_path),
-        "description": entry.description,
-        "emotion_tags": list(entry.emotion_tags),
-        "usage_count": entry.usage_count,
-        "last_used_ts": entry.last_used_ts,
-        "marker": entry.marker,
-        "status": status,
-        "source": source,
-        "perceptual_hash": perceptual_hash or str(existing.get("perceptual_hash", "") or ""),
-        "file_size": int(file_size),
-        "file_mtime_ns": int(file_mtime_ns),
+        "media_hash"        : entry.media_hash,
+        "file_path"         : _to_data_relative_path(context, file_path),
+        "description"       : entry.description,
+        "emotion_tags"      : list(entry.emotion_tags),
+        "usage_count"       : entry.usage_count,
+        "last_used_ts"      : entry.last_used_ts,
+        "marker"            : entry.marker,
+        "status"            : status,
+        "source"            : source,
+        "perceptual_hash"   : perceptual_hash or str(existing.get("perceptual_hash", "") or ""),
+        "file_size"         : int(file_size),
+        "file_mtime_ns"     : int(file_mtime_ns),
         "first_collected_ts": first_collected_ts,
-        "last_collected_ts": last_collected_ts,
-        "seen_count": seen_count,
-        "source_chat_id": source_chat_ids[0] if source_chat_ids else "",
-        "source_chat_ids": source_chat_ids,
-        "owner_id": str(existing.get("owner_id", "") or source_user_id or "").strip(),
-        "visibility": visibility,
-        "global_approved": bool(global_approved),
+        "last_collected_ts" : last_collected_ts,
+        "seen_count"        : seen_count,
+        "source_chat_id"    : source_chat_ids[0] if source_chat_ids else "",
+        "source_chat_ids"   : source_chat_ids,
+        "owner_id"          : str(existing.get("owner_id", "") or source_user_id or "").strip(),
+        "visibility"        : visibility,
+        "global_approved"   : bool(global_approved),
     }
 
 
@@ -506,17 +510,22 @@ def _score_record(record: dict[str, Any]) -> tuple[float, float, float]:
     return (usage_count * 3.0 + seen_count, last_used_ts, last_collected_ts)
 
 
-def _remove_library_file(context, record: dict[str, Any]) -> None:
+def _remove_library_file(context, record: dict[str, Any]) -> bool:
+    """删除库内文件；返回 False 表示文件仍在（被占用或路径不在库内），调用方应保留索引。"""
+
     file_path     = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
     allowed_roots = _allowed_emoji_target_dirs(context)
     if not allowed_roots:
-        return
+        return False
     if not _is_path_within_roots(file_path, allowed_roots):
-        return
+        return False
     if file_path.exists():
-        # 自动清理是配额维护，单个文件正被占用时保留索引并在下轮重试。
-        with suppress(OSError):
+        try:
             file_path.unlink()
+        except OSError:
+            # 自动清理是配额维护，单个文件正被占用时保留索引并在下轮重试。
+            return False
+    return True
 
 
 def _safe_target_file_path(
@@ -618,30 +627,32 @@ def _prune_auto_entries(
 
     keep_hashes = keep_hashes or set()
     entries     = payload.setdefault("entries", {})
-    auto_active = [
-        (media_hash, record)
-        for media_hash, record in entries.items()
-        if isinstance(record, dict)
-        and _source_from_record(record) == "auto"
-        and _status_from_record(record) == "active"
-    ]
-    if len(auto_active) <= max_entries:
-        return
-
-    survivors = {
-        media_hash
-        for media_hash, _record in sorted(
-            auto_active,
-            key     = lambda item: (_score_record(item[1]), item[0]),
-            reverse = True,
-        )[:max_entries]
-    }
-    survivors.update(keep_hashes)
-    for media_hash, record in list(auto_active):
-        if media_hash in survivors:
+    # 已启用与待审核的自动条目分别受同一数量上限约束：长期没人审批的收件箱也不能无限增长。
+    for status in ("active", "pending"):
+        auto_entries = [
+            (media_hash, record)
+            for media_hash, record in entries.items()
+            if isinstance(record, dict)
+            and _source_from_record(record) == "auto"
+            and _status_from_record(record) == status
+        ]
+        if len(auto_entries) <= max_entries:
             continue
-        _remove_library_file(context, record)
-        entries.pop(media_hash, None)
+
+        survivors = {
+            media_hash
+            for media_hash, _record in sorted(
+                auto_entries,
+                key     = lambda item: (_score_record(item[1]), item[0]),
+                reverse = True,
+            )[:max_entries]
+        }
+        survivors.update(keep_hashes)
+        for media_hash, record in auto_entries:
+            if media_hash in survivors:
+                continue
+            if _remove_library_file(context, record):
+                entries.pop(media_hash, None)
 
 
 def _is_usable_library_metadata(
@@ -758,6 +769,13 @@ def _collect_emoji_candidate_locked(
     if not target_path.exists():
         _copy_into_library_if_needed(source_path, target_path)
 
+    if existing is not None:
+        # 感知指纹必须与保留的代表图同源：沿用代表图时用它的指纹，否则相似链会逐次漂移。
+        kept_hash = existing.get("perceptual_hash")
+        if isinstance(kept_hash, str) and kept_hash:
+            perceptual_hash = kept_hash
+        elif target_path.exists():
+            perceptual_hash = _average_hash(target_path)
     if existing is not None and record_key != rendered.media_hash:
         # 相似条目沿用代表图的字节，其内容哈希及语义必须同时沿用。
         rendered = replace(
@@ -996,7 +1014,7 @@ async def load_emoji_library(
         return []
 
     retained_entries: dict[str, dict[str, Any]] = {}
-    results: list[EmojiLibraryEntry]            = []
+    results         : list[EmojiLibraryEntry]   = []
     repair_needed                               = False
     for scanned in scanned_files:
         status = _scanned_file_status(context, scanned)

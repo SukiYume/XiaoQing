@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,28 @@ from core.plugin_base import build_action, image, record, text
 from .tasks import ChatRef, Outcome
 
 logger = logging.getLogger(__name__)
+
+# 每发完一部分就回报一次：这次发送带出了哪些附件、结果如何。
+PartReport = Callable[[list[Path], "bool | None"], Awaitable[None]]
+
+
+async def _sent_part(
+    report: PartReport | None,
+    paths: list[Path],
+    sending: Awaitable[bool | None],
+) -> bool | None:
+    """等一次发送并立刻回报；发送途中被取消时这部分可能已经发出，按未知回报后继续取消。"""
+
+    try:
+        sent = await sending
+    except asyncio.CancelledError:
+        if report is not None:
+            await asyncio.shield(report(paths, None))
+        raise
+    if report is not None:
+        await asyncio.shield(report(paths, sent))
+    return sent
+
 
 IMAGE_SUFFIXES  = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
 AUDIO_SUFFIXES  = frozenset({".mp3", ".wav", ".silk", ".amr", ".ogg", ".m4a", ".flac"})
@@ -26,10 +50,10 @@ MAX_UPLOADS     = 5
 def classify_files(paths: list[str]) -> tuple[list[Path], list[Path], list[str]]:
     """拆成可内嵌图片、随后发送的附件和无法发送的说明；重复路径只发一次。"""
 
-    images: list[Path]  = []
-    uploads: list[Path] = []
-    problems: list[str] = []
-    seen: set[Path]     = set()
+    images  : list[Path] = []
+    uploads : list[Path] = []
+    problems: list[str]  = []
+    seen    : set[Path]  = set()
     for raw in paths:
         path = Path(raw).expanduser()
         try:
@@ -100,21 +124,23 @@ async def upload_each(
     context: Any,
     chat: ChatRef,
     uploads: list[Path],
+    *,
+    on_result: PartReport | None = None,
 ) -> list[tuple[Path, bool | None]]:
-    """语音和视频在 QQ 里必须单独成条，其余文件走文件上传；逐个返回发送结果。"""
+    """语音和视频在 QQ 里必须单独成条，其余文件走文件上传；逐个返回并回报发送结果。"""
 
     results: list[tuple[Path, bool | None]] = []
     for path in uploads:
         suffix = path.suffix.lower()
         if suffix in AUDIO_SUFFIXES:
-            sent = await send_message(context, chat, [record(str(path))])
+            sending = send_message(context, chat, [record(str(path))])
         elif suffix in VIDEO_SUFFIXES:
-            sent = await send_message(
+            sending = send_message(
                 context, chat, [{"type": "video", "data": {"file": path.as_uri()}}]
             )
         else:
-            sent = await upload_file(context, chat, path)
-        results.append((path, sent))
+            sending = upload_file(context, chat, path)
+        results.append((path, await _sent_part(on_result, [path], sending)))
     return results
 
 
@@ -123,12 +149,19 @@ class SendReport:
     """一次交付里各部分的发送结果：内嵌图片随文字那条消息，其余附件各自一份。"""
 
     message: bool | None
-    images: list[Path] = field(default_factory=list)
+    images : list[Path] = field(default_factory=list)
     uploads: list[tuple[Path, bool | None]] = field(default_factory=list)
 
     @property
-    def delivered(self) -> bool:
-        return self.message is not False and all(sent is not False for _, sent in self.uploads)
+    def result(self) -> bool | None:
+        """全部明确送达为 ``True``，任一部分失败为 ``False``，其余有未知结果时为 ``None``。"""
+
+        parts = [self.message, *(sent for _, sent in self.uploads)]
+        if any(sent is False for sent in parts):
+            return False
+        if all(sent is True for sent in parts):
+            return True
+        return None
 
 
 async def deliver_outcome(
@@ -136,13 +169,18 @@ async def deliver_outcome(
     chat: ChatRef,
     outcome: Outcome,
     *,
-    mention: bool = False,
+    mention: bool                = False,
+    on_result: PartReport | None = None,
 ) -> SendReport:
-    """主动发回原会话，返回各部分的发送结果；``mention`` 时在群里先 @ 发起人。"""
+    """主动发回原会话，返回各部分的发送结果；``mention`` 时在群里先 @ 发起人。
+
+    ``on_result`` 在每部分发完时立即收到结果，中途取消也不会丢掉已经发出的部分。
+    """
 
     images, _, _ = classify_files(outcome.files)
     message, uploads = outcome_message(outcome)
     if mention and chat.group_id is not None:
         message = [{"type": "at", "data": {"qq": str(chat.user_id)}}, text(" "), *message]
-    sent = await send_message(context, chat, message)
-    return SendReport(sent, images, await upload_each(context, chat, uploads))
+    sent = await _sent_part(on_result, images, send_message(context, chat, message))
+    results = await upload_each(context, chat, uploads, on_result=on_result)
+    return SendReport(sent, images, results)

@@ -36,29 +36,29 @@ class LogEvent:
     """已解析且与原始日志行解耦的最小事件。"""
 
     event_type: LogEventType
-    player: str
-    message: str | None = None
+    player    : str
+    message   : str | None = None
 
 
 @dataclass(slots=True)
 class LogBatch:
     """一次有界轮询的事件、丢弃统计和待提交游标。"""
 
-    events: list[LogEvent]
-    matched_total: int        = 0
-    dropped_events: int       = 0
-    skipped_bytes: int        = 0
-    skipped_lines: int | None = 0
-    cursor_before: int | None = None
-    cursor_after: int | None  = None
-    file_identity: str | None = None
+    events        : list[LogEvent]
+    matched_total : int        = 0
+    dropped_events: int        = 0
+    skipped_bytes : int        = 0
+    skipped_lines : int | None = 0
+    cursor_before : int | None = None
+    cursor_after  : int | None = None
+    file_identity : str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _ReadWindow:
-    content: bytes
+    content      : bytes
     cursor_before: int
-    cursor_after: int
+    cursor_after : int
     file_identity: str
     skipped_bytes: int        = 0
     skipped_lines: int | None = 0
@@ -128,8 +128,8 @@ class LogMonitor:
             return
         AtomicJsonStore(self.state_path).write(
             {
-                "version": 1,
-                "position": position,
+                "version"      : 1,
+                "position"     : position,
                 "file_identity": file_identity,
             }
         )
@@ -337,6 +337,13 @@ class LogMonitor:
             or batch.cursor_after < 0
         ):
             return False
+        if (
+            self._initialized
+            and batch.cursor_after == self._last_position
+            and batch.file_identity == self._file_identity
+        ):
+            # 文件身份与位置都没变：静止日志不必每轮原子写盘。
+            return True
         self._persist_position(batch.cursor_after, batch.file_identity)
         self._last_position = batch.cursor_after
         self._file_identity = batch.file_identity

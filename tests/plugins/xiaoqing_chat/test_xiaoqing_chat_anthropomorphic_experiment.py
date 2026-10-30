@@ -248,14 +248,14 @@ def test_real_experiment_context_exposes_ai_route_without_secrets(tmp_path: Path
         "ai": {
             "providers": {
                 "test": {
-                    "api_base": "https://llm.example/v1",
+                    "api_base"     : "https://llm.example/v1",
                     "endpoint_path": "/chat/completions",
                 }
             },
             "models": {
                 "test-model": {
-                    "provider": "test",
-                    "model": "model-id",
+                    "provider"  : "test",
+                    "model"     : "model-id",
                     "modalities": ["text"],
                 }
             },

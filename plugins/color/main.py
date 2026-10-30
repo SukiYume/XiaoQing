@@ -47,16 +47,16 @@ MAX_CUSTOM_COLORS_PER_SCOPE  = data_manager.MAX_CUSTOM_COLORS_PER_SCOPE
 MAX_CUSTOM_COLOR_NAME_LENGTH = data_manager.MAX_COLOR_NAME_CHARS
 
 _PRIMARY_OPTIONS: dict[ColorAction, tuple[str, ...]] = {
-    "help": ("h", "help"),
-    "catalog": ("l", "list"),
-    "name": ("n", "name"),
-    "rgb": ("r", "rgb"),
-    "hex": ("x", "hex"),
-    "cmyk": ("c", "cmyk"),
-    "keyword": ("a", "accord", "q", "search"),
-    "write": ("w", "write"),
-    "delete": ("d", "delete"),
-    "stellar": ("s", "stellar"),
+    "help"    : ("h", "help"),
+    "catalog" : ("l", "list"),
+    "name"    : ("n", "name"),
+    "rgb"     : ("r", "rgb"),
+    "hex"     : ("x", "hex"),
+    "cmyk"    : ("c", "cmyk"),
+    "keyword" : ("a", "accord", "q", "search"),
+    "write"   : ("w", "write"),
+    "delete"  : ("d", "delete"),
+    "stellar" : ("s", "stellar"),
     "spectype": ("t", "spectype"),
 }
 _PICTURE_OPTIONS    = ("p", "picture")
@@ -106,10 +106,10 @@ class ColorInputError(ValueError):
 
 @dataclass(frozen=True)
 class ColorRequest:
-    action: ColorAction
-    value: str    = ""
+    action : ColorAction
+    value  : str  = ""
     picture: bool = False
-    page: int     = 1
+    page   : int  = 1
 
 
 def _selected_option(parsed: ParsedArgs, aliases: Sequence[str]) -> tuple[str, str] | None:
@@ -640,10 +640,14 @@ def _parse_custom_color(definition: str) -> ColorRecord:
         raise ColorInputError(
             "格式错误；请使用“颜色名 R G B”或“颜色名 #HEX”，例如 /color add 我的红 255 0 0"
         )
-    if len(parts) >= 4 and all(re.fullmatch(r"\d+", part) for part in parts[-3:]):
-        # 完整 RGB 三元组具有优先权，避免把三位蓝色通道解释为短 HEX。
+    numeric = [re.fullmatch(r"[+-]?\d+(?:\.\d+)?", part) is not None for part in parts]
+    if len(parts) >= 4 and all(numeric[-3:]):
+        # 末尾三项都是数字形态即按 RGB 校验：负数、小数和越界值直接报错，
+        # 不能退回去把最后一项当短 HEX、把其余数字并进名称。
         name_parts = parts[:-3]
         rgb = _parse_channels(" ".join(parts[-3:]), label="RGB", count=3, maximum=convert.RGB_MAX)
+    elif len(parts) >= 3 and numeric[-1] and numeric[-2] and not parts[-1].startswith("#"):
+        raise ColorInputError("RGB 需要三个 0–255 的整数，例如 /color add 我的红 255 0 0")
     elif _DIRECT_HEX_PATTERN.fullmatch(parts[-1]) is not None:
         name_parts = parts[:-1]
         try:
@@ -663,11 +667,11 @@ def _parse_custom_color(definition: str) -> ColorRecord:
     if has_control_characters(name):
         raise ColorInputError("颜色名包含控制字符")
     return {
-        "name": name,
+        "name"  : name,
         "pinyin": "",
-        "RGB": rgb,
-        "hex": convert.rgb_to_hex(rgb),
-        "CMYK": convert.rgb_to_cmyk(rgb),
+        "RGB"   : rgb,
+        "hex"   : convert.rgb_to_hex(rgb),
+        "CMYK"  : convert.rgb_to_cmyk(rgb),
     }
 
 

@@ -217,12 +217,12 @@ def _sign_invalid_widget_token(
     issued_at = int(time.time())
     payload   = {
         "owner_id": owner_id,
-        "sub": owner_id,
-        "typ": "pendo-web",
-        "iss": "pendo-web",
-        "exp": expires_at,
-        "iat": issued_at,
-        "kind": "widget",
+        "sub"     : owner_id,
+        "typ"     : "pendo-web",
+        "iss"     : "pendo-web",
+        "exp"     : expires_at,
+        "iat"     : issued_at,
+        "kind"    : "widget",
     }
     if scope is not None:
         payload["scope"] = scope
@@ -416,11 +416,11 @@ def _demo_request() -> Request:
 
     return Request(
         {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/auth/demo",
+            "type"   : "http",
+            "method" : "POST",
+            "path"   : "/api/auth/demo",
             "headers": [],
-            "client": ("127.0.0.1", 12345),
+            "client" : ("127.0.0.1", 12345),
         }
     )
 

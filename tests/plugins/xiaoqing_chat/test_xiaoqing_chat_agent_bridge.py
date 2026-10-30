@@ -41,13 +41,13 @@ def _prepared(
 
 def _event() -> dict:
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
-        "message_id": 99,
-        "sender": {"user_id": 12345, "card": "主人"},
-        "message": [
+        "user_id"     : 12345,
+        "group_id"    : 67890,
+        "message_id"  : 99,
+        "sender"      : {"user_id": 12345, "card": "主人"},
+        "message"     : [
             {"type": "text", "data": {"text": "小青，帮我画个 sin 图"}},
             {"type": "image", "data": {"file": "abc.image", "url": "https://img.example/a.png"}},
             {"type": "image", "data": {"file": "local.png"}},
@@ -92,11 +92,11 @@ def _hctx(tmp_path, agent) -> tuple[HandlerContext, SimpleNamespace]:
 @pytest.fixture
 def quiet_side_effects():
     fakes = {
-        "ensure_user_message_recorded": AsyncMock(return_value="m7"),
-        "schedule_memory_persist": Mock(),
+        "ensure_user_message_recorded" : AsyncMock(return_value="m7"),
+        "schedule_memory_persist"      : Mock(),
         "schedule_action_history_flush": Mock(),
-        "log_step": Mock(),
-        "allocate_local_id": Mock(return_value="m8"),
+        "log_step"                     : Mock(),
+        "allocate_local_id"            : Mock(return_value="m8"),
     }
     with patch.multiple(agent_bridge, **fakes):
         yield fakes
@@ -109,10 +109,10 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             return_value={
-                "handled": True,
-                "segments": [{"type": "text", "data": {"text": "画好了"}}],
+                "handled"   : True,
+                "segments"  : [{"type": "text", "data": {"text": "画好了"}}],
                 "reply_text": "画好了",
-                "task_id": "a1b2c3",
+                "task_id"   : "a1b2c3",
             }
         )
     )
@@ -162,10 +162,10 @@ async def test_reply_receipt_reports_the_delivery_back_to_the_agent(
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             return_value={
-                "handled": True,
-                "segments": [{"type": "text", "data": {"text": "画好了"}}],
+                "handled"   : True,
+                "segments"  : [{"type": "text", "data": {"text": "画好了"}}],
                 "reply_text": "画好了",
-                "task_id": "a1b2c3",
+                "task_id"   : "a1b2c3",
             }
         ),
         report_delivery=AsyncMock(side_effect=RuntimeError("agent unloaded")),
@@ -350,9 +350,9 @@ async def test_bot_name_followup_routes_after_idle_cleanup(
             clock[0] += 5
             other = {
                 **_event(),
-                "user_id": 54321,
-                "message_id": 98,
-                "message": [{"type": "text", "data": {"text": "今天好冷"}}],
+                "user_id"                   : 54321,
+                "message_id"                : 98,
+                "message"                   : [{"type": "text", "data": {"text": "今天好冷"}}],
                 "_xc_user_recorded_local_id": "other",
             }
             state.memory_store.append(
@@ -373,7 +373,7 @@ async def test_bot_name_followup_routes_after_idle_cleanup(
         clock[0] += followup_delay
         event = {
             **_event(),
-            "message": [{"type": "text", "data": {"text": text}}],
+            "message"                   : [{"type": "text", "data": {"text": text}}],
             "_xc_user_recorded_local_id": "current",
         }
         state.memory_store.append(
@@ -588,7 +588,7 @@ async def test_quoted_message_and_downloaded_images_reach_the_agent(tmp_path, qu
     media = SimpleNamespace(
         get_message=AsyncMock(
             return_value={
-                "sender": {"nickname": "甲"},
+                "sender" : {"nickname": "甲"},
                 "message": [
                     {"type": "text", "data": {"text": "这是上个月的数据表"}},
                     {"type": "image", "data": {"url": "https://img.example/quoted.png"}},
@@ -672,10 +672,10 @@ async def test_quoting_the_agent_reply_in_a_group_is_recognized_as_talking_to_th
     agent      = SimpleNamespace(
         handle_turn=AsyncMock(
             return_value={
-                "handled": True,
-                "segments": [{"type": "text", "data": {"text": long_reply}}],
+                "handled"   : True,
+                "segments"  : [{"type": "text", "data": {"text": long_reply}}],
                 "reply_text": long_reply,
-                "task_id": "a1b2c3",
+                "task_id"   : "a1b2c3",
             }
         ),
         report_delivery=AsyncMock(),
@@ -744,10 +744,10 @@ async def test_concurrent_replies_keep_their_own_message_ids(tmp_path):
         agent = SimpleNamespace(
             handle_turn=AsyncMock(
                 return_value={
-                    "handled": True,
-                    "segments": [{"type": "text", "data": {"text": text_value}}],
+                    "handled"   : True,
+                    "segments"  : [{"type": "text", "data": {"text": text_value}}],
                     "reply_text": text_value,
-                    "task_id": task_id,
+                    "task_id"   : task_id,
                 }
             ),
             report_delivery=AsyncMock(),

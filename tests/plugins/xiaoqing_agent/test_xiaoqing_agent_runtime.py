@@ -219,7 +219,7 @@ async def test_delivery_review_uses_tool_facts_and_preserves_files_without_repea
     runner.run.assert_awaited_once()
     assert context.actions == []
     _, messages, kwargs = ai.calls[-2 if valid_review else -1]
-    assert kwargs.get("tools") is None and kwargs["temperature"] == 0.1
+    assert kwargs.get("tools") is None and "temperature" not in kwargs
     assert "你是小青" in messages[0]["content"]
     assert any("中段事实仍需核对" in str(message.get("content")) for message in messages)
     assert "中段事实仍需核对" not in task.command_results[0]
@@ -364,8 +364,8 @@ async def test_slow_task_acknowledges_then_delivers_text_images_and_files(tmp_pa
     assert upload_action["action"] == "upload_group_file"
     assert upload_action["params"] == {
         "group_id": GROUP_ID,
-        "file": str((out / "table.csv").resolve()),
-        "name": "table.csv",
+        "file"    : str((out / "table.csv").resolve()),
+        "name"    : "table.csv",
     }
 
 

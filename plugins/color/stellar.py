@@ -31,9 +31,9 @@ Messages               = list[dict[str, Any]]
 class StellarColor:
     spectral_type: str
     temperature_k: int
-    log_g: float
-    linear_rgb: tuple[float, float, float]
-    hex_value: str
+    log_g        : float
+    linear_rgb   : tuple[float, float, float]
+    hex_value    : str
 
 
 def _parse_stellar_row(line: str, *, line_number: int) -> StellarColor:

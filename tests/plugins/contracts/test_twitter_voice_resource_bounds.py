@@ -88,7 +88,7 @@ def test_twitter_media_extraction_skips_malformed_items_individually():
                                     {"type": "photo"},
                                     {"type": "photo", "media_url_https": None},
                                     {
-                                        "type": "photo",
+                                        "type"           : "photo",
                                         "media_url_https": " https://pbs.twimg.com/ok.png ",
                                     },
                                     {"type": "video"},
@@ -191,10 +191,10 @@ def _voice_context(tmp_path: Path) -> SimpleNamespace:
                 "plugins": {
                     "voice": {
                         "subscription_key": "secret",
-                        "region": "southeastasia",
-                        "voice_name": "zh-CN-XiaomoNeural",
-                        "style": "cheerful",
-                        "role": "Girl",
+                        "region"          : "southeastasia",
+                        "voice_name"      : "zh-CN-XiaomoNeural",
+                        "style"           : "cheerful",
+                        "role"            : "Girl",
                     }
                 }
             },

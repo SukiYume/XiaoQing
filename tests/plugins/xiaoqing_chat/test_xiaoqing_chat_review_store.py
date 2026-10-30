@@ -24,14 +24,14 @@ def _sessions_path(data_dir: Path) -> Path:
 
 def _session_payload(*, created_at: object = 1.0) -> dict[str, object]:
     return {
-        "kind": "goal_strategy",
-        "chat_id": "42",
-        "created_at": created_at,
-        "expires_at": 120.0,
-        "step": 0,
+        "kind"        : "goal_strategy",
+        "chat_id"     : "42",
+        "created_at"  : created_at,
+        "expires_at"  : 120.0,
+        "step"        : 0,
         "last_push_ts": 0.0,
-        "payload": {"goal": "自然聊天"},
-        "answers": [],
+        "payload"     : {"goal": "自然聊天"},
+        "answers"     : [],
     }
 
 
@@ -46,7 +46,7 @@ def test_review_store_recovers_malformed_primary_from_backup(tmp_path: Path) -> 
     path.parent.mkdir(parents=True)
     backup   = path.with_name(f"{path.name}.bak")
     expected = {
-        "active": {"session-1": _session_payload()},
+        "active"     : {"session-1": _session_payload()},
         "last_closed": {},
     }
     backup.write_text(json.dumps(expected, ensure_ascii=False), encoding="utf-8")
@@ -96,7 +96,7 @@ def test_review_store_skips_invalid_entries_and_preserves_original_backup(tmp_pa
     path.parent.mkdir(parents=True)
     original = {
         "active": {
-            "valid": _session_payload(),
+            "valid"  : _session_payload(),
             "invalid": _session_payload(created_at="not-a-number"),
         },
         "last_closed": {"42:goal_strategy": 5.0, "bad": "not-a-number"},
@@ -140,10 +140,10 @@ def test_review_store_quarantines_malformed_policy_and_can_save_replacement(
     )
 
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "goal_override": "保持简洁",
+        "goal_override"  : "保持简洁",
         "goal_lock_until": 30.0,
-        "strategy_note": "避免重复",
-        "avoid_patterns": ["复读"],
+        "strategy_note"  : "避免重复",
+        "avoid_patterns" : ["复读"],
     }
     assert quarantined[0].read_bytes() == original
 
@@ -190,11 +190,12 @@ async def test_review_push_distinguishes_rejection_from_unknown_outcome(
         kind             = "goal_strategy",
         chat_id          = "42",
         payload          = {"goal": "自然聊天"},
-        timeout_seconds  = 60,
+        timeout_seconds  = 120,
         cooldown_seconds = 0,
         now              = 10.0,
     )
     assert session is not None
+    # 推送发生在会话有效期内（10 + 120 > 100）；超时的会话不再推送。
     monkeypatch.setattr(review_sessions.time, "time", lambda: 100.0)
 
     async def send_action(_action: dict) -> bool | None:

@@ -15,6 +15,7 @@ from typing import Any, cast
 from core.args import parse
 from core.delivery import DeliveryReceipt, send_with_receipt
 from core.interfaces import DeliveryTarget, PluginContextProtocol
+from core.lifecycle import to_thread_owned
 from core.message import sender_display_name
 from core.plugin_base import Segments, bounded_external_text, build_action, run_sync, segments
 from core.sensitive_audit import summarize_sensitive
@@ -54,8 +55,8 @@ _PLAYER_PATTERN  = re.compile(r"[A-Za-z0-9_]{1,16}\Z")
 
 @dataclass(frozen=True, slots=True)
 class _ServerConfig:
-    host: str
-    port: int
+    host    : str
+    port    : int
     password: str
     log_file: str
 
@@ -66,7 +67,7 @@ class _MinecraftConfigError(ValueError):
 
 @dataclass(slots=True)
 class _EventTokenBucket:
-    tokens: float     = MC_EVENT_BUCKET_CAPACITY
+    tokens    : float = MC_EVENT_BUCKET_CAPACITY
     updated_at: float = 0.0
 
     def take(self, requested: int, *, now: float) -> int:
@@ -773,7 +774,8 @@ async def _poll_connection(conn: McConnection) -> tuple[McConnection, LogBatch] 
         return None
     if batch.events or batch.dropped_events or batch.skipped_bytes:
         return conn, batch
-    _commit_log_batch(conn, batch)
+    # 需要落盘的提交在线程里完成，等待范围覆盖真实写入，事件循环不被原子替换阻塞。
+    await to_thread_owned(_commit_log_batch, conn, batch)
     return None
 
 
@@ -789,8 +791,8 @@ async def _deliver_log_batch(
         event_total,
     )
 
-    def commit_cursor() -> None:
-        if not _commit_log_batch(conn, batch):
+    async def commit_cursor() -> None:
+        if not await to_thread_owned(_commit_log_batch, conn, batch):
             raise RuntimeError("Minecraft log cursor commit failed")
 
     receipt = DeliveryReceipt(

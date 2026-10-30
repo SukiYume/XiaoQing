@@ -23,17 +23,17 @@ LEGACY_TASK_FIELDS: Final = frozenset(
     {"due_time", "estimate", "subtasks", "dependencies", "progress"}
 )
 
-LEDGER_TRANSACTION_TYPES: Final        = frozenset({"expense", "income", "transfer"})
+LEDGER_TRANSACTION_TYPES       : Final = frozenset({"expense", "income", "transfer"})
 LEDGER_TRANSACTION_TYPE_ALIASES: Final = {
-    "out": "expense",
-    "expense": "expense",
-    "支出": "expense",
-    "in": "income",
-    "income": "income",
-    "收入": "income",
+    "out"     : "expense",
+    "expense" : "expense",
+    "支出"      : "expense",
+    "in"      : "income",
+    "income"  : "income",
+    "收入"      : "income",
     "transfer": "transfer",
-    "xfer": "transfer",
-    "转账": "transfer",
+    "xfer"    : "transfer",
+    "转账"      : "transfer",
 }
 LEDGER_DEFAULT_ACCOUNT   = "现金"
 LEDGER_DEFAULT_CURRENCY  = "CNY"
@@ -99,7 +99,7 @@ TYPE_SPECIFIC_ITEM_FIELDS = {
         "merchant",
         "remark",
     },
-    "note": {"references", "last_viewed", "related_items"},
+    "note" : {"references", "last_viewed", "related_items"},
     "diary": {
         "mood",
         "mood_score",
@@ -128,18 +128,18 @@ DIARY_MOOD_VALUES = {
 }
 
 DIARY_MOOD_ALIASES = {
-    "😊": "happy",
-    "😄": "happy",
-    "😌": "calm",
-    "🤩": "excited",
-    "😢": "sad",
-    "😭": "sad",
-    "😠": "angry",
-    "😡": "angry",
-    "😴": "tired",
-    "😰": "anxious",
-    "🙏": "grateful",
-    "😐": "neutral",
+    "😊" : "happy",
+    "😄" : "happy",
+    "😌" : "calm",
+    "🤩" : "excited",
+    "😢" : "sad",
+    "😭" : "sad",
+    "😠" : "angry",
+    "😡" : "angry",
+    "😴" : "tired",
+    "😰" : "anxious",
+    "🙏" : "grateful",
+    "😐" : "neutral",
     "开心": "happy",
     "平静": "calm",
     "兴奋": "excited",
@@ -514,10 +514,18 @@ def _normalize_ledger_amount(normalized: dict[str, Any], *, partial: bool) -> No
     if partial and not has_cents and not has_amount:
         return
     if has_cents and normalized.get("amount_cents") not in (None, ""):
-        try:
-            cents = int(normalized["amount_cents"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Ledger amount_cents must be an integer") from exc
+        raw = normalized["amount_cents"]
+        # 分值是整数契约：布尔值不是金额，1.9 也不能被截断成 1 分。
+        if isinstance(raw, bool):
+            raise ValueError("Ledger amount_cents must be an integer")
+        if isinstance(raw, int):
+            cents = raw
+        elif isinstance(raw, float) and raw.is_integer():
+            cents = int(raw)
+        elif isinstance(raw, str) and re.fullmatch(r"[0-9]+", raw.strip()):
+            cents = int(raw.strip())
+        else:
+            raise ValueError("Ledger amount_cents must be an integer")
         if cents <= 0:
             raise ValueError("Ledger amount_cents must be greater than 0")
     elif has_amount:
@@ -1012,7 +1020,7 @@ def _normalize_note_references(value: Any) -> list[dict[str, str]]:
         raise ValueError(f"Note references cannot exceed {MAX_NOTE_REFERENCES} entries")
 
     references: list[dict[str, str]] = []
-    seen: set[str]                   = set()
+    seen      : set[str]             = set()
     for raw_reference in value:
         if not isinstance(raw_reference, dict):
             continue
@@ -1022,7 +1030,7 @@ def _normalize_note_references(value: Any) -> list[dict[str, str]]:
         seen.add(reference_id)
         reference = {
             "kind": sanitize_text(str(raw_reference.get("kind") or "item"), 40) or "item",
-            "id": reference_id,
+            "id"  : reference_id,
         }
         for key, limit in (("type", 40), ("title", 200)):
             text = sanitize_text(str(raw_reference.get(key) or ""), limit)
@@ -1042,7 +1050,7 @@ def _normalize_related_item_ids(value: Any) -> list[str]:
         raise ValueError(f"Note related_items cannot exceed {MAX_NOTE_REFERENCES} entries")
 
     related: list[str] = []
-    seen: set[str]     = set()
+    seen   : set[str]  = set()
     for raw_id in value:
         related_id = sanitize_text(str(raw_id or ""), 120)
         if related_id and related_id not in seen:
@@ -1109,32 +1117,35 @@ def _normalize_diary_mood_fields(normalized: dict[str, Any], *, partial: bool) -
     if not partial or "mood" in normalized:
         normalized["mood"] = normalize_diary_mood(mood)
 
-    weather = normalized.get("weather")
-    if weather in (None, ""):
-        normalized["weather"] = ""
-    elif weather is not None:
-        normalized["weather"] = sanitize_text(str(weather), 32)
+    if not partial or "weather" in normalized:
+        weather = normalized.get("weather")
+        if weather in (None, ""):
+            normalized["weather"] = ""
+        elif weather is not None:
+            normalized["weather"] = sanitize_text(str(weather), 32)
 
-    mood_score = normalized.get("mood_score")
-    if mood_score in (None, ""):
-        normalized["mood_score"] = None
-    elif mood_score is not None:
-        try:
-            score = int(mood_score)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Diary mood_score must be an integer") from exc
-        if not 1 <= score <= 10:
-            raise ValueError("Diary mood_score must be between 1 and 10")
-        normalized["mood_score"] = score
+    if not partial or "mood_score" in normalized:
+        mood_score = normalized.get("mood_score")
+        if mood_score in (None, ""):
+            normalized["mood_score"] = None
+        elif mood_score is not None:
+            try:
+                score = int(mood_score)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Diary mood_score must be an integer") from exc
+            if not 1 <= score <= 10:
+                raise ValueError("Diary mood_score must be between 1 and 10")
+            normalized["mood_score"] = score
 
 
 def _normalize_diary_template_fields(normalized: dict[str, Any], *, partial: bool) -> None:
     """规范日记模板、记录时间和收藏状态。"""
-    template_id = normalized.get("template_id")
-    if template_id in (None, ""):
-        normalized["template_id"] = None
-    elif template_id is not None:
-        normalized["template_id"] = sanitize_text(str(template_id), 80) or None
+    if not partial or "template_id" in normalized:
+        template_id = normalized.get("template_id")
+        if template_id in (None, ""):
+            normalized["template_id"] = None
+        elif template_id is not None:
+            normalized["template_id"] = sanitize_text(str(template_id), 80) or None
 
     entry_time = normalized.get("entry_time")
     if not partial or "entry_time" in normalized:
@@ -1169,12 +1180,12 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
     return normalized
 
 
-ItemNormalizer: TypeAlias = Callable[[dict[str, Any], bool], dict[str, Any]]
+ItemNormalizer  : TypeAlias = Callable[[dict[str, Any], bool], dict[str, Any]]
 ITEM_NORMALIZERS: Final[dict[str, ItemNormalizer]] = {
-    "event": normalize_event_fields,
-    "task": normalize_task_fields,
-    "note": normalize_note_fields,
-    "diary": normalize_diary_fields,
+    "event" : normalize_event_fields,
+    "task"  : normalize_task_fields,
+    "note"  : normalize_note_fields,
+    "diary" : normalize_diary_fields,
     "ledger": normalize_ledger_fields,
 }
 

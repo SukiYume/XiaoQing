@@ -32,7 +32,7 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-_MODEL_CACHE: dict[tuple[str, str, int], "MultiInterestInferenceModel"] = {}
+_MODEL_CACHE: dict[tuple[str, str, int, int], "MultiInterestInferenceModel"] = {}
 
 
 # =============================================================================
@@ -42,20 +42,20 @@ _MODEL_CACHE: dict[tuple[str, str, int], "MultiInterestInferenceModel"] = {}
 
 @dataclass(frozen=True, slots=True)
 class ModelArtifacts:
-    encoder_name: str
-    n_interests: int
-    embedding_dim: int
+    encoder_name    : str
+    n_interests     : int
+    embedding_dim   : int
     interest_centers: np.ndarray
-    pos_centroid: np.ndarray
-    neg_centroid: np.ndarray | None
-    classifier: LogisticRegression
-    threshold: float
-    threshold_beta: float
+    pos_centroid    : np.ndarray
+    neg_centroid    : np.ndarray | None
+    classifier      : LogisticRegression
+    threshold       : float
+    threshold_beta  : float
     cluster_keywords: list[str]
-    cluster_sizes: list[int]
+    cluster_sizes   : list[int]
     cluster_examples: list[list[str]]
-    feature_names: list[str]
-    columns: dict[str, str | None]
+    feature_names   : list[str]
+    columns         : dict[str, str | None]
 
 
 # =============================================================================
@@ -64,7 +64,7 @@ class ModelArtifacts:
 
 
 class MultiInterestInferenceModel:
-    def __init__(self, model_dir: str, batch_size: int = 256):
+    def __init__(self, model_dir: str, batch_size: int = 256, max_len: int | None = None):
         self.model_dir = Path(model_dir)
         if type(batch_size) is not int or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
@@ -133,7 +133,10 @@ class MultiInterestInferenceModel:
 
         sentence_transformer = importlib.import_module("sentence_transformers").SentenceTransformer
         self.encoder         = sentence_transformer(artifacts.encoder_name)
-        encoder_dim          = int(self.encoder.get_sentence_embedding_dimension())
+        if max_len is not None:
+            # 与训练相同的截断长度；training_config 中的 max_len 才真正控制编码输入。
+            self.encoder.max_seq_length = int(max_len)
+        encoder_dim = int(self.encoder.get_sentence_embedding_dimension())
         if encoder_dim != expected_dim:
             raise ValueError("encoder output dimension does not match model artifacts")
         self._use_fp16 = torch.cuda.is_available()
@@ -142,9 +145,9 @@ class MultiInterestInferenceModel:
         if not texts:
             return np.zeros((0, self.artifacts.embedding_dim), dtype=np.float32)
         kw: dict[str, Any] = {
-            "batch_size": self.batch_size,
-            "show_progress_bar": False,
-            "convert_to_numpy": True,
+            "batch_size"          : self.batch_size,
+            "show_progress_bar"   : False,
+            "convert_to_numpy"    : True,
             "normalize_embeddings": True,
         }
         if self._use_fp16:
@@ -244,10 +247,13 @@ def run_multi_interest_inference(
         resolved_path,
         resolve_artifact_fingerprint(params, resolved_path),
         int(params.batch_size),
+        int(params.max_len),
     )
     model = _MODEL_CACHE.get(cache_key)
     if model is None:
-        model = MultiInterestInferenceModel(runtime_path, batch_size=params.batch_size)
+        model = MultiInterestInferenceModel(
+            runtime_path, batch_size=params.batch_size, max_len=params.max_len
+        )
         for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
             _MODEL_CACHE.pop(stale_key, None)
         _MODEL_CACHE[cache_key] = model

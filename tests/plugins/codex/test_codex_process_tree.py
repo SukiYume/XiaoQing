@@ -199,81 +199,70 @@ async def _exercise_real_windows_process_tree(pause_stderr: bool) -> None:
     import subprocess
 
     def process_alive(pid: int) -> bool:
-        process_handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-        if not process_handle:
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
             return False
         try:
-            exit_code = ctypes.c_ulong()
-            if not ctypes.windll.kernel32.GetExitCodeProcess(
-                process_handle,
-                ctypes.byref(exit_code),
-            ):
+            code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                 return False
-            return exit_code.value == 259
+            return code.value == 259
         finally:
-            ctypes.windll.kernel32.CloseHandle(process_handle)
+            ctypes.windll.kernel32.CloseHandle(handle)
 
     grandchild_code = "import time; time.sleep(60)"
     child_code      = (
         "import subprocess,sys,time; "
         f"grandchild=subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
-        "print(grandchild.pid, flush=True); "
-        "time.sleep(60)"
+        "print(grandchild.pid, flush=True); time.sleep(60)"
     )
     parent_code = (
         "import subprocess,sys,time; "
-        f"child=subprocess.Popen([sys.executable, '-c', {child_code!r}], "
-        "stdout=subprocess.PIPE, text=True); "
+        f"child=subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.PIPE, text=True); "
         "grandchild_pid=child.stdout.readline().strip(); "
-        "print(f'{child.pid} {grandchild_pid}', flush=True); "
-        "time.sleep(60)"
+        "print(f'{child.pid} {grandchild_pid}', flush=True); time.sleep(60)"
     )
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    process       = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
         parent_code,
         stdout        = asyncio.subprocess.PIPE,
         stderr        = asyncio.subprocess.PIPE,
-        creationflags = creationflags,
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
     )
-    assert process.stdout is not None
-    child_pid, grandchild_pid = map(
-        int,
-        (await asyncio.wait_for(process.stdout.readline(), timeout=5)).split(),
-    )
-    pipes = [process._transport.get_pipe_transport(fd) for fd in (1, 2)]
-    if pause_stderr:
-        # 缓冲区背压会暂停读取，进程退出时仍可能留有未收尾的输出管道。
-        assert process.stderr is not None
-        process.stderr.feed_data(b"x" * (256 * 1024))
-        assert not pipes[1].is_reading()
-
+    descendants = []
     try:
-        result = await runner.terminate_process_tree(
-            process,
-            helper_timeout_seconds = 5,
-            kill_timeout_seconds   = 5,
+        assert process.stdout is not None
+        descendants = list(
+            map(int, (await asyncio.wait_for(process.stdout.readline(), timeout=5)).split())
         )
-
+        assert len(descendants) == 2
+        assert all(process_alive(pid) for pid in descendants)
+        pipes = [process._transport.get_pipe_transport(fd) for fd in (1, 2)]
+        if pause_stderr:
+            assert process.stderr is not None
+            process.stderr.feed_data(b"x" * (256 * 1024))
+            assert not pipes[1].is_reading()
+        result = await runner.terminate_process_tree(
+            process, helper_timeout_seconds=5, kill_timeout_seconds=5
+        )
         assert result.parent_reaped is True
         assert result.tree_confirmed is True
-        for _ in range(100):
-            if not process_alive(child_pid) and not process_alive(grandchild_pid):
-                break
-            await asyncio.sleep(0.05)
-        assert process_alive(child_pid) is False
-        assert process_alive(grandchild_pid) is False
+        async with asyncio.timeout(5):
+            while any(process_alive(pid) for pid in descendants):
+                await asyncio.sleep(0.05)
     finally:
         if process.returncode is None:
-            process.kill()
-            await process.wait()
-        for pid in (child_pid, grandchild_pid):
+            await runner.terminate_process_tree(
+                process, helper_timeout_seconds=5, kill_timeout_seconds=5
+            )
+        for pid in descendants:
             if process_alive(pid):
                 subprocess.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
                     check          = False,
                     capture_output = True,
+                    timeout        = 10,
                 )
         await runner._drain_process_after_termination(process)
     assert all(pipe.is_closing() for pipe in pipes)
@@ -322,10 +311,10 @@ async def test_real_posix_parent_and_term_ignoring_child_are_reaped():
         stderr            = asyncio.subprocess.PIPE,
         start_new_session = True,
     )
-    assert process.stdout is not None
-    child_pid = int((await asyncio.wait_for(process.stdout.readline(), timeout=2)).strip())
-
+    child_pid = None
     try:
+        assert process.stdout is not None
+        child_pid = int((await asyncio.wait_for(process.stdout.readline(), timeout=2)).strip())
         result = await runner.terminate_process_tree(
             process,
             term_grace_seconds   = 0.2,
@@ -337,9 +326,11 @@ async def test_real_posix_parent_and_term_ignoring_child_are_reaped():
             os.kill(child_pid, 0)
     finally:
         if process.returncode is None:
-            process.kill()
-            await process.wait()
-        try:
-            os.kill(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            await runner.terminate_process_tree(
+                process, term_grace_seconds=0.2, kill_timeout_seconds=2
+            )
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

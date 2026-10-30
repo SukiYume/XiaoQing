@@ -7,10 +7,10 @@ from typing import Any
 from .client import BridgeError, request_json
 
 WEATHER_CODES = {
-    0: "晴",
-    1: "大部晴朗",
-    2: "局部多云",
-    3: "阴",
+    0 : "晴",
+    1 : "大部晴朗",
+    2 : "局部多云",
+    3 : "阴",
     45: "雾",
     48: "冻雾",
     51: "小毛毛雨",

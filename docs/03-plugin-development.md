@@ -670,16 +670,24 @@ def commit() -> None:
     mark_sent(receipt.message_ids)  # 发出后各条消息的 ID；长回复被拆成几条时每条都有
 
 
+def unknown() -> None:
+    # 已交给传输层但没有回执：消息可能已经发出，也可能没有，message_ids 可能为空。
+    # 不能当作确认送达，也不能回滚到可以重新领取的状态，否则可能重复投递。
+    mark_delivery_unknown()
+
+
 receipt = DeliveryReceipt(
     expected_actions = 1,
     commit           = commit,
     rollback         = release_reservation,
-    unknown          = commit,
+    unknown          = unknown,
 )
 return DeliverySegments(reply, receipt)
 ```
 
 Core 等全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`。
+未知结果需要业务自己决定取舍：公告类可以按 at-most-once 视为完成以避免重复，
+需要可靠送达的业务应保留可查询的“未知”状态，并在帮助和 README 中写明这一策略。
 回调都至多执行一次。
 主动发送使用 `send_with_receipt(context.send_action, action, receipt)`。
 长文本由 Core 按消息段边界自动拆分，也可用 `split_message_segments()` 自行拆分。

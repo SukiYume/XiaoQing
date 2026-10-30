@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from tests.helpers.qingssh_test_support import (
     EXIT_CODE_TIMEOUT,
-    AsyncMock,
-    Mock,
-    asyncio,
-    pytest,
     qingssh_main,
     ssh_manager_module,
 )
@@ -19,9 +19,9 @@ def _manager(tmp_path) -> ssh_manager_module.SSHManager:
     manager         = ssh_manager_module.SSHManager(tmp_path)
     manager.servers = {
         "lab": {
-            "host": "10.0.0.5",
-            "port": 22,
-            "username": "astro",
+            "host"        : "10.0.0.5",
+            "port"        : 22,
+            "username"    : "astro",
             "password_ref": "secret-ref-should-not-leak",
         },
         "edge": {"host": "edge.example", "port": 2222, "username": "ops", "proxyjump": "bastion"},
@@ -56,9 +56,9 @@ async def test_service_command_uses_a_private_connection_and_always_disconnects(
     result = await manager.run_service_command("lab", "uptime", timeout=12.5)
 
     assert result == {
-        "ok": True,
+        "ok"       : True,
         "exit_code": 0,
-        "output": "line 1\nline 2\n",
+        "output"   : "line 1\nline 2\n",
         "truncated": False,
         "timed_out": False,
     }
@@ -111,14 +111,14 @@ async def test_service_command_cancellation_still_disconnects(monkeypatch, tmp_p
 
     async def stream(*_args, **_kwargs):
         started.set()
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
 
     monkeypatch.setattr(manager, "connect", AsyncMock(return_value=(True, "ok")))
     monkeypatch.setattr(manager, "execute_command_stream", stream)
     monkeypatch.setattr(manager, "disconnect", disconnect)
 
     running = asyncio.create_task(manager.run_service_command("lab", "sleep 99", timeout=60))
-    await started.wait()
+    await asyncio.wait_for(started.wait(), timeout=10)
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
         await running
@@ -200,7 +200,7 @@ async def test_manager_shutdown_cancels_agent_commands_still_running(monkeypatch
     monkeypatch.setattr(manager, "run_service_command", hang)
     monkeypatch.setattr(manager, "close_all", lambda: None)
     pending = manager.start_service_command("lab", "sleep 3600", timeout=60)
-    await started.wait()
+    await asyncio.wait_for(started.wait(), timeout=10)
 
     await manager.shutdown()
 

@@ -17,7 +17,7 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 | [06 - Configuration](06-configuration.md) | Configuration fields, secrets, AI routing, network security, and live reload | Deployers and administrators |
 | [07 - Advanced topics](07-advanced.md) | Permissions, background tasks, scheduling, service capabilities, performance, and deployment modes | Advanced developers |
 | [08 - Message flow](08-message-flow.md) | The complete path from a OneBot event to a reply | Troubleshooters and framework maintainers |
-| [09 - Plugin manual](09-plugins.md) | Purpose, commands, configuration, and data for 31 built-in plugins. command and scheduled-task indexes | Users and administrators |
+| [09 - Plugin manual](09-plugins.md) | Purpose, commands, configuration, and data for 32 built-in plugins. command and scheduled-task indexes | Users and administrators |
 | [Pendo Scriptable widget](pendo-scriptable-widget.md) | Authentication, script, and setup for the iPhone widget | Pendo users |
 | [Changelog (Chinese)](../../CHANGELOG.md) | Version changes, affected functions, and verification results | Users and maintainers |
 

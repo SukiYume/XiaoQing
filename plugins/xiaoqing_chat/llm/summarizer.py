@@ -26,10 +26,10 @@ from .prompt_builder import ChatMessage, build_dialogue_prompt
 class TopicSummary:
     """一条写入缓存和向量索引的话题摘要。"""
 
-    topic_id: str
-    topic: str
-    keywords: list[str]
-    summary: str
+    topic_id  : str
+    topic     : str
+    keywords  : list[str]
+    summary   : str
     key_points: list[str]
     updated_at: float
 
@@ -63,10 +63,10 @@ def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: list[dict[str, Any]] = [
         {
-            "topic_id": topic.topic_id,
-            "topic": topic.topic,
-            "keywords": topic.keywords,
-            "summary": topic.summary,
+            "topic_id"  : topic.topic_id,
+            "topic"     : topic.topic,
+            "keywords"  : topic.keywords,
+            "summary"   : topic.summary,
             "key_points": topic.key_points,
             "updated_at": topic.updated_at,
         }
@@ -137,8 +137,8 @@ def _persist_current_topic_summary(
             + "\n- ".join(summary.key_points)
         ),
         meta={
-            "type": "topic_summary",
-            "chat_id": chat_id,
+            "type"    : "topic_summary",
+            "chat_id" : chat_id,
             "keywords": summary.keywords,
         },
     )
@@ -183,9 +183,10 @@ async def maybe_update_topic_summary(
     msgs = build_topic_messages(bot_name=bot_name, history=history[-min(40, len(history)) :])
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
     out          = await chat_completions(
+        route                  = "reasoning",
         secrets                = secrets,
         messages               = payload_msgs,
-        temperature            = min(0.6, llm.temperature),
+        temperature            = llm.temperature,
         top_p                  = llm.top_p,
         max_tokens             = llm.max_tokens,
         timeout_seconds        = llm.timeout_seconds,

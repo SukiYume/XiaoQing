@@ -39,18 +39,19 @@ def test_compaction_and_append_share_one_path_lock(monkeypatch, tmp_path: Path) 
                 finished.set()
 
     first = threading.Thread(target=append, args=("q1", "a1"))
-    first.start()
-    assert entered_atomic_write.wait(timeout=2.0)
-
     second = threading.Thread(
         target=append, args=("q2", "a2"), kwargs={"finished": second_finished}
     )
-    second.start()
-    assert not second_finished.wait(timeout=0.05)
-
-    release_atomic_write.set()
-    first.join(timeout=2.0)
-    second.join(timeout=2.0)
+    first.start()
+    try:
+        assert entered_atomic_write.wait(timeout=2.0)
+        second.start()
+        assert not second_finished.wait(timeout=0.05)
+    finally:
+        release_atomic_write.set()
+        first.join(timeout=2.0)
+        if second.ident is not None:
+            second.join(timeout=2.0)
 
     assert not first.is_alive()
     assert not second.is_alive()

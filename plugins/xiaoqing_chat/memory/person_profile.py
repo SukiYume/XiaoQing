@@ -16,11 +16,11 @@ from .memory_db import MemoryDB
 
 @dataclass
 class PersonProfile:
-    chat_id: str
-    subject_id: int
+    chat_id     : str
+    subject_id  : int
     subject_name: str
-    facts: list[str]
-    updated_at: float
+    facts       : list[str]
+    updated_at  : float
 
 
 def _profile_path(data_dir: Path, chat_id: str, subject_id: int) -> Path:
@@ -87,11 +87,11 @@ def save_profile(data_dir: Path, profile: PersonProfile) -> None:
     path = _profile_path(data_dir, str(profile.chat_id), profile.subject_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "chat_id": profile.chat_id,
-        "subject_id": profile.subject_id,
+        "chat_id"     : profile.chat_id,
+        "subject_id"  : profile.subject_id,
         "subject_name": profile.subject_name,
-        "facts": profile.facts,
-        "updated_at": profile.updated_at,
+        "facts"       : profile.facts,
+        "updated_at"  : profile.updated_at,
     }
     write_json(path, payload)
 
@@ -144,9 +144,9 @@ def update_profile_and_index(
         doc_id = f"profile:{chat_id}:{subject_id}",
         text   = profile_text,
         meta   = {
-            "type": "person_profile",
-            "chat_id": chat_id,
-            "subject_id": subject_id,
+            "type"        : "person_profile",
+            "chat_id"     : chat_id,
+            "subject_id"  : subject_id,
             "subject_name": existing.subject_name,
         },
     )

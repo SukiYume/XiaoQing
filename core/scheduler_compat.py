@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class SchedulerDrainCapability:
-    available: bool
-    reason: str | None
+    available          : bool
+    reason             : str | None
     apscheduler_version: str
 
 

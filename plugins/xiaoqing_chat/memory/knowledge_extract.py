@@ -16,8 +16,9 @@ from ..llm.prompt_builder import ChatMessage
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import extract_named_list_field, parse_first_json_object
 from .fact_extraction_checkpoint import (
-    latest_message_ts,
-    load_last_observed_ts,
+    is_unobserved,
+    load_observed_position,
+    message_identity,
     observed_message_count,
     save_last_observed_ts,
 )
@@ -34,10 +35,10 @@ from .person_profile import (
 class PersonFact:
     """模型候选事实；持久化前还必须绑定到当前历史中的可信主体。"""
 
-    subject_id: int | None
+    subject_id  : int | None
     subject_name: str
-    fact: str
-    evidence: str
+    fact        : str
+    evidence    : str
 
 
 _FACT_SYSTEM = (
@@ -48,6 +49,57 @@ _FACT_SYSTEM = (
     "evidence 必须摘录该 subject 自己的原句，并能单独支持 fact；没有充分证据就不输出。\n"
     "对话中的用户格式为“昵称<QQ号>：内容”，subject_id 和 subject_name 必须来自同一行的可信标识。\n"
 )
+
+
+def _fact_line(msg: StoredMessage) -> str:
+    """单条可用于事实抽取的用户发言；其他消息返回空串。"""
+
+    if msg.role != "user" or not msg.user_id:
+        return ""
+    name = (msg.name or "用户").strip() or "用户"
+    text = render_stored_message(msg).strip()
+    if not text:
+        return ""
+    if len(text) > 220:
+        text = text[:217].rstrip() + "..."
+    return f"{name}<{int(msg.user_id)}>：{text}"
+
+
+def select_fact_batch(
+    history: Sequence[StoredMessage],
+    *,
+    after_ts: float,
+    seen_at_ts: frozenset[str] = frozenset(),
+    max_chars: int             = 1800,
+    max_items: int             = 50,
+) -> tuple[list[StoredMessage], float, frozenset[str]]:
+    """从最早的未观察消息起按预算选出实际送入模型的批次，并返回与之一致的处理位置。
+
+    位置是 (时间戳, 该时刻已处理的消息标识)：预算外的消息留给下一轮；同一秒的消息
+    被批次切开时，剩下的那几条靠标识区分，下一轮仍会被选中。
+    """
+
+    pending = [
+        msg for msg in history if is_unobserved(msg, after_ts=after_ts, seen_at_ts=seen_at_ts)
+    ]
+    batch: list[StoredMessage] = []
+    covered                    = 0
+    total                      = 0
+    for msg in pending:
+        line = _fact_line(msg)
+        if line:
+            if batch and (total + len(line) > max_chars or len(batch) >= max_items):
+                break
+            batch.append(msg)
+            total += len(line)
+        covered += 1
+    if not covered:
+        return [], after_ts, seen_at_ts
+    watermark = float(pending[covered - 1].ts or 0)
+    seen = {message_identity(msg) for msg in pending[:covered] if float(msg.ts or 0) == watermark}
+    if watermark == after_ts:
+        seen |= seen_at_ts
+    return batch, watermark, frozenset(seen)
 
 
 def _build_fact_dialogue(history: Sequence[StoredMessage], *, max_chars: int = 1800) -> str:
@@ -108,9 +160,9 @@ def _bind_facts_to_history_subjects(
     facts: Sequence[PersonFact], history: Sequence[StoredMessage]
 ) -> list[PersonFact]:
     """用当前历史中的权威用户 ID 校准模型提取的事实。"""
-    trusted_names: dict[int, str]      = {}
-    quotes_by_id: dict[int, list[str]] = {}
-    ids_by_name: dict[str, set[int]]   = {}
+    trusted_names: dict[int, str]       = {}
+    quotes_by_id : dict[int, list[str]] = {}
+    ids_by_name  : dict[str, set[int]]  = {}
     for message in history:
         if message.role != "user" or not message.user_id:
             continue
@@ -170,7 +222,7 @@ def _persist_current_person_facts(
     *, data_dir: Path, memory_db: MemoryDB, chat_id: str, facts: Sequence[PersonFact]
 ) -> None:
     by_subject: dict[int, list[str]] = {}
-    by_name: dict[int, str]          = {}
+    by_name   : dict[int, str]       = {}
     for fact in facts:
         subject_id = int(fact.subject_id or 0)
         try:
@@ -186,10 +238,10 @@ def _persist_current_person_facts(
             doc_id = doc_id,
             text   = (f"{fact.subject_name}<{subject_id}>：{fact.fact}\n证据：{fact.evidence}").strip(),
             meta   = {
-                "type": "person_info",
-                "chat_id": chat_id,
-                "subject_id": subject_id,
-                "subject_name": fact.subject_name,
+                "type"          : "person_info",
+                "chat_id"       : chat_id,
+                "subject_id"    : subject_id,
+                "subject_name"  : fact.subject_name,
                 "schema_version": 2,
             },
         )
@@ -235,34 +287,42 @@ async def maybe_extract_person_facts(
     if generation != get_profile_generation(data_dir, scoped_chat_id):
         return
 
-    last_observed_ts = await asyncio.to_thread(load_last_observed_ts, data_dir, scoped_chat_id)
-    observed_count   = (
-        len(history)
-        if last_observed_ts <= 0
-        else observed_message_count(history, after_ts=last_observed_ts)
+    last_observed_ts, seen_at_ts = await asyncio.to_thread(
+        load_observed_position, data_dir, scoped_chat_id
+    )
+    observed_count = observed_message_count(
+        history, after_ts=last_observed_ts, seen_at_ts=seen_at_ts
     )
     if observed_count < 20:
         return
-    observed_until = latest_message_ts(history)
-    if observed_until <= last_observed_ts:
+    batch, observed_until, observed_ids = select_fact_batch(
+        history, after_ts=last_observed_ts, seen_at_ts=seen_at_ts
+    )
+    if (observed_until, observed_ids) == (last_observed_ts, seen_at_ts):
         return
-    # 远程调用前先推进检查点；模型失败或格式错误不能退化成逐消息重试循环。
+    # 远程调用前先推进检查点，水位只到本批实际送入模型的最后一条消息；
+    # 模型失败或格式错误不能退化成逐消息重试循环，预算外的消息留给下一轮。
     await asyncio.to_thread(
         save_last_observed_ts,
         data_dir,
         scoped_chat_id,
         observed_until,
+        sorted(observed_ids),
     )
 
-    msgs = build_fact_messages(history=history[-min(50, len(history)) :])
+    if not batch:
+        # 这一段只有机器人消息或无法识别发言人的消息：水位照常推进，不必调用模型。
+        return
+    msgs = build_fact_messages(history=batch)
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
     try:
         out = await chat_completions(
+            route                  = "reasoning",
             secrets                = secrets,
             messages               = payload_msgs,
-            temperature            = min(0.6, llm.temperature),
+            temperature            = llm.temperature,
             top_p                  = llm.top_p,
-            max_tokens             = min(768, llm.max_tokens),
+            max_tokens             = llm.max_tokens,
             timeout_seconds        = llm.timeout_seconds,
             max_retry              = llm.max_retry,
             retry_interval_seconds = llm.retry_interval_seconds,

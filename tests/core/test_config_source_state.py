@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
 import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
     _MAX_CONFIG_SOURCE_BYTES,
     _MAX_CONFIG_TREE_DEPTH,
     _MAX_CONFIG_TREE_NODES,
-    Any,
     ConfigLoadError,
     ConfigManager,
     ConfigSourceStatus,
-    Path,
-    json,
-    pytest,
 )
 
 config_file     = _fixture_support.config_file
@@ -96,7 +98,7 @@ class TestConfigSourceStateModel:
         before  = config_manager.snapshot()
         rotated = {
             "admin_user_ids": [999],
-            "plugins": {"echo": {"api_key": "for-new-config-only"}},
+            "plugins"       : {"echo": {"api_key": "for-new-config-only"}},
         }
         config_file.write_text("{broken", encoding="utf-8")
         secrets_file.write_text(json.dumps(rotated), encoding="utf-8")

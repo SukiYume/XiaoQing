@@ -36,7 +36,7 @@ from .media_evidence import (
 
 @dataclass(frozen=True)
 class ChatMessage:
-    role: str
+    role   : str
     content: str
 
 
@@ -278,9 +278,9 @@ def _current_turn_target_block(
         text = str(current_text or "").strip()
         return f"现在{sender}说的：{text}。引起了你的注意" if text else ""
 
-    text_parts: list[str]    = []
+    text_parts   : list[str] = []
     media_markers: list[str] = []
-    media_kinds: list[str]   = []
+    media_kinds  : list[str] = []
     addressed_to_bot         = False
     for part in parts:
         kind = str(part.get("kind", "") or "").strip()
@@ -531,9 +531,9 @@ def _untrusted_context_block(
     context = {
         key: value.strip()[:1200]
         for key, value in {
-            "retrieved_memory": memory_block,
+            "retrieved_memory"         : memory_block,
             "learned_expression_habits": expression_habits_block,
-            "chat_jargon_explanations": jargon_explanation,
+            "chat_jargon_explanations" : jargon_explanation,
         }.items()
         if value.strip()
     }

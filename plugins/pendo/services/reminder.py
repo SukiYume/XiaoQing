@@ -52,10 +52,10 @@ class ReminderService:
         messages.extend(self._check_unconfirmed_repeats())
         sent_count = len(messages)
         return {
-            "status": "success",
-            "sent": sent_count,
+            "status"  : "success",
+            "sent"    : sent_count,
             "messages": messages,
-            "message": f"发送了{sent_count}条提醒",
+            "message" : f"发送了{sent_count}条提醒",
         }
 
     def _collect_initial_reminders(self) -> list[dict[str, Any]]:
@@ -251,9 +251,11 @@ class ReminderService:
         settings: dict[str, Any],
     ) -> bool:
         """判断重复间隔、最大次数和静默时段是否允许本次投递。"""
-        repeat_count       = int(log["repeat_count"])
-        last_sent_at       = self._parse_user_time(str(log["last_sent_at"]), item.owner_id)
-        seconds_since_last = (user_now - last_sent_at).total_seconds()
+        repeat_count = int(log["repeat_count"])
+        last_sent_at = self._parse_user_time(str(log["last_sent_at"]), item.owner_id)
+        # 持续时间在 UTC 时间轴上计算：同一 ZoneInfo 的 datetime 相减按钟面差，
+        # 夏令时回拨或跳时会得到负值或错误间隔。本地时间只用于静默时段判断。
+        seconds_since_last = user_now.timestamp() - last_sent_at.timestamp()
         if repeat_count >= PendoConfig.REMINDER_MAX_REPEATS + 1:
             if seconds_since_last >= PendoConfig.REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS:
                 self.db.confirm_reminder(
@@ -324,15 +326,15 @@ class ReminderService:
         identity = f"{item.id}\0{remind_time_str}\0{attempt}".encode()
         context  = getattr(item, "context", None)
         return {
-            "user_id": item.owner_id,
-            "group_id": context.get("group_id") if isinstance(context, dict) else None,
-            "message": message,
-            "item_id": item.id,
-            "remind_time": remind_time_str,
-            "claim_token": claim_token,
-            "claim_kind": claim_kind,
+            "user_id"           : item.owner_id,
+            "group_id"          : context.get("group_id") if isinstance(context, dict) else None,
+            "message"           : message,
+            "item_id"           : item.id,
+            "remind_time"       : remind_time_str,
+            "claim_token"       : claim_token,
+            "claim_kind"        : claim_kind,
             "claim_repeat_count": repeat_count,
-            "delivery_key": f"pendo-reminder-{hashlib.sha256(identity).hexdigest()}",
+            "delivery_key"      : f"pendo-reminder-{hashlib.sha256(identity).hexdigest()}",
         }
 
     def confirm_reminder(
@@ -392,10 +394,10 @@ class ReminderService:
             if not (end_dt <= item_start or start_dt >= item_end):
                 conflicts.append(
                     {
-                        "id": item.id,
-                        "title": item.title,
+                        "id"        : item.id,
+                        "title"     : item.title,
                         "start_time": item_start_text,
-                        "end_time": getattr(item, "end_time", None),
+                        "end_time"  : getattr(item, "end_time", None),
                     }
                 )
 

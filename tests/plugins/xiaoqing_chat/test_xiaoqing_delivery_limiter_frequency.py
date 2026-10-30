@@ -117,8 +117,8 @@ async def test_observer_cancellation_cannot_rollback_delivered_reply() -> None:
     app._notify_outgoing_action_observers = AsyncMock(side_effect=asyncio.CancelledError)
     action = attach_receipt(
         {
-            "action": "send_group_msg",
-            "params": {"group_id": 1, "message": []},
+            "action"        : "send_group_msg",
+            "params"        : {"group_id": 1, "message": []},
             "_source_plugin": "example",
         },
         receipt,
@@ -223,9 +223,9 @@ async def test_generation_limiter_sweeps_expired_unique_users(
     monkeypatch.setattr("plugins.xiaoqing_chat.generation_limiter.time.time", lambda: clock[0])
     limiter = GenerationLimiter(max_tracked_users=3, sweep_interval_seconds=0.0)
     kwargs = {
-        "max_global": 0,
-        "max_per_chat": 0,
-        "max_per_user": 0,
+        "max_global"                : 0,
+        "max_per_chat"              : 0,
+        "max_per_user"              : 0,
         "max_calls_per_user_per_day": 10,
     }
     for index in range(3):
@@ -247,9 +247,9 @@ async def test_generation_limiter_rejects_new_keys_at_capacity(
     monkeypatch.setattr("plugins.xiaoqing_chat.generation_limiter.time.time", lambda: 100_000.0)
     limiter = GenerationLimiter(max_tracked_users=2, sweep_interval_seconds=0.0)
     kwargs = {
-        "max_global": 0,
-        "max_per_chat": 0,
-        "max_per_user": 0,
+        "max_global"                : 0,
+        "max_per_chat"              : 0,
+        "max_per_user"              : 0,
         "max_calls_per_user_per_day": 10,
     }
     for user_id in ("u1", "u2"):

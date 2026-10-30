@@ -21,10 +21,10 @@ _COMMON_STORAGE_DATETIME_FIELDS: Final = (
     "deleted_at",
 )
 _ITEM_STORAGE_DATETIME_FIELDS: Final = {
-    "event": ("start_time", "end_time"),
-    "task": ("deadline_at", "completed_at", "cancelled_at"),
-    "note": ("last_viewed",),
-    "diary": ("entry_time",),
+    "event" : ("start_time", "end_time"),
+    "task"  : ("deadline_at", "completed_at", "cancelled_at"),
+    "note"  : ("last_viewed",),
+    "diary" : ("entry_time",),
     "ledger": (),
 }
 _ALL_STORAGE_DATETIME_FIELDS: Final = frozenset(
@@ -313,14 +313,14 @@ def parse_date_optional(date_str: str, now: datetime | None = None) -> str | Non
 
     # 相对日期
     relative = {
-        "今天": 0,
-        "today": 0,
-        "昨天": -1,
+        "今天"       : 0,
+        "today"    : 0,
+        "昨天"       : -1,
         "yesterday": -1,
-        "明天": 1,
-        "tomorrow": 1,
-        "后天": 2,
-        "前天": -2,
+        "明天"       : 1,
+        "tomorrow" : 1,
+        "后天"       : 2,
+        "前天"       : -2,
     }
     if lowered in relative:
         return (now + timedelta(days=relative[lowered])).strftime("%Y-%m-%d")
@@ -368,16 +368,16 @@ def _calendar_keyword_ranges(now: datetime) -> dict[str, tuple[datetime, datetim
     tomorrow_start = day_start + timedelta(days=1)
     tomorrow_end = day_end + timedelta(days=1)
     return {
-        "today": (day_start, day_end),
-        "今天": (day_start, day_end),
+        "today"   : (day_start, day_end),
+        "今天"      : (day_start, day_end),
         "tomorrow": (tomorrow_start, tomorrow_end),
-        "明天": (tomorrow_start, tomorrow_end),
-        "week": (week_start, week_end),
-        "本周": (week_start, week_end),
-        "month": (month_start, month_end),
-        "本月": (month_start, month_end),
-        "year": (year_start, year_end),
-        "今年": (year_start, year_end),
+        "明天"      : (tomorrow_start, tomorrow_end),
+        "week"    : (week_start, week_end),
+        "本周"      : (week_start, week_end),
+        "month"   : (month_start, month_end),
+        "本月"      : (month_start, month_end),
+        "year"    : (year_start, year_end),
+        "今年"      : (year_start, year_end),
     }
 
 

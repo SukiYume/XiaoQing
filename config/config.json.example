@@ -49,6 +49,11 @@
         "log_rotation": "time",
         "ai": {
                 "providers": {
+                        "openai": {
+                                "api_base": "https://api.openai.com/v1",
+                                "endpoint_path": "/chat/completions",
+                                "proxy": ""
+                        },
                         "deepseek": {
                                 "api_base": "https://api.deepseek.com",
                                 "endpoint_path": "/chat/completions",
@@ -61,6 +66,14 @@
                         }
                 },
                 "models": {
+                        "chatgpt": {
+                                "provider": "openai",
+                                "model": "chat-latest",
+                                "modalities": [
+                                        "text",
+                                        "image"
+                                ]
+                        },
                         "deepseek-flash": {
                                 "provider": "deepseek",
                                 "model": "deepseek-flash",
@@ -130,6 +143,8 @@
                                 "routes": {
                                         "plan": {
                                                 "models": ["deepseek-flash"],
+                                                "temperature": 0,
+                                                "max_tokens": 1600,
                                                 "timeout_seconds": 25,
                                                 "total_timeout_seconds": 28,
                                                 "max_retry": 0
@@ -180,48 +195,82 @@
                         "ai": {
                                 "routes": {
                                         "agent": {
-                                                "models": ["deepseek-pro", "deepseek-flash"],
+                                                "models": [
+                                                        "chatgpt",
+                                                        "deepseek-pro",
+                                                        "deepseek-flash"
+                                                ],
                                                 "timeout_seconds": 180,
                                                 "total_timeout_seconds": 400,
-                                                "max_retry": 1
+                                                "max_retry": 1,
+                                                "temperature": 0.2
                                         },
                                         "triage": {
-                                                "models": ["deepseek-flash", "glm-5.2"],
+                                                "models": [
+                                                        "chatgpt",
+                                                        "deepseek-flash",
+                                                        "glm-5.2"
+                                                ],
                                                 "timeout_seconds": 15,
                                                 "total_timeout_seconds": 20,
-                                                "max_retry": 1
+                                                "max_retry": 1,
+                                                "temperature": 0.1
                                         }
                                 }
                         }
                 },
                 "xiaoqing_chat": {
                         "ai": {
-                                "default_model_alias": "deepseek",
                                 "model_aliases": {
                                         "deepseek": "deepseek-flash",
                                         "glm": "glm-5.2"
                                 },
                                 "routes": {
                                         "chat": {
-                                                "models": ["deepseek-flash", "glm-5.2"],
+                                                "models": [
+                                                        "chatgpt",
+                                                        "deepseek-flash",
+                                                        "glm-5.2"
+                                                ],
                                                 "timeout_seconds": 15,
                                                 "total_timeout_seconds": 60,
                                                 "max_retry": 2,
-                                                "retry_interval_seconds": 0.5
+                                                "retry_interval_seconds": 0.5,
+                                                "temperature": 0.8,
+                                                "top_p": 0.9,
+                                                "max_tokens": 768
                                         },
                                         "checker": {
-                                                "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"],
-                                                "request_defaults": {"thinking": {"type": "disabled"}},
+                                                "models": [
+                                                        "deepseek-flash-thinking",
+                                                        "deepseek-pro",
+                                                        "glm-5.2"
+                                                ],
+                                                "request_defaults": {
+                                                        "thinking": {
+                                                                "type": "disabled"
+                                                        }
+                                                },
                                                 "timeout_seconds": 8,
-                                                "total_timeout_seconds": 20,
-                                                "max_retry": 0
+                                                "total_timeout_seconds": 30,
+                                                "max_retry": 0,
+                                                "temperature": 0.0,
+                                                "top_p": 0.8,
+                                                "max_tokens": 8192
                                         },
                                         "reasoning": {
-                                                "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"],
+                                                "models": [
+                                                        "deepseek-flash-thinking",
+                                                        "deepseek-pro",
+                                                        "glm-5.2"
+                                                ],
                                                 "timeout_seconds": 15,
                                                 "total_timeout_seconds": 45,
                                                 "max_retry": 1,
-                                                "retry_interval_seconds": 0.5
+                                                "retry_interval_seconds": 0.5,
+                                                "temperature": 0.6,
+                                                "top_p": 0.9,
+                                                "max_tokens": 2048
                                         },
                                         "vision": {
                                                 "models": [
@@ -233,7 +282,10 @@
                                                 "timeout_seconds": 20,
                                                 "total_timeout_seconds": 70,
                                                 "max_retry": 1,
-                                                "retry_interval_seconds": 0.5
+                                                "retry_interval_seconds": 0.5,
+                                                "temperature": 0.2,
+                                                "top_p": 0.9,
+                                                "max_tokens": 800
                                         }
                                 }
                         }

@@ -9,14 +9,14 @@ from ..utils.constants import ItemRarity, ItemType
 class Item:
     """从内置道具表构建的只读式领域数据。"""
 
-    name: str
+    name     : str
     item_type: ItemType
-    rarity: ItemRarity
+    rarity   : ItemRarity
 
-    price: int         = 0
-    hunger_gain: int   = 0
-    mood_gain: int     = 0
-    health_gain: int   = 0
-    clean_gain: int    = 0
-    exp_gain: int      = 0
+    price        : int = 0
+    hunger_gain  : int = 0
+    mood_gain    : int = 0
+    health_gain  : int = 0
+    clean_gain   : int = 0
+    exp_gain     : int = 0
     trustee_hours: int = 0

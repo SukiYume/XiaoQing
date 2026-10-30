@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 
@@ -40,11 +41,11 @@ def _display_fields(row: JsonObject, collection: JsonObject | None) -> JsonObjec
         category = category or collection.get("category") or ""
 
     return {
-        "title": title,
-        "display_title": title,
+        "title"           : title,
+        "display_title"   : title,
         "display_subtitle": subtitle,
-        "location": location,
-        "category": category,
+        "location"        : location,
+        "category"        : category,
     }
 
 
@@ -69,19 +70,19 @@ def _event_entries(
                     date.fromisoformat(day),
                     {
                         **item_dict,
-                        "id": getattr(item, "id", ""),
-                        "title": display["title"],
-                        "display_title": display["display_title"],
+                        "id"              : getattr(item, "id", ""),
+                        "title"           : display["title"],
+                        "display_title"   : display["display_title"],
                         "display_subtitle": display["display_subtitle"],
-                        "node_title": row["title"],
-                        "collection": event_collection,
-                        "start_time": row["start_time"],
-                        "end_time": row["end_time"],
-                        "start_epoch_ms": row["start_epoch_ms"],
-                        "end_epoch_ms": row["end_epoch_ms"],
-                        "location": display["location"],
-                        "category": display["category"],
-                        "entry_kind": row["kind"],
+                        "node_title"      : row["title"],
+                        "collection"      : event_collection,
+                        "start_time"      : row["start_time"],
+                        "end_time"        : row["end_time"],
+                        "start_epoch_ms"  : row["start_epoch_ms"],
+                        "end_epoch_ms"    : row["end_epoch_ms"],
+                        "location"        : display["location"],
+                        "category"        : display["category"],
+                        "entry_kind"      : row["kind"],
                     },
                 ),
             )
@@ -104,6 +105,16 @@ def _local_datetime(
     if value.tzinfo is not None:
         return value.astimezone(user_timezone).replace(tzinfo=None, microsecond=0)
     return value.replace(microsecond=0)
+
+
+def _unique_occurrences(payloads: Iterable[JsonObject]) -> list[JsonObject]:
+    """按日程身份与发生时刻去重，并按开始时间排序。"""
+
+    unique: dict[tuple[object, object, object], JsonObject] = {}
+    for payload in payloads:
+        key = (payload.get("id"), payload.get("start_time"), payload.get("end_time"))
+        unique.setdefault(key, payload)
+    return sorted(unique.values(), key=lambda event: event.get("start_time") or "")
 
 
 def _scheduled_events(
@@ -205,8 +216,8 @@ def build_dashboard_overview(
     tasks_completed = db.get_items(
         owner_id,
         filters={
-            "type": "task",
-            "status": "done",
+            "type"      : "task",
+            "status"    : "done",
             "sort_field": "updated_at",
             "sort_order": "DESC",
         },
@@ -217,10 +228,10 @@ def build_dashboard_overview(
     recent_ledger = db.get_items(
         owner_id,
         filters={
-            "type": "ledger",
+            "type"      : "ledger",
             "date_field": "ledger_date",
             "start_date": month_start_date.isoformat(),
-            "end_date": today,
+            "end_date"  : today,
             "sort_field": "ledger_date",
             "sort_order": "DESC",
         },
@@ -231,20 +242,20 @@ def build_dashboard_overview(
     month_ledger = db.aggregate_ledger_amounts_by_day(
         owner_id,
         {
-            "type": "ledger",
+            "type"      : "ledger",
             "date_field": "ledger_date",
             "start_date": month_start_date.isoformat(),
-            "end_date": today,
+            "end_date"  : today,
         },
     )
 
     by_currency = db.aggregate_ledger_by_currency(
         owner_id,
         {
-            "type": "ledger",
+            "type"      : "ledger",
             "date_field": "ledger_date",
             "start_date": month_start_date.isoformat(),
-            "end_date": today,
+            "end_date"  : today,
         },
     )
 
@@ -261,19 +272,18 @@ def build_dashboard_overview(
 
     scheduled_events = _scheduled_events(db, owner_id, month_start_date, coverage_end_date)
 
-    events_month = [
+    # 跨天日程按覆盖的自然日展开成多行；事项列表与计数只保留每次发生的一条，
+    # 否则一条三天的日程会算作三场，并在“即将到来”里挤掉其他安排。
+    events_month = _unique_occurrences(
         payload
         for display_day, payload in scheduled_events
         if month_start_date <= display_day <= month_end_date
-    ]
-    events_month.sort(key=lambda event: event.get("start_time") or "")
-
-    events_agenda = [
+    )
+    events_agenda = _unique_occurrences(
         payload
         for display_day, payload in scheduled_events
         if month_start_date <= display_day <= agenda_end_date
-    ]
-    events_agenda.sort(key=lambda event: event.get("start_time") or "")
+    )
 
     recent_diary_count, recent_completed_count = _recent_counts(
         db,
@@ -296,23 +306,23 @@ def build_dashboard_overview(
 
     return {
         "summary": {
-            "events_month": len(events_month),
-            "tasks_pending": active_task_count,
-            "tasks_done_recent": recent_completed_count,
+            "events_month"        : len(events_month),
+            "tasks_pending"       : active_task_count,
+            "tasks_done_recent"   : recent_completed_count,
             "ledger_month_expense": round(month_expense, 2),
-            "diary_month": recent_diary_count,
+            "diary_month"         : recent_diary_count,
         },
-        "events_month": events_month,
+        "events_month" : events_month,
         "events_agenda": events_agenda,
-        "tasks": {
-            "active": [item_to_dict(task) for task in active_tasks],
+        "tasks"        : {
+            "active"   : [item_to_dict(task) for task in active_tasks],
             "completed": [item_to_dict(task) for task in tasks_completed[:4]],
         },
-        "recent_ledger": [item_to_dict(item) for item in recent_ledger],
-        "spending_trend": spending_trend,
+        "recent_ledger"     : [item_to_dict(item) for item in recent_ledger],
+        "spending_trend"    : spending_trend,
         "ledger_by_currency": by_currency,
-        "month_summary": {
-            "income": round(month_income, 2),
+        "month_summary"     : {
+            "income" : round(month_income, 2),
             "expense": round(month_expense, 2),
             "balance": round(month_income - month_expense, 2),
         },

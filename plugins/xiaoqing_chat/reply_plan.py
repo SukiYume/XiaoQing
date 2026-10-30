@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
 from .brain_chat import (
     get_brain_chat_max_context,
-    get_brain_chat_temperature,
     persona_reply_style,
 )
 from .chat_event import event_chat_id, is_private_event
@@ -119,39 +118,38 @@ def _merge_planner_reasoning(action_reasoning: str, plan_reasoning: str) -> str:
 
 @dataclass(frozen=True)
 class ReplyGenerationPlan:
-    text: str
-    event: dict[str, Any]
-    context: Any
-    runtime: ChatRuntime
-    state: Any
-    forced: bool
-    action: PlannedAction
-    bot_name: str
-    chat_id: str
-    is_private: bool
-    history: Any
-    earlier_history: tuple[Any, ...]
-    max_context_size: int
-    chat_temperature: float
-    secrets: dict[str, Any]
-    model: str
-    foreground: Any
-    request_id: str
-    profile_block: str
-    policy_block: str
-    knowledge_block: str
-    expression_block: str
+    text              : str
+    event             : dict[str, Any]
+    context           : Any
+    runtime           : ChatRuntime
+    state             : Any
+    forced            : bool
+    action            : PlannedAction
+    bot_name          : str
+    chat_id           : str
+    is_private        : bool
+    history           : Any
+    earlier_history   : tuple[Any, ...]
+    max_context_size  : int
+    secrets           : dict[str, Any]
+    model             : str
+    foreground        : Any
+    request_id        : str
+    profile_block     : str
+    policy_block      : str
+    knowledge_block   : str
+    expression_block  : str
     jargon_explanation: str
-    keyword_rules: tuple[Any, ...]
-    regex_rules: tuple[Any, ...]
-    merged_reasoning: str
-    effective_goal: str
-    tool_info_block: str
+    keyword_rules     : tuple[Any, ...]
+    regex_rules       : tuple[Any, ...]
+    merged_reasoning  : str
+    effective_goal    : str
+    tool_info_block   : str
     effective_identity: str
-    effective_style: str
-    state_text: str
-    started_at: float
-    media_candidates: str = ""
+    effective_style   : str
+    state_text        : str
+    started_at        : float
+    media_candidates  : str = ""
     # 只对这一条的额外要求（比如告别收尾），叠加在人设的说话方式之后。
     turn_note: str = ""
 
@@ -252,7 +250,6 @@ async def prepare_reply_generation(
     chat_id          = event_chat_id(event)
     is_private       = is_private_event(event)
     max_context_size = get_brain_chat_max_context(runtime, is_brain_chat)
-    chat_temperature = get_brain_chat_temperature(runtime, is_brain_chat)
 
     history, earlier_history = await _load_reply_history(runtime, state, chat_id, max_context_size)
     started_at = time.monotonic()
@@ -262,11 +259,11 @@ async def prepare_reply_generation(
         chat_id = chat_id,
         step    = "reply.generate.start",
         fields  = {
-            "forced": forced,
-            "brain_chat": is_brain_chat,
-            "think_level": action.think_level,
+            "forced"       : forced,
+            "brain_chat"   : is_brain_chat,
+            "think_level"  : action.think_level,
             "history_items": len(history),
-            "text": text,
+            "text"         : text,
         },
     )
 
@@ -339,7 +336,6 @@ async def prepare_reply_generation(
         history            = history,
         earlier_history    = earlier_history,
         max_context_size   = max_context_size,
-        chat_temperature   = chat_temperature,
         secrets            = resolved_secrets,
         model              = resolved_secrets.get("model", ""),
         foreground         = foreground,

@@ -17,6 +17,7 @@ from core.ai import AIModelInfo
 from core.interfaces import PluginCapabilities
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.llm.gateway import LLMError
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.media.emoji_library import collect_emoji_candidate, load_emoji_library
 from plugins.xiaoqing_chat.media.event_media import (
     RenderedMedia,
@@ -27,7 +28,6 @@ from plugins.xiaoqing_chat.media.event_media import (
 )
 from plugins.xiaoqing_chat.media.event_media_analysis import (
     _load_and_prepare_media_for_llm,
-    _media_llm_max_tokens,
     _prepare_media_for_llm,
     _resolve_media_llm_secret_candidates,
     _semantic_retry_reason,
@@ -113,7 +113,7 @@ def _raw_media_response(
         {
             "choices": [
                 {
-                    "message": {"content": content},
+                    "message"      : {"content": content},
                     "finish_reason": finish_reason,
                 }
             ]
@@ -129,18 +129,16 @@ def _make_media_runtime(**media_overrides):
     media_cfg.max_analyze_bytes              = 1024 * 1024
     media_cfg.enable_emoji_refine_background = False
     media_cfg.enable_meme_cultural_hint      = False
-    media_cfg.vision_timeout_seconds         = 5.0
-    media_cfg.vision_max_retry               = 0
-    media_cfg.vision_retry_interval_seconds  = 0.1
     for key, value in media_overrides.items():
         setattr(media_cfg, key, value)
-    cfg.temperature                             = 0.7
-    cfg.top_p                                   = 0.9
-    cfg.max_tokens                              = 256
-    cfg.foreground_max_retry                    = 0
-    cfg.foreground_retry_interval_seconds       = 0.2
-    cfg.background_max_retry                    = 1
-    cfg.background_retry_interval_seconds       = 0.2
+    cfg._llm_configs["vision"] = LLMCallConfig(
+        timeout_seconds        = 5,
+        max_retry              = 0,
+        retry_interval_seconds = 0.1,
+        temperature            = 0.2,
+        top_p                  = 0.9,
+        max_tokens             = 800,
+    )
     cfg.goal.enable_goal                        = False
     cfg.reflection.enable_expression_reflection = False
     cfg.reflection.enable_review_sessions       = False
@@ -176,21 +174,21 @@ def mock_context(tmp_path: Path):
     context.secrets = {
         "plugins": {
             "xiaoqing_chat": {
-                "default": "test",
+                "default"  : "test",
                 "providers": {
                     "test": {
-                        "api_base": "http://test",
-                        "api_key": "key",
-                        "model": "model",
+                        "api_base"     : "http://test",
+                        "api_key"      : "key",
+                        "model"        : "model",
                         "endpoint_path": "/v1/chat/completions",
                     }
                 },
                 "vision": {
                     "providers": {
                         "glm-4v": {
-                            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-                            "api_key": "vision-key",
-                            "model": "glm-4v",
+                            "api_base"     : "https://open.bigmodel.cn/api/paas/v4",
+                            "api_key"      : "vision-key",
+                            "model"        : "glm-4v",
                             "endpoint_path": "/chat/completions",
                         }
                     }
@@ -230,7 +228,6 @@ __all__ = (
     "_load_and_prepare_media_for_llm",
     "looks_like_structured_media_text",
     "_make_media_runtime",
-    "_media_llm_max_tokens",
     "_prepare_media_for_llm",
     "_raw_media_response",
     "read_file_bounded",

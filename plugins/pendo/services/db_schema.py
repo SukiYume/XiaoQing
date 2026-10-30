@@ -42,6 +42,19 @@ def _sqlite_local_date(value: Any, timezone_name: Any) -> str:
         return ""
 
 
+def _sqlite_local_wall(value: object, timezone_name: str) -> str:
+    """待办筛选沿用本地墙钟比较，并把有效值固定为可排序格式。"""
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(ZoneInfo(timezone_name))
+    return parsed.replace(tzinfo=None).isoformat(timespec="microseconds")
+
+
 def _sqlite_utc_epoch(value: Any, timezone_name: Any) -> float | None:
     """按显式时区把存储的墙钟时间转换为绝对排序键。"""
 
@@ -508,6 +521,7 @@ def configure_connection(connection: sqlite3.Connection) -> None:
     connection.create_function("pendo_casefold", 1, _sqlite_casefold, deterministic=True)
     connection.create_function("pendo_local_date", 2, _sqlite_local_date, deterministic=True)
     connection.create_function("pendo_utc_epoch", 2, _sqlite_utc_epoch, deterministic=True)
+    connection.create_function("pendo_local_wall", 2, _sqlite_local_wall, deterministic=True)
 
 
 def _create_event_projection_triggers(cursor: sqlite3.Cursor) -> None:
@@ -523,24 +537,49 @@ def _create_event_projection_triggers(cursor: sqlite3.Cursor) -> None:
         end_time = (SELECT MAX(COALESCE(end_time, start_time)) FROM items WHERE event_collection_id = event_collections.id AND deleted = 0),
         version = version + 1
         WHERE deleted = 0 AND EXISTS (SELECT 1 FROM items WHERE event_collection_id = event_collections.id AND deleted = 0)""")
-    for operation, reference, condition in (
-        ("INSERT", "NEW.event_collection_id", "NEW.event_collection_id IS NOT NULL"),
-        ("DELETE", "OLD.event_collection_id", "OLD.event_collection_id IS NOT NULL"),
+    # 只有影响投影的列真正变化时才重算整组聚合：批量修改分类、提醒等字段不再让每一行都
+    # 扫描全部子节点。其他子节点变化仍递增集合版本，旧表单照常收到冲突。
+    # 聚合子查询带上 type='event' AND deleted=0，才能命中 idx_items_event_collection 部分索引。
+    # 每次初始化都按当前定义重建触发器，已有数据库同样升级到新的触发条件。
+    in_collection = "(OLD.event_collection_id IS NOT NULL OR NEW.event_collection_id IS NOT NULL)"
+    unchanged     = (
+        "NEW.start_time IS OLD.start_time AND NEW.end_time IS OLD.end_time"
+        " AND NEW.deleted IS OLD.deleted AND NEW.type IS OLD.type"
+        " AND NEW.event_collection_id IS OLD.event_collection_id"
+    )
+    cursor.execute("DROP TRIGGER IF EXISTS event_collection_version_update")
+    cursor.execute(f"""
+        CREATE TRIGGER event_collection_version_update
+        AFTER UPDATE ON items WHEN {in_collection} AND {unchanged}
+        BEGIN
+            UPDATE event_collections SET
+                version = version + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+            WHERE id = NEW.event_collection_id AND deleted = 0;
+        END
+    """)
+    for operation, event, reference, condition in (
+        ("insert", "INSERT", "NEW.event_collection_id", "NEW.event_collection_id IS NOT NULL"),
+        ("delete", "DELETE", "OLD.event_collection_id", "OLD.event_collection_id IS NOT NULL"),
         (
+            "update",
             "UPDATE",
             "OLD.event_collection_id, NEW.event_collection_id",
-            "OLD.event_collection_id IS NOT NULL OR NEW.event_collection_id IS NOT NULL",
+            f"{in_collection} AND NOT ({unchanged})",
         ),
     ):
+        cursor.execute(f"DROP TRIGGER IF EXISTS event_collection_projection_{operation}")
         cursor.execute(f"""
-            CREATE TRIGGER IF NOT EXISTS event_collection_projection_{operation.lower()}
-            AFTER {operation} ON items WHEN {condition}
+            CREATE TRIGGER event_collection_projection_{operation}
+            AFTER {event} ON items WHEN {condition}
             BEGIN
                 UPDATE event_collections SET
                     start_time = (SELECT MIN(start_time) FROM items
-                                  WHERE event_collection_id = event_collections.id AND deleted = 0),
+                                  WHERE event_collection_id = event_collections.id
+                                    AND type = 'event' AND deleted = 0),
                     end_time = (SELECT MAX(COALESCE(end_time, start_time)) FROM items
-                                WHERE event_collection_id = event_collections.id AND deleted = 0),
+                                WHERE event_collection_id = event_collections.id
+                                  AND type = 'event' AND deleted = 0),
                     version = version + 1,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
                 WHERE id IN ({reference}) AND deleted = 0;

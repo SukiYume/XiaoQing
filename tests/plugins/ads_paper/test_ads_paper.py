@@ -27,9 +27,9 @@ async def test_search_delivers_titles_and_links_promised_by_command_help() -> No
         search_papers=AsyncMock(
             return_value=[
                 {
-                    "title": ["A repeating fast radio burst"],
-                    "author": ["Spitler, L."],
-                    "year": "2016",
+                    "title"  : ["A repeating fast radio burst"],
+                    "author" : ["Spitler, L."],
+                    "year"   : "2016",
                     "bibcode": "2016Natur.531..202S",
                 }
             ]
@@ -81,10 +81,6 @@ async def test_search_timeout_reaches_command_error_boundary(tmp_path, monkeypat
 # ============================================================
 # Tests
 # ============================================================
-
-
-class TestAdsPaperRuntimeContract:
-    """Verify the installed package imports and exposes its real entrypoints."""
 
 
 @pytest.mark.asyncio

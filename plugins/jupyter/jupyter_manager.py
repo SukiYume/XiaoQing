@@ -50,7 +50,7 @@ _PNG_FORMAT_EXTENSIONS = {"PNG": ".png"}
 
 # 可选依赖允许安装后重试，因此失败状态不是永久缓存。
 JUPYTER_AVAILABLE         = False
-IMPORT_ERROR: str | None  = None
+IMPORT_ERROR : str | None = None
 KernelManager: Any | None = None
 _IMPORT_LOCK              = threading.Lock()
 
@@ -79,15 +79,15 @@ def validate_png_bytes(image_data: object) -> bool:
 class KernelCleanupReport:
     """保留分阶段的尽力清理结果，供隔离决策、诊断和测试使用。"""
 
-    context: str
-    channels_stopped: bool | None   = None
-    shutdown_succeeded: bool | None = None
-    resources_cleaned: bool | None  = None
-    fallback_methods: list[str] = field(default_factory=list)
-    fallback_succeeded: bool | None = None
-    alive_after: bool | None        = None
-    orphan_confirmed_absent: bool   = True
-    errors: list[str] = field(default_factory=list)
+    context                : str
+    channels_stopped       : bool | None = None
+    shutdown_succeeded     : bool | None = None
+    resources_cleaned      : bool | None = None
+    fallback_methods       : list[str] = field(default_factory=list)
+    fallback_succeeded     : bool | None = None
+    alive_after            : bool | None = None
+    orphan_confirmed_absent: bool        = True
+    errors                 : list[str] = field(default_factory=list)
 
     def record_error(self, stage: str, exc: BaseException | None = None) -> None:
         """只保留阶段与异常类型，避免诊断报告携带路径或凭据正文。"""
@@ -136,10 +136,10 @@ class _ExecutionState:
     """记录可能仍在线程中运行的 I/O，保证取消时可以等待其收敛。"""
 
     kernel_was_running: bool
-    pending_task: asyncio.Task[Any] | None  = None
-    pending_kind: str | None                = None
-    recovery_task: asyncio.Task[str] | None = None
-    msg_id: str | None                      = None
+    pending_task      : asyncio.Task[Any] | None = None
+    pending_kind      : str | None               = None
+    recovery_task     : asyncio.Task[str] | None = None
+    msg_id            : str | None               = None
 
 
 def lazy_import_jupyter() -> None:
@@ -162,9 +162,9 @@ def lazy_import_jupyter() -> None:
 
 
 class JupyterKernelManager:
-    _instances: ClassVar[dict[str, JupyterKernelManager]]       = {}
-    _quarantined_instances: ClassVar[set[JupyterKernelManager]] = set()
-    _instances_lock                                             = threading.Lock()
+    _instances            : ClassVar[dict[str, JupyterKernelManager]] = {}
+    _quarantined_instances: ClassVar[set[JupyterKernelManager]]       = set()
+    _instances_lock                                                   = threading.Lock()
 
     def __init__(self, data_dir: Path):
         self.data_dir    = Path(data_dir)
@@ -540,7 +540,8 @@ class JupyterKernelManager:
         """在没有执行占用时重新确认空闲状态，并按需关闭内核。"""
 
         async with self._execute_lock:
-            if not self.is_running:
+            # is_running 要拿线程锁并探测内核进程；启动、重启持锁期间不能卡住事件循环。
+            if not await asyncio.to_thread(lambda: self.is_running):
                 return True
             idle_time = time.monotonic() - self._last_activity
             if idle_time <= AUTO_SHUTDOWN_TIMEOUT:
@@ -573,11 +574,11 @@ class JupyterKernelManager:
                 return {"running": False, "message": "内核未启动"}
             uptime = time.monotonic() - self._started_at if self._started_at else 0.0
             return {
-                "running": True,
-                "kernel_name": str(getattr(self._km, "kernel_name", "unknown")),
-                "uptime": uptime,
+                "running"        : True,
+                "kernel_name"    : str(getattr(self._km, "kernel_name", "unknown")),
+                "uptime"         : uptime,
                 "execution_count": self._execution_count,
-                "message": f"内核运行中 (已执行 {self._execution_count} 次, 运行 {uptime:.0f}s)",
+                "message"        : f"内核运行中 (已执行 {self._execution_count} 次, 运行 {uptime:.0f}s)",
             }
 
     def start_kernel(self, kernel_name: str = "python3") -> bool:
@@ -1004,7 +1005,9 @@ except ImportError:
                 result,
                 budget,
                 total_image_bytes,
-                include_text=msg_type == "execute_result",
+                # display_data 只有文本表示时同样呈现；同时带 PNG 时文本只是图像的替代说明。
+                include_text=msg_type == "execute_result"
+                or not (isinstance(content.get("data"), dict) and "image/png" in content["data"]),
             )
         elif msg_type == "error":
             exceeded = self._process_error_message(content, result, budget)
@@ -1098,7 +1101,9 @@ except ImportError:
                 )
             except (TimeoutError, QueueEmpty):
                 continue
-            action, total_image_bytes = self._process_iopub_message(
+            # PNG 解码与完整校验（单张最多 2000 万像素）放在工作线程里执行。
+            action, total_image_bytes = await asyncio.to_thread(
+                self._process_iopub_message,
                 message,
                 str(state.msg_id),
                 result,

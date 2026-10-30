@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from ...models.item import get_item_type_value
 from ...services.db import Database
@@ -32,24 +32,24 @@ from ..utils import (
 router = APIRouter()
 
 DEFAULT_DATE_FIELDS: Final[dict[str | None, str]] = {
-    "event": "start_time",
-    "task": "plan_date",
-    "diary": "diary_date",
+    "event" : "start_time",
+    "task"  : "plan_date",
+    "diary" : "diary_date",
     "ledger": "ledger_date",
-    "note": "created_at",
-    None: "created_at",
+    "note"  : "created_at",
+    None    : "created_at",
 }
 
 ALLOWED_DATE_FIELDS_BY_TYPE: Final[dict[str | None, frozenset[str]]] = {
-    "event": frozenset({"created_at", "start_time", "end_time"}),
-    "task": frozenset({"created_at", "plan_date", "deadline_at", "completed_at", "cancelled_at"}),
-    "diary": frozenset({"created_at", "diary_date", "entry_time"}),
+    "event" : frozenset({"created_at", "start_time", "end_time"}),
+    "task"  : frozenset({"created_at", "plan_date", "deadline_at", "completed_at", "cancelled_at"}),
+    "diary" : frozenset({"created_at", "diary_date", "entry_time"}),
     "ledger": frozenset({"created_at", "ledger_date"}),
-    "note": frozenset({"created_at"}),
-    None: frozenset(Database.ALLOWED_DATE_FIELDS),
+    "note"  : frozenset({"created_at"}),
+    None    : frozenset(Database.ALLOWED_DATE_FIELDS),
 }
 
-DATE_ONLY_FIELDS: Final    = frozenset({"plan_date", "diary_date", "ledger_date"})
+DATE_ONLY_FIELDS   : Final = frozenset({"plan_date", "diary_date", "ledger_date"})
 ALLOWED_SORT_FIELDS: Final = frozenset(Database._ALLOWED_SORT_FIELDS)
 
 
@@ -140,10 +140,10 @@ LEDGER_MUTABLE_FIELDS: Final = frozenset(
 )
 
 MUTABLE_FIELDS_BY_TYPE: Final[dict[str, frozenset[str]]] = {
-    "event": EVENT_MUTABLE_FIELDS,
-    "task": TASK_MUTABLE_FIELDS,
-    "note": NOTE_MUTABLE_FIELDS,
-    "diary": DIARY_MUTABLE_FIELDS,
+    "event" : EVENT_MUTABLE_FIELDS,
+    "task"  : TASK_MUTABLE_FIELDS,
+    "note"  : NOTE_MUTABLE_FIELDS,
+    "diary" : DIARY_MUTABLE_FIELDS,
     "ledger": LEDGER_MUTABLE_FIELDS,
 }
 
@@ -188,58 +188,58 @@ UPDATE_FIELD_DEPENDENCIES: Final[dict[str, tuple[FieldDependency, ...]]] = {
 class _ItemPayload(BaseModel):  # type: ignore[misc]
     """创建与更新接口共用的可写字段。"""
 
-    title: str | None      = None
-    content: str | None    = None
-    tags: list[str] | None = None
-    category: str | None   = None
+    title   : str | None       = None
+    content : str | None       = None
+    tags    : list[str] | None = None
+    category: str | None       = None
     # 日程字段
-    start_time: str | None                      = None
-    end_time: str | None                        = None
-    location: str | None                        = None
-    timezone: str | None                        = None
-    remind_times: list[str] | None              = None
+    start_time    : str | None                  = None
+    end_time      : str | None                  = None
+    location      : str | None                  = None
+    timezone      : str | None                  = None
+    remind_times  : list[str] | None            = None
     reminder_rules: list[dict[str, Any]] | None = None
-    notes: str | None                           = None
+    notes         : str | None                  = None
     # 待办字段
-    plan_date: str | None    = None
-    deadline_at: str | None  = None
-    priority: int | None     = None
-    status: str | None       = None
-    repeat_rule: str | None  = None
+    plan_date   : str | None = None
+    deadline_at : str | None = None
+    priority    : int | None = None
+    status      : str | None = None
+    repeat_rule : str | None = None
     completed_at: str | None = None
     cancelled_at: str | None = None
     # 日记字段
-    diary_date: str | None                        = None
-    mood: str | None                              = None
-    mood_score: int | None                        = None
-    weather: str | None                           = None
-    template_id: str | None                       = None
-    entry_time: str | None                        = None
+    diary_date      : str | None                  = None
+    mood            : str | None                  = None
+    mood_score      : int | None                  = None
+    weather         : str | None                  = None
+    template_id     : str | None                  = None
+    entry_time      : str | None                  = None
     template_answers: list[dict[str, Any]] | None = None
-    is_favorite: bool | None                      = None
+    is_favorite     : bool | None                 = None
     # 账目字段
-    amount: float | None             = None
-    amount_cents: int | None         = None
-    currency: str | None             = None
-    transaction_type: str | None     = None
-    ledger_category: str | None      = None
-    ledger_date: str | None          = None
-    account_name: str | None         = None
-    counter_account_name: str | None = None
-    merchant: str | None             = None
-    remark: str | None               = None
+    amount              : float | None     = None
+    amount_cents        : StrictInt | None = None
+    currency            : str | None       = None
+    transaction_type    : str | None       = None
+    ledger_category     : str | None       = None
+    ledger_date         : str | None       = None
+    account_name        : str | None       = None
+    counter_account_name: str | None       = None
+    merchant            : str | None       = None
+    remark              : str | None       = None
     # 笔记字段
-    references: list[dict[str, Any]] | None = None
-    related_items: list[str] | None         = None
+    references   : list[dict[str, Any]] | None = None
+    related_items: list[str] | None            = None
 
 
 class ItemCreate(_ItemPayload):
     """创建一个受支持类型条目的请求体。"""
 
-    type: str
-    title: str | None   = ""
+    type   : str
+    title  : str | None = ""
     content: str | None = ""
-    tags: list[str] = Field(default_factory=list)
+    tags   : list[str] = Field(default_factory=list)
 
 
 class ItemUpdate(_ItemPayload):
@@ -251,8 +251,8 @@ class ItemUpdate(_ItemPayload):
 def _collect_note_reference_ids(payload: dict[str, Any]) -> list[str]:
     """按首次出现顺序合并笔记引用对象和关联 ID。"""
 
-    ids: list[str] = []
-    seen: set[str] = set()
+    ids : list[str] = []
+    seen: set[str]  = set()
     for ref in payload.get("references") or []:
         if not isinstance(ref, dict):
             continue
@@ -281,9 +281,9 @@ def _resolve_note_reference_payload(
         payload["related_items"] = []
         return payload
 
-    canonical_ids: list[str] = []
-    missing_ids: list[str]   = []
-    seen_canonical: set[str] = set()
+    canonical_ids : list[str] = []
+    missing_ids   : list[str] = []
+    seen_canonical: set[str]  = set()
     for ref_id in ids:
         resolved_id = db.resolve_item_id(owner_id, ref_id)
         if resolved_id is None:
@@ -304,9 +304,9 @@ def _resolve_note_reference_payload(
         item_type = get_item_type_value(getattr(target, "type", None), default="item")
         references.append(
             {
-                "kind": "item",
-                "id": ref_id,
-                "type": item_type,
+                "kind" : "item",
+                "id"   : ref_id,
+                "type" : item_type,
                 "title": getattr(target, "title", "") or "无标题",
             }
         )
@@ -424,7 +424,7 @@ def _resolve_date_filters(
     return {
         "date_field": resolved_field,
         "start_date": start_text,
-        "end_date": end_text,
+        "end_date"  : end_text,
     }
 
 
@@ -564,11 +564,11 @@ def _build_update_operation_log(
     if not note_updates:
         return {"user_id": owner_id, "action": "update", "item_type": item_type}
     return {
-        "user_id": owner_id,
-        "action": f"edit_{item_type}",
+        "user_id"  : owner_id,
+        "action"   : f"edit_{item_type}",
         "item_type": item_type,
-        "details": {
-            "updates": note_updates,
+        "details"  : {
+            "updates"   : note_updates,
             "old_values": {field: current.get(field) for field in note_updates if field in current},
         },
     }
@@ -630,15 +630,15 @@ def aggregate_items(
             amounts[kind] = amount_cents
         count += item_count
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "currency": currency,
+            "currency"   : currency,
             "by_currency": db.aggregate_ledger_by_currency(owner_id, filters),
-            "income": amounts["income"] / 100,
-            "expense": amounts["expense"] / 100,
-            "transfer": amounts["transfer"] / 100,
-            "balance": (amounts["income"] - amounts["expense"]) / 100,
-            "count": count,
+            "income"     : amounts["income"] / 100,
+            "expense"    : amounts["expense"] / 100,
+            "transfer"   : amounts["transfer"] / 100,
+            "balance"    : (amounts["income"] - amounts["expense"]) / 100,
+            "count"      : count,
         },
         "message": "",
     }
@@ -842,7 +842,7 @@ def list_items(
     total = db.count_items(owner_id, filters)
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "items": [item_to_dict(item) for item in items],
             "total": total,
@@ -883,12 +883,12 @@ def create_item(
     item_data = body.model_dump(exclude_none=True)
     item_data.update(
         {
-            "type": item_type,
-            "owner_id": owner_id,
+            "type"      : item_type,
+            "owner_id"  : owner_id,
             "created_at": storage_now,
             "updated_at": storage_now,
-            "context": {},
-            "deleted": False,
+            "context"   : {},
+            "deleted"   : False,
         }
     )
 
@@ -923,8 +923,8 @@ def create_item(
         item_id = db.insert_item(
             item_data,
             operation_log={
-                "user_id": owner_id,
-                "action": "create",
+                "user_id"  : owner_id,
+                "action"   : "create",
                 "item_type": item_type,
             },
         )
@@ -932,8 +932,8 @@ def create_item(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
-        "ok": True,
-        "data": {"id": item_id, "display_id": public_id(item_id)},
+        "ok"     : True,
+        "data"   : {"id": item_id, "display_id": public_id(item_id)},
         "message": "创建成功",
     }
 
@@ -971,9 +971,9 @@ def update_item(
         )
     # 完整表单必须携带读取时版本，防止旧窗口写回已经更新的正文。
     form_fields = {
-        "note": {"title", "content"},
-        "diary": {"diary_date", "content"},
-        "event": {"title", "start_time"},
+        "note"  : {"title", "content"},
+        "diary" : {"diary_date", "content"},
+        "event" : {"title", "start_time"},
         "ledger": {"title", "amount"},
     }.get(item_type, set())
     if form_fields and form_fields <= requested_fields and body.version is None:
@@ -1001,11 +1001,11 @@ def update_item(
     }
     if not updates:
         return {
-            "ok": True,
+            "ok"  : True,
             "data": {
-                "id": str(item.id),
+                "id"        : str(item.id),
                 "display_id": item.display_id,
-                "version": current_version,
+                "version"   : current_version,
             },
             "message": "无变化",
         }
@@ -1029,11 +1029,11 @@ def update_item(
         )
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "id": str(item.id),
+            "id"        : str(item.id),
             "display_id": item.display_id,
-            "version": current_version + 1,
+            "version"   : current_version + 1,
         },
         "message": "更新成功",
     }
@@ -1060,8 +1060,8 @@ def delete_item(
             soft          = True,
             owner_id      = owner_id,
             operation_log = {
-                "user_id": owner_id,
-                "action": "delete",
+                "user_id"  : owner_id,
+                "action"   : "delete",
                 "item_type": item_type,
             },
         )
@@ -1072,7 +1072,7 @@ def delete_item(
         )
 
     return {
-        "ok": True,
-        "data": {"id": str(item.id), "display_id": item.display_id},
+        "ok"     : True,
+        "data"   : {"id": str(item.id), "display_id": item.display_id},
         "message": "已删除",
     }

@@ -35,11 +35,11 @@ def test_search_presets_apply_dates_and_status_without_keyword_matches(db: Datab
     ]:
         db.insert_item(
             {
-                "id": identifier,
-                "owner_id": owner,
-                "type": "task",
-                "title": "处理收据",
-                "status": status,
+                "id"       : identifier,
+                "owner_id" : owner,
+                "type"     : "task",
+                "title"    : "处理收据",
+                "status"   : status,
                 "plan_date": plan_date,
             }
         )
@@ -50,10 +50,10 @@ def test_search_presets_apply_dates_and_status_without_keyword_matches(db: Datab
     ]:
         db.insert_item(
             {
-                "id": identifier,
-                "owner_id": owner,
-                "type": "diary",
-                "content": "散步记录",
+                "id"        : identifier,
+                "owner_id"  : owner,
+                "type"      : "diary",
+                "content"   : "散步记录",
                 "diary_date": day,
             }
         )
@@ -84,10 +84,10 @@ def test_search_http_endpoint_preserves_type_alias_and_query_bounds(db: Database
     owner_id = "owner-search-http"
     db.insert_item(
         {
-            "id": "search-http-task",
-            "owner_id": owner_id,
-            "type": "task",
-            "title": "HTTP 搜索待办",
+            "id"       : "search-http-task",
+            "owner_id" : owner_id,
+            "type"     : "task",
+            "title"    : "HTTP 搜索待办",
             "plan_date": "2030-01-01",
         }
     )
@@ -120,18 +120,18 @@ def test_search_filter_builder_trims_values_and_infers_specialized_types() -> No
         " 现金 ",
         " 小店 ",
     ) == {
-        "type": "ledger",
-        "ledger_category": "餐饮",
+        "type"            : "ledger",
+        "ledger_category" : "餐饮",
         "transaction_type": "expense",
-        "account_name": "现金",
-        "merchant": "小店",
+        "account_name"    : "现金",
+        "merchant"        : "小店",
     }
     assert search_api._build_search_filters(None, None, "餐饮", None, None, None, None) == {
-        "type": "ledger",
+        "type"           : "ledger",
         "ledger_category": "餐饮",
     }
     assert search_api._build_search_filters(None, None, None, " OPEN ", None, None, None) == {
-        "type": "task",
+        "type"  : "task",
         "status": "open",
     }
     assert search_api._build_search_filters(None, " ", None, " ", None, "", " ") == {}
@@ -211,11 +211,11 @@ def test_search_route_pages_results_and_preserves_total(db: Database) -> None:
     for index in range(3):
         db.insert_item(
             {
-                "id": f"search-page-{index}",
+                "id"      : f"search-page-{index}",
                 "owner_id": owner_id,
-                "type": "note",
-                "title": f"共同关键词 {index}",
-                "content": "分页验证",
+                "type"    : "note",
+                "title"   : f"共同关键词 {index}",
+                "content" : "分页验证",
             }
         )
 
@@ -233,6 +233,14 @@ def test_search_route_pages_results_and_preserves_total(db: Database) -> None:
     assert data["page_size"] == 1
     assert len(cast(list[dict[str, Any]], data["items"])) == 1
 
+    pages = [
+        search_api.search_items(q="共同关键词", page=page, page_size=1, owner_id=owner_id, db=db)[
+            "data"
+        ]["items"]
+        for page in (1, 2, 3)
+    ]
+    assert {page[0]["id"] for page in pages} == {f"search-page-{i}" for i in range(3)}
+
 
 def test_search_route_batches_event_collection_payloads(
     db: Database,
@@ -243,23 +251,23 @@ def test_search_route_batches_event_collection_payloads(
     owner_id = "owner-search-batch-collections"
     db.create_event_collection(
         {
-            "id": "search-collection",
+            "id"      : "search-collection",
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "批量会议",
+            "kind"    : "multi_node",
+            "title"   : "批量会议",
         }
     )
     for index in range(2):
         db.insert_item(
             {
-                "id": f"search-event-{index}",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": f"共同议程 {index}",
-                "start_time": f"2030-09-0{index + 1}T09:00:00",
-                "event_collection_id": "search-collection",
+                "id"                   : f"search-event-{index}",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : f"共同议程 {index}",
+                "start_time"           : f"2030-09-0{index + 1}T09:00:00",
+                "event_collection_id"  : "search-collection",
                 "event_collection_kind": "multi_node",
-                "event_role": "multi_node_child",
+                "event_role"           : "multi_node_child",
             }
         )
 
@@ -288,24 +296,24 @@ def test_event_collection_category_search_trims_legacy_values_and_keeps_total_al
     owner_id      = "owner-search-legacy-category"
     collection_id = db.create_event_collection(
         {
-            "id": "legacy-category-collection",
+            "id"      : "legacy-category-collection",
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "旧分类会议",
+            "kind"    : "multi_node",
+            "title"   : "旧分类会议",
             "category": "学术",
         }
     )
     db.insert_item(
         {
-            "id": "legacy-category-event",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "子节点标题",
-            "category": "其他",
-            "start_time": "2030-10-01T09:00:00",
-            "event_collection_id": collection_id,
+            "id"                   : "legacy-category-event",
+            "owner_id"             : owner_id,
+            "type"                 : "event",
+            "title"                : "子节点标题",
+            "category"             : "其他",
+            "start_time"           : "2030-10-01T09:00:00",
+            "event_collection_id"  : collection_id,
             "event_collection_kind": "multi_node",
-            "event_role": "multi_node_child",
+            "event_role"           : "multi_node_child",
         }
     )
     with db.get_connection():
@@ -334,25 +342,25 @@ def test_database_search_items_matches_additional_text_fields(db: Database) -> N
     owner_id = "u-search"
     db.insert_item(
         {
-            "id": "ev1",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "组会",
-            "content": "",
-            "location": "图书馆 402",
+            "id"        : "ev1",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "组会",
+            "content"   : "",
+            "location"  : "图书馆 402",
             "start_time": "2026-03-28T09:00:00",
-            "end_time": "2026-03-28T10:00:00",
+            "end_time"  : "2026-03-28T10:00:00",
         }
     )
     db.insert_item(
         {
-            "id": "dy1",
-            "owner_id": owner_id,
-            "type": "diary",
-            "title": "雨夜",
-            "content": "今天走得很慢。",
-            "weather": "🌧️ 雨",
-            "location": "窗边的风声",
+            "id"        : "dy1",
+            "owner_id"  : owner_id,
+            "type"      : "diary",
+            "title"     : "雨夜",
+            "content"   : "今天走得很慢。",
+            "weather"   : "大雪",
+            "location"  : "窗边的风声",
             "diary_date": "2026-03-28",
         }
     )
@@ -360,7 +368,7 @@ def test_database_search_items_matches_additional_text_fields(db: Database) -> N
     by_location, location_total = db.search_items_page(owner_id, "图书馆", limit=10)
     by_weather, weather_total = db.search_items_page(
         owner_id,
-        "风声",
+        "大雪",
         filters = {"type": "diary"},
         limit   = 10,
     )
@@ -379,20 +387,20 @@ def test_database_search_preserves_fts_rank_before_newer_like_only_rows(
     owner_id = "u-search-order"
     db.insert_item(
         {
-            "id": "fts-first",
-            "owner_id": owner_id,
-            "type": "note",
-            "title": "alpha 相关结果",
+            "id"        : "fts-first",
+            "owner_id"  : owner_id,
+            "type"      : "note",
+            "title"     : "alpha 相关结果",
             "created_at": "2030-01-01T08:00:00",
             "updated_at": "2030-01-01T08:00:00",
         }
     )
     db.insert_item(
         {
-            "id": "like-newer",
-            "owner_id": owner_id,
-            "type": "note",
-            "title": "alpha 新结果",
+            "id"        : "like-newer",
+            "owner_id"  : owner_id,
+            "type"      : "note",
+            "title"     : "alpha 新结果",
             "created_at": "2040-01-01T08:00:00",
             "updated_at": "2040-01-01T08:00:00",
         }
@@ -416,39 +424,39 @@ def test_database_search_items_supports_ledger_category_filter(db: Database) -> 
     owner_id = "u-search-ledger"
     db.insert_item(
         {
-            "id": "ld1",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "餐饮消费",
-            "amount": 20,
+            "id"              : "ld1",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "餐饮消费",
+            "amount"          : 20,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2026-03-28",
+            "ledger_category" : "餐饮",
+            "ledger_date"     : "2026-03-28",
         }
     )
     db.insert_item(
         {
-            "id": "ld2",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "交通消费",
-            "amount": 8,
+            "id"              : "ld2",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "交通消费",
+            "amount"          : 8,
             "transaction_type": "expense",
-            "ledger_category": "交通",
-            "ledger_date": "2026-03-28",
+            "ledger_category" : "交通",
+            "ledger_date"     : "2026-03-28",
         }
     )
     db.insert_item(
         {
-            "id": "ld3",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "信用卡还款",
-            "amount_cents": 100000,
-            "transaction_type": "transfer",
-            "ledger_category": "转账",
-            "ledger_date": "2026-03-28",
-            "account_name": "微信",
+            "id"                  : "ld3",
+            "owner_id"            : owner_id,
+            "type"                : "ledger",
+            "title"               : "信用卡还款",
+            "amount_cents"        : 100000,
+            "transaction_type"    : "transfer",
+            "ledger_category"     : "转账",
+            "ledger_date"         : "2026-03-28",
+            "account_name"        : "微信",
             "counter_account_name": "招行信用卡",
         }
     )
@@ -487,29 +495,29 @@ def test_database_search_items_matches_event_collection_text(db: Database) -> No
     owner_id = "u-search-event-collection"
     db.create_event_collection(
         {
-            "id": "col-frb",
-            "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "FRB2026会议",
-            "category": "学术",
-            "notes": "整体会议信息",
+            "id"        : "col-frb",
+            "owner_id"  : owner_id,
+            "kind"      : "multi_node",
+            "title"     : "FRB2026会议",
+            "category"  : "学术",
+            "notes"     : "整体会议信息",
             "start_time": "2026-03-05T09:00:00",
-            "end_time": "2026-04-01T10:00:00",
+            "end_time"  : "2026-04-01T10:00:00",
         }
     )
     db.insert_item(
         {
-            "id": "col-frb_m01",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "摘要截止",
-            "category": "学术",
-            "start_time": "2026-03-05T09:00:00",
-            "event_role": "multi_node_child",
-            "event_collection_id": "col-frb",
+            "id"                   : "col-frb_m01",
+            "owner_id"             : owner_id,
+            "type"                 : "event",
+            "title"                : "摘要截止",
+            "category"             : "学术",
+            "start_time"           : "2026-03-05T09:00:00",
+            "event_role"           : "multi_node_child",
+            "event_collection_id"  : "col-frb",
             "event_collection_kind": "multi_node",
-            "event_index": 1,
-            "event_node_key": "m01",
+            "event_index"          : 1,
+            "event_node_key"       : "m01",
         }
     )
 
@@ -530,29 +538,29 @@ def test_search_route_adds_event_collection_payload(db: Database) -> None:
     owner_id = "u-search-route-collection"
     db.create_event_collection(
         {
-            "id": "col-import",
-            "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "导入会议",
-            "category": "学术",
-            "notes": "整体备注",
+            "id"        : "col-import",
+            "owner_id"  : owner_id,
+            "kind"      : "multi_node",
+            "title"     : "导入会议",
+            "category"  : "学术",
+            "notes"     : "整体备注",
             "start_time": "2026-03-05T09:00:00",
-            "end_time": "2026-04-01T10:00:00",
+            "end_time"  : "2026-04-01T10:00:00",
         }
     )
     db.insert_item(
         {
-            "id": "col-import_m01",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "摘要截止",
-            "category": "学术",
-            "start_time": "2026-03-05T09:00:00",
-            "event_role": "multi_node_child",
-            "event_collection_id": "col-import",
+            "id"                   : "col-import_m01",
+            "owner_id"             : owner_id,
+            "type"                 : "event",
+            "title"                : "摘要截止",
+            "category"             : "学术",
+            "start_time"           : "2026-03-05T09:00:00",
+            "event_role"           : "multi_node_child",
+            "event_collection_id"  : "col-import",
             "event_collection_kind": "multi_node",
-            "event_index": 1,
-            "event_node_key": "m01",
+            "event_index"          : 1,
+            "event_node_key"       : "m01",
         }
     )
 
@@ -578,10 +586,10 @@ def test_collection_search_filters_before_pagination(db):
     )
     for filters in [
         {
-            "type": "event",
+            "type"      : "event",
             "date_field": "start_time",
             "start_date": "2031-01-01",
-            "end_date": "2031-02-01",
+            "end_date"  : "2031-02-01",
         },
         {"type": "event", "tags": "absent"},
     ]:

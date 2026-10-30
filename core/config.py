@@ -65,13 +65,13 @@ class _PluginExecutionPolicySchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    timeout_seconds: float | None = Field(default=None, ge=0, le=86400)
-    parallel_limit: int | None = Field(default=None, ge=1, le=1024)
+    timeout_seconds      : float | None = Field(default=None, ge=0, le=86400)
+    parallel_limit       : int | None = Field(default=None, ge=1, le=1024)
     admission_queue_limit: int | None = Field(default=None, ge=0, le=10000)
-    sync_parallel_limit: int | None = Field(default=None, ge=1, le=3)
-    sync_queue_limit: int | None = Field(default=None, ge=0, le=10000)
-    failure_threshold: int | None = Field(default=None, ge=1, le=10000)
-    cooldown_seconds: float | None = Field(default=None, ge=0.1, le=86400)
+    sync_parallel_limit  : int | None = Field(default=None, ge=1, le=3)
+    sync_queue_limit     : int | None = Field(default=None, ge=0, le=10000)
+    failure_threshold    : int | None = Field(default=None, ge=1, le=10000)
+    cooldown_seconds     : float | None = Field(default=None, ge=0.1, le=86400)
     drain_timeout_seconds: float | None = Field(default=None, ge=0.1, le=3600)
 
     @field_validator("timeout_seconds")
@@ -97,7 +97,7 @@ class _PluginExecutionConfigSchema(_PluginExecutionPolicySchema):
     """Top-level execution policy, including process-wide sync admission."""
 
     global_sync_queue_limit: int | None = Field(default=None, ge=1, le=100000)
-    overrides: dict[str, _PluginExecutionPolicySchema] | None = None
+    overrides              : dict[str, _PluginExecutionPolicySchema] | None = None
 
     @field_validator("overrides")
     @classmethod
@@ -123,22 +123,23 @@ class _RuntimeConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    max_concurrency: int | None = Field(default=None, ge=1, le=1024)
-    session_timeout: float | None = Field(default=None, gt=0, le=604800)
-    plugin_poll_interval: float | None = Field(default=None, gt=0, le=86400)
-    data_root: StrictStr | None = None
-    ws_queue_size: int | None = Field(default=None, ge=1, le=10000)
-    inbound_ws_max_workers: int | None = Field(default=None, ge=1, le=128)
+    max_concurrency                     : int | None = Field(default=None, ge=1, le=1024)
+    session_timeout                     : float | None = Field(default=None, gt=0, le=604800)
+    plugin_poll_interval                : float | None = Field(default=None, gt=0, le=86400)
+    data_root                           : StrictStr | None = None
+    ws_queue_size                       : int | None = Field(default=None, ge=1, le=10000)
+    inbound_ws_max_workers              : int | None = Field(default=None, ge=1, le=128)
     inbound_ws_broadcast_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
-    timezone: str | None                                  = None
-    enable_ws_client: bool | None                         = None
-    enable_inbound_server: bool | None                    = None
-    inbound_trusted_tls_proxy: StrictBool | None          = None
-    onebot_ws_uri: str | None                             = None
-    onebot_http_base: str | None                          = None
-    inbound_ws_uri: str | None                            = None
-    inbound_http_base: str | None                         = None
-    plugin_execution: _PluginExecutionConfigSchema | None = None
+    timezone                            : str | None                          = None
+    enable_ws_client                    : bool | None                         = None
+    enable_inbound_server               : bool | None                         = None
+    enable_plugin_schedules             : StrictBool | None                   = None
+    inbound_trusted_tls_proxy           : StrictBool | None                   = None
+    onebot_ws_uri                       : str | None                          = None
+    onebot_http_base                    : str | None                          = None
+    inbound_ws_uri                      : str | None                          = None
+    inbound_http_base                   : str | None                          = None
+    plugin_execution                    : _PluginExecutionConfigSchema | None = None
 
     @field_validator("data_root")
     @classmethod
@@ -395,10 +396,10 @@ class ConfigSnapshot(tuple[Any, ...]):
 class PendingSecretsChange:
     """不携带凭据值的待确认 ``secrets.json`` 变更摘要。"""
 
-    added_paths: tuple[str, ...]
+    added_paths  : tuple[str, ...]
     removed_paths: tuple[str, ...]
     changed_paths: tuple[str, ...]
-    added_count: int
+    added_count  : int
     removed_count: int
     changed_count: int
 
@@ -463,12 +464,12 @@ def _summarize_secret_changes(
 
 @dataclass(frozen=True, slots=True)
 class _SourceRead:
-    status: ConfigSourceStatus
-    etag: str
-    value: dict[str, Any] | None    = None
-    error: ConfigLoadError | None   = None
-    identity: str                   = ""
-    stat_key: _SourceStatKey | None = None
+    status  : ConfigSourceStatus
+    etag    : str
+    value   : dict[str, Any] | None  = None
+    error   : ConfigLoadError | None = None
+    identity: str                    = ""
+    stat_key: _SourceStatKey | None  = None
 
     @property
     def signature(self) -> tuple[ConfigSourceStatus, str, str]:
@@ -506,8 +507,8 @@ def _source_stat_key(source_stat: os.stat_result) -> _SourceStatKey:
 
 @dataclass
 class _ConfigNotification:
-    revision: int
-    snapshot: ConfigSnapshot
+    revision : int
+    snapshot : ConfigSnapshot
     callbacks: tuple[ConfigCallback, ...]
 
 
@@ -851,7 +852,7 @@ class ConfigManager:
         """Mutate the strict on-disk value and publish only after durable commit."""
 
         notification: _ConfigNotification | None = None
-        failure: BaseException | None            = None
+        failure     : BaseException | None       = None
         result                                   = cast(T, None)
         with self._lock:
             with keyed_path_lock(self.secrets_path):
@@ -1218,14 +1219,14 @@ class ConfigManager:
                 self._fail_closed_watch_error(exc)
 
     async def _watch_reconcile_once(self) -> None:
-        notification: _ConfigNotification | None          = None
-        changed                                           = False
-        pending_external_change                           = False
-        pending_candidate_changed                         = False
-        pending_notice: PendingSecretsChange | None       = None
-        published_config: _SourceRead | None              = None
-        published_secrets: _SourceRead | None             = None
-        read_hint: tuple[_SourceRead, _SourceRead] | None = None
+        notification: _ConfigNotification | None                  = None
+        changed                                                   = False
+        pending_external_change                                   = False
+        pending_candidate_changed                                 = False
+        pending_notice   : PendingSecretsChange | None            = None
+        published_config : _SourceRead | None                     = None
+        published_secrets: _SourceRead | None                     = None
+        read_hint        : tuple[_SourceRead, _SourceRead] | None = None
         for _attempt in range(_MAX_WATCH_STABILITY_RETRIES):
             with self._lock:
                 generation = self._source_generation

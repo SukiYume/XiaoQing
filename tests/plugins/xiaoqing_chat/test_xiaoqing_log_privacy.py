@@ -51,9 +51,9 @@ def test_sensitive_chat_log_fields_are_fingerprinted_not_truncated(field_name: s
 def test_sensitive_nested_chat_log_fields_are_fingerprinted() -> None:
     sanitized = sanitize_log_fields(
         {
-            "status": "ok",
+            "status" : "ok",
             "payload": {
-                "role": "user",
+                "role"   : "user",
                 "content": CANARY,
             },
         }
@@ -69,7 +69,6 @@ def test_sensitive_nested_chat_log_fields_are_fingerprinted() -> None:
 def test_model_reason_that_looks_like_a_status_token_is_still_fingerprinted() -> None:
     sanitized = sanitize_log_fields({"reason": "private", "reason_code": "parse_failed"})
 
-    assert CANARY not in json.dumps(sanitized, ensure_ascii=False)
     assert sanitized["reason"] != "private"
     assert "fingerprint=hmac-sha256:" in sanitized["reason"]
     assert sanitized["reason_code"] == "parse_failed"
@@ -88,13 +87,13 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
             chat_id = "private-chat-id",
             step    = "reply.debug",
             fields  = {
-                "status": "prepared",
+                "status"    : "prepared",
                 "request_id": "req-cr220",
-                "task_id": "task-cr220",
-                "role": "system",
-                "prompt": CANARY,
-                "history": CANARY,
-                "response": CANARY,
+                "task_id"   : "task-cr220",
+                "role"      : "system",
+                "prompt"    : CANARY,
+                "history"   : CANARY,
+                "response"  : CANARY,
             },
         )
 
@@ -153,8 +152,8 @@ def test_log_step_rejects_malicious_correlation_ids() -> None:
     fields = sanitize_log_fields(
         {
             "request_id": f"req\n{CANARY}",
-            "task_id": "task-ok_1",
-            "job_id": "x" * 65,
+            "task_id"   : "task-ok_1",
+            "job_id"    : "x" * 65,
         }
     )
 
@@ -170,8 +169,8 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
     chat_id = f"chat-{CANARY}"
     event   = {
         "message_type": "group",
-        "group_id": f"group-{CANARY}",
-        "user_id": f"operator-{CANARY}",
+        "group_id"    : f"group-{CANARY}",
+        "user_id"     : f"operator-{CANARY}",
     }
     state = SimpleNamespace(
         pop_persist_task = lambda event_chat_id: None,

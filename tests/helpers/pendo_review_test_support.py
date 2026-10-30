@@ -63,9 +63,9 @@ class _SessionEventHandler:
     async def create_event(self, user_id, parsed_data, context, allow_conflict=False):
         _ = (user_id, context, allow_conflict)
         return {
-            "status": "need_confirm",
+            "status" : "need_confirm",
             "message": "需要确认冲突",
-            "data": dict(parsed_data),
+            "data"   : dict(parsed_data),
         }
 
 
@@ -79,7 +79,7 @@ class _SessionAiParser:
 def _pendo_session_services() -> dict[str, object]:
     return {
         "event_handler": _SessionEventHandler(),
-        "ai_parser": _SessionAiParser(),
+        "ai_parser"    : _SessionAiParser(),
     }
 
 
@@ -98,13 +98,13 @@ def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> 
     for collection_index, (collection_id, title) in enumerate(collection_specs, 1):
         db.create_event_collection(
             {
-                "id": collection_id,
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": title,
-                "category": "工作",
+                "id"        : collection_id,
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : title,
+                "category"  : "工作",
                 "start_time": f"2030-01-0{collection_index}T10:00:00",
-                "end_time": f"2030-01-0{collection_index}T12:00:00",
+                "end_time"  : f"2030-01-0{collection_index}T12:00:00",
             }
         )
         for event_index in range(1, 4):
@@ -112,17 +112,17 @@ def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> 
             remind_time = f"2030-01-0{collection_index}T0{event_index}:00:00"
             db.insert_item(
                 {
-                    "id": event_id,
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": f"节点 {collection_index}-{event_index}",
-                    "category": "工作",
-                    "start_time": f"2030-01-0{collection_index}T1{event_index}:00:00",
-                    "remind_times": [remind_time],
-                    "event_role": "multi_node_child",
-                    "event_collection_id": collection_id,
+                    "id"                   : event_id,
+                    "owner_id"             : owner_id,
+                    "type"                 : "event",
+                    "title"                : f"节点 {collection_index}-{event_index}",
+                    "category"             : "工作",
+                    "start_time"           : f"2030-01-0{collection_index}T1{event_index}:00:00",
+                    "remind_times"         : [remind_time],
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : collection_id,
                     "event_collection_kind": "multi_node",
-                    "event_index": event_index,
+                    "event_index"          : event_index,
                 }
             )
             stored_remind_time = db.get_item(event_id, owner_id).remind_times[0]

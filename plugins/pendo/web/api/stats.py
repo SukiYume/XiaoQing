@@ -75,8 +75,10 @@ def _coarse_timestamp_dates(start: date, end: date) -> tuple[str, str]:
 
 
 def _event_time_slot(hour: int) -> str:
-    """映射到前端稳定的六个时段桶。"""
+    """映射到前端稳定的七个时段桶；00:00–05:59 单独归入凌晨，不再算作晚间。"""
 
+    if 0 <= hour <= 5:
+        return "00-06"
     if 6 <= hour <= 8:
         return "06-09"
     if 9 <= hour <= 11:
@@ -130,10 +132,10 @@ def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[s
     value         = str(range_str or "month").strip() or "month"
     quarter_month = ((current_day.month - 1) // 3) * 3 + 1
     preset_bounds = {
-        "month": (current_day.replace(day=1), current_day),
-        "week": (current_day - timedelta(days=current_day.weekday()), current_day),
-        "quarter": (date(current_day.year, quarter_month, 1), current_day),
-        "year": (date(current_day.year, 1, 1), current_day),
+        "month"    : (current_day.replace(day=1), current_day),
+        "week"     : (current_day - timedelta(days=current_day.weekday()), current_day),
+        "quarter"  : (date(current_day.year, quarter_month, 1), current_day),
+        "year"     : (date(current_day.year, 1, 1), current_day),
         "last_year": (
             date(current_day.year - 1, 1, 1),
             date(current_day.year - 1, 12, 31),
@@ -287,8 +289,8 @@ def ledger_stats(
     ).fetchall()
 
     category_totals: dict[str, list[JsonObject]] = {
-        "expense": [],
-        "income": [],
+        "expense" : [],
+        "income"  : [],
         "transfer": [],
     }
     for category, transaction_type, total, _count in by_category:
@@ -298,23 +300,23 @@ def ledger_stats(
             )
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "currency": currency,
+            "currency"   : currency,
             "by_currency": db.aggregate_ledger_by_currency(
                 owner_id,
                 {
-                    "type": "ledger",
+                    "type"      : "ledger",
                     "date_field": "ledger_date",
                     "start_date": start,
-                    "end_date": end,
+                    "end_date"  : end,
                 },
             ),
-            "monthly": _aggregate_ledger_periods(monthly, "month"),
-            "expense_by_category": category_totals["expense"],
-            "income_by_category": category_totals["income"],
-            "transfer_by_category": category_totals["transfer"],
-            "daily": _aggregate_ledger_periods(daily, "date"),
+            "monthly"                 : _aggregate_ledger_periods(monthly, "month"),
+            "expense_by_category"     : category_totals["expense"],
+            "income_by_category"      : category_totals["income"],
+            "transfer_by_category"    : category_totals["transfer"],
+            "daily"                   : _aggregate_ledger_periods(daily, "date"),
             "expense_amount_histogram": _build_amount_histogram(
                 [float(r[0] or 0) for r in expense_amounts]
             ),
@@ -350,7 +352,7 @@ def ledger_visual_insights(
         raise HTTPException(status_code=422, detail="amount_min 不能大于 amount_max")
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": build_ledger_insights(
             db               = db,
             owner_id         = owner_id,
@@ -396,6 +398,8 @@ def task_stats(
             OR substr(created_at, 1, 10) BETWEEN ? AND ?
             OR substr(COALESCE(completed_at, ''), 1, 10) BETWEEN ? AND ?
             OR substr(COALESCE(cancelled_at, ''), 1, 10) BETWEEN ? AND ?
+            OR ((plan_date IS NULL OR plan_date = '')
+                AND substr(COALESCE(deadline_at, ''), 1, 10) BETWEEN ? AND ?)
           )
         ORDER BY id
         """,
@@ -409,16 +413,18 @@ def task_stats(
                 upper_date,
                 lower_date,
                 upper_date,
+                lower_date,
+                upper_date,
             ),
         )
         .fetchall()
     )
 
-    status_counter: Counter[str]             = Counter()
-    priority_counter: Counter[Any]           = Counter()
-    plan_counter: Counter[str]               = Counter()
-    text_category_counter: Counter[str]      = Counter()
-    weekly_counter: Counter[tuple[str, str]] = Counter()
+    status_counter       : Counter[str]             = Counter()
+    priority_counter     : Counter[Any]             = Counter()
+    plan_counter         : Counter[str]             = Counter()
+    text_category_counter: Counter[str]             = Counter()
+    weekly_counter       : Counter[tuple[str, str]] = Counter()
     for row in task_rows:
         created_at   = _local_datetime(row["created_at"], user_timezone)
         completed_at = _local_datetime(row["completed_at"], user_timezone)
@@ -427,6 +433,10 @@ def task_stats(
             plan_day = date.fromisoformat(str(row["plan_date"] or ""))
         except ValueError:
             plan_day = None
+        # 准入与计划分布一致：没有计划日期时以本地截止日作为计划日。
+        deadline = _local_datetime(row["deadline_at"], user_timezone)
+        if plan_day is None and deadline is not None:
+            plan_day = deadline.date()
         if not any(
             (
                 _day_in_range(created_at.date() if created_at else None, start_day, end_day),
@@ -452,7 +462,6 @@ def task_stats(
             continue
 
         # 日期计划优先；没有计划日期时，截止日仍可反映任务压力。
-        deadline = _local_datetime(row["deadline_at"], user_timezone)
         plan_key = str(row["plan_date"] or "").strip() or (
             deadline.date().isoformat() if deadline else ""
         )
@@ -463,8 +472,8 @@ def task_stats(
             text_category_counter[category_key] += 1
 
     totals = {
-        "open": status_counter["open"],
-        "done": status_counter["done"],
+        "open"     : status_counter["open"],
+        "done"     : status_counter["done"],
         "cancelled": status_counter["cancelled"],
     }
     totals["closed"] = totals["done"] + totals["cancelled"]
@@ -485,10 +494,10 @@ def task_stats(
     )[:8]
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "totals": totals,
-            "weekly": weekly,
+            "totals" : totals,
+            "weekly" : weekly,
             "by_plan": [
                 {"plan": key, "count": count} for key, count in sorted(plan_counter.items())
             ],
@@ -519,8 +528,8 @@ def task_overview(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "ok": True,
-        "data": data,
+        "ok"     : True,
+        "data"   : data,
         "message": "",
     }
 
@@ -550,8 +559,8 @@ def notes_overview(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "ok": True,
-        "data": data,
+        "ok"     : True,
+        "data"   : data,
         "message": "",
     }
 
@@ -611,10 +620,10 @@ def event_stats(
     ]
     collections = db.get_event_collections_by_ids(owner_id, collection_ids)
 
-    weekly_counter: Counter[str]                   = Counter()
-    slot_counter: Counter[str]                     = Counter()
+    weekly_counter      : Counter[str]             = Counter()
+    slot_counter        : Counter[str]             = Counter()
     weekday_slot_counter: Counter[tuple[int, str]] = Counter()
-    category_counter: Counter[str]                 = Counter()
+    category_counter    : Counter[str]             = Counter()
     for event in events:
         start_at = _local_datetime(event.start_time, user_timezone)
         if start_at is None or not _day_in_range(start_at.date(), start_day, end_day):
@@ -636,8 +645,8 @@ def event_stats(
     weekday_slots = [
         {
             "weekday": _WEEKDAY_LABELS[weekday],
-            "slot": slot,
-            "count": count,
+            "slot"   : slot,
+            "count"  : count,
         }
         for (weekday, slot), count in sorted(weekday_slot_counter.items())
     ]
@@ -649,12 +658,12 @@ def event_stats(
     ]
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "weekly": weekly,
-            "time_slots": time_slots,
+            "weekly"       : weekly,
+            "time_slots"   : time_slots,
             "weekday_slots": weekday_slots,
-            "by_category": by_category,
+            "by_category"  : by_category,
         },
         "message": "",
     }
@@ -713,19 +722,19 @@ def ledger_comparison(
         yoy_values      = monthly_map.get(yoy_key, {"expense": 0.0, "income": 0.0})
         result_months.append(
             {
-                "month": month_key,
-                "expense": current_values["expense"],
-                "income": current_values["income"],
+                "month"       : month_key,
+                "expense"     : current_values["expense"],
+                "income"      : current_values["income"],
                 "prev_expense": previous_values["expense"],
-                "prev_income": previous_values["income"],
-                "yoy_expense": yoy_values["expense"],
-                "yoy_income": yoy_values["income"],
+                "prev_income" : previous_values["income"],
+                "yoy_expense" : yoy_values["expense"],
+                "yoy_income"  : yoy_values["income"],
             }
         )
 
     return {
-        "ok": True,
-        "data": {"currency": currency, "months": result_months},
+        "ok"     : True,
+        "data"   : {"currency": currency, "months": result_months},
         "message": "",
     }
 
@@ -803,18 +812,18 @@ def activity_heatmap(
         diary_count  = activity_counts["diary"][day_key]
         days.append(
             {
-                "date": day_key,
-                "count": ledger_count + task_count + event_count + note_count + diary_count,
+                "date"  : day_key,
+                "count" : ledger_count + task_count + event_count + note_count + diary_count,
                 "ledger": ledger_count,
-                "task": task_count,
-                "event": event_count,
-                "note": note_count,
-                "diary": diary_count,
+                "task"  : task_count,
+                "event" : event_count,
+                "note"  : note_count,
+                "diary" : diary_count,
             }
         )
 
     return {
-        "ok": True,
-        "data": {"year": target_year, "days": days},
+        "ok"     : True,
+        "data"   : {"year": target_year, "days": days},
         "message": "",
     }

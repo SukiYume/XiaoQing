@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _ack_reply_delivery,
     _make_hctx,
     _reply_draft,
-    asyncio,
-    patch,
     patch_turn,
-    pytest,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -183,7 +182,7 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
         patch(
             "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
             new=AsyncMock(side_effect=fake_record_bot_reply),
-        ),
+        ) as record_reply,
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",
@@ -199,6 +198,8 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
         ),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
+        await _ack_reply_delivery(result)
+        record_reply.assert_awaited_once()
 
     assert result == [{"type": "text", "data": {"text": "forced-ok"}}]
 

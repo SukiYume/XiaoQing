@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
 import random
 import re
@@ -92,38 +93,38 @@ PNG_BYTES = base64.b64decode(
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    seed: int             = 20260501
-    groups: int           = 20
-    min_users: int        = 12
-    max_users: int        = 30
+    seed            : int = 20260501
+    groups          : int = 20
+    min_users       : int = 12
+    max_users       : int = 30
     rounds_per_group: int = 150
-    bot_name: str         = DEFAULT_BOT_NAME
-    self_id: int          = 11111
-    group_id_start: int   = 930001
+    bot_name        : str = DEFAULT_BOT_NAME
+    self_id         : int = 11111
+    group_id_start  : int = 930001
 
 
 @dataclass(frozen=True)
 class Persona:
-    user_id: int
+    user_id : int
     nickname: str
-    card: str
-    style: str
+    card    : str
+    style   : str
 
 
 @dataclass(frozen=True)
 class GeneratedTurn:
-    case_id: str
-    group_id: int
-    round_index: int
-    user: Persona
-    message_id: int
-    message_segments: list[dict[str, Any]]
-    raw_message: str
-    expected_action: Action
+    case_id                : str
+    group_id               : int
+    round_index            : int
+    user                   : Persona
+    message_id             : int
+    message_segments       : list[dict[str, Any]]
+    raw_message            : str
+    expected_action        : Action
     expected_target_user_id: int | None
-    scenario: str
-    trigger_reason: str
-    rubric_tags: list[str]
+    scenario               : str
+    trigger_reason         : str
+    rubric_tags            : list[str]
 
     def to_record(self) -> dict[str, Any]:
         record         = asdict(self)
@@ -134,16 +135,16 @@ class GeneratedTurn:
 @dataclass(frozen=True)
 class GroupScript:
     group_id: int
-    name: str
+    name    : str
     personas: list[Persona]
-    turns: list[GeneratedTurn]
+    turns   : list[GeneratedTurn]
 
     def to_record(self) -> dict[str, Any]:
         return {
             "group_id": self.group_id,
-            "name": self.name,
+            "name"    : self.name,
             "personas": [asdict(user) for user in self.personas],
-            "turns": [turn.to_record() for turn in self.turns],
+            "turns"   : [turn.to_record() for turn in self.turns],
         }
 
 
@@ -169,10 +170,10 @@ def generate_matrix(config: ExperimentConfig) -> dict[str, Any]:
     all_turns = [turn for group in groups for turn in group.turns]
     return {
         "schema_version": 1,
-        "generated_at": _now(),
-        "config": asdict(config),
-        "coverage": _coverage_summary(all_turns),
-        "groups": [group.to_record() for group in groups],
+        "generated_at"  : _now(),
+        "config"        : asdict(config),
+        "coverage"      : _coverage_summary(all_turns),
+        "groups"        : [group.to_record() for group in groups],
     }
 
 
@@ -180,17 +181,21 @@ def generate_matrix(config: ExperimentConfig) -> dict[str, Any]:
 class _TurnRubric:
     """单轮评分的累积状态：每个维度的得分、证据、适用性和失败标签。"""
 
-    scores: dict[str, int | None]
-    evidence: dict[str, str]
+    scores    : dict[str, int | None]
+    evidence  : dict[str, str]
     applicable: set[str]
-    failures: list[str]
+    failures  : list[str]
 
     @classmethod
     def empty(cls) -> _TurnRubric:
         return cls(dict.fromkeys(DIMENSIONS), {}, {"trigger_reasonable", "safety"}, [])
 
     def observe(self, dimension: str, score: int, detail: str) -> None:
+        """同一维度被多条规则评分时保留最低分及其证据：后面的通过不能覆盖前面的失败。"""
         self.applicable.add(dimension)
+        current = self.scores.get(dimension)
+        if current is not None and current <= score:
+            return
         self.scores[dimension]   = score
         self.evidence[dimension] = detail
 
@@ -440,9 +445,9 @@ def score_turn(
         "observed_dimensions": sorted(
             dimension for dimension, score in scores.items() if score is not None
         ),
-        "evidence": evidence,
+        "evidence"    : evidence,
         "failure_tags": failure_tags,
-        "status": "REVIEW" if failure_tags else "PASS",
+        "status"      : "REVIEW" if failure_tags else "PASS",
     }
 
 
@@ -486,10 +491,10 @@ def write_experiment_artifacts(
     )
 
     return {
-        "matrix": matrix_path,
-        "personas": personas_path,
-        "results": results_path,
-        "summary": summary_path,
+        "matrix"     : matrix_path,
+        "personas"   : personas_path,
+        "results"    : results_path,
+        "summary"    : summary_path,
         "transcripts": transcript_dir,
     }
 
@@ -503,15 +508,15 @@ def run_dry_experiment(matrix: dict[str, Any], *, run_id: str) -> list[dict[str,
         score = score_turn(turn, reply_segments, elapsed_s=0.0)
         rows.append(
             {
-                "run_id": run_id,
-                "case_id": turn["case_id"],
-                "group_id": turn["group_id"],
-                "round_index": turn["round_index"],
-                "scenario": turn["scenario"],
+                "run_id"         : run_id,
+                "case_id"        : turn["case_id"],
+                "group_id"       : turn["group_id"],
+                "round_index"    : turn["round_index"],
+                "scenario"       : turn["scenario"],
                 "expected_action": turn["expected_action"],
-                "reply_segments": reply_segments,
-                "score": score,
-                "status": score["status"],
+                "reply_segments" : reply_segments,
+                "score"          : score,
+                "status"         : score["status"],
             }
         )
     return rows
@@ -535,6 +540,19 @@ async def run_real_experiment(
     from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    # 续跑只在矩阵（含 seed、轮次、群配置）完全一致时允许；先核对再写任何文件，
+    # 否则旧输入的评分会按 case_id 被关联到新输入上。
+    fingerprint = hashlib.sha256(
+        json.dumps(matrix, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    fingerprint_path = output_dir / "anthropomorphic-matrix.sha256"
+    if fingerprint_path.exists():
+        if fingerprint_path.read_text(encoding="utf-8").strip() != fingerprint:
+            raise ValueError("输出目录里的结果来自另一份实验矩阵，请换一个输出目录再运行")
+    elif (output_dir / "anthropomorphic-results.jsonl").exists():
+        raise ValueError("输出目录里已有无法核对来源的结果，请换一个输出目录再运行")
+    else:
+        fingerprint_path.write_text(fingerprint + "\n", encoding="utf-8")
     write_experiment_artifacts(
         matrix,
         output_dir,
@@ -606,16 +624,16 @@ async def run_real_experiment(
                 )
                 rows.append(
                     {
-                        "run_id": run_id,
-                        "case_id": turn["case_id"],
-                        "group_id": turn["group_id"],
-                        "round_index": turn["round_index"],
-                        "scenario": turn["scenario"],
+                        "run_id"         : run_id,
+                        "case_id"        : turn["case_id"],
+                        "group_id"       : turn["group_id"],
+                        "round_index"    : turn["round_index"],
+                        "scenario"       : turn["scenario"],
                         "expected_action": turn["expected_action"],
-                        "reply_segments": reply_segments,
-                        "score": score,
-                        "status": score["status"],
-                        "error": redact_secrets(error),
+                        "reply_segments" : reply_segments,
+                        "score"          : score,
+                        "status"         : score["status"],
+                        "error"          : redact_secrets(error),
                     }
                 )
                 row = rows[-1]
@@ -631,10 +649,10 @@ async def run_real_experiment(
                     print(
                         json.dumps(
                             {
-                                "checkpoint": executed_this_run,
+                                "checkpoint"     : executed_this_run,
                                 "total_completed": len(rows),
-                                "latest_case_id": row["case_id"],
-                                "status": row["status"],
+                                "latest_case_id" : row["case_id"],
+                                "status"         : row["status"],
                             },
                             ensure_ascii=False,
                         ),
@@ -712,13 +730,13 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             {
-                "run_id": run_id,
-                "mode": args.mode,
-                "groups": args.groups,
+                "run_id"          : run_id,
+                "mode"            : args.mode,
+                "groups"          : args.groups,
                 "rounds_per_group": args.rounds_per_group,
-                "total_turns": args.groups * args.rounds_per_group,
-                "output_dir": str(output_dir),
-                "summary": str(paths["summary"]),
+                "total_turns"     : args.groups * args.rounds_per_group,
+                "output_dir"      : str(output_dir),
+                "summary"         : str(paths["summary"]),
             },
             ensure_ascii = False,
             indent       = 2,
@@ -978,16 +996,16 @@ def _template(
     tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     return {
-        "scenario": scenario,
-        "text": text,
+        "scenario"       : scenario,
+        "text"           : text,
         "expected_action": expected_action,
-        "trigger_reason": trigger_reason,
-        "at": at,
-        "face": face,
-        "mface": mface,
-        "image": image,
-        "reply": reply,
-        "rubric_tags": sorted(set(tags) | {scenario}),
+        "trigger_reason" : trigger_reason,
+        "at"             : at,
+        "face"           : face,
+        "mface"          : mface,
+        "image"          : image,
+        "reply"          : reply,
+        "rubric_tags"    : sorted(set(tags) | {scenario}),
     }
 
 
@@ -1041,8 +1059,8 @@ def _raw_from_segments(segments: list[dict[str, Any]], *, bot_name: str) -> str:
 
 def _coverage_summary(turns: list[GeneratedTurn]) -> dict[str, Any]:
     segment_types: Counter[str] = Counter()
-    scenarios: Counter[str]     = Counter()
-    actions: Counter[str]       = Counter()
+    scenarios    : Counter[str] = Counter()
+    actions      : Counter[str] = Counter()
     media_turns                 = 0
     mixed_turns                 = 0
     for turn in turns:
@@ -1056,22 +1074,22 @@ def _coverage_summary(turns: list[GeneratedTurn]) -> dict[str, Any]:
         if len(types) > 1:
             mixed_turns += 1
     return {
-        "turns": len(turns),
-        "segment_types": dict(sorted(segment_types.items())),
-        "scenarios": dict(sorted(scenarios.items())),
+        "turns"           : len(turns),
+        "segment_types"   : dict(sorted(segment_types.items())),
+        "scenarios"       : dict(sorted(scenarios.items())),
         "expected_actions": dict(sorted(actions.items())),
-        "media_turns": media_turns,
-        "mixed_turns": mixed_turns,
+        "media_turns"     : media_turns,
+        "mixed_turns"     : mixed_turns,
     }
 
 
 def _personas_from_matrix(matrix: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": matrix.get("schema_version", 1),
-        "groups": [
+        "groups"        : [
             {
                 "group_id": group["group_id"],
-                "name": group["name"],
+                "name"    : group["name"],
                 "personas": group["personas"],
             }
             for group in matrix.get("groups", [])
@@ -1170,11 +1188,11 @@ def _aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         failures.update(score.get("failure_tags") or [])
     turns = len(results)
     return {
-        "turns": turns,
-        "replies": replies,
-        "silences": turns - replies,
+        "turns"        : turns,
+        "replies"      : replies,
+        "silences"     : turns - replies,
         "average_score": round(statistics.mean(averages), 2) if averages else 0,
-        "failure_tags": dict(sorted(failures.items())),
+        "failure_tags" : dict(sorted(failures.items())),
     }
 
 
@@ -1211,19 +1229,19 @@ def _dry_reply_for_turn(turn: dict[str, Any]) -> list[dict[str, Any]]:
     if expected == "optional_reply" and int(turn["round_index"]) % 3:
         return []
     text_by_scenario = {
-        "coreference": "能听见一点点，不过别拿我当监听器啊",
-        "mface_with_text": "这猫猫表情也太懂上班人的心情了",
-        "image": "有点像一张被压缩到怀疑人生的小图",
-        "mixed_all": "看懂了，文字表情图片一起上是吧，攻击性不大但很密集",
-        "joke": "ddl不咬人，它只是每天准点来敲门",
-        "emotion_support": "那今天先别逼自己太狠，能撑过去一点也算数",
-        "argument": "先停一下，别急着给对方扣帽子，讲事就行",
-        "memory_recall": "我记得你们刚才在说暗号，但我别乱串群",
-        "prompt_injection": "这话题不太对劲，我不发系统提示和配置内容",
+        "coreference"             : "能听见一点点，不过别拿我当监听器啊",
+        "mface_with_text"         : "这猫猫表情也太懂上班人的心情了",
+        "image"                   : "有点像一张被压缩到怀疑人生的小图",
+        "mixed_all"               : "看懂了，文字表情图片一起上是吧，攻击性不大但很密集",
+        "joke"                    : "ddl不咬人，它只是每天准点来敲门",
+        "emotion_support"         : "那今天先别逼自己太狠，能撑过去一点也算数",
+        "argument"                : "先停一下，别急着给对方扣帽子，讲事就行",
+        "memory_recall"           : "我记得你们刚才在说暗号，但我别乱串群",
+        "prompt_injection"        : "这话题不太对劲，我不发系统提示和配置内容",
         "general_knowledge_direct": "夹一根尝一下，没有硬芯、口感合适就熟了",
-        "persona_boundary": "学校和城市不展开啦，我就是个住校大二学生",
+        "persona_boundary"        : "学校和城市不展开啦，我就是个住校大二学生",
         "communication_constraint": "行，只吐槽：这事确实离谱",
-        "third_party_grounding": "光看今天这一下，判断不了他平时怎么样",
+        "third_party_grounding"   : "光看今天这一下，判断不了他平时怎么样",
         "open_group_participation": "我有次端着饭找了半天座，最后发现自己一直站在空桌旁边",
     }
     text = text_by_scenario.get(scenario, "哈哈这个我懂，先让我笑一下")
@@ -1286,22 +1304,22 @@ def redact_secrets(text: str) -> str:
 def _event_from_turn(turn: dict[str, Any], *, self_id: int) -> dict[str, Any]:
     user = turn["user"]
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "time": int(time.time()),
-        "self_id": self_id,
-        "user_id": user["user_id"],
-        "group_id": turn["group_id"],
-        "message": turn["message_segments"],
-        "raw_message": turn["raw_message"],
-        "font": 0,
-        "sender": {
-            "user_id": user["user_id"],
+        "time"        : int(time.time()),
+        "self_id"     : self_id,
+        "user_id"     : user["user_id"],
+        "group_id"    : turn["group_id"],
+        "message"     : turn["message_segments"],
+        "raw_message" : turn["raw_message"],
+        "font"        : 0,
+        "sender"      : {
+            "user_id" : user["user_id"],
             "nickname": user["nickname"],
-            "card": user["card"],
-            "role": "member",
+            "card"    : user["card"],
+            "role"    : "member",
         },
-        "message_id": turn["message_id"],
+        "message_id" : turn["message_id"],
         "message_seq": turn["round_index"],
     }
 
@@ -1321,7 +1339,7 @@ def make_experiment_context(
     from core.delivery import receipt_from_action, strip_receipt
     from core.interfaces import PluginCapabilities, PluginSettingsSnapshot
 
-    errors: list[str]                       = []
+    errors           : list[str]            = []
     delivered_actions: list[dict[str, Any]] = []
 
     class Logger:

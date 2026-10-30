@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
+
 import tests.helpers.dispatcher_test_support as _fixture_support
 from tests.helpers.dispatcher_test_support import (
-    AsyncMock,
     BlockingConcurrencyProbe,
     CommandSpec,
     Dispatcher,
-    MagicMock,
     MessageContext,
-    Mock,
     PluginExecutionGate,
-    SimpleNamespace,
-    asyncio,
     inspect,
-    logging,
-    pytest,
 )
 
 dispatcher             = _fixture_support.dispatcher
@@ -110,12 +110,12 @@ class TestProcessEventLinearFlow:
     def event_template(self):
         def _build(**overrides):
             base = {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": "",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : "",
             }
             base.update(overrides)
             return base
@@ -269,8 +269,10 @@ class TestProcessEventLinearFlow:
             dispatcher.unmute_group(67890)
 
     @pytest.mark.asyncio
-    async def test_group_mute_blocks_url(self, dispatcher, mock_plugin_registry, event_template):
-        dispatcher.mute_group(67890, 5.0)
+    async def test_group_mute_blocks_url(
+        self, dispatcher, mock_plugin_registry, mock_config_provider, event_template
+    ):
+        mock_config_provider.config["require_bot_name_in_group"] = False
         try:
             url_parser                   = MagicMock()
             url_parser.module.handle_url = AsyncMock(
@@ -279,11 +281,17 @@ class TestProcessEventLinearFlow:
             mock_plugin_registry.get.side_effect = lambda name: (
                 url_parser if name == "url_parser" else None
             )
+            baseline = await dispatcher.handle_event(event_template(message="https://example.com"))
+            assert baseline == [{"type": "text", "data": {"text": "p"}}]
+            url_parser.module.handle_url.assert_awaited_once()
+            url_parser.module.handle_url.reset_mock()
+            dispatcher.mute_group(67890, 5.0)
             result = await dispatcher.handle_event(event_template(message="https://example.com"))
             assert result == []
             url_parser.module.handle_url.assert_not_awaited()
         finally:
             dispatcher.unmute_group(67890)
+            mock_config_provider.config["require_bot_name_in_group"] = True
 
     @pytest.mark.asyncio
     async def test_require_bot_name_false_processes_group_plain_text(
@@ -320,7 +328,7 @@ class TestProcessEventLinearFlow:
         )
         mock_plugin_registry.get.side_effect = lambda name: {
             "xiaoqing_chat": xiaoqing,
-            "smalltalk": generic,
+            "smalltalk"    : generic,
         }.get(name)
 
         result = await dispatcher.handle_event(event_template(message="普通群聊消息"))

@@ -279,8 +279,8 @@ context.list_plugins() -> list[str]
 ```
 
 These are in-process APIs for trusted plugins. Loaded plugins can call them directly.
-Bot Core user commands follow manifest declarations.
-Before a call, Dispatcher uses `command_access` to check Bot administrator status and the private-chat scene.
+Bot Core user commands are authorized per their own manifest declarations; Dispatcher checks them with `command_access` before the call.
+`/help` and `/plugins` are public. `/reload` and `/metrics` need a Bot administrator and work in private and group chats. Mute commands need a Bot administrator and only work in groups. `/set_secret` and `/get_secret` need a Bot administrator and only work in private chats. See the [command entry index](09-plugins.md#️-command-entry-index).
 Deployers protect code-call boundaries through plugin source review.
 
 ## 🧩 Capability
@@ -341,6 +341,8 @@ context.capabilities.ai.list_models(
     required_modalities: tuple[str, ...] = ("text",),
 ) -> tuple[AIModelInfo, ...]
 ```
+
+`list_models()` returns models with usable keys in route order. Missing keys skip a provider; a completely unavailable chain raises `AIConfigError`. `complete()` rejects a pinned model with a missing key. Main routes own routine request parameters; explicit call parameters support dynamic task budgets.
 
 ### `AIModelInfo`
 

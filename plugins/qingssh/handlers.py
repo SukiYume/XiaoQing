@@ -77,8 +77,8 @@ async def _connect_to_server(
         ssh_config = manager.get_ssh_config_for_host(server_name)
         if ssh_config is not None:
             server = {
-                "host": ssh_config["hostname"],
-                "port": ssh_config["port"],
+                "host"    : ssh_config["hostname"],
+                "port"    : ssh_config["port"],
                 "username": ssh_config["user"],
             }
         else:
@@ -104,10 +104,10 @@ async def _connect_to_server(
     try:
         await context.create_session(
             initial_data={
-                SessionKeys.SERVER_NAME: server_name,
-                SessionKeys.HOST: server["host"],
-                SessionKeys.COMMAND_COUNT: 0,
-                SessionKeys.STATE: "connected",
+                SessionKeys.SERVER_NAME      : server_name,
+                SessionKeys.HOST             : server["host"],
+                SessionKeys.COMMAND_COUNT    : 0,
+                SessionKeys.STATE            : "connected",
                 SessionKeys.USERNAME_OVERRIDE: username_override,
             },
             timeout=SESSION_TIMEOUT,
@@ -321,8 +321,8 @@ async def handle_ssh_add(
     if not parts:
         await context.create_session(
             initial_data={
-                SessionKeys.STATE: "adding",
-                SessionKeys.STEP: "name",
+                SessionKeys.STATE        : "adding",
+                SessionKeys.STEP         : "name",
                 SessionKeys.SERVER_CONFIG: {},
             },
             timeout=ADD_SERVER_TIMEOUT,

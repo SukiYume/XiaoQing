@@ -20,7 +20,7 @@ import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 _READ_SIZE                = 64 * 1024
 _COPY_SIZE                = 1024 * 1024
@@ -227,6 +227,47 @@ def _wait_for_posix_group_exit(process_id: int, timeout: float) -> bool:
     return not _send_posix_group_signal(process_id, 0)
 
 
+# Windows 上主进程先退出后，taskkill /T 已找不到它的后代；用作业对象持有整棵进程树，
+# 主进程退出与否都能一并回收继承了输出管道的子孙进程。
+_WINDOWS_JOBS: dict[int, int] = {}
+
+
+def _attach_windows_job(process: subprocess.Popen[Any]) -> None:
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.OpenProcess.restype      = wintypes.HANDLE
+    job                               = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return
+    process_all_access = 0x1F0FFF
+    handle             = kernel32.OpenProcess(process_all_access, False, process.pid)
+    if handle and kernel32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(handle)):
+        _WINDOWS_JOBS[process.pid] = job
+    else:
+        kernel32.CloseHandle(wintypes.HANDLE(job))
+    if handle:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
+def _terminate_windows_job(process: subprocess.Popen[Any]) -> bool:
+    job = _WINDOWS_JOBS.pop(process.pid, None)
+    if job is None:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        return bool(kernel32.TerminateJobObject(wintypes.HANDLE(job), 1))
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(job))
+
+
 def _terminate_process_tree(
     process: subprocess.Popen[bytes],
 ) -> tuple[int, Exception | None]:
@@ -235,6 +276,10 @@ def _terminate_process_tree(
     tree_error: Exception | None = None
     group_signaled               = False
     if os.name == "nt":
+        if _terminate_windows_job(process):
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            return process.returncode if process.returncode is not None else 1, None
         if process.poll() is not None:
             return process.returncode, None
         system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
@@ -398,9 +443,9 @@ def run_process(
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup_info.wShowWindow = subprocess.SW_HIDE
 
-    errors: list[Exception]                 = []
+    errors         : list[Exception]        = []
     started_threads: list[threading.Thread] = []
-    stopping: threading.Event | None        = None
+    stopping       : threading.Event | None = None
     cleaned_up                              = False
     process: subprocess.Popen[bytes] | None = None
     try:
@@ -417,6 +462,7 @@ def run_process(
             # 保持既有 taskkill /T 语义，不改变生产监控链。
             start_new_session=os.name != "nt",
         )
+        _attach_windows_job(process)
         if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen 契约
             raise RuntimeError("failed to create output pipes")
 
@@ -424,10 +470,10 @@ def run_process(
         stopping = threading.Event()
         common   = {
             "maximum_bytes": maximum_bytes,
-            "backup_count": backup_count,
-            "errors": errors,
-            "failed": failed,
-            "stopping": stopping,
+            "backup_count" : backup_count,
+            "errors"       : errors,
+            "failed"       : failed,
+            "stopping"     : stopping,
         }
         thread_specs = (
             (process.stdout, stdout_log, "stdout-log-pump"),

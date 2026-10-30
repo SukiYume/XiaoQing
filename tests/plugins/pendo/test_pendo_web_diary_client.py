@@ -100,6 +100,11 @@ const showConfirmModal = async () => globalThis.__confirmResult;
 const safeHtml = (value) => value;""",
         ),
         (
+            "import { captureFormDraft, reopenWithDraft } from '../components/form.js';",
+            """const captureFormDraft = () => ({ fields: [], groups: [] });
+const reopenWithDraft = async (open) => { await open(); };""",
+        ),
+        (
             "import { buildFormHTML, getFormData, initFormInteractions } "
             "from '../components/form.js';",
             """const buildFormHTML = () => '<div class="stub-fields"></div>';
@@ -152,6 +157,7 @@ const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...a
 } from '../utils/timezone.js';""",
             timezone_runtime,
         ),
+        ("import { createInstantMemory } from '../utils/timezone.js';", ""),
     )
     for original, replacement in replacements:
         assert original in source
@@ -422,12 +428,12 @@ def test_diary_month_loads_ignore_stale_and_destroyed_responses() -> None:
 
         const monthChange = client.updateMonth(2026, 3);
         assert.equal(requests.length, 4);
-        const currentOverview = requests.find((request) =>
+        const currentOverview = requests.slice(2).find((request) =>
             request.path === '/stats/diary/overview'
             && request.params.year === 2026
             && request.params.month === 3
         );
-        const currentItems = requests.find((request) =>
+        const currentItems = requests.slice(2).find((request) =>
             request.path === '/items'
             && request.params.start_date === '2026-03-01'
         );

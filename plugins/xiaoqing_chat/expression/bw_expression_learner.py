@@ -14,6 +14,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.lifecycle import to_thread_owned
+
 from ..config.config import PersonalityConfig
 from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
 from ..llm.llm_config import LLMCallConfig
@@ -77,7 +79,7 @@ _SINGLE_CHECK_PROMPT = """你是表达方式审核器。你要判断一条“表
 @dataclass(frozen=True)
 class LearnedExpression:
     situation: str
-    style: str
+    style    : str
     source_id: str
 
 
@@ -93,8 +95,8 @@ def _similarity(a: str, b: str) -> float:
 def _build_dialogue(
     messages: Sequence[StoredMessage], *, max_lines: int = 60
 ) -> tuple[str, frozenset[str]]:
-    lines: list[str]     = []
-    source_ids: set[str] = set()
+    lines     : list[str] = []
+    source_ids: set[str]  = set()
     for msg in messages[-max_lines:]:
         if msg.role == "assistant":
             continue
@@ -127,9 +129,10 @@ async def learn_from_messages(
 
     prompt = _LEARN_PROMPT.format(dialogue=dialogue)
     resp, _ = await chat_completions_raw_with_fallback_paths(
+        route    = "reasoning",
         secrets  = secrets,
         messages = [{"role": "user", "content": prompt}],
-        **llm.bounded(max_temperature=0.7, max_tokens=900, min_tokens=500).as_kwargs(),
+        **llm.as_kwargs(),
     )
     content                      = extract_response_content(resp)
     arr                          = parse_first_json_array(str(content))
@@ -165,9 +168,10 @@ async def single_expression_check(
         persona_text=persona_text, situation=situation.strip(), style=style.strip()
     )
     resp, _ = await chat_completions_raw_with_fallback_paths(
+        route    = "reasoning",
         secrets  = secrets,
         messages = [{"role": "user", "content": prompt}],
-        **llm.bounded(max_temperature=0.4, max_tokens=400).as_kwargs(),
+        **llm.as_kwargs(),
     )
     content = extract_response_content(resp)
     ok, obj = get_items_from_json(
@@ -177,11 +181,11 @@ async def single_expression_check(
         "reason",
         optional_items = ("modified_situation", "modified_style"),
         default_values = {
-            "checked": False,
-            "rejected": False,
-            "reason": "",
+            "checked"           : False,
+            "rejected"          : False,
+            "reason"            : "",
             "modified_situation": "",
-            "modified_style": "",
+            "modified_style"    : "",
         },
         allow_array=False,
     )
@@ -299,8 +303,12 @@ async def upsert_learned(
     llm: LLMCallConfig,
     expected_generation: str | None = None,
 ) -> int:
-    generation = store.generation(chat_id) if expected_generation is None else expected_generation
-    items      = store.load()
+    generation = (
+        await to_thread_owned(store.generation, chat_id)
+        if expected_generation is None
+        else expected_generation
+    )
+    items = await to_thread_owned(store.load)
     changed, touched = _merge_learned(
         items, learned, chat_id=chat_id, threshold=float(similarity_threshold), now=time.time()
     )
@@ -319,10 +327,14 @@ async def upsert_learned(
     scoped = [item for item in items if item.chat_id == chat_id]
     other  = [item for item in items if item.chat_id != chat_id]
     scoped.sort(key=lambda item: (item.last_active_time, item.count), reverse=True)
-    limit = max(0, int(max_store))
-    items = other + (scoped[:limit] if limit else [])
-    with store.generation_guard(chat_id, generation) as current:
-        if not current:
-            return 0
-        store.save(items)
-    return changed
+    limit    = max(0, int(max_store))
+    items[:] = other + (scoped[:limit] if limit else [])
+
+    def commit() -> int:
+        with store.generation_guard(chat_id, generation) as current:
+            if not current:
+                return 0
+            store.save(items)
+        return changed
+
+    return await to_thread_owned(commit)

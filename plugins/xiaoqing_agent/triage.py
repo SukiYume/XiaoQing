@@ -12,16 +12,15 @@ from .loop import AGENT_ROUTE
 from .prompts import build_triage_messages, capability_summary, current_time
 from .tasks import AgentTask
 
-TRIAGE_ROUTE    = "triage"
-TRIAGE_ACTIONS  = frozenset({"conversation", "task", "cancel", "status", "update"})
-_MAX_TASK_ID    = 32
-_TRIAGE_TIMEOUT = 20.0
-_FENCE_RE       = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+TRIAGE_ROUTE   = "triage"
+TRIAGE_ACTIONS = frozenset({"conversation", "task", "cancel", "status", "update"})
+_MAX_TASK_ID   = 32
+_FENCE_RE      = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
 class TriageDecision:
-    action: str
+    action : str
     task_id: str = ""
 
 
@@ -113,7 +112,5 @@ async def triage_turn(
     result = await ai.complete(
         route,
         messages,
-        temperature           = 0.1,
-        total_timeout_seconds = _TRIAGE_TIMEOUT,
     )
     return parse_decision(result.content, running=running)

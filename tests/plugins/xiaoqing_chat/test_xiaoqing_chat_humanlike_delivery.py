@@ -118,8 +118,8 @@ def test_reply_cannot_repeat_its_own_recent_sentence_verbatim():
         StoredMessage(role="user", name="Momo", ts=3.0, content="小青你说怎么治"),
     ]
     common = {
-        "history": history,
-        "max_repeat_compare": 2,
+        "history"             : history,
+        "max_repeat_compare"  : 2,
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 3,
     }
@@ -157,20 +157,20 @@ def test_single_latest_history_message_is_not_marked_as_forgotten():
 
 def _response(**changes):
     payload = {
-        "suitable": True,
-        "reason": "",
-        "need_replan": False,
-        "severity": "soft",
-        "context_coherent": True,
-        "speaker_correct": True,
-        "instruction_followed": True,
-        "persona_grounded": True,
-        "factually_plausible": True,
-        "non_template": True,
+        "suitable"             : True,
+        "reason"               : "",
+        "need_replan"          : False,
+        "severity"             : "soft",
+        "context_coherent"     : True,
+        "speaker_correct"      : True,
+        "instruction_followed" : True,
+        "persona_grounded"     : True,
+        "factually_plausible"  : True,
+        "non_template"         : True,
         "persona_scan_complete": True,
-        "persona_claims": [],
+        "persona_claims"       : [],
         "context_scan_complete": True,
-        "context_claims": [],
+        "context_claims"       : [],
     }
     payload.update(changes)
     return json.dumps(payload, ensure_ascii=False)
@@ -318,10 +318,10 @@ def test_prices_computed_from_the_poster_are_supported(claim, expected):
 
 
 _MEME_PART = {
-    "kind": "emoji",
-    "media_hash": "a6ee",
-    "marker": "[表情包：慵懒，放松]",
-    "description": "橙色卡通猫趴着，文字内容是“我只是坐一下 一坐就是半小时”",
+    "kind"        : "emoji",
+    "media_hash"  : "a6ee",
+    "marker"      : "[表情包：慵懒，放松]",
+    "description" : "橙色卡通猫趴着，文字内容是“我只是坐一下 一坐就是半小时”",
     "emotion_tags": ["慵懒", "放松"],
 }
 
@@ -345,8 +345,8 @@ def test_older_image_outside_the_window_stays_quotable():
         parts = (
             {"kind": "text", "text": "路过看到的"},
             {
-                "kind": "image",
-                "marker": "[图片：饮品优惠卡片，文字内容是“地点：东门小广场”]",
+                "kind"       : "image",
+                "marker"     : "[图片：饮品优惠卡片，文字内容是“地点：东门小广场”]",
                 "description": "饮品优惠卡片，文字内容是“地点：东门小广场”",
             },
         ),
@@ -454,8 +454,8 @@ def test_resending_the_same_sticker_on_request_is_not_a_verbatim_repeat():
     sticker = "[表情包：慵懒，满足；写着“我只是坐一下”]"
     history = [StoredMessage(role="assistant", name="小青", content=sticker, ts=time.time())]
     kwargs = {
-        "history": history,
-        "max_repeat_compare": 4,
+        "history"             : history,
+        "max_repeat_compare"  : 4,
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 0,
     }
@@ -471,7 +471,7 @@ def test_visual_evidence_quote_tolerates_ocr_spacing():
         content=_response(
             visual_claims=[
                 {
-                    "claim": "周日九点到十二点暂停",
+                    "claim"   : "周日九点到十二点暂停",
                     "evidence": "10月18日（周日） 09:00—12:00 暂停开放",
                 }
             ],
@@ -580,7 +580,7 @@ def test_unsourced_claim_only_counts_as_dialogue_fact_when_it_concerns_people(cl
         allow_low_stakes_persona_fiction = True,
         # 对话行带“时:分”前缀，日期里的“17”不能被当成人名。
         source_records={
-            "h1": "17:37, 阿杰: 我在补孤独摇滚",
+            "h1"     : "17:37, 阿杰: 我在补孤独摇滚",
             "current": "小青你觉得呢",
         },
     )

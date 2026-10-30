@@ -233,20 +233,20 @@ def _refusal_text(node: CommandCatalogNode, refusal: str, *, is_private: bool, r
 class MessageContext:
     """消息上下文，封装消息相关的所有信息"""
 
-    request_id: str  # 请求追踪 ID
-    text: str  # 原始文本
-    clean_text: str  # 去除前缀后的文本
-    user_id: int | None  # 用户 ID
-    group_id: int | None  # 群 ID (私聊为 None)
-    is_private: bool  # 是否私聊
-    has_bot_name: bool  # 是否包含 bot_name（任意位置）
-    has_prefix: bool  # 是否"指向 bot"：/开头 OR bot_name OR @me（任意位置）
+    request_id        : str  # 请求追踪 ID
+    text              : str  # 原始文本
+    clean_text        : str  # 去除前缀后的文本
+    user_id           : int | None  # 用户 ID
+    group_id          : int | None  # 群 ID (私聊为 None)
+    is_private        : bool  # 是否私聊
+    has_bot_name      : bool  # 是否包含 bot_name（任意位置）
+    has_prefix        : bool  # 是否"指向 bot"：/开头 OR bot_name OR @me（任意位置）
     has_command_prefix: bool  # 是否以命令前缀（默认 "/"）开头
-    is_only_bot_name: bool  # 是否只叫 bot_name
-    is_at_me: bool  # 是否 @ 了机器人
-    is_url_only: bool  # clean_text 严格匹配 ^https?://\S+$
-    event: dict[str, Any]  # 原始事件
-    is_empty: bool = False  # 无文本、媒体或 @；仅允许活跃会话消费
+    is_only_bot_name  : bool  # 是否只叫 bot_name
+    is_at_me          : bool  # 是否 @ 了机器人
+    is_url_only       : bool  # clean_text 严格匹配 ^https?://\S+$
+    event             : dict[str, Any]  # 原始事件
+    is_empty          : bool = False  # 无文本、媒体或 @；仅允许活跃会话消费
     # Read-only routing hint.  The continuation path always revalidates the
     # session generation inside SessionManager.update() before doing work.
     cached_session: Session | None = None

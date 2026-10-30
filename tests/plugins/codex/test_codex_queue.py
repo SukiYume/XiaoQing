@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
 
 import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
     MAX_MESSAGE_TEXT_LENGTH,
     PNG_BYTES,
-    AsyncMock,
     CodexImageArtifact,
     CwdError,
     FakeContext,
     FakeRunner,
-    Path,
     _arxiv_addon,
     _install_actual_runner_manager,
     _install_fake_manager,
@@ -22,12 +26,9 @@ from tests.helpers.codex_test_support import (
     _valid_arxiv_summary,
     _wait_manager_idle,
     _wait_until,
-    asyncio,
     codex_main,
-    json,
     load_plugin_config,
     normalize_cwd,
-    pytest,
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -48,21 +49,21 @@ def test_codex_config_rejects_implicit_coercions_and_clamps_resources(tmp_path: 
     raw     = context.config["plugins"]["codex"]
     raw.update(
         {
-            "allowed_cwd_roots": [str(tmp_path), 123, "", str(tmp_path)],
-            "max_parallel_jobs": True,
-            "max_prompt_chars": 9_000_000,
-            "spawn_timeout_seconds": 1.5,
-            "job_timeout_seconds": "90",
-            "max_image_bytes": 100 * 1024**2,
-            "max_image_total_bytes": 64 * 1024,
-            "sandbox": "escape-everything",
-            "approval_policy": ["never"],
-            "skip_git_repo_check": "false",
-            "protected_sessions": ["safe", 7, "bad\nlabel"],
-            "arxiv_summary": {"label": "bad label", "methodology": []},
-            "session_ttl_days": True,
+            "allowed_cwd_roots"      : [str(tmp_path), 123, "", str(tmp_path)],
+            "max_parallel_jobs"      : True,
+            "max_prompt_chars"       : 9_000_000,
+            "spawn_timeout_seconds"  : 1.5,
+            "job_timeout_seconds"    : "90",
+            "max_image_bytes"        : 100 * 1024**2,
+            "max_image_total_bytes"  : 64 * 1024,
+            "sandbox"                : "escape-everything",
+            "approval_policy"        : ["never"],
+            "skip_git_repo_check"    : "false",
+            "protected_sessions"     : ["safe", 7, "bad\nlabel"],
+            "arxiv_summary"          : {"label": "bad label", "methodology": []},
+            "session_ttl_days"       : True,
             "artifact_retention_days": 99_999,
-            "emergency_disk_bytes": -1,
+            "emergency_disk_bytes"   : -1,
         }
     )
 
@@ -504,14 +505,14 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
 
     async def delayed_spawn(*_args, **_kwargs):
         spawn_started.set()
-        await allow_spawn.wait()
+        await asyncio.wait_for(allow_spawn.wait(), timeout=10)
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
     terminate = _patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "side effect", user_id=1, group_id=2, context=context)
-    await spawn_started.wait()
+    await asyncio.wait_for(spawn_started.wait(), timeout=10)
     job = manager.running["race"]
     assert job.status == "starting"
     cancel_task = asyncio.create_task(manager.cancel("race", job.job_id))
@@ -562,7 +563,7 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
 
     async def delayed_authorize(label, job):
         before_prompt.set()
-        await allow_prompt.wait()
+        await asyncio.wait_for(allow_prompt.wait(), timeout=10)
         return await original_authorize(label, job)
 
     manager._authorize_job_prompt = delayed_authorize  # type: ignore[method-assign]
@@ -570,7 +571,7 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
     terminate = _patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "side effect", user_id=1, group_id=2, context=context)
-    await before_prompt.wait()
+    await asyncio.wait_for(before_prompt.wait(), timeout=10)
     job = manager.running["race"]
     assert job.spawn_handoff.is_set()
     assert job.process is process
@@ -604,7 +605,7 @@ async def test_cancel_after_prompt_commit_terminates_and_finishes_cancelled(
     _patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "running body", user_id=1, group_id=2, context=context)
-    await process.prompt_sent.wait()
+    await asyncio.wait_for(process.prompt_sent.wait(), timeout=10)
     job = manager.running["race"]
     assert job.status == "running"
     assert job.prompt_started is True
@@ -633,12 +634,12 @@ async def test_spawn_failure_completes_handoff_and_terminal_state(
 
     async def failing_spawn(*_args, **_kwargs):
         spawn_started.set()
-        await fail_spawn.wait()
+        await asyncio.wait_for(fail_spawn.wait(), timeout=10)
         raise OSError("spawn failed")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_spawn)
     await manager.enqueue("race", "body", user_id=1, group_id=2, context=context)
-    await spawn_started.wait()
+    await asyncio.wait_for(spawn_started.wait(), timeout=10)
     job = manager.running["race"]
     fail_spawn.set()
     await _wait_manager_idle(manager)
@@ -666,13 +667,13 @@ async def test_shutdown_during_spawn_uses_same_handoff_without_prompt(
 
     async def delayed_spawn(*_args, **_kwargs):
         spawn_started.set()
-        await allow_spawn.wait()
+        await asyncio.wait_for(allow_spawn.wait(), timeout=10)
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
     _patch_race_termination(monkeypatch)
     await manager.enqueue("race", "shutdown body", user_id=1, group_id=2, context=context)
-    await spawn_started.wait()
+    await asyncio.wait_for(spawn_started.wait(), timeout=10)
     job = manager.running["race"]
 
     shutdown_task = asyncio.create_task(manager.shutdown())
@@ -702,7 +703,7 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
     never = asyncio.Event()
 
     async def stuck_spawn(*_args, **_kwargs):
-        await never.wait()
+        await asyncio.wait_for(never.wait(), timeout=10)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", stuck_spawn)
     await manager.enqueue("race", "body", user_id=1, group_id=2, context=context)

@@ -1,8 +1,14 @@
 # 插件运行期控制：执行策略、服务绑定和旧代排空统一收口。
-# mypy: disable-error-code=attr-defined
 """Plugin execution policy, service binding, and runtime drain responsibilities."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
+    from .plugin_manager_support import _LifecycleTaskOutcome
 
 import asyncio
 import logging
@@ -35,17 +41,67 @@ logger = logging.getLogger(__name__)
 
 
 class PluginRuntimeMixin:
-    _plugins: dict[str, LoadedPlugin]
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        @staticmethod
+        async def _capture_lifecycle(awaitable: Awaitable[Any]) -> _LifecycleTaskOutcome:
+            raise NotImplementedError
+
+        _change_handlers: list[Any]
+
+        _deferred_lifecycle_errors: dict[str, list[BaseException]]
+
+        _execution_gates: dict[str, PluginExecutionGate]
+
+        @staticmethod
+        def _is_fatal_base_exception(exc: BaseException) -> bool:
+            raise NotImplementedError
+
+        def _log_watch_error(
+            self,
+            bucket: str,
+            message: str,
+            exc: BaseException,
+            *,
+            level: int = logging.WARNING,
+        ) -> None:
+            raise NotImplementedError
+
+        def _plugin_runtime_names(self) -> set[str]:
+            raise NotImplementedError
+
+        @classmethod
+        def _raise_preferred_lifecycle_error(
+            cls,
+            primary: BaseException,
+            cleanup: BaseException,
+        ) -> None:
+            raise NotImplementedError
+
+        def _release_import_paths(self) -> None:
+            raise NotImplementedError
+
+        @staticmethod
+        def _unwrap_lifecycle_outcome(value: Any) -> Any:
+            raise NotImplementedError
+
+        _watch_waiters: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Event]]
+
+        _watch_waiters_lock: Any
+
+        router: Any
+    _plugins            : dict[str, LoadedPlugin]
     _quarantined_plugins: set[str]
-    _services: dict[str, LoadedPluginService]
-    _pending_plugins: dict[
+    _services           : dict[str, LoadedPluginService]
+    _pending_plugins    : dict[
         asyncio.Task[Any],
         tuple[PluginDefinition, ModuleType, float],
     ]
     _pending_transactions: dict[asyncio.Task[Any], _PluginLoadTransaction]
-    _poll_interval: float
-    _poll_revision: int
-    _sync_broker: PluginSyncBroker
+    _poll_interval       : float
+    _poll_revision       : int
+    _sync_broker         : PluginSyncBroker
     _purge_plugin_modules: Callable[[str], dict[str, ModuleType]]
 
     def on_change(self, handler) -> None:
@@ -463,8 +519,8 @@ class PluginRuntimeMixin:
         close_task = asyncio.create_task(
             self._capture_lifecycle(gate.close(timeout_seconds=close_timeout))
         )
-        interrupted: BaseException | None         = None
-        result: PluginExecutionDrainResult | None = None
+        interrupted: BaseException | None              = None
+        result     : PluginExecutionDrainResult | None = None
 
         while result is None:
             try:

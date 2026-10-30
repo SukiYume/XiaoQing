@@ -274,7 +274,7 @@ context.list_plugins() -> list[str]
 ```
 
 这些方法属于受信任插件的进程内 API，已加载插件可直接调用。
-Bot Core 的用户命令按 Manifest 声明，由 Dispatcher 在调用前用 `command_access` 校验 Bot 管理员与私聊场景。
+Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在调用前用 `command_access` 校验：`/help`、`/plugins` 对所有人开放；`/reload`、`/metrics` 需要 Bot 管理员，私聊、群聊均可；静音命令需要 Bot 管理员且仅限群聊；`/set_secret`、`/get_secret` 需要 Bot 管理员且仅限私聊。完整列表见[插件使用手册的命令入口速查](09-plugins.md#️-命令入口速查)。
 部署者通过插件来源审查保护代码调用边界。
 
 ---
@@ -334,6 +334,8 @@ context.capabilities.ai.list_models(
     required_modalities: tuple[str, ...] = ("text",),
 ) -> tuple[AIModelInfo, ...]
 ```
+
+`list_models()` 按路由顺序返回具备密钥的可用模型。缺少密钥的供应商自动跳过；整条链不可用时抛出 `AIConfigError`。`complete()` 对显式固定的缺密钥模型报错。常规请求参数由主配置路由提供，调用参数用于动态任务预算。
 
 ### `AIModelInfo`
 

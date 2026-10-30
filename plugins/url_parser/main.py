@@ -292,7 +292,7 @@ async def _build_preview(url: str, context: Context) -> MessageSegments:
         return []
 
     response: MessageSegments = []
-    if title or description:
+    if title or description or image_path is not None:
         lines = [f"🔗 {title or '网页预览'}"]
         if description:
             lines.append(description)

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar, cast
+
+T = TypeVar("T")
 
 
 class LazyAsyncLock:
@@ -91,3 +93,21 @@ async def await_owned_task(
                 break
             continue
     return task.result()
+
+
+async def to_thread_owned(function: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
+    """在线程中运行阻塞工作，调用方取消时仍等线程结束，再把取消传播出去。
+
+    ``asyncio.to_thread`` 被取消只放弃等待，线程照常运行。持锁写盘、启动外部资源这类
+    工作若在锁释放后才落地，会覆盖后来者的结果；这里让等待范围覆盖线程的真实生命周期。
+    """
+
+    task         = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancellation = DeferredCancellation()
+    try:
+        result = await await_owned_task(task, cancellation)
+    except BaseException as exc:
+        cancellation.raise_if_requested(cause=exc)
+        raise
+    cancellation.raise_if_requested()
+    return cast(T, result)

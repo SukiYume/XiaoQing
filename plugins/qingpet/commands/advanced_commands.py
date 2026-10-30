@@ -15,28 +15,28 @@ from ..utils.validators import validate_item_amount
 from .basic_commands import resolve_pet_for_self_command, with_pet_name
 
 _TRAINING_TYPES = {
-    "体力": "strength",
-    "strength": "strength",
-    "敏捷": "agility",
-    "agility": "agility",
-    "智力": "intellect",
+    "体力"       : "strength",
+    "strength" : "strength",
+    "敏捷"       : "agility",
+    "agility"  : "agility",
+    "智力"       : "intellect",
     "intellect": "intellect",
 }
 _EXPLORE_LOCATIONS = {
-    "森林": "forest",
+    "森林"    : "forest",
     "forest": "forest",
-    "海边": "beach",
-    "beach": "beach",
-    "山洞": "cave",
-    "cave": "cave",
-    "废墟": "ruins",
-    "ruins": "ruins",
+    "海边"    : "beach",
+    "beach" : "beach",
+    "山洞"    : "cave",
+    "cave"  : "cave",
+    "废墟"    : "ruins",
+    "ruins" : "ruins",
 }
 _RANKING_TYPES = ("care_score", "intimacy", "experience", "coins")
 _TASK_NAMES    = {
-    "feed": "喂食宠物",
+    "feed" : "喂食宠物",
     "clean": "清洁宠物",
-    "play": "玩耍互动",
+    "play" : "玩耍互动",
     "visit": "访问他人宠物",
 }
 
@@ -375,7 +375,8 @@ def handle_message(user_id: str, group_id: int, args: str, db: Database) -> tupl
         social_service = SocialService(db)
         return social_service.get_messages(user_id, group_id)
 
-    match = re.match(r"@?(\d+)\s+(.+)", args.strip())
+    # 完整拆分目标与正文：正文可以换行，不能只取首行就宣称写入成功。
+    match = re.fullmatch(r"@?(\d+)\s+(.+)", args.strip(), re.DOTALL)
     if not match:
         return False, "格式错误\n用法: /宠物 留言 @QQ号 <内容>\n用法: /宠物 留言 （查看你的留言）"
 

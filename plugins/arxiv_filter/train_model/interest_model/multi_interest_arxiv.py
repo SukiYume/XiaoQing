@@ -69,9 +69,9 @@ class TrainingConfig:
     #               ④ 时域天文 / 变星 / 超新星
     #               ⑤ 软件工具 / 数据方法（防止"垃圾桶"cluster）
     #   如果重新训练后 WD/Pulsar 仍有遗漏，可尝试 n=11~12。
-    n_interests: int = 6
-    batch_size: int  = 256
-    val_size: float  = 0.15
+    n_interests: int   = 6
+    batch_size : int   = 256
+    val_size   : float = 0.15
     # beta 影响阈值选取方向：
     #   beta=2.0 → 严重偏向 Recall，threshold 极低 → 推的数量过多（原始问题）
     #   beta=1.0 → F1，Precision/Recall 对等（可用于更克制的推荐实验）
@@ -79,9 +79,9 @@ class TrainingConfig:
     beta: float = 2.0
     # min_threshold：F-beta 优化后的阈值下限，防止极端不平衡数据集上阈值被压得过低
     min_threshold: float = 0.40
-    split_mode: str      = "random"
-    random_seed: int     = 42
-    max_len: int         = 512
+    split_mode   : str   = "random"
+    random_seed  : int   = 42
+    max_len      : int   = 512
 
     def __post_init__(self) -> None:
         if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
@@ -108,11 +108,11 @@ def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
     return _training.resolve_columns(
         df,
         {
-            "id": ["arxivid", "id", "paperid", "articleid"],
-            "title": ["title", "papertitle"],
+            "id"      : ["arxivid", "id", "paperid", "articleid"],
+            "title"   : ["title", "papertitle"],
             "abstract": ["abstract", "summary", "description"],
-            "label": ["label", "interest", "target", "y"],
-            "date": [
+            "label"   : ["label", "interest", "target", "y"],
+            "date"    : [
                 "date",
                 "created",
                 "createddate",
@@ -181,7 +181,7 @@ def split_dataframe(
         log                       = _log,
         missing_date_error        = "split_mode=time 时需要可识别的日期列。",
         stratify_fallback_message = "警告：分层随机切分失败，自动退回普通随机切分。",
-        invalid_dates_message     = "警告：有 {count} 条记录日期无法解析，将被放到最前面参与时间排序。",
+        invalid_dates_message     = "警告：有 {count} 条记录日期无法解析，将排在最前面进入训练集。",
         empty_training_error      = "验证集比例过大，导致训练集为空。",
         unknown_mode_error        = "未知 split_mode: {mode}",
     )
@@ -194,20 +194,20 @@ def split_dataframe(
 
 @dataclass(slots=True)
 class ModelArtifacts:
-    encoder_name: str
-    n_interests: int
-    embedding_dim: int
+    encoder_name    : str
+    n_interests     : int
+    embedding_dim   : int
     interest_centers: np.ndarray
-    pos_centroid: np.ndarray
-    neg_centroid: np.ndarray | None
-    classifier: LogisticRegression
-    threshold: float
-    threshold_beta: float
+    pos_centroid    : np.ndarray
+    neg_centroid    : np.ndarray | None
+    classifier      : LogisticRegression
+    threshold       : float
+    threshold_beta  : float
     cluster_keywords: list[str]
-    cluster_sizes: list[int]
+    cluster_sizes   : list[int]
     cluster_examples: list[list[str]]
-    feature_names: list[str]
-    columns: dict[str, str | None]
+    feature_names   : list[str]
+    columns         : dict[str, str | None]
 
 
 # =============================================================================
@@ -223,6 +223,7 @@ class MultiInterestArxivModel:
         batch_size: int       = 256,
         threshold_beta: float = 2.0,
         random_state: int     = 42,
+        max_len: int | None   = None,
     ):
         if not isinstance(encoder_name, str) or not encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
@@ -243,7 +244,9 @@ class MultiInterestArxivModel:
         self.random_state   = random_state
 
         _log(f"Loading encoder: {encoder_name}")
-        self.encoder       = _training.load_sentence_transformer_class()(encoder_name)
+        self.encoder = _training.apply_max_len(
+            _training.load_sentence_transformer_class()(encoder_name), max_len
+        )
         self.embedding_dim = int(self.encoder.get_sentence_embedding_dimension())
         if self.embedding_dim <= 0:
             raise ValueError("encoder returned an invalid embedding dimension")
@@ -256,9 +259,9 @@ class MultiInterestArxivModel:
         if not texts:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
         kw: dict[str, Any] = {
-            "batch_size": self.batch_size,
-            "show_progress_bar": True,
-            "convert_to_numpy": True,
+            "batch_size"          : self.batch_size,
+            "show_progress_bar"   : True,
+            "convert_to_numpy"    : True,
             "normalize_embeddings": True,
         }
         if self._use_fp16:
@@ -353,7 +356,7 @@ class MultiInterestArxivModel:
         sims_all = pos_embeddings @ centers.T
         all_labels = sims_all.argmax(axis=1)
         keywords: list[str]       = []
-        sizes: list[int]          = []
+        sizes   : list[int]       = []
         examples: list[list[str]] = []
 
         for ci in range(k):
@@ -544,6 +547,7 @@ class MultiInterestArxivModel:
         self,
         val_df: pd.DataFrame,
         precomputed_embeddings: np.ndarray | None = None,
+        min_threshold: float | None               = None,
     ) -> tuple[float, float]:
         if self.artifacts is None:
             raise RuntimeError("模型尚未训练或加载。")
@@ -561,6 +565,14 @@ class MultiInterestArxivModel:
         )["interest_prob"].to_numpy()
 
         threshold, best_fb = _training.best_fbeta_threshold(y_true, y_score, self.threshold_beta)
+        if min_threshold is not None and threshold < min_threshold:
+            _log(
+                f"[Validation] 阈值 {threshold:.4f} 低于 min_threshold={min_threshold:.4f}，"
+                f"已强制抬升；最优候选 F{self.threshold_beta:.1f}={best_fb:.4f}"
+            )
+            threshold = min_threshold
+            # 写入训练配置的分数必须对应最终部署阈值。
+            best_fb = _training.fbeta_at_threshold(y_true, y_score, threshold, self.threshold_beta)
         self.artifacts.threshold = threshold
         return threshold, best_fb
 
@@ -706,9 +718,9 @@ class MultiInterestArxivModel:
 
         clusters = [
             {
-                "cluster_id": i,
-                "size": a.cluster_sizes[i],
-                "keywords": a.cluster_keywords[i],
+                "cluster_id"    : i,
+                "size"          : a.cluster_sizes[i],
+                "keywords"      : a.cluster_keywords[i],
                 "example_titles": a.cluster_examples[i],
             }
             for i in range(a.n_interests)
@@ -732,15 +744,15 @@ def save_training_config(
     best_fbeta: float,
 ) -> None:
     payload = {
-        "model_type": "multi_interest",
-        "runtime_model_path": ".",
-        "model_name": config.encoder_name,
-        "max_len": config.max_len,
-        "optimal_threshold": float(optimal_threshold),
+        "model_type"           : "multi_interest",
+        "runtime_model_path"   : ".",
+        "model_name"           : config.encoder_name,
+        "max_len"              : config.max_len,
+        "optimal_threshold"    : float(optimal_threshold),
         "best_validation_fbeta": float(best_fbeta),
-        "threshold_beta": float(config.beta),
-        "input_mode": "title_abstract",
-        "train_version": "multi_interest_v1",
+        "threshold_beta"       : float(config.beta),
+        "input_mode"           : "title_abstract",
+        "train_version"        : "multi_interest_v1",
     }
     (output_dir / "training_config.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8"
@@ -798,6 +810,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
         batch_size     = config.batch_size,
         threshold_beta = config.beta,
         random_state   = config.random_seed,
+        max_len        = config.max_len,
     )
 
     # 预计算 embeddings（训练集和验证集各编码一次，后续全部复用）
@@ -813,19 +826,12 @@ def main(config: TrainingConfig = CONFIG) -> None:
 
     model.fit(train_df, precomputed_embeddings=train_emb)
 
+    # 阈值下限防止 F-beta 优化出过低的阈值（导致推荐数量过多）；分数按最终阈值重算。
     threshold, best_fbeta = model.select_threshold_on_validation(
-        val_df, precomputed_embeddings=val_emb
+        val_df, precomputed_embeddings=val_emb, min_threshold=config.min_threshold
     )
-    # 应用阈值下限，防止 F-beta 优化出过低的阈值（导致推荐数量过多）
-    if threshold < config.min_threshold:
-        _log(
-            f"[Validation] 阈值 {threshold:.4f} 低于 min_threshold={config.min_threshold:.4f}，已强制抬升。"
-        )
-        threshold = config.min_threshold
-        assert model.artifacts is not None
-        model.artifacts.threshold = threshold
     _log(
-        f"[Validation] selected threshold = {threshold:.4f}, best F{config.beta:.1f} = {best_fbeta:.4f}"
+        f"[Validation] deployed threshold = {threshold:.4f}, F{config.beta:.1f} at threshold = {best_fbeta:.4f}"
     )
 
     _log(f"\n{'=' * 72}\nTrain Set Evaluation\n{'=' * 72}")

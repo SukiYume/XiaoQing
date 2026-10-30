@@ -59,9 +59,9 @@ class FakeContext:
         self.config                        = {
             "plugins": {
                 "codex": {
-                    "default_cwd": str(self.default_cwd),
-                    "allowed_cwd_roots": [str(tmp_path)],
-                    "max_parallel_jobs": max_parallel_jobs,
+                    "default_cwd"        : str(self.default_cwd),
+                    "allowed_cwd_roots"  : [str(tmp_path)],
+                    "max_parallel_jobs"  : max_parallel_jobs,
                     "job_timeout_seconds": 30,
                 }
             }
@@ -78,8 +78,10 @@ class FakeContext:
             revision = self.settings_revision,
         )
 
-    async def send_action(self, action: dict[str, Any]) -> None:
+    async def send_action(self, action: dict[str, Any]) -> bool:
+        # 与真实发送器一致：确认送达返回 True。
         self.actions.append(action)
+        return True
 
 
 class FakeRunner:
@@ -272,17 +274,17 @@ def reset_codex_manager():
 
 def _persisted_session(label: str, cwd: Path, **updates: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "label": label,
-        "cwd": str(cwd),
-        "owner_user_id": 101,
-        "target_group_id": 202,
-        "thread_id": None,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "total_jobs": 0,
-        "input_tokens": 0,
+        "label"              : label,
+        "cwd"                : str(cwd),
+        "owner_user_id"      : 101,
+        "target_group_id"    : 202,
+        "thread_id"          : None,
+        "created_at"         : time.time(),
+        "updated_at"         : time.time(),
+        "total_jobs"         : 0,
+        "input_tokens"       : 0,
         "cached_input_tokens": 0,
-        "output_tokens": 0,
+        "output_tokens"      : 0,
     }
     payload.update(updates)
     return payload

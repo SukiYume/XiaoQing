@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 
 import tests.helpers.app_test_support as _fixture_support
 from core.app_delivery import AppDeliveryMixin
 from core.app_support import current_action_sink
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
-from core.delivery import DeliveryReceipt, send_with_receipt
+from core.delivery import DeliveryReceipt, attach_receipt, send_with_receipt
 from tests.helpers.app_test_support import (
-    AsyncMock,
     BroadcastResult,
-    MagicMock,
-    Mock,
     OneBotActionOutcomeUnknown,
-    Path,
-    SimpleNamespace,
     XiaoQingApp,
-    asyncio,
-    pytest,
 )
 
 temp_app_root = _fixture_support.temp_app_root
@@ -38,7 +37,7 @@ async def test_inbound_event_uses_same_long_message_splitter_as_active_delivery(
             "action": "send_group_msg",
             "params": {
                 "group_id": 67890,
-                "message": [
+                "message" : [
                     {"type": "text", "data": {"text": original_text}},
                     image_segment,
                 ],
@@ -48,10 +47,10 @@ async def test_inbound_event_uses_same_long_message_splitter_as_active_delivery(
 
     actions = await app._handle_inbound_event(
         {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
+            "user_id"     : 12345,
+            "group_id"    : 67890,
         }
     )
 
@@ -103,10 +102,10 @@ async def test_app_process_event(temp_app_root: Path):
     )
 
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
     }
 
     result = await app._process_event(event)
@@ -126,10 +125,10 @@ async def test_app_process_event_no_response(temp_app_root: Path):
     app.dispatcher.handle_event = AsyncMock(return_value=[])
 
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
     }
 
     result = await app._process_event(event)
@@ -155,10 +154,10 @@ async def test_app_handle_upstream_event(temp_app_root: Path):
     )
 
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
     }
 
     await app._handle_upstream_event(event)
@@ -189,10 +188,10 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
     )
 
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
     }
 
     await app._handle_upstream_event(event)
@@ -214,10 +213,10 @@ async def test_app_handle_inbound_event(temp_app_root: Path):
     )
 
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
     }
 
     result = await app._handle_inbound_event(event)
@@ -253,12 +252,12 @@ async def test_app_deduplicates_message_id_across_inbound_transports(temp_app_ro
     app = XiaoQingApp(temp_app_root)
     app.dispatcher.handle_event = AsyncMock(return_value=[])
     event = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "private",
-        "self_id": 10000,
-        "user_id": 12345,
-        "message_id": 99,
-        "message": [{"type": "text", "data": {"text": "hello"}}],
+        "self_id"     : 10000,
+        "user_id"     : 12345,
+        "message_id"  : 99,
+        "message"     : [{"type": "text", "data": {"text": "hello"}}],
     }
 
     await app._handle_upstream_event(event)
@@ -286,13 +285,13 @@ async def test_app_dedupe_key_includes_group_and_user_scope(temp_app_root: Path)
     app = XiaoQingApp(temp_app_root)
     app.dispatcher.handle_event = AsyncMock(return_value=[])
     base = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "self_id": 10000,
-        "user_id": 1,
-        "group_id": 10,
-        "message_id": 99,
-        "message": "hello",
+        "self_id"     : 10000,
+        "user_id"     : 1,
+        "group_id"    : 10,
+        "message_id"  : 99,
+        "message"     : "hello",
     }
 
     await app._handle_inbound_event(base)
@@ -325,10 +324,10 @@ async def test_app_dedupe_hot_path_never_scans_live_key_map(
     for message_id in (1, 2, 3):
         assert await app._claim_inbound_event(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "private",
-                "user_id": 7,
-                "message_id": message_id,
+                "user_id"     : 7,
+                "message_id"  : message_id,
             }
         )
 
@@ -505,8 +504,8 @@ async def test_app_send_single_action_does_not_mutate_bypass_action(temp_app_roo
     app.http_sender.send_action         = AsyncMock()
 
     action = {
-        "action": "send_group_msg",
-        "params": {"group_id": 1, "message": []},
+        "action"      : "send_group_msg",
+        "params"      : {"group_id": 1, "message": []},
         "_bypass_sink": True,
     }
     await app._send_single_action(action)
@@ -648,14 +647,22 @@ async def test_app_send_action_propagates_onebot_business_rejection(temp_app_roo
     app                       = XiaoQingApp(temp_app_root)
     app.http_sender           = MagicMock()
     app.http_sender.http_base = "http://localhost:5700"
+    # 符合发送契约的可信发送器：否则会在无发送器分支提前返回 False，业务拒绝路径根本没被执行。
+    app.http_sender.credentials_trusted     = True
+    app._runtime_onebot_credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=False)
     app.plugin_manager.get = Mock(return_value=None)
 
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
     assert await app._send_action(action) is False
+    assert app.http_sender.send_action.await_count == 1
+    sent = app.http_sender.send_action.await_args.args[0]
+    assert sent["action"] == "send_group_msg"
+    assert sent["params"]["group_id"] == 1
 
     context = app._build_plugin_context("test", Path("/test"), Path("/test"), {})
     assert await context.send_action(action) is False
+    assert app.http_sender.send_action.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -777,16 +784,55 @@ async def test_reply_commit_sees_every_message_id_of_a_split_reply(temp_app_root
     with patch("core.app_delivery.MESSAGE_SPLIT_DELAY", 0):
         await app._handle_upstream_event(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "private",
-                "sub_type": "friend",
-                "user_id": 12345,
-                "self_id": 11111,
-                "message_id": 7,
-                "message": "在吗",
-                "raw_message": "在吗",
+                "sub_type"    : "friend",
+                "user_id"     : 12345,
+                "self_id"     : 11111,
+                "message_id"  : 7,
+                "message"     : "在吗",
+                "raw_message" : "在吗",
             }
         )
 
     assert app.ws_client.send_action.await_count == 2
     assert committed == [(4242, 4243)]
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_a_delivered_chunk_settles_the_split_reply_as_unknown(
+    temp_app_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """首段已送达、在下一段之前的间隔里取消：整份回执记为未知，不能回滚业务预留。"""
+
+    app                  = XiaoQingApp(temp_app_root)
+    callbacks: list[str] = []
+    receipt              = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = lambda: callbacks.append("commit"),
+        rollback         = lambda: callbacks.append("rollback"),
+        unknown          = lambda: callbacks.append("unknown"),
+    )
+    first_sent = asyncio.Event()
+
+    async def deliver(_action, wait_ws_seconds: float = 0.0):
+        first_sent.set()
+        return True
+
+    monkeypatch.setattr(app, "_send_single_action", deliver)
+    # 拆分间隔拉长，取消正好落在第一段确认之后、第二段发送之前。
+    monkeypatch.setattr("core.app_delivery.MESSAGE_SPLIT_DELAY", 30.0)
+    action = {
+        "action": "send_group_msg",
+        "params": {"group_id": 1, "message": [{"type": "text", "data": {"text": "x" * 10_000}}]},
+    }
+    action  = attach_receipt(action, receipt)
+    sending = asyncio.create_task(app._send_action(action))
+    await asyncio.wait_for(first_sent.wait(), 5)
+    await asyncio.sleep(0)
+    sending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(sending, 5)
+
+    assert receipt.expected_actions > 1
+    assert callbacks == ["unknown"]

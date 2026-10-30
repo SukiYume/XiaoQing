@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -82,15 +83,26 @@ def _number(text: str) -> int | None:
 
 
 def check_requested_amount(
-    text: str, items: list[dict[str, Any]], settings: dict[str, Any]
+    text: str | Sequence[str], items: list[dict[str, Any]], settings: dict[str, Any]
 ) -> None:
+    """按原话核对出粮量；``text`` 为原话和后续补充时，以最后一次说出数量的那句为准。"""
+
     feeds = [i for i in items if ":pet-food-out:" in i["cap"].get("type", "")]
     if not feeds:
         return
     if len(feeds) != 1:
         raise BridgeError("出粮已拦截：请每次指定一台喂食器和一个出粮量。")
+    texts = [text] if isinstance(text, str) else list(text)
     # Keep the entire number token, including decimal signs: partial matches must fail closed.
-    matches = re.findall(r"([\d.\-+零一二两三四五六七八九十百]+)\s*(克|g|份)", text, re.I)
+    stated = [
+        found
+        for found in (
+            re.findall(r"([\d.\-+零一二两三四五六七八九十百]+)\s*(克|g|份)", item, re.I)
+            for item in texts
+        )
+        if found
+    ]
+    matches = stated[-1] if stated else []
     if len(matches) != 1:
         raise BridgeError("出粮已拦截：请明确一个出粮量，例如“小爱 出一份粮”。")
     amount, unit = matches[0]

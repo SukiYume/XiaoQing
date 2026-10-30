@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 class ExecutionStats:
     """执行统计数据"""
 
-    total_calls: int      = 0
-    total_time: float     = 0.0
-    min_time: float       = float("inf")
-    max_time: float       = 0.0
-    slow_calls: int       = 0  # 超过阈值的调用次数
-    errors: int           = 0
-    cancelled: int        = 0
+    total_calls   : int   = 0
+    total_time    : float = 0.0
+    min_time      : float = float("inf")
+    max_time      : float = 0.0
+    slow_calls    : int   = 0  # 超过阈值的调用次数
+    errors        : int   = 0
+    cancelled     : int   = 0
     last_call_time: float = 0.0
 
     def record(
@@ -69,14 +69,14 @@ class ExecutionStats:
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {
-            "total_calls": self.total_calls,
-            "total_time": round(self.total_time, 3),
-            "avg_time": round(self.avg_time, 3),
-            "min_time": round(self.min_time, 3) if self.min_time != float("inf") else 0,
-            "max_time": round(self.max_time, 3),
-            "slow_calls": self.slow_calls,
-            "errors": self.errors,
-            "cancelled": self.cancelled,
+            "total_calls" : self.total_calls,
+            "total_time"  : round(self.total_time, 3),
+            "avg_time"    : round(self.avg_time, 3),
+            "min_time"    : round(self.min_time, 3) if self.min_time != float("inf") else 0,
+            "max_time"    : round(self.max_time, 3),
+            "slow_calls"  : self.slow_calls,
+            "errors"      : self.errors,
+            "cancelled"   : self.cancelled,
             "success_rate": round(self.success_rate, 4),
         }
 
@@ -172,10 +172,10 @@ class MetricsCollector:
         """获取当前汇总统计快照。"""
         with self._lock:
             return {
-                "uptime_seconds": round(self.uptime, 1),
-                "global": self._global_stats.to_dict(),
-                "plugins_count": len(self._plugin_stats),
-                "commands_count": len(self._command_stats),
+                "uptime_seconds"  : round(self.uptime, 1),
+                "global"          : self._global_stats.to_dict(),
+                "plugins_count"   : len(self._plugin_stats),
+                "commands_count"  : len(self._command_stats),
                 "top_slow_plugins": self._get_top_slow_plugins(5),
             }
 

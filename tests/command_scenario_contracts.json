@@ -530,6 +530,18 @@
       "dynamic_codes": [],
       "regression_codes": []
     },
+    "xiaoai": {
+      "state_model": "external_session",
+      "reason": "米家设备读写会操作真实家电（出粮、开关、红外），账号登录与设备目录跨请求存在；只用回归测试覆盖，不在命令矩阵里真实执行",
+      "test_files": [
+        "tests/plugins/xiaoai/test_xiaoai.py",
+        "tests/plugins/xiaoai/test_home.py",
+        "tests/plugins/xiaoai/test_auth.py",
+        "tests/plugins/xiaoai/test_login.py"
+      ],
+      "dynamic_codes": ["xiaoai.xiaoai.调用", "xiaoai.xiaoai.执行", "xiaoai.xiaoai.设置", "xiaoai.xiaoai.份量", "xiaoai.xiaoai.登录", "xiaoai.xiaoai.取消登录", "xiaoai.xiaoai.选择", "xiaoai.xiaoai.续期", "xiaoai.xiaoai.刷新设备", "xiaoai.xiaoai.天气城市"],
+      "regression_codes": ["xiaoai.xiaoai.调用", "xiaoai.xiaoai.执行", "xiaoai.xiaoai.设置", "xiaoai.xiaoai.份量", "xiaoai.xiaoai.登录", "xiaoai.xiaoai.取消登录", "xiaoai.xiaoai.选择", "xiaoai.xiaoai.续期", "xiaoai.xiaoai.刷新设备", "xiaoai.xiaoai.天气城市"]
+    },
     "xiaoqing_agent": {
       "state_model": "async_job",
       "reason": "run 会启动调用模型与本地进程的后台任务，stop 回收该任务；只用回归测试覆盖，不在命令矩阵里真实执行",
@@ -713,7 +725,7 @@
         {"id":"deadline_view","code":"ads_paper.paper.deadline","message":"/paper deadline","expect_all":["dl-{{run_id}}","2037-10-01"]},
         {"id":"deadline_delete","code":"ads_paper.paper.deadline.del","message":"/paper deadline del 1","expect_all":["已删除截稿日期"],"cleanup":true},
         {"id":"topic_remove","code":"ads_paper.paper.topics.remove","message":"/paper topics remove topic-{{run_id}}","expect_all":["已删除关键词"],"cleanup":true},
-        {"id":"topic_clear_idempotent","code":"ads_paper.paper.topics.clear","message":"/paper topics clear","expect_any":["已清空","清空失败"],"cleanup":true},
+        {"id":"topic_clear_idempotent","code":"ads_paper.paper.topics.clear","message":"/paper topics clear","expect_all":["已清空"],"reject_any":["失败"],"cleanup":true},
         {"id":"writing_delete","code":"ads_paper.paper.writing.del","message":"/paper writing del matrix-{{run_id}} 1","expect_all":["已删除"],"cleanup":true},
         {"id":"note_delete","code":"ads_paper.paper.note.del","message":"/paper note del matrix-{{run_id}} 1","expect_all":["已删除论文"],"cleanup":true},
         {"id":"note_absent","code":"ads_paper.paper.note","message":"/paper note matrix-{{run_id}}","expect_all":["暂无笔记"],"reject_any":["笔记-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
@@ -795,7 +807,7 @@
         {"id":"execute","code":"jupyter.jupyter","message":"/py print('matrix-{{run_id}}')","expect_all":["matrix-{{run_id}}"]},
         {"id":"status","code":"jupyter.jupyter_kernel.status","message":"/kernel status","expect_any":["运行","内核","状态"]},
         {"id":"restart","code":"jupyter.jupyter_kernel.restart","message":"/kernel restart","expect_any":["重启","内核"]},
-        {"id":"shutdown","code":"jupyter.jupyter_kernel.shutdown","message":"/kernel shutdown","expect_any":["关闭","停止","内核"],"cleanup":true}
+        {"id":"shutdown","code":"jupyter.jupyter_kernel.shutdown","message":"/kernel shutdown","expect_all":["内核已关闭"],"reject_any":["失败","错误"],"cleanup":true}
       ]
     },
     {
@@ -1139,8 +1151,8 @@
         {"id":"sleep","code":"qingpet.qingpet.sleep","message":"/pet sleep","expect_any":["睡","休息"]},
         {"id":"wake","code":"qingpet.qingpet.wake","message":"/pet wake","expect_any":["醒","起床"]},
         {"id":"disable_trade","code":"qingpet.qingpet.admin.config.设置","message":"/pet admin config 设置 trade_enabled false","expect_any":["已设置","trade_enabled"],"cleanup":true},
-        {"id":"delete","code":"qingpet.qingpet.admin.delete","message":"/pet admin delete @{{test_user_id}} 确认","expect_any":["删除","已清除"],"cleanup":true},
-        {"id":"disable","code":"qingpet.qingpet.admin.disable","message":"/pet admin disable","expect_any":["已在群","已停用","关闭"],"cleanup":true}
+        {"id":"delete","code":"qingpet.qingpet.admin.delete","message":"/pet admin delete @{{test_user_id}} 确认","expect_all":["宠物已删除"],"reject_any":["失败","错误"],"cleanup":true},
+        {"id":"disable","code":"qingpet.qingpet.admin.disable","message":"/pet admin disable","expect_all":["中禁用"],"reject_any":["失败","错误"],"cleanup":true}
       ]
     },
     {

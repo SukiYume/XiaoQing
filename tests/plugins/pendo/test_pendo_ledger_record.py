@@ -103,8 +103,8 @@ async def test_invalid_record_never_writes(tmp_path, overrides):
     try:
         payload = {
             "amount_cents": 9947,
-            "title": "会员",
-            "source_text": "记账99.47会员，服务，信用卡",
+            "title"       : "会员",
+            "source_text" : "记账99.47会员，服务，信用卡",
             **overrides,
         }
         result = await LedgerHandler(db).handle(
@@ -127,11 +127,11 @@ async def test_record_inherits_verified_history_and_keeps_owner_boundary(tmp_pat
             SimpleNamespace(),
         )
         payload = {
-            "amount_cents": 4850,
-            "title": "打车",
+            "amount_cents" : 4850,
+            "title"        : "打车",
             "category_from": first["item_id"],
-            "account_from": first["item_id"],
-            "source_text": "按上次同样的分类和账户记一笔打车48.5",
+            "account_from" : first["item_id"],
+            "source_text"  : "按上次同样的分类和账户记一笔打车48.5",
         }
         denied = await handler.handle("u2", "record " + json.dumps(payload), SimpleNamespace())
         assert denied["status"] == "error" and db.get_all_items("u2") == []

@@ -96,9 +96,9 @@ class TestMessageScan:
 
     def test_has_at_mention_checks_event_and_raw_message(self):
         event = {
-            "self_id": "12345",
+            "self_id"    : "12345",
             "raw_message": "[CQ:at,qq=12345]",
-            "message": [{"type": "text", "data": {"text": ""}}],
+            "message"    : [{"type": "text", "data": {"text": ""}}],
         }
         assert has_at_mention(event, self_id="12345") is True
 
@@ -147,8 +147,8 @@ class TestParseTextCommandContext:
 
     def test_strips_inline_cq_at_from_clean_text(self):
         event = {
-            "self_id": "12345",
-            "message": "帮我看看 [CQ:at,qq=12345] 这个",
+            "self_id"    : "12345",
+            "message"    : "帮我看看 [CQ:at,qq=12345] 这个",
             "raw_message": "帮我看看 [CQ:at,qq=12345] 这个",
         }
         result = parse_text_command_context(

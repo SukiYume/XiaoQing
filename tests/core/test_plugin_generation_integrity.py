@@ -226,13 +226,13 @@ def _write_manifest(plugin_dir: Path, name: str, *, entry: str = "main.py") -> N
     (plugin_dir / "plugin.json").write_text(
         json.dumps(
             {
-                "name": name,
-                "version": "1.0.0",
-                "entry": entry,
-                "commands": [],
-                "schedule": [],
+                "name"       : name,
+                "version"    : "1.0.0",
+                "entry"      : entry,
+                "commands"   : [],
+                "schedule"   : [],
                 "concurrency": "parallel",
-                "enabled": True,
+                "enabled"    : True,
             }
         ),
         encoding="utf-8",
@@ -781,13 +781,13 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
     manager.load_plugin(plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
-    finder                             = manager._source_finders[name]
-    original_deactivate                = finder.deactivate_and_wait
-    original_exec                      = plugin_manager_module._SourceOnlyPluginLoader.exec_module
-    exec_returned                      = threading.Event()
-    release_exec                       = threading.Event()
-    import_results: list[ModuleType]   = []
-    import_errors: list[BaseException] = []
+    finder                              = manager._source_finders[name]
+    original_deactivate                 = finder.deactivate_and_wait
+    original_exec                       = plugin_manager_module._SourceOnlyPluginLoader.exec_module
+    exec_returned                       = threading.Event()
+    release_exec                        = threading.Event()
+    import_results: list[ModuleType]    = []
+    import_errors : list[BaseException] = []
 
     def delayed_exec(loader, module):  # type: ignore[no-untyped-def]
         original_exec(loader, module)
@@ -991,7 +991,7 @@ def test_restore_blocks_absent_fast_path_import_until_old_objects_are_committed(
     release_commit                      = threading.Event()
     import_done                         = threading.Event()
     import_results: list[ModuleType]    = []
-    import_errors: list[BaseException]  = []
+    import_errors : list[BaseException] = []
     restore_errors: list[BaseException] = []
 
     class BlockingOwnedLedger(dict[str, dict[str, ModuleType]]):

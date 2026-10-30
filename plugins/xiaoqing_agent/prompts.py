@@ -77,7 +77,7 @@ def build_delivery_messages(
     return [
         {"role": "system", "content": system},
         {
-            "role": "user",
+            "role"   : "user",
             "content": ("筛选候选回复" if candidate else "生成回复")
             + f"\n发起人原话：{task.request_text or task.goal}\n\n执行回报：\n"
             + "\n\n".join(evidence)

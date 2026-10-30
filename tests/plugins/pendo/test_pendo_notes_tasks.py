@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
 from tests.helpers.pendo_review_test_support import (
     Database,
     EventHandler,
     NoteHandler,
-    Path,
     ReminderService,
-    SimpleNamespace,
     TaskHandler,
     _make_temp_db,
-    asyncio,
-    datetime,
-    pytest,
-    shutil,
 )
 
 
@@ -40,13 +42,13 @@ def test_note_list_accepts_bare_time_range_before_category_inference(monkeypatch
         ]:
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": title,
-                    "content": "密钥内容",
-                    "category": "密钥",
-                    "tags": ["rustdesk"],
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : title,
+                    "content"   : "密钥内容",
+                    "category"  : "密钥",
+                    "tags"      : ["rustdesk"],
                     "created_at": created_at,
                     "updated_at": created_at,
                 }
@@ -89,20 +91,20 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
     def insert_event(item_id: str):
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "原始日程",
-                "content": "",
-                "category": "工作",
-                "location": "上海",
-                "notes": "原备注",
-                "tags": [],
-                "start_time": "2026-05-04T09:00:00",
-                "end_time": "2026-05-04T10:00:00",
+                "id"          : item_id,
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "原始日程",
+                "content"     : "",
+                "category"    : "工作",
+                "location"    : "上海",
+                "notes"       : "原备注",
+                "tags"        : [],
+                "start_time"  : "2026-05-04T09:00:00",
+                "end_time"    : "2026-05-04T10:00:00",
                 "remind_times": ["2026-05-04T09:00:00"],
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "created_at"  : "2026-05-01T09:00:00",
+                "updated_at"  : "2026-05-01T09:00:00",
             }
         )
 
@@ -168,13 +170,13 @@ def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
     try:
         db.insert_item(
             {
-                "id": event_id,
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "KSP讨论",
-                "category": "工作",
-                "timezone": "Asia/Shanghai",
-                "start_time": "2026-09-02T20:00:00",
+                "id"          : event_id,
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "KSP讨论",
+                "category"    : "工作",
+                "timezone"    : "Asia/Shanghai",
+                "start_time"  : "2026-09-02T20:00:00",
                 "remind_times": [
                     "2026-09-01T20:00:00",
                     "2026-09-02T19:00:00",
@@ -230,13 +232,13 @@ def test_note_edit_only_updates_explicit_metadata_when_no_body():
     try:
         db.insert_item(
             {
-                "id": "note-edit",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "原始标题",
-                "content": "原始正文",
-                "category": "旧分类",
-                "tags": ["旧标签"],
+                "id"        : "note-edit",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "原始标题",
+                "content"   : "原始正文",
+                "category"  : "旧分类",
+                "tags"      : ["旧标签"],
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
@@ -298,13 +300,13 @@ def test_note_list_uses_user_clock_and_counts_all_rows(
             created_at = "2025-12-31T23:30:00" if index == 0 else "2026-01-02T09:00:00"
             db.insert_item(
                 {
-                    "id": f"clock-note-{index:02d}",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": f"时区笔记-{index:02d}",
-                    "content": "正文",
-                    "category": "甲类" if index < 30 else "乙类",
-                    "tags": ["focus"] if index < 2 else [],
+                    "id"        : f"clock-note-{index:02d}",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : f"时区笔记-{index:02d}",
+                    "content"   : "正文",
+                    "category"  : "甲类" if index < 30 else "乙类",
+                    "tags"      : ["focus"] if index < 2 else [],
                     "created_at": created_at,
                     "updated_at": created_at,
                 }
@@ -447,24 +449,24 @@ def test_note_noop_mutations_and_link_arguments_do_not_write(tmp_path: Path) -> 
     try:
         db.insert_item(
             {
-                "id": "note-source",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "来源",
-                "content": "正文",
-                "category": "资料",
-                "tags": ["已有"],
+                "id"        : "note-source",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "来源",
+                "content"   : "正文",
+                "category"  : "资料",
+                "tags"      : ["已有"],
                 "references": [
                     {
-                        "kind": "item",
-                        "id": "note-target",
-                        "type": "note",
+                        "kind" : "item",
+                        "id"   : "note-target",
+                        "type" : "note",
                         "title": "目标",
                     }
                 ],
                 "related_items": ["note-target"],
-                "created_at": "2026-01-01T00:00:00",
-                "updated_at": "2026-01-01T00:00:00",
+                "created_at"   : "2026-01-01T00:00:00",
+                "updated_at"   : "2026-01-01T00:00:00",
             }
         )
         for item_id, category in (
@@ -474,12 +476,12 @@ def test_note_noop_mutations_and_link_arguments_do_not_write(tmp_path: Path) -> 
         ):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": item_id,
-                    "content": "正文",
-                    "category": category,
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : item_id,
+                    "content"   : "正文",
+                    "category"  : category,
                     "created_at": "2026-01-01T00:00:00",
                     "updated_at": "2026-01-01T00:00:00",
                 }
@@ -553,24 +555,24 @@ def test_note_link_enforces_reference_limit_before_writing(tmp_path: Path) -> No
     try:
         db.insert_item(
             {
-                "id": "limit-source",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "已满引用",
-                "content": "正文",
-                "references": references,
+                "id"           : "limit-source",
+                "owner_id"     : owner_id,
+                "type"         : "note",
+                "title"        : "已满引用",
+                "content"      : "正文",
+                "references"   : references,
                 "related_items": [reference["id"] for reference in references],
-                "created_at": "2026-01-01T00:00:00",
-                "updated_at": "2026-01-01T00:00:00",
+                "created_at"   : "2026-01-01T00:00:00",
+                "updated_at"   : "2026-01-01T00:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "limit-target",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "新目标",
-                "content": "正文",
+                "id"        : "limit-target",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "新目标",
+                "content"   : "正文",
                 "created_at": "2026-01-01T00:00:00",
                 "updated_at": "2026-01-01T00:00:00",
             }
@@ -601,11 +603,11 @@ def test_note_backlinks_are_newest_first_and_limited(
     try:
         db.insert_item(
             {
-                "id": "backlink-source",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "被引用笔记",
-                "content": "正文",
+                "id"        : "backlink-source",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "被引用笔记",
+                "content"   : "正文",
                 "created_at": "2026-01-01T00:00:00",
                 "updated_at": "2026-01-01T00:00:00",
             }
@@ -614,14 +616,14 @@ def test_note_backlinks_are_newest_first_and_limited(
             timestamp = f"2026-01-{index + 1:02d}T12:00:00"
             db.insert_item(
                 {
-                    "id": f"back-{index:02d}",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": f"反向引用 {index}",
-                    "content": "正文",
+                    "id"           : f"back-{index:02d}",
+                    "owner_id"     : owner_id,
+                    "type"         : "note",
+                    "title"        : f"反向引用 {index}",
+                    "content"      : "正文",
                     "related_items": ["backlink-source"],
-                    "created_at": timestamp,
-                    "updated_at": timestamp,
+                    "created_at"   : timestamp,
+                    "updated_at"   : timestamp,
                 }
             )
 
@@ -647,31 +649,31 @@ def test_task_list_supports_cat_tag_and_date_filters():
     try:
         db.insert_item(
             {
-                "id": "task-work",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "CmdAudit 写周报",
-                "category": "工作",
-                "tags": ["cmdaudit", "周报"],
-                "plan_date": "2026-05-10",
+                "id"         : "task-work",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "CmdAudit 写周报",
+                "category"   : "工作",
+                "tags"       : ["cmdaudit", "周报"],
+                "plan_date"  : "2026-05-10",
                 "deadline_at": "2026-05-11T18:00:00",
-                "priority": 2,
-                "status": TaskStatus.OPEN.value,
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "priority"   : 2,
+                "status"     : TaskStatus.OPEN.value,
+                "created_at" : "2026-05-01T09:00:00",
+                "updated_at" : "2026-05-01T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task-home",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "CmdAudit 买礼物",
-                "category": "家庭",
-                "tags": ["family"],
-                "plan_date": "2026-05-12",
-                "priority": 4,
-                "status": TaskStatus.OPEN.value,
+                "id"        : "task-home",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "CmdAudit 买礼物",
+                "category"  : "家庭",
+                "tags"      : ["family"],
+                "plan_date" : "2026-05-12",
+                "priority"  : 4,
+                "status"    : TaskStatus.OPEN.value,
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
@@ -719,12 +721,12 @@ def test_task_inline_parser_supports_quotes_clearing_and_stable_tag_deduplicatio
     assert parsed["priority"] == 2
     assert parsed["tags"] == ["Focus"]
     assert parsed["_explicit_fields"] == {
-        "plan_date": True,
-        "deadline_at": True,
+        "plan_date"   : True,
+        "deadline_at" : True,
         "remind_times": True,
-        "category": True,
-        "priority": True,
-        "tags": True,
+        "category"    : True,
+        "priority"    : True,
+        "tags"        : True,
     }
 
     apostrophe_title = handler._parse_task_text(
@@ -837,13 +839,13 @@ def test_task_list_uses_exact_total_and_rejects_out_of_range_page(tmp_path: Path
         for index in range(total):
             db.insert_item(
                 {
-                    "id": f"exact-task-{index:02d}",
-                    "owner_id": owner_id,
-                    "type": "task",
-                    "title": f"精确待办 {index:02d}",
-                    "category": "工作" if index % 2 else "家庭",
-                    "priority": 3,
-                    "status": "open",
+                    "id"        : f"exact-task-{index:02d}",
+                    "owner_id"  : owner_id,
+                    "type"      : "task",
+                    "title"     : f"精确待办 {index:02d}",
+                    "category"  : "工作" if index % 2 else "家庭",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": f"2026-05-01T09:{index:02d}:00",
                     "updated_at": f"2026-05-01T09:{index:02d}:00",
                 }
@@ -872,16 +874,16 @@ def test_task_time_shortcuts_accept_offset_aware_legacy_deadline(
     try:
         db.insert_item(
             {
-                "id": "task-aware-future",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "跨时区截止",
-                "category": "工作",
+                "id"         : "task-aware-future",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "跨时区截止",
+                "category"   : "工作",
                 "deadline_at": "2032-01-02T09:00:00+08:00",
-                "priority": 3,
-                "status": "open",
-                "created_at": "2032-01-01T09:00:00",
-                "updated_at": "2032-01-01T09:00:00",
+                "priority"   : 3,
+                "status"     : "open",
+                "created_at" : "2032-01-01T09:00:00",
+                "updated_at" : "2032-01-01T09:00:00",
             }
         )
         handler = TaskHandler(db)
@@ -901,18 +903,18 @@ def test_task_edit_can_clear_schedule_and_skips_identical_second_write(tmp_path:
     try:
         db.insert_item(
             {
-                "id": "task-clear-fields",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "提交材料",
-                "category": "工作",
-                "plan_date": "2026-05-01",
-                "deadline_at": "2026-05-02T10:00:00",
+                "id"          : "task-clear-fields",
+                "owner_id"    : owner_id,
+                "type"        : "task",
+                "title"       : "提交材料",
+                "category"    : "工作",
+                "plan_date"   : "2026-05-01",
+                "deadline_at" : "2026-05-02T10:00:00",
                 "remind_times": ["2026-05-02T09:00:00"],
-                "priority": 2,
-                "status": "open",
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "priority"    : 2,
+                "status"      : "open",
+                "created_at"  : "2026-05-01T09:00:00",
+                "updated_at"  : "2026-05-01T09:00:00",
             }
         )
         handler = TaskHandler(db)
@@ -958,13 +960,13 @@ def test_task_status_transitions_are_idempotent_and_require_one_id(tmp_path: Pat
     try:
         db.insert_item(
             {
-                "id": "task-status-one",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "完成审查",
-                "category": "工作",
-                "priority": 2,
-                "status": "open",
+                "id"        : "task-status-one",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "完成审查",
+                "category"  : "工作",
+                "priority"  : 2,
+                "status"    : "open",
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
@@ -1016,13 +1018,13 @@ def test_task_category_delete_requires_one_exact_target(tmp_path: Path):
     try:
         db.insert_item(
             {
-                "id": "task-delete-one",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "整理资料",
-                "category": "工作 项目",
-                "priority": 3,
-                "status": "open",
+                "id"        : "task-delete-one",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "整理资料",
+                "category"  : "工作 项目",
+                "priority"  : 3,
+                "status"    : "open",
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
@@ -1040,3 +1042,36 @@ def test_task_category_delete_requires_one_exact_target(tmp_path: Path):
         assert db.get_item("task-delete-one", owner_id) is None
     finally:
         db.cleanup()
+
+
+@pytest.mark.parametrize("kind", ["task", "note"])
+def test_command_list_decodes_only_requested_page(db, monkeypatch, kind):
+    from unittest.mock import Mock
+
+    from plugins.pendo.config import PendoConfig
+    from plugins.pendo.handlers.note import NoteHandler
+    from plugins.pendo.handlers.task import TaskHandler
+
+    size = PendoConfig.LIST_PAGE_SIZE
+    for index in range(size * 2 + 3):
+        db.insert_item(
+            {
+                "id"      : f"{kind}-{index:03d}",
+                "owner_id": "paged",
+                "type"    : kind,
+                "title"   : f"row-{index:03d}",
+                "category": "work",
+            }
+        )
+    decode = Mock(wraps=db._row_to_item)
+    monkeypatch.setattr(db, "_row_to_item", decode)
+    handler = TaskHandler(db) if kind == "task" else NoteHandler(db)
+    listing = handler.list_tasks if kind == "task" else handler.list_notes
+    result  = asyncio.run(listing("paged", "cat:work page:2", SimpleNamespace()))
+    assert result["status"] == "success"
+    assert f"共{size * 2 + 3}项" in result["message"]
+    assert decode.call_count == size
+    decode.reset_mock()
+    result = asyncio.run(listing("paged", "", SimpleNamespace()))
+    assert "work" in result["message"]
+    decode.assert_not_called()

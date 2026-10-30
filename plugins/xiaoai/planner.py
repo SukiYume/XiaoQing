@@ -25,12 +25,7 @@ async def _json(context: Any, system: str, payload: dict[str, Any]) -> dict[str,
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            temperature           = 0,
-            max_tokens            = 1600,
-            timeout_seconds       = 25,
-            total_timeout_seconds = 28,
-            max_retry             = 0,
-            extra_payload         = {"response_format": {"type": "json_object"}},
+            extra_payload={"response_format": {"type": "json_object"}},
         )
         content = result.content.strip()
         if content.startswith("```"):

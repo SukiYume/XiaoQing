@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final            = REPOSITORY_ROOT
+ROOT           : Final = REPOSITORY_ROOT
 SETTINGS_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "settings.js"
 )
@@ -290,12 +290,11 @@ def test_settings_save_preserves_live_draft_and_extension_keys() -> None:
         assert.equal(formCleared, false);
         controls['#setting-timezone'].value = 'Asia/Tokyo';
         assert.equal(payloads.length, 1);
+        // 只提交改动过的字段：未改的时间和页面没有展示的扩展键都不回传，
+        // 读取后其他入口写入的设置不会被这份旧快照覆盖。
         assert.equal(payloads[0].timezone, 'Europe/Paris');
-        assert.equal(payloads[0].quiet_hours_end, '06:30');
-        assert.equal(payloads[0].default_category, '未分类');
-        assert.deepEqual(payloads[0].settings_json.extension_flag, { nested: true });
-        assert.equal(payloads[0].settings_json.reminder_enabled, false);
-        assert.equal('privacy_mode' in payloads[0].settings_json, false);
+        assert.equal('quiet_hours_end' in payloads[0], false);
+        assert.deepEqual(payloads[0].settings_json, { reminder_enabled: false, daily_briefing_enabled: true });
 
         pending.resolve({ data: {
             timezone: 'Europe/Paris',

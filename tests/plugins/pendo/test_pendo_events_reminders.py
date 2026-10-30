@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from typing import Any
 
 import pytest
 
 from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.rule_parser import RuleParser
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    Any,
-    asyncio,
-)
 
 
 class TestEventLeafModel:
     """测试新版日程 leaf 数据模型"""
 
     def test_event_item_has_event_graph_fields_without_legacy_milestones(self):
-        import sys
 
-        sys.path.insert(0, str(ROOT))
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(owner_id="u1", title="会议")
@@ -33,18 +28,14 @@ class TestEventLeafModel:
         assert item.event_collection_id is None
 
     def test_event_item_has_notes_field(self):
-        import sys
 
-        sys.path.insert(0, str(ROOT))
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(owner_id="u1", title="会议", notes="备注内容")
         assert item.notes == "备注内容"
 
     def test_event_item_to_dict_includes_event_graph_fields(self):
-        import sys
 
-        sys.path.insert(0, str(ROOT))
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(
@@ -68,10 +59,8 @@ class TestAIParserMilestones:
     """测试 AI parser 处理多时间节点事件"""
 
     def _make_parser(self):
-        import sys
         from datetime import datetime
 
-        sys.path.insert(0, str(ROOT))
         from plugins.pendo.services.ai_parser import AIParser
 
         return AIParser(
@@ -87,13 +76,17 @@ class TestAIParserMilestones:
         """多节点时 remind_times 是所有里程碑各自提醒的并集"""
         parser     = self._make_parser()
         milestones = [
-            {"name": "注册截止", "time": "2030-04-06T00:00:00"},
-            {"name": "会议开始", "time": "2030-04-22T10:30:00"},
+            {"name": "注册截止", "time": "2030-04-06T00:00:00+08:00"},
+            {"name": "会议开始", "time": "2030-04-22T10:30:00+08:00"},
         ]
         remind_offsets = ["提前1天", "提前1小时"]
         times          = parser.build_remind_times_for_milestones(milestones, remind_offsets)
-        # 2 milestones × 2 offsets = 4 remind times
-        assert len(times) == 4
+        assert set(times) == {
+            "2030-04-05T00:00:00+08:00",
+            "2030-04-05T23:00:00+08:00",
+            "2030-04-21T10:30:00+08:00",
+            "2030-04-22T09:30:00+08:00",
+        }
 
     def test_parse_event_with_ai_handles_milestones(self):
         """模拟 LLM 返回 milestones 时正确解析"""
@@ -105,14 +98,14 @@ class TestAIParserMilestones:
 
         mock_response = json.dumps(
             {
-                "title": "星团会议",
-                "start_time": None,
-                "end_time": None,
-                "location": "江苏溧水",
-                "category": "学习",
+                "title"         : "星团会议",
+                "start_time"    : None,
+                "end_time"      : None,
+                "location"      : "江苏溧水",
+                "category"      : "学习",
                 "remind_offsets": ["提前1天", "提前1小时"],
-                "rrule": None,
-                "milestones": [
+                "rrule"         : None,
+                "milestones"    : [
                     {"name": "注册截止", "time": "2030-04-06T00:00:00Z"},
                     {"name": "会议开始", "time": "2030-04-22T10:30:00+00:00"},
                     {"name": "会议结束", "time": "2030-04-26T12:00:00+08:00"},
@@ -142,16 +135,16 @@ class TestAIParserMilestones:
         parser        = self._make_parser()
         mock_response = json.dumps(
             {
-                "parse_source": "rule",
-                "title": "心理咨询",
-                "start_time": "2030-08-19T18:00:00+00:00",
-                "end_time": "2030-08-19T19:00:00Z",
-                "location": None,
-                "category": "健康",
+                "parse_source"  : "rule",
+                "title"         : "心理咨询",
+                "start_time"    : "2030-08-19T18:00:00+00:00",
+                "end_time"      : "2030-08-19T19:00:00Z",
+                "location"      : None,
+                "category"      : "健康",
                 "remind_offsets": [],
-                "rrule": None,
-                "milestones": [],
-                "notes": None,
+                "rrule"         : None,
+                "milestones"    : [],
+                "notes"         : None,
             }
         )
 
@@ -174,14 +167,14 @@ class TestAIParserMilestones:
 
         mock_response = json.dumps(
             {
-                "title": "悉尼大学博后申请",
-                "start_time": None,
-                "end_time": None,
-                "location": "悉尼大学",
-                "category": "工作",
+                "title"         : "悉尼大学博后申请",
+                "start_time"    : None,
+                "end_time"      : None,
+                "location"      : "悉尼大学",
+                "category"      : "工作",
                 "remind_offsets": ["提前1周", "提前1天"],
-                "rrule": None,
-                "milestones": [
+                "rrule"         : None,
+                "milestones"    : [
                     {"name": "申请截止", "time": "2030-06-14T14:00:00"},
                 ],
                 "notes": "https://example.com/job",
@@ -204,9 +197,7 @@ class TestMilestoneEventHandler:
     """测试多时间节点事件创建"""
 
     def _make_handler(self):
-        import sys
 
-        sys.path.insert(0, str(ROOT))
         from unittest.mock import MagicMock
 
         from plugins.pendo.handlers.event import EventHandler
@@ -227,16 +218,16 @@ class TestMilestoneEventHandler:
 
         handler                     = self._make_handler()
         parsed_data: dict[str, Any] = {
-            "title": "星团会议",
+            "title"     : "星团会议",
             "milestones": [
                 {"name": "注册截止", "time": "2030-04-06T00:00:00"},
                 {"name": "会议开始", "time": "2030-04-22T10:30:00"},
                 {"name": "会议结束", "time": "2030-04-26T12:00:00"},
             ],
-            "start_time": "2030-04-06T00:00:00",
-            "end_time": "2030-04-26T12:00:00",
-            "location": "江苏溧水",
-            "notes": "https://example.com",
+            "start_time"  : "2030-04-06T00:00:00",
+            "end_time"    : "2030-04-26T12:00:00",
+            "location"    : "江苏溧水",
+            "notes"       : "https://example.com",
             "remind_times": ["2030-04-05T00:00:00", "2030-04-05T23:00:00"],
         }
         from plugins.pendo.models.item import ItemType
@@ -259,10 +250,10 @@ class TestMilestoneEventHandler:
 
         handler                     = self._make_handler()
         parsed_data: dict[str, Any] = {
-            "title": "普通会议",
-            "milestones": [],
-            "start_time": "2030-04-06T09:00:00",
-            "notes": "会议室在3楼",
+            "title"       : "普通会议",
+            "milestones"  : [],
+            "start_time"  : "2030-04-06T09:00:00",
+            "notes"       : "会议室在3楼",
             "remind_times": ["2030-04-05T09:00:00"],
         }
         from plugins.pendo.models.item import ItemType
@@ -284,9 +275,7 @@ class TestMilestoneReminderMessage:
     """测试里程碑事件的提醒消息"""
 
     def _make_service(self):
-        import sys
 
-        sys.path.insert(0, str(ROOT))
         from unittest.mock import MagicMock
 
         from plugins.pendo.services.reminder import ReminderService
@@ -301,8 +290,8 @@ class TestMilestoneReminderMessage:
 
         service                                      = self._make_service()
         service.db.get_event_collection.return_value = {
-            "id": "abc12345",
-            "kind": "multi_node",
+            "id"   : "abc12345",
+            "kind" : "multi_node",
             "title": "星团会议",
             "notes": "这是整场会议的全局说明",
         }
@@ -355,10 +344,7 @@ class TestMilestoneReminderMessage:
 
 class TestRecurringEventRegression:
     def test_create_recurring_event_preserves_duration_per_instance(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
 
@@ -372,16 +358,16 @@ class TestRecurringEventRegression:
         handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
 
         parsed_data = {
-            "title": "晨会",
-            "content": "每日站会",
+            "title"     : "晨会",
+            "content"   : "每日站会",
             "start_time": "2030-01-01T09:00:00",
-            "end_time": "2030-01-01T10:30:00",
-            "location": "A会议室",
-            "tags": ["团队"],
-            "category": "工作",
-            "context": {},
-            "notes": "带上周报",
-            "rrule": "FREQ=DAILY;COUNT=2",
+            "end_time"  : "2030-01-01T10:30:00",
+            "location"  : "A会议室",
+            "tags"      : ["团队"],
+            "category"  : "工作",
+            "context"   : {},
+            "notes"     : "带上周报",
+            "rrule"     : "FREQ=DAILY;COUNT=2",
         }
         remind_times = ["2030-01-01T08:00:00"]
 
@@ -393,10 +379,7 @@ class TestRecurringEventRegression:
         assert inserted_items[1].end_time == "2030-01-02T10:30:00+08:00"
 
     def test_edit_recurring_collection_updates_header_without_shifting_occurrences(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -408,14 +391,14 @@ class TestRecurringEventRegression:
         try:
             db.create_event_collection(
                 {
-                    "id": collection_id,
-                    "owner_id": "u1",
-                    "kind": "recurring",
-                    "title": "重复会议",
-                    "category": "工作",
-                    "rrule": "FREQ=DAILY;COUNT=2",
+                    "id"        : collection_id,
+                    "owner_id"  : "u1",
+                    "kind"      : "recurring",
+                    "title"     : "重复会议",
+                    "category"  : "工作",
+                    "rrule"     : "FREQ=DAILY;COUNT=2",
                     "start_time": "2030-01-01T09:00:00",
-                    "end_time": "2030-01-02T10:00:00",
+                    "end_time"  : "2030-01-02T10:00:00",
                 }
             )
             first = EventItem(
@@ -476,10 +459,7 @@ class TestRecurringEventRegression:
 
 class TestReminderRegression:
     def test_parse_updates_uses_partial_ai_parse_for_edits(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -492,12 +472,12 @@ class TestReminderRegression:
                 assert kwargs["fallback_text"] == changes
                 assert "[编辑现有日程]" in text
                 return {
-                    "type": "event",
+                    "type"        : "event",
                     "parse_source": "ai",
-                    "title": "[编辑现有日程] 原标题：FAST2026观测申请截止",
-                    "content": text,
-                    "category": "未分类",
-                    "start_time": "2026-04-07T14:00:00",
+                    "title"       : "[编辑现有日程] 原标题：FAST2026观测申请截止",
+                    "content"     : text,
+                    "category"    : "未分类",
+                    "start_time"  : "2026-04-07T14:00:00",
                     "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
                 }
 
@@ -517,18 +497,15 @@ class TestReminderRegression:
         updates = asyncio.run(handler._parse_updates(changes, current_event))
 
         assert updates == {
-            "start_time": "2026-04-07T14:00:00",
+            "start_time"  : "2026-04-07T14:00:00",
             "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
         }
 
     def test_ai_edit_stores_model_utc_suffix_as_shanghai_wall_time(self, tmp_path):
         """回归：模型返回 18:00+00:00 时，日程仍应显示为北京时间 18:00。"""
         import json
-        import sys
         from unittest.mock import AsyncMock, MagicMock, patch
         from zoneinfo import ZoneInfo
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -566,10 +543,10 @@ class TestReminderRegression:
             handler = EventHandler(db=db, ai_parser=parser, reminder_service=MagicMock())
             mock_response = json.dumps(
                 {
-                    "start_time": "2026-08-19T18:00:00+00:00",
-                    "end_time": None,
+                    "start_time"    : "2026-08-19T18:00:00+00:00",
+                    "end_time"      : None,
                     "remind_offsets": [],
-                    "milestones": [],
+                    "milestones"    : [],
                 }
             )
 
@@ -603,10 +580,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_parse_updates_does_not_take_location_from_note_text(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -614,9 +588,9 @@ class TestReminderRegression:
         class _FakeAiParser:
             async def parse_event_with_ai(self, text, user_id, **kwargs):
                 return {
-                    "type": "event",
+                    "type"    : "event",
                     "location": "北京南",
-                    "notes": "从北京南坐G123去会场",
+                    "notes"   : "从北京南坐G123去会场",
                 }
 
             def parse_natural_language(self, text, user_id):
@@ -638,10 +612,7 @@ class TestReminderRegression:
         assert updates == {"notes": "从北京南坐G123去会场"}
 
     def test_edit_single_instance_keeps_category_and_explicit_reminders(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -669,7 +640,7 @@ class TestReminderRegression:
 
             async def fake_parse_updates(changes, current_event):
                 return {
-                    "start_time": "2026-04-07T14:00:00",
+                    "start_time"  : "2026-04-07T14:00:00",
                     "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
                 }
 
@@ -699,10 +670,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_collection_reminders_apply_explicit_offsets_to_children(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -714,14 +682,14 @@ class TestReminderRegression:
             collection_id = "series123"
             db.create_event_collection(
                 {
-                    "id": collection_id,
-                    "owner_id": "u1",
-                    "kind": "recurring",
-                    "title": "重复会议",
-                    "category": "工作",
-                    "rrule": "FREQ=DAILY;COUNT=2",
+                    "id"        : collection_id,
+                    "owner_id"  : "u1",
+                    "kind"      : "recurring",
+                    "title"     : "重复会议",
+                    "category"  : "工作",
+                    "rrule"     : "FREQ=DAILY;COUNT=2",
                     "start_time": "2030-01-01T10:00:00",
-                    "end_time": "2030-01-02T11:00:00",
+                    "end_time"  : "2030-01-02T11:00:00",
                 }
             )
             first = EventItem(
@@ -790,10 +758,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_list_events_exact_date_query_returns_matching_day(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -823,10 +788,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_leaf_edit_preserves_sent_history_and_prunes_stale_unsent_logs(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -883,10 +845,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_edit_multi_node_leaf_shifts_only_that_leaf(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -897,13 +856,13 @@ class TestReminderRegression:
         try:
             db.create_event_collection(
                 {
-                    "id": "mile1234",
-                    "owner_id": "u1",
-                    "kind": "multi_node",
-                    "title": "报名流程",
-                    "category": "未分类",
+                    "id"        : "mile1234",
+                    "owner_id"  : "u1",
+                    "kind"      : "multi_node",
+                    "title"     : "报名流程",
+                    "category"  : "未分类",
                     "start_time": "2030-01-01T10:00:00",
-                    "end_time": "2030-01-03T10:00:00",
+                    "end_time"  : "2030-01-03T10:00:00",
                 }
             )
             first = EventItem(
@@ -959,10 +918,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_edit_multi_node_leaf_notes_does_not_mutate_collection_notes(self, tmp_path):
-        import sys
         from unittest.mock import AsyncMock, MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -973,14 +929,14 @@ class TestReminderRegression:
         try:
             db.create_event_collection(
                 {
-                    "id": "mile5678",
-                    "owner_id": "u1",
-                    "kind": "multi_node",
-                    "title": "学术会议",
-                    "category": "工作",
-                    "notes": "旧备注",
+                    "id"        : "mile5678",
+                    "owner_id"  : "u1",
+                    "kind"      : "multi_node",
+                    "title"     : "学术会议",
+                    "category"  : "工作",
+                    "notes"     : "旧备注",
                     "start_time": "2030-01-06T00:00:00",
-                    "end_time": "2030-01-26T12:00:00",
+                    "end_time"  : "2030-01-26T12:00:00",
                 }
             )
             event = EventItem(
@@ -1006,11 +962,11 @@ class TestReminderRegression:
             ai_parser = MagicMock()
             ai_parser.parse_event_with_ai = AsyncMock(side_effect=RuntimeError("boom"))
             ai_parser.parse_natural_language.return_value = {
-                "type": "event",
-                "title": "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
-                "content": "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
-                "category": "工作",
-                "owner_id": "u1",
+                "type"              : "event",
+                "title"             : "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                "content"           : "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                "category"          : "工作",
+                "owner_id"          : "u1",
                 "needs_confirmation": [],
             }
             handler = EventHandler(db=db, ai_parser=ai_parser, reminder_service=MagicMock())
@@ -1033,10 +989,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_collection_reminder_view_returns_aggregate_series_reminders(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -1047,14 +1000,14 @@ class TestReminderRegression:
         try:
             db.create_event_collection(
                 {
-                    "id": "abcd1234",
-                    "owner_id": "u1",
-                    "kind": "recurring",
-                    "title": "重复会议",
-                    "category": "未分类",
-                    "rrule": "FREQ=DAILY;COUNT=2",
+                    "id"        : "abcd1234",
+                    "owner_id"  : "u1",
+                    "kind"      : "recurring",
+                    "title"     : "重复会议",
+                    "category"  : "未分类",
+                    "rrule"     : "FREQ=DAILY;COUNT=2",
                     "start_time": "2030-01-01T10:00:00",
-                    "end_time": "2030-01-02T10:00:00",
+                    "end_time"  : "2030-01-02T10:00:00",
                 }
             )
             first = EventItem(
@@ -1097,10 +1050,7 @@ class TestReminderRegression:
             db.cleanup()
 
     def test_list_reminders_week_supports_multi_node_leaf_events(self, tmp_path, monkeypatch):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
@@ -1112,13 +1062,13 @@ class TestReminderRegression:
         try:
             db.create_event_collection(
                 {
-                    "id": "mileweek",
-                    "owner_id": "u1",
-                    "kind": "multi_node",
-                    "title": "学术会议",
-                    "category": "未分类",
+                    "id"        : "mileweek",
+                    "owner_id"  : "u1",
+                    "kind"      : "multi_node",
+                    "title"     : "学术会议",
+                    "category"  : "未分类",
                     "start_time": "2030-01-22T10:30:00",
-                    "end_time": "2030-01-26T12:00:00",
+                    "end_time"  : "2030-01-26T12:00:00",
                 }
             )
             start_event = EventItem(

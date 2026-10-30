@@ -68,12 +68,12 @@ def local_image(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 def _client(monkeypatch: pytest.MonkeyPatch, **methods: object) -> SimpleNamespace:
     values = {
-        "interesting": AsyncMock(return_value=_page()),
-        "search": AsyncMock(return_value=_page()),
-        "resolve_user": AsyncMock(return_value="98765432@N01"),
+        "interesting"  : AsyncMock(return_value=_page()),
+        "search"       : AsyncMock(return_value=_page()),
+        "resolve_user" : AsyncMock(return_value="98765432@N01"),
         "public_photos": AsyncMock(return_value=_page()),
-        "album_photos": AsyncMock(return_value=_page()),
-        "photo_info": AsyncMock(return_value=_photo(9, license_id="4")),
+        "album_photos" : AsyncMock(return_value=_page()),
+        "photo_info"   : AsyncMock(return_value=_photo(9, license_id="4")),
     }
     values.update(methods)
     client = SimpleNamespace(**values)

@@ -10,7 +10,6 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from core.args import parse
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.image_validation import ImageValidationLimits, validate_image_bytes
 from core.plugin_base import (
@@ -73,9 +72,9 @@ def _get_config(context: PluginContextProtocol) -> Mapping[str, Any]:
 
 
 _IMAGE_MIME_FORMATS = {
-    "image/gif": "GIF",
+    "image/gif" : "GIF",
     "image/jpeg": "JPEG",
-    "image/png": "PNG",
+    "image/png" : "PNG",
     "image/webp": "WEBP",
 }
 _IMAGE_FORMAT_EXTENSIONS = {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
@@ -139,6 +138,33 @@ async def _safe_download_image(
 ) -> Path | None:
     allowed_hosts = _allowed_hosts(context)
     _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
+    cache = BoundedFileCache(images_dir, IMAGE_CACHE_LIMITS)
+    # 缓存按请求 URL 命名，写入前已完整校验；APOD 每天的图片使用带日期的独立 URL，
+    # 命中即复用，内容随缓存 TTL（120 天）与容量淘汰刷新。
+    cached = await run_sync(
+        cache.get_any,
+        tuple(
+            _cache_filename(url, ext) for ext in dict.fromkeys(_IMAGE_FORMAT_EXTENSIONS.values())
+        ),
+    )
+    if cached is not None:
+        # 命中前复核缓存文件本身：被截断或替换的文件不能直接发出，丢弃后重新下载。
+        try:
+            cached_bytes = await run_sync(cached.read_bytes)
+            await run_sync(
+                validate_image_bytes,
+                cached_bytes,
+                limits=ImageValidationLimits(
+                    max_bytes  = MAX_IMAGE_BYTES,
+                    max_pixels = MAX_IMAGE_PIXELS,
+                    max_frames = MAX_IMAGE_FRAMES,
+                ),
+                format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+            )
+        except (OSError, ValueError):
+            await run_sync(cached.unlink, missing_ok=True)
+        else:
+            return cached
     fetched = await fetch_public_bytes(
         url,
         headers                          = {**HEADERS, "accept-encoding": "identity"},
@@ -166,10 +192,9 @@ async def _safe_download_image(
         format_extensions = _IMAGE_FORMAT_EXTENSIONS,
         expected_format   = expected_format,
     )
-    cache  = BoundedFileCache(images_dir, IMAGE_CACHE_LIMITS)
     target = await run_sync(
         cache.put,
-        _cache_filename(fetched.url, validated.extension),
+        _cache_filename(url, validated.extension),
         fetched.body,
     )
     if target is None:
@@ -216,7 +241,7 @@ def _find_image_url(
     # 新版页面的媒体范围同时排除导航、站点标识和相关新闻图片。
     scope                 = media if media is not None else root
     candidates: list[str] = []
-    preferred: list[str]  = []
+    preferred : list[str] = []
     for element in scope.find_all("img"):
         candidate = None
         for source in _image_sources(element):
@@ -490,14 +515,14 @@ async def handle(
     """处理手动 APOD 查询；只接受空参数或精确的 help 子命令。"""
     del command, event
     try:
-        parsed = parse(args)
+        raw_args = args.strip()
 
-        # 解析子命令
-        if parsed and parsed.first:
-            if len(parsed) == 1 and parsed.first.lower() in {"help", "帮助"}:
+        # 只接受空参数或单独的 help；--date 这类未声明选项不能被当成空参数执行抓取。
+        if raw_args:
+            if raw_args.lower() in {"help", "帮助"}:
                 return segments(_show_help())
             visible_command = bounded_external_text(
-                parsed.first,
+                raw_args,
                 max_chars = 32,
                 max_bytes = 128,
                 default   = "未知",

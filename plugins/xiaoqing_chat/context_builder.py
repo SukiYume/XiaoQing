@@ -46,7 +46,7 @@ async def retrieve_memory_context(
     mem_t0       = time.monotonic()
     memory_block = ""
     try:
-        llm = llm_call_config(runtime.cfg, foreground=True)
+        llm = llm_call_config(runtime.cfg, foreground=False)
         memory_block = await asyncio.wait_for(
             build_memory_block(
                 data_dir         = data_dir,
@@ -68,7 +68,7 @@ async def retrieve_memory_context(
             chat_id = chat_id,
             step    = "reply.memory.ok",
             fields  = {
-                "elapsed_s": round(time.monotonic() - mem_t0, 3),
+                "elapsed_s"   : round(time.monotonic() - mem_t0, 3),
                 "memory_chars": len(memory_block or ""),
             },
         )
@@ -81,7 +81,7 @@ async def retrieve_memory_context(
             step    = "reply.memory.fail",
             fields  = {
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
-                "reason": "timeout",
+                "reason"   : "timeout",
             },
         )
     except Exception as exc:
@@ -99,7 +99,7 @@ async def retrieve_memory_context(
             step    = "reply.memory.fail",
             fields  = {
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
-                "reason": type(exc).__name__,
+                "reason"   : type(exc).__name__,
             },
         )
     return memory_block

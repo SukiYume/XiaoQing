@@ -37,17 +37,17 @@ class _VoiceSynthesisProvider(Protocol):
 
 
 class _Capabilities(Protocol):
-    chat_reply: _ChatReplyProvider | None
+    chat_reply     : _ChatReplyProvider | None
     voice_synthesis: _VoiceSynthesisProvider | None
 
 
 class Context(Protocol):
     """本插件实际读取的最小运行时上下文。"""
 
-    data_dir: Path
-    current_user_id: int | None
+    data_dir        : Path
+    current_user_id : int | None
     current_group_id: int | None
-    capabilities: _Capabilities
+    capabilities    : _Capabilities
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
@@ -114,8 +114,8 @@ class _QaSnapshot:
 
 @dataclass
 class _AuditSnapshot:
-    path: Path
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    path   : Path
+    lock   : asyncio.Lock = field(default_factory=asyncio.Lock)
     entries: list[dict[str, Any]] | None = None
 
 
@@ -142,7 +142,7 @@ def _normalize_responses(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     responses: list[str] = []
-    seen: set[str]       = set()
+    seen     : set[str]  = set()
     for item in value:
         if not isinstance(item, str):
             continue
@@ -210,7 +210,7 @@ def _normalize_answers(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     answers: list[str] = []
-    seen: set[str]     = set()
+    seen   : set[str]  = set()
     for item in value:
         if not isinstance(item, str):
             continue
@@ -294,11 +294,11 @@ async def _record_qa_audit(context: Context, operation: str, question: str) -> N
     try:
         snapshot = _audit_snapshot_for(context)
         entry    = {
-            "at": datetime.now(UTC).isoformat(),
+            "at"       : datetime.now(UTC).isoformat(),
             "operation": operation,
-            "scope": _qa_scope(context),
-            "owner": _positive_id(getattr(context, "current_user_id", None)),
-            "question": question,
+            "scope"    : _qa_scope(context),
+            "owner"    : _positive_id(getattr(context, "current_user_id", None)),
+            "question" : question,
         }
         async with snapshot.lock:
             if snapshot.entries is None:
@@ -369,6 +369,8 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
     if len(parts) < 2:
         return segments("格式: 记忆 问题 回答")
     question, answer = parts[0].strip(), parts[1].strip()
+    if question.casefold() in _HELP_ALIASES:
+        return segments("help、帮助和 ? 为帮助保留词，请使用其他问题。")
     if not question or len(question) > MAX_QUESTION_LENGTH:
         return segments(f"问题不能为空且不能超过 {MAX_QUESTION_LENGTH} 个字符。")
     if not answer or len(answer) > MAX_ANSWER_LENGTH:
@@ -423,7 +425,7 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
 
     snapshot = _qa_snapshot_for(context)
     operation: str
-    result: MessageSegments
+    result   : MessageSegments
     async with snapshot.lock:
         current = await _qa_data_locked(snapshot)
         data    = {item: list(answers) for item, answers in current.items()}
@@ -570,7 +572,7 @@ async def _call_chat_api(text_content: str, context: Context) -> MessageSegments
         if provider is None:
             raise RuntimeError("chat reply provider unavailable")
         actor = {
-            "user_id": _positive_id(getattr(context, "current_user_id", None)),
+            "user_id" : _positive_id(getattr(context, "current_user_id", None)),
             "group_id": _positive_id(getattr(context, "current_group_id", None)),
         }
         reply = _coerce_segments(await provider.reply(text_content, actor))

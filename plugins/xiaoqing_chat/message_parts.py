@@ -50,6 +50,7 @@ def _normalize_media_part(value: dict[str, Any]) -> dict[str, Any] | None:
         "file_path",
         "label",
         "mode",
+        "cultural_hint",
     ):
         text = str(value.get(field, "") or "").strip()
         if text:
@@ -318,10 +319,10 @@ def _message_parts_to_full_legacy(
     if not normalized_parts:
         return "", []
 
-    visible_chunks: list[str]         = []
-    media_items: list[dict[str, Any]] = []
-    pending_text_prefix               = ""
-    total_parts                       = len(normalized_parts)
+    visible_chunks: list[str]            = []
+    media_items   : list[dict[str, Any]] = []
+    pending_text_prefix                  = ""
+    total_parts                          = len(normalized_parts)
     for index, part in enumerate(normalized_parts):
         kind = str(part.get("kind", "") or "").strip()
         if kind == "text":
@@ -348,13 +349,14 @@ def _message_parts_to_full_legacy(
         if media_item is None:
             continue
         media_items.append(media_item)
-        visible_chunks.append(str(media_item.get("marker", "") or ""))
+        # 结构化媒体直接生成有序占位符：不再先拼标记文字再用正则找回，长摘要不会泄露成正文，
+        # 用户文字里形似标记的内容也不会被误当成媒体，媒体位置保持原顺序。
+        visible_chunks.append(media_placeholder(len(media_items)))
 
     if pending_text_prefix:
         visible_chunks.append(pending_text_prefix)
 
-    visible_text = "".join(visible_chunks)
-    content      = compact_message_content(visible_text, media_items)
+    content = "".join(visible_chunks).strip()
     return content, media_items
 
 

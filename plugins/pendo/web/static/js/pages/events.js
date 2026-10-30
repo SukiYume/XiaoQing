@@ -12,6 +12,7 @@ import {
     zonedInputToUtcIso,
     zonedInstantEpoch,
 } from '../utils/timezone.js';
+import { createInstantMemory } from '../utils/timezone.js';
 import {
     bindEnterAction,
     bindFormSubmit,
@@ -155,15 +156,18 @@ function formatEventDateTime(value) {
     return hasInvalidDatePrefix(value) ? '未知时间' : formatZonedDateTime(value);
 }
 
+// 当前编辑器的原始时刻记忆：未改动的开始、结束和提醒时间原样提交，不做分钟级往返转换。
+let _editorInstants = createInstantMemory();
+
 /** 把接口日期转成用户设置时区的 YYYY-MM-DDTHH:mm，非法值不进入表单。 */
 function toInputDateTime(value, userTimeZone) {
     if (hasInvalidDatePrefix(value)) return '';
-    return zonedDateTimeToInput(value, userTimeZone);
+    return _editorInstants.display(value, userTimeZone);
 }
 
-/** 严格把用户设置时区的墙钟转换为唯一 UTC 时刻。 */
+/** 未改动的字段沿用原时刻；改动过的字段严格把用户时区墙钟转换为唯一 UTC 时刻。 */
 function inputToIso(value, userTimeZone) {
-    return zonedInputToUtcIso(value, userTimeZone);
+    return _editorInstants.resolve(value, userTimeZone);
 }
 
 function reminderRulesFromTimes(startTime, remindTimes) {
@@ -768,14 +772,9 @@ function detailActionNoun(event) {
     return '事件';
 }
 
-function renderTimelineEntries(items) {
+function renderTimelineEntries(items, events = new Map((_state.overview?.events || []).map((event) => [String(event.id ?? ''), event]))) {
     if (!Array.isArray(items) || !items.length) return '';
 
-    const events = new Map(
-        (_state.overview?.events || [])
-            .filter((event) => event && typeof event === 'object')
-            .map((event) => [String(event.id ?? ''), event]),
-    );
     return items
         .filter((item) => item && typeof item === 'object')
         .map((item) => {
@@ -837,6 +836,12 @@ function renderSelectedDayPanel() {
 }
 
 function renderTimelinePage() {
+    const events = new Map(
+        (_state.overview?.events || [])
+            .filter((event) => event && typeof event === 'object')
+            .map((event) => [String(event.id ?? ''), event]),
+    );
+
     const timelineDays = _state.overview?.timeline_days || [];
     return `
         <section class="events-panel">
@@ -877,7 +882,7 @@ function renderTimelinePage() {
                                 <div></div>
                                 <div class="events-timeline-day-meta">${formatWeekday(row.date)} · ${row.items.length} 条</div>
                             </div>
-                            ${renderTimelineEntries(row.items)}
+                            ${renderTimelineEntries(row.items, events)}
                         `,
                             )
                             .join('')}
@@ -947,9 +952,6 @@ async function loadOverview(options = {}) {
             const bounds = await fetchItemRangeBounds(api, {
                 type: 'event',
                 filters: { category: _state.filters.category, keyword: _state.filters.keyword },
-                sortField: 'start_time',
-                startField: 'start_time',
-                endField: 'end_time',
                 fallbackEnd: today,
             });
             if (_container !== container || requestVersion !== _loadVersion) return;
@@ -1183,6 +1185,7 @@ function collectEditorPayload(content, userTimeZone) {
 }
 
 async function openEventEditor(existing = null, prefillDate = '') {
+    _editorInstants = createInstantMemory();
     let userTimeZone;
     try {
         userTimeZone = await fetchUserTimeZone();

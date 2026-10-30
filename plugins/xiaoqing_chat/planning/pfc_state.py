@@ -14,15 +14,15 @@ from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
 @dataclass
 class PFCConversationState:
-    chat_id: str
-    ignore_until_ts: float            = 0.0
-    ended: bool                       = False
-    last_successful_reply_action: str = ""
-    goal_list: list[dict[str, Any]] = field(default_factory=list)
-    knowledge_list: list[dict[str, Any]] = field(default_factory=list)
-    planner_fail_ts: list[float] = field(default_factory=list)
-    planner_skip_until: float = 0.0
-    updated_at: float = field(default_factory=lambda: time.time())
+    chat_id                     : str
+    ignore_until_ts             : float = 0.0
+    ended                       : bool  = False
+    last_successful_reply_action: str   = ""
+    goal_list                   : list[dict[str, Any]] = field(default_factory=list)
+    knowledge_list              : list[dict[str, Any]] = field(default_factory=list)
+    planner_fail_ts             : list[float] = field(default_factory=list)
+    planner_skip_until          : float = 0.0
+    updated_at                  : float = field(default_factory=lambda: time.time())
 
     @property
     def top_goal(self) -> str:
@@ -95,14 +95,14 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
     @staticmethod
     def _payload(st: PFCConversationState) -> dict[str, Any]:
         return {
-            "ignore_until_ts": st.ignore_until_ts,
-            "ended": st.ended,
+            "ignore_until_ts"             : st.ignore_until_ts,
+            "ended"                       : st.ended,
             "last_successful_reply_action": st.last_successful_reply_action,
-            "goal_list": st.goal_list,
-            "knowledge_list": st.knowledge_list,
-            "planner_fail_ts": st.planner_fail_ts,
-            "planner_skip_until": st.planner_skip_until,
-            "updated_at": st.updated_at,
+            "goal_list"                   : st.goal_list,
+            "knowledge_list"              : st.knowledge_list,
+            "planner_fail_ts"             : st.planner_fail_ts,
+            "planner_skip_until"          : st.planner_skip_until,
+            "updated_at"                  : st.updated_at,
         }
 
     def mark_dirty(self, chat_id: str) -> None:

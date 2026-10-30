@@ -29,9 +29,9 @@ PLUGIN_MANIFESTS = tuple(sorted((PROJECT_ROOT / "plugins").glob("*/plugin.json")
 
 @dataclass(frozen=True, slots=True)
 class _CatalogFixture:
-    manifests: tuple[PluginManifest, ...]
-    roots: tuple[CommandCatalogNode, ...]
-    router: CommandRouter
+    manifests  : tuple[PluginManifest, ...]
+    roots      : tuple[CommandCatalogNode, ...]
+    router     : CommandRouter
     invocations: list[CommandInvocation]
 
 
@@ -287,8 +287,8 @@ def test_mobile_help_progressively_discloses_real_pendo_catalog() -> None:
 
 class _ConfigProvider:
     config: ClassVar[dict[str, Any]] = {
-        "bot_name": "TestBot",
-        "command_prefixes": ["/"],
+        "bot_name"                 : "TestBot",
+        "command_prefixes"         : ["/"],
         "require_bot_name_in_group": False,
     }
 
@@ -331,8 +331,8 @@ class _Request:
 
     def __init__(self, payload: dict[str, Any]) -> None:
         self.headers = {
-            "Authorization": "Bearer catalog-test-token",
-            "Content-Type": "application/json",
+            "Authorization"           : "Bearer catalog-test-token",
+            "Content-Type"            : "application/json",
             "X-XiaoQing-Response-Mode": "actions",
         }
         self._payload = payload
@@ -356,12 +356,12 @@ def _onebot_payload(
         else ("private" not in contexts and "group" in contexts)
     )
     payload: dict[str, Any] = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group" if group_mode else "private",
-        "user_id": 10001,
-        "self_id": 90001,
-        "raw_message": text,
-        "message": [{"type": "text", "data": {"text": text}}],
+        "user_id"     : 10001,
+        "self_id"     : 90001,
+        "raw_message" : text,
+        "message"     : [{"type": "text", "data": {"text": text}}],
     }
     if group_mode:
         payload["group_id"] = 20001

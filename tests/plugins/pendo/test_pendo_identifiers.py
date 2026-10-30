@@ -67,8 +67,8 @@ def test_database_default_event_collection_id_uses_full_uuid(db: Database) -> No
     collection_id = db.create_event_collection(
         {
             "owner_id": "uuid-default-collection-owner",
-            "kind": "multi_node",
-            "title": "默认集合 ID",
+            "kind"    : "multi_node",
+            "title"   : "默认集合 ID",
         }
     )
 
@@ -100,10 +100,10 @@ def test_event_graph_rejects_short_id_shared_by_leaf_and_collection(db: Database
     db.insert_item(EventItem(id=leaf_id, owner_id=owner_id, title="叶子"))
     db.create_event_collection(
         {
-            "id": collection_id,
+            "id"      : collection_id,
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "集合",
+            "kind"    : "multi_node",
+            "title"   : "集合",
         }
     )
 

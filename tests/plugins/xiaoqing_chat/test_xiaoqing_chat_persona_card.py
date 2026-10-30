@@ -109,7 +109,7 @@ def test_regex_guards_stay_narrow() -> None:
         plugin_dir     = BUNDLED_PERSONA_FILE.parent.parent,
     )
 
-    assert cfg.max_tokens == 768
+    assert "max_tokens" not in cfg.model_fields
     assert cfg.personality.state_probability == 0.18
     assert cfg.bot_name_only_replies == ["在", "嗯？", "怎么了", "我在", "有事吗"]
     assert len(cfg.keyword_reaction.regex_rules) == 2
@@ -197,7 +197,7 @@ def test_old_persona_fields_are_reported_not_silently_used(tmp_path: Path) -> No
         tmp_path,
         {
             "personality": {"identity": "旧人设", "reply_style": "旧风格", "states": ["困"]},
-            "brain_chat": {"brain_identity": "旧深度人设"},
+            "brain_chat" : {"brain_identity": "旧深度人设"},
         },
     )
     cfg = load_xiaoqing_chat_config(context_config={}, plugin_dir=plugin_dir, logger=logger)

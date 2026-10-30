@@ -97,10 +97,10 @@ def test_build_event_schedule_handles_missing_start_time() -> None:
     )
 
     assert result == {
-        "kind": "single",
-        "display_days": [],
-        "day_entries": {},
-        "time_summary": "未设置时间",
+        "kind"          : "single",
+        "display_days"  : [],
+        "day_entries"   : {},
+        "time_summary"  : "未设置时间",
         "start_epoch_ms": None,
-        "end_epoch_ms": None,
+        "end_epoch_ms"  : None,
     }

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 import tests.helpers.plugin_manager_test_support as _fixture_support
+from core.plugin_manager import PluginDefinition
 from core.plugin_watcher import _ManifestRejection
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.plugin_manager_test_support import (
-    AsyncMock,
     CommandRouter,
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginExecutionDrainResult,
     PluginExecutionGate,
     PluginLoadError,
@@ -21,8 +25,6 @@ from tests.helpers.plugin_manager_test_support import (
     _FatalLifecycleError,
     _service_definition,
     _write_runtime_manifest,
-    asyncio,
-    pytest,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -492,13 +494,21 @@ def test_all_active_plugin_manifests_validate_against_the_strict_schema():
         context_factory = lambda *args, **kwargs: Mock(),
     )
 
-    definitions = [
-        manager._load_definition(path)
+    definitions = {
+        path.name: manager._load_definition(path)
         for path in (root / "plugins").iterdir()
         if manager._is_plugin_dir(path)
-    ]
+    }
 
-    assert all(definition is not None for definition in definitions)
+    # 拒绝结果同样“不为 None”：必须断言得到的是真正的定义，并报告被拒绝的插件与原因。
+    assert definitions
+    rejected = {
+        name: definition.bucket
+        for name, definition in definitions.items()
+        if isinstance(definition, _ManifestRejection)
+    }
+    assert rejected == {}
+    assert all(isinstance(definition, PluginDefinition) for definition in definitions.values())
 
 
 def test_configure_execution_applies_per_plugin_timeout_override(tmp_path: Path):
@@ -508,10 +518,10 @@ def test_configure_execution_applies_per_plugin_timeout_override(tmp_path: Path)
     snapshot = ConfigSnapshot(
         config={
             "plugin_execution": {
-                "timeout_seconds": 12,
-                "parallel_limit": 2,
+                "timeout_seconds"      : 12,
+                "parallel_limit"       : 2,
                 "drain_timeout_seconds": 7,
-                "overrides": {"codex": {"timeout_seconds": 0}},
+                "overrides"            : {"codex": {"timeout_seconds": 0}},
             }
         },
         secrets={},

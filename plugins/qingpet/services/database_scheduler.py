@@ -3,7 +3,7 @@
 import json
 import logging
 import sqlite3
-from datetime import timedelta
+from datetime import date, timedelta
 
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
@@ -59,7 +59,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         except Exception as exc:
             conn.rollback()
             _log_database_failure("settle_expired_trade_listings", exc)
-            return 0
+            raise
 
     def _expire_trade_listing_in_transaction(
         self,
@@ -160,8 +160,37 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         )
         return cursor.rowcount == 1
 
-    def run_daily_reset_atomic(self, period_key: str, group_id: int) -> DailyResetResult | None:
-        """原子领取每日任务、重置计数、增加宠物年龄并完成调度。"""
+    def missed_daily_reset_days(self, group_id: int, today: str) -> int | None:
+        """距上次完成的每日结算过了几个业务日；从未结算过的群返回 None。
+
+        进程跨午夜停机时午夜任务不会补跑：启动和每次调度都据此补结算，
+        昨天的次数上限不会继续拦截当天操作，宠物年龄按实际跨越的日期增长。
+        """
+        row = (
+            self._get_connection()
+            .execute(
+                """SELECT MAX(substr(period_key, 1, 10)) AS last_day FROM scheduler_runs
+               WHERE job_name = 'qingpet_daily_reset' AND status = 'completed'
+                 AND period_key LIKE ?""",
+                (f"%:{group_id}",),
+            )
+            .fetchone()
+        )
+        last_day = row["last_day"] if row is not None else None
+        if not last_day:
+            return None
+        try:
+            return max(0, (date.fromisoformat(today) - date.fromisoformat(last_day)).days)
+        except ValueError:
+            return None
+
+    def run_daily_reset_atomic(
+        self,
+        period_key: str,
+        group_id: int,
+        age_days: int = 1,
+    ) -> DailyResetResult | None:
+        """原子领取每日任务、重置计数、按跨越的天数增加宠物年龄并完成调度。"""
         job_name = "qingpet_daily_reset"
         conn     = self._get_connection()
         try:
@@ -186,9 +215,9 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 (group_id,),
             )
             pet_cursor = conn.execute(
-                """UPDATE pets SET age = age + 1, version = version + 1
+                """UPDATE pets SET age = age + ?, version = version + 1
                    WHERE group_id = ?""",
-                (group_id,),
+                (max(1, int(age_days)), group_id),
             )
             if not self._complete_scheduler_run_in_transaction(conn, job_name, period_key):
                 raise sqlite3.DatabaseError("scheduler completion claim lost")
@@ -457,7 +486,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
     def get_pet_ranking(self, group_id: int, ranking_type: str, limit: int = 10) -> list[dict]:
         expressions = {
             "care_score": "(hunger + mood + clean + energy + health) / 5.0",
-            "intimacy": "intimacy",
+            "intimacy"  : "intimacy",
             "experience": "experience",
         }
         expression = expressions.get(ranking_type)

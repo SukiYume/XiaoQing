@@ -27,6 +27,7 @@ const {{
     zonedDateTimeToInput,
     zonedInputToUtcIso,
     zonedInstantEpoch,
+    createInstantMemory,
 }} = (() => {{
 {source}
     return {{
@@ -41,6 +42,7 @@ const {{
         zonedDateTimeToInput,
         zonedInputToUtcIso,
         zonedInstantEpoch,
+        createInstantMemory,
     }};
 }})();
 setUserTimeZone(globalThis.__userTimeZone || 'Asia/Shanghai');

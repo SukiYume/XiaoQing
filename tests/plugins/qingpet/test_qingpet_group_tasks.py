@@ -250,9 +250,9 @@ def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(
         assert len(rows) == len(GROUP_TASK_TEMPLATES)
         progress = {row["task_type"]: row["current_value"] for row in rows}
         assert progress == {
-            "group_clean": 1,
+            "group_clean"  : 1,
             "group_explore": 0,
-            "group_feed": 0,
+            "group_feed"   : 0,
         }
     finally:
         db.cleanup()

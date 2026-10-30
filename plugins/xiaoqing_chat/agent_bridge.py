@@ -223,9 +223,9 @@ def agent_may_take_over(
 class _AgentPlan:
     """agent 判断要接手的一轮：交给它的材料、它的判断，以及开始判断的时刻。"""
 
-    turn: dict[str, Any]
+    turn    : dict[str, Any]
     decision: Any
-    started: float
+    started : float
 
 
 def _log_agent_step(context: Any, hctx: HandlerContext, step: str, **fields: Any) -> None:
@@ -256,15 +256,15 @@ async def _decide(
     try:
         quoted_text, quoted_images = await _quoted_message(event, context)
         turn = {
-            "text": prepared.text,
-            "user_id": event.get("user_id"),
-            "group_id": event.get("group_id"),
-            "message_id": event.get("message_id"),
-            "is_private": prepared.is_private,
-            "bot_name": hctx.bot_name,
+            "text"       : prepared.text,
+            "user_id"    : event.get("user_id"),
+            "group_id"   : event.get("group_id"),
+            "message_id" : event.get("message_id"),
+            "is_private" : prepared.is_private,
+            "bot_name"   : hctx.bot_name,
             "sender_name": event_sender_name(event),
-            "history": await _recent_history(hctx, event),
-            "images": [*_image_urls(event.get("message")), *quoted_images],
+            "history"    : await _recent_history(hctx, event),
+            "images"     : [*_image_urls(event.get("message")), *quoted_images],
             "image_files": _image_files(event),
             "quoted_text": quoted_text,
             # 人设只写在人设卡里：agent 拿人物事实和〔办事〕各节，和平时聊天是同一个人。

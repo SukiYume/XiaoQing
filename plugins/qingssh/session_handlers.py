@@ -59,22 +59,22 @@ _SessionJobKey = tuple[Any, Any]
 class _ServerDraft(TypedDict, total=False):
     """引导式添加会话逐步收集的服务器配置。"""
 
-    name: str
-    host: str
-    port: int
-    username: str
+    name     : str
+    host     : str
+    port     : int
+    username : str
     auth_type: str
-    key_path: str
+    key_path : str
 
 
 _REQUIRED_DRAFT_FIELDS: dict[str, tuple[str, ...]] = {
-    "name": (),
-    "host": ("name",),
-    "port": ("name", "host"),
-    "username": ("name", "host", "port"),
+    "name"     : (),
+    "host"     : ("name",),
+    "port"     : ("name", "host"),
+    "username" : ("name", "host", "port"),
     "auth_type": ("name", "host", "port", "username"),
-    "password": ("name", "host", "port", "username", "auth_type"),
-    "key_path": ("name", "host", "port", "username", "auth_type"),
+    "password" : ("name", "host", "port", "username", "auth_type"),
+    "key_path" : ("name", "host", "port", "username", "auth_type"),
 }
 _IMAGE_EXTENSIONS          = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"})
 _MAX_SHOWIMG_FILES         = 5
@@ -116,7 +116,7 @@ class _ShowImageRequest:
     """一条已验证的图片匹配与分页请求。"""
 
     pattern: str
-    page: int
+    page   : int
 
 
 class _ShowImageInputError(ValueError):
@@ -175,6 +175,18 @@ def _resolve_showimg_listing(pattern: str, cwd: str | None) -> tuple[str, str]:
     return remote_dir or "/", filename_pattern
 
 
+def _has_shell_expansion(raw_value: str) -> bool:
+    """单引号之外出现 ``$`` 或反引号时，Shell 会展开它们。"""
+
+    quoted = False
+    for char in raw_value:
+        if char == "'":
+            quoted = not quoted
+        elif not quoted and char in "$`":
+            return True
+    return False
+
+
 def _parse_export_environment(
     text: str,
     env_vars: dict[str, str],
@@ -187,6 +199,9 @@ def _parse_export_environment(
 
     var_name  = export_match.group(1)
     raw_value = export_match.group(2).strip()
+    if _has_shell_expansion(raw_value):
+        # 会话只能保存字面值，后续命令按单引号还原；带展开的值保存下来会变成另一个值。
+        return None, "export 值暂不支持变量或命令展开，请写出完整值，或用单引号表示字面值"
     if not raw_value:
         var_value = ""
     else:
@@ -212,15 +227,15 @@ def _parse_export_environment(
 class _CommandJob:
     """一个后台命令及其所属的不可变会话代次。"""
 
-    key: _SessionJobKey
+    key        : _SessionJobKey
     server_name: str
-    job_id: str
-    task: asyncio.Task[None]
+    job_id     : str
+    task       : asyncio.Task[None]
 
 
 # 按唯一 ID 保存全部存活任务，避免新会话代次覆盖索引后，关闭流程漏掉旧任务。
 # 第二个索引只指向每个用户/群会话的当前代次；任务结束时同时做对象与 ID 比较。
-_COMMAND_JOBS: dict[str, _CommandJob]          = {}
+_COMMAND_JOBS      : dict[str, _CommandJob]    = {}
 _CURRENT_JOB_BY_KEY: dict[_SessionJobKey, str] = {}
 _SHUTTING_DOWN                                 = False
 
@@ -265,10 +280,7 @@ def _session_history(session: Session) -> list[str]:
 
 
 def _new_job_id() -> str:
-    while True:
-        job_id = uuid.uuid4().hex
-        if job_id not in _COMMAND_JOBS:
-            return job_id
+    return uuid.uuid4().hex
 
 
 def _register_job(job: _CommandJob) -> None:
@@ -1113,8 +1125,8 @@ async def _handle_showimg_command(
     await asyncio.to_thread(BoundedFileCache(images_dir, _IMAGE_CACHE_LIMITS).prune)
 
     downloaded_files: list[tuple[int, str, Path]] = []
-    local_paths: list[Path]                       = []
-    errors: list[str]                             = []
+    local_paths     : list[Path]                  = []
+    errors          : list[str]                   = []
     try:
         for global_index, filename in enumerate(page_files, page_start + 1):
             remote_path = resolve_remote_path(filename, remote_dir)

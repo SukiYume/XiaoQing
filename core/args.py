@@ -24,8 +24,8 @@ def _is_option_token(token: str) -> bool:
 class ParsedArgs:
     """解析后的命令参数"""
 
-    raw: str
-    tokens: list[str] = field(default_factory=list)
+    raw    : str
+    tokens : list[str] = field(default_factory=list)
     options: dict[str, str] = field(default_factory=dict)
 
     def get(self, index: int, default: str = "") -> str:
@@ -138,7 +138,7 @@ def parse(raw: str) -> ParsedArgs:
 
 def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
     """Parse caller-owned token boundaries without joining and tokenizing again."""
-    args: list[str]         = []
+    args   : list[str]      = []
     options: dict[str, str] = {}
     idx                     = 0
     options_enabled         = True

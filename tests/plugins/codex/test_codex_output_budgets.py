@@ -28,14 +28,14 @@ def codex_config(tmp_path: Path) -> CodexPluginConfig:
         config   = {
             "plugins": {
                 "codex": {
-                    "default_cwd": str(tmp_path),
-                    "allowed_cwd_roots": [str(tmp_path)],
-                    "job_timeout_seconds": 30,
-                    "max_stdout_bytes": 64 * 1024,
-                    "max_stderr_bytes": 64 * 1024,
-                    "max_json_line_bytes": 16 * 1024,
+                    "default_cwd"           : str(tmp_path),
+                    "allowed_cwd_roots"     : [str(tmp_path)],
+                    "job_timeout_seconds"   : 30,
+                    "max_stdout_bytes"      : 64 * 1024,
+                    "max_stderr_bytes"      : 64 * 1024,
+                    "max_json_line_bytes"   : 16 * 1024,
                     "max_final_output_bytes": 64 * 1024,
-                    "max_image_artifacts": 2,
+                    "max_image_artifacts"   : 2,
                 }
             }
         },
@@ -94,18 +94,18 @@ def test_chunked_stdout_keeps_events_then_enforces_total_budget(
         {
             "type": "item.completed",
             "item": {
-                "type": "agent_message",
-                "text": "最后答案",
+                "type"    : "agent_message",
+                "text"    : "最后答案",
                 "artifact": {"path": "C:/tmp/chart.PNG"},
             },
         },
         {
-            "type": "turn.completed",
+            "type" : "turn.completed",
             "usage": {
-                "input_tokens": 13,
+                "input_tokens"       : 13,
                 "cached_input_tokens": 5,
-                "output_tokens": 8,
-                "ignored": "not retained",
+                "output_tokens"      : 8,
+                "ignored"            : "not retained",
             },
         },
     ]
@@ -117,9 +117,9 @@ def test_chunked_stdout_keeps_events_then_enforces_total_budget(
     assert accumulator.summary.thread_id == "thread-budget"
     assert accumulator.summary.last_message == "最后答案"
     assert accumulator.summary.usage == {
-        "input_tokens": 13,
+        "input_tokens"       : 13,
         "cached_input_tokens": 5,
-        "output_tokens": 8,
+        "output_tokens"      : 8,
     }
     assert accumulator.summary.image_paths == ["C:/tmp/chart.PNG"]
 
@@ -141,11 +141,11 @@ def test_streaming_event_parser_rejects_non_objects_and_ambiguous_counters(
             json.dumps({"type": "thread.started", "thread_id": "bad\nthread"}),
             json.dumps(
                 {
-                    "type": "turn.completed",
+                    "type" : "turn.completed",
                     "usage": {
-                        "input_tokens": True,
+                        "input_tokens"       : True,
                         "cached_input_tokens": 1.5,
-                        "output_tokens": 8,
+                        "output_tokens"      : 8,
                     },
                 }
             ),
@@ -153,8 +153,8 @@ def test_streaming_event_parser_rejects_non_objects_and_ambiguous_counters(
                 {
                     "type": "item.completed",
                     "item": {
-                        "type": "agent_message",
-                        "text": "safe answer",
+                        "type" : "agent_message",
+                        "text" : "safe answer",
                         "image": "bad\npath.png",
                     },
                 }
@@ -281,13 +281,13 @@ def test_runner_streams_real_subprocess_events(
         {
             "type": "item.completed",
             "item": {
-                "type": "agent_message",
-                "text": "real final",
+                "type" : "agent_message",
+                "text" : "real final",
                 "image": "C:/tmp/real.png",
             },
         },
         {
-            "type": "turn.completed",
+            "type" : "turn.completed",
             "usage": {"input_tokens": 21, "output_tokens": 34},
         },
     ]

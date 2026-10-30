@@ -50,9 +50,9 @@ def test_scenario_checks_flag_stale_topic_and_missing_image_content(quality):
         expected_any    = ("暖气",),
     )
     assert quality._scenario_checks(scenario, "宿舍暖气还没来") == {
-        "has_reply": True,
-        "not_exhausted_fallback": True,
-        "no_stale_topic_terms": True,
+        "has_reply"                : True,
+        "not_exhausted_fallback"   : True,
+        "no_stale_topic_terms"     : True,
         "mentions_expected_content": True,
     }
     stale = quality._scenario_checks(scenario, "冷到想重看孤独摇滚")
@@ -88,7 +88,7 @@ def test_unaddressed_scenarios_are_observed_outside_the_machine_gate(quality):
     rows    = [{"reply": ""}, {"reply": "因为冬天它升得高"}]
     assert quality._scenario_observations(join, rows) == {"bot_replies": 1, "joined": True}
     assert quality._scenario_observations(silence, rows) == {
-        "bot_replies": 1,
+        "bot_replies"  : 1,
         "stayed_silent": False,
     }
     addressed = next(s for s in quality.SCENARIOS if s.addressed)

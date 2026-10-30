@@ -63,11 +63,11 @@ def media_action_detail(
         entry = marker.entry
         return _drop_empty(
             {
-                "media_kind": marker.kind,
-                "media_marker": marker.marker,
-                "media_mode": marker.mode,
-                "media_hash": str(getattr(entry, "media_hash", "") or ""),
-                "media_key": str(getattr(entry, "media_key", "") or ""),
+                "media_kind"   : marker.kind,
+                "media_marker" : marker.marker,
+                "media_mode"   : marker.mode,
+                "media_hash"   : str(getattr(entry, "media_hash", "") or ""),
+                "media_key"    : str(getattr(entry, "media_key", "") or ""),
                 "media_face_id": str(getattr(entry, "face_id", "") or ""),
             }
         )
@@ -77,11 +77,11 @@ def media_action_detail(
         return {}
     return _drop_empty(
         {
-            "media_kind": str(part.get("kind", "") or ""),
-            "media_marker": str(part.get("marker", "") or ""),
-            "media_mode": str(part.get("mode", "") or ""),
-            "media_hash": str(part.get("media_hash", "") or ""),
-            "media_key": str(part.get("media_key", "") or ""),
+            "media_kind"   : str(part.get("kind", "") or ""),
+            "media_marker" : str(part.get("marker", "") or ""),
+            "media_mode"   : str(part.get("mode", "") or ""),
+            "media_hash"   : str(part.get("media_hash", "") or ""),
+            "media_key"    : str(part.get("media_key", "") or ""),
             "media_face_id": str(part.get("face_id", "") or ""),
         }
     )
@@ -102,13 +102,13 @@ def _serialize_rendered_media_items(
         emotion_tags = [str(tag).strip() for tag in (item.emotion_tags or ()) if str(tag).strip()]
         payload      = _drop_empty(
             {
-                "kind": kind,
-                "media_hash": media_hash,
-                "face_id": face_id,
-                "marker": marker,
-                "description": description,
+                "kind"        : kind,
+                "media_hash"  : media_hash,
+                "face_id"     : face_id,
+                "marker"      : marker,
+                "description" : description,
                 "emotion_tags": emotion_tags,
-                "file_path": str(item.cached_path) if item.cached_path is not None else "",
+                "file_path"   : str(item.cached_path) if item.cached_path is not None else "",
             }
         )
         if kind == "qq_face" and description:

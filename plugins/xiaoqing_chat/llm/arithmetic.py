@@ -15,20 +15,20 @@ _MEASURED_VALUE_RE = re.compile(
 _MEASUREMENT_UNITS = {
     "块钱": ("money", 1),
     "元钱": ("money", 1),
-    "块": ("money", 1),
-    "元": ("money", 1),
+    "块" : ("money", 1),
+    "元" : ("money", 1),
     "小时": ("time", 3600),
     "分钟": ("time", 60),
     "秒钟": ("time", 1),
-    "秒": ("time", 1),
+    "秒" : ("time", 1),
     "公里": ("length", 1000),
     "千米": ("length", 1000),
-    "米": ("length", 1),
+    "米" : ("length", 1),
     "厘米": ("length", 0.01),
     "毫米": ("length", 0.001),
     "千克": ("mass", 1000),
     "公斤": ("mass", 1000),
-    "克": ("mass", 1),
+    "克" : ("mass", 1),
 }
 
 

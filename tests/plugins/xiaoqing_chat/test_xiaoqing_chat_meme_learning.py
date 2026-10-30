@@ -23,7 +23,7 @@ from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
 MODEL = {
     "secrets": {},
-    "llm": LLMCallConfig(
+    "llm"    : LLMCallConfig(
         temperature            = 0,
         top_p                  = 1,
         max_tokens             = 512,
@@ -134,12 +134,12 @@ async def test_meme_extraction_accepts_supported_correction(state):
     )
     payload = [
         {
-            "term": "空转",
-            "is_jargon": True,
-            "meaning": "忙碌却没有进展",
-            "usage": "无效忙碌",
-            "tone": "轻松自嘲",
-            "evidence": text,
+            "term"      : "空转",
+            "is_jargon" : True,
+            "meaning"   : "忙碌却没有进展",
+            "usage"     : "无效忙碌",
+            "tone"      : "轻松自嘲",
+            "evidence"  : text,
             "correction": True,
         },
         {"term": "凭空新词", "is_jargon": True, "meaning": "无来源"},

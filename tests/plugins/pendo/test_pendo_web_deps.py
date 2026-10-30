@@ -150,8 +150,8 @@ def test_widget_bearer_rejects_invalid_subject_and_auth_errors(
         "verify_token",
         lambda _token, **_kwargs: {
             "owner_id": "",
-            "kind": "widget",
-            "scope": "widget:read",
+            "kind"    : "widget",
+            "scope"   : "widget:read",
         },
     )
     with pytest.raises(HTTPException) as invalid_owner:

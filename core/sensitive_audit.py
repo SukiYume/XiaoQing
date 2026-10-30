@@ -28,8 +28,8 @@ _ERROR_TYPE_RE         = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 class SensitiveAuditSummary:
     """Metadata safe to interpolate into an ordinary log record."""
 
-    kind: str
-    length: int
+    kind       : str
+    length     : int
     byte_length: int
     fingerprint: str
 

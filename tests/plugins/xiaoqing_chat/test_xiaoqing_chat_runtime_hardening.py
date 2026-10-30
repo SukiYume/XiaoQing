@@ -48,20 +48,14 @@ def test_config_rejects_unsafe_numeric_and_regex_values(payload):
 def test_config_accepts_safe_zero_disable_values_and_probability_boundaries():
     cfg = XiaoQingChatConfig.model_validate(
         {
-            "reply_probability_base": 0.0,
+            "reply_probability_base"             : 0.0,
             "participation_cue_reply_probability": 1.0,
-            "background_max_retry": 0,
-            "io_persist_debounce_seconds": 0.0,
-            "media": {
-                "vision_max_retry": 0,
-                "vision_retry_interval_seconds": 0.0,
-            },
+            "io_persist_debounce_seconds"        : 0.0,
         }
     )
 
     assert cfg.reply_probability_base == 0.0
     assert cfg.participation_cue_reply_probability == 1.0
-    assert cfg.background_max_retry == 0
     assert cfg.io_persist_debounce_seconds == 0.0
 
 
@@ -96,7 +90,7 @@ def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
         "plugins": {
             "xiaoqing_chat": {
                 "media": {
-                    "max_media_per_message": 3,
+                    "max_media_per_message"       : 3,
                     "enable_inbound_media_context": True,
                 }
             }
@@ -321,7 +315,6 @@ def test_humanize_typing_delay_disabled_when_flag_off():
 
 
 def test_refresh_mood_state_reuses_active_mood_without_reroll():
-    import random
     import time
 
     from plugins.xiaoqing_chat.handlers import _refresh_mood_state
@@ -343,7 +336,6 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
     )
 
     # 即使随机数极端，活跃 mood 应直接复用
-    random.seed(0)
     mood = _refresh_mood_state(runtime, state, "g1")
     assert mood == "现在心情不错"
     state.set_mood_state.assert_not_called()
@@ -375,3 +367,57 @@ def test_refresh_mood_state_resets_after_long_idle():
     mood = _refresh_mood_state(runtime, state, "g1")
     assert mood in {"现在心情不错", "刚吃完饭"}
     assert state.set_mood_state.called
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"temperature": 0.5},
+        {"foreground_max_retry": 0},
+        {"background_timeout_seconds": 2},
+        {"reply_check": {"max_tokens": 200}},
+        {"media": {"vision_timeout_seconds": 5}},
+        {"brain_chat": {"brain_temperature": 0.5}},
+    ],
+)
+def test_retired_ai_parameters_report_the_single_configuration_source(payload):
+    with pytest.raises(ValidationError, match="config.plugins.xiaoqing_chat.ai.routes"):
+        XiaoQingChatConfig.model_validate(payload)
+
+
+def test_main_routes_supply_distinct_runtime_parameters(tmp_path):
+    from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
+
+    routes = {
+        name: {
+            "models"                : ["profile"],
+            "temperature"           : 0.1 * index,
+            "top_p"                 : 0.8,
+            "max_tokens"            : 1000 * index,
+            "timeout_seconds"       : index + 3,
+            "total_timeout_seconds" : index + 10,
+            "max_retry"             : index,
+            "retry_interval_seconds": index / 10,
+        }
+        for index, name in enumerate(("chat", "reasoning", "checker", "vision"), 1)
+    }
+    config = {"plugins": {"xiaoqing_chat": {"ai": {"routes": routes}}}}
+    cfg = load_xiaoqing_chat_config(context_config=config, plugin_dir=tmp_path)
+    for name, route in routes.items():
+        assert cfg.llm_config(name).as_kwargs() == {
+            key: value for key, value in route.items() if key != "models"
+        }
+    assert "_llm_configs" not in cfg.model_dump()
+    # A fresh load reflects a changed main route.
+    routes["chat"]["temperature"] = 0.99
+    updated = load_xiaoqing_chat_config(context_config=config, plugin_dir=tmp_path)
+    assert updated.llm_config("chat").temperature == 0.99
+    assert cfg.llm_config("chat").temperature == 0.1
+
+
+def test_behavior_file_rejects_a_second_ai_registry(tmp_path):
+    from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
+
+    (tmp_path / "xiaoqing_config.json").write_text('{"ai": {"routes": {}}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="AI routes belong in config.plugins.xiaoqing_chat.ai"):
+        load_xiaoqing_chat_config(context_config={}, plugin_dir=tmp_path)

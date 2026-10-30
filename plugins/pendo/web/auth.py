@@ -22,20 +22,20 @@ from ..config import PendoConfig
 if TYPE_CHECKING:
     from ..services.db import Database
 
-_ALGORITHM: Final                 = "HS256"
-_TOKEN_ISSUER: Final              = "pendo-web"
-_TOKEN_TYPE: Final                = "pendo-web"
-_WIDGET_KIND: Final               = "widget"
-_WIDGET_SCOPE: Final              = "widget:read"
-_MIN_SECRET_BYTES: Final          = 32
-_MAX_OWNER_ID_CHARS: Final        = 256
-_LOGIN_CODE_DIGEST_DOMAIN: Final  = b"pendo-login-code\0"
-_WEB_SESSION_DIGEST_DOMAIN: Final = b"pendo-web-session\0"
-_SECRET_FILE: Path | None         = None
-_SECRET_CACHE: str | None         = None
-_AUTH_DATABASE: Database | None   = None
-_AUTH_LOCK                        = threading.Lock()
-_SECRET_LOCK                      = threading.Lock()
+_ALGORITHM                : Final           = "HS256"
+_TOKEN_ISSUER             : Final           = "pendo-web"
+_TOKEN_TYPE               : Final           = "pendo-web"
+_WIDGET_KIND              : Final           = "widget"
+_WIDGET_SCOPE             : Final           = "widget:read"
+_MIN_SECRET_BYTES         : Final           = 32
+_MAX_OWNER_ID_CHARS       : Final           = 256
+_LOGIN_CODE_DIGEST_DOMAIN : Final           = b"pendo-login-code\0"
+_WEB_SESSION_DIGEST_DOMAIN: Final           = b"pendo-web-session\0"
+_SECRET_FILE              : Path | None     = None
+_SECRET_CACHE             : str | None      = None
+_AUTH_DATABASE            : Database | None = None
+_AUTH_LOCK                                  = threading.Lock()
+_SECRET_LOCK                                = threading.Lock()
 
 
 def configure_auth_storage(data_dir: Path) -> None:
@@ -87,23 +87,23 @@ class WebSession:
     """由服务端持久化、可按设备撤销的浏览器会话。"""
 
     session_id: str
-    device_id: str
-    owner_id: str
+    device_id : str
+    owner_id  : str
     csrf_token: str
     created_at: int
     expires_at: int
-    demo: bool = False
+    demo      : bool = False
 
 
 @dataclass(frozen=True)
 class WebSessionInfo:
     """不含浏览器 Bearer 凭据的会话设备记录。"""
 
-    device_id: str
-    owner_id: str
+    device_id : str
+    owner_id  : str
     created_at: int
     expires_at: int
-    demo: bool = False
+    demo      : bool = False
 
 
 def _credential_digest(domain: bytes, credential: str) -> str:
@@ -357,14 +357,14 @@ def _encode_widget_token(
     expires_at              = _expiry_timestamp(now, expires_seconds)
     payload: dict[str, Any] = {
         "owner_id": normalized_owner,
-        "sub": normalized_owner,
-        "typ": _TOKEN_TYPE,
-        "iss": _TOKEN_ISSUER,
-        "exp": expires_at,
-        "iat": now,
-        "kind": _WIDGET_KIND,
-        "scope": _WIDGET_SCOPE,
-        "jti": token_id,
+        "sub"     : normalized_owner,
+        "typ"     : _TOKEN_TYPE,
+        "iss"     : _TOKEN_ISSUER,
+        "exp"     : expires_at,
+        "iat"     : now,
+        "kind"    : _WIDGET_KIND,
+        "scope"   : _WIDGET_SCOPE,
+        "jti"     : token_id,
     }
     encoded = jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM)
     if isinstance(encoded, bytes):

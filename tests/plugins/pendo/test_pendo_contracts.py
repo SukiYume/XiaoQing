@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
+
 from tests.helpers.pendo_test_support import (
     ROOT,
-    datetime,
-    json,
 )
 
 
@@ -63,13 +64,19 @@ class TestPendoConfig:
 
         # 检查是否有 schedule 配置
         schedule = config.get("schedule", [])
-        assert isinstance(schedule, list)
+        assert {job["id"]: job["cron"] for job in schedule} == {
+            "pendo_reminders"                : {"minute": "*"},
+            "pendo_daily_briefing"           : {"minute": "*"},
+            "pendo_diary_reminder"           : {"minute": "*"},
+            "pendo_migrate_todos"            : {"minute": 5},
+            "pendo_prune_operation_logs"     : {"hour": 0, "minute": 15},
+            "pendo_weekly_finance_summary"   : {"minute": "*"},
+            "pendo_month_end_finance_summary": {"minute": "*"},
+            "pendo_cleanup_demo_data"        : {"hour": "*/6", "minute": 15},
+        }
 
     def test_show_help_uses_overview_and_subcommand_sections(self):
         """测试根帮助只显示命令总览，子命令帮助保留分节样式"""
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.main import _show_help
 
@@ -85,9 +92,6 @@ class TestPendoConfig:
 
     def test_show_help_for_subcommand_only_renders_requested_section(self):
         """测试子模块帮助只渲染对应模块并保留顶部导航提示"""
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.main import _show_help
 
@@ -116,9 +120,6 @@ class TestPendoConfig:
 
     def test_command_router_help_uses_detailed_provider_for_subcommands(self):
         """测试 /pendo help event 复用 main.py 的详细帮助，而不是旧路由摘要。"""
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.core.router import CommandRouter
         from plugins.pendo.main import _local_catalog_root, _show_help
@@ -129,11 +130,11 @@ class TestPendoConfig:
         router = CommandRouter(
             _local_catalog_root(),
             {
-                "event": dummy_handler,
-                "note": dummy_handler,
-                "diary": dummy_handler,
+                "event"   : dummy_handler,
+                "note"    : dummy_handler,
+                "diary"   : dummy_handler,
                 "settings": dummy_handler,
-                "confirm": dummy_handler,
+                "confirm" : dummy_handler,
             },
             help_provider=_show_help,
         )
@@ -157,9 +158,6 @@ class TestPendoConfig:
 
     def test_help_map_covers_current_command_surface_and_beginner_examples(self):
         """测试 HELP_MAP 覆盖当前命令面、关键参数和可复制示例。"""
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.main import HELP_MAP, _show_help
 

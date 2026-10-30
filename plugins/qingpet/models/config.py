@@ -16,12 +16,12 @@ class GroupConfig:
     """控制单个群的玩法开关、经济倍率和内容过滤扩展。"""
 
     group_id: int
-    enabled: bool = True
+    enabled : bool = True
 
     economy_multiplier: float = 1.0
-    decay_multiplier: float   = 1.0
+    decay_multiplier  : float = 1.0
 
-    trade_enabled: bool           = False
+    trade_enabled          : bool = False
     natural_trigger_enabled: bool = False
 
     activity_enabled: bool = True

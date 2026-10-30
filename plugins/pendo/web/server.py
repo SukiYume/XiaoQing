@@ -27,11 +27,11 @@ from .deps import set_db
 
 logger = logging.getLogger("pendo.web")
 
-_app: FastAPI | None             = None
-_server: uvicorn.Server | None   = None
-_thread: threading.Thread | None = None
-_last_error: str | None          = None
-_STATE_LOCK                      = threading.RLock()
+_app       : FastAPI | None          = None
+_server    : uvicorn.Server | None   = None
+_thread    : threading.Thread | None = None
+_last_error: str | None              = None
+_STATE_LOCK                          = threading.RLock()
 
 STATIC_DIR      = Path(__file__).parent / "static"
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -74,8 +74,8 @@ def create_app(db: Database) -> FastAPI:
     async def request_validation_exception_handler(request, exc):
         errors = [
             {
-                "loc": err.get("loc", []),
-                "msg": err.get("msg", "Invalid value"),
+                "loc" : err.get("loc", []),
+                "msg" : err.get("msg", "Invalid value"),
                 "type": err.get("type", "value_error"),
             }
             for err in exc.errors()
@@ -83,10 +83,10 @@ def create_app(db: Database) -> FastAPI:
         return JSONResponse(
             status_code = 422,
             content     = {
-                "ok": False,
-                "message": "请求参数校验失败",
+                "ok"        : False,
+                "message"   : "请求参数校验失败",
                 "error_code": "validation_error",
-                "errors": errors,
+                "errors"    : errors,
             },
         )
 
@@ -96,8 +96,8 @@ def create_app(db: Database) -> FastAPI:
         return JSONResponse(
             status_code = status_code,
             content     = {
-                "ok": False,
-                "message": exc.get_user_message(),
+                "ok"        : False,
+                "message"   : exc.get_user_message(),
                 "error_code": exc.error_code,
             },
         )

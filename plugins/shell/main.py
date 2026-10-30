@@ -53,9 +53,9 @@ _TERMINAL_QUERY_TIMEOUT = 10.0
 class TerminalSettings:
     """单次命令代次使用的已校验公开终端配置。"""
 
-    backend: str
+    backend   : str
     executable: str | None = None
-    error: str | None      = None
+    error     : str | None = None
 
 
 class ShellContext(Protocol):
@@ -214,6 +214,11 @@ def _is_whitelist_disabled(context: ShellContext) -> bool:
 # ──────────────────── 参数与路径解析 ────────────────────
 
 
+_RELATIVE_PATH_RE = re.compile(r"[\w.\-]+(?:[\\/][\w.\-]+)+[\\/]?")
+# 解释器代码参数：紧跟在这些开关后面的 argv 是代码字符串，原样交给解释器。
+_CODE_FLAGS = frozenset({"-c", "-e", "-command", "/c", "-encodedcommand"})
+
+
 def _strip_outer_quotes(token: str) -> str:
     if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
         return token[1:-1]
@@ -236,7 +241,8 @@ def _looks_like_path(token: str) -> bool:
             return True
         if token.startswith("/") and not token.startswith("//"):
             return False
-        return "/" in token or "\\" in token
+        # 只认明确的相对路径形态（dir/file.txt）：代码、正则、带引号或括号的文本即使含斜杠也不是路径。
+        return _RELATIVE_PATH_RE.fullmatch(token) is not None
     return token.startswith(("/", "./", "../", "~/"))
 
 
@@ -264,7 +270,7 @@ def _normalize_path_token(token: str) -> str:
 def _merge_windows_quoted_assignments(parts: list[str]) -> list[str] | None:
     """合并 ``key="含空格值"`` 被非 POSIX shlex 拆开的片段。"""
 
-    merged: list[str]  = []
+    merged : list[str] = []
     pending: list[str] = []
     for part in parts:
         if pending:
@@ -292,8 +298,14 @@ def _split_command(cmd_line: str) -> list[str] | None:
         if merged_parts is None:
             return None
         parts = merged_parts
-    parts = [_normalize_path_token(_strip_outer_quotes(part)) for part in parts]
-    return parts if parts else None
+    normalized: list[str] = []
+    for index, part in enumerate(parts):
+        token = _strip_outer_quotes(part)
+        if index > 0 and parts[index - 1].casefold() in _CODE_FLAGS:
+            normalized.append(token)
+        else:
+            normalized.append(_normalize_path_token(token))
+    return normalized if normalized else None
 
 
 def _validate_command(
