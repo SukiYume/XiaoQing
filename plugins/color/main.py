@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int, quote_token, tokenize
 from core.delivery import CommandOutcome, DeliverySegments
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import has_control_characters, image, segments, text
+from core.plugin_base import has_control_characters, image, run_sync, segments, text
 from core.public_errors import public_error_response
 from core.router import resolve_context_command_invocation
 
@@ -783,7 +783,7 @@ async def handle(
         if request.action == "auto" and stellar.is_spectral_type(request.value):
             return await stellar.query_stellar_color(request.value, context, _image_dir(context))
 
-        colors = await data_manager.load_colors_async(context)
+        colors = await run_sync(data_manager.load_colors, context)
         if not colors:
             return segments("❌ 颜色数据加载失败，请检查插件资源")
         return await _handle_palette_request(request, colors, context)

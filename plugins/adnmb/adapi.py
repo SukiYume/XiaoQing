@@ -21,6 +21,8 @@ from core.bounded_http import (
     parse_bounded_json,
 )
 from core.image_validation import (
+    WEB_IMAGE_FORMAT_EXTENSIONS,
+    WEB_IMAGE_MIME_FORMATS,
     ImageValidationError,
     ImageValidationLimits,
     validate_image_bytes,
@@ -31,17 +33,14 @@ from core.safe_http import SafeHttpError, fetch_public_bytes
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 配置常量
-# ============================================================
-
 API_HOST  = "https://www.nmbxd1.com"
 IMAGE_CDN = "https://image.nmb.best"
 APP_ID    = "A-Island-IOS-App"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
-MAX_IMAGE_BYTES           = 8 * 1024 * 1024
-MAX_IMAGE_PIXELS          = 20_000_000
-MAX_IMAGE_FRAMES          = 120
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+IMAGE_LIMITS    = ImageValidationLimits(
+    max_bytes=MAX_IMAGE_BYTES, max_pixels=20_000_000, max_frames=120
+)
 IMAGE_TIMEOUT_SECONDS     = 15
 MAX_EXTERNAL_RESULT_CHARS = 512
 FORUM_CACHE_TTL_SECONDS   = 60 * 60
@@ -51,14 +50,7 @@ IMAGE_CACHE_LIMITS        = FileCacheLimits(
     max_bytes   = 256 * 1024 * 1024,
     ttl_seconds = 7 * 24 * 60 * 60,
 )
-_IMAGE_MIME_FORMATS = {
-    "image/gif" : "GIF",
-    "image/jpeg": "JPEG",
-    "image/png" : "PNG",
-    "image/webp": "WEBP",
-}
-_IMAGE_FORMAT_EXTENSIONS = {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
-_ADNMB_BODY_LIMITS       = BodyLimits(
+_ADNMB_BODY_LIMITS = BodyLimits(
     max_wire_bytes    = 4 * 1024 * 1024,
     max_decoded_bytes = 8 * 1024 * 1024,
 )
@@ -80,10 +72,6 @@ ENDPOINTS = {
     "add_feed"  : "/Api/addFeed",
     "del_feed"  : "/Api/delFeed",
 }
-
-# ============================================================
-# 数据结构
-# ============================================================
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,11 +135,6 @@ class Thread:
         return cls(main_post=main_post, replies=replies)
 
 
-# ============================================================
-# API 客户端
-# ============================================================
-
-
 class AdnmbClient:
     """A岛 API 异步客户端"""
 
@@ -202,7 +185,8 @@ class AdnmbClient:
         return parse_bounded_json(response, limits=_ADNMB_JSON_LIMITS)
 
     async def get_forum_list(self) -> dict[str, str]:
-        """获取板块列表"""
+        """获取板块列表（板块名 -> ID），结果缓存一小时。"""
+
         now = time.monotonic()
         if self._forum_cache is not None and now < self._forum_cache_expires_at:
             return dict(self._forum_cache)
@@ -210,34 +194,29 @@ class AdnmbClient:
         data = await self._get("forum_list")
         if not isinstance(data, list):
             return {}
-
+        forums = (
+            forum
+            for group in data
+            if isinstance(group, dict) and isinstance(group.get("forums"), list)
+            for forum in group["forums"]
+            if isinstance(forum, dict)
+        )
         forum_list: dict[str, str] = {}
-        for group in data:
-            if not isinstance(group, dict):
-                continue
-            forums = group.get("forums", [])
-            if not isinstance(forums, list):
-                continue
-            for forum in forums:
-                if not isinstance(forum, dict):
-                    continue
-                name     = forum.get("name")
-                forum_id = forum.get("id")
-                if not isinstance(name, str) or not name or forum_id is None:
-                    continue
+        for forum in forums:
+            name, forum_id = forum.get("name"), forum.get("id")
+            if isinstance(name, str) and name and forum_id is not None:
                 forum_list[name] = str(forum_id)
                 if len(forum_list) >= MAX_FORUM_CACHE_ENTRIES:
                     break
-            if len(forum_list) >= MAX_FORUM_CACHE_ENTRIES:
-                break
 
         self._forum_cache            = forum_list
         self._forum_cache_expires_at = now + FORUM_CACHE_TTL_SECONDS
         return dict(forum_list)
 
-    async def get_timeline(self, page: int = 1) -> list[Thread]:
-        """获取时间线"""
-        data = await self._get("timeline", id="-1", page=page)
+    @staticmethod
+    def _threads(data: Any) -> list[Thread]:
+        """解析串列表，跳过畸形条目和管理员串。"""
+
         if not isinstance(data, list):
             return []
         return [
@@ -245,67 +224,46 @@ class AdnmbClient:
             for item in data
             if isinstance(item, dict) and item.get("user_hash") != "Admin"
         ]
+
+    async def get_timeline(self, page: int = 1) -> list[Thread]:
+        return self._threads(await self._get("timeline", id="-1", page=page))
 
     async def get_forum(self, forum_name: str, page: int = 1) -> list[Thread]:
-        """获取板块内容"""
-        forum_list = await self.get_forum_list()
-        forum_id   = forum_list.get(forum_name)
-
+        forum_id = (await self.get_forum_list()).get(forum_name)
         if not forum_id:
             return []
-
-        data = await self._get("forum", id=forum_id, page=page)
-        if data == "该板块不存在":
-            return []
-
-        if not isinstance(data, list):
-            return []
-        return [
-            Thread.from_json(item)
-            for item in data
-            if isinstance(item, dict) and item.get("user_hash") != "Admin"
-        ]
+        return self._threads(await self._get("forum", id=forum_id, page=page))
 
     async def get_thread(self, thread_id: str, page: int = 1) -> Thread | None:
-        """获取串内容"""
         data = await self._get("thread", id=thread_id, page=page)
-        if data == "该主题不存在" or not isinstance(data, dict):
-            return None
-        return Thread.from_json(data)
+        return Thread.from_json(data) if isinstance(data, dict) else None
 
     async def get_ref(self, ref_id: str) -> Post | None:
-        """获取单条回复"""
         data = await self._get("ref", id=ref_id, page=1)
-        if not isinstance(data, dict) or "id" not in data:
-            return None
-        return Post.from_json(data)
+        return Post.from_json(data) if isinstance(data, dict) and "id" in data else None
 
     async def get_feed(self, page: int = 1) -> list[Post]:
-        """获取订阅"""
         data = await self._get("feed", page=page, uuid=self.uuid)
         if not isinstance(data, list):
             return []
         return [Post.from_json(item) for item in data if isinstance(item, dict)]
 
-    async def add_feed(self, thread_id: str) -> str:
-        """添加订阅"""
-        result = await self._get("add_feed", tid=thread_id, uuid=self.uuid)
+    async def _change_feed(self, endpoint: str, thread_id: str, default: str) -> str:
+        """订阅增删接口返回一段提示文本，按外部文本边界截断。"""
+
+        result = await self._get(endpoint, tid=thread_id, uuid=self.uuid)
         return bounded_external_text(
             result,
             max_chars = MAX_EXTERNAL_RESULT_CHARS,
             max_bytes = MAX_EXTERNAL_RESULT_CHARS * 4,
-            default   = "添加订阅失败",
+            default   = default,
         )
 
+    async def add_feed(self, thread_id: str) -> str:
+        return await self._change_feed("add_feed", thread_id, "添加订阅失败")
+
     async def del_feed(self, thread_id: str) -> str:
-        """删除订阅"""
-        result = await self._get("del_feed", tid=thread_id, uuid=self.uuid)
-        return bounded_external_text(
-            result,
-            max_chars = MAX_EXTERNAL_RESULT_CHARS,
-            max_bytes = MAX_EXTERNAL_RESULT_CHARS * 4,
-            default   = "删除订阅失败",
-        )
+        return await self._change_feed("del_feed", thread_id, "删除订阅失败")
 
     async def download_image(self, img_path: str, use_thumb: bool = False) -> Path | None:
         """下载图片到本地缓存"""
@@ -313,27 +271,21 @@ class AdnmbClient:
         if not img_path:
             return None
 
-        # 选择 CDN 路径
-        cdn_type = "thumb" if use_thumb else "image"
-        url      = f"{IMAGE_CDN}/{cdn_type}/{img_path}"
+        url = f"{IMAGE_CDN}/{'thumb' if use_thumb else 'image'}/{img_path}"
 
-        # 本地文件路径
+        # 缓存文件名取 URL 摘要；先查缓存并复验，失效则删除重新下载
         digest      = hashlib.sha256(url.encode("utf-8")).hexdigest()
         cached_path = await asyncio.to_thread(
             self._image_cache.get_any,
-            tuple(f"{digest}{extension}" for extension in _IMAGE_FORMAT_EXTENSIONS.values()),
+            tuple(f"{digest}{extension}" for extension in WEB_IMAGE_FORMAT_EXTENSIONS.values()),
         )
         if cached_path is not None:
             try:
                 await asyncio.to_thread(
                     validate_image_path,
                     cached_path,
-                    limits=ImageValidationLimits(
-                        max_bytes  = MAX_IMAGE_BYTES,
-                        max_pixels = MAX_IMAGE_PIXELS,
-                        max_frames = MAX_IMAGE_FRAMES,
-                    ),
-                    format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+                    limits            = IMAGE_LIMITS,
+                    format_extensions = WEB_IMAGE_FORMAT_EXTENSIONS,
                 )
                 return cached_path
             except (ImageValidationError, OSError):
@@ -358,7 +310,7 @@ class AdnmbClient:
             content_type = (
                 str(fetched.headers.get("Content-Type", "")).split(";", 1)[0].strip().casefold()
             )
-            expected_format = _IMAGE_MIME_FORMATS.get(content_type)
+            expected_format = WEB_IMAGE_MIME_FORMATS.get(content_type)
             if expected_format is None:
                 raise ImageValidationError(
                     "unsupported_format",
@@ -367,12 +319,8 @@ class AdnmbClient:
             validated = await asyncio.to_thread(
                 validate_image_bytes,
                 fetched.body,
-                limits=ImageValidationLimits(
-                    max_bytes  = MAX_IMAGE_BYTES,
-                    max_pixels = MAX_IMAGE_PIXELS,
-                    max_frames = MAX_IMAGE_FRAMES,
-                ),
-                format_extensions = _IMAGE_FORMAT_EXTENSIONS,
+                limits            = IMAGE_LIMITS,
+                format_extensions = WEB_IMAGE_FORMAT_EXTENSIONS,
                 expected_format   = expected_format,
             )
             filename = f"{digest}{validated.extension}"
@@ -381,14 +329,8 @@ class AdnmbClient:
                 await asyncio.to_thread(self._image_cache.put, filename, fetched.body),
             )
         except (SafeHttpError, ValueError) as exc:
-            logger.warning(
-                "Image download rejected error_type=%s",
-                type(exc).__name__,
-            )
+            logger.warning("Image download rejected error_type=%s", type(exc).__name__)
         except Exception as exc:
-            logger.warning(
-                "Image download error error_type=%s",
-                type(exc).__name__,
-            )
+            logger.warning("Image download error error_type=%s", type(exc).__name__)
 
         return None

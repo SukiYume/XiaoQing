@@ -18,9 +18,9 @@ from core.interfaces import DeliveryTarget, PluginContextProtocol
 from core.lifecycle import to_thread_owned
 from core.message import sender_display_name
 from core.plugin_base import Segments, bounded_external_text, build_action, run_sync, segments
-from core.sensitive_audit import summarize_sensitive
+from core.sensitive_audit import audit_error_type, summarize_sensitive
+from core.sensitive_audit import safe_request_id as audit_request_id
 
-from .audit import audit_error_type, audit_request_id
 from .connection import ConnectionManager, McConnection
 from .log_monitor import LogBatch, LogEvent, LogEventType, LogMonitor
 from .rcon import RconClient
@@ -694,21 +694,16 @@ def _batch_message(
     return message, max(batch.matched_total, len(batch.events)), granted
 
 
-def _action_for_connection(conn: McConnection, message: str) -> dict[str, Any]:
-    # DeliveryTarget 与非空文本已在上游验证，因此 build_action 此处不可能返回 None。
-    return cast(
-        dict[str, Any],
-        build_action(segments(message), conn.target.user_id, conn.target.group_id),
-    )
-
-
 async def _send_mc_action(
     context: PluginContextProtocol,
     conn: McConnection,
     message: str,
     receipt: DeliveryReceipt,
 ) -> None:
-    action = _action_for_connection(conn, message)
+    # DeliveryTarget 与非空文本已在上游验证，因此 build_action 此处不可能返回 None。
+    action = cast(
+        dict[str, Any], build_action(segments(message), conn.target.user_id, conn.target.group_id)
+    )
     try:
         outcome = await asyncio.wait_for(
             send_with_receipt(context.send_action, action, receipt),

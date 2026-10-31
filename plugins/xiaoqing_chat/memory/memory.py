@@ -328,23 +328,33 @@ class MemoryStore:
             if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
                 del history[:-MAX_CACHED_MESSAGES_PER_CHAT]
 
-    def get(self, chat_id: str) -> list[StoredMessage]:
+    def _cache_state(self, chat_id: str) -> tuple[list[StoredMessage] | None, int, bool]:
+        """读取缓存、代际与删除标记，供加载完成后判断结果是否仍然有效。"""
+
         with self._sync_lock:
-            cached     = self._messages.get(chat_id)
-            generation = self._generations.get(chat_id, 0)
-            tombstoned = chat_id in self._tombstones
+            return (
+                self._messages.get(chat_id),
+                self._generations.get(chat_id, 0),
+                chat_id in self._tombstones,
+            )
+
+    def _merge_loaded(
+        self, chat_id: str, generation: int, loaded: list[StoredMessage] | None
+    ) -> list[StoredMessage]:
+        """把磁盘加载结果并入缓存；加载期间会话被清空或删除时丢弃旧数据。"""
+
+        with self._sync_lock:
+            current = self._messages.get(chat_id, [])
+            if self._generations.get(chat_id, 0) == generation and chat_id not in self._tombstones:
+                self._messages[chat_id] = self._merge_history(loaded or [], current)
+            return self._messages.get(chat_id) or []
+
+    def get(self, chat_id: str) -> list[StoredMessage]:
+        cached, generation, tombstoned = self._cache_state(chat_id)
         if tombstoned:
             return []
         if cached is None:
-            loaded = self._load(chat_id)
-            with self._sync_lock:
-                current = self._messages.get(chat_id, [])
-                if (
-                    self._generations.get(chat_id, 0) == generation
-                    and chat_id not in self._tombstones
-                ):
-                    self._messages[chat_id] = self._merge_history(loaded or [], current)
-                cached = self._messages.get(chat_id) or []
+            cached = self._merge_loaded(chat_id, generation, self._load(chat_id))
         return list(cached)
 
     def _async_load_lock(self, chat_id: str) -> asyncio.Lock:
@@ -357,22 +367,13 @@ class MemoryStore:
 
     async def get_async(self, chat_id: str) -> list[StoredMessage]:
         async with self._async_load_lock(chat_id):
-            with self._sync_lock:
-                cached     = self._messages.get(chat_id)
-                generation = self._generations.get(chat_id, 0)
-                tombstoned = chat_id in self._tombstones
+            cached, generation, tombstoned = self._cache_state(chat_id)
             if tombstoned:
                 return []
             if cached is None:
-                loaded = await asyncio.to_thread(self._load, chat_id)
-                with self._sync_lock:
-                    current = self._messages.get(chat_id, [])
-                    if (
-                        self._generations.get(chat_id, 0) == generation
-                        and chat_id not in self._tombstones
-                    ):
-                        self._messages[chat_id] = self._merge_history(loaded or [], current)
-                    cached = self._messages.get(chat_id) or []
+                cached = self._merge_loaded(
+                    chat_id, generation, await asyncio.to_thread(self._load, chat_id)
+                )
         return list(cached)
 
     async def get_recent_async(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:

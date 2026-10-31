@@ -24,8 +24,9 @@ from core.image_validation import (
     ImageValidationLimits,
     validate_image_bytes,
 )
+from core.sensitive_audit import log_sensitive_operation as log_sensitive_audit
+from core.sensitive_audit import safe_audit_id
 
-from .jupyter_audit import log_sensitive_audit, safe_audit_id
 from .jupyter_config import (
     AUTO_SHUTDOWN_TIMEOUT,
     CHECK_INTERVAL,

@@ -58,6 +58,25 @@ class _ScopedPluginView(Mapping[str, Any]):
         return self.value == other
 
 
+def _plugin_namespace(source: Mapping[str, Any], plugin_name: str) -> Mapping[str, Any]:
+    """取出 ``source["plugins"][plugin_name]``；任一层不是映射时返回空映射。"""
+
+    plugins = source.get("plugins", {})
+    options = plugins.get(plugin_name, {}) if isinstance(plugins, Mapping) else {}
+    return options if isinstance(options, Mapping) else {}
+
+
+def _lookup_dotted(namespace: Any, path: str) -> Any:
+    """按 ``a.b.c`` 逐级读取并返回脱离快照的副本；路径不存在时返回 None。"""
+
+    current = namespace
+    for part in path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return materialize_snapshot_value(current)
+
+
 def _scoped_plugin_config(plugin_name: str, source: Mapping[str, Any]) -> Mapping[str, Any]:
     """Build an immutable view of public settings plus one plugin namespace."""
 
@@ -67,19 +86,10 @@ def _scoped_plugin_config(plugin_name: str, source: Mapping[str, Any]) -> Mappin
         and source.plugin_name == plugin_name
     ):
         return source
-
-    plugins = source.get("plugins", {})
-    if not isinstance(plugins, Mapping):
-        plugins = {}
-    plugin_options = plugins.get(plugin_name, {})
-    if not isinstance(plugin_options, Mapping):
-        plugin_options = {}
     view            = {key: source[key] for key in _PLUGIN_PUBLIC_CONFIG_KEYS if key in source}
-    view["plugins"] = {plugin_name: plugin_options}
+    view["plugins"] = {plugin_name: _plugin_namespace(source, plugin_name)}
     return _ScopedPluginView(
-        value       = _freeze_config_mapping(view),
-        plugin_name = plugin_name,
-        kind        = "config",
+        value=_freeze_config_mapping(view), plugin_name=plugin_name, kind="config"
     )
 
 
@@ -92,15 +102,10 @@ def _scoped_plugin_secrets(plugin_name: str, source: Mapping[str, Any]) -> Mappi
         and source.plugin_name == plugin_name
     ):
         return source
-
-    plugins = source.get("plugins", {})
-    if not isinstance(plugins, Mapping):
-        plugins = {}
-    plugin_secrets = plugins.get(plugin_name, {})
-    if not isinstance(plugin_secrets, Mapping):
-        plugin_secrets = {}
     return _ScopedPluginView(
-        value       = _freeze_config_mapping({"plugins": {plugin_name: plugin_secrets}}),
+        value=_freeze_config_mapping(
+            {"plugins": {plugin_name: _plugin_namespace(source, plugin_name)}}
+        ),
         plugin_name = plugin_name,
         kind        = "secrets",
     )
@@ -112,6 +117,7 @@ if TYPE_CHECKING:
     from .session import Session, SessionManager
 
 
+### 插件日志器：每条日志自动带上当前请求的 request_id
 class _RequestLogger:
     def __init__(self, base_logger: logging.Logger, request_id: str | None) -> None:
         self._base_logger = base_logger
@@ -216,13 +222,8 @@ class PluginContext:
         # 与 get_config() 一样只消费一份原子 settings 快照。直接构造的测试/
         # 扩展上下文通常没有 secret_reader，但仍可能有可热更新的 settings_reader；
         # 从 self.secrets 读取会把这条兼容路径固定在旧代。
-        settings     = self.get_settings_snapshot()
-        current: Any = settings.secrets.get("plugins", {}).get(self.plugin_name, {})
-        for part in path.split("."):
-            if not isinstance(current, Mapping) or part not in current:
-                return None
-            current = current[part]
-        return materialize_snapshot_value(current)
+        settings = self.get_settings_snapshot()
+        return _lookup_dotted(settings.secrets.get("plugins", {}).get(self.plugin_name, {}), path)
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot:
         """Return one atomic generation scoped to this plugin."""
@@ -241,13 +242,9 @@ class PluginContext:
 
     def get_config(self, path: str) -> Any:
         """Read one detached value from the current plugin config namespace."""
-        settings     = self.get_settings_snapshot()
-        current: Any = settings.config.get("plugins", {}).get(self.plugin_name, {})
-        for part in path.split("."):
-            if not isinstance(current, Mapping) or part not in current:
-                return None
-            current = current[part]
-        return materialize_snapshot_value(current)
+
+        settings = self.get_settings_snapshot()
+        return _lookup_dotted(settings.config.get("plugins", {}).get(self.plugin_name, {}), path)
 
     def set_secret(self, path: str, value: Any) -> None:
         if self.secret_writer is None:

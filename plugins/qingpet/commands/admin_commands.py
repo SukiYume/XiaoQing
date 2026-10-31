@@ -4,7 +4,7 @@ import re
 
 from core.args import parse_int
 
-from ..services.admin_service import AdminService
+from ..services.admin_service import log_admin_operation, set_group_config
 from ..services.database import Database
 from ..services.economy_service import EconomyService
 
@@ -16,11 +16,8 @@ def handle_manage_enable(user_id: str, group_id: int, args: str, db: Database) -
     if args.strip():
         return False, "用法: /宠物 管理 开启"
 
-    admin_service = AdminService(db)
-    success       = admin_service.enable_plugin(group_id)
-
-    if success:
-        admin_service.log_admin_operation(group_id, user_id, "ENABLE", "启用插件")
+    if db.update_group_config_field(group_id, "enabled", True):
+        log_admin_operation(db, group_id, user_id, "ENABLE", "启用插件")
         return True, f"✅ 宠物插件已在群 {group_id} 中启用"
     return False, "启用失败"
 
@@ -30,11 +27,8 @@ def handle_manage_disable(user_id: str, group_id: int, args: str, db: Database) 
     if args.strip():
         return False, "用法: /宠物 管理 关闭"
 
-    admin_service = AdminService(db)
-    success       = admin_service.disable_plugin(group_id)
-
-    if success:
-        admin_service.log_admin_operation(group_id, user_id, "DISABLE", "禁用插件")
+    if db.update_group_config_field(group_id, "enabled", False):
+        log_admin_operation(db, group_id, user_id, "DISABLE", "禁用插件")
         return True, f"✅ 宠物插件已在群 {group_id} 中禁用"
     return False, "禁用失败"
 
@@ -42,11 +36,9 @@ def handle_manage_disable(user_id: str, group_id: int, args: str, db: Database) 
 def handle_manage_config(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后查看或修改群配置。"""
 
-    admin_service = AdminService(db)
-
     raw_args = args.strip()
     if not raw_args or raw_args == "查看":
-        config = admin_service.get_config(group_id)
+        config = db.get_group_config(group_id)
         lines  = [
             f"⚙️ 群配置 ({config.group_id})",
             "",
@@ -71,12 +63,9 @@ def handle_manage_config(user_id: str, group_id: int, args: str, db: Database) -
                 "trade_enabled, natural_trigger_enabled, activity_enabled"
             )
 
-        key   = parts[1]
-        value = parts[2]
-
-        success = admin_service.set_config(group_id, key, value)
-        if success:
-            admin_service.log_admin_operation(group_id, user_id, "CONFIG_SET", f"{key}={value}")
+        key, value = parts[1], parts[2]
+        if set_group_config(db, group_id, key, value):
+            log_admin_operation(db, group_id, user_id, "CONFIG_SET", f"{key}={value}")
             return True, f"✅ 配置已更新: {key} = {value}"
         return False, "配置更新失败，请检查key和value是否正确"
 
@@ -97,14 +86,8 @@ def handle_manage_reset(user_id: str, group_id: int, args: str, db: Database) ->
             f"确认执行请发送：/宠物 管理 重置 @{target_user_id} 确认"
         )
 
-    admin_service = AdminService(db)
-    success       = admin_service.reset_user_pet(
-        target_user_id,
-        group_id,
-        operator_user_id=user_id,
-    )
-
-    if success:
+    # 原子重置宠物及相关冷却，并在同一事务写入审计日志
+    if db.admin_reset_user_pet_atomic(target_user_id, group_id, user_id):
         return True, f"✅ 用户 {target_user_id} 的宠物已重置"
     return False, "重置失败，用户可能不存在"
 
@@ -119,10 +102,7 @@ def handle_manage_ban(user_id: str, group_id: int, args: str, db: Database) -> t
     target_user_id = match.group(1)
     days           = int(match.group(2))
 
-    admin_service = AdminService(db)
-    success = admin_service.ban_user(target_user_id, group_id, days, operator_user_id=user_id)
-
-    if success:
+    if db.admin_set_ban_atomic(target_user_id, group_id, user_id, days=days):
         return True, f"✅ 用户 {target_user_id} 已被封禁 {days} 天"
     return False, "封禁失败"
 
@@ -136,10 +116,7 @@ def handle_manage_unban(user_id: str, group_id: int, args: str, db: Database) ->
 
     target_user_id = match.group(1)
 
-    admin_service = AdminService(db)
-    success = admin_service.unban_user(target_user_id, group_id, operator_user_id=user_id)
-
-    if success:
+    if db.admin_set_ban_atomic(target_user_id, group_id, user_id, days=None):
         return True, f"✅ 用户 {target_user_id} 已解封"
     return False, "解封失败"
 
@@ -155,8 +132,7 @@ def handle_manage_log(user_id: str, group_id: int, args: str, db: Database) -> t
             return False, "日志条数必须是 1～100 的整数"
         limit = parsed_limit
 
-    admin_service = AdminService(db)
-    logs          = admin_service.get_logs(group_id, limit)
+    logs = db.get_operation_logs(group_id, limit)
 
     if not logs:
         return True, "📋 暂无操作日志"
@@ -180,8 +156,7 @@ def handle_manage_stats(user_id: str, group_id: int, args: str, db: Database) ->
     if args.strip():
         return False, "用法: /宠物 管理 统计"
 
-    economy_service = EconomyService(db)
-    return True, economy_service.format_stats(group_id)
+    return True, EconomyService(db).format_stats(group_id)
 
 
 def handle_manage_activity(
@@ -207,7 +182,7 @@ def handle_manage_activity(
     activity_id = db.create_activity(group_id, activity_type, title, target, reward_coins)
     if activity_id is None:
         return False, "活动创建失败"
-    AdminService(db).log_admin_operation(
-        group_id, user_id, "ACTIVITY_CREATE", f"activity_id={activity_id} type={activity_type}"
+    log_admin_operation(
+        db, group_id, user_id, "ACTIVITY_CREATE", f"activity_id={activity_id} type={activity_type}"
     )
     return True, f"✅ 活动 #{activity_id} 已创建；对应宠物行为会推进进度"

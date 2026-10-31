@@ -6,7 +6,7 @@ import math
 import re
 from typing import Any
 
-from core.plugin_base import PluginContextProtocol, run_sync
+from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
@@ -50,7 +50,7 @@ def _finite_float(value: str) -> float:
     return result
 
 
-def _handle_time_sync(args: str, context: PluginContextProtocol) -> str:
+def handle_time(args: str, context: PluginContextProtocol) -> str:
     """处理时间转换命令"""
     args = args.strip()
 
@@ -91,9 +91,3 @@ def _handle_time_sync(args: str, context: PluginContextProtocol) -> str:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.time"
         )
-
-
-async def handle_time(args: str, context: PluginContextProtocol) -> str:
-    """在线程 bulkhead 中执行 astropy 时间计算。"""
-
-    return await run_sync(_handle_time_sync, args, context)

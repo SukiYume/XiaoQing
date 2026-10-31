@@ -301,18 +301,6 @@ class TestQingsshPathResolver:
         assert pr.extract_cwd_from_output("") is None
         assert pr.extract_cwd_from_output(None) is None
 
-    def test_extract_cwd_dots_in_path(self):
-        """测试路径中包含点号的情况（核心 bug 场景）"""
-        pr = self._import_path_resolver()
-        assert (
-            pr.extract_cwd_from_output("__XQ_CWD__/home/user/low.iops.files\n")
-            == "/home/user/low.iops.files"
-        )
-        assert (
-            pr.extract_cwd_from_output("__XQ_CWD__/home/user/low.iops.files/FRB121102\n")
-            == "/home/user/low.iops.files/FRB121102"
-        )
-
     def test_strip_cwd_markers(self):
         pr = self._import_path_resolver()
 

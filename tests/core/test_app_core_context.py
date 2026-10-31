@@ -26,7 +26,6 @@ def test_app_init_with_minimal_args(temp_app_root: Path):
 
         assert app.root == temp_app_root
     assert app.config_manager is not None
-    assert app.log_manager is not None
     assert app.http_session is None
     assert app.http_sender is None
     assert app.ws_client is None
@@ -188,7 +187,7 @@ def test_app_load_admins_rejects_unsafe_shapes(
 ) -> None:
     app = XiaoQingApp(temp_app_root)
 
-    app._load_admins({"admin_user_ids": raw_ids})
+    app.identity_service.load_admins({"admin_user_ids": raw_ids})
 
     assert app.identity_service.admin_ids == set()
 
@@ -198,7 +197,7 @@ def test_app_load_admins_accepts_positive_ints_and_decimal_strings(
 ) -> None:
     app = XiaoQingApp(temp_app_root)
 
-    app._load_admins({"admin_user_ids": (12345, "67890", "12345")})
+    app.identity_service.load_admins({"admin_user_ids": (12345, "67890", "12345")})
 
     assert app.identity_service.admin_ids == {12345, 67890}
 

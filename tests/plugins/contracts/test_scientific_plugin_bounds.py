@@ -50,7 +50,7 @@ def test_mass_calculations_reject_non_positive_or_non_finite_values(
 async def test_redshift_rejects_every_non_finite_value(value: str):
     context = SimpleNamespace(logger=logging.getLogger("test.astro_tools"))
 
-    result = await redshift.handle_redshift(value, context)
+    result = redshift.handle_redshift(value, context)
 
     assert result == "红移值必须是有限数字"
 

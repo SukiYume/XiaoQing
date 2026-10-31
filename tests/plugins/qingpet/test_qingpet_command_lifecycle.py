@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from plugins.qingpet import main as qingpet_main
-from plugins.qingpet.services.admin_service import AdminService
 from plugins.qingpet.utils.constants import PetStatus
 from tests.helpers.assertions import text_segments_text
 
@@ -25,7 +24,7 @@ async def test_real_command_entry_reuses_one_pet_and_invalid_steps_do_not_mutate
         "user_id"     : int(user_id),
         "message_id"  : 1,
     }
-    assert AdminService(qingpet_db).enable_plugin(group_id) is True
+    assert qingpet_db.update_group_config_field(group_id, "enabled", True) is True
 
     # 隔离限流噪声，只验证生产路由、处理器和数据库之间的业务契约。
     monkeypatch.setattr(qingpet_main, "_db_instance", qingpet_db)
@@ -85,10 +84,6 @@ async def test_real_command_entry_reuses_one_pet_and_invalid_steps_do_not_mutate
     still_awake = qingpet_db.get_pet(user_id, group_id)
     assert still_awake is not None and still_awake.status != PetStatus.SLEEPING
 
-    assert AdminService(qingpet_db).delete_user_pet(
-        user_id,
-        group_id,
-        operator_user_id="lifecycle-test",
-    )
+    assert qingpet_db.admin_delete_pet_atomic(user_id, group_id, "lifecycle-test")
     assert qingpet_db.get_pet(user_id, group_id) is None
     assert "还没有宠物" in await call("status")

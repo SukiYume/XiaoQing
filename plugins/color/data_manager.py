@@ -184,12 +184,6 @@ def load_colors(context: PluginContextProtocol) -> list[ColorRecord]:
     return colors
 
 
-async def load_colors_async(context: PluginContextProtocol) -> list[ColorRecord]:
-    """通过当前插件的有界执行池加载内置库和作用域自定义颜色。"""
-
-    return cast(list[ColorRecord], await run_sync(load_colors, context))
-
-
 def load_custom_colors(context: PluginContextProtocol) -> list[ColorRecord]:
     """在进程内锁保护下加载当前会话或私聊作用域的自定义颜色。"""
 

@@ -173,13 +173,6 @@ _SETTING_SPECS: Final[dict[str, _SettingSpec]] = {
 }
 
 
-async def handle_settings(user_id: str, args: str, db: Database) -> str:
-    """分发查看、静默时段和单值设置命令，只返回展示文本。"""
-
-    _ok, message = await handle_settings_result(user_id, args, db)
-    return message
-
-
 async def handle_settings_result(user_id: str, args: str, db: Database) -> tuple[bool, str]:
     """分发设置命令，返回 (是否成功, 展示文本)；校验失败和未知设置项为失败。"""
 

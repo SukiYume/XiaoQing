@@ -91,6 +91,32 @@ def _split_force_flag(text: str) -> tuple[str, bool]:
     return " ".join(" ".join(parts).split()), True
 
 
+_REMINDER_PARSE_ERROR: CommandMessage = {
+    "status" : "error",
+    "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
+}
+
+
+def _collection_fields(
+    collection_id: str, user_id: str, kind: str, parsed_data: dict[str, Any]
+) -> dict[str, Any]:
+    """重复日程与多节点日程集合共有的字段，缺省值与单次日程一致。"""
+
+    return {
+        "id"      : collection_id,
+        "owner_id": user_id,
+        "kind"    : kind,
+        "title"   : parsed_data.get("title", "无标题日程"),
+        "content" : parsed_data.get("content", ""),
+        "category": parsed_data.get("category", "未分类"),
+        "location": parsed_data.get("location", ""),
+        "tags"    : parsed_data.get("tags", []),
+        "notes"   : parsed_data.get("notes", ""),
+        "context" : parsed_data.get("context", {}),
+        "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+    }
+
+
 class EventAIParserProtocol(Protocol):
     async def parse_event_with_ai(
         self,
@@ -486,23 +512,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         collection_id      = new_internal_id()
         collection_payload = {
-            "id"            : collection_id,
-            "owner_id"      : user_id,
-            "kind"          : "recurring",
-            "title"         : parsed_data.get("title", "无标题日程"),
-            "content"       : parsed_data.get("content", ""),
-            "category"      : parsed_data.get("category", "未分类"),
-            "location"      : parsed_data.get("location", ""),
-            "tags"          : parsed_data.get("tags", []),
-            "notes"         : parsed_data.get("notes", ""),
-            "context"       : parsed_data.get("context", {}),
-            "timezone"      : parsed_data.get("timezone", "Asia/Shanghai"),
+            **_collection_fields(collection_id, user_id, "recurring", parsed_data),
             "rrule"         : parsed_data["rrule"],
             "reminder_rules": reminder_rules,
             "start_time"    : instances[0].isoformat(),
-            "end_time": (
-                (instances[-1] + duration).isoformat() if duration else instances[-1].isoformat()
-            ),
+            "end_time"      : (instances[-1] + duration if duration else instances[-1]).isoformat(),
         }
         children: list[tuple[str, EventItem]] = []
 
@@ -639,17 +653,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         collection_id      = new_internal_id()
         collection_payload = {
-            "id"            : collection_id,
-            "owner_id"      : user_id,
-            "kind"          : "multi_node",
-            "title"         : parsed_data.get("title", "无标题日程"),
-            "content"       : parsed_data.get("content", ""),
-            "category"      : parsed_data.get("category", "未分类"),
-            "location"      : parsed_data.get("location", ""),
-            "tags"          : parsed_data.get("tags", []),
-            "notes"         : parsed_data.get("notes", ""),
-            "context"       : parsed_data.get("context", {}),
-            "timezone"      : parsed_data.get("timezone", "Asia/Shanghai"),
+            **_collection_fields(collection_id, user_id, "multi_node", parsed_data),
             "reminder_rules": reminder_rules,
             "start_time"    : start_time,
             "end_time"      : end_time,
@@ -781,20 +785,27 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         current_dt: datetime,
     ) -> tuple[str | None, str]:
         """格式化单次事件的列表项。返回 (date_str, text)。"""
+
+        return EventHandler._format_list_item(event, current_dt, event.title or "无标题")
+
+    @staticmethod
+    def _format_list_item(
+        event: EventItem, current_dt: datetime, label: str
+    ) -> tuple[str | None, str]:
+        """列表项：时间段、标题、地点（截断到 15 字）与短 ID；返回 (日期, 文本)。"""
+
         if not event.start_time:
             return None, ""
-        ev_start_dt = TimezoneHelper.parse(event.start_time, current_dt.tzinfo)
-        date_str    = ev_start_dt.strftime("%Y-%m-%d")
-        time_str    = ItemFormatter.format_time_range(
+        date_str = TimezoneHelper.parse(event.start_time, current_dt.tzinfo).strftime("%Y-%m-%d")
+        time_str = ItemFormatter.format_time_range(
             event.start_time,
             event.end_time,
             tz=current_dt.tzinfo or TimezoneHelper.DEFAULT_TZ,
         )
-        text = f"• {time_str} {event.title or '无标题'}"
+        text = f"• {time_str} {label}"
         if event.location:
             text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" {event.display_id}\n"
-        return date_str, text
+        return date_str, f"{text} {event.display_id}\n"
 
     @staticmethod
     def _format_graph_list_item(
@@ -802,22 +813,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         current_dt: datetime,
         collection: dict[str, Any],
     ) -> tuple[str | None, str]:
-        if not event.start_time:
-            return None, ""
-        ev_start_dt = TimezoneHelper.parse(event.start_time, current_dt.tzinfo)
-        date_str    = ev_start_dt.strftime("%Y-%m-%d")
-        time_str    = ItemFormatter.format_time_range(
-            event.start_time,
-            event.end_time,
-            tz=current_dt.tzinfo or TimezoneHelper.DEFAULT_TZ,
-        )
-        collection_title = collection.get("title") or "无标题"
-        marker           = "📌" if collection.get("kind") == "multi_node" else "🔄"
-        text             = f"• {time_str} {collection_title} · {event.title or '无标题'} {marker}"
-        if event.location:
-            text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" {event.display_id}\n"
-        return date_str, text
+        """集合节点的列表项：集合标题 · 节点标题，并标出多节点（📌）或重复（🔄）。"""
+
+        marker = "📌" if collection.get("kind") == "multi_node" else "🔄"
+        label  = f"{collection.get('title') or '无标题'} · {event.title or '无标题'} {marker}"
+        return EventHandler._format_list_item(event, current_dt, label)
 
     @staticmethod
     def _parse_event_list_filters(
@@ -1518,19 +1518,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not base_time:
             return {"status": "error", "message": "❌ 该日程没有开始时间，无法计算提醒"}
 
-        reminder_rules = await run_sync(
-            self.ai_parser.build_reminder_rules_from_description,
-            reminder_desc,
-        )
-
+        reminder_rules = await self._parse_reminder_rules(reminder_desc)
         if not reminder_rules:
-            return {
-                "status" : "error",
-                "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
-            }
-
-        reminder_rules = with_start_time_reminder_rule(reminder_rules)
-        remind_times   = build_remind_times_from_rules(base_time, reminder_rules)
+            return {**_REMINDER_PARSE_ERROR}
+        remind_times = build_remind_times_from_rules(base_time, reminder_rules)
         await self._db_update_item(
             event_id,
             {"reminder_rules": reminder_rules, "remind_times": remind_times},
@@ -1550,6 +1541,14 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         lines.append(f"\n💡 用 /pendo event reminders {event.display_id} 查看详情")
         return {"status": "success", "message": "\n".join(lines)}
 
+    async def _parse_reminder_rules(self, reminder_desc: str) -> list[dict[str, int]]:
+        """把“提前1天”这类描述解析为提醒规则，并补上默认的准点提醒；解析不出时返回空列表。"""
+
+        reminder_rules = await run_sync(
+            self.ai_parser.build_reminder_rules_from_description, reminder_desc
+        )
+        return with_start_time_reminder_rule(reminder_rules) if reminder_rules else []
+
     async def _set_collection_reminders(
         self,
         user_id: str,
@@ -1562,19 +1561,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not family.children:
             return {"status": "warning", "message": "⚠️ 该日程集合没有可设置提醒的节点"}
 
-        reminder_rules = await run_sync(
-            self.ai_parser.build_reminder_rules_from_description,
-            reminder_desc,
-        )
-
+        reminder_rules = await self._parse_reminder_rules(reminder_desc)
         if not reminder_rules:
-            return {
-                "status" : "error",
-                "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
-            }
-
-        reminder_rules = with_start_time_reminder_rule(reminder_rules)
-        child_updates  = {
+            return {**_REMINDER_PARSE_ERROR}
+        child_updates = {
             str(child.id): (
                 build_remind_times_from_rules(child.start_time, reminder_rules),
                 reminder_rules,

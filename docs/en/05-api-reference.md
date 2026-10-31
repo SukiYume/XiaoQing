@@ -5,6 +5,8 @@
 This chapter lists public types, functions, and entry signatures used in plugin development.
 See [plugin development](03-plugin-development.md) for procedures and [Core modules](04-core-modules.md) for implementation ownership.
 
+The `core` package itself exports nothing; import from the specific submodule, for example `from core.args import parse` or `from core.plugin_base import text`.
+
 ## 📌 Basic types
 
 ```python
@@ -33,7 +35,6 @@ OneBot message-segment structure:
 | `image_url(url)` | `image` | Remote image URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | Local audio |
-| `record_url(url)` | `record` | Remote audio URL |
 | `segments(payload)` | `Segments` | Normalize a string, list, or empty value |
 
 Example:

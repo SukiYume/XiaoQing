@@ -23,7 +23,7 @@ from core.plugin_base import head_tail_preview
 from core.plugin_base import segments as _core_segments
 from core.process_tree import run_process
 from core.public_errors import public_error_response
-from core.sensitive_audit import log_sensitive_operation, safe_audit_id
+from core.sensitive_audit import log_sensitive_operation, safe_request_id
 
 from .config import (
     DANGEROUS_PATTERNS,
@@ -67,12 +67,6 @@ class ShellContext(Protocol):
 # ──────────────────── 配置与审计 ────────────────────
 
 
-def _audit_request_id(context: object) -> str:
-    value     = getattr(context, "request_id", "")
-    candidate = value if isinstance(value, str) else ""
-    return safe_audit_id(candidate)
-
-
 def _log_command_audit(
     context: object,
     command_text: str,
@@ -84,7 +78,7 @@ def _log_command_audit(
     log_sensitive_operation(
         logger,
         "shell.execute",
-        request_id  = _audit_request_id(context),
+        request_id  = safe_request_id(context),
         status      = status,
         return_code = return_code,
         payload     = command_text,
@@ -98,16 +92,10 @@ def _get_config(context: ShellContext) -> Mapping[str, Any]:
     return context.get_settings_snapshot().plugin_secrets("shell")
 
 
-def _get_public_config(context: ShellContext) -> Mapping[str, Any]:
-    """从当前原子设置代取得插件公开配置。"""
-
-    return context.get_settings_snapshot().plugin_config("shell")
-
-
 def _get_terminal_settings(context: ShellContext) -> TerminalSettings:
     """解析公开终端配置；缺省保持直接执行。"""
 
-    raw = _get_public_config(context).get("terminal")
+    raw = context.get_settings_snapshot().plugin_config("shell").get("terminal")
     if raw is None:
         return TerminalSettings(backend=_TERMINAL_DIRECT)
     if not isinstance(raw, Mapping):

@@ -28,14 +28,11 @@ _POOL_GUARD                         = threading.RLock()
 _PATH_LOCKS: dict[Path, _LockEntry] = {}
 
 
-def _canonical_path(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
 @contextmanager
 def keyed_path_lock(path: Path) -> Iterator[None]:
     """锁定规范化路径，并在最后一个使用者退出后回收锁条目。"""
-    key = _canonical_path(path)
+
+    key = path.expanduser().resolve(strict=False)
     with _POOL_GUARD:
         entry = _PATH_LOCKS.get(key)
         if entry is None:
@@ -54,6 +51,7 @@ def keyed_path_lock(path: Path) -> Iterator[None]:
 
 def atomic_write_bytes(path: Path, payload: bytes) -> None:
     """通过同目录临时文件、fsync 和原子替换写入字节。"""
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
@@ -72,6 +70,7 @@ def atomic_write_bytes(path: Path, payload: bytes) -> None:
                 time.sleep(delay)
         else:
             os.replace(temp_name, path)
+        # POSIX 下还需 fsync 目录，保证重命名本身也已落盘。
         if os.name != "nt":
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
@@ -116,44 +115,42 @@ class AtomicJsonStore:
         except FileNotFoundError:
             return None
 
-    def _read_unlocked(self, default: T, *, raise_on_error: bool) -> T | Any:
-        payload = self._read_payload_unlocked()
-        if payload is None:
-            return default
-        try:
-            return self._decode(payload)
-        except (UnicodeDecodeError, json.JSONDecodeError) as primary_error:
-            if raise_on_error:
-                # Security-sensitive callers use strict reads so a stale backup
-                # cannot silently roll back a newer authorization decision.
-                raise primary_error from None
-            try:
-                backup_payload = self.backup_path.read_bytes()
-                recovered      = self._decode(backup_payload)
-            except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
-                return default
-            atomic_write_bytes(self.path, backup_payload)
-            return recovered
-
     def read(self, default: T, *, raise_on_error: bool = False) -> T | Any:
-        with keyed_path_lock(self.path):
-            return self._read_unlocked(default, raise_on_error=raise_on_error)
+        """读取 JSON；主文件损坏时从备份恢复，严格模式下直接抛错。"""
 
-    def _write_unlocked(self, value: Any) -> None:
-        payload = self._encode(value)
-        current = self._read_payload_unlocked()
-        if current is not None:
+        with keyed_path_lock(self.path):
+            payload = self._read_payload_unlocked()
+            if payload is None:
+                return default
             try:
-                self._decode(current)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                pass
-            else:
-                atomic_write_bytes(self.backup_path, current)
-        atomic_write_bytes(self.path, payload)
+                return self._decode(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError) as primary_error:
+                if raise_on_error:
+                    # Security-sensitive callers use strict reads so a stale backup
+                    # cannot silently roll back a newer authorization decision.
+                    raise primary_error from None
+                try:
+                    backup_payload = self.backup_path.read_bytes()
+                    recovered      = self._decode(backup_payload)
+                except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+                    return default
+                atomic_write_bytes(self.path, backup_payload)
+                return recovered
 
     def write(self, value: Any) -> None:
+        """写入新值前，把仍可解析的旧内容保存为备份。"""
+
+        payload = self._encode(value)
         with keyed_path_lock(self.path):
-            self._write_unlocked(value)
+            current = self._read_payload_unlocked()
+            if current is not None:
+                try:
+                    self._decode(current)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+                else:
+                    atomic_write_bytes(self.backup_path, current)
+            atomic_write_bytes(self.path, payload)
 
     def write_with_backup(self, value: Any) -> None:
         """Atomically publish a value and make the backup an explicit copy of it."""

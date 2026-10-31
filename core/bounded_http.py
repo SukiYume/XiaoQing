@@ -640,6 +640,32 @@ def _without_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _next_redirect_hop(
+    response: Any,
+    method: str,
+    hop: int,
+    policy: RedirectPolicy,
+    current_url: str,
+    current_headers: dict[str, str],
+) -> tuple[str, dict[str, str]]:
+    """校验一次重定向并返回下一跳的 URL 与请求头。"""
+
+    if method not in {"GET", "HEAD"}:
+        raise RedirectPolicyError("redirects are disabled for this HTTP method")
+    if hop >= policy.max_hops:
+        raise RedirectPolicyError("too many redirects")
+    location = getattr(response, "headers", {}).get("Location")
+    if not location:
+        raise RedirectPolicyError("redirect has no Location header")
+    next_url, same_origin = _redirect_target(
+        current_url = str(getattr(response, "url", current_url)),
+        location    = location,
+        policy      = policy,
+    )
+    # Authorization/Cookie 只能留在原始源；显式允许的跨源跳转也不能继承。
+    return next_url, current_headers if same_origin else _without_sensitive_headers(current_headers)
+
+
 async def aiohttp_request_bounded(
     session: Any,
     method: str,
@@ -679,26 +705,17 @@ async def aiohttp_request_bounded(
         async with request as response:
             status = int(getattr(response, "status", 0))
             if status in _REDIRECT_STATUSES:
-                if normalized_method not in {"GET", "HEAD"}:
+                try:
+                    current_url, current_headers = _next_redirect_hop(
+                        response,
+                        normalized_method,
+                        hop,
+                        redirect_policy,
+                        current_url,
+                        current_headers,
+                    )
+                finally:
                     _close_response(response)
-                    raise RedirectPolicyError("redirects are disabled for this HTTP method")
-                if hop >= redirect_policy.max_hops:
-                    _close_response(response)
-                    raise RedirectPolicyError("too many redirects")
-                location = getattr(response, "headers", {}).get("Location")
-                if not location:
-                    _close_response(response)
-                    raise RedirectPolicyError("redirect has no Location header")
-                next_url, same_origin = _redirect_target(
-                    current_url = str(getattr(response, "url", current_url)),
-                    location    = location,
-                    policy      = redirect_policy,
-                )
-                # Authorization/Cookie 只能留在原始源；显式允许的跨源跳转也不能继承。
-                if not same_origin:
-                    current_headers = _without_sensitive_headers(current_headers)
-                current_url = next_url
-                _close_response(response)
                 continue
             if status not in success_statuses:
                 _close_response(response)
@@ -770,21 +787,9 @@ def requests_request_bounded(
             _ensure_before_deadline(deadline_monotonic)
             status = int(getattr(response, "status_code", 0))
             if status in _REDIRECT_STATUSES:
-                if normalized_method not in {"GET", "HEAD"}:
-                    raise RedirectPolicyError("redirects are disabled for this HTTP method")
-                if hop >= redirect_policy.max_hops:
-                    raise RedirectPolicyError("too many redirects")
-                location = getattr(response, "headers", {}).get("Location")
-                if not location:
-                    raise RedirectPolicyError("redirect has no Location header")
-                next_url, same_origin = _redirect_target(
-                    current_url = str(getattr(response, "url", current_url)),
-                    location    = location,
-                    policy      = redirect_policy,
+                current_url, current_headers = _next_redirect_hop(
+                    response, normalized_method, hop, redirect_policy, current_url, current_headers
                 )
-                if not same_origin:
-                    current_headers = _without_sensitive_headers(current_headers)
-                current_url = next_url
                 continue
             if status not in success_statuses:
                 raise HttpStatusError(status)

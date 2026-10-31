@@ -91,9 +91,6 @@ class AppConfigApplyMixin:
         def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
             raise NotImplementedError
 
-        def _load_admins(self, secrets: Mapping[str, Any] | None = None) -> None:
-            raise NotImplementedError
-
         def _parse_ws_queue_size(self, config: Mapping[str, Any]) -> int:
             raise NotImplementedError
 
@@ -269,7 +266,7 @@ class AppConfigApplyMixin:
         self._runtime_onebot_token               = onebot_token
         self._runtime_onebot_credentials_trusted = onebot_credentials_trusted
         self._runtime_inbound_token              = inbound_token
-        self._load_admins(trusted_secrets)
+        self.identity_service.load_admins(trusted_secrets)
 
         desired_http_base = str(snapshot.config.get("onebot_http_base", "") or "").strip()
         desired_http_base = desired_http_base.rstrip("/")

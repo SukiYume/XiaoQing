@@ -136,7 +136,7 @@ def test_apod_cache_key_uses_full_url_and_trusted_mime() -> None:
 
 @pytest.mark.asyncio
 async def test_lightyear_constant_has_quantity_semantics() -> None:
-    result = await astro_const.handle_const("ly", MagicMock())
+    result = astro_const.handle_const("ly", MagicMock())
     assert "1.000000e+00" in result
     assert "lyr" in result
 

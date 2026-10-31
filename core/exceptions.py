@@ -1,22 +1,14 @@
-"""
-XiaoQing 异常定义
-
-自定义异常类，用于更精确的错误处理和调试。
-部分子类当前作为公共 API 和插件扩展预留，即使核心路径暂时只用返回值或日志处理错误，也不要按死代码删除。
-"""
+"""XiaoQing 框架异常：插件加载与配置读取失败时携带上下文信息。"""
 
 from pathlib import Path
 
 
+### 框架基础异常，所有自定义异常的共同父类
 class XiaoQingError(Exception):
     """XiaoQing 框架基础异常"""
 
 
-# ============================================================
-# 插件相关异常
-# ============================================================
-
-
+### 插件异常，消息前缀带上插件名，便于定位
 class PluginError(XiaoQingError):
     """插件执行错误"""
 
@@ -30,68 +22,22 @@ class PluginLoadError(PluginError):
     """插件加载错误"""
 
 
+### 用普通异常承载插件生命周期中的致命 BaseException，避免直接打断事件循环
 class PluginLifecycleFatalError(PluginError):
     """Task-safe carrier for a fatal plugin lifecycle BaseException."""
 
     def __init__(self, plugin_name: str, original: BaseException):
         self.original = original
         super().__init__(
-            plugin_name,
-            f"fatal lifecycle error: {type(original).__name__}: {original}",
+            plugin_name, f"fatal lifecycle error: {type(original).__name__}: {original}"
         )
-
-
-class PluginExecutionError(PluginError):
-    """插件执行错误"""
-
-
-class PluginTimeoutError(PluginError):
-    """插件执行超时"""
-
-
-# ============================================================
-# 命令相关异常
-# ============================================================
-
-
-class CommandError(XiaoQingError):
-    """命令错误"""
-
-
-class CommandNotFoundError(CommandError):
-    """命令未找到"""
-
-    def __init__(self, command: str):
-        self.command = command
-        super().__init__(f"Command not found: {command}")
-
-
-class CommandPermissionError(CommandError):
-    """命令权限不足"""
-
-    def __init__(self, command: str, user_id: int):
-        self.command = command
-        self.user_id = user_id
-        super().__init__(f"Permission denied for command '{command}' by user {user_id}")
-
-
-class CommandArgumentError(CommandError):
-    """命令参数错误"""
-
-    def __init__(self, command: str, message: str):
-        self.command = command
-        super().__init__(f"Invalid arguments for '{command}': {message}")
-
-
-# ============================================================
-# 配置相关异常
-# ============================================================
 
 
 class ConfigError(XiaoQingError):
     """配置错误"""
 
 
+### 配置加载失败；传入 original 时第一个参数视为文件路径
 class ConfigLoadError(ConfigError):
     """配置加载错误"""
 
@@ -105,74 +51,11 @@ class ConfigLoadError(ConfigError):
         super().__init__(message)
 
 
-class ConfigValidationError(ConfigError):
-    """配置校验错误"""
-
-
-# ============================================================
-# 会话相关异常
-# ============================================================
-
-
-class SessionError(XiaoQingError):
-    """会话错误"""
-
-
-class SessionNotFoundError(SessionError):
-    """会话不存在"""
-
-    def __init__(self, user_id: int, group_id: int | None = None):
-        self.user_id  = user_id
-        self.group_id = group_id
-        location      = f"group {group_id}" if group_id is not None else "private"
-        super().__init__(f"No active session for user {user_id} in {location}")
-
-
-class SessionExpiredError(SessionError):
-    """会话已过期"""
-
-
-# ============================================================
-# 通信相关异常
-# ============================================================
-
-
-class CommunicationError(XiaoQingError):
-    """通信错误"""
-
-
-class OneBotError(CommunicationError):
-    """OneBot 通信错误"""
-
-
-class AuthenticationError(CommunicationError):
-    """认证错误"""
-
-
 __all__ = [
-    # 基础
-    "XiaoQingError",
-    # 插件
-    "PluginError",
-    "PluginLoadError",
-    "PluginLifecycleFatalError",
-    "PluginExecutionError",
-    "PluginTimeoutError",
-    # 命令
-    "CommandError",
-    "CommandNotFoundError",
-    "CommandPermissionError",
-    "CommandArgumentError",
-    # 配置
     "ConfigError",
     "ConfigLoadError",
-    "ConfigValidationError",
-    # 会话
-    "SessionError",
-    "SessionNotFoundError",
-    "SessionExpiredError",
-    # 通信
-    "CommunicationError",
-    "OneBotError",
-    "AuthenticationError",
+    "PluginError",
+    "PluginLifecycleFatalError",
+    "PluginLoadError",
+    "XiaoQingError",
 ]

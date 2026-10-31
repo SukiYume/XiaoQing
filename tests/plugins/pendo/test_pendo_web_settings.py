@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from plugins.pendo.commands.settings import handle_settings
+from plugins.pendo.commands.settings import handle_settings_result
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.settings_utils import (
     normalize_settings_json,
@@ -388,7 +388,7 @@ def test_web_saved_settings_reflect_in_plugin_settings_output(db: Database) -> N
             },
         },
     )
-    message = asyncio.run(handle_settings(owner_id, "", db))
+    message = asyncio.run(handle_settings_result(owner_id, "", db))[1]
 
     assert "🔔 提醒: 关闭" in message
     assert "🗓️ 每日简报: 关闭 (08:00)" in message
@@ -401,7 +401,7 @@ def test_plugin_settings_defaults_match_config_defaults(db: Database) -> None:
 
     owner_id = "u-settings-config"
 
-    message = asyncio.run(handle_settings(owner_id, "", db))
+    message = asyncio.run(handle_settings_result(owner_id, "", db))[1]
 
     assert "🔔 提醒: 开启" in message
     assert "🗓️ 每日简报: 开启 (08:00)" in message
@@ -423,7 +423,7 @@ def test_plugin_settings_single_value_commands_persist_by_storage_layer(db: Data
     )
 
     for command, expected_text in commands:
-        message = asyncio.run(handle_settings(owner_id, command, db))
+        message = asyncio.run(handle_settings_result(owner_id, command, db))[1]
         assert expected_text in message
 
     settings = db.get_user_settings(owner_id)
@@ -440,7 +440,7 @@ def test_plugin_settings_ai_privacy_alias_updates_same_consent_key(db: Database)
     """旧 AI 隐私命令别名应复用同一设置键，避免产生重复配置。"""
 
     owner_id = "u-settings-ai-alias"
-    message  = asyncio.run(handle_settings(owner_id, "ai_privacy off", db))
+    message  = asyncio.run(handle_settings_result(owner_id, "ai_privacy off", db))[1]
 
     custom = cast(dict[str, Any], db.get_user_settings(owner_id)["settings_json"])
     assert "🔒 已关闭" in message
@@ -452,7 +452,7 @@ def test_plugin_settings_quiet_hours_are_written_atomically(db: Database) -> Non
     """合法静默时段应一次写入起止时间，并允许两侧空白。"""
 
     owner_id = "u-settings-quiet-hours"
-    message  = asyncio.run(handle_settings(owner_id, "quiet_hours 23:00 - 07:00", db))
+    message  = asyncio.run(handle_settings_result(owner_id, "quiet_hours 23:00 - 07:00", db))[1]
 
     settings = db.get_user_settings(owner_id)
     assert "🔕 静默时段: 23:00 - 07:00" in message
@@ -480,7 +480,7 @@ def test_plugin_settings_invalid_values_do_not_change_defaults(
     owner_id = f"u-settings-invalid-{command.split()[0]}"
     before   = db.get_user_settings(owner_id)
 
-    message = asyncio.run(handle_settings(owner_id, command, db))
+    message = asyncio.run(handle_settings_result(owner_id, command, db))[1]
 
     assert expected_text in message
     assert db.get_user_settings(owner_id) == before
@@ -491,8 +491,8 @@ def test_plugin_settings_whitespace_only_args_show_current_settings(db: Database
 
     owner_id = "u-settings-whitespace"
 
-    empty_message      = asyncio.run(handle_settings(owner_id, "", db))
-    whitespace_message = asyncio.run(handle_settings(owner_id, "  \t  ", db))
+    empty_message      = asyncio.run(handle_settings_result(owner_id, "", db))[1]
+    whitespace_message = asyncio.run(handle_settings_result(owner_id, "  \t  ", db))[1]
 
     assert whitespace_message == empty_message
 

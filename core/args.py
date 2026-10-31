@@ -1,8 +1,4 @@
-"""
-命令参数解析模块
-
-提供灵活的命令参数解析功能。
-"""
+"""命令参数解析：分词、短/长选项与严格整数解析。"""
 
 import re
 import shlex
@@ -132,12 +128,7 @@ def parse(raw: str) -> ParsedArgs:
 
     返回: ParsedArgs 对象
     """
-    args, options = _parse_tokens(tokenize(raw))
-    return ParsedArgs(raw=raw, tokens=args, options=options)
-
-
-def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
-    """Parse caller-owned token boundaries without joining and tokenizing again."""
+    tokens_list             = tokenize(raw)
     args   : list[str]      = []
     options: dict[str, str] = {}
     idx                     = 0
@@ -153,6 +144,7 @@ def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
             key, eq, value = token[prefix_length:].partition("=")
             if eq:
                 options[key] = value
+            # 下一个 token 不是选项时作为当前选项的值，否则当前选项是布尔开关
             elif (
                 idx + 1 < len(tokens_list)
                 and tokens_list[idx + 1] != "--"
@@ -167,7 +159,7 @@ def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
 
         idx += 1
 
-    return args, options
+    return ParsedArgs(raw=raw, tokens=args, options=options)
 
 
 __all__ = ["FLAG_VALUE", "ParsedArgs", "parse", "parse_int", "quote_token", "tokenize"]

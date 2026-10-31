@@ -25,12 +25,12 @@ from typing import Any
 
 
 def _load_inference() -> ModuleType:
-    """从仓库根导入插件公开 facade，不依赖调用者的当前目录。"""
+    """从仓库根导入插件推理入口，不依赖调用者的当前目录。"""
 
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    return importlib.import_module("plugins.arxiv_filter.arxiv_inference")
+    return importlib.import_module("plugins.arxiv_filter.inference.runner")
 
 
 def build_parser() -> argparse.ArgumentParser:

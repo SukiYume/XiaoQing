@@ -1,4 +1,4 @@
-"""Plugin schedule publication and callback execution."""
+"""插件定时任务：按 manifest 发布到调度器，并按投递模式（广播/定向/静默）执行回调。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import functools
 import logging
 from typing import Any
 
-from .app_support import _parse_group_ids
+from .app_support import _parse_positive_ids
 from .delivery import (
     DeliveryReceipt,
     ScheduledDelivery,
@@ -154,7 +154,9 @@ class AppSchedulingMixin:
                 else list(self.config.get("default_group_ids", []))
             )
             try:
-                parsed_target_groups = _parse_group_ids(raw_target_groups)
+                parsed_target_groups = _parse_positive_ids(
+                    raw_target_groups, field_name="default_group_ids"
+                )
             except (TypeError, ValueError) as exc:
                 logger.error(
                     "Scheduled job skipped for %s because group IDs are invalid: %s",
@@ -169,59 +171,46 @@ class AppSchedulingMixin:
             delivery_targets  = delivery_targets,
             schedule_delivery = delivery,
         )
-        context = self.plugin_manager.build_context(
-            plugin_name,
-            principal=principal,
-        )
+        context = self.plugin_manager.build_context(plugin_name, principal=principal)
         try:
             loaded = (
                 loaded_plugin if loaded_plugin is not None else self.plugin_manager.get(plugin_name)
             )
-
-            async def run_job_handler() -> Any:
-                return await call_plugin_callback(handler, context)
-
-            result = await invoke_loaded_plugin(loaded, run_job_handler)
-
-            receipt = getattr(result, "delivery_receipt", None)
-            if delivery == "silent":
-                if result not in (None, []):
-                    logger.warning(
-                        "Silent schedule result ignored: plugin=%s result_type=%s",
-                        plugin_name,
-                        type(result).__name__,
-                    )
-                if isinstance(receipt, DeliveryReceipt):
-                    await receipt.record(False)
-                return
+            result = await invoke_loaded_plugin(
+                loaded, functools.partial(call_plugin_callback, handler, context)
+            )
 
             if delivery == "targeted":
                 await self._deliver_targeted_schedule_result(result, plugin_name, principal)
                 return
 
-            segs = segments(result)
-            if not segs:
-                if isinstance(receipt, DeliveryReceipt):
-                    await receipt.record(False)
-                return
+            receipt = getattr(result, "delivery_receipt", None)
+            receipt = receipt if isinstance(receipt, DeliveryReceipt) else None
+            if delivery == "silent" and result not in (None, []):
+                logger.warning(
+                    "Silent schedule result ignored: plugin=%s result_type=%s",
+                    plugin_name,
+                    type(result).__name__,
+                )
 
+            # 静默任务不投递；广播任务向每个目标群各发一条
             actions: list[dict[str, Any]] = []
-            for target in principal.delivery_targets:
+            segs                          = segments(result) if delivery != "silent" else []
+            for target in principal.delivery_targets if segs else ():
                 action = build_action(segs, target.user_id, target.group_id)
                 if action:
                     actions.append(self._tag_action_source(action, plugin_name))
 
+            # 没有可发送内容时回执按“未投递”结算
             if not actions:
-                if isinstance(receipt, DeliveryReceipt):
+                if receipt is not None:
                     await receipt.record(False)
                 return
 
-            if isinstance(receipt, DeliveryReceipt):
+            if receipt is not None:
                 receipt.add_expected_actions(len(actions) - 1)
+                actions = [attach_receipt(action, receipt) for action in actions]
             for action in actions:
-                if isinstance(receipt, DeliveryReceipt):
-                    action = attach_receipt(action, receipt)
-                # 使用统一的 _send_action 方法（优先 WS，备选 HTTP）
                 await self._send_action(action)
 
         except asyncio.CancelledError:

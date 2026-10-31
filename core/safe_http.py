@@ -13,13 +13,14 @@ validation and the TCP connection.
 from __future__ import annotations
 
 import asyncio
+import functools
 import ipaddress
 import math
 import re
 import socket
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import ParamSpec, TypeVar, cast
 from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
 import aiohttp
@@ -39,6 +40,8 @@ MAX_RESPONSE_BYTES             = 2 * 1024 * 1024
 MAX_DECOMPRESSION_RATIO        = 20
 MAX_COMPRESSED_BYTES           = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS        = 10
+_P                             = ParamSpec("_P")
+_R                             = TypeVar("_R")
 _CROSS_ORIGIN_HEADER_ALLOWLIST = frozenset(
     {"accept", "accept-encoding", "accept-language", "range", "user-agent"}
 )
@@ -342,30 +345,9 @@ async def _read_limited_body(response: aiohttp.ClientResponse) -> bytes:
         raise SafeHttpError(message) from exc
 
 
-async def fetch_public_html(
-    url: str,
-    *,
-    headers: Mapping[str, str] | None      = None,
-    timeout_seconds: float                 = REQUEST_TIMEOUT_SECONDS,
-    allowed_hosts: Collection[str] | None  = None,
-    allow_transparent_proxy_fake_dns: bool = False,
-) -> SafeHttpResponse | None:
-    """Fetch HTML within one deadline covering DNS and every redirect hop."""
-
-    timeout = _validated_total_timeout(timeout_seconds)
-    return await asyncio.wait_for(
-        _fetch_public_html(
-            url,
-            headers                          = headers,
-            timeout_seconds                  = timeout,
-            allowed_hosts                    = allowed_hosts,
-            allow_transparent_proxy_fake_dns = allow_transparent_proxy_fake_dns,
-        ),
-        timeout=timeout,
-    )
-
-
 def _validated_total_timeout(value: float) -> float:
+    """总超时必须是有限正数；布尔值不算数字。"""
+
     if isinstance(value, bool):
         raise ValueError("timeout_seconds must be a positive finite number")
     try:
@@ -377,7 +359,24 @@ def _validated_total_timeout(value: float) -> float:
     return timeout
 
 
-async def _fetch_public_html(
+def _with_total_deadline(
+    fetch: Callable[_P, Awaitable[_R]],
+) -> Callable[_P, Awaitable[_R]]:
+    """校验 ``timeout_seconds`` 并让它成为覆盖 DNS 与全部重定向的总截止时间。"""
+
+    @functools.wraps(fetch)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        timeout = _validated_total_timeout(
+            cast(float, kwargs.get("timeout_seconds", REQUEST_TIMEOUT_SECONDS))
+        )
+        kwargs["timeout_seconds"] = timeout
+        return await asyncio.wait_for(fetch(*args, **kwargs), timeout=timeout)
+
+    return wrapper
+
+
+@_with_total_deadline
+async def fetch_public_html(
     url: str,
     *,
     headers: Mapping[str, str] | None      = None,
@@ -551,38 +550,8 @@ async def _read_identity_body_limited(
         raise SafeHttpError("response is too large") from exc
 
 
+@_with_total_deadline
 async def fetch_public_bytes(
-    url: str,
-    *,
-    headers: Mapping[str, str] | None              = None,
-    timeout_seconds: float                         = REQUEST_TIMEOUT_SECONDS,
-    max_bytes: int                                 = MAX_RESPONSE_BYTES,
-    allowed_content_type_prefixes: tuple[str, ...] = ("image/",),
-    allowed_content_types: Collection[str] | None  = None,
-    allowed_hosts: Collection[str] | None          = None,
-    allowed_schemes: Collection[str] | None        = None,
-    allow_transparent_proxy_fake_dns: bool         = False,
-) -> SafeHttpResponse | None:
-    """Fetch bytes within one deadline covering DNS and every redirect hop."""
-
-    timeout = _validated_total_timeout(timeout_seconds)
-    return await asyncio.wait_for(
-        _fetch_public_bytes(
-            url,
-            headers                          = headers,
-            timeout_seconds                  = timeout,
-            max_bytes                        = max_bytes,
-            allowed_content_type_prefixes    = allowed_content_type_prefixes,
-            allowed_content_types            = allowed_content_types,
-            allowed_hosts                    = allowed_hosts,
-            allowed_schemes                  = allowed_schemes,
-            allow_transparent_proxy_fake_dns = allow_transparent_proxy_fake_dns,
-        ),
-        timeout=timeout,
-    )
-
-
-async def _fetch_public_bytes(
     url: str,
     *,
     headers: Mapping[str, str] | None              = None,

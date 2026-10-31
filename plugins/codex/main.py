@@ -47,24 +47,6 @@ async def shutdown(_context: PluginContextProtocol | None = None) -> None:
     await shutdown_existing_manager()
 
 
-async def enqueue_arxiv_summary(
-    context: PluginContextProtocol,
-    *,
-    date: str,
-    links: list[str],
-    user_id: int | None  = None,
-    group_id: int | None = None,
-) -> str:
-    """供核心能力调用的唯一 Codex sidecar 操作。"""
-    return await enqueue_or_replay_arxiv_summary(
-        context,
-        date     = date,
-        links    = links,
-        user_id  = user_id,
-        group_id = group_id,
-    )
-
-
 async def enqueue_arxiv_summary_service(
     date: str,
     links: list[str],
@@ -72,14 +54,10 @@ async def enqueue_arxiv_summary_service(
     group_id: int | None,
     context: PluginContextProtocol,
 ) -> str:
-    """适配 manifest 声明的 context-last 通用服务契约。"""
+    """codex.enqueue_arxiv_summary 服务入口（manifest 约定 context 放最后）：提交或重放当日 arXiv 摘要任务。"""
 
-    return await enqueue_arxiv_summary(
-        context,
-        date     = date,
-        links    = links,
-        user_id  = user_id,
-        group_id = group_id,
+    return await enqueue_or_replay_arxiv_summary(
+        context, date=date, links=links, user_id=user_id, group_id=group_id
     )
 
 

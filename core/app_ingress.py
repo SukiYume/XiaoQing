@@ -111,6 +111,16 @@ class AppIngressMixin:
         except (TypeError, ValueError):
             return cast(int, DEFAULT_INBOUND_WS_QUEUE_SIZE)
 
+    async def _stop_current_ws_client(self, owner: _ConfigApplyOwner | None) -> bool:
+        """停止当前 WS 客户端及其监听任务；期间失去配置所有权时返回 False。"""
+
+        if self.ws_client:
+            await self._stop_ws_client(owner=owner)
+            if not self._owns_config_apply(owner):
+                return False
+            await self._cancel_task("_ws_client_task")
+        return self._owns_config_apply(owner)
+
     async def _reconcile_ws_client(
         self,
         *,
@@ -123,16 +133,9 @@ class AppIngressMixin:
     ) -> None:
         if not self._owns_config_apply(owner):
             return
+        # 关闭 WS 或凭据不可信时只停止旧连接
         if not enable_ws or not ws_uri or not credentials_trusted:
-            if self.ws_client:
-                if not self._owns_config_apply(owner):
-                    return
-                await self._stop_ws_client(owner=owner)
-                if not self._owns_config_apply(owner):
-                    return
-                await self._cancel_task("_ws_client_task")
-                if not self._owns_config_apply(owner):
-                    return
+            await self._stop_current_ws_client(owner)
             return
 
         needs_restart = (
@@ -148,15 +151,8 @@ class AppIngressMixin:
         if not needs_restart:
             return
 
-        if self.ws_client:
-            if not self._owns_config_apply(owner):
-                return
-            await self._stop_ws_client(owner=owner)
-            if not self._owns_config_apply(owner):
-                return
-            await self._cancel_task("_ws_client_task")
-            if not self._owns_config_apply(owner):
-                return
+        if not await self._stop_current_ws_client(owner):
+            return
 
         with self._runtime_auth_lock:
             if not self._owns_config_apply_locked(owner):
@@ -223,15 +219,7 @@ class AppIngressMixin:
                     if desired is not None:
                         desired.update_token("")
                     return
-                current = self.inbound_manager
-                if current is not None:
-                    safe_token = (
-                        inbound_token
-                        if desired is not None
-                        and self._inbound_manager_key(current) == self._inbound_manager_key(desired)
-                        else ""
-                    )
-                    current.update_token(safe_token)
+                current = self._sync_current_inbound_token(inbound_token, desired)
             deferred_cancellation = _DeferredCancellation()
             try:
                 await self._reconcile_inbound_manager_impl(
@@ -253,6 +241,46 @@ class AppIngressMixin:
             if desired is not None:
                 self._unregister_inbound_candidate(desired)
 
+    def _sync_current_inbound_token(
+        self,
+        inbound_token: str,
+        desired: InboundManager | None,
+    ) -> InboundManager | None:
+        """监听配置未变时当前监听器沿用新 token，否则先吊销，避免旧端口接受新凭据。"""
+
+        current = self.inbound_manager
+        if current is not None:
+            same_listener = desired is not None and self._inbound_manager_key(
+                current
+            ) == self._inbound_manager_key(desired)
+            current.update_token(inbound_token if same_listener else "")
+        return current
+
+    async def _discard_inbound_candidate(
+        self,
+        desired: InboundManager,
+        deferred_cancellation: _DeferredCancellation,
+    ) -> None:
+        """吊销候选监听器的 token 并停止它。"""
+
+        desired.update_token("")
+        await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+
+    async def _rollback_inbound_manager(
+        self,
+        current: InboundManager,
+        error: BaseException | None,
+        deferred_cancellation: _DeferredCancellation,
+    ) -> None:
+        """恢复最新可用 token 后重新启动旧监听器；error 为空表示配置所有权已变化。"""
+
+        current.update_token(self._latest_safe_inbound_token(current))
+        await self._restore_inbound_manager(
+            current,
+            error or RuntimeError("runtime configuration ownership changed"),
+            deferred_cancellation,
+        )
+
     async def _reconcile_inbound_manager_impl(
         self,
         inbound_token: str,
@@ -264,48 +292,23 @@ class AppIngressMixin:
         with self._runtime_auth_lock:
             if self._stopping or not self._owns_config_apply_locked(owner):
                 return
-            current = self.inbound_manager
-            if current is not None:
-                safe_token = (
-                    inbound_token
-                    if desired is not None
-                    and self._inbound_manager_key(current) == self._inbound_manager_key(desired)
-                    else ""
-                )
-                current.update_token(safe_token)
+            current = self._sync_current_inbound_token(inbound_token, desired)
         async with self._inbound_reconcile_lock.get():
             with self._runtime_auth_lock:
                 if self._stopping or not self._owns_config_apply_locked(owner):
                     return
-                current = self.inbound_manager
-                if current is not None:
-                    safe_token = (
-                        inbound_token
-                        if desired is not None
-                        and self._inbound_manager_key(current) == self._inbound_manager_key(desired)
-                        else ""
-                    )
-                    current.update_token(safe_token)
+                current = self._sync_current_inbound_token(inbound_token, desired)
             await self._drain_inbound_cleanup_pending(deferred_cancellation)
             if not self._owns_config_apply(owner):
                 if desired is not None:
-                    desired.update_token("")
-                    await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+                    await self._discard_inbound_candidate(desired, deferred_cancellation)
                 return
             with self._runtime_auth_lock:
                 if not self._owns_config_apply_locked(owner):
                     if desired is not None:
                         desired.update_token("")
                     return
-                current = self.inbound_manager
-                if current is not None:
-                    safe_token = (
-                        inbound_token
-                        if desired is not None
-                        and self._inbound_manager_key(current) == self._inbound_manager_key(desired)
-                        else ""
-                    )
-                    current.update_token(safe_token)
+                current = self._sync_current_inbound_token(inbound_token, desired)
             desired_key = self._inbound_manager_key(desired)
             current_key = self._inbound_manager_key(current)
 
@@ -322,12 +325,7 @@ class AppIngressMixin:
                             )
                         raise
                     if not self._owns_config_apply(owner):
-                        current.update_token(self._latest_safe_inbound_token(current))
-                        await self._restore_inbound_manager(
-                            current,
-                            RuntimeError("runtime configuration ownership changed"),
-                            deferred_cancellation,
-                        )
+                        await self._rollback_inbound_manager(current, None, deferred_cancellation)
                         return
                     if self.inbound_manager is current:
                         self.inbound_manager = None
@@ -338,8 +336,7 @@ class AppIngressMixin:
                 try:
                     await desired.start()
                     if not self._owns_config_apply(owner):
-                        desired.update_token("")
-                        await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+                        await self._discard_inbound_candidate(desired, deferred_cancellation)
                         return
                 except BaseException:
                     cleanup_error = await self._cleanup_inbound_candidate(
@@ -357,8 +354,7 @@ class AppIngressMixin:
                     if publish_candidate:
                         self.inbound_manager = desired
                 if not publish_candidate:
-                    desired.update_token("")
-                    await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+                    await self._discard_inbound_candidate(desired, deferred_cancellation)
                     return
                 return
 
@@ -460,35 +456,18 @@ class AppIngressMixin:
             await self._cleanup_inbound_candidate(desired, deferred_cancellation)
             raise
         if self._stopping or not self._owns_config_apply(owner):
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
-            return
-        if not self._owns_config_apply(owner):
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
             return
         try:
             await current.stop()
         except BaseException as stop_error:
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
             if not self._stopping:
-                current.update_token(self._latest_safe_inbound_token(current))
-                await self._restore_inbound_manager(
-                    current,
-                    stop_error,
-                    deferred_cancellation,
-                )
+                await self._rollback_inbound_manager(current, stop_error, deferred_cancellation)
             raise
         if not self._owns_config_apply(owner):
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
-            current.update_token(self._latest_safe_inbound_token(current))
-            await self._restore_inbound_manager(
-                current,
-                RuntimeError("runtime configuration ownership changed"),
-                deferred_cancellation,
-            )
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
+            await self._rollback_inbound_manager(current, None, deferred_cancellation)
             return
         commit_error: BaseException | None = None
         try:
@@ -501,15 +480,9 @@ class AppIngressMixin:
             commit_error      = exc
             publish_candidate = False
         if not publish_candidate:
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
             if not self._stopping:
-                current.update_token(self._latest_safe_inbound_token(current))
-                await self._restore_inbound_manager(
-                    current,
-                    commit_error or RuntimeError("runtime configuration ownership changed"),
-                    deferred_cancellation,
-                )
+                await self._rollback_inbound_manager(current, commit_error, deferred_cancellation)
             if commit_error is not None:
                 raise commit_error
             return
@@ -528,59 +501,29 @@ class AppIngressMixin:
             await current.stop()
         except BaseException as stop_error:
             if not self._stopping:
-                current.update_token(self._latest_safe_inbound_token(current))
-                await self._restore_inbound_manager(
-                    current,
-                    stop_error,
-                    deferred_cancellation,
-                )
+                await self._rollback_inbound_manager(current, stop_error, deferred_cancellation)
             raise
         if not self._owns_config_apply(owner):
-            current.update_token(self._latest_safe_inbound_token(current))
-            await self._restore_inbound_manager(
-                current,
-                RuntimeError("runtime configuration ownership changed"),
-                deferred_cancellation,
-            )
+            await self._rollback_inbound_manager(current, None, deferred_cancellation)
             return
         if self._stopping:
-            return
-        if not self._owns_config_apply(owner):
-            current.update_token(self._latest_safe_inbound_token(current))
-            await self._restore_inbound_manager(
-                current,
-                RuntimeError("runtime configuration ownership changed"),
-                deferred_cancellation,
-            )
             return
         try:
             await desired.start()
         except BaseException as candidate_error:
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
             if self._stopping:
                 raise
-            current.update_token(self._latest_safe_inbound_token(current))
-            await self._restore_inbound_manager(
-                current,
-                candidate_error,
-                deferred_cancellation,
-            )
+            await self._rollback_inbound_manager(current, candidate_error, deferred_cancellation)
             raise
         with self._runtime_auth_lock:
             publish_candidate = not self._stopping and self._owns_config_apply_locked(owner)
             if publish_candidate:
                 self.inbound_manager = desired
         if not publish_candidate:
-            desired.update_token("")
-            await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._discard_inbound_candidate(desired, deferred_cancellation)
             if not self._stopping:
-                current.update_token(self._latest_safe_inbound_token(current))
-                await self._restore_inbound_manager(
-                    current,
-                    RuntimeError("runtime configuration ownership changed"),
-                    deferred_cancellation,
-                )
+                await self._rollback_inbound_manager(current, None, deferred_cancellation)
             return
 
     @staticmethod

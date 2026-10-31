@@ -307,7 +307,7 @@ Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或
 
 XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行与交付检查使用 `agent`，任务分流使用 `triage`。常规插件调用沿用路由参数。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
 
-`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。旧 AI 字段会触发迁移提示并指出主配置位置：将 `temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算、视觉请求参数移到对应路由。深度聊天的采样参数沿用聊天路由。删除 `default_model_alias`，默认模型由路由顺序决定。行为文件中的 `ai` 注册表会触发明确错误。
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都在主配置的对应路由中设置，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段、`default_model_alias` 或 `ai` 注册表时，加载报错并指出主配置位置。
 
 DEBUG 日志记录最终采用的路由、模型 profile、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
 

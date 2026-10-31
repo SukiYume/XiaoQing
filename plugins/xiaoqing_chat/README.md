@@ -406,7 +406,7 @@ python main.py
 
 模型请求参数统一配置在主配置的 `plugins.xiaoqing_chat.ai.routes`：`chat` 管主回复，`reasoning` 管规划与后台任务，`checker` 管审查，`vision` 管视觉。每条路由拥有 `temperature`、`top_p`、`max_tokens`、`timeout_seconds`、`total_timeout_seconds`、`max_retry` 和 `retry_interval_seconds`。深度模式沿用聊天采样参数；明确的长文请求和图像截断重试可以调整当前调用预算。业务频控、后台工作时限和参与策略保留在本行为文件。
 
-旧的前后台请求参数、规划请求超时、审查和视觉请求参数已移除。旧字段会给出指向主配置的迁移错误。默认模型由 `chat.models` 的可用顺序决定，`default_model_alias` 已移除。
+请求参数、规划请求超时、审查和视觉请求参数都在主配置的模型路由中设置；行为配置中出现这些字段或 `default_model_alias` 时，加载会报错并指出主配置位置。默认模型由 `chat.models` 的可用顺序决定。
 
 | 字段 | 发行值 | 说明 |
 |---|---|---|

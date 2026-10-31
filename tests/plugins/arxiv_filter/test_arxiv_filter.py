@@ -466,12 +466,12 @@ class TestInferenceLoading:
 
     def test_load_inference_caches_result(self, temp_plugin_dir):
         """测试推理函数缓存"""
-        fake_module = types.ModuleType("plugins.arxiv_filter.arxiv_inference")
+        fake_module = types.ModuleType("plugins.arxiv_filter.inference.runner")
         fake_func = lambda **kwargs: "ok"  # noqa: E731
         fake_module.get_positive_arxiv_today_as_string = fake_func
 
         arxiv_filter._inference_func = None
-        with patch.dict(sys.modules, {"plugins.arxiv_filter.arxiv_inference": fake_module}):
+        with patch.dict(sys.modules, {"plugins.arxiv_filter.inference.runner": fake_module}):
             # 第一次加载
             func1 = arxiv_filter._load_inference()
             # 第二次加载应该返回缓存的函数
@@ -483,13 +483,13 @@ class TestInferenceLoading:
 
     def test_plugin_init_clears_inference_cache(self, temp_plugin_dir):
         """插件代加载清除函数缓存，由 core 负责模块代际重载。"""
-        fake_module = types.ModuleType("plugins.arxiv_filter.arxiv_inference")
+        fake_module = types.ModuleType("plugins.arxiv_filter.inference.runner")
         fake_func1 = lambda **kwargs: "ok1"  # noqa: E731
         fake_func2 = lambda **kwargs: "ok2"  # noqa: E731
         fake_module.get_positive_arxiv_today_as_string = fake_func1
 
         arxiv_filter._inference_func = None
-        with patch.dict(sys.modules, {"plugins.arxiv_filter.arxiv_inference": fake_module}):
+        with patch.dict(sys.modules, {"plugins.arxiv_filter.inference.runner": fake_module}):
             func1 = arxiv_filter._load_inference()
             assert func1 is fake_func1
 
@@ -657,7 +657,7 @@ class TestHelp:
 
     def test_show_help(self):
         """测试显示帮助信息"""
-        help_text = arxiv_filter._show_help()
+        help_text = arxiv_filter._HELP_TEXT
         assert help_text is not None
         assert "arXiv" in help_text
         assert "论文" in help_text

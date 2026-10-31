@@ -1,12 +1,4 @@
-"""
-日志管理模块
-
-提供完整的日志管理功能：
-- 控制台输出（带颜色）
-- 文件保存（按日期轮转）
-- 日志级别配置
-- 统一格式化
-"""
+"""日志管理：彩色控制台输出、按大小或日期轮转的主日志与错误日志，统一带 request_id 的格式。"""
 
 import copy
 import logging
@@ -33,11 +25,7 @@ def _enable_windows_ansi(kernel32: Any) -> bool:
     return bool(kernel32.SetConsoleMode(handle, updated_mode))
 
 
-# ============================================================
-# 颜色格式化（控制台）
-# ============================================================
-
-
+### 没有 request_id 的后台日志统一显示为 "-"
 class RequestContextFormatter(logging.Formatter):
     """Formatter that makes request correlation visible without breaking background logs."""
 
@@ -83,21 +71,8 @@ class ColoredFormatter(RequestContextFormatter):
         return super().format(record)
 
 
-# ============================================================
-# 日志管理器
-# ============================================================
-
-
 class LogManager:
-    """
-    日志管理器
-
-    支持功能：
-    - 控制台输出（可配置颜色）
-    - 文件输出（按大小或时间轮转）
-    - 多个日志文件（主日志、错误日志）
-    - 动态调整日志级别
-    """
+    """创建时即接管根 logger：控制台（可选颜色）+ 主日志文件 + 错误日志文件。"""
 
     # 默认格式
     DEFAULT_FORMAT = "%(asctime)s [%(levelname)s] [request_id=%(request_id)s] %(name)s: %(message)s"
@@ -129,69 +104,50 @@ class LogManager:
         self.backup_count   = backup_count
         self.rotation_type  = rotation_type
 
-        # 确保日志目录存在
         self.log_dir.mkdir(parents=True, exist_ok=True)
-
-        # 保存 handler 引用，方便后续管理
-        self._console_handler: logging.Handler | None = None
-        self._file_handler: logging.Handler | None    = None
-        self._error_handler: logging.Handler | None   = None
-
-        # 初始化
         self._setup()
 
     def _setup(self) -> None:
-        """设置日志系统"""
-        # 获取根 logger
+        """替换根 logger 的全部 handler：控制台、主日志文件、错误日志文件。"""
+
         root_logger = logging.getLogger()
         root_logger.setLevel(self.level)
 
-        # 清除现有 handlers
+        # 清除现有 handlers；pytest 的捕获 handler 只摘除不关闭
         for handler in list(root_logger.handlers):
             root_logger.removeHandler(handler)
             if handler.__class__.__module__.startswith("_pytest."):
                 continue
-            try:
-                handler.flush()
-            except Exception:
-                pass
-            try:
-                handler.close()
-            except Exception:
-                pass
+            for close_step in (handler.flush, handler.close):
+                try:
+                    close_step()
+                except Exception:
+                    pass
 
-        # 添加控制台 handler
         if self.console_output:
-            self._console_handler = self._create_console_handler()
-            root_logger.addHandler(self._console_handler)
-
-        # 添加文件 handler
+            root_logger.addHandler(self._create_console_handler())
         if self.file_output:
-            self._file_handler = self._create_file_handler()
-            root_logger.addHandler(self._file_handler)
-
-            # 添加错误日志文件（仅记录 ERROR 及以上）
-            self._error_handler = self._create_error_handler()
-            root_logger.addHandler(self._error_handler)
+            root_logger.addHandler(
+                self._create_file_handler("xiaoqing.log", self.level, self.rotation_type)
+            )
+            # 错误日志只记录 ERROR 及以上，始终按大小轮转
+            root_logger.addHandler(
+                self._create_file_handler("xiaoqing_error.log", logging.ERROR, "size")
+            )
 
         # 降低第三方库的日志级别
-        logging.getLogger("apscheduler").setLevel(logging.WARNING)
-        logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
-        logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
+        for name in ("apscheduler", "apscheduler.executors.default", "apscheduler.scheduler"):
+            logging.getLogger(name).setLevel(logging.WARNING)
 
     def _create_console_handler(self) -> logging.Handler:
-        """创建控制台 handler"""
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(self.level)
 
-        # 检测是否应该使用颜色
+        # stdout 被重定向到文件时禁用颜色；Windows 需先开启 ANSI 支持
         use_color = self.use_color
-
-        # 如果 stdout 不是终端（被重定向到文件），禁用颜色
         if not sys.stdout.isatty():
             use_color = False
         elif sys.platform == "win32":
-            # Windows 尝试启用 ANSI 支持
             try:
                 import ctypes
 
@@ -199,135 +155,71 @@ class LogManager:
             except Exception:
                 use_color = False
 
-        formatter = ColoredFormatter(
-            fmt       = self.DEFAULT_FORMAT,
-            datefmt   = self.DEFAULT_DATE_FORMAT,
-            use_color = use_color,
+        handler.setFormatter(
+            ColoredFormatter(
+                fmt=self.DEFAULT_FORMAT, datefmt=self.DEFAULT_DATE_FORMAT, use_color=use_color
+            )
         )
-        handler.setFormatter(formatter)
-
         return handler
 
-    def _create_file_handler(self) -> logging.Handler:
-        """创建文件 handler（按大小或时间轮转）"""
-        log_file = self.log_dir / "xiaoqing.log"
+    def _create_file_handler(
+        self, filename: str, level: int, rotation_type: str
+    ) -> logging.Handler:
+        """创建文件 handler：time 为每天午夜轮转，其余按大小轮转。"""
 
+        log_file = str(self.log_dir / filename)
         handler: logging.Handler
-        if self.rotation_type == "time":
-            # 按时间轮转（每天一个文件）
+        if rotation_type == "time":
             timed_handler = TimedRotatingFileHandler(
-                filename    = str(log_file),
+                filename    = log_file,
                 when        = "midnight",
                 interval    = 1,
                 backupCount = self.backup_count,
                 encoding    = "utf-8",
             )
-            # 设置文件名后缀格式
             timed_handler.suffix = "%Y-%m-%d"
             handler              = timed_handler
         else:
-            # 按大小轮转
             handler = RotatingFileHandler(
-                filename    = str(log_file),
+                filename    = log_file,
                 maxBytes    = self.max_bytes,
                 backupCount = self.backup_count,
                 encoding    = "utf-8",
             )
-
-        handler.setLevel(self.level)
-        formatter = RequestContextFormatter(
-            fmt     = self.FILE_FORMAT,
-            datefmt = self.DEFAULT_DATE_FORMAT,
+        handler.setLevel(level)
+        handler.setFormatter(
+            RequestContextFormatter(fmt=self.FILE_FORMAT, datefmt=self.DEFAULT_DATE_FORMAT)
         )
-        handler.setFormatter(formatter)
-
         return handler
-
-    def _create_error_handler(self) -> logging.Handler:
-        """创建错误日志 handler（仅记录 ERROR 及以上）"""
-        error_file = self.log_dir / "xiaoqing_error.log"
-
-        handler = RotatingFileHandler(
-            filename    = str(error_file),
-            maxBytes    = self.max_bytes,
-            backupCount = self.backup_count,
-            encoding    = "utf-8",
-        )
-        handler.setLevel(logging.ERROR)
-
-        formatter = RequestContextFormatter(
-            fmt     = self.FILE_FORMAT,
-            datefmt = self.DEFAULT_DATE_FORMAT,
-        )
-        handler.setFormatter(formatter)
-
-        return handler
-
-    def set_level(self, level: str) -> None:
-        """动态设置日志级别"""
-        self.level = getattr(logging, level.upper(), logging.INFO)
-
-        root_logger = logging.getLogger()
-        root_logger.setLevel(self.level)
-
-        if self._console_handler:
-            self._console_handler.setLevel(self.level)
-        if self._file_handler:
-            self._file_handler.setLevel(self.level)
-
-
-# ============================================================
-# 便捷函数
-# ============================================================
-
-_log_manager: LogManager | None = None
 
 
 def setup_logging(config: Mapping[str, Any], log_dir: Path | None = None) -> LogManager:
     """
-    设置日志系统
-
-    Args:
-        config: 配置字典，支持以下键：
-            - log_level: 日志级别 (DEBUG/INFO/WARNING/ERROR)
-            - log_to_file: 是否保存到文件 (默认 True)
-            - log_to_console: 是否输出到控制台 (默认 True)
-            - log_use_color: 是否使用颜色 (默认 True)
-            - log_max_size_mb: 单个日志文件最大大小 MB (默认 10)
-            - log_backup_count: 保留的日志文件数量 (默认 5)
-            - log_rotation: 轮转方式 "size" 或 "time" (默认 "time")
-        log_dir: 日志目录，默认为项目根目录下的 logs 文件夹
-
-    Returns:
-        LogManager 实例
+    按配置初始化日志系统，支持以下键：
+        - log_level: 日志级别 (DEBUG/INFO/WARNING/ERROR)
+        - log_to_file: 是否保存到文件 (默认 True)
+        - log_to_console: 是否输出到控制台 (默认 True)
+        - log_use_color: 是否使用颜色 (默认 True)
+        - log_max_size_mb: 单个日志文件最大大小 MB (默认 10)
+        - log_backup_count: 保留的日志文件数量 (默认 5)
+        - log_rotation: 轮转方式 "size" 或 "time" (默认 "time")
+    log_dir 默认为项目根目录下的 logs 文件夹。
     """
-    global _log_manager
 
-    # 从配置读取参数
-    level          = config.get("log_level", "INFO")
-    file_output    = config.get("log_to_file", True)
-    console_output = config.get("log_to_console", True)
-    use_color      = config.get("log_use_color", True)
-    max_size_mb    = config.get("log_max_size_mb", 10)
-    backup_count   = config.get("log_backup_count", 5)
-    rotation_type  = config.get("log_rotation", "time")
-
-    # 默认日志目录
-    if log_dir is None:
-        log_dir = Path(__file__).parent.parent / "logs"
-
-    _log_manager = LogManager(
+    level         = config.get("log_level", "INFO")
+    rotation_type = config.get("log_rotation", "time")
+    log_dir       = log_dir or Path(__file__).parent.parent / "logs"
+    manager       = LogManager(
         log_dir        = log_dir,
         level          = level,
-        console_output = console_output,
-        file_output    = file_output,
-        use_color      = use_color,
-        max_bytes      = max_size_mb * 1024 * 1024,
-        backup_count   = backup_count,
+        console_output = config.get("log_to_console", True),
+        file_output    = config.get("log_to_file", True),
+        use_color      = config.get("log_use_color", True),
+        max_bytes      = config.get("log_max_size_mb", 10) * 1024 * 1024,
+        backup_count   = config.get("log_backup_count", 5),
         rotation_type  = rotation_type,
     )
 
-    # 记录启动信息
     logger = logging.getLogger(__name__)
     logger.info("=" * 60)
     logger.info("XiaoQing 日志系统初始化完成")
@@ -335,25 +227,7 @@ def setup_logging(config: Mapping[str, Any], log_dir: Path | None = None) -> Log
     logger.info("日志目录: %s", log_dir)
     logger.info("轮转方式: %s", rotation_type)
     logger.info("=" * 60)
-
-    return _log_manager
-
-
-def get_log_manager() -> LogManager | None:
-    """获取全局 LogManager 实例"""
-    return _log_manager
+    return manager
 
 
-def get_logger(name: str) -> logging.Logger:
-    """获取指定名称的 logger"""
-    return logging.getLogger(name)
-
-
-__all__ = [
-    "LogManager",
-    "RequestContextFormatter",
-    "ColoredFormatter",
-    "setup_logging",
-    "get_log_manager",
-    "get_logger",
-]
+__all__ = ["ColoredFormatter", "LogManager", "RequestContextFormatter", "setup_logging"]

@@ -11,9 +11,10 @@ import pytest
 import pytest_asyncio
 
 import core.scheduler as scheduler_module
-from core.scheduler import ScheduledJobSpec, SchedulerManager
-from core.scheduler_compat import (
+from core.scheduler import (
+    ScheduledJobSpec,
     SchedulerDrainCapability,
+    SchedulerManager,
     probe_asyncio_scheduler_drain,
 )
 from tests.helpers.asyncio_tools import cancellation_then_release_callback

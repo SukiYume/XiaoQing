@@ -4,7 +4,7 @@ import re
 
 from core.args import parse_int
 
-from ..services.admin_service import AdminService
+from ..services.admin_service import log_admin_operation
 from ..services.database import Database
 from ..services.item_service import ItemService
 from ..services.pet_service import PetService
@@ -274,9 +274,8 @@ def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return False, "背包数量不足、挂单已达上限或创建失败"
 
     # 交易状态改变后写入管理员审计日志，便于追溯资产流转。
-    admin_service = AdminService(db)
-    admin_service.log_admin_operation(
-        group_id, user_id, "TRADE_SELL", f"挂单:{item_id}x{amount} 售价{price}金币"
+    log_admin_operation(
+        db, group_id, user_id, "TRADE_SELL", f"挂单:{item_id}x{amount} 售价{price}金币"
     )
 
     return True, f"✅ 挂单成功！{item_id} x{amount} 售价{price}金币"
@@ -298,8 +297,8 @@ def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
     listing = result
 
     # 成交后记录买卖双方与金额，保持经济变更可追溯。
-    admin_service = AdminService(db)
-    admin_service.log_admin_operation(
+    log_admin_operation(
+        db,
         group_id,
         user_id,
         "TRADE_BUY",
@@ -329,8 +328,8 @@ def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> tuple
         return False, "撤单失败"
 
     # 撤单成功后记录审计事件；失败操作不写成已完成交易。
-    admin_service = AdminService(db)
-    admin_service.log_admin_operation(
+    log_admin_operation(
+        db,
         listing["group_id"],
         user_id,
         "TRADE_CANCEL",
@@ -426,12 +425,7 @@ def handle_manage_delete(user_id: str, group_id: int, args: str, db: Database) -
             f"⚠️ 将永久删除用户 {target_user_id} 的宠物。\n"
             f"确认执行请发送：/宠物 管理 删除 @{target_user_id} 确认"
         )
-    success = AdminService(db).delete_user_pet(
-        target_user_id,
-        group_id,
-        operator_user_id=user_id,
-    )
-    if success:
+    if db.admin_delete_pet_atomic(target_user_id, group_id, user_id):
         return True, f"✅ 用户 {target_user_id} 的宠物已删除"
     return False, "删除失败"
 
