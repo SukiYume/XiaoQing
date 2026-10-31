@@ -47,6 +47,8 @@ async def reset_chat_session(state, chat_id: str, data_dir: Path) -> None:
         state.bw_jargon_store,
         state.bw_recorder,
         state.bw_tracker_store,
+        state.self_timeline,
+        state.open_loops,
     )
     state.review_store.clear_policy(chat_id)
     state.review_store.clear_sessions_for_chat(chat_id)

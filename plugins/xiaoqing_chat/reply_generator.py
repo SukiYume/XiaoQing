@@ -17,7 +17,7 @@ from .context_builder import (
     retrieve_memory_context,
 )
 from .llm.check_result import ReplyCheckResult, ReplyRejected, checker_unavailable
-from .llm.communication_constraints import requested_char_count
+from .llm.communication_constraints import requested_char_count, requested_sentence_count
 from .llm.gateway import LLMError, chat_completions_with_fallback_paths
 from .llm.local_checks import (
     heuristic_check,
@@ -72,6 +72,20 @@ _REASONING_TURN_RE = re.compile(
 
 
 # 路由、人物边界与确定性文本修复
+
+
+# 对方提到几句话、多少字（“用一句话安利”“写个800字”），不管是不是精确的要求都按原句分段。
+_LENGTH_HINT_RE = re.compile(r"[一二两三四五六七八九十百千\d]+\s*(?:句|字)")
+
+
+def _allows_clause_bubbles(text: str) -> bool:
+    """对方要求了几句话或多少字时按原句分段，分句气泡会让句数和篇幅看起来不对。"""
+
+    return (
+        requested_sentence_count(text) is None
+        and requested_char_count(text) is None
+        and _LENGTH_HINT_RE.search(str(text or "")) is None
+    )
 
 
 def _needs_reasoning_route(text: str) -> bool:
@@ -216,6 +230,8 @@ def _build_attempt_messages(
         goal             = plan.effective_goal,
         earlier_context  = _earlier_context(plan),
         media_candidates = plan.media_candidates,
+        life_block       = plan.life_block,
+        open_loop_block  = plan.open_loop_block,
     )
     if attempt.extra_check_hint:
         messages.append(ChatMessage(role="user", content=attempt.extra_check_hint))
@@ -306,7 +322,8 @@ def _precheck_candidate(
     raw_parts     = process_llm_response(
         precheck_text,
         plan.runtime.cfg.postprocess,
-        bot_name=plan.bot_name,
+        bot_name     = plan.bot_name,
+        clause_split = _allows_clause_bubbles(plan.text),
     )
     raw_draft = build_reply_draft(raw_parts, raw_text=raw, rewritten_text=raw)
     if raw_draft is None:
@@ -414,7 +431,12 @@ async def _resolve_candidate_draft(
                 fields  = {"kind": "", "hint": "", "reason": "parse_failed"},
             )
 
-    parts = process_llm_response(marker_text, plan.runtime.cfg.postprocess, bot_name=plan.bot_name)
+    parts = process_llm_response(
+        marker_text,
+        plan.runtime.cfg.postprocess,
+        bot_name     = plan.bot_name,
+        clause_split = _allows_clause_bubbles(plan.text),
+    )
     draft = build_reply_draft(parts, raw_text=raw, rewritten_text=marker_text)
     if draft is None and resolved_marker is not None:
         draft = ReplyDraft(
@@ -445,6 +467,8 @@ def _checker_grounding_text(plan: ReplyGenerationPlan, memory_block: str) -> str
     parts = (
         plan.effective_identity,
         plan.state_text,
+        plan.life_block,
+        plan.open_loop_block,
         plan.profile_block,
         str(memory_block or "")[:1200],
     )

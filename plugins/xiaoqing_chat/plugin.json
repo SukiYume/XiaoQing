@@ -182,6 +182,22 @@
       ]
     }
   ],
+  "schedule": [
+    {
+      "id": "xiaoqing_chat.daily_life",
+      "handler": "scheduled_daily_life",
+      "delivery": "silent",
+      "cron": {"hour": 5, "minute": 30},
+      "description": "每天早上按人设与作息安排角色今天的生活小事；life.enable_daily_life 关闭时不做事"
+    },
+    {
+      "id": "xiaoqing_chat.proactive",
+      "handler": "scheduled_proactive",
+      "delivery": "targeted",
+      "cron": {"minute": "*/20"},
+      "description": "冷群时以群友身份主动开口；plugins.xiaoqing_chat.proactive.enabled 打开后生效"
+    }
+  ],
   "dependencies": [
     {
       "name": "aiohttp",

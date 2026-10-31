@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.atomic_store import atomic_write_text, keyed_path_lock
@@ -12,6 +12,12 @@ from core.plugin_base import load_json, write_json
 
 from ..store_base import coerce_finite_float
 from .memory_db import MemoryDB
+
+# 同一时间只有一个值的属性：改口时新值替换旧值，旧值留作“以前说过”。
+SINGLE_VALUED_ATTRIBUTES = frozenset(
+    {"居住地", "家乡", "学校", "专业", "年级", "工作", "公司", "年龄", "生日", "感情状态", "称呼"}
+)
+_MAX_SUPERSEDED = 20
 
 
 @dataclass
@@ -21,6 +27,17 @@ class PersonProfile:
     subject_name: str
     facts       : list[str]
     updated_at  : float
+    # 单值属性 → 当前生效的那条事实。
+    attributes: dict[str, str] = field(default_factory=dict)
+    # 被改口替换的旧事实：{"attribute", "fact", "replaced_by", "replaced_at"}。
+    superseded: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SupersededFact:
+    attribute: str
+    old_fact : str
+    new_fact : str
 
 
 def _profile_path(data_dir: Path, chat_id: str, subject_id: int) -> Path:
@@ -91,12 +108,26 @@ def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProf
         if isinstance(facts, list)
         else []
     )
+    raw_attributes = raw.get("attributes")
+    attributes     = {
+        str(key): str(value)
+        for key, value in (raw_attributes.items() if isinstance(raw_attributes, dict) else ())
+        if str(key) in SINGLE_VALUED_ATTRIBUTES and str(value) in fact_list
+    }
+    raw_superseded = raw.get("superseded")
+    superseded     = [
+        item
+        for item in (raw_superseded if isinstance(raw_superseded, list) else ())
+        if isinstance(item, dict) and str(item.get("fact") or "").strip()
+    ][-_MAX_SUPERSEDED:]
     return PersonProfile(
         chat_id      = chat_id,
         subject_id   = subject_id,
         subject_name = name or str(subject_id),
         facts        = fact_list,
         updated_at=coerce_finite_float(raw.get("updated_at"), default=0.0, minimum=0.0),
+        attributes = attributes,
+        superseded = superseded,
     )
 
 
@@ -109,6 +140,8 @@ def save_profile(data_dir: Path, profile: PersonProfile) -> None:
         "subject_name": profile.subject_name,
         "facts"       : profile.facts,
         "updated_at"  : profile.updated_at,
+        "attributes"  : profile.attributes,
+        "superseded"  : profile.superseded,
     }
     write_json(path, payload)
 
@@ -121,13 +154,21 @@ def update_profile_and_index(
     subject_id: int,
     subject_name: str,
     new_facts: Sequence[str],
-    max_facts: int = 120,
-) -> None:
+    max_facts: int                       = 120,
+    attributes: Mapping[str, str] | None = None,
+) -> list[SupersededFact]:
+    """追加新事实并更新画像索引。
+
+    ``attributes`` 把新事实映射到单值属性；同一属性已有不同的事实时，旧事实移出当前
+    资料、记进 ``superseded``，返回这些被替换的旧事实，调用方据此标记旧的检索记录。
+    """
+
+    replaced: list[SupersededFact] = []
     if subject_id <= 0:
-        return
+        return replaced
     chat_id = (chat_id or "").strip()
     if not chat_id:
-        return
+        return replaced
     now = time.time()
     existing = load_profile(data_dir, chat_id=chat_id, subject_id=subject_id) or PersonProfile(
         chat_id      = chat_id,
@@ -142,20 +183,35 @@ def update_profile_and_index(
     seen = set(existing.facts)
     for f in new_facts:
         f = (f or "").strip()
-        if not f or f in seen:
+        if not f:
+            continue
+        attribute = str((attributes or {}).get(f) or "")
+        if attribute in SINGLE_VALUED_ATTRIBUTES:
+            old = existing.attributes.get(attribute)
+            if old and old != f:
+                existing.facts = [fact for fact in existing.facts if fact != old]
+                seen.discard(old)
+                existing.superseded.append(
+                    {"attribute": attribute, "fact": old, "replaced_by": f, "replaced_at": now}
+                )
+                replaced.append(SupersededFact(attribute, old, f))
+            existing.attributes[attribute] = f
+        if f in seen:
             continue
         existing.facts.append(f)
         seen.add(f)
     if max_facts > 0 and len(existing.facts) > max_facts:
         existing.facts = existing.facts[-max_facts:]
+    live                = set(existing.facts)
+    existing.attributes = {
+        key: value for key, value in existing.attributes.items() if value in live
+    }
+    existing.superseded = existing.superseded[-_MAX_SUPERSEDED:]
     existing.updated_at = now
 
     save_profile(data_dir, existing)
 
-    profile_text = (
-        f"{existing.subject_name}<{existing.subject_id}> 的已知信息：\n- "
-        + "\n- ".join(existing.facts[-20:])
-    ).strip()
+    profile_text = _profile_text(existing)
     memory_db.bind(data_dir)
     memory_db.upsert_text(
         doc_id = f"profile:{chat_id}:{subject_id}",
@@ -167,6 +223,17 @@ def update_profile_and_index(
             "subject_name": existing.subject_name,
         },
     )
+    return replaced
+
+
+def _profile_text(profile: PersonProfile) -> str:
+    lines = [f"{profile.subject_name}<{profile.subject_id}> 的已知信息："]
+    lines += [f"- {fact}" for fact in profile.facts[-20:]]
+    earlier = profile.superseded[-3:]
+    if earlier:
+        lines.append("以前说过、后来改了（按现在的说法为准）：")
+        lines += [f"- {item.get('attribute')}：原来是“{item.get('fact')}”" for item in earlier]
+    return "\n".join(lines).strip()
 
 
 def build_profile_block(memory_db: MemoryDB, *, chat_id: str, subject_id: int | None) -> str:

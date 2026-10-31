@@ -14,6 +14,7 @@ from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
     "task_name",
     [
         "summarizer:g1",
+        "daily_life:today",
         "expression_learn:g1",
         "reflection:g1",
         "review_push:g1",

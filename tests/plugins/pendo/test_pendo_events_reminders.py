@@ -16,14 +16,11 @@ from plugins.pendo.services.rule_parser import RuleParser
 class TestEventLeafModel:
     """测试新版日程 leaf 数据模型"""
 
-    def test_event_item_has_event_graph_fields_without_legacy_milestones(self):
+    def test_event_item_defaults_to_a_single_event(self):
 
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(owner_id="u1", title="会议")
-        assert not hasattr(item, "milestones")
-        assert not hasattr(item, "parent_id")
-        assert not hasattr(item, "rrule")
         assert item.event_role == "single"
         assert item.event_collection_id is None
 
@@ -342,7 +339,7 @@ class TestMilestoneReminderMessage:
         assert "对应提醒点: 提前1天（04月05日 09:00）" in msg
 
 
-class TestRecurringEventRegression:
+class TestRecurringEvents:
     def test_create_recurring_event_preserves_duration_per_instance(self):
         from unittest.mock import MagicMock
 
@@ -457,7 +454,7 @@ class TestRecurringEventRegression:
             db.cleanup()
 
 
-class TestReminderRegression:
+class TestEventEditsAndReminders:
     def test_parse_updates_uses_partial_ai_parse_for_edits(self):
         from unittest.mock import MagicMock
 

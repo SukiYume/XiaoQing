@@ -19,6 +19,8 @@ class TopicSummaryCacheEntry:
     keywords  : list[str]
     key_points: list[str]
     updated_at: float
+    # 之后怎么用：normal、tone 或 avoid；旧缓存没有这个字段时按 normal 之外的“未标注”处理。
+    mention: str = ""
 
 
 def topic_summary_cache_path(data_dir: Path, chat_id: str) -> Path:
@@ -87,6 +89,7 @@ def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummar
                 keywords   = keywords,
                 key_points = key_points,
                 updated_at = updated_at,
+                mention    = str(item_dict.get("mention", "") or "").strip(),
             )
         )
     return entries

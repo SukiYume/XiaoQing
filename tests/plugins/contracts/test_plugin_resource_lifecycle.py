@@ -1,4 +1,4 @@
-"""CR-276 regressions for quotas and bounded plugin-owned resources."""
+"""Quotas and bounded plugin-owned resources."""
 
 from __future__ import annotations
 

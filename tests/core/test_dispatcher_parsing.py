@@ -305,6 +305,33 @@ class TestMessageParser:
         assert ctx.is_url_only is False
         assert ctx.has_prefix is True
 
+    @pytest.mark.parametrize(
+        "segments",
+        [
+            [{"type": "at", "data": {"qq": "11111"}}, {"type": "image", "data": {"file": "a.png"}}],
+            [{"type": "text", "data": {"text": "小青"}}, {"type": "mface", "data": {"id": "1"}}],
+        ],
+    )
+    def test_mention_with_a_picture_is_a_message_not_a_bare_call(
+        self, mock_config_provider: MagicMock, segments: list[dict[str, object]]
+    ):
+        """@ 或叫名字时附了截图、表情包，内容在图上，交给闲聊处理而不是只回“嗯？”。"""
+        parser = MessageParser(mock_config_provider)
+        ctx    = parser.parse(
+            {
+                "post_type"   : "message",
+                "message_type": "group",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : segments,
+                "raw_message" : "",
+            }
+        )
+        assert ctx is not None
+        assert ctx.has_prefix is True
+        assert ctx.is_only_bot_name is False
+
 
 class TestDispatcherHandleEvent:
     """Dispatcher.handle_event 测试"""

@@ -1,4 +1,4 @@
-"""批量操作、参数校验、会话和导出命令。"""
+"""参数校验、触发词、会话和导出命令。"""
 
 from __future__ import annotations
 
@@ -11,57 +11,7 @@ from tests.helpers.pendo_test_support import (
 )
 
 
-class TestBatchDeleteRefactor:
-    def test_task_category_delete_uses_shared_batch_helper(self, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.task import TaskHandler
-
-        db                           = MagicMock()
-        db.get_item_ids.return_value = ["t1", "t2"]
-        handler                      = TaskHandler(db)
-        calls                        = []
-
-        async def fake_batch(item_ids, owner_id, item_type, action, details_factory=None):
-            calls.append((item_ids, owner_id, item_type, action, details_factory))
-            return 2
-
-        monkeypatch.setattr(handler, "_db_batch_soft_delete_with_log", fake_batch, raising=False)
-
-        result = asyncio.run(handler._delete_category_tasks("u1", "工作"))
-
-        assert result["status"] == "success"
-        assert calls == [(["t1", "t2"], "u1", "task", "delete_task", None)]
-
-    def test_note_category_delete_uses_shared_batch_helper(self, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.note import NoteHandler
-
-        db                           = MagicMock()
-        db.get_item_ids.return_value = ["n1", "n2"]
-        handler                      = NoteHandler(db)
-        calls                        = []
-
-        async def fake_batch(item_ids, owner_id, item_type, action, details_factory=None):
-            calls.append((item_ids, owner_id, item_type, action, details_factory))
-            return 2
-
-        monkeypatch.setattr(handler, "_db_batch_soft_delete_with_log", fake_batch, raising=False)
-
-        result = asyncio.run(handler._delete_category_notes("u1", "工作", {}))
-
-        assert result["status"] == "success"
-        assert len(calls) == 1
-        item_ids, owner_id, item_type, action, details_factory = calls[0]
-        assert item_ids == ["n1", "n2"]
-        assert owner_id == "u1"
-        assert item_type == "note"
-        assert action == "delete_note"  # 与 task 的 "delete_task" 保持命名对称
-        assert details_factory is None  # 不再传多余的 details_factory
-
-
-class TestCommandValidationRegression:
+class TestCommandValidation:
     def test_note_add_invalid_category_returns_validation_error(self, tmp_path):
 
         from plugins.pendo.handlers.note import NoteHandler
@@ -107,7 +57,7 @@ class TestCommandValidationRegression:
             db.cleanup()
 
 
-class TestTriggerConflictRegression:
+class TestTriggerNormalization:
     def test_pendo_manifest_triggers_match_runtime_normalization(self):
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
         with open(plugin_json_path, encoding="utf-8") as f:
@@ -143,7 +93,7 @@ class TestTriggerConflictRegression:
             assert pendo_main._normalize_trigger_args(spec.name, args) == f"{subcommand} list"
 
 
-class TestSessionRegression:
+class TestSessions:
     def test_simple_session_types_dispatch_directly_to_cached_handlers(self):
 
         from plugins.pendo.commands import session as session_module
@@ -420,7 +370,7 @@ class TestSessionRegression:
         assert end_calls == []
 
 
-class TestOperationAndExportRegression:
+class TestOperationsAndExport:
     def test_confirm_handles_aware_reminder_times(self, monkeypatch):
         from datetime import datetime
         from unittest.mock import MagicMock

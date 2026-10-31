@@ -3,7 +3,7 @@
 人设只写在人设卡（默认是插件自带的 ``config/persona.md``）里。标题末尾的〔…〕标记
 决定一节交给谁：不带标记的是人物事实，聊天、agent、行为规划和回复审查都用；
 〔聊天〕只给聊天回复，〔办事〕只给 agent，〔深度对话〕在私聊深度模式下追加，
-〔心境〕下的每一条是一种随机心境。
+〔心境〕下的每一条是一种随机心境，〔作息〕下的每一条是一个作息时段。
 """
 
 from __future__ import annotations
@@ -16,13 +16,18 @@ from pathlib import Path
 
 from core.constants import DEFAULT_BOT_NAME
 
+from .life.schedule import parse_routine
+
 BUNDLED_PERSONA_FILE = Path(__file__).resolve().parent / "config" / "persona.md"
 
-SCOPE_CHAT  = "聊天"
-SCOPE_AGENT = "办事"
-SCOPE_DEEP  = "深度对话"
-SCOPE_MOODS = "心境"
-_SCOPES     = frozenset({SCOPE_CHAT, SCOPE_AGENT, SCOPE_DEEP, SCOPE_MOODS})
+SCOPE_CHAT    = "聊天"
+SCOPE_AGENT   = "办事"
+SCOPE_DEEP    = "深度对话"
+SCOPE_MOODS   = "心境"
+SCOPE_ROUTINE = "作息"
+_SCOPES       = frozenset({SCOPE_CHAT, SCOPE_AGENT, SCOPE_DEEP, SCOPE_MOODS, SCOPE_ROUTINE})
+# 这些小节按条目取用，不作为正文交给模型。
+_LIST_SCOPES = frozenset({SCOPE_MOODS, SCOPE_ROUTINE})
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 _TAG_RE     = re.compile(r"〔([^〕]*)〕")
@@ -80,7 +85,9 @@ class PersonaCard:
         flush()
         if not sections:
             raise ValueError("人设卡是空的")
-        return cls(tuple(sections))
+        card = cls(tuple(sections))
+        parse_routine(card.routine)
+        return card
 
     def facts(self, bot_name: object) -> str:
         """人物事实：名字加上不带标记的各节。"""
@@ -102,10 +109,19 @@ class PersonaCard:
 
     @property
     def moods(self) -> tuple[str, ...]:
+        return self._bullets(SCOPE_MOODS)
+
+    @property
+    def routine(self) -> tuple[str, ...]:
+        """〔作息〕的条目，每条是“日子 时段 在做什么（忙/睡/闲）”。"""
+
+        return self._bullets(SCOPE_ROUTINE)
+
+    def _bullets(self, scope: str) -> tuple[str, ...]:
         return tuple(
             match.group(1)
             for section in self.sections
-            if SCOPE_MOODS in section.scopes
+            if scope in section.scopes
             for match in map(_BULLET_RE.match, section.body.splitlines())
             if match
         )
@@ -113,7 +129,7 @@ class PersonaCard:
     def _render(self, wanted: Callable[[PersonaSection], bool], name: str) -> str:
         blocks: list[str] = []
         for section in self.sections:
-            if SCOPE_MOODS in section.scopes or not wanted(section):
+            if section.scopes & _LIST_SCOPES or not wanted(section):
                 continue
             if not section.title:
                 blocks.append(section.body)

@@ -39,6 +39,7 @@ from .chat_event import (
     text_with_mentions,
 )
 from .chat_runtime import (
+    ai_route_context,
     chat_lock,
     configured_bot_name,
     is_ignored_text,
@@ -52,6 +53,10 @@ from .expression.bw_reflect_tracker import tick_reflect_tracker
 from .frequency_control import decide_reply
 from .generation_limiter import CHAT_SUPERSEDED, GenerationLimitExceeded
 from .handler_context import HandlerContext
+from .life.closing_guard import should_stay_silent
+from .life.daily_life import day_key, ensure_today
+from .life.schedule import delay_factor, participation_factor, routine_slot_now
+from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
 from .llm.communication_constraints import requests_silence
 from .logging_utils import log_step
@@ -64,6 +69,8 @@ from .message_parts import (
 )
 from .planning.action_history import ActionRecord
 from .planning.goal_state import derive_goal_async, is_low_information_turn
+from .post_reply_tasks import spawn_life_extraction
+from .runtime_state import SELF_MOOD_KEY
 from .runtime_state import get_state as _state
 from .smalltalk_models import PreparedSmalltalkTurn
 from .store_binding import bound_state
@@ -74,48 +81,61 @@ from .task_scheduler import (
 )
 from .turn_delivery import finalize_smalltalk_turn
 from .turn_generation import ensure_user_message_recorded, generate_smalltalk_turn
+from .utils.wall_clock import local_datetime
 
 # 会话状态、重置与长空档判定
 
 
-def _refresh_mood_state(runtime, state, chat_id: str) -> str:
-    """挑选或复用人格情绪状态。
+_SLEEPY_MOOD_RE                    = re.compile(r"困|睡|迷糊")
+_QUIET_MOOD_RE                     = re.compile(r"听|话少|轻一点|困")
+_last_mood_check: dict[str, float] = {}
+
+
+def _refresh_mood_state(runtime, state, _chat_id: str, *, availability: str = "free") -> str:
+    """挑选或复用角色此刻的心境。
 
     规则：
-    - 已有未过期 mood，且最近活跃过 → 直接沿用，不再随机重摇。
-    - 长时间静默（超过 state_force_refresh_after_idle_seconds）→ 视作"睡了一觉"，
-      强制走重新挑 state 的流程。
-    - 没有可用 mood → 按 state_probability 摇是否进入某个 state；
-      命中后随机一个时长（在 [min,max] 之间），写入 state 缓存。
+    - 心境全局一份，不随会话变化；已有未过期的直接沿用，不再随机重摇。
+    - 超过 state_force_refresh_after_idle_seconds 没有任何会话来过消息 → 视作"睡了一觉"，
+      重新挑。
+    - 作息是睡觉时换成犯困的心境（人设卡里有的话）；上课等忙碌时段偏向安静的心境。
+    - 没有可用心境 → 按 state_probability 摇是否进入某个心境；命中后随机一个时长。
     """
     cfg               = runtime.cfg.personality
     states: list[str] = list(cfg.card.moods)
     if not states:
         return ""
 
-    now            = time.time()
-    last_observe   = float(state.get_last_observe_ts(chat_id) or 0.0)
-    last_reply     = float(state.get_last_reply_ts(chat_id) or 0.0)
-    last_active    = max(last_observe, last_reply)
-    idle_threshold = max(0.0, cfg.state_force_refresh_after_idle_seconds)
+    now                             = time.time()
+    last_check                      = _last_mood_check.get(SELF_MOOD_KEY, 0.0)
+    idle_threshold                  = max(0.0, cfg.state_force_refresh_after_idle_seconds)
+    _last_mood_check[SELF_MOOD_KEY] = now
 
-    current_value = state.get_mood_state(chat_id)
+    current_value = state.get_mood_state(SELF_MOOD_KEY)
     current       = current_value if isinstance(current_value, str) else ""
-    if current and idle_threshold > 0 and last_active and (now - last_active) > idle_threshold:
+    if current and idle_threshold > 0 and last_check and (now - last_check) > idle_threshold:
         # 静默太久，强制让下面的逻辑走"重新决定"
+        current = ""
+    sleepy = [mood for mood in states if _SLEEPY_MOOD_RE.search(mood)]
+    if availability == "asleep" and sleepy and current not in sleepy:
         current = ""
 
     if current:
         return current
 
-    if random.random() >= cfg.state_probability:
-        return ""
+    if availability == "asleep" and sleepy:
+        candidates = sleepy
+    else:
+        if random.random() >= cfg.state_probability:
+            return ""
+        quiet      = [mood for mood in states if _QUIET_MOOD_RE.search(mood)]
+        candidates = quiet if availability == "busy" and quiet and random.random() < 0.5 else states
 
-    new_mood = random.choice(states)
+    new_mood = random.choice(candidates)
     min_d    = max(60.0, cfg.state_min_duration_seconds)
     max_d    = max(min_d, cfg.state_max_duration_seconds)
     duration = random.uniform(min_d, max_d)
-    state.set_mood_state(chat_id, new_mood, duration_seconds=duration)
+    state.set_mood_state(SELF_MOOD_KEY, new_mood, duration_seconds=duration)
     return new_mood
 
 
@@ -126,6 +146,10 @@ _SENSITIVE_EXTERNAL_TEXT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+# 其他插件的长推送（APOD、arXiv）只记开头一段：知道群里刚推送过什么，又不让长篇正文刷满上下文。
+_MAX_EXTERNAL_MEMORY_CHARS = 1000
+_EXTERNAL_HEADLINE_CHARS   = 160
 
 _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS = 60.0
 # 同一会话已有一轮在生成时，新一轮最多排队这么久；旧一轮看到新消息会在下一个检查点退出。
@@ -144,9 +168,16 @@ def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | N
     compact = str(text or "").strip()
     if not compact:
         return True
-    if len(compact) > 1000:
+    if len(compact) > _MAX_EXTERNAL_MEMORY_CHARS:
         return True
     return bool(_SENSITIVE_EXTERNAL_TEXT_RE.search(compact))
+
+
+def _external_headline(text: str) -> str:
+    """长推送的开头一段：标题加正文起头，够知道推送的是什么，后面的长篇不记。"""
+
+    compact = " ".join(str(text or "").split())
+    return compact[:_EXTERNAL_HEADLINE_CHARS].rstrip() + "…（内容较长，只记下开头）"
 
 
 def _context_chat_and_user_id(context) -> tuple[str, int | None]:
@@ -456,6 +487,10 @@ async def observe_outgoing_action(
         if str(source_plugin or "").strip() == AGENT_PLUGIN:
             # 群友常常只引用结果接着说；记不下这条，就认不出那是在跟小青说话。
             text = text[:MAX_AGENT_MEMORY_CHARS]
+        elif len(
+            text.strip()
+        ) > _MAX_EXTERNAL_MEMORY_CHARS and not _SENSITIVE_EXTERNAL_TEXT_RE.search(text):
+            text = _external_headline(text)
         if is_ignored_text(text, runtime):
             return []
         if _should_skip_external_bot_memory(text, source_plugin, runtime.cfg):
@@ -494,6 +529,23 @@ async def observe_outgoing_action(
                 chat_id = chat_id,
                 step    = "smalltalk.memory.append_external_bot",
                 fields  = {"local_id": local_id, "source_plugin": str(source_plugin or "").strip()},
+            )
+            history = (
+                list(await state.memory_store.get_recent_async(chat_id, max_items=12))
+                if str(source_plugin or "").strip() == AGENT_PLUGIN
+                else []
+            )
+        if history:
+            # agent 的后台结果是小青自己交付的：答应过的事据此结掉，新的说法也记下来。
+            spawn_life_extraction(
+                context,
+                runtime,
+                state,
+                chat_id  = chat_id,
+                bot_name = configured_bot_name(context),
+                secrets=ai_route_context(context, chat_id=chat_id),
+                history = history,
+                source  = "agent",
             )
     except Exception as exc:
         public_error_message(
@@ -627,6 +679,65 @@ def _spawn_expression_reflection(context, hctx: HandlerContext) -> None:
     log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
 
 
+async def _private_closing_settled(text: str, event: dict[str, Any], hctx: HandlerContext) -> bool:
+    """私聊里对方只回了句收尾，而角色已经收过尾：这一轮不接话，避免互道晚安停不下来。"""
+
+    life = hctx.runtime.cfg.life
+    if not life.enable_private_closing_guard or event.get("_xc_command_forced"):
+        return False
+    history = await hctx.state.memory_store.get_recent_async(hctx.chat_id, max_items=8)
+    return should_stay_silent(
+        text,
+        history,
+        now                = time.time(),
+        window_seconds     = float(life.closing_guard_window_seconds),
+        current_message_id = event.get("message_id"),
+    )
+
+
+def spawn_daily_life(context, runtime, state, secrets: dict[str, Any], *, bot_name: str) -> None:
+    """今天的生活小事还没安排时在后台安排一次；早上的定时任务通常已经做过。"""
+
+    if not runtime.cfg.life.enable_daily_life:
+        return
+    if state.daily_life.get(day_key(local_datetime())) is not None:
+        return
+    card = runtime.cfg.personality.card
+    spawn_bg_task(
+        context,
+        ensure_today(
+            store   = state.daily_life,
+            persona = card.facts(bot_name),
+            routine = card.routine,
+            secrets = secrets,
+            llm=llm_call_config(runtime.cfg, foreground=False),
+        ),
+        name="daily_life:today",
+    )
+
+
+def _apply_routine(event: dict[str, Any], hctx: HandlerContext) -> float:
+    """按人设卡〔作息〕记下此刻的作息底色和延迟乘数，返回普通群聊插话概率的乘数。"""
+
+    life = hctx.runtime.cfg.life
+    if not life.enable_schedule_state:
+        return 1.0
+    try:
+        slot = routine_slot_now(hctx.runtime.cfg.personality.card, local_datetime())
+    except ValueError:
+        return 1.0
+    event["_xc_routine_text"]         = routine_state_text(slot)
+    event["_xc_routine_availability"] = slot.availability if slot is not None else "free"
+    if not life.schedule_affects_pacing:
+        return 1.0
+    event["_xc_delay_factor"] = delay_factor(
+        slot, busy=life.busy_delay_factor, asleep=life.asleep_delay_factor
+    )
+    return participation_factor(
+        slot, busy=life.busy_participation_factor, asleep=life.asleep_participation_factor
+    )
+
+
 async def _prepare_smalltalk_turn(
     clean_text: str,
     event: dict[str, Any],
@@ -653,6 +764,17 @@ async def _prepare_smalltalk_turn(
         await _maybe_reset_idle_conversation(event, context, runtime, state, chat_id=chat_id)
 
     attention, is_private = await _resolve_attention(text, event, context, hctx)
+    if is_private and await _private_closing_settled(text, event, hctx):
+        log_step(
+            context,
+            runtime,
+            chat_id = chat_id,
+            step    = "smalltalk.closing_silence",
+            fields  = {"text": text},
+        )
+        return None
+    routine_factor = _apply_routine(event, hctx)
+    spawn_daily_life(context, runtime, state, hctx.secrets, bot_name=hctx.bot_name)
     reply_gate_allowed = attention.forced or await decide_reply(
         runtime,
         state,
@@ -660,6 +782,7 @@ async def _prepare_smalltalk_turn(
         text,
         is_private,
         runtime.cfg.brain_chat.enable_private_brain_chat,
+        routine_factor=routine_factor,
     )
     # 先用上一轮状态完成回复门控，再记录本轮观察到的新目标。这样当前消息不会先把
     # 自己标成“活跃话题”，同时即使本轮不回复，后续仍能看到真正的新话题。
@@ -678,7 +801,12 @@ async def _prepare_smalltalk_turn(
         forced            = attention.forced,
         force_reason      = attention.force_reason,
         brain_chat_active = is_brain_chat_active(runtime, is_private),
-        mood_text         = _refresh_mood_state(runtime, state, chat_id),
+        mood_text         = _refresh_mood_state(
+            runtime,
+            state,
+            chat_id,
+            availability=str(event.get("_xc_routine_availability") or "free"),
+        ),
     )
 
 

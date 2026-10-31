@@ -52,6 +52,14 @@ def _is_persona_intro_query(text: str, *, bot_name: str) -> bool:
 
 
 CONTEXT_GROUNDING_FALLBACKS = ("等等，我好像没跟上你们说的是哪件事",)
+# 撒娇、招呼、抱怨没被理这类话不是在问事实，“拿不准”“没跟上”都接不住，回一句在场就好。
+SOCIAL_FALLBACKS = ("在呢在呢", "哪有，我在呢")
+# 叫她、问她在不在、撒娇抱怨没人理；问别人在干嘛、“想我们周末去哪”是真问题，不算。
+_SOCIAL_TURN_RE = re.compile(
+    r"不理我|理理我|理我一下|别不理|在吗|在不在|在嘛|人呢|怎么不说话|怎么不回|"
+    r"(?<![他她它])(?:在干嘛|干嘛呢|睡了吗|醒了吗)|想我(?![们的家])|想不想我|"
+    r"你(?:是不是)?生气了|生我(?:的)?气|还在吗"
+)
 
 
 _PUBLIC_IDENTITY_FALLBACK_MAX_CHARS = 120
@@ -73,6 +81,7 @@ ALL_FALLBACK_TEXTS = frozenset(
     (
         *PERSONA_GROUNDING_FALLBACKS,
         *CONTEXT_GROUNDING_FALLBACKS,
+        *SOCIAL_FALLBACKS,
         NOT_READY_FALLBACK,
         PRESENCE_FALLBACK,
         UNSURE_FALLBACK,
@@ -238,7 +247,8 @@ def _forced_fallback_texts(
         # 刚用过的兜底会被复读检查拦下，每组都备一句，连续几轮时不退化成“我在”。
         if current_image and event_media_all_unreadable(plan.event):
             texts = MEDIA_UNREADABLE_FALLBACKS
-        elif _asks_question(plan):
+        elif _asks_question(plan) or not current_image:
+            # 这轮没发图时，“看到了”就是在编：说的是别处的图或问到细节，都承认拿不准。
             texts = MEDIA_UNSURE_FALLBACKS
         else:
             texts = MEDIA_SEEN_FALLBACKS
@@ -249,6 +259,8 @@ def _forced_fallback_texts(
         return _persona_fallback_texts(plan), "reply.check.exhausted.persona_grounding"
     if failure_code == "instruction_following":
         return (NOT_READY_FALLBACK,), step
+    if _SOCIAL_TURN_RE.search(str(plan.text or "")):
+        return SOCIAL_FALLBACKS, step
     if _asks_question(plan):
         # 被问到却答不稳时，承认拿不准比说“没跟上”更贴切。
         return (UNSURE_FALLBACK, UNSURE_ALTERNATE), step

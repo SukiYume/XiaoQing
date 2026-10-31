@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from plugins.xiaoqing_chat.media.models import RenderedMedia, ResolvedMedia
-from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from plugins.xiaoqing_chat.runtime_state import SELF_MOOD_KEY, ChatRuntimeState
 
 
 def test_provider_overrides_have_a_hard_lru_capacity(monkeypatch):
@@ -33,10 +33,13 @@ def test_stale_chat_cleanup_removes_provider_override(monkeypatch):
     state.set_last_observe_ts("old", 1.0)
     state.set_last_observe_ts("recent", 2.0)
 
+    state.set_mood_state(SELF_MOOD_KEY, "现在有点调皮")
+
     state.cleanup_stale_chats()
 
     assert state.get_chat_provider("old") is None
     assert state.get_chat_provider("recent") == "two"
+    assert state.get_mood_state(SELF_MOOD_KEY) == "现在有点调皮", "她自己的心境不属于任何会话"
 
 
 def test_runtime_config_cache_has_a_hard_lru_capacity(monkeypatch):

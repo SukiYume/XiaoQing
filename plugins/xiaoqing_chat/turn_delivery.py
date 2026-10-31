@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from core.delivery import DeliveryReceipt, DeliverySegments, attach_receipt
+from core.delivery import DeliveryReceipt, DeliverySegments, send_with_receipt
+from core.interfaces import ACTION_BYPASS_SINK_KEY
 from core.plugin_base import build_action, segments
 
 from .brain_chat import (
@@ -19,7 +21,7 @@ from .frequency_control import record_reply_frequency
 from .logging_utils import log_step
 from .memory.local_ids import allocate_local_id, most_recent_user_local_id
 from .memory.person_profile import get_profile_generation
-from .message_parts import normalize_message_parts
+from .message_parts import build_text_message_parts, normalize_message_parts
 from .planning.action_history import ActionRecord
 from .post_reply_tasks import spawn_post_reply_tasks
 from .reply_media import (
@@ -45,6 +47,8 @@ if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
 
+logger = logging.getLogger(__name__)
+
 
 def _jittered(value: float, ratio: float) -> float:
     if ratio <= 0:
@@ -58,8 +62,12 @@ def _compute_typing_delay(
     *,
     input_text: str,
     output_text: str,
+    factor: float = 1.0,
 ) -> float:
-    """读消息 + 打字的总延迟，单位秒。返回 0 表示禁用。"""
+    """读消息 + 打字的总延迟，单位秒。返回 0 表示禁用。
+
+    ``factor`` 来自作息：上课或睡觉时整体放慢，封顶也随之放宽。
+    """
     cfg = runtime.cfg.humanize
     if not bool(cfg.enable_typing_delay):
         return 0.0
@@ -70,10 +78,11 @@ def _compute_typing_delay(
     cap       = float(cfg.max_total_delay_seconds)
     in_len    = len(str(input_text or ""))
     out_len   = len(str(output_text or ""))
-    raw       = (read_base + read_per * in_len) + (type_per * out_len)
+    scale     = max(1.0, float(factor))
+    raw       = ((read_base + read_per * in_len) + (type_per * out_len)) * scale
     raw       = _jittered(raw, jitter)
     if cap > 0:
-        raw = min(raw, cap)
+        raw = min(raw, cap * scale)
     return max(0.0, raw)
 
 
@@ -471,27 +480,96 @@ async def _rollback_smalltalk_delivery(
     )
 
 
-def _build_smalltalk_delivery_receipt(
-    finalization: _SmalltalkFinalization,
-    reply_parts,
-    *,
-    batch_count: int,
-) -> DeliveryReceipt:
-    async def commit() -> None:
-        # 回执收齐了这条回复每一批发出后的消息 ID，记录和真实消息一一对应。
-        await _commit_smalltalk_delivery(finalization, reply_parts, receipt.message_ids)
+class _ReplyBubbles:
+    """一条回复的各个气泡分别结算，都有了结果再按真实发出的气泡结算整条回复。
 
-    async def rollback() -> None:
-        await _rollback_smalltalk_delivery(finalization, batch_count=batch_count)
+    Core 在 ``send_action()`` 返回之前就按传输结果结算动作上的回执。整条回复共用一张
+    回执时，第二个气泡明确失败会当场回滚整条回复，结果未知会当场按整条回复提交，插件
+    事后再补记已发出的气泡都来不及。所以每个气泡单独领一张回执，结果先记在这里；不再
+    发新气泡、并且发出去的都有了结果之后，才结算整条回复，且只结算一次：
 
-    receipt = DeliveryReceipt(
-        expected_actions = batch_count,
-        commit           = commit,
-        rollback         = rollback,
-        # 已提交但回执丢失时保留本轮记忆，避免可能已看到的回复从上下文消失。
-        unknown=commit,
-    )
-    return receipt
+    - 每个气泡都确认发出：提交整条回复；
+    - 每个气泡都发了，只是有的结果未知：可能已被看到，仍按整条回复记；
+    - 只发出了一部分：只记确认发出或结果未知的气泡，没发出去的不算她说过；
+    - 一个都没发出去：回滚。
+
+    结算在最后一个有结果的气泡回执的回调里进行，提交失败会记在那张回执上。
+    """
+
+    def __init__(self, finalization: _SmalltalkFinalization, reply_parts, batches: list[Any]):
+        self._finalization                            = finalization
+        self._reply_parts                             = reply_parts
+        self._batches                                 = list(batches)
+        self._outcomes: dict[int, bool | None]        = {}
+        self._message_ids: dict[int, tuple[Any, ...]] = {}
+        self._dispatched                              = 0
+        self._closed                                  = False
+        self._settled                                 = False
+
+    def receipt(self, index: int) -> DeliveryReceipt:
+        """第 ``index`` 个气泡交给发送层之前领取它自己的回执。"""
+
+        self._dispatched = max(self._dispatched, index + 1)
+
+        def settle(outcome: bool | None):
+            async def callback() -> None:
+                self._outcomes[index]    = outcome
+                self._message_ids[index] = receipt.message_ids
+                await self._maybe_settle()
+
+            return callback
+
+        receipt = DeliveryReceipt(
+            expected_actions = 1,
+            commit           = settle(True),
+            rollback         = settle(False),
+            unknown          = settle(None),
+        )
+        return receipt
+
+    async def close(self) -> None:
+        """不再发新气泡；已经发出的都有了结果就立即结算整条回复。"""
+
+        self._closed = True
+        try:
+            await self._maybe_settle()
+        except Exception:
+            # 这里没有回执兜底：和回执回调失败一样只记日志，不打断本轮处理。
+            logger.exception("xiaoqing_chat reply settlement failed")
+
+    def _seen(self) -> list[int]:
+        """确认发出或结果未知（可能已被看到）的气泡，按发送顺序。"""
+
+        return [
+            index for index in range(self._dispatched) if self._outcomes.get(index) is not False
+        ]
+
+    async def _maybe_settle(self) -> None:
+        if self._settled or not self._closed or len(self._outcomes) < self._dispatched:
+            return
+        # 先占住结算权再 await，之后到达的回调不会重复提交或回滚。
+        self._settled = True
+        seen          = self._seen()
+        if not seen:
+            await _rollback_smalltalk_delivery(self._finalization, batch_count=len(self._batches))
+            return
+        message_ids = tuple(item for index in seen for item in self._message_ids.get(index, ()))
+        if len(seen) == len(self._batches):
+            parts = self._reply_parts
+        else:
+            parts = _sent_bubble_parts([self._batches[index] for index in seen])
+            log_step(
+                self._finalization.context,
+                self._finalization.hctx.runtime,
+                chat_id = self._finalization.hctx.chat_id,
+                step    = "smalltalk.delivery.partial",
+                fields  = {
+                    "local_id": self._finalization.generated.local_id,
+                    "sent"    : len(seen),
+                    "batches" : len(self._batches),
+                },
+            )
+        await _commit_smalltalk_delivery(self._finalization, parts, message_ids)
 
 
 async def _apply_smalltalk_presend_delay(
@@ -508,6 +586,7 @@ async def _apply_smalltalk_presend_delay(
         finalization.hctx.runtime,
         input_text  = finalization.prepared.text,
         output_text = display_reply_text(finalization.generated),
+        factor      = float(finalization.event.get("_xc_delay_factor") or 1.0),
     )
     # 读消息和打字的时间从收到消息算起；理解、规划和生成已经花掉的时间不再重复等待。
     elapsed = max(0.0, time.monotonic() - finalization.started_at)
@@ -538,37 +617,65 @@ def _smalltalk_interbubble_delay(runtime: ChatRuntime, batch: Any) -> float:
     return gap + min(1.2, type_per * batch_chars * 0.6)
 
 
+def _sent_bubble_parts(batches: list[Any]) -> tuple[dict[str, Any], ...]:
+    """已经发出的气泡里的文字；气泡之间空一行，和整条回复的记法一致。"""
+
+    texts = (
+        "".join(
+            str((segment.get("data") or {}).get("text") or "")
+            for segment in batch
+            if isinstance(segment, dict) and segment.get("type") == "text"
+        ).strip()
+        for batch in batches
+    )
+    return cast(
+        tuple[dict[str, Any], ...],
+        build_text_message_parts("\n\n".join(text for text in texts if text)),
+    )
+
+
 async def _send_smalltalk_intermediate_batches(
     finalization: _SmalltalkFinalization,
     outbound_batches: list[Any],
-    receipt: DeliveryReceipt,
+    bubbles: _ReplyBubbles,
     *,
     apply_humanize: bool,
 ) -> bool:
-    """发送末批之前的所有批次；最后一批由调用方返回给核心层。"""
+    """发送末批之前的所有批次；最后一批由调用方返回给核心层。
+
+    正向 WS 下，Core 会把处理事件期间发出的消息先收起来、处理完再一起发，气泡之间的
+    停顿就没了。这时中间的气泡绕过收集器直接发出，停顿才是对方真实看到的停顿；
+    其他接入方式没有这个问题，保持原样。
+
+    每个气泡用自己的回执发出；中途停发时整条回复按 :class:`_ReplyBubbles` 的规则结算。
+    """
 
     user_id  = finalization.event.get("user_id")
     group_id = finalization.event.get("group_id")
-    for batch in outbound_batches[:-1]:
+    direct   = finalization.event.get("_source") == "upstream_ws"
+    for index, batch in enumerate(outbound_batches[:-1]):
         async with chat_lock(finalization.hctx.chat_id):
             stale = _drop_stale_generated_turn(finalization, phase="between_batches")
         if stale:
-            await receipt.record(False)
+            await bubbles.close()
             return False
         action = build_action(batch, user_id, group_id)
         if not action:
-            await receipt.record(False)
+            await bubbles.close()
             return False
+        if direct:
+            action[ACTION_BYPASS_SINK_KEY] = True
+        receipt = bubbles.receipt(index)
         try:
-            sent = await finalization.context.send_action(attach_receipt(action, receipt))
+            delivered = await send_with_receipt(finalization.context.send_action, action, receipt)
         except BaseException:
+            # Core 已结算时这里不会改写结果；没走到 Core 的按没发出处理。
             await asyncio.shield(receipt.record(False))
             raise
-        if sent is not True:
-            if sent is False:
-                await receipt.record(False)
+        if delivered is not True:
+            await bubbles.close()
             return False
-        if apply_humanize:
+        if apply_humanize or finalization.hctx.runtime.cfg.humanize.interbubble_applies_to_forced:
             gap = _smalltalk_interbubble_delay(finalization.hctx.runtime, batch)
             if gap > 0:
                 await asyncio.sleep(gap)
@@ -608,11 +715,7 @@ async def finalize_smalltalk_turn(
         generated.cancel_speculative_memory()
         return []
 
-    receipt = _build_smalltalk_delivery_receipt(
-        finalization,
-        reply_parts,
-        batch_count=len(outbound_batches),
-    )
+    bubbles        = _ReplyBubbles(finalization, reply_parts, outbound_batches)
     apply_humanize = await _apply_smalltalk_presend_delay(
         finalization,
         has_outbound_batches=bool(outbound_batches),
@@ -620,20 +723,27 @@ async def finalize_smalltalk_turn(
     async with chat_lock(finalization.hctx.chat_id):
         if _drop_stale_generated_turn(finalization, phase="after_presend_delay"):
             return []
-    if len(outbound_batches) > 1:
-        sent = await _send_smalltalk_intermediate_batches(
-            finalization,
-            outbound_batches,
-            receipt,
-            apply_humanize=apply_humanize,
-        )
-        if not sent:
-            return []
-        async with chat_lock(finalization.hctx.chat_id):
-            stale = _drop_stale_generated_turn(finalization, phase="before_last_batch")
-        if stale:
-            await receipt.record(False)
-            return []
-        return DeliverySegments(outbound_batches[-1], receipt)
-
-    return DeliverySegments(outbound_batches[0], receipt)
+    last = len(outbound_batches) - 1
+    try:
+        if last > 0:
+            sent = await _send_smalltalk_intermediate_batches(
+                finalization,
+                outbound_batches,
+                bubbles,
+                apply_humanize=apply_humanize,
+            )
+            if not sent:
+                return []
+            async with chat_lock(finalization.hctx.chat_id):
+                stale = _drop_stale_generated_turn(finalization, phase="before_last_batch")
+            if stale:
+                # 前面的气泡已经发出，最后一个不再发。
+                await bubbles.close()
+                return []
+        receipt = bubbles.receipt(last)
+        await bubbles.close()
+    except BaseException:
+        # 中途被取消时不再发后面的气泡，已经发出的照常结算。
+        await asyncio.shield(bubbles.close())
+        raise
+    return DeliverySegments(outbound_batches[last], receipt)

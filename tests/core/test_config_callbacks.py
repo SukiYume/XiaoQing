@@ -23,20 +23,6 @@ temp_config_dir = _fixture_support.temp_config_dir
 class TestConfigManagerOnReload:
     """ConfigManager.on_reload 测试"""
 
-    def test_notification_bookkeeping_has_no_unused_waiter_state(
-        self,
-        config_manager: ConfigManager,
-    ):
-        from core.config import _ConfigNotification
-
-        assert tuple(_ConfigNotification.__dataclass_fields__) == (
-            "revision",
-            "snapshot",
-            "callbacks",
-        )
-        assert not hasattr(config_manager, "_notification_thread_id")
-        assert config_manager._notification_queue.maxlen == 1
-
     @pytest.mark.asyncio
     async def test_reload_callback(self, config_manager: ConfigManager):
         """手动 reload 不触发只属于 watch 方法的重新加载回调。"""

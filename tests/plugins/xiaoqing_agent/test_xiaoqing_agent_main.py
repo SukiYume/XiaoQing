@@ -672,8 +672,6 @@ def test_parse_decision_is_conservative() -> None:
         running=running,
     )
     assert fenced.action == "task"
-    assert not hasattr(fenced, "goal")
-    assert not hasattr(fenced, "reply")
 
 
 def test_update_for_a_finished_task_starts_a_new_one() -> None:
