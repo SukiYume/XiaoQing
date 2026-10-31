@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from tests.helpers.git import run_git
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -71,3 +71,46 @@ def test_every_tracked_plugin_asset_is_covered_by_package_data() -> None:
     """新增运行时资源必须同步进入 wheel/sdist 的声明，不能静默漏发。"""
 
     assert _declared_plugin_assets() == _tracked_plugin_assets()
+
+
+def _pruned_source_dirs() -> list[PurePosixPath]:
+    """MANIFEST.in 明确不发布的目录（训练、迁移、实验脚本等）。"""
+
+    return [
+        PurePosixPath(line.split(None, 1)[1].strip())
+        for line in (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+        if line.startswith("prune ")
+    ]
+
+
+def _source_packages() -> set[str]:
+    """列出 core 和 plugins 下所有含 Python 源码、且不在 prune 名单里的目录。"""
+
+    pruned             = _pruned_source_dirs()
+    packages: set[str] = set()
+    for path in run_git(
+        ROOT,
+        "-c",
+        "core.quotePath=false",
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        "core",
+        "plugins",
+    ).split("\0"):
+        if not path or PurePosixPath(path).suffix != ".py":
+            continue
+        directory = PurePosixPath(path).parent
+        if any(directory == item or item in directory.parents for item in pruned):
+            continue
+        packages.add(".".join(directory.parts))
+    return packages
+
+
+def test_every_source_package_is_declared_for_the_wheel() -> None:
+    """packages 是显式列表：新增子包不写进去，wheel 里就没有它，安装后导入直接失败。"""
+
+    assert set(_pyproject()["tool"]["setuptools"]["packages"]) == _source_packages()

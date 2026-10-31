@@ -14,6 +14,7 @@ from .runtime_state import get_state as _state
 
 _SINGLEFLIGHT_BG_TASK_KINDS = frozenset(
     {
+        "daily_life",
         "expression_learn",
         "facts",
         "media_refine",

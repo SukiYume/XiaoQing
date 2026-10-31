@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 
 
-class TestReminderBackfillRegression:
+class TestReminderConfirmation:
     def test_event_list_includes_day_delta_for_each_event(self, monkeypatch, tmp_path):
         from datetime import datetime
         from typing import Any, cast

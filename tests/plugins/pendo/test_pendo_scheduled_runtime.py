@@ -14,7 +14,7 @@ from tests.helpers.pendo_test_support import (
 )
 
 
-class TestScheduledRegression:
+class TestScheduledTasks:
     def test_check_reminders_returns_messages_without_send_action(self, monkeypatch):
 
         from plugins.pendo.commands import scheduled as scheduled_module

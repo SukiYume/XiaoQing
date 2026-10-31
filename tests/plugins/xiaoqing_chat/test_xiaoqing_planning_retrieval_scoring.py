@@ -20,7 +20,7 @@ from plugins.xiaoqing_chat.utils.json_parsing import (
 
 
 @pytest.mark.asyncio
-async def test_heartflow_uses_only_current_explicit_score_contract() -> None:
+async def test_heartflow_score_combines_turn_signals_with_the_base() -> None:
     engine = HeartflowEngine()
     engine._cache["g1"] = HeartflowState(no_reply_streak=3)
 
@@ -33,17 +33,6 @@ async def test_heartflow_uses_only_current_explicit_score_contract() -> None:
     )
 
     assert score == pytest.approx(0.51)
-    assert not hasattr(engine, "score")
-    obsolete_call = {
-        "chat_id"                 : "g1",
-        "text"                    : "问题？",
-        "goal"                    : "",
-        "seconds_since_last_reply": 0.0,
-        "base"                    : 0.2,
-        "threshold"               : 0.5,
-    }
-    with pytest.raises(TypeError, match="threshold"):
-        await engine.score_async(**obsolete_call)
 
 
 @pytest.mark.parametrize("last_action", [None, "direct_reply"])

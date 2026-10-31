@@ -71,7 +71,7 @@
         "max_repeat_compare": 2,
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 3,
-        "max_regen": 1,
+        "max_regen": 2,
         "max_replan": 1
     },
     "heartflow": {
@@ -107,7 +107,8 @@
     "summarizer": {
         "enable_topic_summarizer": true,
         "min_messages_per_update": 6,
-        "max_cache_topics": 20
+        "max_cache_topics": 20,
+        "enable_private_summary": true
     },
     "expression": {
         "enable_expression_learning": true,
@@ -142,7 +143,10 @@
         "splitter": {
             "enable": true,
             "max_length": 256,
-            "max_sentence_num": 3
+            "max_sentence_num": 3,
+            "clause_split": true,
+            "clause_split_min_chars": 12,
+            "clause_split_max_chars": 160
         }
     },
     "humanize": {
@@ -154,7 +158,38 @@
         "jitter_ratio": 0.25,
         "max_total_delay_seconds": 5.0,
         "interbubble_min_seconds": 0.6,
-        "interbubble_max_seconds": 1.6
+        "interbubble_max_seconds": 1.6,
+        "interbubble_applies_to_forced": true
+    },
+    "life": {
+        "enable_private_closing_guard": true,
+        "closing_guard_window_seconds": 1800,
+        "enable_schedule_state": true,
+        "schedule_affects_pacing": true,
+        "busy_participation_factor": 0.5,
+        "asleep_participation_factor": 0.15,
+        "busy_delay_factor": 1.6,
+        "asleep_delay_factor": 2.5,
+        "enable_self_timeline": true,
+        "self_timeline_max_entries": 80,
+        "self_timeline_max_injected": 8,
+        "self_state_extract_interval_seconds": 600,
+        "enable_open_loops": true,
+        "open_loop_followup_hours": 36,
+        "open_loop_max_per_chat": 60,
+        "enable_daily_life": true
+    },
+    "proactive": {
+        "enabled": false,
+        "group_ids": [],
+        "min_group_idle_minutes": 90,
+        "max_group_dormant_hours": 12,
+        "min_interval_hours": 4,
+        "retry_after_skip_minutes": 120,
+        "max_per_group_per_day": 2,
+        "active_hours_start": "09:00",
+        "active_hours_end": "23:00",
+        "enable_persona_judge": true
     },
     "debug": {
         "show_reply_prompt": false,

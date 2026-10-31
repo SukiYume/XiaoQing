@@ -21,6 +21,10 @@ def bind_all_stores(state, data_dir: Path) -> None:
     state.bw_recorder.bind(data_dir)
     state.bw_jargon_store.bind(data_dir)
     state.memory_db.bind(data_dir)
+    state.self_timeline.bind(data_dir)
+    state.open_loops.bind(data_dir)
+    state.proactive_state.bind(data_dir)
+    state.daily_life.bind(data_dir)
 
 
 def bound_state(context):

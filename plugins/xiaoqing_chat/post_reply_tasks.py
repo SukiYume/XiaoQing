@@ -1,18 +1,23 @@
-"""调度回复成功后的摘要、学习、复盘和事实提取任务。"""
+"""调度回复成功后的摘要、学习、复盘、事实提取和生活记录任务。"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from .chat_event import is_private_event
 from .chat_runtime import llm_call_config
 from .constants import EXPRESSION_LEARN_MIN_INTERVAL, EXPRESSION_LEARN_MIN_MESSAGES
 from .expression.bw_message_recorder import extract_and_learn
+from .life.extract import extract_life_records
+from .life.open_loops import mentions as reply_mentions_loop
 from .llm.summarizer import maybe_update_topic_summary
 from .logging_utils import log_step
 from .memory.knowledge_extract import maybe_extract_person_facts
 from .memory.person_profile import get_profile_generation
 from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
+from .message_parts import render_stored_message
 from .task_scheduler import schedule_memory_db_save, spawn_bg_task
 
 if TYPE_CHECKING:
@@ -55,6 +60,60 @@ async def _maybe_push_strategy_review(hctx: HandlerContext) -> None:
     )
 
 
+def spawn_life_extraction(
+    context: Any,
+    runtime: Any,
+    state: Any,
+    *,
+    chat_id: str,
+    bot_name: str,
+    secrets: dict[str, Any],
+    history: Sequence[Any],
+    source: str,
+) -> None:
+    """角色的一条发言确认发出后，记下她说过的近况与承诺、群友提到的待办时间点。
+
+    ``history`` 的最后一条必须是这条角色发言。
+    """
+
+    life = runtime.cfg.life
+    if not (life.enable_self_timeline or life.enable_open_loops) or not history:
+        return
+    spawn_bg_task(
+        context,
+        extract_life_records(
+            state    = state,
+            life_cfg = life,
+            secrets  = secrets,
+            llm=llm_call_config(runtime.cfg, foreground=False),
+            chat_id  = chat_id,
+            bot_name = bot_name,
+            history  = list(history),
+            source   = source,
+        ),
+        name=f"life_extract:{chat_id}",
+    )
+
+
+async def _settle_surfaced_open_loop(
+    hctx: HandlerContext, history: Sequence[Any], event: dict[str, Any]
+) -> None:
+    """这一轮提示过的未完话头：真的问出口了就记为已问，对方答过的那一轮之后结束。"""
+
+    surfaced = event.get("_xc_open_loop_surfaced")
+    if not isinstance(surfaced, tuple) or len(surfaced) != 2 or not history:
+        return
+    loop, mode = surfaced
+    store = hctx.state.open_loops
+    if mode == "review":
+        await asyncio.to_thread(store.close, hctx.chat_id, {loop.loop_id})
+    elif reply_mentions_loop(render_stored_message(history[-1]), loop):
+        await asyncio.to_thread(store.mark_asked, hctx.chat_id, loop.loop_id)
+    else:
+        # 换了说法问的，由随后的生活记录抽取认出并记为已问。
+        await asyncio.to_thread(store.mark_surfaced, hctx.chat_id, loop.loop_id)
+
+
 async def spawn_post_reply_tasks(
     hctx: HandlerContext,
     history_snapshot: list[Any],
@@ -76,7 +135,10 @@ async def spawn_post_reply_tasks(
     bg = llm_call_config(runtime.cfg, foreground=False)
 
     # 锁外调度后台任务（不阻塞其他请求）
-    if runtime.cfg.summarizer.enable_topic_summarizer and not is_private_event(event):
+    summarizer = runtime.cfg.summarizer
+    if summarizer.enable_topic_summarizer and (
+        summarizer.enable_private_summary or not is_private_event(event)
+    ):
 
         async def _run_summarizer() -> None:
             await maybe_update_topic_summary(
@@ -133,8 +195,23 @@ async def spawn_post_reply_tasks(
             history             = history_snapshot,
             expected_generation = generation,
             llm                 = bg,
+            # 私聊消息少而集中，攒得少一些就提取一次。
+            min_messages=8 if is_private_event(event) else 20,
         )
         schedule_memory_db_save(context, runtime)
 
     spawn_bg_task(context, _run_fact_extract(), name=f"facts:{chat_id}")
     log_step(context, runtime, chat_id=chat_id, step="smalltalk.facts.spawn", fields={})
+
+    await _settle_surfaced_open_loop(hctx, history_snapshot, event)
+    if history_snapshot and history_snapshot[-1].role == "assistant":
+        spawn_life_extraction(
+            context,
+            runtime,
+            state,
+            chat_id  = chat_id,
+            bot_name = bot_name,
+            secrets  = secrets,
+            history  = history_snapshot,
+            source   = "chat",
+        )

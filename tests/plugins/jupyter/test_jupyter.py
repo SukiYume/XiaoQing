@@ -53,13 +53,8 @@ def _response_text(response: list[dict[str, object]]) -> str:
 # ============================================================
 
 
-# ============================================================
-# Regression tests for CodeReview issues
-# ============================================================
-
-
-class TestJupyterCodeReviewFixes:
-    """测试 CodeReview 提到的 Jupyter 问题修复"""
+class TestJupyterExecution:
+    """代码提取、内核隔离、执行取消与输出边界。"""
 
     def test_extract_code_and_timeout_does_not_damage_inline_t_literal(self):
         """`-t` 只应作为前置参数处理，不应误伤代码中的字符串"""

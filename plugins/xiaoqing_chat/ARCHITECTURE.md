@@ -36,6 +36,7 @@ xiaoqing_chat
   ├─ 规划              planning/
   ├─ 记忆与知识        memory/
   ├─ 表达学习          expression/
+  ├─ 生活连续性        life/
   ├─ 媒体              media/ + media_registry + reply_media + reply_payload
   └─ 运行状态与存储    runtime_state / task_scheduler / store_base / store_binding
 ```
@@ -121,13 +122,27 @@ xiaoqing_chat
 | `memory_db.py` | 长期记忆文档、人物资料和向量索引 |
 | `vector_store.py` | 本地哈希向量索引，文档与矩阵一致性缓存 |
 | `memory_retrieval.py` | 带来源、受范围约束的记忆上下文与检索代理 |
-| `person_profile.py` | 按会话和主体保存人物资料，重置代际 |
+| `mention_policy.py` | 记忆用法标签（可提起 / 只影响语气 / 带不确定 / 除非问起），优先采用摘要写入时的标注；当下状态问题的旧记忆过滤 |
+| `person_profile.py` | 按会话和主体保存人物资料，单值属性改口时替换旧事实并保留“以前说过”，重置代际 |
 | `knowledge_extract.py` | 从原话提取带主体证据的人物事实 |
 | `fact_extraction_checkpoint.py` | 事实提取水位 |
 | `knowledge_base.py` | 管理员批准的知识文件，全有或全无的有界索引 |
 | `topic_summary_cache.py` | 话题摘要缓存 |
 | `thinking_back.py` | 近期回想缓存 |
 | `review_sessions.py` | 人工复盘会话与回复策略 |
+
+### `life/`：生活连续性
+
+| 模块 | 职责 |
+|---|---|
+| `daily_life.py` | 每天的生活小事：生成（失败后退避）、按日期存取、只交出已过时间点的、被问到过去时组合前几天的生活 |
+| `schedule.py` | 解析人设卡〔作息〕，取此刻命中的时段，给出作息底色、插话概率乘数和打字延迟乘数 |
+| `closing_guard.py` | 私聊收尾沉默：对方只回收尾话、角色已经收过尾时本轮不回复 |
+| `self_timeline.py` | 角色说过的近况、打算和承诺：存储、按会话可见范围筛选（承诺和私聊里涉及对方的近况只留在原会话）、过期与结束、保留一周历史、提示块 |
+| `open_loops.py` | 群友有时间点的未完话头：存储、去重、按说话人取“顺口问 / 对方在答”、提示块 |
+| `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头；打算与承诺每次读、近况按会话限频、兜底句不读；校验类别、说话人、ID 与时间，按会话串行，提交时核对重置代际 |
+| `proactive.py` | 主动开口：时段、作息、群安静程度与节奏检查，起草、本地复读检查、人设自检，投递回执提交 |
+| `proactive_state.py` | 每个群上次主动开口的时间、当天次数与上次尝试时间 |
 
 ### `expression/`：表达与黑话
 
@@ -196,7 +211,9 @@ handle_smalltalk → _prepare_smalltalk_turn
   ├─ 停聊请求 / 屏蔽词 → 结束
   ├─ 长空档 → 切换短期状态（保留原始历史）
   ├─ attention_gate.decide_attention        明确召唤？
-  ├─ frequency_control.decide_reply         普通参与：硬频控 → 概率 → Heartflow → 沉默补偿
+  ├─ life.closing_guard                     私聊里只是收尾，且角色已收尾 → 结束
+  ├─ life.schedule                          作息底色、插话与延迟乘数写到事件上
+  ├─ frequency_control.decide_reply         普通参与：硬频控 → 概率 → Heartflow → 沉默补偿 → 作息乘数
   ├─ 记录本轮观察到的目标
   └─ PreparedSmalltalkTurn
   │
@@ -229,9 +246,9 @@ turn_generation.generate_smalltalk_turn
   ▼
 turn_delivery.finalize_smalltalk_turn
   ├─ 过期检查（打字期间的新消息、会话重置）
-  ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔
+  ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔（正向 WS 下中间气泡绕过 Core 的事件收集直接发出）
   ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
-  │                 → post_reply_tasks：摘要、事实提取、表达学习、策略复盘
+  │                 → post_reply_tasks：摘要、事实提取、表达学习、策略复盘、未完话头结算、生活记录抽取
   └─ 投递拒绝 / 异常 → 回滚待提交状态
 ```
 
@@ -302,7 +319,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ### 语义审查（`llm/reply_checker.py`）
 
-审查规则与 JSON 材料分为独立消息。审查模型先列出陈述与证据，再给出判断：
+审查提示词与 JSON 材料分为独立消息。三段提示词（证据审查 `_EVIDENCE_REVIEW_PROMPT`、独立阅读 `_TURN_READING_PROMPT`、语义比较 `_SEMANTIC_REVIEW_PROMPT`）和人设卡一样写成几条原则，具体的边界交给人设卡和本地证据核对。审查模型先列出陈述与证据，再给出判断：
 
 | 轴 | 字段 |
 |---|---|

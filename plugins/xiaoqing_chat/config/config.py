@@ -74,6 +74,11 @@ class ResponseSplitterConfig(BaseModel):
     enable          : bool = True
     max_length      : int = Field(default=256, ge=1, le=4000)
     max_sentence_num: int = Field(default=3, ge=1, le=50)
+    # 气泡数没用完时，把较长的句子按逗号、省略号再拆开，像在 QQ 上一句一句打出来。
+    clause_split          : bool = True
+    clause_split_min_chars: int = Field(default=12, ge=2, le=4000)
+    # 超过这个长度的回复多半是讲解或清单，只按整句分段。
+    clause_split_max_chars: int = Field(default=160, ge=1, le=20_000)
 
 
 class ResponsePostProcessConfig(BaseModel):
@@ -101,6 +106,8 @@ class HumanizeConfig(BaseModel):
     # 多条消息之间的额外停顿（每两条之间随机取值）
     interbubble_min_seconds: float = Field(default=0.6, ge=0.0, le=60.0, allow_inf_nan=False)
     interbubble_max_seconds: float = Field(default=1.6, ge=0.0, le=60.0, allow_inf_nan=False)
+    # 明确召唤也在气泡之间停顿：连发几条零间隔的消息一眼就像机器人。
+    interbubble_applies_to_forced: bool = True
 
     @model_validator(mode="after")
     def _validate_interbubble_range(self) -> Self:
@@ -275,6 +282,8 @@ class BrainChatConfig(BaseModel):
 
 class SummarizerConfig(BaseModel):
     enable_topic_summarizer: bool = True
+    # 私聊同样生成话题摘要；摘要只能在原私聊里检索到。
+    enable_private_summary : bool = True
     min_messages_per_update: int = Field(default=12, ge=1, le=1000)
     max_cache_topics       : int = Field(default=20, ge=1, le=1000)
 
@@ -315,6 +324,73 @@ class MediaConfig(BaseModel):
     # 模型不知道时返回空，不强行猜。每张梗图额外一次 LLM 调用，量受到表情包出现频率限制。
     enable_meme_cultural_hint         : bool                   = True
     meme_cultural_hint_timeout_seconds: PositiveTimeoutSeconds = 8.0
+
+
+class LifeConfig(BaseModel):
+    """角色在时间上的连续性：收尾沉默、作息状态、自我陈述和未完话头。"""
+
+    # 私聊里对方只说晚安、拜拜、谢谢这类收尾话，且角色已经收过尾时不再回复。
+    enable_private_closing_guard: bool  = True
+    closing_guard_window_seconds: float = Field(
+        default=1800.0, ge=60.0, le=7200.0, allow_inf_nan=False
+    )
+    # 按人设卡〔作息〕推出“现在大概在做什么”，作为语气底色注入。
+    enable_schedule_state: bool = True
+    # 作息影响节奏：忙或睡时普通群聊少插话、回得更慢。明确召唤照常回复。
+    schedule_affects_pacing    : bool        = True
+    busy_participation_factor  : Probability = 0.5
+    asleep_participation_factor: Probability = 0.15
+    busy_delay_factor          : float = Field(default=1.6, ge=1.0, le=10.0, allow_inf_nan=False)
+    asleep_delay_factor        : float = Field(default=2.5, ge=1.0, le=10.0, allow_inf_nan=False)
+    # 投递后从角色自己的回复里记下她说过的近况、打算和答应别人的事，后续保持一致。
+    enable_self_timeline      : bool = True
+    self_timeline_max_entries : int = Field(default=80, ge=1, le=1000)
+    self_timeline_max_injected: int = Field(default=8, ge=1, le=50)
+    # 只有近况线索（没有打算、承诺、交差）时，同一会话至少隔这么久才读一次，控制调用量。
+    self_state_extract_interval_seconds: NonNegativeSeconds = 600.0
+    # 每天早上按人设和作息安排几件生活小事，到点之后她才“经历过”，聊天时有自己的生活可说。
+    enable_daily_life: bool = True
+    # 记下群友提到的、有时间点的事（考试、面试），时间过了以后合适时顺口关心一句。
+    enable_open_loops       : bool = True
+    open_loop_followup_hours: float = Field(default=36.0, gt=0.0, le=720.0, allow_inf_nan=False)
+    open_loop_max_per_chat  : int = Field(default=60, ge=1, le=1000)
+
+
+class ProactiveConfig(BaseModel):
+    """冷群时以群友身份主动开口：分享兴趣、接插件推送或关心到期的事。默认关闭。"""
+
+    enabled: bool = False
+    # 允许主动开口的群；留空表示 Core default_group_ids 里的全部群。
+    group_ids: list[int] = Field(default_factory=list, max_length=200)
+    # 群里至少安静这么久才考虑开口。
+    min_group_idle_minutes: float = Field(default=90.0, ge=5.0, le=10080.0, allow_inf_nan=False)
+    # 群里超过这么久没人说话就不去打扰（不把死群拉起来）。
+    max_group_dormant_hours: float = Field(default=12.0, gt=0.0, le=720.0, allow_inf_nan=False)
+    min_interval_hours     : float = Field(default=4.0, ge=0.0, le=720.0, allow_inf_nan=False)
+    # 起草后没发出去（模型选择不说或自检拦下）时，这段时间内不再尝试。
+    retry_after_skip_minutes: float = Field(default=120.0, ge=0.0, le=10080.0, allow_inf_nan=False)
+    max_per_group_per_day   : int = Field(default=2, ge=0, le=50)
+    active_hours_start      : str = "09:00"
+    active_hours_end        : str = "23:00"
+    # 起草后再用审查路由做一次人设与时机自检，不通过就不发。
+    enable_persona_judge: bool = True
+
+    @field_validator("active_hours_start", "active_hours_end")
+    @classmethod
+    def _validate_clock(cls, value: str) -> str:
+        text  = str(value or "").strip()
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+        hours, minutes = (int(match.group(1)), int(match.group(2))) if match else (-1, -1)
+        if not match or hours > 24 or minutes > 59 or (hours == 24 and minutes):
+            raise ValueError("clock must look like HH:MM (00:00-24:00)")
+        return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+    @field_validator("group_ids")
+    @classmethod
+    def _validate_group_ids(cls, values: list[int]) -> list[int]:
+        if any(int(value) <= 0 for value in values):
+            raise ValueError("group_ids must be positive")
+        return [int(value) for value in values]
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +497,8 @@ class XiaoQingChatConfig(BaseModel):
     media           : MediaConfig = Field(default_factory=MediaConfig)
     postprocess     : ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
     humanize        : HumanizeConfig = Field(default_factory=HumanizeConfig)
+    life            : LifeConfig = Field(default_factory=LifeConfig)
+    proactive       : ProactiveConfig = Field(default_factory=ProactiveConfig)
     debug           : DebugConfig = Field(default_factory=DebugConfig)
 
     @field_validator("ban_regex")

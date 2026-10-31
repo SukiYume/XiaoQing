@@ -7,7 +7,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 
-class TestCrossTypeCommandRegression:
+class TestCrossTypeCommands:
     def test_note_view_with_event_id_returns_hint(self, tmp_path):
 
         from plugins.pendo.handlers.note import NoteHandler

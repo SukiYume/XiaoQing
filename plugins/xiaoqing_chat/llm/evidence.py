@@ -39,6 +39,12 @@ _HYPOTHETICAL_RE = re.compile(r"(?:如果|假设|假如|要是|倘若|若是)")
 _UNCERTAINTY_RE = re.compile(r"(?:可能|也许|大概|或许|似乎|好像|不一定|未必)")
 
 
+# 她承认自己不知道、记不清、没看到：这是在说缺口，不是对别人的事实陈述。
+_ADMITS_GAP_RE = re.compile(
+    r"(?:我|咱)[^，,。！!？?]{0,3}?(?:不知道|不清楚|不确定|记不清|不记得|没看到|没注意|没看清)"
+)
+
+
 _CLAIM_SCAFFOLD_RE = re.compile(
     r"^(?:我|你|她|他|本人|自己|角色)(?:自己)?|(?:是一个|是一名|是一位|就是|属于|是)"
 )
@@ -198,11 +204,15 @@ def validate_evidence_contract(
         # 审查模型误把资料原文列为候选陈述时，该条目不属于候选，不能据此拒绝候选。
         if not claim_is_verbatim and evidence_is_visible(claim, evidence_source):
             continue
-        # 对话条目中的调侃、提议和假设不断言事实；未标注时按事实处理。
+        # 对话条目中的调侃、提议和假设不断言事实；作品设定、公共知识和梗的含义由语义轴判断。
+        # 未标注时按事实处理。
         if (
             claims_key == "context_claims"
             and claim_is_verbatim
-            and str(item.get("kind") or "").strip().lower() == "creative"
+            and (
+                str(item.get("kind") or "").strip().lower() in {"creative", "knowledge"}
+                or _ADMITS_GAP_RE.search(claim)
+            )
         ):
             continue
         if (

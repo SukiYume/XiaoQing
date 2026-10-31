@@ -796,10 +796,13 @@ async def test_observe_outgoing_action_records_external_plugin_text_only(mock_co
 
 
 @pytest.mark.asyncio
-async def test_long_agent_results_are_kept_shortened_but_other_long_output_is_skipped(
+async def test_long_agent_results_are_kept_shortened_but_other_long_output_keeps_a_headline(
     mock_context,
 ):
-    """agent 的结果是小青说的话：截短记下，群友只引用它接着说时也能认出来。"""
+    """agent 的结果是小青说的话：截短记下，群友只引用它接着说时也能认出来。
+
+    其他插件的长推送只记开头一段：知道群里刚推送过什么，长篇正文不进上下文。
+    """
 
     from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
     from plugins.xiaoqing_chat.handlers import observe_outgoing_action
@@ -821,7 +824,7 @@ async def test_long_agent_results_are_kept_shortened_but_other_long_output_is_sk
                 "message" : [
                     {"type": "at", "data": {"qq": "30003"}},
                     {"type": "text", "data": {"text": " "}},
-                    {"type": "text", "data": {"text": "结果" * 800}},
+                    {"type": "text", "data": {"text": "今日推荐\n" + "结果" * 800}},
                 ],
             },
             ACTION_RESULT_MESSAGE_ID_KEY: 4242,
@@ -836,14 +839,20 @@ async def test_long_agent_results_are_kept_shortened_but_other_long_output_is_sk
         patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
     ):
         await observe_outgoing_action(long_result(), mock_context, source_plugin="arxiv_filter")
-        state.memory_store.append.assert_not_called()
+        headline, _media = message_parts_to_legacy(
+            state.memory_store.append.call_args.kwargs["parts"]
+        )
+        assert headline.startswith("今日推荐 结果结果") and headline.endswith(
+            "（内容较长，只记下开头）"
+        )
+        assert len(headline) < 200
         await observe_outgoing_action(long_result(), mock_context, source_plugin="xiaoqing_agent")
 
     append_kwargs = state.memory_store.append.call_args.kwargs
     assert append_kwargs["message_id"] == 4242
     assert append_kwargs["source_plugin"] == "xiaoqing_agent"
     content, _media = message_parts_to_legacy(append_kwargs["parts"])
-    assert content.startswith("结果结果") and len(content) <= 1000
+    assert "结果结果" in content and len(content) <= 1000
 
 
 @pytest.mark.asyncio

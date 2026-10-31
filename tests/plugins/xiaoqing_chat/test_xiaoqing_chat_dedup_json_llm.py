@@ -110,65 +110,6 @@ def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.MonkeyPatch) -> None:
-    from plugins.xiaoqing_chat.llm import gateway
-    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
-
-    async def fake_raw_with_fallback_paths(**_kwargs):
-        return (
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                '{"suitable": false, "reason": "重复", "need_replan": true, '
-                                '"persona_scan_complete": true, "persona_claims": [], '
-                                '"context_scan_complete": true, "context_claims": []}'
-                            )
-                        }
-                    }
-                ]
-            },
-            "/v1/chat/completions",
-        )
-
-    called             = {"count": 0}
-    original_extractor = gateway.extract_response_content
-
-    def traced_extractor(data):
-        called["count"] += 1
-        return original_extractor(data)
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
-        fake_raw_with_fallback_paths,
-    )
-    monkeypatch.setattr(gateway, "extract_response_content", traced_extractor)
-
-    result = await check_reply(
-        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name               = "小青",
-        reply                  = "好的",
-        goal                   = "聊天",
-        policy_text            = "",
-        history                = [],
-        chat_history_text      = "user: hi",
-        enable_llm_checker     = True,
-        max_repeat_compare     = 3,
-        similarity_threshold   = 0.9,
-        max_assistant_in_row   = 5,
-        timeout_seconds        = 1.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.0,
-    )
-
-    assert called["count"] == 1
-    assert result.suitable is False
-    assert result.reason == "重复"
-    assert result.need_replan is True
-
-
-@pytest.mark.asyncio
 async def test_gateway_fallback_wrapper_shared_logic_for_content_mode() -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock

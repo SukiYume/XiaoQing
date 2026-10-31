@@ -1,4 +1,4 @@
-"""把群聊历史压缩为可检索、可增量更新的话题摘要。"""
+"""把聊天历史压缩为可检索、可增量更新的话题摘要，并标出之后能不能直接提起。"""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from ..utils.json_parsing import parse_first_json_object
 from .gateway import chat_completions
 from .prompt_builder import ChatMessage, build_dialogue_prompt
 
+MENTION_LABELS = frozenset({"normal", "tone", "avoid"})
+
 
 @dataclass
 class TopicSummary:
@@ -31,6 +33,8 @@ class TopicSummary:
     summary   : str
     key_points: list[str]
     updated_at: float
+    # 之后怎么用：normal 可以提起，tone 只影响语气，avoid 除非对方提起不主动翻。
+    mention: str = "normal"
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +56,7 @@ def _load_cache(data_dir: Path, chat_id: str) -> list[TopicSummary]:
                 summary    = item.summary,
                 key_points = item.key_points,
                 updated_at = item.updated_at,
+                mention    = item.mention,
             )
         )
     return out
@@ -68,6 +73,7 @@ def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) ->
             "summary"   : topic.summary,
             "key_points": topic.key_points,
             "updated_at": topic.updated_at,
+            "mention"   : topic.mention,
         }
         for topic in topics
     ]
@@ -81,7 +87,11 @@ _TOPIC_SYSTEM = (
     "不能升级成角色的真实经历、稳定属性或客观结论。\n"
     "只保留对后续理解有用且能从原对话直接支持的信息，不补写动机、关系或背景。\n"
     "要求：只输出 JSON，不要输出解释文字。\n"
-    "字段：topic（短标题），keywords（3-8 个关键词），summary（100-200 字），key_points（3-6 条要点）。\n"
+    "字段：topic（短标题），keywords（3-8 个关键词），summary（100-200 字），key_points（3-6 条要点），"
+    "mention（之后角色能不能主动提起这段内容）。\n"
+    "mention 取 avoid：争吵、冲突、让人难堪或下不来台的事，除非当事人自己提起，不该主动翻出来；"
+    "tone：伤心、病痛、失去、挫折这类沉重的事，之后只让语气更体贴，不复述细节；"
+    "normal：其他内容。\n"
 )
 
 
@@ -91,7 +101,7 @@ def build_topic_messages(*, bot_name: str, history: Sequence[StoredMessage]) -> 
         "对话如下：\n"
         f"{dialogue}\n\n"
         "输出 JSON：\n"
-        '{"topic":"...","keywords":["..."],"summary":"...","key_points":["..."]}'
+        '{"topic":"...","keywords":["..."],"summary":"...","key_points":["..."],"mention":"normal"}'
     )
     return [
         ChatMessage(role="system", content=_TOPIC_SYSTEM.strip()),
@@ -138,6 +148,7 @@ def _persist_current_topic_summary(
             "type"    : "topic_summary",
             "chat_id" : chat_id,
             "keywords": summary.keywords,
+            "mention" : summary.mention,
         },
     )
 
@@ -205,6 +216,7 @@ async def maybe_update_topic_summary(
     if not isinstance(key_points, list):
         key_points = []
 
+    mention  = str(obj.get("mention", "") or "").strip().lower()
     now      = time.time()
     topic_id = f"{int(now)}"
     ts       = TopicSummary(
@@ -214,6 +226,7 @@ async def maybe_update_topic_summary(
         summary    = summary,
         key_points = [str(k).strip() for k in key_points if isinstance(k, str) and k.strip()],
         updated_at = now,
+        mention    = mention if mention in MENTION_LABELS else "normal",
     )
     cache.append(ts)
     if max_cache_topics > 0 and len(cache) > max_cache_topics:

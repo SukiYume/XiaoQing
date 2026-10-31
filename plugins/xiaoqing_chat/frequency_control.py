@@ -35,6 +35,8 @@ class ReplyGateDecision:
     heartflow_score         : float | None = None
     active_topic            : bool         = False
     participation_cue       : str          = ""
+    # 作息对插话概率的乘数：忙或睡时小于 1。
+    routine_factor: float = 1.0
 
     def as_log_fields(self) -> dict[str, object]:
         fields: dict[str, object] = {
@@ -54,6 +56,8 @@ class ReplyGateDecision:
             fields["roll"] = round(self.roll, 4)
         if self.heartflow_score is not None:
             fields["heartflow_score"] = round(self.heartflow_score, 4)
+        if self.routine_factor != 1.0:
+            fields["routine_factor"] = round(self.routine_factor, 4)
         return fields
 
 
@@ -171,11 +175,14 @@ async def decide_reply(
     text: str,
     is_private: bool,
     enable_private_brain_chat: bool,
+    *,
+    routine_factor: float = 1.0,
 ) -> bool:
     """判断普通消息是否主动参与，并把决策细节记入运行状态供日志使用。
 
     明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复；这里只处理硬频控、
-    普通插话概率、heartflow 软加分和静默期补偿。
+    普通插话概率、heartflow 软加分和静默期补偿。``routine_factor`` 是作息给的乘数，
+    最后作用在概率上：角色在上课或睡觉时更少插话。
     """
 
     cfg    = runtime.cfg
@@ -231,6 +238,8 @@ async def decide_reply(
             )
         streak      = (await state.heartflow.get_async(chat_id)).no_reply_streak
         probability = max(0.0, min(1.0, _streak_adjusted(probability, streak)))
+        factor      = 1.0 if is_private else max(0.0, min(1.0, routine_factor))
+        probability = probability * factor
         roll        = random.random()
         decision    = dataclasses.replace(
             decision,
@@ -240,6 +249,7 @@ async def decide_reply(
             roll            = roll,
             no_reply_streak = streak,
             heartflow_score = score,
+            routine_factor  = factor,
         )
     state.set_reply_gate_decision(chat_id, decision)
     return decision.should_reply

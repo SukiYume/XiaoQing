@@ -19,10 +19,12 @@ from core.message import extract_text, sender_display_name
 from .chat_event import event_sender_name
 from .chat_runtime import chat_lock
 from .handler_context import HandlerContext
+from .life.self_timeline import self_timeline_block
 from .logging_utils import log_step
 from .memory.local_ids import allocate_local_id
 from .message_parts import build_text_message_parts
 from .planning.action_history import ActionRecord
+from .post_reply_tasks import spawn_life_extraction
 from .smalltalk_models import PreparedSmalltalkTurn
 from .task_scheduler import schedule_action_history_flush, schedule_memory_persist
 from .turn_generation import ensure_user_message_recorded
@@ -146,6 +148,7 @@ async def _record_agent_reply(
     """
 
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
+    history: list[Any] = []
     async with chat_lock(chat_id):
         if reply_text:
             state.memory_store.append(
@@ -158,7 +161,21 @@ async def _record_agent_reply(
                 message_ids   = message_ids,
             )
             schedule_memory_persist(context, runtime, chat_id=chat_id)
+            history = list(
+                await state.memory_store.get_recent_async(chat_id, max_items=_HISTORY_ITEMS)
+            )
         state.set_last_reply_ts(chat_id, time.time())
+    # “弄完告诉你”这类答应过的事记下来，之后聊天和 agent 都知道自己还欠着什么。
+    spawn_life_extraction(
+        context,
+        runtime,
+        state,
+        chat_id  = chat_id,
+        bot_name = hctx.bot_name,
+        secrets  = hctx.secrets,
+        history  = history,
+        source   = "agent",
+    )
 
 
 async def _report_delivery(context: Any, task_id: str, delivered: bool | None) -> None:
@@ -241,6 +258,22 @@ def _fall_back_to_chat(context: Any, exc: Exception) -> None:
     )
 
 
+async def _agent_persona(hctx: HandlerContext) -> str:
+    """人物事实和〔办事〕各节，加上她最近说过的近况和答应过的事。"""
+
+    persona = hctx.runtime.cfg.personality.card.for_agent(hctx.bot_name)
+    life    = hctx.runtime.cfg.life
+    if not life.enable_self_timeline:
+        return persona
+    entries = await asyncio.to_thread(
+        hctx.state.self_timeline.visible,
+        hctx.chat_id,
+        limit=int(life.self_timeline_max_injected),
+    )
+    block = self_timeline_block(entries)
+    return f"{persona}\n\n{block}" if block else persona
+
+
 async def _decide(
     prepared: PreparedSmalltalkTurn,
     event: dict[str, Any],
@@ -268,7 +301,7 @@ async def _decide(
             "image_files": _image_files(event),
             "quoted_text": quoted_text,
             # 人设只写在人设卡里：agent 拿人物事实和〔办事〕各节，和平时聊天是同一个人。
-            "persona": hctx.runtime.cfg.personality.card.for_agent(hctx.bot_name),
+            "persona": await _agent_persona(hctx),
         }
         result = await asyncio.wait_for(
             agent.handle_turn({**turn, "phase": "decide"}),

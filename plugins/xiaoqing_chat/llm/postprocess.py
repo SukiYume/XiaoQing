@@ -10,6 +10,30 @@ from ..config.config import ResponsePostProcessConfig, ResponseSplitterConfig
 
 _RE_MULTI_SPACE      = re.compile(r"[ \t]{2,}")
 _SENTENCE_TAIL_CHARS = frozenset("。！？!?～~…")
+# 链接、邮箱、代码和列表这类要原样看清的内容不按分句拆气泡。
+_CLAUSE_SPLIT_BLOCK_RE = re.compile(
+    r"```|https?://|www\.|[\w.+-]+@[\w-]+\.[\w.]+|^\s*(?:[-*•]|\d+[.、)])\s*\S", re.M
+)
+_OPENING_PAIRS = {
+    "“": "”",
+    "‘": "’",
+    "「": "」",
+    "『": "』",
+    "（": "）",
+    "(": ")",
+    "【": "】",
+    "《": "》",
+}
+_CLAUSE_TRAILING_COMMAS = "，,、"
+_BRACKET_SPAN           = 60
+
+
+def _pairs_nearby(text: str, index: int, closer: str) -> bool:
+    """括号或引号在附近配上了才算数；“:(”这类表情和落单的半个括号不算。"""
+
+    span = text[index + 1 : index + 1 + _BRACKET_SPAN].split("\n", 1)[0]
+    end  = span.find(closer)
+    return end >= 0 and text[index] not in span[:end]
 
 
 def split_chat_reply(text: str) -> list[str]:
@@ -94,8 +118,10 @@ def split_sentences(text: str) -> list[str]:
     if "```" in s:
         return split_chat_reply(s)
 
-    quote_pairs            = {"“": "”", "‘": "’", "「": "」", "『": "』"}
-    closing_quotes         = set(quote_pairs.values())
+    quote_pairs = {"“": "”", "‘": "’", "「": "」", "『": "』"}
+    # 书名号和括号里的感叹号、问号不是句末（《孤独摇滚！》）；只在后文确实有配对时才保护。
+    bracket_pairs          = {"《": "》", "（": "）", "(": ")", "【": "】"}
+    closing_quotes         = set(quote_pairs.values()) | set(bracket_pairs.values())
     quote_stack: list[str] = []
     out        : list[str] = []
     start                  = 0
@@ -105,6 +131,8 @@ def split_sentences(text: str) -> list[str]:
         closed_quote = False
         if char in quote_pairs:
             quote_stack.append(quote_pairs[char])
+        elif char in bracket_pairs and _pairs_nearby(s, index, bracket_pairs[char]):
+            quote_stack.append(bracket_pairs[char])
         elif quote_stack and char == quote_stack[-1]:
             quote_stack.pop()
             closed_quote = True
@@ -138,13 +166,102 @@ def split_sentences(text: str) -> list[str]:
     return out or [s]
 
 
+def _clause_cuts(sentence: str) -> list[tuple[int, int]]:
+    """分句位置：逗号之后，以及省略号、波浪号之后；括号与引号里面不切，数字之间的逗号不切。
+
+    返回 (片段结束位置, 下一片段开始位置)；两者之间是被切掉的逗号。
+    """
+
+    cuts : list[tuple[int, int]] = []
+    stack: list[str]             = []
+    index                        = 0
+    while index < len(sentence):
+        char = sentence[index]
+        if char in _OPENING_PAIRS and _pairs_nearby(sentence, index, _OPENING_PAIRS[char]):
+            stack.append(_OPENING_PAIRS[char])
+        elif stack and char == stack[-1]:
+            stack.pop()
+        elif not stack and char in "，,":
+            before = sentence[index - 1] if index else ""
+            after  = sentence[index + 1] if index + 1 < len(sentence) else ""
+            if not (before.isdigit() and after.isdigit()):
+                cuts.append((index, index + 1))
+        elif not stack and char in "…～~":
+            end = index
+            while end + 1 < len(sentence) and sentence[end + 1] in "…～~":
+                end += 1
+            if end + 1 < len(sentence):
+                # 省略号和波浪号留在前一个气泡末尾，是语气的一部分。
+                cuts.append((end + 1, end + 1))
+            index = end
+        index += 1
+    return cuts
+
+
+def _split_clauses(sentence: str, max_pieces: int) -> list[str]:
+    """把一句按分句拆成至多 ``max_pieces`` 段；相邻两段合起来最短的先合回去。"""
+
+    if max_pieces <= 1:
+        return [sentence]
+    pieces: list[str] = []
+    joins : list[str] = []
+    start             = 0
+    for end, resume in _clause_cuts(sentence):
+        piece = sentence[start:end].strip()
+        if piece:
+            pieces.append(piece)
+            joins.append(sentence[end:resume])
+        start = resume
+    tail = sentence[start:].strip()
+    if tail:
+        pieces.append(tail)
+    joins = joins[: max(0, len(pieces) - 1)]
+    while len(pieces) > max_pieces:
+        pair = min(range(len(pieces) - 1), key=lambda i: len(pieces[i]) + len(pieces[i + 1]))
+        pieces[pair : pair + 2] = [pieces[pair] + joins[pair] + pieces[pair + 1]]
+        del joins[pair]
+    return [piece.rstrip(_CLAUSE_TRAILING_COMMAS).strip() for piece in pieces if piece.strip()]
+
+
+def _spread_clauses(
+    sentences: list[str], *, limit: int, min_chars: int, max_chars: int
+) -> list[str]:
+    """气泡数还没用完时，把较长的句子再按分句拆开，像在 QQ 上一句一句打出来。"""
+
+    if len("".join(sentences)) > max_chars or _CLAUSE_SPLIT_BLOCK_RE.search("\n".join(sentences)):
+        return sentences
+    result            = list(sentences)
+    settled: set[str] = set()
+    while len(result) < limit:
+        candidates = [
+            index
+            for index, sentence in enumerate(result)
+            if len(sentence) >= min_chars and sentence not in settled
+        ]
+        if not candidates:
+            break
+        index = max(candidates, key=lambda i: len(result[i]))
+        pieces = _split_clauses(result[index], limit - len(result) + 1)
+        if len(pieces) <= 1:
+            settled.add(result[index])
+            continue
+        result[index : index + 1] = pieces
+    return result
+
+
 def process_llm_response(
     response_text: str,
     cfg: ResponsePostProcessConfig,
     *,
     bot_name: str,
     enable_splitter: bool = True,
+    clause_split: bool    = True,
 ) -> list[str]:
+    """清理回复并分成气泡。
+
+    先按句末标点分句；气泡数没用完时再按逗号、省略号把较长的句子拆开（``clause_split``，
+    对方要求了句数或篇幅时由调用方关闭）。超出气泡数的内容收进最后一条，正文不截断。
+    """
     text            = response_text or ""
     structured_text = (
         _strip_prefix(text, bot_name=bot_name) if cfg.enable_response_post_process else text.strip()
@@ -178,6 +295,13 @@ def process_llm_response(
                 sentences.append(sentence)
         # 分段数量限制消息气泡数；剩余内容完整收进最后一条。
         limit = max(1, splitter.max_sentence_num)
+        if clause_split and splitter.clause_split:
+            sentences = _spread_clauses(
+                sentences,
+                limit     = limit,
+                min_chars = splitter.clause_split_min_chars,
+                max_chars = splitter.clause_split_max_chars,
+            )
         if len(sentences) > limit:
             sentences = sentences[: limit - 1] + ["\n".join(sentences[limit - 1 :])]
         return sentences

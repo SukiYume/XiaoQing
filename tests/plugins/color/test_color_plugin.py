@@ -375,7 +375,7 @@ class TestColorDataManager:
         assert json.loads(custom_file.read_text(encoding="utf-8")) == original
 
 
-class TestColorHandleFixes:
+class TestColorHandle:
     @pytest.mark.asyncio
     async def test_search_exposes_machine_pagination_separately_from_ui_hints(self, tmp_path):
         context = self._context(tmp_path)

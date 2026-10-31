@@ -18,7 +18,7 @@ from core.router import (
     resolve_context_command_invocation,
 )
 
-from .chat_runtime import configured_bot_name
+from .chat_runtime import ai_route_context, configured_bot_name, llm_call_config, load_runtime
 from .commands import (
     handle_config,
     handle_expression,
@@ -35,7 +35,10 @@ from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
     observe_message,
     observe_outgoing_action,
 )
+from .life.daily_life import ensure_today
+from .life.proactive import run_proactive
 from .runtime_state import get_state as _state
+from .store_binding import bound_state
 
 logger = logging.getLogger(__name__)
 
@@ -221,3 +224,32 @@ async def shutdown(context) -> None:
         await _flush_shutdown_state(context, state, log)
 
     log.info("XiaoQing Chat plugin shutdown complete")
+
+
+async def scheduled_daily_life(context) -> None:
+    """每天早上安排角色今天的生活小事。"""
+
+    try:
+        runtime = load_runtime(context)
+        if not runtime.cfg.life.enable_daily_life:
+            return
+        card = runtime.cfg.personality.card
+        await ensure_today(
+            store   = bound_state(context).daily_life,
+            persona = card.facts(configured_bot_name(context)),
+            routine = card.routine,
+            secrets = ai_route_context(context),
+            llm=llm_call_config(runtime.cfg, foreground=False),
+        )
+    except Exception as exc:
+        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.daily_life")
+
+
+async def scheduled_proactive(context) -> list[Any]:
+    """定时检查冷群，以群友身份主动开口；``proactive.enabled`` 关闭时什么也不做。"""
+
+    try:
+        return await run_proactive(context)
+    except Exception as exc:
+        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.proactive")
+        return []

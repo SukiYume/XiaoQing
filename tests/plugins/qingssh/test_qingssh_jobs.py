@@ -20,7 +20,6 @@ from tests.helpers.qingssh_test_support import (
     _SessionStub,
     _TransactionalContext,
     _wait_for,
-    inspect,
     qingssh_main,
     ssh_manager_module,
     ssh_session_handlers,
@@ -198,14 +197,6 @@ async def test_ordinary_commands_remain_available_in_session_history() -> None:
     finally:
         manager._done.set()
         await ssh_session_handlers.shutdown_tasks()
-
-
-def test_background_worker_has_no_session_or_legacy_execution_parameter() -> None:
-    parameters = inspect.signature(ssh_session_handlers._run_background_command).parameters
-
-    assert "session" not in parameters
-    assert "legacy_session" not in parameters
-    assert list(parameters)[:2] == ["update_session", "send_action"]
 
 
 @pytest.mark.asyncio

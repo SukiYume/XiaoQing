@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 _MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
+# Pictures carry content of their own; a small QQ face next to a mention is just a nudge.
+_PICTURE_SEGMENT_TYPES = frozenset({"image", "mface"})
 
 
 class ValidatedInboundEvent(dict[str, Any]):
@@ -49,9 +51,10 @@ def validate_message_segments(message: list[Any]) -> list[dict[str, Any]]:
 class MessageScan:
     """Single-pass summary of a OneBot message payload."""
 
-    text     : str
-    has_media: bool
-    is_at_me : bool
+    text       : str
+    has_media  : bool
+    is_at_me   : bool
+    has_picture: bool = False
 
 
 def normalize_inbound_message(event: dict[str, Any]) -> dict[str, Any]:
@@ -102,6 +105,7 @@ def scan_message(
 
     text_parts: list[str] = []
     has_media             = False
+    has_picture           = False
     is_at_me              = False
 
     for item in iter_message_segments(message):
@@ -114,7 +118,8 @@ def scan_message(
             continue
 
         if segment_type in _MEDIA_SEGMENT_TYPES:
-            has_media = True
+            has_media   = True
+            has_picture = has_picture or segment_type in _PICTURE_SEGMENT_TYPES
             continue
 
         if segment_type == "at" and self_id:
@@ -126,9 +131,10 @@ def scan_message(
         is_at_me = True
 
     return MessageScan(
-        text      = "".join(text_parts),
-        has_media = has_media,
-        is_at_me  = is_at_me,
+        text        = "".join(text_parts),
+        has_media   = has_media,
+        is_at_me    = is_at_me,
+        has_picture = has_picture,
     )
 
 
@@ -257,8 +263,11 @@ def parse_text_command_context(
     has_bot_name       = contains_bot_name(text, bot_name)
     has_command_prefix = any(text.startswith(p) for p in prefixes)
     has_prefix         = has_command_prefix or has_bot_name or is_at_me
-    is_only_bot_name   = (text.strip() == bot_name) or (is_at_me and not clean_text)
-    is_url_only        = is_clean_text_url_only(clean_text)
+    # "@bot" or the bare name alone is a call; with a picture attached it is a message about the picture.
+    is_only_bot_name = not message_scan.has_picture and (
+        (text.strip() == bot_name) or (is_at_me and not clean_text)
+    )
+    is_url_only = is_clean_text_url_only(clean_text)
     return TextCommandContext(
         clean_text         = clean_text,
         is_at_me           = is_at_me,

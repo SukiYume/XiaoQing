@@ -16,6 +16,10 @@ from .expression.bw_jargon_store import JargonStore
 from .expression.bw_message_recorder import MessageRecorder
 from .expression.bw_reflect_tracker import ReflectTrackerStore
 from .generation_limiter import GenerationLimiter
+from .life.daily_life import DailyLifeStore
+from .life.open_loops import OpenLoopStore
+from .life.proactive_state import ProactiveStateStore
+from .life.self_timeline import SelfTimelineStore
 from .media_registry import MediaRegistryStore
 from .memory.memory import MemoryStore
 from .memory.memory_db import MemoryDB
@@ -52,6 +56,10 @@ class _PerChatState:
     reply_gate_decision  : dict[str, Any] = field(default_factory=dict)
 
 
+# 心境属于角色本人，不属于某个会话：同一时刻她在各个群和私聊里是同一种心情。
+SELF_MOOD_KEY = "__self__"
+
+
 class ChatRuntimeState:
     __slots__ = (
         "_memory_store",
@@ -66,6 +74,10 @@ class ChatRuntimeState:
         "_bw_tracker_store",
         "_bw_recorder",
         "_bw_jargon_store",
+        "_self_timeline",
+        "_open_loops",
+        "_proactive_state",
+        "_daily_life",
         "_runtime_cache",
         "_runtime_mtime",
         "_runtime_revision",
@@ -92,6 +104,10 @@ class ChatRuntimeState:
         self._bw_tracker_store = ReflectTrackerStore()
         self._bw_recorder      = MessageRecorder()
         self._bw_jargon_store  = JargonStore()
+        self._self_timeline    = SelfTimelineStore()
+        self._open_loops       = OpenLoopStore()
+        self._proactive_state  = ProactiveStateStore()
+        self._daily_life       = DailyLifeStore()
 
         self._runtime_cache: OrderedDict[str, ChatRuntime] = OrderedDict()
         # 配置文件和人设卡的修改时间，任何一个变了就重新加载。
@@ -154,6 +170,22 @@ class ChatRuntimeState:
     @property
     def bw_jargon_store(self) -> JargonStore:
         return self._bw_jargon_store
+
+    @property
+    def self_timeline(self) -> SelfTimelineStore:
+        return self._self_timeline
+
+    @property
+    def open_loops(self) -> OpenLoopStore:
+        return self._open_loops
+
+    @property
+    def proactive_state(self) -> ProactiveStateStore:
+        return self._proactive_state
+
+    @property
+    def daily_life(self) -> DailyLifeStore:
+        return self._daily_life
 
     @property
     def generation_limiter(self) -> GenerationLimiter:
@@ -230,7 +262,7 @@ class ChatRuntimeState:
             ts = max(pc.last_reply_ts.get(cid, 0.0), pc.last_observe_ts.get(cid, 0.0))
             scored.append((ts, cid))
         scored.sort(reverse=True)
-        keep = {cid for _, cid in scored[: self._MAX_TRACKED_CHATS]}
+        keep = {cid for _, cid in scored[: self._MAX_TRACKED_CHATS]} | {SELF_MOOD_KEY}
         for cid, lock in pc.locks.items():
             if lock.locked():
                 keep.add(cid)

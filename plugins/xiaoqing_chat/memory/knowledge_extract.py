@@ -23,6 +23,7 @@ from .fact_extraction_checkpoint import (
 from .memory import StoredMessage
 from .memory_db import MemoryDB, normalize_memory_chat_id, person_fact_doc_id
 from .person_profile import (
+    SINGLE_VALUED_ATTRIBUTES,
     get_profile_generation,
     update_profile_and_index,
     write_if_profile_generation,
@@ -37,6 +38,8 @@ class PersonFact:
     subject_name: str
     fact        : str
     evidence    : str
+    # 单值属性（住址、学校、职业……）；改口时新事实替换旧事实。
+    attribute: str = ""
 
 
 _FACT_SYSTEM = (
@@ -46,6 +49,9 @@ _FACT_SYSTEM = (
     "短期情绪、单次行为、玩笑、假设、引用、转述和模型推断不应成为人物事实。\n"
     "evidence 必须摘录该 subject 自己的原句，并能单独支持 fact；没有充分证据就不输出。\n"
     "对话中的用户格式为“昵称<QQ号>：内容”，subject_id 和 subject_name 必须来自同一行的可信标识。\n"
+    "fact 属于同一时间只有一个值的属性时，加上 attribute 字段，取值只能是："
+    + "、".join(sorted(SINGLE_VALUED_ATTRIBUTES))
+    + "；喜好、习惯这类可以有很多条的信息不加 attribute。\n"
 )
 
 
@@ -147,9 +153,16 @@ def _parse_fact_json(text: str) -> list[PersonFact]:
         subject_name = str(item.get("subject_name", "")).strip()
         fact         = str(item.get("fact", "")).strip()
         ev           = str(item.get("evidence", "")).strip()
+        attribute    = str(item.get("attribute", "") or "").strip()
         if subject_name and fact:
             out.append(
-                PersonFact(subject_id=subject_id, subject_name=subject_name, fact=fact, evidence=ev)
+                PersonFact(
+                    subject_id   = subject_id,
+                    subject_name = subject_name,
+                    fact         = fact,
+                    evidence     = ev,
+                    attribute    = attribute if attribute in SINGLE_VALUED_ATTRIBUTES else "",
+                )
             )
     return out
 
@@ -192,6 +205,7 @@ def _bind_facts_to_history_subjects(
                 subject_name = trusted_names[resolved_id],
                 fact         = fact.fact,
                 evidence     = fact.evidence,
+                attribute    = fact.attribute,
             )
         )
     return bound
@@ -218,8 +232,9 @@ def _persist_person_facts(
 def _persist_current_person_facts(
     *, data_dir: Path, memory_db: MemoryDB, chat_id: str, facts: Sequence[PersonFact]
 ) -> None:
-    by_subject: dict[int, list[str]] = {}
-    by_name   : dict[int, str]       = {}
+    by_subject  : dict[int, list[str]]      = {}
+    by_name     : dict[int, str]            = {}
+    by_attribute: dict[int, dict[str, str]] = {}
     for fact in facts:
         subject_id = int(fact.subject_id or 0)
         try:
@@ -245,16 +260,55 @@ def _persist_current_person_facts(
         if subject_id > 0:
             by_subject.setdefault(subject_id, []).append(fact.fact.strip())
             by_name[subject_id] = fact.subject_name
+            if fact.attribute:
+                by_attribute.setdefault(subject_id, {})[fact.fact.strip()] = fact.attribute
 
     for subject_id, facts_list in by_subject.items():
-        update_profile_and_index(
+        subject_name = by_name.get(subject_id, str(subject_id))
+        replaced     = update_profile_and_index(
             data_dir     = data_dir,
             memory_db    = memory_db,
             chat_id      = chat_id,
             subject_id   = subject_id,
-            subject_name = by_name.get(subject_id, str(subject_id)),
+            subject_name = subject_name,
             new_facts    = facts_list,
+            attributes   = by_attribute.get(subject_id),
         )
+        for old in replaced:
+            _mark_superseded_fact(
+                memory_db,
+                chat_id      = chat_id,
+                subject_id   = subject_id,
+                subject_name = subject_name,
+                old          = old,
+            )
+
+
+def _mark_superseded_fact(
+    memory_db: MemoryDB, *, chat_id: str, subject_id: int, subject_name: str, old: Any
+) -> None:
+    """旧说法仍可被检索（回答“以前住哪”），但带上已被替换的标记。"""
+
+    try:
+        doc_id = person_fact_doc_id(
+            chat_id=chat_id, subject_id=subject_id, subject_name=subject_name, fact=old.old_fact
+        )
+    except ValueError:
+        return
+    if memory_db.get(doc_id) is None:
+        return
+    memory_db.upsert_text(
+        doc_id = doc_id,
+        text   = f"{subject_name}<{subject_id}>：（旧说法，后来改为“{old.new_fact}”）{old.old_fact}",
+        meta   = {
+            "type"          : "person_info",
+            "chat_id"       : chat_id,
+            "subject_id"    : subject_id,
+            "subject_name"  : subject_name,
+            "schema_version": 2,
+            "superseded"    : True,
+        },
+    )
 
 
 async def maybe_extract_person_facts(
@@ -266,8 +320,9 @@ async def maybe_extract_person_facts(
     history: Sequence[StoredMessage],
     llm: LLMCallConfig,
     expected_generation: str | None = None,
+    min_messages: int               = 20,
 ) -> None:
-    """每观察到二十条新消息时尝试抽取一次人物事实。"""
+    """每观察到 ``min_messages`` 条新消息时尝试抽取一次人物事实。"""
 
     try:
         scoped_chat_id = normalize_memory_chat_id(chat_id)
@@ -290,7 +345,7 @@ async def maybe_extract_person_facts(
     observed_count = observed_message_count(
         history, after_ts=last_observed_ts, seen_at_ts=seen_at_ts
     )
-    if observed_count < 20:
+    if observed_count < max(1, min_messages):
         return
     batch, observed_until, observed_ids = select_fact_batch(
         history, after_ts=last_observed_ts, seen_at_ts=seen_at_ts

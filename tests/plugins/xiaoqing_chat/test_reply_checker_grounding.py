@@ -1084,6 +1084,22 @@ async def test_semantic_reading_requires_original_sources_before_comparing(monke
     remote.assert_awaited_once()
 
 
+def test_semantic_reading_treats_omitted_empty_fields_as_empty() -> None:
+    """模型没有信息缺口时常把 unresolved 等空项省掉或写成 []，这不应让整份阅读作废。"""
+
+    reading = _turn_reading(bot_stance=[])
+    for key in ("unresolved", "local_terms", "facts"):
+        reading.pop(key)
+    validated = checker._validated_turn_reading(
+        reading,
+        {"current": "省了运费"},
+        checker._LLMCheckInput("小青", "给你两袋薯片。", "聊天", "省了运费", "", "", "", True),
+    )
+    assert validated is not None
+    assert validated["unresolved"] == [] and validated["facts"] == []
+    assert validated["bot_stance"] == ""
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "check",
@@ -1448,3 +1464,93 @@ async def test_semantic_checker_unavailability_preserves_infra_classification(mo
         reply="需要对应画面才能确认布局。", current_text="这张截图怎么样", **_options()
     )
     assert result.severity == "infra"
+
+
+@pytest.mark.parametrize(
+    "fragment,rejected",
+    [
+        ("导师心里估计已经在想你上周去哪了", False),
+        ("怕不是又熬夜了", False),
+        ("你跑了十公里", True),
+        ("他不可能去过北京", True),
+    ],
+)
+def test_hedged_premises_are_not_treated_as_assertions(fragment: str, rejected: bool) -> None:
+    """模型把带推测词的说法标成 fact 时，按推测处理：只核对有没有歪曲原事件。"""
+
+    checks = [
+        {
+            "fragment"  : fragment,
+            "literal"   : "直白含义",
+            "kind"      : "fact",
+            "supported" : False,
+            "consistent": True,
+        }
+    ]
+    assert (checker._premise_rejection(checks, f"嗯，{fragment}") is not None) is rejected
+
+
+def test_knowledge_context_claims_need_no_dialogue_source() -> None:
+    from plugins.xiaoqing_chat.llm.check_result import context_contract_rejection
+    from plugins.xiaoqing_chat.llm.evidence import validate_evidence_contract
+
+    reply = "他是怕芙莉莲以后一个人的时候会寂寞"
+    obj   = {
+        "context_scan_complete": True,
+        "context_claims"       : [{"claim": reply, "source_ids": [], "kind": "knowledge"}],
+    }
+    error, unsupported, count = validate_evidence_contract(
+        obj,
+        scan_key          = "context_scan_complete",
+        claims_key        = "context_claims",
+        reply             = reply,
+        evidence_source   = "阿杰：芙莉莲里辛美尔为啥到处给自己立雕像啊",
+        rejection_factory = context_contract_rejection,
+        incomplete_reason = "incomplete",
+        missing_reason    = "missing",
+        invalid_reason    = "invalid",
+        source_records    = {"h1": "阿杰：芙莉莲里辛美尔为啥到处给自己立雕像啊"},
+        bot_name          = "小青",
+    )
+    assert error is None and not unsupported and count == 0
+    obj["context_claims"][0]["kind"] = "fact"
+    _error, unsupported, _count = validate_evidence_contract(
+        obj,
+        scan_key          = "context_scan_complete",
+        claims_key        = "context_claims",
+        reply             = reply,
+        evidence_source   = "阿杰：芙莉莲里辛美尔为啥到处给自己立雕像啊",
+        rejection_factory = context_contract_rejection,
+        incomplete_reason = "incomplete",
+        missing_reason    = "missing",
+        invalid_reason    = "invalid",
+        source_records    = {"h1": "阿杰：芙莉莲里辛美尔为啥到处给自己立雕像啊"},
+        bot_name          = "小青",
+    )
+    assert unsupported, "标成 fact 又带人称的条目仍要求出处"
+
+
+def test_admitting_she_does_not_know_is_not_a_claim_about_others() -> None:
+    """“阿夏几点起我不知道”是在说缺口，模型标成 fact 也不要求对话出处。"""
+
+    from plugins.xiaoqing_chat.llm.check_result import context_contract_rejection
+    from plugins.xiaoqing_chat.llm.evidence import validate_evidence_contract
+
+    reply = "阿夏几点起的我还真不知道"
+    error, unsupported, _count = validate_evidence_contract(
+        {
+            "context_scan_complete": True,
+            "context_claims"       : [{"claim": reply, "source_ids": [], "kind": "fact"}],
+        },
+        scan_key          = "context_scan_complete",
+        claims_key        = "context_claims",
+        reply             = reply,
+        evidence_source   = "阿梨：小青和阿夏，你俩谁更早起",
+        rejection_factory = context_contract_rejection,
+        incomplete_reason = "incomplete",
+        missing_reason    = "missing",
+        invalid_reason    = "invalid",
+        source_records    = {"current": "阿梨：小青和阿夏，你俩谁更早起"},
+        bot_name          = "小青",
+    )
+    assert error is None and not unsupported

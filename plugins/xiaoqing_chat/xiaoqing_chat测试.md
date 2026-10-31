@@ -68,7 +68,7 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 | 隔离与隐私 | `test_xiaoqing_chat_tenant_scope.py`、`test_xiaoqing_log_privacy.py` | 跨会话隔离、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限 |
 | 配置与运行时 | `test_xiaoqing_chat_runtime_hardening.py`、`test_xiaoqing_chat_cache_lifetimes.py` | 配置校验与加载失败回退、热加载、缓存生命周期 |
 | 回复耗时 | `test_xiaoqing_chat_reply_latency.py` | 本轮阅读与生成并行且材料与审查内阅读一致、重写复用、材料变化重读、失败不复用、审查超时保留阅读、`risk` 模式不预读、发送前延迟扣除已用时间 |
-| 实验与脚本 | `test_xiaoqing_chat_anthropomorphic_experiment.py`、`tests/tooling/test_xiaoqing_chat_quality_script.py` | 拟人实验矩阵与投递回执、质量探针的剧本与机器门禁 |
+| 实验与脚本 | `test_xiaoqing_chat_anthropomorphic_experiment.py`、`tests/tooling/test_chat_eval.py` | 拟人实验矩阵与投递回执；聊天评测的剧本、事件构造、规则与门禁、校准阈值和子进程回收 |
 
 插件契约测试（日志脱敏、调用参数与签名一致性）位于 `tests/plugins/contracts`，建议一起运行：
 
@@ -260,19 +260,6 @@ python scripts/run_full_uat.py \
 
 ## 🧠 第六阶段：真实模型与拟人质量
 
-### 质量探针
-
-服务运行时执行：
-
-```bash
-python scripts/run_xiaoqing_chat_quality.py \
-  --endpoint http://127.0.0.1:12000/event \
-  --chat-data-dir test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/data/xiaoqing_chat \
-  --output test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/quality.json
-```
-
-该端口对应专用测试 Bot。`--chat-data-dir` 指向这个 Bot 实际使用的隔离插件数据目录，运行前确认目录已经创建。探针使用 `X-XiaoQing-Response-Mode: actions` 获取调试动作预览。普通 OneBot HTTP 事件响应为空对象，动作端回执提供实际投递证据。报告文件使用新路径，脚本会保护已有报告。
-
 ### 拟人大群实验
 
 ```bash
@@ -285,46 +272,60 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
 
 `--mode` 有三种取值：`matrix` 只生成实验矩阵，`dry-run` 不调用插件，生成可复现的占位结果来检查实验框架与评分，`real` 调用真实模型。实验产物包括矩阵（`anthropomorphic-group-matrix.json`）、JSONL 结果、群聊 transcript 和摘要，默认写入 `test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/`，也可用 `--output-dir` 指定。`--seed` 固定工作负载，`--groups`、`--min-users`、`--max-users`、`--rounds-per-group` 控制规模，`--max-real-turns` 限制远程调用轮数，`--checkpoint-interval` 控制断点保存间隔。
 
-### 多人群聊综合评测
+### 聊天评测：`python -m scripts.chat_eval`
+
+剧本、驱动、规则检查、模型评审和报告集中在 `scripts/chat_eval/` 一个包里，一个入口、四个文件：`scenarios.py`（全部剧本和素材）、`drivers.py`（怎么把消息送进小青）、`review.py`（规则、评审、报告、审查器校准）、`__main__.py`（命令行）。
 
 ```bash
-python scripts/run_xiaoqing_chat_live_eval.py                  # 全部剧本并行 + 模型评审
-python scripts/run_xiaoqing_chat_live_eval.py --suite otaku     # 只跑指定剧本，可重复
-python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
+python -m scripts.chat_eval run                           # 进程内跑群聊回归剧本并评审（默认 --set group）
+python -m scripts.chat_eval run --set quality --gate      # 质量探针；机器门禁不过时退出码为 1
+python -m scripts.chat_eval run --driver live --set life  # 真实 main.py + 假 NapCat 跑生活连续性
+python -m scripts.chat_eval run --suite otaku --no-judge  # 只跑指定剧本，只做规则检查
+python -m scripts.chat_eval judge <结果目录>              # 对已有结果重新评审
+python -m scripts.chat_eval replay <结果目录>/data/xiaoqing_chat g978321 阿禾 "你怎么不理我" --at
+python -m scripts.chat_eval calibrate                     # 只校准审查器的误杀与漏放
 ```
 
-脚本独立运行。脚本读取 `config/config.json` 和 `config/secrets.json` 中的真实模型路由。每个剧本使用独立数据目录，并执行完整的 `observe_message()` → `handle_smalltalk()` 链路。发送使用模拟成功回执。线上数据和 QQ 群保持隔离。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本节奏发言。消息可以包含图片、表情包、QQ 表情、`@` 和引用。`at="bot"` 表示 @ 小青。每轮在 `media_logs` 中记录读图结果，用于排查回复与图片内容的差异。
+两种驱动，模型都是真实调用，线上数据和 QQ 群保持隔离：
 
-| 剧本 | 关注点 |
-|---|---|
-| `otaku` | 活人感：二次元群日常、接梗、立场、被问是不是 AI、复读 |
-| `addressee` | 聊天对象：并行话题、点名他人、`@` 他人、同时点名、被评价 |
-| `participation` | 参与度：情绪、喜报、刷屏、冷场、邀约、发图请求 |
-| `multimodal` | 多模态：读图、表情包含义、指代旧图、发表情、坏图、没发过的图 |
-| `notice` | 文字为主的截图：实验报告和停水通知、带界面元素和网址的网页通知、一整张考试安排。只 @ 小青发图，再逐项追问截止时间、邮箱、网址、教室 |
-| `persona` | 人设与边界：个人问题、偏好记忆与回忆（如“你刚才说你喜欢猫还是狗来着”）、知识、套提示词、长文请求 |
-| `regress` | 计算与出站素材的回归点，例如价格换算、应发出表情包的轮次 |
+| 驱动 | 怎么跑 | 适合 |
+|---|---|---|
+| `inproc`（默认） | 每个剧本一个进程、一份独立数据目录，直接调用 `observe_message()` → `handle_smalltalk()`，发送模拟为成功回执 | 看细节：每轮记下审查候选和理由、模型调用、步骤日志、读图结果（`media_logs`） |
+| `live` | 用测试副本配置启动真实 `main.py`（只换配置文件路径，数据目录、OneBot 地址、默认群都指向测试环境，`secrets.json` 只读），本进程扮演 NapCat 推送事件、应答 `send_*_msg` 并分配消息 ID | 走完 Core 分发、投递回执、气泡节奏、定时任务和 agent；`bot.log` 是完整运行日志 |
 
-每轮先做确定性规则检查，发现项写入报告：
+`live` 驱动中，互不相干的剧本并发跑，每个剧本用自己的一段 QQ 号，同名群友在不同剧本里是不同的人（否则同一个“阿禾”同时在十几个群里说话，会撞上单人并发上限）；要改人设或打开主动开口的剧本最后逐个跑，期间临时改写 `xiaoqing_config.json`，结束时逐字节恢复并核对哈希。多个群同时压在一个 Bot 上，单轮超过 40 秒（`slow`）比真实群聊多，只作观察。
 
-| 规则 | 含义 |
-|---|---|
-| `missed_reply` | 剧本要求回复却没回 |
-| `intrusion` | 剧本要求安静却插话 |
-| `fallback` | 审查耗尽后用了兜底句（按 `reply.check.exhausted.*` 步骤或整句比对 `ALL_FALLBACK_TEXTS`） |
-| `media_doubt` | 图已成功读取，回复仍声称没看清、没刷出来或拿不准 |
-| `breaks_character` | 承认自己是 AI 或提到提示词等 |
-| `markdown` | 普通聊天里出现 Markdown 格式 |
-| `too_long` | 单轮超过 90 字 |
-| `verbatim_repeat` | 原样重复自己说过的话 |
-| `checker_rejected` / `checker_infra` | 候选被审查拒绝 / 审查模型不可用 |
-| `exception` / `slow` | 链路异常 / 单轮超过 40 秒 |
+剧本分三组（`--set`）：
 
-随后由 `reasoning` 路由担任评审，按剧本写给评审看的预期（`note`，不进入角色上下文）逐轮点评，并给出五个 1～5 分：`humanlike`（活人感）、`participation`（参与时机）、`addressee`（聊天对象）、`multimodal`（多模态，无图剧本为空）、`consistency`（前后一致）。
+| 组 | 剧本 | 关注点 |
+|---|---|---|
+| `group` | `otaku` `addressee` `participation` `multimodal` `persona` `banter` `help` `daily` `notice` `regress` | 活人感、聊天对象、参与度、读图与表情、人设边界、接梗、认真求助、日常、文字截图、计算与出站素材 |
+| `quality` | `quality_boundaries` `quality_scenarios` `quality_joining` | 人设与第三方边界、多人归属、话题转移、隔天新话题、读图与历史图、隔天关心面试、自主参与、私事不插话、长空档旧话题 |
+| `life` | `life_private` `life_group` `life_agent` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、作息影响节奏、冷群主动开口 |
 
-结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-liveeval-<commit>/`：每个剧本一个 JSONL（逐轮输入、回复、审查记录、步骤日志），以及汇总的 `summary.json` 和 `report.md`。`--seed` 固定随机过程，`--no-judge` 只跑剧本和规则检查，`--judge-only <DIR>` 对已有结果重新评审，`--out-dir` 指定输出目录。
+`life_agent`、`life_routine`、`life_proactive` 需要 agent、定时任务或改行为配置，只能 `--driver live`。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
 
-评分偏低时先读对应轮次的 JSONL：剧本素材本身有歧义时，应修正剧本或素材。例如，测试图片过于抽象会影响评审。
+每轮先做确定性规则检查：
+
+| 规则 | 含义 | 计入门禁 |
+|---|---|---|
+| `missed_reply` | 剧本要求回复却没回 | 是 |
+| `fallback` | 审查耗尽后用了兜底句（按 `reply.check.exhausted.*` 步骤或逐个气泡比对 `ALL_FALLBACK_TEXTS`） | 是 |
+| `breaks_character` | 承认自己是 AI 或提到提示词等 | 是 |
+| `forbidden_terms` / `missing_expected` | 出现了不该带回的旧话题词 / 该提到的内容一个都没提 | 是 |
+| `exception` | 链路异常 | 是 |
+| `intrusion` | 剧本要求安静却插话 | 否，只观察 |
+| `media_doubt` | 图已成功读取，回复仍声称没看清 | 否 |
+| `markdown` / `too_long` / `verbatim_repeat` | Markdown 格式 / 单轮超过 90 字 / 原样重复 | 否 |
+| `checker_rejected` / `checker_infra` / `slow` | 候选被审查拒绝 / 审查不可用 / 单轮超过 40 秒 | 否 |
+
+随后由 `reasoning` 路由担任评审，逐轮点评并给出五个 1～5 分：`humanlike`、`participation`、`addressee`、`multimodal`（无图剧本为空）、`consistency`。语气指标另外统计回声问句开场、带表情、问句收尾、平均字数和平均气泡数。
+
+`--calibrate` 在进程内用真实 `checker` 路由核对人工写定的候选（自然接梗应放行、编造事实应拦下），漏放必须为零、误杀率不超过 20%，结果计入门禁。`--gate` 时出现计入门禁的规则问题或校准不过，退出码为 1；项目级 UAT 的 `--include-chat-quality` 就是 `run --driver live --set quality --no-judge --calibrate --gate`。
+
+结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-chat-eval-<驱动>-<commit>/`：每个剧本一个 JSONL（逐轮输入、各个气泡、审查记录、步骤日志），`manifest.json`（剧本与图片真相，复评时使用），汇总的 `summary.json`（含门禁结论）和 `report.md`。`live` 驱动另有 `bot.log`、`config.json`（测试副本）和 `data/`（运行后的全部插件数据）。
+
+评分偏低时先读对应轮次的 JSONL；兜底或被拒的轮次用 `replay` 在数据副本上重放，看每一稿候选和审查理由。剧本素材本身有歧义时，修正剧本或素材。
 
 ### 真实群聊剧本
 
