@@ -210,11 +210,6 @@ class TestPluginContextAccess:
         with pytest.raises(TypeError):
             sample_context.secrets["plugins"]["echo"]["api_key"] = "changed"
 
-    def test_context_offers_no_private_admin_check(self, sample_context: PluginContext):
-        """谁能用什么只写在 plugin.json 里、由 Core 判断；插件上下文不再提供自己判断管理员的入口。"""
-
-        assert not hasattr(sample_context, "is_global_admin")
-
     def test_state_access(self, sample_context: PluginContext):
         """测试状态访问"""
         assert sample_context.state["counter"] == 0

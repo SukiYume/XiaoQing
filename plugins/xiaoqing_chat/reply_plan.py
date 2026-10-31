@@ -24,6 +24,9 @@ from .context_builder import (
     sender_profile_context,
     tool_status_context,
 )
+from .life.daily_life import day_key, past_block, recent_days, refers_to_past, today_block
+from .life.open_loops import open_loop_block
+from .life.self_timeline import self_timeline_block
 from .llm.communication_constraints import requested_char_count
 from .llm.llm_config import LLMCallConfig
 from .logging_utils import log_step
@@ -33,6 +36,7 @@ from .media.marker_resolver import (
 from .memory.memory import active_conversation_suffix
 from .memory.review_sessions import build_policy_block
 from .planning.planned_action import PlannedAction
+from .utils.wall_clock import local_datetime
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
 
@@ -152,6 +156,10 @@ class ReplyGenerationPlan:
     media_candidates  : str = ""
     # 只对这一条的额外要求（比如告别收尾），叠加在人设的说话方式之后。
     turn_note: str = ""
+    # 作息底色与“你最近说过的关于自己的事”：属于角色自己的连续性，放进人物事实一节。
+    life_block: str = ""
+    # 当前说话人可以顺口关心的一件到期的事。
+    open_loop_block: str = ""
 
 
 def _load_reply_context_blocks(
@@ -207,6 +215,49 @@ def _select_reaction_rules(
         except re.error:
             continue
     return tuple(keyword_rules), tuple(regex_rules)
+
+
+def _load_life_blocks(
+    *, runtime: ChatRuntime, state: Any, chat_id: str, event: dict[str, Any], text: str
+) -> tuple[str, str]:
+    """读取作息底色、今天的生活、自我陈述和当前说话人的未完话头。
+
+    对方问到过去的事时再加上前几天的生活。话头会登记到事件上，投递后结算。
+    """
+
+    life    = runtime.cfg.life
+    parts   = []
+    routine = str(event.get("_xc_routine_text") or "").strip()
+    if routine:
+        parts.append("作息底色：" + routine)
+    moment = local_datetime()
+    if life.enable_daily_life:
+        if block := today_block(state.daily_life.get(day_key(moment)), moment):
+            parts.append(block)
+    if life.enable_self_timeline:
+        entries = state.self_timeline.visible(chat_id, limit=int(life.self_timeline_max_injected))
+        if block := self_timeline_block(entries):
+            parts.append(block)
+    if refers_to_past(text):
+        days    = recent_days(state.daily_life, moment) if life.enable_daily_life else []
+        earlier = (
+            state.self_timeline.history(chat_id, since=moment.timestamp() - 4 * 86400)
+            if life.enable_self_timeline
+            else []
+        )
+        if block := past_block(days, earlier, moment):
+            parts.append(block)
+    loop_block = ""
+    if life.enable_open_loops:
+        found = state.open_loops.for_speaker(
+            chat_id,
+            event.get("user_id"),
+            followup_seconds=float(life.open_loop_followup_hours) * 3600.0,
+        )
+        if isinstance(found, tuple) and len(found) == 2:
+            event["_xc_open_loop_surfaced"] = found
+            loop_block                      = open_loop_block(*found)
+    return "\n".join(parts), loop_block
 
 
 async def _load_reply_history(
@@ -303,6 +354,9 @@ async def prepare_reply_generation(
             fields  = {"picked": len(expression_block)},
         )
     keyword_rules, regex_rules = _select_reaction_rules(runtime, text)
+    life_block, loop_block = await asyncio.to_thread(
+        _load_life_blocks, runtime=runtime, state=state, chat_id=chat_id, event=event, text=text
+    )
 
     merged_reasoning = _merge_planner_reasoning(action.reasoning, plan_reasoning)
     goal_state       = await state.goal_store.get_async(chat_id)
@@ -356,4 +410,6 @@ async def prepare_reply_generation(
         started_at         = started_at,
         media_candidates   = media_candidates,
         turn_note          = turn_note.strip(),
+        life_block         = life_block,
+        open_loop_block    = loop_block,
     )

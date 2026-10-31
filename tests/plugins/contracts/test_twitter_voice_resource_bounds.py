@@ -1,4 +1,4 @@
-"""CR-278 regressions for Twitter structure/cache and Voice lock/config drift."""
+"""Twitter response structure and media cache, Voice locks and configuration."""
 
 from __future__ import annotations
 

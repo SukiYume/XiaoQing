@@ -16,6 +16,7 @@ from plugins.xiaoqing_chat import agent_bridge, handlers
 from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.handler_context import HandlerContext
+from plugins.xiaoqing_chat.life.self_timeline import SelfTimelineStore
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.smalltalk_models import PreparedSmalltalkTurn
 
@@ -78,8 +79,10 @@ def _hctx(tmp_path, agent) -> tuple[HandlerContext, SimpleNamespace]:
             append=Mock(),
         ),
         action_history=SimpleNamespace(append=Mock()),
-        set_last_reply_ts=Mock(),
+        set_last_reply_ts = Mock(),
+        self_timeline     = SelfTimelineStore(),
     )
+    state.self_timeline.bind(tmp_path)
     context = SimpleNamespace(
         capabilities=PluginCapabilities(is_bot_admin=True, agent_turn=agent),
         logger   = MagicMock(),

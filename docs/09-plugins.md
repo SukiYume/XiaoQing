@@ -248,7 +248,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
 | Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`） |
 | 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
-| 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存 |
+| 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存，以及 `life/` 下的自我陈述、未完话头和主动开口节奏 |
 
 [用户手册](../plugins/xiaoqing_chat/README.md) 逐项说明参与规则、全部配置字段和排障方法，[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 说明模块与数据流，[上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 说明自动化测试与真实模型评测。
 
@@ -1064,6 +1064,8 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `qingssh` | `cleanup_orphans` | 每分钟 | `silent` | 断开已没有活跃会话的 SSH 连接 |
 | `signin` | `scheduled_yingshi` | 每天 00:30 | `broadcast` | 影视飓风每日签到 |
 | `twitter` | `scheduled_fetch` | 每天 03:00 | `silent` | 后台抓取新图 |
+| `xiaoqing_chat` | `scheduled_daily_life` | 每天 05:30 | `silent` | 按人设与作息安排角色今天的生活小事 |
+| `xiaoqing_chat` | `scheduled_proactive` | 每 20 分钟 | `targeted` | 冷群时以群友身份主动开口（`proactive.enabled` 打开后生效，默认关闭） |
 
 Pendo 的简报、日记提醒和财务总结每分钟运行一次，按每位用户自己的时区判断是否到期。
 

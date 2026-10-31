@@ -27,6 +27,7 @@ from ..utils.json_parsing import parse_first_json_object
 from ..utils.text import clip_text
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
+from .mention_policy import LABELS, asks_current_state, classify, format_items
 from .person_profile import get_profile_generation
 from .thinking_back import append_record, get_cached_answer
 
@@ -98,10 +99,12 @@ def _public_retrieved_item(item: RetrievedItem) -> dict[str, Any]:
     doc_id = str(item.doc_id)
     if _looks_like_absolute_path(doc_id):
         doc_id = _opaque_local_reference(doc_id)
+    meta = item.meta if isinstance(item.meta, dict) else {}
     return {
         "doc_id": doc_id,
         "score" : item.score,
         "text"  : item.text,
+        "usage" : LABELS[classify(str(item.text or ""), meta)],
         "meta"  : _public_memory_meta(item.meta),
     }
 
@@ -479,8 +482,12 @@ def _bounded_memory_text(text: str, cfg: MemoryConfig) -> str:
     return clip_text(value, cfg.max_block_chars) if cfg.max_block_chars > 0 else value
 
 
-def _format_memory_items(items: Sequence[RetrievedItem], cfg: MemoryConfig) -> str:
-    lines = [f"- {it.text.strip()}" for it in items if str(it.text or "").strip()]
+def _format_memory_items(
+    items: Sequence[RetrievedItem], cfg: MemoryConfig, *, current_text: str = ""
+) -> str:
+    """每条记忆带上用法标签；对方问当下状态时略去旧的对话类记忆。"""
+
+    lines = format_items(items, current_text=current_text)
     return _bounded_memory_text("\n".join(lines), cfg)
 
 
@@ -735,7 +742,9 @@ async def build_memory_block(
     if not question:
         return ""
 
-    if cfg.enable_thinking_back_cache:
+    # 问当下状态时，旧回答和记忆代理翻出来的旧事只会把过去的状态当成现在。
+    state_query = asks_current_state(current_text)
+    if cfg.enable_thinking_back_cache and not state_query:
         cached = await asyncio.to_thread(
             get_cached_answer,
             data_dir       = data_dir,
@@ -749,13 +758,13 @@ async def build_memory_block(
     direct_items = await asyncio.to_thread(
         _query_direct_memory_items, memory_db, question, cfg=cfg, chat_id=chat_id
     )
-    direct_answer = _format_memory_items(direct_items, cfg)
+    direct_answer = _format_memory_items(direct_items, cfg, current_text=current_text)
     if direct_answer:
         return await _remember_answer(
             data_dir, chat_id, question, direct_answer, cfg, generation=generation
         )
 
-    if (
+    if state_query or (
         cfg.agent_on_direct_miss_requires_reference
         and not planner_question.strip()
         and not _needs_memory_agent(f"{current_text}\n{question}")

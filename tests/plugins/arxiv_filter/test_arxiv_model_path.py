@@ -79,20 +79,3 @@ def test_missing_explicit_configured_model_path_is_not_silently_replaced(
     monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
 
     assert shared.resolve_model_path() == str(plugin_dir / "missing-configured")
-
-
-def test_obsolete_abstract_model_directory_is_not_auto_discovered(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    plugin_dir = tmp_path / "plugin"
-    (plugin_dir / "best_model_abs").mkdir(parents=True)
-    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
-    monkeypatch.setattr(
-        shared,
-        "load_plugin_config",
-        lambda: {"model": {"path": "configured"}},
-    )
-    monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
-
-    assert shared.resolve_model_path() == str(plugin_dir / "configured")

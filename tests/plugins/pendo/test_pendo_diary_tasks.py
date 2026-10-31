@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 
-class TestDiaryViewRegression:
+class TestDiaryViewAndDelete:
     def test_view_diary_by_id_returns_full_entry(self, tmp_path):
 
         from plugins.pendo.handlers.diary import DiaryHandler
@@ -151,7 +151,7 @@ class TestDiaryViewRegression:
             db.cleanup()
 
 
-class TestDiaryMoodAIRegression:
+class TestDiaryMoodAnalysis:
     def test_create_diary_uses_ai_mood_analysis(self, tmp_path):
 
         from plugins.pendo.handlers.diary import DiaryHandler

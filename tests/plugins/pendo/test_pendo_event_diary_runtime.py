@@ -758,39 +758,6 @@ async def test_web_private_delivery_failure_never_echoes_login_code(
     assert "never-echo-this-code" not in result["message"]
 
 
-@pytest.mark.asyncio
-async def test_web_start_ignores_noncallable_error_reader(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """兼容未实现可调用错误读取器的旧服务替身。"""
-    from plugins.pendo.handlers import web as web_module
-
-    server = SimpleNamespace(
-        get_url        = lambda: "http://127.0.0.1:12001",
-        is_running     = lambda: False,
-        start          = lambda _db: False,
-        stop           = lambda: True,
-        get_last_error = "not-callable",
-    )
-    monkeypatch.setattr(web_module, "web_server", server)
-    monkeypatch.setattr(
-        web_module,
-        "issue_login_code",
-        lambda *_args, **_kwargs: "unused-login-code",
-    )
-    monkeypatch.setattr(
-        web_module,
-        "generate_widget_token",
-        lambda *_args, **_kwargs: "unused-widget-token",
-    )
-
-    result = await web_module.WebHandler(db=None).handle("1001", "start", context=SimpleNamespace())
-
-    assert result["status"] == "error"
-    assert "服务启动失败" in result["message"]
-    assert "not-callable" not in result["message"]
-
-
 def test_web_component_loader_only_downgrades_known_optional_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

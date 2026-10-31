@@ -235,7 +235,7 @@ class TestPendoWebHandler:
         assert calls == ["1001"]
 
 
-class TestPendoSearchAndImportRegression:
+class TestSearchAndImport:
     def test_search_handler_applies_date_field_for_range_filters(self, monkeypatch):
 
         from plugins.pendo.handlers.search import SearchHandler
@@ -321,7 +321,7 @@ class TestPendoSearchAndImportRegression:
             db.cleanup()
 
 
-class TestPendoRedesignRegression:
+class TestAmountsRangesAndCategories:
     def test_widget_ledger_panel_prefers_amount_cents(self, tmp_path):
 
         from plugins.pendo.services.db import Database

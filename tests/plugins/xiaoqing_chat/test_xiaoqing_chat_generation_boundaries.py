@@ -165,6 +165,45 @@ async def test_build_memory_block_uses_current_text_when_question_generation_fai
 
 
 @pytest.mark.asyncio
+async def test_current_state_question_does_not_dig_up_old_states() -> None:
+    """问“在干嘛”时，旧的对话类记忆被略去后不再让记忆代理去翻旧账。"""
+
+    from plugins.xiaoqing_chat.config.config import MemoryConfig
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, RetrievedItem
+    from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
+
+    memory_db       = MemoryDB()
+    memory_db.query = MagicMock(
+        return_value=[
+            RetrievedItem(
+                doc_id = "topic:old",
+                text   = "她说自己在赶实验报告",
+                score  = 0.9,
+                meta   = {"type": "topic_summary", "chat_id": "g1", "updated_at": 1.0},
+            )
+        ]
+    )
+    react = AsyncMock(return_value="她在赶实验报告")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("plugins.xiaoqing_chat.memory.memory_retrieval.react_retrieve", react)
+        block = await build_memory_block(
+            data_dir = Path("."),
+            chat_id  = "g1",
+            secrets  = {"_ai": None},
+            cfg=MemoryConfig(planner_question=False, top_k=3, min_score=0.1),
+            bot_name         = "小青",
+            history          = [],
+            current_text     = "小青在干嘛",
+            planner_question = "她现在在干嘛",
+            memory_db        = memory_db,
+            llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
+        )
+
+    assert block == ""
+    react.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_memory_block_is_bounded_so_recent_dialogue_stays_primary() -> None:
     from plugins.xiaoqing_chat.config.config import MemoryConfig
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, RetrievedItem

@@ -344,13 +344,13 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
 def test_refresh_mood_state_resets_after_long_idle():
     import time
 
-    from plugins.xiaoqing_chat.handlers import _refresh_mood_state
+    from plugins.xiaoqing_chat import handlers
+    from plugins.xiaoqing_chat.handlers import SELF_MOOD_KEY, _refresh_mood_state
 
     state                             = MagicMock()
     state.get_mood_state.return_value = "现在心情不错"
-    # 上次活跃距今超过 4h
-    state.get_last_observe_ts.return_value = time.time() - 6 * 3600
-    state.get_last_reply_ts.return_value   = 0.0
+    # 心境是全局的：任何会话上次来消息距今超过 4h
+    handlers._last_mood_check[SELF_MOOD_KEY] = time.time() - 6 * 3600
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(

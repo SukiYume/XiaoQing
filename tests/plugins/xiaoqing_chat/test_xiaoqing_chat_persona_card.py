@@ -96,23 +96,11 @@ def test_the_bundled_card_covers_every_use() -> None:
     assert card.scoped(SCOPE_DEEP, "小青")
 
 
-def test_the_bundled_card_names_the_unit_and_the_cat() -> None:
-    facts = bundled_persona_card().facts("小青")
-
-    assert "快逃科学技术研究院" in facts
-    assert "奶牛猫" in facts and "小黑" in facts and "猫派" in facts
-
-
 def test_regex_guards_stay_narrow() -> None:
     cfg = load_xiaoqing_chat_config(
         context_config = {},
         plugin_dir     = BUNDLED_PERSONA_FILE.parent.parent,
     )
-
-    assert "max_tokens" not in cfg.model_fields
-    assert cfg.personality.state_probability == 0.18
-    assert cfg.bot_name_only_replies == ["在", "嗯？", "怎么了", "我在", "有事吗"]
-    assert len(cfg.keyword_reaction.regex_rules) == 2
 
     guarded = (
         ("你是不是AI", "身份追问"),

@@ -1,5 +1,5 @@
 # 通过真实模块导入验证生产 HTTP 方法的边界。
-"""CR-282 regressions for real imports and production HTTP boundaries."""
+"""Real imports and production HTTP method boundaries."""
 
 from __future__ import annotations
 

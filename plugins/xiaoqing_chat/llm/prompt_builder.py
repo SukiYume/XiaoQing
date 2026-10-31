@@ -467,7 +467,12 @@ def build_earlier_context_block(
 
 
 def _persona_section(
-    *, channel: str, facts: str, state_text: str, personality: PersonalityConfig
+    *,
+    channel: str,
+    facts: str,
+    state_text: str,
+    personality: PersonalityConfig,
+    life_block: str = "",
 ) -> str:
     """人设块：人设卡里的人物事实，加上可创作日常和必须依证据的现实信息边界。"""
 
@@ -476,6 +481,8 @@ def _persona_section(
         lines.append(facts)
     if state_text:
         lines.append(f"- 当前表达状态（只调节语气，不增加人物事实）：{state_text}")
+    if life_block:
+        lines.append(life_block)
     if personality.allow_low_stakes_persona_fiction:
         lines.append(
             "- 日常创作许可：只补模糊的当下感受和一次性小事；"
@@ -585,6 +592,8 @@ def build_prompt_messages(
     goal: str             = "",
     earlier_context: str  = "",
     media_candidates: str = "",
+    life_block: str       = "",
+    open_loop_block: str  = "",
 ) -> list[ChatMessage]:
     bot_name = resolve_bot_name(bot_name)
     sender   = sender_name.strip() if sender_name else "用户"
@@ -597,6 +606,7 @@ def build_prompt_messages(
         facts       = facts,
         state_text  = (state_override or "").strip(),
         personality = personality,
+        life_block  = life_block.strip(),
     )
     system_prompt = _system_prompt(
         persona                = persona,
@@ -653,6 +663,7 @@ def build_prompt_messages(
         _current_turn_target_block(
             sender=sender, current_text=current_text, current_parts=current_parts, bot_name=bot_name
         ),
+        "可以顺口接的旧事：" + open_loop_block.strip() if open_loop_block.strip() else "",
         "关键词反应（可参考，不要生硬照抄）\n" + "；".join(reaction_prompts)
         if reaction_prompts
         else "",
