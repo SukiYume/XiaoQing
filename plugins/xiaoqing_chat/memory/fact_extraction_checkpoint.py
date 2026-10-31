@@ -84,10 +84,6 @@ def observed_message_count(
     )
 
 
-def latest_message_ts(history: Sequence[Any]) -> float:
-    return max((_message_timestamp(message) for message in history), default=0.0)
-
-
 def save_last_observed_ts(
     data_dir: Path,
     chat_id: str,

@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import logging
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
-from .app_support import _parse_admin_user_ids, _PrincipalAuthority
+from .app_support import _parse_positive_ids
 from .interfaces import DeliveryTarget, PluginPrincipal, ScheduleDeliveryMode
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,8 @@ class AppIdentityService:
 
     def __init__(self) -> None:
         self._admin_ids: set[int] = set()
-        self._authority           = _PrincipalAuthority()
+        # 按对象身份记录本应用签发的主体，伪造或跨应用的主体都不会被承认。
+        self._issued: weakref.WeakKeyDictionary[PluginPrincipal, str] = weakref.WeakKeyDictionary()
 
     @property
     def admin_ids(self) -> set[int]:
@@ -30,7 +32,9 @@ class AppIdentityService:
         """Atomically replace the administrator set or revoke it on invalid input."""
 
         try:
-            replacement = _parse_admin_user_ids(secrets.get("admin_user_ids", []))
+            replacement = set(
+                _parse_positive_ids(secrets.get("admin_user_ids", []), field_name="admin_user_ids")
+            )
         except (TypeError, ValueError):
             logger.warning("Invalid admin_user_ids in secrets")
             replacement = set()
@@ -88,16 +92,27 @@ class AppIdentityService:
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
         schedule_delivery: ScheduleDeliveryMode | None      = None,
     ) -> PluginPrincipal:
-        return self._authority.issue(
-            kind              = kind,
+        """Mint and register one principal; user principals default to their own chat."""
+
+        if delivery_targets is None:
+            if kind == "user" and group_id is not None:
+                delivery_targets = (DeliveryTarget("group", int(group_id)),)
+            elif kind == "user" and user_id is not None:
+                delivery_targets = (DeliveryTarget("private", int(user_id)),)
+            else:
+                delivery_targets = ()
+        principal = PluginPrincipal(
+            kind              = kind,  # type: ignore[arg-type]
             user_id           = user_id,
             group_id          = group_id,
             is_bot_admin      = is_bot_admin,
             is_private        = is_private,
-            group_role        = group_role,
+            group_role        = group_role,  # type: ignore[arg-type]
             delivery_targets  = delivery_targets,
             schedule_delivery = schedule_delivery,
         )
+        self._issued[principal] = kind
+        return principal
 
     def owns(self, principal: PluginPrincipal) -> bool:
-        return self._authority.owns(principal)
+        return bool(self._issued.get(principal) == principal.kind)

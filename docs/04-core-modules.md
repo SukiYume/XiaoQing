@@ -90,8 +90,7 @@ Manifest capability 对应 Core 维护的窄特权对象。
 | 模块 | 职责 |
 |---|---|
 | `session.py` | Session 快照、会话键、串行锁、超时和原子更新 |
-| `scheduler.py` | APScheduler 装配、Manifest cron 注册和目标投递 |
-| `scheduler_compat.py` | APScheduler 版本适配边界 |
+| `scheduler.py` | APScheduler 装配、Manifest cron 注册、目标投递和版本适配的有界关闭 |
 | `delivery.py` | 进程内发送回执、目标化调度结果和 commit-after-ack |
 | `durable_fanout.py` | 多目标通知的持久进度和恢复 |
 | `async_keyed_lock.py` | 按业务键串行的异步锁 |

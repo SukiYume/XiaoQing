@@ -13,7 +13,7 @@ Each call site has capability probes, exception isolation, stable cleanup paths,
 | Location | Private API | Purpose | Protection |
 |---|---|---|---|
 | `core/plugin_manager_support.py` | `importlib._bootstrap._get_module_lock` | Reuse CPython module locks during live plugin loading | `getattr` probe, behavior validation, restart-only mode |
-| `core/scheduler_compat.py` | APScheduler internal job store, executor, timer, pending future | Scheduler reload and shutdown | Version probe, calling-contract validation, bounded shutdown |
+| `core/scheduler.py` | APScheduler internal job store, executor, timer, pending future | Scheduler reload and shutdown | Version probe, calling-contract validation, bounded shutdown |
 | `plugins/jupyter/jupyter_manager.py` | `_invoke_cleanup` callback reflection and Jupyter cleanup methods | Kernel termination across versions | Restricted signatures, candidate isolation, cleanup reports |
 | `plugins/codex/runner.py` | `process._transport.get_pipe_transport` | Subprocess-pipe cleanup | Attribute and type probes, exception isolation, process-tree cleanup |
 
@@ -413,11 +413,11 @@ WantedBy=multi-user.target
 
 Replace `WorkingDirectory` with the actual project directory.
 The service manager supplies an available `python`, dependencies, and runtime account.
-The project entry remains `python main.py`.
+The project entry is `python main.py`.
 
 ### Docker
 
-The repository `Dockerfile` is the container build entry.
+The repository `Dockerfile` is the container build entry. `.dockerignore` excludes local configuration and secrets, runtime data, logs, tests, and local work directories, so the image contains only runtime code and resources.
 Mount `config/`, `data/`, and `logs/` during deployment.
 Connect inbound ports to a controlled proxy network.
 

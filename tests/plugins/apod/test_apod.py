@@ -171,7 +171,7 @@ async def test_entry_url_migration_and_custom_page(mock_context, mock_event, mon
 @pytest.mark.parametrize("host", ["science.nasa.gov", "assets.science.nasa.gov", "apod.nasa.gov"])
 def test_nasa_hosts_support_fake_dns(mock_context, host):
     url = f"https://{host}/apod"
-    assert apod._require_allowed_url(url, mock_context) == url
+    assert apod._require_allowed_url(url, apod._allowed_hosts(mock_context)) == url
     assert apod._allow_transparent_proxy_fake_dns(url)
     assert not apod._allow_transparent_proxy_fake_dns(f"http://{host}/apod")
 
@@ -179,7 +179,9 @@ def test_nasa_hosts_support_fake_dns(mock_context, host):
 def test_custom_hosts_keep_public_dns_policy(mock_context):
     assert not apod._allow_transparent_proxy_fake_dns("https://science.nasa.gov.evil.example/apod")
     with pytest.raises(UnsafeUrlError):
-        apod._require_allowed_url("https://science.nasa.gov.evil.example/apod", mock_context)
+        apod._require_allowed_url(
+            "https://science.nasa.gov.evil.example/apod", apod._allowed_hosts(mock_context)
+        )
 
 
 # ============================================================
@@ -339,34 +341,9 @@ SAMPLE_APOD_HTML_NO_TITLE = """
 class TestConfig:
     """测试配置功能"""
 
-    def test_get_config_default(self, mock_context):
-        """测试获取默认配置"""
-        config = apod._get_config(mock_context)
-        assert config == {}
-
-    def test_get_config_with_values(self, temp_data_dir):
-        """测试获取有值的配置"""
-
-        class MockContext:
-            def __init__(self, data_dir):
-                self.data_dir = data_dir
-                self.config   = {
-                    "plugins": {
-                        "apod": {
-                            "url"          : "https://apod.nasa.gov/apod/astropix.html",
-                            "allowed_hosts": ["apod.nasa.gov"],
-                        }
-                    }
-                }
-                self.http_session = None
-                self.logger       = MagicMock()
-
-        context = with_settings_reader(MockContext(temp_data_dir))
-        config  = apod._get_config(context)
-        assert config == {
-            "url"          : "https://apod.nasa.gov/apod/astropix.html",
-            "allowed_hosts": ["apod.nasa.gov"],
-        }
+    def test_allowed_hosts_merge_configured_hosts(self, mock_context):
+        mock_context.config["plugins"]["apod"]["allowed_hosts"] = ["Example.ORG."]
+        assert apod._allowed_hosts(mock_context) == set(apod.NASA_APOD_HOSTS) | {"example.org"}
 
     def test_allowed_hosts_ignores_non_string_and_empty_entries(self, mock_context):
         mock_context.config["plugins"]["apod"]["allowed_hosts"] = [
@@ -423,7 +400,6 @@ def test_image_selection_prefers_apod_image_path(mock_context) -> None:
         apod._find_image_url(
             soup,
             apod.LEGACY_APOD_URL,
-            mock_context,
             {"apod.nasa.gov"},
         )
         == "https://apod.nasa.gov/apod/image/apod260201.jpg"
@@ -441,7 +417,6 @@ def test_image_selection_rejects_ambiguous_allowed_images(mock_context) -> None:
         apod._find_image_url(
             soup,
             apod.DEFAULT_APOD_URL,
-            mock_context,
             {"apod.nasa.gov"},
         )
         is None
@@ -905,7 +880,7 @@ class TestHelp:
 
     def test_show_help(self):
         """测试显示帮助信息"""
-        help_text = apod._show_help()
+        help_text = apod._HELP_TEXT
         assert "每日一天文图 (APOD)" in help_text
         assert "/apod" in help_text
         assert "HTTPS、主机、响应字节、MIME 与图片像素受限校验" in help_text

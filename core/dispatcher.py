@@ -599,12 +599,7 @@ class Dispatcher:
             return []
 
         if not should_process and self._allow_plain_group_smalltalk(ctx):
-            if self.is_muted(ctx.group_id):
-                logger.debug("[%s] Group muted; skip smalltalk", ctx.request_id)
-                return []
-            provider = self._get_smalltalk_provider()
-            logger.info("[%s] Handling as smalltalk (provider=%s)", ctx.request_id, provider)
-            return await self._handle_smalltalk(ctx)
+            return await self._smalltalk_unless_muted(ctx)
 
         if not should_process:
             return []
@@ -659,6 +654,11 @@ class Dispatcher:
             ]
 
         # Step G: smalltalk fallback (mute blocks this step only)
+        return await self._smalltalk_unless_muted(ctx)
+
+    async def _smalltalk_unless_muted(self, ctx: MessageContext) -> list[dict[str, Any]]:
+        """群静音时不闲聊，否则交给闲聊提供者。"""
+
         if self.is_muted(ctx.group_id):
             logger.debug("[%s] Group muted; skip smalltalk", ctx.request_id)
             return []

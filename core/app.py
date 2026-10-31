@@ -1,8 +1,7 @@
-"""
-XiaoQing 主应用
+"""XiaoQing 主应用：组装配置、插件、调度、会话与 OneBot 收发链路。
 
-简化后的核心应用模块。
-"""
+具体职责拆在各个 Mixin 中：生命周期、配置热更新、插件上下文、插件热重载、
+消息投递、入站事件和定时任务。"""
 
 import asyncio
 import logging
@@ -47,7 +46,7 @@ from .interfaces import (
     PluginSettingsSnapshot,
 )
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
-from .logging_config import LogManager, setup_logging
+from .logging_config import setup_logging
 from .metrics import MetricsCollector
 from .onebot import (
     OneBotHttpSender,
@@ -101,11 +100,8 @@ class XiaoQingApp(
         self._plugin_settings_cache: dict[tuple[str, int], PluginSettingsSnapshot] = {}
         self._plugin_settings_cache_revision: int | None                           = None
 
-        # 初始化日志系统（使用新的日志模块）
-        self.log_manager: LogManager = setup_logging(
-            self.config_manager.config,
-            log_dir=root / "logs",
-        )
+        # 初始化日志系统
+        setup_logging(self.config_manager.config, log_dir=root / "logs")
 
         # HTTP 会话（共享）
         self.http_session: aiohttp.ClientSession | None = None
@@ -210,7 +206,7 @@ class XiaoQingApp(
             self._runtime_onebot_credentials_trusted,
         ) = _onebot_credentials(initial_snapshot)
         self._runtime_inbound_token = _inbound_credentials(initial_snapshot)
-        self._load_admins(_trusted_secrets(initial_snapshot))
+        self.identity_service.load_admins(_trusted_secrets(initial_snapshot))
         self._runtime_inbound_key: tuple[Any, ...] | None = None
         self._onebot_auth_generation = 0
         self._ws_client_auth_generation = 0
@@ -281,10 +277,6 @@ class XiaoQingApp(
             group_id   = group_id,
             is_private = is_private,
         )
-
-    def _load_admins(self, secrets: Mapping[str, Any] | None = None) -> None:
-        source = secrets if secrets is not None else self.secrets
-        self.identity_service.load_admins(source)
 
     # ============================================================
     # 生命周期

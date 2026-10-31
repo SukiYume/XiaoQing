@@ -36,7 +36,7 @@ from plugins.qingpet.commands.new_commands import (
     handle_show,
     handle_trade,
 )
-from plugins.qingpet.services.admin_service import AdminService
+from plugins.qingpet.services.admin_service import set_group_config
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -166,9 +166,8 @@ def test_invalid_arguments_are_rejected_without_database_side_effects(
 ) -> None:
     group_id = 921_001
     user_id  = "921002"
-    admin    = AdminService(qingpet_db)
-    assert admin.enable_plugin(group_id)
-    assert admin.set_config(group_id, "trade_enabled", "true")
+    assert qingpet_db.update_group_config_field(group_id, "enabled", True)
+    assert set_group_config(qingpet_db, group_id, "trade_enabled", "true")
     assert PetService(qingpet_db).adopt_pet(user_id, group_id, "边界宠")[0]
     before = _database_snapshot(qingpet_db)
 

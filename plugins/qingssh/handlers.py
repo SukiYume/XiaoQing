@@ -6,9 +6,9 @@ from pathlib import Path
 
 from core.args import tokenize
 from core.interfaces import COMMAND_RUNNER_EVENT_KEY
+from core.sensitive_audit import safe_request_id as audit_request_id
 from core.sensitive_audit import summarize_sensitive
 
-from .audit import audit_request_id
 from .config import ADD_SERVER_TIMEOUT, SESSION_TIMEOUT, SessionKeys
 from .message_formatter import (
     DIVIDER,

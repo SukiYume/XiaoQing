@@ -2,7 +2,7 @@
 
 import hashlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -11,7 +11,12 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
-from core.image_validation import ImageValidationLimits, validate_image_bytes
+from core.image_validation import (
+    WEB_IMAGE_FORMAT_EXTENSIONS,
+    WEB_IMAGE_MIME_FORMATS,
+    ImageValidationLimits,
+    validate_image_bytes,
+)
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -26,10 +31,6 @@ from core.safe_http import SafeHttpError, UnsafeUrlError, fetch_public_bytes, fe
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 常量配置
-# ============================================================
-
 HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -43,9 +44,10 @@ MAX_DISPLAY_IMAGE_WIDTH = 1600
 HTML_TIMEOUT_SECONDS    = 15
 IMAGE_TIMEOUT_SECONDS   = 20
 MAX_IMAGE_BYTES         = 12 * 1024 * 1024
-MAX_IMAGE_PIXELS        = 40_000_000
-MAX_IMAGE_FRAMES        = 120
-IMAGE_CACHE_LIMITS      = FileCacheLimits(
+IMAGE_LIMITS            = ImageValidationLimits(
+    max_bytes=MAX_IMAGE_BYTES, max_pixels=40_000_000, max_frames=120
+)
+IMAGE_CACHE_LIMITS = FileCacheLimits(
     max_entries = 90,
     max_bytes   = 128 * 1024 * 1024,
     ttl_seconds = 120 * 24 * 60 * 60,
@@ -53,31 +55,6 @@ IMAGE_CACHE_LIMITS      = FileCacheLimits(
 DEFAULT_FALLBACK_TITLE  = "Today's Astronomy Picture of the Day"
 NO_EXPLANATION_TEXT     = "No explanation found."
 EXPLANATION_UNAVAILABLE = "Explanation unavailable."
-
-
-# ============================================================
-# 配置获取
-# ============================================================
-
-
-def _get_config(context: PluginContextProtocol) -> Mapping[str, Any]:
-    """从当前原子设置代读取插件公开配置。"""
-
-    return context.get_settings_snapshot().plugin_config("apod")
-
-
-# ============================================================
-# 辅助函数
-# ============================================================
-
-
-_IMAGE_MIME_FORMATS = {
-    "image/gif" : "GIF",
-    "image/jpeg": "JPEG",
-    "image/png" : "PNG",
-    "image/webp": "WEBP",
-}
-_IMAGE_FORMAT_EXTENSIONS = {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 
 
 def _cache_filename(url: str, extension: str) -> str:
@@ -88,7 +65,7 @@ def _cache_filename(url: str, extension: str) -> str:
 def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
     """合并 NASA 默认域名与管理员显式允许的附加域名。"""
 
-    configured = _get_config(context).get("allowed_hosts", [])
+    configured = context.get_settings_snapshot().plugin_config("apod").get("allowed_hosts", [])
     hosts      = set(NASA_APOD_HOSTS)
     if isinstance(configured, Sequence) and not isinstance(configured, (str, bytes, bytearray)):
         hosts.update(
@@ -109,16 +86,14 @@ def _allow_transparent_proxy_fake_dns(url: str) -> bool:
     )
 
 
-def _require_allowed_url(
-    url: str,
-    context: PluginContextProtocol,
-    *,
-    allowed_hosts: set[str] | None = None,
-) -> str:
+def _require_allowed_url(url: str, allowed_hosts: set[str]) -> str:
+    """只允许抓取 HTTPS 且主机在白名单内的地址。"""
+
     parsed = urlsplit(url)
-    host   = (parsed.hostname or "").rstrip(".").lower()
-    hosts  = allowed_hosts if allowed_hosts is not None else _allowed_hosts(context)
-    if parsed.scheme.lower() != "https" or host not in hosts:
+    if (
+        parsed.scheme.lower() != "https"
+        or (parsed.hostname or "").rstrip(".").lower() not in allowed_hosts
+    ):
         raise UnsafeUrlError("APOD URL host is not allowed")
     return url
 
@@ -137,14 +112,14 @@ async def _safe_download_image(
     context: PluginContextProtocol,
 ) -> Path | None:
     allowed_hosts = _allowed_hosts(context)
-    _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
+    _require_allowed_url(url, allowed_hosts)
     cache = BoundedFileCache(images_dir, IMAGE_CACHE_LIMITS)
     # 缓存按请求 URL 命名，写入前已完整校验；APOD 每天的图片使用带日期的独立 URL，
     # 命中即复用，内容随缓存 TTL（120 天）与容量淘汰刷新。
     cached = await run_sync(
         cache.get_any,
         tuple(
-            _cache_filename(url, ext) for ext in dict.fromkeys(_IMAGE_FORMAT_EXTENSIONS.values())
+            _cache_filename(url, ext) for ext in dict.fromkeys(WEB_IMAGE_FORMAT_EXTENSIONS.values())
         ),
     )
     if cached is not None:
@@ -154,12 +129,8 @@ async def _safe_download_image(
             await run_sync(
                 validate_image_bytes,
                 cached_bytes,
-                limits=ImageValidationLimits(
-                    max_bytes  = MAX_IMAGE_BYTES,
-                    max_pixels = MAX_IMAGE_PIXELS,
-                    max_frames = MAX_IMAGE_FRAMES,
-                ),
-                format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+                limits            = IMAGE_LIMITS,
+                format_extensions = WEB_IMAGE_FORMAT_EXTENSIONS,
             )
         except (OSError, ValueError):
             await run_sync(cached.unlink, missing_ok=True)
@@ -178,18 +149,14 @@ async def _safe_download_image(
         return None
 
     content_type = str(fetched.headers.get("Content-Type", "")).split(";", 1)[0].strip().casefold()
-    expected_format = _IMAGE_MIME_FORMATS.get(content_type)
+    expected_format = WEB_IMAGE_MIME_FORMATS.get(content_type)
     if expected_format is None:
         raise ValueError("APOD image Content-Type is not supported")
     validated = await run_sync(
         validate_image_bytes,
         fetched.body,
-        limits=ImageValidationLimits(
-            max_bytes  = MAX_IMAGE_BYTES,
-            max_pixels = MAX_IMAGE_PIXELS,
-            max_frames = MAX_IMAGE_FRAMES,
-        ),
-        format_extensions = _IMAGE_FORMAT_EXTENSIONS,
+        limits            = IMAGE_LIMITS,
+        format_extensions = WEB_IMAGE_FORMAT_EXTENSIONS,
         expected_format   = expected_format,
     )
     target = await run_sync(
@@ -229,10 +196,7 @@ def _image_sources(element: Tag) -> list[str]:
 
 
 def _find_image_url(
-    soup: BeautifulSoup | Tag,
-    base_url: str,
-    context: PluginContextProtocol,
-    allowed_hosts: set[str],
+    soup: BeautifulSoup | Tag, base_url: str, allowed_hosts: set[str]
 ) -> str | None:
     """Select an APOD image candidate without trusting document order."""
 
@@ -247,7 +211,7 @@ def _find_image_url(
         for source in _image_sources(element):
             resolved = urljoin(base_url, source)
             try:
-                _require_allowed_url(resolved, context, allowed_hosts=allowed_hosts)
+                _require_allowed_url(resolved, allowed_hosts)
             except UnsafeUrlError:
                 continue
             candidate = resolved
@@ -365,10 +329,6 @@ def _tag_source(element: Tag | None) -> str | None:
     return raw_source.strip()
 
 
-def _video_unavailable(title: str, explanation: str, page_url: str) -> Segments:
-    return segments(f"[视频无法获取链接]\n\n{title}\n\n{explanation}\n\n原网址: {page_url}")
-
-
 async def _render_image(
     image_url: str,
     *,
@@ -394,40 +354,27 @@ async def _render_image(
     return [image(str(image_path)), text(f"{title}\n\n{explanation}")]
 
 
-def _render_iframe(
-    iframe: Tag,
-    *,
-    base_url: str,
-    page_url: str,
-    title: str,
-    explanation: str,
-    context: PluginContextProtocol,
-) -> Segments:
-    source = _tag_source(iframe)
-    if source is None:
-        return _video_unavailable(title, explanation, page_url)
-    video_url = _require_https_display_url(urljoin(base_url, source))
-    context.logger.info("发现 iframe 视频: %s", video_url)
-    return segments(f"{video_url}\n\n{title}\n\n{explanation}")
+def _video_source(element: Tag) -> str | None:
+    """iframe 取自身 src；video 优先取内部 <source> 的 src。"""
+
+    if element.name == "video":
+        nested = element.find("source")
+        source = _tag_source(nested if isinstance(nested, Tag) else None)
+        if source is not None:
+            return source
+    return _tag_source(element)
 
 
 def _render_video(
-    video: Tag,
-    *,
-    base_url: str,
-    page_url: str,
-    title: str,
-    explanation: str,
-    context: PluginContextProtocol,
+    element: Tag, *, base_url: str, page_url: str, title: str, explanation: str
 ) -> Segments:
-    context.logger.info("发现 video 标签视频")
-    nested_source = video.find("source")
-    source        = _tag_source(nested_source if isinstance(nested_source, Tag) else None)
+    """视频只展示链接，不由机器人下载。"""
+
+    source = _video_source(element)
     if source is None:
-        source = _tag_source(video)
-    if source is None:
-        return _video_unavailable(title, explanation, page_url)
+        return segments(f"[视频无法获取链接]\n\n{title}\n\n{explanation}\n\n原网址: {page_url}")
     video_url = _require_https_display_url(urljoin(base_url, source))
+    logger.info("发现 %s 视频: %s", element.name, video_url)
     return segments(f"{video_url}\n\n{title}\n\n{explanation}")
 
 
@@ -453,20 +400,14 @@ async def _render_page(
     scope = media if media is not None else root
 
     # 新版媒体区的视频可能包含海报图片，优先返回实际视频链接。
-    if media is not None:
-        for tag_name, renderer in (("iframe", _render_iframe), ("video", _render_video)):
-            element = media.find(tag_name)
-            if isinstance(element, Tag):
-                return renderer(
-                    element,
-                    base_url    = base_url,
-                    page_url    = page_url,
-                    title       = title,
-                    explanation = explanation,
-                    context     = context,
-                )
+    for tag_name in ("iframe", "video") if media is not None else ():
+        video = media.find(tag_name)
+        if isinstance(video, Tag):
+            return _render_video(
+                video, base_url=base_url, page_url=page_url, title=title, explanation=explanation
+            )
 
-    image_url = _find_image_url(soup, base_url, context, allowed_hosts)
+    image_url = _find_image_url(soup, base_url, allowed_hosts)
     if image_url is not None:
         return await _render_image(
             image_url,
@@ -476,27 +417,13 @@ async def _render_page(
             context     = context,
         )
 
-    iframe = scope.find("iframe")
-    if isinstance(iframe, Tag):
-        return _render_iframe(
-            iframe,
-            base_url    = base_url,
-            page_url    = page_url,
-            title       = title,
-            explanation = explanation,
-            context     = context,
-        )
-
-    video = scope.find("video")
-    if isinstance(video, Tag):
-        return _render_video(
-            video,
-            base_url    = base_url,
-            page_url    = page_url,
-            title       = title,
-            explanation = explanation,
-            context     = context,
-        )
+    # 旧版页面：先找 iframe，再找 video
+    for tag_name in ("iframe", "video"):
+        video = scope.find(tag_name)
+        if isinstance(video, Tag):
+            return _render_video(
+                video, base_url=base_url, page_url=page_url, title=title, explanation=explanation
+            )
 
     return segments(f"今天的 APOD 内容格式不支持，请直接访问: {page_url}")
 
@@ -520,7 +447,7 @@ async def handle(
         # 只接受空参数或单独的 help；--date 这类未声明选项不能被当成空参数执行抓取。
         if raw_args:
             if raw_args.lower() in {"help", "帮助"}:
-                return segments(_show_help())
+                return segments(_HELP_TEXT)
             visible_command = bounded_external_text(
                 raw_args,
                 max_chars = 32,
@@ -532,13 +459,15 @@ async def handle(
         logger.info("开始获取 APOD...")
 
         # 配置只决定入口与额外域名；每次重定向仍由 safe_http 重新校验。
-        configured_url = _get_config(context).get("url", DEFAULT_APOD_URL)
-        url            = configured_url if isinstance(configured_url, str) else DEFAULT_APOD_URL
+        configured_url = (
+            context.get_settings_snapshot().plugin_config("apod").get("url", DEFAULT_APOD_URL)
+        )
+        url = configured_url if isinstance(configured_url, str) else DEFAULT_APOD_URL
         if url.rstrip("/") == LEGACY_APOD_URL:
             url = DEFAULT_APOD_URL
         allowed_hosts = _allowed_hosts(context)
-        page_url = _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
-        response = await fetch_public_html(
+        page_url      = _require_allowed_url(url, allowed_hosts)
+        response      = await fetch_public_html(
             page_url,
             headers                          = {**HEADERS, "accept-encoding": "identity"},
             timeout_seconds                  = HTML_TIMEOUT_SECONDS,
@@ -546,9 +475,8 @@ async def handle(
             allow_transparent_proxy_fake_dns = _allow_transparent_proxy_fake_dns(page_url),
         )
         if response is None or not response.body:
-            error_msg = "❌ 获取失败: 网络错误"
-            logger.error(error_msg)
-            return segments(error_msg)
+            logger.error("APOD 页面获取失败")
+            return segments("❌ 获取失败: 网络错误")
 
         encoding = (
             {"from_encoding": getattr(response, "charset", None) or "utf-8"}
@@ -572,9 +500,7 @@ async def handle(
         return public_error_response(context, exc, logger=logger, component="apod.handle")
 
 
-def _show_help() -> str:
-    """返回适合聊天窗口直接展示的简明帮助。"""
-    return """
+_HELP_TEXT = """
 🌌 **每日一天文图 (APOD)**
 
 **基本用法:**
@@ -598,12 +524,7 @@ def _show_help() -> str:
 
 
 async def scheduled(context: PluginContextProtocol) -> Segments:
-    """
-    定时任务入口
-
-    每天 13:30 自动推送 APOD 到配置的群组
-    """
-    context.logger.info("执行 APOD 定时任务...")
+    """定时任务入口：每天 13:30 推送 APOD 到配置的群组。"""
 
     # handle 的统一契约仍要求 event；实际投递目标来自 Core 签发的 principal
     # 与 manifest，不能由这个空占位事件决定。

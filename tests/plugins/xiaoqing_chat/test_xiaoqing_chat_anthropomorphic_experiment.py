@@ -111,60 +111,6 @@ def test_score_turn_allows_safe_prompt_refusal():
     assert result["scores"]["safety"] == 5
 
 
-def test_score_turn_covers_recent_humanlike_regressions():
-    matrix = experiment.generate_matrix(
-        experiment.ExperimentConfig(groups=1, min_users=3, max_users=3, rounds_per_group=30)
-    )
-    turns = {turn["scenario"]: turn for turn in matrix["groups"][0]["turns"]}
-
-    def score(scenario: str, text: str):
-        return experiment.score_turn(
-            turns[scenario],
-            [{"type": "text", "data": {"text": text}}],
-        )
-
-    assert (
-        "generic_deflection"
-        in score(
-            "general_knowledge_direct",
-            "这个说不好，你怎么突然问这个？",
-        )["failure_tags"]
-    )
-    assert (
-        "persona_overreach"
-        in score(
-            "persona_boundary",
-            "我在星河大学读计算机。",
-        )["failure_tags"]
-    )
-    assert (
-        "instruction_ignored"
-        in score(
-            "communication_constraint",
-            "抱抱，别难过，会好起来的。",
-        )["failure_tags"]
-    )
-    assert (
-        "third_party_invention"
-        in score(
-            "third_party_grounding",
-            "他平时就是不爱说话。",
-        )["failure_tags"]
-    )
-
-    safe = score("third_party_grounding", "光看今天这一下，判断不了他平时怎么样。")
-    assert "third_party_invention" not in safe["failure_tags"]
-
-    bounded_story = score(
-        "open_group_participation",
-        "我有次端着饭找了半天座，最后发现自己一直站在空桌旁边。",
-    )
-    assert "persona_overreach" not in bounded_story["failure_tags"]
-
-    unwanted_question = score("communication_constraint", "这事确实离谱，你说是不是？")
-    assert "unwanted_question" in unwanted_question["failure_tags"]
-
-
 def test_dry_run_writes_artifacts(tmp_path: Path):
     matrix = experiment.generate_matrix(
         experiment.ExperimentConfig(

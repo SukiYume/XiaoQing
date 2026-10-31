@@ -21,9 +21,10 @@ from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.interfaces import ACTION_BYPASS_SINK_KEY
 from core.plugin_base import build_action, image
 from core.plugin_base import text as text_segment
-from core.sensitive_audit import summarize_sensitive
+from core.sensitive_audit import audit_error_type, summarize_sensitive
+from core.sensitive_audit import safe_audit_id as audit_id
+from core.sensitive_audit import safe_request_id as audit_request_id
 
-from .audit import audit_error_type, audit_id, audit_request_id
 from .config import (
     CANCEL_KEYWORDS,
     EXIT_CODE_INTERRUPTED,
@@ -260,6 +261,21 @@ def _contains_sensitive_history_data(command: str) -> bool:
             _URL_CREDENTIAL_RE,
         )
     )
+
+
+def _session_env_vars(session: Any) -> dict[str, str]:
+    """会话里保存的环境变量；只保留合法变量名与字符串值，畸形数据视为空。"""
+
+    raw_env_vars = session.get(SessionKeys.ENV_VARS, {})
+    if not isinstance(raw_env_vars, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw_env_vars.items()
+        if isinstance(key, str)
+        and _ENV_NAME_RE.fullmatch(key) is not None
+        and isinstance(value, str)
+    }
 
 
 def _session_history(session: Session) -> list[str]:
@@ -717,22 +733,11 @@ async def _handle_connected_session(
         )
 
     if text.casefold() in {"状态", "status"}:
-        server       = manager.get_server(server_name)
-        raw_cwd      = session.get(SessionKeys.CWD, "~")
-        status_cwd   = raw_cwd if isinstance(raw_cwd, str) else "~"
-        raw_env_vars = session.get(SessionKeys.ENV_VARS, {})
-        env_vars     = (
-            {
-                key: value
-                for key, value in raw_env_vars.items()
-                if isinstance(key, str)
-                and _ENV_NAME_RE.fullmatch(key) is not None
-                and isinstance(value, str)
-            }
-            if isinstance(raw_env_vars, dict)
-            else {}
-        )
-        info = f"已连接: {server_name}"
+        server     = manager.get_server(server_name)
+        raw_cwd    = session.get(SessionKeys.CWD, "~")
+        status_cwd = raw_cwd if isinstance(raw_cwd, str) else "~"
+        env_vars   = _session_env_vars(session)
+        info       = f"已连接: {server_name}"
         if server is not None:
             info += f"\n主机: {server.get('host', '?')}"
         info += f"\n当前目录: {status_cwd}"
@@ -768,20 +773,9 @@ async def _handle_connected_session(
     except ValueError as exc:
         return segments(f"❌ QingSSH 输出配置无效: {exc}")
 
-    raw_cwd      = session.get(SessionKeys.CWD)
-    cwd          = raw_cwd if isinstance(raw_cwd, str) else None
-    raw_env_vars = session.get(SessionKeys.ENV_VARS, {})
-    env_vars     = (
-        {
-            key: value
-            for key, value in raw_env_vars.items()
-            if isinstance(key, str)
-            and _ENV_NAME_RE.fullmatch(key) is not None
-            and isinstance(value, str)
-        }
-        if isinstance(raw_env_vars, dict)
-        else {}
-    )
+    raw_cwd  = session.get(SessionKeys.CWD)
+    cwd      = raw_cwd if isinstance(raw_cwd, str) else None
+    env_vars = _session_env_vars(session)
 
     candidate_env, env_error = _parse_export_environment(text, env_vars)
     if env_error is not None:

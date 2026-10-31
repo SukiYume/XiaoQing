@@ -1,7 +1,5 @@
-"""
-插件基础模块
+"""插件基础工具：消息段构建、外部文本清洗、同步函数卸载、JSON 读写与长消息拆分。
 
-提供插件开发所需的通用工具函数和类型定义。
 所有插件应该从这个模块导入基础功能。
 """
 
@@ -215,11 +213,6 @@ def record(file_path: str) -> dict[str, Any]:
     return {"type": "record", "data": {"file": _to_file_uri(file_path)}}
 
 
-def record_url(url: str) -> dict[str, Any]:
-    """创建语音消息段（网络URL）"""
-    return {"type": "record", "data": {"file": url}}
-
-
 def segments(payload: Any) -> Segments:
     """
     将任意返回值转换为标准消息段列表。
@@ -371,12 +364,6 @@ def split_message_segments(
     强制切分。图片、语音等非文本段不会复制或丢弃，而是按原顺序附着在相邻
     文本块中。所有文本拼回后与输入严格一致，包括边界处的换行符。
 
-    Args:
-        segs: 原始消息段列表
-        max_length: 单条消息最大文本长度
-
-    Returns:
-        拆分后的消息段列表的列表
     """
     if type(max_length) is not int or max_length <= 0:
         raise ValueError("max_length must be a positive integer")
@@ -405,18 +392,13 @@ def split_message_segments(
         current_text_length = 0
 
     for segment in segs:
-        if not isinstance(segment, dict) or segment.get("type") != "text":
-            current.append(segment)
-            continue
-        data = segment.get("data")
-        if not isinstance(data, dict):
-            current.append(segment)
-            continue
-        text = data.get("text")
-        if not isinstance(text, str):
-            current.append(segment)
-            continue
-        if not text:
+        data = (
+            segment.get("data")
+            if isinstance(segment, dict) and segment.get("type") == "text"
+            else None
+        )
+        # 非文本段与空文本段原样附着到当前块
+        if not isinstance(data, dict) or not isinstance(text := data.get("text"), str) or not text:
             current.append(segment)
             continue
 
@@ -431,12 +413,8 @@ def split_message_segments(
                 newline  = remaining.rfind("\n", 0, available)
                 split_at = newline + 1 if newline >= 0 else available
 
-            piece               = remaining[:split_at]
-            cloned              = dict(segment)
-            cloned_data         = dict(data)
-            cloned_data["text"] = piece
-            cloned["data"]      = cloned_data
-            current.append(cloned)
+            piece = remaining[:split_at]
+            current.append({**segment, "data": {**data, "text": piece}})
             current_text_length += len(piece)
             remaining = remaining[split_at:]
             if remaining:
@@ -454,7 +432,6 @@ __all__ = [
     "image_url",
     "face",
     "record",
-    "record_url",
     "segments",
     "build_action",
     "split_message_segments",

@@ -643,6 +643,16 @@ class AppLifecycleMixin:
         finally:
             lock.release()
 
+    def _forget_stopped_ws_client(self, client: OneBotWsClient) -> None:
+        """WS 客户端确认停止后清除对它的全部引用。"""
+
+        self._ws_client_stop_task = None
+        if self.ws_client is client:
+            self.ws_client = None
+        if self._ws_client_auth_quarantine is client:
+            self._ws_client_auth_quarantine = None
+        logger.info("WebSocket client stopped")
+
     async def _stop_ws_client(self, *, owner: _ConfigApplyOwner | None = None) -> None:
         if not self._owns_config_apply(owner):
             return
@@ -667,12 +677,7 @@ class AppLifecycleMixin:
             else:
                 if not self._owns_config_apply(owner):
                     return
-                self._ws_client_stop_task = None
-                if self.ws_client is client:
-                    self.ws_client = None
-                if self._ws_client_auth_quarantine is client:
-                    self._ws_client_auth_quarantine = None
-                logger.info("WebSocket client stopped")
+                self._forget_stopped_ws_client(client)
                 return
             self._ws_client_stop_task = None
             stop_task                 = None
@@ -711,12 +716,7 @@ class AppLifecycleMixin:
                 self.ws_client            = client
                 raise
             else:
-                self._ws_client_stop_task = None
-                if self.ws_client is client:
-                    self.ws_client = None
-                if self._ws_client_auth_quarantine is client:
-                    self._ws_client_auth_quarantine = None
-                logger.info("WebSocket client stopped")
+                self._forget_stopped_ws_client(client)
 
     async def _stop_scheduler(self) -> None:
         await self.scheduler.shutdown_async(wait=True)
@@ -854,21 +854,7 @@ class AppLifecycleMixin:
             self._config_apply_task = None
             return
 
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        done, pending = await asyncio.wait(
-            tasks,
-            timeout=self._background_task_stop_timeout_seconds,
-        )
-        failures: list[BaseException] = []
-        for task in done:
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                pass
-            except BaseException as exc:
-                failures.append(exc)
+        pending, failures = await self._cancel_and_collect(tasks)
 
         self._config_apply_tasks = {task for task in self._config_apply_tasks if not task.done()}
         self._config_apply_tasks.update(pending)
@@ -892,6 +878,28 @@ class AppLifecycleMixin:
             summary = "; ".join(f"{type(exc).__name__}: {exc}" for exc in failures)
             raise RuntimeError(f"runtime configuration task(s) failed: {summary}") from failures[0]
 
+    async def _cancel_and_collect(
+        self,
+        tasks: set[asyncio.Task[Any]],
+    ) -> tuple[set[asyncio.Task[Any]], list[BaseException]]:
+        """取消一组任务并在超时内等待；返回仍未结束的任务和已结束任务中的异常。"""
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        done, pending = await asyncio.wait(
+            tasks, timeout=self._background_task_stop_timeout_seconds
+        )
+        failures: list[BaseException] = []
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                failures.append(exc)
+        return pending, failures
+
     async def _cancel_plugin_watch_tasks(self) -> None:
         self._plugin_watch_desired          = False
         self._plugin_watch_restart_pending  = False
@@ -908,21 +916,7 @@ class AppLifecycleMixin:
             self._plugin_watch_restart_task = None
             return
 
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        done, pending = await asyncio.wait(
-            tasks,
-            timeout=self._background_task_stop_timeout_seconds,
-        )
-        failures: list[BaseException] = []
-        for task in done:
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                pass
-            except BaseException as exc:
-                failures.append(exc)
+        pending, failures = await self._cancel_and_collect(tasks)
 
         pending_watchers         = pending - ({restart_task} if restart_task is not None else set())
         self._plugin_watch_tasks = {task for task in self._plugin_watch_tasks if not task.done()}

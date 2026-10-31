@@ -48,6 +48,8 @@ class BoundedFileCache:
         return name
 
     def _entries_unlocked(self) -> list[tuple[Path, os.stat_result]]:
+        """列出缓存目录中的普通文件，跳过隐藏文件（锁文件）和符号链接。"""
+
         entries: list[tuple[Path, os.stat_result]] = []
         try:
             children = list(self.directory.iterdir())
@@ -65,9 +67,10 @@ class BoundedFileCache:
         return entries
 
     def _prune_unlocked(self, *, now: float, protect: Path | None = None) -> None:
-        entries                                     = self._entries_unlocked()
+        """先删过期条目，再按最旧优先淘汰到条目数和字节数都达标；protect 永不淘汰。"""
+
         retained: list[tuple[Path, os.stat_result]] = []
-        for path, stat in entries:
+        for path, stat in self._entries_unlocked():
             if path != protect and now - stat.st_mtime > self.limits.ttl_seconds:
                 path.unlink(missing_ok=True)
             else:
@@ -100,40 +103,45 @@ class BoundedFileCache:
                 return path
         return None
 
-    def put(self, name: str, payload: bytes) -> Path | None:
+    def _prepare(self, name: str, payload: bytes) -> Path | None:
+        """校验文件名并确保目录存在；超过总容量的单条内容直接拒绝缓存。"""
+
         validated = self._validate_name(name)
         if len(payload) > self.limits.max_bytes:
             return None
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / validated
+        return self.directory / validated
+
+    def _store_unlocked(self, path: Path, payload: bytes, now: float) -> Path | None:
+        """写入并刷新访问时间，随后按容量淘汰；被淘汰时返回 None。"""
+
+        atomic_write_bytes(path, payload)
+        os.utime(path, (now, now))
+        self._prune_unlocked(now=now, protect=path)
+        return path if path.is_file() else None
+
+    def put(self, name: str, payload: bytes) -> Path | None:
+        path = self._prepare(name, payload)
+        if path is None:
+            return None
         with keyed_path_lock(self._lock_path):
-            atomic_write_bytes(path, payload)
-            now = time.time()
-            os.utime(path, (now, now))
-            self._prune_unlocked(now=now, protect=path)
-            if not path.is_file():
-                return None
-        return path
+            return self._store_unlocked(path, payload, time.time())
 
     def put_if_absent(self, name: str, payload: bytes) -> tuple[Path | None, bool]:
         """Atomically store a content-addressed entry and report whether it was new."""
-        validated = self._validate_name(name)
-        if len(payload) > self.limits.max_bytes:
+
+        path = self._prepare(name, payload)
+        if path is None:
             return None, False
-        self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / validated
         with keyed_path_lock(self._lock_path):
             now = time.time()
+            # 已存在的内容寻址条目只刷新访问时间，不重写文件。
             if not path.is_symlink() and path.is_file():
                 os.utime(path, (now, now))
                 self._prune_unlocked(now=now, protect=path)
                 return path, False
-            atomic_write_bytes(path, payload)
-            os.utime(path, (now, now))
-            self._prune_unlocked(now=now, protect=path)
-            if not path.is_file():
-                return None, False
-        return path, True
+            stored = self._store_unlocked(path, payload, now)
+        return stored, stored is not None
 
     def prune(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)

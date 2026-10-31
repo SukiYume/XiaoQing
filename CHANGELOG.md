@@ -6,6 +6,34 @@
 - `X.Y.Z — 日期`：正式版本，版本号与 `pyproject.toml` 一致。
 - 仅有日期的条目：4.1.0 之前及版本之间按日期记录的变化。
 
+## 5.0.0 — 2026-10-30
+
+### 升级须知
+
+本版本删除了 Core 的部分公开导入路径，第三方插件若使用以下写法需要修改；内置插件已全部迁移。
+
+- `core` 包不再重导出任何名称。`from core import X` 改为从子模块导入：
+  - `parse`、`tokenize`、`ParsedArgs` → `core.args`
+  - `text`、`image`、`image_url`、`segments`、`build_action`、`run_sync`、`ensure_dir`、`load_json`、`write_json` → `core.plugin_base`
+  - `ConfigManager`、`ConfigSnapshot`、`materialize_snapshot_value` → `core.config`
+  - `CommandRouter`、`CommandSpec` 等命令目录类型 → `core.router`
+  - `Session`、`SessionManager` → `core.session`
+  - `PluginManager`、`LoadedPlugin` → `core.plugin_manager`；`Dispatcher` → `core.dispatcher`
+  - `setup_logging`、`LogManager` → `core.logging_config`；`MetricsCollector`、`ExecutionStats` → `core.metrics`
+- `core.exceptions` 只保留 `XiaoQingError`、`PluginError`、`PluginLoadError`、`PluginLifecycleFatalError`、`ConfigError`、`ConfigLoadError`。以下类从未被 Core 抛出，已删除：`PluginExecutionError`、`PluginTimeoutError`、`CommandError` 及其子类、`ConfigValidationError`、`SessionError` 及其子类、`CommunicationError`、`OneBotError`、`AuthenticationError`。插件如需自定义异常，请继承 `XiaoQingError` 或在插件内定义。
+- 删除的函数：`core.logging_config` 的 `get_logger`、`get_log_manager`、`set_level`（改用标准库 `logging.getLogger`）；`core.metrics` 的 `get_metrics_collector`、`set_metrics_collector`、`ExecutionTimer`、`timed_async` 等计时辅助；`core.plugin_base.record_url`。
+- `core.scheduler_compat` 已并入 `core.scheduler`。
+
+### 变化
+
+- Agent 执行流程精简，人设回复统一交付；Bot 名称追问在空闲清理后仍保留；Pendo 分页约定在 Agent 交付中保持一致。
+- 完成项目审计修复，覆盖 Core、Pendo Web、xiaoqing_chat 等模块。
+- 按统一风格清理 Core 和全部插件：合并重复流程，删除死代码、纯转发封装和只做转发的模块（`arxiv_inference.py`、qingpet `AdminService`、minecraft/qingssh/jupyter 的 audit 模块），请求 ID 与图片格式表统一由 Core 提供。
+- 删除针对单次修复的回归测试和测试基础设施自身的元测试；保留旧数据兼容与迁移相关测试。
+- `.dockerignore` 排除本地工作目录、Agent 状态、虚拟环境、测试与报告，避免进入镜像。
+
+- 验证：完整测试 6763 项通过、1 项跳过，覆盖率 82%；Ruff、841 个文件的格式检查及 412 个源文件的类型检查通过。Docker 镜像构建未在本机验证。
+
 ## 4.6.0 — 2026-10-26
 
 - 新增管理员私聊专用的米家与小爱插件，支持扫码登录、自动续期、设备能力发现、自然语言查询和控制。

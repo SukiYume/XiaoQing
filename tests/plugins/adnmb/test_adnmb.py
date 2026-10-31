@@ -54,8 +54,8 @@ class TestAdnmbRuntimeContract:
     """Exercise the imported plugin and API objects, not source strings."""
 
     def test_public_entrypoints_and_help(self):
-        assert adnmb_main.init() is None
-        help_text = adnmb_main._get_help()
+        assert callable(adnmb_main.handle) and callable(adnmb_main.shutdown)
+        help_text = adnmb_main._HELP_TEXT
         assert "A岛" in help_text
         assert "/adnmb" in help_text
 

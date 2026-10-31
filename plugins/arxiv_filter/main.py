@@ -12,8 +12,8 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.clock import now_in_configured_timezone
 from core.delivery import DeliveryReceipt, DeliverySegments
 from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import (
@@ -74,22 +74,38 @@ def _filter_result(payload: Any, *, succeeded: bool, outcome: str) -> FilterResu
     return FilterResult(list(segments(payload)), succeeded=succeeded, outcome=outcome)
 
 
+def _failure(
+    context: PluginContextProtocol, exc: BaseException, component: str, outcome: str
+) -> FilterResult:
+    """失败结果：记录日志并只向用户展示公开错误文本。"""
+
+    return _filter_result(
+        public_error_response(context, exc, logger=logger, component=component),
+        succeeded = False,
+        outcome   = outcome,
+    )
+
+
+def _list_description(context: PluginContextProtocol, source_date: str | None) -> str:
+    """说明今天的日期以及 arXiv 列表实际对应的日期。"""
+
+    today = _business_now(context).date()
+    if source_date is None:
+        return "arXiv 当前最新列表（日期未能确认）"
+    if source_date == today.isoformat():
+        return f"今天是 {today}"
+    return f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
+
+
 def _configuration_fingerprint(config: Mapping[str, Any]) -> str:
     serialized = json.dumps(config, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _business_now(context: PluginContextProtocol | None = None) -> datetime.datetime:
-    timezone_name = "Asia/Shanghai"
-    if context is not None:
-        configured = context.get_settings_snapshot().config.get("timezone")
-        if isinstance(configured, str):
-            timezone_name = configured
-    try:
-        zone = ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        zone = ZoneInfo("Asia/Shanghai")
-    return datetime.datetime.now(zone)
+    """按全局时区配置的当前时间；没有上下文时使用默认时区。"""
+
+    return now_in_configured_timezone(context)
 
 
 async def _cached_model_artifact_fingerprint(model_path: str) -> str:
@@ -130,14 +146,15 @@ async def _cached_inference(
     config_fingerprint: str,
     source_date: str | None,
 ) -> str:
+    """同一源列表日期、模型和配置只推理一次；并发请求共享同一个推理任务。"""
+
     artifact_fingerprint = await _cached_model_artifact_fingerprint(model_path)
+
+    def run_inference() -> str:
+        return inference(model_path=model_path, artifact_fingerprint=artifact_fingerprint)
+
     if source_date is None:
-        result = await run_sync(
-            lambda: inference(
-                model_path           = model_path,
-                artifact_fingerprint = artifact_fingerprint,
-            )
-        )
+        result = await run_sync(run_inference)
         if not isinstance(result, str):
             raise TypeError("arXiv inference must return text")
         return result
@@ -153,14 +170,7 @@ async def _cached_inference(
     async with _FILTER_LOCK:
         task = _FILTER_INFLIGHT.get(key)
         if task is None:
-            task = asyncio.create_task(
-                run_sync(
-                    lambda: inference(
-                        model_path           = model_path,
-                        artifact_fingerprint = artifact_fingerprint,
-                    )
-                )
-            )
+            task                  = asyncio.create_task(run_sync(run_inference))
             _FILTER_INFLIGHT[key] = task
     try:
         result = await asyncio.shield(task)
@@ -185,6 +195,12 @@ def _is_successful_inference(text: str) -> bool:
     return "----- Positive #" in text or "No positive predictions" in text
 
 
+def _check_arxiv_update_date() -> Any:
+    """在工作线程中连同可选抓取依赖一起导入；测试或禁用路径无需提前导入。"""
+
+    return importlib.import_module(f"{__package__}.arxiv_today").check_arxiv_update_date()
+
+
 def _normalize_source_date(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -200,9 +216,7 @@ async def _latest_arxiv_source_date(context: PluginContextProtocol) -> str | Non
     """读取 arXiv 当前列表的真实发布日期；失败时禁止用本地日期冒充。"""
 
     try:
-        raw_date = await run_sync(
-            lambda: importlib.import_module(f"{__package__}.arxiv_today").check_arxiv_update_date()
-        )
+        raw_date = await run_sync(_check_arxiv_update_date)
     except Exception as exc:
         public_error_message(
             context,
@@ -220,12 +234,7 @@ async def _latest_arxiv_source_date(context: PluginContextProtocol) -> str | Non
 def _load_inference(
     context: PluginContextProtocol | None = None,
 ) -> InferenceFunction | None:
-    """
-    动态加载推理模块
-
-    Returns:
-        推理函数或 None
-    """
+    """首次调用时导入推理模块并缓存推理函数；缺少依赖时返回 None。"""
     global _inference_func
 
     if _inference_func is not None:
@@ -235,10 +244,10 @@ def _load_inference(
     logger.info("开始加载推理模块")
 
     try:
-        from .arxiv_inference import get_positive_arxiv_today_as_string
+        from .inference.runner import get_positive_arxiv_today_as_string
 
         _inference_func = get_positive_arxiv_today_as_string
-        logger.info("成功加载 arxiv_inference 模块")
+        logger.info("成功加载推理模块")
         return _inference_func
     except ImportError as exc:
         if context is not None:
@@ -249,7 +258,7 @@ def _load_inference(
                 component = "arxiv_filter.load_inference",
             )
         else:
-            logger.error("导入 arxiv_inference 模块失败: error_type=ImportError")
+            logger.error("导入推理模块失败: error_type=ImportError")
         logger.error("请确保安装了所需依赖: torch, transformers")
         return None
     except Exception as exc:
@@ -269,16 +278,8 @@ def _load_inference(
 
 
 def init(context: PluginContextProtocol | None = None) -> None:
-    """
-    插件初始化
+    """新一代插件加载时清空进程内缓存，下次调用重新加载推理模块。"""
 
-    清除模块缓存，下次调用时重新加载推理模块。
-    这确保插件更新后能立即生效。
-
-    Args:
-        context: 插件上下文（可选）
-    """
-    # 保留 context 参数是插件生命周期契约的一部分；初始化只清理进程内缓存。
     del context
     global _inference_func
     _inference_func = None
@@ -306,7 +307,7 @@ async def handle(
         # 只接受空参数或单独的 help；--date 这类未声明选项不能被当成空参数执行筛选。
         if raw_args:
             if raw_args.lower() in {"help", "帮助"}:
-                return segments(_show_help())
+                return segments(_HELP_TEXT)
             unknown = bounded_external_text(
                 raw_args,
                 max_chars = 32,
@@ -372,15 +373,7 @@ async def _run_filter(
     allow_codex_sidecar: bool = False,
     source_date: str | None   = None,
 ) -> FilterResult:
-    """
-    执行论文筛选
-
-    Args:
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """执行论文筛选；结果的 succeeded/outcome 供定时投递决定提交还是重试。"""
     if source_date is not None:
         normalized_source_date = _normalize_source_date(source_date)
         if normalized_source_date is None:
@@ -401,12 +394,12 @@ async def _run_filter(
     # 加载推理函数
     inference = _load_inference(context=context)
     if inference is None:
-        error_msg = (
-            "⚠️ 无法加载 AI 模型或依赖，请检查模型配置；"
-            '缺少依赖时请运行 pip install "xiaoqing[arxiv-ml]"。'
-        )
         logger.error("加载推理模块失败")
-        return _filter_result(error_msg, succeeded=False, outcome="model_unavailable")
+        return _filter_result(
+            '⚠️ 无法加载 AI 模型或依赖，请检查模型配置；缺少依赖时请运行 pip install "xiaoqing[arxiv-ml]"。',
+            succeeded = False,
+            outcome   = "model_unavailable",
+        )
 
     try:
         logger.info(
@@ -429,102 +422,49 @@ async def _run_filter(
 
         # 检查是否有错误消息
         if arxiv_text.startswith("Error:"):
-            return _filter_result(
-                public_error_response(
-                    context,
-                    RuntimeError("arXiv inference returned an error result"),
-                    logger    = logger,
-                    component = "arxiv_filter.inference_result",
-                ),
-                succeeded = False,
-                outcome   = "inference_error",
+            return _failure(
+                context,
+                RuntimeError("arXiv inference returned an error result"),
+                "arxiv_filter.inference_result",
+                "inference_error",
             )
 
         # 检查是否没有结果
         if "No positive predictions" in arxiv_text:
             logger.info("今日没有符合条件的论文")
-            today = _business_now(context).date()
-            if source_date is None:
-                list_description = "arXiv 当前最新列表（日期未能确认）"
-            elif source_date == today.isoformat():
-                list_description = f"今天是 {today}"
-            else:
-                list_description = f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
             return _filter_result(
-                f"📚 {list_description}，暂时没有发现感兴趣的论文。",
+                f"📚 {_list_description(context, source_date)}，暂时没有发现感兴趣的论文。",
                 succeeded = True,
                 outcome   = "no_positive_predictions",
             )
 
         if "No papers found" in arxiv_text:
-            return _filter_result(
-                public_error_response(
-                    context,
-                    RuntimeError("arXiv inference did not produce a usable paper list"),
-                    logger    = logger,
-                    component = "arxiv_filter.inference_result",
-                ),
-                succeeded = False,
-                outcome   = "inference_error",
+            return _failure(
+                context,
+                RuntimeError("arXiv inference did not produce a usable paper list"),
+                "arxiv_filter.inference_result",
+                "inference_error",
             )
 
         if "----- Positive #" not in arxiv_text:
-            return _filter_result(
-                public_error_response(
-                    context,
-                    RuntimeError("arXiv inference returned an unknown result format"),
-                    logger    = logger,
-                    component = "arxiv_filter.inference_result",
-                ),
-                succeeded = False,
-                outcome   = "unknown_result",
+            return _failure(
+                context,
+                RuntimeError("arXiv inference returned an unknown result format"),
+                "arxiv_filter.inference_result",
+                "unknown_result",
             )
 
         logger.debug("筛选结果预览: %s...", arxiv_text[:200])
 
     except FileNotFoundError as exc:
-        return _filter_result(
-            public_error_response(
-                context,
-                exc,
-                logger    = logger,
-                component = "arxiv_filter.model_file",
-            ),
-            succeeded = False,
-            outcome   = "model_file_error",
-        )
+        return _failure(context, exc, "arxiv_filter.model_file", "model_file_error")
     except ImportError as exc:
-        return _filter_result(
-            public_error_response(
-                context,
-                exc,
-                logger    = logger,
-                component = "arxiv_filter.dependencies",
-            ),
-            succeeded = False,
-            outcome   = "dependency_error",
-        )
+        return _failure(context, exc, "arxiv_filter.dependencies", "dependency_error")
     except Exception as exc:
-        return _filter_result(
-            public_error_response(
-                context,
-                exc,
-                logger    = logger,
-                component = "arxiv_filter.run",
-            ),
-            succeeded = False,
-            outcome   = "runtime_error",
-        )
+        return _failure(context, exc, "arxiv_filter.run", "runtime_error")
 
     # 格式化输出
-    today = _business_now(context).date()
-    if source_date is None:
-        list_description = "arXiv 当前最新列表（日期未能确认）"
-    elif source_date == today.isoformat():
-        list_description = f"今天是 {today}"
-    else:
-        list_description = f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
-    header = f"📚 {list_description}，以下是你可能感兴趣的论文：\n"
+    header = f"📚 {_list_description(context, source_date)}，以下是你可能感兴趣的论文：\n"
     if allow_codex_sidecar:
         if source_date is None:
             logger.warning("skip Codex arXiv summary: source list date could not be confirmed")
@@ -545,9 +485,7 @@ async def _run_filter(
     return _filter_result(header + arxiv_text, succeeded=True, outcome="papers")
 
 
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
+_HELP_TEXT = """
 📚 **arXiv 论文筛选**
 
 基于 AI 模型自动筛选今日感兴趣的 arXiv 论文
@@ -623,21 +561,19 @@ def _load_update_status(data_dir: str | Path) -> dict[str, object]:
 
 def _save_update_status(data_dir: str | Path, status: Mapping[str, object]) -> None:
     """保存今日更新状态"""
-    status_file = _get_status_file_path(data_dir)
     try:
-        atomic_write_text(status_file, json.dumps(status, ensure_ascii=False, indent=2))
-    except Exception as exc:
-        logger.error(
-            "保存状态文件失败: error_type=%s",
-            type(exc).__name__,
+        atomic_write_text(
+            _get_status_file_path(data_dir), json.dumps(status, ensure_ascii=False, indent=2)
         )
+    except Exception as exc:
+        logger.error("保存状态文件失败: error_type=%s", type(exc).__name__)
         raise
 
 
 def _should_send_today(data_dir: str | Path, business_date: str) -> bool:
     """按调用方已经解析好的配置时区日期检查发送状态。"""
-    status = _load_update_status(data_dir)
-    return status.get("last_sent_date") != business_date
+
+    return _load_update_status(data_dir).get("last_sent_date") != business_date
 
 
 def _claim_path(data_dir: str | Path, business_date: str) -> Path:
@@ -645,6 +581,8 @@ def _claim_path(data_dir: str | Path, business_date: str) -> Path:
 
 
 def _claim_send_today(data_dir: str | Path, business_date: str) -> bool:
+    """用 O_EXCL 创建当日 claim 文件，保证同一业务日只有一个检查者进入发送路径；超过 1 小时的 claim 视为遗留。"""
+
     with _STATUS_LOCK:
         if not _should_send_today(data_dir, business_date):
             return False
@@ -672,11 +610,13 @@ def _release_claim(data_dir: str | Path, business_date: str) -> None:
 
 def _mark_sent_today(data_dir: str | Path, business_date: str) -> None:
     """标记调用方提供的配置时区业务日期已发送。"""
-    status = {
-        "last_sent_date": business_date,
-        "last_sent_time": datetime.datetime.now(datetime.UTC).isoformat(),
-    }
-    _save_update_status(data_dir, status)
+    _save_update_status(
+        data_dir,
+        {
+            "last_sent_date": business_date,
+            "last_sent_time": datetime.datetime.now(datetime.UTC).isoformat(),
+        },
+    )
     _release_claim(data_dir, business_date)
 
 
@@ -716,16 +656,7 @@ async def _check_arxiv_update(
     context: PluginContextProtocol,
     is_final_check: bool = False,
 ) -> Segments:
-    """
-    检查 arXiv 是否更新
-
-    Args:
-        context: 插件上下文
-        is_final_check: 是否是最后一次检查（12点）
-
-    Returns:
-        消息段列表
-    """
+    """定时检查 arXiv 是否已更新到今天；is_final_check 为最后一次（12 点）检查，仍未更新时发停更通知。"""
     if _scheduled_without_delivery_targets(context):
         logger.info("skip scheduled arXiv update check: no explicit delivery targets")
         return []
@@ -761,11 +692,7 @@ async def _check_arxiv_update(
     try:
         try:
             # 连同可选抓取依赖一起放到工作线程；测试或禁用路径无需提前导入。
-            arxiv_date = await run_sync(
-                lambda: importlib.import_module(
-                    f"{__package__}.arxiv_today"
-                ).check_arxiv_update_date()
-            )
+            arxiv_date = await run_sync(_check_arxiv_update_date)
         except Exception as exc:
             public_error_message(
                 context,
@@ -787,16 +714,7 @@ async def _check_arxiv_update(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                return _filter_result(
-                    public_error_response(
-                        context,
-                        exc,
-                        logger    = logger,
-                        component = "arxiv_filter.scheduled_filter",
-                    ),
-                    succeeded = False,
-                    outcome   = "runtime_error",
-                )
+                return _failure(context, exc, "arxiv_filter.scheduled_filter", "runtime_error")
             if isinstance(result, FilterResult) and result.succeeded:
                 transferred = True
                 return _track_delivery(result, data_dir, today)

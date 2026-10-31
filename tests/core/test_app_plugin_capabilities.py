@@ -47,7 +47,7 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     }
     app.config_manager.secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
     app.config_manager.reload()
-    app._load_admins(secrets)
+    app.identity_service.load_admins(secrets)
     _publish_command(app, "bot_core", "set_secret", permission="bot_admin", contexts=("private",))
     principal = app.issue_user_principal(
         {"user_id": 12345},
@@ -319,7 +319,7 @@ async def test_bot_core_secret_admin_works_with_production_context(temp_app_root
     }
     app.config_manager.secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
     app.config_manager.reload()
-    app._load_admins(secrets)
+    app.identity_service.load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -496,7 +496,7 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
         "chat"     : {"chat_option": 3},
     }
     app.config_manager._replace_snapshot(config, secrets)
-    app._load_admins(secrets)
+    app.identity_service.load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -601,7 +601,7 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
     config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {"arxiv_filter": {"source_option": 1}, "codex": {"target_option": 2}}
     app.config_manager._replace_snapshot(config, secrets)
-    app._load_admins(secrets)
+    app.identity_service.load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -880,7 +880,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         }
     }
     app.config_manager._replace_snapshot(config, secrets)
-    app._load_admins(secrets)
+    app.identity_service.load_admins(secrets)
     group_admin_event = {
         "user_id" : 777,
         "group_id": 100,

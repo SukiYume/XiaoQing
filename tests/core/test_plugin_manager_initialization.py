@@ -581,10 +581,10 @@ async def test_one_publication_failure_does_not_block_other_init_commits(
     bad_module.shutdown = bad_shutdown
     original_register   = manager._register_loaded_plugin
 
-    def publish(definition, module, mtime) -> None:
+    def publish(definition, module, mtime, **kwargs) -> None:
         if definition.name == "bad":
             raise RuntimeError("publish failed")
-        original_register(definition, module, mtime)
+        original_register(definition, module, mtime, **kwargs)
 
     manager._register_loaded_plugin = Mock(side_effect=publish)
     for definition, module in (
@@ -766,10 +766,10 @@ async def test_unload_claims_later_init_while_earlier_rollback_is_slow(
     good_module.shutdown = good_shutdown
     original_register    = manager._register_loaded_plugin
 
-    def publish(definition, module, mtime) -> None:
+    def publish(definition, module, mtime, **kwargs) -> None:
         if definition.name == "bad":
             raise RuntimeError("bad publish failed")
-        original_register(definition, module, mtime)
+        original_register(definition, module, mtime, **kwargs)
 
     manager._register_loaded_plugin = Mock(side_effect=publish)
     for definition, module in (

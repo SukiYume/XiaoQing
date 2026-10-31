@@ -79,8 +79,7 @@ Manifest capabilities correspond to narrow privileged objects that Core maintain
 | Module | Responsibility |
 |---|---|
 | `session.py` | Session snapshots, session keys, serial locks, timeouts, atomic updates |
-| `scheduler.py` | APScheduler assembly, manifest cron registration, target delivery |
-| `scheduler_compat.py` | APScheduler version compatibility boundary |
+| `scheduler.py` | APScheduler assembly, manifest cron registration, target delivery, version-gated bounded shutdown |
 | `delivery.py` | In-process send receipts, targeted schedule results, commit after acknowledgement |
 | `durable_fanout.py` | Persistent progress and recovery for multi-target notifications |
 | `async_keyed_lock.py` | Asynchronous locks that serialize operations by business key |

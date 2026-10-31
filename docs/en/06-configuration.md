@@ -306,7 +306,7 @@ Configure sampling, token limits, request and aggregate timeouts, and retries in
 
 XiaoQing Chat loads a typed snapshot of the main routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution and delivery review use `agent`; task classification uses `triage`. Routine calls inherit route settings. Explicit long-form requests can increase output and time budgets; truncated image analysis can increase its output budget. Workflow deadlines still bound optional work and whole Agent tasks.
 
-Move retired behavior-file AI fields into the corresponding main routes: sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings. Deep-chat mode uses chat-route sampling. Remove `default_model_alias`; route order defines the default. The behavior file rejects retired AI fields and a nested `ai` registry with a migration error.
+Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding main routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields, `default_model_alias` and a nested `ai` registry with an error that points to the main configuration.
 
 DEBUG logs record resolved model profiles and request settings. These records contain parameter metadata; keys and message content remain private.
 

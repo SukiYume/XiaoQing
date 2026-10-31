@@ -48,6 +48,15 @@ def safe_audit_id(value: object) -> str:
     return value if type(value) is str and _AUDIT_ID_RE.fullmatch(value) else "-"
 
 
+def safe_request_id(context: object | None) -> str:
+    """从插件上下文取出可安全写入日志的 request_id；缺失或不合规时为 "-"。"""
+
+    try:
+        return safe_audit_id(getattr(context, "request_id", None))
+    except Exception:
+        return "-"
+
+
 def safe_audit_label(value: object) -> str:
     """Return a bounded operation/status label safe for structured logs."""
 
@@ -105,17 +114,11 @@ def log_sensitive_operation(
     Arbitrary user-controlled fields do not belong in this shared boundary.
     """
 
-    if payload is None:
-        payload_kind        = "none"
-        payload_length      = 0
-        payload_bytes       = 0
-        payload_fingerprint = "-"
-    else:
-        summary             = summarize_sensitive(payload)
-        payload_kind        = summary.kind
-        payload_length      = summary.length
-        payload_bytes       = summary.byte_length
-        payload_fingerprint = summary.fingerprint
+    summary = (
+        summarize_sensitive(payload)
+        if payload is not None
+        else SensitiveAuditSummary(kind="none", length=0, byte_length=0, fingerprint="-")
+    )
     target_logger.log(
         logging.ERROR if exc is not None else level,
         "sensitive_audit operation=%s request_id=%s job_id=%s status=%s "
@@ -127,10 +130,10 @@ def log_sensitive_operation(
         safe_audit_label(status),
         return_code if type(return_code) is int else "-",
         audit_error_type(exc) if exc is not None else _safe_error_type(error_type),
-        payload_kind,
-        payload_length,
-        payload_bytes,
-        payload_fingerprint,
+        summary.kind,
+        summary.length,
+        summary.byte_length,
+        summary.fingerprint,
     )
 
 
@@ -144,5 +147,6 @@ __all__ = [
     "log_sensitive_operation",
     "safe_audit_id",
     "safe_audit_label",
+    "safe_request_id",
     "summarize_sensitive",
 ]

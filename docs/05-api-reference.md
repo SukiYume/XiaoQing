@@ -5,6 +5,8 @@
 本章汇总插件开发常用的公开类型、函数和入口签名。
 开发流程见 [插件开发指南](03-plugin-development.md)，实现所有权见 [Core 模块](04-core-modules.md)。
 
+`core` 包本身不导出任何名称，请从具体子模块导入，例如 `from core.args import parse`、`from core.plugin_base import text`。
+
 ---
 
 ## 📌 基础类型
@@ -37,7 +39,6 @@ OneBot 消息段结构：
 | `image_url(url)` | `image` | 远程图片 URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | 本地语音 |
-| `record_url(url)` | `record` | 远程语音 URL |
 | `segments(payload)` | `Segments` | 字符串、列表或空值标准化 |
 
 示例：

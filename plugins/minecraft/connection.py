@@ -7,8 +7,8 @@ import logging
 from dataclasses import dataclass
 
 from core.interfaces import DeliveryTarget
+from core.sensitive_audit import audit_error_type
 
-from .audit import audit_error_type
 from .log_monitor import LogMonitor
 from .rcon import RconClient
 

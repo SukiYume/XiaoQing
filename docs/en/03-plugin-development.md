@@ -167,8 +167,8 @@ python -m pytest -q -n auto --cov=core --cov=plugins --cov-report=term-missing
 git diff --check
 ```
 
-Run affected-module tests and new regression tests first. Then run repository-wide checks.
-Formatting operations check syntax-tree equivalence. Business fixes use behavior tests that reproduce the previous problem.
+Run affected-module tests first. Then run repository-wide checks.
+Formatting operations check syntax-tree equivalence. Tests cover the behavior contracts of current features; a business fix adds or adjusts cases for the affected feature instead of keeping a test dedicated to one fix.
 Test data uses temporary directories or databases.
 
 READMEs describe current use and configuration.

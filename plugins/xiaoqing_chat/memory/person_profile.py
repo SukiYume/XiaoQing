@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +42,23 @@ def get_profile_generation(data_dir: Path, chat_id: str) -> str:
         return profile_generation_path(data_dir, chat_id).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
+
+
+def write_if_profile_generation(
+    data_dir: Path,
+    chat_id: str,
+    expected_generation: str | None,
+    write: Callable[[], None],
+) -> None:
+    """在画像代际锁内执行写入；提取开始后画像被重置（代际变化）时放弃，旧结果不会重新落盘。"""
+
+    with keyed_path_lock(profile_generation_path(data_dir, chat_id)):
+        if (
+            expected_generation is not None
+            and get_profile_generation(data_dir, chat_id) != expected_generation
+        ):
+            return
+        write()
 
 
 def clear_profiles_and_memory(data_dir: Path, chat_id: str, memory_db: MemoryDB | None) -> None:

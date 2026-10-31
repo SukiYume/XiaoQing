@@ -1,24 +1,84 @@
+# 镜像只包含运行所需的代码与资源；本地配置、运行数据、测试和工作目录不进入构建上下文
+
+# 版本控制与 CI
 .git
 .github
-.pytest_cache
-.ruff_cache
-.mypy_cache
+.gitattributes
+.gitignore
+.xiaoqing-sync-root
+
+# Python 缓存、构建产物与虚拟环境
 __pycache__
+**/__pycache__
 *.py[cod]
-*.log
-.coverage
-htmlcov
+*.egg-info
 build
 dist
+.venv
+venv
+env
+ENV
+
+# 测试、覆盖率与检查工具缓存
+tests
+test_reports
+.pytest_cache
+.pytest_*
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+coverage.xml
+coverage*.json
+coverage-reports
+htmlcov
+.hypothesis
+node_modules
+
+# 本地 Agent、编辑器与临时工作目录
+.agent
+.claude
+.codex
+.playwright-mcp
+.worktrees
+.local_archive
+work
+tools
+.idea
+.vscode
+*.swp
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# 日志
 logs
-test_reports/runs
+*.log
+
+# 本地配置与密钥
+.env
+.env.*
+!.env.example
 config/config.json
 config/secrets.json
+plugins/minecraft/config.json
 scripts/sync_to_remote.local.sh
-plugins/*/data
+
+# 运行数据、缓存与本地生成的文档
 data
+plugins/*/data
 plugins/*/cache
 plugins/*/backups
 plugins/*/exports
+plugins/*deprecated
+plugins/pendo/test_tools
+plugins/xiaoqing_chat/figures
+docs/code*
+docs/markdown-audit-*.md
+docs/remote-sync.md
+
+# 模型与训练产物
 plugins/arxiv_filter/best_model*
 plugins/arxiv_filter/train_model/**/cache
+plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv

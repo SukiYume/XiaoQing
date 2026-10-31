@@ -72,13 +72,11 @@ def _resolved_root(root: Path, description: str, *, reject_link: bool) -> Path:
     return resolved
 
 
-def resolve_contained_regular_file(
-    root: Path,
-    relative: str,
-    *,
-    description: str       = "file",
-    reject_root_link: bool = True,
+def _resolve_contained(
+    root: Path, relative: str, *, description: str, reject_root_link: bool, want_dir: bool
 ) -> Path:
+    """解析 root 下的相对路径：拒绝越界、链接分量和 root 本身，并检查目标类型。"""
+
     try:
         normalized = canonical_relative_path(relative, description=description)
     except ValueError as exc:
@@ -91,9 +89,22 @@ def resolve_contained_regular_file(
         resolved.relative_to(resolved_root)
     except (OSError, ValueError) as exc:
         raise PluginPathError(f"{description} escapes its root") from exc
-    if resolved == resolved_root or not resolved.is_file():
-        raise PluginPathError(f"{description} must be an ordinary file below its root")
+    if resolved == resolved_root or not (resolved.is_dir() if want_dir else resolved.is_file()):
+        kind = "a directory" if want_dir else "an ordinary file"
+        raise PluginPathError(f"{description} must be {kind} below its root")
     return resolved
+
+
+def resolve_contained_regular_file(
+    root: Path,
+    relative: str,
+    *,
+    description: str       = "file",
+    reject_root_link: bool = True,
+) -> Path:
+    return _resolve_contained(
+        root, relative, description=description, reject_root_link=reject_root_link, want_dir=False
+    )
 
 
 def resolve_contained_directory(
@@ -103,21 +114,9 @@ def resolve_contained_directory(
     description: str       = "directory",
     reject_root_link: bool = True,
 ) -> Path:
-    try:
-        normalized = canonical_relative_path(relative, description=description)
-    except ValueError as exc:
-        raise PluginPathError(str(exc)) from exc
-    root_path = Path(root)
-    resolved_root = _resolved_root(root_path, description, reject_link=reject_root_link)
-    candidate = _reject_link_components(root_path, normalized, description)
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(resolved_root)
-    except (OSError, ValueError) as exc:
-        raise PluginPathError(f"{description} escapes its root") from exc
-    if resolved == resolved_root or not resolved.is_dir():
-        raise PluginPathError(f"{description} must be a directory below its root")
-    return resolved
+    return _resolve_contained(
+        root, relative, description=description, reject_root_link=reject_root_link, want_dir=True
+    )
 
 
 def resolve_plugin_root(plugins_dir: Path, plugin_dir: Path) -> Path:
@@ -487,14 +486,19 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
                 self._mark_compromised(f"module ownership validation failed: {fullname}")
             raise
         finally:
-            with _PLUGIN_IMPORT_LOCK:
-                self._active_loads -= 1
-                remaining = self._active_threads[thread_id] - 1
-                if remaining:
-                    self._active_threads[thread_id] = remaining
-                else:
-                    self._active_threads.pop(thread_id, None)
-                self._idle.notify_all()
+            self._release_load(thread_id)
+
+    def _release_load(self, thread_id: int) -> None:
+        """登记一次导入结束，并唤醒等待本代排空的线程。"""
+
+        with _PLUGIN_IMPORT_LOCK:
+            self._active_loads -= 1
+            remaining = self._active_threads[thread_id] - 1
+            if remaining:
+                self._active_threads[thread_id] = remaining
+            else:
+                self._active_threads.pop(thread_id, None)
+            self._idle.notify_all()
 
     @contextmanager
     def transaction_guard(self):
@@ -511,14 +515,7 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
         try:
             yield
         finally:
-            with _PLUGIN_IMPORT_LOCK:
-                self._active_loads -= 1
-                remaining = self._active_threads[thread_id] - 1
-                if remaining:
-                    self._active_threads[thread_id] = remaining
-                else:
-                    self._active_threads.pop(thread_id, None)
-                self._idle.notify_all()
+            self._release_load(thread_id)
 
     def deactivate_and_wait(
         self,

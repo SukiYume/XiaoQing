@@ -26,6 +26,7 @@ import logging
 import time
 import uuid as uuidlib
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -42,7 +43,6 @@ from core.plugin_base import (
 )
 from core.public_errors import public_error_response
 
-# 使用相对导入
 from .adapi import AdnmbClient, Post, Thread
 
 logger = logging.getLogger(__name__)
@@ -84,21 +84,20 @@ def _close_client(client: object) -> None:
 
 
 def _client_registry(runtime_state: dict[str, Any]) -> OrderedDict[str, _ClientEntry]:
+    """按最近使用排序的客户端缓存，键为 ``client:<user_id>``。"""
+
     raw_registry = runtime_state.get("clients")
     if isinstance(raw_registry, OrderedDict):
         return cast(OrderedDict[str, _ClientEntry], raw_registry)
 
-    # Discard clients created by the legacy unbounded flat-key registry.
-    for key, value in tuple(runtime_state.items()):
-        if isinstance(key, str) and key.startswith("client"):
-            _close_client(value)
-            runtime_state.pop(key, None)
     registry: OrderedDict[str, _ClientEntry] = OrderedDict()
     runtime_state["clients"]                 = registry
     return registry
 
 
 def _prune_clients(registry: OrderedDict[str, _ClientEntry], now: float) -> None:
+    """关闭闲置超时的客户端，并把缓存数量限制在 MAX_CACHED_CLIENTS 以内。"""
+
     expired = [
         key for key, entry in registry.items() if now - entry.last_used >= CLIENT_IDLE_TTL_SECONDS
     ]
@@ -125,16 +124,12 @@ def _get_client(
     cached_entry    = registry.get(cache_key)
     plugin_cfg      = context.get_settings_snapshot().plugin_secrets("adnmb")
     configured_uuid = str(plugin_cfg.get("uuid", "") or "")
-    if configured_uuid and owner_key:
-        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{configured_uuid}:{owner_key}"))
-    elif configured_uuid:
-        effective_uuid = configured_uuid
-    elif owner_key:
-        effective_uuid = str(
-            uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{cache_dir.resolve()}:{owner_key}")
-        )
+    # 订阅 UUID 按用户派生，互不可见；未配置时以缓存目录作为种子
+    seed = configured_uuid or str(cache_dir.resolve())
+    if owner_key:
+        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{seed}:{owner_key}"))
     else:
-        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
+        effective_uuid = configured_uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, seed))
     if isinstance(cached_entry, _ClientEntry) and isinstance(cached_entry.client, AdnmbClient):
         cached_client = cached_entry.client
         if (
@@ -149,11 +144,7 @@ def _get_client(
         registry.pop(cache_key, None)
         _close_client(cached_client)
 
-    client = AdnmbClient(
-        context.http_session,
-        cache_dir,
-        uuid=effective_uuid,
-    )
+    client = AdnmbClient(context.http_session, cache_dir, uuid=effective_uuid)
     registry[cache_key] = _ClientEntry(client=client, last_used=now)
     registry.move_to_end(cache_key)
     _prune_clients(registry, now)
@@ -161,13 +152,8 @@ def _get_client(
 
 
 # ============================================================
-# 插件初始化
+# 插件生命周期
 # ============================================================
-
-
-def init(context: PluginContextProtocol | None = None) -> None:
-    """插件初始化"""
-    logger.info("ADnmb 插件已初始化")
 
 
 async def shutdown(context: PluginContextProtocol | None = None) -> None:
@@ -195,18 +181,7 @@ async def format_posts(
     max_items: int        = 10,
     download_images: bool = True,
 ) -> Segments:
-    """
-    将帖子列表格式化为消息段
-
-    参数:
-        posts: 帖子列表
-        client: API 客户端（用于下载图片）
-        max_items: 最大显示数量
-        download_images: 是否下载图片
-
-    返回:
-        消息段列表
-    """
+    """将帖子格式化为消息段；图片最多 3 个并发下载，按帖子顺序组装。"""
     if not posts:
         return segments("暂无内容")
 
@@ -225,15 +200,10 @@ async def format_posts(
     )
 
     result: Segments = []
-    for index, post in enumerate(selected_posts):
-        # 添加帖子文本
+    for index, (post, img_path) in enumerate(zip(selected_posts, image_paths, strict=True)):
         result.append(text(post.format_text()))
-
-        # 图片已在有界并发窗口中下载；这里仍按帖子顺序组装消息。
-        img_path = image_paths[index]
         if img_path:
             result.append(image(str(img_path)))
-
         if index + 1 < len(selected_posts):
             result.append(text("\n\n"))
 
@@ -247,24 +217,11 @@ async def format_threads(
     show_replies: bool             = True,
     replies_per_thread: int | None = 3,
 ) -> Segments:
-    """
-    将串列表格式化为消息段
-
-    参数:
-        threads: 串列表
-        client: API 客户端
-        max_items: 最大显示数量
-        show_replies: 是否显示回复
-        replies_per_thread: 每串显示的回复数；None 表示显示本页全部回复（串详情）
-
-    返回:
-        消息段列表
-    """
+    """将串及其回复展开为帖子后格式化；replies_per_thread 为 None 时显示本页全部回复。"""
     if not threads:
         return segments("暂无内容")
 
-    # 收集所有帖子
-    all_posts = []
+    all_posts: list[Post] = []
     for thread in threads[:max_items]:
         all_posts.append(thread.main_post)
         if show_replies:
@@ -292,26 +249,6 @@ _VALUE_OPTION_SPECS = (
     (("e", "delfeed"), "e", "请指定要取消订阅的串号，如: /adnmb -e 12345678"),
     (("p", "page"), "p", "请指定页码，如: /adnmb -t -p 2"),
 )
-_ACTIVE_OPTIONS = frozenset(
-    {
-        "t",
-        "timeline",
-        "f",
-        "forumlist",
-        "m",
-        "showforum",
-        "c",
-        "chuan",
-        "r",
-        "ref",
-        "d",
-        "feed",
-        "a",
-        "addfeed",
-        "e",
-        "delfeed",
-    }
-)
 _ACTIVE_OPTION_GROUPS = {
     "t": ("t", "timeline"),
     "f": ("f", "forumlist"),
@@ -322,23 +259,18 @@ _ACTIVE_OPTION_GROUPS = {
     "a": ("a", "addfeed"),
     "e": ("e", "delfeed"),
 }
-_HELP_OPTIONS     = frozenset({"h", "help", "l", "list"})
-_DISABLED_OPTIONS = frozenset(
-    {
-        "v",
-        "verify",
-        "i",
-        "login",
-        "k",
-        "cookie",
-        "w",
-        "switchcookie",
-        "y",
-        "reply",
-        "o",
-        "logout",
-    }
+_ACTIVE_OPTIONS = frozenset(name for aliases in _ACTIVE_OPTION_GROUPS.values() for name in aliases)
+_HELP_OPTIONS   = frozenset({"h", "help", "l", "list"})
+# 登录、回复等用户功能已禁用，只返回提示
+_DISABLED_OPTION_MESSAGES = (
+    (("v", "verify"), "⚠️ 验证码功能已禁用"),
+    (("i", "login"), "⚠️ 登录功能已禁用"),
+    (("k", "cookie"), "⚠️ 饼干列表功能已禁用"),
+    (("w", "switchcookie"), "⚠️ 切换饼干功能已禁用"),
+    (("y", "reply"), "⚠️ 回复功能已禁用"),
+    (("o", "logout"), "⚠️ 退出登录功能已禁用"),
 )
+_DISABLED_OPTIONS   = frozenset(name for names, _ in _DISABLED_OPTION_MESSAGES for name in names)
 _PAGE_ACTIONS       = frozenset({"t", "m", "c", "d"})
 _NUMERIC_ID_ACTIONS = frozenset({"c", "r", "a", "e"})
 
@@ -360,7 +292,7 @@ def _read_value_options(parsed: ParsedArgs) -> tuple[dict[str, str], str | None]
     return values, None
 
 
-def _has_any_option(parsed: ParsedArgs, names: set[str] | frozenset[str]) -> bool:
+def _has_any_option(parsed: ParsedArgs, names: Iterable[str]) -> bool:
     return any(parsed.has(name) for name in names)
 
 
@@ -442,28 +374,14 @@ async def handle(
         if value_error:
             return segments(value_error)
 
-        page = 1
-        if "p" in option_values:
-            try:
-                page = int(option_values["p"])
-            except ValueError:
-                return segments("页码必须是正整数，如: /adnmb -t -p 2")
-            if page < 1:
-                return segments("页码必须是正整数，如: /adnmb -t -p 2")
+        page = parse_int(option_values["p"], minimum=1) if "p" in option_values else 1
+        if page is None:
+            return segments("页码必须是正整数，如: /adnmb -t -p 2")
 
         # 帮助和已经禁用的用户功能不需要创建缓存目录或 API 客户端。
         if selected_action == "help":
-            return segments(_get_help())
-
-        disabled_options = (
-            ({"v", "verify"}, "⚠️ 验证码功能已禁用"),
-            ({"i", "login"}, "⚠️ 登录功能已禁用"),
-            ({"k", "cookie"}, "⚠️ 饼干列表功能已禁用"),
-            ({"w", "switchcookie"}, "⚠️ 切换饼干功能已禁用"),
-            ({"y", "reply"}, "⚠️ 回复功能已禁用"),
-            ({"o", "logout"}, "⚠️ 退出登录功能已禁用"),
-        )
-        for option_names, message in disabled_options:
+            return segments(_HELP_TEXT)
+        for option_names, message in _DISABLED_OPTION_MESSAGES:
             if _has_any_option(parsed, option_names):
                 return segments(message)
 
@@ -472,13 +390,9 @@ async def handle(
             if len(identifier) > 20 or parse_int(identifier, minimum=1) is None:
                 return segments("编号必须是正整数")
 
-        # 初始化缓存目录
         cache_dir = Path(context.data_dir) / "images"
         ensure_dir(cache_dir)
-        logger.debug("ADnmb image cache initialized")
-
         client = _get_client(context, cache_dir, user_id=str(event.get("user_id", "") or ""))
-        logger.debug("API 客户端已创建")
 
         # 时间线
         if selected_action == "t":
@@ -490,9 +404,11 @@ async def handle(
         # 板块列表
         if selected_action == "f":
             forum_list = await client.get_forum_list()
-            lines      = ["A岛板块列表", "=" * 20]
-            for name, fid in forum_list.items():
-                lines.append(f"  {name} (ID: {fid})")
+            lines      = [
+                "A岛板块列表",
+                "=" * 20,
+                *(f"  {name} (ID: {fid})" for name, fid in forum_list.items()),
+            ]
             return segments("\n".join(lines))
 
         # 板块内容
@@ -534,28 +450,19 @@ async def handle(
                 return segments("暂无订阅或订阅列表为空")
             return await format_posts(posts, client)
 
-        # 添加订阅
+        # 添加/删除订阅
         if selected_action == "a":
-            thread_id = option_values["a"]
-            result    = await client.add_feed(thread_id)
-            return segments(f"订阅结果: {result}")
-
-        # 删除订阅
+            return segments(f"订阅结果: {await client.add_feed(option_values['a'])}")
         if selected_action == "e":
-            thread_id = option_values["e"]
-            result    = await client.del_feed(thread_id)
-            return segments(f"取消订阅结果: {result}")
+            return segments(f"取消订阅结果: {await client.del_feed(option_values['e'])}")
 
-        # 默认显示帮助
-        return segments(_get_help())
+        return segments(_HELP_TEXT)
 
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="adnmb.handle")
 
 
-def _get_help() -> str:
-    """返回帮助信息"""
-    return """A岛匿名版 (adnmb) v2.0.0
+_HELP_TEXT = """A岛匿名版 (adnmb) v2.0.0
 ══════════════════════════
 
 📖 浏览功能:

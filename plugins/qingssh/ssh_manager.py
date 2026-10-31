@@ -24,9 +24,8 @@ from core.args import parse_int
 from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import atomic_write_text
 from core.public_errors import public_error_message
-from core.sensitive_audit import log_sensitive_operation
+from core.sensitive_audit import audit_error_type, log_sensitive_operation
 
-from .audit import audit_error_type
 from .config import (
     COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
