@@ -4,7 +4,7 @@ astro_tools 插件单元测试
 
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -92,18 +92,18 @@ class TestAstroToolsTime:
 
     @pytest.mark.asyncio
     async def test_time_numeric_unix_timestamp(self, mock_context):
-        result = await loaded_modules["time"].handle_time("1706616000", mock_context)
+        result = loaded_modules["time"].handle_time("1706616000", mock_context)
         assert "Unix 1706616000.0" in result or "Unix 1706616000" in result
         assert "UTC" in result
 
     @pytest.mark.asyncio
     async def test_time_numeric_old_unix_timestamp(self, mock_context):
-        result = await loaded_modules["time"].handle_time("946684800", mock_context)
+        result = loaded_modules["time"].handle_time("946684800", mock_context)
         assert "Unix 946684800.0" in result or "Unix 946684800" in result
 
     @pytest.mark.asyncio
     async def test_time_explicit_unix_supports_early_timestamp(self, mock_context):
-        result = await astro_time.handle_time("unix 0", mock_context)
+        result = astro_time.handle_time("unix 0", mock_context)
 
         assert "Unix 0.0" in result
         assert "1970-01-01" in result
@@ -111,7 +111,7 @@ class TestAstroToolsTime:
     @pytest.mark.parametrize("subcommand", ["jd nan", "mjd inf", "unix -inf"])
     @pytest.mark.asyncio
     async def test_time_rejects_non_finite_explicit_values(self, mock_context, subcommand):
-        result = await astro_time.handle_time(subcommand, mock_context)
+        result = astro_time.handle_time(subcommand, mock_context)
 
         assert result.startswith("无效")
 
@@ -133,8 +133,8 @@ class TestAstroToolsCoord:
         mock_context,
         monkeypatch,
     ):
-        handler = AsyncMock(return_value="ok")
-        monkeypatch.setitem(astro_tools._COMMAND_HANDLERS, "coord", handler)
+        handler = MagicMock(return_value="ok")
+        monkeypatch.setitem(astro_tools._SYNC_HANDLERS, "coord", handler)
 
         result = await astro_tools.handle(
             "astro",
@@ -144,7 +144,7 @@ class TestAstroToolsCoord:
         )
 
         assert "ok" in str(result)
-        handler.assert_awaited_once_with("12:34:56 -12:34:56", mock_context)
+        handler.assert_called_once_with("12:34:56 -12:34:56", mock_context)
 
     @pytest.mark.parametrize(
         "args",
@@ -152,7 +152,7 @@ class TestAstroToolsCoord:
     )
     @pytest.mark.asyncio
     async def test_coord_rejects_non_finite_or_extra_values(self, mock_context, args):
-        result = await astro_coord.handle_coord(args, mock_context)
+        result = astro_coord.handle_coord(args, mock_context)
 
         assert "无效" in result or "格式" in result or "请提供" in result
 
@@ -188,7 +188,7 @@ class TestAstroToolsConvert:
     )
     @pytest.mark.asyncio
     async def test_convert_executes_real_supported_units(self, mock_context, args):
-        result = await astro_convert.handle_convert(args, mock_context)
+        result = astro_convert.handle_convert(args, mock_context)
 
         assert result.startswith("📐 单位转换")
         assert "XQ-PLUGIN-UNEXPECTED" not in result
@@ -196,13 +196,13 @@ class TestAstroToolsConvert:
     @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e9999"])
     @pytest.mark.asyncio
     async def test_convert_rejects_non_finite_values(self, mock_context, value):
-        result = await astro_convert.handle_convert(f"{value} pc ly", mock_context)
+        result = astro_convert.handle_convert(f"{value} pc ly", mock_context)
 
         assert result == "❌ 数值必须是有限数字"
 
     @pytest.mark.asyncio
     async def test_convert_rejects_ignored_trailing_arguments(self, mock_context):
-        result = await astro_convert.handle_convert("1 pc ly ignored", mock_context)
+        result = astro_convert.handle_convert("1 pc ly ignored", mock_context)
 
         assert result.startswith("❌ 格式:")
 
@@ -220,7 +220,7 @@ class TestAstroToolsRedshift:
 
     @pytest.mark.asyncio
     async def test_nearby_distance_remains_readable_in_mpc(self, mock_context):
-        result = await astro_redshift.handle_redshift("0.001", mock_context)
+        result = astro_redshift.handle_redshift("0.001", mock_context)
 
         assert "光度距离:" in result
         assert "Mpc" in result
@@ -247,7 +247,7 @@ class TestAstroToolsFormula:
 
     @pytest.mark.asyncio
     async def test_formula_list_alias_returns_real_catalog(self, mock_context):
-        result = await astro_formula.handle_formula("list", mock_context)
+        result = astro_formula.handle_formula("list", mock_context)
 
         assert "schwarzschild" in result
         assert "未找到公式" not in result
@@ -261,8 +261,8 @@ class TestAstroToolsFormula:
 class TestAstroToolsConst:
     @pytest.mark.asyncio
     async def test_constant_alias_resolves_to_single_canonical_value(self, mock_context):
-        canonical = await astro_const.handle_const("c", mock_context)
-        alias     = await astro_const.handle_const("speed", mock_context)
+        canonical = astro_const.handle_const("c", mock_context)
+        alias     = astro_const.handle_const("speed", mock_context)
 
         assert alias == canonical
 
@@ -428,9 +428,9 @@ class TestAstroToolsErrorHandling:
     ],
 )
 def test_astro_units_preserve_case(source, target, expected):
-    from plugins.astro_tools.convert import _handle_convert_sync
+    from plugins.astro_tools.convert import handle_convert
 
-    output = _handle_convert_sync(
+    output = handle_convert(
         f"1 {source} {target}", SimpleNamespace(logger=logging.getLogger(__name__))
     )
     assert f"= {expected} {target}" in output

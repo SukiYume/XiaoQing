@@ -12,9 +12,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from core.atomic_store import AtomicJsonStore
-from core.sensitive_audit import summarize_sensitive
-
-from .audit import audit_error_type
+from core.sensitive_audit import audit_error_type, summarize_sensitive
 
 logger = logging.getLogger(__name__)
 

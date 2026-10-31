@@ -339,7 +339,7 @@ async def test_local_resource_commands_share_one_user_lifecycle_and_reject_bad_m
 
     storage_instance = context.state["paper_storage"]
     assert storage_instance.get_paper_notes("2401.12345", 10001) == []
-    assert storage_instance.list_writing_sections(10001) == []
+    assert storage_instance.writing_section_counts(10001) == {}
     assert storage_instance.get_topics(10001) == []
     assert storage_instance.get_deadlines(10001) == []
 

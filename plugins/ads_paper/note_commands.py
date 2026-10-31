@@ -8,6 +8,31 @@ from core.plugin_base import Segments, segments
 from .constants import DATE_FORMAT
 from .storage import PaperStorage
 
+_DELETE_WORDS = {"del", "delete", "删除"}
+
+
+### 解析 "del <键> <序号>"，序号从 1 开始；返回 (键, 0 基序号) 或错误消息
+def _parse_delete(raw_args: str, usage: str) -> tuple[str, int] | Segments:
+
+    delete_parts = raw_args.split()
+    if len(delete_parts) != 3:
+        return segments(usage)
+    try:
+        return delete_parts[1], int(delete_parts[2]) - 1
+    except ValueError:
+        return segments("❌ 序号必须是数字")
+
+
+### 编号列出文本记录，有时间的另起一行显示
+def _record_lines(heading: str, records: list[dict]) -> Segments:
+
+    lines = [heading]
+    for i, record in enumerate(records, 1):
+        lines.append(f"  {i}. {record.get('content', '')}")
+        if record.get("time"):
+            lines.append(f"     📅 {record['time']}")
+    return segments("\n".join(lines))
+
 
 async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
     """添加、查看或删除当前用户的论文笔记。"""
@@ -20,18 +45,11 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
             "❌ 用法:\n  /paper note <ID> <内容> - 添加笔记\n  /paper note <ID> - 查看笔记\n  /paper note del <ID> <序号> - 删除笔记"
         )
 
-    first = parts[0].casefold()
-
-    if first in {"del", "delete", "删除"}:
-        delete_parts = raw_args.split()
-        if len(delete_parts) != 3:
-            return segments("❌ 用法: /paper note del <ID> <序号>")
-        paper_id = delete_parts[1]
-        try:
-            index = int(delete_parts[2]) - 1
-        except ValueError:
-            return segments("❌ 序号必须是数字")
-
+    if parts[0].casefold() in _DELETE_WORDS:
+        parsed = _parse_delete(raw_args, "❌ 用法: /paper note del <ID> <序号>")
+        if not isinstance(parsed, tuple):
+            return parsed
+        paper_id, index = parsed
         if await asyncio.to_thread(storage.delete_paper_note, paper_id, index, user_id):
             return segments(f"✅ 已删除论文 {paper_id} 的笔记")
         return segments("❌ 删除失败，请检查 ID 和序号")
@@ -41,16 +59,7 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
         notes = await asyncio.to_thread(storage.get_paper_notes, paper_id, user_id)
         if not notes:
             return segments(f"📝 论文 {paper_id} 暂无笔记")
-
-        lines = [f"📝 论文 {paper_id} 的笔记 ({len(notes)} 条):\n"]
-        for i, note in enumerate(notes, 1):
-            content = note.get("content", "")
-            time    = note.get("time", "")
-            lines.append(f"  {i}. {content}")
-            if time:
-                lines.append(f"     📅 {time}")
-
-        return segments("\n".join(lines))
+        return _record_lines(f"📝 论文 {paper_id} 的笔记 ({len(notes)} 条):\n", notes)
 
     content = parts[1]
 
@@ -76,24 +85,17 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
                 "💡 写作灵感箱暂无内容\n\n提示: 使用 '/paper writing <章节> <想法>' 添加灵感"
             )
 
-        lines = ["💡 写作灵感箱:\n"]
-        for section, count in counts.items():
-            lines.append(f"  • {section} ({count} 条)")
-
+        lines = [
+            "💡 写作灵感箱:\n",
+            *(f"  • {section} ({count} 条)" for section, count in counts.items()),
+        ]
         return segments("\n".join(lines))
 
-    first = parts[0].casefold()
-
-    if first in {"del", "delete", "删除"}:
-        delete_parts = raw_args.split()
-        if len(delete_parts) != 3:
-            return segments("❌ 用法: /paper writing del <章节> <序号>")
-        section = delete_parts[1]
-        try:
-            index = int(delete_parts[2]) - 1
-        except ValueError:
-            return segments("❌ 序号必须是数字")
-
+    if parts[0].casefold() in _DELETE_WORDS:
+        parsed = _parse_delete(raw_args, "❌ 用法: /paper writing del <章节> <序号>")
+        if not isinstance(parsed, tuple):
+            return parsed
+        section, index = parsed
         if await asyncio.to_thread(storage.delete_writing_idea, section, index, user_id):
             return segments(f"✅ 已删除「{section}」中的灵感")
         return segments("❌ 删除失败，请检查章节和序号")
@@ -103,16 +105,7 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
         ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
         if not ideas:
             return segments(f"💡 「{section}」暂无灵感")
-
-        lines = [f"💡 「{section}」灵感箱 ({len(ideas)} 条):\n"]
-        for i, idea in enumerate(ideas, 1):
-            content = idea.get("content", "")
-            time    = idea.get("time", "")
-            lines.append(f"  {i}. {content}")
-            if time:
-                lines.append(f"     📅 {time}")
-
-        return segments("\n".join(lines))
+        return _record_lines(f"💡 「{section}」灵感箱 ({len(ideas)} 条):\n", ideas)
 
     content = parts[1]
 
@@ -139,10 +132,7 @@ async def cmd_topics(
         if not topics:
             return segments("🏷️ 暂无研究兴趣关键词\n\n提示: 使用 '/paper topics add <关键词>' 添加")
 
-        lines = ["🏷️ 研究兴趣关键词:\n"]
-        for i, topic in enumerate(topics, 1):
-            lines.append(f"  {i}. {topic}")
-
+        lines = ["🏷️ 研究兴趣关键词:\n", *(f"  {i}. {topic}" for i, topic in enumerate(topics, 1))]
         return segments("\n".join(lines))
 
     first = parts[0].casefold()
@@ -186,11 +176,10 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
             )
 
         lines = ["📅 截稿日期提醒:\n"]
-        for i, dl in enumerate(deadlines, 1):
-            name = dl.get("name", "")
-            date = dl.get("date", "")
-            lines.append(f"  {i}. {name} - {date}")
-
+        lines.extend(
+            f"  {i}. {dl.get('name', '')} - {dl.get('date', '')}"
+            for i, dl in enumerate(deadlines, 1)
+        )
         return segments("\n".join(lines))
 
     first = parts[0].casefold()
@@ -214,7 +203,7 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
             return segments(f"✅ 已添加截稿日期: {name} - {date}")
         return segments("❌ 添加失败")
 
-    if first in {"del", "delete", "删除"}:
+    if first in _DELETE_WORDS:
         if len(parts) != 2 or len(parts[1].split()) != 1:
             return segments("❌ 用法: /paper deadline del <序号>")
         try:

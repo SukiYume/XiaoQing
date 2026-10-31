@@ -8,7 +8,6 @@ import logging
 import pytest
 
 from plugins.qingpet import main as qingpet_main
-from plugins.qingpet.services.admin_service import AdminService
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
@@ -240,14 +239,15 @@ def test_admin_mutation_and_audit_log_share_one_transaction(tmp_path, operation)
                BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END"""
         )
         conn.commit()
-        admin = AdminService(database)
 
         def run() -> bool:
             if operation == "reset":
-                return admin.reset_user_pet(user.user_id, user.group_id, "operator")
+                return database.admin_reset_user_pet_atomic(user.user_id, user.group_id, "operator")
             if operation == "ban":
-                return admin.ban_user(user.user_id, user.group_id, 3, "operator")
-            return admin.delete_user_pet(user.user_id, user.group_id, "operator")
+                return database.admin_set_ban_atomic(
+                    user.user_id, user.group_id, "operator", days=3
+                )
+            return database.admin_delete_pet_atomic(user.user_id, user.group_id, "operator")
 
         assert run() is False
         failed_pet  = database.get_pet(user.user_id, user.group_id)

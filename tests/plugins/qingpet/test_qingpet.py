@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from plugins.qingpet.services.admin_service import AdminService
+from plugins.qingpet.commands.admin_commands import handle_manage_disable, handle_manage_enable
+from plugins.qingpet.services.admin_service import set_group_config
 from plugins.qingpet.services.database import MinigameOutcome
 from plugins.qingpet.services.database_schema import _safe_add_column
 from plugins.qingpet.services.economy_service import EconomyService
@@ -244,29 +245,22 @@ def test_social_ranking(qingpet_db):
 
 
 def test_admin_enable_disable(qingpet_db):
-    admin_service = AdminService(qingpet_db)
-
-    success = admin_service.disable_plugin(123456)
-    assert success
-
-    config = admin_service.get_config(123456)
-    assert not config.enabled
-
-    success = admin_service.enable_plugin(123456)
-    assert success
-
-    config = admin_service.get_config(123456)
-    assert config.enabled
+    assert handle_manage_disable("10001", 123456, "", qingpet_db)[0]
+    assert not qingpet_db.get_group_config(123456).enabled
+    assert handle_manage_enable("10001", 123456, "", qingpet_db)[0]
+    assert qingpet_db.get_group_config(123456).enabled
 
 
 def test_admin_config(qingpet_db):
-    admin_service = AdminService(qingpet_db)
+    assert set_group_config(qingpet_db, 123456, "economy_multiplier", "2.0")
+    assert set_group_config(qingpet_db, 123456, "trade_enabled", "no")
+    assert not set_group_config(qingpet_db, 123456, "economy_multiplier", "20")
+    assert not set_group_config(qingpet_db, 123456, "trade_enabled", "maybe")
+    assert not set_group_config(qingpet_db, 123456, "enabled", "true")
 
-    success = admin_service.set_config(123456, "economy_multiplier", "2.0")
-    assert success
-
-    config = admin_service.get_config(123456)
+    config = qingpet_db.get_group_config(123456)
     assert config.economy_multiplier == 2.0
+    assert not config.trade_enabled
 
 
 def test_pet_decay(qingpet_db):
@@ -342,8 +336,7 @@ def test_admin_reset_clears_pet_cooldowns_and_social_cooldowns(qingpet_db):
     user.last_gift_time = datetime.now() - timedelta(minutes=1)
     qingpet_db.update_user(user)
 
-    admin_service = AdminService(qingpet_db)
-    assert admin_service.reset_user_pet("test_user", 123456) is True
+    assert qingpet_db.admin_reset_user_pet_atomic("test_user", 123456, "ADMIN") is True
 
     reset_pet  = qingpet_db.get_pet("test_user", 123456)
     reset_user = qingpet_db.get_user("test_user", 123456)
@@ -367,8 +360,7 @@ def test_resolve_pet_for_self_command_rejects_disabled_group_in_private(qingpet_
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
 
-    admin_service = AdminService(qingpet_db)
-    assert admin_service.disable_plugin(123456) is True
+    assert qingpet_db.update_group_config_field(123456, "enabled", False) is True
 
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         qingpet_db,
@@ -458,10 +450,9 @@ def test_admin_ban_user_logs_operator_id(qingpet_db):
     user_service = UserService(qingpet_db)
     user_service.get_or_create_user("target", 123456)
 
-    admin_service = AdminService(qingpet_db)
-    assert admin_service.ban_user("target", 123456, 3, operator_user_id="operator") is True
+    assert qingpet_db.admin_set_ban_atomic("target", 123456, "operator", days=3) is True
 
-    logs = admin_service.get_logs(123456, limit=5)
+    logs = qingpet_db.get_operation_logs(123456, 5)
     assert logs
     assert logs[0].user_id == "operator"
 

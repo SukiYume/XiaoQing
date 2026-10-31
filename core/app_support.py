@@ -1,10 +1,9 @@
-# 应用共享状态：凭据快照、生命周期记录和主体授权保持一致。
-"""Shared application credentials, lifecycle records, and principal authority."""
+# 应用共享状态：凭据快照解析、生命周期记录与致命异常包装。
+"""Shared application credentials, lifecycle records, and fatal-error carriers."""
 
 import asyncio
 import logging
 import math
-import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -12,11 +11,6 @@ from enum import Enum
 from typing import Any, Literal, cast, overload
 
 from .config import ConfigSnapshot, ConfigSourceStatus
-from .interfaces import (
-    DeliveryTarget,
-    PluginPrincipal,
-    ScheduleDeliveryMode,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +126,6 @@ def _inbound_credentials(snapshot: ConfigSnapshot) -> str:
     return raw_token
 
 
-def _parse_admin_user_ids(raw_ids: object) -> set[int]:
-    """Parse the complete administrator list or reject it without partial grants."""
-
-    return set(_parse_positive_ids(raw_ids, field_name="admin_user_ids"))
-
-
 def _parse_positive_ids(raw_ids: object, *, field_name: str) -> tuple[int, ...]:
     """Parse a complete positive-ID list without partial acceptance."""
 
@@ -155,12 +143,6 @@ def _parse_positive_ids(raw_ids: object, *, field_name: str) -> tuple[int, ...]:
             raise ValueError(f"{field_name} entries must be positive")
         parsed.append(user_id)
     return tuple(parsed)
-
-
-def _parse_group_ids(raw_ids: object) -> tuple[int, ...]:
-    """Parse configured group IDs using the same all-or-nothing rule as admins."""
-
-    return _parse_positive_ids(raw_ids, field_name="default_group_ids")
 
 
 def _require_onebot_holder_credentials(
@@ -225,53 +207,11 @@ class ApplicationLifecycleFatalError(RuntimeError):
 
 async def _run_background_operation(operation_factory: Callable[[], Awaitable[Any]]) -> Any:
     """Convert fatal child failures without changing ordinary cancellation."""
+
     try:
         return await operation_factory()
-    except asyncio.CancelledError:
-        raise
-    except Exception:
+    except (asyncio.CancelledError, Exception):
+        # 普通异常和取消保持原样，只包装 KeyboardInterrupt 这类致命异常。
         raise
     except BaseException as exc:
         raise ApplicationLifecycleFatalError(exc) from None
-
-
-class _PrincipalAuthority:
-    """Track principals minted by one Application instance by object identity."""
-
-    def __init__(self) -> None:
-        self._issued: weakref.WeakKeyDictionary[PluginPrincipal, str] = weakref.WeakKeyDictionary()
-
-    def issue(
-        self,
-        *,
-        kind: str,
-        user_id: int | None                                 = None,
-        group_id: int | None                                = None,
-        is_bot_admin: bool                                  = False,
-        is_private: bool                                    = False,
-        group_role: str                                     = "unknown",
-        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
-        schedule_delivery: ScheduleDeliveryMode | None      = None,
-    ) -> PluginPrincipal:
-        if delivery_targets is None:
-            if kind == "user" and group_id is not None:
-                delivery_targets = (DeliveryTarget("group", int(group_id)),)
-            elif kind == "user" and user_id is not None:
-                delivery_targets = (DeliveryTarget("private", int(user_id)),)
-            else:
-                delivery_targets = ()
-        principal = PluginPrincipal(
-            kind              = kind,  # type: ignore[arg-type]
-            user_id           = user_id,
-            group_id          = group_id,
-            is_bot_admin      = is_bot_admin,
-            is_private        = is_private,
-            group_role        = group_role,  # type: ignore[arg-type]
-            delivery_targets  = delivery_targets,
-            schedule_delivery = schedule_delivery,
-        )
-        self._issued[principal] = kind
-        return principal
-
-    def owns(self, principal: PluginPrincipal) -> bool:
-        return bool(self._issued.get(principal) == principal.kind)

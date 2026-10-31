@@ -25,10 +25,8 @@ import torch
 from .shared import (
     InferenceParams,
     build_paper_texts,
-    load_training_config,
-    resolve_artifact_fingerprint,
     resolve_dataframe_column,
-    resolve_multi_interest_model_path,
+    run_cached_embedding_model,
     topk_mean_similarity,
 )
 
@@ -249,26 +247,6 @@ def run_knn_inference(
     params: InferenceParams,
     data: pd.DataFrame,
 ) -> tuple[list[float], list[int]]:
-    """执行 k-NN 模型推理，返回 (probs, preds)。"""
-    tcfg          = load_training_config(params.model_path)
-    runtime_path  = resolve_multi_interest_model_path(params.model_path, tcfg)
-    resolved_path = str(Path(runtime_path).resolve())
-    cache_key     = (
-        resolved_path,
-        resolve_artifact_fingerprint(params, resolved_path),
-        int(params.batch_size),
-        int(params.max_len),
-    )
-    model = _MODEL_CACHE.get(cache_key)
-    if model is None:
-        model = KNNInferenceModel(
-            runtime_path, batch_size=params.batch_size, max_len=params.max_len
-        )
-        for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
-            _MODEL_CACHE.pop(stale_key, None)
-        _MODEL_CACHE[cache_key] = model
-    proba = model.predict_proba(data, input_mode=params.input_mode)
+    """被 runner.py 调用，返回 (probs, preds)。"""
 
-    probs = proba.astype(float).tolist()
-    preds = [1 if p >= params.threshold else 0 for p in probs]
-    return probs, preds
+    return run_cached_embedding_model(params, data, _MODEL_CACHE, KNNInferenceModel)

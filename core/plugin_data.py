@@ -11,9 +11,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from .models import (
-    canonical_plugin_name,
-)
+from .models import canonical_plugin_name
 from .plugin_base import ensure_dir
 from .plugin_manager_support import (
     LoadedPlugin,
@@ -32,21 +30,20 @@ class PluginDataMixin:
     plugins_dir      : Path
     _data_directories: dict[str, _PluginDataDirectory]
 
-    def _plugin_data_dir(self, plugin_name: str) -> Path:
-        canonical_name: str = canonical_plugin_name(plugin_name)
-        return self.data_root / canonical_name
+    @staticmethod
+    def _ensure_private_directory(path: Path, description: str) -> Path:
+        """创建 0700 目录并确认它是普通目录而不是链接，返回解析后的真实路径。"""
 
-    def _ensure_data_root(self) -> Path:
         try:
-            self.data_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            metadata = self.data_root.lstat()
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            metadata = path.lstat()
             if is_link_like(metadata) or not stat.S_ISDIR(metadata.st_mode):
-                raise PluginPathError("plugin data root must be an ordinary directory")
-            return self.data_root.resolve(strict=True)
+                raise PluginPathError(f"{description} must be an ordinary directory")
+            return path.resolve(strict=True)
         except PluginPathError:
             raise
         except OSError as exc:
-            raise PluginPathError("cannot create plugin data root") from exc
+            raise PluginPathError(f"cannot create {description}") from exc
 
     @staticmethod
     def _remove_migration_staging(path: Path) -> None:
@@ -58,20 +55,6 @@ class PluginDataMixin:
         except OSError:
             logger.warning("Unable to remove plugin data migration staging directory: %s", path)
 
-    @staticmethod
-    def _ensure_legacy_data_archive_root(data_root: Path) -> Path:
-        archive_root = data_root / ".legacy-plugin-data"
-        try:
-            archive_root.mkdir(mode=0o700, exist_ok=True)
-            metadata = archive_root.lstat()
-            if is_link_like(metadata) or not stat.S_ISDIR(metadata.st_mode):
-                raise PluginPathError("legacy plugin data archive must be an ordinary directory")
-            return archive_root.resolve(strict=True)
-        except PluginPathError:
-            raise
-        except OSError as exc:
-            raise PluginPathError("cannot create legacy plugin data archive") from exc
-
     def _archive_legacy_data_dir(
         self,
         plugin_name: str,
@@ -81,8 +64,10 @@ class PluginDataMixin:
     ) -> Path:
         """Retire one migrated source-tree directory without deleting its fallback copy."""
 
-        archive_root = self._ensure_legacy_data_archive_root(data_root)
-        archive      = archive_root / plugin_name
+        archive_root = self._ensure_private_directory(
+            data_root / ".legacy-plugin-data", "legacy plugin data archive"
+        )
+        archive = archive_root / plugin_name
         try:
             archive.lstat()
         except FileNotFoundError:
@@ -97,6 +82,7 @@ class PluginDataMixin:
         try:
             legacy.rename(archive)
         except OSError as exc:
+            # 跨盘符/跨设备时无法直接重命名，改为“复制到暂存目录再发布”
             cross_device = exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17
             if not cross_device:
                 raise PluginPathError("cannot retire legacy plugin data directory") from exc
@@ -134,6 +120,7 @@ class PluginDataMixin:
 
         target = data_root / plugin_name
         legacy = plugin_root / "data"
+        # 没有历史数据时只需建好空目录
         if not legacy.exists():
             if target.exists():
                 return
@@ -151,6 +138,7 @@ class PluginDataMixin:
             description      = "legacy plugin data directory",
             reject_root_link = True,
         )
+        # 先复制到暂存目录再原子发布，避免半份数据被插件读到
         if not target.exists():
             try:
                 staging = Path(
@@ -207,7 +195,7 @@ class PluginDataMixin:
             return self._verify_data_directory_record(cached)
         plugin_dir  = self.plugins_dir / plugin_name
         plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
-        data_root   = self._ensure_data_root()
+        data_root   = self._ensure_private_directory(self.data_root, "plugin data root")
         self._seed_external_data_dir(
             canonical_plugin_name(plugin_name),
             plugin_root = plugin_root,
@@ -242,6 +230,6 @@ class PluginDataMixin:
             return None
         # Compatibility for synthetic/in-memory generations that never crossed
         # the filesystem authorization path used by production plugins.
-        data_dir = self._plugin_data_dir(name)
+        data_dir = self.data_root / canonical_plugin_name(name)
         ensure_dir(data_dir)
         return data_dir

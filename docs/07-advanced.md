@@ -14,7 +14,7 @@
 | 位置 | 私有 API | 用途 | 保护措施 |
 |---|---|---|---|
 | `core/plugin_manager_support.py` | `importlib._bootstrap._get_module_lock` | 插件热加载期间复用 CPython 模块锁 | `getattr` 探针、行为验证、restart-only 模式 |
-| `core/scheduler_compat.py` | APScheduler 内部 job store、executor、timer 和 pending future | 调度器重载与关闭 | 版本探针、调用约定验证、有界停机 |
+| `core/scheduler.py` | APScheduler 内部 job store、executor、timer 和 pending future | 调度器重载与关闭 | 版本探针、调用约定验证、有界停机 |
 | `plugins/jupyter/jupyter_manager.py` | `_invoke_cleanup` 回调反射与 Jupyter 清理方法 | 多版本内核终止 | 受限签名、候选隔离、清理报告 |
 | `plugins/codex/runner.py` | `process._transport.get_pipe_transport` | 子进程管道回收 | 属性与类型探针、异常隔离、进程树回收 |
 
@@ -425,11 +425,11 @@ WantedBy=multi-user.target
 
 将 `WorkingDirectory` 替换为实际项目目录。
 服务管理器提供可用的 `python`、依赖包与运行账户。
-项目启动入口保持为 `python main.py`。
+项目启动入口为 `python main.py`。
 
 ### Docker
 
-仓库 `Dockerfile` 提供容器构建入口。
+仓库 `Dockerfile` 提供容器构建入口，`.dockerignore` 排除本地配置与密钥、运行数据、日志、测试和本地工作目录，镜像只包含运行代码与资源。
 部署时挂载 `config/`、`data/` 与 `logs/`，并将 Inbound 端口连接到受控代理网络。
 
 生产环境应为 Bot 进程设置专用用户、最小文件权限、明确网络出口、日志轮转、数据备份和健康检查。

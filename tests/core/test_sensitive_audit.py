@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 
 import pytest
 
-from core.sensitive_audit import SensitiveAuditSummary, audit_error_type, summarize_sensitive
+from core.sensitive_audit import (
+    SensitiveAuditSummary,
+    audit_error_type,
+    safe_request_id,
+    summarize_sensitive,
+)
 
 
 def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> None:
@@ -71,9 +77,14 @@ def test_audit_error_type_is_bounded_and_safe_for_logs() -> None:
     assert audit_error_type(invalid_name_error) == "Exception"
 
 
-def test_plugin_audit_modules_reexport_the_shared_error_normalizer() -> None:
-    from plugins.minecraft.audit import audit_error_type as minecraft_error_type
-    from plugins.qingssh.audit import audit_error_type as qingssh_error_type
+def test_safe_request_id_only_accepts_bounded_ids() -> None:
+    class Broken:
+        @property
+        def request_id(self) -> str:
+            raise RuntimeError("boom")
 
-    assert minecraft_error_type is audit_error_type
-    assert qingssh_error_type is audit_error_type
+    assert safe_request_id(SimpleNamespace(request_id="req-1")) == "req-1"
+    assert safe_request_id(SimpleNamespace(request_id="bad\nid")) == "-"
+    assert safe_request_id(SimpleNamespace(request_id=123)) == "-"
+    assert safe_request_id(None) == "-"
+    assert safe_request_id(Broken()) == "-"

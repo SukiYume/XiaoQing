@@ -2436,9 +2436,8 @@ class PluginGenerationMixin:
         effective_entry = authorized_entry or (
             loaded_plugin.authorized_entry if loaded_plugin is not None else None
         )
+        # 没有入口授权记录（内存中合成的插件）时无需在线程中静默导入
         if effective_entry is None:
-            if loaded_plugin is None and authorized_entry is None:
-                return self._register_loaded_plugin(definition, module, mtime)
             return self._register_loaded_plugin(
                 definition,
                 module,

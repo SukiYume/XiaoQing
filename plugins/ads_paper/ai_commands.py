@@ -11,7 +11,7 @@ from core.public_errors import public_error_message, public_error_response
 from .ads_client import ADSClient, _escape_ads_term, paper_title
 from .bibtex import citation_entries
 from .constants import DEFAULT_DAILY_PAPERS
-from .paper_commands import resolve_paper_id_to_bibcode
+from .paper_commands import paper_list_text, resolve_bibcode_arg, resolve_paper_arg
 from .storage import PaperStorage
 
 logger = logging.getLogger(__name__)
@@ -33,13 +33,10 @@ def _paper_entry_date(paper: dict[str, Any]) -> date | None:
 
 
 def _daily_topic_query(topics: list[str], day: date) -> str:
-    quoted = []
-    for topic in topics:
-        escaped = _escape_ads_term(topic)
-        if escaped:
-            quoted.append(f'"{escaped}"')
-    topic_query = " OR ".join(quoted)
-    return f"({topic_query}) AND entdate:[{day.isoformat()} TO NOW]"
+    """任一关键词命中且当天及以后进入 ADS 的论文。"""
+
+    quoted = [f'"{escaped}"' for topic in topics if (escaped := _escape_ads_term(topic))]
+    return f"({' OR '.join(quoted)}) AND entdate:[{day.isoformat()} TO NOW]"
 
 
 def _summary_messages(title: str, abstract: str) -> list[dict[str, Any]]:
@@ -67,20 +64,9 @@ async def cmd_summarize(
 ) -> Segments:
     """通过 Core 的 ``summary`` route 生成摘要，不读取插件私有 AI 凭据。"""
 
-    if not args.strip():
-        return segments(
-            "❌ 请提供论文标识符\n用法: /paper summarize <arXiv ID / arXiv链接 / Bibcode>"
-        )
-
-    paper_id = args.strip()
-    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
-
-    if not bibcode:
-        return segments(f"❌ 未找到论文: {paper_id}")
-
-    paper = await client.get_paper_by_bibcode(bibcode)
-    if not paper:
-        return segments(f"❌ 未找到论文: {bibcode}")
+    _bibcode, paper, error = await resolve_paper_arg(client, args, "summarize")
+    if paper is None:
+        return error or []
 
     title = paper_title(paper, default="")
     raw_abstract = paper.get("abstract", "")
@@ -104,8 +90,7 @@ async def cmd_summarize(
         if not summary:
             raise RuntimeError("AI summary response is empty")
 
-        lines = [f"📄 论文: {title}\n", f"🤖 AI 摘要:\n{summary}"]
-        return segments("\n".join(lines))
+        return segments(f"📄 论文: {title}\n\n🤖 AI 摘要:\n{summary}")
     except Exception as exc:
         error_message = public_error_message(
             context,
@@ -157,11 +142,9 @@ async def cmd_daily(
     if not papers:
         return segments(f"🔍 未找到与关键词 '{', '.join(topics)}' 相关的新论文")
 
-    lines = [f"📚 今日推荐论文 (基于关键词: {', '.join(topics)})\n"]
-    for i, paper in enumerate(papers, 1):
-        lines.append(f"{i}. {client.format_paper_info(paper)}\n")
-
-    return segments("\n".join(lines))
+    return segments(
+        paper_list_text(client, papers, f"📚 今日推荐论文 (基于关键词: {', '.join(topics)})\n")
+    )
 
 
 async def cmd_ref_add(
@@ -173,16 +156,9 @@ async def cmd_ref_add(
 ) -> Segments:
     """获取一篇论文的 BibTeX，并原子加入当前用户的文献库。"""
 
-    if not args.strip():
-        return segments(
-            "❌ 请提供论文标识符\n用法: /paper ref_add <arXiv ID / arXiv链接 / Bibcode>"
-        )
-
-    paper_id = args.strip()
-    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
-
-    if not bibcode:
-        return segments(f"❌ 未找到论文: {paper_id}")
+    bibcode, error = await resolve_bibcode_arg(client, args, "ref_add")
+    if bibcode is None:
+        return error or []
 
     bibtex = await client.get_bibtex(bibcode)
     if not bibtex:
@@ -192,8 +168,7 @@ async def cmd_ref_add(
         if not await asyncio.to_thread(storage.add_reference, user_id, bibcode, bibtex):
             return segments(f"⚠️ 该引用已在文献库中 (Bibcode: {bibcode})")
 
-        lines = ["✅ 已添加到文献库\n", "📎 BibTeX:\n", bibtex]
-        return segments("\n".join(lines))
+        return segments(f"✅ 已添加到文献库\n\n📎 BibTeX:\n\n{bibtex}")
     except Exception as exc:
         return public_error_response(
             context,
@@ -221,10 +196,9 @@ async def cmd_refs(
 
         lines = [f"📚 文献库 ({len(entries)} 条引用):\n"]
         for i, entry in enumerate(entries, 1):
-            title = entry.title
-            if title:
-                suffix = "..." if len(title) > 60 else ""
-                lines.append(f"  {i}. {title[:60]}{suffix}")
+            # 有标题显示标题（最长 60 字），否则显示条目类型与引用键
+            if entry.title:
+                lines.append(f"  {i}. {entry.title[:60]}{'...' if len(entry.title) > 60 else ''}")
             else:
                 lines.append(f"  {i}. @{entry.entry_type}{{{entry.citation_key}}}")
 

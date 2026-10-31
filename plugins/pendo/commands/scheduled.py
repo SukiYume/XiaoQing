@@ -427,16 +427,21 @@ async def _deliver_daily_briefing(
         raise
 
 
+async def _active_user_bundles(db: Database) -> tuple[list[str], dict[str, SettingsBundle]]:
+    """读取活跃用户及其设置；定时任务据此判断每个用户的本地触发时刻。"""
+
+    user_ids = await _get_active_user_ids(db)
+    return user_ids, cast(
+        dict[str, SettingsBundle], await get_user_settings_bundle_map(user_ids, db)
+    )
+
+
 async def send_daily_briefings(context: object, db: Database) -> ActionList:
     """向到达本地配置时刻且尚未发送的用户投递每日简报。"""
 
     run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
-        user_ids = await _get_active_user_ids(db)
-        bundles  = cast(
-            dict[str, SettingsBundle],
-            await get_user_settings_bundle_map(user_ids, db),
-        )
+        user_ids, bundles = await _active_user_bundles(db)
     except Exception as exc:
         public_error_message(
             context,
@@ -533,11 +538,7 @@ async def check_diary_reminders(context: object, db: Database) -> ActionList:
 
     run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
-        user_ids = await _get_active_user_ids(db)
-        bundles  = cast(
-            dict[str, SettingsBundle],
-            await get_user_settings_bundle_map(user_ids, db),
-        )
+        user_ids, bundles = await _active_user_bundles(db)
     except Exception as exc:
         public_error_message(
             context,
@@ -696,11 +697,7 @@ async def _send_finance_summaries(
 
     run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
-        user_ids = await _get_active_user_ids(db)
-        bundles  = cast(
-            dict[str, SettingsBundle],
-            await get_user_settings_bundle_map(user_ids, db),
-        )
+        user_ids, bundles = await _active_user_bundles(db)
     except Exception as exc:
         public_error_message(
             context,

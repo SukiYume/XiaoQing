@@ -323,7 +323,7 @@ Comments and help in `scripts/` describe synchronization, startup arguments, and
 | `tests/tooling` | Test tools and package resources. |
 
 Tests examine input, output, state changes, errors, permissions, concurrency, and resource lifecycles.
-Regression cases belong to the corresponding function modules.
+Cases cover current features only; tests dedicated to a single fix are not kept.
 Parameterized cases combine identical execution paths.
 Isolated substitutes supply external-service responses. Web-client tests execute actual JavaScript.
 

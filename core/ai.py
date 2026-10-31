@@ -13,7 +13,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -30,6 +30,7 @@ from .bounded_http import (
 from .config import materialize_snapshot_value
 
 logger = logging.getLogger(__name__)
+T      = TypeVar("T")
 
 _NAME_RE               = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _RESERVED_PAYLOAD_KEYS = frozenset(
@@ -223,6 +224,13 @@ def _bounded_int(
     return value
 
 
+def _required(value: T | None) -> T:
+    """路由默认值保证有值；这里只为类型收窄。"""
+
+    assert value is not None
+    return value
+
+
 def _payload_mapping(value: Any, label: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -306,38 +314,15 @@ def resolve_route_config(
         raise AIConfigError(f"AI route is not configured: {plugin_name}.{route_name}")
     label   = f"config.plugins.{plugin_name}.ai.routes.{route_name}"
     route   = _mapping(routes[route_name], label)
-    timeout = _bounded_float(
-        route.get("timeout_seconds"),
-        label   = f"{label}.timeout_seconds",
-        default = 30.0,
-        minimum = 0.1,
-        maximum = 600.0,
+    timeout = _required(
+        _bounded_float(
+            route.get("timeout_seconds"),
+            label   = f"{label}.timeout_seconds",
+            default = 30.0,
+            minimum = 0.1,
+            maximum = 600.0,
+        )
     )
-    assert timeout is not None
-    total_timeout = _bounded_float(
-        route.get("total_timeout_seconds"),
-        label   = f"{label}.total_timeout_seconds",
-        default = max(timeout, 60.0),
-        minimum = 0.1,
-        maximum = 1800.0,
-    )
-    assert total_timeout is not None
-    max_retry = _bounded_int(
-        route.get("max_retry"),
-        label   = f"{label}.max_retry",
-        default = 1,
-        minimum = 0,
-        maximum = 10,
-    )
-    assert max_retry is not None
-    retry_interval = _bounded_float(
-        route.get("retry_interval_seconds"),
-        label   = f"{label}.retry_interval_seconds",
-        default = 0.5,
-        minimum = 0.0,
-        maximum = 60.0,
-    )
-    assert retry_interval is not None
     return AIRouteConfig(
         plugin      = plugin_name,
         name        = route_name,
@@ -350,11 +335,7 @@ def resolve_route_config(
             maximum = 2.0,
         ),
         top_p=_bounded_float(
-            route.get("top_p"),
-            label   = f"{label}.top_p",
-            default = None,
-            minimum = 0.0,
-            maximum = 1.0,
+            route.get("top_p"), label=f"{label}.top_p", default=None, minimum=0.0, maximum=1.0
         ),
         max_tokens=_bounded_int(
             route.get("max_tokens"),
@@ -363,14 +344,33 @@ def resolve_route_config(
             minimum = 1,
             maximum = 1_000_000,
         ),
-        timeout_seconds=timeout,
-        total_timeout_seconds=total_timeout,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval,
-        fallback_on=_fallback_categories(route.get("fallback_on"), f"{label}.fallback_on"),
-        request_defaults=_payload_mapping(
-            route.get("request_defaults"),
-            f"{label}.request_defaults",
+        timeout_seconds       = timeout,
+        total_timeout_seconds = _required(
+            _bounded_float(
+                route.get("total_timeout_seconds"),
+                label   = f"{label}.total_timeout_seconds",
+                default = max(timeout, 60.0),
+                minimum = 0.1,
+                maximum = 1800.0,
+            )
+        ),
+        max_retry=_required(
+            _bounded_int(
+                route.get("max_retry"), label=f"{label}.max_retry", default=1, minimum=0, maximum=10
+            )
+        ),
+        retry_interval_seconds=_required(
+            _bounded_float(
+                route.get("retry_interval_seconds"),
+                label   = f"{label}.retry_interval_seconds",
+                default = 0.5,
+                minimum = 0.0,
+                maximum = 60.0,
+            )
+        ),
+        fallback_on      = _fallback_categories(route.get("fallback_on"), f"{label}.fallback_on"),
+        request_defaults = _payload_mapping(
+            route.get("request_defaults"), f"{label}.request_defaults"
         ),
     )
 
@@ -501,20 +501,20 @@ def list_configured_models(
     )
 
 
-def _response_message(data: Mapping[str, Any]) -> Mapping[str, Any]:
+def _first_choice(data: Mapping[str, Any]) -> Mapping[str, Any]:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
         return {}
-    message = choices[0].get("message")
+    return choices[0]
+
+
+def _response_message(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    message = _first_choice(data).get("message")
     return message if isinstance(message, Mapping) else {}
 
 
 def _finish_reason(data: Mapping[str, Any]) -> str:
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
-        return ""
-    value = choices[0].get("finish_reason")
-    return str(value or "").strip()
+    return str(_first_choice(data).get("finish_reason") or "").strip()
 
 
 def _message_text(message: Mapping[str, Any]) -> str:
@@ -588,48 +588,48 @@ def _retryable(category: str) -> bool:
     }
 
 
-def _retry_delay(base_seconds: float, retry_index: int) -> float:
-    # mypy 对 ``int ** int`` 的返回类型保守为 Any；显式收口为 API 承诺的秒数浮点值。
-    return float(max(0.0, base_seconds) * (2 ** max(0, retry_index - 1)))
+### 一次路由调用的请求参数；已按插件配置和边界校验过
+@dataclass(frozen=True, slots=True)
+class _RequestOptions:
+    messages              : list[dict[str, Any]]
+    temperature           : float | None
+    top_p                 : float | None
+    max_tokens            : int | None
+    tools                 : list[dict[str, Any]] | None
+    tool_choice           : Any
+    extra_payload         : Mapping[str, Any] | None
+    timeout_seconds       : float
+    max_retry             : int
+    retry_interval_seconds: float
 
 
+### 组装请求体：模型默认值 < 路由默认值 < 调用参数，再按模型特性调整字段
 def _request_payload(
-    target: _AIModelTarget,
-    route: AIRouteConfig,
-    messages: list[dict[str, Any]],
-    *,
-    temperature: float | None,
-    top_p: float | None,
-    max_tokens: int | None,
-    tools: list[dict[str, Any]] | None,
-    tool_choice: Any,
-    extra_payload: Mapping[str, Any] | None,
+    target: _AIModelTarget, route: AIRouteConfig, options: _RequestOptions
 ) -> dict[str, Any]:
+
     payload: dict[str, Any] = {
         "model"   : target.model,
-        "messages": materialize_snapshot_value(messages),
+        "messages": materialize_snapshot_value(options.messages),
         "stream"  : False,
     }
     payload.update(target.request_defaults)
     payload.update(route.request_defaults)
-    effective_temperature = route.temperature if temperature is None else temperature
-    effective_top_p       = route.top_p if top_p is None else top_p
-    effective_max_tokens  = route.max_tokens if max_tokens is None else max_tokens
-    if effective_temperature is not None:
-        payload["temperature"] = effective_temperature
-    if effective_top_p is not None:
-        payload["top_p"] = effective_top_p
-    if effective_max_tokens is not None:
-        payload["max_tokens"] = effective_max_tokens
-    if tools:
-        payload["tools"] = materialize_snapshot_value(tools)
-    if tool_choice is not None:
-        payload["tool_choice"] = materialize_snapshot_value(tool_choice)
-    if extra_payload is not None:
-        payload.update(_payload_mapping(extra_payload, "AI request extra_payload"))
-    if target.model in {"chat-latest", "gpt-6-luna"}:
-        if "max_tokens" in payload:
-            payload["max_completion_tokens"] = payload.pop("max_tokens")
+    for key, value in (
+        ("temperature", route.temperature if options.temperature is None else options.temperature),
+        ("top_p", route.top_p if options.top_p is None else options.top_p),
+        ("max_tokens", route.max_tokens if options.max_tokens is None else options.max_tokens),
+    ):
+        if value is not None:
+            payload[key] = value
+    if options.tools:
+        payload["tools"] = materialize_snapshot_value(options.tools)
+    if options.tool_choice is not None:
+        payload["tool_choice"] = materialize_snapshot_value(options.tool_choice)
+    if options.extra_payload is not None:
+        payload.update(_payload_mapping(options.extra_payload, "AI request extra_payload"))
+    if target.model in {"chat-latest", "gpt-6-luna"} and "max_tokens" in payload:
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
     if target.model == "chat-latest":
         # This model uses fixed sampling defaults.
         payload.pop("temperature", None)
@@ -637,38 +637,20 @@ def _request_payload(
     return payload
 
 
+### 向单个模型发请求，可重试的错误按指数退避重试
 async def _request_target(
-    *,
     session: aiohttp.ClientSession,
     target: _AIModelTarget,
     route: AIRouteConfig,
-    messages: list[dict[str, Any]],
-    temperature: float | None,
-    top_p: float | None,
-    max_tokens: int | None,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
-    tools: list[dict[str, Any]] | None,
-    tool_choice: Any,
-    extra_payload: Mapping[str, Any] | None,
+    options: _RequestOptions,
     attempt_counter: list[int],
 ) -> dict[str, Any]:
+
     headers = {
         "Authorization": f"Bearer {target.api_key}",
         "Content-Type" : "application/json",
     }
-    payload = _request_payload(
-        target,
-        route,
-        messages,
-        temperature   = temperature,
-        top_p         = top_p,
-        max_tokens    = max_tokens,
-        tools         = tools,
-        tool_choice   = tool_choice,
-        extra_payload = extra_payload,
-    )
+    payload = _request_payload(target, route, options)
     logger.debug(
         "AI request settings plugin=%s route=%s profile=%s temperature=%s top_p=%s "
         "max_tokens=%s timeout_seconds=%s max_retry=%s retry_interval_seconds=%s",
@@ -678,18 +660,18 @@ async def _request_target(
         payload.get("temperature"),
         payload.get("top_p"),
         payload.get("max_completion_tokens", payload.get("max_tokens")),
-        timeout_seconds,
-        max_retry,
-        retry_interval_seconds,
+        options.timeout_seconds,
+        options.max_retry,
+        options.retry_interval_seconds,
     )
-    for retry_index in range(max_retry + 1):
+    request_kwargs: dict[str, Any] = {
+        "json"   : payload,
+        "timeout": aiohttp.ClientTimeout(total=options.timeout_seconds),
+    }
+    if target.proxy:
+        request_kwargs["proxy"] = target.proxy
+    for retry_index in range(options.max_retry + 1):
         attempt_counter[0] += 1
-        request_kwargs: dict[str, Any] = {
-            "json"   : payload,
-            "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
-        }
-        if target.proxy:
-            request_kwargs["proxy"] = target.proxy
         try:
             response = await aiohttp_request_bounded(
                 session,
@@ -717,50 +699,27 @@ async def _request_target(
         except BoundedHttpError:
             error = AIRequestError("invalid_response")
 
-        if retry_index >= max_retry or not _retryable(error.category):
+        if retry_index >= options.max_retry or not _retryable(error.category):
             raise error
-        delay = _retry_delay(retry_interval_seconds, retry_index + 1)
+        delay = max(0.0, options.retry_interval_seconds) * 2.0**retry_index
         if delay:
             await asyncio.sleep(delay)
     raise AssertionError("unreachable AI retry loop")
 
 
+### 按路由顺序尝试各模型，错误类别在 fallback_on 中时降级到下一个
 async def _complete_route(
-    *,
     session: aiohttp.ClientSession,
     route: AIRouteConfig,
     targets: tuple[_AIModelTarget, ...],
-    messages: list[dict[str, Any]],
-    temperature: float | None,
-    top_p: float | None,
-    max_tokens: int | None,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
-    tools: list[dict[str, Any]] | None,
-    tool_choice: Any,
-    extra_payload: Mapping[str, Any] | None,
+    options: _RequestOptions,
 ) -> AICompletionResult:
+
     last_error: AIRequestError | None = None
     attempt_counter                   = [0]
     for index, target in enumerate(targets):
         try:
-            response = await _request_target(
-                session                = session,
-                target                 = target,
-                route                  = route,
-                messages               = messages,
-                temperature            = temperature,
-                top_p                  = top_p,
-                max_tokens             = max_tokens,
-                timeout_seconds        = timeout_seconds,
-                max_retry              = max_retry,
-                retry_interval_seconds = retry_interval_seconds,
-                tools                  = tools,
-                tool_choice            = tool_choice,
-                extra_payload          = extra_payload,
-                attempt_counter        = attempt_counter,
-            )
+            response = await _request_target(session, target, route, options, attempt_counter)
             return AICompletionResult(
                 response      = response,
                 profile       = target.name,
@@ -820,13 +779,6 @@ async def complete_configured_route(
         pinned_model        = pinned_model,
         required_modalities = required_modalities,
     )
-    effective_timeout = _bounded_float(
-        timeout_seconds,
-        label   = "AI request timeout_seconds",
-        default = route.timeout_seconds,
-        minimum = 0.1,
-        maximum = 600.0,
-    )
     effective_total_timeout = _bounded_float(
         total_timeout_seconds,
         label   = "AI request total_timeout_seconds",
@@ -834,45 +786,49 @@ async def complete_configured_route(
         minimum = 0.1,
         maximum = 1800.0,
     )
-    effective_retry = _bounded_int(
-        max_retry,
-        label   = "AI request max_retry",
-        default = route.max_retry,
-        minimum = 0,
-        maximum = 10,
-    )
-    effective_retry_interval = _bounded_float(
-        retry_interval_seconds,
-        label   = "AI request retry_interval_seconds",
-        default = route.retry_interval_seconds,
-        minimum = 0.0,
-        maximum = 60.0,
-    )
-    effective_temperature = _bounded_float(
-        temperature,
-        label   = "AI request temperature",
-        default = None,
-        minimum = 0.0,
-        maximum = 2.0,
-    )
-    effective_top_p = _bounded_float(
-        top_p,
-        label   = "AI request top_p",
-        default = None,
-        minimum = 0.0,
-        maximum = 1.0,
-    )
-    effective_max_tokens = _bounded_int(
-        max_tokens,
-        label   = "AI request max_tokens",
-        default = None,
-        minimum = 1,
-        maximum = 1_000_000,
-    )
-    assert effective_timeout is not None
     assert effective_total_timeout is not None
-    assert effective_retry is not None
-    assert effective_retry_interval is not None
+    options = _RequestOptions(
+        messages    = messages,
+        temperature = _bounded_float(
+            temperature, label="AI request temperature", default=None, minimum=0.0, maximum=2.0
+        ),
+        top_p=_bounded_float(
+            top_p, label="AI request top_p", default=None, minimum=0.0, maximum=1.0
+        ),
+        max_tokens=_bounded_int(
+            max_tokens, label="AI request max_tokens", default=None, minimum=1, maximum=1_000_000
+        ),
+        tools           = tools,
+        tool_choice     = tool_choice,
+        extra_payload   = extra_payload,
+        timeout_seconds = _required(
+            _bounded_float(
+                timeout_seconds,
+                label   = "AI request timeout_seconds",
+                default = route.timeout_seconds,
+                minimum = 0.1,
+                maximum = 600.0,
+            )
+        ),
+        max_retry=_required(
+            _bounded_int(
+                max_retry,
+                label   = "AI request max_retry",
+                default = route.max_retry,
+                minimum = 0,
+                maximum = 10,
+            )
+        ),
+        retry_interval_seconds=_required(
+            _bounded_float(
+                retry_interval_seconds,
+                label   = "AI request retry_interval_seconds",
+                default = route.retry_interval_seconds,
+                minimum = 0.0,
+                maximum = 60.0,
+            )
+        ),
+    )
     logger.debug(
         "AI route budget plugin=%s route=%s total_timeout_seconds=%s",
         route.plugin,
@@ -881,21 +837,7 @@ async def complete_configured_route(
     )
     try:
         return await asyncio.wait_for(
-            _complete_route(
-                session                = session,
-                route                  = route,
-                targets                = targets,
-                messages               = messages,
-                temperature            = effective_temperature,
-                top_p                  = effective_top_p,
-                max_tokens             = effective_max_tokens,
-                timeout_seconds        = effective_timeout,
-                max_retry              = effective_retry,
-                retry_interval_seconds = effective_retry_interval,
-                tools                  = tools,
-                tool_choice            = tool_choice,
-                extra_payload          = extra_payload,
-            ),
+            _complete_route(session, route, targets, options),
             timeout=effective_total_timeout,
         )
     except TimeoutError as exc:

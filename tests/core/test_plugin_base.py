@@ -21,7 +21,6 @@ from core.plugin_base import (
     image,
     image_url,
     load_json,
-    record_url,
     run_sync,
     segments,
     split_message_segments,
@@ -75,18 +74,6 @@ class TestMessageSegments:
         """测试 QQ face 消息段"""
         seg = face(277)
         assert seg == {"type": "face", "data": {"id": "277"}}
-
-    def test_record_url_segment(self):
-        """网络语音构造器是已文档化的插件公共 API。"""
-
-        assert record_url("https://example.com/audio.mp3") == {
-            "type": "record",
-            "data": {"file": "https://example.com/audio.mp3"},
-        }
-
-
-class TestControlCharacterValidation:
-    """验证共用控制字符策略的三个显式开关。"""
 
     def test_default_rejects_c0_and_del_but_not_c1(self):
         assert has_control_characters("a\x00b") is True

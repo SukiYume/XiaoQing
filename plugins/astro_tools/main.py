@@ -1,15 +1,18 @@
 # ruff: noqa: I001  # Keep imports separate for the source-based plugin loader.
-"""
-天文工具插件
-提供天文计算、坐标转换、时间转换等功能
-"""
+"""天文工具插件：时间、坐标、单位、红移、公式、天体与常数查询。"""
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any
 
 from core.args import parse
-from core.plugin_base import PluginContextProtocol, Segments, bounded_external_text, segments
+from core.plugin_base import (
+    PluginContextProtocol,
+    Segments,
+    bounded_external_text,
+    run_sync,
+    segments,
+)
 from core.public_errors import public_error_response
 
 from . import const
@@ -22,17 +25,16 @@ from . import time as astro_time
 
 logger = logging.getLogger(__name__)
 
-AstroHandler = Callable[[str, PluginContextProtocol], Awaitable[str]]
-
-_COMMAND_HANDLERS: dict[str, AstroHandler] = {
+# 本地计算子命令依赖 astropy 的同步计算，统一放进线程 bulkhead；obj 查询 SIMBAD，本身是异步的
+_SYNC_HANDLERS: dict[str, Callable[[str, PluginContextProtocol], str]] = {
     "time"    : astro_time.handle_time,
     "coord"   : coord.handle_coord,
     "convert" : convert.handle_convert,
     "redshift": redshift.handle_redshift,
     "formula" : formula.handle_formula,
-    "obj"     : obj.handle_obj,
     "const"   : const.handle_const,
 }
+_COMMANDS = {*_SYNC_HANDLERS, "obj"}
 
 _SUBCOMMAND_HELP = {
     "time"    : "用法: /astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
@@ -67,19 +69,17 @@ async def handle(
         if len(parsed) == 1 and not parsed.options and subcommand in {"help", "帮助"}:
             return segments(_show_help())
 
-        handler = _COMMAND_HANDLERS.get(subcommand)
-        if handler is None:
+        if subcommand not in _COMMANDS:
             safe_subcommand = bounded_external_text(
-                subcommand,
-                max_chars = 32,
-                max_bytes = 128,
-                suffix    = "…",
+                subcommand, max_chars=32, max_bytes=128, suffix="…"
             )
             return segments(f"未知命令: {safe_subcommand}\n输入 /astro help 查看帮助")
         subcommand_args = raw_parts[1] if len(raw_parts) > 1 else ""
         if subcommand_args.strip().casefold() in {"help", "帮助"}:
             return segments(_show_help(subcommand))
-        return segments(await handler(subcommand_args, context))
+        if subcommand == "obj":
+            return segments(await obj.handle_obj(subcommand_args, context))
+        return segments(await run_sync(_SYNC_HANDLERS[subcommand], subcommand_args, context))
 
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="astro_tools.handle")

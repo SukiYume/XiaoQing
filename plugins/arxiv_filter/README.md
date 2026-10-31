@@ -157,8 +157,7 @@ plugins/arxiv_filter/
 ├── main.py                  # 命令与调度
 ├── codex_summary.py         # Codex 服务调用
 ├── arxiv_today.py           # astro-ph/new 抓取
-├── arxiv_inference.py       # 推理 facade
-├── inference/               # 后端分发与实现
+├── inference/               # 推理入口（runner）、后端分发与实现
 ├── train_model/             # 训练与数据准备
 ├── config.json              # 插件配置
 └── best_model/              # 源码部署模型资产

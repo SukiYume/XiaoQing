@@ -400,7 +400,20 @@ def _jittered_reconnect_delay(base_delay: float, random_sample: float) -> float:
     return low + ((high - low) * sample)
 
 
-class OneBotHttpSender:
+### 两种 OneBot 出站通道共用的端点与凭据读取接口
+class _EndpointAuthHolder:
+    _endpoint_auth: _EndpointAuthState
+
+    @property
+    def auth_token(self) -> str:
+        return self._endpoint_auth.token
+
+    @property
+    def credentials_trusted(self) -> bool:
+        return self._endpoint_auth.credentials_trusted
+
+
+class OneBotHttpSender(_EndpointAuthHolder):
     """OneBot HTTP 发送器"""
 
     def __init__(
@@ -421,14 +434,6 @@ class OneBotHttpSender:
     @property
     def http_base(self) -> str:
         return self._endpoint_auth.endpoint
-
-    @property
-    def auth_token(self) -> str:
-        return self._endpoint_auth.token
-
-    @property
-    def credentials_trusted(self) -> bool:
-        return self._endpoint_auth.credentials_trusted
 
     def update(
         self,
@@ -485,7 +490,7 @@ class OneBotHttpSender:
         return _finalize_onebot_action("HTTP", action, response)
 
 
-class OneBotWsClient:
+class OneBotWsClient(_EndpointAuthHolder):
     """OneBot WebSocket 客户端"""
 
     def __init__(
@@ -562,14 +567,6 @@ class OneBotWsClient:
     @property
     def ws_uri(self) -> str:
         return self._endpoint_auth.endpoint
-
-    @property
-    def auth_token(self) -> str:
-        return self._endpoint_auth.token
-
-    @property
-    def credentials_trusted(self) -> bool:
-        return self._endpoint_auth.credentials_trusted
 
     def _schedule_ws_close(self, ws: Any) -> asyncio.Task[Any]:
         """Own one close task per exact socket so rotations cannot mask each other."""
@@ -1602,14 +1599,7 @@ class OneBotWsClient:
                 timeout=remaining(),
             )
             if main_done:
-                try:
-                    main_task.result()
-                except asyncio.CancelledError:
-                    pass
-                except BaseException as exc:
-                    errors.append(("main listener", exc))
-                if self._main_task is main_task:
-                    self._main_task = None
+                self._collect_main_task(main_task, errors)
             if main_pending:
                 errors.append(
                     (
@@ -1621,14 +1611,7 @@ class OneBotWsClient:
                     )
                 )
         elif main_task is not None and main_task.done():
-            try:
-                main_task.result()
-            except asyncio.CancelledError:
-                pass
-            except BaseException as exc:
-                errors.append(("main listener", exc))
-            if self._main_task is main_task:
-                self._main_task = None
+            self._collect_main_task(main_task, errors)
 
         if self._main_task is None:
             # A listener cancelled during its own cleanup may already be done
@@ -1636,6 +1619,20 @@ class OneBotWsClient:
             # for loop-bound wakeup fields in that case.
             self._event_loop       = None
             self._reconnect_wakeup = None
+
+    def _collect_main_task(
+        self, main_task: asyncio.Task[Any], errors: list[tuple[str, BaseException]]
+    ) -> None:
+        """读取已结束监听任务的结果，记录非取消异常并释放引用。"""
+
+        try:
+            main_task.result()
+        except asyncio.CancelledError:
+            pass
+        except BaseException as exc:
+            errors.append(("main listener", exc))
+        if self._main_task is main_task:
+            self._main_task = None
 
     async def _stop_locked(self) -> None:
         self._running          = False

@@ -14,10 +14,11 @@ from typing import Any, Literal
 from core.interfaces import PluginContextProtocol
 from core.lifecycle import to_thread_owned
 from core.plugin_base import Segments, has_control_characters, image_url, segments, text
+from core.sensitive_audit import log_sensitive_operation as log_sensitive_audit
+from core.sensitive_audit import safe_request_id as context_request_id
 from core.session import Session
 
 from . import jupyter_manager
-from .jupyter_audit import context_request_id, log_sensitive_audit
 from .jupyter_config import (
     DEFAULT_TIMEOUT,
     MAX_CODE_BYTES,
@@ -285,45 +286,49 @@ def _build_result_segments(
     return response
 
 
-async def _handle_execute(args: str, context: PluginContextProtocol) -> Segments:
-    """执行一次有界代码请求；异常正文只进入安全审计的类型字段。"""
+async def _audited_execute(
+    context: PluginContextProtocol, operation: str, code: str, timeout: float
+) -> Any:
+    """在用户自己的内核中执行代码，前后各写一条安全审计；异常时返回 None，正文只记录异常类型。"""
 
-    code, timeout = extract_code_and_timeout(args)
-    if not code.strip():
-        return segments("请输入要执行的代码\n用法: /py print('hello')\n输入 /py help 查看帮助")
     job_id     = uuid.uuid4().hex
     request_id = context_request_id(context)
     try:
         manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
         log_sensitive_audit(
-            logger,
-            "jupyter.execute",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "started",
-            payload    = code,
+            logger, operation, request_id=request_id, job_id=job_id, status="started", payload=code
         )
         result = await manager.execute(code, timeout=timeout, audit_id=job_id)
         log_sensitive_audit(
             logger,
-            "jupyter.execute",
+            operation,
             request_id = request_id,
             job_id     = job_id,
             status     = "succeeded" if result.success else "failed",
             payload    = code,
         )
-        return _build_result_segments(result)
+        return result
     except Exception as exc:
         log_sensitive_audit(
             logger,
-            "jupyter.execute",
+            operation,
             request_id = request_id,
             job_id     = job_id,
             status     = "error",
             payload    = code,
             exc        = exc,
         )
-        return segments("❌ 执行失败，请稍后重试")
+        return None
+
+
+async def _handle_execute(args: str, context: PluginContextProtocol) -> Segments:
+    """执行一次有界代码请求；异常正文只进入安全审计的类型字段。"""
+
+    code, timeout = extract_code_and_timeout(args)
+    if not code.strip():
+        return segments("请输入要执行的代码\n用法: /py print('hello')\n输入 /py help 查看帮助")
+    result = await _audited_execute(context, "jupyter.execute", code, timeout)
+    return segments("❌ 执行失败，请稍后重试") if result is None else _build_result_segments(result)
 
 
 async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -> Segments:
@@ -498,48 +503,19 @@ async def _execute_repl_buffer(
     if state.execution_count >= MAX_REPL_EXECUTIONS:
         return segments("⚠️ REPL 执行计数已达上限，请退出后重新启动")
 
-    job_id     = uuid.uuid4().hex
-    request_id = context_request_id(context)
-    try:
-        manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-        log_sensitive_audit(
-            logger,
-            "jupyter.repl.execute",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "started",
-            payload    = state.code,
-        )
-        result = await manager.execute(state.code, timeout=DEFAULT_TIMEOUT, audit_id=job_id)
-        log_sensitive_audit(
-            logger,
-            "jupyter.repl.execute",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "succeeded" if result.success else "failed",
-            payload    = state.code,
-        )
-        if result.success:
-            next_count = state.execution_count + 1
-            session.set("code_buffer", [])
-            session.set("execution_count", next_count)
-            header = f"✅ 执行完成 (#{next_count})"
-            footer = "继续输入代码，或发送「退出」结束会话"
-        else:
-            header = "⚠️ 执行未成功，缓冲区已保留"
-            footer = "可修改后再次输入 run"
-        return _build_result_segments(result, header=header, footer=footer)
-    except Exception as exc:
-        log_sensitive_audit(
-            logger,
-            "jupyter.repl.execute",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "error",
-            payload    = state.code,
-            exc        = exc,
-        )
+    result = await _audited_execute(context, "jupyter.repl.execute", state.code, DEFAULT_TIMEOUT)
+    if result is None:
         return segments("❌ 执行失败，缓冲区已保留；请稍后重试")
+    if result.success:
+        next_count = state.execution_count + 1
+        session.set("code_buffer", [])
+        session.set("execution_count", next_count)
+        header = f"✅ 执行完成 (#{next_count})"
+        footer = "继续输入代码，或发送「退出」结束会话"
+    else:
+        header = "⚠️ 执行未成功，缓冲区已保留"
+        footer = "可修改后再次输入 run"
+    return _build_result_segments(result, header=header, footer=footer)
 
 
 async def handle_session(

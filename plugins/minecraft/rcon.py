@@ -8,7 +8,7 @@ import struct
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-from .audit import audit_error_type
+from core.sensitive_audit import audit_error_type
 
 logger = logging.getLogger(__name__)
 

@@ -23,6 +23,17 @@ DEFAULT_IMAGE_FORMAT_EXTENSIONS: Final[Mapping[str, str]] = {
     "PNG" : ".png",
     "WEBP": ".webp",
 }
+# 插件下载网络图片时接受的 Content-Type 与格式（不含 BMP）
+WEB_IMAGE_MIME_FORMATS: Final[Mapping[str, str]] = {
+    "image/gif" : "GIF",
+    "image/jpeg": "JPEG",
+    "image/png" : "PNG",
+    "image/webp": "WEBP",
+}
+WEB_IMAGE_FORMAT_EXTENSIONS: Final[Mapping[str, str]] = {
+    image_format: DEFAULT_IMAGE_FORMAT_EXTENSIONS[image_format]
+    for image_format in WEB_IMAGE_MIME_FORMATS.values()
+}
 DEFAULT_IMAGE_FORMAT_SUFFIXES: Final[Mapping[str, frozenset[str]]] = {
     "BMP" : frozenset({".bmp"}),
     "GIF" : frozenset({".gif"}),

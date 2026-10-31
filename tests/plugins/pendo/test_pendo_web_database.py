@@ -486,60 +486,6 @@ def test_undo_delete_restores_event_collection_and_children_from_log():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_rebuild_fts_index_repairs_missing_and_stale_rows():
-    temp_dir, db = _make_temp_db("pendo_review_fts_rebuild")
-    owner_id = "u-fts-rebuild"
-
-    try:
-        db.insert_item(
-            {
-                "id"        : "note-live",
-                "owner_id"  : owner_id,
-                "type"      : "note",
-                "title"     : "全文索引修复",
-                "content"   : "可搜索正文",
-                "category"  : "研究",
-                "created_at": "2026-04-30T09:00:00",
-                "updated_at": "2026-04-30T09:00:00",
-            }
-        )
-        db.insert_item(
-            {
-                "id"        : "note-deleted",
-                "owner_id"  : owner_id,
-                "type"      : "note",
-                "title"     : "应删除索引",
-                "content"   : "旧正文",
-                "category"  : "研究",
-                "created_at": "2026-04-30T09:00:00",
-                "updated_at": "2026-04-30T09:00:00",
-            }
-        )
-        db.delete_item("note-deleted", soft=True, owner_id=owner_id)
-        conn = db.get_connection()
-        conn.execute("DELETE FROM items_fts WHERE id = ?", ("note-live",))
-        conn.execute(
-            "INSERT INTO items_fts (id, title, content, tags, category) VALUES (?, ?, ?, ?, ?)",
-            ("note-deleted", "应删除索引", "旧正文", "", "研究"),
-        )
-        conn.commit()
-
-        result = db.rebuild_fts_index(owner_id)
-
-        assert result["indexed"] == 1
-        assert (
-            conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-live",)).fetchone()
-            is not None
-        )
-        assert (
-            conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-deleted",)).fetchone()
-            is None
-        )
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
 def test_schema_add_column_migration_only_suppresses_its_exact_duplicate():
     from plugins.pendo.services.db_schema import _execute_add_column_migration
 

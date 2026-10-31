@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from .app_identity import AppIdentityService
-from .app_support import _parse_group_ids, current_action_sink
+from .app_support import _parse_positive_ids, current_action_sink
 from .constants import (
     DEFAULT_BOT_NAME,
     INBOUND_EVENT_DEDUP_TTL_SECONDS,
@@ -110,7 +110,7 @@ class AppDeliveryMixin:
             logger.info("No default groups configured, skipping connect notification")
             return
         try:
-            parsed_groups = _parse_group_ids(default_groups)
+            parsed_groups = _parse_positive_ids(default_groups, field_name="default_group_ids")
         except (TypeError, ValueError) as exc:
             logger.error("Connect notification skipped: invalid default_group_ids: %s", exc)
             return

@@ -1,7 +1,4 @@
-"""
-核心命令插件
-提供 Bot 的基础管理功能
-"""
+"""核心命令插件：帮助目录、插件重载、群静音、全局密钥管理与运行指标。"""
 
 import asyncio
 import json
@@ -64,14 +61,7 @@ _DURATION_PATTERN    = re.compile(
 
 
 def mask_secret(value: Any) -> str:
-    """遮罩敏感信息的显示
-
-    Args:
-        value: 要遮罩的值
-
-    Returns:
-        遮罩后的字符串
-    """
+    """遮罩敏感信息的显示"""
     try:
         if isinstance(value, str):
             if len(value) < 12:
@@ -138,17 +128,7 @@ async def handle(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """命令处理入口
-
-    Args:
-        command: plugin.json 中定义的 command name
-        args: 用户输入的参数字符串
-        event: 原始事件数据
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """命令处理入口"""
     try:
         logged_args = (
             "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
@@ -187,12 +167,7 @@ async def handle(
         return segments("❌ 未知命令")
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.handle",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.handle")
 
 
 # ============================================================
@@ -268,12 +243,7 @@ def _handle_help(
         )
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.help",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.help")
 
 
 def _help_not_found(query: str) -> list[dict[str, Any]]:
@@ -641,6 +611,24 @@ def _append_text_page_navigation(
         lines.append(f"➡️ 下一页：/help {query} page {page + 1}")
 
 
+def _append_menu_footer(
+    lines: list[str],
+    query: str,
+    page: int,
+    total_pages: int,
+    page_nodes: tuple[CommandCatalogNode, ...],
+    *,
+    back: str,
+) -> None:
+    """菜单底部：翻页提示、继续查看的示例和返回入口。"""
+
+    _append_text_page_navigation(lines, query=query, page=page, total_pages=total_pages)
+    example = _menu_navigation_example(page_nodes)
+    if example is not None:
+        lines.append(f"继续查看：/help {_help_query_for_node(example)}")
+    lines.append(back)
+
+
 def _plugin_menu_nodes(
     roots: tuple[CommandCatalogNode, ...],
 ) -> tuple[CommandCatalogNode, ...]:
@@ -674,16 +662,9 @@ def _format_plugin_menu(
         *_format_menu_entries(page_nodes),
         "",
     ]
-    _append_text_page_navigation(
-        lines,
-        query       = primary.plugin,
-        page        = page,
-        total_pages = total_pages,
+    _append_menu_footer(
+        lines, primary.plugin, page, total_pages, page_nodes, back="返回总览：/help"
     )
-    example = _menu_navigation_example(page_nodes)
-    if example is not None:
-        lines.append(f"继续查看：/help {_help_query_for_node(example)}")
-    lines.append("返回总览：/help")
     return "\n".join(lines).rstrip()
 
 
@@ -698,31 +679,19 @@ def _format_branch_menu(node: CommandCatalogNode, *, page: int) -> str:
         *_format_menu_entries(page_nodes),
         "",
     ]
-    _append_text_page_navigation(
-        lines,
-        query       = query,
-        page        = page,
-        total_pages = total_pages,
-    )
-    example = _menu_navigation_example(page_nodes)
-    if example is not None:
-        lines.append(f"继续查看：/help {_help_query_for_node(example)}")
     parent_query = " ".join(node.path[:-1]) or node.plugin
-    lines.append(f"返回上级：/help {parent_query}")
+    _append_menu_footer(
+        lines, query, page, total_pages, page_nodes, back=f"返回上级：/help {parent_query}"
+    )
     return "\n".join(lines).rstrip()
 
 
-def _permission_label(permission: str) -> str:
-    return {
-        "public"     : "公开",
-        "bot_admin"  : "Bot 管理员",
-        "group_admin": "群管理员",
-    }.get(permission, permission)
+_PERMISSION_LABELS = {"public": "公开", "bot_admin": "Bot 管理员", "group_admin": "群管理员"}
+_CONTEXT_LABELS    = {"private": "私聊", "group": "群聊"}
 
 
 def _context_label(contexts: tuple[str, ...]) -> str:
-    labels = {"private": "私聊", "group": "群聊"}
-    return "、".join(labels.get(value, value) for value in contexts)
+    return "、".join(_CONTEXT_LABELS.get(value, value) for value in contexts)
 
 
 def _format_command_detail(node: CommandCatalogNode) -> str:
@@ -746,7 +715,7 @@ def _format_command_detail(node: CommandCatalogNode) -> str:
     lines.extend(
         (
             "",
-            f"适用：{_permission_label(node.permission)} · {_context_label(node.contexts)}",
+            f"适用：{_PERMISSION_LABELS.get(node.permission, node.permission)} · {_context_label(node.contexts)}",
             f"命令码：{node.code}",
         )
     )
@@ -914,14 +883,7 @@ def _register_reload_completion_notification(
 
 
 async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """重载配置，并在后台启动全量插件重载。
-
-    Args:
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """重载配置，并在后台启动全量插件重载。"""
     try:
         logger.info("开始重载配置和插件")
         await run_sync(context.reload_config)
@@ -956,23 +918,11 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
             outcome=CommandOutcome("accepted"),
         )
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.reload",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.reload")
 
 
 def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """列出已加载的插件
-
-    Args:
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """列出已加载的插件"""
     try:
         plugins = context.list_plugins()
         if not plugins:
@@ -984,12 +934,7 @@ def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
         logger.info("显示插件列表: %d 个", len(plugins))
         return segments(header + body)
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.plugins",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.plugins")
 
 
 def _handle_mute(
@@ -997,21 +942,7 @@ def _handle_mute(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """处理闭嘴命令
-
-    用法:
-        /闭嘴         - 默认静音 10 分钟
-        /闭嘴 30      - 静音 30 分钟
-        /闭嘴 1h      - 静音 1 小时
-
-    Args:
-        args: 命令参数
-        event: 事件对象
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """/闭嘴 [时长]：默认静音 10 分钟，支持 30、30m、1h、1.5h。"""
     try:
         group_id = event.get("group_id")
 
@@ -1039,37 +970,20 @@ def _handle_mute(
         # 执行静音
         context.mute_group(group_id, duration)
 
-        # 生成友好的时间显示
-        if duration >= 60:
-            time_str = f"{duration / 60:g} 小时"
-        else:
-            time_str = f"{duration:g} 分钟"
+        time_str = f"{duration / 60:g} 小时" if duration >= 60 else f"{duration:g} 分钟"
 
         logger.info("群 %s 设置静音: %s 分钟", group_id, duration)
         return segments(f"🤐 好的，我会安静 {time_str}")
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.mute",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.mute")
 
 
 def _handle_unmute(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """处理说话命令
-
-    Args:
-        event: 事件对象
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """/说话：解除当前群的静音。"""
     try:
         group_id = event.get("group_id")
 
@@ -1089,31 +1003,14 @@ def _handle_unmute(
         return segments("😊 好的，我又可以说话啦！")
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.unmute",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.unmute")
 
 
 async def _handle_set_secret(
     args: str,
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """设置 secrets 中的某个值
-
-    用法:
-        /set_secret plugins.signin.yingshijufeng.sid NEW_VALUE
-        /设置密钥 plugins.signin.yingshijufeng.sid NEW_VALUE
-
-    Args:
-        args: 命令参数
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """/set_secret <路径> <值>：值能按 JSON 解析时保存为对应类型，否则作为字符串。"""
     parts = args.strip().split(maxsplit=1)
     if len(parts) != 2:
         return segments(
@@ -1160,31 +1057,14 @@ async def _handle_set_secret(
         logger.warning("全局密钥更新在提交前失去授权")
         return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.set_secret",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.set_secret")
 
 
 def _handle_get_secret(
     args: str,
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """查看 secrets 中的某个值
-
-    用法:
-        /get_secret plugins.signin.yingshijufeng.sid
-        /查看密钥 plugins.signin.yingshijufeng.sid
-
-    Args:
-        args: 命令参数
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """/get_secret <路径>：目录只列键名，叶子值打码后显示。"""
     path = args.strip()
     if not path:
         return segments(
@@ -1208,18 +1088,12 @@ def _handle_get_secret(
 
         if isinstance(current, dict):
             keys_list = [str(key) for key in current]
-            if len(keys_list) > MAX_DISPLAYED_SECRET_KEYS:
-                display_keys = keys_list[:MAX_DISPLAYED_SECRET_KEYS]
-                suffix       = f", ... 还有 {len(keys_list) - MAX_DISPLAYED_SECRET_KEYS} 个"
-            else:
-                display_keys = keys_list
-                suffix       = ""
+            hidden    = len(keys_list) - MAX_DISPLAYED_SECRET_KEYS
+            suffix    = f", ... 还有 {hidden} 个" if hidden > 0 else ""
             logger.info("查询配置目录: %s, %d 个键", path, len(keys_list))
-            return segments(f"🔑 {path} 包含以下键:\n  {', '.join(display_keys)}{suffix}")
-
-        if isinstance(current, list):
-            logger.info("查询配置列表: %s, %d 个元素", path, len(current))
-            return segments(f"🔑 {path} = {mask_secret(current)}")
+            return segments(
+                f"🔑 {path} 包含以下键:\n  {', '.join(keys_list[:MAX_DISPLAYED_SECRET_KEYS])}{suffix}"
+            )
 
         logger.info("查询配置值: %s", path)
         return segments(f"🔑 {path} = {mask_secret(current)}")
@@ -1230,23 +1104,11 @@ def _handle_get_secret(
         logger.warning("全局密钥读取在返回前失去授权")
         return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.get_secret",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.get_secret")
 
 
 async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """查看运行指标
-
-    Args:
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
+    """/metrics：全局调用统计与最慢的 5 个插件。"""
     try:
         metrics = getattr(context, "metrics", None)
         if metrics is None:
@@ -1300,29 +1162,11 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
         return segments("\n".join(lines))
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "bot_core.metrics",
-        )
+        return public_error_response(context, exc, logger=logger, component="bot_core.metrics")
 
 
 def _parse_duration(text: str) -> float | None:
-    """解析时长字符串
-
-    支持格式:
-        10      -> 10 分钟
-        30m     -> 30 分钟
-        1h      -> 60 分钟
-        1.5h    -> 90 分钟
-
-    Args:
-        text: 时长字符串
-
-    Returns:
-        时长（分钟）；空值、畸形值或非有限值返回 None
-    """
+    """解析时长为分钟：10、30m -> 分钟，1h、1.5h -> 小时；畸形或非有限值返回 None。"""
     match = _DURATION_PATTERN.fullmatch(text.strip())
     if match is None:
         return None

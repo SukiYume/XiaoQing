@@ -14,7 +14,7 @@ import logging
 import math
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -327,6 +327,37 @@ def resolve_multi_interest_model_path(
                 return val
             return os.path.normpath(os.path.join(model_path, val))
     return model_path
+
+
+def run_cached_embedding_model(
+    params: InferenceParams,
+    data: pd.DataFrame,
+    cache: dict[tuple[str, str, int, int], Any],
+    factory: Callable[..., Any],
+) -> tuple[list[float], list[int]]:
+    """k-NN 与多兴趣后端共用的推理入口。
+
+    模型按（真实路径、产物指纹、批大小、最大长度）缓存；同一路径加载新版本时淘汰旧缓存。
+    """
+
+    runtime_path = resolve_multi_interest_model_path(
+        params.model_path, load_training_config(params.model_path)
+    )
+    resolved_path = str(Path(runtime_path).resolve())
+    cache_key     = (
+        resolved_path,
+        resolve_artifact_fingerprint(params, resolved_path),
+        int(params.batch_size),
+        int(params.max_len),
+    )
+    model = cache.get(cache_key)
+    if model is None:
+        model = factory(runtime_path, batch_size=params.batch_size, max_len=params.max_len)
+        for stale_key in [key for key in cache if key[0] == resolved_path]:
+            cache.pop(stale_key, None)
+        cache[cache_key] = model
+    probs = model.predict_proba(data, input_mode=params.input_mode).astype(float).tolist()
+    return probs, [1 if p >= params.threshold else 0 for p in probs]
 
 
 # =============================================================================

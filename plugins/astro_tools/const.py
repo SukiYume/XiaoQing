@@ -2,7 +2,7 @@
 天文常数查询模块
 """
 
-from core.plugin_base import PluginContextProtocol, run_sync
+from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
 _CONST_HELP = (
@@ -44,7 +44,7 @@ _CONST_ALIASES = {
 }
 
 
-def _handle_const_sync(args: str, context: PluginContextProtocol) -> str:
+def handle_const(args: str, context: PluginContextProtocol) -> str:
     """处理天文常数查询命令"""
     args = args.strip().casefold()
     if not args:
@@ -87,9 +87,3 @@ def _handle_const_sync(args: str, context: PluginContextProtocol) -> str:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.const"
         )
-
-
-async def handle_const(args: str, context: PluginContextProtocol) -> str:
-    """在线程 bulkhead 中执行 astropy 常数查询。"""
-
-    return await run_sync(_handle_const_sync, args, context)

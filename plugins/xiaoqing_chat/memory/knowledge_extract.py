@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.atomic_store import keyed_path_lock
-
 from ..llm.gateway import LLMError, chat_completions
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import ChatMessage
@@ -26,8 +24,8 @@ from .memory import StoredMessage
 from .memory_db import MemoryDB, normalize_memory_chat_id, person_fact_doc_id
 from .person_profile import (
     get_profile_generation,
-    profile_generation_path,
     update_profile_and_index,
+    write_if_profile_generation,
 )
 
 
@@ -207,15 +205,14 @@ def _persist_person_facts(
     facts: Sequence[PersonFact],
     expected_generation: str | None = None,
 ) -> None:
-    with keyed_path_lock(profile_generation_path(data_dir, chat_id)):
-        if (
-            expected_generation is not None
-            and get_profile_generation(data_dir, chat_id) != expected_generation
-        ):
-            return
-        _persist_current_person_facts(
+    write_if_profile_generation(
+        data_dir,
+        chat_id,
+        expected_generation,
+        lambda: _persist_current_person_facts(
             data_dir=data_dir, memory_db=memory_db, chat_id=chat_id, facts=facts
-        )
+        ),
+    )
 
 
 def _persist_current_person_facts(

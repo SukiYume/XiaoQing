@@ -89,6 +89,7 @@ def paper_title(paper: dict[str, Any], default: str = "Unknown") -> str:
     return default
 
 
+### NASA ADS 检索客户端：所有请求共享核心 HTTP 会话并受响应体积约束
 class ADSClient:
     def __init__(
         self,
@@ -96,12 +97,8 @@ class ADSClient:
         session: aiohttp.ClientSession,
         context: Any | None = None,
     ) -> None:
-        """Initialize ADS client with API token and shared HTTP session.
+        """token 为 ADS API Token；session 是核心共享的 HTTP 会话。"""
 
-        Args:
-            token: ADS API token
-            session: Shared aiohttp ClientSession for connection pooling
-        """
         self.session  = session
         self.context  = context
         self.base_url = "https://api.adsabs.harvard.edu/v1"
@@ -167,35 +164,19 @@ class ADSClient:
         *,
         sort: str = "citation_count desc",
     ) -> list[dict[str, Any]]:
-        """
-        Search for papers using ADS search API.
+        """按 ADS 查询语法检索论文，fields 为空时取列表展示所需字段。"""
 
-        Args:
-            query: Search query string (supports ADS query syntax)
-            max_results: Maximum number of results to return
-            fields: list of fields to retrieve
-
-        Returns:
-            List of paper dictionaries from ADS API response
-        """
-        if fields is None:
-            fields = [
-                "bibcode",
-                "title",
-                "author",
-                "year",
-                "date",
-                "citation_count",
-                "arxiv_class",
-                "identifier",
-            ]
-
-        return await self._search_docs(
-            query,
-            fields      = fields,
-            max_results = max_results,
-            sort        = sort,
-        )
+        fields = fields or [
+            "bibcode",
+            "title",
+            "author",
+            "year",
+            "date",
+            "citation_count",
+            "arxiv_class",
+            "identifier",
+        ]
+        return await self._search_docs(query, fields=fields, max_results=max_results, sort=sort)
 
     async def get_bibtex(self, bibcode: str) -> str | None:
         """
@@ -229,9 +210,8 @@ class ADSClient:
             return None
 
     async def get_paper_by_bibcode(self, bibcode: str) -> dict[str, Any] | None:
-        bibcode = _validate_bibcode(bibcode)
-        docs    = await self._search_docs(
-            f"bibcode:{_escape_ads_term(bibcode)}",
+        docs = await self._search_docs(
+            f"bibcode:{_escape_ads_term(_validate_bibcode(bibcode))}",
             fields=[
                 "bibcode",
                 "title",
@@ -256,9 +236,8 @@ class ADSClient:
     ) -> list[dict[str, Any]]:
         """查询一篇论文的引用关系，并在拼接 ADS 语法前统一校验 bibcode。"""
 
-        validated_bibcode = _validate_bibcode(bibcode)
         return await self._search_docs(
-            f"{relation}(bibcode:{_escape_ads_term(validated_bibcode)})",
+            f"{relation}(bibcode:{_escape_ads_term(_validate_bibcode(bibcode))})",
             fields      = _RELATION_FIELDS,
             max_results = max_results,
             sort        = "citation_count desc",
@@ -267,71 +246,45 @@ class ADSClient:
     async def get_citations(
         self, bibcode: str, max_results: int = DEFAULT_MAX_CITATIONS
     ) -> list[dict[str, Any]]:
-        return await self._get_relation(
-            "citations",
-            bibcode,
-            max_results=max_results,
-        )
+        return await self._get_relation("citations", bibcode, max_results=max_results)
 
     async def get_references(
         self, bibcode: str, max_results: int = DEFAULT_MAX_REFERENCES
     ) -> list[dict[str, Any]]:
-        return await self._get_relation(
-            "references",
-            bibcode,
-            max_results=max_results,
-        )
+        return await self._get_relation("references", bibcode, max_results=max_results)
 
     async def search_by_author(
         self, author: str, max_results: int = DEFAULT_MAX_RESULTS
     ) -> list[dict[str, Any]]:
-        query = f'author:"{_escape_ads_term(author)}"'
-        return await self.search_papers(query, max_results, sort="date desc")
+        return await self.search_papers(
+            f'author:"{_escape_ads_term(author)}"', max_results, sort="date desc"
+        )
 
     async def search_by_arxiv_id(self, arxiv_id: str) -> dict[str, Any] | None:
-        arxiv_id = self._normalize_arxiv_id(arxiv_id)
-        query    = f"arxiv:{arxiv_id}"
-        papers = await self.search_papers(query, max_results=1)
+        papers = await self.search_papers(
+            f"arxiv:{self._normalize_arxiv_id(arxiv_id)}", max_results=1
+        )
         return papers[0] if papers else None
 
     @staticmethod
     def _normalize_arxiv_id(arxiv_id: str) -> str:
         """
-        Normalize arXiv ID from various formats.
-        Supports:
-        - URLs: https://arxiv.org/abs/2401.12345 or http://arxiv.org/abs/astro-ph/0701089
-        - New format: 2401.12345 or 2401.12345v1
-        - Old format: astro-ph/0701089 or astro-ph/0701089v1
+        规范化 arXiv 编号并去掉版本号，支持：
+        - 链接: https://arxiv.org/abs/2401.12345v1、http://arxiv.org/abs/astro-ph/0701089
+        - 新格式: 2401.12345、2401.12345v1
+        - 旧格式: astro-ph/0701089、astro-ph/0701089v1
         """
+
         arxiv_id = arxiv_id.strip()
-        if arxiv_id.startswith("http"):
-            # Extract from URL - supports both old and new formats
-            # New: https://arxiv.org/abs/2401.12345v1
-            # Old: https://arxiv.org/abs/astro-ph/0701089v1
-            match = ARXIV_URL_PATTERN.search(arxiv_id)
-            if match:
-                return match.group(1)
-        # Remove version number if present (e.g., v1, v2)
-        arxiv_id = ARXIV_VERSION_PATTERN.sub("", arxiv_id)
-        return arxiv_id
+        match    = ARXIV_URL_PATTERN.search(arxiv_id) if arxiv_id.startswith("http") else None
+        return match.group(1) if match else ARXIV_VERSION_PATTERN.sub("", arxiv_id)
 
     @staticmethod
     def extract_arxiv_id(text: str) -> str | None:
-        """
-        Extract arXiv ID from text (e.g., bibcode).
-        Supports:
-        - New format: 2401.12345 or 0706.0001
-        - Old format: astro-ph/0701089, hep-th/9901001, etc.
-        """
-        # Try new format first (YYMM.NNNNN or YYMM.NNNNNN)
-        match = ARXIV_NEW_FORMAT_PATTERN.search(text)
-        if match:
-            return match.group(1)
-        # Try old format (archive/YYMMNNN)
-        match = ARXIV_OLD_FORMAT_PATTERN.search(text)
-        if match:
-            return match.group(1)
-        return None
+        """从文本中提取 arXiv 编号：先找新格式 YYMM.NNNNN，再找旧格式 archive/YYMMNNN。"""
+
+        match = ARXIV_NEW_FORMAT_PATTERN.search(text) or ARXIV_OLD_FORMAT_PATTERN.search(text)
+        return match.group(1) if match else None
 
     @staticmethod
     def format_authors(authors: Any, max_authors: int = DEFAULT_MAX_AUTHORS) -> str:

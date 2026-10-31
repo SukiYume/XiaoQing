@@ -567,26 +567,47 @@ class ConfigManager:
         """Load each source independently without exposing stale credentials."""
 
         with self._lock:
-            config_read, secrets_read = self._read_stable_sources()
-            published_secrets, paired = self._prepare_confirmed_secrets_locked(
-                config_read,
-                secrets_read,
-                confirm_config=True,
-            )
-            self._apply_source_reads_locked(
-                config_read,
-                published_secrets,
-                force         = True,
+            config_read, published_secrets, _snapshot, _notification = self._load_sources_locked(
                 bump_revision = False,
                 notify        = False,
             )
-            if paired:
-                self._mark_sources_paired_locked(config_read, secrets_read)
-            else:
-                self._paired_config_signature = config_read.signature
+        self._log_loaded_sources(config_read, published_secrets, "Config loaded")
+
+    def _load_sources_locked(
+        self,
+        *,
+        bump_revision: bool,
+        notify: bool,
+    ) -> tuple[_SourceRead, _SourceRead, ConfigSnapshot, _ConfigNotification | None]:
+        """严格读取两个配置源并发布；返回读取结果、实际发布的密钥源、快照与待发通知。"""
+
+        config_read, secrets_read = self._read_stable_sources()
+        published_secrets, paired = self._prepare_confirmed_secrets_locked(
+            config_read,
+            secrets_read,
+            confirm_config=True,
+        )
+        if bump_revision:
+            self._clear_pending_sources_locked(bump_generation=True)
+        snapshot, notification, _changed = self._apply_source_reads_locked(
+            config_read,
+            published_secrets,
+            force         = True,
+            bump_revision = bump_revision,
+            notify        = notify,
+        )
+        if paired:
+            self._mark_sources_paired_locked(config_read, secrets_read)
+        else:
+            self._paired_config_signature = config_read.signature
+        return config_read, published_secrets, snapshot, notification
+
+    def _log_loaded_sources(
+        self, config_read: _SourceRead, secrets_read: _SourceRead, message: str
+    ) -> None:
         self._log_source_problem("config", config_read)
-        self._log_source_problem("secrets", published_secrets)
-        logger.info("Config loaded")
+        self._log_source_problem("secrets", secrets_read)
+        logger.info(message)
         _check_secrets_file_permissions(self.secrets_path)
 
     @property
@@ -624,30 +645,13 @@ class ConfigManager:
         """Strictly reload both sources and atomically publish their health state."""
 
         with self._lock:
-            config_read, secrets_read = self._read_stable_sources()
-            published_secrets, paired = self._prepare_confirmed_secrets_locked(
-                config_read,
-                secrets_read,
-                confirm_config=True,
-            )
-            self._clear_pending_sources_locked(bump_generation=True)
-            snapshot, notification, _changed = self._apply_source_reads_locked(
-                config_read,
-                published_secrets,
-                force         = True,
+            config_read, published_secrets, snapshot, notification = self._load_sources_locked(
                 bump_revision = True,
                 notify        = notify,
             )
-            if paired:
-                self._mark_sources_paired_locked(config_read, secrets_read)
-            else:
-                self._paired_config_signature = config_read.signature
         if notification is not None:
             self._start_notification_consumer()
-        self._log_source_problem("config", config_read)
-        self._log_source_problem("secrets", published_secrets)
-        logger.info("Config reloaded")
-        _check_secrets_file_permissions(self.secrets_path)
+        self._log_loaded_sources(config_read, published_secrets, "Config reloaded")
         if config_read.status in {
             ConfigSourceStatus.INVALID,
             ConfigSourceStatus.UNAVAILABLE,
@@ -1437,26 +1441,25 @@ class ConfigManager:
                 notification.revision,
             )
 
+    @staticmethod
+    def _log_callback_error(revision: int, exc: BaseException) -> None:
+        """回调失败只记日志，不影响后续回调和配置发布。"""
+
+        if isinstance(exc, TimeoutError):
+            logger.warning("Config callback timed out at revision %d", revision)
+        elif isinstance(exc, asyncio.CancelledError):
+            logger.warning("Config callback cancelled at revision %d", revision)
+        else:
+            logger.error("Config callback failed: %s", exc, exc_info=exc)
+
     def _run_notification_sync(self, notification: _ConfigNotification) -> None:
         for callback in notification.callbacks:
             try:
                 result = callback(notification.snapshot)
                 if inspect.isawaitable(result):
-                    asyncio.run(
-                        asyncio.wait_for(
-                            result,
-                            timeout=self._callback_timeout_seconds,
-                        )
-                    )
-            except TimeoutError:
-                logger.warning(
-                    "Config callback timed out at revision %d",
-                    notification.revision,
-                )
-            except asyncio.CancelledError:
-                logger.warning("Config callback cancelled at revision %d", notification.revision)
+                    asyncio.run(asyncio.wait_for(result, timeout=self._callback_timeout_seconds))
             except BaseException as exc:
-                logger.exception("Config callback failed: %s", exc)
+                self._log_callback_error(notification.revision, exc)
 
     def _drain_notifications_sync(self) -> None:
         while True:
@@ -1480,22 +1483,9 @@ class ConfigManager:
                     try:
                         result = callback(notification.snapshot)
                         if inspect.isawaitable(result):
-                            await asyncio.wait_for(
-                                result,
-                                timeout=self._callback_timeout_seconds,
-                            )
-                    except TimeoutError:
-                        logger.warning(
-                            "Config callback timed out at revision %d",
-                            notification.revision,
-                        )
-                    except asyncio.CancelledError:
-                        logger.warning(
-                            "Config callback cancelled at revision %d",
-                            notification.revision,
-                        )
+                            await asyncio.wait_for(result, timeout=self._callback_timeout_seconds)
                     except BaseException as exc:
-                        logger.exception("Config callback failed: %s", exc)
+                        self._log_callback_error(notification.revision, exc)
             finally:
                 self._complete_notification(notification)
 

@@ -194,14 +194,6 @@ class PaperStorage:
         data = self._load_json(self.writing_file)
         return [idea for idea in data.get(section, []) if _owned_by(idea, user_id)]
 
-    def list_writing_sections(self, user_id: int) -> list[str]:
-        data = self._load_json(self.writing_file)
-        return [
-            section
-            for section, ideas in data.items()
-            if any(_owned_by(idea, user_id) for idea in ideas)
-        ]
-
     def writing_section_counts(self, user_id: int) -> dict[str, int]:
         """一次读取统计当前用户各章节的灵感数量。"""
 

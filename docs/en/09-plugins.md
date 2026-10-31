@@ -453,7 +453,7 @@ Results include image or video links, title, description, date, credit, and sour
 `config.plugins.apod.url` and `allowed_hosts` configure the page and additional media hosts.
 
 Built-in hosts are `science.nasa.gov`, `assets.science.nasa.gov`, and `apod.nasa.gov`.
-The old `astropix.html` entry automatically migrates to the new homepage.
+A configured `astropix.html` entry is read from the default homepage instead.
 Daily at 13:30, Core `broadcast` sends to schedule `group_ids`. Omission uses `default_group_ids`.
 
 Pages, redirects, and media pass HTTPS, public-DNS, response-size, MIME, dimension, and pixel checks.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "4.6.0"
+version = "5.0.0"
 description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
@@ -32,7 +32,7 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.8.0",
     "websockets>=11.0",
-    # 3.x 私有 drain 能力经 scheduler_compat 行为探测隔离。不满足时使用公开关闭路径。
+    # 3.x 私有 drain 能力经 core/scheduler.py 中的行为探测隔离。不满足时使用公开关闭路径。
     "apscheduler>=3.11,<4",
     "pydantic>=2.5.0",
     # Pendo Web is enabled by default. Its server dependencies are core dependencies.

@@ -5,7 +5,7 @@
 职责：
 - 根据 model_type 自动分发到 transformers / multi_interest 后端
 - 统一输入输出格式
-- 提供便捷函数给 main.py / scripts/arxiv_inference_cli.py 调用
+- 提供便捷函数给 main.py / scripts/arxiv_inference_cli.py 直接调用
 """
 
 import logging

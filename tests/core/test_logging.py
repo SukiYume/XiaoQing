@@ -10,8 +10,6 @@ from core.logging_config import (
     LogManager,
     RequestContextFormatter,
     _enable_windows_ansi,
-    get_log_manager,
-    get_logger,
     setup_logging,
 )
 
@@ -220,23 +218,6 @@ class TestLogManager:
         assert "[request_id=req-file-1]" in content
         assert "[request_id=-]" in content
 
-    def test_set_level(self, tmp_path: Path):
-        """测试动态设置日志级别"""
-        manager = LogManager(
-            log_dir        = tmp_path / "logs",
-            level          = "INFO",
-            console_output = False,
-            file_output    = False,
-        )
-
-        assert manager.level == logging.INFO
-
-        manager.set_level("DEBUG")
-        assert manager.level == logging.DEBUG
-
-        manager.set_level("WARNING")
-        assert manager.level == logging.WARNING
-
     def test_rotation_type_size(self, tmp_path: Path):
         """实际写入触发大小轮转，历史文件数量受配置约束。"""
         from logging.handlers import RotatingFileHandler
@@ -345,14 +326,6 @@ class TestSetupLogging:
         assert manager.console_output is False
         assert manager.rotation_type == "size"
 
-    def test_get_log_manager_after_setup(self, tmp_path: Path):
-        """测试 setup 后获取 manager"""
-        config = {"log_level": "INFO"}
-        setup_logging(config, log_dir=tmp_path / "logs")
-
-        manager = get_log_manager()
-        assert manager is not None
-
     def test_setup_closes_existing_handlers(self, tmp_path: Path):
         """测试 setup_logging 会关闭旧 handlers"""
         root_logger = logging.getLogger()
@@ -380,28 +353,3 @@ class TestSetupLogging:
             if handler in root_logger.handlers:
                 root_logger.removeHandler(handler)
             handler.close()
-
-
-# ============================================================
-# get_logger 测试
-# ============================================================
-
-
-class TestGetLogger:
-    """get_logger 函数测试"""
-
-    def test_get_named_logger(self):
-        """测试获取命名 logger"""
-        logger1 = get_logger("my.module")
-        logger2 = get_logger("my.module")
-
-        assert logger1 is logger2
-        assert logger1.name == "my.module"
-
-    def test_logger_hierarchy(self):
-        """测试 logger 层级"""
-        parent = get_logger("parent")
-        child  = get_logger("parent.child")
-
-        assert child.parent is parent
-        assert child.parent.name == "parent"

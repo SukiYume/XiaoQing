@@ -5,9 +5,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from core.router import resolve_context_command_invocation
+from core.sensitive_audit import audit_error_type
 
 from . import session_handlers
-from .audit import audit_error_type
 from .config import COMMAND_TIMEOUT, SessionKeys
 from .handlers import (
     handle_ssh_add,

@@ -274,12 +274,12 @@ async def test_codex_main_exports_only_the_fixed_arxiv_summary_entrypoint(
     monkeypatch.setattr(codex_main, "enqueue_or_replay_arxiv_summary", exported)
 
     assert (
-        await codex_main.enqueue_arxiv_summary(
+        await codex_main.enqueue_arxiv_summary_service(
+            "2026-07-11",
+            ["https://arxiv.org/abs/2607.00001"],
+            1,
+            2,
             context,
-            date     = "2026-07-11",
-            links    = ["https://arxiv.org/abs/2607.00001"],
-            user_id  = 1,
-            group_id = 2,
         )
         == "queued"
     )

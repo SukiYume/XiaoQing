@@ -9,13 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.atomic_store import keyed_path_lock
 from core.plugin_base import write_json
 
 from ..llm.llm_config import LLMCallConfig
 from ..memory.memory import StoredMessage
 from ..memory.memory_db import MemoryDB
-from ..memory.person_profile import get_profile_generation, profile_generation_path
+from ..memory.person_profile import get_profile_generation, write_if_profile_generation
 from ..memory.topic_summary_cache import load_topic_summary_entries, topic_summary_cache_path
 from ..utils.json_parsing import parse_first_json_object
 from .gateway import chat_completions
@@ -109,15 +108,14 @@ def _persist_topic_summary(
     summary: TopicSummary,
     expected_generation: str | None = None,
 ) -> None:
-    with keyed_path_lock(profile_generation_path(data_dir, chat_id)):
-        if (
-            expected_generation is not None
-            and get_profile_generation(data_dir, chat_id) != expected_generation
-        ):
-            return
-        _persist_current_topic_summary(
+    write_if_profile_generation(
+        data_dir,
+        chat_id,
+        expected_generation,
+        lambda: _persist_current_topic_summary(
             data_dir=data_dir, chat_id=chat_id, cache=cache, memory_db=memory_db, summary=summary
-        )
+        ),
+    )
 
 
 def _persist_current_topic_summary(

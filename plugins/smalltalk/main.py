@@ -255,10 +255,6 @@ def _qa_snapshot_for(context: Context) -> _QaSnapshot:
     return _qa_snapshot(str(_qa_file(context).absolute()))
 
 
-def _audit_snapshot_for(context: Context) -> _AuditSnapshot:
-    return _audit_snapshot(str((context.data_dir / "QA_audit.json").absolute()))
-
-
 def _read_qa_file(path: Path) -> dict[str, list[str]]:
     return _normalize_qa(_load_json(path, {}))
 
@@ -292,7 +288,7 @@ async def _record_qa_audit(context: Context, operation: str, question: str) -> N
     """从内存快照追加有界审计，并在线程中持久化；故障不回滚主数据。"""
 
     try:
-        snapshot = _audit_snapshot_for(context)
+        snapshot = _audit_snapshot(str((context.data_dir / "QA_audit.json").absolute()))
         entry    = {
             "at"       : datetime.now(UTC).isoformat(),
             "operation": operation,
