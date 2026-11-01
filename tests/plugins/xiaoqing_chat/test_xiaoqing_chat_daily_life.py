@@ -371,10 +371,13 @@ async def test_turn_going_stale_after_a_sent_bubble_records_only_what_went_out()
     from plugins.xiaoqing_chat import turn_delivery
     from plugins.xiaoqing_chat.message_parts import build_text_message_parts
 
-    sent: list   = []
-    finalization = _finalization("upstream_ws", sent)
-    batches      = _batches("一", "二", "三", "四")
-    bubbles      = turn_delivery._ReplyBubbles(finalization, (), batches)
+    sent: list                           = []
+    finalization                         = _finalization("upstream_ws", sent)
+    batches                              = _batches("一", "二", "三", "四")
+    finalization.generated.reply_payload = turn_delivery.build_reply_payload_from_parts(
+        build_text_message_parts("一\n\n二\n\n三\n\n四")
+    )
+    bubbles = turn_delivery._ReplyBubbles(finalization, (), batches)
     with (
         patch.object(turn_delivery, "_drop_stale_generated_turn", side_effect=[False, False, True]),
         patch.object(turn_delivery.asyncio, "sleep", AsyncMock()),

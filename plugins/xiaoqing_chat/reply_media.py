@@ -10,11 +10,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
-from .media.emoji_library import mark_emoji_used, mark_emoji_used_by_hash
+from .media.emoji_library import mark_emoji_used_by_hash
 from .media.event_media import render_event_media
-from .media.marker_resolver import ResolvedMarker
 from .media.models import RenderedMedia
-from .media.qq_face_catalog import mark_qq_face_used, mark_qq_face_used_by_id
+from .media.qq_face_catalog import mark_qq_face_used_by_id
 from .media_registry import normalize_media_refs, upsert_registered_media_items
 from .message_parts import (
     build_text_message_parts,
@@ -54,23 +53,9 @@ def _drop_empty(detail: dict[str, Any]) -> dict[str, Any]:
 
 
 def media_action_detail(
-    marker: ResolvedMarker | None,
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """生成行动历史需要的最小媒体摘要，优先采用已解析 marker。"""
-
-    if marker is not None:
-        entry = marker.entry
-        return _drop_empty(
-            {
-                "media_kind"   : marker.kind,
-                "media_marker" : marker.marker,
-                "media_mode"   : marker.mode,
-                "media_hash"   : str(getattr(entry, "media_hash", "") or ""),
-                "media_key"    : str(getattr(entry, "media_key", "") or ""),
-                "media_face_id": str(getattr(entry, "face_id", "") or ""),
-            }
-        )
+    """从结算后的结构化内容生成行动历史媒体摘要。"""
 
     part = _first_media_part(parts)
     if not part:
@@ -234,36 +219,16 @@ def normalize_generated_reply_state(
     generated.reply_payload = None
 
 
-def mark_reply_media_used(context, generated: GeneratedSmalltalkTurn) -> None:
-    """登记已送达回复中的媒体；统计失败不反向影响发送结果。"""
+def mark_reply_media_used(context, reply_parts) -> None:
+    """按结算后的结构化内容登记媒体使用次数。"""
 
-    marker      = generated.media_marker
-    marker_kind = marker.kind if marker is not None else ""
-    reply_parts = normalize_message_parts(generated.reply_parts)
-
-    if marker is not None and marker_kind == "emoji":
-        try:
-            mark_emoji_used(context, marker.entry)
-        except Exception as exc:
-            _log_media_bookkeeping_failure(context, "mark_emoji_entry", exc)
-    elif marker_kind != "emoji":
-        for part in reply_parts:
-            if str(part.get("kind", "") or "").strip() != "emoji":
-                continue
+    for part in normalize_message_parts(reply_parts):
+        if part["kind"] == "emoji":
             try:
                 mark_emoji_used_by_hash(context, str(part.get("media_hash", "") or ""))
             except Exception as exc:
                 _log_media_bookkeeping_failure(context, "mark_emoji_hash", exc)
-
-    if marker is not None and marker_kind == "qq_face":
-        try:
-            mark_qq_face_used(context, marker.entry)
-        except Exception as exc:
-            _log_media_bookkeeping_failure(context, "mark_qq_face_entry", exc)
-    elif marker_kind != "qq_face":
-        for part in reply_parts:
-            if str(part.get("kind", "") or "").strip() != "qq_face":
-                continue
+        elif part["kind"] == "qq_face":
             try:
                 mark_qq_face_used_by_id(
                     context,

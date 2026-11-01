@@ -7,7 +7,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments, send_with_receipt
 from core.interfaces import ACTION_BYPASS_SINK_KEY
@@ -21,7 +21,7 @@ from .frequency_control import record_reply_frequency
 from .logging_utils import log_step
 from .memory.local_ids import allocate_local_id, most_recent_user_local_id
 from .memory.person_profile import get_profile_generation
-from .message_parts import build_text_message_parts, normalize_message_parts
+from .message_parts import normalize_message_parts
 from .planning.action_history import ActionRecord
 from .post_reply_tasks import spawn_post_reply_tasks
 from .reply_media import (
@@ -238,25 +238,24 @@ def _drop_stale_generated_turn(
 def _prepare_smalltalk_reply_output(finalization: _SmalltalkFinalization):
     """提交前构造展示输出并同步媒体引用。"""
 
-    generated = finalization.generated
-    if generated.reply:
-        reply_display_parts     = normalize_message_parts(generated.reply_parts)
-        generated.reply_payload = _build_reply_payload(
-            finalization.hctx.runtime,
-            generated,
-            brain_chat_active = finalization.prepared.brain_chat_active,
-            display_parts     = reply_display_parts,
-        )
-    else:
-        reply_display_parts     = ()
-        generated.reply_payload = None
+    generated   = finalization.generated
     reply_parts = sync_message_parts_to_registry(
         finalization.hctx.state,
-        reply_display_parts,
+        generated.reply_parts if generated.reply else (),
         context = finalization.context,
         runtime = finalization.hctx.runtime,
     )
-    generated.reply_parts = reply_parts
+    generated.reply_parts   = reply_parts
+    generated.reply_payload = (
+        _build_reply_payload(
+            finalization.hctx.runtime,
+            generated,
+            brain_chat_active = finalization.prepared.brain_chat_active,
+            display_parts     = reply_parts,
+        )
+        if generated.reply
+        else None
+    )
     return reply_parts
 
 
@@ -367,7 +366,7 @@ async def _record_delivered_reply(
         detail     = {
             "source"      : "forced",
             "force_reason": prepared.force_reason,
-            **media_action_detail(generated.media_marker, reply_parts),
+            **media_action_detail(reply_parts),
         }
     else:
         assert generated.pfc_result is not None
@@ -378,7 +377,7 @@ async def _record_delivered_reply(
             reasoning += f":{generated.pfc_result.reason}"
         detail = {
             "source": generated.reply_source,
-            **media_action_detail(generated.media_marker, reply_parts),
+            **media_action_detail(reply_parts),
         }
 
     return await _record_bot_reply(
@@ -397,7 +396,7 @@ async def _commit_smalltalk_delivery(
     reply_parts,
     message_ids: tuple[Any, ...] = (),
 ) -> None:
-    """仅在全部外发动作成功后提交内部状态；消息 ID 随记录一起写入。"""
+    """按已送达或结果未知的范围提交内部状态与消息 ID。"""
 
     should_flush_pfc            = False
     history_snapshot: list[Any] = []
@@ -440,7 +439,7 @@ async def _commit_smalltalk_delivery(
         asyncio.to_thread(
             mark_reply_media_used,
             finalization.context,
-            finalization.generated,
+            reply_parts,
         ),
         name=f"reply_media_used:{finalization.hctx.chat_id}",
     )
@@ -554,10 +553,19 @@ class _ReplyBubbles:
             await _rollback_smalltalk_delivery(self._finalization, batch_count=len(self._batches))
             return
         message_ids = tuple(item for index in seen for item in self._message_ids.get(index, ()))
+        payload     = self._finalization.generated.reply_payload
+        assert payload is not None
         if len(seen) == len(self._batches):
-            parts = self._reply_parts
+            emitted_media = [
+                part for batch in payload.batch_parts for part in batch if part["kind"] != "text"
+            ]
+            parts = tuple(
+                part
+                for part in self._reply_parts
+                if part["kind"] == "text" or part in emitted_media
+            )
         else:
-            parts = _sent_bubble_parts([self._batches[index] for index in seen])
+            parts = _sent_bubble_parts([payload.batch_parts[index] for index in seen])
             log_step(
                 self._finalization.context,
                 self._finalization.hctx.runtime,
@@ -617,21 +625,31 @@ def _smalltalk_interbubble_delay(runtime: ChatRuntime, batch: Any) -> float:
     return gap + min(1.2, type_per * batch_chars * 0.6)
 
 
-def _sent_bubble_parts(batches: list[Any]) -> tuple[dict[str, Any], ...]:
-    """已经发出的气泡里的文字；气泡之间空一行，和整条回复的记法一致。"""
+def _sent_bubble_parts(batches: list[list[dict[str, object]]]) -> tuple[dict[str, object], ...]:
+    """合并已投递批次的结构化内容，保留媒体身份和顺序。"""
 
-    texts = (
-        "".join(
-            str((segment.get("data") or {}).get("text") or "")
-            for segment in batch
-            if isinstance(segment, dict) and segment.get("type") == "text"
-        ).strip()
-        for batch in batches
-    )
-    return cast(
-        tuple[dict[str, Any], ...],
-        build_text_message_parts("\n\n".join(text for text in texts if text)),
-    )
+    parts: list[dict[str, object]] = []
+    for batch in batches:
+        if parts:
+            if parts[-1]["kind"] == "text":
+                parts[-1]["text"] = str(parts[-1]["text"]) + "\n\n"
+            else:
+                parts.append({"kind": "text", "text": "\n\n"})
+        for part in batch:
+            if parts and part["kind"] == "text" and parts[-1]["kind"] == "text":
+                parts[-1]["text"] = str(parts[-1]["text"]) + str(part["text"])
+            else:
+                parts.append(dict(part))
+    normalized: list[dict[str, object]] = []
+    for part in parts:
+        if part["kind"] == "text":
+            normalized.extend(
+                {"kind": "text", "text": line}
+                for line in str(part["text"]).splitlines(keepends=True)
+            )
+        else:
+            normalized.append(part)
+    return tuple(normalized)
 
 
 async def _send_smalltalk_intermediate_batches(

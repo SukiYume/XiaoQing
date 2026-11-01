@@ -15,9 +15,10 @@ import pytest
 import tests.helpers.app_test_support as _app_support
 from core.delivery import resolve_action_handoff
 from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
-from plugins.xiaoqing_chat import turn_delivery
+from plugins.xiaoqing_chat import reply_media, turn_delivery
 from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+from plugins.xiaoqing_chat.media_registry import MediaRegistryStore
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts
 from plugins.xiaoqing_chat.smalltalk_models import GeneratedSmalltalkTurn, PreparedSmalltalkTurn
 from tests.helpers.app_test_support import OneBotActionOutcomeUnknown, XiaoQingApp
@@ -33,15 +34,18 @@ class _OneBotWs:
     credentials_trusted = True
 
     def __init__(self, outcomes: list[bool | None]) -> None:
-        self._outcomes        = list(outcomes)
-        self.texts: list[str] = []
+        self._outcomes                  = list(outcomes)
+        self.texts: list[str]           = []
+        self.messages: list[list[dict]] = []
 
     def connected(self) -> bool:
         return True
 
     async def send_action(self, action: dict) -> bool:
         outcome = self._outcomes.pop(0)
-        self.texts.append(action["params"]["message"][0]["data"]["text"])
+        message = action["params"]["message"]
+        self.messages.append(message)
+        self.texts.append("".join(seg["data"]["text"] for seg in message if seg["type"] == "text"))
         if outcome is None:
             raise OneBotActionOutcomeUnknown(action["action"])
         if outcome:
@@ -77,6 +81,9 @@ def _app_with_turn(root: Path, tmp_path: Path, ws: _OneBotWs | None):
         chat_id  = "u7",
         bot_name = "小青",
     )
+    hctx.state.media_store = MediaRegistryStore()
+    hctx.state.memory_store.get_async = AsyncMock(return_value=[])
+    hctx.state.heartflow.on_bot_reply_async = AsyncMock()
     context = SimpleNamespace(send_action=app._send_action, data_dir=tmp_path, logger=MagicMock())
 
     async def finalize(event):
@@ -95,6 +102,8 @@ def _event() -> dict:
 @pytest.fixture
 def recorded():
     """替换掉提交之后的记忆写入和后台任务，只看提交了哪些内容、哪些消息 ID。"""
+
+    deliver = turn_delivery._record_delivered_reply
 
     def drop_task(_context, coro, *, name):
         coro.close()
@@ -117,7 +126,7 @@ def recorded():
         ) as record,
         patch.object(turn_delivery, "_rollback_smalltalk_delivery", AsyncMock()) as rollback,
     ):
-        yield SimpleNamespace(record=record, rollback=rollback)
+        yield SimpleNamespace(record=record, rollback=rollback, deliver=deliver)
 
 
 @pytest.mark.asyncio
@@ -198,3 +207,163 @@ async def test_collected_bubbles_settle_when_the_server_actually_sends_them(
     _finalization, parts, ids = recorded.record.await_args.args
     assert parts == build_text_message_parts("在呢")
     assert ids == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["image", "emoji", "qq_face", "unicode_face"])
+@pytest.mark.parametrize("media_bubble", [0, 1, 2])
+@pytest.mark.parametrize(
+    "outcomes,seen",
+    [
+        ([True, False], [0]),
+        ([True, None], [0, 1]),
+        ([True, True, False], [0, 1]),
+        ([True, True, None], [0, 1, 2]),
+        ([True, True, True], [0, 1, 2]),
+        ([False], []),
+        ([None], [0]),
+    ],
+)
+async def test_media_delivery_scope(
+    temp_app_root, tmp_path, recorded, kind, media_bubble, outcomes, seen
+):
+    ws = _OneBotWs(outcomes)
+    app, generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    media = {
+        "kind"       : "qq_face" if kind == "unicode_face" else kind,
+        "media_key"  : "media:test",
+        "marker"     : "[媒体:测试]",
+        "mode"       : "text_with_media",
+        "description": "测试媒体",
+    }
+    if kind in ("qq_face", "unicode_face"):
+        media.update(face_id="14" if kind == "qq_face" else "🚀", label="微笑")
+    else:
+        media.update(media_hash="test-hash", file_path=str(tmp_path / "test.png"))
+    parts = []
+    for index, word in enumerate(("看这个", "第二条", "第三条")):
+        parts.append({"kind": "text", "text": ("\n\n" if index else "") + word})
+        if index == media_bubble:
+            parts.append(media)
+    generated.reply_parts = tuple(parts)
+    # 保留生成标记，验证结算内容决定历史与使用统计。
+    generated.media_marker = MagicMock(kind=media["kind"], marker=media["marker"])
+    recorded.record.side_effect = recorded.deliver
+    tasks                       = []
+
+    def run_media_task(_context, coro, *, name):
+        if name.startswith("reply_media_used:"):
+            tasks.append(coro)
+        else:
+            coro.close()
+
+    with (
+        patch.object(turn_delivery, "spawn_bg_task", side_effect=run_media_task),
+        patch.object(
+            turn_delivery,
+            "sync_message_parts_to_registry",
+            side_effect=reply_media.sync_message_parts_to_registry,
+        ),
+        patch.object(reply_media, "schedule_media_registry_flush"),
+        patch.object(turn_delivery, "schedule_memory_persist"),
+        patch.object(turn_delivery, "schedule_action_history_flush"),
+        patch.object(turn_delivery, "record_reply_frequency"),
+        patch.object(reply_media, "mark_emoji_used_by_hash") as emoji_used,
+        patch.object(reply_media, "mark_qq_face_used_by_id") as face_used,
+    ):
+        await app._handle_upstream_event(_event())
+        for task in tasks:
+            await task
+
+    assert len(ws.messages) == len(outcomes)
+    expected_media = media_bubble in seen
+    assert emoji_used.call_count == int(expected_media and kind == "emoji")
+    assert face_used.call_count == int(expected_media and kind in ("qq_face", "unicode_face"))
+    if emoji_used.called:
+        assert emoji_used.call_args.args[1] == "test-hash"
+    if face_used.called:
+        assert face_used.call_args.args[1] == media["face_id"]
+    if not seen:
+        recorded.record.assert_not_awaited()
+        recorded.rollback.assert_awaited_once()
+        assert tasks == []
+        return
+    recorded.record.assert_awaited_once()
+    recorded.rollback.assert_not_awaited()
+    finalization, delivered_parts, ids = recorded.record.await_args.args
+    assert ids == tuple(101 + i for i, outcome in enumerate(outcomes) if outcome is True)
+    assert [part for part in delivered_parts if part["kind"] != "text"] == (
+        [media] if expected_media else []
+    )
+    state = finalization.hctx.state
+    state.memory_store.append.assert_called_once()
+    assert state.memory_store.append.call_args.kwargs["parts"] == delivered_parts
+    assert state.memory_store.append.call_args.kwargs["message_ids"] == ids
+    state.action_history.append.assert_called_once()
+    detail = state.action_history.append.call_args.args[1].detail
+    assert detail.get("media_key") == ("media:test" if expected_media else None)
+    assert detail.get("media_kind") == (media["kind"] if expected_media else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcomes,expected",
+    [
+        ((True, None, False), ["one", "two"]),
+        ((True, False, True), ["one", "three"]),
+        ((False, False, False), []),
+    ],
+)
+async def test_collected_media_receipts_settle_once(
+    temp_app_root, tmp_path, recorded, outcomes, expected
+):
+    app, generated = _app_with_turn(temp_app_root, tmp_path, None)
+    generated.reply_parts = (
+        {"kind": "image", "media_key": "one", "file_path": str(tmp_path / "one.png")},
+        {"kind": "text", "text": "\n\n"},
+        {"kind": "qq_face", "media_key": "two", "face_id": "14"},
+        {"kind": "text", "text": "\n\n"},
+        {
+            "kind"      : "emoji",
+            "media_key" : "three",
+            "media_hash": "third",
+            "file_path" : str(tmp_path / "three.png"),
+        },
+    )
+    actions = await app._collect_actions_for_event(_event(), default_source="inbound_ws")
+    assert len(actions) == 3
+    recorded.record.assert_not_awaited()
+    # 乱序回执仍按发送顺序合并，并等待全部在途批次结算。
+    for index in (2, 0):
+        await resolve_action_handoff(actions[index], delivered=outcomes[index])
+        recorded.record.assert_not_awaited()
+        recorded.rollback.assert_not_awaited()
+    await resolve_action_handoff(actions[1], delivered=outcomes[1])
+    for action in actions:
+        await resolve_action_handoff(action, delivered=True)
+    if expected:
+        recorded.record.assert_awaited_once()
+        recorded.rollback.assert_not_awaited()
+        _, parts, ids = recorded.record.await_args.args
+        assert [p["media_key"] for p in parts if p["kind"] != "text"] == expected
+        assert ids == ()
+    else:
+        recorded.record.assert_not_awaited()
+        recorded.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_full_delivery_excludes_media_without_a_sendable_segment(
+    temp_app_root, tmp_path, recorded
+):
+    ws = _OneBotWs([True])
+    app, generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    generated.reply_parts = (
+        {"kind": "text", "text": "文字"},
+        {"kind": "emoji", "media_hash": "missing-file", "marker": "[表情包:缺失]"},
+    )
+    await app._handle_upstream_event(_event())
+    recorded.record.assert_awaited_once()
+    _, parts, ids = recorded.record.await_args.args
+    assert parts == build_text_message_parts("文字")
+    assert ids == (101,)
