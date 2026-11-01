@@ -58,9 +58,9 @@ xiaoqing_chat
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
 | `chat_runtime.py` | 配置热加载、AI route 上下文、`llm_call_config`、屏蔽规则与会话锁 |
 | `attention_gate.py` | 明确召唤：`@`、名字、名字续问、引用角色、上下文共指 |
-| `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读。低信息与点名他人 |
+| `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读。低信息。点名他人的消息不算线索 |
 | `frequency_control.py` | 硬频控、参与概率、Heartflow 软加分、沉默补偿，记录 `ReplyGateDecision` |
-| `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额 |
+| `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额。上一轮回复交给 Core 后到回执结算前，同会话下一轮在配额内等待 |
 | `brain_chat.py` | 私聊深度对话：在说话方式后追加人设卡的〔深度对话〕一节，思考等级、上下文长度和温度 |
 | `persona.py` | 名字解析。解析人设卡（`config/persona.md`），按标记取出人物事实、聊天说话方式与示例、agent 办事部分和心境 |
 | `smalltalk_models.py` | `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 阶段模型 |
@@ -69,7 +69,7 @@ xiaoqing_chat
 | `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
 | `reply_fallbacks.py` | 被拒后的定向重写提示和明确召唤兜底句（`ALL_FALLBACK_TEXTS`） |
-| `turn_delivery.py` | 打字延迟、过期丢弃、分批外发、投递后提交与回滚 |
+| `turn_delivery.py` | 打字延迟、过期丢弃（超出最近 15 条、之后有人叫停、话题已换或会话重置）、要接的话不在最近 5 条里时引用原消息、分批外发、投递后提交与回滚 |
 | `post_reply_tasks.py` | 投递成功后的摘要、事实提取、表达学习和策略复盘任务 |
 | `reply_media.py` | 回复链路的媒体桥接与素材使用记录 |
 | `reply_payload.py` | 把消息部件编排为展示文本和可投递批次 |
@@ -98,6 +98,7 @@ xiaoqing_chat
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
 | `check_result.py` | `ReplyCheckResult`、`ReplyRejected` 与标准拒绝结果 |
 | `summarizer.py` | 话题摘要的增量压缩 |
+| `topic_shift.py` | 回复晚到时确认群里有没有换话题：隔了 5 条以上或有人用“对了”“话说”转开时才问一次 `reasoning` 路由，确认不了按没换处理 |
 
 ### `planning/`：行为规划
 
@@ -106,7 +107,7 @@ xiaoqing_chat
 | `pfc_engine.py` | PFC 会话准备、动作规划、等待、重想和状态提交 |
 | `pfc_action_planner.py` | 把上下文转换为有界动作计划 |
 | `pfc_goal_analyzer.py` | 依据可见对话和行动历史更新短期目标 |
-| `pfc_state.py` | PFC 状态持久化与并发写入 |
+| `pfc_state.py` | PFC 状态持久化与并发写入。取快照时登记轮次号，更新的轮次写回后，迟到的旧快照不再写回 |
 | `pfc_utils.py` | 从模型返回值中提取结构化列表 |
 | `planned_action.py` | 不可变的规划动作 |
 | `goal_state.py` | 会话目标与活跃话题 |
@@ -224,7 +225,7 @@ agent_bridge（明确召唤且 agent 已开启时）
   └─ agent 接手 → 放弃生成并让出名额 → agent act → 回复带回执返回 Core
   │
   ▼
-generation_limiter.admit                    全局 / 会话 / 用户 / 日配额；会话配额排队，最新一轮优先
+generation_limiter.admit                    全局 / 会话 / 用户 / 日配额；会话配额排队，最新一轮优先；等上一轮回复结算
   │
   ▼
 turn_generation.generate_smalltalk_turn
@@ -245,7 +246,8 @@ turn_generation.generate_smalltalk_turn
   │
   ▼
 turn_delivery.finalize_smalltalk_turn
-  ├─ 过期检查（打字期间的新消息、会话重置）
+  ├─ 过期检查（超出最近 15 条、之后有人叫停、会话重置，气泡之间也查）；隔得远或有人转话题时确认话题没换（llm/topic_shift）
+  ├─ 要接的话不在最近 5 条里时首个气泡引用原消息
   ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔（正向 WS 下中间气泡绕过 Core 的事件收集直接发出）
   ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
   │                 → post_reply_tasks：摘要、事实提取、表达学习、策略复盘、未完话头结算、生活记录抽取
@@ -270,7 +272,7 @@ turn_delivery.finalize_smalltalk_turn
 
 普通参与由 `frequency_control.decide_reply` 决定，顺序固定：
 
-1. `_hard_limit_reason`：最小间隔（活跃话题与追问使用更短的间隔）、每分钟上限、连续冷却、低信息、点名他人。
+1. `_hard_limit_reason`：最小间隔（活跃话题与追问使用更短的间隔）、每分钟上限、连续冷却、低信息。点名他人不拦，交给规划器按话题判断。
 2. `_participation_probability`：基础概率。参与线索、活跃话题、活跃话题追问分别抬到各自上限，取最大值。
 3. Heartflow：`score - base_score` 的正值部分按 `probability + (1 - probability) × Δ` 抬高。
 4. `_streak_adjusted`：连续沉默 3 轮 ×1.2（≤ 0.90），5 轮 ×1.4（≤ 0.95）。
@@ -294,6 +296,8 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | `fetch_knowledge` | 检索知识库后再规划 |
 | `end_conversation` | 结束话题，状态置为 ended |
 | `block_and_ignore` | 忽略本轮 |
+
+规划器的“最近行动概要”把连续的 `wait` / `listening` 合成一行条数，不附当时不开口的理由；群聊里她已经连续 3 条以上没出声时，时间提示写明沉默了多少条。否则前几轮的旁听理由会成为下一轮的先例，越听越不开口。
 
 规划器解析失败时，私聊回退为 `direct_reply`，群聊回退为 `wait`。规划请求的单次与总超时取主配置 `reasoning` 路由，连续失败进入退避。
 

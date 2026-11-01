@@ -39,6 +39,9 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
         self._cache: dict[str, PFCConversationState] = {}
         self._dirty_chat_ids: set[str]               = set()
         self._lock                                   = threading.RLock()
+        # 每个会话取规划快照的轮次号，以及已经写回过的最大轮次号（只在内存里，重启后从头数）。
+        self._started_turns: dict[str, int]   = {}
+        self._committed_turns: dict[str, int] = {}
 
     def _path(self, chat_id: str) -> Path | None:
         return self._resolve_path("pfc_state", f"{chat_id}.json")
@@ -134,6 +137,29 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
             self._cache[cid] = state
             self._dirty_chat_ids.add(cid)
             self._evict_clean_states_unlocked(protected_chat_id=cid)
+
+    def begin_turn(self, chat_id: str) -> int:
+        """一轮取规划快照时登记，返回本会话递增的轮次号。"""
+
+        with self._lock:
+            cid                      = str(chat_id)
+            turn                     = self._started_turns.get(cid, 0) + 1
+            self._started_turns[cid] = turn
+            return turn
+
+    def claim_commit(self, chat_id: str, turn: int) -> bool:
+        """轮次不早于已写回的轮次时登记并返回 True；更新的轮次已经写回过时返回 False。
+
+        上一轮的回复交给 Core 后，后面的轮次最多等一段时间就开始规划；那条回复的回执可能
+        在后面的轮次提交之后才到。旧快照这时再写回，会把新目标、结束状态等改回旧值。
+        """
+
+        with self._lock:
+            cid = str(chat_id)
+            if turn < self._committed_turns.get(cid, 0):
+                return False
+            self._committed_turns[cid] = turn
+            return True
 
     async def save_async(self, chat_id: str) -> None:
         await asyncio.to_thread(self.save, chat_id)

@@ -59,7 +59,7 @@ def is_low_information_group_turn(text: str) -> bool:
 
 
 def is_group_turn_directed_to_other(text: str) -> bool:
-    """识别句首明确叫其他群友的轮次，避免机器人抢答。"""
+    """识别句首明确叫其他群友的轮次；这类消息不算面向全群的参与线索。"""
 
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     return bool(value and (_DIRECTED_OTHER_RE.search(value) or _LEADING_MENTION_RE.search(value)))

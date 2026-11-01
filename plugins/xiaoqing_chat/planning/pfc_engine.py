@@ -54,19 +54,51 @@ def _build_goal_focus_context(goal_list: Sequence[dict[str, Any]]) -> str:
     return "\n".join(lines).strip()
 
 
+_PASSIVE_ACTIONS = frozenset({"wait", "listening"})
+
+
+def _passive_run_line(run: Sequence[Any]) -> str:
+    start = format_local("%H:%M:%S", run[0].ts)
+    if len(run) == 1:
+        return f"- {start} 旁听 1 条，没开口"
+    end = format_local("%H:%M:%S", run[-1].ts)
+    return f"- {start}~{end} 连续旁听 {len(run)} 条，没开口"
+
+
 async def _action_history_summary_async(store: ActionHistoryStore, chat_id: str) -> tuple[str, str]:
-    recent = await store.get_recent_async(chat_id, max_items=10)
+    """最近行动概要。连续的旁听只合成一行条数，不再逐条附上当时不开口的理由。
+
+    规划器每轮都会读到这份概要。逐条列出“这是群友之间的对话，我先听着”时，前几轮的
+    沉默理由成了下一轮的先例，越听越不开口。
+    """
+
+    recent = await store.get_recent_async(chat_id, max_items=40)
     if not recent:
         return "", ""
-    lines = []
-    for r in recent[-8:]:
+    lines: list[str] = []
+    run  : list[Any] = []
+    for r in recent:
+        if r.action in _PASSIVE_ACTIONS:
+            run.append(r)
+            continue
+        if run:
+            lines.append(_passive_run_line(run))
+            run = []
         ts  = format_local("%H:%M:%S", r.ts)
         tgt = r.local_target or "-"
         ok  = "ok" if r.executed else "fail"
         lines.append(f"- {ts} {r.action} {tgt} {ok} {r.reasoning}".strip())
-    summary = "\n".join(lines).strip()
-    last = recent[-1]
-    last_ctx = f"action={last.action}\nreason={last.reasoning}\nexecuted={last.executed}\ndetail={last.detail}"
+    if run:
+        lines.append(_passive_run_line(run))
+    summary = "\n".join(lines[-8:]).strip()
+    last    = recent[-1]
+    if last.action in _PASSIVE_ACTIONS:
+        last_ctx = f"action={last.action}（已连续旁听 {len(run)} 条）"
+    else:
+        last_ctx = (
+            f"action={last.action}\nreason={last.reasoning}\n"
+            f"executed={last.executed}\ndetail={last.detail}"
+        )
     return summary, last_ctx
 
 

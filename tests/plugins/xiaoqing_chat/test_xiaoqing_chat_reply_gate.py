@@ -113,21 +113,22 @@ class TestReplyGate:
         state.heartflow.score_async.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reply_gate_skips_turn_explicitly_addressed_to_another_member(self):
+    async def test_turn_addressed_to_another_member_still_reaches_the_planner(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                = MagicMock()
         runtime.cfg.reply_probability_base     = 1.0
         runtime.cfg.min_reply_interval_seconds = 0.0
         runtime.cfg.max_replies_per_minute     = 100
-        runtime.cfg.heartflow.enable_heartflow = True
+        runtime.cfg.heartflow.enable_heartflow = False
         runtime.cfg.goal.enable_goal           = False
 
         state                                            = MagicMock()
         state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
         state.get_reply_timestamps.return_value          = []
-        state.set_reply_gate_decision                    = Mock()
+        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
+        state.set_reply_gate_decision = Mock()
 
         result = await decide_reply(
             runtime,
@@ -138,10 +139,9 @@ class TestReplyGate:
             False,
         )
 
-        assert result is False
+        assert result is True
         decision = state.set_reply_gate_decision.call_args.args[1]
-        assert decision.reason == "directed_to_other"
-        state.heartflow.score_async.assert_not_called()
+        assert decision.reason == "allowed"
 
     @pytest.mark.asyncio
     async def test_clear_group_participation_cue_uses_higher_probability(self):
@@ -179,7 +179,7 @@ class TestReplyGate:
         assert decision.participation_cue == "opening_banter"
 
     @pytest.mark.asyncio
-    async def test_message_directed_to_other_is_rejected_before_probability_roll(self):
+    async def test_message_directed_to_other_rolls_base_probability_without_cue(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                         = MagicMock()
@@ -208,11 +208,11 @@ class TestReplyGate:
                 False,
             )
 
+        # 不硬拦，但也不算面向全群的参与线索：按基础概率掷骰，通过后仍交给规划器。
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
-        assert decision.reason == "directed_to_other"
-        assert decision.probability is None
-        assert decision.roll is None
+        assert decision.reason == "probability"
+        assert decision.probability == 0.45
         assert decision.participation_cue == ""
 
     @pytest.mark.asyncio

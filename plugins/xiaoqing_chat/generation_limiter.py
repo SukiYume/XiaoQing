@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -17,6 +17,10 @@ class GenerationLimitExceeded(RuntimeError):
 # 排队等会话生成槽时，被同会话更新的请求顶替。
 CHAT_SUPERSEDED = "chat_superseded"
 
+# 上一轮的回复交给 Core 后最多等这么久结算，略长于 Core 默认的 OneBot 回执超时（15 秒），
+# 正常情况下回执都在这之内结算。再晚到的回执由规划快照的轮次号挡住，不会覆盖后面的轮次。
+DELIVERY_SETTLE_WAIT_SECONDS = 20.0
+
 
 @dataclass
 class GenerationLimiter:
@@ -26,6 +30,7 @@ class GenerationLimiter:
     _user_inflight        : dict[str, int] = field(default_factory=dict)
     _user_calls           : dict[str, deque[float]] = field(default_factory=dict)
     _chat_waiters         : dict[str, object] = field(default_factory=dict)
+    _delivery_holds       : dict[str, asyncio.Event] = field(default_factory=dict)
     max_tracked_users     : int   = 10_000
     sweep_interval_seconds: float = 300.0
     _last_sweep_at        : float = 0.0
@@ -67,6 +72,35 @@ class GenerationLimiter:
         finally:
             if self._chat_waiters.get(chat_id) is ticket:
                 del self._chat_waiters[chat_id]
+
+    def hold_for_delivery(self, chat_id: str) -> Callable[[], None]:
+        """登记一条已交出、还没结算的回复，返回结算后调用的释放函数。
+
+        回复的最后一个气泡随事件返回给 Core 发送，生成槽在那之前就已释放；回执提交时才
+        把回复写进聊天记录和规划状态。排在后面的一轮要等这次结算，否则它读到的历史里
+        没有这条回复，规划器不知道小青刚说过话，接着又说一遍。
+        """
+
+        settled                       = asyncio.Event()
+        self._delivery_holds[chat_id] = settled
+
+        def release() -> None:
+            settled.set()
+            if self._delivery_holds.get(chat_id) is settled:
+                del self._delivery_holds[chat_id]
+
+        return release
+
+    async def _await_delivery_settled(self, chat_id: str) -> None:
+        settled = self._delivery_holds.get(chat_id)
+        if settled is None or settled.is_set():
+            return
+        try:
+            await asyncio.wait_for(settled.wait(), DELIVERY_SETTLE_WAIT_SECONDS)
+        except TimeoutError:
+            # 回执一直没结算：丢掉这个登记，后面的轮次不再为它等待。
+            if self._delivery_holds.get(chat_id) is settled:
+                del self._delivery_holds[chat_id]
 
     def _sweep_user_calls(self, cutoff: float) -> None:
         for tracked_user, tracked_calls in tuple(self._user_calls.items()):
@@ -115,6 +149,7 @@ class GenerationLimiter:
             self._user_inflight[user_id] = self._user_inflight.get(user_id, 0) + 1
             calls.append(now)
         try:
+            await self._await_delivery_settled(chat_id)
             yield
         finally:
             async with self._lock:
