@@ -163,7 +163,8 @@ python main.py
    - 最近 60 秒已回复 `max_replies_per_minute` 次。
    - 连续回复达到 `continuous_reply_limit` 后的 `continuous_cooldown_seconds` 冷却期内。
    - 低信息消息：只有 QQ 表情码、无内容的媒体占位和标点。
-   - 句首明确点名其他群友，例如 `阿梨你…`、`@某人 …`、`张老师，…`。`@` 段以 `@名字` 写进本轮文本和聊天记录，只 `@` 别人不说话也算。
+
+   点名或 `@` 其他群友（`阿梨你…`、`@某人 …`）不在这里拦，话题她感兴趣也可以接一句，由规划器判断；这类消息不算下面的参与线索，不会跳过规划器直接回复。`@` 段以 `@名字` 写进本轮文本和聊天记录。
 2. **参与概率**：从 `reply_probability_base` 出发，满足以下情况时抬高到对应上限（取最大值，不叠加）：
 
    | 信号 | 识别方式 | 概率上限 |
@@ -403,7 +404,8 @@ python main.py
 
 - **分段**：`postprocess.splitter` 先按句末标点分句，气泡数没用完时再按逗号、省略号把较长的句子拆开（`clause_split`，默认开），像在 QQ 上一句一句打出来；拆开后气泡末尾的逗号去掉，省略号和波浪号保留。括号和引号在附近配上了才算数，里面不拆（“:(”这类表情不算括号），数字之间的逗号不拆；带链接、邮箱、代码或列表的回复，以及超过 `clause_split_max_chars` 字的讲解只按整句分。对方提到几句话或多少字（“用一句话安利”“写个800字”）时也只按整句分。最多 `max_sentence_num` 个气泡（每个建议不超过 `max_length` 字），超出的内容并入最后一条，正文不截断。
 - **打字延迟**（`humanize`）：按阅读和打字速度算出从收到消息到发出的目标时长（上限 `max_total_delay_seconds`），扣掉理解、规划、生成和审查已经花掉的时间后，只补等剩余部分。已经超过目标就立即发送。气泡之间间隔 `interbubble_min_seconds`～`interbubble_max_seconds`，再加上按字数估的打字时间。明确召唤默认不加首条延迟（`apply_to_forced: false`），但气泡之间照样停顿（`interbubble_applies_to_forced: true`）。正向 WS 接入时，Core 会把处理消息期间发出的内容收齐后一起发；为了让停顿真实可见，中间的气泡绕过这个收集直接发出，最后一个气泡仍随回复返回。每个气泡单独结算发送回执：中途发现这一轮已经过期而停发，或某个气泡发送失败、结果未知时，聊天记录只记已经发出（结果未知的算可能已被看到）的气泡，没发出去的不记；一个都没发出去时整轮回滚。
-- **过期丢弃**：等待期间同一会话来了新消息或被重置时，旧回复在发送前丢弃。
+- **过期丢弃与引用**：按群里能看到的条数（含她自己和其他插件的发言）算回复离要接的那句有多远。还在最近 5 条里（`DIRECT_REPLY_RECENT_MESSAGES`）直接发；再往上，群聊里第一个气泡引用原消息；超出最近 15 条（`MAX_REPLY_RECENT_MESSAGES`）、会话被重置，或之后有群友明确叫停（“不用回复了”“不是叫你”，和本轮停聊用同一套识别）时丢弃。投递前、气泡之间和最后一个气泡前都会再查一次，发到一半有人叫停，后面的气泡就不再发。离得远了，或中间有人用“对了”“话说”这类话转开时，发出前用 `reasoning` 路由确认一次话题有没有换（限时 6 秒），换了就不再接旧话；确认不了按没换处理，照常发出。
+- **回复结算后再接下一轮**：最后一个气泡随事件返回给 Core 发送，回执提交时才写进聊天记录和规划状态。同一会话排队的下一轮等这次结算（最多 20 秒，略长于 Core 默认 15 秒的 OneBot 回执超时）再读历史和规划，不会看不到她刚说的话又说一遍。规划快照带轮次号，回执来得比这还晚、后面的轮次已经先写回时，旧快照不再写回，回复本身照常记进聊天记录。
 - **提交时机**：OneBot 确认发送成功后，依次写入角色的聊天记录、PFC、目标、Heartflow、行动历史，并启动摘要、人物事实提取和表达学习等后台任务。发送被拒或失败时丢弃这一轮的待提交状态，下一轮仍基于已确认的记录。
 
 ---
@@ -597,7 +599,7 @@ python -m scripts.chat_eval run --driver live --set life # 真实 main.py 端到
 
 1. 确认 `plugins.smalltalk_provider` 是 `xiaoqing_chat`，当前群没有被 `/闭嘴`。
 2. `/xc config` 查看频控与概率。
-3. 搜索 `smalltalk.no_reply`：`reason` 为 `min_interval`、`max_replies_per_minute`、`continuous_cooldown`、`low_information`、`directed_to_other` 表示被硬限制拦下，`probability` 表示没掷中，日志同时给出概率、掷值和沉默轮数。
+3. 搜索 `smalltalk.no_reply`：`reason` 为 `min_interval`、`max_replies_per_minute`、`continuous_cooldown`、`low_information` 表示被硬限制拦下，`probability` 表示没掷中，日志同时给出概率、掷值和沉默轮数。
 4. 搜索 `smalltalk.pfc.done` 查看规划器选择的动作。`smalltalk.generation_limited` 表示配额不足，`limit=chat_superseded` 表示排队时被同会话更新的消息顶替。
 5. 回复太多时调低 `reply_probability_base`、`participation_cue_reply_probability`，或调高 `min_reply_interval_seconds`。
 

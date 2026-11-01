@@ -44,7 +44,7 @@ from .media.marker_resolver import (
     strip_outbound_marker_residue,
     text_without_outbound_marker,
 )
-from .memory.local_ids import most_recent_user_local_id, replace_local_ids_with_text
+from .memory.local_ids import replace_local_ids_with_text, reply_is_stale
 from .message_parts import (
     normalize_message_parts,
 )
@@ -95,10 +95,12 @@ def _needs_reasoning_route(text: str) -> bool:
 
 
 def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
+    """要接的那句已经太远或有人叫停时提前放弃，省下后续的生成和审查；话题有没有换到发送前再确认。"""
+
     local_id = str(event.get("_xc_user_recorded_local_id") or "").strip()
     if not local_id:
         return False
-    return most_recent_user_local_id(chat_id) != local_id
+    return reply_is_stale(chat_id, local_id)
 
 
 # 草稿规范化、媒体合并与审查输入

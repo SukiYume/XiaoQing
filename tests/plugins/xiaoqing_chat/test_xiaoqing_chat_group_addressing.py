@@ -164,22 +164,27 @@ def test_participation_cue_skips_mentions_statements_and_long_reports(text, expe
 
 
 @pytest.mark.asyncio
-async def test_reply_gate_blocks_turn_that_mentions_someone_else():
+async def test_reply_gate_lets_planner_judge_turn_that_mentions_someone_else():
+    """点名别人不再硬拦：话题小青感兴趣也可以接一句，由规划器判断。"""
+
     from plugins.xiaoqing_chat.frequency_control import decide_reply
 
     runtime                                          = MagicMock()
+    runtime.cfg.reply_probability_base               = 1.0
     runtime.cfg.min_reply_interval_seconds           = 0.0
     runtime.cfg.max_replies_per_minute               = 100
+    runtime.cfg.heartflow.enable_heartflow           = False
     runtime.cfg.goal.enable_goal                     = False
     state                                            = MagicMock()
     state.get_last_reply_ts.return_value             = 0.0
     state.get_continuous_cooldown_until.return_value = 0.0
     state.get_reply_timestamps.return_value          = []
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
+    state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
 
-    assert await decide_reply(runtime, state, "g1", "@久远 喂", False, False) is False
+    assert await decide_reply(runtime, state, "g1", "@久远 喂", False, False) is True
     decision = state.set_reply_gate_decision.call_args.args[1]
-    assert decision.reason == "directed_to_other"
+    assert decision.reason == "allowed"
 
 
 def _planner_kwargs(history: list[StoredMessage], current_text: str) -> dict:

@@ -325,8 +325,8 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),

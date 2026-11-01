@@ -12,7 +12,6 @@ from .constants import is_question
 from .participation import (
     classify_group_participation_cue,
     is_group_repeat_chain,
-    is_group_turn_directed_to_other,
     is_low_information_group_turn,
 )
 
@@ -121,8 +120,7 @@ def _hard_limit_reason(cfg, decision: ReplyGateDecision, text: str, *, is_privat
         return "continuous_cooldown"
     if not is_private and is_low_information_group_turn(text):
         return "low_information"
-    if not is_private and is_group_turn_directed_to_other(text):
-        return "directed_to_other"
+    # 点名或 @ 了别的群友不在这里拦：话题她感兴趣也可以接一句，由规划器判断。
     return ""
 
 

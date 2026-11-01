@@ -119,8 +119,8 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once", new=AsyncMock()
         ) as mock_run_pfc_once,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -224,8 +224,8 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ) as mock_run_pfc_once,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -316,8 +316,8 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
             new=AsyncMock(side_effect=fake_generate_reply_draft),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()
@@ -597,8 +597,8 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -697,8 +697,8 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -1121,8 +1121,8 @@ async def test_smalltalk_action_history_preserves_real_planner_action_name(
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
