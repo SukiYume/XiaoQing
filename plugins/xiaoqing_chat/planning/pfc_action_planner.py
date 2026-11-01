@@ -2,7 +2,7 @@
 
 规划器只接收裁剪后的目标、记忆和行动摘要，并把模型输出收窄到固定动作集合。模型
 不可用、超时、JSON 异常或未知动作时，群聊必须退回 wait，私聊才退回 direct_reply。
-新鲜轮次里已经通过频控的全群邀请可直接进入回复；其余消息仍由规划器判断对象和轮次。
+新鲜轮次里已经通过频控的全群邀请可直接进入回复；其余消息由规划器按话题和时机判断要不要接。
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ _PLANNER_CONTEXT = """{knowledge_info_str}
 {last_action_context}
 
 【时间提示】
-{time_since_last_bot_message_info}{timeout_context}
+{time_since_last_bot_message_info}{participation_info}{timeout_context}
 
 最近对话（注意：仔细看每条消息的发送者，不同用户是不同的人）：
 {chat_history_text}
@@ -94,20 +94,23 @@ PROMPT_INITIAL_REPLY_COMPACT = (
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先判断最新消息的说话人、目标对象和它与前文的关系，不把别人之间的互动误当成在叫你；消息里写着“@某人”就是在叫那个人，@的不是你时不要替对方回答
-2. 你是活跃的群友，没被点名也可以加入：能补充相关的看法、知识、自己的经历，或接住笑点和情绪时，选择 direct_reply
-3. 群友正在接连复读同一句时，跟一句队形算接梗，可以 direct_reply；除此之外只能复述、空泛附和、转述别人之间谁在问谁，或重复追问时，选择 wait 或 listening；面向全群的交流信号不自动等于必须回复，话题已收尾、别人正在一对一说事或你刚连续发过言时也留出空间
-4. 对方明确追问你、纠正你或延续你刚才的话时，通常适合继续；明确拒聊、厌烦或转向别人时，应留出空间
-5. 消息长度不能单独决定行动：短消息也可能有明确交流作用，长消息也可能与你无关
-6. 对不确定的信息先判断是否需要 fetch_knowledge；无需检索时可以承认不确定，但不能编造解释
-7. 已经提出而无人回应的问题不要原样追问，按最新话题重新判断是否有必要发言
-8. 媒体摘要是消息内容的一部分，应根据它表达的意思和当前上下文判断行动，而不是因为出现媒体就回复
+1. 你是活跃的群友。群里在聊的事你感兴趣、有话可说，就接：一句看法、吐槽、好奇的追问、玩笑或共鸣都可以，选择 direct_reply。要不要开口，看的是话题和你有没有话说
+2. 开口不需要亲身经历或专业知识：对别人的经历表示惊讶或羡慕、顺着笑点往前推一步、问一句细节，都是正常的群聊参与；话题碰到你的兴趣、生活或你说过的话时更该开口
+3. 不替别人编造或揣测感受和经历，也不替他回答他自己的事；接话只聊你自己的看法、感受和经历
+4. 这些情况选择 wait 或 listening：你能说的只是复述或空泛附和（“确实”“哈哈”）；话题已经收尾；你刚接连发过言，该给别人留位置；对方明确拒聊或厌烦
+5. 群友正在接连复读同一句时，跟一句队形算接梗，可以 direct_reply
+6. 对方追问你、纠正你或延续你刚才的话时，通常适合继续
+7. 消息长度不能单独决定行动：短消息也可能有明确交流作用，长消息也可能没什么可接
+8. 对不确定的信息先判断是否需要 fetch_knowledge；无需检索时可以承认不确定，但不能编造解释
+9. 已经提出而无人回应的问题不要原样追问，按最新话题重新判断是否有必要发言
+10. 媒体摘要是消息内容的一部分，应根据它表达的意思和当前上下文判断行动，而不是因为出现媒体就回复
+11. 时间提示说你已经好几条没出声时，不要再拿同样的理由继续旁听：有一句自然、有内容的话可接就开口
 
 """
     + _PLANNER_CONTEXT
     + _planner_output_format(
         "fetch_knowledge / listening / direct_reply / wait / rethink_goal / end_conversation / block_and_ignore",
-        "你对当前局势的分析：谁在跟谁说话、气氛如何、你该不该插话、为什么",
+        "你对当前局势的分析：大家在聊什么、气氛如何；你对哪点感兴趣，接一句会说什么",
     )
 )
 
@@ -118,19 +121,20 @@ PROMPT_FOLLOW_UP_COMPACT = (
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先判断最新消息是否在回应、追问或纠正你；如果不是，再判断它是否面向全群以及你能否补充新内容。“@某人”是在叫那个人，@的不是你时不要替对方回答
-2. 你刚刚已经发过消息，默认给其他人留出轮次；只有对话确实需要你继续承接时才再次发言。群友接连复读同一句时，跟一句队形属于接梗，不算抢话；你已经跟过同一句就不再跟
-3. 不以有没有 @、消息长短或是否包含问号作为单一依据，要综合对象、相关性、时机和新增内容
-4. 对方继续交流时可以回应；出现拒聊、厌烦、自然收尾或话题已被别人接住时，选择 wait、listening 或 end_conversation
-5. 不重复未获回应的问题，也不换一种说法重复刚才的结论、笑点或行动
-6. 不确定的信息可以检索、承认不确定或不接，不要根据零散关键词猜测
-7. 媒体摘要与文字具有同等地位，根据其交际含义和上下文判断是否继续
+1. 先读懂最新消息在说什么、和你刚才的话有什么关系：接着你的话说的，通常适合继续；聊到别的事上，就看新话题你感不感兴趣、有没有新内容可说
+2. 你刚刚已经发过消息，默认给其他人留出轮次；对话需要你继续承接，或者你确实有新的话想说时再发言。群友接连复读同一句时，跟一句队形属于接梗，不算抢话；你已经跟过同一句就不再跟
+3. 不替别人编造或揣测感受和经历，也不替他回答他自己的事；接话只聊你自己的看法、感受和经历
+4. 消息长短、有没有问号都不能单独决定行动，要综合话题、时机和你有没有新内容
+5. 出现拒聊、厌烦或自然收尾时，选择 wait、listening 或 end_conversation
+6. 不重复未获回应的问题，也不换一种说法重复刚才的结论、笑点或行动
+7. 不确定的信息可以检索、承认不确定或不接，不要根据零散关键词猜测
+8. 媒体摘要与文字具有同等地位，根据其交际含义和上下文判断是否继续
 
 """
     + _PLANNER_CONTEXT
     + _planner_output_format(
         "fetch_knowledge / wait / listening / send_new_message / rethink_goal / end_conversation / block_and_ignore",
-        "你对当前局势的分析：谁在跟谁说话、对方态度如何、你刚发过言该怎么做",
+        "你对当前局势的分析：大家在聊什么、对你刚才的话什么反应；你还有没有新的话想说",
     )
 )
 
@@ -199,6 +203,30 @@ def _time_since_last_bot(history: Sequence[StoredMessage]) -> str:
         if diff < 60.0:
             return f"提示：你上一条成功发送的消息是在 {diff:.1f} 秒前。\n"
         return ""
+    return ""
+
+
+# 群友连着说了这么多条、小青一直没出声时，提醒规划器她在这段对话里的参与情况。
+_QUIET_STREAK_HINT_MIN = 3
+
+
+def _participation_hint(history: Sequence[StoredMessage]) -> str:
+    """这段对话里小青已经多少条消息没开口。
+
+    规划器只看到眼前几条，每条单独看都“不是在问我”，于是一整段对话都在旁听。告诉它
+    已经沉默了多久，它才能像群友一样意识到该说句话了。
+    """
+
+    quiet = 0
+    for msg in reversed(history):
+        if is_conversation_reply(msg):
+            if quiet >= _QUIET_STREAK_HINT_MIN:
+                return f"提示：你上次开口之后，群友又说了 {quiet} 条，你一直没出声。\n"
+            return ""
+        if msg.role == "user":
+            quiet += 1
+    if quiet >= _QUIET_STREAK_HINT_MIN:
+        return f"提示：这段对话里你还没开过口，群友已经说了 {quiet} 条。\n"
     return ""
 
 
@@ -306,6 +334,7 @@ async def plan_next_action(
         action_history_summary           = clip_text(action_history_summary, 360) or "（暂无）",
         last_action_context              = clip_text(last_action_context, 360) or "（暂无）",
         time_since_last_bot_message_info = time_info,
+        participation_info               = "" if is_private else _participation_hint(history),
         timeout_context                  = timeout_context.strip(),
         chat_history_text                = chat_history_text,
     )

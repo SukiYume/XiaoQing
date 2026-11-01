@@ -93,8 +93,8 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
         patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),

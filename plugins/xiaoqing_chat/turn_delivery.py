@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -18,8 +19,14 @@ from .brain_chat import (
 )
 from .chat_runtime import chat_lock
 from .frequency_control import record_reply_frequency
+from .llm.topic_shift import opens_new_topic, topic_changed
 from .logging_utils import log_step
-from .memory.local_ids import allocate_local_id, most_recent_user_local_id
+from .memory.local_ids import (
+    DIRECT_REPLY_RECENT_MESSAGES,
+    allocate_local_id,
+    split_history_at,
+    stale_reason,
+)
 from .memory.person_profile import get_profile_generation
 from .message_parts import normalize_message_parts
 from .planning.action_history import ActionRecord
@@ -208,17 +215,23 @@ def _drop_stale_generated_turn(
     *,
     phase: str,
 ) -> bool:
-    """取消并审计在会话内竞争中失效的生成轮次。"""
+    """取消并审计已经过期的生成轮次：会话被重置、要接的那句已经太远，或之后有人叫停。
+
+    投递前、气泡之间和最后一个气泡前都会再查一次，发到一半有人说“别回了”也就此停下。
+    """
 
     generated          = finalization.generated
-    latest_local_id    = most_recent_user_local_id(finalization.hctx.chat_id)
+    split              = split_history_at(finalization.hctx.chat_id, generated.local_id)
     current_generation = get_profile_generation(
         finalization.context.data_dir, finalization.hctx.chat_id
     )
-    same_generation = (
-        generated.session_generation is None or generated.session_generation == current_generation
-    )
-    if same_generation and latest_local_id == generated.local_id:
+    if generated.session_generation not in (None, current_generation):
+        reason = "session_reset"
+    elif split is None:
+        reason = "missing"
+    else:
+        reason = stale_reason(split[1])
+    if not reason:
         return False
     generated.cancel_speculative_memory()
     log_step(
@@ -227,12 +240,66 @@ def _drop_stale_generated_turn(
         chat_id = finalization.hctx.chat_id,
         step    = "smalltalk.stale.drop",
         fields  = {
-            "phase"          : phase,
-            "local_id"       : generated.local_id,
-            "latest_local_id": latest_local_id,
+            "phase"         : phase,
+            "reason"        : reason,
+            "local_id"      : generated.local_id,
+            "newer_messages": None if split is None else len(split[1]),
         },
     )
     return True
+
+
+async def _drop_if_topic_changed(finalization: _SmalltalkFinalization) -> bool:
+    """回复晚到时确认群里有没有换话题，换了就不再接旧话。
+
+    要接的那句还在最近 5 条里、中间也没人转开话题时直接发，不多问一次模型。
+    """
+
+    split = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+    if split is None:
+        return False
+    before, after = split
+    if not any(message.role == "user" for message in after):
+        return False
+    if stale_reason(after):
+        # 太远或有人叫停的由过期检查丢弃，不必再问话题。
+        return False
+    if len(after) < DIRECT_REPLY_RECENT_MESSAGES and not any(map(opens_new_topic, after)):
+        return False
+    hctx = finalization.hctx
+
+    def log(step: str, fields: dict[str, Any]) -> None:
+        log_step(finalization.context, hctx.runtime, chat_id=hctx.chat_id, step=step, fields=fields)
+
+    changed = await topic_changed(
+        secrets  = hctx.secrets,
+        bot_name = hctx.bot_name,
+        before   = before,
+        after    = after,
+        reply    = display_reply_text(finalization.generated),
+        llm      = hctx.runtime.cfg.llm_config("reasoning"),
+        log      = log,
+    )
+    if changed:
+        finalization.generated.cancel_speculative_memory()
+        log(
+            "smalltalk.stale.drop",
+            {"phase": "topic_changed", "local_id": finalization.generated.local_id},
+        )
+    return changed
+
+
+def _quote_far_target(finalization: _SmalltalkFinalization, batches: list[Any]) -> None:
+    """要接的那句已经不在最近 5 条里时，第一条气泡引用它，大家知道小青在接哪句。"""
+
+    event      = finalization.event
+    message_id = event.get("message_id")
+    if event.get("group_id") is None or message_id in (None, "") or not batches:
+        return
+    split = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+    if split is None or len(split[1]) < DIRECT_REPLY_RECENT_MESSAGES:
+        return
+    batches[0] = [{"type": "reply", "data": {"id": str(message_id)}}, *batches[0]]
 
 
 def _prepare_smalltalk_reply_output(finalization: _SmalltalkFinalization):
@@ -260,17 +327,17 @@ def _prepare_smalltalk_reply_output(finalization: _SmalltalkFinalization):
 
 
 async def _apply_generated_pfc_state(finalization: _SmalltalkFinalization) -> bool:
-    """由持有会话锁的调用方提交生成后的规划器快照。"""
+    """由持有会话锁的调用方提交生成后的规划器快照；更新的轮次已经写回过时跳过。"""
 
     if finalization.prepared.forced or finalization.generated.pfc_state_snapshot is None:
         return False
-    await commit_planner_snapshot(
+    return await commit_planner_snapshot(
         finalization.hctx.state,
         finalization.hctx.runtime,
         finalization.hctx.chat_id,
         finalization.generated.pfc_state_snapshot,
+        turn=finalization.generated.pfc_turn,
     )
-    return True
 
 
 async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[Any]:
@@ -409,9 +476,10 @@ async def _commit_smalltalk_delivery(
                 != expected
             ):
                 return
-            latest_local_id = most_recent_user_local_id(finalization.hctx.chat_id)
-            if latest_local_id == finalization.generated.local_id:
-                should_flush_pfc = await _apply_generated_pfc_state(finalization)
+            # 回复已经发出，规划状态（刚回复过、目标）就要记上，后来又有群友插话也一样。
+            # 排在后面的轮次通常等这次结算后才取快照（GenerationLimiter.hold_for_delivery）；
+            # 回执迟到、后面的轮次已经先写回时，按轮次号跳过这份旧快照，回复本身照常记下。
+            should_flush_pfc = await _apply_generated_pfc_state(finalization)
             history_snapshot = await _record_delivered_reply(
                 finalization,
                 reply_parts,
@@ -504,10 +572,17 @@ class _ReplyBubbles:
         self._dispatched                              = 0
         self._closed                                  = False
         self._settled                                 = False
+        self._release_hold: Callable[[], None] | None = None
 
     def receipt(self, index: int) -> DeliveryReceipt:
         """第 ``index`` 个气泡交给发送层之前领取它自己的回执。"""
 
+        if self._release_hold is None:
+            # 第一个气泡发出前登记：结算之前，同会话后面的轮次不开始规划。
+            finalization       = self._finalization
+            self._release_hold = finalization.hctx.state.generation_limiter.hold_for_delivery(
+                finalization.hctx.chat_id
+            )
         self._dispatched = max(self._dispatched, index + 1)
 
         def settle(outcome: bool | None):
@@ -548,7 +623,14 @@ class _ReplyBubbles:
             return
         # 先占住结算权再 await，之后到达的回调不会重复提交或回滚。
         self._settled = True
-        seen          = self._seen()
+        try:
+            await self._settle()
+        finally:
+            if self._release_hold is not None:
+                self._release_hold()
+
+    async def _settle(self) -> None:
+        seen = self._seen()
         if not seen:
             await _rollback_smalltalk_delivery(self._finalization, batch_count=len(self._batches))
             return
@@ -738,9 +820,12 @@ async def finalize_smalltalk_turn(
         finalization,
         has_outbound_batches=bool(outbound_batches),
     )
+    if await _drop_if_topic_changed(finalization):
+        return []
     async with chat_lock(finalization.hctx.chat_id):
         if _drop_stale_generated_turn(finalization, phase="after_presend_delay"):
             return []
+        _quote_far_target(finalization, outbound_batches)
     last = len(outbound_batches) - 1
     try:
         if last > 0:

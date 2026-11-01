@@ -327,14 +327,19 @@ async def test_person_facts_threshold_is_configurable(tmp_path, min_messages, ca
 
 def _finalization(source: str, sent: list):
     from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
+    from plugins.xiaoqing_chat.generation_limiter import GenerationLimiter
 
     async def send_action(action):
         sent.append(action)
         return True
 
     return SimpleNamespace(
-        event={"_source": source, "user_id": 7, "group_id": None},
-        hctx=SimpleNamespace(chat_id="u7", runtime=ChatRuntime(XiaoQingChatConfig(), [])),
+        event = {"_source": source, "user_id": 7, "group_id": None},
+        hctx  = SimpleNamespace(
+            chat_id = "u7",
+            runtime = ChatRuntime(XiaoQingChatConfig(), []),
+            state=SimpleNamespace(generation_limiter=GenerationLimiter()),
+        ),
         context=SimpleNamespace(send_action=send_action),
         generated=SimpleNamespace(local_id="u1"),
     )

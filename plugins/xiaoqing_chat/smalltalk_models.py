@@ -22,10 +22,12 @@ class PreparedSmalltalkTurn:
 
 @dataclass
 class GeneratedSmalltalkTurn:
-    local_id               : str                        = ""
-    session_generation     : str | None                 = None
-    pfc_result             : PFCRunResult | None        = None
-    pfc_state_snapshot     : Any                        = None
+    local_id          : str                 = ""
+    session_generation: str | None          = None
+    pfc_result        : PFCRunResult | None = None
+    pfc_state_snapshot: Any                 = None
+    # 取快照时登记的轮次号；提交时据此判断有没有更新的轮次已经写回过。
+    pfc_turn               : int                        = 0
     speculative_memory_task: Any                        = None
     reply_source           : str                        = "pfc"
     reply                  : str                        = ""

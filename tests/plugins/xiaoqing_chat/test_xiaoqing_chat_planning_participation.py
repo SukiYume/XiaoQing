@@ -118,8 +118,8 @@ async def test_smalltalk_goal_path_uses_async_goal_store(mock_context, sample_gr
             new=AsyncMock(return_value=_reply_draft("ok")),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -456,15 +456,14 @@ def test_follow_up_compact_prompt_gives_group_space_after_recent_reply():
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_FOLLOW_UP_COMPACT
 
     assert "默认给其他人留出轮次" in PROMPT_FOLLOW_UP_COMPACT
-    assert "不以有没有 @、消息长短或是否包含问号作为单一依据" in PROMPT_FOLLOW_UP_COMPACT
+    assert "消息长短、有没有问号都不能单独决定行动" in PROMPT_FOLLOW_UP_COMPACT
 
 
 def test_initial_compact_prompt_uses_relevance_and_turn_taking_instead_of_surface_cues():
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_INITIAL_REPLY_COMPACT
 
     assert "消息长度不能单独决定行动" in PROMPT_INITIAL_REPLY_COMPACT
-    assert "说话人、目标对象和它与前文的关系" in PROMPT_INITIAL_REPLY_COMPACT
-    assert "不自动等于必须回复" in PROMPT_INITIAL_REPLY_COMPACT
+    assert "你刚接连发过言，该给别人留位置" in PROMPT_INITIAL_REPLY_COMPACT
 
 
 @pytest.mark.parametrize(
@@ -1186,8 +1185,8 @@ async def test_smalltalk_planner_runs_outside_chat_lock_but_commits_inside(
             create      = True,
         ) as mock_schedule_pfc_state_flush,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -1249,3 +1248,185 @@ async def test_planner_preserves_optional_wait(monkeypatch, seconds, expected):
     )
     assert plan.wait_seconds == expected
     assert plan.thinking == "user typing"
+
+
+# ---------------------------------------------------------------- 规划器不会越听越不开口
+
+
+@pytest.mark.parametrize(
+    "prompt_name", ["PROMPT_INITIAL_REPLY_COMPACT", "PROMPT_FOLLOW_UP_COMPACT"]
+)
+def test_planner_prompts_judge_by_interest_not_by_who_was_addressed(prompt_name):
+    """生产日志：一整段车次闲聊，规划器每条都写“这是群友之间的对话，没有在问我”。"""
+
+    from plugins.xiaoqing_chat.planning import pfc_action_planner
+
+    prompt = getattr(pfc_action_planner, prompt_name)
+    for phrase in (
+        "问我",
+        "在问",
+        "对谁",
+        "谁在跟谁",
+        "目标对象",
+        "@某人",
+        "点名",
+        "面向全群",
+        "一对一",
+    ):
+        assert phrase not in prompt, phrase
+    assert "感兴趣" in prompt
+    assert "不替他回答" in prompt
+
+
+def test_prompts_forbid_making_up_other_peoples_feelings_and_experiences():
+    from plugins.xiaoqing_chat.llm import prompt_builder, reply_checker
+    from plugins.xiaoqing_chat.planning import pfc_action_planner
+
+    for prompt in (
+        pfc_action_planner.PROMPT_INITIAL_REPLY_COMPACT,
+        pfc_action_planner.PROMPT_FOLLOW_UP_COMPACT,
+    ):
+        assert "不替别人编造或揣测感受和经历" in prompt
+        assert "只聊你自己的看法、感受和经历" in prompt
+    assert "不替别人编造、补充或断定感受和经历" in prompt_builder._UNDERSTANDING_DIRECTIVE
+    assert "脑补" not in prompt_builder._UNDERSTANDING_DIRECTIVE
+    assert "从旁接话只说自己的看法、感受和经历" in prompt_builder._DEFAULT_REPLYER_SYSTEM
+    assert "不替群友编造他没说过的经历" in reply_checker._EVIDENCE_REVIEW_PROMPT.template
+
+
+def test_initial_prompt_invites_interested_replies_without_first_hand_experience():
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_INITIAL_REPLY_COMPACT
+
+    assert "感兴趣、有话可说，就接" in PROMPT_INITIAL_REPLY_COMPACT
+    assert "开口不需要亲身经历或专业知识" in PROMPT_INITIAL_REPLY_COMPACT
+    assert "接一句会说什么" in PROMPT_INITIAL_REPLY_COMPACT
+
+
+def _group_turns(count: int, *, bot_spoke_after: int | None = None):
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    history = []
+    for index in range(count):
+        history.append(
+            StoredMessage(
+                role     = "user",
+                name     = f"群友{index % 3}",
+                ts       = 1_000.0 + index,
+                user_id  = 10 + index % 3,
+                local_id = f"m{len(history) + 1}",
+                content  = f"车上餐食换了{index}",
+            )
+        )
+        if bot_spoke_after == index:
+            history.append(
+                StoredMessage(
+                    role     = "assistant",
+                    name     = "小青",
+                    ts       = 1_000.5 + index,
+                    local_id = f"m{len(history) + 1}",
+                    content  = "还有这种操作",
+                )
+            )
+    return history
+
+
+@pytest.mark.parametrize(
+    ("history_args", "expected"),
+    [
+        ((5, None), "这段对话里你还没开过口，群友已经说了 5 条"),
+        ((6, 1), "你上次开口之后，群友又说了 4 条"),
+        ((2, None), ""),
+        ((5, 3), ""),
+    ],
+)
+def test_participation_hint_counts_messages_since_she_last_spoke(history_args, expected):
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import _participation_hint
+
+    count, spoke_after = history_args
+    hint = _participation_hint(_group_turns(count, bot_spoke_after=spoke_after))
+    if expected:
+        assert expected in hint
+    else:
+        assert hint == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_private", [False, True])
+async def test_planner_prompt_tells_group_planner_how_long_she_has_been_quiet(
+    monkeypatch, is_private
+):
+    from plugins.xiaoqing_chat.planning import pfc_action_planner
+
+    captured: dict[str, str] = {}
+
+    async def fake_chat(*_args, **kwargs):
+        captured["prompt"] = kwargs["messages"][0]["content"]
+        return (
+            {"choices": [{"message": {"content": '{"action":"listening","reason":"r"}'}}]},
+            "responses",
+        )
+
+    monkeypatch.setattr(pfc_action_planner, "chat_completions_raw_with_fallback_paths", fake_chat)
+    await pfc_action_planner.plan_next_action(
+        secrets                      = {},
+        bot_name                     = "小青",
+        is_private                   = is_private,
+        personality                  = PersonalityConfig(),
+        history                      = _group_turns(6),
+        goal_list                    = [],
+        knowledge_list               = [],
+        action_history_summary       = "",
+        last_action_context          = "",
+        timeout_context              = "",
+        last_successful_reply_action = None,
+        llm                          = LLMCallConfig(
+            temperature            = 0.7,
+            top_p                  = 0.9,
+            max_tokens             = 256,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
+        ),
+        current_text="嘶",
+    )
+
+    assert ("群友已经说了 6 条" in captured["prompt"]) is (not is_private)
+
+
+@pytest.mark.asyncio
+async def test_action_summary_folds_listening_runs_without_their_reasons(tmp_path):
+    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
+    from plugins.xiaoqing_chat.planning.pfc_engine import _action_history_summary_async
+
+    store = ActionHistoryStore()
+    store.bind(tmp_path)
+
+    def record(ts: float, action: str, reasoning: str) -> None:
+        store.append(
+            "g1",
+            ActionRecord(
+                ts           = ts,
+                local_target = f"m{int(ts)}",
+                action       = action,
+                reasoning    = reasoning,
+                detail       = {},
+                executed     = True,
+            ),
+        )
+
+    for ts in range(1, 4):
+        record(float(ts), "listening", "listening:这是群友之间的对话，我先听着")
+    record(10.0, "direct_reply", "direct_reply:接一句")
+    for ts in range(20, 26):
+        record(float(ts), "wait", "wait:没有在问我")
+
+    summary, last_context = await _action_history_summary_async(store, "g1")
+
+    lines = summary.splitlines()
+    assert len(lines) == 3
+    assert "连续旁听 3 条" in lines[0]
+    assert "direct_reply" in lines[1] and "接一句" in lines[1]
+    assert "连续旁听 6 条" in lines[2]
+    assert "群友之间的对话" not in summary
+    assert "没有在问我" not in summary + last_context
+    assert last_context == "action=wait（已连续旁听 6 条）"

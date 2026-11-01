@@ -263,6 +263,67 @@ async def test_generation_limiter_rejects_new_keys_at_capacity(
     assert len(limiter._user_calls) == 2
 
 
+_ONE_PER_CHAT = {
+    "max_global"                : 0,
+    "max_per_chat"              : 1,
+    "max_per_user"              : 0,
+    "max_calls_per_user_per_day": 0,
+    "chat_wait_seconds"         : 5.0,
+}
+
+
+@pytest.mark.asyncio
+async def test_next_turn_waits_until_previous_reply_is_settled() -> None:
+    """上一轮的末个气泡交给 Core 之后才提交；下一轮要等提交完再读历史和规划状态。"""
+
+    limiter = GenerationLimiter()
+    async with limiter.admit(chat_id="g1", user_id="a", **_ONE_PER_CHAT):
+        release = limiter.hold_for_delivery("g1")
+    # 上一轮已经让出生成槽，但回复还没结算。
+    entered = asyncio.Event()
+
+    async def next_turn() -> None:
+        async with limiter.admit(chat_id="g1", user_id="b", **_ONE_PER_CHAT):
+            entered.set()
+
+    task = asyncio.create_task(next_turn())
+    await asyncio.sleep(0.05)
+    assert not entered.is_set()
+    release()
+    await asyncio.wait_for(task, 1.0)
+    assert entered.is_set()
+
+
+@pytest.mark.asyncio
+async def test_other_chats_do_not_wait_for_an_unsettled_reply() -> None:
+    limiter = GenerationLimiter()
+    limiter.hold_for_delivery("g1")
+    async with limiter.admit(chat_id="g2", user_id="b", **_ONE_PER_CHAT):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_receipt_that_never_settles_stops_holding_later_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.generation_limiter.DELIVERY_SETTLE_WAIT_SECONDS", 0.01
+    )
+    limiter = GenerationLimiter()
+    limiter.hold_for_delivery("g1")
+    async with limiter.admit(chat_id="g1", user_id="b", **_ONE_PER_CHAT):
+        pass
+    assert "g1" not in limiter._delivery_holds
+
+
+def test_releasing_an_old_hold_keeps_the_newer_one() -> None:
+    limiter     = GenerationLimiter()
+    release_old = limiter.hold_for_delivery("g1")
+    limiter.hold_for_delivery("g1")
+    release_old()
+    assert not limiter._delivery_holds["g1"].is_set()
+
+
 @pytest.mark.asyncio
 async def test_continuous_reply_limit_blocks_exact_next_reply(
     monkeypatch: pytest.MonkeyPatch,

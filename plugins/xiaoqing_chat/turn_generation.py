@@ -53,16 +53,24 @@ def _fallback_idle_reply(runtime: ChatRuntime) -> str:
     return random.choice(candidates)
 
 
-async def commit_planner_snapshot(state, runtime: ChatRuntime, chat_id: str, snapshot) -> None:
-    """写回规划器快照，并让会话目标跟随规划器排第一的目标；调用方持有会话锁。"""
+async def commit_planner_snapshot(
+    state, runtime: ChatRuntime, chat_id: str, snapshot, *, turn: int
+) -> bool:
+    """写回规划器快照，并让会话目标跟随规划器排第一的目标；调用方持有会话锁。
 
+    更新的轮次已经写回过时什么也不做，返回 False。
+    """
+
+    if not state.pfc_state_store.claim_commit(chat_id, turn):
+        return False
     state.pfc_state_store.set_state(chat_id, snapshot)
     if not runtime.cfg.goal.enable_goal:
-        return
+        return True
     if snapshot.top_goal:
         await state.goal_store.set_async(chat_id, goal=snapshot.top_goal, source="planner")
     else:
         await asyncio.to_thread(state.goal_store.clear, chat_id)
+    return True
 
 
 # 规划器要求“告别”或“再补一条”时附加的语气约束。
@@ -268,6 +276,7 @@ async def generate_smalltalk_turn(
         )
         if not prepared.forced and planner_enabled:
             generated.pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
+            generated.pfc_turn           = state.pfc_state_store.begin_turn(chat_id)
             if generated.pfc_state_snapshot and generated.pfc_state_snapshot.ended:
                 generated.pfc_state_snapshot.ended = False
 
@@ -294,10 +303,13 @@ async def generate_smalltalk_turn(
                     generated.session_generation is None
                     or generated.session_generation == current_generation
                 ):
-                    await commit_planner_snapshot(
-                        state, runtime, chat_id, generated.pfc_state_snapshot
+                    committed = await commit_planner_snapshot(
+                        state,
+                        runtime,
+                        chat_id,
+                        generated.pfc_state_snapshot,
+                        turn=generated.pfc_turn,
                     )
-                    committed = True
             if committed:
                 schedule_pfc_state_flush(context, runtime, chat_id=chat_id)
         raise

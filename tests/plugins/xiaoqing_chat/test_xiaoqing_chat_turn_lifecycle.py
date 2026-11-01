@@ -184,8 +184,8 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
             new=AsyncMock(side_effect=fake_record_bot_reply),
         ) as record_reply,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -277,8 +277,8 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u2",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=None,
         ),
         patch(
             "plugins.xiaoqing_chat.turn_delivery._record_bot_reply", new=AsyncMock()
@@ -389,8 +389,8 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
             create      = True,
         ) as mock_schedule_pfc_state_flush,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -501,8 +501,8 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
             side_effect=fake_schedule_pfc_state_flush,
         ) as mock_schedule_pfc_state_flush,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -602,8 +602,8 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
             side_effect=fake_schedule_pfc_state_flush,
         ) as mock_schedule_pfc_state_flush,
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch_turn("schedule_memory_persist"),
@@ -670,8 +670,8 @@ async def test_mode_indicator_only_applies_in_brain_chat(mock_context, sample_gr
             new=AsyncMock(return_value=_reply_draft("ok")),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -738,8 +738,8 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
             new=AsyncMock(return_value=_reply_draft("ok")),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
-            return_value="u1",
+            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
+            return_value=([], []),
         ),
         patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
@@ -751,3 +751,469 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
 
     assert result == [{"type": "text", "data": {"text": "[brain]\nok"}}]
     mock_context.send_action.assert_not_awaited()
+
+
+# ---------------------------------------------------------------- 晚到的回复：近的直接接，远的引用，太远或换话题才丢
+
+
+def _record_messages(chat_id: str, *entries: tuple[str, str] | tuple[str, str, str]) -> None:
+    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+    from plugins.xiaoqing_chat.runtime_state import get_state
+
+    for local_id, role, *text in entries:
+        get_state().memory_store.append(
+            chat_id,
+            role     = role,
+            name     = "群友" if role == "user" else "小青",
+            user_id  = 1 if role == "user" else None,
+            local_id = local_id,
+            parts    = build_text_message_parts(text[0] if text else f"{local_id} 的内容"),
+        )
+
+
+def _later(count: int) -> list[tuple[str, str]]:
+    return [(f"m{index + 2}", "user") for index in range(count)]
+
+
+def _fresh_finalization(tmp_path, *, chat_id: str = "g1", event: dict | None = None):
+    from plugins.xiaoqing_chat.generation_limiter import GenerationLimiter
+
+    return SimpleNamespace(
+        generated=SimpleNamespace(
+            local_id                  = "m1",
+            session_generation        = None,
+            cancel_speculative_memory = Mock(),
+            reply                     = "对，九十二次改成 901 了",
+            reply_parts               = (),
+            reply_payload             = None,
+        ),
+        hctx=SimpleNamespace(
+            chat_id  = chat_id,
+            bot_name = "小青",
+            secrets  = {},
+            runtime=SimpleNamespace(cfg=SimpleNamespace(llm_config=lambda _route: Mock())),
+            state=SimpleNamespace(generation_limiter=GenerationLimiter()),
+        ),
+        context=SimpleNamespace(data_dir=tmp_path),
+        event=event if event is not None else {"group_id": 1, "message_id": 555},
+    )
+
+
+def test_split_history_counts_every_visible_message_after_the_target():
+    from plugins.xiaoqing_chat.memory.local_ids import (
+        MAX_REPLY_RECENT_MESSAGES,
+        reply_is_stale,
+        split_history_at,
+    )
+
+    _record_messages("g1", ("m0", "user"), ("m1", "user"), ("m2", "user"), ("m3", "assistant"))
+    before, after = split_history_at("g1", "m1")
+    assert [message.local_id for message in before] == ["m0", "m1"]
+    assert [message.local_id for message in after] == ["m2", "m3"]
+    assert split_history_at("g1", "m9") is None
+    assert not reply_is_stale("g1", "m1")
+    assert reply_is_stale("g1", "m9")
+
+    _record_messages(
+        "g1", *[(f"x{index}", "user") for index in range(MAX_REPLY_RECENT_MESSAGES - 2)]
+    )
+    assert reply_is_stale("g1", "m1")
+
+
+@pytest.mark.parametrize(
+    ("later", "dropped"),
+    [
+        (1, False),  # 生产日志：别的机器人 4 秒后插一句，审查通过的回复就被整条丢掉。
+        (4, False),
+        (14, False),  # 要接的那句还在最近 15 条里
+        (15, True),
+    ],
+)
+def test_reply_is_kept_until_the_target_leaves_the_last_15_messages(tmp_path, later, dropped):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), *_later(later))
+    finalization = _fresh_finalization(tmp_path)
+    with patch.object(turn_delivery, "log_step") as log:
+        assert (
+            turn_delivery._drop_stale_generated_turn(finalization, phase="before_commit") is dropped
+        )
+    assert log.called is dropped
+    if dropped:
+        assert log.call_args.kwargs["fields"]["newer_messages"] == later
+
+
+@pytest.mark.parametrize(
+    ("later", "reason"),
+    [
+        ([("m2", "user", "不用回复了")], "silenced"),
+        ([("m2", "user", "哈哈"), ("m3", "user", "@的不是你")], "silenced"),
+        ([("m2", "assistant", "不用回复了")], ""),  # 小青自己的话不算叫停
+        ([("m2", "user", "不用回复了吗？")], ""),  # 问句不是叫停
+        ([("m2", "user", "嘶")], ""),
+    ],
+)
+def test_stale_reason_recognizes_a_later_request_to_stop(later, reason):
+    from plugins.xiaoqing_chat.memory.local_ids import split_history_at, stale_reason
+
+    _record_messages("g1", ("m1", "user"), *later)
+    split = split_history_at("g1", "m1")
+    assert split is not None
+    assert stale_reason(split[1]) == reason
+
+
+def test_reply_is_dropped_when_someone_asks_her_to_stop_after_the_target(tmp_path):
+    """评审复现：原请求之后记录了“不用回复了”，旧回复仍然发出。"""
+
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), ("m2", "user", "不用回复了"))
+    finalization = _fresh_finalization(tmp_path)
+    with patch.object(turn_delivery, "log_step") as log:
+        assert turn_delivery._drop_stale_generated_turn(finalization, phase="after_presend_delay")
+    assert log.call_args.kwargs["fields"]["reason"] == "silenced"
+    finalization.generated.cancel_speculative_memory.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_silence_request_does_not_spend_a_topic_check(tmp_path):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), *_later(5), ("m9", "user", "别回了"))
+    finalization = _fresh_finalization(tmp_path)
+    with patch.object(turn_delivery, "topic_changed", AsyncMock()) as check:
+        assert not await turn_delivery._drop_if_topic_changed(finalization)
+    check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_silence_request_between_bubbles_stops_the_rest(tmp_path):
+    """发到一半有人说“别回了”：已经发出的照常结算，后面的气泡不再发。"""
+
+    from plugins.xiaoqing_chat import turn_delivery
+    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+
+    _record_messages("g1", ("m1", "user"))
+    sent: list = []
+
+    async def send_action(action):
+        sent.append(action)
+        _record_messages("g1", (f"s{len(sent)}", "user", "不用回复了"))
+        return True
+
+    from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+
+    finalization = _fresh_finalization(tmp_path)
+    finalization.context = SimpleNamespace(data_dir=tmp_path, send_action=send_action)
+    finalization.hctx.runtime            = ChatRuntime(XiaoQingChatConfig(), [])
+    finalization.generated.reply_payload = turn_delivery.build_reply_payload_from_parts(
+        build_text_message_parts("一\n\n二\n\n三")
+    )
+    batches = [[{"type": "text", "data": {"text": text}}] for text in ("一", "二", "三")]
+    bubbles = turn_delivery._ReplyBubbles(finalization, (), batches)
+    with (
+        patch.object(turn_delivery, "chat_lock", side_effect=lambda _chat_id: asyncio.Lock()),
+        patch.object(turn_delivery.asyncio, "sleep", AsyncMock()),
+        patch.object(turn_delivery, "log_step"),
+        patch.object(turn_delivery, "_commit_smalltalk_delivery", AsyncMock()) as commit,
+    ):
+        assert not await turn_delivery._send_smalltalk_intermediate_batches(
+            finalization, batches, bubbles, apply_humanize=False
+        )
+    assert len(sent) == 1
+    commit.assert_awaited_once_with(finalization, build_text_message_parts("一"), ())
+
+
+def test_reply_generator_gives_up_early_after_a_request_to_stop():
+    from plugins.xiaoqing_chat.reply_generator import _is_turn_stale
+
+    _record_messages("g1", ("m1", "user"))
+    event = {"_xc_user_recorded_local_id": "m1"}
+    assert not _is_turn_stale("g1", event)
+    _record_messages("g1", ("m2", "user", "不用回复了"))
+    assert _is_turn_stale("g1", event)
+
+
+# ---------------------------------------------------------------- 迟到的回执不能覆盖更新的规划状态
+
+
+def _pfc_state(goal: str, *, ended: bool):
+    return PFCConversationState(
+        chat_id                      = "g1",
+        ignore_until_ts              = 0.0,
+        ended                        = ended,
+        last_successful_reply_action = "",
+        goal_list                    = [{"goal": goal}],
+        knowledge_list               = [],
+        planner_fail_ts              = [],
+        planner_skip_until           = 0.0,
+        updated_at                   = 0.0,
+    )
+
+
+def test_planner_turns_commit_in_order():
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
+
+    store = PFCStateStore()
+    first, second = store.begin_turn("g1"), store.begin_turn("g1")
+    assert (first, second) == (1, 2)
+    assert store.begin_turn("g2") == 1
+    assert store.claim_commit("g1", second)
+    assert not store.claim_commit("g1", first)
+    assert store.claim_commit("g1", second)  # 同一轮重复提交（重规划）仍然允许
+    assert store.claim_commit("g2", 1)
+
+
+@pytest.mark.asyncio
+async def test_late_receipt_does_not_roll_back_a_newer_turns_planner_state(tmp_path):
+    """评审复现：等回执超时后新一轮先提交（新目标、ended=True），旧回执晚到又改回旧值。"""
+
+    from plugins.xiaoqing_chat.planning.goal_state import GoalStore
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
+    from plugins.xiaoqing_chat.turn_generation import commit_planner_snapshot
+
+    store = PFCStateStore()
+    goals = GoalStore()
+    state = SimpleNamespace(pfc_state_store=store, goal_store=goals)
+    runtime = SimpleNamespace(cfg=SimpleNamespace(goal=SimpleNamespace(enable_goal=True)))
+
+    old_turn = store.begin_turn("g1")  # 旧回复取快照，交给 Core 后回执迟迟不来
+    new_turn = store.begin_turn("g1")  # 等待超时，新一轮开始
+    assert await commit_planner_snapshot(
+        state, runtime, "g1", _pfc_state("new-topic", ended=True), turn=new_turn
+    )
+    assert not await commit_planner_snapshot(
+        state, runtime, "g1", _pfc_state("old-topic", ended=False), turn=old_turn
+    )
+
+    current = store.get("g1")
+    assert current.top_goal == "new-topic"
+    assert current.ended is True
+    assert (await goals.get_async("g1")).goal == "new-topic"
+
+
+def test_reply_is_dropped_after_session_reset_even_without_new_messages(tmp_path):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"))
+    finalization                              = _fresh_finalization(tmp_path)
+    finalization.generated.session_generation = "old-generation"
+    with patch.object(turn_delivery, "log_step"):
+        assert turn_delivery._drop_stale_generated_turn(finalization, phase="before_commit")
+
+
+@pytest.mark.parametrize(
+    ("later", "event", "quoted"),
+    [
+        (4, {"group_id": 1, "message_id": 555}, False),  # 还在最近 5 条里：直接接
+        (5, {"group_id": 1, "message_id": 555}, True),
+        (10, {"group_id": 1, "message_id": 555}, True),
+        (6, {"group_id": None, "message_id": 555}, False),
+        (6, {"group_id": 1}, False),
+    ],
+)
+def test_reply_quotes_the_target_once_it_is_out_of_the_last_five(tmp_path, later, event, quoted):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), *_later(later))
+    finalization = _fresh_finalization(tmp_path, event=event)
+    first   = [{"type": "text", "data": {"text": "对"}}]
+    batches = [first, [{"type": "text", "data": {"text": "就是这样"}}]]
+    turn_delivery._quote_far_target(finalization, batches)
+    if quoted:
+        assert batches[0] == [{"type": "reply", "data": {"id": "555"}}, *first]
+    else:
+        assert batches[0] == first
+    assert batches[1] == [{"type": "text", "data": {"text": "就是这样"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("later", "checked"),
+    [
+        ([], False),
+        ([("m2", "user", "嘶"), ("m3", "user", "喔？")], False),  # 近处的反应：直接发，不多问
+        ([("m2", "user", "对了，明天谁去图书馆")], True),  # 近处有人转话题
+        ([("m2", "assistant", "上一轮的回复")], False),  # 之后没有群友说话
+        (_later(5), True),  # 已经隔了 5 条：确认话题
+        (_later(15), False),  # 太远的交给过期检查
+    ],
+)
+async def test_topic_is_only_checked_when_far_or_someone_changes_the_subject(
+    tmp_path, later, checked
+):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), *later)
+    finalization = _fresh_finalization(tmp_path)
+    with (
+        patch.object(turn_delivery, "topic_changed", AsyncMock(return_value=False)) as check,
+        patch.object(turn_delivery, "log_step"),
+    ):
+        assert not await turn_delivery._drop_if_topic_changed(finalization)
+    assert check.await_count == (1 if checked else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [True, False])
+async def test_reply_is_dropped_when_the_group_moved_to_another_topic(tmp_path, changed):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m0", "user", "901 换车底了"), ("m1", "user"), *_later(6))
+    finalization = _fresh_finalization(tmp_path)
+    with (
+        patch.object(turn_delivery, "topic_changed", AsyncMock(return_value=changed)) as check,
+        patch.object(turn_delivery, "log_step") as log,
+    ):
+        assert await turn_delivery._drop_if_topic_changed(finalization) is changed
+
+    kwargs = check.await_args.kwargs
+    assert [message.local_id for message in kwargs["before"]] == ["m0", "m1"]
+    assert len(kwargs["after"]) == 6
+    assert kwargs["reply"] == "对，九十二次改成 901 了"
+    assert finalization.generated.cancel_speculative_memory.called is changed
+    assert (
+        any(call.kwargs.get("step") == "smalltalk.stale.drop" for call in log.call_args_list)
+        is changed
+    )
+
+
+@pytest.mark.asyncio
+async def test_delivered_reply_commits_planner_state_despite_interleaved_messages(tmp_path):
+    """回复已经发出：后面又有人插话，“刚回复过”的规划状态也要记上，下一轮才会按跟进来规划。"""
+
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), ("m2", "user"))
+    finalization              = _fresh_finalization(tmp_path)
+    finalization.started_at   = 0.0
+    finalization.hctx.runtime = SimpleNamespace(
+        cfg=SimpleNamespace(debug=SimpleNamespace(log_latency=False))
+    )
+
+    def drop_task(_context, coro, *, name):
+        coro.close()
+
+    with (
+        patch.object(turn_delivery, "chat_lock", return_value=asyncio.Lock()),
+        patch.object(
+            turn_delivery, "_apply_generated_pfc_state", AsyncMock(return_value=True)
+        ) as apply_state,
+        patch.object(turn_delivery, "_record_delivered_reply", AsyncMock(return_value=[])),
+        patch.object(turn_delivery, "schedule_pfc_state_flush") as flush,
+        patch.object(turn_delivery, "spawn_bg_task", side_effect=drop_task),
+        patch.object(turn_delivery, "display_reply_text", return_value="对"),
+        patch.object(turn_delivery, "log_step"),
+    ):
+        await turn_delivery._commit_smalltalk_delivery(finalization, (), (101,))
+
+    apply_state.assert_awaited_once_with(finalization)
+    flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", [True, False])
+async def test_reply_bubbles_release_the_chat_once_settled(tmp_path, outcome):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    finalization = _fresh_finalization(tmp_path)
+    limiter      = finalization.hctx.state.generation_limiter
+    bubbles      = turn_delivery._ReplyBubbles(finalization, (), [[{"type": "text"}]])
+    receipt      = bubbles.receipt(0)
+    await bubbles.close()
+    assert "g1" in limiter._delivery_holds
+
+    with (
+        patch.object(turn_delivery, "_commit_smalltalk_delivery", AsyncMock()),
+        patch.object(turn_delivery, "_rollback_smalltalk_delivery", AsyncMock()),
+    ):
+        await receipt.record(outcome)
+    assert "g1" not in limiter._delivery_holds
+
+
+def _stored(local_id: str, text: str, role: str = "user"):
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    return StoredMessage(
+        role=role, name="群友", ts=1_000.0, user_id=1, local_id=local_id, content=text
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ('{"topic_changed": true}', True),
+        ('```json\n{"topic_changed": false}\n```', False),
+        ('{"topic_changed": "true"}', False),  # 只认 JSON 布尔
+        ("看不懂", False),
+    ],
+)
+async def test_topic_changed_reads_the_planner_verdict(monkeypatch, content, expected):
+    from plugins.xiaoqing_chat.llm import topic_shift
+    from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+
+    captured: dict = {}
+
+    async def fake_chat(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": content}}]}, "profile"
+
+    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_fallback_paths", fake_chat)
+    changed = await topic_shift.topic_changed(
+        secrets  = {},
+        bot_name = "小青",
+        before   = [_stored("m1", "有可能901/902这对车从京局车变成广局车了？")],
+        after    = [_stored("m2", "对了，明天谁去图书馆")],
+        reply    = "我猜是换车底了",
+        llm=LLMCallConfig(timeout_seconds=30.0, total_timeout_seconds=60.0, max_retry=2),
+    )
+
+    assert changed is expected
+    assert captured["route"] == "reasoning"
+    assert captured["timeout_seconds"] <= 6.0
+    assert captured["total_timeout_seconds"] <= 6.0
+    assert captured["max_retry"] == 0
+    prompt = captured["messages"][0]["content"]
+    assert "901/902" in prompt and "明天谁去图书馆" in prompt and "我猜是换车底了" in prompt
+
+
+@pytest.mark.asyncio
+async def test_topic_changed_keeps_the_reply_when_the_model_is_unavailable(monkeypatch):
+    from plugins.xiaoqing_chat.llm import topic_shift
+    from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+
+    async def failing_chat(**_kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_fallback_paths", failing_chat)
+    log    = Mock()
+    kwargs = {
+        "bot_name": "小青",
+        "before"  : [_stored("m1", "901 换车底了")],
+        "after"   : [_stored("m2", "对了，明天考试")],
+        "reply"   : "真的假的",
+        "llm"     : LLMCallConfig(),
+        "log"     : log,
+    }
+    assert not await topic_shift.topic_changed(secrets={}, **kwargs)
+    assert log.call_args.args[0] == "smalltalk.topic_check.error"
+    assert not await topic_shift.topic_changed(secrets={"_ai": None}, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("对了，明天谁去图书馆", True),
+        ("话说你们周末干嘛", True),
+        ("btw 那个链接还在吗", True),
+        ("不是，是九十二变成了901/902", False),
+        ("你说的对了一半", False),
+    ],
+)
+def test_opens_new_topic_only_matches_leading_topic_openers(text, expected):
+    from plugins.xiaoqing_chat.llm.topic_shift import opens_new_topic
+
+    assert opens_new_topic(_stored("m2", text)) is expected
+    assert not opens_new_topic(_stored("m3", text, role="assistant"))
