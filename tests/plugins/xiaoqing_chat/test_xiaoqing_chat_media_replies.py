@@ -97,7 +97,7 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used_by_hash"),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",
@@ -200,7 +200,7 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used_by_hash"),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",
@@ -297,7 +297,7 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used_by_id"),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",
@@ -409,8 +409,8 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
-        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used_by_hash"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used_by_id"),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",
@@ -509,7 +509,7 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used_by_id"),
         patch(
             "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
             return_value="u1",

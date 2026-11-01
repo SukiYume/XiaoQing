@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.plugin_base import emoji, face, image, segments, text
@@ -26,6 +26,7 @@ class ReplyPayload:
     outbound_batches: list[list[dict[str, Any]]]
     media_items     : list[dict[str, Any]]
     parts           : tuple[dict[str, Any], ...] = ()
+    batch_parts     : list[list[dict[str, object]]] = field(default_factory=list)
 
 
 def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
@@ -54,29 +55,33 @@ def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
 
 def _build_batch_segments(
     batch_text: str, media_sequence: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[int]]:
+) -> tuple[list[dict[str, Any]], list[int], list[dict[str, object]]]:
     batch = str(batch_text or "")
     if not batch:
-        return [], []
+        return [], [], []
 
-    built           : list[dict[str, Any]] = []
-    consumed_indexes: list[int]            = []
-    cursor                                 = 0
+    built           : list[dict[str, Any]]    = []
+    consumed_indexes: list[int]               = []
+    batch_parts     : list[dict[str, object]] = []
+    cursor                                    = 0
     for match in MEDIA_PLACEHOLDER_RE.finditer(batch):
         text_prefix = batch[cursor : match.start()].strip("\r\n")
         if text_prefix.strip():
             built.extend(segments(text_prefix))
+            batch_parts.append({"kind": "text", "text": text_prefix})
         media_index = max(0, int(match.group(1)) - 1)
         if media_index < len(media_sequence):
             segment = _media_segment(media_sequence[media_index])
             if segment is not None:
                 built.append(segment)
                 consumed_indexes.append(media_index)
+                batch_parts.append(dict(media_sequence[media_index]))
         cursor = match.end()
     suffix = batch[cursor:].lstrip("\r\n")
     if suffix.strip():
         built.extend(segments(suffix))
-    return built, consumed_indexes
+        batch_parts.append({"kind": "text", "text": suffix})
+    return built, consumed_indexes, batch_parts
 
 
 def _media_sequence_from_parts(parts: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -93,29 +98,37 @@ def _build_reply_payload_core(
     template = template_with_fallback_placeholders(reply_template, media_sequence)
     parts = split_chat_reply(template) if template else []
     outbound_batches: list[list[dict[str, Any]]] = []
+    batch_parts     : list[list[dict[str, object]]] = []
     consumed_indexes: set[int] = set()
     for part in parts:
         if not part or not part.strip():
             continue
         if not part.lstrip().startswith("```"):
             part = _LONE_FULL_STOP_RE.sub("", part)
-        batch_segments, batch_indexes = _build_batch_segments(part, media_sequence)
+        batch_segments, batch_indexes, structured_parts = _build_batch_segments(
+            part, media_sequence
+        )
         if batch_segments:
             outbound_batches.append(batch_segments)
+            batch_parts.append(structured_parts)
         consumed_indexes.update(batch_indexes)
 
-    trailing_segments: list[dict[str, Any]] = []
+    trailing_segments: list[dict[str, Any]]    = []
+    trailing_parts   : list[dict[str, object]] = []
     for index, item in enumerate(media_sequence):
         if index in consumed_indexes:
             continue
         segment = _media_segment(item)
         if segment is not None:
             trailing_segments.append(segment)
+            trailing_parts.append(dict(item))
     if trailing_segments:
         if outbound_batches:
             outbound_batches[-1] = [*outbound_batches[-1], *trailing_segments]
+            batch_parts[-1].extend(trailing_parts)
         else:
             outbound_batches.append(trailing_segments)
+            batch_parts.append(trailing_parts)
 
     visible_template = template_with_fallback_placeholders(display_template, media_sequence)
     visible_text     = rebuild_message_content(
@@ -129,6 +142,7 @@ def _build_reply_payload_core(
         outbound_batches = outbound_batches,
         media_items      = media_sequence,
         parts            = payload_parts,
+        batch_parts      = batch_parts,
     )
 
 
