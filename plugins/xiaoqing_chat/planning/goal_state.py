@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from ..constants import is_question
 from ..memory.topic_summary_cache import load_topic_summary_entries
 from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
@@ -130,10 +129,6 @@ def _derive_goal_from_context(
     if t:
         if is_low_information_turn(t):
             return f'围绕话题"{topic}"自然聊天' if topic else ""
-        if is_question(t):
-            if len(t) <= 28:
-                return f"回答用户问题：{t}"
-            return "回答用户问题"
         if len(t) <= 14:
             return f'围绕"{t}"继续聊'
         return "自然聊天"

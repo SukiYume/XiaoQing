@@ -399,6 +399,24 @@ class TestProcessEventLinearFlow:
         assert result and result[0]["data"]["text"] == "在的"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("at_only", [False, True])
+    async def test_group_name_call_routes_to_xiaoqing_planning(
+        self, dispatcher, mock_config_provider, mock_plugin_registry, event_template, at_only
+    ):
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        provider                                                     = MagicMock()
+        provider.module.handle_smalltalk = AsyncMock(return_value=[])
+        provider.module.call_bot_name_only = AsyncMock()
+        mock_plugin_registry.get.return_value = provider
+        message = [{"type": "at", "data": {"qq": "11111"}}] if at_only else "小青"
+        event = event_template(message=message)
+        event["raw_message"] = "[CQ:at,qq=11111]" if at_only else "小青"
+        result               = await dispatcher.handle_event(event)
+        assert result == []
+        provider.module.handle_smalltalk.assert_awaited_once()
+        provider.module.call_bot_name_only.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_private_only_bot_name_calls_bot_name_only(
         self, dispatcher, mock_plugin_registry, event_template
     ):

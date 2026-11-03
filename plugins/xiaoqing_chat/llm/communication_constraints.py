@@ -84,33 +84,6 @@ def forbids_followup_questions(text: str) -> bool:
     return _NO_QUESTION_REQUEST.search(text) is not None
 
 
-# “不是叫你”“@的不是你”：告诉机器人刚才那句不是对它说的，句子到此结束才算。
-_NOT_ADDRESSED_TO_YOU_RE = re.compile(
-    r"(?:(?:不是|没有?|并没有?)(?:在)?(?:叫|喊|找|问|说|艾特|@|at|cue)你"
-    r"|(?:叫|喊|找|问|说|艾特|@|at|cue)的(?:人)?不是你)"
-    r"(?=[啦了哈呀啊哦喔噢嗷]*(?:[，。！!,.~～…\s]|$))",
-    re.IGNORECASE,
-)
-
-
-def requests_silence(text: str) -> bool:
-    """识别当前说话人明确提出的停聊或安静请求。"""
-    direct = _without_quotes(text)
-    if re.search(
-        r"[?？]|什么意思|怎么理解|如何理解|怎么回复|但|不过|另外|接着|然后|帮我|告诉我|我想问|请(?:你)?(?:说|解释|回答|算|写)",
-        direct,
-    ):
-        return False
-    return bool(
-        re.search(
-            r"(?:不用|不要|不必|无需|别)(?:再|先)?(?:回复|回我|回(?=了|啦|[，。！？,!\s]|$)|跟进|接话|插话|回应|打扰)"
-            r"|(?:我(?:只)?想|让我)(?:先)?(?:安静(?:待)?(?:一会儿?|会儿?)|静一静|静静)",
-            direct,
-        )
-        or _NOT_ADDRESSED_TO_YOU_RE.search(direct)
-    )
-
-
 def requested_sentence_count(text: str) -> int | None:
     """读取单一的显式句数要求，保留后续受众和语气约束。"""
     direct  = _without_quotes(text)

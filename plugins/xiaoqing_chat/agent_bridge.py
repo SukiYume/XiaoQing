@@ -225,13 +225,13 @@ def _agent_reply_receipt(
 def agent_may_take_over(
     prepared: PreparedSmalltalkTurn, event: dict[str, Any], context: Any
 ) -> bool:
-    """这一轮要不要先问 agent：明确叫小青或私聊、且不是插件替人执行的命令。"""
+    """检查显式消息指向和工具能力；群聊调用方先完成 PFC 参与判断。"""
 
     agent = getattr(getattr(context, "capabilities", None), "agent_turn", None)
     # 私聊里每句话都是对角色说的；开启私聊脑内对话时私聊不算强制召唤，但同样要交给 agent。
     return (
         agent is not None
-        and bool(prepared.forced or prepared.is_private)
+        and bool(prepared.mentioned or prepared.is_private)
         and not event.get(COMMAND_RUNNER_EVENT_KEY)
     )
 

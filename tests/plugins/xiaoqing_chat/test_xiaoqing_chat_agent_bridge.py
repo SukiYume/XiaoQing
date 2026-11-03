@@ -305,7 +305,7 @@ async def test_private_turns_reach_the_agent_even_without_a_forced_summon(
     [(30, 13, False), (2800, 13, False), (2800, 13, True), (2800, 61, False)],
     ids=["active", "idle", "idle-with-other-speaker", "expired"],
 )
-async def test_bot_name_followup_routes_after_idle_cleanup(
+async def test_name_call_does_not_bypass_gate_after_idle_cleanup(
     tmp_path, quiet_side_effects, monkeypatch, text, idle_seconds, followup_delay, interleaved
 ):
     from dataclasses import replace
@@ -392,15 +392,8 @@ async def test_bot_name_followup_routes_after_idle_cleanup(
         result = await handlers._maybe_reply_smalltalk(text, event, context, hctx=hctx)
 
     assert state.get_continuous_reply_count(hctx.chat_id) == (0 if idle_seconds > 1800 else 3)
-    if followup_delay > 60:
-        assert result == []
-        agent.handle_turn.assert_not_awaited()
-    else:
-        assert result == reply
-        turns = [call.args[0] for call in agent.handle_turn.await_args_list]
-        assert [turn["phase"] for turn in turns] == ["decide", "act"]
-        assert all(turn["text"] == text and turn["user_id"] == 12345 for turn in turns)
-    assert not state.consume_pending_bot_name_call(hctx.chat_id, 12345)
+    assert result == []
+    agent.handle_turn.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -472,7 +465,9 @@ async def test_agent_taking_over_cancels_the_chat_reply_generated_alongside(tmp_
 
     act = AsyncMock(return_value=reply)
     with (
-        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared())),
+        patch.object(
+            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
+        ),
         patch.object(agent_bridge, "_decide", decide),
         patch.object(agent_bridge, "_act", act),
         patch.object(handlers, "generate_smalltalk_turn", generate),
@@ -509,7 +504,9 @@ async def test_declined_turn_uses_the_chat_reply_already_being_generated(tmp_pat
 
     act = AsyncMock()
     with (
-        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared())),
+        patch.object(
+            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
+        ),
         patch.object(agent_bridge, "_decide", decide),
         patch.object(agent_bridge, "_act", act),
         patch.object(handlers, "generate_smalltalk_turn", generate),
@@ -545,7 +542,9 @@ async def test_chat_reply_finished_first_waits_for_the_decision_and_is_dropped(t
         return object()
 
     with (
-        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared())),
+        patch.object(
+            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
+        ),
         patch.object(agent_bridge, "_decide", decide),
         patch.object(agent_bridge, "_act", AsyncMock(return_value=reply)),
         patch.object(handlers, "generate_smalltalk_turn", generate),
@@ -569,7 +568,11 @@ async def test_turns_the_agent_cannot_take_skip_the_decision(tmp_path):
             handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(forced=False))
         ),
         patch.object(agent_bridge, "_decide", decide),
-        patch.object(handlers, "generate_smalltalk_turn", AsyncMock(return_value="generated")),
+        patch.object(
+            handlers,
+            "generate_smalltalk_turn",
+            AsyncMock(return_value=SimpleNamespace(reply="", pfc_result=None)),
+        ),
         patch.object(handlers, "finalize_smalltalk_turn", AsyncMock(return_value=normal)),
     ):
         result = await handlers._maybe_reply_smalltalk(
@@ -779,3 +782,48 @@ async def test_concurrent_replies_keep_their_own_message_ids(tmp_path):
 
     by_text = {message.content: message.remote_ids() for message in store.get("g67890")}
     assert by_text == {"回复 A": (501,), "回复 B": (502,)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "planner_action,take_over", [("wait", True), ("direct_reply", True), ("direct_reply", False)]
+)
+async def test_group_agent_runs_after_planner_allows_participation(planner_action, take_over):
+    from dataclasses import replace
+
+    from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
+
+    limiter, slots = _slot_spy()
+    prepared = replace(_prepared(), forced=False)
+    generated = SimpleNamespace(
+        reply="聊天回复" if planner_action == "direct_reply" else "",
+        pfc_result=PFCRunResult(reply="", action=planner_action, reason="规划决定", ended=False),
+        cancel_speculative_memory=Mock(),
+    )
+    order = []
+
+    async def generate(*_args):
+        order.append("planner")
+        return generated
+
+    async def decide(*_args):
+        assert order == ["planner"]
+        order.append("agent")
+        return object() if take_over else None
+
+    agent_reply = [{"type": "text", "data": {"text": "工具结果"}}]
+    chat_reply  = [{"type": "text", "data": {"text": "聊天回复"}}] if generated.reply else []
+    with (
+        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=prepared)),
+        patch.object(handlers, "generate_smalltalk_turn", generate),
+        patch.object(handlers, "finalize_smalltalk_turn", AsyncMock(return_value=chat_reply)),
+        patch.object(agent_bridge, "_decide", AsyncMock(side_effect=decide)) as decision,
+        patch.object(agent_bridge, "_act", AsyncMock(return_value=agent_reply)) as act,
+    ):
+        result = await handlers._maybe_reply_smalltalk(
+            "帮我画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
+        )
+    assert decision.await_count == (1 if planner_action == "direct_reply" else 0)
+    assert act.await_count == (1 if planner_action == "direct_reply" and take_over else 0)
+    assert result == (agent_reply if act.await_count else chat_reply)
+    assert slots == ["enter", "exit"]

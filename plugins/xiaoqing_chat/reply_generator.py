@@ -95,7 +95,7 @@ def _needs_reasoning_route(text: str) -> bool:
 
 
 def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
-    """要接的那句已经太远或有人叫停时提前放弃，省下后续的生成和审查；话题有没有换到发送前再确认。"""
+    """回复目标超出历史保留范围时提前结束生成与审查；消息语义在投递前复核。"""
 
     local_id = str(event.get("_xc_user_recorded_local_id") or "").strip()
     if not local_id:

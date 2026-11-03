@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from core.message import (
-    contains_bot_name,
-    extract_text,
     has_at_mention,
     iter_message_segments,
     sender_display_name,
@@ -47,14 +45,6 @@ def is_bot_mentioned(event: dict[str, Any]) -> bool:
     """判断消息是否通过 @ 提及机器人。"""
     self_id = str(event.get("self_id", "") or "")
     return has_at_mention(event, self_id=self_id)
-
-
-def mentions_bot_name(event: dict[str, Any], bot_name: str) -> bool:
-    """判断消息正文是否包含机器人名称。"""
-    if not bot_name:
-        return False
-    text = extract_text(event.get("message")).strip()
-    return contains_bot_name(text, bot_name)
 
 
 def other_mentions(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:

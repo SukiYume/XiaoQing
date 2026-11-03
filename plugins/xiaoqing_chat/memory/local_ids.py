@@ -7,10 +7,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..constants import FIND_BY_LOCAL_ID_LIMIT
-from ..llm.communication_constraints import requests_silence
-from ..message_parts import render_stored_message
 from ..persona import resolve_bot_name
 from ..runtime_state import get_state as _state
+from .memory import StoredMessage
 
 
 def allocate_local_id(chat_id: str) -> str:
@@ -33,7 +32,9 @@ DIRECT_REPLY_RECENT_MESSAGES = 5
 MAX_REPLY_RECENT_MESSAGES    = 15
 
 
-def split_history_at(chat_id: str, local_id: str) -> tuple[list[Any], list[Any]] | None:
+def split_history_at(
+    chat_id: str, local_id: str
+) -> tuple[list[StoredMessage], list[StoredMessage]] | None:
     """近期历史在 ``local_id`` 处分成两段：到这条为止（含）和它之后；已不在近期历史里时返回 None。"""
 
     history = list(_state().memory_store.get(chat_id))
@@ -43,21 +44,11 @@ def split_history_at(chat_id: str, local_id: str) -> tuple[list[Any], list[Any]]
     return None
 
 
-def stale_reason(after: Sequence[Any]) -> str:
-    """要接的那句之后的消息让这轮回复作废的原因；还能照常回复时返回空串。
-
-    - ``too_far``：要接的那句已经不在最近 ``MAX_REPLY_RECENT_MESSAGES`` 条里。
-    - ``silenced``：之后有群友明确叫停（“不用回复了”“不是叫你”）。新消息不再一律作废旧回复，
-      叫停就得单独认出来，否则停聊之后旧回复照样发出去。
-    """
+def stale_reason(after: Sequence[StoredMessage]) -> str:
+    """按保留条数判断回复目标是否过期；消息语义由投递上下文复核处理。"""
 
     if len(after) >= MAX_REPLY_RECENT_MESSAGES:
         return "too_far"
-    if any(
-        message.role == "user" and requests_silence(render_stored_message(message))
-        for message in after
-    ):
-        return "silenced"
     return ""
 
 

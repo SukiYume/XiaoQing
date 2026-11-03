@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -13,7 +12,6 @@ import pytest
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_test_support import (
     _build_xiaoqing_catalog,
-    _make_hctx,
     xiaoqing_chat,
 )
 
@@ -342,66 +340,6 @@ async def test_call_bot_name_only_varies_response(mock_context):
     assert [result[0]["data"]["text"] for result in responses] == ["收到", "我在"]
     assert choose.call_count == 2
     assert all(call.args == (["收到", "我在"],) for call in choose.call_args_list)
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_call_bot_name_only_marks_followup_pending(mock_context):
-    """Calling only the bot name should force the next same-user group turn."""
-    from plugins.xiaoqing_chat.main import call_bot_name_only
-    from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
-
-    reset_global_state()
-    try:
-        result = await call_bot_name_only(mock_context)
-
-        assert result
-        state = get_state()
-        assert state.consume_pending_bot_name_call("g67890", 12345, now=time.time() + 1.0) is True
-        assert state.consume_pending_bot_name_call("g67890", 12345, now=time.time() + 1.0) is False
-    finally:
-        reset_global_state()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_pending_bot_name_followup_bypasses_reply_gate(mock_context, sample_group_event):
-    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
-
-    event                = dict(sample_group_event)
-    event["raw_message"] = "起床了没"
-    event["message"]     = [{"type": "text", "data": {"text": "起床了没"}}]
-
-    state = MagicMock()
-    state.consume_pending_bot_name_call = Mock(return_value=True)
-    state.get_mood_state.return_value = ""
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_expression_reflection=False),
-            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
-        )
-    )
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-
-    with (
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.mentions_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.is_private_event", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)
-        ) as gate,
-    ):
-        prepared = await _prepare_smalltalk_turn("起床了没", event, mock_context, hctx)
-
-    assert prepared is not None
-    assert prepared.forced is True
-    assert prepared.force_reason == "bot_name_followup"
-    state.consume_pending_bot_name_call.assert_called_once_with("g67890", 12345)
-    gate.assert_not_awaited()
 
 
 @pytest.mark.plugin

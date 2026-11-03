@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from ..constants import is_question
 from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
 
@@ -101,22 +100,14 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         st: HeartflowState,
         *,
         text: str,
-        goal: str,
         seconds_since_last_reply: float,
         base: float,
-        weight_question: float        = 0.12,
-        weight_goal_match: float      = 0.06,
         weight_short_text: float      = -0.08,
         weight_no_reply_streak: float = 0.05,
         weight_long_silence: float    = 0.08,
     ) -> float:
         s = float(base)
         t = (text or "").strip()
-        if is_question(t):
-            s += weight_question
-        g = (goal or "").strip()
-        if g and ("回答" in g or "澄清" in g):
-            s += weight_goal_match
         if len(t) <= 2:
             s += weight_short_text
         if st.no_reply_streak >= 3:
@@ -130,11 +121,8 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         *,
         chat_id: str,
         text: str,
-        goal: str,
         seconds_since_last_reply: float,
         base: float,
-        weight_question: float        = 0.12,
-        weight_goal_match: float      = 0.06,
         weight_short_text: float      = -0.08,
         weight_no_reply_streak: float = 0.05,
         weight_long_silence: float    = 0.08,
@@ -145,11 +133,8 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         return self._calculate_score(
             st,
             text                     = text,
-            goal                     = goal,
             seconds_since_last_reply = seconds_since_last_reply,
             base                     = base,
-            weight_question          = weight_question,
-            weight_goal_match        = weight_goal_match,
             weight_short_text        = weight_short_text,
             weight_no_reply_streak   = weight_no_reply_streak,
             weight_long_silence      = weight_long_silence,

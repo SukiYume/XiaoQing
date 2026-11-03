@@ -21,6 +21,13 @@ from tests.helpers.xiaoqing_chat_test_support import complete_test_state, patch_
 mock_context = _fixture_support.mock_context
 
 
+async def _allow_media_reply(**kwargs):
+    from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
+
+    reply = await kwargs["generate_reply"]("direct_reply", "参与已获规划许可", "")
+    return PFCRunResult(reply=reply, action="direct_reply", reason="参与已获规划许可", ended=False)
+
+
 @pytest.mark.asyncio
 async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_marker(mock_context):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
@@ -51,6 +58,7 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -82,6 +90,8 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
@@ -154,6 +164,7 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
         "message": [{"type": "image", "data": {"url": "https://example.com/sticker.png"}}],
         "_xc_command_forced": True,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -185,6 +196,8 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
@@ -251,6 +264,7 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -282,6 +296,8 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
@@ -354,6 +370,7 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
         "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -394,6 +411,8 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
@@ -464,6 +483,7 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -494,6 +514,8 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
@@ -561,6 +583,7 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
         "_xc_new_emoji_count": 1,
     }
     complete_test_state(state)
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -572,6 +595,8 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.turn_generation.run_pfc_once", side_effect=_allow_media_reply),
         patch_turn("chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
