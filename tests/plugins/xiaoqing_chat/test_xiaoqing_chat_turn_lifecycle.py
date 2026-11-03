@@ -154,7 +154,8 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event                       = dict(sample_group_event)
+    event = dict(sample_group_event)
+    event.pop("group_id", None)
     event["_xc_command_forced"] = True
 
     async def fake_generate_reply_draft(**kwargs):
@@ -652,7 +653,8 @@ async def test_mode_indicator_only_applies_in_brain_chat(mock_context, sample_gr
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event                       = dict(sample_group_event)
+    event = dict(sample_group_event)
+    event.pop("group_id", None)
     event["_xc_command_forced"] = True
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -720,7 +722,8 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event                       = dict(sample_group_event)
+    event = dict(sample_group_event)
+    event.pop("group_id", None)
     event["_xc_command_forced"] = True
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -779,7 +782,8 @@ def _fresh_finalization(tmp_path, *, chat_id: str = "g1", event: dict | None = N
     from plugins.xiaoqing_chat.generation_limiter import GenerationLimiter
 
     return SimpleNamespace(
-        generated=SimpleNamespace(
+        checked_users = None,
+        generated     = SimpleNamespace(
             local_id                  = "m1",
             session_generation        = None,
             cancel_speculative_memory = Mock(),
@@ -846,14 +850,18 @@ def test_reply_is_kept_until_the_target_leaves_the_last_15_messages(tmp_path, la
 @pytest.mark.parametrize(
     ("later", "reason"),
     [
-        ([("m2", "user", "不用回复了")], "silenced"),
-        ([("m2", "user", "哈哈"), ("m3", "user", "@的不是你")], "silenced"),
+        ([("m2", "user", "不用回复了")], ""),
+        ([("m2", "user", "哈哈"), ("m3", "user", "@的不是你")], ""),
         ([("m2", "assistant", "不用回复了")], ""),  # 小青自己的话不算叫停
         ([("m2", "user", "不用回复了吗？")], ""),  # 问句不是叫停
+        ([("m2", "user", "阿梨，别回复我了")], ""),
+        ([("m2", "user", "@小明 别回复我了")], ""),
+        ([("m2", "user", "小明，不是叫你")], ""),
+        ([("m2", "user", "小青，别回复了")], ""),
         ([("m2", "user", "嘶")], ""),
     ],
 )
-def test_stale_reason_recognizes_a_later_request_to_stop(later, reason):
+def test_stale_reason_leaves_message_meaning_to_context_review(later, reason):
     from plugins.xiaoqing_chat.memory.local_ids import split_history_at, stale_reason
 
     _record_messages("g1", ("m1", "user"), *later)
@@ -862,33 +870,46 @@ def test_stale_reason_recognizes_a_later_request_to_stop(later, reason):
     assert stale_reason(split[1]) == reason
 
 
-def test_reply_is_dropped_when_someone_asks_her_to_stop_after_the_target(tmp_path):
-    """评审复现：原请求之后记录了“不用回复了”，旧回复仍然发出。"""
-
+@pytest.mark.asyncio
+async def test_reply_is_dropped_after_context_review_of_stop_request(tmp_path):
     from plugins.xiaoqing_chat import turn_delivery
 
     _record_messages("g1", ("m1", "user"), ("m2", "user", "不用回复了"))
     finalization = _fresh_finalization(tmp_path)
-    with patch.object(turn_delivery, "log_step") as log:
-        assert turn_delivery._drop_stale_generated_turn(finalization, phase="after_presend_delay")
-    assert log.call_args.kwargs["fields"]["reason"] == "silenced"
+    with (
+        patch.object(
+            turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=True)
+        ) as check,
+        patch.object(turn_delivery, "log_step"),
+    ):
+        assert await turn_delivery._drop_if_context_changed(finalization)
+    check.assert_awaited_once()
     finalization.generated.cancel_speculative_memory.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_silence_request_does_not_spend_a_topic_check(tmp_path):
+async def test_silence_request_reaches_context_review(tmp_path):
     from plugins.xiaoqing_chat import turn_delivery
 
     _record_messages("g1", ("m1", "user"), *_later(5), ("m9", "user", "别回了"))
     finalization = _fresh_finalization(tmp_path)
-    with patch.object(turn_delivery, "topic_changed", AsyncMock()) as check:
-        assert not await turn_delivery._drop_if_topic_changed(finalization)
-    check.assert_not_awaited()
+    with (
+        patch.object(
+            turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=True)
+        ) as check,
+        patch.object(turn_delivery, "log_step"),
+    ):
+        assert await turn_delivery._drop_if_context_changed(finalization)
+    check.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_silence_request_between_bubbles_stops_the_rest(tmp_path):
-    """发到一半有人说“别回了”：已经发出的照常结算，后面的气泡不再发。"""
+@pytest.mark.parametrize(
+    "text,stopped",
+    [("不用回复了", True), ("阿梨，别回复我了", False), ("@小明 别回复我了", False)],
+)
+async def test_silence_request_between_bubbles_respects_addressee(tmp_path, text, stopped):
+    """气泡之间针对小青的叫停会结束投递，发给其他群友的要求保留当前回复。"""
 
     from plugins.xiaoqing_chat import turn_delivery
     from plugins.xiaoqing_chat.message_parts import build_text_message_parts
@@ -898,7 +919,7 @@ async def test_silence_request_between_bubbles_stops_the_rest(tmp_path):
 
     async def send_action(action):
         sent.append(action)
-        _record_messages("g1", (f"s{len(sent)}", "user", "不用回复了"))
+        _record_messages("g1", (f"s{len(sent)}", "user", text))
         return True
 
     from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
@@ -916,23 +937,51 @@ async def test_silence_request_between_bubbles_stops_the_rest(tmp_path):
         patch.object(turn_delivery, "chat_lock", side_effect=lambda _chat_id: asyncio.Lock()),
         patch.object(turn_delivery.asyncio, "sleep", AsyncMock()),
         patch.object(turn_delivery, "log_step"),
+        patch.object(turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=stopped)),
         patch.object(turn_delivery, "_commit_smalltalk_delivery", AsyncMock()) as commit,
     ):
-        assert not await turn_delivery._send_smalltalk_intermediate_batches(
+        continued = await turn_delivery._send_smalltalk_intermediate_batches(
             finalization, batches, bubbles, apply_humanize=False
         )
-    assert len(sent) == 1
-    commit.assert_awaited_once_with(finalization, build_text_message_parts("一"), ())
+        assert continued is not stopped
+        assert turn_delivery._drop_stale_generated_turn(finalization, phase="before_final") is False
+    assert len(sent) == (1 if stopped else 2)
+    if stopped:
+        commit.assert_awaited_once_with(finalization, build_text_message_parts("一"), ())
+    else:
+        commit.assert_not_awaited()
 
 
-def test_reply_generator_gives_up_early_after_a_request_to_stop():
+@pytest.mark.parametrize(
+    "text,stopped",
+    [
+        ("不用回复了", True),
+        ("小青，别回复了", True),
+        ("阿梨，别回复我了", False),
+        ("@小明 别回复我了", False),
+    ],
+)
+def test_reply_generator_defers_stop_wording_to_delivery_review(text, stopped):
     from plugins.xiaoqing_chat.reply_generator import _is_turn_stale
 
     _record_messages("g1", ("m1", "user"))
     event = {"_xc_user_recorded_local_id": "m1"}
     assert not _is_turn_stale("g1", event)
-    _record_messages("g1", ("m2", "user", "不用回复了"))
-    assert _is_turn_stale("g1", event)
+    _record_messages("g1", ("m2", "user", text))
+    assert not _is_turn_stale("g1", event)
+
+
+@pytest.mark.asyncio
+async def test_third_party_silence_still_allows_topic_check(tmp_path):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), *_later(5), ("m9", "user", "阿梨，别回复了"))
+    finalization = _fresh_finalization(tmp_path)
+    with patch.object(
+        turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=False)
+    ) as check:
+        assert not await turn_delivery._drop_if_context_changed(finalization)
+    check.assert_awaited_once()
 
 
 # ---------------------------------------------------------------- 迟到的回执不能覆盖更新的规划状态
@@ -958,11 +1007,13 @@ def test_planner_turns_commit_in_order():
     store = PFCStateStore()
     first, second = store.begin_turn("g1"), store.begin_turn("g1")
     assert (first, second) == (1, 2)
-    assert store.begin_turn("g2") == 1
+    other = store.begin_turn("g2")
+    assert other > second
+    assert store.claim_commit("g1", first)  # 新轮次尚未提交时，较早的有效快照仍可写回。
     assert store.claim_commit("g1", second)
     assert not store.claim_commit("g1", first)
     assert store.claim_commit("g1", second)  # 同一轮重复提交（重规划）仍然允许
-    assert store.claim_commit("g2", 1)
+    assert store.claim_commit("g2", other)
 
 
 @pytest.mark.asyncio
@@ -1033,7 +1084,7 @@ def test_reply_quotes_the_target_once_it_is_out_of_the_last_five(tmp_path, later
     ("later", "checked"),
     [
         ([], False),
-        ([("m2", "user", "嘶"), ("m3", "user", "喔？")], False),  # 近处的反应：直接发，不多问
+        ([("m2", "user", "嘶"), ("m3", "user", "喔？")], True),  # 近处的反应：直接发，不多问
         ([("m2", "user", "对了，明天谁去图书馆")], True),  # 近处有人转话题
         ([("m2", "assistant", "上一轮的回复")], False),  # 之后没有群友说话
         (_later(5), True),  # 已经隔了 5 条：确认话题
@@ -1048,10 +1099,12 @@ async def test_topic_is_only_checked_when_far_or_someone_changes_the_subject(
     _record_messages("g1", ("m1", "user"), *later)
     finalization = _fresh_finalization(tmp_path)
     with (
-        patch.object(turn_delivery, "topic_changed", AsyncMock(return_value=False)) as check,
+        patch.object(
+            turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=False)
+        ) as check,
         patch.object(turn_delivery, "log_step"),
     ):
-        assert not await turn_delivery._drop_if_topic_changed(finalization)
+        assert not await turn_delivery._drop_if_context_changed(finalization)
     assert check.await_count == (1 if checked else 0)
 
 
@@ -1063,10 +1116,12 @@ async def test_reply_is_dropped_when_the_group_moved_to_another_topic(tmp_path, 
     _record_messages("g1", ("m0", "user", "901 换车底了"), ("m1", "user"), *_later(6))
     finalization = _fresh_finalization(tmp_path)
     with (
-        patch.object(turn_delivery, "topic_changed", AsyncMock(return_value=changed)) as check,
+        patch.object(
+            turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=changed)
+        ) as check,
         patch.object(turn_delivery, "log_step") as log,
     ):
-        assert await turn_delivery._drop_if_topic_changed(finalization) is changed
+        assert await turn_delivery._drop_if_context_changed(finalization) is changed
 
     kwargs = check.await_args.kwargs
     assert [message.local_id for message in kwargs["before"]] == ["m0", "m1"]
@@ -1077,6 +1132,167 @@ async def test_reply_is_dropped_when_the_group_moved_to_another_topic(tmp_path, 
         any(call.kwargs.get("step") == "smalltalk.stale.drop" for call in log.call_args_list)
         is changed
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [True, False])
+@pytest.mark.parametrize(
+    "text",
+    ["@阿梨 对了，明天谁去图书馆", "@阿梨 话说，明天谁去图书馆", "阿梨，对了，明天谁去图书馆"],
+)
+async def test_single_addressed_topic_opener_reaches_model(tmp_path, text, changed):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    _record_messages("g1", ("m1", "user"), ("m2", "user", text))
+    finalization = _fresh_finalization(tmp_path)
+    with (
+        patch.object(
+            turn_delivery, "reply_should_be_withheld", AsyncMock(return_value=changed)
+        ) as check,
+        patch.object(turn_delivery, "log_step"),
+    ):
+        assert await turn_delivery._drop_if_context_changed(finalization) is changed
+    check.assert_awaited_once()
+    assert [message.content for message in check.await_args.kwargs["after"]] == [text]
+    assert finalization.generated.cancel_speculative_memory.called is changed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arrival", ["during_check", "waiting_for_lock"])
+@pytest.mark.parametrize(
+    "new_role,new_text,second_verdict,delivered,checks",
+    [
+        ("user", "对了，明天谁去图书馆", True, False, 2),
+        ("user", "没错，901 就是这辆", False, True, 2),
+        ("assistant", "对了，明天谁去图书馆", False, True, 1),
+        ("user", "不用回复了", True, False, 2),
+    ],
+)
+async def test_finalization_refreshes_topic_snapshot_before_delivery(
+    tmp_path,
+    arrival,
+    new_role,
+    new_text,
+    second_verdict,
+    delivered,
+    checks,
+):
+    from plugins.xiaoqing_chat import turn_delivery
+    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+
+    _record_messages("g1", ("m1", "user"), *_later(5))
+    finalization = _fresh_finalization(tmp_path)
+    parts = build_text_message_parts(finalization.generated.reply)
+    finalization.generated.reply_payload = turn_delivery.build_reply_payload_from_parts(parts)
+    batches = [[{"type": "text", "data": {"text": finalization.generated.reply}}]]
+    started = asyncio.Event()
+    finish_check = asyncio.Event()
+    lock = asyncio.Lock()
+    snapshots = []
+
+    async def check(**kwargs):
+        snapshots.append([message.local_id for message in kwargs["after"]])
+        if len(snapshots) == 1:
+            started.set()
+            await finish_check.wait()
+            return False
+        return second_verdict
+
+    with (
+        patch.object(turn_delivery, "chat_lock", return_value=lock),
+        patch.object(turn_delivery, "reply_should_be_withheld", AsyncMock(side_effect=check)),
+        patch.object(turn_delivery, "_prepare_smalltalk_reply_output", return_value=parts),
+        patch.object(turn_delivery, "_smalltalk_outbound_batches", return_value=batches),
+        patch.object(
+            turn_delivery, "_apply_smalltalk_presend_delay", AsyncMock(return_value=False)
+        ),
+        patch.object(turn_delivery, "_rollback_smalltalk_delivery", AsyncMock()),
+        patch.object(turn_delivery, "log_step"),
+    ):
+        task = asyncio.create_task(
+            turn_delivery.finalize_smalltalk_turn(
+                SimpleNamespace(forced=True),
+                finalization.generated,
+                finalization.event,
+                finalization.context,
+                finalization.hctx,
+                started_at=0,
+            )
+        )
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            if arrival == "waiting_for_lock":
+                await lock.acquire()
+                finish_check.set()
+                await asyncio.sleep(0)
+            _record_messages("g1", ("m99", new_role, new_text))
+            finish_check.set()
+            if lock.locked():
+                lock.release()
+            result = await asyncio.wait_for(task, 1)
+            if result:
+                await result.delivery_receipt.record(False)
+        finally:
+            finish_check.set()
+            if lock.locked():
+                lock.release()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert bool(result) is delivered
+    assert len(snapshots) == checks
+    assert "m99" not in snapshots[0]
+    if checks == 2:
+        assert snapshots[1][-1] == "m99"
+    assert finalization.generated.cancel_speculative_memory.called is not delivered
+
+
+@pytest.mark.asyncio
+async def test_finalization_stops_after_two_outdated_topic_snapshots(tmp_path):
+    from plugins.xiaoqing_chat import turn_delivery
+    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+
+    _record_messages("g1", ("m1", "user"), *_later(5))
+    finalization                         = _fresh_finalization(tmp_path)
+    parts                                = build_text_message_parts(finalization.generated.reply)
+    finalization.generated.reply_payload = turn_delivery.build_reply_payload_from_parts(parts)
+    checks                               = 0
+
+    async def check(**_kwargs):
+        nonlocal checks
+        checks += 1
+        await asyncio.sleep(0)
+        _record_messages("g1", (f"new{checks}", "user", "还有新消息"))
+        return False
+
+    with (
+        patch.object(turn_delivery, "chat_lock", return_value=asyncio.Lock()),
+        patch.object(turn_delivery, "reply_should_be_withheld", AsyncMock(side_effect=check)),
+        patch.object(turn_delivery, "_prepare_smalltalk_reply_output", return_value=parts),
+        patch.object(
+            turn_delivery,
+            "_smalltalk_outbound_batches",
+            return_value=[[{"type": "text", "data": {"text": "回复"}}]],
+        ),
+        patch.object(
+            turn_delivery, "_apply_smalltalk_presend_delay", AsyncMock(return_value=False)
+        ),
+        patch.object(turn_delivery, "log_step") as log,
+    ):
+        result = await asyncio.wait_for(
+            turn_delivery.finalize_smalltalk_turn(
+                SimpleNamespace(forced=True),
+                finalization.generated,
+                finalization.event,
+                finalization.context,
+                finalization.hctx,
+                started_at=0,
+            ),
+            1,
+        )
+    assert result == []
+    assert checks == 2
+    finalization.generated.cancel_speculative_memory.assert_called_once()
+    assert log.call_args.kwargs["fields"]["reason"] == "topic_snapshot_outdated"
 
 
 @pytest.mark.asyncio
@@ -1144,13 +1360,13 @@ def _stored(local_id: str, text: str, role: str = "user"):
 @pytest.mark.parametrize(
     ("content", "expected"),
     [
-        ('{"topic_changed": true}', True),
-        ('```json\n{"topic_changed": false}\n```', False),
-        ('{"topic_changed": "true"}', False),  # 只认 JSON 布尔
-        ("看不懂", False),
+        ('{"withhold_reply": true}', True),
+        ('```json\n{"withhold_reply": false}\n```', False),
+        ('{"withhold_reply": "true"}', True),  # 只认 JSON 布尔
+        ("看不懂", True),
     ],
 )
-async def test_topic_changed_reads_the_planner_verdict(monkeypatch, content, expected):
+async def test_reply_should_be_withheld_reads_the_planner_verdict(monkeypatch, content, expected):
     from plugins.xiaoqing_chat.llm import topic_shift
     from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 
@@ -1161,7 +1377,7 @@ async def test_topic_changed_reads_the_planner_verdict(monkeypatch, content, exp
         return {"choices": [{"message": {"content": content}}]}, "profile"
 
     monkeypatch.setattr(topic_shift, "chat_completions_raw_with_fallback_paths", fake_chat)
-    changed = await topic_shift.topic_changed(
+    changed = await topic_shift.reply_should_be_withheld(
         secrets  = {},
         bot_name = "小青",
         before   = [_stored("m1", "有可能901/902这对车从京局车变成广局车了？")],
@@ -1180,7 +1396,7 @@ async def test_topic_changed_reads_the_planner_verdict(monkeypatch, content, exp
 
 
 @pytest.mark.asyncio
-async def test_topic_changed_keeps_the_reply_when_the_model_is_unavailable(monkeypatch):
+async def test_context_review_withholds_reply_when_model_is_unavailable(monkeypatch):
     from plugins.xiaoqing_chat.llm import topic_shift
     from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 
@@ -1197,23 +1413,6 @@ async def test_topic_changed_keeps_the_reply_when_the_model_is_unavailable(monke
         "llm"     : LLMCallConfig(),
         "log"     : log,
     }
-    assert not await topic_shift.topic_changed(secrets={}, **kwargs)
-    assert log.call_args.args[0] == "smalltalk.topic_check.error"
-    assert not await topic_shift.topic_changed(secrets={"_ai": None}, **kwargs)
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("对了，明天谁去图书馆", True),
-        ("话说你们周末干嘛", True),
-        ("btw 那个链接还在吗", True),
-        ("不是，是九十二变成了901/902", False),
-        ("你说的对了一半", False),
-    ],
-)
-def test_opens_new_topic_only_matches_leading_topic_openers(text, expected):
-    from plugins.xiaoqing_chat.llm.topic_shift import opens_new_topic
-
-    assert opens_new_topic(_stored("m2", text)) is expected
-    assert not opens_new_topic(_stored("m3", text, role="assistant"))
+    assert await topic_shift.reply_should_be_withheld(secrets={}, **kwargs)
+    assert log.call_args.args[0] == "smalltalk.context_check.error"
+    assert await topic_shift.reply_should_be_withheld(secrets={"_ai": None}, **kwargs)

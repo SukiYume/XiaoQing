@@ -227,42 +227,6 @@ def test_exhausted_fallbacks_stay_in_character():
 
 
 @pytest.mark.parametrize(
-    "text,previous,expected",
-    [
-        ("下次一定", ["这周末爬山吗", "下次一定"], True),
-        ("我超，原！", ["我超，原"], True),
-        ("下次一定", ["这周末爬山吗"], False),
-        ("这" * 40, ["这" * 40], False),
-        ("下次一定", [], False),
-    ],
-)
-def test_group_repeat_chain_is_recognized_from_previous_member(text, previous, expected):
-    from plugins.xiaoqing_chat.participation import is_group_repeat_chain
-
-    assert is_group_repeat_chain(text, previous) is expected
-
-
-@pytest.mark.asyncio
-async def test_repeat_chain_cue_reads_recent_history_excluding_current_turn():
-    from types import SimpleNamespace
-
-    from plugins.xiaoqing_chat.frequency_control import _repeat_chain_cue
-
-    history = [
-        StoredMessage(role="user", name="阿杰", ts=1.0, content="这周末要不要去爬山"),
-        StoredMessage(role="user", name="Momo", ts=2.0, content="下次一定"),
-        StoredMessage(role="user", name="北北", ts=3.0, content="下次一定"),
-    ]
-
-    async def get_recent_async(event_chat_id, *, max_items):
-        return history[-max_items:]
-
-    state = SimpleNamespace(memory_store=SimpleNamespace(get_recent_async=get_recent_async))
-    assert await _repeat_chain_cue(state, "g1", "下次一定") == "repeat_chain"
-    assert await _repeat_chain_cue(state, "g1", "周日吧") == ""
-
-
-@pytest.mark.parametrize(
     "text,expected",
     [
         ("[图片：图片内容读取失败]", True),
@@ -537,26 +501,6 @@ def test_meme_summary_keeps_scene_and_caption_together():
 )
 def test_prices_follow_counts_and_discounts_stated_in_the_chat(evidence, claim, expected):
     assert arithmetic_mod.measured_values_are_supported(claim, evidence) is expected
-
-
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        ("我抽到限定了！！！！十连出金", "excited_share"),
-        ("论文终于投出去了!!", "excited_share"),
-        ("啊啊！！", ""),
-        ("阿白，你抽到了！！", ""),
-        ("今天天气不错", ""),
-        ("发个狗头", "media_request"),
-        ("来张梗图", "media_request"),
-        ("阿白发个狗头", ""),
-        ("发个链接给我", ""),
-    ],
-)
-def test_excited_self_share_invites_group_reactions(text, expected):
-    from plugins.xiaoqing_chat.participation import classify_group_participation_cue
-
-    assert classify_group_participation_cue(text) == expected
 
 
 @pytest.mark.parametrize(

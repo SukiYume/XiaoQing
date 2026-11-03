@@ -19,7 +19,7 @@ from .brain_chat import (
 )
 from .chat_runtime import chat_lock
 from .frequency_control import record_reply_frequency
-from .llm.topic_shift import opens_new_topic, topic_changed
+from .llm.topic_shift import reply_should_be_withheld
 from .logging_utils import log_step
 from .memory.local_ids import (
     DIRECT_REPLY_RECENT_MESSAGES,
@@ -51,6 +51,7 @@ from .turn_generation import commit_planner_snapshot
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
+    from .memory.memory import StoredMessage
     from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
 
@@ -121,16 +122,17 @@ def _batch_text_length(batch: Any) -> int:
     return total
 
 
-@dataclass(frozen=True)
+@dataclass
 class _SmalltalkFinalization:
     """单次收尾生命周期使用的输入。"""
 
-    prepared  : PreparedSmalltalkTurn
-    generated : GeneratedSmalltalkTurn
-    event     : dict[str, Any]
-    context   : Any
-    hctx      : HandlerContext
-    started_at: float
+    prepared     : PreparedSmalltalkTurn
+    generated    : GeneratedSmalltalkTurn
+    event        : dict[str, Any]
+    context      : Any
+    hctx         : HandlerContext
+    started_at   : float
+    checked_users: tuple[StoredMessage, ...] | None = None
 
 
 async def _record_bot_reply(
@@ -215,10 +217,7 @@ def _drop_stale_generated_turn(
     *,
     phase: str,
 ) -> bool:
-    """取消并审计已经过期的生成轮次：会话被重置、要接的那句已经太远，或之后有人叫停。
-
-    投递前、气泡之间和最后一个气泡前都会再查一次，发到一半有人说“别回了”也就此停下。
-    """
+    """检查会话重置、目标消息丢失和距离上限。"""
 
     generated          = finalization.generated
     split              = split_history_at(finalization.hctx.chat_id, generated.local_id)
@@ -249,29 +248,35 @@ def _drop_stale_generated_turn(
     return True
 
 
-async def _drop_if_topic_changed(finalization: _SmalltalkFinalization) -> bool:
-    """回复晚到时确认群里有没有换话题，换了就不再接旧话。
+async def _drop_if_context_changed(
+    finalization: _SmalltalkFinalization,
+    *,
+    history: tuple[list[StoredMessage], list[StoredMessage]] | None = None,
+) -> bool:
+    """出现新群友消息时复核参与时机，相同快照复用已经确认的结果。"""
 
-    要接的那句还在最近 5 条里、中间也没人转开话题时直接发，不多问一次模型。
-    """
-
-    split = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+    split = (
+        history
+        if history is not None
+        else split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+    )
     if split is None:
         return False
     before, after = split
     if not any(message.role == "user" for message in after):
         return False
     if stale_reason(after):
-        # 太远或有人叫停的由过期检查丢弃，不必再问话题。
+        # 超出保留范围的消息由过期检查处理。
         return False
-    if len(after) < DIRECT_REPLY_RECENT_MESSAGES and not any(map(opens_new_topic, after)):
+    users = tuple(message for message in after if message.role == "user")
+    if users == finalization.checked_users:
         return False
     hctx = finalization.hctx
 
     def log(step: str, fields: dict[str, Any]) -> None:
         log_step(finalization.context, hctx.runtime, chat_id=hctx.chat_id, step=step, fields=fields)
 
-    changed = await topic_changed(
+    changed = await reply_should_be_withheld(
         secrets  = hctx.secrets,
         bot_name = hctx.bot_name,
         before   = before,
@@ -280,13 +285,49 @@ async def _drop_if_topic_changed(finalization: _SmalltalkFinalization) -> bool:
         llm      = hctx.runtime.cfg.llm_config("reasoning"),
         log      = log,
     )
+    finalization.checked_users = users
     if changed:
         finalization.generated.cancel_speculative_memory()
         log(
             "smalltalk.stale.drop",
-            {"phase": "topic_changed", "local_id": finalization.generated.local_id},
+            {"phase": "context_changed", "local_id": finalization.generated.local_id},
         )
     return changed
+
+
+async def _confirm_delivery_context(finalization: _SmalltalkFinalization, *, phase: str) -> bool:
+    """在投递边界复核最新上下文，模型等待期间有新消息时最多刷新一次。"""
+    for _attempt in range(2):
+        checked = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+        if await _drop_if_context_changed(finalization, history=checked):
+            return False
+        async with chat_lock(finalization.hctx.chat_id):
+            if _drop_stale_generated_turn(finalization, phase=phase):
+                return False
+            current = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
+            checked_users = (
+                [message for message in checked[1] if message.role == "user"] if checked else []
+            )
+            current_users = (
+                [message for message in current[1] if message.role == "user"] if current else []
+            )
+            if current_users == checked_users:
+                return True
+    else:
+        # 持续活跃的群聊先结束这轮，避免反复等待和按过期判断投递。
+        finalization.generated.cancel_speculative_memory()
+        log_step(
+            finalization.context,
+            finalization.hctx.runtime,
+            chat_id = finalization.hctx.chat_id,
+            step    = "smalltalk.stale.drop",
+            fields  = {
+                "phase"   : "topic_check",
+                "reason"  : "topic_snapshot_outdated",
+                "local_id": finalization.generated.local_id,
+            },
+        )
+        return False
 
 
 def _quote_far_target(finalization: _SmalltalkFinalization, batches: list[Any]) -> None:
@@ -754,9 +795,7 @@ async def _send_smalltalk_intermediate_batches(
     group_id = finalization.event.get("group_id")
     direct   = finalization.event.get("_source") == "upstream_ws"
     for index, batch in enumerate(outbound_batches[:-1]):
-        async with chat_lock(finalization.hctx.chat_id):
-            stale = _drop_stale_generated_turn(finalization, phase="between_batches")
-        if stale:
+        if not await _confirm_delivery_context(finalization, phase="between_batches"):
             await bubbles.close()
             return False
         action = build_action(batch, user_id, group_id)
@@ -820,12 +859,9 @@ async def finalize_smalltalk_turn(
         finalization,
         has_outbound_batches=bool(outbound_batches),
     )
-    if await _drop_if_topic_changed(finalization):
+    if not await _confirm_delivery_context(finalization, phase="after_presend_delay"):
         return []
-    async with chat_lock(finalization.hctx.chat_id):
-        if _drop_stale_generated_turn(finalization, phase="after_presend_delay"):
-            return []
-        _quote_far_target(finalization, outbound_batches)
+    _quote_far_target(finalization, outbound_batches)
     last = len(outbound_batches) - 1
     try:
         if last > 0:
@@ -837,9 +873,7 @@ async def finalize_smalltalk_turn(
             )
             if not sent:
                 return []
-            async with chat_lock(finalization.hctx.chat_id):
-                stale = _drop_stale_generated_turn(finalization, phase="before_last_batch")
-            if stale:
+            if not await _confirm_delivery_context(finalization, phase="before_last_batch"):
                 # 前面的气泡已经发出，最后一个不再发。
                 await bubbles.close()
                 return []

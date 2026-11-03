@@ -37,25 +37,6 @@ MODEL = {
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("我俩私聊处理，群里先不用跟进。", True),
-        ("我只想先安静待会儿，大家聊吧。", True),
-        ("小青，这条不用回复。", True),
-        ("小青，这条不用回了。", True),
-        ("小青，不用回宿舍，来食堂找我。", False),
-        ("他说‘别回我’，我有点疑惑。", False),
-        ("不用回复上一题，帮我算这道新题。", False),
-        ("不用回复是什么意思？", False),
-    ],
-)
-def test_explicit_silence_respects_quotes_and_new_requests(text, expected):
-    from plugins.xiaoqing_chat.llm.communication_constraints import requests_silence
-
-    assert requests_silence(text) is expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
         ("白矮星和中子星有什么区别，用两句话说清。", 2),
         ("请用三句解释", 3),
         ("天为什么是蓝的？两句话，给小朋友听的。", 2),

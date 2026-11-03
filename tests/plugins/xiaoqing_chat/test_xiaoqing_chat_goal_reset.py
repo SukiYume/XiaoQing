@@ -34,6 +34,9 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
+    sample_group_event = {
+        key: value for key, value in sample_group_event.items() if key != "group_id"
+    }
     lock                              = asyncio.Lock()
     state                             = MagicMock()
     state.get_mood_state.return_value = ""
@@ -279,7 +282,8 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event                       = dict(sample_group_event)
+    event = dict(sample_group_event)
+    event.pop("group_id", None)
     event["_xc_command_forced"] = True
 
     async def fake_build_memory_block(**_kwargs):
@@ -347,122 +351,6 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
 
 
 @pytest.mark.asyncio
-async def test_prepare_smalltalk_turn_forces_reply_when_bot_name_is_mentioned(
-    mock_context, sample_group_event
-):
-    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
-
-    state                              = MagicMock()
-    state.review_store.cleanup_expired = Mock()
-    state.pfc_state_store.get_async    = AsyncMock(
-        return_value=PFCConversationState(chat_id="g67890", goal_list=[], planner_skip_until=0.0)
-    )
-    state.get_mood_state.return_value = ""
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(
-                enable_expression_reflection = False,
-                enable_review_sessions       = False,
-            ),
-            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
-        )
-    )
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.handlers.build_effective_user_text",
-            new=AsyncMock(return_value="你好"),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.mentions_bot_name", return_value=True),
-        patch("plugins.xiaoqing_chat.handlers.is_private_event", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
-        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.log_step"),
-    ):
-        prepared = await _prepare_smalltalk_turn("你好", sample_group_event, mock_context, hctx)
-
-    assert prepared is not None
-    assert prepared.mentioned is True
-    assert prepared.forced is True
-
-
-@pytest.mark.asyncio
-async def test_prepare_smalltalk_turn_forces_reply_when_recent_coreference_mentions_bot(
-    mock_context, sample_group_event
-):
-    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
-    from plugins.xiaoqing_chat.memory.memory import StoredMessage
-
-    event                               = dict(sample_group_event)
-    event["message_id"]                 = 103
-    state                               = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(
-        return_value=[
-            StoredMessage(
-                role       = "user",
-                name       = "群友",
-                ts         = time.time() - 5,
-                message_id = 101,
-                content    = "小青你在吗",
-            ),
-            StoredMessage(
-                role       = "assistant",
-                name       = "小青",
-                ts         = time.time() - 4,
-                message_id = 102,
-                content    = "在呢",
-            ),
-        ]
-    )
-    state.pfc_state_store.get_async = AsyncMock(
-        return_value=PFCConversationState(chat_id="g67890", goal_list=[], planner_skip_until=0.0)
-    )
-    state.get_mood_state.return_value = ""
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(
-                enable_expression_reflection = False,
-                enable_review_sessions       = False,
-            ),
-            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
-        )
-    )
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.handlers.build_effective_user_text",
-            new=AsyncMock(return_value="不@她能不能听见啊"),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.mentions_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.is_private_event", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)
-        ) as gate,
-        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.log_step"),
-    ):
-        prepared = await _prepare_smalltalk_turn("不@她能不能听见啊", event, mock_context, hctx)
-
-    assert prepared is not None
-    assert prepared.mentioned is True
-    assert prepared.forced is True
-    assert prepared.force_reason == "coreference_mention"
-    gate.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anchor(
     mock_context, sample_group_event
 ):
@@ -508,7 +396,6 @@ async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anc
         ),
         patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers.mentions_bot_name", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.is_private_event", return_value=False),
         patch(
             "plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)
@@ -847,7 +734,6 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     state.set_continuous_cooldown_until(chat_id, 600.0)
     state.set_last_observe_ts(chat_id, 500.0)
     state.set_mood_state(chat_id, "旧情绪", duration_seconds=600.0)
-    state.set_pending_bot_name_call(chat_id, 1001, ttl_seconds=600.0)
     state.set_reply_gate_decision(chat_id, SimpleNamespace(reason="old"))
     assert state.fetch_and_increment_local_id(chat_id) == 1
     assert state.fetch_and_increment_local_id(chat_id) == 2
@@ -909,7 +795,6 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     assert await state.action_history.get_recent_async(chat_id, max_items=20) == []
     assert state.get_last_observe_ts(chat_id) == 0.0
     assert state.get_mood_state(chat_id) == ""
-    assert state.consume_pending_bot_name_call(chat_id, 1001) is False
     assert state.get_reply_gate_decision(chat_id) is None
     assert state.fetch_and_increment_local_id(chat_id) == 1
     assert [item.expression_id for item in state.bw_expr_store.load()] == ["expr-other"]

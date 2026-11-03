@@ -106,7 +106,7 @@ class HumanizeConfig(BaseModel):
     # 多条消息之间的额外停顿（每两条之间随机取值）
     interbubble_min_seconds: float = Field(default=0.6, ge=0.0, le=60.0, allow_inf_nan=False)
     interbubble_max_seconds: float = Field(default=1.6, ge=0.0, le=60.0, allow_inf_nan=False)
-    # 明确召唤也在气泡之间停顿：连发几条零间隔的消息一眼就像机器人。
+    # 私聊直接回复也在气泡之间停顿：连发几条零间隔的消息一眼就像机器人。
     interbubble_applies_to_forced: bool = True
 
     @model_validator(mode="after")
@@ -232,8 +232,6 @@ class ReplyCheckConfig(BaseModel):
 class HeartflowConfig(BaseModel):
     enable_heartflow      : bool        = False
     base_score            : Probability = 0.35
-    weight_question       : UnitWeight  = 0.12
-    weight_goal_match     : UnitWeight  = 0.06
     weight_short_text     : UnitWeight  = -0.08
     weight_no_reply_streak: UnitWeight  = 0.05
     weight_long_silence   : UnitWeight  = 0.08
@@ -336,7 +334,7 @@ class LifeConfig(BaseModel):
     )
     # 按人设卡〔作息〕推出“现在大概在做什么”，作为语气底色注入。
     enable_schedule_state: bool = True
-    # 作息影响节奏：忙或睡时普通群聊少插话、回得更慢。明确召唤照常回复。
+    # 作息影响节奏：忙或睡时普通群聊少插话、回得更慢。私聊直接回复使用独立路径。
     schedule_affects_pacing    : bool        = True
     busy_participation_factor  : Probability = 0.5
     asleep_participation_factor: Probability = 0.15
@@ -446,24 +444,21 @@ class XiaoQingChatConfig(BaseModel):
                     )
         return value
 
-    enable_smalltalk                        : bool               = True
-    reply_probability_base                  : Probability        = 0.55
-    participation_cue_reply_probability     : Probability        = 0.9
-    active_topic_reply_probability          : Probability        = 0.72
-    active_topic_question_reply_probability : Probability        = 0.9
-    min_reply_interval_seconds              : NonNegativeSeconds = 12.0
-    active_topic_min_reply_interval         : NonNegativeSeconds = 3.0
-    active_topic_question_min_reply_interval: NonNegativeSeconds = 2.0
-    max_replies_per_minute                  : int = Field(default=6, ge=0, le=600)
-    max_generation_inflight_global          : int = Field(default=4, ge=1, le=1000)
-    max_generation_inflight_per_chat        : int = Field(default=1, ge=1, le=1000)
-    max_generation_inflight_per_user        : int = Field(default=1, ge=1, le=1000)
-    max_generation_calls_per_user_per_day   : int = Field(default=200, ge=1, le=1_000_000)
-    continuous_reply_limit                  : int = Field(default=3, ge=1, le=100)
-    continuous_cooldown_seconds             : NonNegativeSeconds = 25.0
-    max_context_size                        : int = Field(default=30, ge=1, le=200)
-    io_persist_debounce_seconds             : ShortDelaySeconds = 0.8
-    memory_db_save_debounce_seconds         : float             = Field(
+    enable_smalltalk                     : bool               = True
+    reply_probability_base               : Probability        = 0.55
+    active_topic_reply_probability       : Probability        = 0.72
+    min_reply_interval_seconds           : NonNegativeSeconds = 12.0
+    active_topic_min_reply_interval      : NonNegativeSeconds = 3.0
+    max_replies_per_minute               : int = Field(default=6, ge=0, le=600)
+    max_generation_inflight_global       : int = Field(default=4, ge=1, le=1000)
+    max_generation_inflight_per_chat     : int = Field(default=1, ge=1, le=1000)
+    max_generation_inflight_per_user     : int = Field(default=1, ge=1, le=1000)
+    max_generation_calls_per_user_per_day: int = Field(default=200, ge=1, le=1_000_000)
+    continuous_reply_limit               : int = Field(default=3, ge=1, le=100)
+    continuous_cooldown_seconds          : NonNegativeSeconds = 25.0
+    max_context_size                     : int = Field(default=30, ge=1, le=200)
+    io_persist_debounce_seconds          : ShortDelaySeconds = 0.8
+    memory_db_save_debounce_seconds      : float             = Field(
         default       = 20.0,
         ge            = 0.0,
         le            = 3600.0,

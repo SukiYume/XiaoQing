@@ -11,6 +11,33 @@ env:
   XIAOQING_CI: "1"
 
 jobs:
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build distribution in isolated environment
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-build"
+          "$RUNNER_TEMP/wheel-build/bin/python" -m pip install build==1.5.1
+          "$RUNNER_TEMP/wheel-build/bin/python" -m build --outdir "$RUNNER_TEMP/wheel-dist"
+      - name: Install wheel and check outside checkout
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-install"
+          wheels=("$RUNNER_TEMP"/wheel-dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          "$RUNNER_TEMP/wheel-install/bin/python" -m pip install "${wheels[0]}[plugins]"
+          cp scripts/check_installed_wheel.py "$RUNNER_TEMP/check_installed_wheel.py"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-install/bin/python" -I check_installed_wheel.py
+
   test:
     runs-on: ubuntu-latest
     strategy:

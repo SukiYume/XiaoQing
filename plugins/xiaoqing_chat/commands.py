@@ -66,7 +66,7 @@ async def reset_transient_conversation_state(state, chat_id: str, data_dir: Path
     )
     await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
     await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
-    state.clear_transient_chat_state(chat_id, clear_pending_call=False)
+    state.clear_transient_chat_state(chat_id)
 
 
 def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:

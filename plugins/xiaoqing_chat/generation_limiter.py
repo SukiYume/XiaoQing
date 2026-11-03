@@ -124,38 +124,44 @@ class GenerationLimiter:
         async with self._lock:
             if max_per_chat > 0:
                 await self._await_chat_slot(chat_id, max_per_chat, chat_wait_seconds)
-            now    = time.time()
-            cutoff = now - 86400.0
-            if now - self._last_sweep_at >= max(0.0, self.sweep_interval_seconds) or len(
-                self._user_calls
-            ) >= max(1, self.max_tracked_users):
-                self._sweep_user_calls(cutoff)
-                self._last_sweep_at = now
-            if user_id not in self._user_calls and len(self._user_calls) >= max(
-                1, self.max_tracked_users
-            ):
-                raise GenerationLimitExceeded("daily_user_capacity")
-            calls = self._user_calls.setdefault(user_id, deque())
-            while calls and calls[0] < cutoff:
-                calls.popleft()
-            if max_global > 0 and self._global_inflight >= max_global:
-                raise GenerationLimitExceeded("global_inflight")
-            if max_per_user > 0 and self._user_inflight.get(user_id, 0) >= max_per_user:
-                raise GenerationLimitExceeded("user_inflight")
-            if max_calls_per_user_per_day > 0 and len(calls) >= max_calls_per_user_per_day:
-                raise GenerationLimitExceeded("daily_user_calls")
-            self._global_inflight += 1
+            # 先保留会话顺序，等待回执时仅占用本会话槽。
             self._chat_inflight[chat_id] = self._chat_inflight.get(chat_id, 0) + 1
-            self._user_inflight[user_id] = self._user_inflight.get(user_id, 0) + 1
-            calls.append(now)
+        admitted = False
         try:
             await self._await_delivery_settled(chat_id)
+            async with self._lock:
+                # 回执结算后按最新配额准入，日调用次数从实际进入生成时登记。
+                now    = time.time()
+                cutoff = now - 86400.0
+                if now - self._last_sweep_at >= max(0.0, self.sweep_interval_seconds) or len(
+                    self._user_calls
+                ) >= max(1, self.max_tracked_users):
+                    self._sweep_user_calls(cutoff)
+                    self._last_sweep_at = now
+                if user_id not in self._user_calls and len(self._user_calls) >= max(
+                    1, self.max_tracked_users
+                ):
+                    raise GenerationLimitExceeded("daily_user_capacity")
+                calls = self._user_calls.setdefault(user_id, deque())
+                while calls and calls[0] < cutoff:
+                    calls.popleft()
+                if max_global > 0 and self._global_inflight >= max_global:
+                    raise GenerationLimitExceeded("global_inflight")
+                if max_per_user > 0 and self._user_inflight.get(user_id, 0) >= max_per_user:
+                    raise GenerationLimitExceeded("user_inflight")
+                if max_calls_per_user_per_day > 0 and len(calls) >= max_calls_per_user_per_day:
+                    raise GenerationLimitExceeded("daily_user_calls")
+                self._global_inflight += 1
+                self._user_inflight[user_id] = self._user_inflight.get(user_id, 0) + 1
+                calls.append(now)
+                admitted = True
             yield
         finally:
             async with self._lock:
-                self._global_inflight = max(0, self._global_inflight - 1)
+                if admitted:
+                    self._global_inflight = max(0, self._global_inflight - 1)
+                    self._decrement(self._user_inflight, user_id)
                 self._decrement(self._chat_inflight, chat_id)
-                self._decrement(self._user_inflight, user_id)
                 self._slot_released.notify_all()
 
     @staticmethod

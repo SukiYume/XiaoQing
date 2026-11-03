@@ -57,7 +57,7 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 | 领域 | 测试模块 | 覆盖内容 |
 |---|---|---|
 | 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID |
-| 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py` | 明确召唤、共指、参与线索、点名他人、低信息消息、频控、生成配额、复读队形、称呼与时区 |
+| 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_chat_group_addressing.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py` | 消息受众、共指上下文、点名他人、低信息消息、频控、生成配额、收尾与邀请的规划判断、称呼与时区 |
 | 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_retrieval_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py` | PFC 动作、目标同步、长空档切换、检索评分 |
 | 生成 | `test_xiaoqing_prompt_builder.py`、`test_xiaoqing_chat_reply_generation*.py`、`test_xiaoqing_chat_generation_boundaries.py`、`test_bot_name_injection.py` | 提示词结构、名字注入、上下文超限重建、复核超时降级、网关与公开错误 |
 | 审查 | `test_reply_checker.py`、`test_reply_checker_grounding.py`、`test_reply_checker_risk_mode.py`、`test_reply_checker_social_boundaries.py`、`test_xiaoqing_chat_reply_completion.py` | 本地规则（复读、近似照搬、连续发言、凭空经历）、语义审查各轴、证据契约、`always` / `risk` 模式、人设（坚持真人身份）、缺图话术、定向重写与兜底 |
@@ -141,7 +141,7 @@ python scripts/run_full_uat.py \
 
 | 用例 | 期望 |
 |---|---|
-| `/xc 你好` | 进入明确召唤回复链 |
+| `/xc 你好` | 群聊进入 PFC；私聊按配置进入回复链 |
 | `/xc help` | 返回完整结构化目录 |
 | `/xc 帮助` | 与 help 结果一致 |
 | `/xc help extra` | 返回参数错误与用法 |
@@ -224,7 +224,7 @@ python scripts/run_full_uat.py \
 
 ## 📌 第五阶段：召唤与参与
 
-### 明确召唤矩阵
+### 消息入口与受众矩阵
 
 覆盖以下剧本：
 
@@ -237,7 +237,7 @@ python scripts/run_full_uat.py \
 - 历史含 Bot 锚点后的 `她`、`他`、`ta` 共指。
 - 历史锚点切换到另一位群友后的代词消息。
 
-记录 `forced`、`reason`、`direct_mentioned`、`coreference_mentioned` 和 `reply_to_bot`。
+记录 `forced`、`force_reason`、`direct_mentioned` 和 `reply_to_bot`。群聊的 `forced` 固定为 false，所有入口通过频率门控后进入 PFC；逐项验证 wait 得到保留、发言决定才调用回复生成。
 
 ### 普通参与矩阵
 
@@ -246,8 +246,8 @@ python scripts/run_full_uat.py \
 - 基础概率命中与未命中。
 - 面向全群的问题、邀请和开场。
 - 明确点给其他成员的话题。
-- 上一轮 Goal 匹配与普通延续。
-- 活跃话题追问。
+- 上一轮目标与普通延续；目标关键词保持相同参与评分。
+- 活跃话题与收尾消息；问句词面保持相同参与概率。
 - 仅 QQ face 与标点。
 - 最小间隔、每分钟上限和连续回复冷却。
 - Heartflow 各权重信号。
@@ -410,7 +410,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 
 ### 回复检查
 
-覆盖确定性 hard、确定性 soft、语义 hard、语义 soft、重生成、重规划、主动参与耗尽和明确召唤耗尽。每个用例核对候选状态与最终提交状态。
+覆盖确定性 hard、确定性 soft、语义 hard、语义 soft、重生成、重规划、群聊参与耗尽和私聊直接回复耗尽。每个用例核对候选状态与最终提交状态。
 
 交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求。复核前 `semantic_acceptance_passed` 保持空值。
 
@@ -460,7 +460,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 | 级别 | 定义 | 示例 |
 |---|---|---|
 | P0 | 数据、安全或生命周期灾难 | 跨群泄露、凭据泄露、数据损坏、主进程崩溃 |
-| P1 | 核心能力失效 | 明确召唤无响应、权限绕过、状态错误提交、模型链全部失效 |
+| P1 | 核心能力失效 | 规划已允许发言却投递失败、权限绕过、状态错误提交、模型链全部失效 |
 | P2 | 主要体验或边界异常 | 参与时机明显偏差、媒体错位、错误提示缺失、持久化恢复偏差 |
 | P3 | 局部展示与维护问题 | 文案、日志字段、低频格式问题 |
 
