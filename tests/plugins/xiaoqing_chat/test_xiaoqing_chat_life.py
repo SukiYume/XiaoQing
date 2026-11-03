@@ -467,6 +467,41 @@ async def _consider(tmp_path, history, outputs, *, runtime=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "xiaoqing_chat", "xiaoqing_agent"])
+async def test_proactive_stops_after_own_reply(tmp_path, source) -> None:
+    with patch.object(proactive, "_skip") as skip:
+        delivery, model, _state = await _consider(
+            tmp_path, [_bot("任务完成了", ts=NOW - 2 * 3600, source=source)], []
+        )
+    assert delivery is None
+    model.assert_not_awaited()
+    assert skip.call_args.args[3] == "own_last_word"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("next_speaker", ["apod", "user"])
+async def test_proactive_resumes_after_external_message(tmp_path, next_speaker) -> None:
+    history = [_bot("任务完成了", ts=NOW - 3 * 3600, source="xiaoqing_agent")]
+    history.append(
+        _bot("今日天文图：土星环", ts=NOW - 2 * 3600, source="apod")
+        if next_speaker == "apod"
+        else _user("今天的土星环真好看", ts=NOW - 2 * 3600)
+    )
+    delivery, model, _state = await _consider(
+        tmp_path,
+        history,
+        ['{"decision":"send","text":"这张土星环好漂亮"}', '{"decision":"send","reason":"自然"}'],
+    )
+    assert delivery is not None
+    assert model.await_count == 2
+    if next_speaker == "apod":
+        assert (
+            "（apod 推送）今日天文图：土星环"
+            in model.await_args_list[0].kwargs["messages"][1]["content"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_proactive_sends_after_draft_and_judge(tmp_path) -> None:
     history = [
         _user("有人看今天的 APOD 吗", ts=NOW - 3 * 3600),
@@ -508,7 +543,8 @@ async def test_proactive_respects_judge_skip_and_quiet_rules(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_proactive_commit_records_message_and_rhythm(tmp_path) -> None:
+@pytest.mark.parametrize("outcome", [True, None, False])
+async def test_proactive_commit_records_message_and_rhythm(tmp_path, outcome) -> None:
     history = [_user("有人看今天的 APOD 吗", ts=NOW - 3 * 3600)]
     delivery, _model, state = await _consider(
         tmp_path,
@@ -524,7 +560,14 @@ async def test_proactive_commit_records_message_and_rhythm(tmp_path) -> None:
         patch.object(proactive, "schedule_action_history_flush"),
         patch.object(proactive, "spawn_life_extraction") as extraction,
     ):
-        await delivery.receipt.record(True)
+        await delivery.receipt.record(outcome)
+        await delivery.receipt.record(True)  # 重复回报保持首次结算结果。
+    if outcome is False:
+        assert appended == []
+        assert state.proactive_state.get("g42").count == 0
+        extraction.assert_not_called()
+        return
+    assert len(appended) == 1
     assert appended[0]["chat_id"] == "g42" and appended[0]["role"] == "assistant"
     record = state.proactive_state.get("g42")
     assert record.count == 1 and record.last_ts > 0

@@ -25,7 +25,6 @@ sample_group_event = _fixture_support.sample_group_event
 
 @pytest.mark.asyncio
 async def test_external_source_survives_reload_and_keeps_chat_turn_boundaries(tmp_path):
-    from plugins.xiaoqing_chat.attention_gate import _has_recent_bot_anchor
     from plugins.xiaoqing_chat.llm.local_checks import heuristic_check
     from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt
     from plugins.xiaoqing_chat.memory.memory import MemoryStore
@@ -51,8 +50,6 @@ async def test_external_source_survives_reload_and_keeps_chat_turn_boundaries(tm
     assert "小青[插件通知:earthquake]" in rendered
     assert "小青(你)" not in rendered
     assert _seconds_since_last_assistant(history, now=110) == 9999.0
-    with patch("plugins.xiaoqing_chat.attention_gate.time.time", return_value=110):
-        assert not _has_recent_bot_anchor(history, bot_name="小青", current_message_id=None)
     assert (
         heuristic_check(
             reply                = "自动通知 2",

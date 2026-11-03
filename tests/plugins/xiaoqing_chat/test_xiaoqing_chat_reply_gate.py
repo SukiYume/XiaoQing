@@ -28,8 +28,6 @@ class TestReplyGate:
         runtime.cfg.continuous_cooldown_seconds          = 0.0
         runtime.cfg.heartflow.enable_heartflow           = True
         runtime.cfg.heartflow.base_score                 = 0.2
-        runtime.cfg.heartflow.weight_question            = 0.12
-        runtime.cfg.heartflow.weight_goal_match          = 0.06
         runtime.cfg.heartflow.weight_short_text          = -0.08
         runtime.cfg.heartflow.weight_no_reply_streak     = 0.05
         runtime.cfg.heartflow.weight_long_silence        = 0.08
@@ -144,16 +142,32 @@ class TestReplyGate:
         assert decision.reason == "allowed"
 
     @pytest.mark.asyncio
-    async def test_clear_group_participation_cue_uses_higher_probability(self):
+    @pytest.mark.parametrize("roll,allowed", [(0.2, True), (0.7, False)])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "大家都散了，这事就到这吧",
+            "大家刚才已经聊完了",
+            "大家别再提这件事了",
+            "大家有没有人还想来玩",
+            "你们都说完了",
+            "各位辛苦了，今天到这里",
+            "我宣布，周一应该从一周里删掉",
+            "今晚吃啥啊",
+            "论文终于投出去了!!",
+            "发个狗头",
+            "下次一定",
+        ],
+    )
+    async def test_group_wording_uses_base_probability(self, text, roll, allowed):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
-        runtime                                         = MagicMock()
-        runtime.cfg.reply_probability_base              = 0.45
-        runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.min_reply_interval_seconds          = 0.0
-        runtime.cfg.max_replies_per_minute              = 100
-        runtime.cfg.heartflow.enable_heartflow          = False
-        runtime.cfg.goal.enable_goal                    = False
+        runtime                                = MagicMock()
+        runtime.cfg.reply_probability_base     = 0.45
+        runtime.cfg.min_reply_interval_seconds = 0.0
+        runtime.cfg.max_replies_per_minute     = 100
+        runtime.cfg.heartflow.enable_heartflow = False
+        runtime.cfg.goal.enable_goal           = False
 
         state                                            = MagicMock()
         state.get_last_reply_ts.return_value             = 0.0
@@ -161,34 +175,39 @@ class TestReplyGate:
         state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=None)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
-        state.set_reply_gate_decision = Mock()
+        state.set_reply_gate_decision       = Mock()
+        state.memory_store.get_recent_async = AsyncMock(
+            return_value=[
+                SimpleNamespace(role="user", content=text),
+                SimpleNamespace(role="user", content=text),
+            ]
+        )
 
-        with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.7):
+        with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=roll):
             result = await decide_reply(
                 runtime,
                 state,
                 "g1",
-                "我宣布，周一应该从一周里删掉",
+                text,
                 False,
                 False,
             )
 
-        assert result is True
+        assert result is allowed
         decision = state.set_reply_gate_decision.call_args.args[1]
-        assert decision.probability == 0.8
-        assert decision.participation_cue == "opening_banter"
+        assert decision.probability == 0.45
+        assert decision.reason == ("allowed" if allowed else "probability")
 
     @pytest.mark.asyncio
-    async def test_message_directed_to_other_rolls_base_probability_without_cue(self):
+    async def test_message_directed_to_other_rolls_base_probability(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
-        runtime                                         = MagicMock()
-        runtime.cfg.reply_probability_base              = 0.45
-        runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.min_reply_interval_seconds          = 0.0
-        runtime.cfg.max_replies_per_minute              = 100
-        runtime.cfg.heartflow.enable_heartflow          = False
-        runtime.cfg.goal.enable_goal                    = False
+        runtime                                = MagicMock()
+        runtime.cfg.reply_probability_base     = 0.45
+        runtime.cfg.min_reply_interval_seconds = 0.0
+        runtime.cfg.max_replies_per_minute     = 100
+        runtime.cfg.heartflow.enable_heartflow = False
+        runtime.cfg.goal.enable_goal           = False
 
         state                                            = MagicMock()
         state.get_last_reply_ts.return_value             = 0.0
@@ -208,12 +227,11 @@ class TestReplyGate:
                 False,
             )
 
-        # 不硬拦，但也不算面向全群的参与线索：按基础概率掷骰，通过后仍交给规划器。
+        # 点名消息使用基础概率，通过后交给规划器。
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
         assert decision.reason == "probability"
         assert decision.probability == 0.45
-        assert decision.participation_cue == ""
 
     @pytest.mark.asyncio
     async def test_reply_gate_records_min_interval_skip_reason(self):
@@ -248,18 +266,15 @@ class TestReplyGate:
     async def test_active_topic_min_interval_uses_configured_value(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
-        runtime                                              = MagicMock()
-        runtime.cfg.reply_probability_base                   = 0.6
-        runtime.cfg.min_reply_interval_seconds               = 10.0
-        runtime.cfg.active_topic_min_reply_interval          = 4.0
-        runtime.cfg.active_topic_question_min_reply_interval = 2.0
-        runtime.cfg.participation_cue_reply_probability      = 0.8
-        runtime.cfg.active_topic_reply_probability           = 0.6
-        runtime.cfg.active_topic_question_reply_probability  = 0.9
-        runtime.cfg.max_replies_per_minute                   = 100
-        runtime.cfg.heartflow.enable_heartflow               = False
-        runtime.cfg.brain_chat.enable_private_brain_chat     = False
-        runtime.cfg.goal.enable_goal                         = True
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.6
+        runtime.cfg.min_reply_interval_seconds           = 10.0
+        runtime.cfg.active_topic_min_reply_interval      = 4.0
+        runtime.cfg.active_topic_reply_probability       = 0.6
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.heartflow.enable_heartflow           = False
+        runtime.cfg.brain_chat.enable_private_brain_chat = False
+        runtime.cfg.goal.enable_goal                     = True
 
         state                                            = MagicMock()
         state.get_last_reply_ts.return_value             = 97.0
@@ -286,24 +301,22 @@ class TestReplyGate:
         ):
             result = await decide_reply(runtime, state, "g1", "那为什么会这样？", False, False)
 
-        assert result is True
+        assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
-        assert decision.min_interval_seconds == 2.0
+        assert decision.min_interval_seconds == 4.0
 
     @pytest.mark.asyncio
     async def test_active_topic_uses_explicit_probability_without_aggressive_boost(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 
-        runtime                                              = MagicMock()
-        runtime.cfg.reply_probability_base                   = 0.45
-        runtime.cfg.active_topic_reply_probability           = 0.6
-        runtime.cfg.min_reply_interval_seconds               = 0.0
-        runtime.cfg.active_topic_min_reply_interval          = 0.0
-        runtime.cfg.active_topic_question_min_reply_interval = 0.0
-        runtime.cfg.participation_cue_reply_probability      = 0.8
-        runtime.cfg.max_replies_per_minute                   = 100
-        runtime.cfg.heartflow.enable_heartflow               = False
-        runtime.cfg.goal.enable_goal                         = True
+        runtime                                     = MagicMock()
+        runtime.cfg.reply_probability_base          = 0.45
+        runtime.cfg.active_topic_reply_probability  = 0.6
+        runtime.cfg.min_reply_interval_seconds      = 0.0
+        runtime.cfg.active_topic_min_reply_interval = 0.0
+        runtime.cfg.max_replies_per_minute          = 100
+        runtime.cfg.heartflow.enable_heartflow      = False
+        runtime.cfg.goal.enable_goal                = True
 
         state                                            = MagicMock()
         state.get_last_reply_ts.return_value             = 90.0
@@ -326,16 +339,15 @@ class TestReplyGate:
         assert decision.active_topic is True
         assert decision.probability == 0.6
 
-        runtime.cfg.active_topic_question_reply_probability = 0.9
         with (
             patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0),
             patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.85),
         ):
             result = await decide_reply(runtime, state, "g1", "那为什么会这样？", False, False)
 
-        assert result is True
+        assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
-        assert decision.probability == 0.9
+        assert decision.probability == 0.6
 
     @pytest.mark.asyncio
     async def test_group_heartflow_bonus_stays_soft(self):
@@ -349,8 +361,6 @@ class TestReplyGate:
         runtime.cfg.continuous_cooldown_seconds          = 0.0
         runtime.cfg.heartflow.enable_heartflow           = True
         runtime.cfg.heartflow.base_score                 = 0.2
-        runtime.cfg.heartflow.weight_question            = 0.12
-        runtime.cfg.heartflow.weight_goal_match          = 0.06
         runtime.cfg.heartflow.weight_short_text          = -0.08
         runtime.cfg.heartflow.weight_no_reply_streak     = 0.05
         runtime.cfg.heartflow.weight_long_silence        = 0.08

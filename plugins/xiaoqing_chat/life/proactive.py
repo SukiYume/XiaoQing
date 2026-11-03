@@ -251,7 +251,8 @@ async def _consider_group(
     if idle > cfg.max_group_dormant_hours * 3600.0:
         _skip(context, runtime, chat_id, "dormant", idle_minutes=idle / 60)
         return None
-    if last.role == "assistant" and last.source_plugin in _OWN_SOURCES:
+    # Agent 交付也算自己的末句；通用聊天轮次和推送材料分类保持各自语义。
+    if last.role == "assistant" and last.source_plugin in _OWN_SOURCES | {"xiaoqing_agent"}:
         # 最后一句是她自己说的，没人接；再开口就成了自言自语。
         _skip(context, runtime, chat_id, "own_last_word")
         return None

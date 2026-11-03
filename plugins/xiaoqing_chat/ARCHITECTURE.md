@@ -52,12 +52,12 @@ xiaoqing_chat
 | `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、热加载文件 |
 | `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口 |
 | `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额。`call_bot_name_only`、`observe_outgoing_action` |
-| `agent_bridge.py` | 明确召唤时把这一轮交给 `xiaoqing_agent` 判断（decide），同时照常生成聊天回复。接手则放弃生成、让出会话生成名额，执行（act）并把回复连同消息 ID 写入聊天记录、向 agent 回报是否发出。否则用已生成的回复 |
+| `agent_bridge.py` | 私聊并行判断工具需求；群聊在 PFC 允许发言后判断工具需求。执行结果与投递回执写回原会话 |
 | `commands.py` | `/xc` 管理子命令：统计、重置、配置、记忆、表达、黑话、审查、模型切换 |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
 | `chat_runtime.py` | 配置热加载、AI route 上下文、`llm_call_config`、屏蔽规则与会话锁 |
-| `attention_gate.py` | 明确召唤：`@`、名字、名字续问、引用角色、上下文共指 |
+| `attention_gate.py` | 记录 `@`、引用和命令来源；私聊按配置设置直接回复标记 |
 | `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读。低信息。点名他人的消息不算线索 |
 | `frequency_control.py` | 硬频控、参与概率、Heartflow 软加分、沉默补偿，记录 `ReplyGateDecision` |
 | `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额。上一轮回复交给 Core 后到回执结算前，同会话下一轮在配额内等待 |
@@ -68,7 +68,7 @@ xiaoqing_chat
 | `reply_plan.py` | `ReplyGenerationPlan`：一次性收集上下文块、反应规则、规划目标和人设边界 |
 | `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
-| `reply_fallbacks.py` | 被拒后的定向重写提示和明确召唤兜底句（`ALL_FALLBACK_TEXTS`） |
+| `reply_fallbacks.py` | 被拒后的定向重写提示和私聊直接回复兜底句（`ALL_FALLBACK_TEXTS`） |
 | `turn_delivery.py` | 打字延迟、过期丢弃（超出最近 15 条、之后有人叫停、话题已换或会话重置）、要接的话不在最近 5 条里时引用原消息、分批外发、投递后提交与回滚 |
 | `post_reply_tasks.py` | 投递成功后的摘要、事实提取、表达学习和策略复盘任务 |
 | `reply_media.py` | 回复链路的媒体桥接与素材使用记录 |
@@ -98,7 +98,7 @@ xiaoqing_chat
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
 | `check_result.py` | `ReplyCheckResult`、`ReplyRejected` 与标准拒绝结果 |
 | `summarizer.py` | 话题摘要的增量压缩 |
-| `topic_shift.py` | 回复晚到时确认群里有没有换话题：隔了 5 条以上或有人用“对了”“话说”转开时才问一次 `reasoning` 路由，确认不了按没换处理 |
+| `topic_shift.py` | 新用户消息到达后通过 `reasoning` 复核叫停、换题与参与时机；复核失败时保留旁听 |
 
 ### `planning/`：行为规划
 
@@ -188,8 +188,8 @@ xiaoqing_chat
 | 入口 | 调用方 | 职责 |
 |---|---|---|
 | `init(context)` | PluginManager | 开放后台任务、绑定 store、加载媒体注册表 |
-| `handle(command, args, event, context)` | Router | `/xc` 命令。非子命令的内容作为明确召唤交给 `handle_smalltalk` |
-| `call_bot_name_only(context)` | Dispatcher | 只喊名字时的短应答，并登记 60 秒名字续问 |
+| `handle(command, args, event, context)` | Router | `/xc` 命令。聊天内容交给 `handle_smalltalk`，群聊统一进入 PFC |
+| `call_bot_name_only(context)` | Dispatcher | 私聊只喊名字时的短应答；群聊由 Dispatcher 转入 `handle_smalltalk` |
 | `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始消息段 |
 | `handle_smalltalk(clean_text, event, context)` | Dispatcher | 闲聊决策与回复链路 |
 | `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息。本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过。带敏感标记的动作直接跳过 |
@@ -209,17 +209,17 @@ observe_message
   │
   ▼
 handle_smalltalk → _prepare_smalltalk_turn
-  ├─ 停聊请求 / 屏蔽词 → 结束
+  ├─ 用户配置的屏蔽词 → 结束
   ├─ 长空档 → 切换短期状态（保留原始历史）
-  ├─ attention_gate.decide_attention        明确召唤？
+  ├─ attention_gate.decide_attention        记录显式受众与私聊直接回复标记
   ├─ life.closing_guard                     私聊里只是收尾，且角色已收尾 → 结束
   ├─ life.schedule                          作息底色、插话与延迟乘数写到事件上
-  ├─ frequency_control.decide_reply         普通参与：硬频控 → 概率 → Heartflow → 沉默补偿 → 作息乘数
+  ├─ frequency_control.decide_reply         群聊：硬频控 → 概率 → Heartflow → 沉默补偿 → 作息乘数
   ├─ 记录本轮观察到的目标
   └─ PreparedSmalltalkTurn
   │
   ▼
-agent_bridge（明确召唤且 agent 已开启时）
+agent_bridge（私聊且 agent 已开启时）
   ├─ agent decide 与下面的聊天生成同时开始
   ├─ 判断为闲聊 / agent 不可用 → 继续用生成好的回复
   └─ agent 接手 → 放弃生成并让出名额 → agent act → 回复带回执返回 Core
@@ -232,9 +232,9 @@ turn_generation.generate_smalltalk_turn
   ├─ 会话锁内：确保用户消息已记录，取 PFC 快照
   ├─ 后台预取记忆
   └─ 三条路径之一：
-       forced  → 直接起草
-       planner → run_pfc_once → 规划器决定发言时回调起草
-       direct  → 规划关闭时直接起草
+       forced  → 私聊直接起草
+       planner → 群聊统一进入 run_pfc_once → 发言决定后起草 → 可选工具接管
+       direct  → 私聊可选规划关闭时直接起草
          │
          ▼
        reply_plan.build → reply_generator 尝试循环
@@ -246,7 +246,7 @@ turn_generation.generate_smalltalk_turn
   │
   ▼
 turn_delivery.finalize_smalltalk_turn
-  ├─ 过期检查（超出最近 15 条、之后有人叫停、会话重置，气泡之间也查）；隔得远或有人转话题时确认话题没换（llm/topic_shift）
+  ├─ 过期检查（超出最近 15 条、会话重置）；新用户消息触发上下文复核，气泡之间与末条前再次检查
   ├─ 要接的话不在最近 5 条里时首个气泡引用原消息
   ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔（正向 WS 下中间气泡绕过 Core 的事件收集直接发出）
   ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
@@ -264,23 +264,22 @@ turn_delivery.finalize_smalltalk_turn
 
 | 字段 | 含义 |
 |---|---|
-| `forced` | 明确召唤，直接进入生成 |
-| `force_reason` | 召唤来源 |
-| `mentioned` / `direct_mentioned` | 名字或 `@` 命中 |
-| `coreference_mentioned` | 上下文共指命中（要求近期历史有角色锚点） |
+| `forced` | 私聊直接回复标记；群聊固定为 false |
+| `force_reason` | 私聊直接回复来源 |
+| `mentioned` / `direct_mentioned` | 命令、私聊、引用或 `@` 的显式来源信息 |
 | `reply_to_bot` | 引用的 `message_id` 是角色历史消息 |
 
 普通参与由 `frequency_control.decide_reply` 决定，顺序固定：
 
-1. `_hard_limit_reason`：最小间隔（活跃话题与追问使用更短的间隔）、每分钟上限、连续冷却、低信息。点名他人不拦，交给规划器按话题判断。
-2. `_participation_probability`：基础概率。参与线索、活跃话题、活跃话题追问分别抬到各自上限，取最大值。
+1. `_hard_limit_reason`：最小间隔（活跃话题使用更短的间隔）、每分钟上限、连续冷却、低信息。点名他人不拦，交给规划器按话题判断。
+2. `_participation_probability`：基础概率。活跃话题按配置提高概率，取最大值。
 3. Heartflow：`score - base_score` 的正值部分按 `probability + (1 - probability) × Δ` 抬高。
 4. `_streak_adjusted`：连续沉默 3 轮 ×1.2（≤ 0.90），5 轮 ×1.4（≤ 0.95）。
 5. 掷骰，结果与概率、掷值、沉默轮数一起写入 `ReplyGateDecision`，`smalltalk.no_reply` 日志直接输出这些字段。
 
-Core 提取正文时只保留文本段。`handlers._label_other_mentions` 把 `@` 其他成员的段落按原位置还原为 `@名字` 再进入有效文本、媒体合成和历史，硬限制、参与线索、规划器和回复提示都依据这份文本判断这句话在叫谁。
+Core 提取正文时只保留文本段。`handlers._label_other_mentions` 把 `@` 其他成员的段落按原位置还原为 `@名字` 再进入有效文本、媒体合成和历史，规划器和回复提示依据这份文本及上下文判断接收对象和参与时机。
 
-私聊深度对话模式跳过第 2～4 步。通过后，规划开启时进入 PFC，关闭时直接起草。参与线索只影响概率，不改变路径。
+私聊深度对话模式跳过第 2～4 步。私聊通过后按配置选择 PFC 或直接起草。群聊通过后统一由 PFC 根据完整上下文决定回复或旁听。中间动作未完成时返回 wait。
 
 ---
 
@@ -345,7 +344,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 审查模型不可用时结果为 `severity="infra"`、`failure_code="checker_unavailable"`：
 
-- `always`：不发送未审查的候选。明确召唤回复 `NOT_READY_FALLBACK`，普通参与安静。
+- `always`：不发送未审查的候选。私聊直接回复路径返回 `NOT_READY_FALLBACK`，普通参与安静。
 - `risk`：放行通过本地规则的候选。未开启低风险人设发挥且问题涉及人设时，按 `persona_grounding` 拒绝。
 
 ### 重写与兜底（`reply_fallbacks.py`）
@@ -354,8 +353,8 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 |---|---|
 | 还有重写次数 | 按 `failure_code` 生成定向修正提示（soft 只调语气措辞，hard 只承接可见依据） |
 | 普通参与，耗尽 | `persona_grounding` / `context_grounding` / `instruction_following` 安静。其他需要重规划的问题抛出 `ReplyRejected` 交给 PFC。不需要重规划时安静 |
-| 明确召唤，耗尽，只剩 soft 且本地规则通过 | 接受该候选（`reply.check.exhausted.accept`） |
-| 明确召唤，耗尽，仍有 hard | 按原因选择兜底句（`reply.check.exhausted.forced_fallback`），跳过与最近发言重复的句子，最后退到 `PRESENCE_FALLBACK` |
+| 私聊直接回复，耗尽，只剩 soft 且本地规则通过 | 接受该候选（`reply.check.exhausted.accept`） |
+| 私聊直接回复，耗尽，仍有 hard | 按原因选择兜底句（`reply.check.exhausted.forced_fallback`），跳过与最近发言重复的句子，最后退到 `PRESENCE_FALLBACK` |
 
 兜底句集合为 `ALL_FALLBACK_TEXTS`，评测脚本据此识别审查耗尽后的回复。
 
@@ -380,7 +379,6 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 ### 进程内状态（`runtime_state.py`）
 
 - 每个会话的统计、锁、回复时间戳、连续回复计数、冷却与当前回复元数据。
-- 名字续问登记（60 秒）。
 - 会话级与全局模型覆盖。
 - 媒体细化与后台学习任务、防抖刷盘任务。
 - `GenerationLimiter`。
@@ -445,7 +443,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 要改的行为 | 位置 |
 |---|---|
 | 召唤条件 | `attention_gate.py` |
-| 普通参与线索 | `participation.py` |
+| 低信息消息和句首称呼识别 | `participation.py` |
 | 频控与概率 | `frequency_control.py` |
 | 规划 | `planning/` |
 | 生成上下文 | `context_builder.py`、`reply_plan.py`、`llm/prompt_builder.py` |

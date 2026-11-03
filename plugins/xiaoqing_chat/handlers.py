@@ -34,7 +34,6 @@ from .chat_event import (
     event_chat_id,
     is_bot_mentioned,
     is_private_event,
-    mentions_bot_name,
     other_mentions,
     text_with_mentions,
 )
@@ -58,7 +57,6 @@ from .life.daily_life import day_key, ensure_today
 from .life.schedule import delay_factor, participation_factor, routine_slot_now
 from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
-from .llm.communication_constraints import requests_silence
 from .logging_utils import log_step
 from .media.event_media import build_effective_user_text
 from .memory.local_ids import allocate_local_id
@@ -71,7 +69,6 @@ from .planning.action_history import ActionRecord
 from .planning.goal_state import derive_goal_async, is_low_information_turn
 from .post_reply_tasks import spawn_life_extraction
 from .runtime_state import SELF_MOOD_KEY
-from .runtime_state import get_state as _state
 from .smalltalk_models import PreparedSmalltalkTurn
 from .store_binding import bound_state
 from .task_scheduler import (
@@ -151,7 +148,6 @@ _SENSITIVE_EXTERNAL_TEXT_RE = re.compile(
 _MAX_EXTERNAL_MEMORY_CHARS = 1000
 _EXTERNAL_HEADLINE_CHARS   = 160
 
-_BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS = 60.0
 # 同一会话已有一轮在生成时，新一轮最多排队这么久；旧一轮看到新消息会在下一个检查点退出。
 _CHAT_GENERATION_QUEUE_SECONDS = 20.0
 
@@ -178,16 +174,6 @@ def _external_headline(text: str) -> str:
 
     compact = " ".join(str(text or "").split())
     return compact[:_EXTERNAL_HEADLINE_CHARS].rstrip() + "…（内容较长，只记下开头）"
-
-
-def _context_chat_and_user_id(context) -> tuple[str, int | None]:
-    user_id  = _coerce_int_or_none(getattr(context, "current_user_id", None))
-    group_id = _coerce_int_or_none(getattr(context, "current_group_id", None))
-    if group_id is not None:
-        return f"g{group_id}", user_id
-    if user_id is not None:
-        return f"u{user_id}", user_id
-    return "", user_id
 
 
 def _coerce_int_or_none(value: Any) -> int | None:
@@ -326,6 +312,8 @@ def _chat_text_with_addressee(clean_text: str, event: dict[str, Any], bot_name: 
     text = str(clean_text or "").strip()
     if event.get(MENTION_LABELS_KEY):
         text = text_with_mentions(event) or text
+    if not text and bot_name and is_bot_mentioned(event):
+        return f"@{bot_name}"
     if not text or not bot_name or text.startswith(bot_name):
         return text
     raw_text = (
@@ -566,26 +554,16 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
 
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
     brain_chat_enabled = runtime.cfg.brain_chat.enable_private_brain_chat
-    direct_mentioned   = is_bot_mentioned(event) or mentions_bot_name(event, hctx.bot_name)
+    direct_mentioned   = is_bot_mentioned(event)
     is_private         = is_private_event(event)
     command_forced     = bool(event.get("_xc_command_forced"))
-    # 上一条只喊了名字时，紧跟的这句话视为在对机器人说。
-    pending_bot_name_forced = (
-        not command_forced
-        and not (is_private and not brain_chat_enabled)
-        and not direct_mentioned
-        and state.consume_pending_bot_name_call(chat_id, _coerce_int_or_none(event.get("user_id")))
-    )
-    attention = await decide_attention(
-        text                      = text,
+    attention          = await decide_attention(
         event                     = event,
         state                     = state,
         chat_id                   = chat_id,
-        bot_name                  = hctx.bot_name,
         is_private                = is_private,
         command_forced            = command_forced,
         direct_mentioned          = direct_mentioned,
-        pending_bot_name_forced   = pending_bot_name_forced,
         enable_private_brain_chat = brain_chat_enabled,
     )
     log_step(
@@ -594,20 +572,18 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
         chat_id = chat_id,
         step    = "smalltalk.recv",
         fields  = {
-            "is_private"           : is_private,
-            "mentioned"            : attention.mentioned,
-            "direct_mentioned"     : direct_mentioned,
-            "coreference_mentioned": attention.coreference_mentioned,
-            "reply_to_bot"         : attention.reply_to_bot,
-            "forced"               : attention.forced,
-            "force_reason"         : attention.force_reason,
-            "pending_bot_name"     : pending_bot_name_forced,
-            "brain_chat_enabled"   : brain_chat_enabled,
-            "msg_id"               : event.get("message_id"),
-            "user_id"              : event.get("user_id"),
-            "group_id"             : event.get("group_id"),
-            "text"                 : text,
-            "new_emoji_count"      : max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
+            "is_private"        : is_private,
+            "mentioned"         : attention.mentioned,
+            "direct_mentioned"  : direct_mentioned,
+            "reply_to_bot"      : attention.reply_to_bot,
+            "forced"            : attention.forced,
+            "force_reason"      : attention.force_reason,
+            "brain_chat_enabled": brain_chat_enabled,
+            "msg_id"            : event.get("message_id"),
+            "user_id"           : event.get("user_id"),
+            "group_id"          : event.get("group_id"),
+            "text"              : text,
+            "new_emoji_count"   : max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
         },
     )
     return attention, is_private
@@ -753,9 +729,6 @@ async def _prepare_smalltalk_turn(
         context = context,
         runtime = runtime,
     )
-    if requests_silence(text):
-        log_step(context, runtime, chat_id=chat_id, step="smalltalk.explicit_silence")
-        return None
     if is_ignored_text(text, runtime):
         log_step(context, runtime, chat_id=chat_id, step="smalltalk.ignore", fields={"text": text})
         return None
@@ -839,8 +812,8 @@ async def _maybe_reply_smalltalk(
             prepared, event, context, hctx, started_at=t0, deciding=deciding
         )
 
-    # 明确叫小青时让 agent 判断要不要动手，同时照常生成聊天回复；它不接手就用聊天回复。
-    if agent_may_take_over(prepared, event, context):
+    # 私聊并行判断工具需求；群聊先由 PFC 决定参与。
+    if prepared.is_private and agent_may_take_over(prepared, event, context):
         return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
     return await chat(None)
 
@@ -873,6 +846,23 @@ async def _reply_with_chat(
                 # 生成比 agent 的判断先完成，而 agent 要接手：这次的聊天回复不发。
                 generated.cancel_speculative_memory()
                 return []
+            if (
+                not prepared.is_private
+                and generated.reply
+                and generated.pfc_result is not None
+                and generated.pfc_result.action in ("direct_reply", "send_new_message")
+                and agent_may_take_over(prepared, event, context)
+            ):
+
+                async def deliver(decision: asyncio.Task[Any] | None) -> list[dict[str, Any]]:
+                    if decision is not None and await asyncio.shield(decision) is not None:
+                        generated.cancel_speculative_memory()
+                        return []
+                    return await finalize_smalltalk_turn(
+                        prepared, generated, event, context, hctx, started_at=started_at
+                    )
+
+                return await answer_with_agent_or_chat(prepared, event, context, hctx, deliver)
             return await finalize_smalltalk_turn(
                 prepared,
                 generated,
@@ -922,22 +912,5 @@ async def call_bot_name_only(context) -> list[dict[str, Any]]:
             exc,
             logger    = context.logger,
             component = "xiaoqing_chat.bot_name_only.config",
-        )
-    chat_id, user_id = _context_chat_and_user_id(context)
-    if chat_id:
-        _state().set_pending_bot_name_call(
-            chat_id,
-            user_id,
-            ttl_seconds=_BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
-        )
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "smalltalk.bot_name_only",
-            fields  = {
-                "user_id"       : user_id,
-                "followup_ttl_s": _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
-            },
         )
     return segments(random.choice(replies))

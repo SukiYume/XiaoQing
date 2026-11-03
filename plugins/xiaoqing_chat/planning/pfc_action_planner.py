@@ -2,7 +2,7 @@
 
 规划器只接收裁剪后的目标、记忆和行动摘要，并把模型输出收窄到固定动作集合。模型
 不可用、超时、JSON 异常或未知动作时，群聊必须退回 wait，私聊才退回 direct_reply。
-新鲜轮次里已经通过频控的全群邀请可直接进入回复；其余消息由规划器按话题和时机判断要不要接。
+通过频控的群聊消息由规划器结合话题、上下文和发言时机决定回复或旁听。
 """
 
 from __future__ import annotations
@@ -19,14 +19,10 @@ from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_resp
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage, is_conversation_reply
-from ..participation import classify_group_participation_cue as _group_participation_cue
 from ..utils.text import clip_text
 from .pfc_utils import get_items_from_json
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
-
-# 问句距离上一位群友的发言在这个时间内，视为在接对方的话。
-_EXCHANGE_FOLLOWUP_SECONDS = 90.0
 
 _ALLOWED_PLANNER_ACTIONS = frozenset(
     {
@@ -67,6 +63,11 @@ _PLANNER_CONTEXT = """{knowledge_info_str}
 
 最近对话（注意：仔细看每条消息的发送者，不同用户是不同的人）：
 {chat_history_text}
+
+【消息指向与参与】
+结合完整上下文识别当前消息的接收对象、代词指向和交流意图。名字提及、@、引用、问号和续句都是上下文线索，行动由你综合判断。
+对你提出的明确停聊要求选择 wait 或 listening。对其他人的要求、转述和引用按其实际含义理解；阅读整句中的否定、补充与转折。
+话题已收尾、缺少新内容或其他成员需要空间时保持旁听。需要继续思考或查资料时选择对应中间动作，只有准备好参与时才选择回复动作。
 
 """
 
@@ -230,21 +231,6 @@ def _participation_hint(history: Sequence[StoredMessage]) -> str:
     return ""
 
 
-def _follows_another_speaker(history: Sequence[StoredMessage]) -> bool:
-    """本轮消息是否紧跟另一位群友的发言；历史末条即本轮消息。"""
-
-    if len(history) < 2:
-        return False
-    current, previous = history[-1], history[-2]
-    if current.role != "user" or previous.role != "user":
-        return False
-    if current.user_id is None or previous.user_id in (None, current.user_id):
-        return False
-    if not current.ts or not previous.ts:
-        return False
-    return 0.0 <= float(current.ts) - float(previous.ts) <= _EXCHANGE_FOLLOWUP_SECONDS
-
-
 def _parse_plan(content: str, fallback_action: str) -> PFCPlan:
     """解析规划器输出；结构不合法或动作不在白名单时退回保守动作。"""
     ok, obj = get_items_from_json(
@@ -302,21 +288,8 @@ async def plan_next_action(
     chat_history_text  = build_dialogue_prompt(
         history, bot_name=bot_name, truncate=True, max_chars=1200
     )
-    time_info         = _time_since_last_bot(history)
-    channel           = "私聊" if is_private else "群聊"
-    participation_cue = ""
-    if not is_private and not last_successful_reply_action:
-        # 分类器已经排除点给其他人的消息；上游频控也已经完成概率、间隔和限流。
-        # 新鲜轮次里的明确全群邀请直接回复，避免规划器仅凭“没点名”再次否决。
-        participation_cue = _group_participation_cue(current_text)
-        if participation_cue == "open_question" and _follows_another_speaker(history):
-            # 紧接着别人说的问句多半是在接对方的话（“藤子 ban 吗？”），谁问谁交给规划器判断。
-            participation_cue = ""
-        if participation_cue:
-            return PFCPlan(
-                action = "direct_reply",
-                reason = f"fresh_group_participation:{participation_cue}",
-            )
+    time_info = _time_since_last_bot(history)
+    channel   = "私聊" if is_private else "群聊"
 
     tpl = (
         PROMPT_FOLLOW_UP_COMPACT

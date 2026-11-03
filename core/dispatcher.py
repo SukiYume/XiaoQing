@@ -1218,6 +1218,8 @@ class Dispatcher:
         """
         处理只叫 bot_name 的情况
         """
+        if not ctx.is_private and self._get_smalltalk_provider() == "xiaoqing_chat":
+            return await self._dispatch_to_provider(ctx, "handle_smalltalk", (ctx.text, ctx.event))
         default_response = self.random.choice(constants.DEFAULT_BOT_NAME_RESPONSES_LIST)
         return await self._dispatch_to_provider(
             ctx,

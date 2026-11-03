@@ -52,8 +52,7 @@ class _PerChatState:
     # chat_id ->（情绪文本，过期时间戳）
     mood_state: dict[str, tuple[str, float]] = field(default_factory=dict)
     # chat_id ->（调用者用户 ID，过期时间戳）
-    pending_bot_name_call: dict[str, tuple[int | None, float]] = field(default_factory=dict)
-    reply_gate_decision  : dict[str, Any] = field(default_factory=dict)
+    reply_gate_decision: dict[str, Any] = field(default_factory=dict)
 
 
 # 心境属于角色本人，不属于某个会话：同一时刻她在各个群和私聊里是同一种心情。
@@ -250,7 +249,6 @@ class ChatRuntimeState:
             pc.persist_tasks,
             pc.next_local_id,
             pc.mood_state,
-            pc.pending_bot_name_call,
             pc.reply_gate_decision,
             self._active_provider_by_chat,
         ):
@@ -279,7 +277,6 @@ class ChatRuntimeState:
             pc.stats,
             pc.next_local_id,
             pc.mood_state,
-            pc.pending_bot_name_call,
             pc.reply_gate_decision,
         ):
             for cid in list(d.keys()):
@@ -346,7 +343,7 @@ class ChatRuntimeState:
     def pop_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
         return self._per_chat.persist_tasks.pop(chat_id, None)
 
-    def clear_transient_chat_state(self, chat_id: str, *, clear_pending_call: bool = True) -> None:
+    def clear_transient_chat_state(self, chat_id: str) -> None:
         """移除一次会话重置后不应继续生效的纯内存状态。"""
         pc = self._per_chat
         for values in (
@@ -360,8 +357,6 @@ class ChatRuntimeState:
             pc.reply_gate_decision,
         ):
             values.pop(chat_id, None)
-        if clear_pending_call:
-            pc.pending_bot_name_call.pop(chat_id, None)
 
     def start_accepting_background_tasks(self) -> None:
         self._accepting_background_tasks = True
@@ -451,28 +446,6 @@ class ChatRuntimeState:
     ) -> None:
         """在指定时长内保存当前会话的情绪状态。"""
         self._per_chat.mood_state[chat_id] = (mood_text, time.time() + duration_seconds)
-
-    def set_pending_bot_name_call(
-        self, chat_id: str, user_id: int | None, *, ttl_seconds: float = 60.0
-    ) -> None:
-        expires_at                                    = time.time() + max(0.0, float(ttl_seconds))
-        self._per_chat.pending_bot_name_call[chat_id] = (user_id, expires_at)
-
-    def consume_pending_bot_name_call(
-        self, chat_id: str, user_id: int | None, *, now: float | None = None
-    ) -> bool:
-        entry = self._per_chat.pending_bot_name_call.get(chat_id)
-        if not entry:
-            return False
-        caller_user_id, expires_at = entry
-        current_ts = time.time() if now is None else float(now)
-        if current_ts > expires_at:
-            del self._per_chat.pending_bot_name_call[chat_id]
-            return False
-        if caller_user_id is not None and user_id != caller_user_id:
-            return False
-        del self._per_chat.pending_bot_name_call[chat_id]
-        return True
 
     def set_reply_gate_decision(self, chat_id: str, decision: Any) -> None:
         self._per_chat.reply_gate_decision[chat_id] = decision

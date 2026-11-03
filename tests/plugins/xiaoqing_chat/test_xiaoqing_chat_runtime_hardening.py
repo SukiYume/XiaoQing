@@ -48,14 +48,14 @@ def test_config_rejects_unsafe_numeric_and_regex_values(payload):
 def test_config_accepts_safe_zero_disable_values_and_probability_boundaries():
     cfg = XiaoQingChatConfig.model_validate(
         {
-            "reply_probability_base"             : 0.0,
-            "participation_cue_reply_probability": 1.0,
-            "io_persist_debounce_seconds"        : 0.0,
+            "reply_probability_base"        : 0.0,
+            "active_topic_reply_probability": 1.0,
+            "io_persist_debounce_seconds"   : 0.0,
         }
     )
 
     assert cfg.reply_probability_base == 0.0
-    assert cfg.participation_cue_reply_probability == 1.0
+    assert cfg.active_topic_reply_probability == 1.0
     assert cfg.io_persist_debounce_seconds == 0.0
 
 

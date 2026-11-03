@@ -165,7 +165,7 @@ _ACTION_ALIASES: dict[str, str] = {
 
 
 def _normalize_action(action: str) -> str:
-    return _ACTION_ALIASES.get((action or "").strip().lower(), "direct_reply")
+    return _ACTION_ALIASES.get((action or "").strip().lower(), "wait")
 
 
 def _wait_run_result(plan: PFCPlan, action: str) -> PFCRunResult:
@@ -510,14 +510,10 @@ async def _finish_pfc_action(
             reason = plan.reason,
             ended  = False,
         )
-    reply = await session.generate_reply("direct_reply", plan.reason, "")
-    if reply:
-        session.state.last_successful_reply_action = "direct_reply"
-        session.dirty                              = True
     return PFCRunResult(
-        reply  = reply,
-        action = "direct_reply",
-        reason = plan.reason,
+        reply  = "",
+        action = "wait",
+        reason = "planner_incomplete",
         ended  = False,
     )
 

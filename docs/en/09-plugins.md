@@ -245,14 +245,12 @@ Restart restores configured models.
 
 **Participation**
 
-- Explicit invocation requests a reply: private chat, `/xc`, group mentions, persona-name text, or replies to persona messages.
-  It also includes follow-up questions within 60 seconds after name-only invocation and pronouns referring to the persona in recent discussion.
-- Ordinary group chat first passes hard limits: minimum interval, per-minute cap, consecutive-reply cooldown, low-information input, and initial mentions of other members.
-  Then it uses a base-probability draw.
-  Group invitations, image requests, open questions, cheering, excited sharing, repeated phrases, and active topics increase probability.
-  Heartflow soft scores and consecutive silence supply further adjustment.
-- The PFC planner then selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion.
-- Global, conversation, user-concurrency, and daily-user quotas also apply before generation.
+- Group turns pass frequency limits, participation probability, and PFC context planning. Names, pronouns, follow-up messages, mentions, quoted replies, and `/xc` chat input all use this path. Group planning remains enabled regardless of the optional private-chat planner setting.
+- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation.
+- The planner selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Unfinished intermediate actions, invalid actions, and unavailable planning leave the group turn waiting.
+- Private chat retains its configured direct-reply and planning paths. Group tool handoff follows an explicit PFC participation decision.
+- New user messages before delivery trigger a context review through the reasoning route. Matching snapshots reuse the result. Review failure withholds the remaining reply.
+- Global, conversation, user-concurrency, and daily-user quotas apply before generation.
 
 **Persona**
 

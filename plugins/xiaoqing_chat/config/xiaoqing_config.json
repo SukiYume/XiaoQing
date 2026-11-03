@@ -1,12 +1,9 @@
 {
     "enable_smalltalk": true,
     "reply_probability_base": 0.75,
-    "participation_cue_reply_probability": 0.9,
     "active_topic_reply_probability": 0.72,
-    "active_topic_question_reply_probability": 0.9,
     "min_reply_interval_seconds": 8,
     "active_topic_min_reply_interval": 3.0,
-    "active_topic_question_min_reply_interval": 2.0,
     "max_replies_per_minute": 4,
     "continuous_reply_limit": 3,
     "continuous_cooldown_seconds": 25,

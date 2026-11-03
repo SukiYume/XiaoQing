@@ -27,12 +27,11 @@ async def test_heartflow_score_combines_turn_signals_with_the_base() -> None:
     score = await engine.score_async(
         chat_id                  = "g1",
         text                     = "这是问题吗？",
-        goal                     = "回答用户问题",
         seconds_since_last_reply = 300.0,
         base                     = 0.2,
     )
 
-    assert score == pytest.approx(0.51)
+    assert score == pytest.approx(0.33)
 
 
 @pytest.mark.parametrize("last_action", [None, "direct_reply"])

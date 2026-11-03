@@ -90,12 +90,11 @@ def complete_test_state(state):
                     default = None
                 setattr(store, method, AsyncMock(return_value=default))
     neutral = {
-        "consume_pending_bot_name_call": False,
-        "get_reply_gate_decision"      : None,
-        "get_last_observe_ts"          : 0.0,
-        "get_last_reply_ts"            : 0.0,
-        "get_mood_state"               : "",
-        "pop_persist_task"             : None,
+        "get_reply_gate_decision": None,
+        "get_last_observe_ts"    : 0.0,
+        "get_last_reply_ts"      : 0.0,
+        "get_mood_state"         : "",
+        "pop_persist_task"       : None,
     }
     for name, value in neutral.items():
         if _explicit_test_attribute(state, name) is _MISSING_TEST_CONFIG:

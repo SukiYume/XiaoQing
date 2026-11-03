@@ -266,15 +266,17 @@ async def generate_smalltalk_turn(
     recent_history = active_conversation_suffix(
         recent, idle_gap_seconds=float(runtime.cfg.memory.conversation_idle_gap_seconds)
     )
-    planner_enabled = runtime.cfg.planner.enable_planner or (
-        prepared.brain_chat_active and runtime.cfg.brain_chat.private_planner_always_on
+    planner_enabled = (
+        not prepared.is_private
+        or runtime.cfg.planner.enable_planner
+        or (prepared.brain_chat_active and runtime.cfg.brain_chat.private_planner_always_on)
     )
 
     async with chat_lock(chat_id):
         generated.local_id = await ensure_user_message_recorded(
             prepared.text, event, context, runtime, state=state
         )
-        if not prepared.forced and planner_enabled:
+        if planner_enabled and not (prepared.is_private and prepared.forced):
             generated.pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
             generated.pfc_turn           = state.pfc_state_store.begin_turn(chat_id)
             if generated.pfc_state_snapshot and generated.pfc_state_snapshot.ended:
@@ -282,7 +284,7 @@ async def generate_smalltalk_turn(
 
     turn = _TurnGenerator(prepared, event, context, hctx, generated, recent_history)
     try:
-        if prepared.forced:
+        if prepared.is_private and prepared.forced:
             await turn.run_forced()
         elif planner_enabled:
             await turn.run_planner()

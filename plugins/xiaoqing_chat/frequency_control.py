@@ -8,12 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .constants import is_question
-from .participation import (
-    classify_group_participation_cue,
-    is_group_repeat_chain,
-    is_low_information_group_turn,
-)
+from .participation import is_low_information_group_turn
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
@@ -33,7 +28,6 @@ class ReplyGateDecision:
     no_reply_streak         : int          = 0
     heartflow_score         : float | None = None
     active_topic            : bool         = False
-    participation_cue       : str          = ""
     # 作息对插话概率的乘数：忙或睡时小于 1。
     routine_factor: float = 1.0
 
@@ -47,7 +41,6 @@ class ReplyGateDecision:
             "cooldown_left_seconds"   : round(self.cooldown_left_seconds, 3),
             "no_reply_streak"         : self.no_reply_streak,
             "active_topic"            : self.active_topic,
-            "participation_cue"       : self.participation_cue,
         }
         if self.probability is not None:
             fields["probability"] = round(self.probability, 4)
@@ -80,27 +73,11 @@ def record_reply_frequency(chat_id: str, runtime: ChatRuntime, state, *, forced:
         state.set_continuous_reply_count(chat_id, 0)
 
 
-async def _repeat_chain_cue(state, chat_id: str, text: str) -> str:
-    """当前消息若在跟前一位群友复读，就作为参与信号；历史不可读时不影响原判断。"""
-
-    try:
-        recent = await state.memory_store.get_recent_async(chat_id, max_items=4)
-    except Exception:
-        return ""
-    user_texts = [message.content for message in recent if message.role == "user"]
-    # 当前消息通常已先写入历史；去掉末尾的自己再与前一位比较。
-    if user_texts and user_texts[-1].strip() == str(text or "").strip():
-        user_texts = user_texts[:-1]
-    return "repeat_chain" if is_group_repeat_chain(text, user_texts) else ""
-
-
-def _min_reply_interval(cfg, *, active_topic: bool, followup_question: bool) -> float:
+def _min_reply_interval(cfg, *, active_topic: bool) -> float:
     interval = float(cfg.min_reply_interval_seconds)
     if active_topic:
         # 群聊中连续话题允许更快回复；别人紧接着追问时不再套用普通群聊的长间隔。
         interval = min(interval, max(0.0, cfg.active_topic_min_reply_interval))
-        if followup_question:
-            interval = min(interval, max(0.0, cfg.active_topic_question_min_reply_interval))
     return interval
 
 
@@ -124,32 +101,22 @@ def _hard_limit_reason(cfg, decision: ReplyGateDecision, text: str, *, is_privat
     return ""
 
 
-def _participation_probability(
-    cfg, *, cue: str, active_topic: bool, followup_question: bool
-) -> float:
-    """普通插话概率；面向全群的线索和活跃话题只抬高到各自的上限，不叠加放大。"""
+def _participation_probability(cfg, *, active_topic: bool) -> float:
+    """普通插话概率，活跃话题按配置提高概率。"""
 
     probability = float(cfg.reply_probability_base)
-    if cue:
-        probability = max(probability, min(1.0, cfg.participation_cue_reply_probability))
     if active_topic:
         probability = max(probability, min(1.0, cfg.active_topic_reply_probability))
-        if followup_question:
-            # 活跃话题里的明确追问更像连续对话；仍保留小概率静默，PFC 会再判断是否在跟机器人说话。
-            probability = max(probability, min(1.0, cfg.active_topic_question_reply_probability))
     return probability
 
 
-async def _heartflow_score(cfg, state, chat_id: str, text: str, goal: str, since: float) -> float:
+async def _heartflow_score(cfg, state, chat_id: str, text: str, since: float) -> float:
     heartflow = cfg.heartflow
     score     = await state.heartflow.score_async(
         chat_id                  = chat_id,
         text                     = text,
-        goal                     = goal,
         seconds_since_last_reply = since,
         base                     = heartflow.base_score,
-        weight_question          = heartflow.weight_question,
-        weight_goal_match        = heartflow.weight_goal_match,
         weight_short_text        = heartflow.weight_short_text,
         weight_no_reply_streak   = heartflow.weight_no_reply_streak,
         weight_long_silence      = heartflow.weight_long_silence,
@@ -198,25 +165,16 @@ async def decide_reply(
         and now - float(goal_state.ts) < 300
         and since < 300
     )
-    followup_question = active_topic and is_question(text)
-    cue               = ""
-    if not is_private:
-        cue = classify_group_participation_cue(text) or await _repeat_chain_cue(
-            state, chat_id, text
-        )
 
     decision = ReplyGateDecision(
         should_reply             = False,
         reason                   = "",
         seconds_since_last_reply = since,
-        min_interval_seconds     = _min_reply_interval(
-            cfg, active_topic=active_topic, followup_question=followup_question
-        ),
+        min_interval_seconds=_min_reply_interval(cfg, active_topic=active_topic),
         replies_last_minute    = len(window),
         max_replies_per_minute = cfg.max_replies_per_minute,
         cooldown_left_seconds  = max(0.0, state.get_continuous_cooldown_until(chat_id) - now),
         active_topic           = active_topic,
-        participation_cue      = cue,
     )
     if reason := _hard_limit_reason(cfg, decision, text, is_private=is_private):
         decision = dataclasses.replace(decision, reason=reason)
@@ -224,13 +182,11 @@ async def decide_reply(
         # 深度对话模式下跳过概率控制。
         decision = dataclasses.replace(decision, should_reply=True, reason="private_brain_chat")
     else:
-        probability = _participation_probability(
-            cfg, cue=cue, active_topic=active_topic, followup_question=followup_question
-        )
+        probability = _participation_probability(cfg, active_topic=active_topic)
         score = None
         if cfg.heartflow.enable_heartflow:
             # Heartflow 信号作为软加分，不作为硬门槛。
-            score       = await _heartflow_score(cfg, state, chat_id, text, goal, since)
+            score       = await _heartflow_score(cfg, state, chat_id, text, since)
             probability = probability + (1.0 - probability) * max(
                 0.0, score - cfg.heartflow.base_score
             )

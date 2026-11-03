@@ -303,6 +303,126 @@ async def test_other_chats_do_not_wait_for_an_unsettled_reply() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("max_global,max_per_user", [(1, 0), (0, 1), (1, 1)])
+async def test_delivery_wait_leaves_generation_quota_for_other_chats(
+    max_global: int,
+    max_per_user: int,
+) -> None:
+    limiter = GenerationLimiter()
+    limits  = {
+        **_ONE_PER_CHAT,
+        "max_global"                : max_global,
+        "max_per_user"              : max_per_user,
+        "max_calls_per_user_per_day": 2,
+    }
+    async with limiter.admit(chat_id="g1", user_id="a", **limits):
+        release = limiter.hold_for_delivery("g1")
+    entered = asyncio.Event()
+
+    async def next_turn() -> None:
+        async with limiter.admit(chat_id="g1", user_id="b", **limits):
+            entered.set()
+
+    task = asyncio.create_task(next_turn())
+    try:
+        await asyncio.sleep(0)
+        assert not entered.is_set()
+        # 同一用户在独立会话中也能使用生成配额。
+        async with asyncio.timeout(1):
+            async with limiter.admit(chat_id="g2", user_id="b", **limits):
+                assert limiter._global_inflight == 1
+                assert limiter._user_inflight == {"b": 1}
+                assert len(limiter._user_calls["b"]) == 1
+                assert not entered.is_set()
+        assert limiter._global_inflight == 0
+    finally:
+        release()
+        await asyncio.wait_for(task, 1)
+    assert entered.is_set()
+    assert len(limiter._user_calls["b"]) == 2
+    assert limiter._chat_inflight == {}
+    assert limiter._user_inflight == {}
+    assert limiter._global_inflight == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_delivery_wait_releases_chat_slot_without_charging_user() -> None:
+    limiter = GenerationLimiter()
+    release = limiter.hold_for_delivery("g1")
+
+    async def next_turn() -> None:
+        async with limiter.admit(chat_id="g1", user_id="b", **_ONE_PER_CHAT):
+            pytest.fail("Generation started before delivery settled")
+
+    task = asyncio.create_task(next_turn())
+    await asyncio.sleep(0)
+    try:
+        with pytest.raises(GenerationLimitExceeded, match="chat_inflight"):
+            async with limiter.admit(
+                chat_id = "g1",
+                user_id = "c",
+                **{**_ONE_PER_CHAT, "chat_wait_seconds": 0},
+            ):
+                pytest.fail("Same-chat request bypassed the waiting turn")
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release()
+    assert limiter._global_inflight == 0
+    assert limiter._chat_inflight == {}
+    assert limiter._user_inflight == {}
+    assert limiter._user_calls == {}
+    async with limiter.admit(chat_id="g1", user_id="b", **_ONE_PER_CHAT):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit,reason",
+    [
+        ("max_global", "global_inflight"),
+        ("max_per_user", "user_inflight"),
+        ("max_calls_per_user_per_day", "daily_user_calls"),
+        ("max_tracked_users", "daily_user_capacity"),
+    ],
+)
+async def test_delivery_wait_checks_current_quota_after_settlement(limit: str, reason: str) -> None:
+    limiter = GenerationLimiter()
+    limits  = dict(_ONE_PER_CHAT)
+    if limit == "max_tracked_users":
+        limiter.max_tracked_users = 1
+    else:
+        limits[limit] = 1
+    release = limiter.hold_for_delivery("g1")
+
+    async def next_turn() -> None:
+        async with limiter.admit(chat_id="g1", user_id="b", **limits):
+            pytest.fail("Request exceeded the current quota")
+
+    task = asyncio.create_task(next_turn())
+    try:
+        await asyncio.sleep(0)
+        user_id = "c" if limit == "max_tracked_users" else "b"
+        async with limiter.admit(chat_id="g2", user_id=user_id, **limits):
+            release()
+            with pytest.raises(GenerationLimitExceeded, match=reason):
+                await asyncio.wait_for(task, 1)
+            # 被拒绝的等待者仅释放自己的会话槽，其他生成任务保持占用。
+            assert limiter._global_inflight == 1
+            assert limiter._chat_inflight == {"g2": 1}
+            assert limiter._user_inflight == {user_id: 1}
+            assert len(limiter._user_calls[user_id]) == 1
+    finally:
+        release()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert limiter._global_inflight == 0
+    assert limiter._chat_inflight == {}
+    assert limiter._user_inflight == {}
+
+
+@pytest.mark.asyncio
 async def test_receipt_that_never_settles_stops_holding_later_turns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

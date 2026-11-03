@@ -39,8 +39,9 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
         self._cache: dict[str, PFCConversationState] = {}
         self._dirty_chat_ids: set[str]               = set()
         self._lock                                   = threading.RLock()
-        # 每个会话取规划快照的轮次号，以及已经写回过的最大轮次号（只在内存里，重启后从头数）。
-        self._started_turns: dict[str, int]   = {}
+        # 进程内统一递增，回收会话后也保持编号唯一，迟到回执无法复用新会话的轮次。
+        self._next_turn = 0
+        # 当前缓存会话的提交下界：初次登记的轮次，或已经提交过的最大轮次。
         self._committed_turns: dict[str, int] = {}
 
     def _path(self, chat_id: str) -> Path | None:
@@ -94,6 +95,7 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
         )
         for key in candidates[:overflow]:
             del self._cache[key]
+            self._committed_turns.pop(key, None)
 
     @staticmethod
     def _payload(st: PFCConversationState) -> dict[str, Any]:
@@ -139,13 +141,14 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
             self._evict_clean_states_unlocked(protected_chat_id=cid)
 
     def begin_turn(self, chat_id: str) -> int:
-        """一轮取规划快照时登记，返回本会话递增的轮次号。"""
+        """取规划快照时登记进程内唯一的轮次号，提交记录随会话缓存回收。"""
 
         with self._lock:
-            cid                      = str(chat_id)
-            turn                     = self._started_turns.get(cid, 0) + 1
-            self._started_turns[cid] = turn
-            return turn
+            cid = str(chat_id)
+            self._get_unlocked(cid)
+            self._next_turn += 1
+            self._committed_turns.setdefault(cid, self._next_turn)
+            return self._next_turn
 
     def claim_commit(self, chat_id: str, turn: int) -> bool:
         """轮次不早于已写回的轮次时登记并返回 True；更新的轮次已经写回过时返回 False。
@@ -155,8 +158,10 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
         """
 
         with self._lock:
-            cid = str(chat_id)
-            if turn < self._committed_turns.get(cid, 0):
+            cid       = str(chat_id)
+            committed = self._committed_turns.get(cid)
+            # clear 或缓存淘汰后，旧快照失效；重新 begin_turn 才建立新的提交下界。
+            if committed is None or turn < committed:
                 return False
             self._committed_turns[cid] = turn
             return True
@@ -177,6 +182,7 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
             cid = str(chat_id)
             self._cache.pop(cid, None)
             self._dirty_chat_ids.discard(cid)
+            self._committed_turns.pop(cid, None)
             path = self._path(cid)
             if path:
                 delete_json_artifacts(path)
