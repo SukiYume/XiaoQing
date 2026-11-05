@@ -345,7 +345,9 @@ def test_consolidation_snapshots_are_deterministic_once_per_topic_and_tier() -> 
     assert (
         first["since"] < first["until"]
         and "天文摄影" in first["text"]
-        and "喜欢的居多" in first["text"]
+        and "大多挺喜欢" in first["text"]
+        # 次数只存在字段里，交给她的文字不报数
+        and not any(ch.isdigit() for ch in first["text"])
     )
     for n in range(2, 4):
         lc.add_interest_evidence(

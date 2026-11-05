@@ -41,6 +41,7 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 | `threads.py` | 小课题状态机 open → reviewing → done / dropped；`finish` 要求引用已有经历 ID |
 | `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；损坏恢复；预算 `reserve_llm_call` |
 | `turn_context.py` | 聊天侧取用的选择规则与文本块；`unknown_terms` 入队 |
+| `reinforce.py` | 自我强化的纯函数：收获公式、EMA 偏好、来源可靠性、习惯分桶、好奇边界（frontier）、说法的社交反馈 |
 | `sources/watch.py` | “看”视频：详情、标签、弹幕（XML，按归一化文本计频、30 秒分桶找最密时间点） |
 | `memes.py` | 梗图：固定图床下载、vision 判定、sha256 去重落盘、淘汰与撤销记录、分页导出、开关 |
 | `wind_down.py` | 睡前整理：日记（引用经历 ID 与日期）、小课题收获 / 继续 / 放弃、周日周记，本地核对 |
@@ -63,6 +64,12 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 
 - 主动开口分享候选（`share_candidates` 暂为空）、白名单私聊主动联系。
 - daily_life 探针（`turn_context(mode="probe")`）、作息亲和（`activity_affinity`）。
+
+## 第四轮增补
+
+- **新状态**：`state.preferences` / `source_health` / `habits` / `topic_penalty` / `last_reward` / `followup_day`，新集合 `frontier.json`、`learnings.json`；词条和表达条目上多了 `use_ok` / `use_confused` / `fps` / `suppressed_until`；小课题多了 `parent_id` / `depth`；经历多了 `tags`。
+- **决策**：`planner.choose` 的打分在活动偏好、搜索接口不稳、探索欲（+10）、有前因的小课题（+4）之后做 softmax；因素记在 `last_decision.factors`。
+- **只有真实信号**：偏好来自她自己的喜欢 / 不喜欢和真实进展；失败和全是看过的不更新偏好，只影响来源可靠性；社交反馈来自群友的真实回应。
 
 ## 第二轮增补
 

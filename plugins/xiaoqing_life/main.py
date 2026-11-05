@@ -187,8 +187,9 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
         moment,
         presence,
         runtime.rng,
-        running = runtime.running,
-        manual  = manual,
+        running  = runtime.running,
+        manual   = manual,
+        frontier = store.frontier,
     )
 
 

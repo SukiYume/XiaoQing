@@ -10,27 +10,30 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import reinforce
 from .config import LifeConfig
 from .lifecycle import DAY, expression_status, term_key
 from .safety import is_blocked, is_profane, normalize_for_match, overlap
 from .stores import MAX_LOOKUP_QUEUE, LifeStore
 
-MAX_TEXT_CHARS     = 500
-MAX_RECENT         = 8
-MAX_BOT_RECENT     = 6
-MAX_UNKNOWN_TERMS  = 3
-MAX_UNKNOWN_CHARS  = 12
-MAX_EXCLUDE_IDS    = 20
-SHARE_WINDOW_HOURS = 24
-MAX_SHARE          = 3
-MAX_PLAN_SLOTS     = 3
-ASK_EPISODES       = 3
-ASK_DAYS           = 2
-PAST_DAYS          = 7
-TOPIC_DAYS         = 3
-USE_FRESH_DAYS     = 21
-MAX_UNDERSTOOD     = 3
-_MIN_OVERLAP       = 2
+MAX_TEXT_CHARS      = 500
+MAX_RECENT          = 8
+MAX_BOT_RECENT      = 6
+MAX_UNKNOWN_TERMS   = 3
+MAX_UNKNOWN_CHARS   = 12
+MAX_EXCLUDE_IDS     = 20
+SHARE_WINDOW_HOURS  = 24
+MAX_SHARE           = 3
+MAX_PLAN_SLOTS      = 3
+HABIT_PREFER        = 100
+MAX_ASKED_LEARNINGS = 2
+ASK_EPISODES        = 3
+ASK_DAYS            = 2
+PAST_DAYS           = 7
+TOPIC_DAYS          = 3
+USE_FRESH_DAYS      = 21
+MAX_UNDERSTOOD      = 3
+_MIN_OVERLAP        = 2
 
 _ASK_RE = re.compile(
     r"最近(?:都|在|有)?(?:干|忙|看|玩|刷|做)|刷到|刷了|好玩的|有趣的|有意思的|今天(?:都)?(?:干|做|忙|玩|看)"
@@ -49,8 +52,9 @@ _FOLLOW_RE = re.compile(
     r"(?:那个|这个|那条|这条|刚才|刚说|刚刚|你说的).{0,8}(?:视频|帖子|内容|东西|讲啥|讲什么|是啥|咋回事|怎么回事)"
     r"|讲啥的|讲什么的|说的啥|咋回事"
 )
-_WEEK_RE = re.compile(r"这周|本周|这一周|最近过得|这几天过得")
-_LIKE_RE = re.compile(r"喜欢什么|喜欢看什么|迷上|最近.{0,3}迷|爱看什么|什么兴趣")
+_LEARN_RE = re.compile(r"学到(?:了)?(?:啥|什么)|有什么收获|有啥收获|收获|有啥变化|有什么变化")
+_WEEK_RE  = re.compile(r"这周|本周|这一周|最近过得|这几天过得")
+_LIKE_RE  = re.compile(r"喜欢什么|喜欢看什么|迷上|最近.{0,3}迷|爱看什么|什么兴趣")
 
 _VERBS = {
     "bili_popular": "刷B站热门，点开了",
@@ -62,16 +66,16 @@ _VERBS = {
 }
 
 _LIFE_HEADER = (
-    "你最近上网看到的（这只是你生活里上网的那一部分，其他的事以前面的人物事实为准；你自己的经历。聊到相关的、或者别人问你最近在干嘛时，"
-    "自然带出一件最想聊的就好，对方想听再接着说，不用报清单；当时的感想是真实记录，可以换个说法，但事实别改（谁做了什么、看没看完）；细节记不清就说记不清。看视频你通常只扫了简介、弹幕和评论区，按这个程度说，别说成看完了或描述画面；被问内容就按“讲的是”那句简短答，不用反复声明自己没看正片）："
+    "你最近上网看到的（你自己的经历，也只是你生活里上网的这一部分）。"
+    "聊到相关的或被问起时可以从这里取，说哪件、说多少随当时的话头。"
+    "事实照记录：谁做的、你看到了多少（多半是扫了简介、弹幕和评论区）；"
+    "感想可以用自己的话重新说，记录外的细节就是记不清："
 )
-_SLANG_HEADER = (
-    "你在网上学到的说法（帮你听懂对方；自己用的话一次最多一个，对得上才用，"
-    "像顺嘴说出来，不解释梗）："
-)
-_GUIDE       = "说话分寸：只说上面有依据的；打算不是做完了；兴趣有没有变，要前后两段时间都有证据才说；别念时间点和编号；一次带出一两点就好。"
-_PART_NOTE   = "对方问的是一整天（或这阵子）的事：上网只是其中一部分，别只讲这一块，其他的事照人物事实里的生活记录说。"
-_PLAN_HEADER = "对方在问你接下来的安排，就按这些说（只是打算，还没做，别说成做完了）："
+_SLANG_HEADER = "你在网上学到的说法（帮你听懂对方；对得上时也可以自己用）："
+_GUIDE        = "这些是依据，不是要讲的清单。打算和做完分开说；兴趣变了要前后都有记录才算。"
+_PART_NOTE    = "对方问的是一整天（或这阵子）：上网只是其中一部分，其他的事看人物事实里的生活记录。"
+_PLAN_HEADER  = "接下来的安排（只是打算，还没发生）："
+_LEARN_HEADER = "你之前自己查明白的（可以用自己的话讲，记录外的细节说大概）："
 
 
 def clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -296,7 +300,7 @@ def recap_lines(store: LifeStore, req: dict[str, Any], moment: datetime) -> list
         recent = [s for s in store.snapshots if now - float(s["created_at"]) <= 30 * DAY]
         recent.sort(key=lambda s: float(s["created_at"]), reverse=True)
         if recent and _LIKE_RE.search(text):
-            lines.append("对方在问你最近迷上什么，有记录的才算数，按这些说：")
+            lines.append("对方在问你最近迷上什么（有记录的才算）：")
         lines += [f"- 最近的你：{s['text']}" for s in recent[:2]]
     return lines
 
@@ -305,13 +309,55 @@ def wants_plans(text: str) -> bool:
     return bool(_PLAN_RE.search(text))
 
 
+def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[list[str], bool]:
+    """自己查明白的事：话题对上给 1 条；问“最近学到啥 / 有什么收获”给 ≤2 条加一句确定性的成长概括。"""
+
+    rows = sorted(store.learnings, key=lambda r: float(r.get("created_at", 0.0)), reverse=True)
+    if not rows:
+        return [], False
+    text = req["text"]
+    if _LEARN_RE.search(text):
+        picked = rows[:MAX_ASKED_LEARNINGS]
+        lines  = [f"- {r['text']}" for r in picked]
+        if growth := growth_line(rows, now):
+            lines.append(f"- {growth}")
+    else:
+        context = " ".join([text, *req["recent"][-2:]])
+        scored  = [(overlap(context, f"{r.get('topic', '')} {r['text']}"), r) for r in rows]
+        scored  = [pair for pair in scored if pair[0] >= _MIN_OVERLAP]
+        if not scored:
+            return [], False
+        picked = [max(scored, key=lambda pair: pair[0])[1]]
+        lines = [f"- {picked[0]['text']}"]
+    for row in picked:
+        row["last_used"] = now
+    return lines, True
+
+
+def growth_line(rows: list[dict[str, Any]], now: float) -> str:
+    """确定性模板：这个月在某话题上查明白了几件事。"""
+
+    recent = [r for r in rows if now - float(r.get("created_at", 0.0)) <= 30 * DAY]
+    if not recent:
+        return ""
+    counts: dict[str, int] = {}
+    for row in recent:
+        counts[row.get("topic", "")] = counts.get(row.get("topic", ""), 0) + 1
+    topic, n = max(counts.items(), key=lambda kv: kv[1])
+    # 只说程度不报数，免得她把件数当成汇报念出来。
+    amount = "好几件事" if n >= 3 else "一两件事"
+    tail   = "，别的方面也零零碎碎查了点" if len(recent) > n else ""
+    return f"这个月在{topic}上查明白了{amount}{tail}"
+
+
 def plan_lines(store: LifeStore, routine_slots: list[str]) -> list[str]:
     """打算：今天剩下的作息时段（≤3）加进行中小课题的下一步。"""
 
     lines  = [f"- {slot}" for slot in routine_slots[:MAX_PLAN_SLOTS]]
     thread = next((t for t in store.threads if t.get("status") == "open"), None)
     if thread is not None:
-        lines.append(f"- 想接着查：{thread.get('next_query') or thread.get('title')}（还没查完）")
+        follow = "（接着上次查明白的事往下问）" if thread.get("parent_id") else "（还没查完）"
+        lines.append(f"- 想接着查：{thread.get('next_query') or thread.get('title')}{follow}")
     return lines
 
 
@@ -321,8 +367,10 @@ def build_life_lines(
     moment: datetime,
     cfg: LifeConfig,
     routine_slots: list[str] | None = None,
+    learnings: list[str] | None     = None,
 ) -> tuple[str, list[str]]:
-    plan = plan_lines(store, routine_slots or []) if wants_plans(req["text"]) else []
+    learn = learnings or []
+    plan  = plan_lines(store, routine_slots or []) if wants_plans(req["text"]) else []
     episodes, asking = select_episodes(store, req, moment, cfg)
     link = bool(_LINK_RE.search(req["text"]))
     lines = [episode_line(e, moment, cfg, link=link) for e in episodes]
@@ -333,6 +381,8 @@ def build_life_lines(
     thread_line = select_thread(store, req, asking, moment.timestamp())
     doing       = current_line(store, moment.timestamp())
     if not (lines or thread_line or doing or plan):
+        if learn:
+            return "\n".join([_LEARN_HEADER, *learn, _GUIDE]), []
         return "", []
     parts = [
         _LIFE_HEADER,
@@ -340,6 +390,7 @@ def build_life_lines(
         *lines,
         *([thread_line] if thread_line else []),
         *([_PLAN_HEADER, *plan] if plan else []),
+        *([_LEARN_HEADER, *learn] if learn else []),
         *([_PART_NOTE] if _named_days(req["text"], moment) or asking else []),
         _GUIDE,
     ]
@@ -399,7 +450,10 @@ def _term_line(entry: dict[str, Any]) -> str:
 
 
 def _cooled(entry: dict[str, Any], now: float, cfg: LifeConfig) -> bool:
-    return now - float(entry.get("last_suggested", 0.0)) >= cfg.suggest_cooldown_hours * 3600.0
+    scale = reinforce.HABIT_COOLDOWN_SCALE if reinforce.is_habit(entry) else 1.0
+    return (
+        now - float(entry.get("last_suggested", 0.0)) >= cfg.suggest_cooldown_hours * 3600.0 * scale
+    )
 
 
 def pick_usable_term(
@@ -418,11 +472,12 @@ def pick_usable_term(
             or now - float(entry.get("last_seen", 0.0)) > USE_FRESH_DAYS * DAY
         ):
             continue
-        if key in spoken or not _cooled(entry, now, cfg):
+        if key in spoken or not _cooled(entry, now, cfg) or reinforce.is_suppressed(entry, now):
             continue
         score = overlap(context, f"{entry.get('meaning', '')} {entry.get('usage', '')}")
-        if score >= _MIN_OVERLAP and (best is None or score > best[0]):
-            best = (score, key, entry)
+        rank  = score + (HABIT_PREFER if reinforce.is_habit(entry) else 0)
+        if score >= _MIN_OVERLAP and (best is None or rank > best[0]):
+            best = (rank, key, entry)
     return (best[1], best[2]) if best else None
 
 
@@ -435,13 +490,18 @@ def pick_expression(
     spoken                                  = normalize_for_match(" ".join(req["bot_recent"]))
     best: tuple[int, dict[str, Any]] | None = None
     for entry in store.expressions:
-        if expression_status(entry, now, cfg) == "fading" or not _cooled(entry, now, cfg):
+        if (
+            expression_status(entry, now, cfg) == "fading"
+            or not _cooled(entry, now, cfg)
+            or reinforce.is_suppressed(entry, now)
+        ):
             continue
         if normalize_for_match(str(entry.get("pattern", ""))) in spoken:
             continue
         score = overlap(context, str(entry.get("situation", "")))
-        if score >= _MIN_OVERLAP and (best is None or score > best[0]):
-            best = (score, entry)
+        rank  = score + (HABIT_PREFER if reinforce.is_habit(entry) else 0)
+        if score >= _MIN_OVERLAP and (best is None or rank > best[0]):
+            best = (rank, entry)
     return best[1] if best else None
 
 
@@ -527,8 +587,16 @@ def turn_context(
             },
             dirty,
         )
-    now = moment.timestamp()
-    life_lines, episode_ids = build_life_lines(store, req, moment, cfg, routine_slots)
+    now   = moment.timestamp()
+    dirty = (
+        reinforce.apply_feedback(
+            store.terms, store.expressions, req["recent"], req["bot_recent"], now
+        )
+        or dirty
+    )
+    learn, learn_dirty = learning_lines(store, req, now)
+    dirty = dirty or learn_dirty
+    life_lines, episode_ids = build_life_lines(store, req, moment, cfg, routine_slots, learn)
     slang, term_keys, used = build_slang_notes(store, req, now, cfg, rng)
     hint  = build_expression_hint(store, req, now, cfg, rng)
     dirty = dirty or used or bool(hint)

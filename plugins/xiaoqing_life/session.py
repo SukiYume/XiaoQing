@@ -16,6 +16,7 @@ from typing import Any
 
 from . import digest as digest_mod
 from . import memes as memes_mod
+from . import reinforce
 from . import threads as thread_ops
 from .config import LifeConfig
 from .lifecycle import (
@@ -23,6 +24,7 @@ from .lifecycle import (
     consolidate,
     interest_weights,
     mark_seen,
+    merge_topic,
     prune_episodes,
     refresh_expressions,
     refresh_interests,
@@ -82,12 +84,20 @@ class SessionOutcome:
     episodes: int = 0
     terms   : int = 0
     details : dict[str, int] = field(default_factory=dict)
+    # 这次实际用到的来源（热榜源名），用来更新来源偏好。
+    source: str = ""
 
 
 # ───────────────────────────── 取材 ─────────────────────────────
 
 
-async def _hot_items(cfg: LifeConfig, fetch: Fetcher, source: str) -> tuple[list[SourceItem], int]:
+async def _hot_items(
+    cfg: LifeConfig,
+    fetch: Fetcher,
+    source: str,
+    outcomes: dict[str, bool] | None = None,
+    unhealthy: frozenset[str]        = frozenset(),
+) -> tuple[list[SourceItem], int]:
     """先取选中的热榜源，失败再依次换其余已开启的；返回条目与失败的来源数。"""
 
     blocked = cfg.blocked_keywords
@@ -98,40 +108,70 @@ async def _hot_items(cfg: LifeConfig, fetch: Fetcher, source: str) -> tuple[list
         "weibo_hot"   : lambda: hotlists.weibo(fetch, blocked),
         "baidu_hot"   : lambda: hotlists.baidu(fetch, blocked),
     }
-    order    = [source, *[s for s in HOT_SOURCE_WEIGHTS if s != source and cfg.source_on(s)]]
+    rest = [s for s in HOT_SOURCE_WEIGHTS if s != source and cfg.source_on(s)]
+    order = [source, *sorted(rest, key=lambda name: name in unhealthy)]  # 近期不稳的排到最后
     failures = 0
     for name in order:
         try:
             items = await readers[name]()
         except SourceError as exc:
             failures += 1
+            if outcomes is not None:
+                outcomes[name] = False
             logger.info("xiaoqing_life step=source name=%s failed reason=%s", name, exc.reason)
             continue
+        if outcomes is not None:
+            outcomes[name] = True
         if items:
             return items, failures
     return [], failures
 
 
 async def _search_items(
-    cfg: LifeConfig, fetch: Fetcher, query: str
+    cfg: LifeConfig, fetch: Fetcher, query: str, outcomes: dict[str, bool] | None = None
 ) -> tuple[list[SourceItem], int]:
     try:
-        return await bilibili.search(fetch, query, cfg.blocked_keywords), 0
+        found = await bilibili.search(fetch, query, cfg.blocked_keywords)
     except SourceError as exc:
+        if outcomes is not None:
+            outcomes["bili_search"] = False
         logger.info("xiaoqing_life step=source name=bili_search failed reason=%s", exc.reason)
         return [], 1
+    if outcomes is not None:
+        outcomes["bili_search"] = True
+    return found, 0
 
 
 async def _gather(
-    cfg: LifeConfig, decision: Decision, fetch: Fetcher
+    cfg: LifeConfig,
+    decision: Decision,
+    fetch: Fetcher,
+    outcomes: dict[str, bool] | None = None,
+    unhealthy: frozenset[str]        = frozenset(),
 ) -> tuple[list[SourceItem], int]:
     if decision.choice == HOT_SCROLL:
-        return await _hot_items(cfg, fetch, str(decision.params.get("source") or "bili_popular"))
-    items, failures = await _search_items(cfg, fetch, str(decision.params.get("query") or ""))
+        return await _hot_items(
+            cfg, fetch, str(decision.params.get("source") or "bili_popular"), outcomes, unhealthy
+        )
+    items, failures = await _search_items(
+        cfg, fetch, str(decision.params.get("query") or ""), outcomes
+    )
     if not items and failures and cfg.source_on("bili_popular"):
-        fallback, more = await _hot_items(cfg, fetch, "bili_popular")
+        fallback, more = await _hot_items(cfg, fetch, "bili_popular", outcomes, unhealthy)
         return fallback, failures + more
     return items, failures
+
+
+NOVELTY_BONUS = 1.5
+
+
+def novelty(item: SourceItem, seen_text: str) -> float:
+    """热榜里的新鲜感：标题 / 标签和最近 3 天的经历话题都不重合就加一点分。"""
+
+    if not seen_text:
+        return 0.0
+    body = f"{item.title} {' '.join(item.tags)}"
+    return NOVELTY_BONUS if overlap(body, seen_text) == 0 else 0.0
 
 
 def prescore(item: SourceItem, topics: list[str]) -> float:
@@ -147,21 +187,29 @@ def prescore(item: SourceItem, topics: list[str]) -> float:
     return 3.0 * min(hits, 3) + math.log10(item.heat + 1)
 
 
-def pick_clicks(cfg: LifeConfig, items: list[SourceItem], topics: list[str]) -> list[int]:
+def pick_clicks(
+    cfg: LifeConfig, items: list[SourceItem], topics: list[str], novel_text: str = ""
+) -> list[int]:
     """≤3 个 B 站条目（取热评），按预打分挑，返回它们在 ``items`` 里的下标（保持原顺序）。"""
 
     candidates = [i for i, item in enumerate(items) if item.source.startswith("bili_")]
-    candidates.sort(key=lambda i: prescore(items[i], topics), reverse=True)
+    candidates.sort(
+        key=lambda i: prescore(items[i], topics) + novelty(items[i], novel_text), reverse=True
+    )
     return sorted(candidates[:COMMENT_ITEMS])
 
 
 async def _open_items(
-    cfg: LifeConfig, fetch: Fetcher, items: list[SourceItem], topics: list[str]
+    cfg: LifeConfig,
+    fetch: Fetcher,
+    items: list[SourceItem],
+    topics: list[str],
+    novel_text: str = "",
 ) -> list[SourceItem]:
     """点开预选的条目：前 ``max_watch_per_session`` 个取详情 / 标签 / 弹幕，再取热评。"""
 
     result = list(items)
-    clicks = pick_clicks(cfg, items, topics)
+    clicks = pick_clicks(cfg, items, topics, novel_text)
     ranked = sorted(clicks, key=lambda i: prescore(items[i], topics), reverse=True)
     watched = set(ranked[: cfg.max_watch_per_session])
     for index in clicks:
@@ -211,6 +259,7 @@ def _episode_rows(
                 "at"          : at,
                 "day"         : day_key(datetime.fromtimestamp(at, tz)),
                 "gist"        : item.text[:60],
+                "tags"        : list(item.tags),
                 "uploader"    : item.uploader,
                 "url"         : item.url,
                 "duration_s"  : item.duration_s,
@@ -328,6 +377,7 @@ def _remember_activity(state: dict[str, Any], decision: Decision, start: float, 
             "choice"   : decision.choice,
             "thread_id": decision.params.get("thread_id", ""),
             "query"    : decision.params.get("query", ""),
+            "explored" : bool(decision.params.get("explored")),
             "at"       : end,
         }
     )
@@ -345,6 +395,29 @@ def _housekeeping(store: LifeStore, cfg: LifeConfig, now: float) -> None:
     prune_episodes(store.episodes, now, cfg, thread_ops.protected_episode_ids(store.threads))
 
 
+def _known_keys(terms: dict[str, dict[str, Any]]) -> set[str]:
+    return {k for k, e in terms.items() if len(e.get("sources", [])) >= 2 or e.get("verified")}
+
+
+def _thread_progress(threads: list[dict[str, Any]]) -> int:
+    """小课题推进（步数增加）或答出（进入回看 / 完成）的数量。"""
+
+    return sum(int(t.get("steps", 0)) for t in threads) + sum(
+        1 for t in threads if t.get("status") in ("reviewing", "done")
+    )
+
+
+def _frontier_words(store: LifeStore, rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """小课题笔记里的关键词（下一次要搜的话），挂在对应的经历上。"""
+
+    words: dict[str, list[str]] = {}
+    for row in rows:
+        thread = thread_ops.get_thread(store.threads, str(row.get("thread_id") or ""))
+        if thread is not None:
+            words[row["id"]] = [w for w in str(thread.get("next_query", "")).split() if len(w) >= 2]
+    return words
+
+
 async def _commit(
     store: LifeStore,
     cfg: LifeConfig,
@@ -355,21 +428,93 @@ async def _commit(
     deps: SessionDeps,
 ) -> SessionOutcome:
     start, end = span
-    moment = deps.now()
-    now    = moment.timestamp()
-    rows   = _episode_rows(result, items, decision, start, end, moment.tzinfo)
+    moment                = deps.now()
+    now                   = moment.timestamp()
+    rows                  = _episode_rows(result, items, decision, start, end, moment.tzinfo)
+    stats: dict[str, int] = {}
 
     def apply(s: LifeStore) -> None:
+        known_before, expr_before = _known_keys(s.terms), len(s.expressions)
+        progress_before = _thread_progress(s.threads)
         s.episodes.extend(rows)
         _learn(s, result, rows, now)
         _apply_thread(s, cfg, decision, result.thread, rows, now)
+        liked = [r for r in rows if r["feeling"] == "like"]
+        reinforce.grow_frontier(
+            s.frontier, s.interests, liked, _frontier_words(s, rows), cfg.blocked_keywords, now
+        )
+        stats.update(
+            liked           = len(liked),
+            disliked        = sum(1 for r in rows if r["feeling"] == "dislike"),
+            new_known       = len(_known_keys(s.terms) - known_before),
+            new_expressions = max(0, len(s.expressions) - expr_before),
+            thread_progress = 1 if _thread_progress(s.threads) > progress_before else 0,
+        )
         mark_seen(s.seen, [item.item_id for item in items], now)
         _housekeeping(s, cfg, now)
         _remember_activity(s.state, decision, start, end)
 
     await store.mutate(apply)
-    return SessionOutcome(
+    outcome = SessionOutcome(
         "ok", "digested", items=len(items), episodes=len(rows), terms=len(result.terms)
+    )
+    outcome.details.update(stats)
+    outcome.source = items[0].source if items else ""
+    return outcome
+
+
+async def _reinforce(
+    store: LifeStore,
+    cfg: LifeConfig,
+    decision: Decision,
+    outcome: SessionOutcome,
+    span: Span,
+    deps: SessionDeps,
+) -> None:
+    """一次成功消化的上网把收获写回偏好、来源偏好、习惯，并在没有喜欢时给话题一点负面证据。"""
+
+    if outcome.status != "ok" or outcome.reason != "digested":
+        return
+    d      = outcome.details
+    reward = reinforce.session_reward(
+        liked           = d.get("liked", 0),
+        disliked        = d.get("disliked", 0),
+        new_known       = d.get("new_known", 0),
+        new_expressions = d.get("new_expressions", 0),
+        thread_progress = d.get("thread_progress", 0),
+        memes           = d.get("memes", 0),
+    )
+    moment = datetime.fromtimestamp(span[0], deps.now().tzinfo)
+    day    = day_key(moment)
+
+    def apply(s: LifeStore) -> None:
+        reinforce.update_preference(s.state, "activity", decision.choice, reward)
+        if decision.choice == HOT_SCROLL and outcome.source in HOT_SOURCE_WEIGHTS:
+            reinforce.update_preference(s.state, "source", outcome.source, reward)
+        reinforce.record_habit(s.state, moment, reward)
+        s.state["last_reward"] = round(reward, 3)
+        query                  = str(decision.params.get("query") or "")
+        if decision.choice == INTEREST and query and d.get("liked", 0) == 0:
+            _penalize_topic(s, query, day, span[0])
+
+    await store.mutate(apply)
+
+
+def _penalize_topic(store: LifeStore, query: str, day: str, now: float) -> None:
+    """一次 interest_dive 一条喜欢的都没有：给所搜话题记一条 −0.5 的证据（同一话题每天最多一次）。"""
+
+    topic                     = merge_topic(store.interests, query)
+    penalties: dict[str, str] = store.state.setdefault("topic_penalty", {})
+    if not topic or penalties.get(topic) == day:
+        return
+    penalties[topic] = day
+    add_interest_evidence(
+        store.interests,
+        topic,
+        episode_id = "",
+        item_id    = f"dive:{day}:{topic}",
+        delta      = reinforce.TOPIC_PENALTY,
+        now        = now,
     )
 
 
@@ -474,9 +619,33 @@ async def _start(
         s.state["last_session_end"] = span[1]
         s.state["current"]          = {**_doing(decision), "start": span[0], "end": span[1]}
         s.state["last_decision"]    = {**decision.record(span[0])}
+        if decision.params.get("frontier"):
+            reinforce.mark_tried(s.frontier, str(decision.params["frontier"]))
 
     await store.mutate(apply)
     return span, day
+
+
+async def _record_sources(store: LifeStore, outcomes: dict[str, bool], now: float) -> None:
+    """本次各来源成败写进来源可靠性（连续失败 ≥2 次就降权 6 小时）。"""
+
+    if not outcomes:
+        return
+
+    def apply(s: LifeStore) -> None:
+        for name, ok in outcomes.items():
+            reinforce.record_source(s.state, name, ok, now)
+
+    await store.mutate(apply)
+
+
+def _recent_text(store: LifeStore, now: float) -> str:
+    cutoff = now - 3 * 86400
+    return " ".join(
+        f"{e.get('title', '')} {' '.join(e.get('topics', []))} {' '.join(e.get('tags', []))}"
+        for e in store.episodes
+        if float(e.get("at", 0.0)) >= cutoff
+    )
 
 
 def _topics(store: LifeStore, cfg: LifeConfig, now: float) -> list[str]:
@@ -486,7 +655,14 @@ def _topics(store: LifeStore, cfg: LifeConfig, now: float) -> list[str]:
 async def _browse(
     store: LifeStore, cfg: LifeConfig, decision: Decision, span: Span, day: str, deps: SessionDeps
 ) -> SessionOutcome:
-    items, failures = await _gather(cfg, decision, deps.fetch)
+    outcomes: dict[str, bool] = {}
+    unhealthy                 = frozenset(
+        k
+        for k in (*HOT_SOURCE_WEIGHTS, "bili_search")
+        if reinforce.health_factor(store.state, k, span[0]) < 1.0
+    )
+    items, failures = await _gather(cfg, decision, deps.fetch, outcomes, unhealthy)
+    await _record_sources(store, outcomes, deps.now().timestamp())
     if deps.on_items is not None:
         deps.on_items(items)
     if not items:
@@ -496,7 +672,13 @@ async def _browse(
     fresh = [i for i in items if i.item_id not in store.seen][: max(1, cap)]
     if not fresh:
         return await _no_news(store, cfg, decision, span, deps)
-    fresh = await _open_items(cfg, deps.fetch, fresh, _topics(store, cfg, span[0]))
+    fresh = await _open_items(
+        cfg,
+        deps.fetch,
+        fresh,
+        _topics(store, cfg, span[0]),
+        novel_text=_recent_text(store, span[0]) if decision.choice == HOT_SCROLL else "",
+    )
     result, reason = await _digest(store, cfg, fresh, deps, day)
     if result is None:
         return await _record_failure(
@@ -504,6 +686,7 @@ async def _browse(
         )
     outcome                  = await _commit(store, cfg, decision, fresh, result, span, deps)
     outcome.details["memes"] = await _collect_memes(store, cfg, fresh, result, day, deps)
+    await _reinforce(store, cfg, decision, outcome, span, deps)
     return outcome
 
 
@@ -588,6 +771,16 @@ async def _lookup_terms(
         _remember_activity(s.state, decision, span[0], span[1])
 
     await store.mutate(apply)
+    moment = datetime.fromtimestamp(span[0], deps.now().tzinfo)
+
+    def reward_apply(s: LifeStore) -> None:
+        reward = reinforce.session_reward(
+            liked=0, disliked=0, new_known=len(found), new_expressions=0, thread_progress=0, memes=0
+        )
+        reinforce.update_preference(s.state, "activity", decision.choice, reward)
+        reinforce.record_habit(s.state, moment, reward)
+
+    await store.mutate(reward_apply)
     return SessionOutcome("ok", "looked_up", terms=len(found))
 
 

@@ -17,11 +17,12 @@ from .config import LifeConfig
 from .digest import extract_json
 from .lifecycle import DAY
 from .safety import clean_text, is_blocked
-from .stores import LifeStore, reserve_llm_call
+from .stores import LifeStore, new_id, reserve_llm_call
 
 logger = logging.getLogger(__name__)
 
 JOURNAL_KEEP_DAYS = 56
+MAX_LEARNINGS     = 100
 MAX_DIARY_CHARS   = 140
 MAX_WEEKLY_CHARS  = 180
 
@@ -33,23 +34,26 @@ _SYSTEM = """{persona}
 {{
   "diary": {{"date": "YYYY-MM-DD", "text": "2到4句你口吻的小结，像随手记的日记", "episode_ids": ["引用的经历id"]}},
   "threads": [{{"id": "小课题id", "action": "done|continue|drop", "takeaway": "done 时写一句收获", "episode_ids": ["收获依据的经历id"]}}],
-  "weekly": {{"text": "2到4句这周的小结", "dates": ["引用的日记日期"], "episode_ids": ["引用的经历id"]}}
+  "weekly": {{"text": "2到4句这周的小结", "dates": ["引用的日记日期"], "episode_ids": ["引用的经历id"]}},
+  "followup": {{"parent_id": "刚刚 done 的小课题 id", "title": "后续问题，20字内", "why": "为什么想接着查", "next_query": "下次搜什么"}}
 }}
 怎么写：
 - 日记只写记录里有的事，每一句都能在经历里找到依据，写清楚是哪天；没有的事不写，细节记不清就不写细节。可以顺带提一句今天兴趣上的变化。
 - threads 里每个小课题都要给 action：status 为 reviewing 的是已经查到结果的，写 done 和一句收获，并引用它笔记里的经历 id；status 为 open 的，还想接着查就 continue，不想查了就 drop。
-- 没有 weekly 要求时，weekly 给 null；有要求时只引用给出的日记日期和经历。"""
+- 没有 weekly 要求时，weekly 给 null；有要求时只引用给出的日记日期和经历；记录里的 learnings 是这周自己查明白的事，周记可以提到。
+- 某个小课题今天 done、并且自然引出了一个还想接着查的新问题，可以用 followup 写下来（一天最多一个）；没有就给 null。"""
 
 
 @dataclass(slots=True)
 class WindDownResult:
-    status : str  = "ok"
-    reason : str  = ""
-    diary  : bool = False
-    weekly : bool = False
-    done   : int  = 0
-    dropped: int  = 0
-    details: dict[str, int] = field(default_factory=dict)
+    status  : str  = "ok"
+    reason  : str  = ""
+    diary   : bool = False
+    weekly  : bool = False
+    done    : int  = 0
+    dropped : int  = 0
+    followup: bool = False
+    details : dict[str, int] = field(default_factory=dict)
 
 
 def _today_episodes(store: LifeStore, day: str, now: float) -> list[dict[str, Any]]:
@@ -116,6 +120,11 @@ def build_messages(
         "weekly_requested": weekly,
     }
     if weekly:
+        record["learnings"] = [
+            {"topic": row.get("topic", ""), "text": row["text"]}
+            for row in store.learnings
+            if now - float(row.get("created_at", 0.0)) <= 7 * DAY
+        ]
         record["diaries"] = [
             {"date": j["day"], "text": j["text"], "episode_ids": j["episode_ids"]}
             for j in recent_diaries(store, now)
@@ -168,7 +177,11 @@ def validate_weekly(
 
 
 def apply_threads(
-    store: LifeStore, rows: Any, now: float, blocked: tuple[str, ...]
+    store: LifeStore,
+    rows: Any,
+    now: float,
+    blocked: tuple[str, ...],
+    finished: list[dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     """reviewing 只有带依据的收获才 done；open 的 continue / drop。返回 (done, dropped)。"""
 
@@ -186,13 +199,80 @@ def apply_threads(
             takeaway = clean_text(row.get("takeaway"), 80)
             ids      = row.get("episode_ids")
             if takeaway and not is_blocked(takeaway, blocked) and isinstance(ids, list):
-                done += thread_ops.finish(
-                    thread, takeaway, [i for i in ids if isinstance(i, str)], now
-                )
+                cited = [i for i in ids if isinstance(i, str)]
+                if thread_ops.finish(thread, takeaway, cited, now):
+                    done += 1
+                    store.learnings.append(_learning(thread, takeaway, cited, now))
+                    if finished is not None:
+                        finished.append(thread)
         elif thread["status"] == "open" and action == "drop":
             thread_ops.drop(thread, now)
             dropped += 1
     return done, dropped
+
+
+def _learning(
+    thread: dict[str, Any], text: str, episode_ids: list[str], now: float
+) -> dict[str, Any]:
+    """小课题在睡前整理里 done：收获变成“自己查明白的事”（引用的经历已由 ``finish`` 核对过）。"""
+
+    known = {n.get("episode_id") for n in thread.get("notes", [])}
+    return {
+        "id"         : new_id("l"),
+        "topic"      : str(thread.get("title", ""))[:20],
+        "text"       : text.strip()[:80],
+        "thread_id"  : thread["id"],
+        "episode_ids": [i for i in episode_ids if i in known],
+        "created_at" : now,
+        "last_used"  : 0.0,
+    }
+
+
+def prune_learnings(learnings: list[dict[str, Any]], cfg: LifeConfig, now: float) -> None:
+    """保留 ``learning_keep_days`` 天、至多 100 条（先丢最旧的）。"""
+
+    learnings[:] = [
+        row
+        for row in learnings
+        if now - float(row.get("created_at", 0.0)) <= cfg.learning_keep_days * DAY
+    ]
+    learnings.sort(key=lambda row: float(row.get("created_at", 0.0)))
+    del learnings[: max(0, len(learnings) - MAX_LEARNINGS)]
+
+
+def apply_followup(
+    store: LifeStore,
+    raw: Any,
+    finished: list[dict[str, Any]],
+    cfg: LifeConfig,
+    day: str,
+    now: float,
+) -> bool:
+    """done 的小课题可以提一个后续问题（全天最多 1 个），开成带 ``parent_id`` / ``depth`` 的新小课题。"""
+
+    if not isinstance(raw, dict) or store.state.get("followup_day") == day:
+        return False
+    parent = next((t for t in finished if t["id"] == raw.get("parent_id")), None)
+    if parent is None:
+        return False
+    depth = int(parent.get("depth", 0)) + 1
+    title = clean_text(raw.get("title"), 20)
+    if depth > thread_ops.MAX_DEPTH or not title or is_blocked(title, cfg.blocked_keywords):
+        return False
+    opened = thread_ops.open_thread(
+        store.threads,
+        cfg,
+        title      = title,
+        why        = clean_text(raw.get("why"), 60),
+        next_query = clean_text(raw.get("next_query"), 30),
+        now        = now,
+        parent_id  = parent["id"],
+        depth      = depth,
+    )
+    if opened is None:
+        return False
+    store.state["followup_day"] = day
+    return True
 
 
 def prune_journal(journal: list[dict[str, Any]], now: float) -> None:
@@ -238,9 +318,12 @@ async def run_wind_down(
     def apply(s: LifeStore) -> None:
         entry = {"kind": "diary", "at": now, **diary}
         s.journal.append(entry)
-        s.state["diary"]          = diary
-        s.state["wound_down_day"] = day
-        result.done, result.dropped = apply_threads(s, raw.get("threads"), now, blocked)
+        s.state["diary"]               = diary
+        s.state["wound_down_day"]      = day
+        finished: list[dict[str, Any]] = []
+        result.done, result.dropped = apply_threads(s, raw.get("threads"), now, blocked, finished)
+        result.followup = apply_followup(s, raw.get("followup"), finished, cfg, day, now)
+        prune_learnings(s.learnings, cfg, now)
         if weekly:
             note = validate_weekly(raw.get("weekly"), recent_diaries(s, now), blocked)
             if note is not None:

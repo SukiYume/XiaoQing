@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from . import reinforce
 from .config import LifeConfig
 from .lifecycle import interest_weights
 from .persona_bridge import Presence
@@ -54,6 +55,8 @@ class Decision:
     scores     : dict[str, float] = field(default_factory=dict)
     params     : dict[str, Any] = field(default_factory=dict)
     probability: float = 1.0
+    # 自我强化因素（偏好、来源可靠性、习惯、探索欲），写进 last_decision 和 /life status。
+    factors: dict[str, Any] = field(default_factory=dict)
 
     def record(self, at: float) -> dict[str, Any]:
         """写进 ``state.last_decision`` 的形式；参数里的查询词不进日志，只进状态。"""
@@ -64,6 +67,7 @@ class Decision:
             "reason"     : self.reason,
             "scores"     : dict(self.scores),
             "probability": round(self.probability, 3),
+            "factors"    : dict(self.factors),
         }
 
 
@@ -149,7 +153,8 @@ def gate(
         return _rest("min_gap")
     if now - float(state.get("last_failure_at", 0.0)) < cfg.failure_backoff_minutes * 60.0:
         return _rest("failure_backoff")
-    if rng.random() >= cfg.session_probability:
+    habit = reinforce.habit_multiplier(state, moment)
+    if rng.random() >= min(1.0, cfg.session_probability * habit):
         return _rest("dice")
     return None
 
@@ -169,12 +174,17 @@ def _weighted_pick(rng: random.Random, weights: dict[str, float]) -> str | None:
     return next(reversed(weights))
 
 
-ANIME_QUERIES        = ("新番", "动画推荐", "番剧", "动漫混剪", "轻小说")
-ANIME_BONUS          = 10.0
-ANIME_TOPIC_SHARE    = 0.7
-MEAL_HOT_BONUS       = 10.0
-MORNING_WINDOW_MIN   = 120
-MORNING_THREAD_BONUS = 6.0
+ANIME_QUERIES             = ("新番", "动画推荐", "番剧", "动漫混剪", "轻小说")
+ANIME_BONUS               = 10.0
+THREAD_PARENT_BONUS       = 4.0
+EXPLORE_BONUS             = 10.0
+EXPLORE_PATIENCE          = 5
+FRONTIER_SHARE            = 0.5
+UNRELIABLE_SEARCH_PENALTY = 15.0
+ANIME_TOPIC_SHARE         = 0.7
+MEAL_HOT_BONUS            = 10.0
+MORNING_WINDOW_MIN        = 120
+MORNING_THREAD_BONUS      = 6.0
 
 
 def _anime_topic(rng: random.Random) -> str:
@@ -185,29 +195,51 @@ def _recent_queries(state: dict[str, Any]) -> list[str]:
     return [str(r.get("query")) for r in state.get("recent", []) if r.get("query")]
 
 
-def choose_topic(
+def choose_topic_ex(
     cfg: LifeConfig,
     state: dict[str, Any],
     interests: dict[str, dict[str, Any]],
     now: float,
     rng: random.Random,
-) -> str:
-    """70% 按兴趣分加权，30% 取探索种子；最近搜过的相似话题降权但不封禁。"""
+    frontier: list[dict[str, Any]] | None = None,
+    force_explore: bool                   = False,
+) -> tuple[str, bool, str]:
+    """返回 (话题, 是否探索, 取自 frontier 的话题)。
+
+    70% 按兴趣分加权，30% 探索；探索时 50% 从好奇边界（喜欢的经历带来的新话题，近期的更可能）抽，
+    50% 从探索种子抽。最近搜过的相似话题降权但不封禁。``force_explore`` 是“探索欲”：最近一直没探索时。
+    """
 
     recent = _recent_queries(state)
 
     def discount(topic: str, weight: float) -> float:
         return weight * _SIMILAR_PENALTY if any(similar(topic, q) for q in recent) else weight
 
-    if rng.random() >= _EXPLORE_SHARE:
+    if not force_explore and rng.random() >= _EXPLORE_SHARE:
         weights = interest_weights(interests, now)
         for seed in cfg.seed_interests:
             weights.setdefault(seed, 1.0)
         picked = _weighted_pick(rng, {k: discount(k, w) for k, w in weights.items()})
         if picked:
-            return picked
+            return picked, False, ""
+    pool = reinforce.frontier_weights(frontier or [], now)
+    if pool and rng.random() < FRONTIER_SHARE:
+        topic = _weighted_pick(rng, {k: discount(k, w) for k, w in pool.items()})
+        if topic:
+            return topic, True, topic
     explore = {q: discount(q, 1.0) for q in EXPLORATION_QUERIES}
-    return _weighted_pick(rng, explore) or EXPLORATION_QUERIES[0]
+    return _weighted_pick(rng, explore) or EXPLORATION_QUERIES[0], True, ""
+
+
+def choose_topic(
+    cfg: LifeConfig,
+    state: dict[str, Any],
+    interests: dict[str, dict[str, Any]],
+    now: float,
+    rng: random.Random,
+    frontier: list[dict[str, Any]] | None = None,
+) -> str:
+    return choose_topic_ex(cfg, state, interests, now, rng, frontier)[0]
 
 
 # ───────────────────────────── 打分 ─────────────────────────────
@@ -218,9 +250,10 @@ def _last_choices(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _thread_score(thread: dict[str, Any], state: dict[str, Any], now: float) -> float:
-    hours   = max(0.0, (now - float(thread.get("updated_at", now))) / 3600.0)
-    repeats = sum(1 for r in _last_choices(state) if r.get("thread_id") == thread.get("id"))
-    return 60.0 + min(12.0, hours) - 12.0 * repeats
+    hours        = max(0.0, (now - float(thread.get("updated_at", now))) / 3600.0)
+    repeats      = sum(1 for r in _last_choices(state) if r.get("thread_id") == thread.get("id"))
+    parent_bonus = THREAD_PARENT_BONUS if thread.get("parent_id") else 0.0
+    return 60.0 + min(12.0, hours) - 12.0 * repeats + parent_bonus
 
 
 def _best_thread(
@@ -238,8 +271,18 @@ def _best_thread(
     return best
 
 
-def _enabled_hot_sources(cfg: LifeConfig) -> dict[str, float]:
-    return {k: w for k, w in HOT_SOURCE_WEIGHTS.items() if cfg.source_on(k)}
+def _enabled_hot_sources(
+    cfg: LifeConfig, state: dict[str, Any] | None = None, now: float = 0.0
+) -> dict[str, float]:
+    """已开启的热榜源及权重；有记录时乘上“最近喜不喜欢”和“最近稳不稳”两个因子。"""
+
+    weights = {k: w for k, w in HOT_SOURCE_WEIGHTS.items() if cfg.source_on(k)}
+    if state is None:
+        return weights
+    return {
+        k: w * reinforce.source_pref_factor(state, k) * reinforce.health_factor(state, k, now)
+        for k, w in weights.items()
+    }
 
 
 def _softmax_pick(
@@ -260,6 +303,58 @@ def _softmax_pick(
     return chosen, weights[chosen] / total
 
 
+def _explore_overdue(state: dict[str, Any]) -> bool:
+    """最近 5 次上网都没有探索过：下一次 interest_dive 进入探索模式（避免越过越窄）。"""
+
+    last = list(state.get("recent", []))[-EXPLORE_PATIENCE:]
+    return len(last) == EXPLORE_PATIENCE and not any(r.get("explored") for r in last)
+
+
+def _interest_params(
+    cfg: LifeConfig,
+    state: dict[str, Any],
+    interests: dict[str, dict[str, Any]],
+    now: float,
+    rng: random.Random,
+    frontier: list[dict[str, Any]] | None,
+    *,
+    anime: bool,
+    overdue: bool,
+) -> dict[str, Any]:
+    if anime and rng.random() < ANIME_TOPIC_SHARE:
+        return {"query": _anime_topic(rng), "explored": False}
+    topic, explored, from_frontier = choose_topic_ex(
+        cfg, state, interests, now, rng, frontier, force_explore=overdue
+    )
+    params: dict[str, Any] = {"query": topic, "explored": explored}
+    if from_frontier:
+        params["frontier"] = from_frontier
+    return params
+
+
+def _apply_reinforcement(
+    scores: dict[str, float], factors: dict[str, Any], state: dict[str, Any], now: float
+) -> None:
+    """活动偏好（EMA）加成；搜索接口近期不稳时，依赖它的活动整体扣分。写入因素供状态页查看。"""
+
+    pref: dict[str, float] = {}
+    for name in scores:
+        adjust = reinforce.pref_adjust(state, "activity", name)
+        if adjust:
+            scores[name] += adjust
+            pref[name] = round(adjust, 2)
+    if pref:
+        factors["pref"] = pref
+    if reinforce.health_factor(state, "bili_search", now) < 1.0:
+        for name in (THREAD, INTEREST):
+            if name in scores:
+                scores[name] -= UNRELIABLE_SEARCH_PENALTY
+        factors["unreliable"] = ["bili_search"]
+    hot_down = [k for k in HOT_SOURCE_WEIGHTS if reinforce.health_factor(state, k, now) < 1.0]
+    if hot_down:
+        factors["unreliable_hot"] = hot_down
+
+
 def choose(
     cfg: LifeConfig,
     state: dict[str, Any],
@@ -267,14 +362,16 @@ def choose(
     interests: dict[str, dict[str, Any]],
     moment: datetime,
     rng: random.Random,
-    presence: Presence | None = None,
+    presence: Presence | None             = None,
+    frontier: list[dict[str, Any]] | None = None,
 ) -> Decision:
     """在候选里按分数做 softmax 抽样；没有候选就是休息。参数只为被选中的活动生成。"""
 
-    now                                             = moment.timestamp()
-    last                                            = _last_choices(state)
-    scores: dict[str, float]                        = {}
-    build : dict[str, Callable[[], dict[str, Any]]] = {}
+    now                                              = moment.timestamp()
+    last                                             = _last_choices(state)
+    scores : dict[str, float]                        = {}
+    build  : dict[str, Callable[[], dict[str, Any]]] = {}
+    factors: dict[str, Any]                          = {}
 
     if (found := _best_thread(cfg, state, threads, now)) and cfg.source_on("bili_search"):
         thread, score = found
@@ -285,7 +382,7 @@ def choose(
             "thread_id": thread["id"],
             "query"    : str(thread.get("next_query") or thread.get("title") or ""),
         }
-    hot = _enabled_hot_sources(cfg)
+    hot = _enabled_hot_sources(cfg, state, now)
     if hot:
         repeated = len(last) == _RECENT_WINDOW and all(r.get("choice") == HOT_SCROLL for r in last)
         meal = _affinity_hit(cfg, presence, "meal")
@@ -308,11 +405,13 @@ def choose(
             + (20.0 if grind else 0.0)
             + (ANIME_BONUS if anime else 0.0)
         )
-        build[INTEREST] = lambda: {
-            "query": _anime_topic(rng)
-            if anime and rng.random() < ANIME_TOPIC_SHARE
-            else choose_topic(cfg, state, interests, now, rng)
-        }
+        overdue = _explore_overdue(state)
+        scores[INTEREST] += EXPLORE_BONUS if overdue else 0.0
+        if overdue:
+            factors["explore"] = EXPLORE_BONUS
+        build[INTEREST] = lambda: _interest_params(
+            cfg, state, interests, now, rng, frontier, anime=anime, overdue=overdue
+        )
     queue = list(state.get("lookup_queue", []))
     if queue and cfg.source_on("baike_lookup"):
         scores[TERM_LOOKUP] = 30.0 + min(15.0, 5.0 * len(queue))
@@ -320,8 +419,12 @@ def choose(
 
     if not scores:
         return _rest("no_candidate")
+    _apply_reinforcement(scores, factors, state, now)
+    habit = reinforce.habit_multiplier(state, moment)
+    if habit != 1.0:
+        factors["habit"] = round(habit, 3)
     chosen, probability = _softmax_pick(scores, cfg.choice_temperature, rng)
-    return Decision(chosen, "sampled", scores, build[chosen](), probability)
+    return Decision(chosen, "sampled", scores, build[chosen](), probability, factors)
 
 
 def decide(
@@ -334,10 +437,11 @@ def decide(
     presence: Presence,
     rng: random.Random,
     *,
-    running: bool = False,
-    manual: bool  = False,
+    running: bool                         = False,
+    manual: bool                          = False,
+    frontier: list[dict[str, Any]] | None = None,
 ) -> Decision:
     blocked = gate(cfg, state, episodes, moment, presence, rng, running=running, manual=manual)
     if blocked is not None:
         return blocked
-    return choose(cfg, state, threads, interests, moment, rng, presence)
+    return choose(cfg, state, threads, interests, moment, rng, presence, frontier)

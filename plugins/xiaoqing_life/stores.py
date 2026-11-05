@@ -30,6 +30,8 @@ _COLLECTIONS: dict[str, Callable[[], Any]] = {
     "snapshots"  : list,
     "journal"    : list,
     "memes"      : dict,
+    "frontier"   : list,
+    "learnings"  : list,
 }
 
 MAX_TERMS        = 500
@@ -57,6 +59,11 @@ def default_state() -> dict[str, Any]:
         "lookup_queue"    : [],
         "recent"          : [],
         "current"         : {},
+        "preferences"     : {},
+        "source_health"   : {},
+        "habits"          : {},
+        "topic_penalty"   : {},
+        "followup_day"    : "",
         "last_session_end": 0.0,
         "diary"           : {},
     }
@@ -101,6 +108,8 @@ class LifeStore:
         self.snapshots: list[dict[str, Any]]      = []
         self.journal: list[dict[str, Any]]        = []
         self.memes: dict[str, dict[str, Any]]     = {}
+        self.frontier: list[dict[str, Any]]       = []
+        self.learnings: list[dict[str, Any]]      = []
 
     def load(self) -> None:
         """同步读取全部文件；插件初始化时调用一次。"""

@@ -194,7 +194,7 @@ def add_interest_evidence(
     *,
     episode_id: str,
     item_id: str,
-    delta: int,
+    delta: float,
     now: float,
 ) -> bool:
     """喜欢 +1、不喜欢 -1；同一 item_id 只计一次。返回是否真的新增了证据。"""
@@ -284,10 +284,11 @@ SNAPSHOT_TIERS = (2, 4, 8)
 
 
 def _snapshot_text(topic: str, stage: str, total: int, liked: int) -> str:
-    mood = "喜欢的居多" if liked * 2 > total else "没那么喜欢"
+    # 次数留在快照字段里给 /life 和测试看；交给她的文字只说程度，免得被当成报数念出来。
+    mood = "大多挺喜欢" if liked * 2 > total else "看是看了，没那么喜欢"
     if stage == "consistent":
-        return f"这阵子一直常看{topic}相关的内容（{total}次，{mood}）"
-    return f"这两周常看{topic}相关的内容（{total}次，{mood}）"
+        return f"这阵子一直常刷到{topic}相关的内容，{mood}"
+    return f"这两周常刷到{topic}相关的内容，{mood}"
 
 
 def consolidate(
