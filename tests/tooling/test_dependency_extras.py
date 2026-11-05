@@ -48,6 +48,7 @@ _OPTIONAL_PLUGIN_DEPENDENCIES = {
     "jupyter"      : {"ipykernel", "jupyter_client"},
     "qingssh"      : {"paramiko"},
     "xiaoai"       : {"miservice", "qrcode"},
+    "xiaoqing_life": {"PIL"},
     "xiaoqing_chat": {"PIL"},
 }
 

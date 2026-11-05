@@ -27,6 +27,9 @@ _COLLECTIONS: dict[str, Callable[[], Any]] = {
     "threads"    : list,
     "seen"       : dict,
     "state"      : dict,
+    "snapshots"  : list,
+    "journal"    : list,
+    "memes"      : dict,
 }
 
 MAX_TERMS        = 500
@@ -43,17 +46,19 @@ def new_id(prefix: str = "") -> str:
 
 def default_state() -> dict[str, Any]:
     return {
-        "day"            : "",
-        "sessions_today" : 0,
-        "llm_calls_today": 0,
-        "activity_log"   : [],
-        "last_session_at": 0.0,
-        "last_failure_at": 0.0,
-        "last_decision"  : {},
-        "wound_down_day" : "",
-        "lookup_queue"   : [],
-        "recent"         : [],
-        "diary"          : {},
+        "day"             : "",
+        "sessions_today"  : 0,
+        "llm_calls_today" : 0,
+        "activity_log"    : [],
+        "last_session_at" : 0.0,
+        "last_failure_at" : 0.0,
+        "last_decision"   : {},
+        "wound_down_day"  : "",
+        "lookup_queue"    : [],
+        "recent"          : [],
+        "current"         : {},
+        "last_session_end": 0.0,
+        "diary"           : {},
     }
 
 
@@ -93,6 +98,9 @@ class LifeStore:
         self.threads: list[dict[str, Any]]        = []
         self.seen: dict[str, float]               = {}
         self.state: dict[str, Any]                = default_state()
+        self.snapshots: list[dict[str, Any]]      = []
+        self.journal: list[dict[str, Any]]        = []
+        self.memes: dict[str, dict[str, Any]]     = {}
 
     def load(self) -> None:
         """同步读取全部文件；插件初始化时调用一次。"""

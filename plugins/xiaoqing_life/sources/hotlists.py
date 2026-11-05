@@ -109,7 +109,7 @@ async def baidu(fetch: Fetcher, blocked: Iterable[str], limit: int = 20) -> list
         "baidu_hot",
         await fetch.get_json(
             "https://top.baidu.com/api/board",
-            params  = {"platform": "wise", "tab": "realtime"},
+            params  = {"platform": "pc", "tab": "realtime"},
             referer = "https://top.baidu.com/board?tab=realtime",
         ),
         key="",

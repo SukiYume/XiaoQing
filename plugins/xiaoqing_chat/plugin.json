@@ -191,6 +191,13 @@
       "description": "每天早上按人设与作息安排角色今天的生活小事；life.enable_daily_life 关闭时不做事"
     },
     {
+      "id": "xiaoqing_chat.life_memes",
+      "handler": "scheduled_life_memes",
+      "delivery": "silent",
+      "cron": {"minute": "7,37"},
+      "description": "把 xiaoqing_life 收集的梗图同步进表情库；life.enable_life_memes 关闭或插件不在时不做事"
+    },
+    {
       "id": "xiaoqing_chat.proactive",
       "handler": "scheduled_proactive",
       "delivery": "targeted",

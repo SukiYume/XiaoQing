@@ -126,15 +126,40 @@ async def test_disabled_or_asleep_ticks_start_nothing_and_write_no_records(
 
 
 @pytest.mark.asyncio
-async def test_wind_down_window_records_the_decision_but_browses_nothing(
+async def test_wind_down_window_runs_the_tidy_up_as_a_tracked_task_and_browses_nothing(
     tmp_path: Path, patched
 ) -> None:
-    context, runtime = _context(tmp_path, FakeAI(DIGEST))
-    runtime.store.episodes.append({"id": "e1", "day": "2026-11-05", "at": MOMENT.timestamp()})
+    diary = {"diary": {"date": "2026-11-05", "text": "今天刷了猫猫视频。", "episode_ids": ["e1"]}}
+    context, runtime = _context(tmp_path, FakeAI(diary))
+    runtime.store.episodes.append(
+        {
+            "id"      : "e1",
+            "day"     : "2026-11-05",
+            "at"      : MOMENT.timestamp() - 600,
+            "title"   : "猫猫的一天",
+            "reaction": "好可爱",
+            "feeling" : "like",
+            "gist"    : "",
+        }
+    )
     patched["presence"] = Presence("free", "", 20)
     await life_main.scheduled_tick(context)
-    assert runtime.task is None and runtime.store.state["last_decision"]["choice"] == "wind_down"
-    assert runtime.store.state["sessions_today"] == 0
+    assert runtime.task is not None
+    await asyncio.wait_for(runtime.task, timeout=2)
+    state = runtime.store.state
+    assert state["wound_down_day"] == "2026-11-05" and state["diary"]["episode_ids"] == ["e1"]
+    assert state["sessions_today"] == 0 and state["llm_calls_today"] == 1
+    # 已整理过：窗口内再检查只是休息
+    await life_main.scheduled_tick(context)
+    assert runtime.store.state["last_decision"]["reason"] == "winding_down"
+
+
+@pytest.mark.asyncio
+async def test_disabled_tick_does_not_touch_any_state(tmp_path: Path, patched) -> None:
+    context, runtime = _context(tmp_path, FakeAI(DIGEST), enabled=False)
+    before = (dict(runtime.store.state), dict(runtime.store.interests))
+    await life_main.scheduled_tick(context)
+    assert (runtime.store.state, runtime.store.interests) == before
 
 
 @pytest.mark.asyncio

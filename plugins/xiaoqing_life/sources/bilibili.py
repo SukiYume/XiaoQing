@@ -28,6 +28,13 @@ REFERER     = "https://www.bilibili.com/"
 RANKING_CAP = 30
 
 
+def bvid_of(item: SourceItem) -> str:
+    """条目链接末段（BV 号）；不是 BV 号时为空。"""
+
+    tail = item.url.rsplit("/", 1)[-1]
+    return tail if tail.startswith("BV") else ""
+
+
 def aid_of(item: SourceItem) -> str:
     """条目 ID 的原生部分（视频 aid），用于取评论。"""
 
@@ -43,6 +50,8 @@ def _video_item(source: str, raw: dict[str, Any], blocked: Iterable[str]) -> Sou
     tags += list(str(raw.get("tag") or "").split(",")[:3])
     return build_item(
         source    = source,
+        id_prefix = "bili",
+        uploader  = as_dict(raw.get("owner")).get("name") or raw.get("author"),
         native_id = str(aid),
         title     = raw.get("title"),
         text      = raw.get("desc") or raw.get("description"),

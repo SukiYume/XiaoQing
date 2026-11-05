@@ -15,12 +15,15 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from core.bounded_http import (
+    XML_MIME_POLICY,
     BodyLimits,
     BoundedHttpError,
     JsonLimits,
     MimePolicy,
+    XmlLimits,
     aiohttp_request_bounded,
     parse_bounded_json,
+    validate_bounded_xml,
 )
 
 from ..safety import clean_text, is_blocked
@@ -46,6 +49,7 @@ _JSON_LIMITS = JsonLimits(
     max_nodes        = 200_000,
     max_string_chars = 2 * 1024 * 1024,
 )
+_XML_LIMITS = XmlLimits(max_bytes=8 * 1024 * 1024, max_nodes=200_000)
 # 少数站点会把 JSON 标成 text/*；解析本身仍然严格。
 _MIME_POLICY = MimePolicy(
     exact               = frozenset({"application/json", "text/json", "text/plain", "text/html"}),
@@ -80,15 +84,27 @@ class SourceComment:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceDanmaku:
+    ref  : str
+    text : str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceItem:
-    item_id : str
-    source  : str
-    title   : str
-    text    : str
-    url     : str
-    heat    : int
-    tags    : tuple[str, ...]
-    comments: tuple[SourceComment, ...] = ()
+    item_id   : str
+    source    : str
+    title     : str
+    text      : str
+    url       : str
+    heat      : int
+    tags      : tuple[str, ...]
+    comments  : tuple[SourceComment, ...] = ()
+    uploader  : str                       = ""
+    duration_s: int                       = 0
+    # 弹幕最密的时间点描述（"第 3 分钟弹幕最密"）与高频弹幕；只有被她“点开”的视频才有。
+    dense_moment: str                       = ""
+    danmaku     : tuple[SourceDanmaku, ...] = ()
 
 
 class Fetcher(Protocol):
@@ -97,6 +113,10 @@ class Fetcher(Protocol):
     async def get_json(
         self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
     ) -> Any: ...
+
+    async def get_xml(
+        self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
+    ) -> bytes: ...
 
 
 class BoundedFetcher:
@@ -128,6 +148,36 @@ class BoundedFetcher:
                 },
             )
             return parse_bounded_json(response, limits=_JSON_LIMITS)
+        except BoundedHttpError as exc:
+            raise SourceError(host, type(exc).__name__) from None
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise SourceError(host, type(exc).__name__) from None
+
+    async def get_xml(
+        self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
+    ) -> bytes:
+        """有界 XML：拒绝 DTD / 实体，解压（含裸 deflate）与节点数都有上限。"""
+
+        host = (urlsplit(url).hostname or "").lower()
+        if host not in ALLOWED_HOSTS:
+            raise SourceError("http", "host_not_allowed")
+        headers = {"User-Agent": USER_AGENT, "Accept": "text/xml, application/xml, */*"}
+        if referer:
+            headers["Referer"] = referer
+        try:
+            response = await aiohttp_request_bounded(
+                self._session,
+                "GET",
+                url,
+                limits         = _BODY_LIMITS,
+                mime_policy    = XML_MIME_POLICY,
+                headers        = headers,
+                request_kwargs = {
+                    "params" : dict(params or {}),
+                    "timeout": aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS),
+                },
+            )
+            return validate_bounded_xml(response, limits=_XML_LIMITS)
         except BoundedHttpError as exc:
             raise SourceError(host, type(exc).__name__) from None
         except (aiohttp.ClientError, TimeoutError) as exc:
@@ -179,6 +229,8 @@ def build_item(
     tags: Iterable[Any],
     blocked: Iterable[str],
     comments: tuple[SourceComment, ...] = (),
+    id_prefix: str                      = "",
+    uploader: Any                       = "",
 ) -> SourceItem | None:
     """清洗并过滤成统一条目；标题为空、native_id 为空或命中屏蔽词时丢弃整条。"""
 
@@ -192,7 +244,7 @@ def build_item(
     if is_blocked(haystack, blocked):
         return None
     return SourceItem(
-        item_id  = f"{source}:{identifier}",
+        item_id  = f"{id_prefix or source}:{identifier}",
         source   = source,
         title    = clean_title,
         text     = clean_body,
@@ -200,4 +252,5 @@ def build_item(
         heat     = heat,
         tags     = clean_tags,
         comments = comments,
+        uploader = clean_text(uploader, 20),
     )

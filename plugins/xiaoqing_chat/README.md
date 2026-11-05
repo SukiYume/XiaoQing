@@ -278,7 +278,7 @@ python main.py
 
 **自己的一天**：每天 05:30（或当天第一条消息时）用 `reasoning` 路由按人设和〔作息〕安排 3～5 件生活小事：课上的插曲、吃了什么、社团和宿舍里的事。回复时只交出已经过了时间点的那几件，她不会提前知道下午发生什么；同一天各会话看到的是同一份。对方问到昨天、前几天、上周时，再交出那几天的小事和她当时说过的近况。小事不涉及真实群友、不带承诺，回复审查把它们当作人物资料。生成失败时半小时内不再重试。
 
-**网上生活**：装了 `xiaoqing_life` 并在它那边打开 `enabled` 后，小青会在作息空闲时自己上网（B 站、知乎、微博、百科），留下带来源的经历、学到的流行语和表达方式。每轮回复前聊天只向它要一次和当前话题相关的一两点：被问“最近刷到啥好玩的”时能拿真实经历接话，群友用了她学过的梗时她听得懂，对得上时偶尔顺嘴用一个。这些内容进入人物事实、用语参考和表达提示，回复审查也把经历当作她自己的事实；请求有 `life.online_life_timeout_seconds` 的时限，超时、报错、能力缺失或 `life.enable_online_life` 关闭时，提示词与没装时逐字一致。梗图导入表情库和主动分享网上见闻对应 `enable_life_memes`、`enable_life_share`，随后接入。详见 [xiaoqing_life](../xiaoqing_life/README.md)。
+**网上生活**：装了 `xiaoqing_life` 并在它那边打开 `enabled` 后，小青会在作息空闲时自己上网（B 站、知乎、微博、百科），留下带来源的经历、学到的流行语和表达方式。每轮回复前聊天只向它要一次和当前话题相关的一两点：被问“最近刷到啥好玩的”时能拿真实经历接话，群友用了她学过的梗时她听得懂，对得上时偶尔顺嘴用一个。这些内容进入人物事实、用语参考和表达提示，回复审查也把经历当作她自己的事实；请求有 `life.online_life_timeout_seconds` 的时限，超时、报错、能力缺失或 `life.enable_online_life` 关闭时，提示词与没装时逐字一致。`enable_life_memes` 打开时，每小时第 7、37 分钟把 xiaoqing_life 收集并通过安全判定的梗图导入表情库（全局可见、按内容去重、来源标为 `life:<sha256>`，被关掉的会删除），回复时照常用 `[想发表情:…]` 发出；`enable_life_share`（主动分享网上见闻）随后接入。详见 [xiaoqing_life](../xiaoqing_life/README.md)。
 
 **心境**：〔心境〕是角色本人的，全局一份，同一时刻她在各个群和私聊里是同一种心情。作息是睡觉时换成犯困的心境，上课等忙碌时段偏向安静的心境；所有会话都超过 `state_force_refresh_after_idle_seconds` 没有消息时重新挑。
 
@@ -491,7 +491,8 @@ python main.py
 | `life.open_loop_max_per_chat` | `60` | 每个会话最多保存的话头 |
 | `life.enable_online_life` | `true` | 每轮向 `xiaoqing_life` 取网上经历、用语和表达（插件不在或关闭时无影响） |
 | `life.online_life_timeout_seconds` | `0.8` | 取用的时限，超时按没有处理 |
-| `life.enable_life_memes` / `enable_life_share` | `true` / `true` | 梗图导入表情库 / 主动分享网上见闻（随后接入） |
+| `life.enable_life_memes` | `true` | 定时把 xiaoqing_life 的梗图导入表情库（插件不在或关闭时不做事） |
+| `life.enable_life_share` | `true` | 主动分享网上见闻（随后接入） |
 
 ### 主动开口
 

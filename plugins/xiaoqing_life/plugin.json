@@ -110,7 +110,7 @@
           "aliases": [
             "梗图"
           ],
-          "help": "梗图列表（梗图收集尚未接入）",
+          "help": "梗图列表（短 ID、名字、状态）",
           "usage": "/life memes",
           "examples": [
             "/life memes"
@@ -155,7 +155,7 @@
         {
           "name": "meme",
           "aliases": [],
-          "help": "开关一张梗图（梗图收集尚未接入）",
+          "help": "开关一张梗图：off 后聊天侧表情库会删掉它，on 后重新导出",
           "usage": "/life meme on|off <短ID>",
           "examples": [
             "/life meme off ab12cd"
@@ -201,6 +201,11 @@
       "name": "aiohttp",
       "required": true,
       "description": "取材 HTTP 在入口导入链中直接使用 aiohttp"
+    },
+    {
+      "name": "PIL",
+      "required": false,
+      "description": "梗图下载后的格式与像素校验；缺失时不收梗图，其余功能照常"
     }
   ]
 }

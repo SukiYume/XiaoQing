@@ -36,6 +36,7 @@ from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
     observe_outgoing_action,
 )
 from .life.daily_life import ensure_today
+from .life.online import sync_life_memes
 from .life.proactive import run_proactive
 from .runtime_state import get_state as _state
 from .store_binding import bound_state
@@ -243,6 +244,18 @@ async def scheduled_daily_life(context) -> None:
         )
     except Exception as exc:
         public_error_message(context, exc, logger=logger, component="xiaoqing_chat.daily_life")
+
+
+async def scheduled_life_memes(context) -> None:
+    """把 xiaoqing_life 收集的梗图同步进表情库；开关关闭或能力缺失时什么也不做。"""
+
+    try:
+        runtime = load_runtime(context)
+        if not runtime.cfg.life.enable_life_memes:
+            return
+        await sync_life_memes(context, runtime)
+    except Exception as exc:
+        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.life_memes")
 
 
 async def scheduled_proactive(context) -> list[Any]:

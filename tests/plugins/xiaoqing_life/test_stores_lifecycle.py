@@ -180,7 +180,7 @@ def test_seed_interests_start_at_one_without_evidence_and_scores_decay_by_half_l
     entry = interests["天文观测"]
     assert entry["evidence"] == [] and entry["stage"] == "none"
     assert lc.interest_score(entry, NOW) == pytest.approx(1.0)
-    assert lc.interest_score(entry, NOW + 30 * DAY) == pytest.approx(0.5)
+    assert lc.interest_score(entry, NOW + 300 * DAY) == pytest.approx(1.0)  # 种子底分不衰减
     lc.add_interest_evidence(interests, "猫", episode_id="e", item_id="i", delta=1, now=NOW)
     assert lc.interest_score(interests["猫"], NOW + 30 * DAY) == pytest.approx(0.5)
     weights = lc.interest_weights(interests, NOW)

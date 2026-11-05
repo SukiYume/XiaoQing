@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ def _episode(n: int, title: str, ago: float, **kw: Any) -> dict[str, Any]:
     return {
         "id"       : f"e{n}",
         "at"       : NOW - ago,
-        "day"      : "2026-11-05",
+        "day"      : datetime.fromtimestamp(NOW - ago, MOMENT.tzinfo).strftime("%Y-%m-%d"),
         "activity" : "hot_scroll",
         "source"   : "bili_popular",
         "item_id"  : f"bili_popular:{n}",
@@ -195,7 +196,7 @@ def test_understood_terms_come_from_the_message_or_recent_turns_and_include_fadi
 
 def test_usable_term_needs_known_fresh_relevant_unspoken_and_cooled(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    _term(store, "哈基米", "对猫咪的爱称", usage="看到猫图时感叹")
+    _term(store, "哈基米", "对猫咪的爱称", usage="看到猫图拍得好可爱时感叹")
     ask = "你家猫图拍得好可爱，是什么猫"
     response, dirty = _call(store, ask, rng=0.0)
     assert "可以顺手用的：「哈基米」" in response["slang_notes"] and dirty

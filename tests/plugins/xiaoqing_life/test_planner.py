@@ -22,16 +22,19 @@ class Always(random.Random):
     def __init__(self, value: float = 0.0) -> None:
         super().__init__(1)
         self._value = value
+        self._calls = 0
 
     def random(self) -> float:
-        return self._value
+        # 第一次是概率门（受 value 控制），之后是抽样：取中位数，分数占优的活动必被选中。
+        self._calls += 1
+        return self._value if self._calls == 1 else 0.5
 
 
 def _decide(
     cfg=None, *, state=None, episodes=(), threads=(), interests=None, presence=FREE, rng=None, **kw
 ):
     return planner.decide(
-        cfg or make_cfg(),
+        cfg or make_cfg(choice_temperature=0.5),
         state if state is not None else default_state(),
         list(episodes),
         list(threads),
@@ -118,7 +121,7 @@ def test_thread_continue_wins_and_scores_are_recorded() -> None:
     assert decision.scores[planner.THREAD] == pytest.approx(65.0)
     assert decision.params == {"thread_id": "t1", "query": "猎户座 拍摄"}
     record = decision.record(NOW)
-    assert record["choice"] == planner.THREAD and record["reason"] == "best_score"
+    assert record["choice"] == planner.THREAD and record["reason"] == "sampled"
 
 
 def test_thread_penalties_cooldown_and_step_limit() -> None:
@@ -161,13 +164,27 @@ def test_term_lookup_scores_by_queue_length_and_needs_baike() -> None:
 
 
 def test_no_candidates_means_rest_without_records() -> None:
-    off = dict.fromkeys(("bili_popular", "bili_ranking", "bili_search", "zhihu_hot", "weibo_hot", "baidu_hot", "baike_lookup"), False)
+    off = dict.fromkeys(
+        (
+            "bili_popular",
+            "bili_ranking",
+            "bili_search",
+            "zhihu_hot",
+            "weibo_hot",
+            "baidu_hot",
+            "baike_lookup",
+        ),
+        False,
+    )
     decision = _decide(make_cfg(sources=off))
     assert decision.choice == planner.REST and decision.reason == "no_candidate"
 
 
 def test_hot_source_is_drawn_from_enabled_ones_by_weight() -> None:
-    cfg = make_cfg(sources={"bili_popular": False, "zhihu_hot": False, "bili_ranking": False})
+    cfg = make_cfg(
+        choice_temperature = 0.5,
+        sources            = {"bili_popular": False, "zhihu_hot": False, "bili_ranking": False},
+    )
     sources = {
         planner.choose(cfg, default_state(), [], {}, MOMENT, random.Random(n)).params.get("source")
         for n in range(40)
