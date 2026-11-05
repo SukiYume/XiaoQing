@@ -98,7 +98,7 @@ def test_asking_about_recent_life_gives_up_to_three_recent_episodes_share_first(
     store.state["diary"] = {"day": "2026-11-05", "text": "今天刷了不少猫", "episode_ids": ["e1"]}
     response, _ = _call(store, "最近刷到啥好玩的了吗")
     lines = response["life_lines"]
-    assert lines.startswith("你最近上网看到的") and "细节记不清就说记不清" in lines
+    assert lines.startswith("你最近上网看到的") and "记录外的细节就是记不清" in lines
     assert lines.count("「") == 3 and "三天前的视频" not in lines
     assert lines.index("新显卡评测") < lines.index("猫猫的一天")  # share 优先
     assert "今天 12:00 刷B站热门，点开了「猫猫的一天」" in lines
@@ -188,7 +188,7 @@ def test_understood_terms_come_from_the_message_or_recent_turns_and_include_fadi
     _term(store, "没出现", "不相关")
     response, _ = _call(store, "你看这个哈基米", recent=["刚才有人提到南北绿豆"])
     notes = response["slang_notes"]
-    assert notes.startswith("你在网上学到的说法") and "不解释梗" in notes
+    assert notes.startswith("你在网上学到的说法") and "对得上时也可以自己用" in notes
     assert "「哈基米」：对猫咪的爱称，看到猫时感叹" in notes and "「南北绿豆」" in notes
     assert "没出现" not in notes and "可以顺手用的" not in notes  # 掷骰没中不推荐
     assert set(response["term_keys"]) == {"哈基米", "南北绿豆"}

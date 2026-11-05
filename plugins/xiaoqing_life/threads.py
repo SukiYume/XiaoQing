@@ -12,6 +12,7 @@ from .planner import THREAD_COOLDOWN_SECONDS, similar
 from .stores import new_id
 
 DONE_KEEP_SECONDS = 30 * 86400
+MAX_DEPTH         = 3
 MAX_NOTES         = 8
 ACTIVE            = ("open", "reviewing")
 
@@ -38,8 +39,10 @@ def open_thread(
     why: str,
     next_query: str,
     now: float,
+    parent_id: str = "",
+    depth: int     = 0,
 ) -> dict[str, Any] | None:
-    """名额已满或已有相近的小课题时不新开。"""
+    """名额已满或已有相近的小课题时不新开；后续问题带 ``parent_id`` 和 ``depth``（最多 3 层）。"""
 
     title = title.strip()[:20]
     if not title or len(active_threads(threads)) >= cfg.max_open_threads:
@@ -59,6 +62,8 @@ def open_thread(
         "takeaway"      : "",
         "created_at"    : now,
         "updated_at"    : now,
+        "parent_id"     : parent_id,
+        "depth"         : depth,
     }
     threads.append(thread)
     return thread

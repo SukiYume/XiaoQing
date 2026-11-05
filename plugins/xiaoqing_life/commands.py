@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from . import reinforce
 from .config import LifeConfig
 from .lifecycle import DAY, term_key
 from .persona_bridge import Presence
@@ -63,12 +64,45 @@ def status_text(store: LifeStore, cfg: LifeConfig, presence: Presence, moment: d
             f"{_CHOICES.get(decision.get('choice', ''), decision.get('choice', ''))}，"
             f"理由 {decision.get('reason', '')}{outcome}" + (f"（{scores}）" if scores else "")
         )
+    lines += _reinforcement_lines(store, now)
     open_threads = sum(1 for t in store.threads if t.get("status") in ("open", "reviewing"))
     lines.append(
         f"经历 {len(store.episodes)} 条，词条 {len(store.terms)} 个，表达 {len(store.expressions)} 条，"
         f"兴趣 {len(store.interests)} 个，进行中小课题 {open_threads} 个，待查词 {len(state.get('lookup_queue', []))} 个"
     )
     return "\n".join(lines)
+
+
+def _reinforcement_lines(store: LifeStore, now: float) -> list[str]:
+    """自我强化的可见部分：最近的偏好、不稳的来源、习惯、好奇边界与自己查明白的事。"""
+
+    state            = store.state
+    lines: list[str] = []
+    prefs            = state.get("preferences", {})
+    if prefs.get("activity"):
+        shown = "，".join(
+            f"{_CHOICES.get(k, k)} {reinforce.pref_adjust(state, 'activity', k):+.1f}"
+            for k in prefs["activity"]
+        )
+        lines.append(f"最近的偏好（打分加成）：{shown}")
+    if prefs.get("source"):
+        shown = "，".join(
+            f"{k} ×{reinforce.source_pref_factor(state, k):.2f}" for k in prefs["source"]
+        )
+        lines.append(f"热榜来源偏好：{shown}")
+    down = [
+        k for k in state.get("source_health", {}) if reinforce.health_factor(state, k, now) < 1.0
+    ]
+    if down:
+        lines.append(f"近期不稳的来源（权重 ×0.2，6 小时内恢复）：{'、'.join(down)}")
+    if habit := reinforce.habit_text(state):
+        lines.append(f"习惯：{habit}")
+    untried = sum(1 for f in store.frontier if not f.get("tried"))
+    lines.append(f"好奇边界 {untried} 个待试，自己查明白的事 {len(store.learnings)} 件")
+    factors = (state.get("last_decision") or {}).get("factors")
+    if factors:
+        lines.append(f"上次决策的自我强化因素：{factors}")
+    return lines
 
 
 def recent_text(store: LifeStore, moment: datetime) -> str:

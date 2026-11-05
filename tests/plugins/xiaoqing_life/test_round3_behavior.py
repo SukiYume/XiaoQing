@@ -479,9 +479,9 @@ def test_plan_questions_get_the_rest_of_todays_routine_and_the_threads_next_step
     )
     for text in ("等会干嘛", "今晚有什么安排", "明天打算干啥", "你下午有啥打算"):
         lines = _call(store, text, ["20:00 社团活动", "22:30 打游戏"])["life_lines"]
-        assert "对方在问你接下来的安排，就按这些说（只是打算，还没做" in lines
+        assert "接下来的安排（只是打算，还没发生）：" in lines
         assert "- 20:00 社团活动" in lines and "- 想接着查：猎户座 拍摄 曝光（还没查完）" in lines
-        assert "说话分寸" in lines
+        assert "这些是依据，不是要讲的清单" in lines
     assert _call(store, "今天吃什么") is None  # 没问打算就不给
     four = _call(store, "等会干嘛", ["a", "b", "c", "d"])["life_lines"]
     assert four.count("\n- ") == 4  # 3 个时段 + 小课题
@@ -557,7 +557,7 @@ def test_recent_week_like_and_link_intents_keep_the_guidance_line(tmp_path: Path
     link = _call(store, "刚说的视频叫啥，链接发我")["life_lines"]
     assert "（UP主 up主）" in link and "（链接 https://www.bilibili.com/video/BV1）" in link
     for lines in (today, week, like, link):
-        assert "别念时间点和编号" in lines and "兴趣有没有变，要前后两段时间都有证据才说" in lines
+        assert "打算和做完分开说；兴趣变了要前后都有记录才算" in lines
     assert "bilibili.com" not in today
     _ = timedelta
 

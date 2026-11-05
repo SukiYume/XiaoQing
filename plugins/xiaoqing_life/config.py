@@ -83,6 +83,7 @@ class LifeConfig:
     activity_affinity    : Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(ACTIVITY_AFFINITY)
     )
+    learning_keep_days: int                           = 180
     choice_temperature: float                         = 8.0
     session_minutes   : Mapping[str, tuple[int, int]] = field(
         default_factory=lambda: dict(SESSION_MINUTES)
@@ -171,6 +172,7 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
         "term_fading_days"      : (1, 365),
         "term_forget_days"      : (1, 730),
         "max_memes"             : (0, 2000),
+        "learning_keep_days"    : (1, 730),
         "max_meme_bytes"        : (1024, 8 * 1024 * 1024),
     }
     float_spec: dict[str, tuple[float, float]] = {
