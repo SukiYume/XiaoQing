@@ -54,6 +54,7 @@ from .generation_limiter import CHAT_SUPERSEDED, GenerationLimitExceeded
 from .handler_context import HandlerContext
 from .life.closing_guard import should_stay_silent
 from .life.daily_life import day_key, ensure_today
+from .life.online import probe_online_life
 from .life.schedule import delay_factor, participation_factor, routine_slot_now
 from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
@@ -679,17 +680,18 @@ def spawn_daily_life(context, runtime, state, secrets: dict[str, Any], *, bot_na
     if state.daily_life.get(day_key(local_datetime())) is not None:
         return
     card = runtime.cfg.personality.card
-    spawn_bg_task(
-        context,
-        ensure_today(
+
+    async def generate() -> None:
+        await ensure_today(
             store   = state.daily_life,
             persona = card.facts(bot_name),
             routine = card.routine,
             secrets = secrets,
             llm=llm_call_config(runtime.cfg, foreground=False),
-        ),
-        name="daily_life:today",
-    )
+            online_life=await probe_online_life(context, runtime),
+        )
+
+    spawn_bg_task(context, generate(), name="daily_life:today")
 
 
 def _apply_routine(event: dict[str, Any], hctx: HandlerContext) -> float:

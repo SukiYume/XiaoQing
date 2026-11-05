@@ -173,6 +173,48 @@ def _find_picture(items: list[SourceItem], ref: str) -> tuple[str, str] | None:
     return None
 
 
+_PREFERRED_EXT      = (".gif", ".webp", ".png")
+SHORT_COMMENT_CHARS = 20
+
+
+def _median(values: list[int]) -> float:
+    ordered = sorted(values)
+    mid     = len(ordered) // 2
+    return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def preselect(items: list[SourceItem]) -> list[tuple[str, str]]:
+    """确定性预选评论配图：点赞不低于该条目评论中位数，且评论短（≤20 字）或没有文字；
+    gif / webp / png 优先于可能很大的 jpg，再按点赞从高到低。视觉判定仍然决定收不收。"""
+
+    ranked: list[tuple[int, int, str]] = []
+    for item in items:
+        likes = [c.likes for c in item.comments]
+        if not likes:
+            continue
+        median = _median(likes)
+        for comment in item.comments:
+            if comment.likes < median or len(comment.text) > SHORT_COMMENT_CHARS:
+                continue
+            for index, url in enumerate(comment.pictures):
+                path  = url.split("?", 1)[0].lower()
+                bulky = 0 if path.endswith(_PREFERRED_EXT) else 1
+                ranked.append((bulky, -comment.likes, f"{comment.ref}#{index}"))
+    ranked.sort()
+    return [(ref, "预选：高赞短评配图") for _, _, ref in ranked]
+
+
+def merge_picks(
+    digest_picks: list[tuple[str, str]], preselected: list[tuple[str, str]], cap: int
+) -> list[tuple[str, str]]:
+    """消化挑的在前，预选的补齐，按引用去重，总数不超过 ``cap``。"""
+
+    merged: dict[str, str] = {}
+    for ref, why in [*digest_picks, *preselected]:
+        merged.setdefault(ref, why)
+    return list(merged.items())[: max(0, cap)]
+
+
 def meme_path(store: LifeStore, sha: str, ext: str) -> Path:
     return store.data_dir / MEME_DIR / f"{sha}{ext}"
 

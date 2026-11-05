@@ -44,7 +44,7 @@ from .planner import (
 from .safety import normalize_for_match, overlap
 from .sources import baike, bilibili, hotlists, watch
 from .sources.base import Fetcher, SourceError, SourceItem
-from .stores import MAX_RECENT, LifeStore, new_id, reserve_llm_call, roll_day
+from .stores import MAX_LOOKUP_QUEUE, MAX_RECENT, LifeStore, new_id, reserve_llm_call, roll_day
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,17 @@ def _episode_rows(
     return rows
 
 
+QUEUE_TERM_CHARS = 8
+
+
+def _queue_for_lookup(state: dict[str, Any], term: str) -> None:
+    """新的未查实词条自动进待查队列（有界、去重），让百科来判断是不是真的流行语。"""
+
+    queue: list[str] = state.setdefault("lookup_queue", [])
+    if term not in queue and len(queue) < MAX_LOOKUP_QUEUE:
+        queue.append(term)
+
+
 def _learn(
     store: LifeStore,
     result: digest_mod.DigestResult,
@@ -237,12 +248,15 @@ def _learn(
     now: float,
 ) -> None:
     for term in result.terms:
+        fresh = term_key(term.term) not in store.terms
         upsert_term(
             store.terms,
             {"term": term.term, "meaning": term.meaning, "usage": term.usage, "tone": term.tone},
             term.item_id,
             now,
         )
+        if fresh and len(term.term) <= QUEUE_TERM_CHARS:
+            _queue_for_lookup(store.state, term.term)
     for expr in result.expressions:
         upsert_expression(
             store.expressions,
@@ -478,7 +492,8 @@ async def _browse(
     if not items:
         reason = "all_sources_failed" if failures else "nothing_found"
         return await _record_failure(store, reason, decision, span, deps)
-    fresh = [i for i in items if i.item_id not in store.seen][: cfg.max_items_per_session]
+    cap   = int(decision.params.get("item_cap") or cfg.max_items_per_session)
+    fresh = [i for i in items if i.item_id not in store.seen][: max(1, cap)]
     if not fresh:
         return await _no_news(store, cfg, decision, span, deps)
     fresh = await _open_items(cfg, deps.fetch, fresh, _topics(store, cfg, span[0]))
@@ -500,7 +515,10 @@ async def _collect_memes(
     day: str,
     deps: SessionDeps,
 ) -> int:
-    if not result.memes or deps.download is None or deps.vision is None:
+    picks = memes_mod.merge_picks(
+        result.memes, memes_mod.preselect(items), cfg.max_vision_per_session
+    )
+    if not picks or deps.download is None or deps.vision is None:
         return 0
     download = deps.download
 
@@ -511,7 +529,7 @@ async def _collect_memes(
         store,
         cfg,
         items,
-        result.memes,
+        picks,
         download = fetch_image,
         vision   = deps.vision,
         day      = day,

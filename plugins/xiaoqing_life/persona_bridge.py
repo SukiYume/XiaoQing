@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 
 Availability = Literal["free", "busy", "asleep"]
 
-_CHAT_DIR      = Path(__file__).resolve().parent.parent / "xiaoqing_chat"
-_LOOKAHEAD_MIN = 24 * 60
-_SCAN_STEP_MIN = 5
-_DEFAULT_NAME  = "小青"
+_CHAT_DIR        = Path(__file__).resolve().parent.parent / "xiaoqing_chat"
+_LOOKAHEAD_MIN   = 24 * 60
+_SCAN_STEP_MIN   = 5
+_WAKE_WINDOW_MIN = 120
+PLAN_HORIZON_MIN = 12 * 60
+_DEFAULT_NAME    = "小青"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +30,8 @@ class Presence:
     activity    : str
     # 距离下一次睡觉还有多少分钟；当前已在睡觉时为 0，24 小时内没有睡眠时段为 None。
     minutes_until_sleep: int | None
+    # 睡眠时段结束后过了多少分钟（只看最近 2 小时）；没有或仍在睡为 None。
+    minutes_since_wake: int | None = None
 
 
 def now(context: Any) -> datetime:
@@ -83,10 +87,22 @@ def _quiet_presence(cfg: LifeConfig, moment: datetime) -> Presence:
 
     if asleep_at(moment):
         return Presence("asleep", "睡觉", 0)
+    since = _since_wake(asleep_at, moment)
     for offset in range(_SCAN_STEP_MIN, _LOOKAHEAD_MIN + 1, _SCAN_STEP_MIN):
         if asleep_at(moment + timedelta(minutes=offset)):
-            return Presence("free", "", offset)
-    return Presence("free", "", None)
+            return Presence("free", "", offset, since)
+    return Presence("free", "", None, since)
+
+
+def _since_wake(asleep_at: Any, moment: datetime) -> int | None:
+    """往回扫 2 小时，找到仍在睡觉的最近时刻，当前已醒时返回醒来后的分钟数。"""
+
+    if asleep_at(moment):
+        return None
+    for offset in range(_SCAN_STEP_MIN, _WAKE_WINDOW_MIN + 1, _SCAN_STEP_MIN):
+        if asleep_at(moment - timedelta(minutes=offset)):
+            return offset
+    return None
 
 
 def _routine_presence(card: Any, moment: datetime) -> Presence | None:
@@ -103,9 +119,41 @@ def _routine_presence(card: Any, moment: datetime) -> Presence | None:
         if ahead is not None and ahead.availability == "asleep":
             until = offset
             break
+
+    def asleep_at(point: datetime) -> bool:
+        found = routine_slot_now(card, point)
+        return found is not None and found.availability == "asleep"
+
+    since = _since_wake(asleep_at, moment)
     if slot is None:
-        return Presence("free", "", until)
-    return Presence(slot.availability, slot.activity, until)
+        return Presence("free", "", until, since)
+    return Presence(slot.availability, slot.activity, until, since)
+
+
+def upcoming_plans(context: Any, moment: datetime, limit: int = 3) -> list[str]:
+    """今天剩下的作息时段（不含睡觉），形如 ``20:00 社团活动``；读不到作息就是空。"""
+
+    card = persona_card(context)
+    if card is None or not getattr(card, "routine", ()):
+        return []
+    try:
+        from plugins.xiaoqing_chat.life.schedule import parse_routine
+
+        slots = parse_routine(tuple(card.routine))
+    except Exception:
+        return []
+    now_minute = moment.hour * 60 + moment.minute
+    ahead      = sorted(
+        (
+            s
+            for s in slots
+            if moment.weekday() in s.days
+            and s.availability != "asleep"
+            and 0 < s.start - now_minute <= PLAN_HORIZON_MIN
+        ),
+        key=lambda s: s.start,
+    )
+    return [f"{s.start // 60:02d}:{s.start % 60:02d} {s.activity}" for s in ahead[:limit]]
 
 
 def availability(context: Any, cfg: LifeConfig, moment: datetime) -> Presence:

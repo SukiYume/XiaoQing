@@ -143,7 +143,8 @@ xiaoqing_chat
 | `open_loops.py` | 群友有时间点的未完话头：存储、去重、按说话人取“顺口问 / 对方在答”、提示块 |
 | `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头；打算与承诺每次读、近况按会话限频、兜底句不读；校验类别、说话人、ID 与时间，按会话串行，提交时核对重置代际 |
 | `proactive.py` | 主动开口：时段、作息、群安静程度与节奏检查，起草、本地复读检查、人设自检，投递回执提交 |
-| `proactive_state.py` | 每个群上次主动开口的时间、当天次数与上次尝试时间 |
+| `proactive_state.py` | 每个会话上次主动开口的时间、当天次数、上次尝试时间和已分享的网上经历 ID（最近 20 个）；群聊键是 `g<群号>`，私聊键是 `private:<QQ号>` |
+| `proactive_private.py` | 私聊主动联系（`proactive.private_user_ids` 白名单，默认空即不运行）：材料是与这位朋友资料里兴趣对得上的分享候选和他到期的未完话头；每天次数、间隔、对方刚说过话、上一条没回、同一经历只分享一次等协调规则逐条检查；起草 / 本地复读检查 / 人设自检复用群聊流程 |
 | `online.py` | 经 `life.turn_context` 向 `xiaoqing_life` 取网上经历、用语与表达：请求不含用户 ID 与群号；能力缺失、开关关闭、超时、异常或格式不对一律当空；`reply_plan` 把 `life_lines` 追加到 `life_block`、`slang_notes` 追加到 `jargon_explanation`、`expression_hint` 只在没有群内表达时补位；`sync_life_memes` 按游标（`life/life_memes_cursor.json`）逐页拉 `life.export_memes`，经 `emoji_library.import_external_emoji` / `remove_external_emoji` 导入和删除（只动 `life:` 来源的条目） |
 
 ### `expression/`：表达与黑话

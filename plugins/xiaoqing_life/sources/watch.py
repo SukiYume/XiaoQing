@@ -71,8 +71,13 @@ def process_danmaku(
 
 
 def _dense_moment(buckets: Counter[int]) -> str:
-    dense = [(b, c) for b, c in buckets.most_common(MAX_DENSE_MOMENTS) if c >= MIN_DENSE_COUNT]
-    spots = []
+    """忽略开头 30 秒（来了 / 前排）和最后一个桶，除非它们是仅有的数据；永远不输出 0:00。"""
+
+    last = max(buckets, default=0)
+    interior = Counter({b: c for b, c in buckets.items() if b not in (0, last)})
+    pool     = interior or Counter({b: c for b, c in buckets.items() if b != 0})
+    dense    = [(b, c) for b, c in pool.most_common(MAX_DENSE_MOMENTS) if c >= MIN_DENSE_COUNT]
+    spots    = []
     for bucket, _ in sorted(dense):
         start = bucket * BUCKET_SECONDS
         spots.append(f"{start // 60}:{start % 60:02d}")

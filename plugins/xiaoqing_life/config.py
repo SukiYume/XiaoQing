@@ -45,6 +45,14 @@ SESSION_MINUTES: dict[str, tuple[int, int]] = {
     "term_lookup"    : (5, 10),
 }
 
+# 作息活动文字里的关键词表（``Presence.activity``）：anime 偏向动画话题，meal 偏向随手刷热榜且条目减半，
+# no_browse 即使标为空闲也不上网。
+ACTIVITY_AFFINITY: dict[str, tuple[str, ...]] = {
+    "anime"    : ("刷番", "番"),
+    "meal"     : ("吃饭", "午饭", "晚饭", "早饭"),
+    "no_browse": ("社", "活动", "课", "实验", "考试"),
+}
+
 _QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 
 
@@ -72,8 +80,11 @@ class LifeConfig:
     max_items_per_session: int                           = 6
     max_comments_per_item: int                           = 12
     max_watch_per_session: int                           = 2
-    choice_temperature   : float                         = 8.0
-    session_minutes      : Mapping[str, tuple[int, int]] = field(
+    activity_affinity    : Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: dict(ACTIVITY_AFFINITY)
+    )
+    choice_temperature: float                         = 8.0
+    session_minutes   : Mapping[str, tuple[int, int]] = field(
         default_factory=lambda: dict(SESSION_MINUTES)
     )
     max_vision_per_session: int             = 2
@@ -198,6 +209,18 @@ def _session_minutes(value: Any) -> dict[str, tuple[int, int]]:
     return merged
 
 
+def _affinity(value: Any) -> dict[str, tuple[str, ...]]:
+    merged = dict(ACTIVITY_AFFINITY)
+    if isinstance(value, Mapping):
+        for name in ACTIVITY_AFFINITY:
+            words = value.get(name)
+            if isinstance(words, list):
+                merged[name] = tuple(w.strip() for w in words if isinstance(w, str) and w.strip())[
+                    :20
+                ]
+    return merged
+
+
 def parse_life_config(raw: Any) -> LifeConfig:
     o = raw if isinstance(raw, Mapping) else {}
     d = LifeConfig()
@@ -205,6 +228,7 @@ def parse_life_config(raw: Any) -> LifeConfig:
         enabled = _bool(o.get("enabled"), d.enabled),
         sources = _sources(o.get("sources")),
         seed_interests=_words(o.get("seed_interests"), d.seed_interests, limit=60),
+        activity_affinity = _affinity(o.get("activity_affinity")),
         session_minutes   = _session_minutes(o.get("session_minutes")),
         browse_when_busy  = _bool(o.get("browse_when_busy"), d.browse_when_busy),
         quiet_hours       = _quiet(o.get("quiet_hours"), d.quiet_hours),

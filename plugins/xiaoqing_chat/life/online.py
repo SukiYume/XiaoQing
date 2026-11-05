@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -107,6 +108,62 @@ def parse_response(raw: Any) -> OnlineLife:
     )
 
 
+async def probe_online_life(context: Any, runtime: ChatRuntime) -> bool:
+    """xiaoqing_life 是否在线且开启（``turn_context(mode="probe")``）；任何失败都是 False。"""
+
+    life_cfg   = runtime.cfg.life
+    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    if capability is None or not life_cfg.enable_online_life:
+        return False
+    try:
+        raw = await asyncio.wait_for(
+            capability.turn_context({"version": 1, "mode": "probe"}),
+            timeout=float(life_cfg.online_life_timeout_seconds),
+        )
+        return isinstance(raw, dict) and raw.get("online_life") is True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return False
+
+
+async def fetch_share_candidates(
+    context: Any, runtime: ChatRuntime, *, exclude_ids: Sequence[str]
+) -> list[dict[str, Any]]:
+    """主动开口的分享候选（``turn_context(mode="proactive")``）；任何失败或关闭都是空。"""
+
+    life_cfg   = runtime.cfg.life
+    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    if capability is None or not life_cfg.enable_life_share:
+        return []
+    request = {
+        "version"    : 1,
+        "mode"       : "proactive",
+        "exclude_ids": [str(i) for i in exclude_ids][-20:],
+    }
+    try:
+        raw = await asyncio.wait_for(
+            capability.turn_context(request), timeout=float(life_cfg.online_life_timeout_seconds)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return []
+    rows                        = raw.get("share_candidates") if isinstance(raw, dict) else None
+    found: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("episode_id"), str):
+            continue
+        line = _clip(row.get("line"), 400)
+        if not line or row["episode_id"] in exclude_ids:
+            continue
+        topics = [
+            t.strip()[:12] for t in row.get("topics", []) if isinstance(t, str) and t.strip()
+        ][:5]
+        found.append({"episode_id": row["episode_id"][:40], "line": line, "topics": topics})
+    return found[:3]
+
+
 async def fetch_online_life(
     context: Any,
     runtime: ChatRuntime,
@@ -176,7 +233,9 @@ def _write_cursor(context: Any, since: float) -> None:
     _cursor_store(context).write_with_backup({"since": since})
 
 
-def _decode_meme(raw: Any) -> tuple[bytes, str, str, tuple[str, ...], str] | None:
+def _decode_meme(
+    raw: Any, runtime: Any = None
+) -> tuple[bytes, str, str, tuple[str, ...], str] | None:
     """校验一张导出的梗图；返回 (字节, 后缀, 名字, 标签, sha256)，不合格返回 None。"""
 
     import base64
@@ -198,6 +257,8 @@ def _decode_meme(raw: Any) -> tuple[bytes, str, str, tuple[str, ...], str] | Non
         return None
     if hashlib.sha256(image).hexdigest() != sha:
         return None
+    if not _valid_meme_image(image, runtime, str(raw.get("mime"))):
+        return None
     tags_raw = raw.get("emotion_tags")
     tags     = tuple(
         t.strip()[:6]
@@ -207,6 +268,36 @@ def _decode_meme(raw: Any) -> tuple[bytes, str, str, tuple[str, ...], str] | Non
     return image, suffix, label.strip()[:8], tags, sha
 
 
+def _valid_meme_image(image: bytes, runtime: Any, mime: str = "") -> bool:
+    """导入前再按表情库自己的图片预算校验一遍（xiaoqing_life 一侧的校验不能替代这一道）。"""
+
+    from core.image_validation import (
+        WEB_IMAGE_FORMAT_EXTENSIONS,
+        WEB_IMAGE_MIME_FORMATS,
+        ImageValidationError,
+        validate_image_bytes,
+    )
+
+    from ..media.loading import image_validation_limits
+
+    media  = runtime.cfg.media if runtime is not None else None
+    limits = image_validation_limits(
+        max_bytes  = int(getattr(media, "max_analyze_bytes", 4 * 1024 * 1024)),
+        max_pixels = int(getattr(media, "max_image_pixels", 20_000_000)),
+        max_frames = int(getattr(media, "max_animation_frames", 120)),
+    )
+    try:
+        validate_image_bytes(
+            image,
+            limits            = limits,
+            format_extensions = WEB_IMAGE_FORMAT_EXTENSIONS,
+            expected_format   = WEB_IMAGE_MIME_FORMATS.get(mime),
+        )
+    except ImageValidationError:
+        return False
+    return True
+
+
 async def _apply_page(context: Any, runtime: ChatRuntime, page: dict[str, Any]) -> int:
     from ..media.emoji_library import import_external_emoji, remove_external_emoji
     from ..media.loading import run_media_blocking
@@ -214,7 +305,7 @@ async def _apply_page(context: Any, runtime: ChatRuntime, page: dict[str, Any]) 
 
     changed = 0
     for raw in page.get("memes", []) if isinstance(page.get("memes"), list) else []:
-        decoded = _decode_meme(raw)
+        decoded = _decode_meme(raw, runtime)
         if decoded is None:
             continue
         image, suffix, label, tags, sha = decoded

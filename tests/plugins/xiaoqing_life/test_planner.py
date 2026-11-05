@@ -50,7 +50,7 @@ def test_disabled_asleep_busy_and_running_do_nothing() -> None:
     assert _decide(make_cfg(enabled=False)).reason == "disabled"
     assert _decide(running=True).reason == "session_running"
     assert _decide(presence=Presence("asleep", "睡觉", 0)).reason == "asleep"
-    busy = Presence("busy", "上课", 120)
+    busy = Presence("busy", "收拾宿舍", 120)
     assert _decide(presence=busy).reason == "busy"
     assert _decide(make_cfg(browse_when_busy=True), presence=busy).choice != planner.REST
 

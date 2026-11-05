@@ -48,6 +48,8 @@ _SYSTEM = """你在为一个聊天角色安排她“今天”会经历的几件�
 - 每件一句话，省略主语，不超过 30 字。
 格式：{"events":[{"at":"08:20","text":"早八差点迟到，踩点溜进教室"}]}"""
 
+_ONLINE_LIFE_RULE = "\n- 她上网刷到的具体视频、帖子和热点另有真实记录，这里不写具体的视频或帖子。"
+
 
 @dataclass(frozen=True)
 class DayEvent:
@@ -144,7 +146,12 @@ class DailyLifeStore(StoreBase):
 
 
 def build_messages(
-    *, persona: str, routine: Sequence[str], moment: datetime, yesterday: DayRecord | None
+    *,
+    persona: str,
+    routine: Sequence[str],
+    moment: datetime,
+    yesterday: DayRecord | None,
+    online_life: bool = False,
 ) -> list[dict[str, str]]:
     earlier = "；".join(event.text for event in yesterday.events) if yesterday else "（没有记录）"
     user    = "\n".join(
@@ -155,7 +162,10 @@ def build_messages(
         ]
     )
     return [
-        {"role": "system", "content": f"{persona}\n\n{_SYSTEM}"},
+        {
+            "role"   : "system",
+            "content": f"{persona}\n\n{_SYSTEM}{_ONLINE_LIFE_RULE if online_life else ''}",
+        },
         {"role": "user", "content": user},
     ]
 
@@ -168,6 +178,7 @@ async def ensure_today(
     secrets: dict[str, Any],
     llm: LLMCallConfig,
     now: float | None = None,
+    online_life: bool = False,
 ) -> DayRecord | None:
     """今天的小事还没安排时生成一次；已经有了直接返回。生成失败时今天就没有小事。"""
 
@@ -188,7 +199,11 @@ async def ensure_today(
                 route    = "reasoning",
                 secrets  = secrets,
                 messages = build_messages(
-                    persona=persona, routine=routine, moment=moment, yesterday=yesterday
+                    persona     = persona,
+                    routine     = routine,
+                    moment      = moment,
+                    yesterday   = yesterday,
+                    online_life = online_life,
                 ),
                 **llm.as_kwargs(),
             )

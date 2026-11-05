@@ -258,7 +258,8 @@ def test_proactive_mode_returns_no_candidates_for_now_and_bad_payloads_are_toler
 ) -> None:
     store = _store(tmp_path)
     store.episodes.append(_episode(1, "猫猫的一天", HOUR, share=True))
-    assert _call(store, "", mode="proactive")[0] is None
+    proactive = _call(store, "", mode="proactive")[0]
+    assert proactive["share_candidates"][0]["episode_id"] == "e1" and proactive["life_lines"] == ""
     payload = {
         "text"         : 5,
         "recent"       : "x",

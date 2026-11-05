@@ -123,6 +123,7 @@ def new_row(run: str, suite: str, index: int, episode: int, item: dict[str, Any]
         **{key: item[key] for key in keys},
         "forbid"     : item.get("forbid") or [],
         "expect_any" : item.get("expect_any") or [],
+        "online"     : item.get("online") or "",
         "started_utc": datetime.now(UTC).isoformat(),
         "checks"     : [],
         "calls"      : [],
@@ -200,6 +201,149 @@ def seed_data(
         )
 
 
+def _seed_episode(item: dict[str, Any], index: int, *, at: float, day: str) -> dict[str, Any]:
+    return {
+        "id"          : f"seed{index:02d}",
+        "at"          : at,
+        "day"         : day,
+        "activity"    : "hot_scroll",
+        "source"      : item["source"],
+        "item_id"     : f"bili:{900 + index}",
+        "title"       : item["title"],
+        "reaction"    : item["reaction"],
+        "feeling"     : item["feeling"],
+        "share"       : item["share"],
+        "topics"      : item["topics"],
+        "term_keys"   : [],
+        "thread_id"   : "",
+        "gist"        : item["gist"],
+        "uploader"    : item["uploader"],
+        "url"         : item["url"],
+        "duration_s"  : 0,
+        "dense_moment": "",
+    }
+
+
+def seed_online_life(life_dir: Path) -> None:
+    """用确定的经历 / 词条 / 小课题 / 快照预置 xiaoqing_life 的隔离数据目录；时间戳相对现在。
+
+    今天的经历均匀落在今天 0 点到现在之间，昨天的落在昨天的整点，所以“今天 / 昨天”的说法总是对得上。
+    """
+
+    from .scenarios import ONLINE_LIFE_SEED as seed
+
+    now = datetime.now(ZONE)
+    today = now.replace(hour=0, minute=1, second=0, microsecond=0)
+    span                           = max(60.0, (now - today).total_seconds())
+    episodes: list[dict[str, Any]] = []
+    for n, item in enumerate(seed["today"]):
+        at = today.timestamp() + span * (0.35 + 0.4 * n) * 0.9
+        episodes.append(_seed_episode(item, n, at=at, day=now.strftime("%Y-%m-%d")))
+    yesterday = now - timedelta(days=1)
+    for n, item in enumerate(seed["yesterday"], start=len(episodes)):
+        moment = yesterday.replace(hour=item["hour"], minute=20, second=0, microsecond=0)
+        episodes.append(
+            _seed_episode(item, n, at=moment.timestamp(), day=moment.strftime("%Y-%m-%d"))
+        )
+    term = seed["term"]
+    key  = "".join(ch for ch in term["term"] if ch.isalnum())
+    life_dir.mkdir(parents=True, exist_ok=True)
+
+    def dump(name: str, value: Any) -> None:
+        (life_dir / f"{name}.json").write_text(
+            json.dumps(value, ensure_ascii=False), encoding="utf-8"
+        )
+
+    dump("episodes", episodes)
+    dump(
+        "terms",
+        {
+            key: {
+                **term,
+                "status"        : "known",
+                "verified"      : True,
+                "sources"       : ["baike:x", "bili:1"],
+                "first_seen"    : now.timestamp() - 5 * 86400,
+                "last_seen"     : now.timestamp() - 3600,
+                "last_suggested": 0.0,
+            }
+        },
+    )
+    dump(
+        "threads",
+        [
+            {
+                "id"            : "tseed01",
+                "title"         : seed["thread"]["title"],
+                "why"           : seed["thread"]["why"],
+                "next_query"    : seed["thread"]["next_query"],
+                "status"        : "open",
+                "steps"         : 1,
+                "empty_streak"  : 0,
+                "cooldown_until": 0.0,
+                "notes"         : [{"episode_id": "seed01", "note": "三脚架要稳"}],
+                "takeaway"      : "",
+                "created_at"    : now.timestamp() - 86400,
+                "updated_at"    : now.timestamp() - 7200,
+            }
+        ],
+    )
+    dump(
+        "snapshots",
+        [
+            {
+                "topic"         : "天文摄影",
+                "tier"          : 2,
+                "stage"         : "repeated",
+                "evidence_count": 3,
+                "liked"         : 3,
+                "since"         : now.timestamp() - 9 * 86400,
+                "until"         : now.timestamp() - 3600,
+                "created_at"    : now.timestamp() - 3600,
+                "text"          : seed["snapshot"],
+            }
+        ],
+    )
+
+
+class LifeBridge:
+    """把 xiaoqing_life 的服务回调接成聊天侧的 ``capabilities.life_context``（进程内直调）。"""
+
+    def __init__(self, context: Any) -> None:
+        self._context = context
+
+    async def turn_context(self, payload: dict[str, Any]) -> Any:
+        from plugins.xiaoqing_life import main as life_main
+
+        return await life_main.turn_context(dict(payload), self._context)
+
+    async def export_memes(self, payload: dict[str, Any]) -> Any:
+        return None
+
+
+def make_life_bridge(config: dict[str, Any], life_dir: Path) -> LifeBridge:
+    """隔离配置里启用 xiaoqing_life，路由沿用 xiaoqing_chat 的；数据目录就是预置过的那个。"""
+
+    from types import SimpleNamespace
+
+    cfg                      = json.loads(json.dumps(config))
+    plugins                  = cfg.setdefault("plugins", {})
+    chat_ai                  = plugins.get("xiaoqing_chat", {}).get("ai", {})
+    plugins["xiaoqing_life"] = {"enabled": True, "ai": chat_ai}
+    snapshot = SimpleNamespace(config=cfg, secrets={})
+    context = SimpleNamespace(
+        data_dir              = life_dir,
+        state                 = {},
+        get_settings_snapshot = lambda: snapshot,
+        logger                = SimpleNamespace(
+            info=lambda *a, **k: None, warning=lambda *a, **k: None, debug=lambda *a, **k: None
+        ),
+        http_session=None,
+        capabilities=SimpleNamespace(ai=None),
+    )
+    return LifeBridge(context)
+
+
 def suite_group(suite_index: int, episode: int) -> int:
     return 978_000 + suite_index * 20 + episode
 
@@ -249,7 +393,7 @@ class _RowLogger:
 
 
 async def run_inproc_suite(
-    name: str, suite: Suite, suite_index: int, seed: int, out_dir: Path
+    name: str, suite: Suite, suite_index: int, seed: int, out_dir: Path, online_life: bool = False
 ) -> Path:
     """在隔离数据目录里逐轮驱动一个剧本，返回逐轮记录的 jsonl 路径。"""
 
@@ -277,6 +421,12 @@ async def run_inproc_suite(
         seed_data(data_dir, suite.setup, group_id=suite_group(suite_index, episode))
     config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
     secrets = json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
+    online_life                    = online_life or "online_life" in suite.setup
+    life_bridge: LifeBridge | None = None
+    if online_life:
+        life_dir = out_dir / "isolated" / f"{run_name}-xiaoqing_life"
+        seed_online_life(life_dir)
+        life_bridge = make_life_bridge(config, life_dir)
     reset_global_state()
     state = get_state()
     bind_all_stores(state, data_dir)
@@ -363,7 +513,8 @@ async def run_inproc_suite(
                             lambda *, route_name, _actual=actual_ai, **kw: _actual.list_models(
                                 route_name, **kw
                             ),
-                        )
+                        ),
+                        life_context=life_bridge,
                     )
                     context.logger = _RowLogger(row, redact_secrets)
                     started        = time.monotonic()

@@ -378,6 +378,12 @@ class ProactiveConfig(BaseModel):
     active_hours_end        : str = "23:00"
     # 起草后再用审查路由做一次人设与时机自检，不通过就不发。
     enable_persona_judge: bool = True
+    # 私聊主动联系（默认关闭）：只有白名单里的朋友才会收到；白名单为空时这一路完全不运行。
+    private_user_ids: list[int] = Field(default_factory=list, max_length=100)
+    # 同一位朋友每天最多几次、两次至少隔多久；对方最近这么久说过话就不打扰。
+    private_max_per_day       : int = Field(default=1, ge=0, le=20)
+    private_min_interval_hours: float = Field(default=20.0, ge=0.0, le=720.0, allow_inf_nan=False)
+    private_quiet_minutes     : float = Field(default=30.0, ge=0.0, le=1440.0, allow_inf_nan=False)
 
     @field_validator("active_hours_start", "active_hours_end")
     @classmethod
@@ -388,6 +394,13 @@ class ProactiveConfig(BaseModel):
         if not match or hours > 24 or minutes > 59 or (hours == 24 and minutes):
             raise ValueError("clock must look like HH:MM (00:00-24:00)")
         return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+    @field_validator("private_user_ids")
+    @classmethod
+    def _validate_private_ids(cls, values: list[int]) -> list[int]:
+        if any(int(value) <= 0 for value in values):
+            raise ValueError("private_user_ids must be positive")
+        return list(dict.fromkeys(int(value) for value in values))
 
     @field_validator("group_ids")
     @classmethod

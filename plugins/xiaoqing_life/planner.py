@@ -93,6 +93,13 @@ def _has_episode_today(episodes: list[dict[str, Any]], day: str) -> bool:
     return any(e.get("day") == day for e in episodes)
 
 
+def _affinity_hit(cfg: LifeConfig, presence: Presence | None, kind: str) -> bool:
+    """作息活动文字是否含该类关键词。"""
+
+    activity = presence.activity if presence is not None else ""
+    return bool(activity) and any(word in activity for word in cfg.activity_affinity.get(kind, ()))
+
+
 def gate(
     cfg: LifeConfig,
     state: dict[str, Any],
@@ -131,6 +138,8 @@ def gate(
         return _rest("llm_exhausted")
     if _window_minutes(state, now, cfg.activity_window_minutes) >= cfg.activity_limit_minutes:
         return _rest("activity_limit")
+    if _affinity_hit(cfg, presence, "no_browse"):
+        return _rest("activity_busy")
     if manual:
         return None
     ended = max(float(state.get("last_session_end", 0.0)), float(state.get("last_session_at", 0.0)))
@@ -158,6 +167,18 @@ def _weighted_pick(rng: random.Random, weights: dict[str, float]) -> str | None:
         if point <= 0:
             return key
     return next(reversed(weights))
+
+
+ANIME_QUERIES        = ("新番", "动画推荐", "番剧", "动漫混剪", "轻小说")
+ANIME_BONUS          = 10.0
+ANIME_TOPIC_SHARE    = 0.7
+MEAL_HOT_BONUS       = 10.0
+MORNING_WINDOW_MIN   = 120
+MORNING_THREAD_BONUS = 6.0
+
+
+def _anime_topic(rng: random.Random) -> str:
+    return ANIME_QUERIES[int(rng.random() * len(ANIME_QUERIES)) % len(ANIME_QUERIES)]
 
 
 def _recent_queries(state: dict[str, Any]) -> list[str]:
@@ -246,6 +267,7 @@ def choose(
     interests: dict[str, dict[str, Any]],
     moment: datetime,
     rng: random.Random,
+    presence: Presence | None = None,
 ) -> Decision:
     """在候选里按分数做 softmax 抽样；没有候选就是休息。参数只为被选中的活动生成。"""
 
@@ -256,7 +278,9 @@ def choose(
 
     if (found := _best_thread(cfg, state, threads, now)) and cfg.source_on("bili_search"):
         thread, score = found
-        scores[THREAD] = score
+        since_wake     = presence.minutes_since_wake if presence is not None else None
+        morning        = since_wake is not None and since_wake <= MORNING_WINDOW_MIN
+        scores[THREAD] = score + (MORNING_THREAD_BONUS if morning else 0.0)
         build[THREAD]  = lambda: {
             "thread_id": thread["id"],
             "query"    : str(thread.get("next_query") or thread.get("title") or ""),
@@ -264,8 +288,12 @@ def choose(
     hot = _enabled_hot_sources(cfg)
     if hot:
         repeated = len(last) == _RECENT_WINDOW and all(r.get("choice") == HOT_SCROLL for r in last)
-        scores[HOT_SCROLL] = 40.0 - (15.0 if repeated else 0.0)
-        build[HOT_SCROLL] = lambda: {"source": _weighted_pick(rng, hot)}
+        meal = _affinity_hit(cfg, presence, "meal")
+        scores[HOT_SCROLL] = 40.0 - (15.0 if repeated else 0.0) + (MEAL_HOT_BONUS if meal else 0.0)
+        build[HOT_SCROLL] = lambda: {
+            "source": _weighted_pick(rng, hot),
+            **({"item_cap": max(1, cfg.max_items_per_session // 2)} if meal else {}),
+        }
     if cfg.source_on("bili_search"):
         positive = any(
             e.get("delta", 0) > 0 for entry in interests.values() for e in entry.get("evidence", [])
@@ -273,8 +301,18 @@ def choose(
         grind = len(last) == _RECENT_WINDOW and all(
             r.get("choice") in {THREAD, HOT_SCROLL} for r in last
         )
-        scores[INTEREST] = 35.0 + (8.0 if positive else 0.0) + (20.0 if grind else 0.0)
-        build[INTEREST]  = lambda: {"query": choose_topic(cfg, state, interests, now, rng)}
+        anime            = _affinity_hit(cfg, presence, "anime")
+        scores[INTEREST] = (
+            35.0
+            + (8.0 if positive else 0.0)
+            + (20.0 if grind else 0.0)
+            + (ANIME_BONUS if anime else 0.0)
+        )
+        build[INTEREST] = lambda: {
+            "query": _anime_topic(rng)
+            if anime and rng.random() < ANIME_TOPIC_SHARE
+            else choose_topic(cfg, state, interests, now, rng)
+        }
     queue = list(state.get("lookup_queue", []))
     if queue and cfg.source_on("baike_lookup"):
         scores[TERM_LOOKUP] = 30.0 + min(15.0, 5.0 * len(queue))
@@ -302,4 +340,4 @@ def decide(
     blocked = gate(cfg, state, episodes, moment, presence, rng, running=running, manual=manual)
     if blocked is not None:
         return blocked
-    return choose(cfg, state, threads, interests, moment, rng)
+    return choose(cfg, state, threads, interests, moment, rng, presence)
