@@ -200,6 +200,8 @@ packages = [
     "plugins.xiaoqing_chat.memory",
     "plugins.xiaoqing_chat.planning",
     "plugins.xiaoqing_chat.utils",
+    "plugins.xiaoqing_life",
+    "plugins.xiaoqing_life.sources",
 ]
 
 [tool.setuptools.package-data]

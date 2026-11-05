@@ -398,6 +398,8 @@ PluginServiceName = Literal[
     "agent.report_delivery",
     "codex.agent_task",
     "qingssh.agent_command",
+    "life.turn_context",
+    "life.export_memes",
 ]
 
 PluginCapabilityName = Literal[
@@ -466,6 +468,9 @@ _SERVICE_CONTRACTS: dict[
     "agent.report_delivery": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
     "codex.agent_task"     : ("codex", frozenset({"xiaoqing_agent"}), None),
     "qingssh.agent_command": ("qingssh", frozenset({"xiaoqing_agent"}), None),
+    # 小青的网上生活：聊天每轮取用相关经历与用语，并定期导入收集到的梗图。
+    "life.turn_context": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),
+    "life.export_memes": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),
 }
 
 _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {

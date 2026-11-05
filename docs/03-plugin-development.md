@@ -860,7 +860,7 @@ Manifest 的 `services` 声明导出，`uses_services` 声明消费，Core 校�
 | `callers` | Core 服务表规定的调用插件集合 |
 | `required_capability` | 特定桥接需要的附加 capability，普通服务省略 |
 
-当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用）。
+当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用），以及小青网上生活的两条桥：`life.turn_context` 与 `life.export_memes`（`xiaoqing_life` 提供，`xiaoqing_chat` 调用；数据只关于小青自己，不按用户身份门控，系统主体也可用）。
 Core 按服务名核验固定所有者和调用方。
 `agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查。
 `codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。

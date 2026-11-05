@@ -5,7 +5,7 @@
   "entry": "main.py",
   "concurrency": "parallel",
   "capabilities": ["onebot_media"],
-  "uses_services": ["agent.handle_turn", "agent.report_delivery"],
+  "uses_services": ["agent.handle_turn", "agent.report_delivery", "life.turn_context", "life.export_memes"],
   "services": [
     {
       "name": "core.observe_outgoing_action",

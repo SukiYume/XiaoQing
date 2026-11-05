@@ -25,6 +25,7 @@ from .context_builder import (
     tool_status_context,
 )
 from .life.daily_life import day_key, past_block, recent_days, refers_to_past, today_block
+from .life.online import EMPTY_ONLINE_LIFE, OnlineLife, fetch_online_life
 from .life.open_loops import open_loop_block
 from .life.self_timeline import self_timeline_block
 from .llm.communication_constraints import requested_char_count
@@ -281,6 +282,42 @@ def foreground_call_config(runtime: ChatRuntime, text: str) -> LLMCallConfig:
     return foreground
 
 
+def _merge_online_life(
+    online: OnlineLife, life_block: str, jargon_explanation: str, expression_block: str
+) -> tuple[str, str, str]:
+    """网上生活追加到已有块之后；群里学到的表达优先，hint 只补空缺。空时原样返回。"""
+
+    if online.empty:
+        return life_block, jargon_explanation, expression_block
+    if online.life_lines:
+        life_block = "\n".join(part for part in (life_block, online.life_lines) if part)
+    if online.slang_notes:
+        jargon_explanation = "\n".join(
+            part for part in (jargon_explanation, online.slang_notes) if part
+        )
+    if online.expression_hint and not expression_block:
+        expression_block = online.expression_hint
+    return life_block, jargon_explanation, expression_block
+
+
+def _log_online_life(context: Any, runtime: ChatRuntime, chat_id: str, online: OnlineLife) -> None:
+    if online is EMPTY_ONLINE_LIFE or online.empty:
+        return
+    log_step(
+        context,
+        runtime,
+        chat_id = chat_id,
+        step    = "reply.online_life",
+        fields  = {
+            "life_chars"      : len(online.life_lines),
+            "slang_chars"     : len(online.slang_notes),
+            "expression_chars": len(online.expression_hint),
+            "episodes"        : online.episode_count,
+            "term_hits"       : online.term_count,
+        },
+    )
+
+
 async def prepare_reply_generation(
     *,
     text: str,
@@ -354,9 +391,24 @@ async def prepare_reply_generation(
             fields  = {"picked": len(expression_block)},
         )
     keyword_rules, regex_rules = _select_reaction_rules(runtime, text)
-    life_block, loop_block = await asyncio.to_thread(
-        _load_life_blocks, runtime=runtime, state=state, chat_id=chat_id, event=event, text=text
+    (life_block, loop_block), online = await asyncio.gather(
+        asyncio.to_thread(
+            _load_life_blocks, runtime=runtime, state=state, chat_id=chat_id, event=event, text=text
+        ),
+        fetch_online_life(
+            context,
+            runtime,
+            text          = text,
+            history       = history,
+            is_private    = is_private,
+            unknown_words = action.unknown_words,
+            chat_id       = chat_id,
+        ),
     )
+    life_block, jargon_explanation, expression_block = _merge_online_life(
+        online, life_block, jargon_explanation, expression_block
+    )
+    _log_online_life(context, runtime, chat_id, online)
 
     merged_reasoning = _merge_planner_reasoning(action.reasoning, plan_reasoning)
     goal_state       = await state.goal_store.get_async(chat_id)

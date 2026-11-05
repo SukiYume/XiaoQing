@@ -252,6 +252,17 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 [用户手册](../plugins/xiaoqing_chat/README.md) 逐项说明参与规则、全部配置字段和排障方法，[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 说明模块与数据流，[上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 说明自动化测试与真实模型评测。
 
+### `xiaoqing_life`：小青的网上生活
+
+`xiaoqing_life` 让小青在作息空闲时按兴趣自己上网（B 站热门/搜索/热评、知乎与微博热榜、百度百科），记下带来源的经历，学流行语和表达方式，留一两个小课题隔天续查；`xiaoqing_chat` 每轮回复前经 `life.turn_context` 取相关的一两点。默认关闭，`config.plugins.xiaoqing_life.enabled` 打开后生效，需要配置 `ai.routes.reasoning`。不登录、不发任何互动，外部文本只作为低信任数据交给模型并经本地核对。`/life` 命令只给 Bot 管理员。详见 [XiaoQing Life](../plugins/xiaoqing_life/README.md)。
+
+| 项目 | 内容 |
+|---|---|
+| 命令 | `/life [status|recent|slang|threads|memes|run|forget|help]` |
+| 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
+| Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用） |
+| 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、已看过条目与状态 |
+
 ### `xiaoqing_agent`：任务代理
 
 XiaoQing Agent 让小青在有人叫她做事时真正动手：调用已有的 XiaoQing 命令（如 Pendo 日程待办、论文、天象）。
@@ -1027,6 +1038,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `xiaoai` | `/米家`、`/小爱`、`/xiaoai` | Bot 管理员 | 私聊 |
 | `xiaoqing_agent` | `/agent` | 公开（工具按发起人权限） | 私聊、群聊 |
 | `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
+| `xiaoqing_life` | `/life` | Bot 管理员 | 私聊、群聊 |
 
 ---
 

@@ -174,7 +174,11 @@
         "enable_open_loops": true,
         "open_loop_followup_hours": 36,
         "open_loop_max_per_chat": 60,
-        "enable_daily_life": true
+        "enable_daily_life": true,
+        "enable_online_life": true,
+        "online_life_timeout_seconds": 0.8,
+        "enable_life_memes": true,
+        "enable_life_share": true
     },
     "proactive": {
         "enabled": false,
