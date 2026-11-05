@@ -156,7 +156,7 @@ def queue_reply_regeneration(
             bot_name=plan.bot_name,
         ):
             correction = (
-                "这些精确身份资料不在群里透露。像普通网友那样笑着带过即可，不编具体答案，"
+                "这些精确身份资料不在群里透露。像普通网友那样轻松带过即可，不编具体答案，"
                 "也可以接着聊已经确定的身份或兴趣。语气保持普通群友的口吻。"
             )
         elif allows_low_stakes_persona_fiction(plan.runtime) and persona_question:
