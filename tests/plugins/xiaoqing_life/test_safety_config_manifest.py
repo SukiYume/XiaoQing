@@ -100,6 +100,9 @@ def test_blocklist_and_profanity() -> None:
     assert is_blocked("加微信领福利")
     assert is_blocked("普通标题带自定义词", ["自定义词"])
     assert not is_blocked("今天拍到了猎户座大星云")
+    # 真实知乎热榜标题：时政内容整条不交给模型
+    assert is_blocked("反中乱港分子黄之锋再判 10 年，哪些信息值得关注？带来哪些警示？")
+    assert not is_blocked("C罗官宣从葡萄牙国家队正式退役，如何评价此事？")
     assert is_profane("nmsl") and is_profane("你个傻逼") and not is_profane("sbc 不是脏话")
 
 
