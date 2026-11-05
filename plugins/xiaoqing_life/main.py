@@ -238,8 +238,15 @@ async def turn_context(
         if not cfg.enabled:
             return None
         runtime = get_runtime(context)
+        moment  = runtime.clock(context)
+        text    = payload.get("text") if isinstance(payload, dict) else ""
+        slots   = (
+            persona_bridge.upcoming_plans(context, moment)
+            if isinstance(text, str) and turn_context_mod.wants_plans(text)
+            else []
+        )
         response, dirty = turn_context_mod.turn_context(
-            runtime.store, cfg, payload, runtime.clock(context), runtime.rng
+            runtime.store, cfg, payload, moment, runtime.rng, slots
         )
         if dirty:
             runtime.spawn(runtime.store.flush())

@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 
 from ..store_base import StoreBase, coerce_finite_float, coerce_int
 
-_FILE = ("life", "proactive_state.json")
+_FILE               = ("life", "proactive_state.json")
+MAX_SHARED_LIFE_IDS = 20
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,8 @@ class ProactiveRecord:
     count  : int   = 0
     # 上次调用模型起草的时间，不论最后发没发。
     last_attempt_ts: float = 0.0
+    # 已经分享过的网上经历 ID（最近 20 个）；下次作为 exclude_ids 交给 xiaoqing_life。
+    shared_life_ids: tuple[str, ...] = ()
 
     def count_on(self, day: str) -> int:
         return self.count if self.day == day else 0
@@ -50,6 +54,11 @@ class ProactiveStateStore(StoreBase):
                         last_attempt_ts=coerce_finite_float(
                             item.get("last_attempt_ts"), default=0.0, minimum=0.0
                         ),
+                        shared_life_ids=tuple(
+                            str(v)
+                            for v in (item.get("shared_life_ids") or [])
+                            if isinstance(v, str)
+                        )[-MAX_SHARED_LIFE_IDS:],
                     )
             self._records = records
         return self._records
@@ -65,12 +74,21 @@ class ProactiveStateStore(StoreBase):
             records[chat_id] = replace(current, last_attempt_ts=ts)
             self._save_locked()
 
-    def record(self, chat_id: str, *, ts: float, day: str) -> None:
+    def record(
+        self, chat_id: str, *, ts: float, day: str, shared_life_ids: Sequence[str] = ()
+    ) -> None:
         with self._lock:
-            records          = self._load_locked()
-            current          = records.get(chat_id, ProactiveRecord())
+            records = self._load_locked()
+            current = records.get(chat_id, ProactiveRecord())
+            shared  = tuple(dict.fromkeys([*current.shared_life_ids, *shared_life_ids]))[
+                -MAX_SHARED_LIFE_IDS:
+            ]
             records[chat_id] = replace(
-                current, last_ts=ts, day=day, count=current.count_on(day) + 1
+                current,
+                last_ts         = ts,
+                day             = day,
+                count           = current.count_on(day) + 1,
+                shared_life_ids = shared,
             )
             self._save_locked()
 

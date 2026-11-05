@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from .safety import clean_text, is_blocked, is_profane, quote_in_source
+from .safety import clean_text, is_blocked, is_profane, is_violent_term, quote_in_source
 from .sources.base import SourceItem
 
 MAX_LOOKED_AT   = 3
@@ -284,6 +284,7 @@ def _validate_terms(
             continue
         if (
             term in keys
+            or is_violent_term(term)
             or is_profane(" ".join((term, meaning)))
             or is_blocked(" ".join((term, meaning, str(row.get("usage") or ""))), blocked)
         ):

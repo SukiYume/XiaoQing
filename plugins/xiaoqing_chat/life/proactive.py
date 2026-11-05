@@ -16,7 +16,7 @@ import asyncio
 import random
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from core.delivery import DeliveryReceipt, ScheduledDelivery
@@ -37,6 +37,7 @@ from ..task_scheduler import schedule_action_history_flush, schedule_memory_pers
 from ..utils.json_parsing import parse_first_json_object
 from ..utils.wall_clock import describe_now, local_datetime
 from .daily_life import day_key, today_block
+from .online import fetch_share_candidates
 from .schedule import routine_slot_now, state_text
 from .self_timeline import self_timeline_block
 
@@ -114,6 +115,25 @@ def parse_judgement(raw: str) -> bool:
     return str(data.get("decision") or "").lower() == "send"
 
 
+_SHARE_HEADER = (
+    "你最近自己真的刷到过、想和人分享的事（要说就挑一件，用自己的话像随口提起，别念标题清单；"
+    "没有自然的由头就 skip；说的是其中某件时，在 JSON 里加上 life_ref 填它的编号）："
+)
+
+
+def share_block(lines: Sequence[str]) -> str:
+    return "\n".join([_SHARE_HEADER, *(f"{n}. {line}" for n, line in enumerate(lines, start=1))])
+
+
+def parse_life_ref(raw: str, candidates: Sequence[dict[str, Any]]) -> list[str]:
+    """草稿 JSON 里的 life_ref（1 起的编号）对应的经历 ID；没写或越界就是空。"""
+
+    ref = (parse_first_json_object(raw) or {}).get("life_ref")
+    if isinstance(ref, bool) or not isinstance(ref, int) or not 1 <= ref <= len(candidates):
+        return []
+    return [str(candidates[ref - 1]["episode_id"])]
+
+
 def _materials(
     *,
     notices: Sequence[str],
@@ -121,10 +141,13 @@ def _materials(
     idle_minutes: int,
     dialogue: str,
     now: float,
+    share_lines: Sequence[str] = (),
 ) -> str:
     lines = [f"现在：{describe_now(now)}，群里已经安静了约{idle_minutes}分钟。"]
     if life_text:
         lines.append(life_text)
+    if share_lines:
+        lines.append(share_block(share_lines))
     if notices:
         lines.append("群里最近的插件推送（还没人跟你聊过）：\n" + "\n".join(notices))
     lines.append("最近的群聊：\n" + (dialogue or "（无）"))
@@ -149,6 +172,10 @@ def _receipt(
     bot_name: str,
     text: str,
     secrets: dict[str, Any],
+    state_key: str                       = "",
+    shared_life_ids: Sequence[str]       = (),
+    reasoning: str                       = "group_idle",
+    on_commit: Callable[[], None] | None = None,
 ) -> DeliveryReceipt:
     async def commit() -> None:
         now = time.time()
@@ -163,11 +190,14 @@ def _receipt(
         )
         schedule_memory_persist(context, runtime, chat_id=chat_id)
         state.set_last_reply_ts(chat_id, now)
+        if on_commit is not None:
+            on_commit()
         await asyncio.to_thread(
             state.proactive_state.record,
-            chat_id,
-            ts  = now,
-            day = local_datetime(now).strftime("%Y-%m-%d"),
+            state_key or chat_id,
+            ts              = now,
+            day             = local_datetime(now).strftime("%Y-%m-%d"),
+            shared_life_ids = shared_life_ids,
         )
         state.action_history.append(
             chat_id,
@@ -175,7 +205,7 @@ def _receipt(
                 ts           = now,
                 local_target = "",
                 action       = "proactive_message",
-                reasoning    = "group_idle",
+                reasoning    = reasoning,
                 detail       = {"text": text[:200]},
                 executed     = True,
             ),
@@ -200,6 +230,59 @@ def _receipt(
 
     receipt = DeliveryReceipt(expected_actions=1, commit=commit, rollback=rollback, unknown=commit)
     return receipt
+
+
+async def draft_through_judge(
+    context: Any,
+    runtime: Any,
+    *,
+    chat_id: str,
+    secrets: dict[str, Any],
+    system: str,
+    material: str,
+    history: Sequence[Any],
+    judge_system: str,
+) -> tuple[str, str] | None:
+    """起草 → 本地复读检查 → 人设自检；返回 (草稿, 模型原始输出)，任何一步不通过返回 None。"""
+
+    try:
+        raw = await _complete(
+            "chat", secrets, llm_call_config(runtime.cfg, foreground=True), system, material
+        )
+        draft = parse_draft(raw)
+    except LLMError:
+        _skip(context, runtime, chat_id, "draft_failed")
+        return None
+    if not draft:
+        _skip(context, runtime, chat_id, "model_skip")
+        return None
+    check = runtime.cfg.reply_check
+    if heuristic_check(
+        reply                = draft,
+        history              = history,
+        max_repeat_compare   = check.max_repeat_compare,
+        similarity_threshold = check.similarity_threshold,
+        max_assistant_in_row = check.max_assistant_in_row,
+    ):
+        _skip(context, runtime, chat_id, "local_check")
+        return None
+    if runtime.cfg.proactive.enable_persona_judge:
+        try:
+            allowed = parse_judgement(
+                await _complete(
+                    "checker",
+                    secrets,
+                    runtime.cfg.llm_config("checker"),
+                    judge_system,
+                    f"{material}\n\n她准备发：{draft}",
+                )
+            )
+        except LLMError:
+            allowed = False
+        if not allowed:
+            _skip(context, runtime, chat_id, "judge")
+            return None
+    return draft, raw
 
 
 def _skip(context: Any, runtime: Any, chat_id: str, code: str, **numbers: float) -> None:
@@ -273,69 +356,43 @@ async def _consider_group(
         part for part in (card.facts(bot_name), card.scoped(SCOPE_CHAT, bot_name)) if part
     )
     dialogue = build_dialogue_prompt(history[-_DIALOGUE_ITEMS:], bot_name=bot_name, truncate=True)
+    candidates = await fetch_share_candidates(context, runtime, exclude_ids=record.shared_life_ids)
     material = _materials(
         notices=plugin_notices(history, now=now),
         life_text    = "\n".join(blocks),
         idle_minutes = int(idle // 60),
         dialogue     = dialogue,
         now          = now,
+        share_lines  = [c["line"] for c in candidates],
     )
     secrets = ai_route_context(context, chat_id=chat_id)
     if secrets.get("_ai") is None:
         _skip(context, runtime, chat_id, "ai_unavailable")
         return None
     await asyncio.to_thread(state.proactive_state.record_attempt, chat_id, ts=now)
-    try:
-        draft = parse_draft(
-            await _complete(
-                "chat",
-                secrets,
-                llm_call_config(runtime.cfg, foreground=True),
-                f"{persona}\n\n{_DRAFT_INSTRUCTION}",
-                material,
-            )
-        )
-    except LLMError:
-        _skip(context, runtime, chat_id, "draft_failed")
+    done = await draft_through_judge(
+        context,
+        runtime,
+        chat_id      = chat_id,
+        secrets      = secrets,
+        system       = f"{persona}\n\n{_DRAFT_INSTRUCTION}",
+        material     = material,
+        history      = history,
+        judge_system = f"{card.facts(bot_name)}\n\n{_JUDGE_INSTRUCTION}",
+    )
+    if done is None:
         return None
-    if not draft:
-        _skip(context, runtime, chat_id, "model_skip")
-        return None
-    check = runtime.cfg.reply_check
-    if heuristic_check(
-        reply                = draft,
-        history              = history,
-        max_repeat_compare   = check.max_repeat_compare,
-        similarity_threshold = check.similarity_threshold,
-        max_assistant_in_row = check.max_assistant_in_row,
-    ):
-        _skip(context, runtime, chat_id, "local_check")
-        return None
-    if runtime.cfg.proactive.enable_persona_judge:
-        try:
-            allowed = parse_judgement(
-                await _complete(
-                    "checker",
-                    secrets,
-                    runtime.cfg.llm_config("checker"),
-                    f"{card.facts(bot_name)}\n\n{_JUDGE_INSTRUCTION}",
-                    f"{material}\n\n她准备发：{draft}",
-                )
-            )
-        except LLMError:
-            allowed = False
-        if not allowed:
-            _skip(context, runtime, chat_id, "judge")
-            return None
+    draft, raw_draft = done
     log_step(context, runtime, chat_id=chat_id, step="proactive.send", fields={"text": draft})
     receipt = _receipt(
         context,
         runtime,
         state,
-        chat_id  = chat_id,
-        bot_name = bot_name,
-        text     = draft,
-        secrets  = secrets,
+        chat_id         = chat_id,
+        bot_name        = bot_name,
+        text            = draft,
+        secrets         = secrets,
+        shared_life_ids = parse_life_ref(raw_draft, candidates),
     )
     return ScheduledDelivery.group(group_id, segments(draft), receipt=receipt)
 
@@ -376,4 +433,13 @@ async def run_proactive(context: Any) -> list[ScheduledDelivery]:
         )
         if delivery is not None:
             deliveries.append(delivery)
+    if cfg.private_user_ids and not (slot is not None and slot.availability != "free"):
+        from .proactive_private import consider_private
+
+        for user_id in cfg.private_user_ids:
+            private = await consider_private(
+                context, runtime, state, user_id, now=now, life_text=life_text
+            )
+            if private is not None:
+                deliveries.append(private)
     return deliveries

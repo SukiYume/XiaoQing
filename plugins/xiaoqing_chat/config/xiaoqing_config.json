@@ -190,7 +190,11 @@
         "max_per_group_per_day": 2,
         "active_hours_start": "09:00",
         "active_hours_end": "23:00",
-        "enable_persona_judge": true
+        "enable_persona_judge": true,
+        "private_user_ids": [],
+        "private_max_per_day": 1,
+        "private_min_interval_hours": 20,
+        "private_quiet_minutes": 30
     },
     "debug": {
         "show_reply_prompt": false,

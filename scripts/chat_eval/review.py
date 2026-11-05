@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from .drivers import DEFAULT_CONFIG, DEFAULT_SECRETS, PROJECT_ROOT
-from .scenarios import BOT_NAME, CHECKER_CASES, CHECKER_MIN_ACCEPT_RATE, MEDIA_TRUTH, CheckerCase
+from .scenarios import (
+    BOT_NAME,
+    CHECKER_CASES,
+    CHECKER_MIN_ACCEPT_RATE,
+    MEDIA_TRUTH,
+    ONLINE_LIFE_TITLES,
+    ONLINE_LIFE_URLS,
+    CheckerCase,
+)
 
 # 这些规则问题说明回复本身不合格，``--gate`` 时任何一条都让运行失败。
 GATE_FINDINGS = frozenset(
@@ -21,6 +29,9 @@ GATE_FINDINGS = frozenset(
         "exception",
         "forbidden_terms",
         "missing_expected",
+        "unseeded_title",
+        "online_life_leak",
+        "link_mismatch",
     }
 )
 
@@ -93,6 +104,40 @@ def _user_line(row: dict[str, Any], media_truth: dict[str, str] = MEDIA_TRUTH) -
     return "".join(bits)
 
 
+_BRACKET_TITLE_RE = re.compile(r"「([^」\n]{2,40})」")
+_URL_RE           = re.compile(r"https?://\S+")
+
+
+def _title_like(a: str, b: str) -> bool:
+    a, b = a.strip(), b.strip()
+    return bool(a and b) and (a in b or b in a)
+
+
+def online_life_findings(online: str, reply: str) -> list[tuple[str, Any]]:
+    """网上生活的机械检查：只能提预置的标题、无关话题不提预置标题、给的链接必须是预置的。"""
+
+    found: list[tuple[str, Any]] = []
+    if online == "seeded":
+        bad = [
+            title
+            for title in _BRACKET_TITLE_RE.findall(reply)
+            if not any(_title_like(title, seeded) for seeded in ONLINE_LIFE_TITLES)
+        ]
+        if bad:
+            found.append(("unseeded_title", bad))
+    if online == "none":
+        leaked = [title for title in ONLINE_LIFE_TITLES if title[:6] in reply or title in reply]
+        if leaked:
+            found.append(("online_life_leak", leaked))
+    if online == "link":
+        urls = _URL_RE.findall(reply)
+        if not any(url.rstrip("。，,.)）") in ONLINE_LIFE_URLS for url in urls) or any(
+            url.rstrip("。，,.)）") not in ONLINE_LIFE_URLS for url in urls
+        ):
+            found.append(("link_mismatch", urls))
+    return found
+
+
 def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     said    : list[str]            = []
@@ -123,6 +168,8 @@ def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             forbidden = [term for term in row.get("forbid") or () if term.lower() in lowered]
             if forbidden:
                 add(row, "forbidden_terms", forbidden)
+            for kind, detail in online_life_findings(row.get("online") or "", reply):
+                add(row, kind, detail)
             expected = row.get("expect_any") or ()
             if expected and not any(term.lower() in lowered for term in expected):
                 add(row, "missing_expected", list(expected))

@@ -42,6 +42,7 @@ def turn(
     forbid: tuple[str, ...]     = (),
     expect_any: tuple[str, ...] = (),
     wait: float                 = 0.0,
+    online: str                 = "",
 ) -> dict[str, Any]:
     """一条消息。``hours_ago`` 让它带上过去的时间戳；``wait`` 是端到端驱动等回复的上限秒数。"""
 
@@ -61,6 +62,8 @@ def turn(
         "forbid"    : list(forbid),
         "expect_any": list(expect_any),
         "wait"      : wait,
+        # 网上生活的机械检查：seeded 只能提到预置的标题，none 不能出现任何预置标题，link 必须给预置的链接。
+        "online": online,
     }
 
 
@@ -1211,16 +1214,280 @@ LIFE_SCENARIOS: dict[str, tuple[Episodes, str, tuple[str, ...], bool]] = {
 }
 
 
+# ══ 网上生活：预置的经历、词条、小课题与快照（时间戳相对“现在”，开跑时写入隔离数据目录）══════
+
+ONLINE_LIFE_SEED: dict[str, Any] = {
+    "today": [
+        {
+            "title"   : "猫咪第一次见到雪的反应",
+            "uploader": "萌宠研究所",
+            "gist"    : "猫咪在阳台第一次看到下雪，歪头盯着雪花",
+            "reaction": "那个歪头太可爱了，我自己都看笑了",
+            "topics"  : ["猫咪"],
+            "feeling" : "like",
+            "share"   : True,
+            "source"  : "bili_popular",
+            "url"     : "https://www.bilibili.com/video/BV1eval0001",
+        },
+        {
+            "title"   : "【天文摄影】新手三脚架怎么选",
+            "uploader": "星野小站",
+            "gist"    : "介绍赤道仪和三脚架的选择要点和预算",
+            "reaction": "价格看得我有点心疼，不过原来三脚架这么讲究",
+            "topics"  : ["天文摄影"],
+            "feeling" : "like",
+            "share"   : False,
+            "source"  : "bili_search",
+            "url"     : "https://www.bilibili.com/video/BV1eval0002",
+        },
+    ],
+    "yesterday": [
+        {
+            "title"   : "雨夜走读京都的4K漫步",
+            "uploader": "漫步日本",
+            "gist"    : "下雨的京都夜晚沿着鸭川散步的实景",
+            "reaction": "下雨天看这个特别治愈，雨声很舒服",
+            "topics"  : ["旅行"],
+            "feeling" : "like",
+            "share"   : False,
+            "source"  : "bili_popular",
+            "hour"    : 21,
+            "url"     : "https://www.bilibili.com/video/BV1eval0003",
+        },
+        {
+            "title"   : "盘点那些年被低估的独立游戏",
+            "uploader": "游戏小酒馆",
+            "gist"    : "推荐几款口碑很好但没火的独立游戏",
+            "reaction": "记下了两个想玩的，空洞骑士那种手感的最想试",
+            "topics"  : ["独立游戏"],
+            "feeling" : "like",
+            "share"   : False,
+            "source"  : "bili_ranking",
+            "hour"    : 12,
+            "url"     : "https://www.bilibili.com/video/BV1eval0004",
+        },
+    ],
+    "term": {
+        "term"   : "绷不住了",
+        "meaning": "忍不住笑出来，或者情绪一下子崩了",
+        "usage"  : "看到特别好笑或破防的事时的感叹",
+        "tone"   : "玩笑",
+    },
+    "thread": {
+        "title"     : "猎户座大星云怎么拍",
+        "why"       : "想拍一次",
+        "next_query": "猎户座大星云 拍摄 曝光参数",
+    },
+    "snapshot": "这两周常看天文摄影相关的内容（3次，喜欢的居多）",
+}
+ONLINE_LIFE_TITLES: tuple[str, ...] = tuple(
+    item["title"] for key in ("today", "yesterday") for item in ONLINE_LIFE_SEED[key]
+)
+ONLINE_LIFE_URLS: tuple[str, ...] = tuple(
+    item["url"] for key in ("today", "yesterday") for item in ONLINE_LIFE_SEED[key]
+)
+
+ONLINE_LIFE_SCENARIOS: dict[str, tuple[Episodes, str]] = {
+    "ol_recent_group": (
+        (
+            (
+                t(
+                    "阿夏",
+                    "小青你最近都在刷啥，有啥好玩的没",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "预置：今天刷了猫咪见雪的视频和天文摄影三脚架的视频。应从这些里挑一两点接话，不编造别的视频，不念清单",
+                ),
+                t(
+                    "阿夏",
+                    "那个猫的视频讲啥的",
+                    at     = "bot",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "只讲预置的简介：猫咪在阳台第一次看到下雪，歪头盯着雪花；不编画面细节",
+                ),
+            ),
+        ),
+        "group",
+    ),
+    "ol_recent_private": (
+        (
+            (
+                t(
+                    "阿梨",
+                    "你今天都刷了点啥呀",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "和群里同一天问法一致：预置的今天经历，不编造",
+                ),
+                t(
+                    "阿梨",
+                    "有意思不",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "接着聊刚说的那条，说自己的感受",
+                ),
+            ),
+        ),
+        "private",
+    ),
+    "ol_yesterday": (
+        (
+            (
+                t(
+                    "阿禾",
+                    "小青你昨天刷到啥了",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "预置的昨天：雨夜京都4K漫步、被低估的独立游戏。只能从这两条里说，今天的视频不算昨天",
+                ),
+            ),
+        ),
+        "group",
+    ),
+    "ol_term": (
+        (
+            (
+                t(
+                    "阿白",
+                    "小青你看这个，我直接绷不住了哈哈哈",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    forbid = ("什么意思", "啥意思", "是什么梗", "啥梗"),
+                    note   = "预置了词条“绷不住了”（忍不住笑）。她应当听懂，不问什么意思，也不解释梗",
+                ),
+            ),
+        ),
+        "group",
+    ),
+    "ol_unrelated": (
+        (
+            (
+                t(
+                    "阿夏",
+                    "今天食堂二楼的饺子还行",
+                    pace   = 0,
+                    online = "none",
+                    note   = "无关闲聊，不要硬扯网上刷到的东西",
+                ),
+                t(
+                    "阿禾",
+                    "我想去买个新键盘",
+                    pace   = 9,
+                    online = "none",
+                    note   = "无关，可接可不接，别提预置的视频",
+                ),
+                t(
+                    "阿白",
+                    "小青你周末有空打本吗",
+                    at     = "bot",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "none",
+                    note   = "问周末安排，不要借机报刷到的视频",
+                ),
+            ),
+        ),
+        "group",
+    ),
+    "ol_link": (
+        (
+            (
+                t(
+                    "阿梨",
+                    "小青你最近刷到啥好玩的了吗",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "先随口说一两个",
+                ),
+                t(
+                    "阿梨",
+                    "你刚说的那个视频叫啥，链接发我一下",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "link",
+                    note   = "应给出她刚提到的那条的标题，并给预置里对应的链接；不能给别的或编出来的链接",
+                ),
+            ),
+        ),
+        "private",
+    ),
+    "ol_plan": (
+        (
+            (
+                t(
+                    "阿夏",
+                    "小青等会你干嘛呀",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "按她的作息和在查的小课题（猎户座大星云怎么拍）说打算，说成“打算/准备”，不说成已经做完",
+                ),
+                t(
+                    "阿夏",
+                    "晚上呢",
+                    at     = "bot",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "接着说晚上的打算，不矛盾",
+                ),
+            ),
+        ),
+        "group",
+    ),
+    "ol_like": (
+        (
+            (
+                t(
+                    "阿禾",
+                    "小青你最近迷上啥了",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("天文", "星"),
+                    online     = "seeded",
+                    note       = "预置的兴趣快照：这两周常看天文摄影相关的内容。用它回答，不夸大成“一直都”",
+                ),
+            ),
+        ),
+        "group",
+    ),
+}
+
+
 def _suites() -> dict[str, Suite]:
     suites = {name: Suite((tuple(turns),), "group") for name, turns in GROUP_SCENARIOS.items()}
     suites |= {name: Suite(episodes, "quality") for name, episodes in QUALITY_SCENARIOS.items()}
     for name, (episodes, chat, setup, live_only) in LIFE_SCENARIOS.items():
         suites[name] = Suite(episodes, "life", chat=chat, setup=setup, live_only=live_only)
+    # 群聊剧本在她睡觉的时段会被作息压低回复概率（正常现象）；每个群聊剧本另给一个私聊版，
+    # 任何时段都能评网上生活本身。
+    private_twins = {
+        f"{name}_p": (
+            tuple(tuple({**item, "at": ""} for item in episode) for episode in episodes),
+            "private",
+        )
+        for name, (episodes, chat) in ONLINE_LIFE_SCENARIOS.items()
+        if chat == "group"
+    }
+    for name, (episodes, chat) in (ONLINE_LIFE_SCENARIOS | private_twins).items():
+        suites[name] = Suite(episodes, "online_life", chat=chat, setup=("online_life",))
     return suites
 
 
 SUITES = _suites()
-SETS   = ("group", "quality", "life")
+SETS   = ("group", "quality", "life", "online_life")
 
 
 # ══ 审查器校准：人工写定的候选回复，量化误杀与漏放 ═══════════════════════════════

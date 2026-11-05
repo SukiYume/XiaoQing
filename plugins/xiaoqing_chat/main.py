@@ -36,7 +36,7 @@ from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
     observe_outgoing_action,
 )
 from .life.daily_life import ensure_today
-from .life.online import sync_life_memes
+from .life.online import probe_online_life, sync_life_memes
 from .life.proactive import run_proactive
 from .runtime_state import get_state as _state
 from .store_binding import bound_state
@@ -241,6 +241,7 @@ async def scheduled_daily_life(context) -> None:
             routine = card.routine,
             secrets = ai_route_context(context),
             llm=llm_call_config(runtime.cfg, foreground=False),
+            online_life=await probe_online_life(context, runtime),
         )
     except Exception as exc:
         public_error_message(context, exc, logger=logger, component="xiaoqing_chat.daily_life")

@@ -78,7 +78,9 @@ def default_out_dir(driver: str) -> Path:
     return REPORT_ROOT / f"{datetime.now().strftime('%Y%m%d-%H%M')}-chat-eval-{driver}-{head}"
 
 
-def run_inproc(out_dir: Path, suites: dict[str, Suite], seed: int) -> list[str]:
+def run_inproc(
+    out_dir: Path, suites: dict[str, Suite], seed: int, online_life: bool = False
+) -> list[str]:
     """每个剧本一个进程：插件运行时状态是进程级单例，并行跑必须隔离。返回失败的剧本。"""
 
     workers: list[subprocess.Popen] = []
@@ -96,6 +98,7 @@ def run_inproc(out_dir: Path, suites: dict[str, Suite], seed: int) -> list[str]:
                         str(seed + suite_index(name) + 1),
                         "--out-dir",
                         str(out_dir),
+                        *(["--online-life"] if online_life else []),
                     ],
                     cwd    = PROJECT_ROOT,
                     stdout = log,
@@ -142,7 +145,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     failed: list[str] = []
     if args.driver == "inproc":
-        failed = run_inproc(out_dir, suites, args.seed)
+        failed = run_inproc(out_dir, suites, args.seed, args.online_life)
     else:
         try:
             asyncio.run(
@@ -201,7 +204,12 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 def cmd_worker(args: argparse.Namespace) -> int:
     asyncio.run(
         drivers.run_inproc_suite(
-            args.name, SUITES[args.name], suite_index(args.name), args.seed, args.out_dir
+            args.name,
+            SUITES[args.name],
+            suite_index(args.name),
+            args.seed,
+            args.out_dir,
+            args.online_life,
         )
     )
     return 0
@@ -224,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--suite", action="append", choices=list(SUITES), help="按名字选剧本，可重复")
     run.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    run.add_argument(
+        "--online-life",
+        action = "store_true",
+        help   = "（inproc）为任意剧本接上预置的 xiaoqing_life；online_life 组始终接上",
+    )
     run.add_argument("--out-dir", type=Path)
     run.add_argument("--no-judge", action="store_true", help="只做规则检查，不调用评审模型")
     run.add_argument("--calibrate", action="store_true", help="另外校准审查器，结果计入门禁")
@@ -257,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("name")
     worker.add_argument("--seed", type=int, required=True)
     worker.add_argument("--out-dir", type=Path, required=True)
+    worker.add_argument("--online-life", action="store_true")
     worker.set_defaults(handler=cmd_worker)
     return parser
 

@@ -120,6 +120,18 @@ _PROFANE_RE = re.compile(
 )
 
 
+# 只对词条本身检查的暴力 / 粗口词：不放进条目屏蔽词表，免得整条视频被误丢。
+_VIOLENT_TERM_RE = re.compile(
+    r"灭门|屠杀|屠城|砍死|弄死|打死|杀死|去死|该死|自残|自杀|割腕|跳楼|枪毙|凌迟|血洗|灭族|爆头"
+)
+
+
+def is_violent_term(text: str) -> bool:
+    """词条本身是暴力、自伤或诅咒类说法。"""
+
+    return bool(_VIOLENT_TERM_RE.search(unicodedata.normalize("NFKC", text)))
+
+
 def is_profane(text: str) -> bool:
     """脏话缩写、人身攻击和低俗说法不收进词条与表达。"""
 
