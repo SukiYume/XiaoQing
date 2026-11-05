@@ -1,0 +1,206 @@
+{
+  "name": "xiaoqing_life",
+  "version": "0.1.0",
+  "description": "小青自己的网上生活：按作息和兴趣上网，学流行语、表达方式和梗图，供聊天取用",
+  "author": "XiaoQing",
+  "entry": "main.py",
+  "concurrency": "parallel",
+  "services": [
+    {
+      "name": "life.turn_context",
+      "callback": "turn_context",
+      "callers": [
+        "xiaoqing_chat"
+      ]
+    },
+    {
+      "name": "life.export_memes",
+      "callback": "export_memes",
+      "callers": [
+        "xiaoqing_chat"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "life",
+      "triggers": [
+        "life"
+      ],
+      "help": "小青的网上生活：查看她最近上网的经历、学到的词条和小课题，或立刻安排一次上网。仅 Bot 管理员。",
+      "usage": "/life [status|recent|slang|threads|memes|run|forget|meme|help]",
+      "permission": "bot_admin",
+      "contexts": [
+        "private",
+        "group"
+      ],
+      "examples": [
+        "/life status"
+      ],
+      "invalid_examples": [
+        "/life unknown-command"
+      ],
+      "subcommands": [
+        {
+          "name": "status",
+          "aliases": [
+            "状态"
+          ],
+          "help": "开关、此刻作息、今日次数、最近一次决策与各类数量",
+          "usage": "/life status",
+          "examples": [
+            "/life status"
+          ],
+          "invalid_examples": [
+            "/life status extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "recent",
+          "aliases": [
+            "最近"
+          ],
+          "help": "最近 8 条上网经历",
+          "usage": "/life recent",
+          "examples": [
+            "/life recent"
+          ],
+          "invalid_examples": [
+            "/life recent extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "slang",
+          "aliases": [
+            "词条"
+          ],
+          "help": "学到的词条前 15（状态、来源数、最近看到）",
+          "usage": "/life slang",
+          "examples": [
+            "/life slang"
+          ],
+          "invalid_examples": [
+            "/life slang extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "threads",
+          "aliases": [
+            "小课题"
+          ],
+          "help": "进行中和刚结束的小课题",
+          "usage": "/life threads",
+          "examples": [
+            "/life threads"
+          ],
+          "invalid_examples": [
+            "/life threads extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "memes",
+          "aliases": [
+            "梗图"
+          ],
+          "help": "梗图列表（梗图收集尚未接入）",
+          "usage": "/life memes",
+          "examples": [
+            "/life memes"
+          ],
+          "invalid_examples": [
+            "/life memes extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "run",
+          "aliases": [
+            "运行"
+          ],
+          "help": "立刻安排一次上网，跳过概率与间隔，不跳过开关、睡眠和预算",
+          "usage": "/life run",
+          "examples": [
+            "/life run"
+          ],
+          "invalid_examples": [
+            "/life run extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "forget",
+          "aliases": [
+            "忘记"
+          ],
+          "help": "删除一个词条",
+          "usage": "/life forget <词>",
+          "examples": [
+            "/life forget 哈基米"
+          ],
+          "invalid_examples": [
+            "/life forget"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "meme",
+          "aliases": [],
+          "help": "开关一张梗图（梗图收集尚未接入）",
+          "usage": "/life meme on|off <短ID>",
+          "examples": [
+            "/life meme off ab12cd"
+          ],
+          "invalid_examples": [
+            "/life meme maybe"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "help",
+          "aliases": [
+            "帮助",
+            "?"
+          ],
+          "help": "显示 /life 用法",
+          "usage": "/life help",
+          "examples": [
+            "/life help"
+          ],
+          "invalid_examples": [
+            "/life help extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "id": "xiaoqing_life.tick",
+      "handler": "scheduled_tick",
+      "delivery": "silent",
+      "cron": {
+        "minute": "*/15"
+      },
+      "description": "按作息、预算和兴趣决定这一刻要不要上网；enabled 关闭时不做事"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "aiohttp",
+      "required": true,
+      "description": "取材 HTTP 在入口导入链中直接使用 aiohttp"
+    }
+  ]
+}

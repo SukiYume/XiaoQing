@@ -144,6 +144,7 @@ xiaoqing_chat
 | `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头；打算与承诺每次读、近况按会话限频、兜底句不读；校验类别、说话人、ID 与时间，按会话串行，提交时核对重置代际 |
 | `proactive.py` | 主动开口：时段、作息、群安静程度与节奏检查，起草、本地复读检查、人设自检，投递回执提交 |
 | `proactive_state.py` | 每个群上次主动开口的时间、当天次数与上次尝试时间 |
+| `online.py` | 经 `life.turn_context` 向 `xiaoqing_life` 取网上经历、用语与表达：请求不含用户 ID 与群号；能力缺失、开关关闭、超时、异常或格式不对一律当空；`reply_plan` 把 `life_lines` 追加到 `life_block`、`slang_notes` 追加到 `jargon_explanation`、`expression_hint` 只在没有群内表达时补位 |
 
 ### `expression/`：表达与黑话
 

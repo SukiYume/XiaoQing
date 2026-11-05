@@ -26,6 +26,7 @@ _REQUIRED_PLUGIN_DEPENDENCIES = {
     "voice"        : {"aiohttp"},
     "wolframalpha" : {"aiohttp"},
     "xiaoqing_chat": {"aiohttp", "numpy", "pydantic"},
+    "xiaoqing_life": {"aiohttp"},
 }
 
 _OPTIONAL_PLUGIN_DEPENDENCIES = {

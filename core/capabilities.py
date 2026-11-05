@@ -231,6 +231,36 @@ class AgentTurnService:
 
 
 @dataclass(frozen=True)
+class LifeContextService:
+    """xiaoqing_chat → xiaoqing_life 的固定桥；数据只关于小青自己，不按用户身份门控。"""
+
+    _turn_context: Callable[[dict[str, Any]], Awaitable[Any]]
+    _export_memes: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
+
+    @staticmethod
+    def _mapping_or_none(result: Any, label: str) -> dict[str, Any] | None:
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError(f"{label} result must be a mapping or None")
+        return result
+
+    async def turn_context(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(payload, Mapping):
+            raise TypeError("life turn context payload must be a mapping")
+        result = await self._turn_context(dict(payload))
+        return self._mapping_or_none(result, "life turn context")
+
+    async def export_memes(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self._export_memes is None:
+            raise RuntimeError("life.export_memes is not declared by this plugin")
+        if not isinstance(payload, Mapping):
+            raise TypeError("life meme export payload must be a mapping")
+        result = await self._export_memes(dict(payload))
+        return self._mapping_or_none(result, "life meme export")
+
+
+@dataclass(frozen=True)
 class CodexAgentTaskService:
     """xiaoqing_agent → codex：提交一个任务并等到它结束。"""
 

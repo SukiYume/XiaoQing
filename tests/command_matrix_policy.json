@@ -38,13 +38,20 @@
     "wolframalpha": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "xiaoai": {"risk": "privileged", "dependency": "external", "sensitive": true},
     "xiaoqing_agent": {"risk": "privileged", "dependency": "local", "sensitive": true},
-    "xiaoqing_chat": {"risk": "isolated_state", "dependency": "external", "sensitive": false}
+    "xiaoqing_chat": {"risk": "isolated_state", "dependency": "external", "sensitive": false},
+    "xiaoqing_life": {"risk": "privileged", "dependency": "external", "sensitive": true}
   },
   "commands": {
     "xiaoqing_agent.agent.help": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只返回帮助"},
     "xiaoqing_agent.agent.status": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读取运行中任务"},
     "xiaoqing_agent.agent.history": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读取本会话任务记录"},
     "xiaoqing_agent.agent.result": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只重发本会话已有的任务结果"},
+    "xiaoqing_life.life.status": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
+    "xiaoqing_life.life.recent": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
+    "xiaoqing_life.life.slang": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
+    "xiaoqing_life.life.threads": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
+    "xiaoqing_life.life.memes": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只返回提示"},
+    "xiaoqing_life.life.help": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只返回帮助"},
     "adnmb.adnmb.-a": {
       "risk": "isolated_state",
       "dependency": "external",

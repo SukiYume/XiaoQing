@@ -1,0 +1,130 @@
+# 🌐 XiaoQing Life
+
+XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，她按兴趣去刷 B 站热门、搜索和热评，看知乎、微博热榜，遇到不懂的流行语就查百度百科。她看到什么、学到什么都有来源记录，聊天时能拿真实经历接话。
+
+本插件只负责“上网”和“提供素材”，不直接说话。`xiaoqing_chat` 每轮回复前经 `life.turn_context` 取走和当前话题相关的一两点，写进提示词；关闭本插件或 `xiaoqing_chat` 一侧的开关时，聊天行为与没装时完全一致。
+
+---
+
+## ✨ 她会做什么
+
+| 能力 | 说明 |
+|---|---|
+| 经历 | 今天几点刷到了什么、她怎么觉得。被问“最近刷到啥好玩的”或话题对上时拿真实经历接话 |
+| 流行语 | 词条、含义、常见用法、语气。先保证听得懂，对得上的时候偶尔用一个 |
+| 表达方式 | 评论区里的句式和接梗套路，抽象成“当……时：……”，必须附原文摘录 |
+| 小课题 | 对某件事起了好奇就留一个小课题，隔天接着查，查完留下一句收获；没查完只能说“在查” |
+| 兴趣 | 喜欢的东西越刷越多，随时间衰减，偶尔探索新方向 |
+| 查词 | 群里听不懂的词进待查队列，之后由她自己去百科查，查到流行语才记下 |
+
+尚未接入（见 [DESIGN.md](DESIGN.md) 第 7 节）：梗图收集与导入表情库、睡前整理与日记、主动开口分享。`life.export_memes` 先返回空页，`/life memes`、`/life meme` 提示尚未接入。
+
+**不做的事**：不登录任何账号，不发评论、点赞、私信；不执行网页里的任何指令；不把群聊内容上传到外网；不新增第三方依赖。
+
+---
+
+## 🔐 安全与数据边界
+
+- 外部文本（标题、简介、评论）一律是低信任数据：去标签、链接、`@名字`、方括号片段，删“忽略以上……”这类对模型下指令的整句，命中屏蔽词（时政、色情、血腥、赌博、引流、地域与性别对立，加上 `blocked_keywords`）整条丢弃。
+- 外部文本只以 JSON 数据块交给模型，提示词里不放在 system 里。
+- 模型的输出只是候选。每个词条、表达必须附原文逐字摘录，且摘录确实出现在被引用的评论或条目里；编号越界、伪造摘录、超量的一律丢弃。模型写的总结和她自己的回复不能成为“新学到的东西”的来源。
+- 只请求固定域名（`api.bilibili.com`、`api.zhihu.com`、`weibo.com`、`top.baidu.com`、`baike.baidu.com`），不带 Cookie，响应体与 JSON 复杂度有上限。
+- 日志只记 ID、数量、原因和错误类型，不记外部原文。
+- 聊天侧请求不含任何用户 ID、群号。
+
+---
+
+## ⚙️ 开启
+
+在 `config/config.json` 中开启，并配置 `reasoning` 路由（缺失时上网只记“模型未配置”并退避，不产生任何经历）：
+
+```json
+{
+  "plugins": {
+    "xiaoqing_life": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "reasoning": { "models": ["deepseek-pro"], "timeout_seconds": 30, "total_timeout_seconds": 90 },
+          "vision":    { "models": ["glm-4.6v"] }
+        }
+      }
+    }
+  }
+}
+```
+
+`vision` 路由留给随后接入的梗图判定。
+
+### 配置字段
+
+数值越界时钳制到边界，类型错误时回退到默认值。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 总开关；关闭时定时任务不做事，`turn_context` 返回 `None` |
+| `sources` | 见下 | 各来源开关：`bili_popular`、`bili_ranking`、`bili_search`、`bili_comments`、`zhihu_hot`、`weibo_hot`、`baike_lookup` 默认开，`baidu_hot` 默认关 |
+| `seed_interests` | 13 个初始兴趣 | 作为搜索词；起始分 1，不算证据 |
+| `max_sessions_per_day` | `5` | 每天（配置时区自然日）最多上网次数 |
+| `max_llm_calls_per_day` | `24` | 所有模型调用合计，调用前先计数并落盘，失败不退还，重启不清零 |
+| `min_session_gap_minutes` | `75` | 两次上网最短间隔 |
+| `session_probability` | `0.5` | 满足条件的每次检查实际出发的概率 |
+| `activity_window_minutes` / `activity_limit_minutes` | `180` / `45` | 滚动窗口内累计上网时长达到上限就休息 |
+| `failure_backoff_minutes` | `60` | 所有来源都失败或模型不可用后的退避 |
+| `browse_when_busy` | `false` | 作息为“忙”时是否允许偷偷刷一下 |
+| `quiet_hours` | `"00:30-08:00"` | 读不到人设卡〔作息〕时的睡眠时段 |
+| `wind_down_minutes` | `60` | 距睡觉多少分钟内只整理、不取新材料 |
+| `max_items_per_session` | `6` | 交给消化的条目数 |
+| `max_comments_per_item` | `8` | 每条取的热评数（含楼中楼合计） |
+| `max_open_threads` / `thread_max_steps` | `2` / `3` | 同时进行的小课题数 / 每个最多续查次数 |
+| `episode_detail_days` / `episode_keep_days` | `7` / `45` | 经历细节期 / 保留期 |
+| `term_candidate_days` / `term_fading_days` / `term_forget_days` | `14` / `30` / `90` | 词条生命周期 |
+| `active_use_probability` | `0.3` | 每轮推一个“可以用”的梗或表达的概率 |
+| `suggest_cooldown_hours` | `6` | 同一词条或表达两次推荐的最短间隔 |
+| `blocked_keywords` | `[]` | 额外屏蔽词 |
+| `memes_enabled` / `meme_auto_approve` / `max_memes` / `max_meme_bytes` / `max_vision_per_session` | 见 DESIGN.md | 梗图相关，随后接入 |
+
+`xiaoqing_chat` 一侧还有 `life.enable_online_life`（默认 `true`）和 `life.online_life_timeout_seconds`（默认 `0.8`），见 [xiaoqing_chat 手册](../xiaoqing_chat/README.md)。
+
+---
+
+## 🕒 作息与节奏
+
+- 读 `xiaoqing_chat` 人设卡的〔作息〕：睡觉不动，上课（忙）默认不动，空闲才可能上网。读不到〔作息〕（`xiaoqing_chat` 不在、人设卡没写或写错）时退回 `quiet_hours`。
+- 时间一律用配置时区（`timezone`，默认 `Asia/Shanghai`），不看宿主机时区。
+- 距离睡觉不足 `wind_down_minutes` 时不再取新材料；今天有经历且还没整理时记为“睡前整理”（目前只记决策，整理本身随后接入）。
+- 每 15 分钟检查一次，依次判断：开关、是否已有上网任务、作息、当天次数与模型预算、滚动时长、间隔与失败退避、概率。任何一项不满足就休息，只更新 `last_decision`，不写经历、不调模型。
+- 选活动是无模型的可解释打分：续做小课题、刷热榜、按兴趣搜、查词。分数与理由都保存，`/life status` 可查。
+
+---
+
+## 🔧 命令
+
+`/life` 全部子命令只给 Bot 管理员。
+
+| 用法 | 作用 |
+|---|---|
+| `/life`、`/life status` | 开关、此刻作息、今日次数与模型调用、最近一次决策与理由、各类数量 |
+| `/life recent` | 最近 8 条经历 |
+| `/life slang` | 词条前 15（状态、来源数、最近看到） |
+| `/life threads` | 小课题 |
+| `/life memes` | 梗图列表（尚未接入） |
+| `/life run` | 立刻安排一次上网：跳过概率、间隔和失败退避，不跳过开关、睡眠和预算 |
+| `/life forget <词>` | 删除词条 |
+
+---
+
+## 📁 数据目录
+
+`data/xiaoqing_life/`：`episodes.json`、`terms.json`、`expressions.json`、`interests.json`、`threads.json`、`seen.json`、`state.json`。全部原子写入并保留 `.bak` 备份；主文件损坏时读备份，都坏时旧文件改名为 `.corrupt` 留底并从空开始。
+
+---
+
+## 🧪 测试
+
+```bash
+python -m pytest tests/plugins/xiaoqing_life tests/core/test_app_life_capabilities.py -q
+python -m pytest tests/plugins/xiaoqing_chat/test_xiaoqing_chat_online_life.py -q
+```
+
+全部离线：假 HTTP、假模型，不访问真实网络。模块与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。

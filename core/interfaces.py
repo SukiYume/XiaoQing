@@ -275,6 +275,14 @@ class AgentTurnCapability(Protocol):
         """当轮回复发出后告诉 agent 结果：``True`` 发出、``False`` 失败、``None`` 未知。"""
 
 
+class LifeContextCapability(Protocol):
+    """xiaoqing_chat 向 xiaoqing_life 取小青自己的网上生活；``None`` 表示没有可用内容。"""
+
+    async def turn_context(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    async def export_memes(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+
 class CodexAgentTaskCapability(Protocol):
     """xiaoqing_agent 提交一个 Codex 任务并等待其文本与图片结果。"""
 
@@ -368,6 +376,7 @@ class PluginCapabilities:
     voice_synthesis    : VoiceSynthesisCapability | None    = None
     chat_reply         : ChatReplyCapability | None         = None
     agent_turn         : AgentTurnCapability | None         = None
+    life_context       : LifeContextCapability | None       = None
     codex_agent        : CodexAgentTaskCapability | None    = None
     ssh_agent          : SSHAgentCommandCapability | None   = None
     command_runner     : CommandRunnerCapability | None     = None

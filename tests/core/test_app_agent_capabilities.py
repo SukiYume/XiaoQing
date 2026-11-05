@@ -687,6 +687,8 @@ def test_shipped_manifests_declare_the_agent_bridges() -> None:
     assert set(load("xiaoqing_chat").uses_services) == {
         "agent.handle_turn",
         "agent.report_delivery",
+        "life.turn_context",
+        "life.export_memes",
     }
     agent = load("xiaoqing_agent")
     assert set(agent.uses_services) == {"codex.agent_task", "qingssh.agent_command"}

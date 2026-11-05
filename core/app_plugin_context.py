@@ -22,6 +22,7 @@ from .capabilities import (
     CodexArxivSummaryService,
     CommandRunnerService,
     ConfigSubscriptionService,
+    LifeContextService,
     LocalToolsService,
     OneBotMediaService,
     SecretAdminService,
@@ -333,6 +334,34 @@ class AppPluginContextMixin:
             operation_id     = operation_id,
         )
 
+    def _build_life_capabilities(
+        self,
+        plugin_name: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        *,
+        uses_services: frozenset[str],
+    ) -> dict[str, Any]:
+        """网上生活只关于小青自己，不按用户身份门控，系统主体（定时任务）也可用。"""
+
+        if "life.turn_context" not in uses_services:
+            return {}
+
+        def declared(service_name: str) -> Callable[[dict[str, Any]], Awaitable[Any]]:
+            async def invoke(payload: dict[str, Any]) -> Any:
+                return await self._invoke_declared_service(
+                    caller_plugin = plugin_name,
+                    service_name  = service_name,
+                    principal     = principal,
+                    request_id    = request_id,
+                    args          = (payload,),
+                )
+
+            return invoke
+
+        export = declared("life.export_memes") if "life.export_memes" in uses_services else None
+        return {"life_context": LifeContextService(declared("life.turn_context"), export)}
+
     def _build_agent_capabilities(
         self,
         plugin_name: str,
@@ -585,6 +614,12 @@ class AppPluginContextMixin:
             voice_synthesis     = voice_synthesis,
             chat_reply          = chat_reply,
             ai                  = AIService(complete_ai_route, list_ai_models),
+            **self._build_life_capabilities(
+                plugin_name,
+                principal,
+                request_id,
+                uses_services=uses_services,
+            ),
             **self._build_agent_capabilities(
                 plugin_name,
                 principal,
