@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -14,10 +15,13 @@ from datetime import datetime
 from typing import Any
 
 from . import digest as digest_mod
+from . import memes as memes_mod
 from . import threads as thread_ops
 from .config import LifeConfig
 from .lifecycle import (
     add_interest_evidence,
+    consolidate,
+    interest_weights,
     mark_seen,
     prune_episodes,
     refresh_expressions,
@@ -37,7 +41,8 @@ from .planner import (
     Decision,
     day_key,
 )
-from .sources import baike, bilibili, hotlists
+from .safety import normalize_for_match, overlap
+from .sources import baike, bilibili, hotlists, watch
 from .sources.base import Fetcher, SourceError, SourceItem
 from .stores import MAX_RECENT, LifeStore, new_id, reserve_llm_call, roll_day
 
@@ -59,6 +64,14 @@ class SessionDeps:
     now         : Callable[[], datetime]
     persona     : str  = ""
     reasoning_ok: bool = True
+    # 她此刻的作息活动文字（"上课" "睡觉"），进入消化提示让感想贴合当下状态。
+    activity_text: str = ""
+    # 梗图用：下载并校验图片、视觉判定；缺省时不收梗图。
+    download: Callable[[str, int], Awaitable[tuple[bytes, str] | None]] | None = None
+    vision  : Callable[[list[dict[str, Any]]], Awaitable[str]] | None          = None
+    # 调试 / 验证脚本的钩子：拿到取材条目、模型原始 JSON。
+    on_items : Callable[[list[SourceItem]], None] | None                 = None
+    on_digest: Callable[[dict[str, Any], list[SourceItem]], None] | None = None
 
 
 @dataclass(slots=True)
@@ -121,25 +134,52 @@ async def _gather(
     return items, failures
 
 
-async def _with_comments(
-    cfg: LifeConfig, fetch: Fetcher, items: list[SourceItem]
-) -> list[SourceItem]:
-    """前几条 B 站条目取热评；单条失败只是没有评论。"""
+def prescore(item: SourceItem, topics: list[str]) -> float:
+    """她会不会点开：标题 / 标签与兴趣的重合，加上热度的对数。"""
 
-    if not cfg.source_on("bili_comments") or cfg.max_comments_per_item <= 0:
-        return items
+    body   = f"{item.title} {' '.join(item.tags)}"
+    folded = normalize_for_match(body)
+    hits   = sum(
+        1
+        for topic in topics
+        if overlap(body, topic) >= 1 or (len(topic) >= 2 and normalize_for_match(topic) in folded)
+    )
+    return 3.0 * min(hits, 3) + math.log10(item.heat + 1)
+
+
+def pick_clicks(cfg: LifeConfig, items: list[SourceItem], topics: list[str]) -> list[int]:
+    """≤3 个 B 站条目（取热评），按预打分挑，返回它们在 ``items`` 里的下标（保持原顺序）。"""
+
+    candidates = [i for i, item in enumerate(items) if item.source.startswith("bili_")]
+    candidates.sort(key=lambda i: prescore(items[i], topics), reverse=True)
+    return sorted(candidates[:COMMENT_ITEMS])
+
+
+async def _open_items(
+    cfg: LifeConfig, fetch: Fetcher, items: list[SourceItem], topics: list[str]
+) -> list[SourceItem]:
+    """点开预选的条目：前 ``max_watch_per_session`` 个取详情 / 标签 / 弹幕，再取热评。"""
+
     result = list(items)
-    for index, item in enumerate(items[:COMMENT_ITEMS], start=1):
-        if not item.source.startswith("bili_"):
-            continue
-        try:
-            comments = await bilibili.hot_comments(
-                fetch, item, index, cfg.blocked_keywords, cfg.max_comments_per_item
-            )
-        except SourceError as exc:
-            logger.info("xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason)
-            continue
-        result[index - 1] = replace(item, comments=comments)
+    clicks = pick_clicks(cfg, items, topics)
+    ranked = sorted(clicks, key=lambda i: prescore(items[i], topics), reverse=True)
+    watched = set(ranked[: cfg.max_watch_per_session])
+    for index in clicks:
+        item     = result[index]
+        position = index + 1
+        if index in watched:
+            item = await watch.watch(fetch, item, position, cfg.blocked_keywords)
+        if cfg.source_on("bili_comments") and cfg.max_comments_per_item > 0:
+            try:
+                comments = await bilibili.hot_comments(
+                    fetch, item, position, cfg.blocked_keywords, cfg.max_comments_per_item
+                )
+                item = replace(item, comments=comments)
+            except SourceError as exc:
+                logger.info(
+                    "xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason
+                )
+        result[index] = item
     return result
 
 
@@ -150,30 +190,41 @@ def _episode_rows(
     result: digest_mod.DigestResult,
     items: list[SourceItem],
     decision: Decision,
-    moment: datetime,
+    start: float,
+    end: float,
+    tz: Any,
 ) -> list[dict[str, Any]]:
+    """经历的时间戳按顺序均匀撒在名义浏览时段 [start, end] 内：她是一条一条刷过去的。"""
+
     by_id                           = {item.item_id: item for item in items}
     term_keys: dict[str, list[str]] = {}
     for term in result.terms:
         term_keys.setdefault(term.item_id, []).append(term_key(term.term))
-    rows = []
-    for seen in result.looked_at:
+    rows  = []
+    total = len(result.looked_at)
+    for order, seen in enumerate(result.looked_at, start=1):
         item = by_id[seen.item_id]
+        at   = start + (end - start) * order / (total + 1)
         rows.append(
             {
-                "id"       : new_id("e"),
-                "at"       : moment.timestamp(),
-                "day"      : day_key(moment),
-                "activity" : decision.choice,
-                "source"   : item.source,
-                "item_id"  : item.item_id,
-                "title"    : item.title,
-                "reaction" : seen.reaction,
-                "feeling"  : seen.feeling,
-                "share"    : seen.share,
-                "topics"   : list(seen.topics),
-                "term_keys": term_keys.get(item.item_id, []),
-                "thread_id": decision.params.get("thread_id", ""),
+                "id"          : new_id("e"),
+                "at"          : at,
+                "day"         : day_key(datetime.fromtimestamp(at, tz)),
+                "gist"        : item.text[:60],
+                "uploader"    : item.uploader,
+                "url"         : item.url,
+                "duration_s"  : item.duration_s,
+                "dense_moment": item.dense_moment,
+                "activity"    : decision.choice,
+                "source"      : item.source,
+                "item_id"     : item.item_id,
+                "title"       : item.title,
+                "reaction"    : seen.reaction,
+                "feeling"     : seen.feeling,
+                "share"       : seen.share,
+                "topics"      : list(seen.topics),
+                "term_keys"   : term_keys.get(item.item_id, []),
+                "thread_id"   : decision.params.get("thread_id", ""),
             }
         )
     return rows
@@ -252,6 +303,8 @@ def _apply_thread(
 
 
 def _remember_activity(state: dict[str, Any], decision: Decision, start: float, end: float) -> None:
+    """``start``/``end`` 是名义浏览时段；间隔、滚动时长和“正在做什么”都按它算。"""
+
     state["activity_log"].append({"start": start, "end": end})
     state["activity_log"][:] = [
         s for s in state["activity_log"] if float(s["end"]) >= end - ACTIVITY_KEEP_SEC
@@ -272,6 +325,8 @@ def _housekeeping(store: LifeStore, cfg: LifeConfig, now: float) -> None:
     refresh_expressions(store.expressions, now, cfg)
     refresh_interests(store.interests, now)
     seed_interests(store.interests, cfg.seed_interests, now)
+    consolidate(store.interests, store.snapshots, now)
+    del store.snapshots[:-100]
     thread_ops.prune_threads(store.threads, now)
     prune_episodes(store.episodes, now, cfg, thread_ops.protected_episode_ids(store.threads))
 
@@ -282,12 +337,13 @@ async def _commit(
     decision: Decision,
     items: list[SourceItem],
     result: digest_mod.DigestResult,
-    start: float,
+    span: tuple[float, float],
     deps: SessionDeps,
 ) -> SessionOutcome:
+    start, end = span
     moment = deps.now()
     now    = moment.timestamp()
-    rows   = _episode_rows(result, items, decision, moment)
+    rows   = _episode_rows(result, items, decision, start, end, moment.tzinfo)
 
     def apply(s: LifeStore) -> None:
         s.episodes.extend(rows)
@@ -295,7 +351,7 @@ async def _commit(
         _apply_thread(s, cfg, decision, result.thread, rows, now)
         mark_seen(s.seen, [item.item_id for item in items], now)
         _housekeeping(s, cfg, now)
-        _remember_activity(s.state, decision, start, now)
+        _remember_activity(s.state, decision, start, end)
 
     await store.mutate(apply)
     return SessionOutcome(
@@ -306,20 +362,33 @@ async def _commit(
 # ───────────────────────────── 失败与入口 ─────────────────────────────
 
 
-async def _record_failure(
-    store: LifeStore, reason: str, decision: Decision, start: float, deps: SessionDeps
-) -> SessionOutcome:
-    """全部来源失败或模型不可用：只记失败时间，不写任何经历。"""
+Span = tuple[float, float]
 
-    end = deps.now().timestamp()
+
+async def _record_failure(
+    store: LifeStore,
+    reason: str,
+    decision: Decision,
+    span: Span,
+    deps: SessionDeps,
+    *,
+    failed: bool = True,
+) -> SessionOutcome:
+    """全部来源失败或模型不可用：只记失败时间，不写任何经历；这次不算浏览了那么久。"""
+
+    start = span[0]
+    end   = max(start, deps.now().timestamp())
 
     def apply(s: LifeStore) -> None:
-        s.state["last_failure_at"] = end
-        s.state["last_decision"]   = {**s.state.get("last_decision", {}), "outcome": reason}
+        if failed:
+            s.state["last_failure_at"] = end
+        s.state["last_session_end"] = end
+        s.state["current"]          = {}
+        s.state["last_decision"]    = {**s.state.get("last_decision", {}), "outcome": reason}
         _remember_activity(s.state, decision, start, end)
 
     await store.mutate(apply)
-    return SessionOutcome("failed", reason)
+    return SessionOutcome("failed" if failed else "skipped", reason)
 
 
 async def _digest(
@@ -340,6 +409,8 @@ async def _digest(
         items         = items,
         known_terms   = [t["term"] for t in store.terms.values()],
         thread_titles = [t["title"] for t in thread_ops.active_threads(store.threads)],
+        moment        = deps.now(),
+        activity      = deps.activity_text,
     )
     try:
         text = await deps.complete(REASONING_ROUTE, messages)
@@ -349,6 +420,8 @@ async def _digest(
     raw = digest_mod.extract_json(text or "")
     if raw is None:
         return None, "digest_unparseable"
+    if deps.on_digest is not None:
+        deps.on_digest(raw, items)
     return (
         digest_mod.validate(
             raw, items, max_memes=cfg.max_vision_per_session, blocked=cfg.blocked_keywords
@@ -357,41 +430,97 @@ async def _digest(
     )
 
 
-async def _start(store: LifeStore, deps: SessionDeps, decision: Decision) -> tuple[float, str]:
+def _draw_span(cfg: LifeConfig, deps: SessionDeps, choice: str, start: float) -> Span:
+    low, high = cfg.session_minutes.get(choice, (10, 10))
+    return start, start + deps.rng.randint(low, high) * 60.0
+
+
+def _doing(decision: Decision) -> dict[str, Any]:
+    """“她这会儿在做什么”：不含任何还没刷到的标题。"""
+
+    return {
+        "choice"   : decision.choice,
+        "source"   : decision.params.get("source", ""),
+        "query"    : decision.params.get("query", ""),
+        "thread_id": decision.params.get("thread_id", ""),
+    }
+
+
+async def _start(
+    store: LifeStore, cfg: LifeConfig, deps: SessionDeps, decision: Decision
+) -> tuple[Span, str]:
     moment = deps.now()
     day    = day_key(moment)
+    span   = _draw_span(cfg, deps, decision.choice, moment.timestamp())
 
     def apply(s: LifeStore) -> None:
         roll_day(s.state, day)
-        s.state["sessions_today"]  = int(s.state.get("sessions_today", 0)) + 1
-        s.state["last_session_at"] = moment.timestamp()
-        s.state["last_decision"]   = {**decision.record(moment.timestamp())}
+        s.state["sessions_today"]   = int(s.state.get("sessions_today", 0)) + 1
+        s.state["last_session_at"]  = span[0]
+        s.state["last_session_end"] = span[1]
+        s.state["current"]          = {**_doing(decision), "start": span[0], "end": span[1]}
+        s.state["last_decision"]    = {**decision.record(span[0])}
 
     await store.mutate(apply)
-    return moment.timestamp(), day
+    return span, day
+
+
+def _topics(store: LifeStore, cfg: LifeConfig, now: float) -> list[str]:
+    return list(dict.fromkeys([*interest_weights(store.interests, now), *cfg.seed_interests]))
 
 
 async def _browse(
-    store: LifeStore, cfg: LifeConfig, decision: Decision, start: float, day: str, deps: SessionDeps
+    store: LifeStore, cfg: LifeConfig, decision: Decision, span: Span, day: str, deps: SessionDeps
 ) -> SessionOutcome:
     items, failures = await _gather(cfg, decision, deps.fetch)
+    if deps.on_items is not None:
+        deps.on_items(items)
     if not items:
         reason = "all_sources_failed" if failures else "nothing_found"
-        return await _record_failure(store, reason, decision, start, deps)
+        return await _record_failure(store, reason, decision, span, deps)
     fresh = [i for i in items if i.item_id not in store.seen][: cfg.max_items_per_session]
     if not fresh:
-        return await _no_news(store, cfg, decision, start, deps)
-    fresh = await _with_comments(cfg, deps.fetch, fresh)
+        return await _no_news(store, cfg, decision, span, deps)
+    fresh = await _open_items(cfg, deps.fetch, fresh, _topics(store, cfg, span[0]))
     result, reason = await _digest(store, cfg, fresh, deps, day)
     if result is None:
-        if reason == "llm_exhausted":
-            return SessionOutcome("skipped", reason)
-        return await _record_failure(store, reason, decision, start, deps)
-    return await _commit(store, cfg, decision, fresh, result, start, deps)
+        return await _record_failure(
+            store, reason, decision, span, deps, failed=reason != "llm_exhausted"
+        )
+    outcome                  = await _commit(store, cfg, decision, fresh, result, span, deps)
+    outcome.details["memes"] = await _collect_memes(store, cfg, fresh, result, day, deps)
+    return outcome
+
+
+async def _collect_memes(
+    store: LifeStore,
+    cfg: LifeConfig,
+    items: list[SourceItem],
+    result: digest_mod.DigestResult,
+    day: str,
+    deps: SessionDeps,
+) -> int:
+    if not result.memes or deps.download is None or deps.vision is None:
+        return 0
+    download = deps.download
+
+    async def fetch_image(url: str) -> tuple[bytes, str] | None:
+        return await download(url, cfg.max_meme_bytes)
+
+    return await memes_mod.collect(
+        store,
+        cfg,
+        items,
+        result.memes,
+        download = fetch_image,
+        vision   = deps.vision,
+        day      = day,
+        now      = lambda: deps.now().timestamp(),
+    )
 
 
 async def _no_news(
-    store: LifeStore, cfg: LifeConfig, decision: Decision, start: float, deps: SessionDeps
+    store: LifeStore, cfg: LifeConfig, decision: Decision, span: Span, deps: SessionDeps
 ) -> SessionOutcome:
     """取到的全是看过的：续做的小课题记一次空步，其余什么都不写。"""
 
@@ -399,14 +528,14 @@ async def _no_news(
 
     def apply(s: LifeStore) -> None:
         _apply_thread(s, cfg, decision, None, [], now)
-        _remember_activity(s.state, decision, start, now)
+        _remember_activity(s.state, decision, span[0], span[1])
 
     await store.mutate(apply)
     return SessionOutcome("ok", "all_seen")
 
 
 async def _lookup_terms(
-    store: LifeStore, cfg: LifeConfig, decision: Decision, start: float, deps: SessionDeps
+    store: LifeStore, cfg: LifeConfig, decision: Decision, span: Span, deps: SessionDeps
 ) -> SessionOutcome:
     """查百科：查实的流行语直接 known；查不到丢弃，请求出错的留在队列里。"""
 
@@ -424,7 +553,7 @@ async def _lookup_terms(
         if entry is not None:
             found.append(entry)
     if errors and not settled:
-        return await _record_failure(store, "all_sources_failed", decision, start, deps)
+        return await _record_failure(store, "all_sources_failed", decision, span, deps)
     now = deps.now().timestamp()
 
     def apply(s: LifeStore) -> None:
@@ -438,7 +567,7 @@ async def _lookup_terms(
             )
         s.state["lookup_queue"] = [t for t in s.state["lookup_queue"] if t not in settled]
         _housekeeping(s, cfg, now)
-        _remember_activity(s.state, decision, start, now)
+        _remember_activity(s.state, decision, span[0], span[1])
 
     await store.mutate(apply)
     return SessionOutcome("ok", "looked_up", terms=len(found))
@@ -449,11 +578,11 @@ async def run_session(
 ) -> SessionOutcome:
     """一次上网。调用方负责单飞与取消；这里只管顺序和落盘。"""
 
-    start, day = await _start(store, deps, decision)
+    span, day = await _start(store, cfg, deps, decision)
     if decision.choice == TERM_LOOKUP:
-        outcome = await _lookup_terms(store, cfg, decision, start, deps)
+        outcome = await _lookup_terms(store, cfg, decision, span, deps)
     elif decision.choice in (HOT_SCROLL, INTEREST, THREAD):
-        outcome = await _browse(store, cfg, decision, start, day, deps)
+        outcome = await _browse(store, cfg, decision, span, day, deps)
     else:
         outcome = SessionOutcome("skipped", "unsupported_choice")
     logger.info(

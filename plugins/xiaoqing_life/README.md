@@ -17,7 +17,12 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 | 兴趣 | 喜欢的东西越刷越多，随时间衰减，偶尔探索新方向 |
 | 查词 | 群里听不懂的词进待查队列，之后由她自己去百科查，查到流行语才记下 |
 
-尚未接入（见 [DESIGN.md](DESIGN.md) 第 7 节）：梗图收集与导入表情库、睡前整理与日记、主动开口分享。`life.export_memes` 先返回空页，`/life memes`、`/life meme` 提示尚未接入。
+| 看视频 | 被她点开的 B 站视频（至多 2 个）取详情、标签、弹幕（按频次与时间点）和热评；她读到的是简介、弹幕和评论区，经历里不声称看完或看到画面 |
+| 梗图 | 评论区里像反应表情的图，经视觉判定安全后进入 xiaoqing_chat 的表情库（全局可见，来源 `life:<sha256>`） |
+| 睡前整理 | 睡前写 2–4 句日记、给查完的小课题写收获、决定继续还是不查了；周日再写周记 |
+| 巩固快照 | 兴趣达到 repeated / consistent 时按固定模板生成“最近常看……”，不调模型 |
+
+尚未接入（见 [DESIGN.md](DESIGN.md) 第 8 节）：主动开口分享（群聊与白名单私聊）、daily_life 探针、作息亲和。
 
 **不做的事**：不登录任何账号，不发评论、点赞、私信；不执行网页里的任何指令；不把群聊内容上传到外网；不新增第三方依赖。
 
@@ -54,7 +59,7 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 }
 ```
 
-`vision` 路由留给随后接入的梗图判定。
+`vision` 路由用于梗图判定（图片以 data URL 送入）；缺失或 PIL 不可用时不收梗图。
 
 ### 配置字段
 
@@ -75,14 +80,18 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 | `quiet_hours` | `"00:30-08:00"` | 读不到人设卡〔作息〕时的睡眠时段 |
 | `wind_down_minutes` | `60` | 距睡觉多少分钟内只整理、不取新材料 |
 | `max_items_per_session` | `6` | 交给消化的条目数 |
-| `max_comments_per_item` | `8` | 每条取的热评数（含楼中楼合计） |
+| `max_comments_per_item` | `12` | 每条取的热评数（含楼中楼合计）；取评论的 ≤3 个条目按兴趣重合与热度预打分挑选 |
+| `max_watch_per_session` | `2` | 每次最多“点开”几个视频取详情 / 标签 / 弹幕 |
+| `choice_temperature` | `8` | 选活动的 softmax 温度：分数相近时更随机，调小趋近取最高分 |
+| `session_minutes` | 热榜 8–20 / 兴趣 15–35 / 续课题 15–30 / 查词 5–10 | 每种活动名义上的浏览时长（分钟，开始时随机取）；经历时间戳均匀撒在这段时间里，聊天只拿“已经刷到”的 |
 | `max_open_threads` / `thread_max_steps` | `2` / `3` | 同时进行的小课题数 / 每个最多续查次数 |
 | `episode_detail_days` / `episode_keep_days` | `7` / `45` | 经历细节期 / 保留期 |
 | `term_candidate_days` / `term_fading_days` / `term_forget_days` | `14` / `30` / `90` | 词条生命周期 |
 | `active_use_probability` | `0.3` | 每轮推一个“可以用”的梗或表达的概率 |
 | `suggest_cooldown_hours` | `6` | 同一词条或表达两次推荐的最短间隔 |
 | `blocked_keywords` | `[]` | 额外屏蔽词 |
-| `memes_enabled` / `meme_auto_approve` / `max_memes` / `max_meme_bytes` / `max_vision_per_session` | 见 DESIGN.md | 梗图相关，随后接入 |
+| `memes_enabled` / `meme_auto_approve` | `true` / `true` | 梗图收集；自动通过视觉安全判定，关掉后新图为 pending，需 `/life meme on <短ID>` |
+| `max_memes` / `max_meme_bytes` / `max_vision_per_session` | `200` / `1048576` / `2` | 梗图数量上限（淘汰最久未导出的）、单张字节上限、每次最多判定几张（每张 1 次 vision 调用） |
 
 `xiaoqing_chat` 一侧还有 `life.enable_online_life`（默认 `true`）和 `life.online_life_timeout_seconds`（默认 `0.8`），见 [xiaoqing_chat 手册](../xiaoqing_chat/README.md)。
 
@@ -108,7 +117,8 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 | `/life recent` | 最近 8 条经历 |
 | `/life slang` | 词条前 15（状态、来源数、最近看到） |
 | `/life threads` | 小课题 |
-| `/life memes` | 梗图列表（尚未接入） |
+| `/life memes` | 梗图列表（短 ID、名字、状态） |
+| `/life meme on\|off <短ID>` | 开关一张梗图；off 后经 `revoked` 让聊天侧表情库删掉 |
 | `/life run` | 立刻安排一次上网：跳过概率、间隔和失败退避，不跳过开关、睡眠和预算 |
 | `/life forget <词>` | 删除词条 |
 
@@ -116,7 +126,7 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 
 ## 📁 数据目录
 
-`data/xiaoqing_life/`：`episodes.json`、`terms.json`、`expressions.json`、`interests.json`、`threads.json`、`seen.json`、`state.json`。全部原子写入并保留 `.bak` 备份；主文件损坏时读备份，都坏时旧文件改名为 `.corrupt` 留底并从空开始。
+`data/xiaoqing_life/`：`episodes.json`、`terms.json`、`expressions.json`、`interests.json`、`threads.json`、`seen.json`、`snapshots.json`、`journal.json`（日记与周记，保留 8 周）、`memes.json` 与 `memes/<sha256>.<ext>`、`state.json`。全部原子写入并保留 `.bak` 备份；主文件损坏时读备份，都坏时旧文件改名为 `.corrupt` 留底并从空开始。
 
 ---
 
@@ -128,3 +138,14 @@ python -m pytest tests/plugins/xiaoqing_chat/test_xiaoqing_chat_online_life.py -
 ```
 
 全部离线：假 HTTP、假模型，不访问真实网络。模块与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+### 真实验证
+
+```bash
+python scripts/run_xiaoqing_life_session.py --activity hot_scroll --routes-from xiaoqing_chat
+python scripts/run_xiaoqing_life_session.py --activity interest_dive --query 天文摄影 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
+python scripts/run_xiaoqing_life_session.py --activity wind_down --advance-minutes 15 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
+python scripts/run_xiaoqing_life_session.py --no-ai --activity hot_scroll   # 只看取材
+```
+
+在隔离数据目录（默认 `work/xiaoqing_life/<时间戳>/`）里用真实端点和真实模型跑一次，打印取材、模型原始 JSON、被本地核对丢弃的条目及原因和落盘结果，并写 `result.json`。只读 `config/config.json` 与 `secrets.json`；`--routes-from xiaoqing_chat` 在内存里复用该插件的 `reasoning` / `vision` 路由。B 站的排行、搜索接口会间歇性触发风控（`-352` / HTTP 412），此时该来源按失败处理并换其它来源，不要高频重试。

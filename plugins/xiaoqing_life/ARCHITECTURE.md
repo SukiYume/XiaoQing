@@ -41,6 +41,9 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 | `threads.py` | 小课题状态机 open → reviewing → done / dropped；`finish` 要求引用已有经历 ID |
 | `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；损坏恢复；预算 `reserve_llm_call` |
 | `turn_context.py` | 聊天侧取用的选择规则与文本块；`unknown_terms` 入队 |
+| `sources/watch.py` | “看”视频：详情、标签、弹幕（XML，按归一化文本计频、30 秒分桶找最密时间点） |
+| `memes.py` | 梗图：固定图床下载、vision 判定、sha256 去重落盘、淘汰与撤销记录、分页导出、开关 |
+| `wind_down.py` | 睡前整理：日记（引用经历 ID 与日期）、小课题收获 / 继续 / 放弃、周日周记，本地核对 |
 | `commands.py` | `/life` 子命令文本 |
 
 ## 关键约定
@@ -58,7 +61,15 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 
 ## 尚未实现
 
-- 梗图下载、视觉判定、存储与导出（`export_memes` 暂返回空页）；`xiaoqing_chat` 一侧的表情库导入与同步任务。
-- 睡前整理：日记、reviewing 小课题的收获、兴趣巩固（planner 会在睡前窗口选出 `wind_down`，目前只记决策）。
-- 主动开口分享候选（`share_candidates` 暂为空）。
-- 真实验证脚本 `scripts/run_xiaoqing_life_session.py`。
+- 主动开口分享候选（`share_candidates` 暂为空）、白名单私聊主动联系。
+- daily_life 探针（`turn_context(mode="probe")`）、作息亲和（`activity_affinity`）。
+
+## 第二轮增补
+
+- **选活动**：分数过 softmax（`choice_temperature`）抽样，`last_decision` 记分数、选中项与概率。
+- **名义浏览时段**：每次上网开始时按活动抽一个时长，`last_session_at` / `last_session_end` / `activity_log` 按它记，间隔从结束算起；经历时间戳均匀撒在时段内，`turn_context` 只给 `at ≤ 现在` 的，时段内另给一句“你这会儿正在……”（不含未刷到的标题）。
+- **经历**：额外存 `gist`、`uploader`、`url`、`duration_s`、`dense_moment`；链接只在对方要链接 / 问哪个视频 / 谁做的时给；明说昨天 / 前天只看那一天。
+- **兴趣**：话题先并到相近的已有兴趣（`similar`，≤12 字）；种子兴趣常量底分不衰减，证据半衰期 30 天；到 repeated / consistent 生成 2/4/8 档巩固快照。
+- **B 站条目 ID** 与来源无关（`bili:<aid>`），热门 / 搜索 / 排行的同一视频只算一个独立来源。
+- **Core**：`Content-Encoding: deflate` 同时接受 zlib 封装与裸 deflate（B 站弹幕接口返回裸 deflate），限额不变。
+- **真实验证**：`scripts/run_xiaoqing_life_session.py`。

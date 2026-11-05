@@ -9,7 +9,7 @@ import math
 from typing import Any
 
 from .config import LifeConfig
-from .safety import normalize_for_match
+from .safety import normalize_for_match, similar
 from .stores import MAX_EXPRESSIONS, MAX_INTERESTS, MAX_TERMS, SEEN_DAYS, new_id
 
 DAY                     = 86400.0
@@ -176,6 +176,18 @@ def _decay(age_seconds: float) -> float:
     return float(0.5 ** (max(0.0, age_seconds) / (INTEREST_HALF_LIFE_DAYS * DAY)))
 
 
+TOPIC_CHARS = 12
+
+
+def merge_topic(interests: dict[str, dict[str, Any]], topic: str) -> str:
+    """话题先并到已有的相近兴趣上（「天文」「天文观测」「看星星」不各占一项），否则用新键。"""
+
+    key = topic.strip()[:TOPIC_CHARS]
+    if not key or key in interests:
+        return key
+    return next((existing for existing in interests if similar(key, existing)), key)
+
+
 def add_interest_evidence(
     interests: dict[str, dict[str, Any]],
     topic: str,
@@ -187,7 +199,7 @@ def add_interest_evidence(
 ) -> bool:
     """喜欢 +1、不喜欢 -1；同一 item_id 只计一次。返回是否真的新增了证据。"""
 
-    key = topic.strip()[:20]
+    key = merge_topic(interests, topic)
     if not key or delta == 0:
         return False
     entry = interests.setdefault(
@@ -205,16 +217,19 @@ def add_interest_evidence(
 def seed_interests(
     interests: dict[str, dict[str, Any]], seeds: tuple[str, ...], now: float
 ) -> None:
-    """种子兴趣起始分 1，不算证据。"""
+    """种子兴趣有一个不衰减的常量底分 1，不算证据；学来的证据照常衰减。"""
 
     for topic in seeds:
-        interests.setdefault(
+        entry = interests.setdefault(
             topic, {"base": 1.0, "evidence": [], "updated_at": now, "stage": "none"}
         )
+        entry["seed"] = True
+        entry["base"] = 1.0
 
 
 def interest_score(entry: dict[str, Any], now: float) -> float:
-    total = float(entry.get("base", 0.0)) * _decay(now - float(entry.get("updated_at", now)))
+    base  = float(entry.get("base", 0.0))
+    total = base if entry.get("seed") else base * _decay(now - float(entry.get("updated_at", now)))
     for item in entry.get("evidence", []):
         total += float(item.get("delta", 0)) * _decay(now - float(item.get("at", now)))
     return total
@@ -248,7 +263,7 @@ def refresh_interests(interests: dict[str, dict[str, Any]], now: float) -> None:
     for key in list(interests):
         entry          = interests[key]
         entry["stage"] = interest_stage(entry, now)
-        if not entry["evidence"] and interest_score(entry, now) < 0.05:
+        if not entry["evidence"] and not entry.get("seed") and interest_score(entry, now) < 0.05:
             del interests[key]
     if len(interests) > MAX_INTERESTS:
         ranked = sorted(interests, key=lambda k: interest_score(interests[k], now))
@@ -261,3 +276,51 @@ def interest_weights(interests: dict[str, dict[str, Any]], now: float) -> dict[s
 
     weights = {k: interest_score(v, now) for k, v in interests.items()}
     return {k: w for k, w in weights.items() if w > 0.0 and math.isfinite(w)}
+
+
+# ───────────────────────────── 巩固快照 ─────────────────────────────
+
+SNAPSHOT_TIERS = (2, 4, 8)
+
+
+def _snapshot_text(topic: str, stage: str, total: int, liked: int) -> str:
+    mood = "喜欢的居多" if liked * 2 > total else "没那么喜欢"
+    if stage == "consistent":
+        return f"这阵子一直常看{topic}相关的内容（{total}次，{mood}）"
+    return f"这两周常看{topic}相关的内容（{total}次，{mood}）"
+
+
+def consolidate(
+    interests: dict[str, dict[str, Any]], snapshots: list[dict[str, Any]], now: float
+) -> int:
+    """兴趣到 repeated / consistent 时生成确定性快照（不调模型）；同一话题同一档位只生成一次。
+
+    快照只是“最近的自己”的依据，不是任何学习的来源。返回新增条数。
+    """
+
+    made = 0
+    for topic, entry in interests.items():
+        stage = interest_stage(entry, now)
+        if stage not in ("repeated", "consistent"):
+            continue
+        evidence = entry.get("evidence", [])
+        tier = max((t for t in SNAPSHOT_TIERS if len(evidence) >= t), default=0)
+        if not tier or any(s["topic"] == topic and s["tier"] == tier for s in snapshots):
+            continue
+        liked = sum(1 for e in evidence if e.get("delta", 0) > 0)
+        times = [float(e.get("at", now)) for e in evidence]
+        snapshots.append(
+            {
+                "topic"         : topic,
+                "tier"          : tier,
+                "stage"         : stage,
+                "evidence_count": len(evidence),
+                "liked"         : liked,
+                "since"         : min(times),
+                "until"         : max(times),
+                "created_at"    : now,
+                "text"          : _snapshot_text(topic, stage, len(evidence), liked),
+            }
+        )
+        made += 1
+    return made

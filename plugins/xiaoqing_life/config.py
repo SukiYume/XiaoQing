@@ -37,6 +37,14 @@ SOURCE_DEFAULTS: dict[str, bool] = {
     "baike_lookup" : True,
 }
 
+# 每种活动名义上的浏览时长（分钟，闭区间，会话开始时随机取一个）。
+SESSION_MINUTES: dict[str, tuple[int, int]] = {
+    "hot_scroll"     : (8, 20),
+    "interest_dive"  : (15, 35),
+    "thread_continue": (15, 30),
+    "term_lookup"    : (5, 10),
+}
+
 _QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 
 
@@ -59,10 +67,15 @@ class LifeConfig:
     failure_backoff_minutes: float = 60.0
     browse_when_busy       : bool  = False
     # 读不到人设卡〔作息〕时的睡眠时段。
-    quiet_hours           : str             = "00:30-08:00"
-    wind_down_minutes     : float           = 60.0
-    max_items_per_session : int             = 6
-    max_comments_per_item : int             = 8
+    quiet_hours          : str                           = "00:30-08:00"
+    wind_down_minutes    : float                         = 60.0
+    max_items_per_session: int                           = 6
+    max_comments_per_item: int                           = 12
+    max_watch_per_session: int                           = 2
+    choice_temperature   : float                         = 8.0
+    session_minutes      : Mapping[str, tuple[int, int]] = field(
+        default_factory=lambda: dict(SESSION_MINUTES)
+    )
     max_vision_per_session: int             = 2
     max_open_threads      : int             = 2
     thread_max_steps      : int             = 3
@@ -137,6 +150,7 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
         "max_llm_calls_per_day" : (0, 500),
         "max_items_per_session" : (1, 12),
         "max_comments_per_item" : (0, 20),
+        "max_watch_per_session" : (0, 3),
         "max_vision_per_session": (0, 6),
         "max_open_threads"      : (0, 5),
         "thread_max_steps"      : (1, 10),
@@ -151,6 +165,7 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
     float_spec: dict[str, tuple[float, float]] = {
         "min_session_gap_minutes": (0.0, 1440.0),
         "session_probability"    : (0.0, 1.0),
+        "choice_temperature"     : (0.5, 100.0),
         "activity_window_minutes": (15.0, 1440.0),
         "activity_limit_minutes" : (1.0, 1440.0),
         "failure_backoff_minutes": (0.0, 1440.0),
@@ -166,6 +181,23 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
     return values
 
 
+def _session_minutes(value: Any) -> dict[str, tuple[int, int]]:
+    merged = dict(SESSION_MINUTES)
+    if isinstance(value, Mapping):
+        for name, default in SESSION_MINUTES.items():
+            pair = value.get(name)
+            if (
+                isinstance(pair, list)
+                and len(pair) == 2
+                and all(isinstance(n, int) and not isinstance(n, bool) for n in pair)
+            ):
+                low, high = max(1, min(pair)), min(240, max(pair))
+                merged[name] = (low, max(low, high))
+            else:
+                merged[name] = default
+    return merged
+
+
 def parse_life_config(raw: Any) -> LifeConfig:
     o = raw if isinstance(raw, Mapping) else {}
     d = LifeConfig()
@@ -173,6 +205,7 @@ def parse_life_config(raw: Any) -> LifeConfig:
         enabled = _bool(o.get("enabled"), d.enabled),
         sources = _sources(o.get("sources")),
         seed_interests=_words(o.get("seed_interests"), d.seed_interests, limit=60),
+        session_minutes   = _session_minutes(o.get("session_minutes")),
         browse_when_busy  = _bool(o.get("browse_when_busy"), d.browse_when_busy),
         quiet_hours       = _quiet(o.get("quiet_hours"), d.quiet_hours),
         memes_enabled     = _bool(o.get("memes_enabled"), d.memes_enabled),

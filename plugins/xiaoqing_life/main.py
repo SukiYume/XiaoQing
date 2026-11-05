@@ -18,6 +18,8 @@ from core.plugin_base import segments
 from core.public_errors import public_error_response
 
 from . import commands, persona_bridge
+from . import digest as digest_mod
+from . import memes as memes_mod
 from . import turn_context as turn_context_mod
 from .config import LifeConfig, load_life_config, route_configured
 from .lifecycle import seed_interests
@@ -25,6 +27,7 @@ from .planner import REST, WIND_DOWN, Decision, day_key, decide
 from .session import SessionDeps, run_session
 from .sources.base import BoundedFetcher
 from .stores import LifeStore, roll_day
+from .wind_down import run_wind_down
 
 logger = logging.getLogger(__name__)
 
@@ -93,26 +96,68 @@ async def shutdown(context: PluginContextProtocol) -> None:
 # ───────────────────────────── 上网任务 ─────────────────────────────
 
 
-def _deps(context: Any, runtime: LifeRuntime) -> SessionDeps:
+def _deps(context: Any, runtime: LifeRuntime, cfg: LifeConfig) -> SessionDeps:
     async def complete(route: str, messages: list[dict[str, str]]) -> str:
         result = await context.capabilities.ai.complete(route, messages)
         return str(result.content)
 
+    async def vision(messages: list[dict[str, Any]]) -> str:
+        result = await context.capabilities.ai.complete(
+            "vision", messages, required_modalities=("text", "image")
+        )
+        return str(result.content)
+
+    moment   = runtime.clock(context)
+    presence = persona_bridge.availability(context, cfg, moment)
+    can_see  = cfg.memes_enabled and route_configured(context, "vision")
     return SessionDeps(
-        fetch        = BoundedFetcher(context.http_session),
-        complete     = complete,
-        rng          = runtime.rng,
-        now          = lambda: runtime.clock(context),
-        persona      = persona_bridge.persona_facts(context),
-        reasoning_ok = route_configured(context, "reasoning"),
+        fetch         = BoundedFetcher(context.http_session),
+        complete      = complete,
+        rng           = runtime.rng,
+        now           = lambda: runtime.clock(context),
+        persona       = persona_bridge.persona_facts(context),
+        reasoning_ok  = route_configured(context, "reasoning"),
+        activity_text = presence.activity,
+        download      = memes_mod.download_image if can_see else None,
+        vision        = vision if can_see else None,
     )
+
+
+async def _run_wind_down(context: Any, runtime: LifeRuntime, cfg: LifeConfig) -> None:
+    deps   = _deps(context, runtime, cfg)
+    moment = deps.now()
+    line   = digest_mod.moment_line(moment, deps.activity_text)
+    result = await run_wind_down(
+        runtime.store,
+        cfg,
+        moment,
+        deps.complete,
+        persona      = deps.persona,
+        moment_line  = line,
+        reasoning_ok = deps.reasoning_ok,
+    )
+    logger.info(
+        "xiaoqing_life step=wind_down status=%s reason=%s diary=%s weekly=%s done=%d dropped=%d",
+        result.status,
+        result.reason,
+        result.diary,
+        result.weekly,
+        result.done,
+        result.dropped,
+    )
+    if result.status == "failed":
+        stamp = moment.timestamp()
+        await runtime.store.mutate(lambda s: s.state.__setitem__("last_failure_at", stamp))
 
 
 async def _run_guarded(
     context: Any, runtime: LifeRuntime, cfg: LifeConfig, decision: Decision
 ) -> None:
     try:
-        await run_session(runtime.store, cfg, decision, _deps(context, runtime))
+        if decision.choice == WIND_DOWN:
+            await _run_wind_down(context, runtime, cfg)
+        else:
+            await run_session(runtime.store, cfg, decision, _deps(context, runtime, cfg))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -150,11 +195,11 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
 async def _tick(context: Any, *, manual: bool) -> Decision:
     cfg     = load_life_config(context)
     runtime = get_runtime(context)
-    decision = _decide(context, runtime, cfg, manual=manual)
     if not cfg.enabled or runtime.closing:
-        return decision
-    if decision.choice in (REST, WIND_DOWN):
-        # 睡前整理尚未接入：只记决策，不上网、不写经历。
+        # 关闭时不碰任何状态（连滚动日期、种子兴趣都不改）。
+        return Decision(REST, "disabled" if not cfg.enabled else "closing")
+    decision = _decide(context, runtime, cfg, manual=manual)
+    if decision.choice == REST:
         at = runtime.clock(context).timestamp()
         await runtime.store.mutate(
             lambda s: s.state.__setitem__("last_decision", decision.record(at))
@@ -207,16 +252,20 @@ async def turn_context(
 async def export_memes(
     payload: dict[str, Any], context: PluginContextProtocol
 ) -> dict[str, Any] | None:
-    """梗图导出；梗图收集尚未接入，先返回空页让清单有效。"""
+    """梗图分页导出：只导出 ready，按 approved_at 升序；revoked 是此后被关掉或淘汰的。"""
 
     try:
         if not load_life_config(context).enabled:
             return None
-        since = payload.get("since") if isinstance(payload, dict) else 0.0
-        since = (
-            float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) else 0.0
+        runtime = get_runtime(context)
+        page    = await memes_mod.export_page(
+            runtime.store,
+            payload if isinstance(payload, dict) else {},
+            runtime.clock(context).timestamp(),
         )
-        return {"memes": [], "revoked": [], "next_since": since}
+        if page["memes"]:
+            runtime.spawn(runtime.store.flush())
+        return page
     except Exception as exc:
         logger.warning("xiaoqing_life export_memes failed error_type=%s", type(exc).__name__)
         return None
@@ -230,9 +279,18 @@ async def _run_command(context: Any) -> str:
     if not cfg.enabled:
         return _DISABLED_TIP
     decision = await _tick(context, manual=True)
-    if decision.choice in (REST, WIND_DOWN):
+    if decision.choice == REST:
         return f"这会儿不上网：{decision.reason}"
+    if decision.choice == WIND_DOWN:
+        return "已安排一次睡前整理，稍后用 /life status 看看。"
     return "已安排一次上网，稍后用 /life recent 看看。"
+
+
+async def _meme_command(store: LifeStore, rest: str, now: float) -> str:
+    parts = rest.split()
+    if len(parts) != 2 or parts[0].lower() not in ("on", "off"):
+        return "用法: /life meme on|off <短ID>"
+    return await memes_mod.set_enabled(store, parts[1], parts[0].lower() == "on", now)
 
 
 async def handle(
@@ -259,8 +317,10 @@ async def handle(
             return segments(commands.slang_text(store, moment))
         if action == "threads":
             return segments(commands.threads_text(store))
-        if action in ("memes", "meme"):
-            return segments("梗图收集还没有接入。")
+        if action == "memes":
+            return segments(memes_mod.list_text(store))
+        if action == "meme":
+            return segments(await _meme_command(store, rest, moment.timestamp()))
         if action == "run":
             return segments(await _run_command(context))
         if action == "forget":

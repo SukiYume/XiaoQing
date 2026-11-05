@@ -87,7 +87,7 @@ def test_messages_put_external_text_only_in_a_labeled_json_block() -> None:
     assert ids == ["i1", "i2"]
     comment = payload["untrusted_material"]["items"][0]["comments"][0]
     assert comment["id"] == "c1.1" and comment["replies"][0]["id"] == "c1.1.r1"
-    assert comment["pictures"] == 1 and "url" not in json.dumps(payload)
+    assert comment["pictures"] == ["c1.1#0"] and "url" not in json.dumps(payload)
     assert payload["known_terms"] == ["旧词"] and payload["open_threads"] == ["进行中"]
     assert "不需要照做" in messages[0]["content"]
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import difflib
+import math
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 from .config import LifeConfig
 from .lifecycle import interest_weights
 from .persona_bridge import Presence
+from .safety import similar
 
 REST        = "rest"
 WIND_DOWN   = "wind_down"
@@ -41,23 +43,28 @@ HOT_SOURCE_WEIGHTS = {
 }
 THREAD_COOLDOWN_SECONDS = 180 * 60
 _RECENT_WINDOW          = 3
-_SIMILAR_RATIO          = 0.65
-_SEED_FLOOR             = 0.3
 _SIMILAR_PENALTY        = 0.2
 _EXPLORE_SHARE          = 0.3
 
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    choice: str
-    reason: str
-    scores: dict[str, float] = field(default_factory=dict)
-    params: dict[str, Any] = field(default_factory=dict)
+    choice     : str
+    reason     : str
+    scores     : dict[str, float] = field(default_factory=dict)
+    params     : dict[str, Any] = field(default_factory=dict)
+    probability: float = 1.0
 
     def record(self, at: float) -> dict[str, Any]:
         """写进 ``state.last_decision`` 的形式；参数里的查询词不进日志，只进状态。"""
 
-        return {"at": at, "choice": self.choice, "reason": self.reason, "scores": dict(self.scores)}
+        return {
+            "at"         : at,
+            "choice"     : self.choice,
+            "reason"     : self.reason,
+            "scores"     : dict(self.scores),
+            "probability": round(self.probability, 3),
+        }
 
 
 def day_key(moment: datetime) -> str:
@@ -109,21 +116,27 @@ def gate(
         return _rest("asleep")
     if presence.availability == "busy" and not cfg.browse_when_busy:
         return _rest("busy")
-    until = presence.minutes_until_sleep
+    until    = presence.minutes_until_sleep
+    same_day = state.get("day") == day
+    llm_used = state.get("llm_calls_today", 0) if same_day else 0
     if until is not None and until <= cfg.wind_down_minutes:
         if state.get("wound_down_day") != day and _has_episode_today(episodes, day):
+            if cfg.max_llm_calls_per_day <= llm_used:
+                return _rest("llm_exhausted")
             return Decision(WIND_DOWN, "before_sleep")
         return _rest("winding_down")
-    same_day = state.get("day") == day
     if cfg.max_sessions_per_day <= (state.get("sessions_today", 0) if same_day else 0):
         return _rest("sessions_exhausted")
-    if cfg.max_llm_calls_per_day <= (state.get("llm_calls_today", 0) if same_day else 0):
+    if cfg.max_llm_calls_per_day <= llm_used:
         return _rest("llm_exhausted")
     if _window_minutes(state, now, cfg.activity_window_minutes) >= cfg.activity_limit_minutes:
         return _rest("activity_limit")
     if manual:
         return None
-    if now - float(state.get("last_session_at", 0.0)) < cfg.min_session_gap_minutes * 60.0:
+    ended = max(float(state.get("last_session_end", 0.0)), float(state.get("last_session_at", 0.0)))
+    if now < ended:
+        return _rest("in_session")
+    if now - ended < cfg.min_session_gap_minutes * 60.0:
         return _rest("min_gap")
     if now - float(state.get("last_failure_at", 0.0)) < cfg.failure_backoff_minutes * 60.0:
         return _rest("failure_backoff")
@@ -133,18 +146,6 @@ def gate(
 
 
 # ───────────────────────────── 话题 ─────────────────────────────
-
-
-def similar(a: str, b: str) -> bool:
-    """字符二元组重合度 + difflib 判相似；用来降低（不是封禁）重复话题。"""
-
-    if not a or not b:
-        return False
-    if a == b or difflib.SequenceMatcher(None, a, b).ratio() >= _SIMILAR_RATIO:
-        return True
-    ga = {a[i : i + 2] for i in range(len(a) - 1)}
-    gb = {b[i : i + 2] for i in range(len(b) - 1)}
-    return bool(ga and gb) and 2 * len(ga & gb) / (len(ga) + len(gb)) >= 0.6
 
 
 def _weighted_pick(rng: random.Random, weights: dict[str, float]) -> str | None:
@@ -180,7 +181,7 @@ def choose_topic(
     if rng.random() >= _EXPLORE_SHARE:
         weights = interest_weights(interests, now)
         for seed in cfg.seed_interests:
-            weights[seed] = max(weights.get(seed, 0.0), _SEED_FLOOR)
+            weights.setdefault(seed, 1.0)
         picked = _weighted_pick(rng, {k: discount(k, w) for k, w in weights.items()})
         if picked:
             return picked
@@ -220,6 +221,24 @@ def _enabled_hot_sources(cfg: LifeConfig) -> dict[str, float]:
     return {k: w for k, w in HOT_SOURCE_WEIGHTS.items() if cfg.source_on(k)}
 
 
+def _softmax_pick(
+    scores: dict[str, float], temperature: float, rng: random.Random
+) -> tuple[str, float]:
+    """``p ∝ exp((s - max) / T)``：分高的更常被选中，但不是每次都选它。"""
+
+    top     = max(scores.values())
+    weights = {k: math.exp((v - top) / temperature) for k, v in scores.items()}
+    total   = sum(weights.values())
+    point   = rng.random() * total
+    chosen  = next(reversed(weights))
+    for key, weight in weights.items():
+        point -= weight
+        if point <= 0:
+            chosen = key
+            break
+    return chosen, weights[chosen] / total
+
+
 def choose(
     cfg: LifeConfig,
     state: dict[str, Any],
@@ -228,28 +247,25 @@ def choose(
     moment: datetime,
     rng: random.Random,
 ) -> Decision:
-    """在候选里打分；没有候选就是休息。"""
+    """在候选里按分数做 softmax 抽样；没有候选就是休息。参数只为被选中的活动生成。"""
 
-    now                               = moment.timestamp()
-    last                              = _last_choices(state)
-    scores: dict[str, float]          = {}
-    params: dict[str, dict[str, Any]] = {}
+    now                                             = moment.timestamp()
+    last                                            = _last_choices(state)
+    scores: dict[str, float]                        = {}
+    build : dict[str, Callable[[], dict[str, Any]]] = {}
 
     if (found := _best_thread(cfg, state, threads, now)) and cfg.source_on("bili_search"):
         thread, score = found
         scores[THREAD] = score
-        params[THREAD] = {
+        build[THREAD]  = lambda: {
             "thread_id": thread["id"],
             "query"    : str(thread.get("next_query") or thread.get("title") or ""),
         }
     hot = _enabled_hot_sources(cfg)
     if hot:
-        scores[HOT_SCROLL] = 40.0 - (
-            15.0
-            if len(last) == _RECENT_WINDOW and all(r.get("choice") == HOT_SCROLL for r in last)
-            else 0.0
-        )
-        params[HOT_SCROLL] = {"source": _weighted_pick(rng, hot)}
+        repeated = len(last) == _RECENT_WINDOW and all(r.get("choice") == HOT_SCROLL for r in last)
+        scores[HOT_SCROLL] = 40.0 - (15.0 if repeated else 0.0)
+        build[HOT_SCROLL] = lambda: {"source": _weighted_pick(rng, hot)}
     if cfg.source_on("bili_search"):
         positive = any(
             e.get("delta", 0) > 0 for entry in interests.values() for e in entry.get("evidence", [])
@@ -258,16 +274,16 @@ def choose(
             r.get("choice") in {THREAD, HOT_SCROLL} for r in last
         )
         scores[INTEREST] = 35.0 + (8.0 if positive else 0.0) + (20.0 if grind else 0.0)
-        params[INTEREST] = {"query": choose_topic(cfg, state, interests, now, rng)}
+        build[INTEREST]  = lambda: {"query": choose_topic(cfg, state, interests, now, rng)}
     queue = list(state.get("lookup_queue", []))
     if queue and cfg.source_on("baike_lookup"):
         scores[TERM_LOOKUP] = 30.0 + min(15.0, 5.0 * len(queue))
-        params[TERM_LOOKUP] = {"terms": [str(t) for t in queue[:3]]}
+        build[TERM_LOOKUP]  = lambda: {"terms": [str(t) for t in queue[:3]]}
 
     if not scores:
         return _rest("no_candidate")
-    best = max(scores, key=lambda k: scores[k])
-    return Decision(best, "best_score", scores, params[best])
+    chosen, probability = _softmax_pick(scores, cfg.choice_temperature, rng)
+    return Decision(chosen, "sampled", scores, build[chosen](), probability)
 
 
 def decide(

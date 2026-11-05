@@ -34,7 +34,7 @@ async def test_bilibili_popular_parses_cleans_and_drops_blocked() -> None:
         }
     )
     items = await bilibili.popular(fetch, [])
-    assert [i.item_id for i in items] == ["bili_popular:1"]
+    assert [i.item_id for i in items] == ["bili:1"]
     item = items[0]
     assert item.title == "猫猫的一天" and item.text == "详情" and item.tags == ("科技",)
     assert item.heat == 1001 and item.url.endswith("BV1")

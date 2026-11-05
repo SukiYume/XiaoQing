@@ -44,6 +44,12 @@ class FakeFetcher:
                 return value(params) if callable(value) else value
         raise SourceError("fake", "no_route")
 
+    async def get_xml(
+        self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
+    ) -> bytes:
+        value = await self.get_json(url, params=params, referer=referer)
+        return value if isinstance(value, bytes) else str(value).encode("utf-8")
+
 
 def bili_video(aid: int, title: str, desc: str = "简介", **extra: Any) -> dict[str, Any]:
     return {

@@ -122,7 +122,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
 
     assert (outcome.status, outcome.episodes, outcome.terms) == ("ok", 2, 1)
     assert len(ai.calls) == 1 and ai.calls[0][0] == "reasoning"
-    assert [e["item_id"] for e in store.episodes] == ["bili_popular:1", "bili_popular:2"]
+    assert [e["item_id"] for e in store.episodes] == ["bili:1", "bili:2"]
     first = store.episodes[0]
     assert (first["activity"], first["feeling"], first["share"], first["day"]) == (
         HOT_SCROLL,
@@ -132,9 +132,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
     )
     assert first["term_keys"] == ["哈基米"] and first["title"] == "猫猫的一天"
     # 词条只收有真实摘录的那个，且来源是它出现的条目
-    assert list(store.terms) == ["哈基米"] and store.terms["哈基米"]["sources"] == [
-        "bili_popular:1"
-    ]
+    assert list(store.terms) == ["哈基米"] and store.terms["哈基米"]["sources"] == ["bili:1"]
     assert store.terms["哈基米"]["status"] == "candidate"
     assert store.expressions[0]["pattern"] == "X基础，Y不基础"
     assert (
@@ -142,7 +140,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
         and store.interests["装机"]["evidence"][0]["delta"] == -1
     )
     assert store.threads[0]["title"] == "猫为什么爱纸箱" and store.threads[0]["status"] == "open"
-    assert set(store.seen) == {"bili_popular:1", "bili_popular:2"}
+    assert set(store.seen) == {"bili:1", "bili:2"}
     state = store.state
     assert (state["sessions_today"], state["llm_calls_today"], state["day"]) == (1, 1, "2026-11-05")
     assert state["last_decision"]["choice"] == HOT_SCROLL and state["last_session_at"] == NOW
@@ -318,7 +316,7 @@ async def test_thread_continue_without_news_cools_down_after_two_empty_steps(
 ) -> None:
     store = _thread_store(tmp_path)
     fetch = FakeFetcher({**_search(_video(7, "旧视频")), "/reply/main": comments_payload()})
-    store.seen["bili_search:7"] = NOW - 100  # 已经看过
+    store.seen["bili:7"] = NOW - 100  # 已经看过
     ai = FakeAI()
     await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
     assert store.threads[0]["empty_streak"] == 1 and ai.calls == []

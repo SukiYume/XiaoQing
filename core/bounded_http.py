@@ -315,15 +315,19 @@ class _BoundedDecoder:
             and declared_wire_bytes > limits.max_decoded_bytes
         ):
             raise ResponseLimitError("declared decoded body is too large")
-        self._limits     = limits
-        self._wire_bytes = 0
-        self._decoded    = bytearray()
+        self._limits                       = limits
+        self._wire_bytes                   = 0
+        self._decoded                      = bytearray()
+        self._deflate_header: bytes | None = None
         if encoding == "identity":
             self._decompressor: zlib._Decompress | None = None
         elif encoding == "gzip":
             self._decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
         elif encoding == "deflate":
-            self._decompressor = zlib.decompressobj()
+            # 浏览器同样兼容两种写法：HTTP 规定 zlib 封装，但不少服务（如 B 站）发送裸 deflate。
+            # 收到前两个字节再决定，限额与比例检查对两种形式完全一致。
+            self._decompressor   = None
+            self._deflate_header = b""
         else:  # pragma: no cover - validated by _content_encoding
             raise ResponseFormatError("unsupported content encoding")
 
@@ -341,6 +345,10 @@ class _BoundedDecoder:
         if self._wire_bytes > self._limits.max_wire_bytes:
             raise ResponseLimitError("response wire body is too large")
 
+        if self._deflate_header is not None:
+            payload = self._start_deflate(payload)
+            if not payload:
+                return
         if self._decompressor is None:
             self._append(payload)
             return
@@ -357,7 +365,24 @@ class _BoundedDecoder:
         if self._decompressor.unconsumed_tail:
             raise ResponseLimitError("decoded response body is too large")
 
+    def _start_deflate(self, payload: bytes) -> bytes:
+        """攒够两个字节后按有无 zlib 头选择解压方式；返回应继续解压的全部数据。"""
+
+        header = (self._deflate_header or b"") + payload
+        if len(header) < 2:
+            self._deflate_header = header
+            return b""
+        self._deflate_header = None
+        is_zlib              = (header[0] & 0x0F) == 8 and ((header[0] << 8) | header[1]) % 31 == 0
+        self._decompressor   = (
+            zlib.decompressobj() if is_zlib else zlib.decompressobj(-zlib.MAX_WBITS)
+        )
+        return header
+
     def finish(self) -> bytes:
+        if self._deflate_header is not None:
+            self._decompressor   = zlib.decompressobj()
+            self._deflate_header = None
         if self._decompressor is not None:
             try:
                 output = self._decompressor.flush(self._remaining_output_budget() + 1)

@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.atomic_store import keyed_path_lock
+from core.atomic_store import atomic_write_bytes, keyed_path_lock
 from core.image_validation import ImageValidationError, validate_image_path
 from core.plugin_base import ensure_dir, load_json, write_json
 
@@ -28,6 +28,7 @@ from .loading import image_validation_limits, run_media_blocking
 from .markers import is_generic_media_label, looks_like_structured_media_text
 from .models import SUPPORTED_IMAGE_SUFFIXES
 
+_EXTERNAL_SOURCE_PREFIX       = "life:"
 _PENDING_DIR_NAME             = "pending"
 _REJECTED_DIR_NAME            = "rejected"
 _EMOJI_REPAIR_TASKS: set[str] = set()
@@ -277,6 +278,10 @@ def _status_from_record(record: dict[str, Any] | None) -> str:
 
 def _source_from_record(record: dict[str, Any] | None) -> str:
     source = str((record or {}).get("source", "") or "auto").strip().lower()
+    if source.startswith(_EXTERNAL_SOURCE_PREFIX) and _is_sha256(
+        source[len(_EXTERNAL_SOURCE_PREFIX) :]
+    ):
+        return source
     return source if source in {"manual", "auto"} else "auto"
 
 
@@ -813,6 +818,100 @@ def _collect_emoji_candidate_locked(
         payload          = payload,
     )
     return entry, is_new
+
+
+def import_external_emoji(
+    context,
+    runtime,
+    *,
+    image_bytes: bytes,
+    suffix: str,
+    description: str,
+    emotion_tags: tuple[str, ...],
+    marker: str,
+    source: str,
+) -> bool:
+    """把外部插件（xiaoqing_life）已校验的梗图放进表情库，全局可见；返回是否新增或更新。
+
+    按内容 sha256 幂等：同一张图重复导入什么都不改；已有的手动 / 自动收集条目不被覆盖。
+    ``source`` 必须是 ``life:<sha256>``，之后只能按这个来源删除。
+    """
+
+    sha = hashlib.sha256(image_bytes).hexdigest()
+    if source != f"{_EXTERNAL_SOURCE_PREFIX}{sha}":
+        raise ValueError("external emoji source must be life:<sha256 of the image>")
+    suffix = suffix.lower() if suffix.lower() in SUPPORTED_IMAGE_SUFFIXES else ".png"
+    if not (description.strip() and marker.strip()):
+        raise ValueError("external emoji needs a description and marker")
+    library_dir = resolve_emoji_library_dir(context)
+    with keyed_path_lock(_emoji_index_path(context)):
+        ensure_dir(library_dir)
+        payload          = _load_index(context)
+        original_payload = deepcopy(payload)
+        entries          = payload.setdefault("entries", {})
+        existing         = entries.get(sha)
+        existing         = existing if isinstance(existing, dict) else None
+        if existing is not None and _source_from_record(existing) != source:
+            return False
+        target = _safe_target_file_path(
+            context, existing=existing, base_dir=library_dir, record_key=sha, suffix=suffix
+        )
+        if not _is_path_within_roots(target, _allowed_emoji_target_dirs(context)):
+            return False
+        if not target.exists():
+            atomic_write_bytes(target, image_bytes)
+        if (
+            existing is not None
+            and existing.get("status") == "active"
+            and existing.get("visibility") == "global"
+            and existing.get("global_approved") is True
+        ):
+            return False
+        entry = EmojiLibraryEntry(
+            media_hash   = sha,
+            file_path    = _to_data_relative_path(context, target),
+            description  = description.strip(),
+            emotion_tags = tuple(emotion_tags),
+            usage_count  = int((existing or {}).get("usage_count", 0) or 0),
+            last_used_ts = float((existing or {}).get("last_used_ts", 0.0) or 0.0),
+            marker       = marker.strip(),
+        )
+        record = _normalize_entry_record(
+            context          = context,
+            file_path        = target,
+            entry            = entry,
+            existing         = existing,
+            status           = "active",
+            source           = source,
+            perceptual_hash  = _average_hash(target),
+            touch_collection = False,
+        )
+        record["visibility"]      = "global"
+        record["global_approved"] = True
+        entries[sha]              = record
+        _save_index_if_changed(context, original_payload=original_payload, payload=payload)
+        return True
+
+
+def remove_external_emoji(context, media_hash: str, *, source_prefix: str = "life:") -> bool:
+    """只删来源以 ``source_prefix`` 开头的条目（文件与索引行）；其它来源一律不动。"""
+
+    if not _is_sha256(media_hash):
+        return False
+    with keyed_path_lock(_emoji_index_path(context)):
+        payload          = _load_index(context)
+        original_payload = deepcopy(payload)
+        entries          = payload.setdefault("entries", {})
+        record           = entries.get(media_hash)
+        if not isinstance(record, dict):
+            return False
+        if not _source_from_record(record).startswith(source_prefix):
+            return False
+        if not _remove_library_file(context, record):
+            return False
+        entries.pop(media_hash, None)
+        _save_index_if_changed(context, original_payload=original_payload, payload=payload)
+        return True
 
 
 def schedule_emoji_library_repair(context, runtime) -> bool:

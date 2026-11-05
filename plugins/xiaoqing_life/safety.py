@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import difflib
 import html
 import re
 import unicodedata
 from collections.abc import Iterable
 
-_TAG_RE     = re.compile(r"<[^<>]{0,200}>")
-_URL_RE     = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
-_AT_RE      = re.compile(r"@[^\s@，,。:：]{1,30}")
-_BRACKET_RE = re.compile(r"[\[［][^\[\]［］]{0,60}[\]］]")
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁠﻿]")
+_SIMILAR_RATIO = 0.65
+_TAG_RE        = re.compile(r"<[^<>]{0,200}>")
+_URL_RE        = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_AT_RE         = re.compile(r"@[^\s@，,。:：]{1,30}")
+_BRACKET_RE    = re.compile(r"[\[［][^\[\]［］]{0,60}[\]］]")
+_CONTROL_RE    = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁠﻿]")
+_LONG_RUN_RE = re.compile(r"(.)\1{5,}")
+_REPLY_PREFIX_RE = re.compile(r"^\s*回复\s*[:：]\s*")
 _SPACE_RE = re.compile(r"\s+")
 _SENTENCE_RE = re.compile(r"(?<=[。！？!?；;\n])")
 _NORMALIZE_RE = re.compile(r"[\W_]+")
@@ -133,7 +137,9 @@ def clean_text(value: object, limit: int) -> str:
     text = _URL_RE.sub("", text)
     text = _AT_RE.sub("", text)
     text = _BRACKET_RE.sub("", text)
+    text = _REPLY_PREFIX_RE.sub("", text.strip())
     text = _drop_injection(text)
+    text = _LONG_RUN_RE.sub(lambda m: m.group(1) * 3, text)
     text = _SPACE_RE.sub(" ", text).strip()
     return text[:limit].strip()
 
@@ -165,3 +171,30 @@ def quote_in_source(quote: str, source: str) -> bool:
 
     needle = normalize_for_match(quote)
     return bool(needle) and needle in normalize_for_match(source)
+
+
+def similar(a: str, b: str) -> bool:
+    """字符二元组重合度 + difflib 判相似；用来合并近义话题、降低（不是封禁）重复话题。"""
+
+    if not a or not b:
+        return False
+    if a == b or difflib.SequenceMatcher(None, a, b).ratio() >= _SIMILAR_RATIO:
+        return True
+    ga = {a[i : i + 2] for i in range(len(a) - 1)}
+    gb = {b[i : i + 2] for i in range(len(b) - 1)}
+    return bool(ga and gb) and 2 * len(ga & gb) / (len(ga) + len(gb)) >= 0.6
+
+
+# 太常见而没有话题意义的二元组：不算内容重合。
+STOP_BIGRAMS = frozenset(
+    "一个 这个 那个 什么 就是 可以 不是 没有 自己 我们 你们 他们 时候 现在 今天 怎么 这样 还是 真的 觉得 因为 所以".split()
+)
+
+
+def bigrams(text: str) -> set[str]:
+    folded = normalize_for_match(text)
+    return {folded[i : i + 2] for i in range(len(folded) - 1)} - STOP_BIGRAMS
+
+
+def overlap(a: str, b: str) -> int:
+    return len(bigrams(a) & bigrams(b))
