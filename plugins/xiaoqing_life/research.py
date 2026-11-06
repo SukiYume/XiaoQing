@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
@@ -19,7 +21,7 @@ from . import methods as methods_mod
 from . import reinforce
 from . import threads as thread_ops
 from .config import LifeConfig
-from .safety import clean_text, is_blocked
+from .safety import clean_text, is_blocked, normalize_for_match, quote_in_source
 from .sources import baike, bilibili, deep, watch, wiki
 from .sources.base import Fetcher, SourceError, SourceItem
 from .stores import LifeStore, reserve_llm_call
@@ -56,11 +58,12 @@ _SYSTEM = """{persona}
 
 怎么查：
 - 先看笔记里已经知道什么、还差什么，再读这一轮的材料。要点用自己的话写，但每条要点都要附材料里的原文（quote）和它所在的编号（refs，如 i1、c1.2、p1.2）。
-- 发现之前的笔记理解错了，用 revises 指出改的是哪条笔记。两种说法对不上时可以写进 open_question，下一步去对照。
+- 只有发现之前某条笔记说错了，才用 revises 指出改的是哪条；只是补充了新细节、把问题答得更全，就直接写新的要点，不用 revises。两种说法对不上时可以写进 open_question，下一步去对照。
 - 查明白了 status 写 answered；资料明显不够、再查也没用时写 stuck；还在往下查写 progress；这一轮没收获写 none。
-- next：想换个词再搜写 search（arg 是搜索词）；想把材料里某个 B站视频读深一点写 deep_read（arg 是它的条目编号）；想查一个概念写 lookup（arg 是概念）；够了就写 stop。
+- next：想换个词再搜写 search（arg 是两三个关键词，用空格隔开）；想把材料里某个 B站视频读深一点写 deep_read（arg 是它的条目编号）；想查一个概念写 lookup（arg 是一个词条名，2 到 8 个字，比如“地球自转”“周日视运动”，不要写成问句）；够了就写 stop。next.action 只能从 available_actions 里选。
+- 要点的 quote 可以把同一个问题在不同材料里的几句原文接起来，每一句都要逐字来自 refs 里列出的编号。
 - methods 是你以前摸索出的查法，适用就照着做。
-- looked_at 只写你真的点开细看的条目；没有合适内容的字段给空数组。"""
+- looked_at 只写你真的点开细看的条目；feeling 是你对这条内容本身喜不喜欢，不是它有没有回答你的问题（没回答到写在 reaction 里就好）。没有合适内容的字段给空数组。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,8 +101,9 @@ def build_messages(
     methods: list[str],
     round_no: int,
     rounds_left: int,
-    moment: datetime | None = None,
-    activity: str           = "",
+    moment: datetime | None    = None,
+    activity: str              = "",
+    available: tuple[str, ...] = ACTIONS,
 ) -> list[dict[str, str]]:
     notes = [
         {
@@ -119,6 +123,7 @@ def build_messages(
         "methods"           : methods,
         "round"             : round_no,
         "rounds_left"       : rounds_left,
+        "available_actions" : list(available),
         "untrusted_material": digest_mod.material(items),
     }
     system = _SYSTEM.replace("{persona}", persona or "你是小青。").replace(
@@ -132,7 +137,7 @@ def build_messages(
 
 def _findings(
     rows: Any,
-    texts: dict[str, str],
+    texts: Mapping[str, str],
     items: list[SourceItem],
     live_ids: set[str],
     blocked: tuple[str, ...],
@@ -140,7 +145,7 @@ def _findings(
     found: list[Finding] = []
     for row in digest_mod._rows(rows, MAX_FINDINGS * 2):
         refs  = digest_mod._refs(row.get("refs"), texts)
-        quote = digest_mod._quote_ok(row.get("quote"), refs, texts) if refs else None
+        quote = finding_quote(row.get("quote"), refs, texts) if refs else None
         text  = clean_text(row.get("text"), FINDING_CHARS)
         if not (refs and quote and text) or is_blocked(text, blocked):
             continue
@@ -159,10 +164,49 @@ def _findings(
     return found
 
 
-def _next(raw: Any, items: list[SourceItem]) -> Next:
+def available_actions(
+    cfg: LifeConfig, state: dict[str, Any], items: list[SourceItem], now: float
+) -> tuple[str, ...]:
+    """这一轮之后还能做的行动：关掉的、近期不稳的来源不给；deep_read 要材料里有 B站条目。"""
+
+    found: list[str] = []
+    if cfg.source_on("bili_search") and reinforce.health_factor(state, "bili_search", now) >= 1.0:
+        found.append("search")
+    if any(i.source.startswith("bili_") for i in items):
+        found.append("deep_read")
+    if cfg.source_on("baike_lookup") or cfg.source_on("wiki_read"):
+        found.append("lookup")
+    return (*found, "stop")
+
+
+_FRAGMENT_RE      = re.compile(r"[。！？；!?;…]+")
+MIN_FRAGMENT      = 4
+MIN_CHECKED_SHARE = 0.6
+
+
+def finding_quote(quote: Any, refs: list[str], texts: Mapping[str, str]) -> str | None:
+    """要点摘录：整段在所引原文里；或者是几句原文接起来，每一句（≥4 字）都逐字出现在某个所引编号里，
+    并且核对过的部分占摘录的 60% 以上（把不同材料里的说法接起来正是研究要做的）。"""
+
+    whole = digest_mod._quote_ok(quote, refs, texts)
+    if whole or not isinstance(quote, str):
+        return whole
+    pieces  = [p for p in _FRAGMENT_RE.split(quote) if len(normalize_for_match(p)) >= MIN_FRAGMENT]
+    total   = len(normalize_for_match(quote))
+    checked = sum(len(normalize_for_match(p)) for p in pieces)
+    if not pieces or not total or checked < MIN_CHECKED_SHARE * total:
+        return None
+    if all(any(quote_in_source(p, texts[r]) for r in refs) for p in pieces):
+        return clean_text(quote, 120) or None
+    return None
+
+
+def _next(raw: Any, items: list[SourceItem], allowed: tuple[str, ...] = ACTIONS) -> Next:
     """不在表里视为 stop；deep_read 的参数必须是本轮 B站条目编号（换算成条目 ID）；search / lookup 参数清洗后非空。"""
 
     if not isinstance(raw, dict) or raw.get("action") not in ACTIONS:
+        return Next()
+    if raw.get("action") not in allowed:  # 关掉的来源：当作 stop
         return Next()
     action = str(raw["action"])
     arg    = raw.get("arg")
@@ -185,7 +229,11 @@ def _question(value: Any, blocked: tuple[str, ...]) -> str:
 
 
 def validate_round(
-    raw: dict[str, Any], items: list[SourceItem], thread: dict[str, Any], blocked: tuple[str, ...]
+    raw: dict[str, Any],
+    items: list[SourceItem],
+    thread: dict[str, Any],
+    blocked: tuple[str, ...],
+    allowed: tuple[str, ...] = ACTIONS,
 ) -> RoundResult:
     """逐条核对；不通过的丢弃。``looked_at`` / ``terms`` / ``expressions`` 用消化的同一套校验。"""
 
@@ -199,11 +247,30 @@ def validate_round(
         open_question = _question(raw.get("open_question"), blocked),
         status        = status if status in ("progress", "answered", "stuck") else "none",
         stuck_reason  = clean_text(raw.get("stuck_reason"), 30),
-        next          = _next(raw.get("next"), items),
+        next          = _next(raw.get("next"), items, allowed),
     )
 
 
 # ───────────────────────────── 行动 ─────────────────────────────
+
+
+def fallback_action(
+    cfg: LifeConfig, state: dict[str, Any], thread: dict[str, Any], tried: Next, now: float
+) -> Next | None:
+    """第一轮的另一种开头：试过 lookup 就搜，试过 search 就查词条；没有可换的返回 None。"""
+
+    title     = str(thread.get("title") or "")
+    search_ok = (
+        cfg.source_on("bili_search") and reinforce.health_factor(state, "bili_search", now) >= 1.0
+    )
+    lookup_ok = cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
+    if tried.action == "lookup" and search_ok:
+        query = clean_text(thread.get("next_query") or title, SEARCH_ARG_CHARS)
+        return Next("search", query) if query else None
+    if tried.action == "search" and lookup_ok:
+        concept = clean_text(thread.get("topic") or title[:LOOKUP_ARG_CHARS], LOOKUP_ARG_CHARS)
+        return Next("lookup", concept) if concept and concept != tried.arg else None
+    return None
 
 
 def first_action(
@@ -423,9 +490,31 @@ async def run(
                     value     = failed_value,
                 )
             )
-            if round_no == 1:
-                return await _first_round_empty(store, cfg, thread_id, reason, decision, span, deps)
-            break
+            alternate = (
+                fallback_action(cfg, store.state, thread, action, now0) if round_no == 1 else None
+            )
+            if alternate is not None:
+                # 第一轮这条路没东西（比如这个词条这周读过了）：换另一种开头再试一次。
+                action = alternate
+                items, reason = await _material(ctx, action, deps)
+                if not items:
+                    await store.mutate(
+                        partial(
+                            _log_action,
+                            thread_id = thread_id,
+                            round_no  = round_no,
+                            action    = action,
+                            useful    = False,
+                            now       = deps.now().timestamp(),
+                            value     = FAIL_VALUE if reason != "all_seen" else 0.0,
+                        )
+                    )
+            if not items:
+                if round_no == 1:
+                    return await _first_round_empty(
+                        store, cfg, thread_id, reason, decision, span, deps
+                    )
+                break
         step = await _round(
             ctx,
             deps,
@@ -558,6 +647,7 @@ async def _round(
     thread = thread_ops.get_thread(store.threads, thread_id)
     if thread is None:
         return "thread_missing"
+    allowed  = available_actions(cfg, store.state, items, deps.now().timestamp())
     messages = build_messages(
         persona     = deps.persona,
         thread      = thread,
@@ -567,6 +657,7 @@ async def _round(
         rounds_left = rounds - round_no,
         moment      = deps.now(),
         activity    = deps.activity_text,
+        available   = allowed,
     )
     try:
         text = await deps.complete("reasoning", messages)
@@ -578,7 +669,7 @@ async def _round(
         return "digest_unparseable"
     if deps.on_digest is not None:
         deps.on_digest(raw, items)
-    result = validate_round(raw, items, thread, cfg.blocked_keywords)
+    result = validate_round(raw, items, thread, cfg.blocked_keywords, allowed)
     stop   = await _commit_round(
         ctx, deps, decision, thread_id, round_no, action, items, result, r_span, tally
     )
@@ -623,7 +714,8 @@ async def _commit_round(
         known_before, expr_before = sm._known_keys(s.terms), len(s.expressions)
         fresh = _merge_repeats(s.episodes, rows, thread_id, ctx.session_start)
         s.episodes.extend(fresh)
-        sm._learn(s, result.digest, fresh, now)
+        # 研究里的“又爱又嫌”多半是在说资料好不好用：只当普通证据，不生成兴趣走向。
+        sm._learn(s, result.digest, [{**r, "aspects": {}} for r in fresh], now)
         stats["new_rows"] = float(len(fresh))
         liked             = [r for r in fresh if r["feeling"] == "like"]
         reinforce.grow_frontier(

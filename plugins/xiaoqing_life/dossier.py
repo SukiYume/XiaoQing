@@ -29,6 +29,13 @@ SUGGEST_COOLDOWN = 6 * 3600
 MIN_OVERLAP      = 2
 ORIGIN_CHARS     = 60
 
+
+def _bare(text: Any) -> str:
+    """接进“之前以为……，后来发现……”时去掉句末标点，免得出现“。，”。"""
+
+    return str(text or "").rstrip("。！？!?；;，,、 ")
+
+
 _WORK_STATE = {"drafting": "在整理", "done": "整理完了", "shelved": "先放着了"}
 
 
@@ -210,7 +217,9 @@ def recall_lines(entry: Mapping[str, Any], moment: datetime, detail_days: int) -
         entry.get("corrections", []), key=lambda c: float(c.get("at", 0.0)), reverse=True
     )
     if fixes:
-        lines.append(f"- 后来改过想法：之前以为{fixes[0]['before']}，后来发现{fixes[0]['after']}")
+        lines.append(
+            f"- 后来改过想法：之前以为{_bare(fixes[0]['before'])}，后来发现{_bare(fixes[0]['after'])}"
+        )
     if entry.get("works"):
         work = entry["works"][-1]
         lines.append(
@@ -269,7 +278,7 @@ def correction_line(
         return "", None
     _, entry, fix = best
     return (
-        f"你在{entry['topic']}上改过一个想法：之前以为{fix['before']}，后来发现{fix['after']}",
+        f"你在{entry['topic']}上改过一个想法：之前以为{_bare(fix['before'])}，后来发现{_bare(fix['after'])}",
         fix,
     )
 

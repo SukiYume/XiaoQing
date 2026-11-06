@@ -40,7 +40,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT         = Path(__file__).resolve().parents[1]
+BILI_SOURCES = ("bili_popular", "bili_ranking", "bili_search", "bili_comments", "bili_subtitles")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -186,7 +187,14 @@ def _snapshot(store: LifeStore) -> dict[str, Any]:
 
 async def _main(args: argparse.Namespace) -> int:
     config, secrets = _build_config(args.routes_from)
-    life_cfg = parse_life_config({**config["plugins"][PLUGIN], "enabled": True})
+    options: dict[str, Any] = {**config["plugins"][PLUGIN], "enabled": True}
+    if args.no_bili:
+        # B站 风控期间：关掉全部 B站 来源，研究循环第一轮就会改查百科 / 维基。
+        options["sources"] = {
+            **(options.get("sources") or {}),
+            **dict.fromkeys(BILI_SOURCES, False),
+        }
+    life_cfg = parse_life_config(options)
     context  = _stub_context(config)
     stamp    = time.strftime("%Y%m%d-%H%M%S")
     data_dir = Path(args.data_dir) if args.data_dir else ROOT / "work" / "xiaoqing_life" / stamp
@@ -273,8 +281,8 @@ async def _main(args: argparse.Namespace) -> int:
         seed_interests(store.interests, life_cfg.seed_interests, moment.timestamp())
 
         if args.activity == "wind_down":
-            line    = digest_mod.moment_line(moment, presence.activity)
-            outcome = await run_wind_down(
+            line  = digest_mod.moment_line(moment, presence.activity)
+            wound = await run_wind_down(
                 store,
                 life_cfg,
                 moment,
@@ -283,7 +291,7 @@ async def _main(args: argparse.Namespace) -> int:
                 moment_line  = line,
                 reasoning_ok = deps.reasoning_ok,
             )
-            result["wind_down"] = dataclasses.asdict(outcome) | {
+            result["wind_down"] = dataclasses.asdict(wound) | {
                 "diary"  : store.state.get("diary"),
                 "journal": store.journal[-2:],
             }
@@ -360,7 +368,8 @@ async def _main(args: argparse.Namespace) -> int:
                     result["validation"] = _drops(raw_box["raw"], raw_box["items"], verdict)
                     print("核对：", json.dumps(result["validation"], ensure_ascii=False))
                 if args.force_memes and raw_box and deps.download and deps.vision:
-                    pics = [
+                    fetch_image = deps.download
+                    pics        = [
                         f"{c.ref}#{n}"
                         for i in raw_box["items"]
                         for c in i.comments
@@ -379,7 +388,7 @@ async def _main(args: argparse.Namespace) -> int:
                         life_cfg_forced,
                         raw_box["items"],
                         picks,
-                        download = lambda u: deps.download(u, life_cfg.max_meme_bytes),
+                        download = lambda u: fetch_image(u, life_cfg.max_meme_bytes),
                         vision   = deps.vision,
                         day      = moment.strftime("%Y-%m-%d"),
                         now      = lambda: clock().timestamp(),
@@ -502,11 +511,11 @@ def _pick_thread(args: Any, store: LifeStore, cfg: Any, moment: datetime) -> dic
         opened = thread_ops.open_thread(
             store.threads,
             cfg,
-            title      = args.thread,
-            why        = "脚本验证用",
-            next_query = args.query or args.thread,
-            now        = moment.timestamp(),
-            topic      = thread_ops.pick_topic(store.interests, "", args.thread, args.query),
+            title=args.thread,
+            why="脚本验证用",
+            next_query=args.query or args.thread,
+            now=moment.timestamp(),
+            topic=thread_ops.pick_topic(store.interests, args.topic, args.thread, args.query),
         )
         if opened is None:
             raise SystemExit("小课题名额已满，无法开新的")
@@ -583,6 +592,9 @@ def main() -> int:
         "--thread", default="", help="thread_continue：要续做（没有就先开）的小课题标题"
     )
     parser.add_argument(
+        "--topic", default="", help="thread_continue：新开小课题的话题（正式流程里由消化给出）"
+    )
+    parser.add_argument(
         "--work", default="", help="work_on：作品 ID 或标题（缺省取第一个进行中的）"
     )
     parser.add_argument(
@@ -591,6 +603,11 @@ def main() -> int:
         help    = "已保存的 B站 凭证文件（只读复制到隔离目录，用来验证字幕；不打印内容）",
     )
     parser.add_argument("--no-ai", action="store_true")
+    parser.add_argument(
+        "--no-bili",
+        action = "store_true",
+        help   = "关掉全部 B站 来源（风控期间用，研究改查百科 / 维基）",
+    )
     parser.add_argument(
         "--force-memes",
         type    = int,

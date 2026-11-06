@@ -86,9 +86,12 @@ async def test_start_needs_a_grounded_topic(tmp_path: Path) -> None:
     made = works.start_work(store, cfg, _start_raw(episode_ids=[]), NOW)
     assert made is not None and made["status"] == "drafting" and made["form"] == "list"
     assert store.state["last_work_start"] == NOW and store.works == [made]
-    # 依据 2：引用 ≥2 条喜欢的同话题经历
+    # 依据 2：引用 ≥2 条喜欢的同话题经历，且跨开约一天（一下午刷出来的不算成形）
+    same = _store(tmp_path / "s")
+    same.episodes += [_episode(1), _episode(2, ago=2 * 3600.0)]
+    assert works.start_work(same, cfg, _start_raw(), NOW) is None
     other = _store(tmp_path / "b")
-    other.episodes += [_episode(1), _episode(2)]
+    other.episodes += [_episode(1), _episode(2, ago=2 * DAY)]
     assert works.start_work(other, cfg, _start_raw(episode_ids=["e1"]), NOW) is None
     assert works.start_work(other, cfg, _start_raw(), NOW) is not None
     # 经历要是喜欢的、同话题的
@@ -153,7 +156,15 @@ async def test_candidate_topics_are_capped_and_exclude_running_works(tmp_path: P
     assert works.candidate_topics(gap, make_cfg(), NOW) == []
     liked = _store(tmp_path / "l")
     liked.episodes += [_episode(1), _episode(2)]
+    assert works.candidate_topics(liked, make_cfg(), NOW) == []  # 同一会儿的两条：还不算
+    liked.episodes[1]["at"] = NOW - 2 * DAY
     assert works.candidate_topics(liked, make_cfg(), NOW) == ["独立游戏"]
+    # 兴趣证据都在一个下午里：也还不算成形
+    burst = _store(tmp_path / "burst")
+    _repeated_interest(burst)
+    for row in burst.interests["独立游戏"]["evidence"]:
+        row["at"] = NOW - 3600
+    assert works.candidate_topics(burst, make_cfg(), NOW) == []
 
 
 async def _wind(store: LifeStore, reply: dict[str, Any], **cfg: Any):
@@ -1201,3 +1212,58 @@ async def test_a_tidy_without_changes_still_consumes_the_material(tmp_path: Path
     old = _work(last_op_at=NOW - 22 * 86400, last_review_at=NOW - 60)
     works.housekeep([old], NOW)
     assert old["status"] == "shelved"
+
+
+async def test_todo_entries_are_not_shared_or_called_just_added() -> None:
+    work    = _work()
+    grounds = {"e1": "星露谷物语 评测"}
+    applied = works.apply_ops(
+        work,
+        [
+            {"op": "add", "kind": "point", "text": "种田很治愈", "episode_ids": ["e1"]},
+            {
+                "op"         : "add",
+                "kind"       : "todo",
+                "text"       : "查查联机",
+                "episode_ids": ["e1"],
+                "check"      : "联机",
+            },
+        ],
+        grounds,
+        {},
+        (),
+        NOW,
+    )
+    works.record_ops(work, applied, NOW)
+    assert work["last_ops"] == ["种田很治愈"] and work["last_add_at"] == NOW
+    only_todo = _work()
+    works.record_ops(
+        only_todo,
+        works.apply_ops(
+            only_todo,
+            [{"op": "add", "kind": "todo", "text": "查查", "episode_ids": ["e1"], "check": "联机"}],
+            grounds,
+            {},
+            (),
+            NOW,
+        ),
+        NOW,
+    )
+    assert only_todo["last_ops"] == [] and only_todo["last_add_at"] == 0.0
+    assert works.share_candidate([only_todo], MOMENT) is None
+
+
+async def test_a_check_that_found_nothing_rests_then_gives_up() -> None:
+    todo = _entry(1, kind="todo", check="联机")
+    work = _work(entries=[todo])
+    assert works.todo_check(work, NOW) is todo
+    works._note_check_try(work, "w1", [], NOW)
+    assert works.todo_check(work, NOW + DAY) is None  # 歇 7 天
+    assert works.todo_check(work, NOW + 8 * DAY) is todo
+    works._note_check_try(work, "w1", [], NOW + 8 * DAY)
+    assert works.todo_check(work, NOW + 30 * DAY) is None  # 两次都没结果：不再查
+    assert work["entries"][0]["kind"] == "todo"  # 仍是待核实
+    # 核实了就不记失败
+    fresh = _work(entries=[_entry(2, kind="todo", check="联机")])
+    works._note_check_try(fresh, "w2", [("verify", {"id": "w2"})], NOW)
+    assert "check_tries" not in fresh["entries"][0]

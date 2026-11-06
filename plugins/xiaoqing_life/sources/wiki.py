@@ -1,6 +1,6 @@
 """中文维基阅读：按查询取最相关的 ≤2 个页面的介绍段。
 
-维基原文可能是繁体，摘录照抄原字（核对时只做全半角与标点归一，不转繁简）。
+请求时要简体（``variant=zh-cn``）；个别没转换的字仍照抄原字（核对时只做全半角与标点归一，不转繁简）。
 """
 
 from __future__ import annotations
@@ -69,6 +69,8 @@ async def read(fetch: Fetcher, query: str, blocked: Iterable[str]) -> list[Sourc
                 "exintro"    : "1",
                 "exlimit"    : "3",
                 "format"     : "json",
+                # 介绍段转成简体（实测对 extracts 生效），她的摘录和原文才对得上。
+                "variant": "zh-cn",
             },
         ),
         key="",

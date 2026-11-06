@@ -481,6 +481,7 @@ async def test_wiki_read_ranks_by_title_overlap_and_caps_at_two() -> None:
         params["gsrsearch"] == "猎户座大星云"
         and params["exintro"] == "1"
         and params["explaintext"] == "1"
+        and params["variant"] == "zh-cn"
     )
     assert params["gsrlimit"] == "3" and params["format"] == "json"
 
