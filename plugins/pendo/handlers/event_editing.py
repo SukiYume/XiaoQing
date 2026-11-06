@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from ..models.item import EventItem
 from ..utils.time_utils import TimezoneHelper, resolve_source_wall_time
 from ..utils.validators import normalize_event_fields
-from .event_support import event_display_timezone
+from .event_support import event_display_timezone, format_event_edit_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,17 @@ class EventEditingMixin:
     ) -> dict[str, Any]:
         """请 AI 只返回用户明确要修改的字段，失败时回退规则解析。"""
         current_title = getattr(current_event, "title", "") or ""
-        current_start = getattr(current_event, "start_time", "") or ""
+        # 存储的是 UTC 时刻，直接写进提示会让模型把 UTC 钟点当成用户的墙钟时间。
+        display_tz    = event_display_timezone(current_event)
+        start_text    = format_event_edit_datetime(getattr(current_event, "start_time", None), display_tz)
+        times         = f"原时间：{start_text}"
+        if getattr(current_event, "end_time", None):
+            end_text = format_event_edit_datetime(current_event.end_time, display_tz)
+            times   += f"，原结束时间：{end_text}"
         edit_prompt   = (
-            f"[编辑现有日程] 原标题：{current_title}，原时间：{current_start}。"
+            f"[编辑现有日程] 原标题：{current_title}，{times}。"
             f"用户修改指令：{changes}。"
+            f"相对说法（如“两周后的同一时间”）以原时间为基准换算。"
             f"请只返回需要修改的字段，未提及的字段不要更改。"
             f'若用户未明确要求修改标题（如使用"改名""重命名""标题改为"等词），'
             f"则不要返回title字段。"

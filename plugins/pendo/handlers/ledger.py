@@ -23,7 +23,7 @@ from ..models.item import ItemType, LedgerItem
 from ..models.ledger_record import LedgerRecord
 from ..utils.currency import currency_code, currency_label, group_by_currency
 from ..utils.db_ops import DbOpsMixin
-from ..utils.error_handlers import handle_command_errors
+from ..utils.error_handlers import handle_command_errors, validation_details
 from ..utils.formatters import ItemFormatter, paginate
 from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
@@ -331,11 +331,10 @@ class LedgerHandler(DbOpsMixin):
             try:
                 record = LedgerRecord.model_validate_json(rest)
             except ValidationError as exc:
-                details = "；".join(
-                    f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
-                    for error in exc.errors(include_input=False, include_url=False)
-                )
-                return {"status": "error", "message": "❌ 记账字段校验失败：" + details}
+                return {
+                    "status" : "error",
+                    "message": "❌ 记账字段校验失败：" + validation_details(exc),
+                }
             for source_id, field_name, attribute in (
                 (record.category_from, "category", "ledger_category"),
                 (record.account_from, "account", "account_name"),

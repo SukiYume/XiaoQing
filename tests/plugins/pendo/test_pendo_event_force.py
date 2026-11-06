@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -40,6 +41,7 @@ def _handler(results: list[dict]) -> tuple[SimpleNamespace, list]:
         ai_parser=SimpleNamespace(parse_event_with_ai=parse_event_with_ai),
         create_event=create_event,
     )
+    handler._create_with_sessions = partial(EventHandler._create_with_sessions, handler)
     return handler, calls
 
 

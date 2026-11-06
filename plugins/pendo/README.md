@@ -39,6 +39,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 
 ```text
 /pendo event add <内容>
+/pendo event record <JSON> [--force]
 /pendo event list [today|tomorrow|week|month|year|YYYY-MM|start..end] [cat:分类] [#标签]
 /pendo event view <id>
 /pendo event edit <id> <内容>

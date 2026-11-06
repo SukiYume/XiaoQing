@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, TypeVar, cast, overload
 
+from pydantic import ValidationError
+
 from core.public_errors import public_error_message
 
 from ..core.exceptions import PendoException
@@ -27,6 +29,14 @@ def _context_from_call(
         return inspect.signature(target).bind_partial(*args, **kwargs).arguments.get("context")
     except (TypeError, ValueError):
         return None
+
+
+def validation_details(exc: ValidationError) -> str:
+    """把结构化输入的校验错误压成一行“字段: 原因”。"""
+    return "；".join(
+        f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
 
 
 def success_result(message: str, **extra: Any) -> dict[str, Any]:

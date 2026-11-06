@@ -6,15 +6,18 @@ from itertools import islice
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from core.plugin_base import run_sync
 
 from ..config import PendoConfig
 from ..core.router import TOP_LEVEL_REDIRECTS
 from ..core.types import CommandMessage, PendoContext
+from ..models.event_record import EventRecord
 from ..models.item import EventItem, ItemType
 from ..services.event_graph import EventFamily, EventGraphService
 from ..utils.db_ops import DbOpsMixin
-from ..utils.error_handlers import error_result, handle_command_errors
+from ..utils.error_handlers import error_result, handle_command_errors, validation_details
 from ..utils.formatters import (
     ItemFormatter,
     MessageBuilder,
@@ -129,6 +132,10 @@ class EventAIParserProtocol(Protocol):
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]: ...
 
+    def build_event_result(
+        self, parsed: dict[str, Any], source_text: str, user_id: str, *, partial: bool
+    ) -> dict[str, Any]: ...
+
     def build_remind_times_from_offsets(self, start_time: str, offsets: list[Any]) -> list[str]: ...
 
     def build_reminder_rules_from_description(self, description: str) -> list[dict[str, int]]: ...
@@ -198,6 +205,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if command == "add":
             return await self.add_event(user_id, rest, context, group_id)
+        if command == "record":
+            return await self.record_event(user_id, rest, context, group_id)
         if command == "view":
             return await self.view_event(user_id, rest, context)
         if command == "edit":
@@ -223,7 +232,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return await self.list_events(user_id, args, context)
 
         return error_result(
-            f"❌ 未知子命令: event {command}\n\n可用命令: add, list, view, edit, delete, reminders"
+            f"❌ 未知子命令: event {command}\n\n可用命令: add, record, list, view, edit, delete, reminders"
         )
 
     # ==================== 添加日程 ====================
@@ -241,10 +250,35 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         # 用 AI 解析自然语言。
         parsed = await self.ai_parser.parse_event_with_ai(text, user_id)
+        return await self._create_with_sessions(user_id, parsed, context, group_id, force)
+
+    async def record_event(
+        self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
+    ) -> CommandMessage:
+        """按结构化 JSON 写入日程，不经自然语言解析；``--force`` 同 ``add``。"""
+        text, force = _split_force_flag(text)
+        try:
+            record = EventRecord.model_validate_json(text)
+        except ValidationError as exc:
+            return error_result("❌ 日程字段校验失败：" + validation_details(exc))
+        parsed = self.ai_parser.build_event_result(
+            record.parsed_fields(), record.content or record.title, user_id, partial=False
+        )
+        return await self._create_with_sessions(user_id, parsed, context, group_id, force)
+
+    async def _create_with_sessions(
+        self,
+        user_id: str,
+        parsed: dict[str, Any],
+        context: PendoContext,
+        group_id: int | None,
+        allow_conflict: bool,
+    ) -> CommandMessage:
+        """创建解析好的日程；缺信息或有冲突时开会话等用户补充或确认。"""
         if group_id:
             parsed["context"] = {"group_id": group_id}
 
-        result = await self.create_event(user_id, parsed, context, allow_conflict=force)
+        result = await self.create_event(user_id, parsed, context, allow_conflict=allow_conflict)
 
         # 处理需要补充信息的情况
         if result.get("status") == "need_info":
