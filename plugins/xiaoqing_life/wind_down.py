@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from . import methods as methods_mod
 from . import threads as thread_ops
 from .config import LifeConfig
 from .digest import extract_json
@@ -33,13 +34,16 @@ _SYSTEM = """{persona}
 只输出一个 JSON 对象：
 {{
   "diary": {{"date": "YYYY-MM-DD", "text": "2到4句你口吻的小结，像随手记的日记", "episode_ids": ["引用的经历id"]}},
-  "threads": [{{"id": "小课题id", "action": "done|continue|drop", "takeaway": "done 时写一句收获", "episode_ids": ["收获依据的经历id"]}}],
+  "threads": [{{"id": "小课题id", "action": "done|continue|drop", "takeaway": "done 时写一句收获", "episode_ids": ["收获依据的经历id"], "reason": "drop 时写原因，30字内"}}],
+  "methods": [{{"thread_id": "今天 done 的小课题id", "text": "自己摸索出的查法，40字内", "applies_to": "适用于什么样的问题，20字内", "actions": [有用的行动下标]}}],
   "weekly": {{"text": "2到4句这周的小结", "dates": ["引用的日记日期"], "episode_ids": ["引用的经历id"]}},
   "followup": {{"parent_id": "刚刚 done 的小课题 id", "title": "后续问题，20字内", "why": "为什么想接着查", "next_query": "下次搜什么"}}
 }}
 怎么写：
 - 日记只写记录里有的事，每一句都能在经历里找到依据，写清楚是哪天；没有的事不写，细节记不清就不写细节。可以顺带提一句今天兴趣上的变化。
 - threads 里每个小课题都要给 action：status 为 reviewing 的是已经查到结果的，写 done 和一句收获，并引用它笔记里的经历 id；status 为 open 的，还想接着查就 continue，不想查了就 drop。
+- status 为 parked 的是查到一半先放着的，不想再查了可以 drop（reason 写一句原因），否则不用写。
+- 今天 done 的小课题如果在 actions 里有用的行动，可以把“怎么查到的”概括成一条自己的查法写进 methods（全天最多一条）；没有就给空数组。
 - 没有 weekly 要求时，weekly 给 null；有要求时只引用给出的日记日期和经历；记录里的 learnings 是这周自己查明白的事，周记可以提到。
 - 某个小课题今天 done、并且自然引出了一个还想接着查的新问题，可以用 followup 写下来（一天最多一个）；没有就给 null。"""
 
@@ -110,12 +114,16 @@ def build_messages(
         ],
         "threads": [
             {
-                "id"    : t["id"],
-                "title" : t["title"],
-                "status": t["status"],
-                "notes" : t.get("notes", []),
+                "id"     : t["id"],
+                "title"  : t["title"],
+                "status" : t["status"],
+                "notes"  : t.get("notes", []),
+                "actions": methods_mod.action_rows(t),
             }
-            for t in thread_ops.active_threads(store.threads)
+            for t in (
+                *thread_ops.active_threads(store.threads),
+                *thread_ops.parked_threads(store.threads),
+            )
         ],
         "weekly_requested": weekly,
     }
@@ -203,10 +211,11 @@ def apply_threads(
                 if thread_ops.finish(thread, takeaway, cited, now):
                     done += 1
                     store.learnings.append(_learning(thread, takeaway, cited, now))
+                    methods_mod.on_thread_done(store.methods, thread)
                     if finished is not None:
                         finished.append(thread)
-        elif thread["status"] == "open" and action == "drop":
-            thread_ops.drop(thread, now)
+        elif thread["status"] in ("open", "parked") and action == "drop":
+            thread_ops.drop(thread, now, clean_text(row.get("reason"), 30))
             dropped += 1
     return done, dropped
 
@@ -268,6 +277,8 @@ def apply_followup(
         now        = now,
         parent_id  = parent["id"],
         depth      = depth,
+        topic      = str(parent.get("topic") or "")
+        or thread_ops.pick_topic(store.interests, "", title, str(raw.get("next_query") or "")),
     )
     if opened is None:
         return False
@@ -323,6 +334,9 @@ async def run_wind_down(
         finished: list[dict[str, Any]] = []
         result.done, result.dropped = apply_threads(s, raw.get("threads"), now, blocked, finished)
         result.followup = apply_followup(s, raw.get("followup"), finished, cfg, day, now)
+        methods_mod.apply_extracted(
+            s.methods, raw.get("methods"), finished, blocked, day, s.state, now
+        )
         prune_learnings(s.learnings, cfg, now)
         if weekly:
             note = validate_weekly(raw.get("weekly"), recent_diaries(s, now), blocked)

@@ -1,24 +1,52 @@
-"""小课题状态机：open → reviewing → done（或 dropped）。打算和完成分开，没查完只能说“在查”。
+"""小课题状态机：open → reviewing → done（或 parked / dropped）。打算和完成分开，没查完只能说“在查”。
 
 ``reviewing`` 到 ``done`` 要睡前整理写收获并引用经历 ID；答完或步数到上限时先进 ``reviewing``。
+研究卡住（stuck）时搁置（``parked``），过了 ``park_days`` 天可以被再拿起；搁置两次后再卡住就放弃。
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .config import LifeConfig
+from .lifecycle import merge_topic
 from .planner import THREAD_COOLDOWN_SECONDS, similar
 from .stores import new_id
 
+DAY               = 86400.0
 DONE_KEEP_SECONDS = 30 * 86400
 MAX_DEPTH         = 3
-MAX_NOTES         = 8
+MAX_NOTES         = 16  # 一次研究最多 3 轮 × 3 条要点
+MAX_ACTIONS       = 12
+MAX_CORRECTIONS   = 4
+MAX_EVENTS        = 10
+MAX_PARKED        = 2
+PARK_LIMIT_DAYS   = 30
+MAX_PARK_COUNT    = 2
+DEFAULT_PARK_WHY  = "资料不太够"
 ACTIVE            = ("open", "reviewing")
+
+# 主题档案（里程碑 3）挂在这里：小课题开 / 搁置 / 放弃 / 更正 / done 时调用 ``hook(thread, kind, data)``。
+EVENT_HOOKS: list[Callable[[dict[str, Any], str, dict[str, Any]], None]] = []
+
+
+def on_thread_event(thread: dict[str, Any], kind: str, **data: Any) -> None:
+    """小课题的重要变化都从这一个函数出去；现在只留一份有界的事件记录，并通知已登记的钩子。"""
+
+    events: list[dict[str, Any]] = thread.setdefault("events", [])
+    events.append({"kind": kind, "at": data.get("now", thread.get("updated_at", 0.0))})
+    del events[:-MAX_EVENTS]
+    for hook in EVENT_HOOKS:
+        hook(thread, kind, data)
 
 
 def active_threads(threads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [t for t in threads if t.get("status") in ACTIVE]
+
+
+def parked_threads(threads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [t for t in threads if t.get("status") == "parked"]
 
 
 def get_thread(threads: list[dict[str, Any]], thread_id: str) -> dict[str, Any] | None:
@@ -31,6 +59,19 @@ def find_similar(threads: list[dict[str, Any]], title: str) -> dict[str, Any] | 
     )
 
 
+def pick_topic(interests: dict[str, dict[str, Any]], topic: str, title: str, query: str) -> str:
+    """话题：模型给的 > 把搜索词 / 标题并到已有兴趣 > 标题前 8 字。"""
+
+    given = topic.strip()[:12]
+    if given:
+        return given
+    for text in (query, title):
+        merged = merge_topic(interests, text) if text.strip() else ""
+        if merged and merged in interests:
+            return merged
+    return title.strip()[:8]
+
+
 def open_thread(
     threads: list[dict[str, Any]],
     cfg: LifeConfig,
@@ -41,6 +82,7 @@ def open_thread(
     now: float,
     parent_id: str = "",
     depth: int     = 0,
+    topic: str     = "",
 ) -> dict[str, Any] | None:
     """名额已满或已有相近的小课题时不新开；后续问题带 ``parent_id`` 和 ``depth``（最多 3 层）。"""
 
@@ -52,6 +94,7 @@ def open_thread(
     thread = {
         "id"            : new_id("t"),
         "title"         : title,
+        "topic"         : topic.strip()[:12] or title[:8],
         "why"           : why.strip()[:60],
         "next_query"    : (next_query.strip() or title)[:30],
         "status"        : "open",
@@ -64,15 +107,99 @@ def open_thread(
         "updated_at"    : now,
         "parent_id"     : parent_id,
         "depth"         : depth,
+        "open_question" : "",
+        "next_action"   : {},
+        "actions"       : [],
+        "corrections"   : [],
+        "methods_used"  : [],
+        "park_reason"   : "",
+        "resume_hint"   : "",
+        "parked_until"  : 0.0,
+        "park_count"    : 0,
+        "drop_reason"   : "",
     }
     threads.append(thread)
+    on_thread_event(thread, "opened", now=now)
     return thread
+
+
+# ───────────────────────────── 笔记 ─────────────────────────────
+
+
+def _note_number(note: dict[str, Any]) -> int:
+    ident = str(note.get("id") or "")
+    return int(ident[1:]) if ident[:1] == "n" and ident[1:].isdigit() else 0
+
+
+def ensure_note_ids(thread: dict[str, Any]) -> None:
+    """旧笔记没有 ID 时按顺序补 ``n<k>``，不改已有的。"""
+
+    notes = thread.setdefault("notes", [])
+    seq   = max([int(thread.get("note_seq", 0)), *(_note_number(n) for n in notes)])
+    for note in notes:
+        if not note.get("id"):
+            seq += 1
+            note["id"] = f"n{seq}"
+    thread["note_seq"] = seq
 
 
 def _add_note(thread: dict[str, Any], episode_id: str, note: str) -> None:
     if note.strip():
-        thread["notes"].append({"episode_id": episode_id, "note": note.strip()[:80]})
+        ensure_note_ids(thread)
+        thread["note_seq"] += 1
+        thread["notes"].append(
+            {"id": f"n{thread['note_seq']}", "episode_id": episode_id, "note": note.strip()[:80]}
+        )
         del thread["notes"][:-MAX_NOTES]
+
+
+def live_notes(thread: dict[str, Any]) -> list[dict[str, Any]]:
+    """没被后来的发现取代的笔记。"""
+
+    ensure_note_ids(thread)
+    return [n for n in thread.get("notes", []) if not n.get("superseded_by")]
+
+
+def add_finding(
+    thread: dict[str, Any],
+    *,
+    episode_id: str,
+    text: str,
+    quote: str,
+    revises: str,
+    now: float,
+) -> str:
+    """研究要点 → 笔记 ``{id, episode_id, note, quote, at, kind}``；有效 ``revises`` 同时记一条更正。"""
+
+    ensure_note_ids(thread)
+    thread["note_seq"] += 1
+    note_id = f"n{thread['note_seq']}"
+    old = next((n for n in live_notes(thread) if n.get("id") == revises), None) if revises else None
+    thread["notes"].append(
+        {
+            "id"        : note_id,
+            "episode_id": episode_id,
+            "note"      : text.strip()[:80],
+            "quote"     : quote.strip()[:60],
+            "at"        : now,
+            "kind"      : "finding",
+        }
+    )
+    if old is not None:
+        old["superseded_by"]              = note_id
+        corrections: list[dict[str, Any]] = thread.setdefault("corrections", [])
+        correction                        = {
+            "id"        : new_id("c"),
+            "before"    : str(old.get("note", ""))[:80],
+            "after"     : text.strip()[:80],
+            "episode_id": episode_id,
+            "at"        : now,
+        }
+        corrections.append(correction)
+        del corrections[:-MAX_CORRECTIONS]
+        on_thread_event(thread, "correction", now=now, correction=correction)
+    del thread["notes"][:-MAX_NOTES]
+    return note_id
 
 
 def record_step(
@@ -115,30 +242,94 @@ def finish(thread: dict[str, Any], takeaway: str, episode_ids: list[str], now: f
     thread["takeaway"]   = takeaway.strip()[:80]
     thread["status"]     = "done"
     thread["updated_at"] = now
+    on_thread_event(thread, "done", now=now)
     return True
 
 
-def drop(thread: dict[str, Any], now: float) -> None:
-    thread["status"]     = "dropped"
-    thread["updated_at"] = now
+def drop(thread: dict[str, Any], now: float, reason: str = "") -> None:
+    thread["status"]      = "dropped"
+    thread["updated_at"]  = now
+    thread["drop_reason"] = reason.strip()[:30]
+    on_thread_event(thread, "dropped", now=now, reason=thread["drop_reason"])
+
+
+# ───────────────────────────── 搁置 ─────────────────────────────
+
+
+def park(
+    threads: list[dict[str, Any]],
+    thread: dict[str, Any],
+    cfg: LifeConfig,
+    *,
+    reason: str,
+    hint: str,
+    now: float,
+) -> str:
+    """研究卡住：已搁置过 2 次就放弃（``drop_reason`` = 搁置原因）；否则搁置 ``park_days`` 天。返回新状态。"""
+
+    why = reason.strip()[:30] or DEFAULT_PARK_WHY
+    if int(thread.get("park_count", 0)) >= MAX_PARK_COUNT:
+        drop(thread, now, why)
+        return "dropped"
+    thread["status"]       = "parked"
+    thread["park_reason"]  = why
+    thread["resume_hint"]  = hint.strip()[:30]
+    thread["parked_until"] = now + cfg.park_days * DAY
+    thread["parked_at"]    = now
+    thread["park_count"]   = int(thread.get("park_count", 0)) + 1
+    thread["updated_at"]   = now
+    on_thread_event(thread, "parked", now=now, reason=why)
+    enforce_parked_cap(threads, now)
+    return str(thread["status"])
+
+
+def resume(thread: dict[str, Any], now: float) -> None:
+    """搁置的小课题被选中续做：回到 open。"""
+
+    if thread.get("status") == "parked":
+        thread["status"]       = "open"
+        thread["parked_until"] = 0.0
+        thread["updated_at"]   = now
+
+
+def enforce_parked_cap(threads: list[dict[str, Any]], now: float) -> None:
+    """搁置的最多同时 2 个，多出的最旧的放弃。"""
+
+    parked = sorted(parked_threads(threads), key=lambda t: float(t.get("parked_at", 0.0)))
+    for thread in parked[: max(0, len(parked) - MAX_PARKED)]:
+        drop(thread, now, "放不下了")
+
+
+def expire_parked(threads: list[dict[str, Any]], now: float) -> None:
+    """搁置超过 30 天没再拿起：放弃（“放太久了”）。"""
+
+    for thread in parked_threads(threads):
+        if (
+            now - float(thread.get("parked_at", thread.get("updated_at", now)))
+            > PARK_LIMIT_DAYS * DAY
+        ):
+            drop(thread, now, "放太久了")
 
 
 def prune_threads(threads: list[dict[str, Any]], now: float) -> None:
-    """结束的小课题保留 30 天，用于“我前两天查了下……”。"""
+    """结束的小课题保留 30 天，用于“我前两天查了下……”；搁置的先看是否放太久了。"""
 
+    expire_parked(threads, now)
     threads[:] = [
         t
         for t in threads
-        if t.get("status") in ACTIVE or now - float(t.get("updated_at", 0.0)) <= DONE_KEEP_SECONDS
+        if t.get("status") in (*ACTIVE, "parked")
+        or now - float(t.get("updated_at", 0.0)) <= DONE_KEEP_SECONDS
     ]
 
 
 def protected_episode_ids(threads: list[dict[str, Any]]) -> set[str]:
-    """进行中小课题引用的经历不过期。"""
+    """进行中和搁置中的小课题引用的经历不过期。"""
 
     return {
         str(n.get("episode_id"))
-        for t in active_threads(threads)
+        for t in threads
+        if t.get("status") in (*ACTIVE, "parked")
         for n in t.get("notes", [])
         if n.get("episode_id")
     }

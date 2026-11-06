@@ -16,7 +16,8 @@ HELP_TEXT = """🌐 小青的网上生活
 /life [status]        开关、此刻作息、今日次数、最近一次决策
 /life recent          最近 8 条经历
 /life slang           词条前 15
-/life threads         小课题
+/life threads         小课题（含搁置原因、最新要点、更正数）
+/life methods         她自己摸索出的查法
 /life memes           梗图列表（梗图收集尚未接入）
 /life run             立刻安排一次上网（跳过概率与间隔）
 /life forget <词>     删除词条
@@ -74,7 +75,7 @@ def status_text(
     open_threads = sum(1 for t in store.threads if t.get("status") in ("open", "reviewing"))
     lines.append(
         f"经历 {len(store.episodes)} 条，词条 {len(store.terms)} 个，表达 {len(store.expressions)} 条，"
-        f"兴趣 {len(store.interests)} 个，进行中小课题 {open_threads} 个，待查词 {len(state.get('lookup_queue', []))} 个"
+        f"兴趣 {len(store.interests)} 个，进行中小课题 {open_threads} 个，待查词 {len(state.get('lookup_queue', []))} 个，方法 {len(store.methods)} 条"
     )
     return "\n".join(lines)
 
@@ -136,13 +137,38 @@ def slang_text(store: LifeStore, moment: datetime) -> str:
     )
 
 
+def _latest_finding(thread: dict[str, Any]) -> str:
+    notes = [n for n in thread.get("notes", []) if n.get("note") and not n.get("superseded_by")]
+    return str(notes[-1]["note"]) if notes else ""
+
+
 def threads_text(store: LifeStore) -> str:
     if not store.threads:
         return "没有小课题。"
+    lines = []
+    for t in store.threads:
+        line = f"[{t.get('status', '')}] {t.get('title', '')}（第 {t.get('steps', 0)} 步）"
+        if t.get("takeaway"):
+            line += f" 收获：{t['takeaway']}"
+        if t.get("status") == "parked" and t.get("park_reason"):
+            line += f" 搁置原因：{t['park_reason']}"
+        if t.get("status") == "dropped" and t.get("drop_reason"):
+            line += f" 放弃原因：{t['drop_reason']}"
+        if finding := _latest_finding(t):
+            line += f" 最新要点：{finding}"
+        if t.get("corrections"):
+            line += f" 更正 {len(t['corrections'])} 次"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def methods_text(store: LifeStore) -> str:
+    if not store.methods:
+        return "还没有自己摸索出的查法。"
     return "\n".join(
-        f"[{t.get('status', '')}] {t.get('title', '')}（第 {t.get('steps', 0)} 步）"
-        + (f" 收获：{t['takeaway']}" if t.get("takeaway") else "")
-        for t in store.threads
+        f"[{m.get('status', 'active')}] {m.get('text', '')}（适用：{m.get('applies_to', '')}；"
+        f"用过 {m.get('uses', 0)} 次，帮上忙 {m.get('wins', 0)} 次）"
+        for m in store.methods
     )
 
 
@@ -170,6 +196,8 @@ def route(args: str) -> tuple[str, str]:
         "最近"     : "recent",
         "slang"  : "slang",
         "词条"     : "slang",
+        "methods": "methods",
+        "方法"     : "methods",
         "threads": "threads",
         "小课题"    : "threads",
         "memes"  : "memes",

@@ -273,12 +273,9 @@ async def test_thread_continue_progress_then_step_limit_moves_to_reviewing(tmp_p
         "looked_at": [
             {"item": "i1", "reaction": "原来猫喜欢躲着", "feeling": "like", "topics": ["猫"]}
         ],
-        "thread": {
-            "action": "progress",
-            "title" : "猫为什么爱纸箱",
-            "note"  : "纸箱让猫有安全感",
-            "refs"  : ["i1"],
-        },
+        "findings": [{"text": "纸箱让猫有安全感", "quote": "猫咪为什么爱钻纸箱", "refs": ["i1"]}],
+        "status"  : "progress",
+        "next"    : {"action": "stop"},
     }
     fetch = FakeFetcher(
         {**_search(_video(7, "猫咪为什么爱钻纸箱")), "/reply/main": comments_payload()}
@@ -289,6 +286,7 @@ async def test_thread_continue_progress_then_step_limit_moves_to_reviewing(tmp_p
     thread = store.threads[0]
     assert thread["steps"] == 3 and thread["status"] == "reviewing"
     assert thread["notes"][0]["episode_id"] == store.episodes[0]["id"]
+    assert thread["notes"][0]["note"] == "纸箱让猫有安全感" and thread["notes"][0]["id"] == "n1"
     assert store.episodes[0]["thread_id"] == "t1"
     assert fetch.calls[0][1]["keyword"] == "猫 纸箱"
 
@@ -298,12 +296,8 @@ async def test_thread_continue_answered_moves_to_reviewing_immediately(tmp_path:
     store  = _thread_store(tmp_path)
     digest = {
         "looked_at": [{"item": "i1", "reaction": "懂了", "feeling": "like"}],
-        "thread"   : {
-            "action": "answered",
-            "title" : "猫为什么爱纸箱",
-            "note"  : "查明白了",
-            "refs"  : ["i1"],
-        },
+        "findings" : [{"text": "查明白了", "quote": "答案视频", "refs": ["i1"]}],
+        "status"   : "answered",
     }
     fetch = FakeFetcher({**_search(_video(7, "答案视频")), "/reply/main": comments_payload()})
     await run_session(store, make_cfg(), _continue(), _deps(fetch, FakeAI(digest)))

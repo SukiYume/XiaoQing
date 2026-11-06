@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 REASONING_ROUTE   = "reasoning"
 COMMENT_ITEMS     = 3
 ACTIVITY_KEEP_SEC = 24 * 3600
-_FEELING_DELTA    = {"like": 1, "dislike": -1}
+_FEELING_DELTA    = {"like": 1.0, "dislike": -1.0, "mixed": 0.5}
 
 Complete = Callable[[str, list[dict[str, str]]], Awaitable[str]]
 
@@ -85,7 +85,7 @@ class SessionOutcome:
     items   : int = 0
     episodes: int = 0
     terms   : int = 0
-    details : dict[str, int] = field(default_factory=dict)
+    details : dict[str, float] = field(default_factory=dict)
     # 这次实际用到的来源（热榜源名），用来更新来源偏好。
     source: str = ""
 
@@ -214,6 +214,7 @@ async def _open_items(
     novel_text: str = "",
     *,
     subtitles: bool = False,
+    need_hit: bool  = True,
 ) -> list[SourceItem]:
     """点开预选的条目：前 ``max_watch_per_session`` 个取详情 / 标签 / 弹幕，再取热评。
 
@@ -225,8 +226,10 @@ async def _open_items(
     clicks = pick_clicks(cfg, items, topics, novel_text)
     ranked = sorted(clicks, key=lambda i: prescore(items[i], topics), reverse=True)
     watched  = set(ranked[: cfg.max_watch_per_session])
-    eligible = [i for i in ranked if i in watched and interest_hits(items[i], topics) >= 1]
-    deeper   = set(eligible[: cfg.max_deep_reads_per_session])
+    eligible = [
+        i for i in ranked if i in watched and (not need_hit or interest_hits(items[i], topics) >= 1)
+    ]
+    deeper = set(eligible[: cfg.max_deep_reads_per_session])
     for index in clicks:
         item     = result[index]
         position = index + 1
@@ -269,16 +272,22 @@ def _episode_rows(
     start: float,
     end: float,
     tz: Any,
+    auto_ids: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
-    """经历的时间戳按顺序均匀撒在名义浏览时段 [start, end] 内：她是一条一条刷过去的。"""
+    """经历的时间戳按顺序均匀撒在名义浏览时段 [start, end] 内：她是一条一条刷过去的。
+
+    ``auto_ids`` 是研究要点引用、但没出现在 ``looked_at`` 里的条目：自动补一条（meh、感想为空、``auto``）。
+    """
 
     by_id                           = {item.item_id: item for item in items}
     term_keys: dict[str, list[str]] = {}
     for term in result.terms:
         term_keys.setdefault(term.item_id, []).append(term_key(term.term))
     rows  = []
-    total = len(result.looked_at)
-    for order, seen in enumerate(result.looked_at, start=1):
+    seens = list(result.looked_at)
+    seens += [digest_mod.LookedAt(item_id, "", "", "meh", False, ()) for item_id in auto_ids]
+    total = len(seens)
+    for order, seen in enumerate(seens, start=1):
         item = by_id[seen.item_id]
         at   = start + (end - start) * order / (total + 1)
         rows.append(
@@ -304,6 +313,12 @@ def _episode_rows(
                 "thread_id"       : decision.params.get("thread_id", ""),
                 "depth"           : deep.depth_of(item),
                 "subtitle_partial": item.subtitle_partial,
+                "aspects": (
+                    {"like": seen.liked_part, "dislike": seen.disliked_part}
+                    if seen.feeling == "mixed"
+                    else {}
+                ),
+                "auto": seen.ref == "",
             }
         )
     return rows
@@ -344,15 +359,20 @@ def _learn(
             now,
         )
     for row in episodes:
-        delta = _FEELING_DELTA.get(row["feeling"], 0)
+        if row.get("auto"):
+            continue  # 自动补的经历不产生兴趣证据
+        delta   = _FEELING_DELTA.get(row["feeling"], 0.0)
+        aspects = row.get("aspects") or {}
         for topic in row["topics"]:
             add_interest_evidence(
                 store.interests,
                 topic,
-                episode_id = row["id"],
-                item_id    = row["item_id"],
-                delta      = delta,
-                now        = now,
+                episode_id     = row["id"],
+                item_id        = row["item_id"],
+                delta          = delta,
+                now            = now,
+                aspect_like    = str(aspects.get("like", "")),
+                aspect_dislike = str(aspects.get("dislike", "")),
             )
 
 
@@ -377,6 +397,9 @@ def _apply_thread(
             why        = proposal.why,
             next_query = proposal.next_query,
             now        = now,
+            topic      = thread_ops.pick_topic(
+                store.interests, proposal.topic, proposal.title, proposal.next_query
+            ),
         )
         return
     if target is None and proposal is not None and proposal.title:
@@ -393,6 +416,14 @@ def _apply_thread(
         thread_ops.record_step(
             target, cfg, episode_id=episode_id, note=note, new_content=useful, now=now
         )
+
+
+def _liked_count(rows: list[dict[str, Any]]) -> float:
+    """喜欢的条数；又爱又嫌（mixed）算 0.5 个喜欢。"""
+
+    return sum(1.0 for r in rows if r["feeling"] == "like") + 0.5 * sum(
+        1 for r in rows if r["feeling"] == "mixed"
+    )
 
 
 def _remember_activity(state: dict[str, Any], decision: Decision, start: float, end: float) -> None:
@@ -458,10 +489,10 @@ async def _commit(
     deps: SessionDeps,
 ) -> SessionOutcome:
     start, end = span
-    moment                = deps.now()
-    now                   = moment.timestamp()
-    rows                  = _episode_rows(result, items, decision, start, end, moment.tzinfo)
-    stats: dict[str, int] = {}
+    moment                  = deps.now()
+    now                     = moment.timestamp()
+    rows                    = _episode_rows(result, items, decision, start, end, moment.tzinfo)
+    stats: dict[str, float] = {}
 
     def apply(s: LifeStore) -> None:
         known_before, expr_before = _known_keys(s.terms), len(s.expressions)
@@ -474,7 +505,7 @@ async def _commit(
             s.frontier, s.interests, liked, _frontier_words(s, rows), cfg.blocked_keywords, now
         )
         stats.update(
-            liked           = len(liked),
+            liked           = _liked_count(rows),
             disliked        = sum(1 for r in rows if r["feeling"] == "dislike"),
             new_known       = len(_known_keys(s.terms) - known_before),
             new_expressions = max(0, len(s.expressions) - expr_before),
@@ -823,7 +854,11 @@ async def run_session(
     span, day = await _start(store, cfg, deps, decision)
     if decision.choice == TERM_LOOKUP:
         outcome = await _lookup_terms(store, cfg, decision, span, deps)
-    elif decision.choice in (HOT_SCROLL, INTEREST, THREAD):
+    elif decision.choice == THREAD:
+        from . import research
+
+        outcome = await research.run(store, cfg, decision, deps, span, day)
+    elif decision.choice in (HOT_SCROLL, INTEREST):
         outcome = await _browse(store, cfg, decision, span, day, deps)
     else:
         outcome = SessionOutcome("skipped", "unsupported_choice")
