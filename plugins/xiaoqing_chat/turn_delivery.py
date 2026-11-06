@@ -20,7 +20,7 @@ from .brain_chat import (
 from .chat_runtime import chat_lock
 from .frequency_control import record_reply_frequency
 from .llm.topic_shift import reply_should_be_withheld
-from .logging_utils import log_step
+from .logging_utils import accumulate_timing, log_step
 from .memory.local_ids import (
     DIRECT_REPLY_RECENT_MESSAGES,
     allocate_local_id,
@@ -276,7 +276,8 @@ async def _drop_if_context_changed(
     def log(step: str, fields: dict[str, Any]) -> None:
         log_step(finalization.context, hctx.runtime, chat_id=hctx.chat_id, step=step, fields=fields)
 
-    changed = await reply_should_be_withheld(
+    check_started = time.monotonic()
+    changed       = await reply_should_be_withheld(
         secrets  = hctx.secrets,
         bot_name = hctx.bot_name,
         before   = before,
@@ -284,6 +285,9 @@ async def _drop_if_context_changed(
         reply    = display_reply_text(finalization.generated),
         llm      = hctx.runtime.cfg.llm_config("reasoning"),
         log      = log,
+    )
+    accumulate_timing(
+        finalization.generated.timings, "context_check_s", time.monotonic() - check_started
     )
     finalization.checked_users = users
     if changed:
@@ -569,6 +573,7 @@ async def _commit_smalltalk_delivery(
             "elapsed_s"  : round(time.monotonic() - finalization.started_at, 3),
             "reply_chars": len(display_reply_text(finalization.generated)),
             "reply"      : display_reply_text(finalization.generated),
+            "timings"    : finalization.generated.timings,
         },
     )
 
@@ -736,6 +741,7 @@ async def _apply_smalltalk_presend_delay(
             },
         )
         await asyncio.sleep(delay)
+        accumulate_timing(finalization.generated.timings, "send_wait_s", delay)
     return apply_humanize
 
 
@@ -818,6 +824,7 @@ async def _send_smalltalk_intermediate_batches(
             gap = _smalltalk_interbubble_delay(finalization.hctx.runtime, batch)
             if gap > 0:
                 await asyncio.sleep(gap)
+                accumulate_timing(finalization.generated.timings, "send_wait_s", gap)
     return True
 
 

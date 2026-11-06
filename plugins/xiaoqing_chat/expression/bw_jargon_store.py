@@ -50,7 +50,8 @@ class JargonRecord:
     chat_id_counts      : list[list[Any]] = field(default_factory=list)
     is_global           : bool = False
     count               : int  = 0
-    is_complete         : bool = False
+    # 释义有依据（原句解释过，或多处上下文推断出）；否则只是候选，不当作本群共识。
+    confirmed           : bool = False
     last_inference_count: int  = 0
     updated_at          : float = field(default_factory=lambda: time.time())
     usage               : str = ""
@@ -123,7 +124,7 @@ class JargonStore(StoreBase):
                 chat_id_counts = _chat_count_list(item.get("chat_id_counts")),
                 is_global=coerce_json_bool(item.get("is_global"), default=False),
                 count=coerce_int(item.get("count"), default=0, minimum=0),
-                is_complete=coerce_json_bool(item.get("is_complete"), default=False),
+                confirmed=coerce_json_bool(item.get("confirmed"), default=False),
                 last_inference_count=coerce_int(
                     item.get("last_inference_count"), default=0, minimum=0
                 ),
@@ -241,7 +242,7 @@ class JargonStore(StoreBase):
             latest_value   = getattr(latest, field_name)
             if desired_value != baseline_value and latest_value == baseline_value:
                 setattr(merged, field_name, desired_value)
-        merged.is_complete          = latest.is_complete or desired.is_complete
+        merged.confirmed            = latest.confirmed or desired.confirmed
         merged.last_inference_count = max(
             latest.last_inference_count,
             desired.last_inference_count,

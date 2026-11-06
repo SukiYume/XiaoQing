@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .planning.pfc_engine import PFCRunResult
@@ -34,6 +34,8 @@ class GeneratedSmalltalkTurn:
     reply_parts            : tuple[dict[str, Any], ...] = ()
     reply_payload          : ReplyPayload | None        = None
     media_marker           : Any                        = None
+    # 本轮各阶段耗时（规划、每次生成与审查、重写、上下文复核、拟人等待），随 smalltalk.done 记录。
+    timings: dict[str, Any] = field(default_factory=dict)
 
     def cancel_speculative_memory(self) -> None:
         """丢弃本轮时取消仍在后台预取的记忆检索。"""

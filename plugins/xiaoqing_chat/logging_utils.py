@@ -170,6 +170,17 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def accumulate_timing(timings: dict[str, Any], key: str, seconds: float) -> None:
+    """把一段耗时累加到本轮耗时记录。"""
+    timings[key] = round(float(timings.get(key, 0.0)) + seconds, 3)
+
+
+def append_timing(timings: dict[str, Any], key: str, value: Any) -> None:
+    """逐次记录：按 1、2、3… 编号存进子字典（日志净化会把列表折叠成个数，看不到每一次）。"""
+    bucket                       = timings.setdefault(key, {})
+    bucket[str(len(bucket) + 1)] = value
+
+
 def log_step(
     context: _LogContext,
     runtime: ChatRuntime | XiaoQingChatConfig | None,

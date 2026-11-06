@@ -86,7 +86,7 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
                 chat_id_counts       = [["chat-1", 2]],
                 is_global            = True,
                 count                = 2,
-                is_complete          = True,
+                confirmed            = True,
                 last_inference_count = 1,
                 updated_at           = 456.0,
             )
@@ -103,7 +103,7 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
     assert rec.raw_content == ["a", "b"]
     assert rec.chat_id_counts == [["chat-1", 2]]
     assert rec.is_global is True
-    assert rec.is_complete is True
+    assert rec.confirmed is True
 
 
 def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
@@ -119,7 +119,7 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
                     "is_global"           : "false",
                     "count"               : "not-an-int",
                     "is_jargon"           : "false",
-                    "is_complete"         : 1,
+                    "is_complete"         : 1,  # 旧字段名不再被读取
                     "last_inference_count": -3,
                     "updated_at"          : "not-a-time",
                 }
@@ -137,7 +137,7 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
     assert record.chat_id_counts == [["chat-1", 2]]
     assert record.is_global is False
     assert record.count == 0
-    assert record.is_complete is False
+    assert record.confirmed is False
     assert record.last_inference_count == 0
     assert record.updated_at > 0
 

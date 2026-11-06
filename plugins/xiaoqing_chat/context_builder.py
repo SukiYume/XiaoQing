@@ -189,11 +189,13 @@ def jargon_context(state, data_dir, chat_id: str, unknown_words: list[str], text
     recent_bot = "\n".join(
         render_stored_message(message) for message in recent if is_conversation_reply(message)
     )
-    scoped = [
+    visible = [
         rec
         for rec in jargon_db.values()
         if rec.meaning and (rec.is_global or rec.scope_chat_id == chat_id)
     ]
+    # 主动活用的候选只取释义有依据的；没有依据的释义仅在本轮提到时作为猜测给出。
+    scoped = [rec for rec in visible if rec.confirmed]
     scoped.sort(
         key=lambda rec: (
             rec.content in text,
@@ -204,8 +206,11 @@ def jargon_context(state, data_dir, chat_id: str, unknown_words: list[str], text
     )
     # 小批候选让模型判断场景迁移；近期用过的梗仅在本轮明确提及时重现。
     candidates = [rec for rec in scoped if rec.content in text or rec.content not in recent_bot]
+    guesses    = [rec.content for rec in visible if not rec.confirmed and rec.content in text]
     selected   = list(
-        dict.fromkeys([*unknown_words, *[rec.content for rec in candidates[:3] if text]])
+        dict.fromkeys(
+            [*unknown_words, *[rec.content for rec in candidates[:3] if text], *guesses]
+        )
     )
     items = []
     for w in selected[:UNKNOWN_WORDS_MAX]:
@@ -214,10 +219,13 @@ def jargon_context(state, data_dir, chat_id: str, unknown_words: list[str], text
         )
         if rec and (rec.is_global or rec.scope_chat_id == chat_id) and rec.meaning:
             details = f"{w}：{rec.meaning}"
-            if rec.usage:
-                details += f"；适用场景：{rec.usage}"
-            if rec.tone:
-                details += f"；情绪：{rec.tone}"
+            if not rec.confirmed:
+                details += "（未经本群确认的猜测，不当作共识，也不主动玩这个梗）"
+            else:
+                if rec.usage:
+                    details += f"；适用场景：{rec.usage}"
+                if rec.tone:
+                    details += f"；情绪：{rec.tone}"
             items.append(details)
         elif w in unknown_words:
             hits = state.memory_db.query_global(w, top_k=1, min_score=0.0, type_filter="word_def")

@@ -16,7 +16,7 @@ from .chat_event import event_chat_id, event_sender_name
 from .chat_runtime import chat_lock
 from .context_builder import retrieve_memory_context
 from .llm.check_result import ReplyRejected
-from .logging_utils import log_step
+from .logging_utils import accumulate_timing, log_step
 from .memory.local_ids import allocate_local_id
 from .memory.memory import active_conversation_suffix
 from .memory.person_profile import get_profile_generation
@@ -98,6 +98,8 @@ class _TurnGenerator:
         self.hctx           = hctx
         self.generated      = generated
         self.recent_history = recent_history
+        # 规划器回调里生成回复花掉的时间，从规划总耗时里扣掉才是规划本身。
+        self.drafting_s     = 0.0
         self.max_context    = get_brain_chat_max_context(hctx.runtime, prepared.brain_chat_active)
         self.think_level    = get_brain_chat_think_level(
             hctx.runtime, prepared.brain_chat_active, history_len=len(recent_history)
@@ -159,6 +161,7 @@ class _TurnGenerator:
             state_text             = self.prepared.mood_text,
             is_brain_chat          = self.prepared.brain_chat_active,
             prefetched_memory_task = self.generated.speculative_memory_task,
+            timings                = self.generated.timings,
         )
 
     async def draft_or_idle(self, *, forced: bool, reasoning: str, plan_reasoning: str) -> None:
@@ -177,12 +180,14 @@ class _TurnGenerator:
         plan_reasoning = "\n".join(
             part for part in (planner_reason, str(extra_reason or "").strip()) if part
         )
+        started = time.monotonic()
         reply, self.generated.reply_parts, self.generated.media_marker = await self.draft(
             forced         = self.prepared.forced,
             reasoning      = planner_reason,
             plan_reasoning = plan_reasoning,
             turn_note      = _PLANNER_MODE_NOTES.get(mode, ""),
         )
+        self.drafting_s += time.monotonic() - started
         return reply or ""
 
     async def run_forced(self) -> None:
@@ -200,7 +205,8 @@ class _TurnGenerator:
         hctx, generated = self.hctx, self.generated
         generated.reply_source = "pfc"
         self.start_memory_prefetch()
-        result = await run_pfc_once(
+        planning_started = time.monotonic()
+        result           = await run_pfc_once(
             context         = self.context,
             runtime_cfg     = hctx.runtime.cfg,
             secrets         = hctx.secrets,
@@ -215,6 +221,9 @@ class _TurnGenerator:
             generate_reply  = self.planner_reply,
             state_override  = generated.pfc_state_snapshot,
             persist_state   = False,
+        )
+        accumulate_timing(
+            generated.timings, "plan_s", time.monotonic() - planning_started - self.drafting_s
         )
         # wait / listening 直接按不发言结束本轮，不在这里睡 wait_seconds：Core 按“群 + 用户”
         # 串行处理事件，这里每睡一秒，同一个人接着发的消息就晚一秒进来；本轮还占着生成

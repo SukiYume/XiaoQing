@@ -306,7 +306,8 @@ async def handle_jargon(_args: str, event: dict[str, Any], context) -> list[dict
     )
     lines = ["🏴‍☠️ 学到的黑话\n", f"共 {len(jargon_list)} 条记录\n"]
     for i, jar in enumerate(jargon_list[:15], 1):
-        meaning_str = f" - {jar.meaning}" if jar.meaning else ""
+        pending     = "" if jar.confirmed else "（待确认）"
+        meaning_str = f" - {jar.meaning}{pending}" if jar.meaning else ""
         lines.append(f"{i}. {jar.content}{meaning_str} (次数: {jar.count})")
     if len(jargon_list) > 15:
         lines.append(f"\n... 还有 {len(jargon_list) - 15} 条记录")

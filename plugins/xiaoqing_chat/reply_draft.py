@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .llm.check_result import ReplyCheckResult
@@ -126,6 +126,8 @@ class ReplyAttemptState:
     extra_check_hint : str                      = ""
     # 本轮对话的独立阅读与候选无关，各次尝试共用。
     turn_reading: TurnReadingCache | None = None
+    # 与本轮生成对象共用的耗时记录。
+    timings: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
