@@ -27,7 +27,12 @@ MAX_RECORDS_PER_CHAT = 30
 MAX_TRANSCRIPTS      = 200
 _CHAT_KEY_RE         = re.compile(r"^[gu][0-9]{1,20}$")
 
-TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled", "interrupted"})
+_MAX_RECORDED_UPDATES = 10
+
+# needs_user：交付的是要问发起人的问题；blocked：权限、服务或工具不支持；unfinished：还差事项。
+TERMINAL_STATUSES = frozenset(
+    {"done", "needs_user", "blocked", "unfinished", "failed", "cancelled", "interrupted"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +106,10 @@ class AgentTask:
     persona: str = field(default="", repr=False)
     # 任务开始时发起人是不是 Bot 管理员：决定占哪份名额、提示词怎么写；本机工具另由 Core 每次复核。
     admin: bool = False
-    # 运行中发起人追加的要求，执行循环在下一步前读走。
+    # 运行中追加的要求，执行循环在下一步前读走。
     notes: list[str] = field(default_factory=list)
+    # 发起人本人在运行中补充过的要求（逐字）：随记录保存，续接时同样算这个任务的要求。
+    updates: list[str] = field(default_factory=list)
     # 结果交付：inline 随当轮回复交给聊天，sent 主动发出，failed 发送失败。
     delivery: str = ""
     # 调用命令带回的发送回执，随附件实际发出时结算（见 receipts.py）。
@@ -145,6 +152,7 @@ class AgentTask:
             "request_text": self.request_text[:500],
             "continues"   : self.continues,
             "thread"      : list(self.thread),
+            "updates"     : [text[:500] for text in self.updates[-_MAX_RECORDED_UPDATES:]],
             "source"      : self.source,
             "status"      : self.status,
             "created_at"  : self.created_at,

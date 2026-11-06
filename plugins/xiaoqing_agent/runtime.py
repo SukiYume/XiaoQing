@@ -57,6 +57,7 @@ _MAX_NOTE_CHARS             = 1000
 _MAX_PENDING_NOTES          = 10
 _MAX_AWAITING_REPORTS       = 200
 _REVIEW_TIMEOUT_SECONDS     = 20.0
+_REVIEW_STATES              = frozenset({"done", "unfinished", "needs_user", "blocked"})
 # 这些工具只负责控制流程，不是执行回报里的事实。
 _CONTROL_TOOLS = frozenset(
     {
@@ -124,18 +125,33 @@ def _delivery_evidence(
     return evidence, reports
 
 
-def _parse_verdict(content: Any) -> tuple[str, list[str]]:
-    """解析交付核对的输出；只有 ``unfinished`` 状态才带回待办事项，其余状态直接交付 reply。"""
+def _parse_verdict(content: Any) -> tuple[str, str, list[str]]:
+    """解析交付核对的输出：(回复, 验收状态, 待办事项)。
+
+    状态不在约定范围内时为空，任务结局退回执行阶段的状态；只有 ``unfinished`` 带回待办事项。
+    """
 
     payload = json.loads(content if isinstance(content, str) and content.strip() else "{}")
     if not isinstance(payload, dict) or not isinstance(payload.get("reply"), str):
         raise ValueError("delivery review requires a reply")
+    state = payload.get("state")
+    state = state if state in _REVIEW_STATES else ""
     items = payload.get("unfinished")
-    if payload.get("state") != "unfinished" or not isinstance(items, list):
-        return payload["reply"].strip(), []
-    return payload["reply"].strip(), [
-        item.strip() for item in items if isinstance(item, str) and item.strip()
-    ]
+    if state != "unfinished" or not isinstance(items, list):
+        return payload["reply"].strip(), state, []
+    return (
+        payload["reply"].strip(),
+        state,
+        [item.strip() for item in items if isinstance(item, str) and item.strip()],
+    )
+
+
+def _final_status(executed: str, reviewed: str) -> str:
+    """任务记录的结局：交付核对给出的验收状态优先；执行没走完时不会因核对升级成 done。"""
+
+    if executed != "done":
+        return reviewed if reviewed in {"needs_user", "blocked"} else "failed"
+    return reviewed or "done"
 
 
 def _scene(chat: ChatRef) -> str:
@@ -314,6 +330,8 @@ class AgentRuntime:
         env       : ToolEnv | None       = None
         outcome   : Outcome | None       = None
         transcript: list[dict[str, Any]] = []
+        # 交付核对给出的验收状态；没有核对或核对不可用时为空。
+        reviewed = ""
         try:
             await self.store.save(task)
             env, tools, messages = await self._prepare(context, config, task, history, images)
@@ -331,7 +349,9 @@ class AgentRuntime:
                     review = build_delivery_messages(
                         task, evidence, history, outcome.text if outcome.authored else ""
                     )
-                    reply, unfinished = await self._review_delivery(env, task, review, transcript)
+                    reply, reviewed, unfinished = await self._review_delivery(
+                        env, task, review, transcript
+                    )
                     targets = [*task.thread, task.request_text]
                     pending = [item for item in unfinished if any(item in text for text in targets)]
                     if (
@@ -355,7 +375,8 @@ class AgentRuntime:
                     )
                     break
             assert outcome is not None
-            task.status = "done" if outcome.status == "done" else "failed"
+            task.status    = _final_status(outcome.status, reviewed)
+            outcome.status = task.status
         except asyncio.CancelledError:
             task.status = "cancelled" if self.accepting else "interrupted"
             self._resolve_waiter(task, Outcome("这个任务已经停下了。", status=task.status))
@@ -397,7 +418,9 @@ class AgentRuntime:
                     "需要的话再说一次。）"
                 )
                 task.notes.clear()
-            await self._hand_over(context, task, outcome)
+            # 当轮还有人在等就交给它作为回复，否则主动发回原会话。
+            if not self._resolve_waiter(task, outcome):
+                await self._deliver(context, task, outcome)
 
     async def _review_delivery(
         self,
@@ -405,8 +428,8 @@ class AgentRuntime:
         task: AgentTask,
         review: list[dict[str, str]],
         transcript: list[dict[str, Any]],
-    ) -> tuple[str, list[str]]:
-        """交付核对：返回最终回复与尚未完成的事项；核对不可用时回复为空。"""
+    ) -> tuple[str, str, list[str]]:
+        """交付核对：返回最终回复、验收状态与尚未完成的事项；核对不可用时全部为空。"""
 
         try:
             async with asyncio.timeout(min(_REVIEW_TIMEOUT_SECONDS, max(1.0, env.remaining()))):
@@ -425,7 +448,7 @@ class AgentRuntime:
                 task.task_id,
                 type(exc).__name__,
             )
-            return "", []
+            return "", "", []
 
     def _forget(self, task: AgentTask, runner: asyncio.Task[None]) -> None:
         """任务协程结束后总是注销；还没开始就被取消的任务不会进入 ``_run`` 的收尾。"""
@@ -458,13 +481,6 @@ class AgentRuntime:
             waiter.set_result(outcome)
             return True
         return False
-
-    async def _hand_over(self, context: Any, task: AgentTask, outcome: Outcome) -> None:
-        """当轮还有人在等就交给它作为回复，否则主动发回原会话。"""
-
-        if self._resolve_waiter(task, outcome):
-            return
-        await self._deliver(context, task, outcome)
 
     async def _deliver(self, context: Any, task: AgentTask, outcome: Outcome) -> None:
         try:
@@ -697,6 +713,8 @@ class AgentRuntime:
         if len(task.notes) >= _MAX_PENDING_NOTES:
             return f"任务 {task.task_id} 还有好几条补充没处理，等它跟上再说。"
         task.notes.append(f"{sender}：{text}" if sender and not chat.is_private else text)
+        if actor.user_id == task.chat.user_id:
+            task.updates.append(text)
         return f"好，已经告诉任务 {task.task_id} 了，它下一步就会按这个调整。"
 
     def status_text(self, chat: ChatRef, task_id: str, actor: Actor) -> str:

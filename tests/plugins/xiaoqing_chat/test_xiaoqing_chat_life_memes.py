@@ -42,7 +42,6 @@ def _png(color: int) -> bytes:
 
 def _import(
     context: Any,
-    runtime: Any,
     image: bytes,
     label: str = "点赞认可",
     tags       = ("认可", "开心"),
@@ -51,7 +50,6 @@ def _import(
     sha = hashlib.sha256(image).hexdigest()
     return import_external_emoji(
         context,
-        runtime,
         image_bytes  = image,
         suffix       = ".png",
         description  = label,
@@ -70,7 +68,7 @@ def _index(context: Any) -> dict[str, Any]:
 async def test_imported_meme_is_global_active_listed_and_resolvable(mock_context) -> None:
     runtime, image = _make_media_runtime(), _png(1)
     sha = hashlib.sha256(image).hexdigest()
-    assert _import(mock_context, runtime, image) is True
+    assert _import(mock_context, image) is True
     record = _index(mock_context)[sha]
     assert (
         record["status"],
@@ -104,10 +102,10 @@ async def test_imported_meme_is_global_active_listed_and_resolvable(mock_context
 
 
 def test_import_is_idempotent_and_never_overrides_other_sources(mock_context) -> None:
-    runtime, image = _make_media_runtime(), _png(2)
-    assert _import(mock_context, runtime, image) is True
+    image = _png(2)
+    assert _import(mock_context, image) is True
     before = _index(mock_context)
-    assert _import(mock_context, runtime, image) is False
+    assert _import(mock_context, image) is False
     assert _index(mock_context) == before
     # 内容相同但已有手动条目：不覆盖
     manual_image = _png(3)
@@ -127,7 +125,7 @@ def test_import_is_idempotent_and_never_overrides_other_sources(mock_context) ->
         "global_approved": False,
     }
     index_path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
-    assert _import(mock_context, runtime, manual_image, label="覆盖尝试") is False
+    assert _import(mock_context, manual_image, label="覆盖尝试") is False
     assert (
         _index(mock_context)[msha]["source"] == "manual"
         and _index(mock_context)[msha]["description"] == "手动表情"
@@ -135,15 +133,14 @@ def test_import_is_idempotent_and_never_overrides_other_sources(mock_context) ->
 
 
 def test_import_rejects_mismatched_sources_and_empty_metadata(mock_context) -> None:
-    runtime, image = _make_media_runtime(), _png(4)
+    image = _png(4)
     with pytest.raises(ValueError):
-        _import(mock_context, runtime, image, source="life:" + "0" * 64)
+        _import(mock_context, image, source="life:" + "0" * 64)
     with pytest.raises(ValueError):
-        _import(mock_context, runtime, image, source="manual")
+        _import(mock_context, image, source="manual")
     with pytest.raises(ValueError):
         import_external_emoji(
             mock_context,
-            runtime,
             image_bytes  = image,
             suffix       = ".png",
             description  = "",
@@ -163,9 +160,9 @@ def _index_entries(context: Any) -> dict[str, Any]:
 
 
 def test_remove_only_deletes_life_sourced_entries(mock_context) -> None:
-    runtime, image = _make_media_runtime(), _png(5)
+    image = _png(5)
     sha = hashlib.sha256(image).hexdigest()
-    _import(mock_context, runtime, image)
+    _import(mock_context, image)
     path = mock_context.data_dir / _index(mock_context)[sha]["file_path"]
     assert remove_external_emoji(mock_context, sha) is True
     assert sha not in _index(mock_context) and not path.exists()
@@ -232,7 +229,7 @@ def _context_with(mock_context: Any, life: Any) -> Any:
 async def test_sync_imports_pages_deletes_revoked_and_advances_the_cursor(mock_context) -> None:
     runtime = _make_media_runtime()
     old     = _png(20)
-    _import(mock_context, runtime, old)
+    _import(mock_context, old)
     new = [_png(21), _png(22)]
     life = FakeLife(_page(new, revoked=[hashlib.sha256(old).hexdigest(), "zz"], next_since=2.0))
     context = _context_with(mock_context, life)

@@ -43,6 +43,10 @@ _READ_SKIP_CHARS      = 1 << 20
 _TRUNCATION_MARKER    = "\n…（中间输出已省略）…\n"
 _AGENT_DIR            = ".agent"
 _CODEX_SESSION_PREFIX = "agent-"
+# 只管流程、本身不产出事实的工具：调用它们不算任务有了进展。
+NO_PROGRESS_TOOLS = frozenset({"wait", "send_message", "update_plan", "xiaoqing_commands"})
+# 某条路径被权限或场景挡住时，其余事项照常推进。
+_BLOCKED_SCOPE_NOTE = "其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
 # 命令回报里的记录 ID（UUID、32 位或 8 位十六进制）：判断重复调用时不算差异。
 _RECORD_ID_RE = re.compile(
     r"\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|[0-9a-f]{8})\b",
@@ -549,7 +553,7 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     lines   = _catalog_lines(env.context, query)
     heading = ""
     if not lines and query.strip() and _catalog_lines(env.context, query, include_unavailable=True):
-        reason = "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+        reason = "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
         env.closed_scopes["unavailable_catalog"] = reason
         return ToolResult(reason, state="blocked", progress=False)
     if not lines and query.strip():
@@ -561,7 +565,7 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
                 root.code.casefold(),
                 *(alias.casefold() for alias in root.aliases),
             } and not command_allowed(root, env.context.principal):
-                reason = "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+                reason = "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
                 env.closed_scopes[root.plugin] = reason
                 return ToolResult(reason, state="blocked", progress=False)
             if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
@@ -752,7 +756,7 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
             is_help     = invocation.node.name == "help" or root.name == "help"
             denied      = command_access(invocation.node, env.context.principal)
             if denied:
-                reason = "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+                reason = "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，" + _BLOCKED_SCOPE_NOTE
                 env.closed_scopes[command_key] = reason
                 return ToolResult(reason, state="blocked", progress=False)
             if (
@@ -1171,7 +1175,7 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 Tool(
                     "xiaoai_capabilities",
                     "读取指定设备的结构化能力，每页6项；按返回的下一页提示继续读取所需能力。"
-                    "包含属性权限、枚举、参数范围和出粮份量换算；只使用返回的能力编号。",
+                    "包含属性权限、枚举、参数范围和单位换算；只使用返回的能力编号。",
                     _object(
                         {"device": {"type": "string"}, "page": {"type": "integer", "minimum": 1}},
                         ["device"],
@@ -1181,8 +1185,8 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 Tool(
                     "xiaoai_execute",
                     "直接提交米家结构化操作，由插件校验执行，省去插件模型解析。先读取设备能力。"
-                    "查询用read，设置用set和value，动作用action和args数组（无参数可省略或传[]）。出粮参数为估算克数，"
-                    "一份乘以grams_per_portion；严格保留任务数量，整份转换由插件完成。"
+                    "查询用read，设置用set和value，动作用action和args数组（无参数可省略或传[]）。"
+                    "数值参数按能力给出的单位和换算填写（如 grams_per_portion），严格保留任务里的数量，取整由插件完成。"
                     "动作成功码表示云端已接收；完成状态按属性回读或设备事件判断，待确认时按已提交交代。"
                     "复杂字符串协议或含义不明时向用户确认。设备任务统一使用这三个专用工具。",
                     _object(
@@ -1333,10 +1337,6 @@ async def execute_tool(
         "final_answer",
     }:
         env.wait_blocked_reason = "工具已返回错误，可根据回报修正输入。当前回报没有提供可轮询状态。"
-    elif (
-        result.progress
-        and not env.closed_scopes
-        and name not in {"wait", "send_message", "update_plan", "xiaoqing_commands"}
-    ):
+    elif result.progress and not env.closed_scopes and name not in NO_PROGRESS_TOOLS:
         env.wait_blocked_reason = ""
     return result

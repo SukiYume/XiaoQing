@@ -445,7 +445,7 @@ def test_exploration_draws_half_from_the_frontier_and_marks_it_tried(tmp_path: P
     ]
     cfg = make_cfg(seed_interests=["猫"])
     picks = [
-        planner.choose_topic_ex(
+        planner.choose_topic(
             cfg, default_state(), {}, NOW, random.Random(n), frontier, force_explore=True
         )
         for n in range(200)
@@ -457,11 +457,11 @@ def test_exploration_draws_half_from_the_frontier_and_marks_it_tried(tmp_path: P
     assert 0.35 < len(from_frontier) / len(picks) < 0.65
     assert any(p[0] in planner.EXPLORATION_QUERIES for p in picks)
     normal = [
-        planner.choose_topic_ex(cfg, default_state(), {}, NOW, random.Random(n), frontier)
+        planner.choose_topic(cfg, default_state(), {}, NOW, random.Random(n), frontier)
         for n in range(200)
     ]
     assert 0.1 < sum(p[1] for p in normal) / 200 < 0.45  # 默认 30% 探索
-    assert planner.choose_topic(cfg, default_state(), {}, NOW, random.Random(1), frontier)
+    assert planner.choose_topic(cfg, default_state(), {}, NOW, random.Random(1), frontier)[0]
 
 
 @pytest.mark.asyncio
@@ -515,9 +515,7 @@ def test_hot_scroll_preselection_gives_a_novelty_bonus_to_unfamiliar_items() -> 
     recent   = "天文摄影入门教程 赤道仪 星空"
     assert novelty(familiar, recent) == 0.0 and novelty(fresh, recent) > 0.0
     assert novelty(fresh, "") == 0.0
-    cfg   = make_cfg()
     picks = pick_clicks(
-        cfg,
         [familiar, fresh, SourceItem("bili:3", "bili_popular", "别的", "", "u", 100, ())],
         [],
         novel_text=recent,

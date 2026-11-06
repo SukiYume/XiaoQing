@@ -192,7 +192,7 @@ def build_messages(
         {
             "role"   : "system",
             "content": _SYSTEM.format(
-                persona=persona or "你是小青。", moment_line=moment_line(moment, activity)
+                persona=persona, moment_line=moment_line(moment, activity)
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

@@ -206,15 +206,13 @@ async def test_candidate_never_overwrites_a_confirmed_meaning(state):
     assert record.meaning == "已确认的含义" and record.confirmed is True
 
 
-@pytest.mark.asyncio
-async def test_inference_confirms_candidates_but_skips_confirmed_entries(state):
+_TWO_USES = ["对方(甲)：来杯快乐水", "对方(乙)：今天又喝了两瓶快乐水"]
+
+
+async def _infer(db: dict, verdict: dict) -> tuple[int, AsyncMock]:
     from plugins.xiaoqing_chat.expression.bw_jargon_miner import _infer_pending_meanings
 
-    db = {
-        "a": JargonRecord("甲", scope_chat_id="g1", meaning="候选", count=3, raw_content=["x"]),
-        "b": JargonRecord("乙", scope_chat_id="g1", meaning="定论", count=3, confirmed=True),
-    }
-    response = {"choices": [{"message": {"content": '{"meaning": "多处上下文推断"}'}}]}
+    response = {"choices": [{"message": {"content": json.dumps(verdict, ensure_ascii=False)}}]}
     with patch(
         "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
         new=AsyncMock(return_value=(response, "test")),
@@ -222,9 +220,111 @@ async def test_inference_confirms_candidates_but_skips_confirmed_entries(state):
         changed = await _infer_pending_meanings(
             {}, db, MODEL["llm"], chat_id="g1", infer_threshold=3
         )
+    return changed, call
+
+
+@pytest.mark.asyncio
+async def test_inference_confirms_only_with_stated_and_cited_evidence(state):
+    db = {
+        "a": JargonRecord("快乐水", scope_chat_id="g1", count=3, raw_content=list(_TWO_USES)),
+        "b": JargonRecord("乙", scope_chat_id="g1", meaning="定论", count=3, confirmed=True),
+    }
+    changed, call = await _infer(db, {"meaning": "碳酸饮料", "sufficient": True, "support": [1, 2]})
     assert changed == 1 and call.await_count == 1
-    assert (db["a"].meaning, db["a"].confirmed) == ("多处上下文推断", True)
+    assert (db["a"].meaning, db["a"].confirmed) == ("碳酸饮料", True)
     assert db["b"].meaning == "定论"
+    prompt = call.await_args.kwargs["messages"][0]["content"]
+    assert "[1]\n对方(甲)：来杯快乐水" in prompt and "[2]\n对方(乙)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_single_context_is_never_inferred_even_with_a_high_count(state):
+    db = {
+        "a": JargonRecord(
+            "快乐水", scope_chat_id="g1", count=3, raw_content=["对方(甲)：来杯快乐水"]
+        ),
+        # 两个窗口重叠在同一句话上，只算一次用法；不含这个词的上下文不算。
+        "b": JargonRecord(
+            "肥宅",
+            scope_chat_id = "g1",
+            count         = 5,
+            raw_content   = ["对方(甲)：我是肥宅\n对方(乙)：哈哈", "对方(甲)：我是肥宅", "无关的一段"],
+        ),
+    }
+    changed, call = await _infer(
+        db, {"meaning": "可能指饮料，具体含义不明确", "sufficient": True, "support": [1, 2]}
+    )
+    assert changed == 0 and call.await_count == 0
+    assert db["a"].confirmed is False and db["b"].confirmed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        {"meaning": "可能指饮料，具体含义不明确", "sufficient": True, "support": [1, 2]},
+        {"meaning": "碳酸饮料", "sufficient": False, "support": [1, 2]},
+        {"meaning": "碳酸饮料", "sufficient": "true", "support": [1, 2]},
+        {"meaning": "碳酸饮料", "sufficient": True, "support": [1]},
+        {"meaning": "碳酸饮料", "sufficient": True, "support": [1, 7]},
+        {"meaning": "碳酸饮料", "sufficient": True, "support": [1, 1]},
+        {"meaning": "碳酸饮料", "sufficient": True},
+    ],
+)
+async def test_unsupported_or_hedged_inference_stays_a_candidate(state, verdict):
+    db = {"a": JargonRecord("快乐水", scope_chat_id="g1", count=3, raw_content=list(_TWO_USES))}
+    changed, call = await _infer(db, verdict)
+    assert changed == 1 and call.await_count == 1
+    assert db["a"].confirmed is False and db["a"].meaning == verdict["meaning"]
+    assert db["a"].last_inference_count == 3  # 等出现更多用法再推断
+    assert (await _infer(db, verdict))[1].await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hedged_inference_never_replaces_an_existing_candidate(state):
+    db = {
+        "a": JargonRecord(
+            "快乐水", scope_chat_id="g1", meaning="原候选", count=3, raw_content=list(_TWO_USES)
+        )
+    }
+    await _infer(db, {"meaning": "或许是饮料", "sufficient": True, "support": [1, 2]})
+    assert (db["a"].meaning, db["a"].confirmed) == ("原候选", False)
+
+
+@pytest.mark.asyncio
+async def test_stored_context_is_where_the_term_was_used(state):
+    filler = [
+        StoredMessage(role="user", name="路人", content=f"无关的第{index}句", ts=time.time())
+        for index in range(10)
+    ]
+    messages = [
+        StoredMessage(role="user", name="甲", content="先来一句", ts=time.time()),
+        StoredMessage(role="user", name="甲", content="今天又空转了一天", ts=time.time()),
+        StoredMessage(role="user", name="乙", content="同感", ts=time.time()),
+        *filler,
+    ]
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        [{"term": "空转", "is_jargon": True, "evidence": "今天又空转了一天"}],
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        ]
+    }
+    with patch(
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(return_value=(response, "test")),
+    ):
+        await mine_jargon(
+            store=state.bw_jargon_store, chat_id="g1", bot_name="小青", messages=messages, **MODEL
+        )
+    assert _record(state, "空转").raw_content == [
+        "对方(甲)：先来一句\n对方(甲)：今天又空转了一天\n对方(乙)：同感"
+    ]
 
 
 def test_unconfirmed_meaning_is_a_marked_guess_and_never_a_transfer_candidate(state, tmp_path):

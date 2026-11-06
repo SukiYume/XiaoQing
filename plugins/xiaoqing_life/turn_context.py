@@ -166,7 +166,7 @@ def followed_up(store: LifeStore, req: dict[str, Any], now: float) -> list[dict[
 
 
 def select_episodes(
-    store: LifeStore, req: dict[str, Any], moment: datetime, cfg: LifeConfig
+    store: LifeStore, req: dict[str, Any], moment: datetime
 ) -> tuple[list[dict[str, Any]], bool]:
     """返回 (经历, 是否在问近况)。只给已经“刷到”的（at ≤ 现在）。
 
@@ -248,12 +248,8 @@ def _opening(episode: dict[str, Any], title: str, who: str) -> str:
     return f"{_VERBS.get(source, '上网看到了')}「{title}」{who}"
 
 
-def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: float) -> str:
-    return select_thread_ex(store, req, asking, now)[0]
-
-
-def select_thread_ex(
-    store: LifeStore, req: dict[str, Any], asking: bool, now: float
+def select_thread(
+    store: LifeStore, req: dict[str, Any], asking: bool
 ) -> tuple[str, dict[str, Any] | None]:
     """话题重合或问近况时给 1 个小课题；在查的写“在查”，查完的写收获。返回（行, 小课题）。"""
 
@@ -456,7 +452,7 @@ def build_life_lines(
     now   = moment.timestamp()
     learn = learnings or []
     plan  = plan_lines(store, routine_slots or []) if wants_plans(req["text"]) else []
-    episodes, asking = select_episodes(store, req, moment, cfg)
+    episodes, asking = select_episodes(store, req, moment)
     link      = bool(_LINK_RE.search(req["text"]))
     context   = " ".join([req["text"], *req["recent"][-2:], *req["bot_recent"][-2:]])
     recalling = bool(_RECALL_RE.search(req["text"]))
@@ -470,7 +466,7 @@ def build_life_lines(
     work = works_mod.pick_work(store.works, context, now, any_work=show or asking)
     excerpt   = [works_mod.excerpt_block(work)] if (show and work is not None) else []
     work_part = [works_mod.work_line(work)] if (work is not None and not show) else []
-    thread_line, thread = select_thread_ex(store, req, asking, now)
+    thread_line, thread = select_thread(store, req, asking)
     if (
         entry is not None
         and thread is not None

@@ -29,7 +29,6 @@ WORK_ON = "work_on"
 
 FORMS            = {"list": "片单", "notes": "小笔记", "review": "观后感"}
 KINDS            = ("item", "point", "thought", "todo")
-OPS              = ("add", "revise", "remove", "verify")
 MAX_ENTRIES      = 12
 MAX_OPS          = 3
 TITLE_CHARS      = 20
@@ -601,12 +600,7 @@ def build_messages(
     }
     if items:
         payload["untrusted_material"] = digest_mod.material(items)
-    system = (
-        _SYSTEM.replace("{{", "{")
-        .replace("}}", "}")
-        .replace("{persona}", persona or "你是小青。")
-        .replace("{moment_line}", digest_mod.moment_line(moment, activity))
-    )
+    system = _SYSTEM.format(persona=persona, moment_line=digest_mod.moment_line(moment, activity))
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

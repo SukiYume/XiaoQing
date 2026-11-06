@@ -47,11 +47,6 @@ _STRIP_RE        = re.compile(r"[!'()*]")
 _wbi_cache: tuple[float, str] | None = None
 
 
-def reset_cache() -> None:
-    global _wbi_cache
-    _wbi_cache = None
-
-
 def mixin_key(img_url: str, sub_url: str) -> str:
     """两个图片文件名（不含扩展名）拼成 64 字符，按重排表取前 32 位；不足 64 位返回空。"""
 

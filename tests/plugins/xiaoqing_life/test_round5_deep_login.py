@@ -60,8 +60,8 @@ OWNER       = 4242
 
 
 @pytest.fixture(autouse=True)
-def _fresh_wbi_cache() -> None:
-    subtitle.reset_cache()
+def _fresh_wbi_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subtitle, "_wbi_cache", None)
 
 
 # ───────────────────────────── 简介 / 置顶 / UP 主回复 ─────────────────────────────
@@ -201,7 +201,7 @@ async def test_wbi_key_is_cached_for_an_hour() -> None:
     await subtitle.wbi_key(fetch, lambda: clock[0])
     assert len(fetch.calls) == 2
     bad = FakeFetcher({"/web-interface/nav": {"code": 0, "data": {}}})
-    subtitle.reset_cache()
+    subtitle._wbi_cache = None
     with pytest.raises(SourceError):
         await subtitle.wbi_key(bad)
 
@@ -323,7 +323,7 @@ async def test_subtitle_read_skips_bad_hosts_and_missing_tracks() -> None:
     bad = FakeFetcher(_subtitle_routes(url="https://evil.example.com/x.json"))
     assert await subtitle.read(bad, "BV1", 1, []) == ([], False)
     assert bad.public_calls == []
-    subtitle.reset_cache()
+    subtitle._wbi_cache = None
     none = FakeFetcher(
         {
             **_subtitle_routes(),
@@ -331,7 +331,7 @@ async def test_subtitle_read_skips_bad_hosts_and_missing_tracks() -> None:
         }
     )
     assert await subtitle.read(none, "BV1", 1, []) == ([], False)
-    subtitle.reset_cache()
+    subtitle._wbi_cache = None
     denied = FakeFetcher({**_subtitle_routes(), "/player/wbi/v2": {"code": -400}})
     with pytest.raises(SourceError):
         await subtitle.read(denied, "BV1", 1, [])

@@ -314,7 +314,6 @@ async def _apply_page(context: Any, runtime: ChatRuntime, page: dict[str, Any]) 
                 await run_media_blocking(
                     import_external_emoji,
                     context,
-                    runtime,
                     image_bytes  = image,
                     suffix       = suffix,
                     description  = label,

@@ -159,12 +159,15 @@ async def _start_and_wait(
     return [], started
 
 
-def _reply_text(message: list[dict[str, Any]]) -> str:
-    return "".join(
+def _handled(message: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
+    """交回聊天侧的接手结果：回复段，以及其中的纯文字（聊天侧记进历史）。"""
+
+    reply_text = "".join(
         str(segment.get("data", {}).get("text", ""))
         for segment in message
         if isinstance(segment, dict) and segment.get("type") == "text"
     ).strip()
+    return {"handled": True, "segments": message, "reply_text": reply_text, **extra}
 
 
 # ──────────────────── xiaoqing_chat 服务入口 ────────────────────
@@ -261,13 +264,13 @@ async def _continuation(
     runtime: AgentRuntime,
     chat: ChatRef,
     task_id: str,
-    history: list[dict[str, Any]],
     text: str,
 ) -> tuple[str, list[str]]:
     """本轮续接最近的某个任务时，返回它的 ID 和验收线索：发起人本人的原话，旧→新，不含本轮。
 
-    线索 = 续接链（沿 ``continues`` 回溯到根任务）上各任务的原话，加上发起人在根任务之后
-    亲口说过的每一句；逐字保留，只做去重和截断，不改写。
+    线索只取同一件事：续接链（沿 ``continues`` 回溯到根任务）上各任务的原话，以及发起人
+    在这些任务运行中补充的要求。中间别的请求和闲聊不算要求，它们留在聊天记录里作背景。
+    逐字保留，只做去重和截断，不改写。
     """
 
     records = {
@@ -281,21 +284,15 @@ async def _continuation(
         record = records.get(str(record.get("continues") or ""))
     if not chain:
         return "", []
-    root_at = float(chain[-1].get("created_at") or 0)
-    clues   = [
-        (float(item.get("created_at") or 0), str(item.get("request_text") or "")) for item in chain
-    ]
-    clues  += [
-        (float(item["ts"]), str(item.get("text") or ""))
-        for item in history
-        if item.get("role") == "user"
-        and str(item.get("user_id")) == str(chat.user_id)
-        and isinstance(item.get("ts"), int | float)
-        and item["ts"] > root_at
+    clues = [
+        line
+        for item in sorted(chain, key=lambda entry: float(entry.get("created_at") or 0))
+        for line in (item.get("request_text"), *(item.get("updates") or ()))
+        if isinstance(line, str)
     ]
     seen   = {"".join(text[:_MAX_THREAD_CHARS].split())}
     thread: list[str] = []
-    for _ts, line in sorted(clues, key=lambda clue: clue[0]):
+    for line in clues:
         line = line.strip()[:_MAX_THREAD_CHARS]
         key  = "".join(line.split())
         if key and key not in seen:
@@ -318,21 +315,22 @@ async def _act(
     actor  = _actor(context, chat)
     sender = str(turn.get("sender_name") or "")
     if decision.action == "status":
-        message = segments(runtime.status_text(chat, decision.task_id, actor))
-        return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
+        return _handled(segments(runtime.status_text(chat, decision.task_id, actor)))
     if decision.action == "cancel":
         stopped = await runtime.stop(chat, decision.task_id, actor)
-        message = segments(
-            "好，停下了。"
-            if isinstance(stopped, list) and stopped
-            else _stopped_text(stopped, empty="现在没有在跑的任务。"),
+        return _handled(
+            segments(
+                "好，停下了。"
+                if isinstance(stopped, list) and stopped
+                else _stopped_text(stopped, empty="现在没有在跑的任务。"),
+            )
         )
-        return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
     if decision.action == "update":
-        message = segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
-        return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
+        return _handled(
+            segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
+        )
 
-    continues, thread = await _continuation(runtime, chat, decision.task_id, history, text)
+    continues, thread = await _continuation(runtime, chat, decision.task_id, text)
     message, task = await _start_and_wait(
         context,
         config,
@@ -349,12 +347,7 @@ async def _act(
         quoted_text  = str(turn.get("quoted_text") or ""),
         persona      = persona,
     )
-    return {
-        "handled"   : True,
-        "segments"  : message,
-        "reply_text": _reply_text(message),
-        "task_id"   : task.task_id if task is not None else "",
-    }
+    return _handled(message, task_id=task.task_id if task is not None else "")
 
 
 async def report_delivery(report: dict[str, Any], context: PluginContextProtocol) -> None:

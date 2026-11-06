@@ -45,8 +45,8 @@ DAY    = 86400.0
 
 
 @pytest.fixture(autouse=True)
-def _fresh_wbi_cache() -> None:
-    subtitle.reset_cache()
+def _fresh_wbi_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subtitle, "_wbi_cache", None)
 
 
 # ───────────────────────────── 夹具 ─────────────────────────────
