@@ -27,14 +27,16 @@ DEFAULT_SEED_INTERESTS = (
 )
 
 SOURCE_DEFAULTS: dict[str, bool] = {
-    "bili_popular" : True,
-    "bili_ranking" : True,
-    "bili_search"  : True,
-    "bili_comments": True,
-    "zhihu_hot"    : True,
-    "weibo_hot"    : True,
-    "baidu_hot"    : False,
-    "baike_lookup" : True,
+    "bili_popular"  : True,
+    "bili_ranking"  : True,
+    "bili_search"   : True,
+    "bili_comments" : True,
+    "zhihu_hot"     : True,
+    "weibo_hot"     : True,
+    "baidu_hot"     : False,
+    "baike_lookup"  : True,
+    "wiki_read"     : True,
+    "bili_subtitles": True,
 }
 
 # 每种活动名义上的浏览时长（分钟，闭区间，会话开始时随机取一个）。
@@ -66,7 +68,7 @@ class LifeConfig:
     sources                : Mapping[str, bool] = field(default_factory=_default_sources)
     seed_interests         : tuple[str, ...] = DEFAULT_SEED_INTERESTS
     max_sessions_per_day   : int             = 5
-    max_llm_calls_per_day  : int             = 24
+    max_llm_calls_per_day  : int             = 30
     min_session_gap_minutes: float           = 75.0
     session_probability    : float           = 0.5
     # 滚动窗口内累计上网时长达到上限就休息。
@@ -75,12 +77,13 @@ class LifeConfig:
     failure_backoff_minutes: float = 60.0
     browse_when_busy       : bool  = False
     # 读不到人设卡〔作息〕时的睡眠时段。
-    quiet_hours          : str                           = "00:30-08:00"
-    wind_down_minutes    : float                         = 60.0
-    max_items_per_session: int                           = 6
-    max_comments_per_item: int                           = 12
-    max_watch_per_session: int                           = 2
-    activity_affinity    : Mapping[str, tuple[str, ...]] = field(
+    quiet_hours               : str                           = "00:30-08:00"
+    wind_down_minutes         : float                         = 60.0
+    max_items_per_session     : int                           = 6
+    max_comments_per_item     : int                           = 12
+    max_watch_per_session     : int                           = 2
+    max_deep_reads_per_session: int                           = 1
+    activity_affinity         : Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(ACTIVITY_AFFINITY)
     )
     learning_keep_days: int                           = 180
@@ -158,22 +161,23 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
     """所有数值字段按「默认值、下界、上界」表统一钳制。"""
 
     int_spec: dict[str, tuple[int, int]] = {
-        "max_sessions_per_day"  : (0, 48),
-        "max_llm_calls_per_day" : (0, 500),
-        "max_items_per_session" : (1, 12),
-        "max_comments_per_item" : (0, 20),
-        "max_watch_per_session" : (0, 3),
-        "max_vision_per_session": (0, 6),
-        "max_open_threads"      : (0, 5),
-        "thread_max_steps"      : (1, 10),
-        "episode_detail_days"   : (1, 60),
-        "episode_keep_days"     : (1, 365),
-        "term_candidate_days"   : (1, 365),
-        "term_fading_days"      : (1, 365),
-        "term_forget_days"      : (1, 730),
-        "max_memes"             : (0, 2000),
-        "learning_keep_days"    : (1, 730),
-        "max_meme_bytes"        : (1024, 8 * 1024 * 1024),
+        "max_sessions_per_day"      : (0, 48),
+        "max_llm_calls_per_day"     : (0, 500),
+        "max_items_per_session"     : (1, 12),
+        "max_comments_per_item"     : (0, 20),
+        "max_watch_per_session"     : (0, 3),
+        "max_deep_reads_per_session": (0, 2),
+        "max_vision_per_session"    : (0, 6),
+        "max_open_threads"          : (0, 5),
+        "thread_max_steps"          : (1, 10),
+        "episode_detail_days"       : (1, 60),
+        "episode_keep_days"         : (1, 365),
+        "term_candidate_days"       : (1, 365),
+        "term_fading_days"          : (1, 365),
+        "term_forget_days"          : (1, 730),
+        "max_memes"                 : (0, 2000),
+        "learning_keep_days"        : (1, 730),
+        "max_meme_bytes"            : (1024, 8 * 1024 * 1024),
     }
     float_spec: dict[str, tuple[float, float]] = {
         "min_session_gap_minutes": (0.0, 1440.0),

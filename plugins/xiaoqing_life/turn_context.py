@@ -214,13 +214,27 @@ def episode_line(
     tail  = f"（链接 {episode['url']}）" if link and episode.get("url") else ""
     if (moment - at).days >= cfg.episode_detail_days:
         return f"- {label}刷到过「{title}」{who}（细节记不清了）{tail}"
-    verb  = _VERBS.get(str(episode.get("source")), "上网看到了")
     gist  = f"，讲的是：{episode['gist']}" if episode.get("gist") else ""
     dense = f"（{episode['dense_moment']}）" if episode.get("dense_moment") else ""
-    return (
-        f"- {label} {at:%H:%M} {verb}「{title}」{who}{gist}{dense}，"
-        f"你当时觉得：{episode.get('reaction', '')}{tail}"
-    )
+    feel  = f"，你当时觉得：{episode['reaction']}" if episode.get("reaction") else ""
+    return f"- {label} {at:%H:%M} {_opening(episode, title, who)}{gist}{dense}{feel}{tail}"
+
+
+def _opening(episode: dict[str, Any], title: str, who: str) -> str:
+    """按读到多少（``depth``）说清动作：看了字幕、认真读了、查百科 / 翻维基读了，否则扫了一眼。"""
+
+    source = str(episode.get("source"))
+    depth  = str(episode.get("depth") or "skim")
+    if source == "baike_read":
+        return f"查百科读了「{title}」{who}"
+    if source == "wiki_read":
+        return f"翻维基读了「{title}」{who}"
+    if source.startswith("bili_") and depth == "watched":
+        rough = "个大概" if episode.get("subtitle_partial") else ""
+        return f"点开看了「{title}」{who}，跟着字幕看了{rough}"
+    if source.startswith("bili_") and depth == "read":
+        return f"点开了「{title}」{who}，认真读了简介和UP主的说明"
+    return f"{_VERBS.get(source, '上网看到了')}「{title}」{who}"
 
 
 def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: float) -> str:

@@ -762,7 +762,7 @@ def test_journal_is_kept_eight_weeks_and_wind_down_passes_the_llm_gate() -> None
     cfg = make_cfg(choice_temperature=0.5)
     near  = type(FREE)("free", "", 20)
     today = [{"id": "e1", "day": "2026-11-05"}]
-    state = default_state() | {"day": "2026-11-05", "llm_calls_today": 24}
+    state = default_state() | {"day": "2026-11-05", "llm_calls_today": 30}
     out   = planner.decide(cfg, state, today, [], {}, MOMENT, near, random.Random(0))
     assert out.reason == "llm_exhausted"
     state["llm_calls_today"] = 3

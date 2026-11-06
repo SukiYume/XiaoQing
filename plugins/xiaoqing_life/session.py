@@ -44,7 +44,7 @@ from .planner import (
     day_key,
 )
 from .safety import normalize_for_match, overlap
-from .sources import baike, bilibili, hotlists, watch
+from .sources import baike, bilibili, deep, hotlists, watch
 from .sources.base import Fetcher, SourceError, SourceItem
 from .stores import MAX_LOOKUP_QUEUE, MAX_RECENT, LifeStore, new_id, reserve_llm_call, roll_day
 
@@ -74,6 +74,8 @@ class SessionDeps:
     # 调试 / 验证脚本的钩子：拿到取材条目、模型原始 JSON。
     on_items : Callable[[list[SourceItem]], None] | None                 = None
     on_digest: Callable[[dict[str, Any], list[SourceItem]], None] | None = None
+    # B站 登录凭证此刻是否可用（未登录或已失效为 False）；字幕只在可用且 ``bili_subtitles`` 开启时读。
+    subtitles_ok: Callable[[], bool] = lambda: False
 
 
 @dataclass(slots=True)
@@ -174,17 +176,22 @@ def novelty(item: SourceItem, seen_text: str) -> float:
     return NOVELTY_BONUS if overlap(body, seen_text) == 0 else 0.0
 
 
-def prescore(item: SourceItem, topics: list[str]) -> float:
-    """她会不会点开：标题 / 标签与兴趣的重合，加上热度的对数。"""
+def interest_hits(item: SourceItem, topics: list[str]) -> int:
+    """标题 / 标签命中的兴趣数。"""
 
     body   = f"{item.title} {' '.join(item.tags)}"
     folded = normalize_for_match(body)
-    hits   = sum(
+    return sum(
         1
         for topic in topics
         if overlap(body, topic) >= 1 or (len(topic) >= 2 and normalize_for_match(topic) in folded)
     )
-    return 3.0 * min(hits, 3) + math.log10(item.heat + 1)
+
+
+def prescore(item: SourceItem, topics: list[str]) -> float:
+    """她会不会点开：标题 / 标签与兴趣的重合，加上热度的对数。"""
+
+    return 3.0 * min(interest_hits(item, topics), 3) + math.log10(item.heat + 1)
 
 
 def pick_clicks(
@@ -205,28 +212,49 @@ async def _open_items(
     items: list[SourceItem],
     topics: list[str],
     novel_text: str = "",
+    *,
+    subtitles: bool = False,
 ) -> list[SourceItem]:
-    """点开预选的条目：前 ``max_watch_per_session`` 个取详情 / 标签 / 弹幕，再取热评。"""
+    """点开预选的条目：前 ``max_watch_per_session`` 个取详情 / 标签 / 弹幕，再取热评。
+
+    被看了的条目里，预打分最高且命中兴趣的 ``max_deep_reads_per_session`` 条再深读（简介全文、
+    UP 主置顶 / 回复，登录后还有字幕）。
+    """
 
     result = list(items)
     clicks = pick_clicks(cfg, items, topics, novel_text)
     ranked = sorted(clicks, key=lambda i: prescore(items[i], topics), reverse=True)
-    watched = set(ranked[: cfg.max_watch_per_session])
+    watched  = set(ranked[: cfg.max_watch_per_session])
+    eligible = [i for i in ranked if i in watched and interest_hits(items[i], topics) >= 1]
+    deeper   = set(eligible[: cfg.max_deep_reads_per_session])
     for index in clicks:
         item     = result[index]
         position = index + 1
         if index in watched:
             item = await watch.watch(fetch, item, position, cfg.blocked_keywords)
+        page: dict[str, Any] | None = None
         if cfg.source_on("bili_comments") and cfg.max_comments_per_item > 0:
             try:
-                comments = await bilibili.hot_comments(
-                    fetch, item, position, cfg.blocked_keywords, cfg.max_comments_per_item
+                page = await bilibili.reply_page(fetch, item, size=20 if index in deeper else 10)
+                item = replace(
+                    item,
+                    comments=bilibili.comments_of(
+                        page, position, cfg.blocked_keywords, cfg.max_comments_per_item
+                    ),
                 )
-                item = replace(item, comments=comments)
             except SourceError as exc:
                 logger.info(
                     "xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason
                 )
+        if index in deeper:
+            item = await deep.deep_read(
+                fetch,
+                item,
+                position,
+                cfg.blocked_keywords,
+                subtitles  = subtitles,
+                reply_page = page,
+            )
         result[index] = item
     return result
 
@@ -255,25 +283,27 @@ def _episode_rows(
         at   = start + (end - start) * order / (total + 1)
         rows.append(
             {
-                "id"          : new_id("e"),
-                "at"          : at,
-                "day"         : day_key(datetime.fromtimestamp(at, tz)),
-                "gist"        : item.text[:60],
-                "tags"        : list(item.tags),
-                "uploader"    : item.uploader,
-                "url"         : item.url,
-                "duration_s"  : item.duration_s,
-                "dense_moment": item.dense_moment,
-                "activity"    : decision.choice,
-                "source"      : item.source,
-                "item_id"     : item.item_id,
-                "title"       : item.title,
-                "reaction"    : seen.reaction,
-                "feeling"     : seen.feeling,
-                "share"       : seen.share,
-                "topics"      : list(seen.topics),
-                "term_keys"   : term_keys.get(item.item_id, []),
-                "thread_id"   : decision.params.get("thread_id", ""),
+                "id"              : new_id("e"),
+                "at"              : at,
+                "day"             : day_key(datetime.fromtimestamp(at, tz)),
+                "gist"            : item.text[:60],
+                "tags"            : list(item.tags),
+                "uploader"        : item.uploader,
+                "url"             : item.url,
+                "duration_s"      : item.duration_s,
+                "dense_moment"    : item.dense_moment,
+                "activity"        : decision.choice,
+                "source"          : item.source,
+                "item_id"         : item.item_id,
+                "title"           : item.title,
+                "reaction"        : seen.reaction,
+                "feeling"         : seen.feeling,
+                "share"           : seen.share,
+                "topics"          : list(seen.topics),
+                "term_keys"       : term_keys.get(item.item_id, []),
+                "thread_id"       : decision.params.get("thread_id", ""),
+                "depth"           : deep.depth_of(item),
+                "subtitle_partial": item.subtitle_partial,
             }
         )
     return rows
@@ -677,7 +707,8 @@ async def _browse(
         deps.fetch,
         fresh,
         _topics(store, cfg, span[0]),
-        novel_text=_recent_text(store, span[0]) if decision.choice == HOT_SCROLL else "",
+        novel_text = _recent_text(store, span[0]) if decision.choice == HOT_SCROLL else "",
+        subtitles  = cfg.source_on("bili_subtitles") and deps.subtitles_ok(),
     )
     result, reason = await _digest(store, cfg, fresh, deps, day)
     if result is None:

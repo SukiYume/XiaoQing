@@ -158,26 +158,26 @@ def _comment(raw: dict[str, Any], ref: str, blocked: Iterable[str]) -> SourceCom
     )
 
 
-async def hot_comments(
-    fetch: Fetcher,
-    item: SourceItem,
-    item_index: int,
-    blocked: Iterable[str],
-    limit: int,
-) -> tuple[SourceComment, ...]:
-    """热评按序号编成 ``c<条目序号>.<评论序号>``，消化提示里用它引用。"""
+async def reply_page(fetch: Fetcher, item: SourceItem, *, size: int = 10) -> dict[str, Any]:
+    """热评接口的 ``data``（评论、置顶和 UP 主信息）；深读时 ``size`` 为 20。"""
 
-    if limit <= 0:
-        return ()
     payload = require_ok(
         "bili_comments",
         await fetch.get_json(
             f"{API}/x/v2/reply/main",
-            params  = {"type": "1", "oid": aid_of(item), "mode": "3", "ps": "10"},
+            params  = {"type": "1", "oid": aid_of(item), "mode": "3", "ps": str(size)},
             referer = REFERER,
         ),
     )
-    rows                          = as_list(as_dict(payload.get("data")).get("replies"))
+    return as_dict(payload.get("data"))
+
+
+def comments_of(
+    page: dict[str, Any], item_index: int, blocked: Iterable[str], limit: int
+) -> tuple[SourceComment, ...]:
+    """热评按序号编成 ``c<条目序号>.<评论序号>``，消化提示里用它引用。"""
+
+    rows                          = as_list(page.get("replies"))
     comments: list[SourceComment] = []
     used                          = 0  # 评论与楼中楼合计不超过 limit
     for raw in rows:
@@ -196,4 +196,25 @@ async def hot_comments(
     return tuple(comments)
 
 
-__all__ = ["SourceError", "aid_of", "hot_comments", "popular", "ranking", "search"]
+async def hot_comments(
+    fetch: Fetcher,
+    item: SourceItem,
+    item_index: int,
+    blocked: Iterable[str],
+    limit: int,
+) -> tuple[SourceComment, ...]:
+    if limit <= 0:
+        return ()
+    return comments_of(await reply_page(fetch, item), item_index, blocked, limit)
+
+
+__all__ = [
+    "SourceError",
+    "aid_of",
+    "comments_of",
+    "hot_comments",
+    "popular",
+    "ranking",
+    "reply_page",
+    "search",
+]
