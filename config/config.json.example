@@ -74,6 +74,17 @@
                                         "image"
                                 ]
                         },
+                        "gpt-terra": {
+                                "provider": "openai",
+                                "model": "gpt-6.1-terra",
+                                "modalities": [
+                                        "text",
+                                        "image"
+                                ],
+                                "request_defaults": {
+                                        "reasoning_effort": "none"
+                                }
+                        },
                         "deepseek-flash": {
                                 "provider": "deepseek",
                                 "model": "deepseek-flash",
@@ -196,6 +207,7 @@
                                 "routes": {
                                         "agent": {
                                                 "models": [
+                                                        "gpt-terra",
                                                         "chatgpt",
                                                         "deepseek-pro",
                                                         "deepseek-flash"
@@ -207,6 +219,7 @@
                                         },
                                         "triage": {
                                                 "models": [
+                                                        "gpt-terra",
                                                         "chatgpt",
                                                         "deepseek-flash",
                                                         "glm-5.2"

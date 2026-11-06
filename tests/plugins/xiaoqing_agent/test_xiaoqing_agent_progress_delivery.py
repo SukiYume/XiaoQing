@@ -30,7 +30,7 @@ async def test_progress_feedback_and_receipts_follow_each_send(
     context              = FakeAgentContext(tmp_path / "data")
     context.send_results = [message_sent, first_sent, second_sent]
     runtime              = AgentRuntime(context.data_dir)
-    task = AgentTask("progress", ChatRef(ADMIN_ID, None), "目标", "原话", "chat", admin=True)
+    task = AgentTask("progress", ChatRef(ADMIN_ID, None), "原话", "chat", admin=True)
     initial_delivery = task.delivery
     workspace        = tmp_path / "workspace"
     workspace.mkdir()

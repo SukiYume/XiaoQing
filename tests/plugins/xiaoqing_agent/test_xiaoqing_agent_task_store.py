@@ -15,7 +15,7 @@ CHAT = ChatRef(10001, None)
 
 
 def _task(task_id: str) -> AgentTask:
-    return AgentTask(task_id=task_id, chat=CHAT, goal=task_id, request_text=task_id, source="test")
+    return AgentTask(task_id=task_id, chat=CHAT, request_text=task_id, source="test")
 
 
 def _ids(path: Path) -> list[str]:

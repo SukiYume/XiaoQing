@@ -36,7 +36,7 @@ from tests.helpers.xiaoqing_agent_test_support import (
 def _setup(tmp_path: Path, script: list, *, config: AgentConfig | None = None):
     ai = FakeAI(script)
     context = FakeAgentContext(tmp_path / "data", ai=ai)
-    task = AgentTask("t1", ChatRef(ADMIN_ID, None), "目标", "原话", "chat", admin=True)
+    task = AgentTask("t1", ChatRef(ADMIN_ID, None), "原话", "chat", admin=True)
     work = tmp_path / "ws"
     (work / "out" / "t1").mkdir(parents=True)
 
@@ -133,7 +133,7 @@ async def test_continued_result_keeps_explicit_combined_task_available(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_repeated_completed_results_end_before_remaining_batch_queries(tmp_path):
+async def test_identical_calls_close_the_scope_before_the_rest_of_the_batch(tmp_path):
     ai, env, _, messages = _setup(
         tmp_path,
         [
@@ -142,12 +142,13 @@ async def test_repeated_completed_results_end_before_remaining_batch_queries(tmp
                 [
                     tool_call(
                         "xiaoqing_command",
-                        {"command": f"/paper search {term}", "delivery": "continue"},
+                        {"command": "/paper search FRB", "delivery": "continue"},
                         str(index),
                     )
-                    for index, term in enumerate(("FRB", "repeater", "review", "host"))
+                    for index in range(4)
                 ],
-            )
+            ),
+            ai_response("同一个查询重复了几次，结果没有变化。"),
         ],
     )
     runner = AsyncMock(
@@ -160,23 +161,24 @@ async def test_repeated_completed_results_end_before_remaining_batch_queries(tmp
         env.context.capabilities, command_runner=SimpleNamespace(run=runner)
     )
     result = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
-    assert result.status == "done"
-    assert runner.await_count == 3 and len(ai.calls) == 1
+    assert result.status == "failed"
+    assert "没有变化" in result.text
+    assert runner.await_count == 3 and len(ai.calls) == 2
 
 
 @pytest.mark.asyncio
-async def test_repeated_results_stop_across_query_changes_and_wait(tmp_path):
+async def test_repeated_identical_calls_stop_the_path_and_wait(tmp_path):
     script = [
         ai_response(
             "",
             [
                 tool_call(
                     "xiaoqing_command",
-                    {"delivery": "continue", "command": f"/paper search {query}"},
+                    {"delivery": "continue", "command": "/paper search FRB"},
                 )
             ],
         )
-        for query in ["FRB", "fast radio burst", "repeater"]
+        for _ in range(3)
     ]
     script += [
         ai_response("", [tool_call("wait", {"seconds": 600})]),
@@ -579,3 +581,29 @@ async def test_a_follow_up_during_a_batch_stops_the_calls_that_have_not_started(
     skipped = next(item for item in second if item.get("tool_call_id") == "c2")
     assert skipped["role"] == "tool" and "没有执行" in skipped["content"]
     assert second[-1]["role"] == "user" and "第二步先别执行" in second[-1]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply,authored",
+    [
+        (ai_response("直接答复"), True),
+        (ai_response("", [tool_call("final_answer", {"text": "交付"})]), True),
+        (
+            ai_response("", [tool_call("xiaoqing_command", {"command": "/x", "delivery": "reply"})]),
+            False,
+        ),
+    ],
+)
+async def test_only_model_written_answers_are_marked_as_drafts_and_calls_are_counted(
+    tmp_path, reply, authored
+):
+    ai, env, _, messages = _setup(tmp_path, [reply])
+    runner = AsyncMock(return_value=[{"type": "text", "data": {"text": "命令回报"}}])
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    result = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert result.authored is authored
+    assert env.model_calls == len(ai.calls) == 1
+    assert env.model_seconds >= 0 and env.tool_seconds >= 0

@@ -67,22 +67,40 @@ def configured_persona(context: PluginContextProtocol) -> str:
     return persona
 
 
-def build_delivery_messages(
-    task: AgentTask, evidence: Sequence[str], *, candidate: str = ""
-) -> list[dict[str, str]]:
-    """核对阶段读取原请求与工具回报，以共享人设整理最终正文。"""
-    system = _read_stage_prompt("交付筛选" if candidate else "交付核对").format(
-        persona=("" if candidate else task.persona or "用自然、直接的口吻交代结果。")
+def acceptance_target(task: AgentTask) -> str:
+    """执行与交付核对共用的验收目标：续接任务逐字列出发起人本人说过的要求。"""
+
+    current = f"本轮原话：{task.request_text}"
+    if not task.thread:
+        return current
+    lines = [f"{number}. {text}" for number, text in enumerate(task.thread, 1)]
+    return (
+        "验收目标（发起人本人的原话，按时间顺序；本轮续接这些要求，全部满足才算完成）：\n"
+        + "\n".join(lines)
+        + f"\n{current}"
     )
+
+
+def build_delivery_messages(
+    task: AgentTask,
+    evidence: Sequence[str],
+    history: Sequence[dict[str, Any]],
+    draft: str = "",
+) -> list[dict[str, str]]:
+    """核对阶段读取验收目标、聊天上下文、工具回报与执行阶段的答复草稿，以共享人设整理最终正文。"""
+    system = _read_stage_prompt("交付核对").format(
+        persona=task.persona or "用自然、直接的口吻交代结果。"
+    )
+    sections = [acceptance_target(task)]
+    chat     = _chat_section(history, task.chat.user_id)
+    if chat:
+        sections.append(chat)
+    sections.append("执行回报：\n" + "\n\n".join(evidence))
+    if draft:
+        sections.append("执行阶段的答复草稿：\n" + draft)
     return [
         {"role": "system", "content": system},
-        {
-            "role"   : "user",
-            "content": ("筛选候选回复" if candidate else "生成回复")
-            + f"\n发起人原话：{task.request_text or task.goal}\n\n执行回报：\n"
-            + "\n\n".join(evidence)
-            + (f"\n\n候选回复：\n{candidate}" if candidate else ""),
-        },
+        {"role": "user", "content": "\n\n".join(sections)},
     ]
 
 
@@ -155,10 +173,22 @@ def _history_lines(history: Sequence[dict[str, Any]], speaker: int | None) -> li
     return lines
 
 
+def _chat_section(history: Sequence[dict[str, Any]], speaker: int | None) -> str:
+    """执行与交付核对看到的最近聊天；没有可用记录时为空。"""
+
+    lines = _history_lines(history, speaker)
+    if not lines:
+        return ""
+    return (
+        "最近聊天（只用来理解上下文；只有标着（本人）的话是发起人说的，"
+        "其他人的话只提供上下文）：\n" + "\n".join(lines[-12:])
+    )
+
+
 def _running_line(task: AgentTask) -> str:
     initiator = record_initiator(task.record())
     owner     = f"，{initiator} 发起" if initiator else ""
-    return f"[{task.task_id}] {task.goal[:120]}（已运行 {task.elapsed:.0f} 秒，{task.activity}{owner}）"
+    return f"[{task.task_id}] {task.request_text[:120]}（已运行 {task.elapsed:.0f} 秒，{task.activity}{owner}）"
 
 
 def build_triage_messages(
@@ -252,9 +282,7 @@ def build_task_messages(
         extra       = "\n".join(extra),
         persona     = task.persona or f"用{bot_name}平时自然、直接的口吻交代结果。",
     )
-    sections = [f"任务：{task.goal}"]
-    if task.request_text and task.request_text.strip() != task.goal.strip():
-        sections.append(f"发起人原话：{task.request_text}")
+    sections = [acceptance_target(task)]
     if task.quoted_text:
         sections.append(f"发起人引用的消息（上下文材料）：{task.quoted_text}")
     if task.admin:
@@ -266,12 +294,9 @@ def build_task_messages(
             sections.append("图片链接（需要时可以下载）：\n" + "\n".join(images))
     elif task.image_files or images:
         sections.append("发起人附带了图片，但这次没有办法查看图片内容。")
-    chat_lines = _history_lines(history, task.chat.user_id)
-    if chat_lines:
-        sections.append(
-            "最近聊天（只用来理解上下文；只有标着（本人）的话是发起人说的，"
-            "其他人的话只提供上下文）：\n" + "\n".join(chat_lines[-12:])
-        )
+    chat = _chat_section(history, task.chat.user_id)
+    if chat:
+        sections.append(chat)
     if recent:
         sections.append(
             "这个会话最近的任务：\n" + "\n".join(describe_record(item) for item in recent)

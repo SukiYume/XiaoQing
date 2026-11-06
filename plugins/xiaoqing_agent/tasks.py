@@ -65,16 +65,17 @@ class Actor:
 class Outcome:
     """一次任务交付给发起人的内容。"""
 
-    text  : str
-    files : list[str] = field(default_factory=list)
-    status: str = "done"
+    text    : str
+    files   : list[str] = field(default_factory=list)
+    status  : str = "done"
+    # 文字是执行阶段的模型写给发起人的答复（交付核对时作草稿），而不是命令回报原文。
+    authored: bool = False
 
 
 @dataclass(eq=False)
 class AgentTask:
     task_id         : str
     chat            : ChatRef
-    goal            : str
     request_text    : str
     source          : str
     created_at      : float = field(default_factory=time.time)
@@ -93,6 +94,9 @@ class AgentTask:
     quoted_text: str = ""
     image_files: list[str] = field(default_factory=list)
     sender     : str = ""
+    # 续接的上一任务 ID，以及沿续接链收集到的发起人本人原话（旧→新，不含本轮）：交付验收的依据。
+    continues: str = ""
+    thread   : list[str] = field(default_factory=list)
     # 聊天插件交来的人设与说话方式，只用于写回复的口吻，不写入任务记录。
     persona: str = field(default="", repr=False)
     # 任务开始时发起人是不是 Bot 管理员：决定占哪份名额、提示词怎么写；本机工具另由 Core 每次复核。
@@ -138,8 +142,9 @@ class AgentTask:
             "user_id"     : self.chat.user_id,
             "group_id"    : self.chat.group_id,
             "sender"      : self.sender,
-            "goal"        : self.goal,
             "request_text": self.request_text[:500],
+            "continues"   : self.continues,
+            "thread"      : list(self.thread),
             "source"      : self.source,
             "status"      : self.status,
             "created_at"  : self.created_at,
@@ -183,13 +188,13 @@ def describe_record(
         status += "（结果没发出去）"
     elif record.get("delivery") == "unknown":
         status += "（结果是否送达未确认）"
-    goal      = str(record.get("goal") or "").strip().replace("\n", " ")
+    request   = str(record.get("request_text") or "").strip().replace("\n", " ")
     result    = str(record.get("result") or record.get("error") or "").strip().replace("\n", " ")
     initiator = record_initiator(record)
     line      = f"[{record.get('task_id', '?')}] {status} · "
     if initiator:
         line += f"{initiator} 发起 · "
-    line += goal[:120]
+    line += request[:120]
     if result:
         line += f" → {result[:result_chars]}"
     files = [str(item) for item in record.get("files") or [] if isinstance(item, str)]

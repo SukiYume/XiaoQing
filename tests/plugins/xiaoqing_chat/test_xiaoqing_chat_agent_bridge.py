@@ -131,8 +131,8 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
     assert turn["sender_name"] == "主人" and turn["bot_name"] == "小青"
     assert turn["images"] == ["https://img.example/a.png"]
     assert turn["history"] == [
-        {"role": "user", "name": "甲", "user_id": 1, "text": "早"},
-        {"role": "assistant", "name": "小青", "user_id": None, "text": "早呀"},
+        {"role": "user", "name": "甲", "user_id": 1, "text": "早", "ts": 1.0},
+        {"role": "assistant", "name": "小青", "user_id": None, "text": "早呀", "ts": 2.0},
     ]
     # 人设只在聊天插件里配置，随每轮交给 agent，agent 的回复和平时聊天是同一个人。
     # agent 拿到人物事实和〔办事〕各节，闲聊示例留在聊天这边。
