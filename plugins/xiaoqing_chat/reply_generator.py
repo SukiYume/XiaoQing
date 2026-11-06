@@ -35,7 +35,7 @@ from .llm.prompt_builder import (
     build_recent_media_block,
 )
 from .llm.reply_checker import TurnReadingCache, check_reply
-from .logging_utils import log_step, safe_correlation_id
+from .logging_utils import append_timing, log_step, safe_correlation_id
 from .media.marker_resolver import (
     ResolvedMarker,
     parse_marker,
@@ -695,6 +695,7 @@ async def generate_reply_draft(
     state_text: str                                  = "",
     is_brain_chat: bool                              = False,
     prefetched_memory_task: asyncio.Task[str] | None = None,
+    timings: dict[str, Any] | None                   = None,
 ) -> ReplyDraft | None:
     plan = await prepare_reply_generation(
         text           = text,
@@ -715,10 +716,12 @@ async def generate_reply_draft(
         max_items         = plan.max_context_size,
         prefetched_memory = prefetched_memory_task,
         turn_reading      = _semantic_reading_cache(plan),
+        timings           = {} if timings is None else timings,
     )
     try:
         return await _generate_checked_draft(plan, attempt)
     finally:
+        attempt.timings["regens"] = int(attempt.timings.get("regens", 0)) + attempt.regen_used
         if attempt.turn_reading is not None:
             await attempt.turn_reading.aclose()
 
@@ -736,6 +739,7 @@ async def _generate_checked_draft(
         if _is_turn_stale(plan.chat_id, plan.event):
             return None
         payload_messages = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
+        generation_started = time.monotonic()
         try:
             candidate = await _request_reply_candidate(plan, payload_messages)
         except LLMError as exc:
@@ -749,6 +753,7 @@ async def _generate_checked_draft(
                 fields  = {"error_type": type(exc).__name__},
             )
             raise
+        append_timing(attempt.timings, "gen_s", round(time.monotonic() - generation_started, 3))
         if candidate is None:
             return None
 
@@ -760,8 +765,18 @@ async def _generate_checked_draft(
                 if not plan.forced:
                     return None
                 raise ReplyRejected("未生成可发送的回复", True)
-            rejected = await _check_candidate_draft(
+            check_started = time.monotonic()
+            rejected      = await _check_candidate_draft(
                 plan, draft, trimmed_history, memory_block, attempt.turn_reading
+            )
+            append_timing(
+                attempt.timings,
+                "check",
+                {
+                    "s"          : round(time.monotonic() - check_started, 3),
+                    "ok"         : rejected is None,
+                    "reason_code": rejected.result.failure_code if rejected else None,
+                },
             )
             regen_step = "reply.check.regen"
             if rejected is None:

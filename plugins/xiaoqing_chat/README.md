@@ -300,7 +300,7 @@ python main.py
 | PFC 状态与行动历史 | 规划器的观察、目标和已执行动作，每会话保留最近 200 条行动 | `planner.enable_planner` |
 | 近期回想 | 30 分钟内相近问题的检索结果缓存 | `memory.enable_thinking_back_cache` |
 | 表达 | 本群常用的说法，审核后按话题相关度每轮至多注入一条，近期用过的降频 | `expression.enable_expression_learning`、`enable_expression_selector` |
-| 黑话 | 本群词汇的含义、适用场景、情绪和来源。明确更正会更新词义，生成时优先采用本群释义 | 随表达学习开启 |
+| 黑话 | 本群词汇的含义、适用场景、情绪和来源。释义分候选与确认：原句自己解释或更正了词义、或多处上下文推断出的才算确认，其余只是候选；生成时主动活用已确认的本群释义，候选只在对方提到时作为未经确认的猜测给出，`/xc jargon` 标出待确认 | 随表达学习开启 |
 | 知识库 | 管理员指定的知识文件，最多 32 个、单个 1 MiB、合计 4 MiB | `knowledge.enable_knowledge`、`knowledge.files` |
 
 **连续会话边界**：相邻两条消息间隔超过 `memory.conversation_idle_gap_seconds`（默认 1800 秒）时，视为新的一段对话。原始历史完整保留，目标、PFC、行动历史、近期回想和话题摘要切换到新片段。用户明确回忆旧事时仍能通过记忆检索取回。

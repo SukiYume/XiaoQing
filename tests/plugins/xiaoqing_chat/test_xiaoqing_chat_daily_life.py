@@ -341,7 +341,7 @@ def _finalization(source: str, sent: list):
             state=SimpleNamespace(generation_limiter=GenerationLimiter()),
         ),
         context=SimpleNamespace(send_action=send_action),
-        generated=SimpleNamespace(local_id="u1"),
+        generated=SimpleNamespace(local_id="u1", timings={}),
     )
 
 

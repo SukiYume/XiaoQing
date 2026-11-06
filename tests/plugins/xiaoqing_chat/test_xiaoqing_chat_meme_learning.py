@@ -93,6 +93,7 @@ def test_local_meme_definition_and_transfer_candidates_are_scoped(state, tmp_pat
                 meaning       = "动静很大，实际没有进展",
                 usage         = "无效会议和无效忙碌",
                 tone          = "轻松自嘲",
+                confirmed     = True,
             ),
             JargonRecord("电子烧水", scope_chat_id="g2", meaning="另一个群的私有定义"),
             JargonRecord("电子烧水", is_global=True, meaning="全局词典中的旧含义"),
@@ -111,17 +112,17 @@ def test_local_meme_definition_and_transfer_candidates_are_scoped(state, tmp_pat
 async def test_meme_extraction_accepts_supported_correction(state):
     text = "纠正一下，本群的空转指忙半天没有进展，适合轻松自嘲。"
     state.bw_jargon_store.save(
-        [JargonRecord("空转", scope_chat_id="g1", meaning="旧含义", is_complete=True)]
+        [JargonRecord("空转", scope_chat_id="g1", meaning="旧含义", confirmed=True)]
     )
     payload = [
         {
-            "term"      : "空转",
-            "is_jargon" : True,
-            "meaning"   : "忙碌却没有进展",
-            "usage"     : "无效忙碌",
-            "tone"      : "轻松自嘲",
-            "evidence"  : text,
-            "correction": True,
+            "term"     : "空转",
+            "is_jargon": True,
+            "meaning"  : "忙碌却没有进展",
+            "usage"    : "无效忙碌",
+            "tone"     : "轻松自嘲",
+            "evidence" : text,
+            "explained" : True,
         },
         {"term": "凭空新词", "is_jargon": True, "meaning": "无来源"},
     ]
@@ -141,7 +142,107 @@ async def test_meme_extraction_accepts_supported_correction(state):
     record  = records[state.bw_jargon_store.key_for("空转", "g1")]
     assert record.meaning == "忙碌却没有进展" and record.source == text
     assert record.usage == "无效忙碌" and record.tone == "轻松自嘲"
+    assert record.confirmed is True
     assert len(records) == 1
+
+
+async def _mine(state, text: str, items: list[dict]) -> None:
+    response = {"choices": [{"message": {"content": json.dumps(items, ensure_ascii=False)}}]}
+    with patch(
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(return_value=(response, "test")),
+    ):
+        await mine_jargon(
+            store    = state.bw_jargon_store,
+            chat_id  = "g1",
+            bot_name = "小青",
+            messages=[StoredMessage(role="user", name="用户", content=text, ts=time.time())],
+            **MODEL,
+        )
+
+
+def _record(state, term: str) -> JargonRecord:
+    return state.bw_jargon_store.load()[state.bw_jargon_store.key_for(term, "g1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explained", [False, None])
+async def test_meaning_without_an_explaining_sentence_is_only_a_candidate(state, explained):
+    text = "今天又空转了一天"
+    item = {"term": "空转", "is_jargon": True, "meaning": "忙碌却没有进展", "evidence": text}
+    if explained is not None:
+        item["explained"] = explained
+    await _mine(state, text, [item])
+    record = _record(state, "空转")
+    assert record.meaning == "忙碌却没有进展" and record.confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_explained_flag_needs_evidence_from_the_original_message(state):
+    text = "今天又空转了一天"
+    item = {
+        "term"     : "空转",
+        "is_jargon": True,
+        "meaning"  : "忙碌却没有进展",
+        "evidence" : "空转就是瞎忙",
+        "explained": True,
+    }
+    await _mine(state, text, [item])
+    assert _record(state, "空转").confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_candidate_never_overwrites_a_confirmed_meaning(state):
+    state.bw_jargon_store.save(
+        [JargonRecord("空转", scope_chat_id="g1", meaning="已确认的含义", confirmed=True)]
+    )
+    text = "今天又空转了一天"
+    await _mine(
+        state,
+        text,
+        [{"term": "空转", "is_jargon": True, "meaning": "新猜测", "evidence": text}],
+    )
+    record = _record(state, "空转")
+    assert record.meaning == "已确认的含义" and record.confirmed is True
+
+
+@pytest.mark.asyncio
+async def test_inference_confirms_candidates_but_skips_confirmed_entries(state):
+    from plugins.xiaoqing_chat.expression.bw_jargon_miner import _infer_pending_meanings
+
+    db = {
+        "a": JargonRecord("甲", scope_chat_id="g1", meaning="候选", count=3, raw_content=["x"]),
+        "b": JargonRecord("乙", scope_chat_id="g1", meaning="定论", count=3, confirmed=True),
+    }
+    response = {"choices": [{"message": {"content": '{"meaning": "多处上下文推断"}'}}]}
+    with patch(
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(return_value=(response, "test")),
+    ) as call:
+        changed = await _infer_pending_meanings(
+            {}, db, MODEL["llm"], chat_id="g1", infer_threshold=3
+        )
+    assert changed == 1 and call.await_count == 1
+    assert (db["a"].meaning, db["a"].confirmed) == ("多处上下文推断", True)
+    assert db["b"].meaning == "定论"
+
+
+def test_unconfirmed_meaning_is_a_marked_guess_and_never_a_transfer_candidate(state, tmp_path):
+    state.bw_jargon_store.save(
+        [
+            JargonRecord(
+                "空转",
+                scope_chat_id = "g1",
+                meaning       = "忙碌却没有进展",
+                usage         = "无效忙碌",
+                tone          = "轻松自嘲",
+            )
+        ]
+    )
+    mentioned = jargon_context(state, tmp_path, "g1", [], "空转是什么意思")
+    assert "空转：忙碌却没有进展" in mentioned and "未经本群确认的猜测" in mentioned
+    assert "无效忙碌" not in mentioned and "轻松自嘲" not in mentioned
+    assert jargon_context(state, tmp_path, "g1", [], "今天忙了一天没进展") == ""
 
 
 @pytest.mark.asyncio

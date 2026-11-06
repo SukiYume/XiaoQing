@@ -326,7 +326,7 @@ def _finalization(started_at: float) -> Any:
     )
     return _SmalltalkFinalization(
         prepared=SimpleNamespace(forced=False, text="这季新番你们追了啥"),
-        generated = SimpleNamespace(),
+        generated = SimpleNamespace(timings={}),
         event     = {},
         context   = Mock(),
         hctx=SimpleNamespace(runtime=runtime, chat_id="g1"),
@@ -349,8 +349,9 @@ async def test_presend_delay_counts_time_already_spent(spent, target, expected):
         patch.object(turn_delivery, "log_step"),
         patch.object(turn_delivery.asyncio, "sleep", sleep),
     ):
-        applied = await turn_delivery._apply_smalltalk_presend_delay(
-            _finalization(time.monotonic() - spent), has_outbound_batches=True
+        finalization = _finalization(time.monotonic() - spent)
+        applied      = await turn_delivery._apply_smalltalk_presend_delay(
+            finalization, has_outbound_batches=True
         )
 
     assert applied is True
@@ -358,3 +359,30 @@ async def test_presend_delay_counts_time_already_spent(spent, target, expected):
         sleep.assert_not_awaited()
     else:
         assert sleep.await_args.args[0] == pytest.approx(expected, abs=0.2)
+        assert finalization.generated.timings["send_wait_s"] == pytest.approx(expected, abs=0.2)
+
+
+def test_timings_record_each_stage_and_survive_log_sanitizing():
+    from plugins.xiaoqing_chat.logging_utils import (
+        accumulate_timing,
+        append_timing,
+        sanitize_log_fields,
+    )
+
+    timings: dict[str, Any] = {}
+    accumulate_timing(timings, "context_check_s", 0.4)
+    accumulate_timing(timings, "context_check_s", 0.35)
+    append_timing(timings, "gen_s", 3.1)
+    append_timing(timings, "gen_s", 2.8)
+    append_timing(timings, "check", {"s": 1.9, "ok": False, "reason_code": "persona_grounding"})
+    append_timing(timings, "check", {"s": 1.2, "ok": True, "reason_code": None})
+
+    assert timings["context_check_s"] == 0.75
+    assert sanitize_log_fields({"timings": timings})["timings"] == {
+        "context_check_s": 0.75,
+        "gen_s"          : {"1": 3.1, "2": 2.8},
+        "check"          : {
+            "1": {"s": 1.9, "ok": False, "reason_code": "persona_grounding"},
+            "2": {"s": 1.2, "ok": True},
+        },
+    }

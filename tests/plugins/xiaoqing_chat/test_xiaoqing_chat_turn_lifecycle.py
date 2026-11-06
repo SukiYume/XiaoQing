@@ -790,6 +790,7 @@ def _fresh_finalization(tmp_path, *, chat_id: str = "g1", event: dict | None = N
             reply                     = "对，九十二次改成 901 了",
             reply_parts               = (),
             reply_payload             = None,
+            timings                   = {},
         ),
         hctx=SimpleNamespace(
             chat_id  = chat_id,
