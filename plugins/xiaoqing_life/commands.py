@@ -18,6 +18,8 @@ HELP_TEXT = """🌐 小青的网上生活
 /life slang           词条前 15
 /life threads         小课题（含搁置原因、最新要点、更正数）
 /life methods         她自己摸索出的查法
+/life works           她在慢慢整理的小作品
+/life dossier [话题]  主题档案（不带话题列出全部）
 /life memes           梗图列表（梗图收集尚未接入）
 /life run             立刻安排一次上网（跳过概率与间隔）
 /life forget <词>     删除词条
@@ -33,6 +35,7 @@ _CHOICES      = {
     "hot_scroll"     : "刷热榜",
     "interest_dive"  : "按兴趣搜",
     "term_lookup"    : "查词",
+    "work_on"        : "整理作品",
 }
 
 
@@ -75,7 +78,7 @@ def status_text(
     open_threads = sum(1 for t in store.threads if t.get("status") in ("open", "reviewing"))
     lines.append(
         f"经历 {len(store.episodes)} 条，词条 {len(store.terms)} 个，表达 {len(store.expressions)} 条，"
-        f"兴趣 {len(store.interests)} 个，进行中小课题 {open_threads} 个，待查词 {len(state.get('lookup_queue', []))} 个，方法 {len(store.methods)} 条"
+        f"兴趣 {len(store.interests)} 个，进行中小课题 {open_threads} 个，待查词 {len(state.get('lookup_queue', []))} 个，方法 {len(store.methods)} 条，作品 {len(store.works)} 个，档案 {len(store.dossiers)} 个"
     )
     return "\n".join(lines)
 
@@ -196,6 +199,10 @@ def route(args: str) -> tuple[str, str]:
         "最近"     : "recent",
         "slang"  : "slang",
         "词条"     : "slang",
+        "works"  : "works",
+        "作品"     : "works",
+        "dossier": "dossier",
+        "档案"     : "dossier",
         "methods": "methods",
         "方法"     : "methods",
         "threads": "threads",
@@ -215,3 +222,34 @@ def route(args: str) -> tuple[str, str]:
         "帮助"     : "help",
     }
     return aliases.get(head.lower(), "unknown"), rest.strip()
+
+
+def works_text(store: LifeStore) -> str:
+    from .works import FORMS
+
+    if not store.works:
+        return "还没有作品。"
+    lines = []
+    for work in store.works:
+        form = FORMS.get(str(work.get("form")), "")
+        lines.append(
+            f"[{work.get('status', '')}] 《{work.get('title', '')}》（{form}，{work.get('topic', '')}，"
+            f"整理 {work.get('revisions', 0)} 次，{len(work.get('entries', []))} 条）"
+        )
+        if work.get("intro"):
+            lines.append(f"  开头：{work['intro']}")
+        for entry in work.get("entries", []):
+            mark = "（待核实）" if entry.get("kind") == "todo" else ""
+            lines.append(f"  - {mark}{entry.get('text', '')}")
+    return "\n".join(lines)
+
+
+def dossier_text(store: LifeStore, topic: str, moment: datetime) -> str:
+    from . import dossier
+
+    if not topic:
+        return dossier.list_text(store.dossiers, moment)
+    entry = dossier.find_recall(store.dossiers, topic, fallback=False)
+    if entry is None:
+        return "没有这个话题的档案。"
+    return dossier.command_text(entry, moment)

@@ -9,6 +9,14 @@
     python scripts/run_xiaoqing_life_session.py --data-dir work/xiaoqing_life/x --activity hot_scroll   # 第二次
     python scripts/run_xiaoqing_life_session.py --no-ai --activity hot_scroll                          # 只看取材
     python scripts/run_xiaoqing_life_session.py --activity wind_down --advance-minutes 40
+    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "猎户座怎么拍"      # 研究循环
+    python scripts/run_xiaoqing_life_session.py --data-dir work/xiaoqing_life/x --activity work_on    # 整理作品
+    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "…" --bili-credential 凭证文件.json
+
+``thread_continue --thread "<标题>"``：隔离目录里找标题匹配的小课题，没有就先开一个，再逐轮打印研究的行动、
+模型原始 JSON 与本地核对结果（要点保留 / 丢弃、更正、下一步）。``work_on`` 要在已有进行中作品的数据目录里跑
+（先用睡前整理开一个），打印条目的增删改和被丢弃的 op。``--bili-credential <文件>`` 只读地把一份已保存的
+凭证文件复制到隔离目录的 secrets/ 下（用来验证字幕），**不打印它的任何内容**；原文件不会被修改。
 
 输出取材条目（数量与几个标题）、模型原始 JSON、被本地核对丢弃的条目及原因、最终落盘的内容，
 并写 ``result.json``。不打印任何密钥。
@@ -22,7 +30,9 @@ import asyncio
 import copy
 import dataclasses
 import json
+import os
 import random
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta
@@ -43,7 +53,10 @@ from plugins.xiaoqing_life import memes as memes_mod  # noqa: E402
 from plugins.xiaoqing_life import (
     persona_bridge,  # noqa: E402
     planner,  # noqa: E402
+    research,  # noqa: E402
 )
+from plugins.xiaoqing_life import threads as thread_ops  # noqa: E402
+from plugins.xiaoqing_life.bili_auth import BiliCredential  # noqa: E402
 from plugins.xiaoqing_life.config import parse_life_config, route_configured  # noqa: E402
 from plugins.xiaoqing_life.lifecycle import seed_interests  # noqa: E402
 from plugins.xiaoqing_life.safety import is_blocked, is_profane, quote_in_source  # noqa: E402
@@ -59,7 +72,14 @@ from plugins.xiaoqing_life.stores import LifeStore  # noqa: E402
 from plugins.xiaoqing_life.wind_down import run_wind_down  # noqa: E402
 
 PLUGIN     = "xiaoqing_life"
-ACTIVITIES = ("hot_scroll", "interest_dive", "thread_continue", "term_lookup", "wind_down")
+ACTIVITIES = (
+    "hot_scroll",
+    "interest_dive",
+    "thread_continue",
+    "term_lookup",
+    "work_on",
+    "wind_down",
+)
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -149,10 +169,16 @@ def _snapshot(store: LifeStore) -> dict[str, Any]:
             for k, v in store.interests.items()
             if v.get("evidence")
         },
-        "threads"        : [{"title": t["title"], "status": t["status"]} for t in store.threads],
-        "seen"           : len(store.seen),
-        "memes"          : {s[:6]: m["status"] for s, m in store.memes.items()},
-        "snapshots"      : len(store.snapshots),
+        "threads"  : [{"title": t["title"], "status": t["status"]} for t in store.threads],
+        "seen"     : len(store.seen),
+        "memes"    : {s[:6]: m["status"] for s, m in store.memes.items()},
+        "snapshots": len(store.snapshots),
+        "works"    : [
+            {"title": w["title"], "status": w["status"], "entries": len(w["entries"])}
+            for w in store.works
+        ],
+        "methods"        : len(store.methods),
+        "dossiers"       : len(store.dossiers),
         "journal"        : len(store.journal),
         "llm_calls_today": store.state.get("llm_calls_today"),
     }
@@ -177,8 +203,14 @@ async def _main(args: argparse.Namespace) -> int:
     }
     before = _snapshot(store)
 
+    credential = BiliCredential(store.data_dir)
+    if args.bili_credential:
+        _install_credential(Path(args.bili_credential), credential)
+        result["bili_credential"] = {"installed": True, "usable": credential.usable()}
+        print("已复制凭证文件到隔离目录（内容不打印）；可用：", credential.usable())
+
     async with aiohttp.ClientSession() as session:
-        fetch = BoundedFetcher(session)
+        fetch = BoundedFetcher(session, credential)
 
         async def complete(
             route: str, messages: list[dict[str, Any]], modalities: tuple[str, ...] = ("text",)
@@ -208,7 +240,17 @@ async def _main(args: argparse.Namespace) -> int:
 
         def on_digest(raw: dict[str, Any], items: list[SourceItem]) -> None:
             raw_box["raw"], raw_box["items"] = raw, items
-            print("模型原始 JSON：", json.dumps(raw, ensure_ascii=False)[:3500])
+            raw_box["rounds"]                = raw_box.get("rounds", 0) + 1
+            print(
+                f"模型原始 JSON（第 {raw_box['rounds']} 次）：",
+                json.dumps(raw, ensure_ascii=False)[:3500],
+            )
+            if args.activity == "thread_continue":
+                thread = thread_ops.get_thread(store.threads, str(raw_box.get("thread_id")))
+                if thread is not None:
+                    report = _research_report(raw, items, thread, life_cfg.blocked_keywords)
+                    result.setdefault("research_rounds", []).append(report)
+                    print("本地核对：", json.dumps(report, ensure_ascii=False))
 
         async def vision(messages: list[dict[str, Any]]) -> str:
             return await complete("vision", messages, ("text", "image"))
@@ -226,6 +268,7 @@ async def _main(args: argparse.Namespace) -> int:
             vision        = vision if can_see else None,
             on_items      = on_items,
             on_digest     = on_digest,
+            subtitles_ok  = credential.usable,
         )
         seed_interests(store.interests, life_cfg.seed_interests, moment.timestamp())
 
@@ -248,6 +291,17 @@ async def _main(args: argparse.Namespace) -> int:
             decision           = _decision(args, store, life_cfg, moment, presence, rng)
             result["decision"] = decision.record(moment.timestamp()) | {"params": decision.params}
             print("决策：", result["decision"])
+            raw_box["thread_id"] = decision.params.get("thread_id", "")
+            if args.activity in ("thread_continue", "work_on") and args.no_ai:
+                raise SystemExit("--no-ai 只用于看取材；研究和整理作品需要模型")
+            if args.activity == "thread_continue":
+                thread = thread_ops.get_thread(store.threads, str(decision.params["thread_id"]))
+                if thread is not None:
+                    opening = research.first_action(
+                        life_cfg, store.state, thread, moment.timestamp()
+                    )
+                    print("第一轮行动：", opening)
+            work_before = copy.deepcopy(store.works)
             if args.no_ai:
                 items, failures = await _gather(life_cfg, decision, fetch)
                 on_items(items)
@@ -275,7 +329,28 @@ async def _main(args: argparse.Namespace) -> int:
             else:
                 outcome           = await run_session(store, life_cfg, decision, deps)
                 result["outcome"] = dataclasses.asdict(outcome)
-                if raw_box:
+                if args.activity == "thread_continue":
+                    thread = thread_ops.get_thread(store.threads, str(decision.params["thread_id"]))
+                    result["thread_after"] = {
+                        "status"       : thread and thread["status"],
+                        "actions"      : thread and thread.get("actions"),
+                        "open_question": thread and thread.get("open_question"),
+                        "notes"        : thread and [n.get("note") for n in thread["notes"]],
+                        "corrections"  : thread and thread.get("corrections"),
+                    }
+                    print(
+                        "研究结果：",
+                        json.dumps(result["thread_after"], ensure_ascii=False, default=str),
+                    )
+                elif args.activity == "work_on":
+                    result["work_ops"] = _work_report(
+                        work_before,
+                        store.works,
+                        str(decision.params["work_id"]),
+                        raw_box.get("raw"),
+                    )
+                    print("整理结果：", json.dumps(result["work_ops"], ensure_ascii=False))
+                elif raw_box:
                     verdict = digest_mod.validate(
                         raw_box["raw"],
                         raw_box["items"],
@@ -379,15 +454,23 @@ def _decision(
         )
         return planner.Decision("interest_dive", "forced", {}, {"query": query})
     if args.activity == "thread_continue":
-        open_threads = [t for t in store.threads if t["status"] == "open"]
-        thread       = open_threads[0] if open_threads else None
-        if thread is None:
-            raise SystemExit("没有进行中的小课题可续做")
+        thread = _pick_thread(args, store, cfg, moment)
         return planner.Decision(
             "thread_continue",
             "forced",
             {},
             {"thread_id": thread["id"], "query": args.query or thread["next_query"]},
+        )
+    if args.activity == "work_on":
+        mine = [w for w in store.works if w["status"] == "drafting"]
+        if args.work:
+            mine = [w for w in mine if args.work in (w["id"], w["title"])] or [
+                w for w in mine if args.work in w["title"]
+            ]
+        if not mine:
+            raise SystemExit("没有进行中的作品可整理（先用 wind_down 开一个，或换一个 --data-dir）")
+        return planner.Decision(
+            "work_on", "forced", {}, {"work_id": mine[0]["id"], "query": mine[0]["title"]}
         )
     if args.activity == "term_lookup":
         terms                       = [t for t in (args.terms or "").split(",") if t]
@@ -406,6 +489,88 @@ def _decision(
     )
 
 
+def _pick_thread(args: Any, store: LifeStore, cfg: Any, moment: datetime) -> dict[str, Any]:
+    """标题匹配的小课题；没有就在隔离目录里先开一个（没给 --thread 时取第一个可续做的）。"""
+
+    live = [t for t in store.threads if t["status"] in ("open", "parked")]
+    if args.thread:
+        found = next(
+            (t for t in live if args.thread in t["title"] or t["title"] in args.thread), None
+        )
+        if found is not None:
+            return dict(found)
+        opened = thread_ops.open_thread(
+            store.threads,
+            cfg,
+            title      = args.thread,
+            why        = "脚本验证用",
+            next_query = args.query or args.thread,
+            now        = moment.timestamp(),
+            topic      = thread_ops.pick_topic(store.interests, "", args.thread, args.query),
+        )
+        if opened is None:
+            raise SystemExit("小课题名额已满，无法开新的")
+        print("已在隔离目录开了小课题：", opened["title"])
+        return dict(opened)
+    if not live:
+        raise SystemExit('没有可续做的小课题；用 --thread "<标题>" 先开一个')
+    return dict(live[0])
+
+
+def _install_credential(source: Path, credential: BiliCredential) -> None:
+    """只读地复制凭证文件到隔离目录（0600）；不解析、不打印内容，原文件不动。"""
+
+    if not source.is_file():
+        raise SystemExit("--bili-credential 指向的文件不存在")
+    credential.path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, credential.path)
+    os.chmod(credential.path, 0o600)
+
+
+def _research_report(
+    raw: dict[str, Any], items: list[SourceItem], thread: dict[str, Any], blocked: Any
+) -> dict[str, Any]:
+    """这一轮模型输出经本地核对后的样子：要点留了几条、更正、下一步、状态。"""
+
+    verdict = research.validate_round(raw, items, thread, tuple(blocked))
+    rows    = raw.get("findings")
+    return {
+        "findings_raw"  : len(rows) if isinstance(rows, list) else 0,
+        "findings_kept" : [f.text for f in verdict.findings],
+        "revises_valid" : [f.revises for f in verdict.findings if f.revises],
+        "looked_at_kept": len(verdict.digest.looked_at),
+        "status"        : verdict.status,
+        "open_question" : verdict.open_question,
+        "next"          : {"action": verdict.next.action, "arg": verdict.next.arg},
+    }
+
+
+def _work_report(
+    before: list[dict[str, Any]], after: list[dict[str, Any]], work_id: str, raw: Any
+) -> dict[str, Any]:
+    """作品条目的增删改，以及被丢弃的 op 数。"""
+
+    old: dict[str, Any] = next((w for w in before if w["id"] == work_id), {"entries": []})
+    new: dict[str, Any] = next((w for w in after if w["id"] == work_id), {"entries": []})
+    was                 = {e["id"]: e for e in old["entries"]}
+    now                 = {e["id"]: e for e in new["entries"]}
+    added               = [e["text"] for i, e in now.items() if i not in was]
+    changed             = [e["text"] for i, e in now.items() if i in was and e != was[i]]
+    removed             = [e["text"] for i, e in was.items() if i not in now]
+    asked               = min(3, len(raw.get("ops") or [])) if isinstance(raw, dict) else 0
+    kept                = len(added) + len(changed) + len(removed)
+    return {
+        "ops_asked"  : asked,
+        "ops_kept"   : kept,
+        "ops_dropped": max(0, asked - kept),
+        "added"      : added,
+        "revised"    : changed,
+        "removed"    : removed,
+        "status"     : new.get("status"),
+        "intro"      : new.get("intro"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -414,6 +579,17 @@ def main() -> int:
     parser.add_argument("--query", default="")
     parser.add_argument("--source", default="bili_popular")
     parser.add_argument("--terms", default="")
+    parser.add_argument(
+        "--thread", default="", help="thread_continue：要续做（没有就先开）的小课题标题"
+    )
+    parser.add_argument(
+        "--work", default="", help="work_on：作品 ID 或标题（缺省取第一个进行中的）"
+    )
+    parser.add_argument(
+        "--bili-credential",
+        default = "",
+        help    = "已保存的 B站 凭证文件（只读复制到隔离目录，用来验证字幕；不打印内容）",
+    )
     parser.add_argument("--no-ai", action="store_true")
     parser.add_argument(
         "--force-memes",

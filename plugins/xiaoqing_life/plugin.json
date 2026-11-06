@@ -28,7 +28,7 @@
         "life"
       ],
       "help": "小青的网上生活：查看她最近上网的经历、学到的词条和小课题，或立刻安排一次上网。仅 Bot 管理员。",
-      "usage": "/life [status|recent|slang|threads|methods|memes|run|forget|meme|login|logout|help]",
+      "usage": "/life [status|recent|slang|threads|methods|works|dossier|memes|run|forget|meme|login|logout|help]",
       "permission": "bot_admin",
       "contexts": [
         "private",
@@ -119,6 +119,38 @@
             "/life methods extra"
           ],
           "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "works",
+          "aliases": [
+            "作品"
+          ],
+          "help": "她在慢慢整理的小作品（片单 / 小笔记 / 观后感）与条目",
+          "usage": "/life works",
+          "examples": [
+            "/life works"
+          ],
+          "invalid_examples": [
+            "/life works extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "dossier",
+          "aliases": [
+            "档案"
+          ],
+          "help": "主题档案：不带话题列出全部，带话题显示一份",
+          "usage": "/life dossier [话题]",
+          "examples": [
+            "/life dossier",
+            "/life dossier 天文摄影"
+          ],
+          "invalid_examples": [
+            "/life dossiers"
+          ],
           "permission": "bot_admin"
         },
         {

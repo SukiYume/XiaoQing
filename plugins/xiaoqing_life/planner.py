@@ -14,6 +14,7 @@ from .config import LifeConfig
 from .lifecycle import interest_weights
 from .persona_bridge import Presence
 from .safety import similar
+from .works import best_candidate
 
 REST        = "rest"
 WIND_DOWN   = "wind_down"
@@ -21,6 +22,7 @@ THREAD      = "thread_continue"
 HOT_SCROLL  = "hot_scroll"
 INTEREST    = "interest_dive"
 TERM_LOOKUP = "term_lookup"
+WORK_ON     = "work_on"
 
 EXPLORATION_QUERIES = (
     "天文摄影",
@@ -372,6 +374,8 @@ def choose(
     rng: random.Random,
     presence: Presence | None             = None,
     frontier: list[dict[str, Any]] | None = None,
+    works: list[dict[str, Any]] | None    = None,
+    episodes: list[dict[str, Any]] | None = None,
 ) -> Decision:
     """在候选里按分数做 softmax 抽样；没有候选就是休息。参数只为被选中的活动生成。"""
 
@@ -423,6 +427,10 @@ def choose(
         build[INTEREST] = lambda: _interest_params(
             cfg, state, interests, now, rng, frontier, anime=anime, overdue=overdue
         )
+    if works and (found_work := best_candidate(cfg, works, state, episodes or [], threads, now)):
+        work, work_score = found_work
+        scores[WORK_ON] = work_score
+        build[WORK_ON]  = lambda: {"work_id": work["id"], "query": str(work.get("title", ""))}
     queue = list(state.get("lookup_queue", []))
     if queue and cfg.source_on("baike_lookup"):
         scores[TERM_LOOKUP] = 30.0 + min(15.0, 5.0 * len(queue))
@@ -451,8 +459,9 @@ def decide(
     running: bool                         = False,
     manual: bool                          = False,
     frontier: list[dict[str, Any]] | None = None,
+    works: list[dict[str, Any]] | None    = None,
 ) -> Decision:
     blocked = gate(cfg, state, episodes, moment, presence, rng, running=running, manual=manual)
     if blocked is not None:
         return blocked
-    return choose(cfg, state, threads, interests, moment, rng, presence, frontier)
+    return choose(cfg, state, threads, interests, moment, rng, presence, frontier, works, episodes)

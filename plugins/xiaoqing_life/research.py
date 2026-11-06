@@ -23,7 +23,6 @@ from .safety import clean_text, is_blocked
 from .sources import baike, bilibili, deep, watch, wiki
 from .sources.base import Fetcher, SourceError, SourceItem
 from .stores import LifeStore, reserve_llm_call
-from .threads import on_thread_event  # noqa: F401 - 主题档案的统一入口，见 threads.py
 
 logger = logging.getLogger(__name__)
 
