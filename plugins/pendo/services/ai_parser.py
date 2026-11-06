@@ -209,6 +209,7 @@ class AIParser:
 - 重复N次→添加;COUNT=N
 - 重复范围（未来一个月、截至某日）必须体现在COUNT或UNTIL中；COUNT按范围内实际发生次数计算，包含首次；COUNT与UNTIL只使用一个
 - 普通会议的开始与结束使用start_time/end_time；独立事项的具名时间点使用milestones。end_time须晚于start_time
+- 用户明确要求多节点（如“多节点”“分成几个节点”“每天一个节点”）时必须填milestones：给出的每个日期或时间点各成一个节点，连续多天的活动每天一个节点，start_time/end_time留null；此规则优先于上一条的普通会议写法
 - 提醒支持: 分钟/小时/天/周
 - remind_offsets必须为字符串数组，每项格式为“提前正整数分钟/小时/天/周”；提前一小时→["提前1小时"]，半小时→["提前30分钟"]，提前一天和一小时→["提前1天", "提前1小时"]
 - 每个数组元素代表一次提醒；提前一小时三十分钟→["提前90分钟"]。禁止输出裸数字、对象、负数、ISO时长（如PT1H）
@@ -321,7 +322,7 @@ class AIParser:
     ) -> dict[str, Any]:
         """规则解析兜底并统一整理返回结果。"""
         parsed = self.parse_natural_language(source_text, user_id)
-        return self._build_event_result(parsed, source_text, user_id, partial=partial)
+        return self.build_event_result(parsed, source_text, user_id, partial=partial)
 
     async def parse_event_with_ai(
         self,
@@ -378,7 +379,7 @@ class AIParser:
 
             logger.info("AI event parse completed: user=%s fields=%s", user_id, sorted(parsed))
 
-            return self._build_event_result(parsed, source_text, user_id, partial=partial)
+            return self.build_event_result(parsed, source_text, user_id, partial=partial)
 
         except Exception as exc:
             self._record_degraded_error(exc, component="pendo.ai_parser.event")
@@ -444,7 +445,7 @@ class AIParser:
             self._record_degraded_error(exc, component="pendo.ai_parser.diary_mood")
             return analyze_diary_mood_rule(text)
 
-    def _build_event_result(
+    def build_event_result(
         self,
         parsed: dict[str, Any],
         source_text: str,
@@ -575,7 +576,12 @@ class AIParser:
             milestone_time = cls._normalize_parser_datetime(raw_time, ai_wall_time=True)
             if milestone_time is None:
                 continue
-            milestones.append({"name": name, "time": milestone_time})
+            milestone = {"name": name, "time": milestone_time}
+            if raw.get("end_time") and (
+                end_time := cls._normalize_parser_datetime(raw["end_time"], ai_wall_time=True)
+            ):
+                milestone["end_time"] = end_time
+            milestones.append(milestone)
         return milestones
 
     def _apply_event_milestones(

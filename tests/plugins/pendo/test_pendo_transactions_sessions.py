@@ -740,7 +740,7 @@ def test_ai_reminder_offset_requires_complete_duration(offset, seconds):
 @pytest.mark.parametrize("offsets", [[], ["PT1H"], [60], [{"minutes": 60}], ["提前1天"]])
 def test_ai_reminder_original_instruction_recovers_model_output(offsets):
     parser = AIParser()
-    result = parser._build_event_result(
+    result = parser.build_event_result(
         {"start_time": "2030-09-22T16:00:00", "remind_offsets": offsets},
         "后面一个月每周二下午4点，跟华为讨论，提前一小时提醒",
         "reminder-recovery",
@@ -764,7 +764,7 @@ def test_ai_reminder_source_extraction_is_limited_to_reminder_clauses(text, expe
 
 
 def test_ai_invalid_offsets_do_not_emit_empty_rules():
-    result = AIParser()._build_event_result(
+    result = AIParser().build_event_result(
         {"start_time": "2030-09-22T16:00:00", "remind_offsets": ["PT1H"]},
         "开会",
         "invalid-reminder",

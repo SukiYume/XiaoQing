@@ -42,19 +42,29 @@
                     "name": "event",
                     "aliases": ["e", "calendar", "日程", "事件"],
                     "help": "日历事件与预约，event 管理单次、重复和多节点日程，支持开始时间、地点和多次提醒",
-                    "usage": "/pendo event <add|list|view|edit|delete|reminders> [args...]",
+                    "usage": "/pendo event <add|record|list|view|edit|delete|reminders> [args...]",
                     "examples": ["/pendo event"],
                     "invalid_examples": ["/pendo event unknown-command"],
                     "subcommands": [
                         {
                             "name": "add",
-                            "help": "自然语言一次说明标题、开始时间、结束时间、地点和提醒。插件默认保留准点提醒，提前提醒会一起加入。冲突时返回待确认信息；用户允许重叠安排后可用 --force 创建。重复日程或多节点行程会返回集合与节点 ID。",
+                            "help": "自然语言一次说明标题、开始时间、结束时间、地点和提醒。插件默认保留准点提醒，提前提醒会一起加入。冲突时返回待确认信息；用户允许重叠安排后可用 --force 创建。重复日程或多节点行程会返回集合与节点 ID。多节点、重复或需要精确时间时用 event record 结构化写入。",
                             "usage": "/pendo event add <内容> [--force]",
                             "examples": [
                                 "/pendo event add 明天上午九点开组会，提前30分钟提醒",
                                 "/pendo event add 明天上午九点开组会 --force"
                             ],
                             "invalid_examples": ["/pendo event add"]
+                        },
+                        {
+                            "name": "record",
+                            "help": "JSON 结构化写入一条日程，不经自然语言解析。必填 kind 和 title：single 单次需 start_time；multi_node 多节点需至少 2 个 nodes（每项 name、time，可选 end_time），不得带 start_time、end_time、rrule；recurring 重复需 start_time 和 rrule（RFC5545）。时间一律是用户当地墙钟时间 YYYY-MM-DDTHH:MM，end_time 须晚于开始。可选 content（缺省用标题）、location、notes、category、remind_offsets（如 [\"提前1天\", \"提前30分钟\"]，应用于每个实例或节点）。时间冲突时返回待确认，已知可重叠时加 --force 直接创建。",
+                            "usage": "/pendo event record <JSON> [--force]",
+                            "examples": [
+                                "/pendo event record {\"kind\":\"single\",\"title\":\"组会\",\"start_time\":\"2026-11-10T09:00\",\"remind_offsets\":[\"提前30分钟\"]}",
+                                "/pendo event record {\"kind\":\"multi_node\",\"title\":\"毕业答辩\",\"nodes\":[{\"name\":\"材料提交\",\"time\":\"2026-12-01T17:00\"},{\"name\":\"正式答辩\",\"time\":\"2026-12-08T14:00\"}],\"remind_offsets\":[\"提前1天\"]}"
+                            ],
+                            "invalid_examples": ["/pendo event record {}"]
                         },
                         {
                             "name": "list",
@@ -145,7 +155,7 @@
                         },
                         {
                             "name": "list",
-                            "help": "按状态、范围或分类列出待办",
+                            "help": "按状态、范围或分类列出待办。today 计划日期或截止时间落在用户当地今天；upcoming 计划日期在今天之后或截止时间在当前时刻之后；overdue 计划日期在今天之前或截止时间已过；inbox 没有计划日期；open 全部未完成。today、upcoming、overdue、inbox 默认只含未完成，加 all 含已完成和已取消。",
                             "usage": "/pendo todo list [today|open|done|cancelled|overdue|upcoming|inbox|分类] [all|page:n]",
                             "examples": ["/pendo todo list open page:1"],
                             "invalid_examples": ["/pendo todo list page:zero"]

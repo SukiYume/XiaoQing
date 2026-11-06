@@ -42,7 +42,7 @@ def event_display_timezone(event: Any) -> ZoneInfo:
         return TimezoneHelper.DEFAULT_TZ
 
 
-def _format_event_edit_datetime(value: Any, display_timezone: ZoneInfo) -> str:
+def format_event_edit_datetime(value: Any, display_timezone: ZoneInfo) -> str:
     if not value:
         return "未设置"
     try:
@@ -100,8 +100,8 @@ def format_event_updated(before: Any, after: Any, changed_fields: set[str]) -> s
             continue
         time_changed = True
         lines.append(
-            f"{label}: {_format_event_edit_datetime(old_value, event_display_timezone(before))}"
-            f" → {_format_event_edit_datetime(new_value, display_timezone)}"
+            f"{label}: {format_event_edit_datetime(old_value, event_display_timezone(before))}"
+            f" → {format_event_edit_datetime(new_value, display_timezone)}"
         )
 
     if time_changed:

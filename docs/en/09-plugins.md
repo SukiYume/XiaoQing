@@ -103,6 +103,7 @@ Complete edits submit the item version read earlier. Conflicts keep the user's e
 
 ```text
 /pendo event add <内容>
+/pendo event record <JSON> [--force]
 /pendo event list [today|tomorrow|week|month|year|YYYY-MM|start..end]
 /pendo event view <id>
 /pendo event edit <id> <内容>
