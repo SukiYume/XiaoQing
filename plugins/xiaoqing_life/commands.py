@@ -20,7 +20,7 @@ HELP_TEXT = """🌐 小青的网上生活
 /life methods         她自己摸索出的查法
 /life works           她在慢慢整理的小作品
 /life dossier [话题]  主题档案（不带话题列出全部）
-/life memes           梗图列表（梗图收集尚未接入）
+/life memes           梗图列表
 /life run             立刻安排一次上网（跳过概率与间隔）
 /life forget <词>     删除词条
 /life meme on|off <短ID>  开关一张梗图

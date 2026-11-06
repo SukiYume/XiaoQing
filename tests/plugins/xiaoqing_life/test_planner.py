@@ -203,14 +203,14 @@ def test_hot_source_is_drawn_from_enabled_ones_by_weight() -> None:
 def test_topic_choice_mixes_interests_and_exploration_and_demotes_repeats() -> None:
     cfg = make_cfg(seed_interests=["猫", "狗"])
     topics = [
-        planner.choose_topic(cfg, default_state(), {}, NOW, random.Random(n)) for n in range(200)
+        planner.choose_topic(cfg, default_state(), {}, NOW, random.Random(n))[0] for n in range(200)
     ]
     assert "猫" in topics and any(t in planner.EXPLORATION_QUERIES for t in topics)
     explore_share = sum(t in planner.EXPLORATION_QUERIES for t in topics) / len(topics)
     assert 0.15 < explore_share < 0.45
 
     state   = default_state() | {"recent": [{"choice": planner.INTEREST, "query": "猫"}]}
-    demoted = [planner.choose_topic(cfg, state, {}, NOW, random.Random(n)) for n in range(200)]
+    demoted = [planner.choose_topic(cfg, state, {}, NOW, random.Random(n))[0] for n in range(200)]
     assert demoted.count("猫") < topics.count("猫")  # 降权但没有封禁
     assert "猫" in demoted
 

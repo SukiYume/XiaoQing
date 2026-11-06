@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from core.clock import now_in_configured_timezone
+from core.constants import DEFAULT_BOT_NAME
 
 from .config import LifeConfig
 
@@ -21,7 +22,6 @@ _LOOKAHEAD_MIN   = 24 * 60
 _SCAN_STEP_MIN   = 5
 _WAKE_WINDOW_MIN = 120
 PLAN_HORIZON_MIN = 12 * 60
-_DEFAULT_NAME    = "小青"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +45,7 @@ def bot_name(context: Any) -> str:
         name = str(context.get_settings_snapshot().config.get("bot_name") or "").strip()
     except Exception:
         name = ""
-    return name or _DEFAULT_NAME
+    return name or DEFAULT_BOT_NAME
 
 
 def persona_card(context: Any) -> Any | None:
@@ -65,13 +65,15 @@ def persona_card(context: Any) -> Any | None:
 
 
 def persona_facts(context: Any) -> str:
+    """人设卡里的人物事实；读不到人设卡时只交代名字。"""
+
+    name = bot_name(context)
     card = persona_card(context)
-    if card is None:
-        return ""
     try:
-        return str(card.facts(bot_name(context)))
+        facts = str(card.facts(name)).strip() if card is not None else ""
     except Exception:
-        return ""
+        facts = ""
+    return facts or f"你是{name}。"
 
 
 def _quiet_presence(cfg: LifeConfig, moment: datetime) -> Presence:

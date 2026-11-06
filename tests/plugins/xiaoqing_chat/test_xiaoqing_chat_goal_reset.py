@@ -793,7 +793,7 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     assert state.get_continuous_reply_count(chat_id) == 0
     assert state.get_continuous_cooldown_until(chat_id) == 0.0
     assert await state.action_history.get_recent_async(chat_id, max_items=20) == []
-    assert state.get_last_observe_ts(chat_id) == 0.0
+    assert chat_id not in state._per_chat.last_observe_ts
     assert state.get_mood_state(chat_id) == ""
     assert state.get_reply_gate_decision(chat_id) is None
     assert state.fetch_and_increment_local_id(chat_id) == 1

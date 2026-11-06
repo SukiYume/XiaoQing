@@ -822,7 +822,6 @@ def _collect_emoji_candidate_locked(
 
 def import_external_emoji(
     context,
-    runtime,
     *,
     image_bytes: bytes,
     suffix: str,
@@ -1167,14 +1166,8 @@ def _filter_visible_entries(
     ]
 
 
-def mark_emoji_used(context, entry: EmojiLibraryEntry) -> None:
-    """记录条目的成功复用，供排序和清理决策使用。"""
-
-    mark_emoji_used_by_hash(context, entry.media_hash)
-
-
 def mark_emoji_used_by_hash(context, media_hash: str) -> None:
-    """更新已有哈希的使用元数据，不创建新记录。"""
+    """记录已有条目的成功复用（供排序和清理），不创建新记录。"""
 
     with keyed_path_lock(_emoji_index_path(context)):
         _mark_emoji_used_locked(context, media_hash)

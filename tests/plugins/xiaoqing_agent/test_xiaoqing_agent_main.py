@@ -15,7 +15,7 @@ from core.delivery import DeliverySegments
 from core.router import build_command_catalog_node
 from plugins.xiaoqing_agent import main as agent_main
 from plugins.xiaoqing_agent.config import AgentConfig, parse_agent_config
-from plugins.xiaoqing_agent.tasks import AgentTask, ChatRef
+from plugins.xiaoqing_agent.tasks import Actor, AgentTask, ChatRef
 from plugins.xiaoqing_agent.triage import parse_decision
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.xiaoqing_agent_test_support import (
@@ -936,7 +936,13 @@ async def test_undelivered_inline_reply_is_reported_into_history(context: FakeAg
 # ──────────────────── 续接任务的验收线索 ────────────────────
 
 
-def _done_task(task_id: str, text: str, at: float, continues: str = "") -> AgentTask:
+def _done_task(
+    task_id: str,
+    text: str,
+    at: float,
+    continues: str = "",
+    updates: list[str] | None = None,
+) -> AgentTask:
     return AgentTask(
         task_id,
         ChatRef(ADMIN_ID, None),
@@ -945,40 +951,33 @@ def _done_task(task_id: str, text: str, at: float, continues: str = "") -> Agent
         created_at=at,
         continues=continues,
         status="done",
+        updates=list(updates or []),
     )
 
 
 @pytest.mark.asyncio
-async def test_continuation_collects_the_initiators_own_words_along_the_chain(
-    tmp_path: Path,
-) -> None:
+async def test_continuation_collects_only_the_same_tasks_requirements(tmp_path: Path) -> None:
     runtime = agent_main.AgentRuntime(tmp_path)
     chat = ChatRef(ADMIN_ID, None)
     for task in (
-        _done_task("aaa111", "添加一个多节点事件 11.14-15", 100.0),
-        _done_task("bbb222", "改", 200.0, continues="aaa111"),
+        _done_task("aaa111", "创建多节点研讨会 11.14-15", 100.0, updates=["提前一天提醒"]),
+        # 中间另外两件事：不续接研讨会，不属于它的验收目标。
+        _done_task("ccc333", "记一笔午饭账 25", 150.0),
+        _done_task("ddd444", "把周三的咨询改到周四", 160.0),
+        _done_task("bbb222", "你建成了两个单次事件", 200.0, continues="aaa111"),
     ):
         await runtime.store.save(task)
-    history = [
-        {"role": "user", "user_id": ADMIN_ID, "text": "更早的闲聊", "ts": 99.0},
-        {"role": "user", "user_id": ADMIN_ID, "text": "创建，提前一天提醒", "ts": 150.0},
-        {"role": "user", "user_id": MEMBER_ID, "text": "别人插话", "ts": 160.0},
-        {"role": "assistant", "user_id": None, "text": "好的", "ts": 170.0},
-        {"role": "user", "user_id": ADMIN_ID, "text": "你创建成了  两个单次事件", "ts": 250.0},
-        {"role": "user", "user_id": ADMIN_ID, "text": "没有时间戳"},
-    ]
-    continues, thread = await agent_main._continuation(runtime, chat, "bbb222", history, "改")
+    continues, thread = await agent_main._continuation(runtime, chat, "bbb222", "改地点到 301")
     assert continues == "bbb222"
-    assert thread == [
-        "添加一个多节点事件 11.14-15",
-        "创建，提前一天提醒",
-        "你创建成了  两个单次事件",
-    ]
-    # 同一句话（去空白后）只保留一次。
-    history.append(
-        {"role": "user", "user_id": ADMIN_ID, "text": "你创建成了两个单次事件", "ts": 260.0}
+    assert thread == ["创建多节点研讨会 11.14-15", "提前一天提醒", "你建成了两个单次事件"]
+    # 同一句话（去空白后）只保留一次，本轮原话不重复列入。
+    await runtime.store.save(
+        _done_task("eee555", "你建成了 两个单次事件", 300.0, continues="bbb222")
     )
-    assert (await agent_main._continuation(runtime, chat, "bbb222", history, "改"))[1] == thread
+    assert (await agent_main._continuation(runtime, chat, "eee555", "提前一天提醒"))[1] == [
+        "创建多节点研讨会 11.14-15",
+        "你建成了两个单次事件",
+    ]
 
 
 @pytest.mark.asyncio
@@ -986,24 +985,32 @@ async def test_continuation_ignores_unknown_ids_and_bounds_the_thread(tmp_path: 
     runtime = agent_main.AgentRuntime(tmp_path)
     chat = ChatRef(ADMIN_ID, None)
     await runtime.store.save(_done_task("loop01", "自己续接自己", 100.0, continues="loop01"))
-    assert await agent_main._continuation(runtime, chat, "nope", [], "改") == ("", [])
-    assert await agent_main._continuation(runtime, chat, "", [], "改") == ("", [])
-    assert await agent_main._continuation(runtime, chat, "loop01", [], "改") == (
+    assert await agent_main._continuation(runtime, chat, "nope", "改") == ("", [])
+    assert await agent_main._continuation(runtime, chat, "", "改") == ("", [])
+    assert await agent_main._continuation(runtime, chat, "loop01", "改") == (
         "loop01",
         ["自己续接自己"],
     )
-    history = [
-        {
-            "role": "user",
-            "user_id": ADMIN_ID,
-            "text": f"第{index}句" + "长" * 600,
-            "ts": 200.0 + index,
-        }
-        for index in range(12)
-    ]
-    _, thread = await agent_main._continuation(runtime, chat, "loop01", history, "改")
+    updates = [f"第{index}句" + "长" * 600 for index in range(12)]
+    await runtime.store.save(_done_task("long01", "长任务", 200.0, updates=updates))
+    _, thread = await agent_main._continuation(runtime, chat, "long01", "改")
+    # 记录里最多留 10 条补充；线索取最近 8 条，每条 500 字。
     assert len(thread) == 8 and all(len(line) == 500 for line in thread)
     assert thread[-1].startswith("第11句")
+
+
+@pytest.mark.asyncio
+async def test_only_the_initiators_own_updates_are_recorded_as_requirements(
+    tmp_path: Path,
+) -> None:
+    runtime = agent_main.AgentRuntime(tmp_path)
+    task = AgentTask("run001", ChatRef(MEMBER_ID, 1001), "画一张图", "chat")
+    runtime.running[task.task_id] = task
+    chat = ChatRef(MEMBER_ID, 1001)
+    runtime.add_note(chat, "", "换成红色", Actor(MEMBER_ID), "群友")
+    runtime.add_note(chat, "", "再加个边框", Actor(ADMIN_ID, admin=True), "管理员")
+    assert len(task.notes) == 2  # 两条都交给运行中的任务
+    assert task.updates == ["换成红色"] and task.record()["updates"] == ["换成红色"]
 
 
 @pytest.mark.asyncio
@@ -1025,11 +1032,13 @@ async def test_follow_up_task_receives_the_acceptance_target(context: FakeAgentC
     assert second is not None
 
     prompt = context.ai.calls[-1][1][1]["content"].splitlines()
-    assert "1. 添加一个多节点事件" in prompt and "2. 创建，提前一天提醒" in prompt
-    assert "本轮原话：改" in prompt
+    assert "1. 添加一个多节点事件" in prompt and "本轮原话：改" in prompt
+    # 两次任务之间的聊天只作背景，不列进验收目标。
+    assert "2. 创建，提前一天提醒" not in prompt
+    assert any(line.endswith("创建，提前一天提醒") and "（本人）" in line for line in prompt)
     record = (await agent_main.get_runtime(context).recent_records(ChatRef(ADMIN_ID, None), 1))[0]
     assert record["continues"] == first["task_id"]
-    assert record["thread"] == ["添加一个多节点事件", "创建，提前一天提醒"]
+    assert record["thread"] == ["添加一个多节点事件"]
 
 
 def test_acceptance_target_lists_the_thread_only_for_follow_ups() -> None:

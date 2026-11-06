@@ -113,10 +113,6 @@ def _media_request_failure_reason(exc: Exception) -> str:
     return type(exc).__name__
 
 
-def _is_media_request_failure(exc: Exception) -> bool:
-    return isinstance(exc, (LLMError, asyncio.TimeoutError, TimeoutError))
-
-
 def _log_media_provider_fallback(
     *,
     context,
@@ -1188,7 +1184,7 @@ async def _analyze_media_with_provider(
                 attempt_base_max_tokens = attempt_base_max_tokens,
             )
         except Exception as exc:
-            if has_fallback_provider and _is_media_request_failure(exc):
+            if has_fallback_provider and isinstance(exc, (LLMError, TimeoutError)):
                 return _MediaProviderOutcome(fallback_reason=_media_request_failure_reason(exc))
             _log_media_analysis_exception(
                 exc,

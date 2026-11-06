@@ -169,7 +169,7 @@ plugins/xiaoqing_life/
 
 照 `plugins/xiaoqing_agent/prompts.py:configured_persona` 的做法函数内延迟导入 `plugins.xiaoqing_chat.config.config.load_xiaoqing_chat_config`，取 `personality.card`：
 
-- `persona_facts(context) -> str`：`card.facts(bot_name)`，用于消化和睡前整理的人物视角。
+- `persona_facts(context) -> str`：`card.facts(bot_name)`（读不到人设卡时为“你是<bot_name>。”），用于消化和睡前整理的人物视角。
 - `availability(context, moment) -> ("free"|"busy"|"asleep", activity_text, minutes_until_sleep)`：用 `plugins.xiaoqing_chat.life.schedule.routine_slot_now(card, moment)`；“距离下一次睡觉还有多少分钟”自己按 `parse_routine(card.routine)` 向后扫描 24 小时求出。
 - xiaoqing_chat 不可导入或人设卡无〔作息〕时，退回 `quiet_hours`。任何异常都按“读不到作息”处理，不阻止插件加载。
 - 时间一律用 `core.clock.now_in_configured_timezone(context)`，不要用 `time.localtime`（宿主机是 UTC−7，用户在 Asia/Shanghai）。
@@ -414,7 +414,7 @@ xiaoqing_chat 发来（不含任何用户 ID、群号）：
    - `fetch_online_life(context, runtime, *, text, history, is_private, unknown_words) -> OnlineLife`：没有 `capabilities.life_context` 或开关关闭 → 空；`asyncio.wait_for` 超时或任何异常 → 空并记 `reply.online_life.error`（只记错误类型）；校验响应类型并截断（life_lines ≤800、slang_notes ≤600、expression_hint ≤200）。
    - `sync_life_memes(context, runtime)`：游标存在 xiaoqing_chat 数据目录，逐页拉取导入，`revoked` 删除。
 4. `reply_plan.prepare_reply_generation`：与其他上下文并行取 `fetch_online_life`；`life_block` 追加 `life_lines`（因此自动进入回复检查的 grounding，“我今天刷到……”不会被当成凭空经历拒掉）；`jargon_explanation` 追加 `slang_notes`（进入提示词低信任 JSON 和审查的用语参考）；`expression_block` 为空时用 `expression_hint`（群里学到的表达优先）。记 `reply.online_life` 日志（各块长度、条目数）。
-5. `media/emoji_library.py`：新增 `import_external_emoji(context, runtime, *, image_bytes, suffix, description, emotion_tags, marker, source)`（索引锁内写入、`visibility="global"`、`global_approved=True`、`source="life:<sha256>"`、按 sha256 幂等）和 `remove_external_emoji(context, media_hash, *, source_prefix="life:")`（只删这个来源的条目）。导入后照常出现在 `build_media_candidates_block` 的“可发素材”里，出站解析与使用计数不用改。
+5. `media/emoji_library.py`：新增 `import_external_emoji(context, *, image_bytes, suffix, description, emotion_tags, marker, source)`（索引锁内写入、`visibility="global"`、`global_approved=True`、`source="life:<sha256>"`、按 sha256 幂等）和 `remove_external_emoji(context, media_hash, *, source_prefix="life:")`（只删这个来源的条目）。导入后照常出现在 `build_media_candidates_block` 的“可发素材”里，出站解析与使用计数不用改。
 6. `main.py`：`scheduled_life_memes(context)`，`enable_life_memes` 关闭或能力缺失时不做事。
 7. 主动开口 `life/proactive.py`：起草材料里加 `turn_context(mode="proactive")` 返回的 `share_candidates`（排除该群已分享过的 episode_id）；投递回执确认后把 episode_id 记进 `ProactiveRecord.shared_life_ids`（保留最近 20 个）。dafeiyu 联系协调的“没人理就停”已由现有规则覆盖（最后一句是她自己说的就不开口），不另加。
 9. `config/config.json.example`：加 `xiaoqing_life` 一节（`enabled: false`，`ai.routes.reasoning` / `vision` 照 xiaoqing_chat 的写法）。

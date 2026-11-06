@@ -446,19 +446,17 @@ def test_reply_prefix_left_after_at_removal_is_stripped() -> None:
 
 
 def test_comment_candidates_are_chosen_by_interest_and_heat_not_by_position() -> None:
-    cfg = make_cfg()
-
     def item(n: int, title: str, heat: int) -> SourceItem:
         return SourceItem(f"bili:{n}", "bili_popular", title, "", "u", heat, ())
 
     items = [item(i, f"无关标题{i}", 100) for i in range(1, 6)]
     items.append(item(6, "天文摄影入门", 100))
     items.append(item(7, "无关热门", 10_000_000))
-    clicks = pick_clicks(cfg, items, ["天文摄影"])
+    clicks = pick_clicks(items, ["天文摄影"])
     assert 5 in clicks and 6 in clicks and len(clicks) == 3 and clicks == sorted(clicks)
     assert prescore(items[5], ["天文摄影"]) > prescore(items[0], ["天文摄影"])
     zhihu = SourceItem("zhihu_hot:1", "zhihu_hot", "天文摄影", "", "u", 1, ())
-    assert pick_clicks(cfg, [zhihu], ["天文摄影"]) == []  # 只有 B 站条目取热评
+    assert pick_clicks([zhihu], ["天文摄影"]) == []  # 只有 B 站条目取热评
 
 
 @pytest.mark.asyncio

@@ -355,7 +355,7 @@ class LifeConfig(BaseModel):
     # 小青的网上生活（xiaoqing_life 插件）：每轮取相关的经历、用语和表达；插件不在或关闭时行为不变。
     enable_online_life         : bool = True
     online_life_timeout_seconds: float = Field(default=0.8, gt=0.0, le=5.0, allow_inf_nan=False)
-    # 梗图导入表情库与主动开口分享网上见闻的开关（对应功能随后接入）。
+    # 梗图导入表情库、主动开口时分享网上见闻。
     enable_life_memes: bool = True
     enable_life_share: bool = True
 

@@ -91,7 +91,6 @@ def complete_test_state(state):
                 setattr(store, method, AsyncMock(return_value=default))
     neutral = {
         "get_reply_gate_decision": None,
-        "get_last_observe_ts"    : 0.0,
         "get_last_reply_ts"      : 0.0,
         "get_mood_state"         : "",
         "pop_persist_task"       : None,

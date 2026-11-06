@@ -196,9 +196,7 @@ def prescore(item: SourceItem, topics: list[str]) -> float:
     return 3.0 * min(interest_hits(item, topics), 3) + math.log10(item.heat + 1)
 
 
-def pick_clicks(
-    cfg: LifeConfig, items: list[SourceItem], topics: list[str], novel_text: str = ""
-) -> list[int]:
+def pick_clicks(items: list[SourceItem], topics: list[str], novel_text: str = "") -> list[int]:
     """≤3 个 B 站条目（取热评），按预打分挑，返回它们在 ``items`` 里的下标（保持原顺序）。"""
 
     candidates = [i for i, item in enumerate(items) if item.source.startswith("bili_")]
@@ -225,7 +223,7 @@ async def _open_items(
     """
 
     result = list(items)
-    clicks = pick_clicks(cfg, items, topics, novel_text)
+    clicks = pick_clicks(items, topics, novel_text)
     ranked = sorted(clicks, key=lambda i: prescore(items[i], topics), reverse=True)
     watched  = set(ranked[: cfg.max_watch_per_session])
     eligible = [
@@ -530,7 +528,6 @@ async def _commit(
 
 async def _reinforce(
     store: LifeStore,
-    cfg: LifeConfig,
     decision: Decision,
     outcome: SessionOutcome,
     span: Span,
@@ -752,7 +749,7 @@ async def _browse(
         )
     outcome                  = await _commit(store, cfg, decision, fresh, result, span, deps)
     outcome.details["memes"] = await _collect_memes(store, cfg, fresh, result, day, deps)
-    await _reinforce(store, cfg, decision, outcome, span, deps)
+    await _reinforce(store, decision, outcome, span, deps)
     return outcome
 
 

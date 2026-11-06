@@ -70,7 +70,7 @@ def test_card_loader_failures_do_not_raise(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(pb.persona_facts(context), str)  # 配置读不懂也不抛异常
     broken = SimpleNamespace(routine=ROUTINE, facts=lambda _n: 1 / 0)
     monkeypatch.setattr(pb, "persona_card", lambda _c: broken)
-    assert pb.persona_facts(context) == ""
+    assert pb.persona_facts(context) == f"你是{pb.bot_name(context)}。"  # 读不到人设时只交代名字
 
 
 def test_real_persona_card_loads_with_default_chat_config(tmp_path: Path) -> None:

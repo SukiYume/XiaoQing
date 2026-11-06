@@ -325,10 +325,6 @@ def _load_qq_face_catalog(context) -> list[QQFaceEntry]:
         return results
 
 
-def mark_qq_face_used(context, entry: QQFaceEntry) -> None:
-    mark_qq_face_used_by_id(context, entry.face_id, label=entry.label)
-
-
 def mark_qq_face_used_by_id(context, face_id: Any, *, label: Any = "") -> None:
     with keyed_path_lock(_catalog_path(context)):
         normalized_id = str(face_id or "").strip()

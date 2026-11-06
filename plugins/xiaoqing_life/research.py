@@ -60,7 +60,7 @@ _SYSTEM = """{persona}
 - 先看笔记里已经知道什么、还差什么，再读这一轮的材料。要点用自己的话写，但每条要点都要附材料里的原文（quote）和它所在的编号（refs，如 i1、c1.2、p1.2）。
 - 只有发现之前某条笔记说错了，才用 revises 指出改的是哪条；只是补充了新细节、把问题答得更全，就直接写新的要点，不用 revises。两种说法对不上时可以写进 open_question，下一步去对照。
 - 查明白了 status 写 answered；资料明显不够、再查也没用时写 stuck；还在往下查写 progress；这一轮没收获写 none。
-- next：想换个词再搜写 search（arg 是两三个关键词，用空格隔开）；想把材料里某个 B站视频读深一点写 deep_read（arg 是它的条目编号）；想查一个概念写 lookup（arg 是一个词条名，2 到 8 个字，比如“地球自转”“周日视运动”，不要写成问句）；够了就写 stop。next.action 只能从 available_actions 里选。
+- next：想换个词再搜写 search（arg 是两三个关键词，用空格隔开）；想把材料里某个 B站视频读深一点写 deep_read（arg 是它的条目编号）；想查一个概念写 lookup（arg 是一个词条名，2 到 8 个字，比如“潮汐锁定”“蒸汽波”，不要写成问句）；够了就写 stop。next.action 只能从 available_actions 里选。
 - 要点的 quote 可以把同一个问题在不同材料里的几句原文接起来，每一句都要逐字来自 refs 里列出的编号。
 - methods 是你以前摸索出的查法，适用就照着做。
 - looked_at 只写你真的点开细看的条目；feeling 是你对这条内容本身喜不喜欢，不是它有没有回答你的问题（没回答到写在 reaction 里就好）。没有合适内容的字段给空数组。"""
@@ -126,7 +126,7 @@ def build_messages(
         "available_actions" : list(available),
         "untrusted_material": digest_mod.material(items),
     }
-    system = _SYSTEM.replace("{persona}", persona or "你是小青。").replace(
+    system = _SYSTEM.replace("{persona}", persona).replace(
         "{moment_line}", digest_mod.moment_line(moment, activity)
     )
     return [
@@ -850,5 +850,5 @@ async def _finish(
         memes           = 0,
         rounds          = tally.rounds,
     )
-    await sm._reinforce(store, cfg, decision, outcome, span, deps)
+    await sm._reinforce(store, decision, outcome, span, deps)
     return outcome

@@ -198,7 +198,7 @@ def _recent_queries(state: dict[str, Any]) -> list[str]:
     return [str(r.get("query")) for r in state.get("recent", []) if r.get("query")]
 
 
-def choose_topic_ex(
+def choose_topic(
     cfg: LifeConfig,
     state: dict[str, Any],
     interests: dict[str, dict[str, Any]],
@@ -232,17 +232,6 @@ def choose_topic_ex(
             return topic, True, topic
     explore = {q: discount(q, 1.0) for q in EXPLORATION_QUERIES}
     return _weighted_pick(rng, explore) or EXPLORATION_QUERIES[0], True, ""
-
-
-def choose_topic(
-    cfg: LifeConfig,
-    state: dict[str, Any],
-    interests: dict[str, dict[str, Any]],
-    now: float,
-    rng: random.Random,
-    frontier: list[dict[str, Any]] | None = None,
-) -> str:
-    return choose_topic_ex(cfg, state, interests, now, rng, frontier)[0]
 
 
 # ───────────────────────────── 打分 ─────────────────────────────
@@ -333,7 +322,7 @@ def _interest_params(
 ) -> dict[str, Any]:
     if anime and rng.random() < ANIME_TOPIC_SHARE:
         return {"query": _anime_topic(rng), "explored": False}
-    topic, explored, from_frontier = choose_topic_ex(
+    topic, explored, from_frontier = choose_topic(
         cfg, state, interests, now, rng, frontier, force_explore=overdue
     )
     params: dict[str, Any] = {"query": topic, "explored": explored}

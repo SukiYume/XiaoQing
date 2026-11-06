@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from ..store_base import (
     StoreBase,
@@ -23,7 +23,6 @@ from ..store_base import (
 )
 from ..utils.wall_clock import format_local
 
-LoopStatus             = Literal["open", "asked", "closed"]
 _REVIEW_WINDOW_SECONDS = 48 * 3600.0
 _KEEP_CLOSED_SECONDS   = 7 * 86400.0
 _MAX_TITLE_CHARS       = 24

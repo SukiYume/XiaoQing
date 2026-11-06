@@ -541,7 +541,7 @@ def test_concurrent_emoji_collect_and_stale_repair_preserve_updates(tmp_path):
     desired                                                  = deepcopy(original)
     desired["entries"][entries[0].media_hash]["description"] = "repair"
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda _: emoji_library.mark_emoji_used(context, entries[0]), range(10)))
+        list(pool.map(lambda _: emoji_library.mark_emoji_used_by_hash(context, entries[0].media_hash), range(10)))
     emoji_library._save_index_if_changed(context, original_payload=original, payload=desired)
     latest = emoji_library._load_index(context)
     assert len(latest["entries"]) == 2

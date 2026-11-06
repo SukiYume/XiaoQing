@@ -11,7 +11,7 @@ from typing import Any
 from core.ai import AIError
 
 from .tasks import Outcome
-from .tools import Tool, ToolEnv, execute_tool
+from .tools import NO_PROGRESS_TOOLS, Tool, ToolEnv, execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -342,12 +342,7 @@ async def run_agent_loop(
                     failures += 1
                 elif result.state == "error":
                     failures += 1
-                elif result.progress and call.name not in {
-                    "wait",
-                    "send_message",
-                    "update_plan",
-                    "xiaoqing_commands",
-                }:
+                elif result.progress and call.name not in NO_PROGRESS_TOOLS:
                     failures = blocked_attempts = 0
                     progressed = True
                 if blocked_attempts >= 2 or failures >= 3:

@@ -309,9 +309,6 @@ class ChatRuntimeState:
     def set_last_reply_ts(self, chat_id: str, ts: float) -> None:
         self._per_chat.last_reply_ts[chat_id] = ts
 
-    def get_last_observe_ts(self, chat_id: str) -> float:
-        return self._per_chat.last_observe_ts.get(chat_id, 0.0)
-
     def set_last_observe_ts(self, chat_id: str, ts: float) -> None:
         self._per_chat.last_observe_ts[chat_id] = ts
 

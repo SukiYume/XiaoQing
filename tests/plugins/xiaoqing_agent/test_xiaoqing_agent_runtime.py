@@ -163,21 +163,26 @@ async def test_fast_task_is_handed_to_the_waiting_turn(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "review",
+    ("review", "status"),
     [
-        ai_response(
-            json.dumps(
-                {"reply": "指令发过去了，设备还没确认灯的状态。", "state": "blocked"},
-                ensure_ascii=False,
-            )
+        (
+            ai_response(
+                json.dumps(
+                    {"reply": "指令发过去了，设备还没确认灯的状态。", "state": "blocked"},
+                    ensure_ascii=False,
+                )
+            ),
+            "blocked",
         ),
-        ai_response(),
-        AIError("offline"),
+        # 核对不可用时任务结局沿用执行阶段的状态。
+        (ai_response(), "done"),
+        (AIError("offline"), "done"),
     ],
 )
 async def test_delivery_review_uses_tool_facts_and_preserves_files_without_repeating_writes(
     tmp_path: Path,
     review,
+    status: str,
 ) -> None:
     work = tmp_path / "workspaces" / CHAT.key
     work.mkdir(parents=True)
@@ -221,7 +226,8 @@ async def test_delivery_review_uses_tool_facts_and_preserves_files_without_repea
     assert "灯关了" not in outcome.text
     assert "确认" in outcome.text
     assert outcome.files == [str(evidence.resolve())]
-    assert outcome.status == "done" and task.steps == 3
+    assert outcome.status == status and task.steps == 3
+    assert _records(tmp_path)[-1]["status"] == status
     runner.run.assert_awaited_once()
     assert context.actions == []
     _, messages, kwargs = ai.calls[-1]
@@ -280,7 +286,9 @@ async def test_stopped_task_reviews_unsupported_claims_without_retrying_commands
     outcome = await runtime.wait_inline(context, task, 5)
     assert outcome is not None
     await task.runner
-    assert outcome.status == "failed" and task.status == "failed"
+    # 执行停在半路，核对判定受阻：记为 blocked，而不是笼统的 failed。
+    assert outcome.status == "blocked" and task.status == "blocked"
+    assert _records(tmp_path)[-1]["status"] == "blocked"
     assert "真实的论文标题和链接" in outcome.text and "肯定可用" not in outcome.text
     assert runner.run.await_count == 3 and len(ai.calls) == 6
     assert ai.calls[-1][2].get("tools") is None
@@ -333,8 +341,11 @@ async def test_needs_user_question_is_delivered_and_unusable_review_falls_back_t
     assert runner.run.await_count == 1 and len(ai.calls) == 2
     if isinstance(review, dict) and "needs_user" in str(review):
         assert outcome.text == _QUESTION
+        assert task.status == outcome.status == "needs_user"
     else:
         assert facts in outcome.text and "末尾完整事实" in outcome.text
+        assert task.status == outcome.status == "done"
+    assert _records(tmp_path)[-1]["status"] == task.status
     assert "本轮原话：改同名记录" in ai.calls[-1][1][1]["content"]
     assert "执行阶段的答复草稿" not in ai.calls[-1][1][1]["content"]
     await runtime.shutdown()
@@ -1097,6 +1108,38 @@ async def test_needs_user_review_is_delivered_even_when_items_are_listed(tmp_pat
     await task.runner
     assert outcome is not None and outcome.text == "要改哪一条？"
     assert runner.run.await_count == 1 and len(ai.calls) == 3
+    assert task.status == outcome.status == "needs_user"
+    assert _records(tmp_path)[-1]["status"] == "needs_user"
+    # 等待发起人回答的任务已经收尾，重启时不会被当成中断。
+    assert await runtime.store.mark_interrupted() == 0
+    assert _records(tmp_path)[-1]["status"] == "needs_user"
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_review_after_the_correction_round_is_recorded_as_unfinished(
+    tmp_path: Path,
+) -> None:
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "已保存第一笔"}}])
+    )
+    verdict = ai_response(
+        json.dumps(
+            {"reply": "第一笔记好了，第二笔还没记。", "state": "unfinished", "unfinished": ["第二笔"]},
+            ensure_ascii=False,
+        )
+    )
+    ai = FakeAI([_command("/ledger one"), _final("记好了"), verdict, _final("记好了"), verdict])
+    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
+    runtime = AgentRuntime(tmp_path)
+    task = runtime.start(
+        context, CONFIG, CHAT, request_text="记两笔：第一笔和第二笔", source="chat", admin=True
+    )
+    outcome = await runtime.wait_inline(context, task, 5)
+    await task.runner
+    assert outcome is not None and outcome.text == "第一笔记好了，第二笔还没记。"
+    assert task.status == outcome.status == "unfinished"
+    assert _records(tmp_path)[-1]["status"] == "unfinished"
     await runtime.shutdown()
 
 

@@ -177,15 +177,6 @@ def _external_headline(text: str) -> str:
     return compact[:_EXTERNAL_HEADLINE_CHARS].rstrip() + "…（内容较长，只记下开头）"
 
 
-def _coerce_int_or_none(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
 async def _maybe_reset_idle_conversation(
     event: dict[str, Any],
     context,

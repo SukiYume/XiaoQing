@@ -28,7 +28,6 @@ from .stores import LifeStore, reserve_llm_call
 
 logger = logging.getLogger(__name__)
 
-VISION_ROUTE = "vision"
 MEME_DIR = "memes"
 TOMBSTONE_KEEP_DAYS = 30
 MAX_EXPORT_PAGE = 10
