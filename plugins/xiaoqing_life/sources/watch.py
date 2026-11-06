@@ -35,6 +35,7 @@ BUCKET_SECONDS    = 30
 MAX_DENSE_MOMENTS = 2
 MIN_DENSE_COUNT   = 3
 MAX_TAGS          = 6
+RAW_DESC_CHARS    = 4000
 MAX_DANMAKU_ROWS  = 20000
 _RUN_RE           = re.compile(r"(.)\1{2,}")
 
@@ -143,6 +144,8 @@ async def watch(
                 text       = desc or updated.text,
                 uploader   = clean_text(owner, 20) or updated.uploader,
                 duration_s = to_int(view.get("duration")),
+                desc_raw   = str(view.get("desc") or "")[:RAW_DESC_CHARS],
+                cid        = cid,
             )
     except SourceError as exc:
         logger.info("xiaoqing_life step=source name=bili_view failed reason=%s", exc.reason)

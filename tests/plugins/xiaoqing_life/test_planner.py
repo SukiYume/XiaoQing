@@ -71,10 +71,10 @@ def test_wind_down_is_chosen_only_with_todays_episodes_and_not_yet_done() -> Non
 def test_daily_budgets_and_rolling_activity_window() -> None:
     state = default_state() | {"day": "2026-11-05", "sessions_today": 5}
     assert _decide(state=state).reason == "sessions_exhausted"
-    state = default_state() | {"day": "2026-11-05", "llm_calls_today": 24}
+    state = default_state() | {"day": "2026-11-05", "llm_calls_today": 30}
     assert _decide(state=state).reason == "llm_exhausted"
     # 昨天的计数不算今天
-    stale = default_state() | {"day": "2026-11-04", "sessions_today": 5, "llm_calls_today": 24}
+    stale = default_state() | {"day": "2026-11-04", "sessions_today": 5, "llm_calls_today": 30}
     assert _decide(state=stale).choice != planner.REST
 
     busy_log = default_state() | {"activity_log": [{"start": NOW - 3000, "end": NOW - 300}]}

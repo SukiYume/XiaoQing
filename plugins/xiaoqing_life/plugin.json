@@ -28,7 +28,7 @@
         "life"
       ],
       "help": "小青的网上生活：查看她最近上网的经历、学到的词条和小课题，或立刻安排一次上网。仅 Bot 管理员。",
-      "usage": "/life [status|recent|slang|threads|memes|run|forget|meme|help]",
+      "usage": "/life [status|recent|slang|threads|memes|run|forget|meme|login|logout|help]",
       "permission": "bot_admin",
       "contexts": [
         "private",
@@ -163,6 +163,71 @@
           "invalid_examples": [
             "/life meme maybe"
           ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "login",
+          "aliases": [
+            "登录"
+          ],
+          "help": "B站扫码登录（只读）：二维码只发到你的私聊；登录后她点开视频能读字幕",
+          "usage": "/life login [status|cancel]",
+          "examples": [
+            "/life login"
+          ],
+          "invalid_examples": [
+            "/life login nonsense"
+          ],
+          "permission": "bot_admin",
+          "subcommands": [
+            {
+              "name": "status",
+              "aliases": [
+                "状态"
+              ],
+              "help": "B站登录状态（有凭证时实时确认一次）",
+              "usage": "/life login status",
+              "examples": [
+                "/life login status"
+              ],
+              "invalid_examples": [
+                "/life login status extra"
+              ],
+              "match": "exact",
+              "permission": "bot_admin"
+            },
+            {
+              "name": "cancel",
+              "aliases": [
+                "取消"
+              ],
+              "help": "取消进行中的扫码登录",
+              "usage": "/life login cancel",
+              "examples": [
+                "/life login cancel"
+              ],
+              "invalid_examples": [
+                "/life login cancel extra"
+              ],
+              "match": "exact",
+              "permission": "bot_admin"
+            }
+          ]
+        },
+        {
+          "name": "logout",
+          "aliases": [
+            "退出登录"
+          ],
+          "help": "删除本地 B站 登录凭证（不调用远端接口）",
+          "usage": "/life logout",
+          "examples": [
+            "/life logout"
+          ],
+          "invalid_examples": [
+            "/life logout extra"
+          ],
+          "match": "exact",
           "permission": "bot_admin"
         },
         {

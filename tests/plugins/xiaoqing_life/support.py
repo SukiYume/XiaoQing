@@ -32,6 +32,7 @@ class FakeFetcher:
     def __init__(self, routes: Mapping[str, Any]) -> None:
         self.routes                                  = dict(routes)
         self.calls: list[tuple[str, dict[str, str]]] = []
+        self.public_calls: list[str]                 = []
 
     async def get_json(
         self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
@@ -43,6 +44,12 @@ class FakeFetcher:
                     raise value
                 return value(params) if callable(value) else value
         raise SourceError("fake", "no_route")
+
+    async def get_public_json(self, url: str) -> Any:
+        """字幕文件（hdslb）：与 ``get_json`` 同样按片段路由，另记在 ``public_calls``。"""
+
+        self.public_calls.append(url)
+        return await self.get_json(url)
 
     async def get_xml(
         self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""

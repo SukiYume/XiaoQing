@@ -17,7 +17,7 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-from . import commands, persona_bridge
+from . import bili_auth, commands, persona_bridge
 from . import digest as digest_mod
 from . import memes as memes_mod
 from . import turn_context as turn_context_mod
@@ -40,12 +40,16 @@ class LifeRuntime:
 
     def __init__(self, store: LifeStore) -> None:
         self.store                           = store
+        self.credential                      = bili_auth.BiliCredential(store.data_dir)
         self.rng                             = random.Random()
         self.task: asyncio.Task[None] | None = None
         self.closing                         = False
         self._bg: set[asyncio.Task[Any]]     = set()
         # 测试里可换成固定时钟。
         self.clock: Callable[[Any], datetime] = persona_bridge.now
+        self.login = bili_auth.BiliLogin(self.credential, store, self.spawn)
+        self.credential.on_invalid = self.login.mark_invalid_record
+        self.login.restore()
 
     @property
     def running(self) -> bool:
@@ -64,7 +68,8 @@ class LifeRuntime:
 
     async def shutdown(self) -> None:
         self.closing = True
-        pending      = [t for t in (self.task, *self._bg) if t is not None and not t.done()]
+        await self.login.close()
+        pending = [t for t in (self.task, *self._bg) if t is not None and not t.done()]
         for task in pending:
             task.cancel()
         if pending:
@@ -111,7 +116,7 @@ def _deps(context: Any, runtime: LifeRuntime, cfg: LifeConfig) -> SessionDeps:
     presence = persona_bridge.availability(context, cfg, moment)
     can_see  = cfg.memes_enabled and route_configured(context, "vision")
     return SessionDeps(
-        fetch         = BoundedFetcher(context.http_session),
+        fetch         = BoundedFetcher(context.http_session, runtime.credential),
         complete      = complete,
         rng           = runtime.rng,
         now           = lambda: runtime.clock(context),
@@ -120,6 +125,7 @@ def _deps(context: Any, runtime: LifeRuntime, cfg: LifeConfig) -> SessionDeps:
         activity_text = presence.activity,
         download      = memes_mod.download_image if can_see else None,
         vision        = vision if can_see else None,
+        subtitles_ok  = runtime.credential.usable,
     )
 
 
@@ -158,6 +164,7 @@ async def _run_guarded(
             await _run_wind_down(context, runtime, cfg)
         else:
             await run_session(runtime.store, cfg, decision, _deps(context, runtime, cfg))
+            await _remind_login(context, runtime)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -170,6 +177,15 @@ async def _run_guarded(
             logger.warning(
                 "xiaoqing_life failure record failed error_type=%s", type(inner).__name__
             )
+
+
+async def _remind_login(context: Any, runtime: LifeRuntime) -> None:
+    """B站登录失效后，一次上网结束时给发起人私聊提醒一次（尽力而为）。"""
+
+    try:
+        await runtime.login.remind_if_invalid(context)
+    except Exception as exc:
+        logger.info("xiaoqing_life step=bili_login remind_failed error_type=%s", type(exc).__name__)
 
 
 def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool) -> Decision:
@@ -301,13 +317,27 @@ async def _meme_command(store: LifeStore, rest: str, now: float) -> str:
     return await memes_mod.set_enabled(store, parts[1], parts[0].lower() == "on", now)
 
 
+async def _login_command(
+    context: Any, runtime: LifeRuntime, rest: str, event: dict[str, Any]
+) -> str:
+    sub = rest.strip().lower()
+    if sub in ("", "start", "开始"):
+        return await runtime.login.start(context, event)
+    if sub in ("status", "状态"):
+        fetcher = BoundedFetcher(context.http_session, runtime.credential)
+        return await runtime.login.status(fetcher, runtime.clock(context).tzinfo)
+    if sub in ("cancel", "取消"):
+        return await runtime.login.cancel(context, event)
+    return "用法: /life login [status|cancel]"
+
+
 async def handle(
     command: str,
     args: str,
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    del command, event
+    del command
     try:
         action, rest = commands.route(args)
         runtime = get_runtime(context)
@@ -318,7 +348,9 @@ async def handle(
             return segments(commands.HELP_TEXT)
         if action == "status":
             presence = persona_bridge.availability(context, cfg, moment)
-            return segments(commands.status_text(store, cfg, presence, moment))
+            return segments(
+                commands.status_text(store, cfg, presence, moment, bili=runtime.login.status_line())
+            )
         if action == "recent":
             return segments(commands.recent_text(store, moment))
         if action == "slang":
@@ -331,6 +363,10 @@ async def handle(
             return segments(await _meme_command(store, rest, moment.timestamp()))
         if action == "run":
             return segments(await _run_command(context))
+        if action == "login":
+            return segments(await _login_command(context, runtime, rest, event))
+        if action == "logout":
+            return segments(await runtime.login.logout())
         if action == "forget":
             return segments(await commands.forget_term(store, rest))
         return segments(f"未知子命令。\n\n{commands.HELP_TEXT}")

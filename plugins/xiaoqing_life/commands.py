@@ -20,7 +20,9 @@ HELP_TEXT = """🌐 小青的网上生活
 /life memes           梗图列表（梗图收集尚未接入）
 /life run             立刻安排一次上网（跳过概率与间隔）
 /life forget <词>     删除词条
-/life meme on|off <短ID>  开关一张梗图"""
+/life meme on|off <短ID>  开关一张梗图
+/life login           B站扫码登录（二维码只发私聊）；login status / login cancel
+/life logout          删除本地 B站 登录凭证"""
 
 _AVAILABILITY = {"free": "空闲", "busy": "在忙", "asleep": "睡着"}
 _CHOICES      = {
@@ -42,7 +44,9 @@ def _age(now: float, at: float) -> str:
     return f"{int(gap // DAY)} 天前"
 
 
-def status_text(store: LifeStore, cfg: LifeConfig, presence: Presence, moment: datetime) -> str:
+def status_text(
+    store: LifeStore, cfg: LifeConfig, presence: Presence, moment: datetime, *, bili: str = ""
+) -> str:
     state    = store.state
     decision = state.get("last_decision") or {}
     now      = moment.timestamp()
@@ -65,6 +69,8 @@ def status_text(store: LifeStore, cfg: LifeConfig, presence: Presence, moment: d
             f"理由 {decision.get('reason', '')}{outcome}" + (f"（{scores}）" if scores else "")
         )
     lines += _reinforcement_lines(store, now)
+    if bili:
+        lines.append(bili)
     open_threads = sum(1 for t in store.threads if t.get("status") in ("open", "reviewing"))
     lines.append(
         f"经历 {len(store.episodes)} 条，词条 {len(store.terms)} 个，表达 {len(store.expressions)} 条，"
@@ -173,6 +179,10 @@ def route(args: str) -> tuple[str, str]:
         "forget" : "forget",
         "忘记"     : "forget",
         "meme"   : "meme",
+        "login"  : "login",
+        "登录"     : "login",
+        "logout" : "logout",
+        "退出登录"   : "logout",
         "help"   : "help",
         "帮助"     : "help",
     }

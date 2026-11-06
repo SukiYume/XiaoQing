@@ -62,7 +62,7 @@ def patched(monkeypatch: pytest.MonkeyPatch):
     state = {"presence": FREE, "fetch": _fetch()}
     monkeypatch.setattr(life_main.persona_bridge, "availability", lambda *_a: state["presence"])
     monkeypatch.setattr(life_main.persona_bridge, "persona_facts", lambda _c: "你是小青。")
-    monkeypatch.setattr(life_main, "BoundedFetcher", lambda _session: state["fetch"])
+    monkeypatch.setattr(life_main, "BoundedFetcher", lambda _session, *_a, **_k: state["fetch"])
     return state
 
 
@@ -271,7 +271,7 @@ async def test_life_commands(tmp_path: Path, patched) -> None:
     assert "猫猫好可爱" in await _life(context, "recent")
     assert "哈基米" in await _life(context, "slang")
     status = await _life(context, "status")
-    assert "今日上网 1/5 次，模型调用 1/24 次" in status and "刷热榜" in status
+    assert "今日上网 1/5 次，模型调用 1/30 次" in status and "刷热榜" in status
     assert "已删除词条" in await _life(context, "forget 哈基米")
     assert "没有这个词条" in await _life(context, "forget 哈基米")
     assert "用法" in await _life(context, "forget")
