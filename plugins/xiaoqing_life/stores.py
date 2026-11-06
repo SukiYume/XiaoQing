@@ -32,6 +32,7 @@ _COLLECTIONS: dict[str, Callable[[], Any]] = {
     "memes"      : dict,
     "frontier"   : list,
     "learnings"  : list,
+    "methods"    : list,
 }
 
 MAX_TERMS        = 500
@@ -110,6 +111,7 @@ class LifeStore:
         self.memes: dict[str, dict[str, Any]]     = {}
         self.frontier: list[dict[str, Any]]       = []
         self.learnings: list[dict[str, Any]]      = []
+        self.methods: list[dict[str, Any]]        = []
 
     def load(self) -> None:
         """同步读取全部文件；插件初始化时调用一次。"""

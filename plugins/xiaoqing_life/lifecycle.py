@@ -196,8 +196,10 @@ def add_interest_evidence(
     item_id: str,
     delta: float,
     now: float,
+    aspect_like: str    = "",
+    aspect_dislike: str = "",
 ) -> bool:
-    """喜欢 +1、不喜欢 -1；同一 item_id 只计一次。返回是否真的新增了证据。"""
+    """喜欢 +1、不喜欢 -1、又爱又嫌 +0.5（带 aspect）；同一 item_id 只计一次。返回是否真的新增了证据。"""
 
     key = merge_topic(interests, topic)
     if not key or delta == 0:
@@ -207,7 +209,10 @@ def add_interest_evidence(
     )
     if any(e.get("item") == item_id for e in entry["evidence"]):
         return False
-    entry["evidence"].append({"episode": episode_id, "item": item_id, "at": now, "delta": delta})
+    record: dict[str, Any] = {"episode": episode_id, "item": item_id, "at": now, "delta": delta}
+    if aspect_like and aspect_dislike:
+        record.update(mixed=True, aspect_like=aspect_like, aspect_dislike=aspect_dislike)
+    entry["evidence"].append(record)
     del entry["evidence"][:-MAX_EVIDENCE]
     entry["updated_at"] = now
     entry["stage"]      = interest_stage(entry, now)
@@ -255,6 +260,46 @@ def interest_stage(entry: dict[str, Any], now: float) -> str:
     if recent >= 2:
         return "repeated"
     return "tentative" if entry.get("evidence") else "none"
+
+
+def _count(entry: dict[str, Any], start: float, end: float, kind: str) -> int:
+    """时间窗 ``[start, end)`` 内某类证据的不同条目数：pos 正向、neg 负向、mixed 又爱又嫌。"""
+
+    items = set()
+    for e in entry.get("evidence", []):
+        if not start <= float(e.get("at", 0.0)) < end:
+            continue
+        delta = float(e.get("delta", 0))
+        got   = "mixed" if e.get("mixed") else ("pos" if delta > 0 else "neg" if delta < 0 else "")
+        if got == kind:
+            items.add(e.get("item"))
+    return len(items)
+
+
+def interest_tone(entry: dict[str, Any], now: float) -> str:
+    """兴趣走向（确定性）：14 天为一期，``recent = [now−14d, now]``，``before = [now−28d, now−14d)``。
+
+    - mixed：近 21 天 mixed ≥2，或正向 ≥1 且负向 ≥1 且合计 ≥3；
+    - cooling：前一期正向 ≥2、这一期正向 0 且有负向或 mixed；
+    - warming：前一期正向 ≥1、这一期正向 ≥ 前一期 + 2。
+    """
+
+    window = 14 * DAY
+    end    = now + 1
+    wide   = now - 21 * DAY
+    mixed  = _count(entry, wide, end, "mixed")
+    pos    = _count(entry, wide, end, "pos")
+    neg    = _count(entry, wide, end, "neg")
+    if mixed >= 2 or (pos >= 1 and neg >= 1 and pos + neg + mixed >= 3):
+        return "mixed"
+    pos_now    = _count(entry, now - window, end, "pos")
+    pos_before = _count(entry, now - 2 * window, now - window, "pos")
+    if pos_before >= 2 and pos_now == 0:
+        if _count(entry, now - window, end, "neg") or _count(entry, now - window, end, "mixed"):
+            return "cooling"
+    if pos_before >= 1 and pos_now >= pos_before + 2:
+        return "warming"
+    return ""
 
 
 def refresh_interests(interests: dict[str, dict[str, Any]], now: float) -> None:
@@ -321,6 +366,64 @@ def consolidate(
                 "until"         : max(times),
                 "created_at"    : now,
                 "text"          : _snapshot_text(topic, stage, len(evidence), liked),
+            }
+        )
+        made += 1
+    return made + _tone_snapshots(interests, snapshots, now)
+
+
+TONE_COOLDOWN_DAYS = 14
+
+
+def _tone_text(topic: str, tone: str, entry: dict[str, Any]) -> str:
+    if tone == "mixed":
+        aspects = [
+            e for e in entry.get("evidence", []) if e.get("aspect_like") and e.get("aspect_dislike")
+        ]
+        if aspects:
+            last = max(aspects, key=lambda e: float(e.get("at", 0.0)))
+            return (
+                f"对{topic}有点又爱又嫌：{last['aspect_like']}还挺喜欢，"
+                f"{last['aspect_dislike']}有点看不下去"
+            )
+        return f"对{topic}的感觉有点复杂"
+    if tone == "cooling":
+        return f"前阵子挺爱看{topic}的，这两周没那么上头了"
+    return f"{topic}最近越看越上头"
+
+
+def _tone_snapshots(
+    interests: dict[str, dict[str, Any]], snapshots: list[dict[str, Any]], now: float
+) -> int:
+    """兴趣走向快照：同话题同走向 14 天内只一次。"""
+
+    made = 0
+    for topic, entry in interests.items():
+        tone = interest_tone(entry, now)
+        if not tone:
+            continue
+        if any(
+            s.get("topic") == topic
+            and s.get("tone") == tone
+            and now - float(s.get("created_at", 0.0)) < TONE_COOLDOWN_DAYS * DAY
+            for s in snapshots
+        ):
+            continue
+        evidence = entry.get("evidence", [])
+        times    = [float(e.get("at", now)) for e in evidence] or [now]
+        snapshots.append(
+            {
+                "topic"         : topic,
+                "tier"          : 0,
+                "kind"          : "tone",
+                "tone"          : tone,
+                "stage"         : tone,
+                "evidence_count": len(evidence),
+                "liked"         : sum(1 for e in evidence if e.get("delta", 0) > 0),
+                "since"         : min(times),
+                "until"         : max(times),
+                "created_at"    : now,
+                "text"          : _tone_text(topic, tone, entry),
             }
         )
         made += 1

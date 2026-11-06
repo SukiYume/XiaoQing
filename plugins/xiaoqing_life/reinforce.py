@@ -72,12 +72,12 @@ def clamp(value: float, low: float, high: float) -> float:
 
 def session_reward(
     *,
-    liked: int,
-    disliked: int,
-    new_known: int,
-    new_expressions: int,
-    thread_progress: int,
-    memes: int,
+    liked: float,
+    disliked: float,
+    new_known: float,
+    new_expressions: float,
+    thread_progress: float,
+    memes: float,
 ) -> float:
     """一次上网的收获；失败和全是看过的不算（由调用方不调用本函数）。"""
 

@@ -28,7 +28,7 @@
         "life"
       ],
       "help": "小青的网上生活：查看她最近上网的经历、学到的词条和小课题，或立刻安排一次上网。仅 Bot 管理员。",
-      "usage": "/life [status|recent|slang|threads|memes|run|forget|meme|login|logout|help]",
+      "usage": "/life [status|recent|slang|threads|methods|memes|run|forget|meme|login|logout|help]",
       "permission": "bot_admin",
       "contexts": [
         "private",
@@ -101,6 +101,22 @@
           ],
           "invalid_examples": [
             "/life threads extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "methods",
+          "aliases": [
+            "方法"
+          ],
+          "help": "她自己摸索出的查法（状态、用过几次、帮上几次）",
+          "usage": "/life methods",
+          "examples": [
+            "/life methods"
+          ],
+          "invalid_examples": [
+            "/life methods extra"
           ],
           "match": "exact",
           "permission": "bot_admin"

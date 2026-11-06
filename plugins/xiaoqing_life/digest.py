@@ -20,7 +20,7 @@ MAX_TERMS       = 5
 MAX_EXPRESSIONS = 3
 MAX_TERM_CHARS  = 10
 MAX_KNOWN_TERMS = 60
-FEELINGS        = frozenset({"like", "meh", "dislike"})
+FEELINGS        = frozenset({"like", "meh", "dislike", "mixed"})
 TONES           = frozenset({"玩笑", "夸", "损", "自嘲", "中性"})
 THREAD_ACTIONS  = frozenset({"none", "open", "progress", "answered"})
 
@@ -32,15 +32,16 @@ _SYSTEM = """{persona}
 
 请用第一人称整理这次上网，只输出一个 JSON 对象，结构如下：
 {{
-  "looked_at": [{{"item": "i2", "reaction": "感想，40字内", "feeling": "like|meh|dislike", "share": false, "topics": ["最多3个短话题"]}}],
+  "looked_at": [{{"item": "i2", "reaction": "感想，40字内", "feeling": "like|meh|dislike|mixed", "liked_part": "mixed 时喜欢的地方，12字内", "disliked_part": "mixed 时不喜欢的地方，12字内", "share": false, "topics": ["最多3个短话题"]}}],
   "terms": [{{"term": "说法", "meaning": "一句话含义", "usage": "什么场合、表达什么", "tone": "玩笑|夸|损|自嘲|中性", "quote": "原文逐字片段，必须包含该说法", "refs": ["c2.3"]}}],
   "expressions": [{{"situation": "当……时", "pattern": "抽象句式或接法，用自己的话概括", "kind": "phrase|move", "quote": "原文逐字片段", "refs": ["c1.2", "c1.2.r1"]}}],
   "meme_pictures": [{{"ref": "c1.2#0", "why": "为什么像反应梗图"}}],
-  "thread": {{"action": "none|open|progress|answered", "title": "小课题，20字内", "why": "为什么想查", "next_query": "下次搜什么", "note": "这次看到的一句要点", "refs": ["i1"]}}
+  "thread": {{"action": "none|open|progress|answered", "title": "小课题，20字内", "topic": "它属于的领域，12字内", "why": "为什么想查", "next_query": "下次搜什么", "note": "这次看到的一句要点", "refs": ["i1"]}}
 }}
 
 怎么整理：
 - 你只点开自己真会点开的 1 到 3 条，看兴趣和心情选；感想像随手发给朋友的一句话。topics 写这条内容属于哪个领域或对象（短而具体，如“骑行”“独立游戏”“猎户座”），不写情绪词和泛泛的词。沉重的社会新闻和灾难可以不点开，点开了也自然地认真对待。
+- 对同一条内容既有喜欢的地方又有看不下去的地方时，feeling 写 mixed，并用 liked_part 和 disliked_part 各写一个短词；只有一面就不要写 mixed。thread 的 topic 写小课题属于的领域。
 - 词条只收网络流行语、梗、圈内说法和流行句式，写成大家实际在说的那个短说法（通常不超过 8 个字）；只出现一次的玩笑、整句感想、普通词、人名、作品名、品牌名都不算。含义要写你从原文里读出来的意思。
 - 表达方式写成可以迁移的说法，例如“当想吐槽某事离谱时：用‘X基础，Y不基础’的反差句式”。move 指楼中楼里接梗、抬杠、顺着句式换一个词往前推这类对话方式。
 - 评论里带图的会在 pictures 里列出图片编号（如 c1.2#0）；图你看不到，只能凭评论文字判断哪张像是当反应表情发的，挑 0 到 2 张写进 meme_pictures，拿不准就不挑。
@@ -56,6 +57,9 @@ class LookedAt:
     feeling : str
     share   : bool
     topics  : tuple[str, ...]
+    # feeling 为 mixed（又爱又嫌）时的两个侧面；缺一个就降为 meh，不会走到这里。
+    liked_part   : str = ""
+    disliked_part: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +87,7 @@ class DigestThread:
     next_query: str
     note      : str
     item_id   : str
+    topic     : str = ""
 
 
 @dataclass(slots=True)
@@ -262,15 +267,25 @@ def _validate_looked(
             if isinstance(row.get("topics"), list)
             else ()
         )
+        liked_part = disliked_part = ""
+        if feeling == "mixed":
+            liked_part    = clean_text(row.get("liked_part"), 12)
+            disliked_part = clean_text(row.get("disliked_part"), 12)
+            if not (liked_part and disliked_part) or is_blocked(
+                f"{liked_part} {disliked_part}", blocked
+            ):
+                feeling, liked_part, disliked_part = "meh", "", ""
         seen.add(ref)
         result.append(
             LookedAt(
-                item_id  = items[int(ref[1:]) - 1].item_id,
-                ref      = ref,
-                reaction = reaction,
-                feeling  = str(feeling),
-                share    = row.get("share") is True,
-                topics   = topics,
+                item_id       = items[int(ref[1:]) - 1].item_id,
+                ref           = ref,
+                reaction      = reaction,
+                feeling       = str(feeling),
+                share         = row.get("share") is True,
+                topics        = topics,
+                liked_part    = liked_part,
+                disliked_part = disliked_part,
             )
         )
         if len(result) >= MAX_LOOKED_AT:
@@ -374,6 +389,7 @@ def _validate_thread(
         next_query = clean_text(raw.get("next_query"), 30),
         note       = note,
         item_id    = item_id,
+        topic      = clean_text(raw.get("topic"), 12),
     )
 
 

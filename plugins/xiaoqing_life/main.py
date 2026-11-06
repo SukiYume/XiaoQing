@@ -357,6 +357,8 @@ async def handle(
             return segments(commands.slang_text(store, moment))
         if action == "threads":
             return segments(commands.threads_text(store))
+        if action == "methods":
+            return segments(commands.methods_text(store))
         if action == "memes":
             return segments(memes_mod.list_text(store))
         if action == "meme":

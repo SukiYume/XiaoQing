@@ -185,6 +185,7 @@ ANIME_TOPIC_SHARE         = 0.7
 MEAL_HOT_BONUS            = 10.0
 MORNING_WINDOW_MIN        = 120
 MORNING_THREAD_BONUS      = 6.0
+PARKED_RESUME_PENALTY     = 8.0
 
 
 def _anime_topic(rng: random.Random) -> str:
@@ -261,11 +262,18 @@ def _best_thread(
 ) -> tuple[dict[str, Any], float] | None:
     best: tuple[dict[str, Any], float] | None = None
     for thread in threads:
-        if thread.get("status") != "open" or int(thread.get("steps", 0)) >= cfg.thread_max_steps:
+        status = thread.get("status")
+        if status == "parked":
+            # 搁置的小课题过了 ``parked_until`` 才作为续做候选，分数 −8。
+            if float(thread.get("parked_until", 0.0)) > now:
+                continue
+        elif status != "open" or int(thread.get("steps", 0)) >= cfg.thread_max_steps:
             continue
         if float(thread.get("cooldown_until", 0.0)) > now:
             continue
-        score = _thread_score(thread, state, now)
+        score = _thread_score(thread, state, now) - (
+            PARKED_RESUME_PENALTY if status == "parked" else 0.0
+        )
         if best is None or score > best[1]:
             best = (thread, score)
     return best
@@ -346,9 +354,9 @@ def _apply_reinforcement(
     if pref:
         factors["pref"] = pref
     if reinforce.health_factor(state, "bili_search", now) < 1.0:
-        for name in (THREAD, INTEREST):
-            if name in scores:
-                scores[name] -= UNRELIABLE_SEARCH_PENALTY
+        # 研究可以改用百科 / 维基，所以搜索不稳只给按兴趣搜扣分。
+        if INTEREST in scores:
+            scores[INTEREST] -= UNRELIABLE_SEARCH_PENALTY
         factors["unreliable"] = ["bili_search"]
     hot_down = [k for k in HOT_SOURCE_WEIGHTS if reinforce.health_factor(state, k, now) < 1.0]
     if hot_down:
@@ -373,7 +381,10 @@ def choose(
     build  : dict[str, Callable[[], dict[str, Any]]] = {}
     factors: dict[str, Any]                          = {}
 
-    if (found := _best_thread(cfg, state, threads, now)) and cfg.source_on("bili_search"):
+    research_ok = (
+        cfg.source_on("bili_search") or cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
+    )
+    if research_ok and (found := _best_thread(cfg, state, threads, now)):
         thread, score = found
         since_wake     = presence.minutes_since_wake if presence is not None else None
         morning        = since_wake is not None and since_wake <= MORNING_WINDOW_MIN

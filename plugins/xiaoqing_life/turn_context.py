@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import methods as methods_mod
 from . import reinforce
 from .config import LifeConfig
 from .lifecycle import DAY, expression_status, term_key
@@ -52,9 +53,10 @@ _FOLLOW_RE = re.compile(
     r"(?:那个|这个|那条|这条|刚才|刚说|刚刚|你说的).{0,8}(?:视频|帖子|内容|东西|讲啥|讲什么|是啥|咋回事|怎么回事)"
     r"|讲啥的|讲什么的|说的啥|咋回事"
 )
-_LEARN_RE = re.compile(r"学到(?:了)?(?:啥|什么)|有什么收获|有啥收获|收获|有啥变化|有什么变化")
-_WEEK_RE  = re.compile(r"这周|本周|这一周|最近过得|这几天过得")
-_LIKE_RE  = re.compile(r"喜欢什么|喜欢看什么|迷上|最近.{0,3}迷|爱看什么|什么兴趣")
+_LEARN_RE  = re.compile(r"学到(?:了)?(?:啥|什么)|有什么收获|有啥收获|收获|有啥变化|有什么变化")
+_WEEK_RE   = re.compile(r"这周|本周|这一周|最近过得|这几天过得")
+_LIKE_RE   = re.compile(r"喜欢什么|喜欢看什么|迷上|最近.{0,3}迷|爱看什么|什么兴趣")
+_METHOD_RE = re.compile(r"怎么查的|你怎么知道|怎么知道的|怎么查到|最近学到(?:了)?(?:啥|什么)")
 
 _VERBS = {
     "bili_popular": "刷B站热门，点开了",
@@ -254,8 +256,19 @@ def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: floa
         return ""
     thread = best[1]
     title  = thread.get("title", "")
+    if thread.get("status") == "parked":
+        hint = f"（下次想从{thread['resume_hint']}接着看）" if thread.get("resume_hint") else ""
+        return f"你查过一阵：{title}，查到一半{thread.get('park_reason') or '资料不太够'}，先放着了{hint}"
     if thread.get("status") == "open":
-        return f"你在查的小事：{title}（还没查完，可以说在研究）"
+        notes = [n for n in thread.get("notes", []) if n.get("note") and not n.get("superseded_by")]
+        parts = []
+        if notes:
+            parts.append(f"上次查到：{notes[-1]['note']}")
+        if thread.get("open_question"):
+            parts.append(f"还没弄懂：{thread['open_question']}")
+        if not parts:
+            return f"你在查的小事：{title}（还没查完，可以说在研究）"
+        return f"你在查的小事：{title}（还没查完；{'；'.join(parts)}）"
     if thread.get("status") == "reviewing":
         return f"你在查的小事：{title}（查得差不多了，还没想好怎么总结）"
     takeaway = str(thread.get("takeaway") or "")
@@ -319,6 +332,29 @@ def recap_lines(store: LifeStore, req: dict[str, Any], moment: datetime) -> list
     return lines
 
 
+def tone_line(store: LifeStore, req: dict[str, Any], now: float) -> str:
+    """话题对上且 14 天内有兴趣走向快照：给 1 行。"""
+
+    context = " ".join([req["text"], *req["recent"][-2:]])
+    folded  = normalize_for_match(context)
+    found   = [
+        s
+        for s in store.snapshots
+        if s.get("kind") == "tone"
+        and now - float(s.get("created_at", 0.0)) <= 14 * DAY
+        and (
+            overlap(context, str(s.get("topic", ""))) >= _MIN_OVERLAP
+            or (
+                len(normalize_for_match(str(s.get("topic", "")))) >= 2
+                and normalize_for_match(str(s["topic"])) in folded
+            )
+        )
+    ]
+    if not found:
+        return ""
+    return f"- 最近的你：{max(found, key=lambda s: float(s['created_at']))['text']}"
+
+
 def wants_plans(text: str) -> bool:
     return bool(_PLAN_RE.search(text))
 
@@ -327,22 +363,27 @@ def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[l
     """自己查明白的事：话题对上给 1 条；问“最近学到啥 / 有什么收获”给 ≤2 条加一句确定性的成长概括。"""
 
     rows = sorted(store.learnings, key=lambda r: float(r.get("created_at", 0.0)), reverse=True)
+    method = methods_mod.chat_line(store.methods) if _METHOD_RE.search(req["text"]) else ""
     if not rows:
-        return [], False
+        return ([f"- {method}"] if method else []), False
     text = req["text"]
     if _LEARN_RE.search(text):
         picked = rows[:MAX_ASKED_LEARNINGS]
         lines  = [f"- {r['text']}" for r in picked]
         if growth := growth_line(rows, now):
             lines.append(f"- {growth}")
+        if method:
+            lines.append(f"- {method}")
     else:
         context = " ".join([text, *req["recent"][-2:]])
         scored  = [(overlap(context, f"{r.get('topic', '')} {r['text']}"), r) for r in rows]
         scored  = [pair for pair in scored if pair[0] >= _MIN_OVERLAP]
         if not scored:
-            return [], False
+            return ([f"- {method}"] if method else []), False
         picked = [max(scored, key=lambda pair: pair[0])[1]]
         lines = [f"- {picked[0]['text']}"]
+        if method:
+            lines.append(f"- {method}")
     for row in picked:
         row["last_used"] = now
     return lines, True
@@ -392,6 +433,8 @@ def build_life_lines(
     if asking and diary.get("day") == moment.strftime("%Y-%m-%d") and diary.get("text"):
         lines.append(f"- 今天大概：{diary['text']}")
     lines += recap_lines(store, req, moment)
+    if (tone := tone_line(store, req, moment.timestamp())) and tone not in lines:
+        lines.append(tone)
     thread_line = select_thread(store, req, asking, moment.timestamp())
     doing       = current_line(store, moment.timestamp())
     if not (lines or thread_line or doing or plan):
