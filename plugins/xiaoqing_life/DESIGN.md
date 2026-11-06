@@ -14,7 +14,7 @@
 6. **兴趣会长**（学 dafeiyu 的兴趣证据）：喜欢的东西越刷越多，兴趣随时间衰减，偶尔探索新方向。
 7. **作息与收尾**（学 dafeiyu 的生活节律）：睡觉、上课不上网；睡前整理一下今天看到的，写两三句日记、回看小课题。
 
-**非目标**：不登录任何账号、不发评论/点赞/私信；不执行网页里的任何指令；不把群聊内容上传到外网；不新增第三方依赖；不改 xiaoqing_agent。
+**非目标**：除管理员扫码授权的 B站 只读登录外不登录任何账号（第五轮起，见 10.11）、不发评论/点赞/私信；不执行网页里的任何指令；不把群聊内容上传到外网；不新增第三方依赖；不改 xiaoqing_agent。
 
 **设计原则**（多数来自 dafeiyu 的实践）：
 
@@ -590,3 +590,260 @@ xiaoqing_life 不存在或关闭时，xiaoqing_chat 行为与改动前完全一�
 - 单元测试覆盖每条规则。
 - 一个可控时钟的 14 天模拟：假来源让话题 A 总是被喜欢、B 总是被讨厌、某来源总失败、某个时段收获高。断言偏好倒向 A 和高收获活动、失败来源降权后恢复、高收获时段形成习惯、frontier 从标签长出并被试过、小课题收获变成 learnings 且后续问题加深、社交反馈把一个词变成 habit 而把另一个压下去。
 - 改了注入文字后重跑 `online_life` 私聊剧本（真实模型），确认不过度声明、不编造、不报清单，审查拒绝不增加。
+
+---
+
+## 10. 第五轮：自己的小作品、有限步骤的自主研究、主题档案、成长的层次与 B站 登录
+
+对照 dafeiyu 的作品（LIFE_V03）、生活决策（LIFE_DECISION_V01）、方法复用（LIFE_V04）、自我表达（SELF_EXPRESSION_V01）、经历记忆（MEMORY_POLICY_V01）与登录实现（`deploy/bili_activity/login.py`、`bili_api.py`）重新评估后，修正第四轮之前的三个判断：“作品”不应只是一句收获；“研究方法复用”轻量化后对聊天角色有价值；“不登录任何账号”改为**只登录管理员扫码授权的 B站 账号，并且只读**（10.11）。
+
+本轮的目标是让她**有一件持续在做的事，并且逐渐形成自己的理解与做事方法**：隔几天问她，能拿出上次那件事的新进展；被追问上个月那件事，能接上；她的查法会随经历变好；看视频能读到字幕，讲得出具体内容。
+
+原则不变，并补四条：
+
+- 她写的东西（作品条目、研究要点、方法、更正）都是模型写的文字，**永远不是词条、表达、兴趣的来源**；它们只引用经历 ID、外部原文摘录或她自己的行动记录。
+- 研究要点（finding）和词条一样，必须附外部材料的逐字摘录并经本地核对；对不上就丢弃。
+- 读到多少说多少：经历记 `depth`——`skim`（扫了简介、弹幕和评论区）、`read`（认真读了简介全文、UP 主置顶 / 回复、百科或维基段落）、`watched`（跟着字幕看了，字幕是节选时就是“看了个大概”）。聊天侧照这个说。
+- 登录凭证只用于 `api.bilibili.com` 的只读 GET；凭证值不进日志、状态、提示词、命令输出，也不发往任何其他域名。
+
+### 10.1 评估结论与取舍（2026-11-05 实测）
+
+| 建议 | 结论 |
+|---|---|
+| 轻量作品 / 持续笔记 | 采用，10.4 |
+| 有完成条件的目标 + 有限步骤自主研究 | 采用：小课题续查改为 ≤3 轮的只读研究循环，10.3 |
+| 正文 / 字幕深读 | 采用。实测不登录时 B站 `x/player/v2` 返回 `need_login_subtitle: true`、字幕列表为空，所以加 B站 扫码登录（10.11）后用 WBI 签名的 `x/player/wbi/v2` 读字幕；没登录或登录失效时退回简介全文、UP 主置顶与回复、百度百科摘要、中文维基介绍段。知乎回答接口实测 403 要求登录（40362 / 40353），dafeiyu 也没有知乎登录，知乎的 v4 接口还要额外签名，本轮不做。抽帧、音轨需要下载视频和听写，不做 |
+| 方法复用 | 采用轻量版：方法来自她自己的研究行动记录，复用结果计数，10.6 |
+| 矛盾 / 修正 / 搁置 | 采用，10.7 |
+| 主题档案、旧事召回、更正旧认识 | 采用，10.5 |
+| 手机控制 | 不采用 |
+
+### 10.2 深读（sources/deep.py、sources/subtitle.py、sources/wiki.py、baike.read）
+
+新增统一结构：
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourcePassage:
+    ref : str   # p<条目序号>.<序号>，消化 / 研究提示里的编号
+    kind: str   # desc / pinned / up_reply / subtitle / baike / wiki
+    text: str   # 清洗后 ≤200 字
+    at  : str = ""   # 字幕段的起始时间 "3:20"，其余为空
+```
+
+`SourceItem` 加 `passages: tuple[SourcePassage, ...] = ()`。`digest.material` 每个条目多一个 `passages: [{id, kind, at, text}]`，`ref_texts` 收录 `p` 编号，`_item_of` 认 `p` 前缀；`quote` 可以引用 `p` 编号。
+
+- **B站深读**（`deep.deep_read(fetch, item, index, blocked, *, subtitles: bool)`）：
+  - 简介全文：复用 `watch` 已取到的 `view` 响应（`watch` 把原始 `desc` 留给深读，不要先截断再切），清洗前按换行和句号切段，再逐段清洗，合计 ≤800 字、≤4 段 `desc`。
+  - 热评请求 `ps=20`：`data.top_replies[]` 或 `data.top.upper`（UP 主置顶，≤300 字，切成 ≤2 段）为 `pinned`；楼中楼里 `member.mid == data.upper.mid` 的回复为 `up_reply`（≤3 条）。结构缺失就少一块，不报错。
+  - 字幕（只在已登录且凭证有效时，见 10.11）：`subtitle.read(fetch, bvid, cid, blocked)`。WBI 签名请求 `https://api.bilibili.com/x/player/wbi/v2?bvid=&cid=`；`data.subtitle.subtitles[]` 里优先 `lan` 以 `zh` 或 `ai-zh` 开头的轨道；`subtitle_url` 没有协议时补 `https:`，`http:` 改成 `https:`，主机必须是 `hdslb.com` 或其子域，否则跳过；**取字幕文件时不带 Cookie**；JSON `body[]` 的 `{from, to, content}`，正文 ≤2 MB。逐行清洗、去屏蔽词后：总长 ≤1200 字就全部给出；否则在全片均匀取 6 个起点，每个起点向后收集连续行到 ≤200 字，成为 6 段 `subtitle`（带 `at`）。有字幕段的经历 `depth = watched`，并记 `subtitle_partial`（是否节选）。
+  - WBI：`x/web-interface/nav` 的 `data.wbi_img.img_url / sub_url` 取文件名拼成 64 字符，按 dafeiyu `MIXIN` 表重排取前 32 位为 mixin key，缓存 1 小时；参数值去掉 `!'()*`，加 `wts`，按键排序 urlencode（空格为 `%20`）后拼 key 求 md5 得 `w_rid`。只用于字幕这一个接口，不给其他接口加签名，不做任何绕风控的处理。
+  - 除字幕的 `nav`（每小时至多一次）、`player/wbi/v2` 和字幕文件外不新增请求（`view` 与热评本来就会取）。
+- **哪些条目深读**：浏览型上网（hot_scroll / interest_dive）里预打分最高、且命中兴趣（`prescore` 的兴趣命中 ≥1）的那 1 条，受 `max_deep_reads_per_session`（默认 1）限制；研究循环里由 `deep_read` 行动指定。
+- **百科阅读**（`baike.read(fetch, term, blocked) -> SourceItem | None`）：同一个卡片接口，`bk_length=600`，不要求流行语标记；`title/desc` 作标题与简介，`abstract` 切成 ≤3 段 `baike`；`item_id = "baike_read:<归一化标题>"`，`source = "baike_read"`。原 `baike.lookup` 不变。开关沿用 `baike_lookup`。
+- **维基阅读**（`wiki.read(fetch, query, blocked) -> list[SourceItem]`）：`https://zh.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=<q>&gsrlimit=3&prop=extracts&explaintext=1&exintro=1&exlimit=3&format=json`；按标题与查询的字符二元组重合排序，取 ≤2 个非空页面；介绍段 ≤600 字切成 ≤3 段 `wiki`；`item_id = "wiki_read:<pageid>"`。`ALLOWED_HOSTS` 加 `zh.wikipedia.org`。User-Agent 用通用名字 `XiaoQingLife/0.5 (personal chat bot)`（不写任何邮箱）。新来源开关 `wiki_read`（默认开；网络不可达按来源失败处理，走来源可靠性降权）。屏蔽词照常过标题和正文。提示里说明“维基原文可能是繁体，摘录照抄原字”。
+- 消化提示补一句：`passages` 是你认真读了的部分（简介全文、UP 主置顶 / 回复、字幕节选、百科、维基）；有字幕的视频你是跟着字幕看的（没看画面），其余条目你只扫了一眼。
+
+### 10.3 有限步骤的自主研究（research.py，取代 thread_continue 的单轮消化）
+
+`thread_continue` 被选中后进入研究循环，最多 `research_max_rounds`（默认 3）轮，每轮 = 执行一个只读行动 → 1 次 reasoning（调用前占预算）→ 本地核对 → **立即提交这一轮**（取消时已完成的轮次保留）。
+
+**行动**（全部只读，参数都经清洗和长度限制）：
+
+| 行动 | 参数 | 做什么 |
+|---|---|---|
+| `search` | 搜索词 ≤30 字 | B站搜索 → 过滤已看过 → 点开（预选 1 条深读 + 热评），同浏览 |
+| `deep_read` | 本轮材料里的条目编号（如 `i2`，必须是 B站条目） | 对那一条做深读（10.2，登录时含字幕），作为下一轮的材料 |
+| `lookup` | 概念 ≤12 字 | `baike.read` +（开着时）`wiki.read`，合计 ≤3 个条目 |
+| `stop` | — | 结束 |
+
+第一轮的行动：小课题上次留下的 `next_action`（仍合法时）；否则按研究行动偏好（`state.preferences.research_action` 的 EMA）在可用的 `search` / `lookup` 里取较高者，平手取 `search`；`bili_search` 关闭或近期不稳时用 `lookup`（参数 = 小课题 `topic`，没有就取标题前 12 字）。
+
+**研究提示**（system = 人物事实 + 此刻 + 任务说明；user = JSON）：
+
+```json
+{"question": {"title": "星空照片为什么拖线", "why": "…", "open_question": "上次没弄懂的"},
+ "own_notes": [{"id": "n1", "note": "曝光太久星星会动", "superseded": false}],
+ "methods": ["上次查梗出处发现转载常省略背景，这次先找较早的原始出处"],
+ "round": 2, "rounds_left": 1,
+ "untrusted_material": {"items": [...同 digest，含 passages...]}}
+```
+
+只输出一个 JSON 对象：
+
+```json
+{"looked_at": [同 digest，feeling 可为 mixed，见 10.7],
+ "terms": [同 digest], "expressions": [同 digest],
+ "findings": [{"text": "自己的话，≤60字", "quote": "原文逐字", "refs": ["p1.2"], "revises": "n1 或空"}],
+ "open_question": "还没弄懂的地方，≤30字，可空",
+ "status": "progress|answered|stuck|none",
+ "stuck_reason": "≤30字，stuck 时写",
+ "next": {"action": "search|deep_read|lookup|stop", "arg": "…"}}
+```
+
+任务说明要点（描述，不列禁词）：她在弄明白一个自己好奇的问题；先看笔记里已经知道什么、还差什么；要点用自己的话写，但每条要点都要附材料原文；发现之前的笔记理解错了，用 `revises` 指出改的是哪条；两种说法对不上时可以写进 `open_question`，下一步去对照；资料明显不够、再查也没用时 `stuck`；`methods` 是她以前摸索出的查法，适用就照着做。
+
+**本地核对**：`findings` ≤3，`refs` 必须是本轮材料编号，`quote` 必须出现在所引原文里（同词条的 `quote_in_source`），`text` 清洗 ≤60 字且不命中屏蔽词；`revises` 必须是该小课题现有、未被取代的笔记 ID，否则当作普通要点；`next.action` 不在表里视为 `stop`，`deep_read` 的参数必须是本轮 B站条目编号，`search` / `lookup` 参数清洗后非空；`looked_at` / `terms` / `expressions` 用 digest 的同一套校验。
+
+**提交**（每轮）：
+
+- `looked_at` → 经历（`activity = thread_continue`，`thread_id`，`depth`）；要点所引条目若不在 `looked_at` 里，自动补一条经历（`feeling = meh`、`reaction = ""`、`auto = true`，不产生兴趣证据）。
+- 每条要点 → 小课题笔记 `{id: "n<k>", episode_id, note, quote(≤60), at, kind: "finding"}`（笔记 ID 在小课题内递增；旧笔记缺 ID 时按顺序补）。有效 `revises` → 旧笔记标 `superseded_by`，并记一条更正 `{id, before, after, episode_id, at}` 到小课题 `corrections`（≤4）和主题档案（10.5）。
+- `open_question` 写到小课题；`next` 合法且不是 `stop` 时写成 `next_action`（`search` 同时更新 `next_query`）。
+- 状态：`answered` → `mark_answered`（进 reviewing），循环结束；`stuck` → 搁置（10.7），循环结束；`progress` 且有 ≥1 条有效要点 → `record_step(new_content=True)`；否则记空步。
+- 行动记录 `actions[{round, action, arg, useful, at}]`（≤12，`useful` = 这一轮有 ≥1 条有效要点），研究行动偏好按 `useful` 更新（有要点 1、没有 0、取材失败 −0.5）。
+
+**循环结束条件**：`answered` / `stuck` / `next = stop` / 轮数用完 / 预算用完 / 下一行动取不到材料（第一轮取不到按现有失败路径处理，之后的轮次只是提前结束）。名义浏览时段（`session_minutes.thread_continue` 改为 20–40 分钟）按轮数均分，每轮的经历时间撒在自己那一段里。研究循环里不收梗图。
+
+**收获**：一次研究的 `thread_progress` = 有效要点数（≤2）+ 答出 1，进现有 `session_reward`。
+
+**规划**：`thread_continue` 候选不再要求 `bili_search` 开着（`baike_lookup` 或 `wiki_read` 开着也行）；`bili_search` 不稳时只给 `interest_dive` 扣分。
+
+### 10.4 自己的小作品（works.py）
+
+一件“作品”是她围绕一个兴趣慢慢整理的小东西：片单 / 清单 / 收藏（`list`）、小笔记（`notes`）、观后感（`review`）。同时进行的作品 ≤ `max_active_works`（默认 1，0 关闭整个功能）。
+
+```text
+works.json: [{id, title(≤20), form, topic(≤12), why(≤60), intro(≤80), status: drafting|done|shelved,
+              entries: [{id, kind: item|point|thought|todo, text(≤80), episode_ids[], check(todo 时 ≤12),
+                         added_at, revised_at}] ≤12,
+              revisions, created_at, updated_at, done_at, last_op_at, last_ops: [文本, ≤3]}]
+```
+
+**开始**（睡前整理里，至多一个）：输出加 `"work": {"action": "start", "title", "form", "topic", "why", "episode_ids"}`。核对：没超过同时进行上限；距上一次开作品 ≥ `work_start_gap_days`（默认 7）；有依据——`topic` 并入的兴趣是 `repeated` / `consistent`，或和 30 天内 done 的小课题话题相近，或引用 ≥2 条喜欢（或 mixed）的、话题相近的经历；标题、话题不命中屏蔽词。睡前整理的输入里给出可开作品的候选话题（满足上面条件的，≤3 个）和她已有的作品，没有候选时不给这一项。
+
+**整理**（新活动 `work_on`，规划器候选，见下）：
+
+1. 有 `todo` 条目带 `check` 词且百科 / 维基开着：先查最早的那个（`baike.read` + `wiki.read`，≤2 个条目），作为本次的外部材料。
+2. 1 次 reasoning。user JSON：`work`（标题、形式、开头、条目带 ID）、`untrusted_record`（她自己的记录：上次整理以来与话题相关、喜欢或 mixed 的经历 ≤8 条 `{id, day, title, gist, reaction, tags, depth}`，同话题小课题的要点与收获 ≤4 条）、`untrusted_material`（第 1 步的读物，没有就省略）。
+3. 输出：`{"ops": [{"op": "add|revise|remove|verify", "entry": "条目ID（revise/remove/verify）", "kind", "text", "episode_ids": [], "check": "todo 时要查的词"}], "intro": "开头一句或 null", "status": "drafting|done", "looked_at": [只针对读物]}`。
+4. 核对：ops ≤3；`add` / `revise` 必须引用本次给出的经历 ID 或本次读物产生的经历；`item` 条目写成“名字：一句话”，名字（≥2 字）归一化后要出现在所引经历的标题、简介或标签里（片单里只能放她真看到过的东西）；`todo` 必须有 `check`；`verify` 只能作用于 `todo`，必须引用本次读物的经历，执行后变成 `point`；`remove` 的目标要存在；条目总数 ≤12；`done` 需要 ≥4 条非 `todo` 条目；文字过屏蔽词与脏话判断。不通过的 op 丢弃，其余照做。
+5. 提交：有 op 生效时 `revisions += 1`、`updated_at`、`last_op_at`、`last_ops`（新加 / 改写的条目文字，给分享用）；读物的 `looked_at` 照常成为经历（`activity = work_on`）；主题档案记一笔。收获 = 0.5 × 生效 op 数（≤1.5），进活动偏好 `work_on`。
+6. 21 天没动过的 drafting 作品自动 `shelved`；done / shelved 保留 180 天，主题档案留标题。
+
+**规划器候选 `work_on`**：有 drafting 作品，且（上次整理后有 ≥1 条相关的新经历 / 要点，或有带 `check` 的 `todo`）时才有。分数 `32 + 6×min(新材料, 2) + (todo 6) − (最近 3 次里已有 2 次 work_on 15) − (12 小时内整理过 20)`，再加活动偏好。名义时长 `session_minutes.work_on = (15, 30)`，计入次数和滚动时长。
+
+**聊天侧**：
+
+- 问近况、或话题和作品对上：一行“你在慢慢整理的：《片单名》（片单，刚开了个头 / 攒了一些 / 快弄完了）；最近加了：……”。done 的写“你之前整理完的：《…》”。不报条数。
+- 想看她的东西（`_SHOW_RE`：发我看看、给我看看、让我看看、发来看看、你写的、你整理的、片单 / 清单 / 笔记发我……）且有作品（进行中或 30 天内 done）：给作品摘录块“你自己整理的《…》（你写的东西，可以照着发，也可以挑几条说）：”+ 开头 + ≤6 条（合计 ≤360 字，`todo` 显示为“（待核实）…”）。
+- 主动分享候选：作品 24 小时内有 `add` / `verify` 生效时，加一条 `{"episode_id": "work:<id>:<YYYY-MM-DD>", "line": "你在整理的《…》刚更新了：<新条目>", "topics": [topic]}`，排在经历候选之后，总数仍 ≤3。ID 含日期，聊天侧现有去重保证一天至多分享一次。xiaoqing_chat 不用改。
+
+### 10.5 主题档案（dossier.py，确定性，不调模型）
+
+```text
+dossiers.json: topic → {topic, started_at, origin(≤60：第一次的 why，或第一条喜欢的经历标题),
+  questions: [{thread_id, title, status: open|reviewing|done|parked|dropped, takeaway, reason, at}] ≤12,
+  corrections: [{before, after, at, last_suggested}] ≤6,
+  works: [{work_id, title, form, status}] ≤4,
+  highlights: [{episode_id, title, reaction, at}] ≤6（最早 2 条 + 最近 4 条，喜欢或 mixed 的）,
+  last_active}
+```
+
+- 小课题加 `topic`（≤12）：digest 的 `thread.open` 输出加 `topic`；缺失时用 `merge_topic` 把搜索词 / 标题并到已有兴趣，再不行取标题前 8 字。
+- 钩子：小课题开 / 状态变化（含收获、搁置原因、放弃原因）、研究更正、作品开始 / 完成 / 搁置、话题并入已有档案的喜欢或 mixed 经历 → 更新对应档案和 `last_active`。档案在第一次有小课题或作品时建立。
+- `last_active` 超过 `dossier_keep_days`（默认 365）删除；总数 ≤60（先丢最久不活跃的）。档案里的标题和感想是快照，经历被清理后仍在。
+- 档案只是“她自己这件事的来龙去脉”的依据，不是任何学习的来源。
+
+**召回**（`turn_context`）：
+
+- `_RECALL_RE`（后来怎么样、后来呢、后来查、那个问题、上个月、之前研究、你查的那个、还在弄、还在查、弄得怎么样、进展……）：在当前消息 + 最近 2 条 + 她最近的回复里找重合最高的档案；没有重合但明显是在追问时取最近活跃的档案。给 ≤5 行：
+  - “关于{topic}（{M}月{D}日开始留意的，起因：{origin}）：”
+  - “- 查过：{title}（查明白了：{takeaway} / 查到一半{reason}，先放着了 / 不查了：{reason} / 还在查）”≤3 条，最近的在前
+  - “- 后来改过想法：之前以为{before}，后来发现{after}”≤1
+  - “- 整理的东西：《{title}》（{状态}）”≤1
+  - “- 印象深的：「{title}」，当时觉得{reaction}”≤1（取超过细节期的）
+- 档案块出现时不再单独给同一话题的小课题行。
+- 没有召回词、但话题和某个档案的更正对上：给一行“你在{topic}上改过一个想法：之前以为…，后来发现…”，同一条更正 6 小时内只给一次（`last_suggested`）。
+
+### 10.6 方法复用（methods.py）
+
+```text
+methods.json: [{id, text(≤40), applies_to(≤20), from_thread, created_at, uses, wins, last_used,
+                status: active|retired}] ≤30
+```
+
+- **提炼**：睡前整理里，当天 done 的小课题可以写一条查法：输出加 `"methods": [{"thread_id", "text", "applies_to", "actions": [行动记录下标]}]`（全天 ≤1 条）。输入里 done / reviewing 的小课题带上 `actions`（下标、行动、参数、是否有用）。核对：小课题这次确实 done；下标都存在且至少一个 `useful`；文字不命中屏蔽词；和已有 active 方法 `similar` 时不新建，只给那条 `wins += 1`。
+- **复用**：研究提示的 `methods` 给 ≤2 条 active 方法：按（小课题标题 + 话题）与（`applies_to` + `text`）的重合排序，重合 ≥1 或 `wins ≥ 1` 才给。第一次给某个小课题用时记进小课题 `methods_used`，方法 `uses += 1`、`last_used`。
+- **结果**：用过方法的小课题 done → 每条 `wins += 1`；`uses ≥ 3` 且 `wins / uses < 1/3` → `retired`。
+- **聊天侧**：问“怎么查的 / 你怎么知道 / 最近学到啥”时给 1 条 `wins ≥ 1` 的方法：“你自己摸索出来的查法：……”。
+
+### 10.7 成长的层次：矛盾、修正、搁置
+
+- **矛盾**：`looked_at.feeling` 加 `mixed`，同时给 `liked_part` / `disliked_part`（各 ≤12 字，缺一个就降为 `meh`），经历存 `aspects`。兴趣证据：mixed +0.5（证据带 `aspect_like` / `aspect_dislike`）。收获里 mixed 计 0.5 个喜欢。
+- **兴趣走向**（`lifecycle.interest_tone`，确定性）：14 天为一期，`recent = [now−14d, now]`、`before = [now−28d, now−14d)`，按不同条目数：
+  - `mixed`：近 21 天 mixed ≥2，或正向 ≥1 且负向 ≥1 且合计 ≥3；
+  - `cooling`：前一期正向 ≥2、这一期正向 0 且有负向或 mixed（两期都有证据才算变化）；
+  - `warming`：前一期正向 ≥1、这一期正向 ≥ 前一期 + 2。
+  `consolidate` 为走向生成快照（同话题同走向 14 天内只一次）：mixed “对{topic}有点又爱又嫌：{like}还挺喜欢，{dislike}有点看不下去”（没有 aspects 时“对{topic}的感觉有点复杂”）；cooling “前阵子挺爱看{topic}的，这两周没那么上头了”；warming “{topic}最近越看越上头”。问喜欢什么 / 这周过得怎样时和阶段快照一起给；话题对上且 14 天内有走向快照时给 1 行。人设卡上的喜好不受影响。
+- **修正**：研究里的 `revises`（10.3），进小课题和主题档案；聊天侧见 10.5。
+- **搁置**：研究 `stuck` → 小课题 `parked`：`park_reason`（stuck_reason，空时“资料不太够”）、`resume_hint`（open_question 或 next 参数）、`parked_until = now + park_days`（默认 3 天）、`park_count += 1`。规划器在 `parked_until` 之后把它作为续做候选（分数 −8），选中时回到 `open`；`park_count ≥ 2` 时再 stuck 就放弃（`drop_reason = park_reason`）；搁置超过 30 天没再拿起也放弃（“放太久了”）。搁置的不占 `max_open_threads`，但最多同时 2 个（多出的最旧的放弃）。搁置和放弃都进主题档案。搁置中的小课题引用的经历不过期。睡前整理可以把搁置的 `drop`（可附 `reason` ≤30 字）。
+- 聊天侧小课题行：
+  - open：“你在查的小事：{title}（还没查完；上次查到：{最新未被取代的要点}；还没弄懂：{open_question}）”（后两段有才写）
+  - parked：“你查过一阵：{title}，查到一半{park_reason}，先放着了（下次想从{resume_hint}接着看）”
+  - dropped：不给（档案召回时才说）
+
+### 10.8 聊天侧文本的长度与优先级
+
+xiaoqing_chat 把 `life_lines` 截在 800 字。`build_life_lines` 组装时总长控制在 780 字内：开头说明和结尾依据必留；其余按优先级放，放不下的整段丢掉：作品摘录（被要求看时）> 档案召回块 > “正在做” > 经历 > 小课题行 > 作品行 > 打算 > 自己查明白的 / 查法 > 回顾快照 > 更正行。
+
+经历行按 `depth` 说清读到多少：`watched` 写“点开看了「…」（UP主 …），跟着字幕看了（个大概）”；`read` 的 B站条目写“点开了「…」（UP主 …），认真读了简介和UP主的说明”；`baike_read` 写“查百科读了「…」”，`wiki_read` 写“翻维基读了「…」”；`reaction` 为空（自动补的经历）时不写“你当时觉得”。`_LIFE_HEADER` 里“多半是扫了简介、弹幕和评论区”保留，各行自己说清读到多少。
+
+### 10.9 配置、存储、命令
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `research_max_rounds` | 3（1–5） | 研究循环轮数上限 |
+| `max_deep_reads_per_session` | 1（0–2） | 浏览型上网里深读的条目数 |
+| `park_days` | 3（1–30） | 搁置多久后可以再拿起 |
+| `max_active_works` | 1（0–3） | 同时进行的作品，0 关闭作品 |
+| `work_start_gap_days` | 7（1–60） | 两次开新作品的最短间隔 |
+| `dossier_keep_days` | 365（30–1095） | 主题档案保留 |
+| `max_llm_calls_per_day` | 24 → **30** | 研究循环一次最多 3 次调用 |
+| `sources.wiki_read` | true | 维基阅读 |
+| `sources.bili_subtitles` | true | 登录后读字幕；未登录时不起作用 |
+| `session_minutes` | `thread_continue` 20–40，新增 `work_on` 15–30 | |
+
+存储新增 `works.json`（list）、`dossiers.json`（dict）、`methods.json`（list），沿用 `LifeStore` 的原子写与损坏恢复。小课题新字段：`topic, open_question, next_action, actions, corrections, methods_used, park_reason, resume_hint, parked_until, park_count, drop_reason`；笔记新字段：`id, quote, at, kind, superseded_by`。经历新字段：`depth, subtitle_partial, aspects, auto`。旧数据缺字段时按默认值读。登录凭证**不在** `LifeStore` 里（见 10.11）。
+
+`/life`：`works`（作品与条目）、`dossier [话题]`（不带参数列出话题，带参数显示一份）、`methods`、`login` / `login status` / `login cancel` / `logout`（10.11）；`threads` 显示搁置原因、最新要点、更正数；`status` 加作品、档案、方法数量与 B站 登录状态；`_CHOICES` 加 `work_on`（整理作品）。`plugin.json` 同步加子命令。
+
+### 10.10 验证
+
+- 单元测试覆盖每条规则：深读解析（简介切段、置顶、UP 主回复、结构缺失）、字幕（WBI 签名用固定 key 与时间的已知值、轨道选择、URL 主机校验、取字幕不带 Cookie、全文 / 节选切段、未登录不请求）、百科 / 维基阅读解析与屏蔽、研究循环（多轮、行动执行、预算用完停、要点摘录核对、`revises` → 更正、`stuck` → 搁置、`answered` → 回看、`next_action` 留存、`deep_read` 只认本轮 B站编号、中途取消保留已提交的轮次、自动补经历不产生兴趣证据）、方法（提炼核对、选择、wins / 退役）、作品（开始的依据核对、op 核对、片单名字必须在经历里、todo → 查 → verify、done 条件、21 天搁置、分享候选 ID 一天一次、摘录长度、作品文字不进任何学习）、档案（钩子、召回块、经历清理后仍在、保留期）、mixed 与走向（两期规则、快照文本）、规划（搁置后再拿起、`work_on` 打分、`thread_continue` 不再强依赖 B站搜索）、聊天侧 780 字预算与优先级、登录（10.11 的每一条）。
+- 14 天可控时钟模拟（新文件）：假来源与假模型让一个话题长成兴趣 → 睡前开一个片单 → 几次 `work_on` 后有 ≥4 条且被分享一次；一个小课题研究两轮后 `stuck` 搁置、3 天后再拿起答出；研究中一条 `revises` 成为更正并出现在档案召回里；done 时提炼一条方法，下一个相近的小课题用上并 `wins` 增加；一个话题前一期喜欢、后一期不喜欢 → `cooling` 快照。
+- 真实验证（B站风控期间避开 B站，研究循环第一轮用 `lookup`）：`run_xiaoqing_life_session.py` 支持 `--activity thread_continue --thread "<标题>"`（在隔离目录里先开一个小课题）逐轮打印行动、原始 JSON 与核对结果，`--activity work_on`，以及 `--bili-credential <文件>`（只读地使用一份已保存的凭证文件，验证字幕）。人工读：要点是否真来自摘录、更正是否合理、作品条目是否都是她看过的东西、字幕节选是否贴合视频。
+
+### 10.11 B站 扫码登录（bili_auth.py，参照 dafeiyu `login.py` 与 xiaoai 的私聊扫码流程）
+
+**边界**：只登录管理员扫码授权的那一个 B站 账号；只读——取材接口全部是 GET，不调用评论、点赞、投币、收藏、关注、弹幕、私信、退出登录等任何写接口；凭证只附在发往 `api.bilibili.com` 的请求上，不发往图床、字幕 CDN、知乎、微博、百科、维基；凭证值、二维码链接、`qrcode_key` 不进日志、状态、命令输出、提示词、异常信息。知乎不登录。
+
+**命令**（全部 `bot_admin`，在私聊或群里发都行，二维码**只发私聊**）：
+
+| 用法 | 作用 |
+|---|---|
+| `/life login`（别名 `登录`） | 开始扫码登录 |
+| `/life login status` | 已登录（账号名、保存时间）/ 登录失效 / 未登录；有凭证时用 `nav` 实时确认一次 |
+| `/life login cancel` | 取消进行中的扫码 |
+| `/life logout`（别名 `退出登录`） | 删掉本地凭证文件（不调用远端退出接口） |
+
+**流程**（照 `plugins/xiaoai/login.py` 的结构：发起人 ID、单一进行中的登录、后台任务、取消、关闭时清理）：
+
+1. 发起人 = `context.current_user_id` 或 `event.user_id`，必须是正整数，否则提示“请私聊发送”。已有别的管理员在登录就拒绝；同一人重发先取消旧的。
+2. 有界 GET `https://passport.bilibili.com/x/passport-login/web/qrcode/generate`（不带 Cookie，`allow_redirects=False`）→ `data.url`、`data.qrcode_key`；`url` 必须是 https 且主机在 `{passport.bilibili.com, account.bilibili.com}`，否则放弃。
+3. 用项目已有依赖 `qrcode[pil]` 生成 PNG（`ImportError` 时提示安装依赖），`base64://` 图片段经 `send_private_msg` 发给发起人，动作带 `SENSITIVE_ACTION_KEY: True`（同 xiaoai 的 `send_private`）。发送结果为 False 就放弃。命令在当前会话只回“二维码已发到你的私聊，请用 B站 App 扫码确认，约 3 分钟内有效”。
+4. 后台任务（`LifeRuntime.spawn` 登记，`shutdown` 取消）：每 2 秒轮询 `.../qrcode/poll?qrcode_key=`，最长 180 秒；`86101` 未扫码、`86090` 已扫未确认继续等；`86038` 过期、超时、其他码 → 私聊提示重新 `/life login`；`0` → 下一步。
+5. 取凭证：只认 `SESSDATA, bili_jct, DedeUserID, DedeUserID__ckMd5` 四个名字，来源是 `data.url` 的查询串（该 url 必须是 https 且主机以 `.bilibili.com` 结尾，每个键只有一个值）和响应的 `Set-Cookie`（有就读）；缺 `SESSDATA / bili_jct / DedeUserID` 任何一个就放弃；值含 `; \r \n` 或超过 512 字符就放弃。`refresh_token` 一并保存（本轮不做自动续期）。
+6. 设备指纹：GET `https://api.bilibili.com/x/frontend/finger/spi` 取 `b_3 / b_4` → `buvid3 / buvid4`，值必须匹配 `[A-Za-z0-9_%.\-+/|]+={0,2}` 且 ≤256 字符；失败不影响登录。
+7. 校验：带新凭证 GET `https://api.bilibili.com/x/web-interface/nav`，`code == 0` 且 `data.isLogin` 为真才保存；否则放弃，**旧的凭证文件保持不变**。
+8. 保存到 `<data_dir>/secrets/bilibili.json`：`{cookies, refresh_token, uid, uname(清洗 ≤40 字), owner(发起人 ID), saved_at}`。目录先按 xiaoai `protect_directory` 的做法收紧权限（POSIX 0700；Windows 用 `icacls` 去继承、只给当前用户），文件用临时文件 + `os.open(..., 0o600)` + fsync + `os.replace` 原子写。这个文件不是 `LifeStore` 的集合，不进备份与损坏恢复。
+9. 私聊发起人：“B站登录好了（账号：{uname}）。之后她点开视频能读字幕。发 /life logout 可以退出。”
+
+**使用**：
+
+- `bili_auth.BiliCredential`：懒加载凭证文件，按文件 mtime 失效重读；`cookie_header()` 只拼上面六个名字（四个登录键 + `buvid3/buvid4`），值有换行或分号的跳过；无文件、读失败、已标记失效时返回空。
+- `BoundedFetcher(session, credential=None)`：只有目标主机**恰好是** `api.bilibili.com` 且 `credential.cookie_header()` 非空时加 `Cookie` 头。其他主机永远不加。字幕文件（`*.hdslb.com`）走单独的 `get_json_public`（或同一方法里按主机判断），不带 Cookie；`ALLOWED_HOSTS` 外加一条“`hdslb.com` 的子域只允许字幕 JSON”规则。
+- 失效：带了 Cookie 的 `api.bilibili.com` 响应 `code == -101`（未登录）→ 在内存与 `state["bili_login"] = {"valid": false, "since": now}` 里标失效（不含任何凭证值），之后不再附 Cookie、不再请求字幕，直到重新登录成功（新登录把它改回 `{"valid": true, "since": now}`）。失效后在下一次上网结束时给 `owner` 私聊一次“B站登录失效了，发 /life login 重新扫码就好”（尽力而为，失败不重试；同一次失效只提醒一次）。
+- `/life status` 加一行：“B站：已登录（{uname}）”/“B站：登录失效，需要重新扫码”/“B站：未登录（字幕读不到，只看简介和评论）”。
+
+**测试**：二维码主机白名单、轮询各状态码、凭证只取允许的键且值校验、`nav` 校验失败不覆盖旧文件、文件权限函数被调用、`Cookie` 只发往 `api.bilibili.com`（发往 hdslb / 维基 / 百科 / 知乎的请求都没有）、`-101` 标失效并停止附 Cookie、失效提醒只一次、`logout` 删文件、另一位管理员不能取消或覆盖、`shutdown` 取消轮询任务、日志 / 命令输出 / 状态 / 提示词里都没有凭证值和二维码链接（用 caplog 与假值断言）、没有任何非 GET 请求。
