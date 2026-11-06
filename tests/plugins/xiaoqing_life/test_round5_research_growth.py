@@ -27,7 +27,7 @@ from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.planner import THREAD, Decision
 from plugins.xiaoqing_life.session import SessionDeps, _liked_count, run_session
 from plugins.xiaoqing_life.sources import subtitle
-from plugins.xiaoqing_life.sources.base import SourceError
+from plugins.xiaoqing_life.sources.base import SourceError, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
 from tests.plugins.xiaoqing_life.support import (
     FakeAI,
@@ -658,7 +658,12 @@ async def test_first_round_without_material_follows_the_failure_path(tmp_path: P
     store = _with_thread(tmp_path)
     ai    = FakeAI()
     fail  = _fetch(**{"/search/type": SourceError("x", "code_412")})
-    out   = await run_session(store, make_cfg(), _continue(), _deps(fail, ai))
+    out   = await run_session(
+        store,
+        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
+        _continue(),
+        _deps(fail, ai),
+    )
     assert out.status == "failed" and out.reason == "all_sources_failed" and ai.calls == []
     assert store.state["last_failure_at"] > 0 and store.episodes == []
     assert store.threads[0]["actions"][0]["useful"] is False
@@ -670,9 +675,19 @@ async def test_all_seen_first_round_records_an_empty_step(tmp_path: Path) -> Non
     store.seen["bili:7"] = NOW - 10
     ai                   = FakeAI()
     fetch                = _fetch(_video(7, "旧视频"))
-    await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
+    await run_session(
+        store,
+        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
+        _continue(),
+        _deps(fetch, ai),
+    )
     assert store.threads[0]["empty_streak"] == 1 and ai.calls == []
-    await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
+    await run_session(
+        store,
+        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
+        _continue(),
+        _deps(fetch, ai),
+    )
     assert store.threads[0]["cooldown_until"] == NOW + 180 * 60
 
 
@@ -1194,10 +1209,17 @@ async def test_mixed_episode_keeps_aspects_and_gives_half_evidence_and_half_a_li
         "like"   : "手感",
         "dislike": "氪金",
     }
+    # 研究里的 mixed 多半在说资料好不好用：经历留着两个侧面，兴趣证据只是普通的 +0.5
     evidence = store.interests["独立游戏"]["evidence"][0]
-    assert evidence["delta"] == 0.5 and evidence["aspect_like"] == "手感"
-    assert evidence["aspect_dislike"] == "氪金"
+    assert evidence["delta"] == 0.5 and "aspect_like" not in evidence and not evidence.get("mixed")
     assert out.details["liked"] == 0.5
+    # 浏览里的 mixed：证据带两个侧面，供兴趣走向用
+    row = {**episode, "id": "e-browse", "item_id": "bili:8"}
+    from plugins.xiaoqing_life.session import _learn
+
+    _learn(store, digest.DigestResult(), [row], NOW)
+    browse = store.interests["独立游戏"]["evidence"][-1]
+    assert browse["mixed"] and (browse["aspect_like"], browse["aspect_dislike"]) == ("手感", "氪金")
     assert _liked_count([{"feeling": "like"}, {"feeling": "mixed"}, {"feeling": "meh"}]) == 1.5
     assert (
         reinforce.session_reward(
@@ -1485,5 +1507,71 @@ async def test_lookup_skips_entries_read_within_seven_days(tmp_path: Path) -> No
         store2.seen[item_id] = NOW - 60
     ai = FakeAI(_reply())
     store2.threads[0].update(status="open", next_action={"action": "lookup", "arg": "猫"})
-    out = await run_session(store2, make_cfg(), _continue(), _deps(fetch, ai))
+    out = await run_session(
+        store2, make_cfg(sources={"bili_search": False}), _continue(), _deps(fetch, ai)
+    )
     assert out.reason == "all_seen" and ai.calls == []
+
+
+async def test_finding_quote_may_join_sentences_from_several_cited_passages() -> None:
+    texts = {
+        "p1.1": "摄像机位置保持不动，随着时间的流逝，恒星本身发生了移动。",
+        "p3.1": "曝光时间越长，亮痕越长。另有一句。",
+    }
+    joined = "摄像机位置保持不动，随着时间的流逝，恒星本身发生了移动。曝光时间越长，亮痕越长。"
+    assert research.finding_quote(joined, ["p1.1", "p3.1"], texts)
+    # 某一句不在所引编号里：整条不算
+    forged = "摄像机位置保持不动，随着时间的流逝，恒星本身发生了移动。地球其实是平的呢。"
+    assert research.finding_quote(forged, ["p1.1", "p3.1"], texts) is None
+    # 只引了其中一个编号：另一句找不到
+    assert research.finding_quote(joined, ["p1.1"], texts) is None
+    # 大半是没核对的短碎片：不算
+    assert research.finding_quote("曝光时间越长。是。的。对。吧。嗯。", ["p3.1"], texts) is None
+
+
+async def test_next_actions_on_disabled_sources_become_stop() -> None:
+    cfg = make_cfg(sources={"bili_search": False, "baike_lookup": True, "wiki_read": False})
+    items   = [SourceItem("baike_read:x", "baike_read", "星轨", "", "", 0, ())]
+    allowed = research.available_actions(cfg, {}, items, NOW)
+    assert allowed == ("lookup", "stop")
+    assert (
+        research._next({"action": "search", "arg": "星轨 原因"}, items, allowed) == research.Next()
+    )
+    assert research._next({"action": "lookup", "arg": "地球自转"}, items, allowed) == research.Next(
+        "lookup", "地球自转"
+    )
+    bili = [SourceItem("bili:1", "bili_search", "视频", "", "", 0, ())]
+    assert "deep_read" in research.available_actions(make_cfg(), {}, bili, NOW)
+    unhealthy = {"source_health": {"bili_search": {"fails": 2, "until": NOW + 3600}}}
+    assert "search" not in research.available_actions(make_cfg(), unhealthy, bili, NOW)
+
+
+async def test_prompt_lists_the_available_actions(tmp_path: Path) -> None:
+    store = _with_thread(tmp_path, next_action={"action": "lookup", "arg": "猫"})
+    ai = FakeAI(_reply(looked_at=[_look()], next={"action": "search", "arg": "猫 纸箱"}))
+    fetch = _fetch(**{"Baike": BAIKE, "wikipedia": WIKI})
+    cfg = make_cfg(sources={"bili_search": False})
+    await run_session(store, cfg, _continue(), _deps(fetch, ai))
+    payload = json.loads(ai.calls[0][1][1]["content"])
+    assert payload["available_actions"] == ["lookup", "stop"]
+    assert len(ai.calls) == 1  # 想 search 但搜索关着：当作 stop
+    assert _calls(fetch, "search/type") == []
+
+
+async def test_first_round_falls_back_to_the_other_opening_once(tmp_path: Path) -> None:
+    # 词条这周读过了：第一轮改去 B站 搜一次，而不是整次研究白跑
+    store = _with_thread(tmp_path, next_action={"action": "lookup", "arg": "猫"})
+    for item_id in ("baike_read:纸箱", "wiki_read:5"):
+        store.seen[item_id] = NOW - 60
+    ai = FakeAI(_reply(looked_at=[_look()], next={"action": "stop"}))
+    fetch = _fetch(_video(7, "猫咪为什么爱钻纸箱"), **{"Baike": BAIKE, "wikipedia": WIKI})
+    out   = await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
+    assert out.status == "ok" and len(ai.calls) == 1
+    assert [a["action"] for a in store.threads[0]["actions"]] == ["lookup", "search"]
+    assert _calls(fetch, "search/type")[0][1]["keyword"] == "猫 纸箱"
+    # 两条路都没有：照旧记空步
+    store.threads[0].update(next_action={"action": "lookup", "arg": "猫"})
+    store.seen["bili:7"] = NOW - 60
+    ai2                  = FakeAI()
+    out                  = await run_session(store, make_cfg(), _continue(), _deps(fetch, ai2))
+    assert out.reason == "all_seen" and ai2.calls == []

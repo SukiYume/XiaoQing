@@ -308,14 +308,16 @@ def current_line(store: LifeStore, now: float) -> str:
     current = store.state.get("current") or {}
     if not current or not float(current.get("start", 0.0)) <= now < float(current.get("end", 0.0)):
         return ""
-    choice = current.get("choice")
-    query  = str(current.get("query") or "")
+    choice       = current.get("choice")
+    query        = str(current.get("query") or "")
+    thread       = next((t for t in store.threads if t.get("id") == current.get("thread_id")), None)
+    thread_title = str(thread.get("title", "")) if thread else ""
     if choice == "hot_scroll":
         doing = _DOING_BY_SOURCE.get(str(current.get("source")), "刷热榜")
     elif choice == "interest_dive":
-        doing = f"在B站搜〔{query}〕" if query else "在B站搜东西"
+        doing = f"B站搜〔{query}〕" if query else "B站搜东西"
     elif choice == "thread_continue":
-        doing = f"在B站接着查〔{query}〕" if query else "在B站接着查"
+        doing = f"接着查〔{thread_title}〕" if thread_title else "接着查一个小问题"
     elif choice == "work_on":
         doing = "整理自己的小作品"
     else:

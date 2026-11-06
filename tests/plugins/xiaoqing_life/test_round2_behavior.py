@@ -219,7 +219,7 @@ def test_turn_context_says_what_she_is_doing_without_unreached_titles(tmp_path: 
     }
     store.episodes.append(_episode(1, -300, title="未来的标题"))
     lines = _call(store, "在干嘛呢")["life_lines"]
-    assert "你这会儿正在在B站搜〔天文摄影〕。" in lines and "未来的标题" not in lines
+    assert "你这会儿正在B站搜〔天文摄影〕。" in lines and "未来的标题" not in lines
     store.state["current"] = {
         "choice": "hot_scroll",
         "source": "bili_popular",

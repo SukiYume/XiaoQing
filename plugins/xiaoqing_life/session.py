@@ -297,7 +297,7 @@ def _episode_rows(
                 "id"              : new_id("e"),
                 "at"              : at,
                 "day"             : day_key(datetime.fromtimestamp(at, tz)),
-                "gist"            : item.text[:60],
+                "gist"            : item.text[:60] + ("…" if len(item.text) > 60 else ""),
                 "tags"            : list(item.tags),
                 "uploader"        : item.uploader,
                 "url"             : item.url,

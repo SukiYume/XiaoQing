@@ -310,11 +310,21 @@ async def test_thread_continue_without_news_cools_down_after_two_empty_steps(
 ) -> None:
     store = _thread_store(tmp_path)
     fetch = FakeFetcher({**_search(_video(7, "旧视频")), "/reply/main": comments_payload()})
-    store.seen["bili:7"] = NOW - 100  # 已经看过
+    store.seen["bili:7"] = NOW - 100  # 已经看过（只开搜索：不换成查词条）
     ai = FakeAI()
-    await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
+    await run_session(
+        store,
+        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
+        _continue(),
+        _deps(fetch, ai),
+    )
     assert store.threads[0]["empty_streak"] == 1 and ai.calls == []
-    await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
+    await run_session(
+        store,
+        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
+        _continue(),
+        _deps(fetch, ai),
+    )
     assert store.threads[0]["cooldown_until"] == NOW + 180 * 60 and store.threads[0]["steps"] == 0
 
 
