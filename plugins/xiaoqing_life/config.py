@@ -44,6 +44,7 @@ SESSION_MINUTES: dict[str, tuple[int, int]] = {
     "hot_scroll"     : (8, 20),
     "interest_dive"  : (15, 35),
     "thread_continue": (20, 40),
+    "work_on"        : (15, 30),
     "term_lookup"    : (5, 10),
 }
 
@@ -85,6 +86,9 @@ class LifeConfig:
     max_deep_reads_per_session: int                           = 1
     research_max_rounds       : int                           = 3
     park_days                 : int                           = 3
+    max_active_works          : int                           = 1
+    work_start_gap_days       : int                           = 7
+    dossier_keep_days         : int                           = 365
     activity_affinity         : Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(ACTIVITY_AFFINITY)
     )
@@ -171,6 +175,9 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
         "max_deep_reads_per_session": (0, 2),
         "research_max_rounds"       : (1, 5),
         "park_days"                 : (1, 30),
+        "max_active_works"          : (0, 3),
+        "work_start_gap_days"       : (1, 60),
+        "dossier_keep_days"         : (30, 1095),
         "max_vision_per_session"    : (0, 6),
         "max_open_threads"          : (0, 5),
         "thread_max_steps"          : (1, 10),

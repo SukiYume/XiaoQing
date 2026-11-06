@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from . import dossier
 from . import methods as methods_mod
 from . import threads as thread_ops
+from . import works as works_mod
 from .config import LifeConfig
 from .digest import extract_json
 from .lifecycle import DAY
@@ -37,6 +39,7 @@ _SYSTEM = """{persona}
   "threads": [{{"id": "小课题id", "action": "done|continue|drop", "takeaway": "done 时写一句收获", "episode_ids": ["收获依据的经历id"], "reason": "drop 时写原因，30字内"}}],
   "methods": [{{"thread_id": "今天 done 的小课题id", "text": "自己摸索出的查法，40字内", "applies_to": "适用于什么样的问题，20字内", "actions": [有用的行动下标]}}],
   "weekly": {{"text": "2到4句这周的小结", "dates": ["引用的日记日期"], "episode_ids": ["引用的经历id"]}},
+  "work": {{"action": "start", "title": "作品名，20字内", "form": "list|notes|review", "topic": "话题，12字内", "why": "为什么想整理，60字内", "episode_ids": ["依据的经历id"]}},
   "followup": {{"parent_id": "刚刚 done 的小课题 id", "title": "后续问题，20字内", "why": "为什么想接着查", "next_query": "下次搜什么"}}
 }}
 怎么写：
@@ -44,6 +47,7 @@ _SYSTEM = """{persona}
 - threads 里每个小课题都要给 action：status 为 reviewing 的是已经查到结果的，写 done 和一句收获，并引用它笔记里的经历 id；status 为 open 的，还想接着查就 continue，不想查了就 drop。
 - status 为 parked 的是查到一半先放着的，不想再查了可以 drop（reason 写一句原因），否则不用写。
 - 今天 done 的小课题如果在 actions 里有用的行动，可以把“怎么查到的”概括成一条自己的查法写进 methods（全天最多一条）；没有就给空数组。
+- work_candidates 有话题时，可以挑一个开始整理一件自己的小作品（片单 list / 小笔记 notes / 观后感 review），依据写在 episode_ids 里（你喜欢的、同话题的经历）；没有 work_candidates 或不想开就给 null。works 是你已经在做的作品。
 - 没有 weekly 要求时，weekly 给 null；有要求时只引用给出的日记日期和经历；记录里的 learnings 是这周自己查明白的事，周记可以提到。
 - 某个小课题今天 done、并且自然引出了一个还想接着查的新问题，可以用 followup 写下来（一天最多一个）；没有就给 null。"""
 
@@ -95,6 +99,7 @@ def build_messages(
     episodes: list[dict[str, Any]],
     *,
     weekly: bool,
+    cfg: LifeConfig,
 ) -> list[dict[str, str]]:
     now                    = moment.timestamp()
     record: dict[str, Any] = {
@@ -126,7 +131,21 @@ def build_messages(
             )
         ],
         "weekly_requested": weekly,
+        "works"           : [
+            {
+                "id"     : w["id"],
+                "title"  : w["title"],
+                "form"   : w["form"],
+                "topic"  : w["topic"],
+                "status" : w["status"],
+                "entries": len(w.get("entries", [])),
+            }
+            for w in works_mod.shown_works(store.works, now)
+        ],
     }
+    candidates = works_mod.candidate_topics(store, cfg, now)
+    if candidates:
+        record["work_candidates"] = candidates
     if weekly:
         record["learnings"] = [
             {"topic": row.get("topic", ""), "text": row["text"]}
@@ -311,7 +330,7 @@ async def run_wind_down(
     if not await reserve_llm_call(store, day, cfg.max_llm_calls_per_day):
         return WindDownResult("skipped", "llm_exhausted")
     weekly = weekly_wanted(store, moment)
-    messages = build_messages(store, moment, persona, moment_line, episodes, weekly=weekly)
+    messages = build_messages(store, moment, persona, moment_line, episodes, weekly=weekly, cfg=cfg)
     try:
         text = await complete("reasoning", messages)
     except Exception as exc:
@@ -337,6 +356,9 @@ async def run_wind_down(
         methods_mod.apply_extracted(
             s.methods, raw.get("methods"), finished, blocked, day, s.state, now
         )
+        works_mod.start_work(s, cfg, raw.get("work"), now)
+        works_mod.housekeep(s.works, now)
+        dossier.sync(s, cfg, now)
         prune_learnings(s.learnings, cfg, now)
         if weekly:
             note = validate_weekly(raw.get("weekly"), recent_diaries(s, now), blocked)

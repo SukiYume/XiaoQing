@@ -1333,19 +1333,15 @@ async def test_thread_topic_comes_from_digest_then_interests_then_title(tmp_path
     assert opened["park_count"] == 0 and opened["actions"] == [] and opened["corrections"] == []
 
 
-async def test_thread_event_hook_is_the_single_exit_for_milestone_three() -> None:
-    seen: list[tuple[str, str]] = []
-    hook = lambda thread, kind, data: seen.append((thread["id"], kind))  # noqa: E731
-    th.EVENT_HOOKS.append(hook)
-    try:
-        thread = _thread()
-        th.park([thread], thread, make_cfg(), reason="r", hint="", now=NOW)
-        th.drop(thread, NOW, "不查了")
-        th.add_finding(thread, episode_id="e", text="x", quote="q", revises="", now=NOW)
-    finally:
-        th.EVENT_HOOKS.remove(hook)
-    assert [k for _, k in seen] == ["parked", "dropped"]
-    assert research.on_thread_event is th.on_thread_event
+async def test_thread_events_are_a_bounded_record_of_what_happened() -> None:
+    thread = _thread()
+    th.park([thread], thread, make_cfg(), reason="r", hint="", now=NOW)
+    th.drop(thread, NOW, "不查了")
+    th.add_finding(thread, episode_id="e", text="x", quote="q", revises="", now=NOW)
+    assert [e["kind"] for e in thread["events"]] == ["parked", "dropped"]
+    for n in range(20):
+        th.on_thread_event(thread, "opened", now=NOW + n)
+    assert len(thread["events"]) == th.MAX_EVENTS
 
 
 async def test_thread_candidate_no_longer_requires_bili_search() -> None:

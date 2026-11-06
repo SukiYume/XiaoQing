@@ -15,9 +15,10 @@ from datetime import datetime
 from typing import Any
 
 from . import digest as digest_mod
+from . import dossier, reinforce
 from . import memes as memes_mod
-from . import reinforce
 from . import threads as thread_ops
+from . import works as works_mod
 from .config import LifeConfig
 from .lifecycle import (
     add_interest_evidence,
@@ -40,6 +41,7 @@ from .planner import (
     INTEREST,
     TERM_LOOKUP,
     THREAD,
+    WORK_ON,
     Decision,
     day_key,
 )
@@ -452,6 +454,8 @@ def _housekeeping(store: LifeStore, cfg: LifeConfig, now: float) -> None:
     seed_interests(store.interests, cfg.seed_interests, now)
     consolidate(store.interests, store.snapshots, now)
     del store.snapshots[:-100]
+    dossier.sync(store, cfg, now)  # 先于下面的清理：档案存自己的快照副本
+    works_mod.housekeep(store.works, now)
     thread_ops.prune_threads(store.threads, now)
     prune_episodes(store.episodes, now, cfg, thread_ops.protected_episode_ids(store.threads))
 
@@ -858,6 +862,10 @@ async def run_session(
         from . import research
 
         outcome = await research.run(store, cfg, decision, deps, span, day)
+    elif decision.choice == WORK_ON:
+        from . import works
+
+        outcome = await works.run(store, cfg, decision, deps, span, day)
     elif decision.choice in (HOT_SCROLL, INTEREST):
         outcome = await _browse(store, cfg, decision, span, day, deps)
     else:

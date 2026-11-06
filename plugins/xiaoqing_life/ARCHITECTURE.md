@@ -80,3 +80,34 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 - **B 站条目 ID** 与来源无关（`bili:<aid>`），热门 / 搜索 / 排行的同一视频只算一个独立来源。
 - **Core**：`Content-Encoding: deflate` 同时接受 zlib 封装与裸 deflate（B 站弹幕接口返回裸 deflate），限额不变。
 - **真实验证**：`scripts/run_xiaoqing_life_session.py`。
+
+
+## 第五轮增补
+
+```text
+thread_continue ─► research.run（每轮：行动 → 1 次 reasoning → 本地核对 → 立即提交）
+                     ├─ search / deep_read / lookup（sources/deep.py、subtitle.py、baike.read、wiki.py）
+                     ├─ 要点 → 小课题笔记 n<k>（带摘录）；revises → 更正；stuck → 搁置；answered → 回看
+                     └─ methods.select（≤2 条）→ 提示；done 时 wins；睡前提炼新方法
+wind_down ─► work.start（works.candidate_topics → start_work）、methods 提炼、dossier.sync
+work_on   ─► works.run（todo 查证 → 1 次 reasoning → apply_ops → 读物成为经历）
+housekeeping ─► dossier.sync（先于清理）→ works.housekeep → threads.prune
+turn_context ─► 档案召回 / 更正行 / 作品行 / 摘录块 / 走向快照行 → 780 字预算（按优先级整段取舍）
+```
+
+| 模块 | 职责 |
+|---|---|
+| `bili_auth.py` | B站扫码登录：`BiliCredential`（懒加载、按 mtime 重读、失效标记）、`BiliLogin`（单一进行中的登录、后台轮询、取消 / 关闭）、凭证文件的目录保护与原子写；Cookie 只由 `BoundedFetcher` 附给 `api.bilibili.com` |
+| `sources/deep.py` | 深读：简介全文切段、UP 主置顶 / 回复、字幕；`depth_of`、`assign_refs` |
+| `sources/subtitle.py` | WBI 签名（只用于字幕接口）、轨道选择、字幕文件主机校验（`hdslb.com`，不带 Cookie）、全文 / 6 段节选 |
+| `sources/wiki.py` | 中文维基阅读（通用 User-Agent，开关 `wiki_read`）；`baike.read` 同样给出带段落的条目 |
+| `research.py` | 有限步骤的研究循环：首轮行动选择、研究提示、本地核对、每轮提交、名义时段按轮数均分 |
+| `methods.py` | 方法复用：选择、使用记录、wins / 退役、睡前提炼的核对 |
+| `works.py` | 小作品：开始的依据核对、`work_on` 会话、op 核对（片单名字必须在所引经历里）、21 天搁置 / 180 天保留、聊天侧作品行 / 摘录 / 分享候选 |
+| `dossier.py` | 主题档案：`sync` 幂等、确定性；档案存快照副本，经历和小课题被清理后仍在；召回与更正行 |
+
+- **新集合**：`methods.json`、`works.json`、`dossiers.json`；`state.bili_login`（只含有效 / 失效与时间，不含凭证值）、`state.research_action` 偏好、`state.last_work_start` / `last_work_on_at` / `method_day`。凭证文件不在 `LifeStore` 里。
+- **档案为什么不用事件钩子**：小课题和作品的状态变化会被 `dossier.sync` 从当前状态幂等地读出来，不依赖进程级全局回调，也就不会在不同存储之间串；小课题上的 `events` 只是有界的记录。
+- **作品不是学习来源**：作品条目只引用经历 ID，不进词条、表达、兴趣证据；`work_on` 读物产生的经历同样不做词条 / 表达学习。
+- **聊天侧预算**：`life_lines` 总长 ≤780 字（xiaoqing_chat 截 800）；开头说明和结尾依据必留，其余按“作品摘录 > 档案召回 > 正在做 > 经历 > 小课题行 > 作品行 > 打算 > 自己查明白的 / 查法 > 回顾快照 > 更正行”整段取舍。
+- **验证**：`tests/plugins/xiaoqing_life/test_round5_*.py` 与 `test_simulation_round5.py`（可控时钟的 23 天时间线：话题长成作品、研究搁置后再拿起并更正、方法提炼与复用、兴趣变冷快照）。

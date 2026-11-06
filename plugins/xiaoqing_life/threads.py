@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from .config import LifeConfig
@@ -27,18 +26,16 @@ MAX_PARK_COUNT    = 2
 DEFAULT_PARK_WHY  = "资料不太够"
 ACTIVE            = ("open", "reviewing")
 
-# 主题档案（里程碑 3）挂在这里：小课题开 / 搁置 / 放弃 / 更正 / done 时调用 ``hook(thread, kind, data)``。
-EVENT_HOOKS: list[Callable[[dict[str, Any], str, dict[str, Any]], None]] = []
-
 
 def on_thread_event(thread: dict[str, Any], kind: str, **data: Any) -> None:
-    """小课题的重要变化都从这一个函数出去；现在只留一份有界的事件记录，并通知已登记的钩子。"""
+    """小课题的重要变化（开 / 搁置 / 放弃 / 更正 / done）都从这一个函数出去：留一份有界的事件记录。
+
+    主题档案不靠它推送，而是由 ``dossier.sync`` 从小课题当前状态幂等地同步。
+    """
 
     events: list[dict[str, Any]] = thread.setdefault("events", [])
     events.append({"kind": kind, "at": data.get("now", thread.get("updated_at", 0.0))})
     del events[:-MAX_EVENTS]
-    for hook in EVENT_HOOKS:
-        hook(thread, kind, data)
 
 
 def active_threads(threads: list[dict[str, Any]]) -> list[dict[str, Any]]:

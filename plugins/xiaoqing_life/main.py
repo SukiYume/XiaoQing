@@ -206,6 +206,7 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
         running  = runtime.running,
         manual   = manual,
         frontier = store.frontier,
+        works    = store.works,
     )
 
 
@@ -357,6 +358,10 @@ async def handle(
             return segments(commands.slang_text(store, moment))
         if action == "threads":
             return segments(commands.threads_text(store))
+        if action == "works":
+            return segments(commands.works_text(store))
+        if action == "dossier":
+            return segments(commands.dossier_text(store, rest, moment))
         if action == "methods":
             return segments(commands.methods_text(store))
         if action == "memes":

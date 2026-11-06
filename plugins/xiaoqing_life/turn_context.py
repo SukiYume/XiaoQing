@@ -10,8 +10,10 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import dossier as dossier_mod
 from . import methods as methods_mod
 from . import reinforce
+from . import works as works_mod
 from .config import LifeConfig
 from .lifecycle import DAY, expression_status, term_key
 from .safety import is_blocked, is_profane, normalize_for_match, overlap
@@ -56,7 +58,14 @@ _FOLLOW_RE = re.compile(
 _LEARN_RE  = re.compile(r"学到(?:了)?(?:啥|什么)|有什么收获|有啥收获|收获|有啥变化|有什么变化")
 _WEEK_RE   = re.compile(r"这周|本周|这一周|最近过得|这几天过得")
 _LIKE_RE   = re.compile(r"喜欢什么|喜欢看什么|迷上|最近.{0,3}迷|爱看什么|什么兴趣")
-_METHOD_RE = re.compile(r"怎么查的|你怎么知道|怎么知道的|怎么查到|最近学到(?:了)?(?:啥|什么)")
+_RECALL_RE = re.compile(
+    r"后来怎么样|后来呢|后来查|那个问题|上个月|之前研究|你查的那个|还在弄|还在查|弄得怎么样|进展"
+)
+_SHOW_RE = re.compile(
+    r"发我看看|给我看看|让我看看|发来看看|你写的|你整理的|(?:片单|清单|笔记).{0,4}发我|发我.{0,4}(?:片单|清单|笔记)"
+)
+LIFE_BUDGET = 780  # xiaoqing_chat 把 life_lines 截在 800 字，留一点余量
+_METHOD_RE  = re.compile(r"怎么查的|你怎么知道|怎么知道的|怎么查到|最近学到(?:了)?(?:啥|什么)")
 
 _VERBS = {
     "bili_popular": "刷B站热门，点开了",
@@ -240,7 +249,13 @@ def _opening(episode: dict[str, Any], title: str, who: str) -> str:
 
 
 def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: float) -> str:
-    """话题重合或问近况时给 1 个小课题；在查的写“在查”，查完的写收获。"""
+    return select_thread_ex(store, req, asking, now)[0]
+
+
+def select_thread_ex(
+    store: LifeStore, req: dict[str, Any], asking: bool, now: float
+) -> tuple[str, dict[str, Any] | None]:
+    """话题重合或问近况时给 1 个小课题；在查的写“在查”，查完的写收获。返回（行, 小课题）。"""
 
     context                                 = " ".join([req["text"], *req["recent"][-2:]])
     best: tuple[int, dict[str, Any]] | None = None
@@ -253,12 +268,15 @@ def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: floa
         if score >= _MIN_OVERLAP and (best is None or score > best[0]):
             best = (score, thread)
     if best is None:
-        return ""
+        return "", None
     thread = best[1]
     title  = thread.get("title", "")
     if thread.get("status") == "parked":
         hint = f"（下次想从{thread['resume_hint']}接着看）" if thread.get("resume_hint") else ""
-        return f"你查过一阵：{title}，查到一半{thread.get('park_reason') or '资料不太够'}，先放着了{hint}"
+        return (
+            f"你查过一阵：{title}，查到一半{thread.get('park_reason') or '资料不太够'}，先放着了{hint}",
+            thread,
+        )
     if thread.get("status") == "open":
         notes = [n for n in thread.get("notes", []) if n.get("note") and not n.get("superseded_by")]
         parts = []
@@ -267,12 +285,12 @@ def select_thread(store: LifeStore, req: dict[str, Any], asking: bool, now: floa
         if thread.get("open_question"):
             parts.append(f"还没弄懂：{thread['open_question']}")
         if not parts:
-            return f"你在查的小事：{title}（还没查完，可以说在研究）"
-        return f"你在查的小事：{title}（还没查完；{'；'.join(parts)}）"
+            return f"你在查的小事：{title}（还没查完，可以说在研究）", thread
+        return f"你在查的小事：{title}（还没查完；{'；'.join(parts)}）", thread
     if thread.get("status") == "reviewing":
-        return f"你在查的小事：{title}（查得差不多了，还没想好怎么总结）"
+        return f"你在查的小事：{title}（查得差不多了，还没想好怎么总结）", thread
     takeaway = str(thread.get("takeaway") or "")
-    return f"你前几天查过：{title}，收获：{takeaway}" if takeaway else ""
+    return (f"你前几天查过：{title}，收获：{takeaway}", thread) if takeaway else ("", thread)
 
 
 _DOING_BY_SOURCE = {
@@ -298,6 +316,8 @@ def current_line(store: LifeStore, now: float) -> str:
         doing = f"在B站搜〔{query}〕" if query else "在B站搜东西"
     elif choice == "thread_continue":
         doing = f"在B站接着查〔{query}〕" if query else "在B站接着查"
+    elif choice == "work_on":
+        doing = "整理自己的小作品"
     else:
         doing = "查百科里的一个说法"
     return f"你这会儿正在{doing}。"
@@ -423,35 +443,92 @@ def build_life_lines(
     cfg: LifeConfig,
     routine_slots: list[str] | None = None,
     learnings: list[str] | None     = None,
+    touched: list[bool] | None      = None,
 ) -> tuple[str, list[str]]:
+    """组装 ``life_lines``，总长控制在 ``LIFE_BUDGET`` 字内：开头说明和结尾依据必留，其余按优先级放，
+
+    放不下的整段丢掉：作品摘录 > 档案召回 > “正在做” > 经历 > 小课题行 > 作品行 > 打算 > 自己查明白的 / 查法
+    > 回顾快照 > 更正行。
+    """
+
+    now   = moment.timestamp()
     learn = learnings or []
     plan  = plan_lines(store, routine_slots or []) if wants_plans(req["text"]) else []
     episodes, asking = select_episodes(store, req, moment, cfg)
-    link = bool(_LINK_RE.search(req["text"]))
-    lines = [episode_line(e, moment, cfg, link=link) for e in episodes]
+    link      = bool(_LINK_RE.search(req["text"]))
+    context   = " ".join([req["text"], *req["recent"][-2:], *req["bot_recent"][-2:]])
+    recalling = bool(_RECALL_RE.search(req["text"]))
+    # 档案召回（追问“后来怎么样了”）或对上话题的更正
+    recall_part: list[str] = []
+    entry = dossier_mod.find_recall(store.dossiers, context, fallback=True) if recalling else None
+    if entry is not None:
+        recall_part = dossier_mod.recall_lines(entry, moment, cfg.episode_detail_days)
+    # 想看她的东西 / 近况 / 话题对上：作品
+    show = bool(_SHOW_RE.search(req["text"]))
+    work = works_mod.pick_work(store.works, context, now, any_work=show or asking)
+    excerpt   = [works_mod.excerpt_block(work)] if (show and work is not None) else []
+    work_part = [works_mod.work_line(work)] if (work is not None and not show) else []
+    thread_line, thread = select_thread_ex(store, req, asking, now)
+    if (
+        entry is not None
+        and thread is not None
+        and (
+            any(q.get("thread_id") == thread.get("id") for q in entry["questions"])
+            or works_mod.topics_match(str(thread.get("topic", "")), str(entry["topic"]))
+        )
+    ):
+        thread_line = ""
+    recap = []
     diary = store.state.get("diary") or {}
     if asking and diary.get("day") == moment.strftime("%Y-%m-%d") and diary.get("text"):
-        lines.append(f"- 今天大概：{diary['text']}")
-    lines += recap_lines(store, req, moment)
-    if (tone := tone_line(store, req, moment.timestamp())) and tone not in lines:
-        lines.append(tone)
-    thread_line = select_thread(store, req, asking, moment.timestamp())
-    doing       = current_line(store, moment.timestamp())
-    if not (lines or thread_line or doing or plan):
+        recap.append(f"- 今天大概：{diary['text']}")
+    recap += recap_lines(store, req, moment)
+    if (tone := tone_line(store, req, now)) and tone not in recap:
+        recap.append(tone)
+    fix_part: list[str]             = []
+    fix_row : dict[str, Any] | None = None
+    if not recalling:
+        fix, fix_row = dossier_mod.correction_line(store.dossiers, context, now)
+        fix_part = [fix] if fix else []
+    doing = current_line(store, now)
+    ep_lines = [episode_line(e, moment, cfg, link=link) for e in episodes]
+    if ep_lines and (_named_days(req["text"], moment) or asking):
+        ep_lines.append(_PART_NOTE)
+    # 显示顺序 → (优先级, 内容)；优先级小的先放
+    parts: list[tuple[int, list[str]]] = [
+        (0, excerpt),
+        (1, recall_part),
+        (2, [doing] if doing else []),
+        (3, ep_lines),
+        (8, recap),
+        (4, [thread_line] if thread_line else []),
+        (5, work_part),
+        (6, [_PLAN_HEADER, *plan] if plan else []),
+        (7, [_LEARN_HEADER, *learn] if learn else []),
+        (9, fix_part),
+    ]
+    if not any(content for prio, content in parts if prio != 7):
         if learn:
             return "\n".join([_LEARN_HEADER, *learn, _GUIDE]), []
         return "", []
-    parts = [
-        _LIFE_HEADER,
-        *([doing] if doing else []),
-        *lines,
-        *([thread_line] if thread_line else []),
-        *([_PLAN_HEADER, *plan] if plan else []),
-        *([_LEARN_HEADER, *learn] if learn else []),
-        *([_PART_NOTE] if _named_days(req["text"], moment) or asking else []),
-        _GUIDE,
-    ]
-    return "\n".join(parts), [e["id"] for e in episodes]
+    used           = len(_LIFE_HEADER) + len(_GUIDE) + 2
+    keep: set[int] = set()
+    for prio, content in sorted(parts, key=lambda p: p[0]):
+        size = sum(len(line) + 1 for line in content)
+        if content and used + size <= LIFE_BUDGET:
+            keep.add(prio)
+            used += size
+    lines = [_LIFE_HEADER]
+    for prio, content in parts:
+        if prio in keep:
+            lines += content
+    lines.append(_GUIDE)
+    if 9 in keep and fix_row is not None:
+        fix_row["last_suggested"] = now  # 真的给出去了才算
+        if touched is not None:
+            touched.append(True)
+    ids = [e["id"] for e in episodes] if 3 in keep else []
+    return "\n".join(lines), ids
 
 
 def share_line(episode: dict[str, Any], moment: datetime, cfg: LifeConfig) -> str:
@@ -474,14 +551,22 @@ def share_candidates(
         and e["id"] not in req["exclude"]
     ]
     rows.sort(key=lambda e: float(e["at"]), reverse=True)
-    return [
+    # 作品刚更新了就给它留一个位置（经历候选最多 2 条），总数仍 ≤3
+    work = works_mod.share_candidate(store.works, moment)
+    if work is not None and work["episode_id"] in req["exclude"]:
+        work = None
+    room  = MAX_SHARE - (1 if work is not None else 0)
+    found = [
         {
             "episode_id": e["id"],
             "line"      : share_line(e, moment, cfg),
             "topics"    : list(e.get("topics", [])),
         }
-        for e in rows[:MAX_SHARE]
+        for e in rows[:room]
     ]
+    if work is not None:
+        found.append(work)
+    return found
 
 
 # ───────────────────────────── 词条与表达 ─────────────────────────────
@@ -652,8 +737,12 @@ def turn_context(
         or dirty
     )
     learn, learn_dirty = learning_lines(store, req, now)
-    dirty = dirty or learn_dirty
-    life_lines, episode_ids = build_life_lines(store, req, moment, cfg, routine_slots, learn)
+    dirty               = dirty or learn_dirty
+    touched: list[bool] = []
+    life_lines, episode_ids = build_life_lines(
+        store, req, moment, cfg, routine_slots, learn, touched
+    )
+    dirty = dirty or bool(touched)
     slang, term_keys, used = build_slang_notes(store, req, now, cfg, rng)
     hint  = build_expression_hint(store, req, now, cfg, rng)
     dirty = dirty or used or bool(hint)

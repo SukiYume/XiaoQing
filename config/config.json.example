@@ -221,6 +221,17 @@
                 },
                 "xiaoqing_life": {
                         "enabled": false,
+                        "max_llm_calls_per_day": 30,
+                        "research_max_rounds": 3,
+                        "max_deep_reads_per_session": 1,
+                        "park_days": 3,
+                        "max_active_works": 1,
+                        "work_start_gap_days": 7,
+                        "dossier_keep_days": 365,
+                        "sources": {
+                                "wiki_read": true,
+                                "bili_subtitles": true
+                        },
                         "ai": {
                                 "routes": {
                                         "reasoning": {
