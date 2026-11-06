@@ -24,7 +24,7 @@ from .delivery import (
     outcome_message,
     upload_each,
 )
-from .loop import parse_tool_calls, response_message, run_agent_loop
+from .loop import complete, parse_tool_calls, run_agent_loop
 from .prompts import (
     build_delivery_messages,
     build_task_messages,
@@ -56,6 +56,18 @@ _PLAN_MARKS                 = {"done": "✓", "in_progress": "▶", "pending": "
 _MAX_NOTE_CHARS             = 1000
 _MAX_PENDING_NOTES          = 10
 _MAX_AWAITING_REPORTS       = 200
+_REVIEW_TIMEOUT_SECONDS     = 20.0
+# 这些工具只负责控制流程，不是执行回报里的事实。
+_CONTROL_TOOLS = frozenset(
+    {
+        "final_answer",
+        "send_message",
+        "update_plan",
+        "wait",
+        "xiaoqing_commands",
+        "xiaoai_capabilities",
+    }
+)
 
 
 @dataclass
@@ -85,6 +97,45 @@ class _Resend:
             rollback         = self.failed,
             unknown          = unknown,
         )
+
+
+def _delivery_evidence(
+    task: AgentTask, env: ToolEnv, outcome: Outcome, messages: list[dict[str, Any]]
+) -> tuple[list[str], list[str]]:
+    """交付核对的执行回报，以及工具原始回报（核对不可用时直接交付它们）。"""
+
+    evidence: list[str] = [
+        f"本轮执行已结束。执行状态：{outcome.status}。停止原因：{task.error or '无'}。"
+    ]
+    evidence.extend(env.closed_scopes.values())
+    reports: list[str] = []
+    for entry in messages[2:]:
+        if entry["role"] == "assistant":
+            evidence.extend(
+                f"调用 {call.name}：{call.arguments}"
+                for call in parse_tool_calls(entry)
+                if call.name not in _CONTROL_TOOLS
+            )
+        elif entry["role"] == "tool" and entry["name"] not in _CONTROL_TOOLS:
+            evidence.append(f"工具 {entry['name']} 回报：{entry['content']}")
+            reports.append(str(entry["content"]))
+        elif entry["role"] == "user":
+            evidence.append(str(entry["content"]))
+    return evidence, reports
+
+
+def _parse_verdict(content: Any) -> tuple[str, list[str]]:
+    """解析交付核对的输出；只有 ``unfinished`` 状态才带回待办事项，其余状态直接交付 reply。"""
+
+    payload = json.loads(content if isinstance(content, str) and content.strip() else "{}")
+    if not isinstance(payload, dict) or not isinstance(payload.get("reply"), str):
+        raise ValueError("delivery review requires a reply")
+    items = payload.get("unfinished")
+    if payload.get("state") != "unfinished" or not isinstance(items, list):
+        return payload["reply"].strip(), []
+    return payload["reply"].strip(), [
+        item.strip() for item in items if isinstance(item, str) and item.strip()
+    ]
 
 
 def _scene(chat: ChatRef) -> str:
@@ -153,11 +204,12 @@ class AgentRuntime:
         config: AgentConfig,
         chat: ChatRef,
         *,
-        goal: str,
         request_text: str,
         source: str,
         sender: str                       = "",
         admin: bool                       = False,
+        continues: str                    = "",
+        thread: Sequence[str]             = (),
         history: Sequence[dict[str, Any]] = (),
         images: Sequence[str]             = (),
         image_files: Sequence[str]        = (),
@@ -177,9 +229,10 @@ class AgentRuntime:
         task = AgentTask(
             task_id      = task_id,
             chat         = chat,
-            goal         = goal.strip(),
             request_text = request_text.strip(),
             source       = source,
+            continues    = continues,
+            thread       = list(thread),
             quoted_text  = quoted_text.strip(),
             image_files  = list(image_files),
             sender       = sender.strip(),
@@ -194,11 +247,11 @@ class AgentRuntime:
         self._active.add(task.runner)
         task.runner.add_done_callback(partial(self._forget, task))
         logger.info(
-            "xiaoqing_agent task started task=%s chat=%s source=%s goal_chars=%d",
+            "xiaoqing_agent task started task=%s chat=%s source=%s request_chars=%d",
             task_id,
             chat.key,
             source,
-            len(task.goal),
+            len(task.request_text),
         )
         return task
 
@@ -258,6 +311,7 @@ class AgentRuntime:
         history: list[dict[str, Any]],
         images: list[str],
     ) -> None:
+        env       : ToolEnv | None       = None
         outcome   : Outcome | None       = None
         transcript: list[dict[str, Any]] = []
         try:
@@ -268,117 +322,37 @@ class AgentRuntime:
             async with asyncio.timeout(config.task_timeout_seconds + _HARD_TIMEOUT_GRACE):
                 for delivery_attempt in range(2):
                     outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
-                    if task.command_results or env.closed_scopes:
-                        # 成功与失败都核对正文；附件、执行状态和写入结果沿用执行阶段的结果。
-                        evidence: list[str] = [
-                            f"本轮执行已结束。执行状态：{outcome.status}。停止原因：{task.error or '无'}。"
-                        ]
-                        evidence.extend(env.closed_scopes.values())
-                        tool_results: list[str] = []
-                        control_tools           = {
-                            "final_answer",
-                            "send_message",
-                            "update_plan",
-                            "wait",
-                            "xiaoqing_commands",
-                            "xiaoai_capabilities",
+                    if not (task.command_results or env.closed_scopes):
+                        break
+                    # 成功与失败都核对正文；附件、执行状态和写入结果沿用执行阶段的结果。
+                    evidence, reports = _delivery_evidence(task, env, outcome, messages)
+                    task.activity     = "核对结果"
+                    task.steps += 1
+                    review = build_delivery_messages(
+                        task, evidence, history, outcome.text if outcome.authored else ""
+                    )
+                    reply, unfinished = await self._review_delivery(env, task, review, transcript)
+                    targets = [*task.thread, task.request_text]
+                    pending = [item for item in unfinished if any(item in text for text in targets)]
+                    if (
+                        delivery_attempt == 0
+                        and pending
+                        and outcome.status == "done"
+                        and task.steps < config.max_steps
+                        and env.remaining() > 5
+                    ):
+                        listing    = "、".join(f"“{item}”" for item in pending)
+                        correction = {
+                            "role"   : "user",
+                            "content": f"交付核对：{listing}尚未完成。依据已有回报完成这一部分，再交付。",
                         }
-                        for entry in messages[2:]:
-                            if entry["role"] == "assistant":
-                                evidence.extend(
-                                    f"调用 {call.name}：{call.arguments}"
-                                    for call in parse_tool_calls(entry)
-                                    if call.name not in control_tools
-                                )
-                            elif entry["role"] == "tool" and entry["name"] not in control_tools:
-                                evidence.append(f"工具 {entry['name']} 回报：{entry['content']}")
-                                tool_results.append(str(entry["content"]))
-                            elif entry["role"] == "user":
-                                evidence.append(str(entry["content"]))
-                        review        = build_delivery_messages(task, evidence)
-                        task.activity = "核对结果"
-                        task.steps += 1
-                        checked                         = ""
-                        filtering: list[dict[str, str]] = []
-                        try:
-                            async with asyncio.timeout(min(20.0, max(1.0, env.remaining()))):
-                                result = await context.capabilities.ai.complete(
-                                    "agent",
-                                    review,
-                                    extra_payload={"response_format": {"type": "json_object"}},
-                                )
-                            content = response_message(result.response).get("content")
-                            payload = json.loads(
-                                content if isinstance(content, str) and content.strip() else "{}"
-                            )
-                            if isinstance(payload, dict) and isinstance(payload.get("reply"), str):
-                                checked = payload["reply"].strip()
-                                pending = payload.get("unfinished_request", "")
-                                if (
-                                    delivery_attempt == 0
-                                    and outcome.status == "done"
-                                    and task.command_results
-                                    and isinstance(pending, str)
-                                    and pending.strip()
-                                    and pending in (task.request_text or task.goal)
-                                    and task.steps < config.max_steps
-                                    and env.remaining() > 5
-                                ):
-                                    correction = {
-                                        "role"   : "user",
-                                        "content": f"交付核对：原请求中的“{pending}”尚未完成。依据已有回报完成这一部分，再交付。",
-                                    }
-                                    transcript.extend(
-                                        [
-                                            *review,
-                                            {"role": "assistant", "content": str(content)},
-                                            correction,
-                                        ]
-                                    )
-                                    messages.append(correction)
-                                    continue
-                            if checked:
-                                filtering = build_delivery_messages(
-                                    task, evidence, candidate=checked
-                                )
-                                task.steps += 1
-                                async with asyncio.timeout(min(20.0, max(1.0, env.remaining()))):
-                                    screened = await context.capabilities.ai.complete(
-                                        "agent",
-                                        filtering,
-                                        extra_payload={"response_format": {"type": "json_object"}},
-                                    )
-                                raw   = response_message(screened.response).get("content")
-                                edits = json.loads(
-                                    raw if isinstance(raw, str) and raw.strip() else "{}"
-                                )
-                                removals = edits.get("remove") if isinstance(edits, dict) else None
-                                if not isinstance(removals, list) or any(
-                                    not isinstance(fragment, str)
-                                    or not fragment
-                                    or fragment not in checked
-                                    for fragment in removals
-                                ):
-                                    raise ValueError(
-                                        "delivery filter requires exact source fragments"
-                                    )
-                                for fragment in removals:
-                                    checked = checked.replace(fragment, "")
-                                checked = checked.strip()
-                        except (AIError, RuntimeError, TimeoutError, ValueError) as exc:
-                            checked = ""
-                            logger.warning(
-                                "xiaoqing_agent delivery review failed task=%s error_type=%s",
-                                task.task_id,
-                                type(exc).__name__,
-                            )
-                        outcome.text = checked or (
-                            "工具回报拿到了，整理回复这一步没接上。当前回报：\n"
-                            + "\n\n".join(tool_results + list(env.closed_scopes.values()))
-                        )
-                        transcript.extend(
-                            [*review, *filtering, {"role": "assistant", "content": outcome.text}]
-                        )
+                        transcript.append(correction)
+                        messages.append(correction)
+                        continue
+                    outcome.text = reply or (
+                        "工具回报拿到了，整理回复这一步没接上。当前回报：\n"
+                        + "\n\n".join(reports + list(env.closed_scopes.values()))
+                    )
                     break
             assert outcome is not None
             task.status = "done" if outcome.status == "done" else "failed"
@@ -404,11 +378,15 @@ class AgentRuntime:
             self.running.pop(task.task_id, None)
             await asyncio.shield(self._persist(task, transcript))
             logger.info(
-                "xiaoqing_agent task finished task=%s status=%s steps=%d elapsed=%.1fs",
+                "xiaoqing_agent task finished task=%s status=%s steps=%d elapsed=%.1fs"
+                " model_calls=%d model_s=%.1f tool_s=%.1f",
                 task.task_id,
                 task.status,
                 task.steps,
                 task.elapsed,
+                env.model_calls if env else 0,
+                env.model_seconds if env else 0.0,
+                env.tool_seconds if env else 0.0,
             )
         if outcome is not None:
             if task.notes:
@@ -420,6 +398,34 @@ class AgentRuntime:
                 )
                 task.notes.clear()
             await self._hand_over(context, task, outcome)
+
+    async def _review_delivery(
+        self,
+        env: ToolEnv,
+        task: AgentTask,
+        review: list[dict[str, str]],
+        transcript: list[dict[str, Any]],
+    ) -> tuple[str, list[str]]:
+        """交付核对：返回最终回复与尚未完成的事项；核对不可用时回复为空。"""
+
+        try:
+            async with asyncio.timeout(min(_REVIEW_TIMEOUT_SECONDS, max(1.0, env.remaining()))):
+                message = await complete(
+                    env,
+                    review,
+                    None,
+                    extra_payload={"response_format": {"type": "json_object"}},
+                )
+            content = message.get("content")
+            transcript.extend([*review, {"role": "assistant", "content": str(content)}])
+            return _parse_verdict(content)
+        except (AIError, RuntimeError, TimeoutError, ValueError) as exc:
+            logger.warning(
+                "xiaoqing_agent delivery review failed task=%s error_type=%s",
+                task.task_id,
+                type(exc).__name__,
+            )
+            return "", []
 
     def _forget(self, task: AgentTask, runner: asyncio.Task[None]) -> None:
         """任务协程结束后总是注销；还没开始就被取消的任务不会进入 ``_run`` 的收尾。"""
@@ -650,7 +656,7 @@ class AgentRuntime:
             return "现在在跑的任务不是你发起的，只有发起人或 Bot 管理员能停止或补充它。"
         if task_id or len(tasks) <= 1:
             return tasks
-        listing = "\n".join(f"[{task.task_id}] {task.goal[:60]}" for task in tasks)
+        listing = "\n".join(f"[{task.task_id}] {task.request_text[:60]}" for task in tasks)
         return (
             f"现在有 {len(tasks)} 个任务在跑：\n{listing}\n"
             "请指明是哪一个（任务ID），全部的话说 all。"
@@ -710,7 +716,7 @@ class AgentRuntime:
         for task in tasks:
             initiator = record_initiator(task.record())
             lines     = [
-                f"[{task.task_id}] {task.goal[:100]}"
+                f"[{task.task_id}] {task.request_text[:100]}"
                 + (f"（{initiator} 发起）" if initiator else ""),
                 f"已运行 {task.elapsed:.0f} 秒，第 {task.steps} 步，{task.activity}",
             ]

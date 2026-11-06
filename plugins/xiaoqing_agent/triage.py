@@ -72,7 +72,7 @@ def parse_decision(
         )
     ):
         return TriageDecision("update", task_id=task_id)
-    return TriageDecision("task")
+    return TriageDecision("task", task_id=task_id)
 
 
 async def triage_turn(

@@ -22,7 +22,7 @@ from core.router import resolve_context_command_invocation
 from .config import AgentConfig, load_agent_config
 from .prompts import configured_bot_name, configured_persona
 from .runtime import AgentRuntime
-from .tasks import Actor, AgentTask, ChatRef
+from .tasks import MAX_RECORDS_PER_CHAT, Actor, AgentTask, ChatRef
 from .triage import TRIAGE_ACTIONS, TriageDecision, triage_turn
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,9 @@ _ROOT_CODE         = "xiaoqing_agent.agent"
 _MAX_HISTORY       = 20
 _MAX_PERSONA_CHARS = 12000
 _MAX_IMAGES        = 6
+# 续接任务的验收线索：最多保留最近几条，每条的字数上限。
+_MAX_THREAD_LINES  = 8
+_MAX_THREAD_CHARS  = 500
 _DISABLED_TIP      = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
 
 HELP_TEXT = """🛠 小青 agent
@@ -119,10 +122,11 @@ async def _start_and_wait(
     runtime: AgentRuntime,
     chat: ChatRef,
     *,
-    goal: str,
     request_text: str,
     source: str,
     sender: str                          = "",
+    continues: str                       = "",
+    thread: list[str] | None             = None,
     history: list[dict[str, Any]] | None = None,
     images: list[str] | None             = None,
     image_files: list[str] | None        = None,
@@ -135,11 +139,12 @@ async def _start_and_wait(
         context,
         config,
         chat,
-        goal         = goal,
         request_text = request_text,
         source       = source,
         sender       = sender,
         admin        = _actor(context, chat).admin,
+        continues    = continues,
+        thread       = thread or [],
         history      = history or [],
         images       = images or [],
         image_files  = image_files or [],
@@ -252,6 +257,53 @@ async def _triage(
     return decision
 
 
+async def _continuation(
+    runtime: AgentRuntime,
+    chat: ChatRef,
+    task_id: str,
+    history: list[dict[str, Any]],
+    text: str,
+) -> tuple[str, list[str]]:
+    """本轮续接最近的某个任务时，返回它的 ID 和验收线索：发起人本人的原话，旧→新，不含本轮。
+
+    线索 = 续接链（沿 ``continues`` 回溯到根任务）上各任务的原话，加上发起人在根任务之后
+    亲口说过的每一句；逐字保留，只做去重和截断，不改写。
+    """
+
+    records = {
+        str(item.get("task_id")): item
+        for item in await runtime.recent_records(chat, MAX_RECORDS_PER_CHAT)
+    }
+    chain: list[dict[str, Any]] = []
+    record = records.get(task_id)
+    while record is not None and record not in chain:
+        chain.append(record)
+        record = records.get(str(record.get("continues") or ""))
+    if not chain:
+        return "", []
+    root_at = float(chain[-1].get("created_at") or 0)
+    clues   = [
+        (float(item.get("created_at") or 0), str(item.get("request_text") or "")) for item in chain
+    ]
+    clues  += [
+        (float(item["ts"]), str(item.get("text") or ""))
+        for item in history
+        if item.get("role") == "user"
+        and str(item.get("user_id")) == str(chat.user_id)
+        and isinstance(item.get("ts"), int | float)
+        and item["ts"] > root_at
+    ]
+    seen   = {"".join(text[:_MAX_THREAD_CHARS].split())}
+    thread: list[str] = []
+    for _ts, line in sorted(clues, key=lambda clue: clue[0]):
+        line = line.strip()[:_MAX_THREAD_CHARS]
+        key  = "".join(line.split())
+        if key and key not in seen:
+            seen.add(key)
+            thread.append(line)
+    return task_id, thread[-_MAX_THREAD_LINES:]
+
+
 async def _act(
     context: Any,
     config: AgentConfig,
@@ -280,15 +332,17 @@ async def _act(
         message = segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
         return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
 
+    continues, thread = await _continuation(runtime, chat, decision.task_id, history, text)
     message, task = await _start_and_wait(
         context,
         config,
         runtime,
         chat,
-        goal         = text[:2000],
         request_text = text,
         source       = "chat",
         sender       = sender,
+        continues    = continues,
+        thread       = thread,
         history      = history,
         images       = _string_list(turn.get("images"), _MAX_IMAGES),
         image_files  = _string_list(turn.get("image_files"), _MAX_IMAGES),
@@ -367,7 +421,6 @@ async def handle(
                 config,
                 runtime,
                 chat,
-                goal         = rest,
                 request_text = rest,
                 source       = "command",
                 sender       = sender_display_name(event.get("sender")),

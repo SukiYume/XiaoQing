@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -195,20 +196,30 @@ def _take_notes(task: Any) -> str:
     return _NOTES_PREFIX + "\n".join(notes) if notes else ""
 
 
-async def _complete(
+async def complete(
     env: ToolEnv,
     messages: list[dict[str, Any]],
     tools: dict[str, Tool] | None,
+    *,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """一次 agent 模型调用，次数与耗时记在 ``env`` 上。"""
+
     ai = env.context.capabilities.ai
     if ai is None:
         raise AIError("AI capability is unavailable")
-    result = await ai.complete(
-        AGENT_ROUTE,
-        messages,
-        tools       = [tool.schema() for tool in tools.values()] if tools else None,
-        tool_choice = "auto" if tools else None,
-    )
+    started = time.perf_counter()
+    try:
+        result = await ai.complete(
+            AGENT_ROUTE,
+            messages,
+            tools         = [tool.schema() for tool in tools.values()] if tools else None,
+            tool_choice   = "auto" if tools else None,
+            extra_payload = extra_payload,
+        )
+    finally:
+        env.model_calls += 1
+        env.model_seconds += time.perf_counter() - started
     return response_message(result.response)
 
 
@@ -227,7 +238,7 @@ async def _wrap_up(
     )
     _append(messages, transcript, {"role": "user", "content": prompt})
     try:
-        reply = await _complete(env, messages, None)
+        reply = await complete(env, messages, None)
         _append(messages, transcript, _assistant_message(reply, []))
         text = _message_content(reply).strip()
     except (AIError, RuntimeError):
@@ -278,7 +289,7 @@ async def run_agent_loop(
             available = tools
             if env.wait_blocked_reason or env.task.command_results:
                 available = {name: tool for name, tool in tools.items() if name != "wait"}
-            message = await _complete(env, messages, available)
+            message = await complete(env, messages, available)
         except (AIError, RuntimeError) as exc:
             logger.warning(
                 "xiaoqing_agent model call failed task=%s error_type=%s",
@@ -293,7 +304,7 @@ async def run_agent_loop(
         if not calls:
             text = _message_content(message).strip()
             if text and not task.notes:
-                return Outcome(text)
+                return Outcome(text, authored=True)
             if text:
                 continue
             empty_replies += 1

@@ -131,7 +131,6 @@ async def test_a_member_gets_a_task_limited_to_their_own_commands(tmp_path: Path
         ),
         _final("最近一次是四川 M5.1"),
         ai_response(json.dumps({"reply": "最近一次是四川 M5.1"})),
-        ai_response('{"remove": []}'),
     ]
     turn = _turn("小青 最近有地震吗", user_id=MEMBER_ID, group_id=GROUP_ID, sender_name="路人")
     result = await agent_main.handle_turn(turn, context)
@@ -242,7 +241,7 @@ async def test_fast_task_answers_in_the_same_turn(context: FakeAgentContext) -> 
     assert len(result["task_id"]) == 6
     task_prompt = context.ai.calls[1][1]
     assert "temperature" not in context.ai.calls[1][2]
-    assert "任务：小青，2 的 100 次方是多少" in task_prompt[1]["content"]
+    assert "本轮原话：小青，2 的 100 次方是多少" in task_prompt[1]["content"]
     assert "主人" in task_prompt[0]["content"]
     assert "QQ" in task_prompt[0]["content"]
     assert 'zoneinfo.ZoneInfo("Asia/Shanghai")' in task_prompt[0]["content"]
@@ -343,7 +342,6 @@ async def test_help_to_ledger_write_and_followup_edit_preserves_one_row(
             write_from_help,
             _final("记好了"),
             ai_response(json.dumps({"reply": "记好了"})),
-            ai_response('{"remove": []}'),
         ]
         first = await agent_main.handle_turn(_turn("帮我记账：" + add_args), context)
         assert first["reply_text"] == "记好了"
@@ -369,7 +367,6 @@ async def test_help_to_ledger_write_and_followup_edit_preserves_one_row(
             ),
             _final("改好了"),
             ai_response(json.dumps({"reply": "改好了"})),
-            ai_response('{"remove": []}'),
         ]
         second = await agent_main.handle_turn(_turn("刚才那笔改一下：" + edit_args), context)
         assert second["reply_text"] == "改好了"
@@ -535,7 +532,7 @@ async def test_agent_run_respects_the_switch_and_skips_triage(context: FakeAgent
     context.ai.script               = [_final("等于 2")]
     assert await _command(context, "run 算一下 1+1", group_id=GROUP_ID) == "等于 2"
     assert len(context.ai.calls) == 1
-    assert "任务：算一下 1+1" in context.ai.calls[0][1][1]["content"]
+    assert "本轮原话：算一下 1+1" in context.ai.calls[0][1][1]["content"]
     assert f"当前会话：QQ 群 {GROUP_ID}" in context.ai.calls[0][1][0]["content"]
 
     history = await _command(context, "history", group_id=GROUP_ID)
@@ -644,7 +641,6 @@ async def test_init_sweeps_unfinished_records_and_shutdown_stops_tasks(tmp_path:
         context,
         AgentConfig(enabled=True),
         ChatRef(ADMIN_ID, None),
-        goal         = "g",
         request_text = "g",
         source       = "chat",
     )
@@ -668,7 +664,7 @@ def test_parse_decision_is_conservative() -> None:
     assert parse_decision('{"action": "status"}', running=running).action == "conversation"
 
     fenced = parse_decision(
-        '思考完毕\n```json\n{"action": "task", "goal": "", "reply": "好"}\n```',
+        '思考完毕\n```json\n{"action": "task", "reply": "好"}\n```',
         running=running,
     )
     assert fenced.action == "task"
@@ -681,8 +677,7 @@ def test_update_for_a_finished_task_starts_a_new_one() -> None:
         AgentTask(
             task_id      = "run001",
             chat         = ChatRef(ADMIN_ID, None),
-            goal         = "数桌面上的 PDF",
-            request_text = "",
+            request_text = "数桌面上的 PDF",
             source       = "chat",
         )
     ]
@@ -695,7 +690,7 @@ def test_update_for_a_finished_task_starts_a_new_one() -> None:
         decision = parse_decision(raw, running=running)
         return decision.action, decision.task_id
 
-    assert decide("done01") == ("task", "")
+    assert decide("done01") == ("task", "done01")
     assert decide("run001") == ("update", "run001")
     assert decide("") == ("update", "")
     assert decide("all") == ("update", "all")
@@ -830,7 +825,7 @@ def test_merged_agent_prompt_selects_each_stage_and_reloads(tmp_path, monkeypatc
     )
     path.write_text(document, encoding="utf-8")
     monkeypatch.setattr(prompts, "_PROMPT_DIR", tmp_path)
-    task = AgentTask("t1", ChatRef(ADMIN_ID, None), "记账", "早餐12.5", "chat", persona="自然说话")
+    task = AgentTask("t1", ChatRef(ADMIN_ID, None), "早餐12.5", "chat", persona="自然说话")
     triage = prompts.build_triage_messages(
         bot_name="小青", text=task.request_text, history=[], running=[], recent=[]
     )
@@ -850,14 +845,14 @@ def test_merged_agent_prompt_selects_each_stage_and_reloads(tmp_path, monkeypatc
         recent     = [],
         images     = [],
     )
-    reply = prompts.build_delivery_messages(task, ["金额12.5"])
+    reply = prompts.build_delivery_messages(task, ["金额12.5"], [])
     assert triage[0]["content"] == "判断：小青\n"
     assert execution[0]["content"].startswith("执行：小青，主人，")
     assert execution[0]["content"].endswith("，自然说话\n")
     assert "核对：" not in execution[0]["content"] and "编辑说明" not in execution[0]["content"]
     assert reply[0]["content"] == "核对：自然说话\n"
     path.write_text(document.replace("核对：", "更新核对："), encoding="utf-8")
-    assert prompts.build_delivery_messages(task, [])[0]["content"] == "更新核对：自然说话\n"
+    assert prompts.build_delivery_messages(task, [], [])[0]["content"] == "更新核对：自然说话\n"
 
 
 @pytest.mark.parametrize(
@@ -911,7 +906,7 @@ async def test_decide_then_act_judges_once(context: FakeAgentContext) -> None:
     assert acted is not None and acted["reply_text"] == "1024"
     assert len(context.ai.calls) == 2
     record = (await agent_main.get_runtime(context).recent_records(ChatRef(ADMIN_ID, None), 1))[0]
-    assert record["goal"] == "2 的 10 次方"
+    assert record["request_text"] == "2 的 10 次方"
 
     context.ai.script = [_triage("conversation")]
     assert await agent_main.handle_turn({**_turn("你好"), "phase": "decide"}, context) is None
@@ -936,3 +931,122 @@ async def test_undelivered_inline_reply_is_reported_into_history(context: FakeAg
     await agent_main.report_delivery({"task_id": result["task_id"], "delivered": False}, context)
     assert "结果没发出去" in await _command(context, "history")
     await _shutdown(context)
+
+
+# ──────────────────── 续接任务的验收线索 ────────────────────
+
+
+def _done_task(task_id: str, text: str, at: float, continues: str = "") -> AgentTask:
+    return AgentTask(
+        task_id,
+        ChatRef(ADMIN_ID, None),
+        text,
+        "chat",
+        created_at=at,
+        continues=continues,
+        status="done",
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_collects_the_initiators_own_words_along_the_chain(
+    tmp_path: Path,
+) -> None:
+    runtime = agent_main.AgentRuntime(tmp_path)
+    chat = ChatRef(ADMIN_ID, None)
+    for task in (
+        _done_task("aaa111", "添加一个多节点事件 11.14-15", 100.0),
+        _done_task("bbb222", "改", 200.0, continues="aaa111"),
+    ):
+        await runtime.store.save(task)
+    history = [
+        {"role": "user", "user_id": ADMIN_ID, "text": "更早的闲聊", "ts": 99.0},
+        {"role": "user", "user_id": ADMIN_ID, "text": "创建，提前一天提醒", "ts": 150.0},
+        {"role": "user", "user_id": MEMBER_ID, "text": "别人插话", "ts": 160.0},
+        {"role": "assistant", "user_id": None, "text": "好的", "ts": 170.0},
+        {"role": "user", "user_id": ADMIN_ID, "text": "你创建成了  两个单次事件", "ts": 250.0},
+        {"role": "user", "user_id": ADMIN_ID, "text": "没有时间戳"},
+    ]
+    continues, thread = await agent_main._continuation(runtime, chat, "bbb222", history, "改")
+    assert continues == "bbb222"
+    assert thread == [
+        "添加一个多节点事件 11.14-15",
+        "创建，提前一天提醒",
+        "你创建成了  两个单次事件",
+    ]
+    # 同一句话（去空白后）只保留一次。
+    history.append(
+        {"role": "user", "user_id": ADMIN_ID, "text": "你创建成了两个单次事件", "ts": 260.0}
+    )
+    assert (await agent_main._continuation(runtime, chat, "bbb222", history, "改"))[1] == thread
+
+
+@pytest.mark.asyncio
+async def test_continuation_ignores_unknown_ids_and_bounds_the_thread(tmp_path: Path) -> None:
+    runtime = agent_main.AgentRuntime(tmp_path)
+    chat = ChatRef(ADMIN_ID, None)
+    await runtime.store.save(_done_task("loop01", "自己续接自己", 100.0, continues="loop01"))
+    assert await agent_main._continuation(runtime, chat, "nope", [], "改") == ("", [])
+    assert await agent_main._continuation(runtime, chat, "", [], "改") == ("", [])
+    assert await agent_main._continuation(runtime, chat, "loop01", [], "改") == (
+        "loop01",
+        ["自己续接自己"],
+    )
+    history = [
+        {
+            "role": "user",
+            "user_id": ADMIN_ID,
+            "text": f"第{index}句" + "长" * 600,
+            "ts": 200.0 + index,
+        }
+        for index in range(12)
+    ]
+    _, thread = await agent_main._continuation(runtime, chat, "loop01", history, "改")
+    assert len(thread) == 8 and all(len(line) == 500 for line in thread)
+    assert thread[-1].startswith("第11句")
+
+
+@pytest.mark.asyncio
+async def test_follow_up_task_receives_the_acceptance_target(context: FakeAgentContext) -> None:
+    context.ai.script = [_triage("task"), _final("已创建")]
+    first = await agent_main.handle_turn(_turn("添加一个多节点事件"), context)
+    assert first is not None
+    history = [
+        {
+            "role": "user",
+            "name": "主人",
+            "user_id": ADMIN_ID,
+            "text": "创建，提前一天提醒",
+            "ts": 9e9,
+        }
+    ]
+    context.ai.script = [_triage("task", task_id=first["task_id"]), _final("改好了")]
+    second = await agent_main.handle_turn(_turn("改", history=history), context)
+    assert second is not None
+
+    prompt = context.ai.calls[-1][1][1]["content"].splitlines()
+    assert "1. 添加一个多节点事件" in prompt and "2. 创建，提前一天提醒" in prompt
+    assert "本轮原话：改" in prompt
+    record = (await agent_main.get_runtime(context).recent_records(ChatRef(ADMIN_ID, None), 1))[0]
+    assert record["continues"] == first["task_id"]
+    assert record["thread"] == ["添加一个多节点事件", "创建，提前一天提醒"]
+
+
+def test_acceptance_target_lists_the_thread_only_for_follow_ups() -> None:
+    from plugins.xiaoqing_agent.prompts import acceptance_target
+
+    task = AgentTask("t1", ChatRef(ADMIN_ID, None), "改", "chat")
+    assert acceptance_target(task) == "本轮原话：改"
+    task.thread = ["添加事件", "提前一天提醒"]
+    assert acceptance_target(task).splitlines() == [
+        "验收目标（发起人本人的原话，按时间顺序；本轮续接这些要求，全部满足才算完成）：",
+        "1. 添加事件",
+        "2. 提前一天提醒",
+        "本轮原话：改",
+    ]
+
+
+def test_parse_decision_keeps_the_continued_task_id_for_tasks() -> None:
+    long_id = "ab12cd" + "x" * 40
+    decision = parse_decision(json.dumps({"action": "task", "task_id": long_id}), running=[])
+    assert decision.action == "task" and decision.task_id == long_id[:32]

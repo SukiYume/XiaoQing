@@ -8,6 +8,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -42,6 +43,11 @@ _READ_SKIP_CHARS      = 1 << 20
 _TRUNCATION_MARKER    = "\n…（中间输出已省略）…\n"
 _AGENT_DIR            = ".agent"
 _CODEX_SESSION_PREFIX = "agent-"
+# 命令回报里的记录 ID（UUID、32 位或 8 位十六进制）：判断重复调用时不算差异。
+_RECORD_ID_RE = re.compile(
+    r"\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|[0-9a-f]{8})\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -94,6 +100,10 @@ class ToolEnv:
     closed_scopes      : dict[str, str] = field(default_factory=dict)
     wait_blocked_reason: str = ""
     user_updates       : list[str] = field(default_factory=list)
+    # 模型调用次数与累计耗时、工具累计耗时（秒），任务结束时写进日志。
+    model_calls  : int   = 0
+    model_seconds: float = 0.0
+    tool_seconds : float = 0.0
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -456,7 +466,9 @@ async def _final_answer(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise ToolError("这些文件不存在，请检查路径后再交付: " + ", ".join(missing))
-    return ToolResult("已交付", final=Outcome(answer, [str(path) for path in files]))
+    return ToolResult(
+        "已交付", final=Outcome(answer, [str(path) for path in files], authored=True)
+    )
 
 
 # ──────────────────── XiaoQing 命令 ────────────────────
@@ -770,7 +782,7 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
                         "remark"          : data.get("remark") or "",
                     }
                 fields["source_text"] = "\n".join(
-                    [env.task.request_text or env.task.goal, *env.user_updates]
+                    [env.task.request_text, *env.user_updates]
                 )
                 command = "/pendo ledger record " + json.dumps(fields, ensure_ascii=False)
             break
@@ -811,7 +823,9 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
         env.wait_blocked_reason        = reason
         body += "\n执行状态：accepted；" + reason
         return ToolResult(body, state="accepted")
-    fingerprint = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    # 同一条命令得到同样的回报才算重复；记录 ID 每次不同，不能算作新信息。
+    observation = f"{' '.join(command.split())}\n{_RECORD_ID_RE.sub('#', body)}"
+    fingerprint = hashlib.sha256(observation.encode("utf-8")).hexdigest()
     observed = env.observations.setdefault(scope, {})
     observed[fingerprint] = observed.get(fingerprint, 0) + 1
     failed = (outcome is not None and outcome.state in {"error", "incomplete"}) or body.startswith(
@@ -831,18 +845,14 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
             body + "\n" + reason, state="blocked", progress=False, command_outcome=outcome
         )
     if observed[fingerprint] >= 3:
-        reason                   = "该服务已连续多次返回相同内容，重复查询没有取得新信息。本轮停止这一路径，交付已有结果与缺口；其他独立事项可继续。"
+        reason                   = "该命令已连续多次得到相同结果，重复调用没有取得新信息。本轮停止这一路径，交付已有结果与缺口；其他独立事项可继续。"
         env.closed_scopes[scope] = reason
         env.wait_blocked_reason  = reason
-        final                    = (
-            Outcome(body, [str(path) for path in sorted(env.command_files)])
-            if outcome is not None and outcome.state == "completed"
-            else None
-        )
-        return ToolResult(body + "\n" + reason, state="blocked", progress=False, final=final)
-    if observed[fingerprint] == 2:
+        return ToolResult(body + "\n" + reason, state="blocked", progress=False)
+    if observed[fingerprint] == 2 and not failed:
         body += (
-            "\n本次结果与此前相同，未取得新信息。请根据已有结果交付；继续查询需要明确尚缺的内容。"
+            "\n与本任务前面一次调用的命令和结果相同（记录 ID 除外），重复同样的调用不会得到不同结果。"
+            "需要不同结果时换用其他写法或参数；做不到时向发起人说明缺口。"
         )
     if outcome is not None:
         body += f"\n执行状态：{outcome.state}"
@@ -886,7 +896,7 @@ async def _xiaoai_execute(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 12:
         raise ToolError("operations 需要包含 1–12 个操作。")
     # 运行中补充的要求按先后附在原话后面：小爱以最后一次明确说出的数量核对操作。
-    request = [env.task.request_text or env.task.goal, *env.user_updates]
+    request = [env.task.request_text, *env.user_updates]
     payload = json.dumps(
         {"operations": operations, "original_request": request if len(request) > 1 else request[0]},
         ensure_ascii = False,
@@ -1291,6 +1301,7 @@ async def execute_tool(
         return ToolResult(
             f"错误：没有名为 {name} 的工具。可用: {', '.join(tools)}", state="error", progress=False
         )
+    started = time.perf_counter()
     try:
         result = await tool.handler(env, parse_arguments(raw_arguments))
     except ToolError as exc:
@@ -1299,6 +1310,8 @@ async def execute_tool(
         result = ToolResult(
             f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error", progress=False
         )
+    finally:
+        env.tool_seconds += time.perf_counter() - started
     if name == "xiaoqing_commands" and result.state == "ok":
         fingerprint           = hashlib.sha256(result.content.encode("utf-8")).hexdigest()
         observed              = env.observations.setdefault("tool:xiaoqing_commands", {})

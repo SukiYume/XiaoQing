@@ -24,6 +24,7 @@ from plugins.xiaoqing_agent.tasks import AgentTask, ChatRef
 from plugins.xiaoqing_agent.tools import (
     ToolEnv,
     ToolError,
+    ToolResult,
     build_tools,
     codex_session_label,
     execute_tool,
@@ -369,45 +370,71 @@ async def test_delivery_preserves_command_attachment_without_copying_path(tmp_pa
     assert text_only.final.files == []
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("completed", [False, True])
-async def test_unchanged_result_reports_no_progress_before_stopping(tmp_path, completed):
+def _command_env(tmp_path: Path, reply: Any) -> tuple[ToolEnv, AsyncMock]:
+    """命令回报由 ``reply`` 决定（每次调用得到的文字）。"""
+
     from tests.core.test_command_catalog import _load_catalog
 
-    runner = SimpleNamespace(
-        run=AsyncMock(
-            return_value=DeliverySegments(
-                [{"type": "text", "data": {"text": "两篇论文及链接"}}],
-                outcome=CommandOutcome("completed") if completed else None,
-            )
+    run = AsyncMock(
+        side_effect=lambda command, **_: DeliverySegments(
+            [{"type": "text", "data": {"text": reply(command)}}],
+            outcome=CommandOutcome("completed"),
         )
     )
     context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+        tmp_path / "data",
+        catalog=_load_catalog().roots,
+        command_runner=SimpleNamespace(run=run),
     )
-    env   = _env(tmp_path, context)
-    tools = _tools(env)
-    first = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/paper search FRB"}
+    return _env(tmp_path, context), run
+
+
+async def _search(env: ToolEnv, command: str) -> ToolResult:
+    return await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": command}
     )
-    second = await execute_tool(
-        tools,
-        env,
-        "xiaoqing_command",
-        {"delivery": "continue", "command": "/paper search fast radio burst"},
-    )
-    third = await execute_tool(
-        tools,
-        env,
-        "xiaoqing_command",
-        {"delivery": "continue", "command": "/paper search repeater"},
-    )
+
+
+@pytest.mark.asyncio
+async def test_identical_command_and_result_report_no_progress_then_close_the_scope(tmp_path):
+    env, _ = _command_env(tmp_path, lambda command: "两篇论文及链接")
+    first  = await _search(env, "/paper search FRB")
+    second = await _search(env, "/paper  search FRB")
+    third  = await _search(env, "/paper search FRB")
     assert first.progress and first.content.startswith("两篇论文及链接")
-    assert not second.progress and "未取得新信息" in second.content
-    assert second.state == "ok" and third.state == "blocked"
-    assert (third.final is not None) == completed
-    if completed:
-        assert third.final.status == "done"
+    assert not second.progress and second.state == "ok"
+    assert "命令和结果相同" in second.content
+    assert third.state == "blocked" and third.final is None
+    assert env.closed_scopes
+    assert "两篇论文及链接" in third.content
+
+
+@pytest.mark.asyncio
+async def test_different_commands_with_the_same_text_are_new_progress(tmp_path):
+    env, run = _command_env(tmp_path, lambda command: "没有找到相关记录")
+    for command in ("/paper search FRB", "/paper search repeater", "/paper search host"):
+        result = await _search(env, command)
+        assert result.progress and "命令和结果相同" not in result.content
+    assert run.await_count == 3 and not env.closed_scopes
+
+
+@pytest.mark.asyncio
+async def test_same_command_that_differs_only_by_record_id_counts_as_a_repeat(tmp_path):
+    ids = iter(["3f2a9c1b", "9d8e7f6a", "0123456789abcdef0123456789abcdef"])
+    env, _ = _command_env(tmp_path, lambda command: f"已创建，ID {next(ids)}")
+    first  = await _search(env, "/paper search FRB")
+    second = await _search(env, "/paper search FRB")
+    assert first.progress
+    assert not second.progress and "命令和结果相同（记录 ID 除外）" in second.content
+
+
+@pytest.mark.asyncio
+async def test_deleting_two_different_records_is_not_a_repeat(tmp_path):
+    env, _ = _command_env(tmp_path, lambda command: "已删除")
+    first  = await _search(env, "/paper search 3f2a9c1b")
+    second = await _search(env, "/paper search 9d8e7f6a")
+    assert first.progress and second.progress
+    assert "命令和结果相同" not in second.content
 
 
 @pytest.mark.asyncio
@@ -742,7 +769,6 @@ async def test_xiaoai_structured_tools_use_command_permissions_and_original_requ
     )
     env                   = _env(tmp_path, context)
     env.task.request_text = "出两份粮"
-    env.task.goal         = "模型改写后的任务"
     tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent", "xiaoai"}))
     assert ("xiaoai_execute" in tools) == available
     if not available:
@@ -767,7 +793,7 @@ def _env(
     remaining: float           = 600.0,
     admin: bool                = True,
 ) -> ToolEnv:
-    task = AgentTask("abc123", ChatRef(ADMIN_ID, None), "目标", "原话", "chat", admin=admin)
+    task = AgentTask("abc123", ChatRef(ADMIN_ID, None), "原话", "chat", admin=admin)
     workspace = tmp_path / "workspace"
     out_dir   = workspace / "out" / task.task_id
     out_dir.mkdir(parents=True)

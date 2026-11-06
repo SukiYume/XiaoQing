@@ -99,7 +99,13 @@ async def _recent_history(hctx: HandlerContext, event: dict[str, Any]) -> list[d
     )
     # 带上说话人的 QQ 号：agent 据此分清发起人本人和群里其他人。
     return [
-        {"role": item.role, "name": item.name, "user_id": item.user_id, "text": item.content}
+        {
+            "role"   : item.role,
+            "name"   : item.name,
+            "user_id": item.user_id,
+            "text"   : item.content,
+            "ts"     : item.ts,
+        }
         for item in history
         if not (item.role == "user" and current is not None and item.message_id == current)
     ][-_HISTORY_ITEMS:]

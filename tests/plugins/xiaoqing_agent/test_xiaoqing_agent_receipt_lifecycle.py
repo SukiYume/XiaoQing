@@ -45,7 +45,7 @@ def _files(tmp_path: Path, *names: str) -> list[Path]:
 
 
 def _task(task_id: str = "t1") -> AgentTask:
-    return AgentTask(task_id, CHAT, "目标", "原话", "chat", admin=True)
+    return AgentTask(task_id, CHAT, "原话", "chat", admin=True)
 
 
 def test_unknown_send_result_is_not_counted_as_delivered() -> None:
