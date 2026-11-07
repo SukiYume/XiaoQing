@@ -223,6 +223,25 @@ def test_declared_oversize_is_rejected_before_reading() -> None:
 
 
 @pytest.mark.asyncio
+async def test_response_preserves_repeated_cookies_in_an_immutable_snapshot() -> None:
+    cookies = [
+        "session=stub; Path=/; Secure",
+        "csrf=stub; Expires=Wed, 09 Jun 2027 10:18:14 GMT; Path=/",
+        "user=123; Path=/; HttpOnly",
+    ]
+    headers = CIMultiDict({"Content-Type": "application/json"})
+    for cookie in cookies:
+        headers.add("Set-Cookie", cookie)
+    response = AsyncResponse(headers=headers)
+    result = await read_aiohttp_response(response, limits=SMALL_LIMITS)
+
+    headers.add("Set-Cookie", "later=excluded; Path=/")
+    assert [v for k, v in result.headers.items() if k.lower() == "set-cookie"] == cookies
+    with pytest.raises(TypeError):
+        result.headers["Set-Cookie"] = "changed"
+
+
+@pytest.mark.asyncio
 async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None:
     payload = b'{"value":"bounded"}'
     compressed = gzip.compress(payload, mtime=0)

@@ -8,6 +8,8 @@
 
 ## 下一版本
 
+- xiaoqing_life 修复 B站扫码确认后报 `missing_credentials`：有界 HTTP 响应保留重复响应头，登录流程逐条解析 `Set-Cookie`。新增凭证仅由响应头返回、带逗号的 Cookie 过期时间、响应头只读快照和完整登录落盘的回归测试。
+
 ### 变化
 
 - Core 命令声明：命令节点新增可选的 `effect`（`read` / `write`，命令只查询还是会新增、修改、删除数据）和 `structured_input`（`name`、`description`、`parameters`，命令接受一个 JSON 对象作为全部参数时的 JSON Schema），发布到 `CommandCatalogNode.effect`、`structured_input` 与 `to_dict()`；`structured_input.name` 同一插件内唯一，schema 须为 object、序列化后不超过 16000 字符。`command_runner.run(..., request_texts=...)` 把发起人本人的原话交给命令，插件在新增的 `context.request_texts` 读取（只随执行器的调用传入，最近 16 条、每条截断到 4000 字；普通消息事件带同名字段也读不到）。

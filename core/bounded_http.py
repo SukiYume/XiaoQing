@@ -20,10 +20,11 @@ import time
 import zlib
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, cast
 from urllib.parse import urljoin, urlsplit
 from xml.parsers import expat
+
+from multidict import CIMultiDict, CIMultiDictProxy
 
 _REDIRECT_STATUSES        = frozenset({301, 302, 303, 307, 308})
 _DEFAULT_SUCCESS_STATUSES = frozenset({200})
@@ -583,16 +584,17 @@ def _build_response(
     wire_bytes: int,
 ) -> BoundedHttpResponse:
     response_url = getattr(response, "url", "")
-    headers      = {
-        str(key): str(value) for key, value in dict(getattr(response, "headers", {})).items()
-    }
+    # Preserve repeated fields such as Set-Cookie in a detached, read-only snapshot.
+    headers = CIMultiDict(
+        (str(key), str(value)) for key, value in getattr(response, "headers", {}).items()
+    )
     return BoundedHttpResponse(
         url           = str(response_url),
         status        = int(getattr(response, "status", getattr(response, "status_code", 0))),
         body          = body,
         media_type    = media_type,
         charset       = charset,
-        headers       = MappingProxyType(headers),
+        headers       = CIMultiDictProxy(headers),
         wire_bytes    = wire_bytes,
         decoded_bytes = len(body),
     )
