@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from multidict import CIMultiDict
 
 from core.delivery import SENSITIVE_ACTION_KEY
 from plugins.xiaoqing_life import bili_auth, commands, digest
@@ -856,6 +857,22 @@ async def test_extract_cookies_takes_only_allowed_keys_and_validates_values() ->
     assert len(ok_len["SESSDATA"]) == 512
 
 
+async def test_extract_cookies_reads_all_cookie_headers() -> None:
+    headers = CIMultiDict(
+        [
+            ("Set-Cookie", f"SESSDATA={SECRET_SESS}; Path=/; Secure; HttpOnly"),
+            ("set-cookie", f"bili_jct={SECRET_JCT}; Expires=Wed, 09 Jun 2027 10:18:14 GMT; Path=/"),
+            ("SET-COOKIE", "DedeUserID=4321; Path=/; Secure"),
+            ("Set-Cookie", "unrelated=ignored; Path=/"),
+        ]
+    )
+    assert bili_auth.extract_cookies({}, headers) == {
+        "SESSDATA"  : SECRET_SESS,
+        "bili_jct"  : SECRET_JCT,
+        "DedeUserID": "4321",
+    }
+
+
 async def test_qr_host_allowlist() -> None:
     assert bili_auth.check_qr_url(QR_URL) == QR_URL
     assert (
@@ -1030,6 +1047,49 @@ async def test_login_success_saves_credentials_and_only_api_gets_the_cookie(
     blob = caplog.text + "".join(env.texts()) + json.dumps(env.store.state) + reply
     for secret in (SECRET_SESS, SECRET_JCT, SECRET_REF, QR_KEY, QR_URL, "BUVID3-ABC"):
         assert secret not in blob
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    ["", "https://passport.biligame.com/crossDomain", "http://passport.biligame.com/crossDomain"],
+)
+async def test_login_succeeds_with_credentials_only_in_repeated_headers(
+    tmp_path: Path,
+    protect_calls: list[Path],
+    caplog: pytest.LogCaptureFixture,
+    callback_url: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    confirmed = _poll(0, url=callback_url, refresh_token=SECRET_REF)
+    confirmed.headers = CIMultiDict(confirmed.headers)
+    for cookie in (
+        f"SESSDATA={SECRET_SESS}; Path=/; Secure; HttpOnly",
+        f"bili_jct={SECRET_JCT}; Expires=Wed, 09 Jun 2027 10:18:14 GMT; Path=/",
+        "DedeUserID=4321; Path=/; Secure",
+    ):
+        confirmed.headers.add("Set-Cookie", cookie)
+    env = Env(tmp_path, _generate(), confirmed, _spi(), aiohttp_json_response(NAV_OK))
+    assert await env.login.start(env.context, env.event()) == bili_auth.MSG_STARTED
+    await env.finish()
+
+    assert env.credential.usable()
+    saved = json.loads(env.credential.path.read_text(encoding="utf-8"))
+    assert all(saved["cookies"][key] for key in bili_auth.REQUIRED_KEYS)
+    assert saved["cookies"]["SESSDATA"] == SECRET_SESS
+    assert saved["cookies"]["bili_jct"] == SECRET_JCT
+    assert saved["cookies"]["DedeUserID"] == "4321"
+    assert protect_calls == [env.credential.path.parent]
+    assert env.store.state["bili_login"]["valid"] is True
+    assert env.texts()[-1] == bili_auth.MSG_DONE.format(uname="测试账号")
+    assert env.sent[-1][SENSITIVE_ACTION_KEY] is True
+    assert len(env.session.requests) == 4
+    assert env.session.requests[-1][1] == f"{bili_auth.API}/x/web-interface/nav"
+    assert f"SESSDATA={SECRET_SESS}" in _headers(env.session, 3)["cookie"]
+    assert all("cookie" not in _headers(env.session, i) for i in range(3))
+    assert all(
+        secret not in caplog.text + "".join(env.texts())
+        for secret in (SECRET_SESS, SECRET_JCT, SECRET_REF)
+    )
 
 
 async def test_poll_codes_expired_unknown_and_timeout(tmp_path: Path) -> None:

@@ -299,15 +299,18 @@ def decoded_variant(cookies: Mapping[str, str]) -> dict[str, str] | None:
 
 
 def _cookies_from_header(headers: Mapping[str, str]) -> dict[str, str]:
-    raw = next((v for k, v in headers.items() if k.lower() == "set-cookie"), "")
-    if not raw:
-        return {}
-    jar = SimpleCookie()
-    try:
-        jar.load(raw)
-    except CookieError:
-        return {}
-    return {name: morsel.value for name, morsel in jar.items() if name in LOGIN_KEYS}
+    cookies: dict[str, str] = {}
+    # Each Set-Cookie field is independent; Expires attributes can contain commas.
+    for key, raw in headers.items():
+        if key.lower() != "set-cookie":
+            continue
+        jar = SimpleCookie()
+        try:
+            jar.load(raw)
+        except CookieError:
+            continue
+        cookies.update({name: morsel.value for name, morsel in jar.items() if name in LOGIN_KEYS})
+    return cookies
 
 
 def extract_cookies(data: Mapping[str, Any], headers: Mapping[str, str]) -> dict[str, str]:
