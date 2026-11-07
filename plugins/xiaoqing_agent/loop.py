@@ -218,8 +218,23 @@ async def complete(
             extra_payload = extra_payload,
         )
     finally:
+        elapsed = time.perf_counter() - started
         env.model_calls += 1
-        env.model_seconds += time.perf_counter() - started
+        env.model_seconds += elapsed
+    usage = result.response.get("usage") if isinstance(result.response, dict) else None
+    usage = usage if isinstance(usage, dict) else {}
+    # 每次调用一行：分得清慢在模型本身（输出长、没命中缓存）还是调用次数多。
+    logger.info(
+        "xiaoqing_agent model call task=%s n=%d model=%s elapsed=%.2fs"
+        " prompt_tokens=%s cached_tokens=%s completion_tokens=%s",
+        env.task.task_id,
+        env.model_calls,
+        getattr(result, "model", ""),
+        elapsed,
+        usage.get("prompt_tokens"),
+        (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        usage.get("completion_tokens"),
+    )
     return response_message(result.response)
 
 

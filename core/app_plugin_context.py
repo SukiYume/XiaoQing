@@ -314,8 +314,9 @@ class AppPluginContextMixin:
         self,
         command_text: str,
         *,
-        sender_name: str  = "",
-        operation_id: str = "",
+        sender_name: str               = "",
+        operation_id: str              = "",
+        request_texts: tuple[str, ...] = (),
         caller_plugin: str,
         principal: PluginPrincipal,
         request_id: str | None,
@@ -332,6 +333,7 @@ class AppPluginContextMixin:
             group_role       = principal.group_role,
             sender_name      = sender_name,
             operation_id     = operation_id,
+            request_texts    = request_texts,
         )
 
     def _build_life_capabilities(

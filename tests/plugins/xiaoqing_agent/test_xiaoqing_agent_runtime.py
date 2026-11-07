@@ -85,8 +85,8 @@ async def test_delivery_repairs_only_unfinished_original_request_once(tmp_path, 
         ai_response(
             json.dumps(
                 {
-                    "reply": "只查到了商店，购买还没完成。",
-                    "state": "unfinished",
+                    "reply"     : "只查到了商店，购买还没完成。",
+                    "state"     : "unfinished",
                     "unfinished": [pending],
                 },
                 ensure_ascii=False,
@@ -109,8 +109,8 @@ async def test_delivery_repairs_only_unfinished_original_request_once(tmp_path, 
                 ai_response(
                     json.dumps(
                         {
-                            "reply": "买好了，2个苹果。",
-                            "state": "unfinished",
+                            "reply"     : "买好了，2个苹果。",
+                            "state"     : "unfinished",
                             "unfinished": [pending],
                         },
                         ensure_ascii=False,
@@ -280,9 +280,7 @@ async def test_stopped_task_reviews_unsupported_claims_without_retrying_commands
     )
     context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="找论文", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="找论文", source="chat", admin=True)
     outcome = await runtime.wait_inline(context, task, 5)
     assert outcome is not None
     await task.runner
@@ -314,7 +312,7 @@ _QUESTION = "查到了两个同名记录，你要改哪一个？"
 async def test_needs_user_question_is_delivered_and_unusable_review_falls_back_to_full_facts(
     tmp_path, review
 ):
-    facts = "记录 A：" + "甲" * 1400 + "；记录 B：" + "乙" * 1400 + "末尾完整事实"
+    facts  = "记录 A：" + "甲" * 1400 + "；记录 B：" + "乙" * 1400 + "末尾完整事实"
     runner = SimpleNamespace(
         run=AsyncMock(return_value=[{"type": "text", "data": {"text": facts}}])
     )
@@ -393,9 +391,7 @@ async def test_inline_reply_uploads_files_after_the_reply_text(tmp_path: Path, m
     (work / "plot.png").write_bytes(PNG)
     context = FakeAgentContext(tmp_path, ai=FakeAI([_final("表在这", ["table.csv", "plot.png"])]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     outcome = await runtime.wait_inline(context, task, 5)
     reply   = await runtime.inline_reply(context, task, outcome)
 
@@ -411,9 +407,7 @@ async def test_stop_cancels_without_delivering_and_records_it(tmp_path: Path) ->
     release = asyncio.Event()
     context = FakeAgentContext(tmp_path, ai=FakeAI([_gate(release, _final("不该发出"))]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="长任务", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="长任务", source="chat", admin=True)
     await wait_until(lambda: len(context.ai.calls) == 1)
 
     stopped = await runtime.stop(CHAT, "", ADMIN)
@@ -429,9 +423,7 @@ async def test_stop_while_a_turn_is_waiting_answers_that_turn(tmp_path: Path) ->
     release = asyncio.Event()
     context = FakeAgentContext(tmp_path, ai=FakeAI([_gate(release, _final("x"))]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     waiting = asyncio.create_task(runtime.wait_inline(context, task, 5))
     await wait_until(lambda: task.inline_waiter is not None and len(context.ai.calls) == 1)
     await runtime.stop(CHAT, task.task_id, ADMIN)
@@ -446,9 +438,7 @@ async def test_result_handed_to_a_cancelled_waiter_is_still_delivered(tmp_path: 
     runtime           = AgentRuntime(tmp_path)
     release           = asyncio.Event()
     context.ai.script = [_gate(release, _final("结果"))]
-    task              = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     waiting = asyncio.create_task(runtime.wait_inline(context, task, 5))
     await wait_until(lambda: task.inline_waiter is not None)
 
@@ -511,9 +501,7 @@ async def test_status_shows_the_plan(tmp_path: Path) -> None:
     )
     context = FakeAgentContext(tmp_path, ai=FakeAI([plan, _gate(release, _final("ok"))]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="画图任务", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="画图任务", source="chat", admin=True)
     await wait_until(lambda: task.plan != [] and len(context.ai.calls) == 2)
 
     status = runtime.status_text(CHAT, "", ADMIN)
@@ -526,9 +514,7 @@ async def test_status_shows_the_plan(tmp_path: Path) -> None:
 async def test_crashing_loop_is_reported_not_raised(tmp_path: Path) -> None:
     context = FakeAgentContext(tmp_path, ai=FakeAI([KeyError("boom")]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     await wait_until(lambda: task.runner.done() and context.actions)
     assert task.status == "failed"
     assert task.error.startswith("KeyError")
@@ -540,9 +526,7 @@ async def test_shutdown_interrupts_tasks_and_restart_sweeps_leftovers(tmp_path: 
     release = asyncio.Event()
     context = FakeAgentContext(tmp_path, ai=FakeAI([_gate(release, _final("x"))]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     await wait_until(lambda: len(context.ai.calls) == 1)
 
     await runtime.shutdown()
@@ -641,9 +625,7 @@ async def test_shutdown_waits_for_a_result_that_is_being_sent(tmp_path: Path) ->
 
     context.send_action = slow_send
     runtime             = AgentRuntime(tmp_path)
-    task                = runtime.start(
-        context, CONFIG, CHAT, request_text="g", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     await sending.wait()
     assert runtime.running == {}
 
@@ -661,9 +643,7 @@ async def test_disabled_history_stays_empty_while_tasks_run(tmp_path: Path) -> N
     release = asyncio.Event()
     context = FakeAgentContext(tmp_path, ai=FakeAI([_final("旧任务"), _gate(release, _final("x"))]))
     runtime = AgentRuntime(tmp_path)
-    done    = runtime.start(
-        context, CONFIG, CHAT, request_text="旧", source="chat", admin=True
-    )
+    done = runtime.start(context, CONFIG, CHAT, request_text="旧", source="chat", admin=True)
     assert await runtime.wait_inline(context, done, 5) is not None
     await wait_until(lambda: done.runner.done())
     runtime.start(context, CONFIG, CHAT, request_text="新", source="chat", admin=True)
@@ -817,9 +797,7 @@ async def test_a_follow_up_that_arrives_after_the_last_step_is_reported_as_unuse
     monkeypatch.setattr(agent_runtime, "run_agent_loop", loop_then_late_note)
     context = FakeAgentContext(tmp_path, ai=FakeAI([_final("蓝色的好了")]))
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="画图", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="画图", source="chat", admin=True)
     await wait_until(lambda: task.runner.done())
 
     [text] = sent_texts(context)
@@ -870,9 +848,7 @@ async def test_resent_results_are_complete_and_record_their_own_delivery(
         tmp_path, ai=FakeAI([_final(long_text), _final("表在这", ["table.csv"])])
     )
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="长结果", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="长结果", source="chat", admin=True)
     await wait_until(lambda: task.runner.done() and len(context.actions) == 1)
 
     resent = await runtime.result_message(context, CHAT, task.task_id)
@@ -950,9 +926,7 @@ async def test_command_receipts_settle_with_the_files_they_brought(tmp_path: Pat
         tmp_path, ai=FakeAI(_command_steps([str(picture)])), command_runner=runner
     )
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="取图", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="取图", source="chat", admin=True)
     await wait_until(lambda: task.runner.done() and bool(context.actions))
     await runtime.shutdown()
 
@@ -969,9 +943,7 @@ async def test_command_receipts_are_released_when_their_files_never_go_out(tmp_p
     del picture
     context = FakeAgentContext(tmp_path, ai=FakeAI(_command_steps([])), command_runner=runner)
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="取图", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="取图", source="chat", admin=True)
     await wait_until(lambda: task.runner.done() and bool(context.actions))
     await runtime.shutdown()
 
@@ -986,9 +958,7 @@ async def test_inline_image_receipt_follows_the_chat_sides_report(tmp_path: Path
         tmp_path, ai=FakeAI(_command_steps([str(picture)])), command_runner=runner
     )
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="取图", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="取图", source="chat", admin=True)
     outcome = await runtime.wait_inline(context, task, 5)
     assert outcome is not None
     message = await runtime.inline_reply(context, task, outcome)
@@ -1013,9 +983,7 @@ async def test_stopping_a_task_releases_its_command_receipts(tmp_path: Path) -> 
         command_runner = runner,
     )
     runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="取图", source="chat", admin=True
-    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="取图", source="chat", admin=True)
     await wait_until(lambda: runner.run.await_count == 2 and len(context.ai.calls) == 3)
     assert receipts.outcomes["twimg"] == []
 
@@ -1038,8 +1006,8 @@ async def test_review_sees_thread_chat_and_draft_and_repairs_only_listed_fragmen
             ai_response(
                 json.dumps(
                     {
-                        "reply": "只建了单次事件，还不是多节点。",
-                        "state": "unfinished",
+                        "reply"     : "只建了单次事件，还不是多节点。",
+                        "state"     : "unfinished",
                         "unfinished": ["多节点事件", "不在验收目标里的片段"],
                     },
                     ensure_ascii=False,
@@ -1052,16 +1020,16 @@ async def test_review_sees_thread_chat_and_draft_and_repairs_only_listed_fragmen
     )
     context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
     runtime = AgentRuntime(tmp_path)
-    task = runtime.start(
+    task    = runtime.start(
         context,
         CONFIG,
         CHAT,
-        request_text="改",
-        source="chat",
-        admin=True,
-        continues="aaa111",
-        thread=["添加一个多节点事件 11.14-15", "创建，提前一天提醒"],
-        history=[{"role": "user", "name": "主人", "user_id": ADMIN_ID, "text": "之前聊的"}],
+        request_text = "改",
+        source       = "chat",
+        admin        = True,
+        continues    = "aaa111",
+        thread       = ["添加一个多节点事件 11.14-15", "创建，提前一天提醒"],
+        history      = [{"role": "user", "name": "主人", "user_id": ADMIN_ID, "text": "之前聊的"}],
     )
     outcome = await runtime.wait_inline(context, task, 5)
     await task.runner
@@ -1101,7 +1069,7 @@ async def test_needs_user_review_is_delivered_even_when_items_are_listed(tmp_pat
     )
     context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
     runtime = AgentRuntime(tmp_path)
-    task = runtime.start(
+    task    = runtime.start(
         context, CONFIG, CHAT, request_text="改同名记录", source="chat", admin=True
     )
     outcome = await runtime.wait_inline(context, task, 5)
@@ -1125,14 +1093,18 @@ async def test_unfinished_review_after_the_correction_round_is_recorded_as_unfin
     )
     verdict = ai_response(
         json.dumps(
-            {"reply": "第一笔记好了，第二笔还没记。", "state": "unfinished", "unfinished": ["第二笔"]},
+            {
+                "reply"     : "第一笔记好了，第二笔还没记。",
+                "state"     : "unfinished",
+                "unfinished": ["第二笔"],
+            },
             ensure_ascii=False,
         )
     )
     ai = FakeAI([_command("/ledger one"), _final("记好了"), verdict, _final("记好了"), verdict])
     context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
     runtime = AgentRuntime(tmp_path)
-    task = runtime.start(
+    task    = runtime.start(
         context, CONFIG, CHAT, request_text="记两笔：第一笔和第二笔", source="chat", admin=True
     )
     outcome = await runtime.wait_inline(context, task, 5)

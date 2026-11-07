@@ -318,7 +318,8 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
     assert draft is not None
     assert draft.text == candidate
     logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
-    assert any('"step": "reply.check.exhausted.accept"' in payload for payload in logged_payloads)
+    # 软问题不再重写，直接照发并记一笔。
+    assert any('"step": "reply.check.soft_pass"' in payload for payload in logged_payloads)
 
 
 def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
@@ -672,3 +673,65 @@ def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan(mock_cont
     )
 
     assert finish_rejected_candidate(plan, rejected) is None
+
+
+@pytest.mark.parametrize(
+    "parts,fragments,kept",
+    [
+        # 删掉没依据的那一个气泡，其余照发。
+        (("有叉烧、两片蛋", "还有几粒绿色配料。", "蛋看着还挺溏心的。"), ("蛋看着还挺溏心的",), 2),
+        # 片段跨两个气泡时两个都删。
+        (("有叉烧", "两片蛋，挺香", "38一碗"), ("叉烧、两片蛋",), 1),
+        # 删完不剩、对不上任何气泡、只有一个气泡时都不删，照原流程重写。
+        (("有叉烧", "两片蛋"), ("有叉烧，两片蛋",), None),
+        (("有叉烧", "两片蛋"), ("海苔",), None),
+        (("有叉烧、两片蛋",), ("两片蛋",), None),
+    ],
+)
+def test_trim_unsupported_bubbles_drops_only_what_lacks_evidence(parts, fragments, kept) -> None:
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, build_reply_draft
+    from plugins.xiaoqing_chat.reply_fallbacks import trim_unsupported_bubbles
+
+    draft = build_reply_draft(parts, raw_text="")
+    rejected = RejectedCandidate(
+        text   = draft.text,
+        result = ReplyCheckResult(
+            False,
+            "视觉陈述缺少可引用的画面或文字依据",
+            True,
+            "hard",
+            "media_grounding",
+            unsupported_fragments=fragments,
+        ),
+        draft=draft,
+    )
+    trimmed = trim_unsupported_bubbles(rejected)
+    if kept is None:
+        assert trimmed is None
+    else:
+        assert trimmed is not None and len(trimmed.text_parts) == kept
+        assert all(fragment not in trimmed.text for fragment in fragments)
+
+
+@pytest.mark.parametrize(
+    "text,declines",
+    [
+        ("周末一起去天文台玩呗", True),
+        ("你们周末有空出来吃火锅吗", True),
+        ("小青，下次一起去看展", True),
+        ("周末去哪玩比较好", False),
+        ("小青，这道题怎么做", False),
+    ],
+)
+def test_invitation_falls_back_to_a_decline_instead_of_not_following(text, declines) -> None:
+    from plugins.xiaoqing_chat.reply_fallbacks import (
+        CONTEXT_GROUNDING_FALLBACKS,
+        INVITE_DECLINE_FALLBACKS,
+        _forced_fallback_texts,
+    )
+
+    plan = SimpleNamespace(text=text, event={}, bot_name="小青", request_id="r1")
+    texts, _step = _forced_fallback_texts(plan, "context_grounding")
+    assert (texts == INVITE_DECLINE_FALLBACKS) is declines
+    assert texts != CONTEXT_GROUNDING_FALLBACKS or not declines

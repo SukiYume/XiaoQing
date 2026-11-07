@@ -183,8 +183,10 @@ class PluginContext:
     capabilities      : PluginCapabilities = field(default_factory=PluginCapabilities)
     request_id        : str | None                 = None
     command_invocation: "CommandInvocation | None" = None
-    state             : dict[str, Any] = field(default_factory=dict)
-    logger            : Any = field(init=False, repr=False)
+    # 代为执行命令时发起人本人的原话（按先后）；只有命令执行器发起的调用才有。
+    request_texts: tuple[str, ...] = ()
+    state        : dict[str, Any] = field(default_factory=dict)
+    logger       : Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Enforce the least-privilege view even for extension/test factories that

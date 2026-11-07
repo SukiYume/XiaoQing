@@ -713,16 +713,22 @@ async def _apply_smalltalk_presend_delay(
     *,
     has_outbound_batches: bool,
 ) -> bool:
-    apply_humanize = (
-        not finalization.prepared.forced or finalization.hctx.runtime.cfg.humanize.apply_to_forced
+    prepared = finalization.prepared
+    factor   = float(finalization.event.get("_xc_delay_factor") or 1.0)
+    # 上课或睡觉时被叫到也回，只是回得慢一点；显式命令照旧立刻回。
+    routine_slowdown = factor > 1.0 and prepared.force_reason != "command"
+    apply_humanize   = (
+        not prepared.forced
+        or finalization.hctx.runtime.cfg.humanize.apply_to_forced
+        or routine_slowdown
     )
     if not apply_humanize or not has_outbound_batches:
         return apply_humanize
     target = _compute_typing_delay(
         finalization.hctx.runtime,
-        input_text  = finalization.prepared.text,
+        input_text  = prepared.text,
         output_text = display_reply_text(finalization.generated),
-        factor      = float(finalization.event.get("_xc_delay_factor") or 1.0),
+        factor      = factor,
     )
     # 读消息和打字的时间从收到消息算起；理解、规划和生成已经花掉的时间不再重复等待。
     elapsed = max(0.0, time.monotonic() - finalization.started_at)

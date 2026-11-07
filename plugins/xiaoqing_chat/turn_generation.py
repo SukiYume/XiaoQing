@@ -99,9 +99,9 @@ class _TurnGenerator:
         self.generated      = generated
         self.recent_history = recent_history
         # 规划器回调里生成回复花掉的时间，从规划总耗时里扣掉才是规划本身。
-        self.drafting_s     = 0.0
-        self.max_context    = get_brain_chat_max_context(hctx.runtime, prepared.brain_chat_active)
-        self.think_level    = get_brain_chat_think_level(
+        self.drafting_s  = 0.0
+        self.max_context = get_brain_chat_max_context(hctx.runtime, prepared.brain_chat_active)
+        self.think_level = get_brain_chat_think_level(
             hctx.runtime, prepared.brain_chat_active, history_len=len(recent_history)
         )
 
@@ -285,7 +285,7 @@ async def generate_smalltalk_turn(
         generated.local_id = await ensure_user_message_recorded(
             prepared.text, event, context, runtime, state=state
         )
-        if planner_enabled and not (prepared.is_private and prepared.forced):
+        if planner_enabled and not prepared.forced:
             generated.pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
             generated.pfc_turn           = state.pfc_state_store.begin_turn(chat_id)
             if generated.pfc_state_snapshot and generated.pfc_state_snapshot.ended:
@@ -293,7 +293,7 @@ async def generate_smalltalk_turn(
 
     turn = _TurnGenerator(prepared, event, context, hctx, generated, recent_history)
     try:
-        if prepared.is_private and prepared.forced:
+        if prepared.forced:
             await turn.run_forced()
         elif planner_enabled:
             await turn.run_planner()

@@ -78,6 +78,25 @@ def save_preference(
     return None
 
 
+def interface_arguments(raw: str) -> tuple[str, int]:
+    """接口命令的 JSON 写法：{"device": 设备名或编号, "page": 页码}，页码省略时为 1。"""
+
+    usage = '接口参数需要 {"device": "设备名或编号", "page": 页码}，页码从 1 开始。'
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        raise BridgeError(usage) from None
+    if not isinstance(value, dict) or set(value) - {"device", "page"}:
+        raise BridgeError(usage)
+    device = value.get("device")
+    page   = value.get("page", 1)
+    if not isinstance(device, str) or not device.strip():
+        raise BridgeError(usage)
+    if type(page) is not int or page < 1:
+        raise BridgeError(usage)
+    return device.strip(), page
+
+
 async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
     profile = read_json(context.data_dir / "speaker.json")
     manager = login.runtime(context).manager
@@ -116,7 +135,9 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
         page  = 1
         parts = query.rsplit(" ", 1)
         names = [d["name"] for d in devices["devices"].values()]
-        if (
+        if text.startswith("接口 ") and query.startswith("{"):
+            query, page = interface_arguments(query)
+        elif (
             text.startswith("接口 ")
             and query not in names
             and len(parts) == 2
@@ -126,7 +147,7 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
         return catalog.describe(devices, query, page, raw=text.startswith("接口 "))
     if text in [d["name"] for d in devices["devices"].values()]:
         return catalog.describe(devices, text)
-    original_request = text
+    original_request: str | list[str] | None = text
     if text.startswith("调用 "):
         try:
             plan = json.loads(text[3:])
@@ -134,7 +155,8 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
                 raise ValueError("object required")
         except ValueError:
             raise BridgeError("调用参数需要 JSON 对象。") from None
-        original_request = plan.pop("original_request", None)
+        # 出粮数量按 Core 传入的发起人原话核对；直接发送的结构化调用没有可核对的原话。
+        original_request = list(getattr(context, "request_texts", ())) or None
     else:
         plan = await planner.plan(context, text, devices, settings)
     if set(plan) == {"clarify"}:

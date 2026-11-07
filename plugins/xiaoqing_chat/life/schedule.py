@@ -115,8 +115,9 @@ def state_text(slot: RoutineSlot | None) -> str:
         return ""
     if slot.availability == "asleep":
         return (
-            f"按作息这会儿你该在{slot.activity}。被叫到就像刚被吵醒或还没睡着那样，"
-            "困一点、短一点；对方有正事时照常帮忙。"
+            f"按作息这会儿你该在{slot.activity}。看到消息照样回，像刚被吵醒或还没睡着那样，"
+            "话少一点、短一点；对方有正事时照常帮忙。"
+            "困这件事这段聊天里说过一次就够了，后面不用每句都提。"
         )
     if slot.availability == "busy":
         return (
@@ -125,6 +126,30 @@ def state_text(slot: RoutineSlot | None) -> str:
         )
     return (
         f"按作息你现在大概在{slot.activity}。只当语气底色，不必主动提；对方问你在干嘛时照这个说。"
+    )
+
+
+# 问到她自己几点起、几点睡、什么时候有课或有空。
+_ROUTINE_QUESTION_RE = re.compile(
+    r"几点(?:起|醒|睡|上课|下课|吃饭|有空|忙完)|什么时候(?:起|醒|睡|上课|下课|有空|忙完)"
+    r"|早起|起得早|起床|作息|课表|几点到几点"
+)
+_ROUTINE_TAG_RE = re.compile(r"\s*[（(][忙睡闲][)）]\s*$")
+
+
+def asks_about_routine(text: str) -> bool:
+    return _ROUTINE_QUESTION_RE.search(str(text or "")) is not None
+
+
+def routine_block(lines: Sequence[str]) -> str:
+    """被问到作息时交给模型的日程原文：她自己当然知道几点起、几点有课。"""
+
+    items = [_ROUTINE_TAG_RE.sub("", str(line).strip()) for line in lines if str(line).strip()]
+    if not items:
+        return ""
+    return (
+        "你的作息（对方问到几点起、几点睡、什么时候有课时照这个说，说个大概就行，不用背课表）：\n"
+        + "\n".join(f"- {item}" for item in items)
     )
 
 

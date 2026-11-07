@@ -70,9 +70,9 @@ class Actor:
 class Outcome:
     """一次任务交付给发起人的内容。"""
 
-    text    : str
-    files   : list[str] = field(default_factory=list)
-    status  : str = "done"
+    text  : str
+    files : list[str] = field(default_factory=list)
+    status: str = "done"
     # 文字是执行阶段的模型写给发起人的答复（交付核对时作草稿），而不是命令回报原文。
     authored: bool = False
 

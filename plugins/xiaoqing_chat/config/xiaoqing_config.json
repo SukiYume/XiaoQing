@@ -14,13 +14,6 @@
         "接着说",
         "我想一下"
     ],
-    "bot_name_only_replies": [
-        "在",
-        "嗯？",
-        "怎么了",
-        "我在",
-        "有事吗"
-    ],
     "pfc_planner_fail_window_seconds": 60.0,
     "pfc_planner_fail_threshold": 2,
     "pfc_planner_backoff_seconds": 120.0,
@@ -143,6 +136,7 @@
             "max_sentence_num": 3,
             "clause_split": true,
             "clause_split_min_chars": 12,
+            "clause_bubble_chars": 16,
             "clause_split_max_chars": 160
         }
     },
@@ -163,10 +157,10 @@
         "closing_guard_window_seconds": 1800,
         "enable_schedule_state": true,
         "schedule_affects_pacing": true,
-        "busy_participation_factor": 0.5,
-        "asleep_participation_factor": 0.15,
+        "busy_participation_factor": 0.7,
+        "asleep_participation_factor": 0.35,
         "busy_delay_factor": 1.6,
-        "asleep_delay_factor": 2.5,
+        "asleep_delay_factor": 2.0,
         "enable_self_timeline": true,
         "self_timeline_max_entries": 80,
         "self_timeline_max_injected": 8,
@@ -194,7 +188,8 @@
         "private_user_ids": [],
         "private_max_per_day": 1,
         "private_min_interval_hours": 20,
-        "private_quiet_minutes": 30
+        "private_quiet_minutes": 30,
+        "private_miss_after_days": 3
     },
     "debug": {
         "show_reply_prompt": false,

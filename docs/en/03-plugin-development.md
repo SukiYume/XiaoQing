@@ -276,6 +276,8 @@ Top-level command object:
 | `priority` | integer | `0` | Top-level routing priority. larger values match first |
 | `examples` | string[] | `[]` | Valid examples, maximum 16 |
 | `invalid_examples` | string[] | `[]` | Invalid argument, scene, or permission examples, maximum 16 |
+| `effect` | `read` / `write` | Undeclared | Whether the command only reads or also adds, changes, or deletes data. See below |
+| `structured_input` | object | Undeclared | Declaration for a command that takes one JSON object as all its arguments. See below |
 | `subcommands` | array | `[]` | Subcommand nodes |
 
 Subcommand node:
@@ -291,6 +293,8 @@ Subcommand node:
 | `contexts` | Scene array | Parent value | A child can restrict scenes. |
 | `examples` | string[] | `[]` | Valid examples |
 | `invalid_examples` | string[] | `[]` | Invalid examples |
+| `effect` | `read` / `write` | Undeclared | Not inherited from the parent |
+| `structured_input` | object | Undeclared | Not inherited from the parent |
 | `subcommands` | array | `[]` | Next-level nodes |
 
 The complete command catalog permits at most 8 levels and 512 nodes.
@@ -324,6 +328,27 @@ If two plugins declare the same trigger and priority, the loading transaction ra
 
 Core generates stable code `example.todo.add` for this leaf node.
 The plugin gets the parsed node and remaining arguments through `context.command_invocation`.
+
+#### Read/write effect and structured input
+
+These two fields let callers such as the Agent treat every plugin the same way from its declaration, without plugin-specific code.
+
+`effect` states whether the command changes data: `read` only queries, `write` adds, changes, or deletes.
+Within one task, XiaoQing Agent does not run an identical `write` command a second time. Read commands repeat normally.
+Declare `write` honestly even for commands whose identical text has a different effect each run, such as stepwise undo; the agent asks the initiator before repeating them.
+
+`structured_input` declares that the command takes one JSON object as all its arguments:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Stable identifier for callers: 3–64 lowercase letters, digits, or underscores, starting with a letter; unique within the plugin |
+| `description` | string | Usage notes for callers. Defaults to the command `help` |
+| `parameters` | object | JSON Schema of the object. `type` must be `object`; at most 16000 characters serialized |
+
+Callers serialize the arguments and append them to the command path, for example `/pendo ledger record {"amount_cents":1250,"title":"breakfast"}`.
+When `parameters` has no fields, callers send only the command path.
+Plugins still validate their arguments; the schema only tells callers how to fill them.
+XiaoQing Agent turns each such command the initiator may use right now into a tool of the same name.
 
 ### Schedule fields
 
@@ -437,6 +462,9 @@ The current `smalltalk_provider` can handle messages that contain only the Bot n
 async def call_bot_name_only(context):
     return segments("我在")
 ```
+
+When `smalltalk_provider` is `xiaoqing_chat`, Core passes Bot-name-only messages to its `handle_smalltalk()`.
+The persona answers from the current topic and routine, and this entry is not called.
 
 ### Entry selection order
 
@@ -869,6 +897,11 @@ XiaoQing Agent adds four bridges:
 - `codex` supplies `codex.agent_task` to `xiaoqing_agent`.
 - `qingssh` supplies `qingssh.agent_command` to `xiaoqing_agent`.
 
+XiaoQing Life adds two bridges:
+
+- `xiaoqing_life` supplies `life.turn_context` and `life.export_memes` to `xiaoqing_chat`.
+  The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
+
 Core checks fixed owners and callers by service name.
 It issues `agent.handle_turn` and `command_runner` to user-message contexts.
 `command_runner` executes as the initiating user, with each command's normal permission and scene checks.
@@ -883,6 +916,7 @@ Serial plugins thus remain available during long commands.
 The user's current interactive session remains separate.
 New command sessions first pass to plugin `close_session` for cleanup, then Core discards them.
 Returned `DeliverySegments` and receipts pass unchanged to the caller for settlement with actual delivery.
+`run(..., request_texts=...)` passes the initiator's own words for this request, oldest first (Core keeps the latest 16, each cut to 4000 characters). The command reads them from `context.request_texts` to check that written fields and counts come from what the person said. They are empty when a user sends the command directly, and an ordinary message event cannot supply them.
 
 `run(..., operation_id=...)` gives each call an independent request ID.
 Before commit, receipts collect each physical message ID in `DeliveryReceipt.message_ids`.

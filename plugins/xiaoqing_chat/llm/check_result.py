@@ -18,6 +18,8 @@ class ReplyCheckResult:
     failure_code       : str = ""
     persona_claim_count: int = 0
     context_claim_count: int = 0
+    # 只有这几处说法没依据、其余都审过时列出来：调用方可以删掉这几个气泡照发其余的。
+    unsupported_fragments: tuple[str, ...] = ()
 
     @property
     def is_hard(self) -> bool:

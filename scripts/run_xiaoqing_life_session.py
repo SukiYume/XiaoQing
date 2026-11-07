@@ -458,9 +458,10 @@ def _decision(
     if args.activity == "hot_scroll":
         return planner.Decision("hot_scroll", "forced", {}, {"source": args.source})
     if args.activity == "interest_dive":
-        query = args.query or planner.choose_topic(
-            cfg, store.state, store.interests, moment.timestamp(), rng
-        )[0]
+        query = (
+            args.query
+            or planner.choose_topic(cfg, store.state, store.interests, moment.timestamp(), rng)[0]
+        )
         return planner.Decision("interest_dive", "forced", {}, {"query": query})
     if args.activity == "thread_continue":
         thread = _pick_thread(args, store, cfg, moment)

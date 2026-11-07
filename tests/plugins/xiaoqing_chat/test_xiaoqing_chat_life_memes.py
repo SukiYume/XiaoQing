@@ -161,7 +161,7 @@ def _index_entries(context: Any) -> dict[str, Any]:
 
 def test_remove_only_deletes_life_sourced_entries(mock_context) -> None:
     image = _png(5)
-    sha = hashlib.sha256(image).hexdigest()
+    sha   = hashlib.sha256(image).hexdigest()
     _import(mock_context, image)
     path = mock_context.data_dir / _index(mock_context)[sha]["file_path"]
     assert remove_external_emoji(mock_context, sha) is True

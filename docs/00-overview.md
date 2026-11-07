@@ -33,7 +33,7 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 | 领域 | 代表插件 | 能力 |
 |---|---|---|
 | Core 管理 | `bot_core` | 分层帮助、插件列表、重载、群静音、secret 管理、运行指标 |
-| 智能聊天 | `xiaoqing_chat`, `xiaoqing_agent`, `smalltalk`, `chat`, `voice` | 多模态聊天、群聊参与、任务代理、基础问答、TTS |
+| 智能聊天 | `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, `smalltalk`, `chat`, `voice` | 多模态聊天、群聊参与、任务代理、角色自己的网上生活、基础问答、TTS |
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、Web、小组件 |
 | 天文科研 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、文献检索、计算、词典、FRB 数据 |
 | 执行与运维 | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | 后台代理、受控终端、SSH、Python REPL、RCON |

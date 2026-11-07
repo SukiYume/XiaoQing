@@ -559,41 +559,6 @@ async def test_background_acceptance_closes_only_its_command(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ledger_tool_and_legacy_command_always_attach_initiator_source(tmp_path):
-    from tests.core.test_command_catalog import _load_catalog
-
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "记账成功"}}])
-    )
-    context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
-    )
-    env                   = _env(tmp_path, context)
-    env.task.request_text = "记账 会员99.47 服务 信用卡"
-    tools = build_tools(env, loaded_plugins=frozenset({"pendo"}))
-    assert "source_text" not in tools["pendo_ledger_add"].parameters["properties"]
-    await execute_tool(
-        tools,
-        env,
-        "pendo_ledger_add",
-        {"amount_cents": 9947, "title": "会员", "source_text": "伪造来源"},
-    )
-    await execute_tool(
-        tools,
-        env,
-        "xiaoqing_command",
-        {"delivery": "continue", "command": "/pendo ledger add 99.47 会员 cat:服务 account:信用卡"},
-    )
-    assert runner.run.await_count == 2
-    for call in runner.run.await_args_list:
-        command = call.args[0]
-        assert command.startswith("/pendo ledger record ")
-        payload = json.loads(command.removeprefix("/pendo ledger record "))
-        assert payload["source_text"] == env.task.request_text
-        assert payload["amount_cents"] == 9947
-
-
-@pytest.mark.asyncio
 async def test_catalog_combines_keywords_and_paginates(tmp_path):
     context = FakeAgentContext(
         tmp_path / "data", catalog=_catalog(), command_runner=SimpleNamespace(run=AsyncMock())
@@ -743,46 +708,6 @@ async def test_read_image_failure_preserves_environment(tmp_path):
     Image.new("RGB", (4, 4)).save(path)
     result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
     assert "补充文字" in result.content and "保留当前运行环境" in result.content
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "admin,group,available", [(True, None, True), (False, None, False), (True, GROUP_ID, False)]
-)
-async def test_xiaoai_structured_tools_use_command_permissions_and_original_request(
-    tmp_path, admin, group, available
-):
-    node = build_command_catalog_node(
-        "xiaoai",
-        {
-            "name"      : "xiaoai",
-            "triggers"  : ["米家"],
-            "help"      : "米家设备",
-            "permission": "bot_admin",
-            "contexts"  : ["private"],
-        },
-        root=True,
-    )
-    runner = SimpleNamespace(run=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]))
-    context = FakeAgentContext(
-        tmp_path / "data", catalog=(node,), command_runner=runner, is_admin=admin, group_id=group
-    )
-    env                   = _env(tmp_path, context)
-    env.task.request_text = "出两份粮"
-    tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent", "xiaoai"}))
-    assert ("xiaoai_execute" in tools) == available
-    if not available:
-        return
-    await execute_tool(tools, env, "xiaoai_devices", {})
-    await execute_tool(tools, env, "xiaoai_capabilities", {"device": "d1", "page": 2})
-    ops = [{"device": "d1", "capability": "a2.1", "op": "action", "args": [20]}]
-    await execute_tool(tools, env, "xiaoai_execute", {"operations": ops})
-    calls = runner.run.await_args_list
-    assert calls[0].args[0] == "/米家 数据"
-    assert calls[1].args[0] == "/米家 接口 d1 2"
-    payload = json.loads(calls[2].args[0].removeprefix("/米家 调用 "))
-    assert payload == {"operations": ops, "original_request": "出两份粮"}
-    assert calls[2].kwargs["operation_id"] == "abc123-3"
 
 
 def _env(
@@ -1060,7 +985,9 @@ async def test_xiaoqing_command_tools_search_catalog_and_convert_replies(tmp_pat
     reply = await execute_tool(
         tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
     )
-    runner.run.assert_awaited_once_with("/pendo todo list", sender_name="", operation_id="abc123-1")
+    runner.run.assert_awaited_once_with(
+        "/pendo todo list", sender_name="", operation_id="abc123-1", request_texts=("原话",)
+    )
     assert reply.content.startswith("今天 2 个待办")
     assert "[图片 https://example.com/x.png]" in reply.content and "[face]" in reply.content
     assert str(image_path) in reply.content
@@ -1393,3 +1320,188 @@ def test_local_tools_need_the_core_capability_even_for_an_admin_task(tmp_path: P
     context = FakeAgentContext(tmp_path / "data", local_tools=None)
     tools = _tools(_env(tmp_path, context, admin=True))
     assert not {"run_python", "run_shell", "read_file", "write_file"} & set(tools)
+
+
+# ──────────────────── 插件声明的结构化命令与写入 ────────────────────
+
+
+def _declared_catalog(**root_overrides: Any) -> tuple[Any, ...]:
+    """一个虚构插件：record 声明为写入并带结构化参数，devices 无参数，list 只读。"""
+
+    record_parameters = {
+        "type"      : "object",
+        "properties": {
+            "amount": {"type": "integer"},
+            "title" : {"type": "string"},
+            "unit"  : {"type": "string", "default": "个"},
+        },
+        "required"            : ["amount", "title"],
+        "additionalProperties": False,
+    }
+    root = build_command_catalog_node(
+        "demo",
+        {
+            "name"    : "demo",
+            "triggers": ["demo", "示例"],
+            "help"    : "示例插件",
+            "usage"   : "/demo <subcommand>",
+            **root_overrides,
+            "subcommands": [
+                {
+                    "name"            : "record",
+                    "help"            : "结构化记一条",
+                    "usage"           : "/demo record <JSON>",
+                    "effect"          : "write",
+                    "structured_input": {
+                        "name"       : "demo_record",
+                        "description": "一次记一条，数量和名称分别传入。",
+                        "parameters" : record_parameters,
+                    },
+                },
+                {
+                    "name"            : "设备",
+                    "help"            : "列设备",
+                    "usage"           : "/demo 设备",
+                    "effect"          : "read",
+                    "structured_input": {
+                        "name"      : "demo_devices",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {"name": "list", "help": "列出", "usage": "/demo list", "effect": "read"},
+                {
+                    "name"  : "add",
+                    "help"  : "自由文本记一条",
+                    "usage" : "/demo add <内容>",
+                    "effect": "write",
+                },
+            ],
+        },
+        root=True,
+    )
+    return (root,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin,group,available", [(True, None, True), (False, None, False), (True, GROUP_ID, False)]
+)
+async def test_structured_tools_come_from_plugin_declarations(tmp_path, admin, group, available):
+    """工具名、说明和参数都来自插件声明；发起人此刻用不了的命令不生成工具。"""
+
+    runner = SimpleNamespace(run=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]))
+    catalog = _declared_catalog(permission="bot_admin", contexts=["private"])
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=catalog, command_runner=runner, is_admin=admin, group_id=group
+    )
+    env                   = _env(tmp_path, context)
+    env.task.request_text = "记 3 个苹果"
+    env.user_updates.append("再加一句：是红的")
+    tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent", "demo"}))
+    assert ("demo_record" in tools) == available and ("demo_devices" in tools) == available
+    if not available:
+        return
+    record = tools["demo_record"]
+    assert (
+        record.description.startswith("一次记一条") and "/demo record <JSON>" in record.description
+    )
+    assert record.parameters["required"] == ["amount", "title"]
+    # 没写说明时用命令自己的 help。
+    assert tools["demo_devices"].description.startswith("列设备")
+
+    await execute_tool(tools, env, "demo_devices", {})
+    await execute_tool(tools, env, "demo_record", {"amount": 3, "title": "苹果"})
+    first, second = runner.run.await_args_list
+    assert first.args[0] == "/demo 设备"
+    assert second.args[0] == '/demo record {"amount": 3, "title": "苹果"}'
+    # 发起人原话按先后交给插件，由插件自己核对。
+    assert second.kwargs["request_texts"] == ("记 3 个苹果", "再加一句：是红的")
+    rejected = await execute_tool(tools, env, "demo_devices", {"x": 1})
+    assert rejected.state == "error" and runner.run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_identical_write_runs_once_per_task_whatever_the_plugin(tmp_path):
+    """声明为写入的命令，同一任务里完全相同的第二次不执行；读命令、不同内容和失败后的重试照常执行。"""
+
+    saved = [{"type": "text", "data": {"text": "✅ 已记下\n🔖 ID：2cfae294"}}]
+    runner = SimpleNamespace(run=AsyncMock(return_value=saved))
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_declared_catalog(), command_runner=runner
+    )
+    env = _env(tmp_path, context)
+    tools = build_tools(env, loaded_plugins=frozenset({"demo"}))
+    item = {"amount": 3, "title": "苹果"}
+
+    first  = await execute_tool(tools, env, "demo_record", item)
+    repeat = await execute_tool(tools, env, "demo_record", {**item, "title": " 苹果", "unit": "个"})
+    typed  = await execute_tool(
+        tools,
+        env,
+        "xiaoqing_command",
+        {"delivery": "continue", "command": "/示例 record " + json.dumps(item)},
+    )
+    other = await execute_tool(tools, env, "demo_record", {**item, "amount": 4})
+    assert first.state == "ok" and other.state == "ok"
+    for blocked in (repeat, typed):
+        assert blocked.state == "blocked" and not blocked.progress
+        assert "2cfae294" in blocked.content and "没有再执行" in blocked.content
+    assert runner.run.await_count == 2
+
+    free_text = {"delivery": "continue", "command": "/demo add  记一条  备忘"}
+    await execute_tool(tools, env, "xiaoqing_command", free_text)
+    again = await execute_tool(
+        tools, env, "xiaoqing_command", {**free_text, "command": "/demo add 记一条 备忘"}
+    )
+    assert again.state == "blocked" and runner.run.await_count == 3
+
+    listing = {"delivery": "continue", "command": "/demo list"}
+    await execute_tool(tools, env, "xiaoqing_command", listing)
+    await execute_tool(tools, env, "xiaoqing_command", listing)
+    assert runner.run.await_count == 5
+
+    runner.run = AsyncMock(
+        side_effect=[[{"type": "text", "data": {"text": "❌ 暂时不可用"}}], saved]
+    )
+    retry_env = _env(tmp_path / "retry", context)
+    retry = build_tools(retry_env, loaded_plugins=frozenset({"demo"}))
+    await execute_tool(retry, retry_env, "demo_record", item)
+    retried = await execute_tool(retry, retry_env, "demo_record", item)
+    assert retried.state == "ok" and runner.run.await_count == 2
+
+
+def test_structured_tool_name_never_replaces_a_builtin_tool(tmp_path):
+    root = build_command_catalog_node(
+        "demo",
+        {
+            "name"            : "demo",
+            "triggers"        : ["demo"],
+            "help"            : "示例",
+            "usage"           : "/demo <JSON>",
+            "structured_input": {"name": "final_answer", "parameters": {"type": "object"}},
+        },
+        root=True,
+    )
+    runner = SimpleNamespace(run=AsyncMock())
+    context = FakeAgentContext(tmp_path / "data", catalog=(root,), command_runner=runner)
+    env = _env(tmp_path, context)
+    tools = build_tools(env, loaded_plugins=frozenset({"demo"}))
+    assert tools["final_answer"].description.startswith("交付最终结果")
+
+
+def test_shipped_plugin_declarations_become_tools(tmp_path):
+    """仓库里的 pendo 与米家声明照样生成原来那几个工具，agent 里没有它们的专门代码。"""
+
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(run=AsyncMock())
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+    )
+    env = _env(tmp_path, context)
+    tools = build_tools(env, loaded_plugins=frozenset({"pendo", "xiaoai"}))
+    for name in ("pendo_ledger_add", "xiaoai_devices", "xiaoai_capabilities", "xiaoai_execute"):
+        assert name in tools
+    assert "source_text" not in tools["pendo_ledger_add"].parameters["properties"]
+    without = build_tools(env, loaded_plugins=frozenset({"xiaoai"}))
+    assert "pendo_ledger_add" not in without

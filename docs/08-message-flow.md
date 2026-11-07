@@ -184,6 +184,7 @@ Router 从命令目录解析顶层触发词和递归子命令：
 `xiaoqing_chat` 可在内部执行 attention、频率控制、行为规划、AI 生成和 reply checker。
 有人明确召唤小青时，`xiaoqing_chat` 经 `agent.handle_turn` 让 `xiaoqing_agent` 判断是否需要动手做事（能用哪些工具由发起人的权限决定），同时照常生成聊天回复：判断为闲聊就用这份回复，agent 接手则放弃它。
 agent 未开启、判断为闲聊或调用失败时继续原流程。
+生成回复前，`xiaoqing_chat` 经 `life.turn_context` 向 `xiaoqing_life` 取和当前话题相关的网上经历、用语与表达，限时取用，取不到时当作没有。
 
 观察入口接收普通聊天候选消息。
 命令、URL、Session 和命令前缀文本在前述阶段完成处理。

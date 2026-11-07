@@ -27,7 +27,7 @@ WallTime = Annotated[str, AfterValidator(_wall_time)]
 class EventNode(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
-    name    : str      = Field(min_length=1, max_length=200, description="节点名称。")
+    name    : str = Field(min_length=1, max_length=200, description="节点名称。")
     time    : WallTime = Field(description="节点时间，用户当地墙钟时间 YYYY-MM-DDTHH:MM。")
     end_time: WallTime | None = Field(default=None, description="节点结束时间，可省略。")
 
@@ -54,8 +54,8 @@ class EventRecord(BaseModel):
     nodes         : list[EventNode] = Field(default_factory=list, description="multi_node 至少两个。")
     rrule         : str = Field(default="", description="RFC5545 RRULE，recurring 必填。")
     remind_offsets: list[str] = Field(
-        default_factory=list,
-        description="提前提醒，例如“提前1天”“提前30分钟”；应用于每个实例或节点。",
+        default_factory = list,
+        description     = "提前提醒，例如“提前1天”“提前30分钟”；应用于每个实例或节点。",
     )
 
     @model_validator(mode="after")

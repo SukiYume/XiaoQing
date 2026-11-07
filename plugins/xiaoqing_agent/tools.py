@@ -7,6 +7,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -24,9 +25,11 @@ from core.router import CommandCatalogNode, command_access, resolve_catalog_invo
 
 from . import receipts
 from .config import PLUGIN_NAME, AgentConfig
-from .prompts import command_allowed
+from .prompts import HIDDEN_CAPABILITY_PLUGINS, command_allowed
 from .shells import ShellSpec
 from .tasks import AgentTask, Outcome
+
+logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[["ToolEnv", dict[str, Any]], Awaitable["ToolResult"]]
 
@@ -104,6 +107,8 @@ class ToolEnv:
     closed_scopes      : dict[str, str] = field(default_factory=dict)
     wait_blocked_reason: str = ""
     user_updates       : list[str] = field(default_factory=list)
+    # 本任务里已经成功执行的写入命令（规范化后的命令 → 回报里的记录 ID）：完全相同的不再执行第二遍。
+    writes: dict[str, str] = field(default_factory=dict)
     # 模型调用次数与累计耗时、工具累计耗时（秒），任务结束时写进日志。
     model_calls  : int   = 0
     model_seconds: float = 0.0
@@ -470,9 +475,7 @@ async def _final_answer(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise ToolError("这些文件不存在，请检查路径后再交付: " + ", ".join(missing))
-    return ToolResult(
-        "已交付", final=Outcome(answer, [str(path) for path in files], authored=True)
-    )
+    return ToolResult("已交付", final=Outcome(answer, [str(path) for path in files], authored=True))
 
 
 # ──────────────────── XiaoQing 命令 ────────────────────
@@ -553,7 +556,9 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     lines   = _catalog_lines(env.context, query)
     heading = ""
     if not lines and query.strip() and _catalog_lines(env.context, query, include_unavailable=True):
-        reason = "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
+        reason = (
+            "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
+        )
         env.closed_scopes["unavailable_catalog"] = reason
         return ToolResult(reason, state="blocked", progress=False)
     if not lines and query.strip():
@@ -565,7 +570,9 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
                 root.code.casefold(),
                 *(alias.casefold() for alias in root.aliases),
             } and not command_allowed(root, env.context.principal):
-                reason = "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
+                reason = (
+                    "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
+                )
                 env.closed_scopes[root.plugin] = reason
                 return ToolResult(reason, state="blocked", progress=False)
             if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
@@ -743,11 +750,41 @@ async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     return result
 
 
+def _write_key(invocation: Any) -> str:
+    """声明为写入的命令的规范形式：完全相同的两次写入在同一任务里只执行一次。
+
+    结构化参数按 schema 补上顶层默认值、去掉字符串首尾空白、键排序，省略字段和显式写默认值算同一次；
+    其他命令按空白归一后的参数文本比较。
+    """
+
+    node      = invocation.node
+    arguments = invocation.arguments.strip()
+    declared  = node.structured_input
+    if declared is not None and arguments.startswith("{"):
+        try:
+            values = json.loads(arguments)
+        except ValueError:
+            values = None
+        if isinstance(values, dict):
+            properties = declared.parameters().get("properties", {})
+            merged     = {
+                name: spec["default"] for name, spec in properties.items() if "default" in spec
+            }
+            merged.update(values)
+            canonical = {
+                name: value.strip() if isinstance(value, str) else value
+                for name, value in merged.items()
+            }
+            return f"{node.code} " + json.dumps(canonical, ensure_ascii=False, sort_keys=True)
+    return f"{node.code} " + " ".join(arguments.split())
+
+
 async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
     tokens = command.lstrip("/").split(maxsplit=1)
     scope       = tokens[0].casefold()
     command_key = scope
     is_help     = False
+    write_key   = ""
     for root in env.context.get_command_catalog():
         if scope in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
             scope       = root.plugin
@@ -756,53 +793,39 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
             is_help     = invocation.node.name == "help" or root.name == "help"
             denied      = command_access(invocation.node, env.context.principal)
             if denied:
-                reason = "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，" + _BLOCKED_SCOPE_NOTE
+                reason = (
+                    "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，"
+                    + _BLOCKED_SCOPE_NOTE
+                )
                 env.closed_scopes[command_key] = reason
                 return ToolResult(reason, state="blocked", progress=False)
-            if (
-                scope == "pendo"
-                and len(invocation.node.path) >= 3
-                and invocation.node.path[-2:]
-                in {("ledger", "add"), ("ledger", "quick"), ("ledger", "record")}
-            ):
-                from plugins.pendo.handlers.ledger import LedgerHandler
-
-                if invocation.node.name == "record":
-                    fields = parse_arguments(invocation.arguments)
-                else:
-                    data, error = LedgerHandler._parse_quick_ledger_data(invocation.arguments)
-                    if error:
-                        raise ToolError(error)
-                    fields = {
-                        "amount_cents"    : data["amount_cents"],
-                        "title"           : data["title"],
-                        "transaction_type": data["transaction_type"],
-                        "category"        : data.get("ledger_category") or "",
-                        "account"         : data.get("account_name") or "",
-                        "to_account"      : data.get("counter_account_name") or "",
-                        "merchant"        : data.get("merchant") or "",
-                        "date"            : data.get("ledger_date") or "",
-                        "currency"        : data.get("currency") or "CNY",
-                        "remark"          : data.get("remark") or "",
-                    }
-                fields["source_text"] = "\n".join(
-                    [env.task.request_text, *env.user_updates]
-                )
-                command = "/pendo ledger record " + json.dumps(fields, ensure_ascii=False)
+            if invocation.node.effect == "write":
+                write_key = _write_key(invocation)
             break
     closed = env.closed_scopes.get(scope) or env.closed_scopes.get(command_key)
     if closed and not is_help:
         return ToolResult(closed, state="blocked", progress=False)
+    if write_key in env.writes:
+        written = env.writes[write_key]
+        return ToolResult(
+            f"这次写入和本任务前面已经成功执行的一次完全相同（{('记录 ID：' + written) if written else '见前面的回报'}），"
+            "没有再执行。发起人给了几项就写几项，不用重复的内容凑数量；"
+            "原话里确实有两项一模一样的内容时，先向发起人确认。",
+            state    = "blocked",
+            progress = False,
+        )
     runner = getattr(env.context.capabilities, "command_runner", None)
     if runner is None:
         raise ToolError("命令能力不可用")
     env.task.activity = f"执行 {command.split()[0][:30]}"
     # 每次调用一个独立的操作标识：插件按它防重复结算时，同一任务里两次独立调用不会被当成一次。
     env.command_counter += 1
+    # 发起人本人的原话交给插件，由插件核对写入的字段和数量确实出自原话。
     result = await runner.run(
         command,
-        sender_name  = env.task.sender,
-        operation_id = f"{env.task.task_id}-{env.command_counter}",
+        sender_name   = env.task.sender,
+        operation_id  = f"{env.task.task_id}-{env.command_counter}",
+        request_texts = (env.task.request_text, *env.user_updates),
     )
     receipt, outcome = (
         (result.delivery_receipt, result.command_outcome)
@@ -835,6 +858,9 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
     failed = (outcome is not None and outcome.state in {"error", "incomplete"}) or body.startswith(
         "❌"
     )
+    if write_key and not failed:
+        record_match          = _RECORD_ID_RE.search(body)
+        env.writes[write_key] = record_match.group(0) if record_match else ""
     if failed:
         env.wait_blocked_reason = (
             "当前命令返回失败或不完整结果。可根据帮助修正参数；等待本身无法取得新结果。"
@@ -875,38 +901,6 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
         command_outcome = outcome,
         truncated       = _TRUNCATION_MARKER in body,
     )
-
-
-async def _pendo_ledger_add(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    return await _run_xiaoqing_command(
-        env, "/pendo ledger record " + json.dumps(args, ensure_ascii=False)
-    )
-
-
-async def _xiaoai_devices(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    return await _run_xiaoqing_command(env, "/米家 数据")
-
-
-async def _xiaoai_capabilities(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    device = _string_arg(args, "device").strip()
-    page   = args.get("page", 1)
-    if type(page) is not int or page < 1:
-        raise ToolError("page 需要为正整数。")
-    return await _run_xiaoqing_command(env, f"/米家 接口 {device} {page}")
-
-
-async def _xiaoai_execute(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    operations = args.get("operations")
-    if not isinstance(operations, list) or not 1 <= len(operations) <= 12:
-        raise ToolError("operations 需要包含 1–12 个操作。")
-    # 运行中补充的要求按先后附在原话后面：小爱以最后一次明确说出的数量核对操作。
-    request = [env.task.request_text, *env.user_updates]
-    payload = json.dumps(
-        {"operations": operations, "original_request": request if len(request) > 1 else request[0]},
-        ensure_ascii = False,
-        separators   = (",", ":"),
-    )
-    return await _run_xiaoqing_command(env, "/米家 调用 " + payload)
 
 
 # ──────────────────── SSH 与 Codex ────────────────────
@@ -1141,96 +1135,6 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 _xiaoqing_command,
             ),
         ]
-        principal = getattr(env.context, "principal", None)
-        if "pendo" in loaded_plugins:
-            from plugins.pendo.models.ledger_record import LedgerRecord
-
-            schema = LedgerRecord.model_json_schema()
-            schema["properties"].pop("source_text")
-            tools.append(
-                Tool(
-                    "pendo_ledger_add",
-                    "一次写入一笔账，金额、描述、分类、账户分别传入。此工具已提供完整参数，可直接调用。"
-                    "分类与账户按用户原话填写；省略字段采用声明的默认值。返回完整已保存字段和记录ID。",
-                    schema,
-                    _pendo_ledger_add,
-                )
-            )
-        if (
-            "xiaoai" in loaded_plugins
-            and principal is not None
-            and any(
-                node.plugin == "xiaoai" and command_access(node, principal) is None
-                for node in env.context.get_command_catalog()
-            )
-        ):
-            target = {"device": {"type": "string"}, "capability": {"type": "string"}}
-            tools += [
-                Tool(
-                    "xiaoai_devices",
-                    "列出米家设备编号、名称及在线状态。设备任务先调用此工具。",
-                    _object({}),
-                    _xiaoai_devices,
-                ),
-                Tool(
-                    "xiaoai_capabilities",
-                    "读取指定设备的结构化能力，每页6项；按返回的下一页提示继续读取所需能力。"
-                    "包含属性权限、枚举、参数范围和单位换算；只使用返回的能力编号。",
-                    _object(
-                        {"device": {"type": "string"}, "page": {"type": "integer", "minimum": 1}},
-                        ["device"],
-                    ),
-                    _xiaoai_capabilities,
-                ),
-                Tool(
-                    "xiaoai_execute",
-                    "直接提交米家结构化操作，由插件校验执行，省去插件模型解析。先读取设备能力。"
-                    "查询用read，设置用set和value，动作用action和args数组（无参数可省略或传[]）。"
-                    "数值参数按能力给出的单位和换算填写（如 grams_per_portion），严格保留任务里的数量，取整由插件完成。"
-                    "动作成功码表示云端已接收；完成状态按属性回读或设备事件判断，待确认时按已提交交代。"
-                    "复杂字符串协议或含义不明时向用户确认。设备任务统一使用这三个专用工具。",
-                    _object(
-                        {
-                            "operations": {
-                                "type"    : "array",
-                                "minItems": 1,
-                                "maxItems": 12,
-                                "items"   : {
-                                    "anyOf": [
-                                        _object(
-                                            {**target, "op": {"type": "string", "enum": ["read"]}},
-                                            ["device", "capability", "op"],
-                                        ),
-                                        _object(
-                                            {
-                                                **target,
-                                                "op"   : {"type": "string", "enum": ["set"]},
-                                                "value": {},
-                                            },
-                                            ["device", "capability", "op", "value"],
-                                        ),
-                                        _object(
-                                            {
-                                                **target,
-                                                "op"  : {"type": "string", "enum": ["action"]},
-                                                "args": {
-                                                    "type"       : "array",
-                                                    "items"      : {},
-                                                    "default"    : [],
-                                                    "description": "按能力 inputs 顺序填写；零参数动作默认 []",
-                                                },
-                                            },
-                                            ["device", "capability", "op"],
-                                        ),
-                                    ]
-                                },
-                            }
-                        },
-                        ["operations"],
-                    ),
-                    _xiaoai_execute,
-                ),
-            ]
     if getattr(capabilities, "ssh_agent", None) is not None and "qingssh" in loaded_plugins:
         tools += [
             Tool(
@@ -1275,7 +1179,64 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 _codex_run,
             )
         )
+    if getattr(capabilities, "command_runner", None) is not None:
+        tools += _structured_command_tools(env, loaded_plugins, {tool.name for tool in tools})
     return {tool.name: tool for tool in tools}
+
+
+def _structured_command_tools(
+    env: ToolEnv, loaded_plugins: frozenset[str], taken: set[str]
+) -> list[Tool]:
+    """插件在命令声明里给了结构化参数的命令各成一个工具；只列发起人此刻能用的。
+
+    工具名、说明和参数都来自插件声明，agent 不认识具体插件；调用时照常走以发起人身份执行命令的那条路。
+    """
+
+    principal         = getattr(env.context, "principal", None)
+    found: list[Tool] = []
+    for root in env.context.get_command_catalog():
+        if root.plugin not in loaded_plugins or root.plugin in HIDDEN_CAPABILITY_PLUGINS:
+            continue
+        for node in root.walk():
+            declared = node.structured_input
+            if declared is None:
+                continue
+            if principal is not None and command_access(node, principal) is not None:
+                continue
+            if declared.name in taken:
+                logger.warning(
+                    "xiaoqing_agent structured tool skipped name=%s command=%s reason=name_taken",
+                    declared.name,
+                    node.code,
+                )
+                continue
+            taken.add(declared.name)
+            description = declared.description or node.help_text
+            found.append(
+                Tool(
+                    declared.name,
+                    f"{description}（对应命令 {node.usage}）",
+                    declared.parameters(),
+                    _structured_handler(node),
+                )
+            )
+    return found
+
+
+def _structured_handler(node: CommandCatalogNode) -> ToolHandler:
+    """把工具参数作为一个 JSON 对象接在命令路径后面执行；schema 没有字段时只发命令路径。"""
+
+    path    = "/" + " ".join(node.path)
+    no_args = node.structured_input is not None and node.structured_input.takes_no_arguments()
+
+    async def handler(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
+        if no_args:
+            if args:
+                raise ToolError("这个工具不需要参数。")
+            return await _run_xiaoqing_command(env, path)
+        return await _run_xiaoqing_command(env, f"{path} {json.dumps(args, ensure_ascii=False)}")
+
+    return handler
 
 
 def parse_arguments(raw: Any) -> dict[str, Any]:

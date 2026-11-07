@@ -61,9 +61,6 @@ def _validated_regex_pattern(value: str) -> str:
     return pattern
 
 
-DEFAULT_BOT_NAME_ONLY_REPLIES = ("在", "嗯？", "怎么了", "我在", "有事吗")
-
-
 class DebugConfig(BaseModel):
     show_reply_prompt: bool = False
     log_latency      : bool = False
@@ -77,6 +74,8 @@ class ResponseSplitterConfig(BaseModel):
     # 气泡数没用完时，把较长的句子按逗号、省略号再拆开，像在 QQ 上一句一句打出来。
     clause_split          : bool = True
     clause_split_min_chars: int = Field(default=12, ge=2, le=4000)
+    # 按逗号拆时，大约每这么多字一个气泡：短回复一两条说完，不把一句话硬拆满。
+    clause_bubble_chars: int = Field(default=16, ge=1, le=4000)
     # 超过这个长度的回复多半是讲解或清单，只按整句分段。
     clause_split_max_chars: int = Field(default=160, ge=1, le=20_000)
 
@@ -336,10 +335,10 @@ class LifeConfig(BaseModel):
     enable_schedule_state: bool = True
     # 作息影响节奏：忙或睡时普通群聊少插话、回得更慢。私聊直接回复使用独立路径。
     schedule_affects_pacing    : bool        = True
-    busy_participation_factor  : Probability = 0.5
-    asleep_participation_factor: Probability = 0.15
+    busy_participation_factor  : Probability = 0.7
+    asleep_participation_factor: Probability = 0.35
     busy_delay_factor          : float = Field(default=1.6, ge=1.0, le=10.0, allow_inf_nan=False)
-    asleep_delay_factor        : float = Field(default=2.5, ge=1.0, le=10.0, allow_inf_nan=False)
+    asleep_delay_factor        : float = Field(default=2.0, ge=1.0, le=10.0, allow_inf_nan=False)
     # 投递后从角色自己的回复里记下她说过的近况、打算和答应别人的事，后续保持一致。
     enable_self_timeline      : bool = True
     self_timeline_max_entries : int = Field(default=80, ge=1, le=1000)
@@ -384,6 +383,8 @@ class ProactiveConfig(BaseModel):
     private_max_per_day       : int = Field(default=1, ge=0, le=20)
     private_min_interval_hours: float = Field(default=20.0, ge=0.0, le=720.0, allow_inf_nan=False)
     private_quiet_minutes     : float = Field(default=30.0, ge=0.0, le=1440.0, allow_inf_nan=False)
+    # 和这位朋友好几天没聊时，想念本身就是开口的由头；0 表示只在有见闻或到期的事时开口。
+    private_miss_after_days: float = Field(default=3.0, ge=0.0, le=60.0, allow_inf_nan=False)
 
     @field_validator("active_hours_start", "active_hours_end")
     @classmethod
@@ -492,9 +493,6 @@ class XiaoQingChatConfig(BaseModel):
     noisy_external_source_plugins     : list[str] = Field(default_factory=list, max_length=100)
     fallback_idle_replies             : list[str] = Field(
         default_factory=lambda: ["我在听", "接着说", "我想一下"]
-    )
-    bot_name_only_replies: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_BOT_NAME_ONLY_REPLIES)
     )
     personality     : PersonalityConfig = Field(default_factory=PersonalityConfig)
     planner         : PlannerConfig = Field(default_factory=PlannerConfig)

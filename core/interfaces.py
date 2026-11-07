@@ -91,6 +91,21 @@ ACTION_RESULT_MESSAGE_ID_KEY = "_result_message_id"
 # Command-runner events carry the calling plugin's name so handlers can tell a
 # tool call from a person typing the same command.
 COMMAND_RUNNER_EVENT_KEY = "_command_runner"
+# 代为执行时发起人本人的原话（按先后，最后一条最新）；只随命令执行器的事件传入。
+COMMAND_REQUEST_TEXTS_EVENT_KEY = "_command_request_texts"
+MAX_COMMAND_REQUEST_TEXTS       = 16
+MAX_COMMAND_REQUEST_TEXT_CHARS  = 4_000
+
+
+def command_request_texts(event: Mapping[str, Any]) -> tuple[str, ...]:
+    """命令执行器事件里的发起人原话；不是执行器发出的事件一律为空。"""
+
+    if not event.get(COMMAND_RUNNER_EVENT_KEY):
+        return ()
+    texts = event.get(COMMAND_REQUEST_TEXTS_EVENT_KEY)
+    if not isinstance(texts, (list, tuple)):
+        return ()
+    return tuple(text for text in texts if isinstance(text, str) and text.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,13 +332,16 @@ class CommandRunnerCapability(Protocol):
         self,
         command_text: str,
         *,
-        sender_name: str  = "",
-        operation_id: str = "",
+        sender_name: str               = "",
+        operation_id: str              = "",
+        request_texts: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         """执行一条命令；返回的回复段若带发送回执（``DeliverySegments``），调用方负责结算。
 
         ``sender_name`` 是发起人在原消息里的显示名，只用于命令里显示是谁，不参与权限判断；
         ``operation_id`` 标识这一次调用，插件据此区分独立的两次调用和同一次调用的重试。
+        ``request_texts`` 是发起人本人这次说的原话（按先后，最后一条最新），插件从
+        ``context.request_texts`` 读取，用来核对写入的字段和数量确实出自原话。
         ``DeliverySegments.command_outcome`` 原样保留执行状态；accepted 表示后台已接收，
         后续完成通知由原插件负责。next_command 携带原查询条件并指向下一页结果。
         has_more 为 None 表示分页完整性未知，False 明确标记末页；page 标记当前页码。
@@ -429,6 +447,8 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     metrics           : Any
     request_id        : str | None
     command_invocation: CommandInvocation | None
+    # 代为执行命令时发起人本人的原话（按先后，最后一条最新）；用户直接发命令时为空。
+    request_texts: tuple[str, ...]
     # One dictionary is shared by events for the current plugin generation.
     # Unload/reload or process restart discards it.
     state       : dict[str, Any]

@@ -39,7 +39,9 @@ class LedgerRecord(BaseModel):
     currency   : str = Field(default="CNY", description="币种代码，例如CNY、USD。")
     remark     : str = ""
     source_text: str = Field(
-        default="", exclude=True, description="执行器传入的发起人原话，用于校验字段来源。"
+        default     = "",
+        exclude     = True,
+        description = "由 Agent 代为执行时的发起人原话（Pendo 从 context.request_texts 填入），用于校验字段来源。",
     )
 
     @model_validator(mode="after")

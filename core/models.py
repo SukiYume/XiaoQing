@@ -2,6 +2,7 @@
 
 import json
 import keyword
+import re
 import unicodedata
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -145,6 +146,63 @@ class OneBotEvent(BaseModel):
 
 CommandContext    = Literal["private", "group"]
 CommandPermission = Literal["public", "bot_admin", "group_admin"]
+# 命令会不会改动数据：read 只查询，write 会新增、修改或删除。省略表示没有声明。
+CommandEffect = Literal["read", "write"]
+
+_STRUCTURED_INPUT_NAME_RE       = re.compile(r"[a-z][a-z0-9_]{2,63}")
+_MAX_STRUCTURED_PARAMETER_CHARS = 16_000
+
+
+class CommandStructuredInputManifest(BaseModel):
+    """命令接受一个 JSON 对象作为全部参数时的声明，供 Agent 这类调用方直接生成结构化调用。
+
+    ``name`` 是调用方使用的稳定标识（小写字母开头，只含小写字母、数字和下划线），
+    ``parameters`` 是这个 JSON 对象的 JSON Schema，``description`` 是给调用方的用法说明，
+    省略时使用命令的 ``help``。参数对象为空且 schema 没有任何字段时，调用方只发送命令路径。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name       : str
+    description: str = ""
+    parameters : dict[str, Any]
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        if type(value) is not str or _STRUCTURED_INPUT_NAME_RE.fullmatch(value) is None:
+            raise ValueError(
+                "structured input name must be 3-64 lowercase letters, digits or underscores"
+                " starting with a letter"
+            )
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def _validate_description(cls, value: str) -> str:
+        if type(value) is not str or len(value) > 2_000:
+            raise ValueError("structured input description must be a bounded string")
+        return value.strip()
+
+    @field_validator("parameters")
+    @classmethod
+    def _validate_parameters(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if value.get("type") != "object":
+            raise ValueError("structured input parameters must be a JSON Schema of type object")
+        properties = value.get("properties", {})
+        if not isinstance(properties, dict) or not all(
+            isinstance(item, dict) for item in properties.values()
+        ):
+            raise ValueError("structured input properties must map names to JSON Schema objects")
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("structured input parameters must be plain JSON") from exc
+        if len(encoded) > _MAX_STRUCTURED_PARAMETER_CHARS:
+            raise ValueError(
+                f"structured input parameters must not exceed {_MAX_STRUCTURED_PARAMETER_CHARS} characters"
+            )
+        return value
 
 
 def _default_command_contexts() -> list[CommandContext]:
@@ -213,6 +271,8 @@ class PluginCommandNodeManifest(BaseModel):
     contexts: list[CommandContext] | None = None
     examples: list[str] = Field(default_factory=list, max_length=16)
     invalid_examples: list[str] = Field(default_factory=list, max_length=16)
+    effect: CommandEffect | None                            = None
+    structured_input: CommandStructuredInputManifest | None = None
     subcommands: list["PluginCommandNodeManifest"] = Field(default_factory=list, max_length=128)
 
     @field_validator("name")
@@ -282,6 +342,8 @@ class PluginCommandManifest(BaseModel):
     contexts        : list[CommandContext] = Field(default_factory=_default_command_contexts)
     examples        : list[str] = Field(default_factory=list, max_length=16)
     invalid_examples: list[str] = Field(default_factory=list, max_length=16)
+    effect          : CommandEffect | None                  = None
+    structured_input: CommandStructuredInputManifest | None = None
     subcommands     : list[PluginCommandNodeManifest] = Field(default_factory=list, max_length=128)
 
     @field_validator("name")
@@ -532,8 +594,9 @@ class PluginManifest(BaseModel):
         if len(command_names) != len(set(command_names)):
             raise ValueError("plugin commands must not contain duplicate stable names")
 
-        command_count                                                              = 0
-        stack: list[tuple[PluginCommandManifest | PluginCommandNodeManifest, int]] = [
+        command_count = 0
+        structured_names: set[str] = set()
+        stack           : list[tuple[PluginCommandManifest | PluginCommandNodeManifest, int]] = [
             (command, 1) for command in self.commands
         ]
         while stack:
@@ -543,6 +606,12 @@ class PluginManifest(BaseModel):
                 raise ValueError("plugin command catalog must not exceed 512 nodes")
             if depth > 8:
                 raise ValueError("plugin command catalog must not exceed 8 levels")
+            if command.structured_input is not None:
+                if command.structured_input.name in structured_names:
+                    raise ValueError(
+                        f"structured input name {command.structured_input.name!r} is declared twice"
+                    )
+                structured_names.add(command.structured_input.name)
             stack.extend((child, depth + 1) for child in command.subcommands)
 
         names = [service.name for service in self.services]

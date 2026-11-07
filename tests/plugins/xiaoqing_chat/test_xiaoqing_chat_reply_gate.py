@@ -80,6 +80,43 @@ class TestReplyGate:
         assert decision.roll == 0.99
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "streak,expected",
+        [
+            # 基础概率 0.35；连续没回复 3 / 5 条以上时门槛本身放宽到 1.2 / 1.4 倍。
+            (0, 0.35 * 0.35),  # 睡着时普通群消息照常压低
+            (3, 0.35 * 1.2 * (0.35 + 0.65 * 0.25)),  # 群里接着热闹，压制逐步减轻
+            (9, 0.35 * 1.4 * (0.35 + 0.65 * 0.5)),  # 最多减到一半，不会和醒着一样
+        ],
+    )
+    async def test_routine_pressure_eases_while_the_group_keeps_talking(self, streak, expected):
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
+
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.35
+        runtime.cfg.min_reply_interval_seconds           = 0.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.heartflow.enable_heartflow           = False
+        runtime.cfg.brain_chat.enable_private_brain_chat = False
+        runtime.cfg.goal.enable_goal                     = False
+
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
+        state.get_continuous_cooldown_until.return_value = 0.0
+        state.get_reply_timestamps.return_value          = []
+        state.goal_store.get_async = AsyncMock(return_value=None)
+        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=streak))
+        state.set_reply_gate_decision = Mock()
+
+        with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.99):
+            await decide_reply(
+                runtime, state, "g1", "今天天气不错", False, False, routine_factor=0.35
+            )
+
+        decision = state.set_reply_gate_decision.call_args.args[1]
+        assert decision.probability == pytest.approx(expected, abs=1e-3)
+
+    @pytest.mark.asyncio
     async def test_reply_gate_skips_standalone_protocol_face_without_planning(self):
         from plugins.xiaoqing_chat.frequency_control import decide_reply
 

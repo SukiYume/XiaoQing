@@ -682,3 +682,23 @@ async def test_proactive_backs_off_after_a_skip(tmp_path) -> None:
             )
     # 第二次在两小时内被跳过，第三次才再问模型。
     assert model.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("text", "asked"),
+    [
+        ("小青，你还没说你几点起", True),
+        ("小青和阿夏，你俩谁更早起", True),
+        ("你一般什么时候有空", True),
+        ("明天早八的课你去吗", False),
+        ("今天食堂的饺子还行", False),
+    ],
+)
+def test_routine_is_given_as_her_own_schedule_only_when_asked(text, asked) -> None:
+    from plugins.xiaoqing_chat.life.schedule import asks_about_routine, routine_block
+
+    assert asks_about_routine(text) is asked
+    block = routine_block(["周一至周五 00:30-07:20 睡觉（睡）", "每天 17:30-18:30 吃晚饭"])
+    assert "- 周一至周五 00:30-07:20 睡觉" in block and "（睡）" not in block
+    assert "- 每天 17:30-18:30 吃晚饭" in block
+    assert routine_block([]) == ""

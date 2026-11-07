@@ -43,13 +43,13 @@ def _chat_count_list(value: Any) -> list[list[Any]]:
 class JargonRecord:
     """一个黑话条目及其按会话累计的观察统计。"""
 
-    content             : str
-    scope_chat_id       : str = ""
-    meaning             : str = ""
-    raw_content         : list[str] = field(default_factory=list)
-    chat_id_counts      : list[list[Any]] = field(default_factory=list)
-    is_global           : bool = False
-    count               : int  = 0
+    content       : str
+    scope_chat_id : str = ""
+    meaning       : str = ""
+    raw_content   : list[str] = field(default_factory=list)
+    chat_id_counts: list[list[Any]] = field(default_factory=list)
+    is_global     : bool = False
+    count         : int  = 0
     # 释义有依据（原句解释过，或多处上下文推断出）；否则只是候选，不当作本群共识。
     confirmed           : bool = False
     last_inference_count: int  = 0

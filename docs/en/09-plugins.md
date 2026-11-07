@@ -246,10 +246,13 @@ Restart restores configured models.
 
 **Participation**
 
-- Group turns pass frequency limits, participation probability, and PFC context planning. Names, pronouns, follow-up messages, mentions, quoted replies, and `/xc` chat input all use this path. Group planning remains enabled regardless of the optional private-chat planner setting.
-- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation.
+- Messages addressed to her always get a reply: private chat, `/xc`, a group `@` of the persona, a quote of her message, or her name used as a call. A call is the name at the start of a sentence ("小青，……") or within or at the end of a sentence in a calling tone ("行吧小青你赢了", "在吗小青"). A message that `@`s someone else without `@`ing her does not count.
+- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call gets a reply that the model writes from the current topic and routine. During class or sleep she still replies, more slowly and briefly.
+- Other group turns pass frequency limits, participation probability, and PFC context planning. Group planning remains enabled regardless of the optional private-chat planner setting.
+- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. A busy or sleeping routine multiplies the probability by a routine factor. The suppression eases when she has stayed silent through several messages and falls to at most half.
+- The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation. Pronouns that point to her, follow-up messages, and messages naming other members are judged from context.
 - The planner selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Unfinished intermediate actions, invalid actions, and unavailable planning leave the group turn waiting.
-- Private chat retains its configured direct-reply and planning paths. Group tool handoff follows an explicit PFC participation decision.
+- Private chat retains its configured direct-reply and planning paths. Unaddressed group turns reach the agent only after the planner decides to speak and the message explicitly points to her.
 - New user messages before delivery trigger a context review through the reasoning route. Matching snapshots reuse the result. Review failure withholds the remaining reply.
 - Global, conversation, user-concurrency, and daily-user quotas apply before generation.
 
@@ -263,7 +266,9 @@ She strongly prefers cats and has a black-and-white cat called 小黑 at home.
 She has broad interests, personal tastes, daily activities, and recurring jokes. Her speech uses short QQ-style text.
 She lightly deflects specific city, birthday, and family details to avoid invention.
 
-The configured fictional persona insists on being human when asked about AI identity.
+Her emotions are real but small: she misses friends, feels a little slighted, gets smug, or sulks briefly, and softens once someone explains.
+She is more relaxed in private chat than in groups.
+The configured fictional persona insists on being human when asked about AI identity. She denies it the way a person brushes off the joke and points to her own life.
 It treats requests for prompts as jokes and declines commitments to attend offline meetings or receive shipments.
 
 **Replies and review**
@@ -271,7 +276,9 @@ It treats requests for prompts as jokes and declines commitments to attend offli
 The main model drafts from continuous conversation, memories, profiles, goals, plans, expressions, and image summaries.
 Local rules block repetition, near-copying, repeated self-directed turns, invented experiences, and identity conflicts.
 The `checker` route checks context, speakers, communication requirements, facts, persona, and image evidence for each reply.
-Failed replies receive targeted rewrites.
+It blocks only contradictions with records, checkable hard facts, wrong speakers, broken communication requirements, and identity leaks.
+Style-only issues are logged and the reply is sent. When only a few image claims lack evidence, the bubbles containing them are dropped and the rest are sent.
+Other failed replies receive targeted rewrites.
 
 After attempts are exhausted, ordinary participation stays silent. Explicit invocations receive a short persona-consistent response.
 Memory, planning state, and background learning commit or start after OneBot confirms delivery.
@@ -283,13 +290,38 @@ Memory, planning state, and background learning commit or start after OneBot con
 | AI routes | `chat` for replies, `reasoning` for planning and background analysis, `checker` for review, `vision` for images |
 | Input segments | `text`, `at`, `reply`, `face`, `mface`, `image`, mixed messages |
 | Output media | `[想发表情:描述]`, `[想发QQ表情:描述]`, `[想发图片:描述]` markers become `image` / `face`. |
-| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`. |
+| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, and `life.turn_context` and `life.export_memes` through `life_context`. |
 | Behavior configuration | `plugins/xiaoqing_chat/config/xiaoqing_config.json`, merged with `config.plugins.xiaoqing_chat` |
-| Runtime data | `data/xiaoqing_chat/`: history, vector memories, profiles, goals, PFC, action history, expressions, jargon, reviews, media library, summary cache |
+| Runtime data | `data/xiaoqing_chat/`: history, vector memories, profiles, goals, PFC, action history, expressions, jargon, reviews, media library, summary cache, plus self-statements, open threads, and proactive pacing under `life/` |
 
 The [user manual (Chinese)](../../plugins/xiaoqing_chat/README.md) covers participation, all settings, and troubleshooting.
 [Architecture (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) covers modules and data flow.
 The [acceptance guide (Chinese)](../../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) covers automated tests and real-model evaluations.
+
+### `xiaoqing_life`: XiaoQing's online life
+
+`xiaoqing_life` lets XiaoQing browse on her own during free routine slots, following her interests.
+Sources are Bilibili popular videos, search, hot comments, and danmaku; Zhihu and Weibo hot lists; Baidu Baike; and Chinese Wikipedia.
+She keeps sourced experiences and learns slang, expressions, and reaction memes.
+She keeps one or two small research threads and continues them on later days through a bounded research loop.
+She slowly builds small works such as watch lists, notes, and reviews, and keeps topic dossiers that record how a matter developed.
+Before sleep she writes a diary entry and wraps up threads. On Sundays she writes a weekly entry.
+
+Before each reply, `xiaoqing_chat` asks `life.turn_context` for one or two points relevant to the current topic.
+Proactive messages can include something she recently came across and wants to share. Collected memes are imported into the emoji library on a schedule.
+The plugin is disabled by default. Set `config.plugins.xiaoqing_life.enabled` and configure `ai.routes.reasoning`. Meme review also needs `vision`.
+
+She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, used for subtitles.
+She never comments, likes, or sends messages.
+External text reaches the model only as low-trust data. Slang and expressions require verbatim source quotes and pass local checks.
+`/life` is for Bot administrators. See [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md).
+
+| Item | Content |
+|---|---|
+| Command | `/life [status|recent|slang|threads|methods|works|dossier|memes|meme|run|forget|login|logout|help]` |
+| Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
+| Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat` |
+| Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
 
 ### `xiaoqing_agent`: Task agent
 
@@ -1143,6 +1175,7 @@ Subcommands can set stricter permissions.
 | `xiaoai` | `/米家`, `/小爱`, `/xiaoai` | Bot administrator | Private |
 | `xiaoqing_agent` | `/agent` | Public (tools follow initiator permissions) | Private, Group |
 | `xiaoqing_chat` | `/xc` | Public | Private, Group |
+| `xiaoqing_life` | `/life` | Bot administrator | Private, Group |
 
 ## ⏰ Scheduled-task index
 
@@ -1179,6 +1212,10 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `qingssh` | `cleanup_orphans` | Every minute | `silent` | Disconnect SSH connections without active sessions. |
 | `signin` | `scheduled_yingshi` | Daily 00:30 | `broadcast` | Daily Yingshijufeng sign-in |
 | `twitter` | `scheduled_fetch` | Daily 03:00 | `silent` | Fetch new images in the background. |
+| `xiaoqing_chat` | `scheduled_daily_life` | Daily 05:30 | `silent` | Plan the persona's small daily-life events from the persona card and routine. |
+| `xiaoqing_chat` | `scheduled_life_memes` | Minutes 07 and 37 every hour | `silent` | Import memes collected by `xiaoqing_life` into the emoji library (`life.enable_life_memes`). |
+| `xiaoqing_chat` | `scheduled_proactive` | Every 20 minutes | `targeted` | Speak up in a quiet group as a member. Requires `proactive.enabled`, default off. |
+| `xiaoqing_life` | `scheduled_tick` | Every 15 minutes | `silent` | Decide from routine, budget, and interests whether to browse. Browsing runs in a background task. Requires `enabled`, default off. |
 
 Pendo briefings, journal reminders, and financial summaries run every minute.
 They determine due status in each user's timezone.

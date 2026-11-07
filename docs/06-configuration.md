@@ -417,6 +417,23 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 agent 使用发起人的命令权限。每条命令分别检查自身权限。Python、Shell 和文件读写跟随 `/shell`。SSH 跟随 `/ssh`。Codex 跟随 `/codex`。`plugin.json` 将这三条命令限定为 Bot 管理员使用。
 全部字段、工具与数据目录见 [XiaoQing Agent](../plugins/xiaoqing_agent/README.md#开启)。
 
+### XiaoQing Life
+
+小青自己的网上生活，默认关闭：
+
+| 路径 | 默认 | 说明 |
+|---|---|---|
+| `plugins.xiaoqing_life.enabled` | `false` | 总开关。关闭时定时任务不做事，`life.turn_context` 返回 `None`，聊天与没装时一致 |
+| `plugins.xiaoqing_life.ai.routes.reasoning` | 必填 | 消化、研究、整理和睡前写日记用的 route；缺失时上网只记“模型未配置”并退避 |
+| `plugins.xiaoqing_life.ai.routes.vision` | 无 | 梗图安全判定；缺失时不收梗图 |
+| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | 每天（配置时区自然日）最多上网次数 |
+| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | 所有模型调用合计，调用前先计数，失败不退还 |
+| `plugins.xiaoqing_life.browse_when_busy` | `false` | 作息为“忙”时是否允许偷偷刷一下 |
+| `plugins.xiaoqing_life.blocked_keywords` | `[]` | 在内置屏蔽词之外再丢弃的内容 |
+
+聊天一侧的取用开关在 `xiaoqing_chat` 行为配置的 `life.enable_online_life`、`life.online_life_timeout_seconds`、`life.enable_life_memes` 和 `life.enable_life_share`。
+全部字段、命令与数据目录见 [XiaoQing Life](../plugins/xiaoqing_life/README.md#开启)。
+
 ### QingSSH
 
 公开预算字段位于 `plugins.qingssh`：

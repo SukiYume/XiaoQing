@@ -33,6 +33,7 @@ from .chat_event import (
     MENTION_LABELS_KEY,
     event_chat_id,
     is_bot_mentioned,
+    is_called_by_name,
     is_private_event,
     other_mentions,
     text_with_mentions,
@@ -46,7 +47,6 @@ from .chat_runtime import (
     load_runtime,
 )
 from .commands import reset_transient_conversation_state
-from .config.config import DEFAULT_BOT_NAME_ONLY_REPLIES
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
 from .expression.bw_reflect_tracker import tick_reflect_tracker
 from .frequency_control import decide_reply
@@ -549,7 +549,13 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
     direct_mentioned   = is_bot_mentioned(event)
     is_private         = is_private_event(event)
     command_forced     = bool(event.get("_xc_command_forced"))
-    attention          = await decide_attention(
+    # @ 了别人、没 @ 她时，句子里的名字多半是在跟别人说她。
+    called_by_name = (
+        not is_private
+        and (direct_mentioned or not other_mentions(event))
+        and is_called_by_name(text, hctx.bot_name)
+    )
+    attention = await decide_attention(
         event                     = event,
         state                     = state,
         chat_id                   = chat_id,
@@ -557,6 +563,7 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
         command_forced            = command_forced,
         direct_mentioned          = direct_mentioned,
         enable_private_brain_chat = brain_chat_enabled,
+        called_by_name            = called_by_name,
     )
     log_step(
         context,
@@ -567,6 +574,7 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
             "is_private"        : is_private,
             "mentioned"         : attention.mentioned,
             "direct_mentioned"  : direct_mentioned,
+            "called_by_name"    : called_by_name,
             "reply_to_bot"      : attention.reply_to_bot,
             "forced"            : attention.forced,
             "force_reason"      : attention.force_reason,
@@ -805,8 +813,8 @@ async def _maybe_reply_smalltalk(
             prepared, event, context, hctx, started_at=t0, deciding=deciding
         )
 
-    # 私聊并行判断工具需求；群聊先由 PFC 决定参与。
-    if prepared.is_private and agent_may_take_over(prepared, event, context):
+    # 私聊和群里明确跟她说的话并行判断工具需求；其余群消息先由 PFC 决定参与。
+    if (prepared.is_private or prepared.forced) and agent_may_take_over(prepared, event, context):
         return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
     return await chat(None)
 
@@ -876,34 +884,3 @@ async def _reply_with_chat(
         if not prepared.forced or str(exc) == CHAT_SUPERSEDED:
             return []
         return segments("消息有点多，我缓一下再回")
-
-
-async def call_bot_name_only(context) -> list[dict[str, Any]]:
-    """
-    处理只有机器人名称的内部调用
-
-    返回一个随机的简短回应短语。
-
-    Args:
-        context: 插件上下文
-
-    Returns:
-        包含单个文本消息段的列表
-    """
-    replies = list(DEFAULT_BOT_NAME_ONLY_REPLIES)
-    runtime = None
-    try:
-        runtime    = load_runtime(context)
-        configured = [
-            str(item).strip() for item in runtime.cfg.bot_name_only_replies if str(item).strip()
-        ]
-        if configured:
-            replies = configured
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "xiaoqing_chat.bot_name_only.config",
-        )
-    return segments(random.choice(replies))

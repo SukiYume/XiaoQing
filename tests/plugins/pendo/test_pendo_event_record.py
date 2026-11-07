@@ -57,9 +57,9 @@ async def test_multi_node_event_creates_a_collection_with_one_child_per_node(db)
     result = await _record(
         _handler(db),
         {
-            "kind"          : "multi_node",
-            "title"         : "研讨会",
-            "nodes"         : [
+            "kind" : "multi_node",
+            "title": "研讨会",
+            "nodes": [
                 {"name": "第一天", "time": "2030-11-14T09:00"},
                 {"name": "第二天", "time": "2030-11-15T09:00", "end_time": "2030-11-15T12:00"},
             ],
@@ -121,7 +121,10 @@ _NODES  = [
         ({**_SINGLE, "rrule": "FREQ=DAILY"}, "不能带 rrule"),
         ({**_SINGLE, "end_time": "2030-01-02T08:00"}, "end_time 须晚于 start_time"),
         ({"kind": "multi_node", "title": "x", "nodes": _NODES[:1]}, "至少 2 个"),
-        ({"kind": "multi_node", "title": "x", "nodes": _NODES, "rrule": "FREQ=DAILY"}, "不能带 rrule"),
+        (
+            {"kind": "multi_node", "title": "x", "nodes": _NODES, "rrule": "FREQ=DAILY"},
+            "不能带 rrule",
+        ),
         ({"kind": "recurring", "title": "x", "start_time": "2030-01-02T09:00"}, "需要 rrule"),
         (
             {"kind": "recurring", "title": "x", "start_time": "2030-01-02T09:00", "rrule": "NOPE"},

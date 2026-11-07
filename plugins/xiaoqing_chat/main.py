@@ -30,7 +30,6 @@ from .commands import (
 )
 from .handler_context import validate_action_list
 from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
-    call_bot_name_only,
     handle_smalltalk,
     observe_message,
     observe_outgoing_action,

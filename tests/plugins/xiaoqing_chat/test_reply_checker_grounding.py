@@ -425,9 +425,10 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     assert low_stakes.persona_claim_count == 1
     assert overreach.suitable is False
     assert overreach.failure_code == "persona_grounding"
-    assert "低风险日常创作" in captured_prompts[0]
-    assert "模糊的当下感受" in captured_prompts[0]
-    assert "精确身份、持续关系和现实承诺仍需依据" in captured_prompts[0]
+    # 自己的日常可以发挥；矛盾、精确身份和现实承诺仍要依据。
+    assert "她自己的日常可以自然发挥" in captured_prompts[0]
+    assert "和这些记录矛盾的说法" in captured_prompts[0]
+    assert "精确身份资料" in captured_prompts[0] and "对别人的现实承诺" in captured_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -1554,3 +1555,33 @@ def test_admitting_she_does_not_know_is_not_a_claim_about_others() -> None:
         bot_name          = "小青",
     )
     assert error is None and not unsupported
+
+
+def _ramen_review(reply: str, **changes):
+    # 实测原样：顺着群友“蛋好溏心”接的一句被列成读图说法，证据写成了转述。
+    claims = [
+        {"claim": "有叉烧、两片蛋", "evidence": "碗里有面条、叉烧、两片鸡蛋"},
+        {"claim": "蛋看着还挺溏心的。", "evidence": "阿白觉得蛋看起来像溏心蛋。"},
+    ]
+    return checker._interpret_checker_response(
+        content=_response(visual_claims=claims, **changes),
+        reply                            = reply,
+        current_text                     = "小青，刚才那个拉面图里除了面还有啥",
+        history_text                     = "[h2]03:53, 阿梨: 深夜放毒[图片：碗里有面条、叉烧、两片鸡蛋和几粒绿色配料。]",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+        image_evidence_required          = True,
+    )
+
+
+def test_visual_rejection_names_only_the_unsupported_claims_when_the_rest_passes():
+    result = _ramen_review("有叉烧、两片蛋\n\n蛋看着还挺溏心的。")
+    assert result.failure_code == "media_grounding" and result.is_hard
+    assert result.unsupported_fragments == ("蛋看着还挺溏心的。",)
+
+    # 其余部分自己也有硬问题时，不能只删这一处。
+    worse = _ramen_review(
+        "有叉烧、两片蛋\n\n蛋看着还挺溏心的。", suitable=False, context_coherent=False
+    )
+    assert worse.failure_code == "media_grounding" and worse.unsupported_fragments == ()

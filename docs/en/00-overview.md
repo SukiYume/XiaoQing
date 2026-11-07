@@ -26,7 +26,7 @@ Python 3.11 or later is necessary. Maintainers use a common code formatter and b
 | Area | Plugins | Capabilities |
 |---|---|---|
 | Core management | `bot_core` | Hierarchical help, plugin list, reload, group mute, secret management, runtime metrics |
-| Intelligent chat | `xiaoqing_chat`, `xiaoqing_agent`, `smalltalk`, `chat`, `voice` | Multimodal chat, group participation, task agent, basic answers, TTS |
+| Intelligent chat | `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, `smalltalk`, `chat`, `voice` | Multimodal chat, group participation, task agent, the persona's own online life, basic answers, TTS |
 | Personal management | `pendo` | Events, tasks, notes, journals, accounts, reminders, Web, widgets |
 | Astronomy research | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | Astronomy images, paper selection, literature search, calculations, dictionary, FRB data |
 | Execution and operations | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | Background agent, controlled terminal, SSH, Python REPL, RCON |

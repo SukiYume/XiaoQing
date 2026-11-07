@@ -133,6 +133,20 @@ def _streak_adjusted(probability: float, no_reply_streak: int) -> float:
     return probability
 
 
+# 群里接连这么多条她都没出声时，作息的压制减到一半。
+_ROUTINE_RELIEF_STREAK = 6
+
+
+def _routine_factor_with_streak(factor: float, no_reply_streak: int) -> float:
+    """上课或躺在床上时，群里一直有人说话、她一直没出声，手机响多了总会看一眼。
+
+    作息的压制随连续没回复的条数逐步减弱，最多减到一半；接不接仍由规划器看话题决定。
+    """
+
+    relief = min(max(no_reply_streak, 0), _ROUTINE_RELIEF_STREAK) / (2 * _ROUTINE_RELIEF_STREAK)
+    return factor + (1.0 - factor) * relief
+
+
 async def decide_reply(
     runtime: ChatRuntime,
     state,
@@ -147,7 +161,7 @@ async def decide_reply(
 
     明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复；这里只处理硬频控、
     普通插话概率、heartflow 软加分和静默期补偿。``routine_factor`` 是作息给的乘数，
-    最后作用在概率上：角色在上课或睡觉时更少插话。
+    最后作用在概率上：角色在上课或睡觉时更少插话，群里一直热闹而她没出声时压得轻一些。
     """
 
     cfg    = runtime.cfg
@@ -192,7 +206,11 @@ async def decide_reply(
             )
         streak      = (await state.heartflow.get_async(chat_id)).no_reply_streak
         probability = max(0.0, min(1.0, _streak_adjusted(probability, streak)))
-        factor      = 1.0 if is_private else max(0.0, min(1.0, routine_factor))
+        factor      = (
+            1.0
+            if is_private
+            else _routine_factor_with_streak(max(0.0, min(1.0, routine_factor)), streak)
+        )
         probability = probability * factor
         roll        = random.random()
         decision    = dataclasses.replace(

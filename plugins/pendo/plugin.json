@@ -19,6 +19,7 @@
                     "aliases": ["确认"],
                     "help": "确认刚收到的提醒",
                     "usage": "/pendo confirm <id>",
+                    "effect": "write",
                     "examples": ["/pendo confirm evt_123"],
                     "invalid_examples": ["/pendo confirm"]
                 },
@@ -27,6 +28,7 @@
                     "aliases": ["延后"],
                     "help": "把条目当前提醒延后到相对时长或当天时刻",
                     "usage": "/pendo snooze <id> <10m|1h|1d|HH:MM>",
+                    "effect": "write",
                     "examples": ["/pendo snooze evt_123 30m"],
                     "invalid_examples": ["/pendo snooze evt_123"]
                 },
@@ -35,6 +37,7 @@
                     "aliases": ["撤销"],
                     "help": "撤销最近一次删除或编辑",
                     "usage": "/pendo undo [分钟]",
+                    "effect": "write",
                     "examples": ["/pendo undo 3"],
                     "invalid_examples": ["/pendo undo tomorrow"]
                 },
@@ -50,6 +53,7 @@
                             "name": "add",
                             "help": "自然语言一次说明标题、开始时间、结束时间、地点和提醒。插件默认保留准点提醒，提前提醒会一起加入。冲突时返回待确认信息；用户允许重叠安排后可用 --force 创建。重复日程或多节点行程会返回集合与节点 ID。多节点、重复或需要精确时间时用 event record 结构化写入。",
                             "usage": "/pendo event add <内容> [--force]",
+                            "effect": "write",
                             "examples": [
                                 "/pendo event add 明天上午九点开组会，提前30分钟提醒",
                                 "/pendo event add 明天上午九点开组会 --force"
@@ -60,6 +64,7 @@
                             "name": "record",
                             "help": "JSON 结构化写入一条日程，不经自然语言解析。必填 kind 和 title：single 单次需 start_time；multi_node 多节点需至少 2 个 nodes（每项 name、time，可选 end_time），不得带 start_time、end_time、rrule；recurring 重复需 start_time 和 rrule（RFC5545）。时间一律是用户当地墙钟时间 YYYY-MM-DDTHH:MM，end_time 须晚于开始。可选 content（缺省用标题）、location、notes、category、remind_offsets（如 [\"提前1天\", \"提前30分钟\"]，应用于每个实例或节点）。时间冲突时返回待确认，已知可重叠时加 --force 直接创建。",
                             "usage": "/pendo event record <JSON> [--force]",
+                            "effect": "write",
                             "examples": [
                                 "/pendo event record {\"kind\":\"single\",\"title\":\"组会\",\"start_time\":\"2026-11-10T09:00\",\"remind_offsets\":[\"提前30分钟\"]}",
                                 "/pendo event record {\"kind\":\"multi_node\",\"title\":\"毕业答辩\",\"nodes\":[{\"name\":\"材料提交\",\"time\":\"2026-12-01T17:00\"},{\"name\":\"正式答辩\",\"time\":\"2026-12-08T14:00\"}],\"remind_offsets\":[\"提前1天\"]}"
@@ -70,6 +75,7 @@
                             "name": "list",
                             "help": "按范围、cat:分类或#标签查询，默认今天。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                             "usage": "/pendo event list [范围] [cat:分类] [#标签]",
+                            "effect": "read",
                             "examples": [
                                 "/pendo event list week cat:工作",
                                 "/pendo event list 2026-10-21..2026-10-28"
@@ -80,6 +86,7 @@
                             "name": "view",
                             "help": "查看单个日程、节点或集合详情",
                             "usage": "/pendo event view <id>",
+                            "effect": "read",
                             "examples": ["/pendo event view evt_123"],
                             "invalid_examples": ["/pendo event view"]
                         },
@@ -87,6 +94,7 @@
                             "name": "edit",
                             "help": "用自然语言修改指定日程的时间、标题、地点、分类或备注；未提到的字段保持原值。集合 ID 修改整体标题/分类/地点/备注；修改单个节点时间先 view 集合并取对应节点 ID。",
                             "usage": "/pendo event edit <id> <内容>",
+                            "effect": "write",
                             "examples": ["/pendo event edit evt_123 改到明天下午三点", "/pendo event edit evt_123 标题改为项目复盘，地点改为会议室"],
                             "invalid_examples": ["/pendo event edit evt_123"]
                         },
@@ -94,6 +102,7 @@
                             "name": "delete",
                             "help": "删除单个日程、节点或整个集合",
                             "usage": "/pendo event delete <id>",
+                            "effect": "write",
                             "examples": ["/pendo event delete evt_123"],
                             "invalid_examples": ["/pendo event delete"]
                         },
@@ -109,6 +118,7 @@
                                     "name": "set",
                                     "help": "按描述重新设置该日程的提醒规则，同时保留默认准点提醒。提前一天和一小时会得到三次提醒：前一天、前一小时、准点。其他已有提前规则会被本次描述替换，追加时把所需规则一起写明；删除用 delete。",
                                     "usage": "/pendo event reminders set <id> <描述>",
+                                    "effect": "write",
                                     "examples": ["/pendo event reminders set evt_123 提前一天和一小时提醒"],
                                     "invalid_examples": ["/pendo event reminders set evt_123"]
                                 },
@@ -116,6 +126,7 @@
                                     "name": "confirm",
                                     "help": "将选中提醒标记为已确认并返回实际确认数量，已确认项到点跳过发送。“确认全部提醒”对应 confirm <id> all。selector 默认 future，all 覆盖全部，today 覆盖用户当地今天，future 覆盖未来；也可指定 HH:MM 或 YYYY-MM-DDTHH:MM。已确认的提醒会跳过。",
                                     "usage": "/pendo event reminders confirm <id> [today|future|all|提醒时间]",
+                                    "effect": "write",
                                     "examples": ["/pendo event reminders confirm evt_123 all", "/pendo event reminders confirm evt_123 today"],
                                     "invalid_examples": ["/pendo event reminders confirm"]
                                 },
@@ -124,6 +135,7 @@
                                     "aliases": ["remove", "rm"],
                                     "help": "删除 selector 选中的提醒；all 全部、today 今天、future 未来，或给出具体提醒时间。确认提醒使用 confirm。",
                                     "usage": "/pendo event reminders delete <id> <all|today|future|提醒时间>",
+                                    "effect": "write",
                                     "examples": ["/pendo event reminders delete evt_123 future", "/pendo event reminders delete evt_123 2026-10-28T18:00"],
                                     "invalid_examples": ["/pendo event reminders delete evt_123"]
                                 },
@@ -131,6 +143,7 @@
                                     "name": "list",
                                     "help": "列出指定范围内的日程提醒及确认状态，默认今天。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                                     "usage": "/pendo event reminders list [范围]",
+                                    "effect": "read",
                                     "examples": ["/pendo event reminders list week"],
                                     "invalid_examples": ["/pendo event reminders list 2026-99-99"]
                                 }
@@ -150,6 +163,7 @@
                             "name": "add",
                             "help": "带内容一次添加，空参数进入真人交互。plan 是计划日期；deadline 是截止时间，可用带T的日期时间或双引号包住含空格的时间。p:1紧急、2高、3中（默认）、4低、5最低。支持cat:分类、#标签和remind:提醒时间（多个时间用逗号分隔）；plan 默认当天，用户当地20点后默认明天；plan:none 明确取消计划日期，deadline:none 和 remind:none 清空对应字段。date/due/reminder 分别是 plan/deadline/remind 的别名。",
                             "usage": "/pendo todo add [内容] [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:时间,时间] [cat:分类] [p:1紧急-5最低]",
+                            "effect": "write",
                             "examples": ["/pendo todo add 写周报 cat:工作 p:2 plan:2026-10-28", "/pendo todo add 交周报 deadline:2026-10-28T18:00"],
                             "invalid_examples": ["/pendo todo add 写周报 p:9"]
                         },
@@ -157,6 +171,7 @@
                             "name": "list",
                             "help": "按状态、范围或分类列出待办。today 计划日期或截止时间落在用户当地今天；upcoming 计划日期在今天之后或截止时间在当前时刻之后；overdue 计划日期在今天之前或截止时间已过；inbox 没有计划日期；open 全部未完成。today、upcoming、overdue、inbox 默认只含未完成，加 all 含已完成和已取消。",
                             "usage": "/pendo todo list [today|open|done|cancelled|overdue|upcoming|inbox|分类] [all|page:n]",
+                            "effect": "read",
                             "examples": ["/pendo todo list open page:1"],
                             "invalid_examples": ["/pendo todo list page:zero"]
                         },
@@ -164,6 +179,7 @@
                             "name": "view",
                             "help": "查看待办详情",
                             "usage": "/pendo todo view <id>",
+                            "effect": "read",
                             "examples": ["/pendo todo view todo_123"],
                             "invalid_examples": ["/pendo todo view"]
                         },
@@ -171,6 +187,7 @@
                             "name": "done",
                             "help": "把待办标为完成",
                             "usage": "/pendo todo done <id>",
+                            "effect": "write",
                             "examples": ["/pendo todo done todo_123"],
                             "invalid_examples": ["/pendo todo done"]
                         },
@@ -178,6 +195,7 @@
                             "name": "cancel",
                             "help": "取消待办",
                             "usage": "/pendo todo cancel <id>",
+                            "effect": "write",
                             "examples": ["/pendo todo cancel todo_123"],
                             "invalid_examples": ["/pendo todo cancel"]
                         },
@@ -185,6 +203,7 @@
                             "name": "undone",
                             "help": "把已完成或取消的待办恢复为未完成",
                             "usage": "/pendo todo undone <id>",
+                            "effect": "write",
                             "examples": ["/pendo todo undone todo_123"],
                             "invalid_examples": ["/pendo todo undone"]
                         },
@@ -192,6 +211,7 @@
                             "name": "edit",
                             "help": "按 ID 修改内容或 plan/deadline/remind/cat/p 字段，字段格式同 add；可以只给字段。未给出的字段保留原值。优先级1最高、5最低。",
                             "usage": "/pendo todo edit <id> [新内容] [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:时间,时间] [cat:分类] [p:1-5]",
+                            "effect": "write",
                             "examples": [
                                 "/pendo todo edit todo_123 deadline:2026-08-01T18:00",
                                 "/pendo todo edit todo_123 p:2"
@@ -202,6 +222,7 @@
                             "name": "delete",
                             "help": "按 ID 或分类删除待办",
                             "usage": "/pendo todo delete <id|cat:分类>",
+                            "effect": "write",
                             "examples": ["/pendo todo delete todo_123"],
                             "invalid_examples": ["/pendo todo delete"]
                         }
@@ -219,6 +240,7 @@
                             "name": "add",
                             "help": "一次写入，日期默认用户当地今天；同一天可多条记录。可指定YYYY-MM-DD或today/昨天等日期。尾部支持mood:情绪、score:1–10、weather:天气、location:地点、tags:标签、favorite:true；含空格值加引号。",
                             "usage": "/pendo diary add [日期] <正文> [mood:情绪] [score:1-10] [weather:天气] [location:地点] [tags:标签] [favorite:true]",
+                            "effect": "write",
                             "examples": ["/pendo diary add 今天跑步五公里 mood:happy score:8"],
                             "invalid_examples": ["/pendo diary add"]
                         },
@@ -226,6 +248,7 @@
                             "name": "list",
                             "help": "按日期、情绪、分类或标签列出日记",
                             "usage": "/pendo diary list [范围] [mood:情绪] [cat:分类] [#标签]",
+                            "effect": "read",
                             "examples": ["/pendo diary list month mood:happy"],
                             "invalid_examples": ["/pendo diary list 2026-99"]
                         },
@@ -233,6 +256,7 @@
                             "name": "view",
                             "help": "按日期或 ID 查看日记详情",
                             "usage": "/pendo diary view <日期|id>",
+                            "effect": "read",
                             "examples": ["/pendo diary view today"],
                             "invalid_examples": ["/pendo diary view"]
                         },
@@ -247,6 +271,7 @@
                             "name": "delete",
                             "help": "按日期或 ID 删除日记",
                             "usage": "/pendo diary delete <日期|id>",
+                            "effect": "write",
                             "examples": ["/pendo diary delete diary_123"],
                             "invalid_examples": ["/pendo diary delete"]
                         }
@@ -264,6 +289,7 @@
                             "name": "add",
                             "help": "一次保存笔记。推荐 title:\"标题\" content 正文，正文可含换行和缩进；也支持标题后直接换行。尾部 cat:分类、#标签、ref:条目ID 作为元数据解析，字段值含空格时加引号。正文按所需原文传入。",
                             "usage": "/pendo note add title:\"标题\" content <正文> [cat:分类] [#标签] [ref:id]",
+                            "effect": "write",
                             "examples": ["/pendo note add title:\"会议纪要\" content 第一条结论\n第二条结论", "/pendo note add title:\"读书摘录\" content 费曼技巧 cat:学习 #方法"],
                             "invalid_examples": ["/pendo note add"]
                         },
@@ -271,6 +297,7 @@
                             "name": "list",
                             "help": "空参数显示分类总览；可按cat:分类、#标签和日期范围筛选，all 展开全部，page:n 从1开始。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                             "usage": "/pendo note list [范围] [cat:分类] [#标签] [all|page:n]",
+                            "effect": "read",
                             "examples": ["/pendo note list cat:学习 #方法"],
                             "invalid_examples": ["/pendo note list page:zero"]
                         },
@@ -278,6 +305,7 @@
                             "name": "view",
                             "help": "查看笔记详情",
                             "usage": "/pendo note view <id>",
+                            "effect": "read",
                             "examples": ["/pendo note view note_123"],
                             "invalid_examples": ["/pendo note view"]
                         },
@@ -285,6 +313,7 @@
                             "name": "edit",
                             "help": "原地编辑内容或元数据。只改标题用 title:\"新标题\"；替换正文用 title:\"标题\" content 原文，可保留正文内部换行和缩进。cat/#标签/ref 格式同 add，未给出的元数据保持原值。",
                             "usage": "/pendo note edit <id> [title:\"标题\"] [content <正文>] [cat:分类] [#标签] [ref:id]",
+                            "effect": "write",
                             "examples": ["/pendo note edit note_123 title:\"新标题\"", "/pendo note edit note_123 title:\"会议纪要\" content 第一行\n第二行"],
                             "invalid_examples": ["/pendo note edit note_123"]
                         },
@@ -292,6 +321,7 @@
                             "name": "append",
                             "help": "向笔记末尾追加内容",
                             "usage": "/pendo note append <id> <追加内容>",
+                            "effect": "write",
                             "examples": ["/pendo note append note_123 补充一条观察"],
                             "invalid_examples": ["/pendo note append note_123"]
                         },
@@ -299,6 +329,7 @@
                             "name": "tag",
                             "help": "给笔记添加标签",
                             "usage": "/pendo note tag <id> <#标签>",
+                            "effect": "write",
                             "examples": ["/pendo note tag note_123 #重要"],
                             "invalid_examples": ["/pendo note tag note_123"]
                         },
@@ -306,6 +337,7 @@
                             "name": "untag",
                             "help": "从笔记移除标签",
                             "usage": "/pendo note untag <id> <#标签>",
+                            "effect": "write",
                             "examples": ["/pendo note untag note_123 #重要"],
                             "invalid_examples": ["/pendo note untag note_123"]
                         },
@@ -313,6 +345,7 @@
                             "name": "link",
                             "help": "把笔记关联到另一条目",
                             "usage": "/pendo note link <id> <关联条目id>",
+                            "effect": "write",
                             "examples": ["/pendo note link note_123 todo_123"],
                             "invalid_examples": ["/pendo note link note_123"]
                         },
@@ -320,6 +353,7 @@
                             "name": "delete",
                             "help": "按 ID 或分类删除笔记",
                             "usage": "/pendo note delete <id|cat:分类>",
+                            "effect": "write",
                             "examples": ["/pendo note delete note_123"],
                             "invalid_examples": ["/pendo note delete"]
                         }
@@ -330,6 +364,7 @@
                     "aliases": ["s", "搜索", "查找"],
                     "help": "跨类型搜索关键词，筛选可用 key:value 或 key=value。type:event|task|note|diary|ledger；range 指日期范围；status 指状态；category/tag 筛选分类标签；账目支持 transaction_type、account、merchant；金额区间使用 ledger list amount:N..M。结果 ID 用于 view/edit。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                     "usage": "/pendo search <关键词> [type:类型] [range:范围] [status:状态] [category:分类] [tag:标签] [transaction_type:类型] [account:账户]",
+                    "effect": "read",
                     "examples": ["/pendo search DEEPSEEK type:ledger range:year", "/pendo search 会议 type:event range:week"],
                     "invalid_examples": ["/pendo search"]
                 },
@@ -345,13 +380,98 @@
                             "name": "add",
                             "help": "带金额和描述一次保存；空参数进入真人交互。Agent 使用带参数形式。字段：type:expense|income|transfer、cat:分类、account:账户、to:转入账户、merchant:商户、date:YYYY-MM-DD、remark:备注、currency:CNY。描述支持空格和包围引号。cat 填分类名称，收支类型单独写type。常用支出分类：餐饮、交通、购物、居住、娱乐、医疗、教育、通讯、社交、宠物、运动、服务、旅行、其他；收入分类：工资、兼职、理财、红包、报销、其他。分类与account账户均支持自定义名称。按用户指定的含义提取分类名称；用户未指定分类时省略cat，采用其他。描述放交易内容，商户可单独写merchant。示例演示参数结构。含空格的字段值用双引号。category/from/counter/payee 分别是 cat/account/to/merchant 的别名。默认支出、分类其他、账户现金、币种CNY、用户当地今天；转账默认分类转账，必须提供不同于转出账户的 to。金额为正数，最多两位小数。",
                             "usage": "/pendo ledger add <金额> <描述> [type:expense|income|transfer] [cat:分类] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] [currency:CNY]",
+                            "effect": "write",
                             "examples": ["/pendo ledger add 32 打车 cat:交通 account:支付宝", "/pendo ledger add 68 订阅费 cat:服务 account:微信 date:2026-10-27", "/pendo ledger add 1000 还款 type:transfer account:微信 to:银行卡"],
                             "invalid_examples": ["/pendo ledger add unexpected"]
                         },
                         {
                             "name": "record",
-                            "help": "JSON结构化记账，一次保存一笔。必填amount_cents正整数（金额的分）和title描述；transaction_type为expense默认、income或transfer。可选category默认其他、account默认现金、to_account转入账户、date当地日期YYYY-MM-DD默认今天、currency默认CNY、merchant、remark。转账默认分类转账，to_account必填且须与转出账户不同。category_from、account_from引用本人已查询到的账目ID，沿用其分类、账户；与对应的category、account字段分别二选一。Agent执行器自动传入source_text原话，落库前校验分类与账户来源。Agent可直接使用同契约的pendo_ledger_add工具。",
+                            "help": "JSON结构化记账，一次保存一笔。必填amount_cents正整数（金额的分）和title描述；transaction_type为expense默认、income或transfer。可选category默认其他、account默认现金、to_account转入账户、date当地日期YYYY-MM-DD默认今天、currency默认CNY、merchant、remark。转账默认分类转账，to_account必填且须与转出账户不同。category_from、account_from引用本人已查询到的账目ID，沿用其分类、账户；与对应的category、account字段分别二选一。由 Agent 代为执行时，落库前按发起人原话校验分类与账户来源。",
                             "usage": "/pendo ledger record <JSON>",
+                            "effect": "write",
+                            "structured_input": {
+                                "name": "pendo_ledger_add",
+                                "description": "一次写入一笔账，金额、描述、分类、账户分别传入；省略的字段采用声明的默认值。分类与账户按用户原话填写，由 Agent 代为执行时按发起人原话校验来源。返回完整已保存字段和记录ID。",
+                                "parameters": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "amount_cents": {
+                                            "description": "金额的最小货币单位，人民币为分。例如99.47元填9947。",
+                                            "exclusiveMinimum": 0,
+                                            "title": "Amount Cents",
+                                            "type": "integer"
+                                        },
+                                        "title": {
+                                            "description": "交易对象或用途，保留原词；分类、账户分别填写独立字段。",
+                                            "maxLength": 200,
+                                            "minLength": 1,
+                                            "title": "Title",
+                                            "type": "string"
+                                        },
+                                        "transaction_type": {
+                                            "default": "expense",
+                                            "enum": ["expense", "income", "transfer"],
+                                            "title": "Transaction Type",
+                                            "type": "string"
+                                        },
+                                        "category": {
+                                            "default": "",
+                                            "description": "用户给出的分类名称；收支类型单独用transaction_type填写。未指定时留空，采用其他。",
+                                            "title": "Category",
+                                            "type": "string"
+                                        },
+                                        "account": {
+                                            "default": "",
+                                            "description": "用户给出的账户名称。未指定时留空，采用现金。",
+                                            "title": "Account",
+                                            "type": "string"
+                                        },
+                                        "category_from": {
+                                            "default": "",
+                                            "description": "用户要求沿用历史分类时填写已查询到的账目ID，category留空。",
+                                            "title": "Category From",
+                                            "type": "string"
+                                        },
+                                        "account_from": {
+                                            "default": "",
+                                            "description": "用户要求沿用历史账户时填写已查询到的账目ID，account留空。",
+                                            "title": "Account From",
+                                            "type": "string"
+                                        },
+                                        "to_account": {
+                                            "default": "",
+                                            "description": "转账的转入账户，转账时必填。",
+                                            "title": "To Account",
+                                            "type": "string"
+                                        },
+                                        "merchant": {
+                                            "default": "",
+                                            "description": "明确提供的商户，可留空。",
+                                            "title": "Merchant",
+                                            "type": "string"
+                                        },
+                                        "date": {
+                                            "default": "",
+                                            "description": "YYYY-MM-DD，留空采用用户当地今天。",
+                                            "title": "Date",
+                                            "type": "string"
+                                        },
+                                        "currency": {
+                                            "default": "CNY",
+                                            "description": "币种代码，例如CNY、USD。",
+                                            "title": "Currency",
+                                            "type": "string"
+                                        },
+                                        "remark": {
+                                            "default": "",
+                                            "title": "Remark",
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": ["amount_cents", "title"],
+                                    "type": "object"
+                                }
+                            },
                             "examples": ["/pendo ledger record {\"amount_cents\":1250,\"title\":\"早餐\",\"category\":\"餐饮\",\"account\":\"微信\"}"],
                             "invalid_examples": ["/pendo ledger record {}"]
                         },
@@ -359,6 +479,7 @@
                             "name": "quick",
                             "help": "单条命令保存账目，参数与 add 相同。字段：type:expense|income|transfer、cat:分类、account:账户、to:转入账户、merchant:商户、date:YYYY-MM-DD、remark:备注、currency:CNY。描述支持空格和包围引号。cat 填分类名称，收支类型单独写type。常用支出分类：餐饮、交通、购物、居住、娱乐、医疗、教育、通讯、社交、宠物、运动、服务、旅行、其他；收入分类：工资、兼职、理财、红包、报销、其他。分类与account账户均支持自定义名称。按用户指定的含义提取分类名称；用户未指定分类时省略cat，采用其他。描述放交易内容，商户可单独写merchant。示例演示参数结构。含空格的字段值用双引号。category/from/counter/payee 分别是 cat/account/to/merchant 的别名。默认支出、分类其他、账户现金、币种CNY、用户当地今天；转账默认分类转账，必须提供不同于转出账户的 to。金额为正数，最多两位小数。",
                             "usage": "/pendo ledger quick <金额> <描述> [type:expense|income|transfer] [cat:分类] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] [currency:CNY]",
+                            "effect": "write",
                             "examples": ["/pendo ledger quick 32 打车 cat:交通 account:支付宝", "/pendo ledger quick 68 订阅费 cat:服务 account:微信 date:2026-10-27", "/pendo ledger quick 1000 还款 type:transfer account:微信 to:银行卡"],
                             "invalid_examples": ["/pendo ledger quick -10 午饭"]
                         },
@@ -366,6 +487,7 @@
                             "name": "list",
                             "help": "默认查看本月，page 从1开始；all 查看全部匹配项，ex 额外显示分类最大单笔。筛选支持 type、cat、account、to、merchant、amount；amount:N 为至少N元，amount:N..M 为闭区间。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                             "usage": "/pendo ledger list [范围] [type:expense|income|transfer] [cat:分类] [account:账户] [to:账户] [merchant:商户] [amount:N|N..M] [ex] [all|page:n]",
+                            "effect": "read",
                             "examples": ["/pendo ledger list month type:expense account:支付宝", "/pendo ledger list 2026-10 amount:20..100 ex", "/pendo ledger list year page:2"],
                             "invalid_examples": ["/pendo ledger list page:zero"]
                         },
@@ -373,6 +495,7 @@
                             "name": "view",
                             "help": "查看账目详情",
                             "usage": "/pendo ledger view <id>",
+                            "effect": "read",
                             "examples": ["/pendo ledger view ledger_123"],
                             "invalid_examples": ["/pendo ledger view"]
                         },
@@ -380,6 +503,7 @@
                             "name": "edit",
                             "help": "使用 list/search 返回的 ID 原地修改，可同时提交多个 field:value 字段。字段：amount、title、cat/category、type、account/from、to/counter、merchant/payee、date、remark、currency；各字段值的格式同 add。含空格的值用双引号，remark:\"\" 清空备注；未给出的字段保持原值。切换为转账时需要 to；转出转账类型时清空转入账户。",
                             "usage": "/pendo ledger edit <id> <字段:值> [字段:值...]",
+                            "effect": "write",
                             "examples": ["/pendo ledger edit ledger_123 amount:68 account:支付宝 cat:软件", "/pendo ledger edit ledger_123 title:\"DeepSeek API\" merchant:DeepSeek currency:USD date:2026-10-27"],
                             "invalid_examples": ["/pendo ledger edit ledger_123"]
                         },
@@ -387,6 +511,7 @@
                             "name": "delete",
                             "help": "删除账目",
                             "usage": "/pendo ledger delete <id>",
+                            "effect": "write",
                             "examples": ["/pendo ledger delete ledger_123"],
                             "invalid_examples": ["/pendo ledger delete"]
                         },
@@ -394,6 +519,7 @@
                             "name": "summary",
                             "help": "按币种汇总收入、支出、结余和转账流量；默认本月。范围支持 today、tomorrow、week、month、year、lastNd、YYYY-MM、YYYY-MM-DD、起日..止日；week 是用户时区本周一至周日，last7d 从当前时刻向前推七天，账目和日记按日期筛选。其他周用明确起止日期。",
                             "usage": "/pendo ledger summary [范围]",
+                            "effect": "read",
                             "examples": [
                                 "/pendo ledger summary month",
                                 "/pendo ledger summary 2026-09"
@@ -407,6 +533,7 @@
                     "aliases": ["导出"],
                     "help": "导出 Markdown 档案并私聊发送文件",
                     "usage": "/pendo export <文件名> [范围] [类型]",
+                    "effect": "read",
                     "examples": ["/pendo export archive month all"],
                     "invalid_examples": ["/pendo export"]
                 },
@@ -415,6 +542,7 @@
                     "aliases": ["导入"],
                     "help": "查看 Web 导入入口和支持格式；聊天端不接收文件路径",
                     "usage": "/pendo import",
+                    "effect": "write",
                     "examples": ["/pendo import"],
                     "invalid_examples": ["/pendo import local-file.zip"]
                 },
@@ -431,6 +559,7 @@
                             "aliases": ["show"],
                             "help": "查看当前用户设置",
                             "usage": "/pendo settings view",
+                            "effect": "read",
                             "examples": ["/pendo settings view"],
                             "invalid_examples": ["/pendo settings view extra"]
                         },
@@ -438,6 +567,7 @@
                             "name": "reminder",
                             "help": "开关事件和待办提醒",
                             "usage": "/pendo settings reminder <on|off>",
+                            "effect": "write",
                             "examples": ["/pendo settings reminder on"],
                             "invalid_examples": ["/pendo settings reminder maybe"]
                         },
@@ -445,6 +575,7 @@
                             "name": "timezone",
                             "help": "设置 IANA 时区",
                             "usage": "/pendo settings timezone <IANA时区>",
+                            "effect": "write",
                             "examples": ["/pendo settings timezone Asia/Shanghai"],
                             "invalid_examples": ["/pendo settings timezone Mars/Base"]
                         },
@@ -452,6 +583,7 @@
                             "name": "quiet_hours",
                             "help": "设置静默时段",
                             "usage": "/pendo settings quiet_hours <HH:MM-HH:MM>",
+                            "effect": "write",
                             "examples": ["/pendo settings quiet_hours 23:00-07:00"],
                             "invalid_examples": ["/pendo settings quiet_hours 25:00-07:00"]
                         },
@@ -459,6 +591,7 @@
                             "name": "daily_report",
                             "help": "设置每日简报时间",
                             "usage": "/pendo settings daily_report <HH:MM>",
+                            "effect": "write",
                             "examples": ["/pendo settings daily_report 08:00"],
                             "invalid_examples": ["/pendo settings daily_report 28:00"]
                         },
@@ -466,6 +599,7 @@
                             "name": "daily_briefing",
                             "help": "开关每日简报",
                             "usage": "/pendo settings daily_briefing <on|off>",
+                            "effect": "write",
                             "examples": ["/pendo settings daily_briefing on"],
                             "invalid_examples": ["/pendo settings daily_briefing maybe"]
                         },
@@ -473,6 +607,7 @@
                             "name": "diary_remind",
                             "help": "设置每日写日记提醒时间",
                             "usage": "/pendo settings diary_remind <HH:MM>",
+                            "effect": "write",
                             "examples": ["/pendo settings diary_remind 22:30"],
                             "invalid_examples": ["/pendo settings diary_remind tonight"]
                         },
@@ -481,6 +616,7 @@
                             "aliases": ["ai_privacy"],
                             "help": "控制日记正文是否可发送给配置的第三方 AI 服务",
                             "usage": "/pendo settings ai_consent <on|off>",
+                            "effect": "write",
                             "examples": ["/pendo settings ai_consent off"],
                             "invalid_examples": ["/pendo settings ai_consent maybe"]
                         }
@@ -491,6 +627,7 @@
                     "aliases": ["h", "帮助", "?"],
                     "help": "显示总览或指定模块的详细帮助",
                     "usage": "/pendo help [command]",
+                    "effect": "read",
                     "examples": ["/pendo help event"],
                     "invalid_examples": ["/pendo help unknown-command"]
                 },
@@ -522,6 +659,7 @@
                             "aliases": ["widget_revoke"],
                             "help": "吊销自己尚未过期的全部桌面组件令牌",
                             "usage": "/pendo web widget-revoke",
+                            "effect": "write",
                             "examples": ["/pendo web widget-revoke"],
                             "invalid_examples": ["/pendo web widget-revoke extra"]
                         },
@@ -545,6 +683,7 @@
                             "name": "status",
                             "help": "查看 Web UI 服务状态",
                             "usage": "/pendo web status",
+                            "effect": "read",
                             "examples": ["/pendo web status"],
                             "invalid_examples": ["/pendo web status extra"]
                         }

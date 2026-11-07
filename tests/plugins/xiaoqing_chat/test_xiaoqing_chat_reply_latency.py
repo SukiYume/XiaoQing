@@ -326,9 +326,9 @@ def _finalization(started_at: float) -> Any:
     )
     return _SmalltalkFinalization(
         prepared=SimpleNamespace(forced=False, text="这季新番你们追了啥"),
-        generated = SimpleNamespace(timings={}),
-        event     = {},
-        context   = Mock(),
+        generated=SimpleNamespace(timings={}),
+        event   = {},
+        context = Mock(),
         hctx=SimpleNamespace(runtime=runtime, chat_id="g1"),
         started_at=started_at,
     )
@@ -360,6 +360,42 @@ async def test_presend_delay_counts_time_already_spent(spent, target, expected):
     else:
         assert sleep.await_args.args[0] == pytest.approx(expected, abs=0.2)
         assert finalization.generated.timings["send_wait_s"] == pytest.approx(expected, abs=0.2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "force_reason,factor,slowed",
+    [
+        ("addressed", 2.0, True),  # 睡觉时被叫到：照样回，只是慢一点
+        ("private", 1.6, True),  # 上课时私聊同理
+        ("addressed", 1.0, False),  # 空闲时被叫到：立刻回
+        ("command", 2.0, False),  # 显式命令不放慢
+    ],
+)
+async def test_routine_slows_direct_replies_but_not_commands(force_reason, factor, slowed):
+    from plugins.xiaoqing_chat import turn_delivery
+
+    sleep = AsyncMock()
+    with (
+        patch.object(turn_delivery, "_compute_typing_delay", return_value=4.0) as typing,
+        patch.object(turn_delivery, "display_reply_text", return_value="醒着呢"),
+        patch.object(turn_delivery, "log_step"),
+        patch.object(turn_delivery.asyncio, "sleep", sleep),
+    ):
+        finalization                           = _finalization(time.monotonic())
+        finalization.prepared.forced           = True
+        finalization.prepared.force_reason     = force_reason
+        finalization.event["_xc_delay_factor"] = factor
+        applied                                = await turn_delivery._apply_smalltalk_presend_delay(
+            finalization, has_outbound_batches=True
+        )
+
+    assert applied is slowed
+    if slowed:
+        assert typing.call_args.kwargs["factor"] == factor
+        assert sleep.await_args.args[0] == pytest.approx(4.0, abs=0.2)
+    else:
+        sleep.assert_not_awaited()
 
 
 def test_timings_record_each_stage_and_survive_log_sanitizing():

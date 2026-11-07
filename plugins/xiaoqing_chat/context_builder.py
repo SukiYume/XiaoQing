@@ -208,9 +208,7 @@ def jargon_context(state, data_dir, chat_id: str, unknown_words: list[str], text
     candidates = [rec for rec in scoped if rec.content in text or rec.content not in recent_bot]
     guesses    = [rec.content for rec in visible if not rec.confirmed and rec.content in text]
     selected   = list(
-        dict.fromkeys(
-            [*unknown_words, *[rec.content for rec in candidates[:3] if text], *guesses]
-        )
+        dict.fromkeys([*unknown_words, *[rec.content for rec in candidates[:3] if text], *guesses])
     )
     items = []
     for w in selected[:UNKNOWN_WORDS_MAX]:

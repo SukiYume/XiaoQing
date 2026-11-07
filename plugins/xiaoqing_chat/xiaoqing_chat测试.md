@@ -295,15 +295,16 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 
 `live` 驱动中，互不相干的剧本并发跑，每个剧本用自己的一段 QQ 号，同名群友在不同剧本里是不同的人（否则同一个“阿禾”同时在十几个群里说话，会撞上单人并发上限）；要改人设或打开主动开口的剧本最后逐个跑，期间临时改写 `xiaoqing_config.json`，结束时逐字节恢复并核对哈希。多个群同时压在一个 Bot 上，单轮超过 40 秒（`slow`）比真实群聊多，只作观察。
 
-剧本分三组（`--set`）：
+剧本分四组（`--set`）：
 
 | 组 | 剧本 | 关注点 |
 |---|---|---|
 | `group` | `otaku` `addressee` `participation` `multimodal` `persona` `banter` `help` `daily` `notice` `regress` | 活人感、聊天对象、参与度、读图与表情、人设边界、接梗、认真求助、日常、文字截图、计算与出站素材 |
 | `quality` | `quality_boundaries` `quality_scenarios` `quality_joining` | 人设与第三方边界、多人归属、话题转移、隔天新话题、读图与历史图、隔天关心面试、自主参与、私事不插话、长空档旧话题 |
-| `life` | `life_private` `life_group` `life_agent` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、作息影响节奏、冷群主动开口 |
+| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话（“记三笔帐”只给一笔时先问、不凑数）、连着办几件小事不多问、作息影响节奏、冷群主动开口 |
+| `online_life` | `ol_recent_group` `ol_recent_private` `ol_yesterday` `ol_term` `ol_unrelated` `ol_link` `ol_plan` `ol_like` | 拿预置的网上经历接话不编造、昨天和今天分开、听得懂学过的词、无关闲聊不硬扯、要链接时只给刚提到的那条、打算不说成做完、兴趣快照不夸大 |
 
-`life_agent`、`life_routine`、`life_proactive` 需要 agent、定时任务或改行为配置，只能 `--driver live`。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
+`life_agent`、`life_agent_ledger`、`life_agent_errands`、`life_routine`、`life_proactive` 需要 agent、定时任务或改行为配置，只能 `--driver live`。`online_life` 组始终接上预置的 xiaoqing_life 数据，`--online-life` 让 inproc 驱动的其他剧本也接上。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
 
 每轮先做确定性规则检查：
 

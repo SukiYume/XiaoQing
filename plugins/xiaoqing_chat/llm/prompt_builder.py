@@ -9,9 +9,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+from ..chat_event import is_bare_name_call
 from ..config.config import PersonalityConfig
 from ..constants import GENERIC_MEDIA_LABELS
-from ..memory.memory import StoredMessage
+from ..memory.memory import StoredMessage, is_conversation_reply
 from ..message_parts import (
     build_text_message_parts,
     normalize_message_parts,
@@ -262,6 +263,29 @@ def _media_only_target_block(
     return ""
 
 
+# 回复末尾的表情标记、emoji 和语气符号不影响“是不是问句收尾”。
+_REPLY_TAIL_DECORATION_RE = re.compile(
+    r"(?:\[[^\[\]]{1,24}\]|[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\s～~。.…!！)）])+$"
+)
+
+
+def _ends_with_question(message: StoredMessage) -> bool:
+    text = _REPLY_TAIL_DECORATION_RE.sub("", render_stored_message(message).strip())
+    return text.endswith(("？", "?"))
+
+
+def recent_question_endings_note(history: Sequence[StoredMessage], *, streak: int = 2) -> str:
+    """她最近几条都用问句收尾时提醒一句：老是“你呢？”像在走访谈流程。"""
+
+    replies = [message for message in history if is_conversation_reply(message)][-streak:]
+    if len(replies) < streak or not all(_ends_with_question(message) for message in replies):
+        return ""
+    return (
+        f"你最近 {streak} 条回复都是用问句收尾的。这条说完自己的话就停，"
+        "除非确实缺一个答不了的信息，不再反问对方。"
+    )
+
+
 def _current_turn_target_block(
     *,
     sender: str,
@@ -270,6 +294,11 @@ def _current_turn_target_block(
     bot_name: str = "",
 ) -> str:
     parts = normalize_message_parts(current_parts) or _current_turn_fallback_parts(current_text)
+    if not any(str(part.get("kind", "") or "") != "text" for part in parts) and is_bare_name_call(
+        current_text, bot_name
+    ):
+        # 像被人喊了一声那样应一下：结合刚才在聊什么和自己此刻的状态，不必问“有事吗”。
+        return f"现在{sender}喊了你一声，没说别的事。引起了你的注意"
     if not parts:
         text = str(current_text or "").strip()
         return f"现在{sender}说的：{text}。引起了你的注意" if text else ""
@@ -481,8 +510,8 @@ def _persona_section(
         lines.append(life_block)
     if personality.allow_low_stakes_persona_fiction:
         lines.append(
-            "- 日常创作许可：只补模糊的当下感受和一次性小事；"
-            "可核对的具体人名、地点、时长和承诺仍需记录支持，不能当外部事实。"
+            "- 日常创作许可：自己此刻在干嘛、刚做完的小事、等会儿的普通打算、小情绪和小插曲可以自然说，"
+            "和作息、今天的生活、说过的话保持一致；真实的具体人名、精确地点和答应别人的现实承诺仍需记录支持。"
         )
     else:
         lines.append(
@@ -660,6 +689,7 @@ def build_prompt_messages(
         _current_turn_target_block(
             sender=sender, current_text=current_text, current_parts=current_parts, bot_name=bot_name
         ),
+        recent_question_endings_note(dialogue_history),
         "可以顺口接的旧事：" + open_loop_block.strip() if open_loop_block.strip() else "",
         "关键词反应（可参考，不要生硬照抄）\n" + "；".join(reaction_prompts)
         if reaction_prompts

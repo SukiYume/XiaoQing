@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import materialize_snapshot_value
 from .delivery import DeliverySegments
+from .interfaces import MAX_COMMAND_REQUEST_TEXT_CHARS, MAX_COMMAND_REQUEST_TEXTS
 
 if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
@@ -349,8 +350,9 @@ class CommandRunnerService:
         self,
         command_text: str,
         *,
-        sender_name: str  = "",
-        operation_id: str = "",
+        sender_name: str               = "",
+        operation_id: str              = "",
+        request_texts: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         _require(self._authorized)
         text = _required_text(command_text, "command text")
@@ -358,8 +360,18 @@ class CommandRunnerService:
             raise ValueError(f"command text must not exceed {_MAX_COMMAND_CHARS} characters")
         if operation_id and _OPERATION_ID.fullmatch(operation_id) is None:
             raise ValueError("operation id must be 1-64 letters, digits, '.', '_' or '-'")
-        name = " ".join(str(sender_name or "").split())[:_MAX_SENDER_NAME_CHARS]
-        result = await self._run(text, sender_name=name, operation_id=operation_id)
+        if not isinstance(request_texts, (tuple, list)) or not all(
+            isinstance(item, str) for item in request_texts
+        ):
+            raise ValueError("request texts must be a sequence of strings")
+        # 只留最近的几条，每条截断；空白条目没有核对价值。
+        texts = tuple(
+            item.strip()[:MAX_COMMAND_REQUEST_TEXT_CHARS] for item in request_texts if item.strip()
+        )[-MAX_COMMAND_REQUEST_TEXTS:]
+        name   = " ".join(str(sender_name or "").split())[:_MAX_SENDER_NAME_CHARS]
+        result = await self._run(
+            text, sender_name=name, operation_id=operation_id, request_texts=texts
+        )
         # 命令带着发送回执（比如取图的预留）时原样交回，由调用方随实际发送结算。
         return result if isinstance(result, DeliverySegments) else list(result)
 

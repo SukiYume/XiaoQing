@@ -322,7 +322,7 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
     state                             = MagicMock()
     state.get_mood_state.return_value = "现在心情不错"
     # 最近一分钟有活动，远小于 idle threshold
-    state.get_last_reply_ts.return_value   = time.time() - 60
+    state.get_last_reply_ts.return_value = time.time() - 60
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(

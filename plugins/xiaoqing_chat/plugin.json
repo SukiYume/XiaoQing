@@ -201,6 +201,7 @@
       "id": "xiaoqing_chat.proactive",
       "handler": "scheduled_proactive",
       "delivery": "targeted",
+      "group_ids": [],
       "cron": {"minute": "*/20"},
       "description": "冷群时以群友身份主动开口；plugins.xiaoqing_chat.proactive.enabled 打开后生效"
     }

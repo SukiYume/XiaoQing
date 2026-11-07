@@ -234,6 +234,27 @@ async def test_private_needs_real_material_matching_this_friends_interests(tmp_p
     assert out is None and model.await_count == 0
 
 
+@pytest.mark.asyncio
+async def test_private_missing_a_friend_after_days_of_silence_is_a_material(tmp_path) -> None:
+    history = [_user("周末去爬山", NOW - 4 * 86400 - 60), _bot("好耶，注意防晒", NOW - 4 * 86400)]
+    missing = [
+        '{"decision":"send","text":"好几天没见你冒泡了，爬山晒黑没"}',
+        '{"decision":"send","reason":"自然"}',
+    ]
+    out, model, *_ = await _private(tmp_path, history, missing, life=_NoLife())
+    assert out is not None and out.message[0]["data"]["text"].startswith("好几天")
+    assert "4 天没聊了" in model.await_args_list[0].kwargs["messages"][1]["content"]
+
+    # 才隔一天、从没聊过、或者关掉了这一项，都不因为想念去找人。
+    for case_history, runtime in (
+        ([_user("周末去爬山", NOW - 86400)], None),
+        ([], None),
+        (history, _runtime(private_miss_after_days=0)),
+    ):
+        out, model, *_ = await _private(tmp_path, case_history, [], life=_NoLife(), runtime=runtime)
+        assert out is None and model.await_count == 0
+
+
 class _NoLife:
     async def turn_context(self, payload: dict[str, Any]) -> Any:
         raise RuntimeError("boom")
@@ -338,6 +359,7 @@ def test_private_config_defaults_and_validation() -> None:
     cfg = XiaoQingChatConfig().proactive
     assert cfg.private_user_ids == [] and cfg.private_max_per_day == 1
     assert cfg.private_min_interval_hours == 20 and cfg.private_quiet_minutes == 30
+    assert cfg.private_miss_after_days == 3
     assert XiaoQingChatConfig.model_validate(
         {"proactive": {"private_user_ids": [5, 5, 6]}}
     ).proactive.private_user_ids == [5, 6]

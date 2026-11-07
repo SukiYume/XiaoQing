@@ -47,6 +47,39 @@ def is_bot_mentioned(event: dict[str, Any]) -> bool:
     return has_at_mention(event, self_id=self_id)
 
 
+_NAME_CALL_PARTICLES = "呢吗嘛啊呀哈吧啦么哇诶欸喂"
+_NAME_CALL_PUNCT     = "，,。.！!？?~～、：:… \t\n"
+# 句中、句末的名字后面跟着这些，才是在叫她（“小青你”“小青，”“在吗小青”），不是更长的词（“小青蛙”）。
+_AFTER_NAME = frozenset("你" + _NAME_CALL_PARTICLES + _NAME_CALL_PUNCT)
+
+
+def is_called_by_name(text: str, bot_name: str) -> bool:
+    """群里不 @ 也能叫她：句首称呼（“小青帮我看看”），或句中、句末带着称呼语气的名字。"""
+
+    value = str(text or "").strip()
+    name  = str(bot_name or "").strip()
+    if not value or not name:
+        return False
+    if value.startswith(name):
+        return True
+    start = value.find(name)
+    while start >= 0:
+        after = value[start + len(name) : start + len(name) + 1]
+        if not after or after in _AFTER_NAME:
+            return True
+        start = value.find(name, start + 1)
+    return False
+
+
+def is_bare_name_call(text: str, bot_name: str) -> bool:
+    """只叫了她一声：空的 @（聊天记录里写成“@名字”），或者只有名字加语气、标点。"""
+
+    value = str(text or "").strip(_NAME_CALL_PUNCT).removeprefix("@")
+    if not value or not bot_name or not value.startswith(bot_name):
+        return False
+    return not value[len(bot_name) :].strip(_NAME_CALL_PUNCT + _NAME_CALL_PARTICLES)
+
+
 def other_mentions(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """按出现顺序返回 @ 的其他对象 ``(QQ 号, 段内名字)``；@机器人自己不算。
 
