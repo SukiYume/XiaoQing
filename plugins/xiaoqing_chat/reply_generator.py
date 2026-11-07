@@ -57,13 +57,20 @@ from .reply_draft import (
     build_reply_draft,
     reply_checker_inputs,
 )
-from .reply_fallbacks import finish_rejected_candidate, queue_reply_regeneration
+from .reply_fallbacks import (
+    finish_rejected_candidate,
+    queue_reply_regeneration,
+    trim_unsupported_bubbles,
+)
 from .reply_plan import (
     ReplyGenerationPlan,
     allows_low_stakes_persona_fiction,
     needs_persona_guard_when_checker_unavailable,
     prepare_reply_generation,
 )
+
+# 这些软问题仍要重写：没照对方明说的要求做（比如篇幅），或者读图结论有出入。
+_REWRITE_SOFT_CODES = frozenset({"instruction_following", "media_grounding", "checker_unavailable"})
 
 _REASONING_TURN_RE = re.compile(
     r"(?:\d(?:[\d.,]*\d)?\s*(?:公斤|千克|克|厘米|毫米|米|公里|立方|每立方|%|％|kg|km|cm))"
@@ -620,6 +627,20 @@ async def _check_candidate_draft(
         is None
         and media_meta_reply_check(reply=heuristic_reply_text, current_text=plan.text) is None
     )
+    if (
+        check.severity == "soft"
+        and check.failure_code not in _REWRITE_SOFT_CODES
+        and deterministic_ok
+    ):
+        # 软问题是口味上的挑剔（措辞、细节出入、两项审查分歧），照发不重写，免得把人味磨平。
+        log_step(
+            plan.context,
+            plan.runtime,
+            chat_id = plan.chat_id,
+            step    = "reply.check.soft_pass",
+            fields  = {"failure_code": check.failure_code, "reason": check.reason},
+        )
+        return None
     return RejectedCandidate(
         text                        = check_reply_text,
         result                      = check,
@@ -738,7 +759,7 @@ async def _generate_checked_draft(
         memory_block = await _load_attempt_memory(plan, attempt, trimmed_history)
         if _is_turn_stale(plan.chat_id, plan.event):
             return None
-        payload_messages = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
+        payload_messages   = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
         generation_started = time.monotonic()
         try:
             candidate = await _request_reply_candidate(plan, payload_messages)
@@ -769,6 +790,18 @@ async def _generate_checked_draft(
             rejected      = await _check_candidate_draft(
                 plan, draft, trimmed_history, memory_block, attempt.turn_reading
             )
+            if rejected is not None and (trimmed := trim_unsupported_bubbles(rejected)):
+                log_step(
+                    plan.context,
+                    plan.runtime,
+                    chat_id = plan.chat_id,
+                    step    = "reply.check.trimmed",
+                    fields  = {
+                        "failure_code": rejected.result.failure_code,
+                        "dropped"     : len(draft.text_parts) - len(trimmed.text_parts),
+                    },
+                )
+                draft, rejected = trimmed, None
             append_timing(
                 attempt.timings,
                 "check",

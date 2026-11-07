@@ -27,6 +27,7 @@ from .context_builder import (
 from .life.daily_life import day_key, past_block, recent_days, refers_to_past, today_block
 from .life.online import EMPTY_ONLINE_LIFE, OnlineLife, fetch_online_life
 from .life.open_loops import open_loop_block
+from .life.schedule import asks_about_routine, routine_block
 from .life.self_timeline import self_timeline_block
 from .llm.communication_constraints import requested_char_count
 from .llm.llm_config import LLMCallConfig
@@ -231,6 +232,13 @@ def _load_life_blocks(
     routine = str(event.get("_xc_routine_text") or "").strip()
     if routine:
         parts.append("作息底色：" + routine)
+    # 被问到几点起、几点有课时，她当然知道自己的日程；平时只用作语气底色。
+    if (
+        life.enable_schedule_state
+        and asks_about_routine(text)
+        and (block := routine_block(runtime.cfg.personality.card.routine))
+    ):
+        parts.append(block)
     moment = local_datetime()
     if life.enable_daily_life:
         if block := today_block(state.daily_life.get(day_key(moment)), moment):

@@ -272,6 +272,22 @@ xiaoqing_chat ──agent.handle_turn (decide / act)──► xiaoqing_agent
   Each call has an independent operation identifier.
 - Long Codex and QingSSH execution waits outside each plugin's execution lane. Serial plugins remain available during long commands.
 
+## 🌐 XiaoQing Life collaboration
+
+`xiaoqing_life` browses on XiaoQing's behalf. `xiaoqing_chat` only consumes the results.
+
+```text
+Core scheduler ── xiaoqing_life.tick (every 15 min) ──► xiaoqing_life ── background browsing ──► read-only GET to fixed domains
+xiaoqing_chat ── life.turn_context (before each reply) ──► xiaoqing_life (in-memory read; no disk, network, or model)
+xiaoqing_chat ── life.export_memes (minutes 07 and 37) ──► xiaoqing_life
+```
+
+- The life plugin owns experiences, terms, expressions, threads, works, dossiers, and memes.
+  Before each reply the chat plugin takes one or two topic-relevant points into the prompt.
+  A timeout, error, disabled switch, or absent plugin counts as empty, and the prompt matches the prompt without the plugin.
+- Requests carry no user ID or group ID. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
+  Core issues `capabilities.life_context` only when the caller declares `uses_services`.
+
 ## 🚀 Startup and shutdown order
 
 ### Startup

@@ -102,11 +102,30 @@ def _strip_prefix(text: str, bot_name: str) -> str:
     return s
 
 
+def _drop_unpaired_lenticular(text: str) -> str:
+    """去掉配不上对的【】：读图摘要用【】代替方括号，模型偶尔把半个括号抄进回复。"""
+
+    if "【" not in text and "】" not in text:
+        return text
+    opened : list[int] = []
+    dropped: set[int]  = set()
+    for index, char in enumerate(text):
+        if char == "【":
+            opened.append(index)
+        elif char == "】":
+            if opened:
+                opened.pop()
+            else:
+                dropped.add(index)
+    dropped.update(opened)
+    return "".join(char for index, char in enumerate(text) if index not in dropped)
+
+
 def _normalize(text: str) -> str:
     s      = text.replace("\r\n", "\n").replace("\r", "\n")
     chunks = s.split("```")
     for index in range(0, len(chunks), 2):
-        chunks[index] = _RE_MULTI_SPACE.sub(" ", chunks[index])
+        chunks[index] = _RE_MULTI_SPACE.sub(" ", _drop_unpaired_lenticular(chunks[index]))
         chunks[index] = re.sub(r"\n{3,}", "\n\n", chunks[index])
     return "```".join(chunks).strip()
 
@@ -224,12 +243,17 @@ def _split_clauses(sentence: str, max_pieces: int) -> list[str]:
 
 
 def _spread_clauses(
-    sentences: list[str], *, limit: int, min_chars: int, max_chars: int
+    sentences: list[str], *, limit: int, min_chars: int, max_chars: int, bubble_chars: int
 ) -> list[str]:
-    """气泡数还没用完时，把较长的句子再按分句拆开，像在 QQ 上一句一句打出来。"""
+    """气泡数还没用完时，把较长的句子再按分句拆开，像在 QQ 上一句一句打出来。
 
-    if len("".join(sentences)) > max_chars or _CLAUSE_SPLIT_BLOCK_RE.search("\n".join(sentences)):
+    拆到大约每 ``bubble_chars`` 字一个气泡为止：二十来字的一句话发一两条，不硬拆满。
+    """
+
+    total = len("".join(sentences))
+    if total > max_chars or _CLAUSE_SPLIT_BLOCK_RE.search("\n".join(sentences)):
         return sentences
+    limit             = min(limit, max(len(sentences), -(-total // bubble_chars)))
     result            = list(sentences)
     settled: set[str] = set()
     while len(result) < limit:
@@ -298,9 +322,10 @@ def process_llm_response(
         if clause_split and splitter.clause_split:
             sentences = _spread_clauses(
                 sentences,
-                limit     = limit,
-                min_chars = splitter.clause_split_min_chars,
-                max_chars = splitter.clause_split_max_chars,
+                limit        = limit,
+                min_chars    = splitter.clause_split_min_chars,
+                max_chars    = splitter.clause_split_max_chars,
+                bubble_chars = splitter.clause_bubble_chars,
             )
         if len(sentences) > limit:
             sentences = sentences[: limit - 1] + ["\n".join(sentences[limit - 1 :])]

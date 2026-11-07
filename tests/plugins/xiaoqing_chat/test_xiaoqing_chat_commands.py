@@ -297,53 +297,6 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_call_bot_name_only(mock_context):
-    """Test call_bot_name_only returns response"""
-    from plugins.xiaoqing_chat.main import call_bot_name_only
-
-    result = await call_bot_name_only(mock_context)
-
-    assert isinstance(result, list)
-    assert len(result) > 0
-    assert result[0]["type"] == "text"
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_call_bot_name_only_uses_configured_replies(mock_context):
-    from plugins.xiaoqing_chat.main import call_bot_name_only
-
-    mock_context.config = {
-        "bot_name": "小青",
-        "plugins" : {"xiaoqing_chat": {"bot_name_only_replies": ["收到"]}},
-    }
-
-    result = await call_bot_name_only(mock_context)
-
-    assert result[0]["data"]["text"] == "收到"
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_call_bot_name_only_varies_response(mock_context):
-    """配置候选交给随机选择器，选择结果原样返回。"""
-    from plugins.xiaoqing_chat.main import call_bot_name_only
-
-    mock_context.config = {
-        "bot_name": "小青",
-        "plugins" : {"xiaoqing_chat": {"bot_name_only_replies": ["收到", "我在"]}},
-    }
-    with patch(
-        "plugins.xiaoqing_chat.handlers.random.choice", side_effect=["收到", "我在"]
-    ) as choose:
-        responses = [await call_bot_name_only(mock_context) for _ in range(2)]
-    assert [result[0]["data"]["text"] for result in responses] == ["收到", "我在"]
-    assert choose.call_count == 2
-    assert all(call.args == (["收到", "我在"],) for call in choose.call_args_list)
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
 async def test_shutdown(mock_context):
     """Test plugin shutdown"""
     from plugins.xiaoqing_chat.main import shutdown

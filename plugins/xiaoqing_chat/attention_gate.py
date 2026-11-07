@@ -1,4 +1,8 @@
-"""记录显式消息指向；群聊参与由 PFC 决定。"""
+"""判断这句话是不是在跟她说：私聊每句都是；群里 @、引用她的话或叫她名字都算。
+
+明确在跟她说的话一定回复（作息只让她回得慢一点、短一点），不过概率门和冷却；
+其余群消息要不要接由频控和 PFC 决定。
+"""
 
 from __future__ import annotations
 
@@ -26,16 +30,21 @@ async def decide_attention(
     command_forced: bool,
     direct_mentioned: bool,
     enable_private_brain_chat: bool,
+    called_by_name: bool = False,
 ) -> AttentionDecision:
-    """保留 @ 和引用关系；私聊按配置选择直接回复路径。"""
+    """私聊按配置选择直接回复路径；群里明确在跟她说话时走同一条直接回复路径。"""
     reply_to_bot = await is_reply_to_bot(event=event, state=state, chat_id=chat_id)
-    forced = is_private and (
-        command_forced or direct_mentioned or reply_to_bot or not enable_private_brain_chat
-    )
+    addressed = command_forced or direct_mentioned or reply_to_bot or called_by_name
+    if is_private:
+        forced = addressed or not enable_private_brain_chat
+        reason = "command" if command_forced else "private"
+    else:
+        forced = addressed
+        reason = "command" if command_forced else "addressed"
     return AttentionDecision(
-        mentioned        = command_forced or direct_mentioned or reply_to_bot or is_private,
+        mentioned        = addressed or is_private,
         forced           = forced,
-        force_reason     = ("command" if command_forced else "private") if forced else "",
+        force_reason     = reason if forced else "",
         direct_mentioned = direct_mentioned,
         reply_to_bot     = reply_to_bot,
     )

@@ -57,6 +57,7 @@
 |---|---|---|
 | `xiaoqing_chat` | [README](../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE](../plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | [README](../plugins/xiaoqing_agent/README.md) | README 内含模块结构、运行边界与数据说明 |
+| `xiaoqing_life` | [README](../plugins/xiaoqing_life/README.md) | [ARCHITECTURE](../plugins/xiaoqing_life/ARCHITECTURE.md)，实现规格见 [DESIGN](../plugins/xiaoqing_life/DESIGN.md) |
 | `pendo` | [README](../plugins/pendo/README.md) | [ARCHITECTURE](../plugins/pendo/ARCHITECTURE.md) |
 
 其他插件均在各自目录提供 `README.md`。

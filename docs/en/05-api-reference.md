@@ -177,6 +177,7 @@ This function splits long messages at text boundaries and keeps mixed-segment or
 | `request_id` | `str \| None` | Current request tracking ID |
 | `principal` | `PluginPrincipal` | Current caller identity |
 | `command_invocation` | `CommandInvocation \| None` | Command node parsed by Core |
+| `request_texts` | `tuple[str, ...]` | The initiator's own words, oldest first, when the command runner executes on their behalf; empty for direct commands |
 | `state` | `dict[str, Any]` | Shared memory state for the current plugin generation |
 
 ### Shared service properties
@@ -301,8 +302,9 @@ Deployers protect code-call boundaries through plugin source review.
 | `agent_turn` | XiaoQing Chat turn handoff to XiaoQing Agent for user messages. Decision and execution can be separate. Reports current-reply delivery. |
 | `codex_agent` | XiaoQing Agent synchronous Codex task. It follows `/codex` and checks each call. |
 | `ssh_agent` | XiaoQing Agent QingSSH server list and one-time commands. It follows `/ssh` and checks each call. |
-| `command_runner` | Execute published commands as the initiator with normal permission and scene checks. `run(text, *, sender_name, operation_id)` returns original `DeliverySegments`. The caller settles receipts. |
+| `command_runner` | Execute published commands as the initiator with normal permission and scene checks. `run(text, *, sender_name, operation_id, request_texts)` returns original `DeliverySegments`. The caller settles receipts. `request_texts` reaches the command as `context.request_texts`. |
 | `local_tools` | Authorize XiaoQing Agent local code execution and file operations. It follows `/shell` and checks each call. |
+| `life_context` | XiaoQing Chat reads XiaoQing's own online life from XiaoQing Life: `turn_context(payload)` and `export_memes(payload)` return a mapping, or `None` when nothing is available. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them. |
 | `ai` | Common AI routes for the current plugin |
 
 `is_bot_admin` and `is_system` always return booleans.
@@ -390,6 +392,8 @@ It supplies immutable snapshots for help, export, permission checks, and plugin 
 | `examples` | `tuple[str, ...]` | Valid examples |
 | `invalid_examples` | `tuple[str, ...]` | Invalid examples |
 | `children` | `tuple[CommandCatalogNode, ...]` | Direct subcommands |
+| `effect` | `str \| None` | Declared `read` / `write`; `None` when undeclared |
+| `structured_input` | `CommandStructuredInput \| None` | Structured input declaration: `name`, `description`, `parameters()` (a fresh schema copy each call), `takes_no_arguments()` |
 
 ```python
 node.walk() -> tuple[CommandCatalogNode, ...]

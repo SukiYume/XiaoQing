@@ -278,6 +278,21 @@ xiaoqing_chat ──agent.handle_turn（decide / act）──► xiaoqing_agent
 
 ---
 
+## 🌐 小青网上生活的跨插件协作
+
+`xiaoqing_life` 负责小青自己上网，`xiaoqing_chat` 只取用结果：
+
+```text
+Core scheduler ── xiaoqing_life.tick（每 15 分钟）──► xiaoqing_life ── 后台上网 ──► 固定域名的只读 GET
+xiaoqing_chat ── life.turn_context（每轮回复前）────► xiaoqing_life（只读内存，不碰磁盘、网络、模型）
+xiaoqing_chat ── life.export_memes（每小时 07、37 分）► xiaoqing_life
+```
+
+- 网上生活插件拥有经历、词条、表达、小课题、作品、档案和梗图；聊天插件每轮回复前取和话题相关的一两点放进提示词，超时、报错、开关关闭或插件不在时当作没有，提示词与没装时一致。
+- 请求不含用户 ID 与群号。数据只关于小青自己，不按用户身份门控，系统主体也可用。Core 只在调用方声明 `uses_services` 时签发 `capabilities.life_context`。
+
+---
+
 ## 🚀 启动与关闭顺序
 
 ### 启动

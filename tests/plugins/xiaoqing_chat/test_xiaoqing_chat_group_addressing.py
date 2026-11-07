@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from plugins.xiaoqing_chat.chat_event import MENTION_LABELS_KEY
+from plugins.xiaoqing_chat.chat_event import (
+    MENTION_LABELS_KEY,
+    is_bare_name_call,
+    is_called_by_name,
+)
 from plugins.xiaoqing_chat.config.config import PersonalityConfig, XiaoQingChatConfig
 from plugins.xiaoqing_chat.generation_limiter import (
     CHAT_SUPERSEDED,
@@ -499,19 +503,51 @@ async def test_planner_wait_ends_turn_without_sleeping(tmp_path):
         ("明天的车票买好了", "other_at"),
         ("他让我不要回复陌生短信", "plain"),
         ("我跟客服说不用回复了", "plain"),
-        ("小青，不用回复了，另外那件事已经解决", "plain"),
         ("大家都散了，这事就到这吧", "plain"),
         ("没什么事了", "plain"),
         ("我们已经等了好几天", "plain"),
         ("大家有没有人还想来玩", "plain"),
-        ("小青", "plain"),
-        ("这句先放着", "bot_at"),
-        ("", "bot_at"),
-        ("这件事说完了", "reply"),
-        ("聊聊刚才的事", "command"),
+        # @ 了别人时，句首的名字是在跟别人说她。
+        ("小青昨天说过这个", "other_at"),
     ],
 )
 async def test_group_entry_reaches_context_planner(tmp_path, text, entry, action):
+    generated, prepared, model, draft = await _run_group_turn(tmp_path, text, entry, action)
+    assert prepared.forced is False
+    model.assert_awaited_once()
+    prompt = model.await_args.kwargs["messages"][0]["content"]
+    assert prepared.text in prompt and "刚才已经回答了" in prompt
+    assert "实际含义" in prompt
+    assert generated.pfc_result.action == action
+    assert draft.await_count == (1 if action == "direct_reply" else 0)
+    assert bool(generated.reply) is (action == "direct_reply")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text,entry,reason",
+    [
+        ("小青，不用回复了，另外那件事已经解决", "plain", "addressed"),
+        ("小青", "plain", "addressed"),
+        ("小青来点推荐", "plain", "addressed"),
+        ("行行行小青你赢了", "plain", "addressed"),
+        ("在吗小青", "plain", "addressed"),
+        ("这句先放着", "bot_at", "addressed"),
+        ("", "bot_at", "addressed"),
+        ("这件事说完了", "reply", "addressed"),
+        ("聊聊刚才的事", "command", "command"),
+    ],
+)
+async def test_group_turns_addressed_to_her_get_a_direct_reply(tmp_path, text, entry, reason):
+    # 规划器即使想旁听也问不到：明确跟她说的话不经概率门、冷却和规划器，直接回复。
+    generated, prepared, model, draft = await _run_group_turn(tmp_path, text, entry, "wait")
+    assert prepared.forced is True and prepared.force_reason == reason
+    model.assert_not_awaited()
+    assert draft.await_count == 1 and generated.reply == "接话内容"
+    assert generated.reply_source == "forced"
+
+
+async def _run_group_turn(tmp_path, text: str, entry: str, action: str):
     import time
 
     from plugins.xiaoqing_chat import handlers, turn_generation
@@ -574,7 +610,6 @@ async def test_group_entry_reaches_context_planner(tmp_path, text, entry, action
     ):
         prepared = await handlers._prepare_smalltalk_turn(text, event, context, hctx)
         assert prepared is not None
-        assert prepared.forced is False
         state.memory_store.append(
             hctx.chat_id,
             role     = "user",
@@ -588,10 +623,37 @@ async def test_group_entry_reaches_context_planner(tmp_path, text, entry, action
         generated.cancel_speculative_memory()
         if generated.speculative_memory_task is not None:
             await asyncio.gather(generated.speculative_memory_task, return_exceptions=True)
-    model.assert_awaited_once()
-    prompt = model.await_args.kwargs["messages"][0]["content"]
-    assert prepared.text in prompt and "刚才已经回答了" in prompt
-    assert "实际含义" in prompt
-    assert generated.pfc_result.action == action
-    assert draft.await_count == (1 if action == "direct_reply" else 0)
-    assert bool(generated.reply) is (action == "direct_reply")
+    return generated, prepared, model, draft
+
+
+@pytest.mark.parametrize(
+    "text,called",
+    [
+        ("小青帮我看看这个", True),
+        ("行吧小青你赢了", True),
+        ("在吗小青", True),
+        ("问问小青，她肯定知道", True),
+        ("我家小青蛙又跑了", False),
+        ("青青草原", False),
+        ("", False),
+    ],
+)
+def test_called_by_name_needs_a_vocative_shape(text, called):
+    """句首称呼一律算；句中只有名字后面接着语气词、标点或“你”才算，“小青蛙”这类更长的词不算。"""
+
+    assert is_called_by_name(text, "小青") is called
+
+
+@pytest.mark.parametrize(
+    "text,bare",
+    [
+        ("小青", True),
+        ("@小青", True),
+        ("小青～", True),
+        ("小青呢？", True),
+        ("小青帮我看看", False),
+    ],
+)
+def test_bare_name_call_is_only_the_name_and_a_tone(text, bare):
+    assert is_bare_name_call(text, "小青") is bare
+    assert not is_bare_name_call(text, "")

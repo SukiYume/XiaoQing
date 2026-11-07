@@ -6,8 +6,10 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .drivers import DEFAULT_CONFIG, DEFAULT_SECRETS, PROJECT_ROOT
 from .scenarios import (
@@ -298,6 +300,23 @@ async def judge_transcript(text: str) -> tuple[dict[str, Any], str]:
     return {"error": error}, ""
 
 
+_WEEKDAYS = "一二三四五六日"
+
+
+def _chat_time_note(rows: list[dict[str, Any]]) -> str:
+    """聊天实际发生的北京时间：评审据此判断截止日期过没过、她该不该困。"""
+
+    try:
+        started = datetime.fromisoformat(str(rows[0]["started_utc"]))
+    except (KeyError, TypeError, ValueError):
+        return ""
+    local = started.astimezone(ZoneInfo("Asia/Shanghai"))
+    return (
+        f"这段聊天发生在北京时间 {local:%Y-%m-%d %H:%M}（周{_WEEKDAYS[local.weekday()]}）。"
+        "日期和截止时间过没过按这个时间判断；深夜时她按作息在睡觉，困一点、短一点属正常。\n"
+    )
+
+
 def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     rows = [
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
@@ -308,7 +327,9 @@ def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     manifest = json.loads((path.parent / "manifest.json").read_text(encoding="utf-8"))
     notes = [item["note"] for item in manifest["scenarios"][suite]]
     text  = transcript(rows, notes, manifest["media_truth"])
-    verdict, model = asyncio.run(judge_transcript(text)) if use_judge else ({}, "")
+    verdict, model = (
+        asyncio.run(judge_transcript(_chat_time_note(rows) + text)) if use_judge else ({}, "")
+    )
     record = {
         "run"                    : path.stem,
         "suite"                  : suite,

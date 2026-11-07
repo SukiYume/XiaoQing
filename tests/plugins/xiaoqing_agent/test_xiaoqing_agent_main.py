@@ -940,7 +940,7 @@ def _done_task(
     task_id: str,
     text: str,
     at: float,
-    continues: str = "",
+    continues: str            = "",
     updates: list[str] | None = None,
 ) -> AgentTask:
     return AgentTask(
@@ -948,17 +948,17 @@ def _done_task(
         ChatRef(ADMIN_ID, None),
         text,
         "chat",
-        created_at=at,
-        continues=continues,
-        status="done",
-        updates=list(updates or []),
+        created_at = at,
+        continues  = continues,
+        status     = "done",
+        updates    = list(updates or []),
     )
 
 
 @pytest.mark.asyncio
 async def test_continuation_collects_only_the_same_tasks_requirements(tmp_path: Path) -> None:
     runtime = agent_main.AgentRuntime(tmp_path)
-    chat = ChatRef(ADMIN_ID, None)
+    chat    = ChatRef(ADMIN_ID, None)
     for task in (
         _done_task("aaa111", "创建多节点研讨会 11.14-15", 100.0, updates=["提前一天提醒"]),
         # 中间另外两件事：不续接研讨会，不属于它的验收目标。
@@ -983,7 +983,7 @@ async def test_continuation_collects_only_the_same_tasks_requirements(tmp_path: 
 @pytest.mark.asyncio
 async def test_continuation_ignores_unknown_ids_and_bounds_the_thread(tmp_path: Path) -> None:
     runtime = agent_main.AgentRuntime(tmp_path)
-    chat = ChatRef(ADMIN_ID, None)
+    chat    = ChatRef(ADMIN_ID, None)
     await runtime.store.save(_done_task("loop01", "自己续接自己", 100.0, continues="loop01"))
     assert await agent_main._continuation(runtime, chat, "nope", "改") == ("", [])
     assert await agent_main._continuation(runtime, chat, "", "改") == ("", [])
@@ -1003,10 +1003,10 @@ async def test_continuation_ignores_unknown_ids_and_bounds_the_thread(tmp_path: 
 async def test_only_the_initiators_own_updates_are_recorded_as_requirements(
     tmp_path: Path,
 ) -> None:
-    runtime = agent_main.AgentRuntime(tmp_path)
-    task = AgentTask("run001", ChatRef(MEMBER_ID, 1001), "画一张图", "chat")
+    runtime                       = agent_main.AgentRuntime(tmp_path)
+    task                          = AgentTask("run001", ChatRef(MEMBER_ID, 1001), "画一张图", "chat")
     runtime.running[task.task_id] = task
-    chat = ChatRef(MEMBER_ID, 1001)
+    chat                          = ChatRef(MEMBER_ID, 1001)
     runtime.add_note(chat, "", "换成红色", Actor(MEMBER_ID), "群友")
     runtime.add_note(chat, "", "再加个边框", Actor(ADMIN_ID, admin=True), "管理员")
     assert len(task.notes) == 2  # 两条都交给运行中的任务
@@ -1016,15 +1016,15 @@ async def test_only_the_initiators_own_updates_are_recorded_as_requirements(
 @pytest.mark.asyncio
 async def test_follow_up_task_receives_the_acceptance_target(context: FakeAgentContext) -> None:
     context.ai.script = [_triage("task"), _final("已创建")]
-    first = await agent_main.handle_turn(_turn("添加一个多节点事件"), context)
+    first             = await agent_main.handle_turn(_turn("添加一个多节点事件"), context)
     assert first is not None
     history = [
         {
-            "role": "user",
-            "name": "主人",
+            "role"   : "user",
+            "name"   : "主人",
             "user_id": ADMIN_ID,
-            "text": "创建，提前一天提醒",
-            "ts": 9e9,
+            "text"   : "创建，提前一天提醒",
+            "ts"     : 9e9,
         }
     ]
     context.ai.script = [_triage("task", task_id=first["task_id"]), _final("改好了")]

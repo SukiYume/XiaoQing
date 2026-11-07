@@ -185,6 +185,7 @@ Core 接管的收据由传输层计数，插件发送帮助器保留同一结算
 | 命令或会话被拒（权限、场景） | `router.py` 的 `command_access` | 对应插件 `plugin.json` |
 | Core 签发的能力缺失 | `app_plugin_context.py` | 对应命令的 `plugin.json` |
 | agent 代为执行命令 | `dispatcher.py` 的 `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
+| 聊天取不到网上生活 | `capabilities.py` 的 `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
 | 群聊参与 | `dispatcher.py` | Smalltalk Provider 插件 |
 | 插件加载与重载 | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | 插件超时与过载 | `plugin_execution.py` | `dispatcher.py` |

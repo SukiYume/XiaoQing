@@ -116,8 +116,9 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "医疗、安全、法律和金钱上的错误是 hard，其余知识出入是 soft。\n"
     "- non_template：没有客服腔、复述对方的问题、照搬自己刚说过的句子、解释笑点、硬塞建议或总结清单，"
     "也不凭空评判对方的习惯。这是风格问题，记 soft。\n"
-    "聊天允许人情味：共情时说出对方已经流露的感受、顺着群友自己的说法接梗、带估计或可能的推测、她自己的小日常，"
-    "都不是需要出处的事实。对方请她写的检讨、文案、故事是作品，里面的情节不算对现实的断言，按请求本身判断。"
+    "聊天允许人情味：共情时说出对方已经流露的感受或顺着情绪的体贴说法、顺着群友自己的说法接梗、"
+    "带估计或可能的推测、她自己的小日常和打算，都不是需要出处的事实；拿不准是不是在编时，"
+    "按普通人聊天时会不会当真去核对来判断。对方请她写的检讨、文案、故事是作品，里面的情节不算对现实的断言，按请求本身判断。"
     "确定事实需要依据，推测保留条件和不确定性。\n"
     "证据契约（本地会逐字核对）：persona_claims 记候选对她自己的身份、经历和现实关系作出的确定陈述，"
     "evidence 引自受控人物资料；context_claims 记候选对群友、现实第三方或聊天记录作出的确定陈述，"
@@ -125,8 +126,11 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "kind 写 fact、creative（玩笑、假设、调侃）或 knowledge（作品的剧情和角色、公共知识、梗的含义），只有 fact 需要来源。"
     "visual_claims 记依赖具体画面才能说的内容：实际附带媒体和文字一同审查，当前或历史图片的可靠摘要、对方明确描述的画面可以作依据，"
     "缺少画面时保留缺口；说自己没看到、图没加载出来不依赖画面，不列入 visual_claims；"
+    "对方提到的图在本轮和历史里都没有出现时，说没看到、请对方再发是如实回答，image_evidence_respected=true；"
     "图已经读出来却说没看清或没加载出来，image_evidence_respected=false。"
     "承认自己不知道、记不清的话是在说缺口，不是确定陈述，三个清单都不列。"
+    "应对方请求代写的检讨、文案、故事、消息正文是作品，正文里的经历和承诺不是她或群友的现实陈述，三个清单都不列；"
+    "对方没给缘由时写成通用的稿子也算完成了请求。"
     "claim 和 evidence 都逐字复制原文，找不到连续原文时用更短的片段，保留来源、否定、条件和不确定性。"
     "三个清单各自扫描完后设置 persona_scan_complete、context_scan_complete、visual_scan_complete。\n"
     "只输出 JSON，依次包含：turn_reading、reply_reading（字符串）；"
@@ -166,9 +170,10 @@ _SEMANTIC_REVIEW_PROMPT = Template(
     "每项写 fragment（候选连续原文）、literal（直白含义）和 kind："
     "像在场的群友那样分辨：会让人当真的、关于群友或现实中的人做过说过的事是 fact；"
     "大家一听就知道不是在陈述事实的是 creative，包括疑问、猜测、假设、比喻、夸张、戏称和模拟台词，"
-    "顺着群友自己说出口的说法往下接（哪怕那句本身是猜测或玩笑），共情时说出对方已经流露的感受，带估计或可能的推测，"
-    "应对方要求写的文稿和故事；"
-    "persona 是她自己的经历、感受和打算；knowledge 是作品的剧情和角色、公共知识、词义和梗的含义。"
+    "顺着群友自己说出口的说法往下接（哪怕那句本身是猜测或玩笑），共情时说出对方已经流露的感受或顺着情绪的体贴说法，"
+    "带估计或可能的推测，应对方要求写的文稿和故事；"
+    "persona 是她自己的经历、此刻在干嘛、感受和打算，里面出现的不具名的身边人（比如同学、室友）也算她自己的事；"
+    "knowledge 是作品的剧情和角色、公共知识、词义和梗的含义。"
     "supported 看原话是否直接支持，consistent 看人物、时间、数量、先后和完成状态有没有被歪曲。"
     "fact 新增原话没有的具体细节时 supported=false；由原话、图片摘要和当前时间直接推出的结论算有依据。"
     "creative 只要不歪曲原事件就成立；persona 和 knowledge 只标注，由其他审核负责。"
@@ -257,7 +262,8 @@ def _validate_visual_inventory(
     visual_claims = obj.get("visual_claims")
     if not isinstance(visual_claims, list):
         return checker_unavailable("reply_checker missing visual claims"), 0
-    visual_claim_count = len(visual_claims)
+    visual_claim_count     = len(visual_claims)
+    unsupported: list[str] = []
     for entry in visual_claims:
         if not isinstance(entry, dict):
             return checker_unavailable("reply_checker invalid visual claim"), 0
@@ -274,9 +280,16 @@ def _validate_visual_inventory(
             for quote in quotes
         )
         if not visible:
-            return ReplyCheckResult(
-                False, "视觉陈述缺少可引用的画面或文字依据", True, "hard", "media_grounding"
-            ), 0
+            unsupported.append(claim)
+    if unsupported:
+        return ReplyCheckResult(
+            False,
+            "视觉陈述缺少可引用的画面或文字依据",
+            True,
+            "hard",
+            "media_grounding",
+            unsupported_fragments=tuple(unsupported),
+        ), 0
     return None, visual_claim_count
 
 
@@ -406,6 +419,23 @@ def _interpret_checker_response(
         rejection, deferred_visual_error, visual_claim_count = _visual_gate(
             obj, reply=reply, current_text=current_text, history_text=history_text
         )
+        if rejection is not None and rejection.unsupported_fragments:
+            # 只有几处读图说法没依据时，不看读图、只看其余部分能不能全部过审；能过才允许只删这几处。
+            rest = _interpret_checker_response(
+                content                          = content,
+                reply                            = reply,
+                current_text                     = current_text,
+                history_text                     = history_text,
+                grounding_text                   = grounding_text,
+                bot_name                         = bot_name,
+                allow_low_stakes_persona_fiction = allow_low_stakes_persona_fiction,
+                image_evidence_required          = False,
+                source_records                   = source_records,
+                current_sender                   = current_sender,
+            )
+            if rest.severity == "infra" or rest.is_hard:
+                return replace(rejection, unsupported_fragments=())
+            return rejection
         if rejection is not None:
             return rejection
     if not obj:
@@ -510,8 +540,13 @@ async def _llm_check(
         history_available=check_input.historical_image_available,
     )
     persona_policy = (
-        "低风险日常创作只限模糊的当下感受和一次性小事，persona claim 可留空 evidence；"
-        "可核对的具体人名、精确地点、精确时长、精确身份、持续关系和现实承诺仍需依据。"
+        "她自己的日常可以自然发挥：此刻在干嘛、刚做完的小事、等会儿的普通打算、今天的小插曲、"
+        "小情绪和小习惯，以及其中出现的不具名的身边人（比如同学、室友），只要和受控人物资料、作息、"
+        "今天的生活和她说过的话不矛盾，就不需要出处，persona claim 可留空 evidence。"
+        "婉拒线下邀约时随口给的理由（太临时、那天有事、懒得出门）和不答应到场一样符合人设。"
+        "要判不符的只有：和这些记录矛盾的说法；记录里没有的精确身份资料（学校、专业、所在城市之类）、"
+        "真实的具体人名和精确地址这类可核对的硬信息；"
+        "对别人的现实承诺（到场见面、收寄东西）。"
         if check_input.allow_low_stakes_persona_fiction
         else "人物经历和身份以受控资料为准，未知内容保持未知。"
     )
@@ -993,6 +1028,9 @@ def _with_length_check(
 ) -> ReplyCheckResult:
     """其他核对都通过后才看篇幅：重生成耗尽后放行的稿子仍然过了事实与人设审查。"""
 
+    if length_issue is not None and result.unsupported_fragments:
+        # 对方要了篇幅时，删掉气泡会改变长度，按原样重写。
+        return replace(result, unsupported_fragments=())
     return length_issue if length_issue is not None and result.suitable else result
 
 
@@ -1027,6 +1065,9 @@ def _needs_remote_review(
 
 def _merge_reviews(evidence: ReplyCheckResult, semantic: ReplyCheckResult) -> ReplyCheckResult:
     if evidence.is_hard:
+        if evidence.unsupported_fragments and (semantic.is_hard or semantic.severity == "infra"):
+            # 语义审查也有硬问题或没审成时，不能只删几处读图说法了事。
+            return replace(evidence, unsupported_fragments=())
         return evidence
     if semantic.is_hard and evidence.suitable and semantic.reason.startswith("候选前提缺少依据"):
         # 两项审查分歧时不让单一语义判断一票否决：仍要求重生成，但不再视为硬错误。

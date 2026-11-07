@@ -506,6 +506,9 @@ def test_follow_up_compact_prompt_gives_group_space_after_recent_reply():
 
     assert "默认给其他人留出轮次" in PROMPT_FOLLOW_UP_COMPACT
     assert "消息长短、有没有问号都不能单独决定行动" in PROMPT_FOLLOW_UP_COMPACT
+    # 让位只针对刚说过话；别人又聊了好几条，或者在问“你们”、喊“人呢”时，她也是被问的人。
+    assert "不用一直让着" in PROMPT_FOLLOW_UP_COMPACT
+    assert "你也是被问到的人之一" in PROMPT_FOLLOW_UP_COMPACT
 
 
 def test_initial_compact_prompt_uses_relevance_and_turn_taking_instead_of_surface_cues():

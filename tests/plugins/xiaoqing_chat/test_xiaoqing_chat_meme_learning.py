@@ -122,7 +122,7 @@ async def test_meme_extraction_accepts_supported_correction(state):
             "usage"    : "无效忙碌",
             "tone"     : "轻松自嘲",
             "evidence" : text,
-            "explained" : True,
+            "explained": True,
         },
         {"term": "凭空新词", "is_jargon": True, "meaning": "无来源"},
     ]

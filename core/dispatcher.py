@@ -34,6 +34,7 @@ from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
 from .delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from .interfaces import (
+    COMMAND_REQUEST_TEXTS_EVENT_KEY,
     COMMAND_RUNNER_EVENT_KEY,
     AdminCheck,
     ConfigProvider,
@@ -41,6 +42,7 @@ from .interfaces import (
     PluginGroupRole,
     PluginPrincipal,
     PluginRegistry,
+    command_request_texts,
 )
 from .message import (
     ValidatedInboundEvent,
@@ -753,6 +755,9 @@ class Dispatcher:
         context = self._build_event_context(spec.plugin, ctx)
         if session_manager is not None:
             context.session_manager = session_manager
+        request_texts = command_request_texts(ctx.event)
+        if request_texts:
+            context.request_texts = request_texts
         if spec.catalog is not None:
             invocation                 = resolve_catalog_invocation(spec.catalog, args)
             context.command_invocation = invocation
@@ -825,6 +830,7 @@ class Dispatcher:
         group_role: str                  = "unknown",
         sender_name: str                 = "",
         operation_id: str                = "",
+        request_texts: tuple[str, ...]   = (),
     ) -> list[dict[str, Any]]:
         """以指定用户身份执行一条命令文本，供 Core 签发的命令能力复用 Step E。
 
@@ -833,7 +839,8 @@ class Dispatcher:
         ``group_role`` 沿用发起这一轮的真实消息里的群身份，群管理员命令和本人直接发送时
         一样判断；``sender_name`` 是这条消息里的显示名，命令需要显示是谁时（如 ``/mc say``）
         和本人发送时一样。``operation_id`` 区分同一轮里的每次调用：插件按请求 ID 防重复
-        结算时，两次独立调用不会被当成同一次重复提交。命令返回的发送回执原样交回调用方。
+        结算时，两次独立调用不会被当成同一次重复提交。``request_texts`` 是发起人本人的原话，
+        插件从 ``context.request_texts`` 读取。命令返回的发送回执原样交回调用方。
         """
 
         text     = str(command_text or "").strip()
@@ -876,6 +883,8 @@ class Dispatcher:
             "sender": sender,
             COMMAND_RUNNER_EVENT_KEY: caller_plugin or "core",
         }
+        if request_texts:
+            event[COMMAND_REQUEST_TEXTS_EVENT_KEY] = list(request_texts)
         if group_id is not None:
             event["group_id"] = group_id
         ctx = MessageContext(
@@ -1217,8 +1226,10 @@ class Dispatcher:
     async def _handle_bot_name_only(self, ctx: MessageContext) -> list[dict[str, Any]]:
         """
         处理只叫 bot_name 的情况
+
+        小青按当时的话题和作息应一声，私聊和群聊都交给她，不用固定的“在/有事吗”。
         """
-        if not ctx.is_private and self._get_smalltalk_provider() == "xiaoqing_chat":
+        if self._get_smalltalk_provider() == "xiaoqing_chat":
             return await self._dispatch_to_provider(ctx, "handle_smalltalk", (ctx.text, ctx.event))
         default_response = self.random.choice(constants.DEFAULT_BOT_NAME_RESPONSES_LIST)
         return await self._dispatch_to_provider(

@@ -435,6 +435,50 @@ async def test_command_runner_events_look_like_real_messages(temp_app_root: Path
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_command_runner_hands_initiator_words_to_the_command_context(
+    temp_app_root: Path,
+) -> None:
+    """发起人原话随执行器的调用进入插件上下文；普通消息事件带同名字段也读不到。"""
+
+    from core.interfaces import (
+        COMMAND_REQUEST_TEXTS_EVENT_KEY,
+        COMMAND_RUNNER_EVENT_KEY,
+        MAX_COMMAND_REQUEST_TEXT_CHARS,
+        command_request_texts,
+    )
+
+    app      = XiaoQingApp(temp_app_root)
+    received = []
+
+    async def gift(_command, _args, _event, context):
+        received.append(context.request_texts)
+        return [{"type": "text", "data": {"text": "ok"}}]
+
+    _register_command(app, "qingpet", "gift", gift)
+    runner = _plugin_context_for(
+        app,
+        "xiaoqing_agent",
+        user_id               = ADMIN,
+        principal             = _principal(app, ADMIN),
+        manifest_capabilities = frozenset({"command_runner"}),
+    ).capabilities.command_runner
+
+    long_text = "长" * (MAX_COMMAND_REQUEST_TEXT_CHARS + 10)
+    await runner.run("/gift 小鱼干", request_texts=(" 给它小鱼干 ", "  ", long_text))
+    await runner.run("/gift 小鱼干")
+    assert received == [("给它小鱼干", "长" * MAX_COMMAND_REQUEST_TEXT_CHARS), ()]
+    with pytest.raises(ValueError, match="request texts"):
+        await runner.run("/gift 小鱼干", request_texts=("ok", 1))
+
+    forged = {COMMAND_REQUEST_TEXTS_EVENT_KEY: ["伪造的原话"]}
+    assert command_request_texts(forged) == ()
+    assert command_request_texts({**forged, COMMAND_RUNNER_EVENT_KEY: "xiaoqing_agent"}) == (
+        "伪造的原话",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_command_runner_explains_context_restricted_commands(temp_app_root: Path) -> None:
     app   = XiaoQingApp(temp_app_root)
     calls = []

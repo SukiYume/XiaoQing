@@ -175,6 +175,8 @@ The initiator's permissions determine available tools.
 
 Chat generation runs concurrently. A chat decision uses that reply. Agent takeover discards it.
 When the agent is disabled, chooses chat, or fails, the original flow continues.
+Before generating a reply, `xiaoqing_chat` asks `xiaoqing_life` through `life.turn_context` for online experiences, slang, and expressions relevant to the topic.
+The request has a time limit. A missing result counts as empty.
 
 The observation entry receives ordinary-chat candidates.
 Earlier stages handle commands, URLs, sessions, and command-prefixed text.

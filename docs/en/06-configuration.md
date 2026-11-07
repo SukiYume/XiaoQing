@@ -425,6 +425,23 @@ Codex follows `/codex`.
 `plugin.json` limits these three commands to Bot administrators.
 See [XiaoQing Agent (Chinese)](../../plugins/xiaoqing_agent/README.md) for all fields, tools, and data directories.
 
+### XiaoQing Life
+
+XiaoQing's own online life. The default state is disabled.
+
+| Path | Default | Description |
+|---|---|---|
+| `plugins.xiaoqing_life.enabled` | `false` | Main switch. When disabled, the schedule does nothing, `life.turn_context` returns `None`, and chat behaves as without the plugin. |
+| `plugins.xiaoqing_life.ai.routes.reasoning` | Necessary | Route for digesting, research, works, and the bedtime journal. Without it, browsing records "model not configured" and backs off. |
+| `plugins.xiaoqing_life.ai.routes.vision` | None | Meme safety review. Without it, no memes are collected. |
+| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | Browsing sessions per day, by calendar day in the configured timezone |
+| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | All model calls combined. Each call is counted before it runs and is not refunded on failure. |
+| `plugins.xiaoqing_life.browse_when_busy` | `false` | Whether a quick browse is allowed during a busy routine slot |
+| `plugins.xiaoqing_life.blocked_keywords` | `[]` | Extra keywords whose content is discarded, on top of the built-in list |
+
+Chat-side switches are `life.enable_online_life`, `life.online_life_timeout_seconds`, `life.enable_life_memes`, and `life.enable_life_share` in the `xiaoqing_chat` behavior configuration.
+See [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md) for all fields, commands, and data directories.
+
 ### QingSSH
 
 Public budgets are under `plugins.qingssh`:

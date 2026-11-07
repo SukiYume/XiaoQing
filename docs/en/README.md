@@ -50,6 +50,7 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 |---|---|---|
 | `xiaoqing_chat` | [README (Chinese)](../../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | [README (Chinese)](../../plugins/xiaoqing_agent/README.md) | The README includes module structure, runtime boundaries, and data. |
+| `xiaoqing_life` | [README (Chinese)](../../plugins/xiaoqing_life/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) holds the implementation spec. |
 | `pendo` | [README (Chinese)](../../plugins/pendo/README.md) | [ARCHITECTURE (Chinese)](../../plugins/pendo/ARCHITECTURE.md) |
 
 Each other plugin has a `README.md` in its directory. The [plugin manual](09-plugins.md) supplies a common index.

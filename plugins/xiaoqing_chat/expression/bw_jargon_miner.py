@@ -208,7 +208,9 @@ def _apply_candidate(
     """把一条候选并入词库；术语必须真的出现在群友原话里，释义更正需要原话证据。"""
 
     term            = str(item.get("term", "") or "").strip()
-    source_messages = [text for message, text in zip(messages, rendered, strict=True) if message.role == "user"]
+    source_messages = [
+        text for message, text in zip(messages, rendered, strict=True) if message.role == "user"
+    ]
     if not term or len(term) > 32 or not any(term in source for source in source_messages):
         return False
     if item.get("is_jargon") is not True:

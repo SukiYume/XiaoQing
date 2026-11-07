@@ -1,7 +1,8 @@
 """私聊主动联系：白名单里的朋友，真实的发现或到期的事才开口。默认关闭，白名单为空时不运行。
 
-材料只有两种：① 她最近刷到过、和这位朋友资料里的兴趣对得上的事（来自 xiaoqing_life 的分享候选）；
-② 这位朋友到期的未完话头（比如“明天考试”，第二天顺口问一句）。都没有就不发。
+材料有三种：① 她最近刷到过、和这位朋友资料里的兴趣对得上的事（来自 xiaoqing_life 的分享候选）；
+② 这位朋友到期的未完话头（比如“明天考试”，第二天顺口问一句）；③ 聊过的朋友好几天没说话了
+（``private_miss_after_days``），想起对方随口说一句。都没有就不发。
 
 联系协调（每条都单独检查）：每天次数上限、两次之间的间隔、对方最近刚说过话就不打扰、她上一条
 主动发的还没被回就不再发、同一件经历只分享给同一个人一次。睡觉、忙碌与活跃时段由调用方检查。
@@ -36,7 +37,7 @@ from .proactive import (
 from .self_timeline import self_timeline_block
 
 _PRIVATE_DRAFT_INSTRUCTION = """这是一次主动找朋友说话的机会，不是对方在跟你说话。你们是私聊。
-材料里是你最近真的刷到、也许对方会感兴趣的事，或者对方之前提过、时间已经过了的事。像想到对方时随手发的一两句就好，没人回也成立。
+材料里是你最近真的刷到、也许对方会感兴趣的事，对方之前提过、时间已经过了的事，或者你们好几天没聊了。像想到对方时随手发的一两句就好，没人回也成立。
 事实按材料说；你自己的近况可以是模糊的小事，但要和“你最近说过的关于自己的事”对得上。
 没有自然的由头，或者和最近的聊天重复，就选择 skip；拿不准也 skip。
 只输出一个 JSON 对象：{"decision":"send","text":"要发的话","life_ref":材料里分享的那件事的编号（不是分享就省略）} 或 {"decision":"skip","reason":"no_natural_opening"}"""
@@ -67,6 +68,22 @@ def matches_interests(candidate: dict[str, Any], facts: str) -> bool:
         if len(topic) >= _MIN_TOPIC_CHARS and topic in facts:
             return True
     return False
+
+
+def days_since_last_chat(history: list[Any], *, now: float) -> float:
+    """两人上一次说话到现在过了几天；还没和对方聊过时是 0（不因想念去找陌生人）。"""
+
+    if not any(m.role == "user" for m in history):
+        return 0.0
+    last = max(float(m.ts or 0.0) for m in history)
+    return max(0.0, now - last) / 86400.0 if last > 0 else 0.0
+
+
+def miss_block(days: float) -> str:
+    return (
+        f"你们已经 {int(days)} 天没聊了。想起对方时可以随口发一句：说说你自己此刻的小事，"
+        "带一点想念或小委屈也行；不追问对方为什么没找你，不要求回复，不发“在吗”这种签到。"
+    )
 
 
 def friend_spoke_recently(history: list[Any], *, now: float, quiet_minutes: float) -> bool:
@@ -122,7 +139,9 @@ async def consider_private(
         )
         if isinstance(found, tuple) and found[1] == "ask":
             loop = found[0]
-    if not candidates and loop is None:
+    quiet_days = days_since_last_chat(history, now=now)
+    missing = cfg.private_miss_after_days > 0 and quiet_days >= cfg.private_miss_after_days
+    if not candidates and loop is None and not missing:
         _skip(context, runtime, key, "private_no_material")
         return None
 
@@ -141,6 +160,8 @@ async def consider_private(
         parts.append(share_block([c["line"] for c in candidates]))
     if loop is not None:
         parts.append(open_loop_block(loop, "ask"))
+    if missing:
+        parts.append(miss_block(quiet_days))
     dialogue = build_dialogue_prompt(history[-_DIALOGUE_ITEMS:], bot_name=bot_name, truncate=True)
     parts.append("你们最近的私聊：\n" + (dialogue or "（还没聊过）"))
     material = "\n\n".join(parts)

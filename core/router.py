@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Awaitable, Callable, Mapping
@@ -40,6 +41,31 @@ class CommandConflictError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class CommandStructuredInput:
+    """命令接受一个 JSON 对象作为全部参数；schema 以 JSON 文本保存，取用时得到新副本。"""
+
+    name           : str
+    description    : str
+    parameters_json: str
+
+    def parameters(self) -> dict[str, Any]:
+        value: dict[str, Any] = json.loads(self.parameters_json)
+        return value
+
+    def takes_no_arguments(self) -> bool:
+        """schema 没有任何字段：调用时只发送命令路径。"""
+
+        return not self.parameters().get("properties")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name"       : self.name,
+            "description": self.description,
+            "parameters" : self.parameters(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CommandCatalogNode:
     """Core 持有的不可变命令目录节点；帮助、导出和测试共享该快照。"""
 
@@ -56,6 +82,9 @@ class CommandCatalogNode:
     examples        : tuple[str, ...]                = ()
     invalid_examples: tuple[str, ...]                = ()
     children        : tuple[CommandCatalogNode, ...] = ()
+    # 插件声明的读写性质（"read" / "write"）；None 表示没有声明。
+    effect          : str | None                    = None
+    structured_input: CommandStructuredInput | None = None
 
     def walk(self) -> tuple[CommandCatalogNode, ...]:
         """按目录顺序展平自身及全部后代。"""
@@ -90,7 +119,11 @@ class CommandCatalogNode:
             "contexts"        : list(self.contexts),
             "examples"        : list(self.examples),
             "invalid_examples": list(self.invalid_examples),
-            "subcommands"     : [child.to_dict() for child in self.children],
+            "effect"          : self.effect,
+            "structured_input": (
+                self.structured_input.to_dict() if self.structured_input is not None else None
+            ),
+            "subcommands": [child.to_dict() for child in self.children],
         }
 
 
@@ -243,6 +276,18 @@ def build_command_catalog_node(
         examples         = tuple(str(value) for value in command.get("examples", ())),
         invalid_examples = tuple(str(value) for value in command.get("invalid_examples", ())),
         children         = children,
+        effect           = command.get("effect"),
+        structured_input = _structured_input(command.get("structured_input")),
+    )
+
+
+def _structured_input(declared: Mapping[str, Any] | None) -> CommandStructuredInput | None:
+    if not declared:
+        return None
+    return CommandStructuredInput(
+        name        = str(declared["name"]),
+        description = str(declared.get("description") or ""),
+        parameters_json=json.dumps(declared["parameters"], ensure_ascii=False),
     )
 
 

@@ -515,8 +515,8 @@ async def test_structured_discovery_and_execution_skip_plugin_ai(env, monkeypatc
     assert devices["devices"]["d1"]["name"] == "台灯"
     assert "did" not in devices["devices"]["d1"]
     assert "p2.2" in await home.handle(ctx, "接口 d1 1", {})
-    p = plan("action", "a2.1", args=[20]) | {"original_request": "出两份粮"}
-    result = await home.handle(ctx, "调用 " + json.dumps(p), {})
+    ctx.request_texts = ("出两份粮",)
+    result = await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
     assert "已提交 2 份" in result
     io.miot_action.assert_awaited_once_with("123", (2, 1), [2])
     ai.complete.assert_not_awaited()
@@ -547,7 +547,7 @@ async def test_structured_feeding_rejects_changed_or_unrepresentable_amount(
     ctx, io, ai = setup_structured_home(env, monkeypatch)
     p = plan(value=100)
     p["operations"].append(plan("action", "a2.1", args=[grams])["operations"][0])
-    p["original_request"] = utterance
+    ctx.request_texts = (utterance,)
     with pytest.raises(client.BridgeError, match="出粮已拦截"):
         await home.handle(ctx, "调用 " + json.dumps(p), {})
     io.miot_action.assert_not_awaited()
@@ -660,3 +660,34 @@ async def test_speaker_forwarding_cannot_bypass_feeding_quantity_guard(env):
     with pytest.raises(client.BridgeError, match="出粮已拦截"):
         await operations.execute_plan(ctx, io, cat, plan("action", "a2.1", args=["出5克粮"]), {})
     io.miot_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_structured_interface_accepts_json_arguments(env, monkeypatch):
+    """接口命令的 JSON 写法和“设备 页码”写法结果相同；格式不对时报出用法。"""
+
+    ctx, _io, _ai = setup_structured_home(env, monkeypatch)
+    assert await home.handle(ctx, '接口 {"device": "d1", "page": 1}', {}) == await home.handle(
+        ctx, "接口 d1 1", {}
+    )
+    for bad in ('{"device": "d1", "page": 0}', '{"device": ""}', '{"device": "d1", "x": 1}', "{"):
+        with pytest.raises(client.BridgeError, match="接口参数需要"):
+            await home.handle(ctx, "接口 " + bad, {})
+
+
+@pytest.mark.asyncio
+async def test_delegated_call_checks_amount_against_initiator_words(env, monkeypatch):
+    """代为执行时按 Core 传入的发起人原话核对数量；参数里不能自带原话。"""
+
+    ctx, io, _ai = setup_structured_home(env, monkeypatch)
+    ctx.request_texts = ("出一份粮",)
+    with pytest.raises(client.BridgeError, match="出粮已拦截"):
+        await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
+    forged = plan("action", "a2.1", args=[20]) | {"original_request": "出两份粮"}
+    with pytest.raises(client.BridgeError, match="operations"):
+        await home.handle(ctx, "调用 " + json.dumps(forged), {})
+    io.miot_action.assert_not_awaited()
+
+    ctx.request_texts = ("出一份粮", "改成两份")
+    result = await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
+    assert "已提交 2 份" in result

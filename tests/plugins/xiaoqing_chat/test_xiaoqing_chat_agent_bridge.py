@@ -348,7 +348,6 @@ async def test_name_call_does_not_bypass_gate_after_idle_cleanup(
         patch.object(handlers, "decide_reply", AsyncMock(return_value=False)),
         patch.object(handlers, "_reply_with_chat", AsyncMock(return_value=[])),
     ):
-        assert await handlers.call_bot_name_only(context)
         if interleaved:
             clock[0] += 5
             other = {

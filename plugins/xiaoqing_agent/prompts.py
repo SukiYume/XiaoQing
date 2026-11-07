@@ -37,8 +37,8 @@ _COMMAND_HINT = "XiaoQing 现成功能（详细参数通过 xiaoqing_commands �
 _SSH_HINT     = "远端操作使用 ssh_servers / ssh_run。"
 _CODEX_HINT   = "较大的编程任务可交给 codex_run。"
 # 这两个插件不作为可调用功能列出：agent 自身，以及只接受真人消息的聊天入口。
-_HIDDEN_CAPABILITY_PLUGINS = frozenset({"xiaoqing_agent", "xiaoqing_chat"})
-_CAPABILITY_HELP_CHARS     = 120
+HIDDEN_CAPABILITY_PLUGINS = frozenset({"xiaoqing_agent", "xiaoqing_chat"})
+_CAPABILITY_HELP_CHARS    = 120
 
 
 def _read_stage_prompt(stage: str) -> str:
@@ -143,7 +143,7 @@ def capability_summary(
 
     lines: list[str] = []
     for root in roots:
-        if root.plugin in _HIDDEN_CAPABILITY_PLUGINS:
+        if root.plugin in HIDDEN_CAPABILITY_PLUGINS:
             continue
         allowed   = command_allowed(root, principal)
         help_text = root.help_text.strip()

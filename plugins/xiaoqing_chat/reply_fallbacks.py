@@ -62,6 +62,14 @@ _SOCIAL_TURN_RE = re.compile(
 )
 
 
+# 约她线下见面、出去玩：人设里一律婉拒，所以婉拒本身永远是安全的兜底，不该说“没跟上”。
+INVITE_DECLINE_FALLBACKS = ("这次就不去啦，你们玩得开心", "我就不去啦，回来给我讲讲")
+_INVITE_TURN_RE          = re.compile(
+    r"(?:一起|出来|约(?:你|个|一下)?|带你|来找你|见个?面|面基)"
+    r"[^。！？!?\n]{0,12}(?:玩|吃|去|逛|看|见|聚|面基)"
+    r"|(?:周末|明天|今晚|下次)[^。！？!?\n]{0,8}(?:有空|一起|出来)"
+)
+
 _PUBLIC_IDENTITY_FALLBACK_MAX_CHARS = 120
 
 
@@ -89,6 +97,7 @@ ALL_FALLBACK_TEXTS = frozenset(
         *MEDIA_UNREADABLE_FALLBACKS,
         *MEDIA_SEEN_FALLBACKS,
         *MEDIA_UNSURE_FALLBACKS,
+        *INVITE_DECLINE_FALLBACKS,
     )
 )
 
@@ -207,6 +216,52 @@ _SILENT_FAILURE_CODES = frozenset(
 )
 
 
+_BARE_TEXT_NOISE_RE = re.compile(r"[\W_]+")
+
+
+def _bare_text(text: str) -> str:
+    """去掉空白、标点和 emoji，只留字词：审查引用的片段和气泡按这个对齐。"""
+
+    return _BARE_TEXT_NOISE_RE.sub("", str(text or ""))
+
+
+def trim_unsupported_bubbles(rejected: RejectedCandidate) -> ReplyDraft | None:
+    """只有几处读图说法没依据、其余都审过时，删掉含这几处的气泡，照发其余的。
+
+    像人发消息前把拿不准的那句删掉：不必整条重写，也不退成“我不敢打包票”。
+    片段对不上气泡、删完什么都不剩、或者回复带着表情图时不删，按原流程重写。
+    """
+
+    result, draft = rejected.result, rejected.draft
+    if (
+        result.failure_code != "media_grounding"
+        or not result.unsupported_fragments
+        or draft is None
+        or draft.media_marker is not None
+        or len(draft.text_parts) < 2
+    ):
+        return None
+    bare_parts                   = [_bare_text(part) for part in draft.text_parts]
+    full                         = "".join(bare_parts)
+    spans: list[tuple[int, int]] = []
+    for bare in bare_parts:
+        start = spans[-1][1] if spans else 0
+        spans.append((start, start + len(bare)))
+    dropped: set[int] = set()
+    for fragment in map(_bare_text, result.unsupported_fragments):
+        if not fragment or fragment not in full:
+            return None
+        start = full.find(fragment)
+        while start >= 0:
+            end = start + len(fragment)
+            dropped |= {index for index, (lo, hi) in enumerate(spans) if lo < end and start < hi}
+            start = full.find(fragment, start + 1)
+    kept = [part for index, part in enumerate(draft.text_parts) if index not in dropped]
+    if not kept or len(kept) == len(draft.text_parts):
+        return None
+    return build_reply_draft(kept, raw_text=draft.raw_text, rewritten_text=draft.rewritten_text)
+
+
 def _fallback_draft(rejected: RejectedCandidate, text: str) -> ReplyDraft | None:
     return build_reply_draft((text,), raw_text=rejected.text, rewritten_text=text)
 
@@ -255,6 +310,10 @@ def _forced_fallback_texts(
         if failure_code == "media_grounding":
             step = "reply.check.exhausted.media_grounding"
         return texts, step
+    if failure_code in {"persona_grounding", "context_grounding", ""} and _INVITE_TURN_RE.search(
+        str(plan.text or "")
+    ):
+        return INVITE_DECLINE_FALLBACKS, step
     if failure_code == "persona_grounding":
         return _persona_fallback_texts(plan), "reply.check.exhausted.persona_grounding"
     if failure_code == "instruction_following":

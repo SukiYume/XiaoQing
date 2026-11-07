@@ -170,6 +170,7 @@ When the connection ends, Core cleans up notification tasks and pending requests
 | Command or session denied by permissions or scene | `router.py` function `command_access` | Corresponding plugin `plugin.json` |
 | Missing Core-issued capability | `app_plugin_context.py` | Corresponding command's `plugin.json` |
 | Agent command execution | `dispatcher.py` function `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
+| Chat receives no online-life context | `capabilities.py` class `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
 | Group participation | `dispatcher.py` | Smalltalk Provider plugin |
 | Plugin loading and reload | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | Plugin timeout and overload | `plugin_execution.py` | `dispatcher.py` |

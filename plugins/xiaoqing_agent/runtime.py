@@ -66,7 +66,6 @@ _CONTROL_TOOLS = frozenset(
         "update_plan",
         "wait",
         "xiaoqing_commands",
-        "xiaoai_capabilities",
     }
 )
 
@@ -344,7 +343,7 @@ class AgentRuntime:
                         break
                     # 成功与失败都核对正文；附件、执行状态和写入结果沿用执行阶段的结果。
                     evidence, reports = _delivery_evidence(task, env, outcome, messages)
-                    task.activity     = "核对结果"
+                    task.activity = "核对结果"
                     task.steps += 1
                     review = build_delivery_messages(
                         task, evidence, history, outcome.text if outcome.authored else ""
@@ -363,8 +362,11 @@ class AgentRuntime:
                     ):
                         listing    = "、".join(f"“{item}”" for item in pending)
                         correction = {
-                            "role"   : "user",
-                            "content": f"交付核对：{listing}尚未完成。依据已有回报完成这一部分，再交付。",
+                            "role": "user",
+                            "content": (
+                                f"交付核对：{listing}尚未完成。依据发起人原话和已有回报完成这一部分，再交付；"
+                                "已经写入的不再写一遍，需要的内容原话里没有时直接问发起人。"
+                            ),
                         }
                         transcript.append(correction)
                         messages.append(correction)

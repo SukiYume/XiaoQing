@@ -175,6 +175,7 @@ split_message_segments(
 | `request_id` | `str \| None` | 当前请求追踪 ID |
 | `principal` | `PluginPrincipal` | 当前调用身份 |
 | `command_invocation` | `CommandInvocation \| None` | Core 解析后的命令节点 |
+| `request_texts` | `tuple[str, ...]` | 由命令执行器代为执行时发起人本人的原话，按先后；用户直接发命令时为空 |
 | `state` | `dict[str, Any]` | 当前插件代共享内存状态 |
 
 ### 共享服务属性
@@ -297,8 +298,9 @@ Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在�
 | `agent_turn` | XiaoQing Chat 到 XiaoQing Agent 的一轮交接（用户消息。可分判断与执行两步），并回报当轮回复是否发出 |
 | `codex_agent` | XiaoQing Agent 到 Codex 的同步任务（跟随 `/codex` 的声明，每次调用复核） |
 | `ssh_agent` | XiaoQing Agent 到 QingSSH 的服务器列表与一次性命令（跟随 `/ssh` 的声明，每次调用复核） |
-| `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送。`run(text, *, sender_name, operation_id)` 原样返回命令的 `DeliverySegments`，由调用方结算回执 |
+| `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送。`run(text, *, sender_name, operation_id, request_texts)` 原样返回命令的 `DeliverySegments`，由调用方结算回执；`request_texts` 是发起人原话，命令在 `context.request_texts` 读取 |
 | `local_tools` | XiaoQing Agent 在本机执行代码、读写文件前的授权确认（跟随 `/shell` 的声明，每次调用复核） |
+| `life_context` | XiaoQing Chat 向 XiaoQing Life 取小青自己的网上生活：`turn_context(payload)` 与 `export_memes(payload)`，返回映射或 `None`（没有可用内容）；数据只关于小青自己，不按用户身份门控，系统主体也可用 |
 | `ai` | 当前插件的统一 AI route |
 
 `is_bot_admin` 与 `is_system` 始终提供布尔值。
@@ -385,6 +387,8 @@ context.capabilities.ai.list_models(
 | `examples` | `tuple[str, ...]` | 正确样例 |
 | `invalid_examples` | `tuple[str, ...]` | 错误样例 |
 | `children` | `tuple[CommandCatalogNode, ...]` | 直接子命令 |
+| `effect` | `str \| None` | 插件声明的 `read` / `write`，未声明为 `None` |
+| `structured_input` | `CommandStructuredInput \| None` | 结构化参数声明：`name`、`description`、`parameters()`（每次返回 schema 副本）、`takes_no_arguments()` |
 
 ```python
 node.walk() -> tuple[CommandCatalogNode, ...]

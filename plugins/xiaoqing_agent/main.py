@@ -33,9 +33,9 @@ _MAX_HISTORY       = 20
 _MAX_PERSONA_CHARS = 12000
 _MAX_IMAGES        = 6
 # 续接任务的验收线索：最多保留最近几条，每条的字数上限。
-_MAX_THREAD_LINES  = 8
-_MAX_THREAD_CHARS  = 500
-_DISABLED_TIP      = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
+_MAX_THREAD_LINES = 8
+_MAX_THREAD_CHARS = 500
+_DISABLED_TIP     = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
 
 HELP_TEXT = """🛠 小青 agent
 
@@ -278,7 +278,7 @@ async def _continuation(
         for item in await runtime.recent_records(chat, MAX_RECORDS_PER_CHAT)
     }
     chain: list[dict[str, Any]] = []
-    record = records.get(task_id)
+    record                      = records.get(task_id)
     while record is not None and record not in chain:
         chain.append(record)
         record = records.get(str(record.get("continues") or ""))
@@ -290,7 +290,7 @@ async def _continuation(
         for line in (item.get("request_text"), *(item.get("updates") or ()))
         if isinstance(line, str)
     ]
-    seen   = {"".join(text[:_MAX_THREAD_CHARS].split())}
+    seen              = {"".join(text[:_MAX_THREAD_CHARS].split())}
     thread: list[str] = []
     for line in clues:
         line = line.strip()[:_MAX_THREAD_CHARS]

@@ -60,17 +60,6 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 
 `life.turn_context`、`life.export_memes` 在 `core/models.py` 的服务契约中声明：只有 `xiaoqing_life` 能导出、只有 `xiaoqing_chat` 能调用。`core/capabilities.py:LifeContextService` 校验载荷与返回类型，`core/app_plugin_context.py` 在调用方声明 `uses_services` 时才签发 `capabilities.life_context`。数据只关于小青自己，不按用户身份门控，系统主体也可用。
 
-## 尚未实现
-
-- 主动开口分享候选（`share_candidates` 暂为空）、白名单私聊主动联系。
-- daily_life 探针（`turn_context(mode="probe")`）、作息亲和（`activity_affinity`）。
-
-## 第四轮增补
-
-- **新状态**：`state.preferences` / `source_health` / `habits` / `topic_penalty` / `last_reward` / `followup_day`，新集合 `frontier.json`、`learnings.json`；词条和表达条目上多了 `use_ok` / `use_confused` / `fps` / `suppressed_until`；小课题多了 `parent_id` / `depth`；经历多了 `tags`。
-- **决策**：`planner.choose` 的打分在活动偏好、搜索接口不稳、探索欲（+10）、有前因的小课题（+4）之后做 softmax；因素记在 `last_decision.factors`。
-- **只有真实信号**：偏好来自她自己的喜欢 / 不喜欢和真实进展；失败和全是看过的不更新偏好，只影响来源可靠性；社交反馈来自群友的真实回应。
-
 ## 第二轮增补
 
 - **选活动**：分数过 softmax（`choice_temperature`）抽样，`last_decision` 记分数、选中项与概率。
@@ -81,6 +70,19 @@ xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py�
 - **Core**：`Content-Encoding: deflate` 同时接受 zlib 封装与裸 deflate（B 站弹幕接口返回裸 deflate），限额不变。
 - **真实验证**：`scripts/run_xiaoqing_life_session.py`。
 
+## 第三轮增补
+
+- **主动分享**：`turn_context(mode="proactive")` 返回 `share_candidates`（她最近真的刷到、想分享的经历，以及作品更新），请求里的 `exclude` 排除这个会话已分享过的；xiaoqing_chat 的群聊与白名单私聊主动开口用它，投递确认后记下已分享的 ID。
+- **探针**：`turn_context(mode="probe")` 在插件开启时返回 `{"version":1,"online_life":true}`，xiaoqing_chat 的每日生活小事据此不写具体视频和帖子，避免和真实上网记录打架。
+- **节律**：`planner` 读作息活动文字，按 `activity_affinity` 调整打分（刷番偏动画话题、吃饭偏热榜且条目减半、社 / 活动 / 课 / 实验 / 考试即使空闲也不上网）；醒来后 `MORNING_WINDOW_MIN`（120 分钟）内续做小课题加 `MORNING_THREAD_BONUS`（6 分）。
+- **按意图取用**：`turn_context` 按问法给不同的块：近况（今天的日记或经历、在查的小课题）、这周（周记 / 近几天日记与快照）、最近迷上什么（快照）、等会儿干嘛（今天剩下的作息时段与小课题的下一步，标明只是打算）、要链接或问哪个视频（标题、UP 主、链接）、追问刚提到的视频（简介摘要）。
+- **取材细节**：新的、≤8 字的未查实词条自动进百科待查队列；暴力 / 自伤 / 诅咒类说法不收为词条；弹幕最密点忽略开头；梗图按点赞、文字长度与格式做确定性预选，聊天侧导入前再校验图片字节。
+
+## 第四轮增补
+
+- **新状态**：`state.preferences` / `source_health` / `habits` / `topic_penalty` / `last_reward` / `followup_day`，新集合 `frontier.json`、`learnings.json`；词条和表达条目上多了 `use_ok` / `use_confused` / `fps` / `suppressed_until`；小课题多了 `parent_id` / `depth`；经历多了 `tags`。
+- **决策**：`planner.choose` 的打分在活动偏好、搜索接口不稳、探索欲（+10）、有前因的小课题（+4）之后做 softmax；因素记在 `last_decision.factors`。
+- **只有真实信号**：偏好来自她自己的喜欢 / 不喜欢和真实进展；失败和全是看过的不更新偏好，只影响来源可靠性；社交反馈来自群友的真实回应。
 
 ## 第五轮增补
 

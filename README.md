@@ -206,6 +206,13 @@ python main.py
 
 - [使用说明](plugins/xiaoqing_agent/README.md)
 
+### xiaoqing_life
+
+`xiaoqing_life` 给小青一份自己的网上生活：作息空闲时按兴趣刷 B 站、知乎、微博热榜和百科，记下带来源的经历，学流行语、表达方式和梗图，留小课题隔天续查，慢慢整理自己的小作品。`xiaoqing_chat` 每轮回复前取和话题相关的一两点，被问“最近刷到啥”时能拿真实经历接话。除管理员扫码授权的 B站 只读登录外不登录账号、不发任何互动。插件默认关闭，通过 `config.plugins.xiaoqing_life.enabled` 开启；关闭时聊天与没装时一致。
+
+- [使用说明](plugins/xiaoqing_life/README.md)
+- [架构说明](plugins/xiaoqing_life/ARCHITECTURE.md)
+
 ### Pendo
 
 Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令、Web 控制台与 Scriptable 小组件共享同一份 SQLite 数据。

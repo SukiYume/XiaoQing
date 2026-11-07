@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -293,6 +294,23 @@ def _valid_session_state(step: str, data: dict[str, Any]) -> bool:
     return True
 
 
+def _quick_as_record(data: dict[str, Any]) -> dict[str, Any]:
+    """快捷记账解析出的字段换成结构化记账的字段名。"""
+
+    return {
+        "amount_cents"    : data["amount_cents"],
+        "title"           : data["title"],
+        "transaction_type": data["transaction_type"],
+        "category"        : data.get("ledger_category") or "",
+        "account"         : data.get("account_name") or "",
+        "to_account"      : data.get("counter_account_name") or "",
+        "merchant"        : data.get("merchant") or "",
+        "date"            : data.get("ledger_date") or "",
+        "currency"        : data.get("currency") or "CNY",
+        "remark"          : data.get("remark") or "",
+    }
+
+
 class LedgerHandler(DbOpsMixin):
     """记账处理器
 
@@ -320,7 +338,15 @@ class LedgerHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         command = parts[0].lower()
         rest    = parts[1] if len(parts) > 1 else ""
+        # 由 Agent 代为执行时 Core 传入发起人本人的原话，分类与账户要能在原话里找到。
+        source_text = "\n".join(getattr(context, "request_texts", ()))
 
+        if command in {"add", "quick"} and rest.strip() and source_text:
+            # 代为执行的快捷记账和结构化记账走同一套原话核对。
+            data, error = self._parse_quick_ledger_data(rest)
+            if error:
+                return {"status": "error", "message": error}
+            return await self._record(user_id, _quick_as_record(data), source_text, group_id)
         if command == "add":
             if rest.strip():
                 return await self.quick_add(user_id, rest, context, group_id)
@@ -329,40 +355,12 @@ class LedgerHandler(DbOpsMixin):
             return await self.quick_add(user_id, rest, context, group_id)
         if command == "record":
             try:
-                record = LedgerRecord.model_validate_json(rest)
-            except ValidationError as exc:
-                return {
-                    "status" : "error",
-                    "message": "❌ 记账字段校验失败：" + validation_details(exc),
-                }
-            for source_id, field_name, attribute in (
-                (record.category_from, "category", "ledger_category"),
-                (record.account_from, "account", "account_name"),
-            ):
-                if source_id:
-                    source, error = await self._db_get_typed_item_or_message(
-                        source_id, user_id, ItemType.LEDGER.value, "账目"
-                    )
-                    if error:
-                        return error
-                    source = cast(LedgerItem, source)
-                    setattr(record, field_name, getattr(source, attribute))
-            return await self._save_ledger_item(
-                user_id,
-                {
-                    "amount_cents"        : record.amount_cents,
-                    "title"               : record.title,
-                    "transaction_type"    : record.transaction_type,
-                    "ledger_category"     : record.category or None,
-                    "account_name"        : record.account or None,
-                    "counter_account_name": record.to_account or None,
-                    "merchant"            : record.merchant,
-                    "ledger_date"         : record.date,
-                    "currency"            : record.currency,
-                    "remark"              : record.remark,
-                },
-                group_id,
-            )
+                payload = json.loads(rest)
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                return {"status": "error", "message": "❌ 记账字段需要一个 JSON 对象"}
+            return await self._record(user_id, payload, source_text, group_id)
         if command == "list":
             return await self.list_ledger(user_id, rest, context)
         if command == "view":
@@ -374,6 +372,47 @@ class LedgerHandler(DbOpsMixin):
         if command == "summary":
             return await self.summary(user_id, rest, context)
         return {"status": "error", "message": f"❌ 未知命令: {command}\n\n{self._show_usage()}"}
+
+    async def _record(
+        self, user_id: str, payload: dict[str, Any], source_text: str, group_id: int | None
+    ) -> CommandMessage:
+        """校验并保存一笔结构化账目；字段来源只按 Core 传入的原话核对，参数里自带的 source_text 不算数。"""
+
+        try:
+            record = LedgerRecord.model_validate({**payload, "source_text": source_text})
+        except ValidationError as exc:
+            return {
+                "status" : "error",
+                "message": "❌ 记账字段校验失败：" + validation_details(exc),
+            }
+        for source_id, field_name, attribute in (
+            (record.category_from, "category", "ledger_category"),
+            (record.account_from, "account", "account_name"),
+        ):
+            if source_id:
+                source, error = await self._db_get_typed_item_or_message(
+                    source_id, user_id, ItemType.LEDGER.value, "账目"
+                )
+                if error:
+                    return error
+                source = cast(LedgerItem, source)
+                setattr(record, field_name, getattr(source, attribute))
+        return await self._save_ledger_item(
+            user_id,
+            {
+                "amount_cents"        : record.amount_cents,
+                "title"               : record.title,
+                "transaction_type"    : record.transaction_type,
+                "ledger_category"     : record.category or None,
+                "account_name"        : record.account or None,
+                "counter_account_name": record.to_account or None,
+                "merchant"            : record.merchant,
+                "ledger_date"         : record.date,
+                "currency"            : record.currency,
+                "remark"              : record.remark,
+            },
+            group_id,
+        )
 
     @staticmethod
     def _show_usage() -> str:

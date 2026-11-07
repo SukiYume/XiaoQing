@@ -590,7 +590,9 @@ async def test_a_follow_up_during_a_batch_stops_the_calls_that_have_not_started(
         (ai_response("直接答复"), True),
         (ai_response("", [tool_call("final_answer", {"text": "交付"})]), True),
         (
-            ai_response("", [tool_call("xiaoqing_command", {"command": "/x", "delivery": "reply"})]),
+            ai_response(
+                "", [tool_call("xiaoqing_command", {"command": "/x", "delivery": "reply"})]
+            ),
             False,
         ),
     ],

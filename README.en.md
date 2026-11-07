@@ -218,6 +218,17 @@ The plugin is disabled by default. `config.plugins.xiaoqing_agent.enabled` enabl
 When it is disabled, `xiaoqing_chat` keeps its usual behavior.
 See the [user guide (Chinese)](plugins/xiaoqing_agent/README.md).
 
+### XiaoQing Life
+
+`xiaoqing_life` gives XiaoQing her own online life.
+In free routine slots she follows her interests through Bilibili, Zhihu and Weibo hot lists, and encyclopedias.
+She keeps sourced experiences, learns slang, expressions, and memes, continues small research threads on later days, and slowly builds small works.
+Before each reply, `xiaoqing_chat` takes one or two topic-relevant points, so she can answer "seen anything fun lately?" from real experience.
+She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, and she never interacts with posts.
+The plugin is disabled by default. `config.plugins.xiaoqing_life.enabled` enables it.
+When it is disabled, chat behaves as without the plugin.
+See the [user guide (Chinese)](plugins/xiaoqing_life/README.md) and [architecture (Chinese)](plugins/xiaoqing_life/ARCHITECTURE.md).
+
 ### Pendo
 
 Pendo uses one data model for events, tasks, notes, diaries, accounts, and reminders.

@@ -33,6 +33,56 @@ def test_current_turn_keeps_speaker_distinct_from_leading_vocative(current, spok
     assert f"{spoken}。引起了你的注意" in messages[-1].content
 
 
+@pytest.mark.parametrize("current", ["小青", "小青！", "小青～", "@小青", "小青呢"])
+def test_bare_name_call_reads_as_being_called(current):
+    messages = build_prompt_messages(
+        is_private    = True,
+        bot_name      = "小青",
+        sender_name   = "阿夏",
+        think_level   = 0,
+        history       = [],
+        current_text  = current,
+        personality   = PersonalityConfig(),
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "name-call",
+    )
+    assert "现在阿夏喊了你一声，没说别的事。引起了你的注意" in messages[-1].content
+
+
+@pytest.mark.parametrize(
+    ("replies", "noted"),
+    [
+        (("今天累死了，你呢？", "那你早点睡吧？"), True),
+        (("早八真的起不来[QQ表情#20]你呢？😂", "周末去哪玩呀？~"), True),
+        (("今天累死了，你呢？", "那你早点睡吧"), False),
+        (("那你早点睡吧？",), False),
+    ],
+)
+def test_question_ending_streak_asks_her_to_stop_quizzing(replies, noted):
+    history = [
+        StoredMessage(role=role, name=name, ts=1_700_000_000.0 + index, content=text)
+        for index, (role, name, text) in enumerate(
+            item
+            for reply in replies
+            for item in (("user", "阿夏", "嗯嗯"), ("assistant", "小青", reply))
+        )
+    ]
+    messages = build_prompt_messages(
+        is_private    = True,
+        bot_name      = "小青",
+        sender_name   = "阿夏",
+        think_level   = 0,
+        history       = history,
+        current_text  = "我也是",
+        personality   = PersonalityConfig(),
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "question-streak",
+    )
+    assert ("不再反问对方" in messages[-1].content) is noted
+
+
 _CARD = PersonaCard.parse("## 你是谁\n- 住校的理工科学生。\n\n## 说话方式〔聊天〕\n- 口语化")
 
 
@@ -132,7 +182,7 @@ def test_prompt_builder_can_disable_persona_story_creation() -> None:
     assert "没有明确写出的具体往事" in system_prompt
 
 
-def test_prompt_builder_limits_story_creation_to_vague_daily_details() -> None:
+def test_prompt_builder_allows_everyday_life_but_not_hard_facts() -> None:
     personality = PersonalityConfig(
         card                             = _CARD,
         allow_low_stakes_persona_fiction = True,
@@ -153,8 +203,8 @@ def test_prompt_builder_limits_story_creation_to_vague_daily_details() -> None:
 
     system_prompt = msgs[0].content
     assert "日常创作许可" in system_prompt
-    assert "模糊的当下感受" in system_prompt
-    assert "可核对的具体人名" in system_prompt
+    assert "自己此刻在干嘛" in system_prompt and "保持一致" in system_prompt
+    assert "真实的具体人名" in system_prompt and "现实承诺仍需记录支持" in system_prompt
 
 
 def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:

@@ -160,12 +160,24 @@ def test_mood_is_shared_across_chats_and_turns_sleepy_at_night() -> None:
 
 def test_casual_reply_is_split_into_clause_bubbles() -> None:
     cfg = ResponsePostProcessConfig()
+    # 大约每 16 字一个气泡：二十来字的一句发两条，更长的才拆满三条，短句不拆。
     assert process_llm_response(
         "我周末经常睡到中午，几点起嘛……看我什么时候被饿醒了", cfg, bot_name="小青"
     ) == [
-        "我周末经常睡到中午",
-        "几点起嘛……",
+        "我周末经常睡到中午，几点起嘛……",
         "看我什么时候被饿醒了",
+    ]
+    assert process_llm_response(
+        "我周末经常睡到中午，几点起嘛……看我什么时候被饿醒了，反正闹钟是叫不醒我的",
+        cfg,
+        bot_name="小青",
+    ) == [
+        "我周末经常睡到中午，几点起嘛……",
+        "看我什么时候被饿醒了",
+        "反正闹钟是叫不醒我的",
+    ]
+    assert process_llm_response("你才胖了，懂不懂啦", cfg, bot_name="小青") == [
+        "你才胖了，懂不懂啦"
     ]
     # 链接、邮箱和数字之间的逗号保持原样。
     assert process_llm_response("physlab@163.com，按学号命名就行", cfg, bot_name="小青") == [
@@ -185,6 +197,17 @@ def test_casual_reply_is_split_into_clause_bubbles() -> None:
     assert process_llm_response(
         "我周末经常睡到中午，几点起嘛", cfg, bot_name="小青", clause_split=False
     ) == ["我周末经常睡到中午，几点起嘛"]
+
+
+def test_unpaired_lenticular_brackets_copied_from_summaries_are_dropped() -> None:
+    cfg = ResponsePostProcessConfig()
+    # 实测原样：读图摘要里的【】被抄了半截进回复。
+    assert process_llm_response("physlab2026@163.com】【。", cfg, bot_name="小青") == [
+        "physlab2026@163.com。"
+    ]
+    assert process_llm_response("【重要】周五交报告", cfg, bot_name="小青") == [
+        "【重要】周五交报告"
+    ]
 
 
 # ---------------------------------------------------------------- 摘要标注
