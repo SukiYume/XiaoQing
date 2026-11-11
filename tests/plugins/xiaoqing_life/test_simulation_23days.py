@@ -1,4 +1,4 @@
-"""第五轮可控时钟模拟（DESIGN §10.10）。
+"""23 天可控时钟模拟：话题长成作品、研究搁置后再拿起并更正、方法提炼与复用、兴趣变冷快照。
 
 假来源 + 脚本化的假模型，一条时间线上验证：
 
@@ -24,8 +24,9 @@ import pytest
 
 from plugins.xiaoqing_life import dossier, planner, threads, wind_down, works
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.planner import THREAD, WORK_ON, Decision
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.stores import LifeStore
 from tests.plugins.xiaoqing_life.support import (
     FREE,
@@ -185,7 +186,7 @@ def _fetch(world: World) -> FakeFetcher:
 
 
 @pytest.mark.asyncio
-async def test_round5_timeline_works_research_methods_dossier_and_tone(tmp_path: Path) -> None:
+async def test_timeline_works_research_methods_dossier_and_tone(tmp_path: Path) -> None:
     world = World()
     store = LifeStore(tmp_path / "life")
     store.load()
@@ -247,7 +248,7 @@ async def test_round5_timeline_works_research_methods_dossier_and_tone(tmp_path:
     when(2, 12)
     t1 = threads.open_thread(
         store.threads, cfg, title="星空为什么拖线", why="拍星空总是拖线", next_query="星空 拖线",
-        now=world.now.timestamp(), topic="天文摄影",
+        now=world.now.timestamp(), topic="天文摄影", kind="practice",
     )  # fmt: skip
     assert t1 is not None
     world.research_script = [
@@ -355,7 +356,11 @@ async def test_round5_timeline_works_research_methods_dossier_and_tone(tmp_path:
         "- 后来改过想法：之前以为星星拖线是因为相机抖动，后来发现其实是地球自转，需要赤道仪跟踪"
         in lines
     )
-    assert "- 查过：星空为什么拖线（查明白了：收获：星空为什么拖线）" in lines
+    # 笔记都出自同一个 UP 主：只算一个来源，档案里照实说还没核实
+    assert (
+        "- 查过：星空为什么拖线（查到一个说法：收获：星空为什么拖线，只在一个地方看到这么说，"
+        "还没找别的来源核实）" in lines
+    )
     assert len(lines) <= tc.LIFE_BUDGET
     summary["dossier recall"] = [x for x in lines.split("\n") if x.startswith("- 后来")]
 
@@ -378,6 +383,7 @@ async def test_round5_timeline_works_research_methods_dossier_and_tone(tmp_path:
     assert (await wind(8)).done == 1
     assert method["wins"] == 1 and method["status"] == "active"
     summary["method uses/wins"] = (method["uses"], method["wins"])
+    # 两个结论都只出自同一个 UP 主：记为没核实；它们是做法类问题，不自动开核实课题
     assert {q["status"] for q in store.dossiers["天文摄影"]["questions"]} == {"done"}
 
     # ── 第 22～23 天：烘焙前一期被喜欢，后一期不喜欢 → cooling ──

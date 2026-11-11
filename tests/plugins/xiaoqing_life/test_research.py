@@ -1,4 +1,4 @@
-"""第五轮里程碑 2：有限步骤的自主研究、方法复用、矛盾与走向、搁置、规划器改动。"""
+"""有限步骤的自主研究、方法复用、矛盾与走向、搁置、规划器改动。"""
 
 from __future__ import annotations
 
@@ -22,10 +22,11 @@ from plugins.xiaoqing_life import (
 )
 from plugins.xiaoqing_life import threads as th
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps, learn, liked_count
 from plugins.xiaoqing_life.config import parse_life_config
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.planner import THREAD, Decision
-from plugins.xiaoqing_life.session import SessionDeps, _liked_count, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import subtitle
 from plugins.xiaoqing_life.sources.base import SourceError, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
@@ -35,6 +36,7 @@ from tests.plugins.xiaoqing_life.support import (
     at,
     comments_payload,
     make_cfg,
+    new_store,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -52,33 +54,28 @@ def _fresh_wbi_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 # ───────────────────────────── 夹具 ─────────────────────────────
 
 
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
-
-
 def _thread(**kw: Any) -> dict[str, Any]:
     return {
-        "id"            : "t1",
-        "title"         : "猫为什么爱纸箱",
-        "topic"         : "猫",
-        "why"           : "好奇",
-        "next_query"    : "猫 纸箱",
-        "status"        : "open",
-        "steps"         : 0,
-        "empty_streak"  : 0,
-        "cooldown_until": 0.0,
-        "notes"         : [],
-        "takeaway"      : "",
-        "created_at"    : NOW - DAY,
-        "updated_at"    : NOW - DAY,
+        "id"        : "t1",
+        "title"     : "猫为什么爱纸箱",
+        "topic"     : "猫",
+        "why"       : "好奇",
+        "next_query": "猫 纸箱",
+        # 这组测试走 B站搜索那条路；按问题类型先查百科的情形见 test_research_production_cases.py。
+        "kind"        : "practice",
+        "status"      : "open",
+        "steps"       : 0,
+        "empty_streak": 0,
+        "notes"       : [],
+        "takeaway"    : "",
+        "created_at"  : NOW - DAY,
+        "updated_at"  : NOW - DAY,
         **kw,
     }
 
 
 def _with_thread(tmp_path: Path, **kw: Any) -> LifeStore:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(_thread(**kw))
     return store
 
@@ -171,29 +168,36 @@ async def test_first_action_prefers_a_legal_saved_next_action() -> None:
     got = research.first_action(
         off, default_state(), _thread(next_action={"action": "search", "arg": "猫 窝"}), NOW
     )
-    assert got == research.Next("lookup", "猫")
+    # 查百科维基用下次要搜的关键词（维基按全部关键词搜，百科卡片取第一个）
+    assert got == research.Next("lookup", "猫 纸箱")
 
 
 async def test_first_action_follows_the_research_action_ema() -> None:
+    """问题类型说不清（旧小课题、标题里也没有“为什么 / 原理”）时才看研究行动偏好。"""
+
     cfg   = make_cfg()
     state = default_state()
-    assert research.first_action(cfg, state, _thread(), NOW).action == "search"  # 平手取 search
+    vague = _thread(kind="", title="猫和纸箱")
+    assert research.first_action(cfg, state, vague, NOW).action == "search"  # 平手取 search
     reinforce.update_preference(state, "research_action", "search", 0.0)
     reinforce.update_preference(state, "research_action", "lookup", 1.0)
-    assert research.first_action(cfg, state, _thread(), NOW) == research.Next("lookup", "猫")
+    assert research.first_action(cfg, state, vague, NOW) == research.Next("lookup", "猫 纸箱")
     state["preferences"]["research_action"].update(search=1.0, lookup=0.2)
-    assert research.first_action(cfg, state, _thread(), NOW).action == "search"
+    assert research.first_action(cfg, state, vague, NOW).action == "search"
 
 
 async def test_first_action_uses_lookup_when_search_is_off_or_unhealthy() -> None:
     off = make_cfg(sources={"bili_search": False})
     assert research.first_action(off, default_state(), _thread(), NOW) == research.Next(
-        "lookup", "猫"
+        "lookup", "猫 纸箱"
     )
-    # 没有 topic 时取标题前 12 字
-    plain = _thread(topic="", title="猫为什么特别特别特别爱纸箱呢")
+    # 没有搜索词和 topic 时取标题前 16 字
+    plain = _thread(topic="", next_query="", title="猫为什么特别特别特别特别特别爱纸箱呢")
     got = research.first_action(off, default_state(), plain, NOW)
-    assert got is not None and got.arg == "猫为什么特别特别特别爱纸箱呢"[:12]
+    assert (
+        got is not None
+        and got.arg == "猫为什么特别特别特别特别特别爱纸箱呢"[: research.LOOKUP_ARG_CHARS]
+    )
     shaky = default_state()
     reinforce.record_source(shaky, "bili_search", False, NOW)
     reinforce.record_source(shaky, "bili_search", False, NOW)
@@ -209,7 +213,7 @@ async def test_no_source_or_missing_thread_is_a_quiet_skip(tmp_path: Path) -> No
     out   = await run_session(store, cfg, _continue(), _deps(_fetch(), ai))
     assert (out.status, out.reason) == ("skipped", "no_source") and ai.calls == []
     gone = Decision(THREAD, "x", {}, {"thread_id": "nope"})
-    out  = await run_session(_store(tmp_path / "b"), make_cfg(), gone, _deps(_fetch(), ai))
+    out  = await run_session(new_store(tmp_path / "b"), make_cfg(), gone, _deps(_fetch(), ai))
     assert out.reason == "thread_missing" and store.episodes == []
 
 
@@ -286,8 +290,8 @@ async def test_findings_are_checked_against_the_material(tmp_path: Path) -> None
 
 
 async def test_revises_marks_old_note_superseded_and_records_a_correction(tmp_path: Path) -> None:
-    old = [{"episode_id": "e0", "note": "猫是怕冷才钻纸箱"}]  # 旧笔记没有 ID
-    store = _with_thread(tmp_path, notes=old, steps=1)
+    old = [{"id": "n1", "episode_id": "e0", "note": "猫是怕冷才钻纸箱"}]
+    store = _with_thread(tmp_path, notes=old, note_seq=1, steps=1)
     reply = _reply(
         looked_at = [_look()],
         findings  = [
@@ -303,7 +307,7 @@ async def test_revises_marks_old_note_superseded_and_records_a_correction(tmp_pa
     )
     thread = store.threads[0]
     ids    = [n["id"] for n in thread["notes"]]
-    assert ids == ["n1", "n2", "n3"]  # 旧笔记按顺序补了 n1
+    assert ids == ["n1", "n2", "n3"]
     assert thread["notes"][0]["superseded_by"] == "n2" and "superseded_by" not in thread["notes"][2]
     assert len(thread["corrections"]) == 1
     fix = thread["corrections"][0]
@@ -313,8 +317,7 @@ async def test_revises_marks_old_note_superseded_and_records_a_correction(tmp_pa
 
 
 async def test_corrections_are_capped_at_four_and_superseded_notes_cannot_be_revised() -> None:
-    thread = _thread(notes=[{"episode_id": "e", "note": "起点"}])
-    th.ensure_note_ids(thread)
+    thread = _thread(notes=[{"id": "n1", "episode_id": "e", "note": "起点"}], note_seq=1)
     for n in range(6):
         live = th.live_notes(thread)[-1]["id"]
         th.add_finding(
@@ -328,14 +331,6 @@ async def test_corrections_are_capped_at_four_and_superseded_notes_cannot_be_rev
         thread, episode_id="e", text="x", quote="q", revises="n1", now=NOW
     )  # n1 已被取代
     assert len(thread["corrections"]) == before
-
-
-async def test_old_notes_get_ids_without_touching_existing_ones() -> None:
-    thread = _thread(notes=[{"id": "n4", "note": "a"}, {"note": "b"}, {"note": "c"}])
-    th.ensure_note_ids(thread)
-    assert [n["id"] for n in thread["notes"]] == ["n4", "n5", "n6"]
-    th.ensure_note_ids(thread)
-    assert [n["id"] for n in thread["notes"]] == ["n4", "n5", "n6"]
 
 
 async def test_cited_items_not_in_looked_at_become_auto_episodes(tmp_path: Path) -> None:
@@ -352,9 +347,12 @@ async def test_cited_items_not_in_looked_at_become_auto_episodes(tmp_path: Path)
     assert manual["auto"] is False and auto["auto"] is True
     assert (auto["feeling"], auto["reaction"], auto["topics"]) == ("meh", "", [])
     assert store.threads[0]["notes"][0]["episode_id"] == auto["id"]
-    # 自动补的经历没有兴趣证据：证据只来自 looked_at 里的 i1
+    # 研究搜出来的条目（点开的 i1 和自动补的 i2）都不记兴趣证据；有真收获时只给小课题的话题记一条
     items = {e["item"] for entry in store.interests.values() for e in entry["evidence"]}
-    assert items == {manual["item_id"]}
+    assert items == {f"thread:t1:{planner.day_key(MOMENT)}"}
+    assert [e["delta"] for e in store.interests["猫"]["evidence"]] == [
+        research.THREAD_INTEREST_DELTA
+    ]
 
 
 async def test_next_action_is_validated(tmp_path: Path) -> None:
@@ -366,7 +364,8 @@ async def test_next_action_is_validated(tmp_path: Path) -> None:
     assert nxt({"action": "bogus", "arg": "x"}, found) == research.Next()
     assert nxt({"action": "search", "arg": "   "}, found) == research.Next()
     assert nxt({"action": "search", "arg": "猫窝" * 25}, found).arg == "猫窝" * 15
-    assert nxt({"action": "lookup", "arg": "瓦楞纸" * 10}, found).arg == "瓦楞纸" * 4
+    lookup = nxt({"action": "lookup", "arg": "瓦楞纸" * 10}, found).arg
+    assert lookup == ("瓦楞纸" * 10)[: research.LOOKUP_ARG_CHARS]
     assert nxt({"action": "deep_read", "arg": "i1"}, found) == research.Next("deep_read", "bili:7")
     assert nxt({"action": "deep_read", "arg": "i2"}, found) == research.Next()
     assert nxt({"action": "deep_read", "arg": "bili:7"}, found) == research.Next()
@@ -688,7 +687,8 @@ async def test_all_seen_first_round_records_an_empty_step(tmp_path: Path) -> Non
         _continue(),
         _deps(fetch, ai),
     )
-    assert store.threads[0]["cooldown_until"] == NOW + 180 * 60
+    # 连着两次没东西：搁置
+    assert store.threads[0]["status"] == "parked" and store.threads[0]["empty_streak"] == 0
 
 
 async def test_later_round_without_material_just_ends_early(tmp_path: Path) -> None:
@@ -707,14 +707,14 @@ async def test_later_round_without_material_just_ends_early(tmp_path: Path) -> N
     out = await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
     # deep_read 没读到新内容也不是失败；第二轮仍然用了一次模型，空回复被当成没有收获
     assert out.status == "ok" and store.threads[0]["steps"] == 1
-    # 不存在于本轮材料的条目：行动取不到材料，提前结束
+    # 后面的轮次查词落空：换 B站再搜一次（搜到的都看过了），还是没东西就提前结束
     store = _with_thread(tmp_path / "b")
     ai = FakeAI(_reply(looked_at=[_look()], next={"action": "lookup", "arg": "纸箱"}))
     fetch = _fetch(_video(7, "视频"), Baike=SourceError("b", "T"), wikipedia=SourceError("w", "T"))
     out = await run_session(store, make_cfg(), _continue(), _deps(fetch, ai))
     assert out.status == "ok" and len(ai.calls) == 1
-    assert [a["action"] for a in store.threads[0]["actions"]] == ["search", "lookup"]
-    assert store.threads[0]["actions"][1]["useful"] is False
+    assert [a["action"] for a in store.threads[0]["actions"]] == ["search", "lookup", "search"]
+    assert [a["useful"] for a in store.threads[0]["actions"][1:]] == [False, False]
 
 
 async def test_budget_exhausted_stops_the_loop_but_keeps_committed_rounds(tmp_path: Path) -> None:
@@ -842,10 +842,10 @@ async def test_parked_thread_resumes_only_after_parked_until_with_a_penalty() ->
     assert THREAD not in scores(parked)  # 还没到时间
     ready = _thread(status="parked", parked_until=NOW - 60, parked_at=NOW - DAY)
     assert scores(ready)[THREAD] == pytest.approx(open_score - 8.0)
-    # 到时间但步数已满的搁置课题仍可续做；冷却中的不行
+    # 到时间但步数已满的搁置课题仍可续做；今天已经查过的不行
     assert THREAD in scores(_thread(status="parked", parked_until=NOW - 1, steps=3))
     assert THREAD not in scores(
-        _thread(status="parked", parked_until=NOW - 1, cooldown_until=NOW + 5)
+        _thread(status="parked", parked_until=NOW - 1, last_session_day="2026-11-05")
     )
 
 
@@ -1141,12 +1141,13 @@ async def test_wind_down_extracts_a_method_and_exposes_actions(tmp_path: Path) -
     assert store.threads[0]["status"] == "done"
     assert len(store.methods) == 2 and store.methods[0]["wins"] == 1  # 用过的方法赢了一次
     assert (
-        store.methods[1]["text"] == "先查百科再搜视频" and store.state["method_day"] == "2026-11-05"
+        store.methods[1]["text"] == "先查百科再搜视频"
+        and store.state["done_on"]["method"] == "2026-11-05"
     )
 
 
 async def test_chat_gives_a_method_when_asked_how_she_found_out(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.methods += [_method(wins=2), _method(id="m2", text="没帮上忙的", wins=0)]
     assert "你自己摸索出来的查法：先找较早的原始出处" in _chat(store, "你怎么知道的？")
     assert "没帮上忙的" not in _chat(store, "你怎么知道的？")
@@ -1209,18 +1210,15 @@ async def test_mixed_episode_keeps_aspects_and_gives_half_evidence_and_half_a_li
         "like"   : "手感",
         "dislike": "氪金",
     }
-    # 研究里的 mixed 多半在说资料好不好用：经历留着两个侧面，兴趣证据只是普通的 +0.5
-    evidence = store.interests["独立游戏"]["evidence"][0]
-    assert evidence["delta"] == 0.5 and "aspect_like" not in evidence and not evidence.get("mixed")
+    # 研究搜出来的条目不记兴趣证据（经历照样留着两个侧面）
+    assert store.interests["独立游戏"]["evidence"] == []  # 种子兴趣，原本就在
     assert out.details["liked"] == 0.5
     # 浏览里的 mixed：证据带两个侧面，供兴趣走向用
     row = {**episode, "id": "e-browse", "item_id": "bili:8"}
-    from plugins.xiaoqing_life.session import _learn
-
-    _learn(store, digest.DigestResult(), [row], NOW)
+    learn(store, digest.DigestResult(), [row], NOW)
     browse = store.interests["独立游戏"]["evidence"][-1]
     assert browse["mixed"] and (browse["aspect_like"], browse["aspect_dislike"]) == ("手感", "氪金")
-    assert _liked_count([{"feeling": "like"}, {"feeling": "mixed"}, {"feeling": "meh"}]) == 1.5
+    assert liked_count([{"feeling": "like"}, {"feeling": "mixed"}, {"feeling": "meh"}]) == 1.5
     assert (
         reinforce.session_reward(
             liked=0.5, disliked=0, new_known=0, new_expressions=0, thread_progress=0, memes=0
@@ -1309,7 +1307,7 @@ async def test_tone_snapshots_use_the_fixed_texts_and_come_once_per_fourteen_day
 
 
 async def test_chat_gets_tone_lines_on_topic_and_with_the_recap(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.snapshots.append(
         {"topic": "独立游戏", "tier": 0, "kind": "tone", "tone": "mixed", "stage": "mixed",
          "created_at": NOW - 2 * DAY, "text": "对独立游戏有点又爱又嫌：手感还挺喜欢，氪金有点看不下去"}
@@ -1337,7 +1335,7 @@ async def test_thread_topic_comes_from_digest_then_interests_then_title(tmp_path
     assert th.pick_topic(interests, "天文摄影", "标题", "") == "天文摄影"
     assert th.pick_topic(interests, "", "拍天文的问题", "天文观测技巧") == "天文观测"
     assert th.pick_topic({}, "", "一个很长很长的小课题标题啊", "无关") == "一个很长很长的小课"[:8]
-    store  = _store(tmp_path)
+    store  = new_store(tmp_path)
     opened = th.open_thread(
         store.threads,
         make_cfg(),
@@ -1434,7 +1432,7 @@ async def test_manifest_lists_the_methods_subcommand() -> None:
 
 
 async def test_methods_collection_is_persisted(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.methods.append(_method())
     await store.flush()
     again = LifeStore(tmp_path / "life")
@@ -1484,7 +1482,9 @@ async def test_followup_thread_inherits_the_parent_topic(tmp_path: Path) -> None
             "parent_id" : parent["id"],
             "title"     : "星轨要拍多久",
             "why"       : "想试试",
+            "done_when" : "知道大概要曝光多久",
             "next_query": "星轨 曝光",
+            "kind"      : "practice",
         },
         [parent],
         make_cfg(),

@@ -35,8 +35,8 @@ const CONFLICT_POLICIES = [
     },
     {
         value: 'skip',
-        label: '跳过同来源',
-        desc: '跳过当前账户中已经导入的同类同来源记录。',
+        label: '跳过已有',
+        desc: '跳过当前账户中同类型的同 ID 记录，以及此前导入过的同来源记录；适合把自己的备份导回来。',
     },
     {
         value: 'overwrite',
@@ -651,7 +651,7 @@ function renderImportTab() {
             </div>
             <aside class="transfer-sidecard">
                 <h3>导入策略</h3>
-                <p>默认隔离导入；跳过/覆盖只匹配当前用户、同类型且此前导入时记录过的同一来源，不会拿外部 ID 直接覆盖现有内部记录。</p>
+                <p>默认隔离导入；跳过会认当前用户同类型的同 ID 记录和此前导入时记录过的同一来源，原记录不动；覆盖只匹配此前导入时记录过的同一来源，不会拿外部 ID 直接覆盖现有内部记录。</p>
                 <div class="transfer-section"><div class="transfer-section-label">冲突策略</div>${CONFLICT_POLICIES.map((item) => renderPolicy(item, 'transfer-conflict-policy', state.conflictPolicy)).join('')}</div>
                 <div class="transfer-section"><div class="transfer-section-label">非法记录处理</div>${INVALID_POLICIES.map((item) => renderPolicy(item, 'transfer-invalid-policy', state.invalidPolicy)).join('')}</div>
                 ${state.inspect?.already_imported ? `<div class="transfer-section"><label class="transfer-check"><input type="checkbox" id="transfer-force-reimport" aria-label="强制重新导入" ${state.forceReimport ? 'checked' : ''} ${busy ? 'disabled' : ''}><span>强制重新导入（此备份包已导入过）</span></label></div>` : ''}

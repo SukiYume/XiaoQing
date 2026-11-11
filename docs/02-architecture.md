@@ -96,6 +96,7 @@ Core 仅把字段路径差异私聊给当前管理员，随后由 `/reload` 重�
 - `GET /metrics`
 
 HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排序规则。
+两个入口还共用一份排队消息登记（`inbound_backlog.py`）：已到达、还没开始处理的消息按发送者记下，经 `inbound_backlog` capability 提供给插件查询。
 配置切换先创建候选 Listener，完成验证后提交新代，再排空旧代。
 
 标准 HTTP 上报的回复进入 OneBot action API，并在实际确认后返回 `{}`。

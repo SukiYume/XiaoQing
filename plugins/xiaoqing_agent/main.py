@@ -22,33 +22,35 @@ from core.router import resolve_context_command_invocation
 from .config import AgentConfig, load_agent_config
 from .prompts import configured_bot_name, configured_persona
 from .runtime import AgentRuntime
-from .tasks import MAX_RECORDS_PER_CHAT, Actor, AgentTask, ChatRef
-from .triage import TRIAGE_ACTIONS, TriageDecision, triage_turn
+from .tasks import Actor, AgentTask, ChatRef
+from .triage import TRIAGE_ACTIONS, TriageDecision, service_list, triage_turn
 
 logger = logging.getLogger(__name__)
 
 _RUNTIME_KEY       = "xiaoqing_agent.runtime"
 _ROOT_CODE         = "xiaoqing_agent.agent"
 _MAX_HISTORY       = 20
-_MAX_PERSONA_CHARS = 12000
-_MAX_IMAGES        = 6
+_MAX_HANDOFF_CHARS = 12000
+# 分流看发起人办事会话里最近几轮的请求和回复，判断这句话是不是接着那件事说。
+_TRIAGE_SESSION_TURNS = 2
+_MAX_IMAGES           = 6
 # 续接任务的验收线索：最多保留最近几条，每条的字数上限。
-_MAX_THREAD_LINES = 8
-_MAX_THREAD_CHARS = 500
-_DISABLED_TIP     = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
+_DISABLED_TIP = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
 
 HELP_TEXT = """🛠 小青 agent
 
 开启后，叫小青做需要动手的事（查日程、查论文、算数、画图、跑代码……），
 小青会自己调用工具做完再回复；普通聊天照旧。能做什么和你自己直接发命令一样：
 跑代码、读写文件、SSH、Codex 只有 Bot 管理员能用。任务进行中可以直接补充要求，
-比如“换成红色”。群里的任务大家都能看，只有发起人和 Bot 管理员能停止或补充。
+比如“换成红色”。接着前面的事说（“刚才那个改一下”“添加”）会接上前面办过的事，
+隔久了或用 /agent new 就从头开始。群里的任务大家都能看，只有发起人和 Bot 管理员能停止或补充。
 
 /agent run <任务>        跳过判断，直接执行
 /agent status [任务ID]   查看运行中的任务和计划
 /agent stop [任务ID|all] 停止运行中的任务（有多个时需指明）
 /agent history           本会话最近的任务
 /agent result <任务ID>   重新发送某个已结束任务的结果
+/agent new               开始新的办事会话
 /agent help              显示本帮助"""
 
 
@@ -96,6 +98,10 @@ def _string_list(value: Any, limit: int) -> list[str]:
     return [item for item in value if isinstance(item, str) and item.strip()][:limit]
 
 
+def _bounded_text(value: Any) -> str:
+    return value.strip()[:_MAX_HANDOFF_CHARS] if isinstance(value, str) else ""
+
+
 def _history(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -125,13 +131,13 @@ async def _start_and_wait(
     request_text: str,
     source: str,
     sender: str                          = "",
-    continues: str                       = "",
-    thread: list[str] | None             = None,
+    plugins: tuple[str, ...]             = (),
     history: list[dict[str, Any]] | None = None,
     images: list[str] | None             = None,
     image_files: list[str] | None        = None,
     quoted_text: str                     = "",
     persona: str                         = "",
+    recent_self: str                     = "",
 ) -> tuple[list[dict[str, Any]], AgentTask | None]:
     """启动并等待当轮结果；后台任务由执行阶段发送实际进度和最终结果。"""
 
@@ -143,13 +149,13 @@ async def _start_and_wait(
         source       = source,
         sender       = sender,
         admin        = _actor(context, chat).admin,
-        continues    = continues,
-        thread       = thread or [],
+        plugins      = plugins,
         history      = history or [],
         images       = images or [],
         image_files  = image_files or [],
         quoted_text  = quoted_text,
         persona      = persona or configured_persona(context),
+        recent_self  = recent_self,
     )
     if isinstance(started, str):
         return segments(started), None
@@ -183,7 +189,8 @@ def _decision_from(raw: Any) -> TriageDecision | None:
         return None
     return TriageDecision(
         action,
-        task_id=str(raw.get("task_id") or "")[:32],
+        task_id = str(raw.get("task_id") or "")[:32],
+        plugins = service_list(raw.get("plugins")),
     )
 
 
@@ -208,8 +215,8 @@ async def handle_turn(
         runtime = get_runtime(context)
         if not runtime.accepting:
             return None
-        persona  = turn.get("persona")
-        persona  = persona.strip()[:_MAX_PERSONA_CHARS] if isinstance(persona, str) else ""
+        persona  = _bounded_text(turn.get("persona"))
+        recent   = _bounded_text(turn.get("recent_self"))
         phase    = str(turn.get("phase") or "")
         history  = _history(turn.get("history"))
         decision = _decision_from(turn.get("decision")) if phase == "act" else None
@@ -221,7 +228,9 @@ async def handle_turn(
                 return None
             if phase == "decide":
                 return {"handled": True, "decision": asdict(decision)}
-        return await _act(context, config, runtime, chat, turn, text, history, decision, persona)
+        return await _act(
+            context, config, runtime, chat, turn, text, history, decision, persona, recent
+        )
     except Exception as exc:
         logger.warning("xiaoqing_agent turn fell back to chat error_type=%s", type(exc).__name__)
         return None
@@ -236,8 +245,9 @@ async def _triage(
     text: str,
     history: list[dict[str, Any]],
 ) -> TriageDecision:
-    running  = runtime.running_in(chat)
-    started  = time.perf_counter()
+    running = runtime.running_in(chat)
+    started = time.perf_counter()
+    session = await runtime.sessions.load(chat, idle_seconds=config.session_idle_minutes * 60)
     decision = await triage_turn(
         context,
         bot_name = str(turn.get("bot_name") or "") or configured_bot_name(context),
@@ -245,6 +255,7 @@ async def _triage(
         history  = history,
         running  = running,
         recent   = await runtime.recent_records(chat, config.history_tasks),
+        session  = session.turns[-_TRIAGE_SESSION_TURNS:] if session is not None else [],
         quoted   = str(turn.get("quoted_text") or ""),
         images   = len(_string_list(turn.get("images"), _MAX_IMAGES))
         + len(_string_list(turn.get("image_files"), _MAX_IMAGES)),
@@ -260,47 +271,6 @@ async def _triage(
     return decision
 
 
-async def _continuation(
-    runtime: AgentRuntime,
-    chat: ChatRef,
-    task_id: str,
-    text: str,
-) -> tuple[str, list[str]]:
-    """本轮续接最近的某个任务时，返回它的 ID 和验收线索：发起人本人的原话，旧→新，不含本轮。
-
-    线索只取同一件事：续接链（沿 ``continues`` 回溯到根任务）上各任务的原话，以及发起人
-    在这些任务运行中补充的要求。中间别的请求和闲聊不算要求，它们留在聊天记录里作背景。
-    逐字保留，只做去重和截断，不改写。
-    """
-
-    records = {
-        str(item.get("task_id")): item
-        for item in await runtime.recent_records(chat, MAX_RECORDS_PER_CHAT)
-    }
-    chain: list[dict[str, Any]] = []
-    record                      = records.get(task_id)
-    while record is not None and record not in chain:
-        chain.append(record)
-        record = records.get(str(record.get("continues") or ""))
-    if not chain:
-        return "", []
-    clues = [
-        line
-        for item in sorted(chain, key=lambda entry: float(entry.get("created_at") or 0))
-        for line in (item.get("request_text"), *(item.get("updates") or ()))
-        if isinstance(line, str)
-    ]
-    seen              = {"".join(text[:_MAX_THREAD_CHARS].split())}
-    thread: list[str] = []
-    for line in clues:
-        line = line.strip()[:_MAX_THREAD_CHARS]
-        key  = "".join(line.split())
-        if key and key not in seen:
-            seen.add(key)
-            thread.append(line)
-    return task_id, thread[-_MAX_THREAD_LINES:]
-
-
 async def _act(
     context: Any,
     config: AgentConfig,
@@ -311,6 +281,7 @@ async def _act(
     history: list[dict[str, Any]],
     decision: TriageDecision,
     persona: str,
+    recent_self: str,
 ) -> dict[str, Any]:
     actor  = _actor(context, chat)
     sender = str(turn.get("sender_name") or "")
@@ -330,7 +301,6 @@ async def _act(
             segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
         )
 
-    continues, thread = await _continuation(runtime, chat, decision.task_id, text)
     message, task = await _start_and_wait(
         context,
         config,
@@ -339,15 +309,20 @@ async def _act(
         request_text = text,
         source       = "chat",
         sender       = sender,
-        continues    = continues,
-        thread       = thread,
+        plugins      = decision.plugins,
         history      = history,
         images       = _string_list(turn.get("images"), _MAX_IMAGES),
         image_files  = _string_list(turn.get("image_files"), _MAX_IMAGES),
         quoted_text  = str(turn.get("quoted_text") or ""),
         persona      = persona,
+        recent_self  = recent_self,
     )
-    return _handled(message, task_id=task.task_id if task is not None else "")
+    return _handled(
+        message,
+        task_id=task.task_id if task is not None else "",
+        # 当轮做完时的结局（needs_user 是在等发起人回答）；转入后台的任务还没有结局。
+        status=task.status if task is not None and message else "",
+    )
 
 
 async def report_delivery(report: dict[str, Any], context: PluginContextProtocol) -> None:
@@ -398,6 +373,11 @@ async def handle(
             if rest:
                 return segments("用法: /agent history")
             return segments(await runtime.history_text(chat))
+        if action == "new":
+            if rest:
+                return segments("用法: /agent new")
+            await runtime.sessions.clear(chat)
+            return segments("好，前面办过的事先放下，下一件从头开始。")
         if action == "result":
             if not rest or len(rest.split()) > 1:
                 return segments("用法: /agent result <任务ID>")

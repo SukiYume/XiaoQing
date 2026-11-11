@@ -52,7 +52,7 @@ def _fetch() -> FakeFetcher:
     return FakeFetcher(
         {
             "/popular"   : popular_payload(bili_video(1, "猫猫的一天")),
-            "/reply/main": comments_payload(bili_reply("哈基米这也太可爱了吧")),
+            "/reply/main": comments_payload(bili_reply("哈基米这也太可爱了吧", sub=("哈基米！",))),
         }
     )
 
@@ -147,7 +147,7 @@ async def test_wind_down_window_runs_the_tidy_up_as_a_tracked_task_and_browses_n
     assert runtime.task is not None
     await asyncio.wait_for(runtime.task, timeout=2)
     state = runtime.store.state
-    assert state["wound_down_day"] == "2026-11-05" and state["diary"]["episode_ids"] == ["e1"]
+    assert state["done_on"]["wind_down"] == "2026-11-05" and state["diary"]["episode_ids"] == ["e1"]
     assert state["sessions_today"] == 0 and state["llm_calls_today"] == 1
     # 已整理过：窗口内再检查只是休息
     await life_main.scheduled_tick(context)

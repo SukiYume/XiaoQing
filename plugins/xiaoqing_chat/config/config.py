@@ -10,10 +10,55 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
-from core.ai import resolve_route_config
+from core.ai import declare_route_defaults, resolve_route_config
 
 from ..llm.llm_config import LLMCallConfig
 from ..persona import PersonaCard, bundled_persona_card, load_persona_card, persona_card_path
+
+# 四条 route 各自的调用参数；主配置里只需要给每条 route 指定模型，要改时才在那边写同名字段。
+declare_route_defaults(
+    "xiaoqing_chat",
+    {
+        # 日常回复：要活一点、短一点，等不起太久。top_p 不能再放开：0.9 时每百条回复有一两条在句尾
+        # 带出模型语料里的垃圾词（“……累成这样 白小姐”），0.8 时还偶尔有，0.6 时 384 条里没有，
+        # 同一句话 8 次采样仍有九成不重样。温度管花样，top_p 管这条尾巴。
+        "chat": {
+            "temperature"          : 0.8,
+            "top_p"                : 0.6,
+            "max_tokens"           : 768,
+            "timeout_seconds"      : 15,
+            "total_timeout_seconds": 60,
+            "max_retry"            : 1,
+        },
+        # 规划、记忆检索、摘要、表达学习和生活记录抽取。
+        "reasoning": {
+            "temperature"          : 0.6,
+            "top_p"                : 0.9,
+            "max_tokens"           : 2048,
+            "timeout_seconds"      : 15,
+            "total_timeout_seconds": 45,
+            "max_retry"            : 1,
+        },
+        # 回复审查：要稳，输出是一份较长的 JSON。
+        "checker": {
+            "temperature"          : 0.0,
+            "top_p"                : 0.8,
+            "max_tokens"           : 8192,
+            "timeout_seconds"      : 12,
+            "total_timeout_seconds": 30,
+            "max_retry"            : 0,
+        },
+        # 读图。
+        "vision": {
+            "temperature"          : 0.2,
+            "top_p"                : 0.9,
+            "max_tokens"           : 800,
+            "timeout_seconds"      : 20,
+            "total_timeout_seconds": 60,
+            "max_retry"            : 1,
+        },
+    },
+)
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 UnitWeight = Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)]
@@ -75,7 +120,7 @@ class ResponseSplitterConfig(BaseModel):
     clause_split          : bool = True
     clause_split_min_chars: int = Field(default=12, ge=2, le=4000)
     # 按逗号拆时，大约每这么多字一个气泡：短回复一两条说完，不把一句话硬拆满。
-    clause_bubble_chars: int = Field(default=16, ge=1, le=4000)
+    clause_bubble_chars: int = Field(default=22, ge=1, le=4000)
     # 超过这个长度的回复多半是讲解或清单，只按整句分段。
     clause_split_max_chars: int = Field(default=160, ge=1, le=20_000)
 
@@ -216,11 +261,13 @@ class MemoryConfig(BaseModel):
 
 
 class ReplyCheckConfig(BaseModel):
-    enable_reply_checker   : bool = True
-    enable_llm_checker     : bool = True
-    enable_semantic_checker: bool = True
-    # 默认逐条审查明确的交流要求；risk 可由部署者选择以减少远程检查。
-    llm_checker_mode    : Literal["always", "risk"] = "always"
+    enable_reply_checker: bool = True
+    enable_llm_checker  : bool = True
+    # 另加一次“只读原话”的独立阅读再比对候选：更严，每条多两次模型调用，默认关。
+    enable_semantic_checker: bool = False
+    # risk：只有回复里出现人物经历、第三方事实、读图、明确要求或线下邀约这类信号时才送审；
+    # always：每条都审，更严也更慢。
+    llm_checker_mode    : Literal["always", "risk"] = "risk"
     max_repeat_compare  : int = Field(default=2, ge=1, le=100)
     similarity_threshold: Probability = 0.9
     max_assistant_in_row: int = Field(default=3, ge=1, le=100)

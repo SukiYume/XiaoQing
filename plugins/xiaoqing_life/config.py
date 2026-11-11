@@ -8,7 +8,35 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.ai import declare_route_defaults
+
 PLUGIN_NAME = "xiaoqing_life"
+
+# 两条 route 各自的调用参数；主配置里只需要给每条 route 指定模型。
+declare_route_defaults(
+    PLUGIN_NAME,
+    {
+        # 消化、研究、睡前整理：后台任务，不赶时间。
+        "reasoning": {
+            "temperature"           : 0.6,
+            "top_p"                 : 0.9,
+            "max_tokens"            : 2048,
+            "timeout_seconds"       : 30,
+            "total_timeout_seconds" : 120,
+            "max_retry"             : 1,
+            "retry_interval_seconds": 1,
+        },
+        # 判定评论区的图是不是梗图。
+        "vision": {
+            "temperature"          : 0.2,
+            "top_p"                : 0.9,
+            "max_tokens"           : 800,
+            "timeout_seconds"      : 20,
+            "total_timeout_seconds": 60,
+            "max_retry"            : 1,
+        },
+    },
+)
 
 DEFAULT_SEED_INTERESTS = (
     "天文观测",
@@ -98,7 +126,7 @@ class LifeConfig:
         default_factory=lambda: dict(SESSION_MINUTES)
     )
     max_vision_per_session: int             = 2
-    max_open_threads      : int             = 2
+    max_open_threads      : int             = 1
     thread_max_steps      : int             = 3
     episode_detail_days   : int             = 7
     episode_keep_days     : int             = 45
@@ -270,8 +298,8 @@ def load_life_config(context: Any) -> LifeConfig:
 
 
 def route_configured(context: Any, route: str) -> bool:
-    """``ai.routes.<route>`` 是否存在；缺失时上网只记“模型未配置”。"""
+    """``ai.routes.<route>`` 是否配了模型；缺失时上网只记“模型未配置”。"""
 
     ai     = _plugin_options(context).get("ai")
     routes = ai.get("routes") if isinstance(ai, Mapping) else None
-    return isinstance(routes, Mapping) and isinstance(routes.get(route), Mapping)
+    return isinstance(routes, Mapping) and bool(routes.get(route))

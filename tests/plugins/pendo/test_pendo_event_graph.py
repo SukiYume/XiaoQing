@@ -276,7 +276,7 @@ def test_batch_soft_delete_preserves_sent_history_and_stops_delivery(tmp_path: P
 
 
 class _NoConflictReminderService:
-    def detect_conflict(self, user_id: str, start_time: str, end_time: str | None = None):
+    def detect_conflicts(self, user_id: str, windows):
         return []
 
 

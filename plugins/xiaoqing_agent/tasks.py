@@ -25,7 +25,7 @@ _T      = TypeVar("_T")
 # 每个会话保留的任务记录数，以及全局保留的完整执行记录数。
 MAX_RECORDS_PER_CHAT = 30
 MAX_TRANSCRIPTS      = 200
-_CHAT_KEY_RE         = re.compile(r"^[gu][0-9]{1,20}$")
+CHAT_KEY_RE          = re.compile(r"^[gu][0-9]{1,20}$")
 
 _MAX_RECORDED_UPDATES = 10
 
@@ -73,8 +73,6 @@ class Outcome:
     text  : str
     files : list[str] = field(default_factory=list)
     status: str = "done"
-    # 文字是执行阶段的模型写给发起人的答复（交付核对时作草稿），而不是命令回报原文。
-    authored: bool = False
 
 
 @dataclass(eq=False)
@@ -99,11 +97,12 @@ class AgentTask:
     quoted_text: str = ""
     image_files: list[str] = field(default_factory=list)
     sender     : str = ""
-    # 续接的上一任务 ID，以及沿续接链收集到的发起人本人原话（旧→新，不含本轮）：交付验收的依据。
-    continues: str = ""
-    thread   : list[str] = field(default_factory=list)
-    # 聊天插件交来的人设与说话方式，只用于写回复的口吻，不写入任务记录。
-    persona: str = field(default="", repr=False)
+    # 同一会话里上一轮的任务 ID（这次接在它后面）；分流选定的服务。
+    continues: str             = ""
+    plugins  : tuple[str, ...] = ()
+    # 聊天插件交来的人设卡（一个办事会话里不变）和她最近的近况（每轮不同），只用于写回复，不写入任务记录。
+    persona    : str = field(default="", repr=False)
+    recent_self: str = field(default="", repr=False)
     # 任务开始时发起人是不是 Bot 管理员：决定占哪份名额、提示词怎么写；本机工具另由 Core 每次复核。
     admin: bool = False
     # 运行中追加的要求，执行循环在下一步前读走。
@@ -133,9 +132,6 @@ class AgentTask:
             return "sent"
         return "unknown"
 
-    # 保留有界命令回报供追问定位记录；用户回复按人设自然表达。
-    command_results: list[str] = field(default_factory=list, repr=False)
-
     @property
     def elapsed(self) -> float:
         end = self.finished_at if self.finished_at is not None else time.time()
@@ -151,7 +147,6 @@ class AgentTask:
             "sender"      : self.sender,
             "request_text": self.request_text[:500],
             "continues"   : self.continues,
-            "thread"      : list(self.thread),
             "updates"     : [text[:500] for text in self.updates[-_MAX_RECORDED_UPDATES:]],
             "source"      : self.source,
             "status"      : self.status,
@@ -159,11 +154,10 @@ class AgentTask:
             "finished_at" : self.finished_at,
             "steps"       : self.steps,
             # 结果原样保存：/agent result 补发的必须和当时要发的完全一样。
-            "result"         : outcome.text if outcome is not None else "",
-            "files"          : list(outcome.files) if outcome is not None else [],
-            "error"          : self.error[:500],
-            "delivery"       : self.delivery,
-            "command_results": list(self.command_results),
+            "result"  : outcome.text if outcome is not None else "",
+            "files"   : list(outcome.files) if outcome is not None else [],
+            "error"   : self.error[:500],
+            "delivery": self.delivery,
         }
 
 
@@ -212,6 +206,17 @@ def describe_record(
     return line
 
 
+async def run_locked(lock: asyncio.Lock, path: Path, work: Callable[[], _T]) -> _T:
+    """同一路径的读改写在线程里持有路径锁，等待方被取消也等线程写完。"""
+
+    def locked() -> _T:
+        with keyed_path_lock(path):
+            return work()
+
+    async with lock:
+        return await to_thread_owned(locked)
+
+
 class TaskStore:
     """按会话保存任务记录；执行记录单独成文件，便于排查一次任务的全过程。"""
 
@@ -221,7 +226,7 @@ class TaskStore:
         self._lock           = asyncio.Lock()
 
     def _path(self, chat_key: str) -> Path:
-        if not _CHAT_KEY_RE.fullmatch(chat_key):
+        if not CHAT_KEY_RE.fullmatch(chat_key):
             raise ValueError("invalid chat key")
         return self.root / f"{chat_key}.json"
 
@@ -267,14 +272,7 @@ class TaskStore:
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
     async def _run_locked(self, path: Path, work: Callable[[], _T]) -> _T:
-        """同一路径的读改写在线程里持有路径锁，等待方被取消也等线程写完。"""
-
-        def locked() -> _T:
-            with keyed_path_lock(path):
-                return work()
-
-        async with self._lock:
-            return await to_thread_owned(locked)
+        return await run_locked(self._lock, path, work)
 
     async def recent(self, chat_key: str, limit: int) -> list[dict[str, Any]]:
         if limit <= 0:

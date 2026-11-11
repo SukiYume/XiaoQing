@@ -529,7 +529,7 @@ async def _skipped_planner_result(session: _PFCSession) -> PFCRunResult:
     )
     if not session.is_private:
         return PFCRunResult(reply="", action="wait", reason="planner_skipped", ended=False)
-    reply = await session.generate_reply("direct_reply", "planner_skipped", "")
+    reply = await session.generate_reply("direct_reply", "", "")
     return PFCRunResult(reply=reply, action="direct_reply", reason="planner_skipped", ended=False)
 
 

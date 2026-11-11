@@ -149,6 +149,15 @@ class Capability:
         return self.result
 
 
+@pytest.fixture(autouse=True)
+def _always_offer_media(monkeypatch) -> None:
+    """可发素材平常按概率给；这里固定给，前后两次准备的结果才能逐字段比较。"""
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.reply_plan.offers_outbound_media", lambda *_args, **_kwargs: True
+    )
+
+
 @pytest_asyncio.fixture
 async def baseline() -> dict[str, Any]:
     plan = await _prepare(_context(None), _runtime())

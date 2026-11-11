@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from ..safety import clean_text, is_blocked, overlap
+from ..safety import clean_text, is_blocked, normalize_for_match, overlap
 from .base import (
     TEXT_CHARS,
     Fetcher,
@@ -51,6 +51,21 @@ def _page_item(page: dict[str, Any], blocked: tuple[str, ...]) -> SourceItem | N
     )
 
 
+def _title_hit(page: dict[str, Any], query: str) -> bool:
+    title = normalize_for_match(str(page.get("title") or ""))
+    words = [normalize_for_match(w) for w in query.split() if w.strip()]
+    return bool(title) and any(w and (w in title or title in w) for w in words)
+
+
+def relevant(page: dict[str, Any], query: str) -> bool:
+    """搜索会兜底返回八竿子打不着的页面：标题或介绍里至少要有一个查询词（或其中的二字片段）。"""
+
+    if _title_hit(page, query):
+        return True
+    body = f"{page.get('title') or ''} {str(page.get('extract') or '')[:400]}"
+    return overlap(body, query) >= 1
+
+
 async def read(fetch: Fetcher, query: str, blocked: Iterable[str]) -> list[SourceItem]:
     """搜索 → 介绍段；按标题与查询的字符二元组重合排序，取 ≤2 个非空页面。"""
 
@@ -76,8 +91,9 @@ async def read(fetch: Fetcher, query: str, blocked: Iterable[str]) -> list[Sourc
         key="",
     )
     pages = as_dict(as_dict(payload.get("query")).get("pages"))
-    rows  = [as_dict(p) for p in pages.values()]
-    rows.sort(key=lambda p: (-overlap(str(p.get("title") or ""), query), to_int(p.get("index"))))
+    rows  = [as_dict(p) for p in pages.values() if relevant(as_dict(p), query)]
+    # 标题就是要查的词的排最前，其余按维基自己的搜索排序（多个关键词时它比标题字面重合靠谱）。
+    rows.sort(key=lambda p: (not _title_hit(p, query), to_int(p.get("index"))))
     items: list[SourceItem] = []
     for page in rows:
         item = _page_item(page, blocked)

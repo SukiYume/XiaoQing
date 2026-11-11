@@ -166,6 +166,7 @@ sequenceDiagram
 | `event_collections` | 一对多组织日程 leaf |
 | `reminder_logs` | 提醒状态、租约和重试信息 |
 | `scheduled_delivery_outbox` | 定时消息与逐目标确认 |
+| `scheduler_heartbeats` | 提醒检查上次运行到的时刻 |
 | `operation_logs` | 操作审计和撤销快照 |
 | `user_settings` | 每用户设置与版本号 |
 | `transfer_logs`、`imported_bundles` | Bundle 导入审计与身份 |
@@ -188,7 +189,9 @@ sequenceDiagram
 
 `event_collections` 表示重复日程和多节点日程，`items` 中的 event leaf 通过 `event_collection_id` 关联集合。leaf 还保存角色、索引、节点键和来源条目。
 
-`services/event_graph.py` 负责集合创建、节点一致性、occurrence 操作和跨集合校验。聊天端、Web API、导出与提醒查询均复用这一图模型。
+`services/event_graph.py` 负责集合创建、节点一致性、occurrence 操作和跨集合校验。聊天端、Web API、导出与提醒查询均复用这一图模型。创建时的冲突检查把全部时间段（重复日程的每次实例、多节点的每个节点）一次交给 `ReminderService.detect_conflicts`，候选日程只按首尾范围读取一次。
+
+集合元信息的修改由 `services/event_collection_mutations.py` 在一个事务里完成。节点创建时从集合抄来的字段跟着集合改：分类和时区下发到全部节点；地点、标签和内容只下发到仍等于集合旧值的节点；重复日程的实例与集合同名同备注，这两项按同一规则下发，多节点日程的节点名和节点备注归节点自己。受影响节点的旧值写入同一条撤销快照。
 
 ---
 
@@ -209,11 +212,13 @@ Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在
 3. 按条目所有者构造 `send_private_msg`，目标固定为数值 QQ 用户。
 4. 根据 OneBot 回执完成或释放 claim。
 
+到期判断以 `scheduler_heartbeats` 里上次检查的时刻为界：之后才到点的提醒属于停机或卡顿期间错过的，在 `REMINDER_CATCH_UP_SECONDS`（6 小时）内照常领取，消息注明晚了多久；早于上次检查仍未发出的提醒是创建时就已过期的，超过 `REMINDER_CHECK_WINDOW_SECONDS`（2 分钟）即标为 `expired`。`expired` 行在聊天端显示“已过期（未发送）”，Web 详情通过 `missed` 字段显示“已过期”。
+
 claim 记录 token、到期时刻、下一次尝试时刻和失败次数。条目写入边界通过 `_sync_reminder_logs` 同步 `items.remind_times` 与 `reminder_logs`，并写入规范 `fire_at_utc`。Schema 初始化负责表、列与查询索引，调度查询严格使用秒级 UTC。该模型支持多个调度 tick 与进程重启。
 
 Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻。提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
 
-每日简报、日记提示和财务摘要使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态。Core 使用 `targeted` 模式向用户私聊投递。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`。该任务每日清理过期操作日志与撤销快照。
+每日简报、日记提示和财务摘要使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态。首次入队的条件是用户本地时间落在设定时刻起 `SCHEDULED_DELIVERY_GRACE_MINUTES`（120 分钟）内且当天尚未发送，窗口不跨零点；设定时刻那一分钟没跑到时当天仍能补发一次。Core 使用 `targeted` 模式向用户私聊投递。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`。该任务每日清理过期操作日志与撤销快照。
 
 ---
 
@@ -274,7 +279,7 @@ Markdown 导出使用调用用户的时区上下文。日期范围与渲染采�
 2. 校验文件 SHA-256 与 JSON 结构。
 3. 将所有 owner 字段绑定到当前会话用户。
 4. 解析引用关系与跨条目 ID。
-5. 应用跳过、覆盖或副本策略。
+5. 应用隔离、跳过、覆盖或副本策略。跳过把当前所有者同类型的同 ID 记录和此前导入过的同来源记录都算已存在；覆盖只认后者，外部 ID 不充当数据库主键。
 6. 在事务中写入业务表与 Bundle 身份。
 7. 记录 `transfer_logs`。
 

@@ -4,6 +4,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Git OpenSSH 的 ProxyJump 通过 SHELL 执行 POSIX 命令。
+# 从 Windows PowerShell 启动脚本时，为当前同步进程使用 Bash。
+if [[ "$OSTYPE" == msys* ]]; then
+    export SHELL="$BASH"
+fi
+
 readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
@@ -35,6 +41,7 @@ readonly -a ARXIV_MODEL_FILES=(
 readonly -a REMOTE_REQUIRED_FILES=(
     "main.py"
     "pyproject.toml"
+    "config/config.json"
     "scripts/run-bot.vbs"
     "scripts/stop-bot.vbs"
     "scripts/run-bot-monitor.ps1"
@@ -50,7 +57,7 @@ usage() {
 
 默认只预览。--apply 会同步当前工作树和 arXiv 运行权重，并删除远端过期源码。
 
-生产配置、密钥、Minecraft 连接配置、日志和运行数据始终保留。
+config/config.json 随源码同步并校验；密钥、Minecraft 连接配置、日志和运行数据独立保留。
 脚本不会停止或启动生产进程。
 
 首次使用时创建 scripts/sync_to_remote.local.sh，并在其中设置：
@@ -197,7 +204,7 @@ rsync_args=(
     --delay-updates
     --partial
     --filter='- /.git/***'
-    --filter='- /config/config.json'
+    --filter='+ /config/config.json'
     --filter='- /config/secrets.json'
     --filter='- /plugins/minecraft/config.json'
     --filter='- /logs/***'

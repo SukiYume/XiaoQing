@@ -291,6 +291,7 @@ Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在�
 | `is_system` | 调度调用状态 |
 | `secret_admin` | Bot Core 的敏感配置管理（跟随 `/set_secret` 的声明，每次调用复核） |
 | `onebot_media` | XiaoQing Chat 的 OneBot 媒体查询 |
+| `inbound_backlog` | XiaoQing Chat 查询“同一个人后面还排着哪些消息”：`waiting()` 只返回当前发送者在本会话里已到达、还没开始处理的消息（`message_id`、`message`、`raw_message`、`time`），看不到其他人和其他会话 |
 | `config_subscription` | Pendo 的配置 revision 订阅 |
 | `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务（定时任务可用。用户触发时跟随 `/codex` 的声明） |
 | `voice_synthesis` | Smalltalk 到 Voice 合成服务 |
@@ -388,7 +389,6 @@ context.capabilities.ai.list_models(
 | `invalid_examples` | `tuple[str, ...]` | 错误样例 |
 | `children` | `tuple[CommandCatalogNode, ...]` | 直接子命令 |
 | `effect` | `str \| None` | 插件声明的 `read` / `write`，未声明为 `None` |
-| `structured_input` | `CommandStructuredInput \| None` | 结构化参数声明：`name`、`description`、`parameters()`（每次返回 schema 副本）、`takes_no_arguments()` |
 
 ```python
 node.walk() -> tuple[CommandCatalogNode, ...]

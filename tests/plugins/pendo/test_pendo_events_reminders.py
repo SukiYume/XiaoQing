@@ -205,7 +205,7 @@ class TestMilestoneEventHandler:
 
         ai_parser        = MagicMock()
         reminder_service = MagicMock()
-        reminder_service.detect_conflict = MagicMock(return_value=[])
+        reminder_service.detect_conflicts = MagicMock(return_value=[])
 
         handler = EventHandler(db=db, ai_parser=ai_parser, reminder_service=reminder_service)
         return handler
@@ -366,9 +366,7 @@ class TestRecurringEvents:
             "notes"     : "带上周报",
             "rrule"     : "FREQ=DAILY;COUNT=2",
         }
-        remind_times = ["2030-01-01T08:00:00"]
-
-        result = asyncio.run(handler._create_recurring_event("u1", parsed_data, remind_times))
+        result = asyncio.run(handler.create_event("u1", parsed_data, {}))
 
         assert result["status"] == "success"
         assert len(inserted_items) == 2
@@ -1084,3 +1082,20 @@ def test_rule_parser_preserves_time_period(text, hour):
         text, datetime.fromisoformat("2030-01-01T10:00:00+08:00")
     )
     assert datetime.fromisoformat(result["start_time"]).hour == hour
+
+
+@pytest.mark.parametrize(
+    "description,seconds",
+    [
+        ("提前半小时提醒我", 1800),
+        ("提前一天叫我一下", 86400),
+        ("提前30分钟提醒", 1800),
+        ("提前2小时30分钟通知我", 9000),
+    ],
+)
+def test_reminder_descriptions_tolerate_how_people_end_the_sentence(description, seconds):
+    from plugins.pendo.services.ai_parser import AIParser
+
+    parser = AIParser.__new__(AIParser)
+    rules  = parser.build_reminder_rules_from_description(description)
+    assert {"offset_seconds": seconds} in rules

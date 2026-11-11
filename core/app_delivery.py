@@ -25,6 +25,7 @@ from .delivery import (
     receipt_from_action,
 )
 from .dispatcher import Dispatcher
+from .inbound_backlog import InboundBacklog
 from .interfaces import ACTION_BYPASS_SINK_KEY, ACTION_RESULT_MESSAGE_ID_KEY
 from .onebot import (
     OneBotActionCancelledAfterCommit,
@@ -86,6 +87,7 @@ class AppDeliveryMixin:
             raise NotImplementedError
 
     dispatcher                         : Dispatcher
+    inbound_backlog                    : InboundBacklog
     http_sender                        : OneBotHttpSender | None
     inbound_manager                    : InboundManager | None
     plugin_manager                     : PluginManager
@@ -552,6 +554,8 @@ class AppDeliveryMixin:
         *,
         default_source: str,
     ) -> list[dict[str, Any]]:
+        # 这条消息开始处理了：它不再是发送者“排着还没处理”的消息。
+        self.inbound_backlog.started(event)
         if not await self._claim_inbound_event(event):
             return []
         sink  = current_action_sink.get()

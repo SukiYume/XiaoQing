@@ -21,10 +21,19 @@ _FENCE_RE      = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 @dataclass(frozen=True, slots=True)
 class TriageDecision:
     action : str
-    task_id: str = ""
+    task_id: str             = ""
+    plugins: tuple[str, ...] = ()
 
 
 CONVERSATION = TriageDecision("conversation")
+
+
+def service_list(value: Any) -> tuple[str, ...]:
+    """分流给出的服务标识：只收字符串，去重保序；格式不对时为空，执行阶段再按目录查询。"""
+
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(dict.fromkeys(item for item in value if isinstance(item, str)))
 
 
 def _first_json_object(text: str) -> dict[str, Any] | None:
@@ -72,7 +81,8 @@ def parse_decision(
         )
     ):
         return TriageDecision("update", task_id=task_id)
-    return TriageDecision("task", task_id=task_id)
+    # 接着前面的事说的请求照常是新任务：同一发起人的办事会话会接上前面的记录。
+    return TriageDecision("task", plugins=service_list(payload.get("plugins")))
 
 
 async def triage_turn(
@@ -83,9 +93,10 @@ async def triage_turn(
     history: Sequence[dict[str, Any]],
     running: Sequence[AgentTask],
     recent: Sequence[dict[str, Any]],
-    quoted: str           = "",
-    images: int           = 0,
-    initiator: int | None = None,
+    session: Sequence[dict[str, Any]] = (),
+    quoted: str                       = "",
+    images: int                       = 0,
+    initiator: int | None             = None,
 ) -> TriageDecision:
     """未单独配置 ``triage`` route 时复用 ``agent`` route。"""
 
@@ -99,6 +110,7 @@ async def triage_turn(
         history      = history,
         running      = running,
         recent       = recent,
+        session      = session,
         quoted       = quoted,
         images       = images,
         capabilities = capability_summary(

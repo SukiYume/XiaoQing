@@ -295,6 +295,7 @@ Deployers protect code-call boundaries through plugin source review.
 | `is_system` | Scheduled-call state |
 | `secret_admin` | Bot Core secret management. It follows `/set_secret` and checks each call. |
 | `onebot_media` | XiaoQing Chat OneBot media queries |
+| `inbound_backlog` | XiaoQing Chat's view of what the same sender has already sent next: `waiting()` returns only the current sender's messages in this chat that have arrived but are not being handled yet (`message_id`, `message`, `raw_message`, `time`); other senders and chats are not visible |
 | `config_subscription` | Pendo configuration-revision subscription |
 | `codex_arxiv_summary` | arXiv Filter to Codex summary service. Scheduled calls are available. User calls follow `/codex`. |
 | `voice_synthesis` | Smalltalk to Voice synthesis service |
@@ -393,7 +394,6 @@ It supplies immutable snapshots for help, export, permission checks, and plugin 
 | `invalid_examples` | `tuple[str, ...]` | Invalid examples |
 | `children` | `tuple[CommandCatalogNode, ...]` | Direct subcommands |
 | `effect` | `str \| None` | Declared `read` / `write`; `None` when undeclared |
-| `structured_input` | `CommandStructuredInput \| None` | Structured input declaration: `name`, `description`, `parameters()` (a fresh schema copy each call), `takes_no_arguments()` |
 
 ```python
 node.walk() -> tuple[CommandCatalogNode, ...]

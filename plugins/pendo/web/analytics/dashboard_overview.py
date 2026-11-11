@@ -239,25 +239,14 @@ def build_dashboard_overview(
         use_cache = True,
     )
 
-    month_ledger = db.aggregate_ledger_amounts_by_day(
-        owner_id,
-        {
-            "type"      : "ledger",
-            "date_field": "ledger_date",
-            "start_date": month_start_date.isoformat(),
-            "end_date"  : today,
-        },
-    )
-
-    by_currency = db.aggregate_ledger_by_currency(
-        owner_id,
-        {
-            "type"      : "ledger",
-            "date_field": "ledger_date",
-            "start_date": month_start_date.isoformat(),
-            "end_date"  : today,
-        },
-    )
+    month_filters = {
+        "type"      : "ledger",
+        "date_field": "ledger_date",
+        "start_date": month_start_date.isoformat(),
+        "end_date"  : today,
+    }
+    month_ledger = db.aggregate_ledger_amounts_by_day(owner_id, month_filters)
+    by_currency  = db.aggregate_ledger_by_currency(owner_id, month_filters)
 
     spending_by_day = {
         day: expense_cents / 100 for day, (expense_cents, _income_cents) in month_ledger.items()

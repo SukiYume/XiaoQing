@@ -94,6 +94,7 @@ Manifest capability 对应 Core 维护的窄特权对象。
 | `delivery.py` | 进程内发送回执、目标化调度结果和 commit-after-ack |
 | `durable_fanout.py` | 多目标通知的持久进度和恢复 |
 | `async_keyed_lock.py` | 按业务键串行的异步锁 |
+| `inbound_backlog.py` | 已到达、还没开始处理的消息登记（按发送者隔离），供 `inbound_backlog` capability 查询 |
 
 Session 管理用户驱动的多轮交互。
 Scheduler 管理时间驱动任务及其广播、目标化或静默投递模式。

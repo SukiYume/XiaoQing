@@ -215,6 +215,9 @@ class TokenAccount:
         except HttpStatusError as exc:
             if exc.status == 401:
                 raise AuthRequired() from None
+            if exc.status == 429:
+                # 限流不是登录问题：照实说，别让人去重新授权。
+                raise BridgeError("米家云端请求太频繁，被暂时限流了，过几分钟再试。") from None
             raise
         if isinstance(result, dict):
             message = str(result.get("message", "")).lower()

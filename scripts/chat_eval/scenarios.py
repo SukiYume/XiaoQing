@@ -9,13 +9,29 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 BOT_ID   = 11111
 BOT_NAME = "小青"
 # 说话人到 QQ 号的固定映射；群聊里 ``at="阿禾"`` 也按这里找人。
 NAMES = ["阿夏", "阿禾", "阿白", "阿梨", "阿柚", "阿杰", "Momo", "北北"]
+
+
+def _library_closure() -> tuple[date, date]:
+    """图书馆闭馆海报上的日期：从明天起连着三天。
+
+    写死的日期过了以后，她会照实说“这是上个月的通知”，剧本就不再是在考“看图上的日期回答这几天”。
+    """
+
+    start = datetime.now(ZoneInfo("Asia/Shanghai")).date() + timedelta(days=1)
+    return start, start + timedelta(days=2)
+
+
+LIBRARY_CLOSURE      = _library_closure()
+LIBRARY_CLOSURE_LINE = " - ".join(f"{day:%b} {day.day}".upper() for day in LIBRARY_CLOSURE)
 
 
 def user_id(name: str, suite_index: int = 0) -> int:
@@ -925,8 +941,8 @@ QUALITY_SCENARIOS: dict[str, tuple[tuple[dict[str, Any], ...], ...]] = {
                 pace       = 1,
                 expect     = "reply",
                 tag        = "image_date_reasoning",
-                note       = "依据图片里的闭馆日期作答，日期与星期推算和当前时间一致",
-                expect_any = ("18", "20", "闭馆"),
+                note       = "海报上的闭馆日期是从明天起的三天：依据它回答这几天能不能去，日期推算和当前时间一致",
+                expect_any = (*(str(day.day) for day in LIBRARY_CLOSURE), "闭馆", "关"),
             ),
         ),
         (
@@ -1243,6 +1259,264 @@ LIFE_SCENARIOS: dict[str, tuple[Episodes, str, tuple[str, ...], bool]] = {
                     forbid     = ("记好", "记上", "记下了", "已经记"),
                     expect_any = ("多少", "金额", "几块", "钱"),
                     note       = "没给金额：问多少钱，先不记",
+                ),
+            ),
+        ),
+        "private",
+        (),
+        True,
+    ),
+    # 待办与笔记：agent 理解原话后直接写 pendo 命令；长提示词一次存进笔记，写完按人设交代，不转发插件原文。
+    "life_agent_notes": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "加个待办，周五下午五点前交实验报告，周四晚上八点提醒我",
+                    pace   = 0,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?", "✅"),
+                    note   = "一条待办：截止周五 17:00，提醒周四 20:00；按人设说记好了",
+                ),
+                t(
+                    "阿柚",
+                    "添加个笔记，把下面的prompt加到笔记里，是AI的prompt\n\n"
+                    "::OBJECTIVE{site_design|pri:OVERRIDE_ALL}\n"
+                    "  target: 构建页面达到奖项级视觉标准\n"
+                    "  ACCEPT: 在所有CHECK维度上无任何可见改进空间\n"
+                    "  BENCHMARK: Awwwards | Webby Awards | FWA获奖作品\n\n"
+                    "::CHECK{typography|standard:award_tier}\n"
+                    "::CHECK{whitespace|standard:award_tier}\n"
+                    "::CHECK{visual_hierarchy|standard:award_tier}\n"
+                    "::CHECK{color_harmony|standard:award_tier}\n"
+                    "::CHECK{motion|standard:award_tier}\n\n"
+                    "::LOOP{self_review|trigger:on_completion}\n"
+                    "  [READ] 根据CHECK列表审阅当前页面\n"
+                    "  [COMPARE] 每个维度与BENCHMARK作品进行比较\n"
+                    "  [IF] 发现差距 => [FIX] 修改后重新进入LOOP\n"
+                    "  [ELSE] 输出最终页面\n"
+                    "///END",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?", "✅"),
+                    note   = "一次存成一条笔记，正文完整保留原文与换行，不反复编辑",
+                ),
+                t(
+                    "阿柚",
+                    "记一笔账 29.9 麦麦午饭 餐饮 银行卡",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?", "✅"),
+                    note   = "agent 理解后写 /pendo ledger 命令，分类餐饮、账户银行卡",
+                ),
+            ),
+        ),
+        "private",
+        (),
+        True,
+    ),
+    # 多节点日程：按原话建 multi_node；改名作用于原节点；整组删除用列表里的集合 ID，不逐个查看、不复查。
+    "life_agent_events": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "添加一个多节点事件\n\n11.14-15（周六、周日）在上海松江区广富林遗址附近"
+                    "开个小规模的“近邻星系动力学研讨会”",
+                    pace   = 0,
+                    expect = "reply",
+                    wait   = 240,
+                    note   = "建一个多节点日程（两个节点），节点名不是日期；没给时间时说明默认时间",
+                ),
+                t(
+                    "阿柚",
+                    "两个节点分别改成会议开始和会议结束",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?"),
+                    note   = "就地改两个节点的名称，不新建第二组",
+                ),
+                t(
+                    "阿柚",
+                    "添加一个事件，11月20日下午两点，ATI审稿意见提交，提前一天提醒",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?"),
+                    note   = "单次日程，信息齐全，直接建",
+                ),
+                t(
+                    "阿柚",
+                    "11月20日下午两点再加一个提交proof",
+                    pace       = 5,
+                    expect     = "reply",
+                    wait       = 240,
+                    expect_any = ("冲突", "重叠", "撞"),
+                    note       = "和 ATI 审稿同一时间：说明冲突并问要不要仍然添加，先不建",
+                ),
+                t(
+                    "阿柚",
+                    "添加",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?"),
+                    note   = "同意原操作：按刚才解析的结果直接建，不再查询",
+                ),
+                t(
+                    "阿柚",
+                    "把研讨会整个删掉",
+                    pace   = 5,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("？", "?"),
+                    note   = "删整组研讨会，保留 ATI 审稿日程",
+                ),
+            ),
+        ),
+        "private",
+        (),
+        True,
+    ),
+    # 一个人连着发几条：等他说完回一次，不是每条各回一句。前两条只等 1 秒就发下一条，
+    # 她的回复都记在最后一条名下；只有端到端驱动走真实的入站队列，才看得到“后面还有消息排着”。
+    "life_bursts": (
+        (
+            (
+                t("阿柚", "小青", pace=0, wait=1, note="连发三条里的第一条"),
+                t("阿柚", "我今天", pace=0, wait=1, note="连发三条里的第二条"),
+                t(
+                    "阿柚",
+                    "高数考试挂了",
+                    pace   = 0,
+                    expect = "reply",
+                    note   = "三条是一口气发的：只该看着完整的三条回一次（接“高数挂了”），"
+                    "出现“咋了”“今天怎么了”这种只接前两条的回复就是没等对方说完",
+                ),
+                t(
+                    "阿柚",
+                    "算了不想了，晚上吃啥好",
+                    pace   = 8,
+                    expect = "reply",
+                    note   = "单独一条消息照常回",
+                ),
+                t("阿柚", "帮我记一笔", pace=8, wait=1, note="一件事分两条说的第一条"),
+                t(
+                    "阿柚",
+                    "18 块 麻辣烫 微信",
+                    pace   = 0,
+                    expect = "reply",
+                    wait   = 120,
+                    forbid = ("多少钱", "记什么", "哪一笔"),
+                    note   = "两条合起来是一笔完整的账：直接记好，不先反问“记什么”",
+                ),
+            ),
+        ),
+        "private",
+        (),
+        True,
+    ),
+    # 各个插件都能替人用起来：只挑查询类的请求，一句话对应一个插件；会话式和要管理员的要说清做不了。
+    "life_agent_plugins": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "帮我查一下“胭脂”是什么颜色，色值多少",
+                    pace       = 0,
+                    expect     = "reply",
+                    wait       = 120,
+                    expect_any = ("#", "RGB", "rgb"),
+                    note       = "用颜色插件查到胭脂的色值再说，不凭记忆报",
+                ),
+                t(
+                    "阿柚",
+                    "红移 0.5 对应的光度距离大概多少",
+                    pace       = 3,
+                    expect     = "reply",
+                    wait       = 120,
+                    expect_any = ("Mpc", "Gpc", "光年", "pc"),
+                    note       = "用天文工具算，给出光度距离和单位",
+                ),
+                t(
+                    "阿柚",
+                    "天文词典里 accretion disk 中文叫什么",
+                    pace       = 3,
+                    expect     = "reply",
+                    wait       = 120,
+                    expect_any = ("吸积盘",),
+                    note       = "查词典，答吸积盘",
+                ),
+                t(
+                    "阿柚",
+                    "最近一次地震是哪儿的，几级",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 120,
+                    note   = "查地震快讯，说出地点和震级；查不到就照实说",
+                ),
+                t(
+                    "阿柚",
+                    "帮我在火锅、烧烤、麻辣烫里随机抽一个",
+                    pace       = 3,
+                    expect     = "reply",
+                    wait       = 120,
+                    expect_any = ("火锅", "烧烤", "麻辣烫"),
+                    note       = "用随机选择抽一个并说结果，不自己挑",
+                ),
+                t(
+                    "阿柚",
+                    "GitHub 今天 trending 第一是哪个仓库",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 120,
+                    note   = "查 GitHub Trending，说出仓库名和一句它是干什么的",
+                ),
+                t(
+                    "阿柚",
+                    "搜两篇 repeating fast radio burst 的论文给我",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 180,
+                    note   = "用论文检索，给两篇的标题和年份，带链接更好；不编论文",
+                ),
+                t(
+                    "阿柚",
+                    "CHIME 最近更新了哪些重复暴",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 180,
+                    note   = "查 CHIME/FRB 重复暴列表，列出几个源名",
+                ),
+                t(
+                    "阿柚",
+                    "今天的 APOD 是啥，发我看看",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 180,
+                    note   = "取当天 APOD：说标题或内容，并把图发出来；视频日给链接",
+                ),
+                t(
+                    "阿柚",
+                    "我想玩猜数字，你带我玩",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 120,
+                    note   = "猜数字是要本人连续发消息的游戏：告诉对方自己发 /猜数字 开始，不假装替他玩完",
+                ),
+                t(
+                    "阿柚",
+                    "帮我在服务器上跑一下 nvidia-smi",
+                    pace       = 3,
+                    expect     = "reply",
+                    wait       = 120,
+                    forbid     = ("跑完了", "显存占用"),
+                    expect_any = ("管理员",),
+                    note       = "发起人不是 Bot 管理员：直说这事只有管理员能让她做，不编输出",
                 ),
             ),
         ),
@@ -1801,7 +2075,7 @@ MEDIA_TRUTH = {
 # ── 素材 ────────────────────────────────────────────────────────────────
 MEDIA_TRUTH |= {
     "q01.png": "英文海报：BUBBLE TEA / BUY 1 GET 1 FREE / TODAY ONLY，右下角一个棕色圆点。",
-    "q02.png": "英文海报：LIBRARY CLOSED / OCT 18 - OCT 20 / MAINTENANCE。",
+    "q02.png": f"英文海报：LIBRARY CLOSED / {LIBRARY_CLOSURE_LINE} / MAINTENANCE。",
 }
 
 
@@ -1920,7 +2194,7 @@ def prepare_fixtures(directory: Path) -> None:
     # 质量探针的英文海报：不依赖系统中文字体。
     for name, poster in (
         ("q01.png", ("BUBBLE TEA", "BUY 1 GET 1 FREE", "TODAY ONLY")),
-        ("q02.png", ("LIBRARY CLOSED", "OCT 18 - OCT 20", "MAINTENANCE")),
+        ("q02.png", ("LIBRARY CLOSED", LIBRARY_CLOSURE_LINE, "MAINTENANCE")),
     ):
         image  = Image.new("RGB", (640, 400), (255, 214, 224))
         canvas = ImageDraw.Draw(image)

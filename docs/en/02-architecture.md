@@ -94,6 +94,7 @@ Confirm public configuration changes and two-source deployments through a stop/s
 - `GET /metrics`
 
 HTTP and WebSocket inbound share authentication policy, session keys, admission queues, and ordering rules.
+They also share one registry of queued messages (`inbound_backlog.py`): messages that have arrived but are not being handled yet are recorded per sender and exposed to plugins through the `inbound_backlog` capability.
 A configuration change first creates a candidate listener. After validation, Core commits the new generation and drains the old generation.
 
 Standard HTTP reports send replies through the OneBot action API. They return `{}` after actual acknowledgement.

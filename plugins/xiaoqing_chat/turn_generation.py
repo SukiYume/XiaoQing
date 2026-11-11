@@ -195,11 +195,8 @@ class _TurnGenerator:
         self.generated.reply_source = "forced"
         self.log("smalltalk.forced_direct", {"force_reason": force_reason})
         self.start_memory_prefetch()
-        await self.draft_or_idle(
-            forced         = True,
-            reasoning      = f"用户直接发起对话，需要回复({force_reason or 'forced'})",
-            plan_reasoning = "用户直接发起对话，需要回复",
-        )
+        # 没有经过规划器，就没有“心里的盘算”可交给生成：空着，提示词里不出现这一块。
+        await self.draft_or_idle(forced=True, reasoning="", plan_reasoning="")
 
     async def run_planner(self) -> None:
         hctx, generated = self.hctx, self.generated
@@ -249,9 +246,7 @@ class _TurnGenerator:
             {"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
         )
         self.start_memory_prefetch()
-        await self.draft_or_idle(
-            forced=False, reasoning="planner_disabled", plan_reasoning="planner_disabled"
-        )
+        await self.draft_or_idle(forced=False, reasoning="", plan_reasoning="")
         self.generated.pfc_result = PFCRunResult(
             reply=self.generated.reply, action="reply", reason="planner_disabled", ended=False
         )

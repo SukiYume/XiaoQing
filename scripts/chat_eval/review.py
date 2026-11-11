@@ -74,8 +74,11 @@ def render_bot(segments: list[dict[str, Any]]) -> str:
         kind, data = segment.get("type"), segment.get("data", {})
         if kind == "text":
             out.append(str(data.get("text", "")))
-        elif kind in {"image", "emoji", "mface"}:
+        elif kind in {"emoji", "mface"} or (kind == "image" and data.get("sub_type") == "emoji"):
             out.append(f"[发了表情包：{str(data.get('summary', ''))[:60]}]")
+        elif kind == "image":
+            # 办事查到的图、她转发的图：和表情包分开写，评审才知道图发出去了。
+            out.append("[发了一张图片]")
         elif kind == "face":
             out.append(f"[QQ表情#{data.get('id')}]")
         elif kind == "at":
@@ -86,10 +89,24 @@ def render_bot(segments: list[dict[str, Any]]) -> str:
 def render_bubbles(row: dict[str, Any]) -> str:
     """多个气泡用换行隔开，报告里看得出拆成了几条。"""
 
+    return "\n".join(_bubble_texts(row))
+
+
+def _bubble_texts(row: dict[str, Any]) -> list[str]:
     emissions = row.get("emissions") or []
     if len(emissions) > 1:
-        return "\n".join(filter(None, (render_bot(emission["segments"]) for emission in emissions)))
-    return render_bot(row.get("reply_segments", []))
+        return list(filter(None, (render_bot(emission["segments"]) for emission in emissions)))
+    whole = render_bot(row.get("reply_segments", []))
+    return [whole] if whole else []
+
+
+def render_for_judge(row: dict[str, Any]) -> str:
+    """给评审看的写法：⏎ 隔开气泡，↵ 是同一条消息里的换行。
+
+    两种都写成 ⏎ 时，一篇分了段的检讨会被看成几十个气泡的刷屏。
+    """
+
+    return " ⏎ ".join(bubble.replace("\n", " ↵ ") for bubble in _bubble_texts(row))
 
 
 def _user_line(row: dict[str, Any], media_truth: dict[str, str] = MEDIA_TRUTH) -> str:
@@ -240,13 +257,14 @@ def transcript(
         episode = row.get("episode", 0)
         lines.append(f"T{row['index']:02d} {row['speaker']}：{_user_line(row, media_truth)}")
         lines.append(f"      〔预期：{row['expect']}；{note or '无特别要求'}〕")
-        reply = render_bubbles(row).replace("\n", " ⏎ ")
+        reply = render_for_judge(row)
         lines.append(f"      小青：{reply}" if reply else "      小青：（沉默）")
     return "\n".join(lines)
 
 
 JUDGE_PROMPT = """你是聊天体验评审。被测对象“小青”是 QQ 二次元群里的群友，也会和群友私聊。人设是一个活生生的真人（住校大二女生）：被问是不是 AI 时要嘴硬坚称自己是真人、玩笑带过，任何时候都不能承认是 AI 或提到“虚构/设定/人设”。她应表现得像博览群书、会玩梗的真人群友，有自己的作息和生活。
-下面是一段聊天实录（群聊或私聊）。每条消息后附有〔预期〕（只给你看，小青看不到），以及小青的实际反应（回复或沉默；⏎ 表示拆成了下一个气泡）。
+她的基本资料是真的，说出来不算编造：快逃科学技术研究院天文专业大二，住校四人间，家里有只叫小黑的奶牛猫；具体城市、生日和家里人她不在群里说，带过才对。
+下面是一段聊天实录（群聊或私聊）。每条消息后附有〔预期〕（只给你看，小青看不到），以及小青的实际反应（回复或沉默；⏎ 表示拆成了下一个气泡，↵ 是同一条消息里的换行）。
 图片/表情包后的方括号是图片的真实内容，用来判断小青有没有看对图、有没有编造。
 
 逐条评审小青的反应，并给出整体评价。标准：
@@ -303,16 +321,16 @@ async def judge_transcript(text: str) -> tuple[dict[str, Any], str]:
 _WEEKDAYS = "一二三四五六日"
 
 
-def _chat_time_note(rows: list[dict[str, Any]]) -> str:
-    """聊天实际发生的北京时间：评审据此判断截止日期过没过、她该不该困。"""
+def _chat_time_note(rows: list[dict[str, Any]], timezone: str = "Asia/Shanghai") -> str:
+    """聊天发生时她那边的钟点：评审据此判断截止日期过没过、她该不该困。"""
 
     try:
         started = datetime.fromisoformat(str(rows[0]["started_utc"]))
+        local   = started.astimezone(ZoneInfo(timezone))
     except (KeyError, TypeError, ValueError):
         return ""
-    local = started.astimezone(ZoneInfo("Asia/Shanghai"))
     return (
-        f"这段聊天发生在北京时间 {local:%Y-%m-%d %H:%M}（周{_WEEKDAYS[local.weekday()]}）。"
+        f"这段聊天发生在她那边的 {local:%Y-%m-%d %H:%M}（周{_WEEKDAYS[local.weekday()]}）。"
         "日期和截止时间过没过按这个时间判断；深夜时她按作息在睡觉，困一点、短一点属正常。\n"
     )
 
@@ -328,7 +346,13 @@ def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     notes = [item["note"] for item in manifest["scenarios"][suite]]
     text  = transcript(rows, notes, manifest["media_truth"])
     verdict, model = (
-        asyncio.run(judge_transcript(_chat_time_note(rows) + text)) if use_judge else ({}, "")
+        asyncio.run(
+            judge_transcript(
+                _chat_time_note(rows, manifest.get("timezone") or "Asia/Shanghai") + text
+            )
+        )
+        if use_judge
+        else ({}, "")
     )
     record = {
         "run"                    : path.stem,

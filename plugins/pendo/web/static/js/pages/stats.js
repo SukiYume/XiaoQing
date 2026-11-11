@@ -1631,7 +1631,7 @@ function taskCards() {
                 (value) => `${value} 项`,
             ),
             footer: renderMetricPairs([
-                { label: `${rangeLabel()}新增`, value: formatCount(tasks.new_this_week || 0) },
+                { label: `${rangeLabel()}新增`, value: formatCount(tasks.created_count || 0) },
                 { label: '当前未完成', value: formatCount(totals.open) },
             ]),
         }),

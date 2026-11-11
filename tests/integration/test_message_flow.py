@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from core.app_delivery import AppDeliveryMixin
 from core.delivery import DeliveryReceipt
 from core.dispatcher import Dispatcher, MessageContext
+from core.inbound_backlog import InboundBacklog
 from core.onebot import OneBotHttpSender
 from core.plugin_execution import PluginExecutionGate
 from core.router import CommandRouter, CommandSpec
@@ -664,6 +665,7 @@ async def test_standard_http_event_reaches_real_action_api(retcode, expected_sta
         app = AppDeliveryMixin()
         app.ws_client = None
         app.inbound_manager = None
+        app.inbound_backlog = InboundBacklog()
         app.http_sender = OneBotHttpSender(str(upstream.make_url("")), "outgoing", session)
         app._http_transport_is_trusted = lambda _: True
         app._claim_inbound_event = AsyncMock(return_value=True)

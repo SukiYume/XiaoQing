@@ -132,7 +132,8 @@ function normalizeSearchResponse(value) {
 }
 
 function itemTitle(item) {
-    if (item.type === 'event' && item.collection?.title) {
+    // 重复日程的实例与集合同名，只写一次。
+    if (item.type === 'event' && item.collection?.title && item.collection.title !== item.title) {
         return `${item.collection.title} · ${item.title || '(无标题)'}`;
     }
     if (item.title) return item.title;

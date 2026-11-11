@@ -58,7 +58,6 @@ def default_state() -> dict[str, Any]:
         "last_session_at" : 0.0,
         "last_failure_at" : 0.0,
         "last_decision"   : {},
-        "wound_down_day"  : "",
         "lookup_queue"    : [],
         "recent"          : [],
         "current"         : {},
@@ -66,9 +65,12 @@ def default_state() -> dict[str, Any]:
         "source_health"   : {},
         "habits"          : {},
         "topic_penalty"   : {},
-        "followup_day"    : "",
         "last_session_end": 0.0,
         "diary"           : {},
+        "heard_topics"    : [],
+        "chat_topics"     : [],
+        # 一天只做一次的事最近一次是哪天做的：wind_down / followup / method / verify。
+        "done_on": {},
     }
 
 
@@ -162,8 +164,42 @@ class LifeStore:
             self._written[name] = text
 
 
+LOOKUP_MISS_DAYS  = 30
+MAX_LOOKUP_MISSES = 100
+
+
+def lookup_missed(state: dict[str, Any], term: str, now: float) -> bool:
+    """这个说法 30 天内去百科查过、没查到：先不再排队（聊天侧每次听到没确认的说法都会交过来）。"""
+
+    at = state.get("lookup_misses", {}).get(term)
+    return isinstance(at, (int, float)) and now - float(at) < LOOKUP_MISS_DAYS * 86400.0
+
+
+def record_lookup_misses(state: dict[str, Any], terms: list[str], now: float) -> None:
+    misses: dict[str, float] = state.setdefault("lookup_misses", {})
+    for term in terms:
+        misses[term] = now
+    fresh = sorted(
+        (
+            (t, float(at))
+            for t, at in misses.items()
+            if now - float(at) < LOOKUP_MISS_DAYS * 86400.0
+        ),
+        key=lambda pair: pair[1],
+    )
+    state["lookup_misses"] = dict(fresh[-MAX_LOOKUP_MISSES:])
+
+
+def done_today(state: dict[str, Any], name: str, day: str) -> bool:
+    return bool(state.get("done_on", {}).get(name) == day)
+
+
+def mark_done(state: dict[str, Any], name: str, day: str) -> None:
+    state.setdefault("done_on", {})[name] = day
+
+
 def roll_day(state: dict[str, Any], day: str) -> None:
-    """跨日（配置时区的自然日）重置当天计数；活动日志不清，滚动窗口还要用。"""
+    """跨日（她的一天，凌晨 5 点分界，见 ``days.py``）重置当天计数；活动日志不清，滚动窗口还要用。"""
 
     if state.get("day") != day:
         state["day"]             = day

@@ -91,13 +91,15 @@ async def popular(fetch: Fetcher, blocked: Iterable[str], limit: int = 20) -> li
 
 
 async def ranking(
-    fetch: Fetcher, blocked: Iterable[str], limit: int = RANKING_CAP
+    fetch: Fetcher, blocked: Iterable[str], limit: int = RANKING_CAP, rid: str = "0"
 ) -> list[SourceItem]:
+    """排行榜；``rid`` 是分区（0 全站，1 动画，4 游戏，36 知识，3 音乐，119 鬼畜，188 科技）。"""
+
     payload = require_ok(
         "bili_ranking",
         await fetch.get_json(
             f"{API}/x/web-interface/ranking/v2",
-            params  = {"rid": "0", "type": "all"},
+            params  = {"rid": rid if rid.isdigit() else "0", "type": "all"},
             referer = REFERER,
         ),
     )

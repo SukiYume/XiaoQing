@@ -57,18 +57,21 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 | 领域 | 测试模块 | 覆盖内容 |
 |---|---|---|
 | 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID |
-| 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_chat_group_addressing.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py` | 消息受众、共指上下文、点名他人、低信息消息、频控、生成配额、收尾与邀请的规划判断、称呼与时区 |
+| 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_chat_group_addressing.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py`、`test_xiaoqing_chat_follow_ups.py` | 消息受众、共指上下文、点名他人、低信息消息、频控、生成配额、收尾与邀请的规划判断、称呼与时区、同一个人连发几条时的让出与带话 |
 | 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_retrieval_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py` | PFC 动作、目标同步、长空档切换、检索评分 |
 | 生成 | `test_xiaoqing_prompt_builder.py`、`test_xiaoqing_chat_reply_generation*.py`、`test_xiaoqing_chat_generation_boundaries.py`、`test_bot_name_injection.py` | 提示词结构、名字注入、上下文超限重建、复核超时降级、网关与公开错误 |
 | 审查 | `test_reply_checker.py`、`test_reply_checker_grounding.py`、`test_reply_checker_risk_mode.py`、`test_reply_checker_social_boundaries.py`、`test_xiaoqing_chat_reply_completion.py` | 本地规则（复读、近似照搬、连续发言、凭空经历）、语义审查各轴、证据契约、`always` / `risk` 模式、人设（坚持真人身份）、缺图话术、定向重写与兜底 |
-| 投递与生命周期 | `test_xiaoqing_chat_turn_lifecycle.py`、`test_xiaoqing_reply_payload.py`、`test_xiaoqing_chat_shutdown.py`、`test_xiaoqing_chat_background_tasks.py`、`test_xiaoqing_chat_task_*.py` | 投递确认后提交、过期丢弃、回滚、分批、后台任务创建失败与去重、关闭等待 |
+| 说话的样子 | `test_xiaoqing_chat_style_rhythm.py`、`test_xiaoqing_chat_requested_length.py`、`test_xiaoqing_chat_persona_card.py` | 装饰与表情的节奏、句尾垃圾词清理、心里的盘算不说出口、长内容分条与整篇成品、明确篇幅要求、采样默认值、人设卡按标记分给聊天 / agent / 规划 / 审查 |
+| 生活连续性 | `test_xiaoqing_chat_life.py`、`test_xiaoqing_chat_daily_life.py`、`test_xiaoqing_chat_proactive_life.py`、`test_xiaoqing_chat_online_life.py`、`test_xiaoqing_chat_life_memes.py`、`test_xiaoqing_chat_life_signals.py` | 作息、收尾沉默、自我陈述、未完话头、自己的一天、主动开口与私聊主动联系、网上生活接入与降级、梗图导入、交给网上生活的话题词 |
+| Agent 交接 | `test_xiaoqing_chat_agent_bridge.py` | 判断与生成并行、接手与回退、当轮回复的回执与记录、连发消息合成一句请求、已被回答的反问不发 |
+| 投递与生命周期 | `test_xiaoqing_chat_turn_lifecycle.py`、`test_xiaoqing_chat_bubble_delivery.py`、`test_xiaoqing_reply_payload.py`、`test_xiaoqing_chat_shutdown.py`、`test_xiaoqing_chat_background_tasks.py`、`test_xiaoqing_chat_task_*.py` | 投递确认后提交、过期丢弃、回滚、分批、后台任务创建失败与去重、关闭等待 |
 | 媒体 | `test_xiaoqing_chat_media_*.py`、`test_xiaoqing_chat_emoji_library.py` | 消息段解析、来源与 OneBot 补取、大小/像素/帧数上限、视觉重试与降级、摘要缓存、表情库、出站标记 |
 | 记忆与存储 | `test_xiaoqing_chat_memory_*.py`、`test_xiaoqing_chat_vector_store_validation.py`、`test_xiaoqing_chat_atomic_readers.py`、`test_xiaoqing_chat_store_base_helpers.py`、`test_xiaoqing_chat_cache_*.py`、`test_xiaoqing_chat_thinking_back.py`、`test_xiaoqing_chat_review_store.py`、`test_xiaoqing_chat_dedup_json_llm.py` | 原子读写、备份恢复、损坏输入、并发保存、重置竞态、向量索引一致性、缓存过期、模型 JSON 修复 |
 | 表达学习 | `test_xiaoqing_chat_expression_store_persistence.py`、`test_xiaoqing_expression_retry_reflection.py`、`test_xiaoqing_chat_meme_learning.py` | 表达与黑话的增量合并、反思重试、本群词义优先、明确更正、学习期间重置 |
 | 隔离与隐私 | `test_xiaoqing_chat_tenant_scope.py`、`test_xiaoqing_log_privacy.py` | 跨会话隔离、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限 |
 | 配置与运行时 | `test_xiaoqing_chat_runtime_hardening.py`、`test_xiaoqing_chat_cache_lifetimes.py` | 配置校验与加载失败回退、热加载、缓存生命周期 |
 | 回复耗时 | `test_xiaoqing_chat_reply_latency.py` | 本轮阅读与生成并行且材料与审查内阅读一致、重写复用、材料变化重读、失败不复用、审查超时保留阅读、`risk` 模式不预读、发送前延迟扣除已用时间 |
-| 实验与脚本 | `test_xiaoqing_chat_anthropomorphic_experiment.py`、`tests/tooling/test_chat_eval.py` | 拟人实验矩阵与投递回执；聊天评测的剧本、事件构造、规则与门禁、校准阈值和子进程回收 |
+| 评测脚本 | `tests/tooling/test_chat_eval.py` | 聊天评测的剧本、事件构造、规则与门禁、校准阈值和子进程回收 |
 
 插件契约测试（日志脱敏、调用参数与签名一致性）位于 `tests/plugins/contracts`，建议一起运行：
 
@@ -141,7 +144,7 @@ python scripts/run_full_uat.py \
 
 | 用例 | 期望 |
 |---|---|
-| `/xc 你好` | 群聊进入 PFC；私聊按配置进入回复链 |
+| `/xc 你好` | 群聊和私聊都按直接回复起草，总会得到回复 |
 | `/xc help` | 返回完整结构化目录 |
 | `/xc 帮助` | 与 help 结果一致 |
 | `/xc help extra` | 返回参数错误与用法 |
@@ -237,7 +240,7 @@ python scripts/run_full_uat.py \
 - 历史含 Bot 锚点后的 `她`、`他`、`ta` 共指。
 - 历史锚点切换到另一位群友后的代词消息。
 
-记录 `forced`、`force_reason`、`direct_mentioned` 和 `reply_to_bot`。群聊的 `forced` 固定为 false，所有入口通过频率门控后进入 PFC；逐项验证 wait 得到保留、发言决定才调用回复生成。
+记录 `forced`、`force_reason`、`direct_mentioned` 和 `reply_to_bot`。私聊、`/xc`、群里 `@` 她、引用她的消息或叫她名字时 `forced` 为 true，直接起草回复；`@` 了别人而没 `@` 她时不算。其余群消息 `forced` 为 false，通过频率门控后进入 PFC：逐项验证 wait 得到保留、发言决定才调用回复生成。同一个人连发几条时，核对前几条只记录不回复，最后一条 `force_reason` 为 `continued` 并回复一次。
 
 ### 普通参与矩阵
 
@@ -260,18 +263,6 @@ python scripts/run_full_uat.py \
 
 ## 🧠 第六阶段：真实模型与拟人质量
 
-### 拟人大群实验
-
-```bash
-python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
-  --mode real \
-  --run-id <RUN_ID> \
-  --groups 20 \
-  --rounds-per-group 150
-```
-
-`--mode` 有三种取值：`matrix` 只生成实验矩阵，`dry-run` 不调用插件，生成可复现的占位结果来检查实验框架与评分，`real` 调用真实模型。实验产物包括矩阵（`anthropomorphic-group-matrix.json`）、JSONL 结果、群聊 transcript 和摘要，默认写入 `test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/`，也可用 `--output-dir` 指定。`--seed` 固定工作负载，`--groups`、`--min-users`、`--max-users`、`--rounds-per-group` 控制规模，`--max-real-turns` 限制远程调用轮数，`--checkpoint-interval` 控制断点保存间隔。
-
 ### 聊天评测：`python -m scripts.chat_eval`
 
 剧本、驱动、规则检查、模型评审和报告集中在 `scripts/chat_eval/` 一个包里，一个入口、四个文件：`scenarios.py`（全部剧本和素材）、`drivers.py`（怎么把消息送进小青）、`review.py`（规则、评审、报告、审查器校准）、`__main__.py`（命令行）。
@@ -281,10 +272,13 @@ python -m scripts.chat_eval run                           # 进程内跑群聊�
 python -m scripts.chat_eval run --set quality --gate      # 质量探针；机器门禁不过时退出码为 1
 python -m scripts.chat_eval run --driver live --set life  # 真实 main.py + 假 NapCat 跑生活连续性
 python -m scripts.chat_eval run --suite otaku --no-judge  # 只跑指定剧本，只做规则检查
+python -m scripts.chat_eval run --timezone UTC            # 上海深夜开跑时，让她按白天的钟点过作息
 python -m scripts.chat_eval judge <结果目录>              # 对已有结果重新评审
 python -m scripts.chat_eval replay <结果目录>/data/xiaoqing_chat g978321 阿禾 "你怎么不理我" --at
 python -m scripts.chat_eval calibrate                     # 只校准审查器的误杀与漏放
 ```
+
+评测跑在真实时钟上：上海的凌晨开跑时她按作息在睡觉，插话变少、回复犯困，分数没法和白天的比。`--timezone <时区名>` 让这次评测里的她按另一个时区的钟点过作息（预置数据的日期、Bot 配置和评审看到的时间一起换）；Pendo 等有自己时区设置的插件不跟着换，办事剧本里的日期会和她的“今天”差一天，比较办事结果时不用这个开关。
 
 两种驱动，模型都是真实调用，线上数据和 QQ 群保持隔离：
 
@@ -301,10 +295,10 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 |---|---|---|
 | `group` | `otaku` `addressee` `participation` `multimodal` `persona` `banter` `help` `daily` `notice` `regress` | 活人感、聊天对象、参与度、读图与表情、人设边界、接梗、认真求助、日常、文字截图、计算与出站素材 |
 | `quality` | `quality_boundaries` `quality_scenarios` `quality_joining` | 人设与第三方边界、多人归属、话题转移、隔天新话题、读图与历史图、隔天关心面试、自主参与、私事不插话、长空档旧话题 |
-| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话（“记三笔帐”只给一笔时先问、不凑数）、连着办几件小事不多问、作息影响节奏、冷群主动开口 |
+| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_agent_notes` `life_agent_events` `life_bursts` `life_agent_plugins` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话（“记三笔帐”只给一笔时先问、不凑数）、连着办几件小事不多问、作息影响节奏、冷群主动开口；一个人连着发几条时只回一次、一件事分两条说时直接办完（`life_bursts`）；颜色、天文工具、词典、地震、随机选择、GitHub、论文、CHIME、APOD 等查询类插件逐个替人用一遍，会话式和要管理员的说清做不了（`life_agent_plugins`） |
 | `online_life` | `ol_recent_group` `ol_recent_private` `ol_yesterday` `ol_term` `ol_unrelated` `ol_link` `ol_plan` `ol_like` | 拿预置的网上经历接话不编造、昨天和今天分开、听得懂学过的词、无关闲聊不硬扯、要链接时只给刚提到的那条、打算不说成做完、兴趣快照不夸大 |
 
-`life_agent`、`life_agent_ledger`、`life_agent_errands`、`life_routine`、`life_proactive` 需要 agent、定时任务或改行为配置，只能 `--driver live`。`online_life` 组始终接上预置的 xiaoqing_life 数据，`--online-life` 让 inproc 驱动的其他剧本也接上。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
+名字以 `life_agent` 开头的剧本、`life_bursts`、`life_routine`、`life_proactive` 需要 agent、真实的入站队列、定时任务或改行为配置，只能 `--driver live`。`online_life` 组始终接上预置的 xiaoqing_life 数据，`--online-life` 让 inproc 驱动的其他剧本也接上。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
 
 每轮先做确定性规则检查：
 
@@ -320,7 +314,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 | `markdown` / `too_long` / `verbatim_repeat` | Markdown 格式 / 单轮超过 90 字 / 原样重复 | 否 |
 | `checker_rejected` / `checker_infra` / `slow` | 候选被审查拒绝 / 审查不可用 / 单轮超过 40 秒 | 否 |
 
-随后由 `reasoning` 路由担任评审，逐轮点评并给出五个 1～5 分：`humanlike`、`participation`、`addressee`、`multimodal`（无图剧本为空）、`consistency`。语气指标另外统计回声问句开场、带表情、问句收尾、平均字数和平均气泡数。
+随后由 `reasoning` 路由担任评审，逐轮点评并给出五个 1～5 分：`humanlike`、`participation`、`addressee`、`multimodal`（无图剧本为空）、`consistency`。交给评审的实录里，`⏎` 隔开气泡，`↵` 是同一条消息里的换行，图片和表情包分开标注。语气指标另外统计回声问句开场、带表情、问句收尾、平均字数和平均气泡数。
 
 `--calibrate` 在进程内用真实 `checker` 路由核对人工写定的候选（自然接梗应放行、编造事实应拦下），漏放必须为零、误杀率不超过 20%，结果计入门禁。`--gate` 时出现计入门禁的规则问题或校准不过，退出码为 1；项目级 UAT 的 `--include-chat-quality` 就是 `run --driver live --set quality --no-judge --calibrate --gate`。
 
@@ -413,9 +407,9 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 
 覆盖确定性 hard、确定性 soft、语义 hard、语义 soft、重生成、重规划、群聊参与耗尽和私聊直接回复耗尽。每个用例核对候选状态与最终提交状态。
 
-交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求。复核前 `semantic_acceptance_passed` 保持空值。
+交流约束（“别反问”“一句话说完”）的用例覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针的机器门禁（`summary.json` 的 `gate`）只代表规则检查的结果，语气和语义以模型评审和人工阅读实录为准。
 
-缺图用例使用纯文字事件指向具体截图，核对回复像群友一样随口说图没加载出来或裂了（不使用“画面读取不到”之类的客服说法），不附和用户对未知画面的评价，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针的 `current_turn_discloses_missing_image` 同时记录缺图告知，旧话题排除保持独立检查。
+缺图用例使用纯文字事件指向具体截图，核对回复像群友一样随口说图没加载出来或裂了（不使用“画面读取不到”之类的客服说法），不附和用户对未知画面的评价，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针（`quality_joining` 的最后一段）用 `forbid` 检查回复没有带回三天前的旧话题词，缺图的说法由评审按预期核对。
 
 ### 媒体
 

@@ -58,6 +58,9 @@ _NOTE_TIME_RANGE_RE: Final = re.compile(
 )
 _CONTENT_MARKER_RE: Final = re.compile(r"content(?:(?::\s*|\s+)(.*))?", re.IGNORECASE | re.DOTALL)
 _EMPTY_INLINE_TITLE_RE: Final = re.compile(r"(^|\s)title:(?=\s|$)", re.IGNORECASE)
+# 没写 title: 时标题就是正文；正文超过标题上限（200 字）时改取首行开头作标题。
+_MAX_DERIVED_TITLE_SOURCE    : Final = 200
+_DERIVED_TITLE_CHARS         : Final = 40
 _MALFORMED_METADATA_SUFFIX_RE: Final = re.compile(
     r"""(?:^|\s)(cat|ref):(?:["'“].*)?\s*$""", re.IGNORECASE
 )
@@ -82,7 +85,7 @@ class ParsedNoteText(TypedDict):
     category         : str
     tags             : list[str]
     reference_ids    : list[str]
-    _title_provided  : bool
+    _title_explicit  : bool
     _content_provided: bool
     _explicit_fields : NoteExplicitFields
 
@@ -312,14 +315,7 @@ class NoteHandler(DbOpsMixin):
 
     @staticmethod
     def _related_from_references(refs: list[dict[str, Any]]) -> list[str]:
-        related: list[str] = []
-        seen   : set[str]  = set()
-        for ref in refs:
-            ref_id = str(ref.get("id") or "").strip()
-            if ref_id and ref_id not in seen:
-                seen.add(ref_id)
-                related.append(ref_id)
-        return related
+        return NoteHandler._dedupe_reference_ids([str(ref.get("id") or "") for ref in refs])
 
     async def _resolve_note_references(
         self,
@@ -376,10 +372,10 @@ class NoteHandler(DbOpsMixin):
             title, content_text = self._extract_inline_title_token(content_text)
             explicit_title = bool(title)
 
-        # 如果没有显式的 title，title 和 content 都是 content_text
+        # 没有显式的 title 时标题由正文得到，正文完整保留（长提示词、长摘录也能一次存下）。
         content_provided = bool(content_text.strip())
         if not title:
-            title = content_text
+            title = self._derive_title(content_text)
 
         return {
             "title"            : title,
@@ -387,7 +383,7 @@ class NoteHandler(DbOpsMixin):
             "category"         : meta["category"] or "",
             "tags"             : meta["tags"],
             "reference_ids"    : meta["reference_ids"],
-            "_title_provided"  : explicit_title or content_provided,
+            "_title_explicit"  : explicit_title,
             "_content_provided": content_provided,
             "_explicit_fields" : {
                 "category"  : bool(meta["category"]),
@@ -395,6 +391,17 @@ class NoteHandler(DbOpsMixin):
                 "references": bool(meta["reference_ids"]),
             },
         }
+
+    @staticmethod
+    def _derive_title(content_text: str) -> str:
+        """由正文得到标题：单行且不超过标题上限时就是正文，多行或超长时取首个非空行的开头。"""
+        text = (content_text or "").strip()
+        if len(text) <= _MAX_DERIVED_TITLE_SOURCE and "\n" not in text:
+            return text
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        return first_line[:_DERIVED_TITLE_CHARS] + (
+            "…" if len(first_line) > _DERIVED_TITLE_CHARS else ""
+        )
 
     @staticmethod
     def _normalize_title_token(raw_value: str) -> str | None:
@@ -800,10 +807,12 @@ class NoteHandler(DbOpsMixin):
 
         current = await get_user_local_wall_time(user_id, self.db)
         last_viewed = normalize_note_fields({"last_viewed": current.isoformat()}, partial=True)
-        await self._db_update_item(
-            note_id,
+        # 查看时间只是附带记录：恰好与另一处修改撞上版本时放弃这次记录，照常展示笔记。
+        await run_sync(
+            self.db.update_item,
+            str(note.id),
             last_viewed,
-            owner_id         = user_id,
+            user_id,
             expected_version = note.version,
             touch            = False,
         )
@@ -860,7 +869,14 @@ class NoteHandler(DbOpsMixin):
         updates: dict[str, Any] = {"type": ItemType.NOTE.value}
         explicit_fields         = parsed["_explicit_fields"]
 
-        if parsed["_title_provided"]:
+        current_content = note.content or ""
+        if parsed["_title_explicit"]:
+            updates["title"] = parsed["title"]
+        elif parsed["_content_provided"] and (note.title or "") in {
+            self._derive_title(current_content),
+            current_content,
+        }:
+            # 标题本来就是由正文得到的，跟着新正文走；单独起过标题的笔记只换正文。
             updates["title"] = parsed["title"]
         if parsed["_content_provided"]:
             updates["content"] = parsed["content"]
@@ -990,9 +1006,17 @@ class NoteHandler(DbOpsMixin):
         return clean
 
     async def tag_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        return await self._change_tags(user_id, args, remove=False)
+
+    async def untag_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        return await self._change_tags(user_id, args, remove=True)
+
+    async def _change_tags(self, user_id: str, args: str, *, remove: bool) -> CommandMessage:
+        """给笔记添加或移除标签；两者只在合并方式和“没有变化”的提示上不同。"""
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
-            return {"status": "error", "message": "❌ 用法: /pendo note tag <id> #标签"}
+            command = "untag" if remove else "tag"
+            return {"status": "error", "message": f"❌ 用法: /pendo note {command} <id> #标签"}
         note_id        = parts[0].strip()
         requested_tags = self._extract_tag_args(parts[1])
         if not requested_tags:
@@ -1009,62 +1033,21 @@ class NoteHandler(DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        note   = cast(NoteItem, note)
-        merged = list(note.tags or [])
-        seen   = {tag.casefold() for tag in merged}
-        for tag in tags:
-            if tag.casefold() not in seen:
-                seen.add(tag.casefold())
-                merged.append(tag)
-        if merged == list(note.tags or []):
-            return {"status": "info", "message": "ℹ️ 这些标签已存在，笔记未改变"}
+        note    = cast(NoteItem, note)
+        current = list(note.tags or [])
+        if remove:
+            dropped   = {tag.casefold() for tag in tags}
+            next_tags = [tag for tag in current if tag.casefold() not in dropped]
+            unchanged = "ℹ️ 笔记中没有这些标签，未做修改"
+        else:
+            existing  = {tag.casefold() for tag in current}
+            next_tags = current + [tag for tag in tags if tag.casefold() not in existing]
+            unchanged = "ℹ️ 这些标签已存在，笔记未改变"
+        if next_tags == current:
+            return {"status": "info", "message": unchanged}
         try:
             updates = normalize_note_fields(
-                {"tags": merged, "type": ItemType.NOTE.value}, partial=True
-            )
-        except ValueError as exc:
-            return {"status": "error", "message": f"❌ {exc}"}
-        saved_tags = cast(list[str], updates["tags"])
-        await self._db_update_with_log(
-            note_id,
-            updates,
-            user_id,
-            action           = "edit_note",
-            expected_version = note.version,
-        )
-        return {
-            "status" : "success",
-            "message": f"✅ 已更新标签: {ItemFormatter.format_tags(saved_tags)}",
-        }
-
-    async def untag_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
-        parts = args.split(maxsplit=1)
-        if len(parts) < 2:
-            return {"status": "error", "message": "❌ 用法: /pendo note untag <id> #标签"}
-        note_id        = parts[0].strip()
-        requested_tags = self._extract_tag_args(parts[1])
-        if not requested_tags:
-            return {"status": "error", "message": "❌ 请提供标签"}
-        try:
-            normalized_tags = cast(
-                list[str],
-                normalize_note_fields({"tags": requested_tags}, partial=True)["tags"],
-            )
-        except ValueError as exc:
-            return {"status": "error", "message": f"❌ {exc}"}
-        tags = {tag.casefold() for tag in normalized_tags}
-        note, wrong_type = await self._db_get_typed_item_or_message(
-            note_id, user_id, ItemType.NOTE.value, "笔记"
-        )
-        if wrong_type:
-            return wrong_type
-        note      = cast(NoteItem, note)
-        remaining = [tag for tag in (note.tags or []) if tag.casefold() not in tags]
-        if remaining == list(note.tags or []):
-            return {"status": "info", "message": "ℹ️ 笔记中没有这些标签，未做修改"}
-        try:
-            updates = normalize_note_fields(
-                {"tags": remaining, "type": ItemType.NOTE.value}, partial=True
+                {"tags": next_tags, "type": ItemType.NOTE.value}, partial=True
             )
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}

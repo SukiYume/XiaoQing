@@ -11,35 +11,29 @@ import pytest
 from plugins.xiaoqing_life import lifecycle as lc
 from plugins.xiaoqing_life import threads as th
 from plugins.xiaoqing_life.config import LifeConfig
-from plugins.xiaoqing_life.stores import LifeStore, reserve_llm_call, roll_day
-from tests.plugins.xiaoqing_life.support import make_cfg
+from plugins.xiaoqing_life.stores import reserve_llm_call, roll_day
+from tests.plugins.xiaoqing_life.support import make_cfg, new_store
 
 DAY = lc.DAY
 NOW = 1_800_000_000.0
 
 
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
-
-
 @pytest.mark.asyncio
 async def test_state_survives_restart_and_writes_a_backup(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     await store.mutate(lambda s: s.episodes.append({"id": "e1", "at": NOW}))
     await store.mutate(lambda s: s.terms.update({"k": {"term": "k"}}))
-    again = _store(tmp_path)
+    again = new_store(tmp_path)
     assert again.episodes == [{"id": "e1", "at": NOW}] and "k" in again.terms
     assert (tmp_path / "life" / "episodes.json.bak").exists()
 
 
 @pytest.mark.asyncio
 async def test_corrupt_main_file_recovers_from_backup(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     await store.mutate(lambda s: s.episodes.append({"id": "e1", "at": NOW}))
     (tmp_path / "life" / "episodes.json").write_text("{not json", encoding="utf-8")
-    assert _store(tmp_path).episodes == [{"id": "e1", "at": NOW}]
+    assert new_store(tmp_path).episodes == [{"id": "e1", "at": NOW}]
 
 
 def test_unreadable_files_are_quarantined_and_start_empty(tmp_path: Path) -> None:
@@ -47,7 +41,7 @@ def test_unreadable_files_are_quarantined_and_start_empty(tmp_path: Path) -> Non
     folder.mkdir()
     (folder / "terms.json").write_text("garbage", encoding="utf-8")
     (folder / "episodes.json").write_text(json.dumps({"wrong": "type"}), encoding="utf-8")
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     assert store.terms == {} and store.episodes == []
     assert (folder / "terms.json.corrupt").exists() and (folder / "episodes.json.corrupt").exists()
     assert store.state["llm_calls_today"] == 0
@@ -57,23 +51,23 @@ def test_unreadable_files_are_quarantined_and_start_empty(tmp_path: Path) -> Non
 async def test_concurrent_mutations_serialize_and_readers_see_a_consistent_snapshot(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
 
     def add(n: int):
         return lambda s: s.episodes.append({"id": f"e{n}", "at": NOW + n})
 
     await asyncio.gather(*(store.mutate(add(n)) for n in range(25)))
     assert len(store.episodes) == 25
-    assert len(_store(tmp_path).episodes) == 25
+    assert len(new_store(tmp_path).episodes) == 25
 
 
 @pytest.mark.asyncio
 async def test_llm_budget_is_counted_before_the_call_and_resets_by_day(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     assert await reserve_llm_call(store, "2026-11-05", 2)
     assert await reserve_llm_call(store, "2026-11-05", 2)
     assert not await reserve_llm_call(store, "2026-11-05", 2)
-    assert _store(tmp_path).state["llm_calls_today"] == 2  # 重启不清零
+    assert new_store(tmp_path).state["llm_calls_today"] == 2  # 重启不清零
     assert await reserve_llm_call(store, "2026-11-06", 2)  # 跨日重置
     assert store.state["llm_calls_today"] == 1
     state = {"day": "2026-11-05", "sessions_today": 3, "llm_calls_today": 9, "activity_log": [1]}
@@ -166,6 +160,9 @@ def test_interest_evidence_counts_each_item_once_and_stages_progress() -> None:
     assert add("a", NOW) and not add("a", NOW + 1)  # 同一来源不重复计
     assert interests["猫"]["stage"] == "tentative"
     assert add("b", NOW + 2)
+    # 同一次上网刷到两条只算试探；隔了半天以上的另一次又刷到才算“常刷到”
+    assert interests["猫"]["stage"] == "tentative"
+    assert add("b2", NOW + 13 * 3600)
     assert interests["猫"]["stage"] == "repeated"
     # 前一个 14 天窗口也要有 ≥2 条不同来源才算 consistent
     assert add("c", NOW - 20 * DAY) and add("d", NOW - 21 * DAY)
@@ -232,27 +229,25 @@ def test_thread_limits_and_similar_titles() -> None:
     assert th.open_thread(threads, cfg, title=" ", why="", next_query="", now=NOW) is None
 
 
-def test_thread_steps_cooldown_and_review_transitions() -> None:
+def test_thread_steps_stall_and_review_transitions() -> None:
     cfg = make_cfg(thread_max_steps=3)
     threads: list = []
     thread = th.open_thread(threads, cfg, title="课题", why="", next_query="q", now=NOW)
-    th.record_step(thread, cfg, episode_id="e1", note="一点", new_content=False, now=NOW)
-    assert thread["cooldown_until"] == 0.0
-    th.record_step(thread, cfg, episode_id="e1", note="", new_content=False, now=NOW + 10)
-    assert thread["cooldown_until"] == NOW + 10 + 180 * 60 and thread["steps"] == 0
+    assert th.record_step(thread, cfg, new_content=False, now=NOW) is False
+    assert th.record_step(thread, cfg, new_content=False, now=NOW + 10) is True  # 连着两次空步
+    assert thread["steps"] == 0
     for n in range(3):
-        th.record_step(
-            thread, cfg, episode_id=f"e{n}", note=f"要点{n}", new_content=True, now=NOW + n
-        )
+        th.record_step(thread, cfg, new_content=True, now=NOW + n)
     assert thread["steps"] == 3 and thread["status"] == "reviewing"  # 步数到上限进回看
-    assert len(thread["notes"]) == 3
+    assert thread["empty_streak"] == 0
 
 
 def test_thread_answered_moves_to_reviewing_and_done_needs_known_episode_ids() -> None:
     cfg           = make_cfg()
     threads: list = []
     thread = th.open_thread(threads, cfg, title="课题", why="", next_query="", now=NOW)
-    th.mark_answered(thread, episode_id="e1", note="查明白了", now=NOW + 1)
+    th.add_finding(thread, episode_id="e1", text="查明白了", quote="q", revises="", now=NOW)
+    th.mark_answered(thread, NOW + 1)
     assert thread["status"] == "reviewing"
     assert not th.finish(thread, "收获", ["e-unknown"], NOW + 2)
     assert not th.finish(thread, "  ", ["e1"], NOW + 2)

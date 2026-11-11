@@ -56,3 +56,23 @@ def test_parse_prompt_lets_an_explicit_multi_node_request_override_the_meeting_r
     rules = AIParser.PARSE_PROMPT_TEMPLATE
     assert "用户明确要求多节点" in rules and "优先于上一条的普通会议写法" in rules
     assert rules.index("普通会议的开始与结束") < rules.index("用户明确要求多节点")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", ["改成会议结束", "改为会议结束", "改成“会议结束”"])
+async def test_natural_rename_is_applied_to_the_existing_event(changes):
+    event = EventItem(
+        owner_id   = "u1",
+        title      = "旧节点",
+        start_time = "2030-11-08T10:00:00+00:00",
+        end_time   = "2030-11-08T12:00:00+00:00",
+        timezone   = "Asia/Shanghai",
+    )
+
+    async def parse_event_with_ai(text, user_id, **kwargs):
+        assert "仅改名时保留原有起止时间" in text
+        return {"title": "会议结束"}
+
+    editor = EventEditingMixin()
+    editor.ai_parser = SimpleNamespace(parse_event_with_ai=parse_event_with_ai)
+    assert await editor._parse_updates(changes, event) == {"title": "会议结束"}

@@ -7,14 +7,45 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from core.ai import declare_route_defaults
+
 PLUGIN_NAME = "xiaoqing_agent"
+
+# 三条 route 各自的调用参数；主配置里只需要给每条 route 指定模型。
+declare_route_defaults(
+    PLUGIN_NAME,
+    {
+        # 执行：带着工具和整段办事会话，单次调用可能较久。
+        "agent": {
+            "temperature"          : 0.2,
+            "timeout_seconds"      : 180,
+            "total_timeout_seconds": 600,
+            "max_retry"            : 1,
+        },
+        # 分流：每句明确对她说的话都要过一遍，要快；聊天侧最多等 25 秒。
+        "triage": {
+            "temperature"          : 0.1,
+            "timeout_seconds"      : 15,
+            "total_timeout_seconds": 20,
+            "max_retry"            : 1,
+        },
+        # read_image 读本地图片。
+        "vision": {
+            "temperature"          : 0.2,
+            "max_tokens"           : 800,
+            "timeout_seconds"      : 20,
+            "total_timeout_seconds": 60,
+            "max_retry"            : 1,
+        },
+    },
+)
 
 
 @dataclass(frozen=True, slots=True)
 class AgentConfig:
     # 总开关；关闭时 xiaoqing_chat 完全保持原有聊天行为。
     enabled: bool = False
-    # 单个任务执行阶段最多调用模型的轮数；命令结果交付另有正文生成与范围筛选。
+    # 单个任务最多调用模型的轮数（含用完预算后交代结果的那一次）。
     max_steps: int = 40
     # 单个任务从开始到交付的总时长上限。
     task_timeout_seconds: float = 1800.0
@@ -32,8 +63,11 @@ class AgentConfig:
     max_tasks_per_member: int = 1
     # 每次工具输出交给模型前的字符上限。
     max_tool_output_chars: int = 12000
-    # 判断与执行时附带的本会话最近任务数。
+    # 判断与开新会话时附带的本会话最近任务数。
     history_tasks: int = 5
+    # 发起人隔多久没说话就开新的办事会话（分钟，0 表示每句话都从头开始），以及会话保留的轮数。
+    session_idle_minutes: float = 120.0
+    session_max_turns   : int   = 20
     # 留空时：Python 用 Bot 自身解释器；Shell 在 Windows 优先 Git Bash，否则 PowerShell。
     python: str = ""
     shell : str = ""
@@ -122,6 +156,18 @@ def parse_agent_config(raw: Any) -> AgentConfig:
             defaults.history_tasks,
             minimum = 0,
             maximum = 20,
+        ),
+        session_idle_minutes=_float(
+            options.get("session_idle_minutes"),
+            defaults.session_idle_minutes,
+            minimum = 0.0,
+            maximum = 1440.0,
+        ),
+        session_max_turns=_int(
+            options.get("session_max_turns"),
+            defaults.session_max_turns,
+            minimum = 1,
+            maximum = 50,
         ),
         python = _text(options.get("python")),
         shell  = _text(options.get("shell")),

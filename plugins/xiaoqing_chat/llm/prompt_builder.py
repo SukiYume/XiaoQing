@@ -24,9 +24,11 @@ from ..utils.wall_clock import describe_now, format_local
 from .communication_constraints import (
     explicit_output_allocation,
     extract_local_term_definitions,
+    mentions_length,
     output_allocation_instruction,
     requested_char_count,
 )
+from .decorations import has_decoration
 from .media_evidence import (
     INBOUND_MEDIA_MARKER_RE,
     history_has_image,
@@ -57,7 +59,7 @@ _DEFAULT_REPLYER_SYSTEM = (
     "先回答已有信息支持的部分，关键缺口用一句话说明。人物创作仅用于角色表达。\n"
     "媒体依据包括当前附件和历史图片的可靠摘要，先查看相关摘要再判断画面是否可用。"
     "解释表情包时说明内容和常见用法，发图人的意图保持为推测。"
-    "只输出要发送的回复，媒体附件使用约定的 marker。"
+    "只输出要发送的回复。"
 )
 
 # 理解规则负责语义与依据；口吻和示例由人设卡提供。
@@ -78,6 +80,11 @@ _OUTBOUND_MEDIA_MARKER_DIRECTIVE = (
     "`[想发QQ表情:简短描述]` 或 `[想发图片:简短描述]`，描述最多 12 字。"
     "每条回复最多一个；候选库没有合适素材时省略。"
     "`[图片：...]`、`[表情包：...]` 和 `[QQ表情：...]` 用于入站摘要，不用于生成附件。"
+)
+# 这一轮不发表情：聊天记录里那些 `[…]` 是别人发的图和表情读出来的摘要，不是打字的写法。
+_NO_MEDIA_DIRECTIVE = (
+    "这一条只发文字。聊天记录里的 `[图片：...]`、`[表情包：...]` 和 `[QQ表情：...]` 是读出来的摘要，"
+    "回复里不写这类方括号，也不把表情的名字当成字打在句尾。"
 )
 
 
@@ -286,6 +293,61 @@ def recent_question_endings_note(history: Sequence[StoredMessage], *, streak: in
     )
 
 
+# 开头取到第一个标点或空白为止，最多几个字：够看出是不是又用了同一种起手。
+_OPENING_RE = re.compile(r"^[^\s，,。.！!？?…～~：:、]{1,6}")
+
+
+def recent_style_note(history: Sequence[StoredMessage], *, window: int = 8) -> str:
+    """列出她最近几条回复的开头，这条换个起手；波浪号和 emoji 刚用过就先不用。
+
+    “换着说”只写在人设里约束力不够：把她实际说过的开头摆出来，模型才知道要避开什么。
+    """
+
+    replies = [
+        text
+        for message in history
+        if is_conversation_reply(message) and (text := render_stored_message(message).strip())
+    ][-window:]
+    if len(replies) < 3:
+        return ""
+    openings = dict.fromkeys(
+        match.group(0) for reply in replies if (match := _OPENING_RE.match(reply))
+    )
+    parts: list[str] = []
+    if openings:
+        listed = "、".join(f"“{opening}”" for opening in openings)
+        parts.append(f"你最近几条回复的开头是：{listed}。这条换一种开头和句式。")
+    if any(has_decoration(reply) for reply in replies):
+        parts.append("波浪号、emoji 和表情最近用过了，这条不带。")
+    return "".join(parts)
+
+
+# 连着两条都到这个字数，下一条闲聊就该短了。
+_LONG_REPLY_CHARS = 24
+
+
+def recent_length_note(history: Sequence[StoredMessage], current_text: str) -> str:
+    """她最近两条都不短时，提醒这条闲聊回短一点。
+
+    真人的消息长短差得很远，模型却会稳定在同一个不长不短的长度上，每条都是“接话 + 内容 + 抖机灵”。
+    对方明说了要几句、多少字时按对方的来。
+    """
+
+    if mentions_length(current_text):
+        return ""
+    replies = [
+        "".join(render_stored_message(message).split())
+        for message in history
+        if is_conversation_reply(message)
+    ][-2:]
+    if len(replies) < 2 or any(len(reply) < _LONG_REPLY_CHARS for reply in replies):
+        return ""
+    return (
+        "你最近两条回复都不短。对方只是在闲聊的话，这条就一句、十来个字，只接最要紧的那一点；"
+        "对方在认真求助、问知识或要成品时照常写足。"
+    )
+
+
 def _current_turn_target_block(
     *,
     sender: str,
@@ -362,14 +424,20 @@ def build_dialogue_prompt(
     *,
     bot_name: str,
     truncate: bool = True,
-    max_chars: int = 800,
+    max_chars: int = 1400,
+    max_items: int = 20,
 ) -> str:
+    """把聊天记录写成逐行对话。截短时最多留最近 ``max_items`` 条、``max_chars`` 字。
+
+    回复、规划和审查用的是同一份截法：她看得到的那段对话，审查也看得到。
+    """
+
     lines: list[str] = []
     truncated        = False
 
     items = list(history)
-    if truncate and len(items) > 12:
-        items     = items[-12:]
+    if truncate and len(items) > max_items:
+        items     = items[-max_items:]
         truncated = True
 
     last_ts: float = 0.0
@@ -510,8 +578,11 @@ def _persona_section(
         lines.append(life_block)
     if personality.allow_low_stakes_persona_fiction:
         lines.append(
-            "- 日常创作许可：自己此刻在干嘛、刚做完的小事、等会儿的普通打算、小情绪和小插曲可以自然说，"
-            "和作息、今天的生活、说过的话保持一致；真实的具体人名、精确地点和答应别人的现实承诺仍需记录支持。"
+            "- 日常创作许可：可以自然表达角色的心情、偏好和普通打算，和作息、今天的生活、说过的话保持一致。"
+            "自己此刻在干嘛、今天和这几天具体发生了什么以提供的生活记录为准，记录空缺时只说通常安排。"
+            "对方问起你以前的事、小习惯、糗事或身边日常的小细节（宿舍、食堂、课上是什么样）而记录里没有时，可以答一件不带具体日期、没法核实、"
+            "和人物资料对得上的日常小事；没人问时不拿现编的亲身经历附和别人。"
+            "真实的具体人名、精确地点和答应别人的现实承诺仍需记录支持。"
         )
     else:
         lines.append(
@@ -539,11 +610,13 @@ def _system_prompt(
     now: str,
     request_id: str,
 ) -> str:
-    sections = [
+    # 表情和图片只在这一轮给了可发素材时才提：每轮都摆着标记的写法，她会句句想带一个。
+    offers_media = bool(media_candidates.strip())
+    sections     = [
         persona,
         _DEFAULT_REPLYER_SYSTEM.strip(),
         _UNDERSTANDING_DIRECTIVE.strip(),
-        _OUTBOUND_MEDIA_MARKER_DIRECTIVE.strip(),
+        _OUTBOUND_MEDIA_MARKER_DIRECTIVE.strip() if offers_media else _NO_MEDIA_DIRECTIVE,
         media_candidates.strip(),
         "不辱骂、不人身攻击、不恶意挑衅。" if personality.polite_guardrail else "",
         output_allocation_instruction(current_text),
@@ -669,7 +742,11 @@ def build_prompt_messages(
         if (length := requested_char_count(current_text)) is not None
         else "",
         "当前对话目标：" + goal.strip() if goal.strip() else "",
-        "你为什么要回复这条消息\n" + planner_reasoning.strip() if planner_reasoning.strip() else "",
+        # 写成“为什么要回复”的问句时，模型会把理由当成答案说出来（“……这个反差挺好接话的”）。
+        "你刚才心里的盘算（只帮你定方向；回复里直接接话，不照着念，也不解释自己为什么开口）：\n"
+        + planner_reasoning.strip()
+        if planner_reasoning.strip()
+        else "",
         (
             "下面是冷场前的旧聊天，只用来记起之前发生过什么。当前话题优先；"
             "同一个人回来而旧聊天里有他结果待定的事时，可以顺口关心一句，不要主动把别人拉回旧话题。\n"
@@ -690,6 +767,8 @@ def build_prompt_messages(
             sender=sender, current_text=current_text, current_parts=current_parts, bot_name=bot_name
         ),
         recent_question_endings_note(dialogue_history),
+        recent_style_note(dialogue_history),
+        recent_length_note(dialogue_history, current_text),
         "可以顺口接的旧事：" + open_loop_block.strip() if open_loop_block.strip() else "",
         "关键词反应（可参考，不要生硬照抄）\n" + "；".join(reaction_prompts)
         if reaction_prompts

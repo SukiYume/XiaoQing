@@ -1,4 +1,4 @@
-"""第四轮：自我强化的日常决策、自由探索、自我成长与注入文字。"""
+"""自我强化：自我强化的日常决策、自由探索、自我成长与注入文字。"""
 
 from __future__ import annotations
 
@@ -13,8 +13,10 @@ from plugins.xiaoqing_life import commands, planner, reinforce, wind_down
 from plugins.xiaoqing_life import lifecycle as lc
 from plugins.xiaoqing_life import threads as th
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps
+from plugins.xiaoqing_life.fetching import novelty, pick_clicks
 from plugins.xiaoqing_life.persona_bridge import Presence
-from plugins.xiaoqing_life.session import SessionDeps, novelty, pick_clicks, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
 from tests.plugins.xiaoqing_life.support import (
@@ -24,18 +26,13 @@ from tests.plugins.xiaoqing_life.support import (
     at,
     comments_payload,
     make_cfg,
+    new_store,
 )
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
 HOUR   = 3600.0
 DAY    = 86400.0
-
-
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
 
 
 # ───────────────────────────── 收获与偏好 ─────────────────────────────
@@ -120,7 +117,7 @@ def test_unreliable_sources_lose_weight_and_a_failing_search_cools_the_activitie
         reinforce.record_source(state, "bili_search", False, NOW + i)
     cfg = make_cfg(choice_temperature=0.5)
     weights = planner._enabled_hot_sources(cfg, state, NOW + 5)
-    assert weights["zhihu_hot"] == pytest.approx(0.2 * 0.2) and weights["bili_popular"] == 0.4
+    assert weights["zhihu_hot"] == pytest.approx(0.15 * 0.2) and weights["bili_popular"] == 0.3
     out = planner.choose(cfg, state, [], {}, MOMENT.replace(), random.Random(2))
     assert out.scores["interest_dive"] == 35 - 15 or "unreliable" in out.factors
     assert out.factors.get("unreliable") == ["bili_search"] or out.factors.get("unreliable_hot")
@@ -171,7 +168,7 @@ async def _dive(store: LifeStore, query: str, reply: dict[str, Any], moment=MOME
 async def test_a_dive_without_likes_leaves_one_mild_negative_note_per_topic_per_day(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     lc.seed_interests(store.interests, ("天文摄影",), NOW)
     await _dive(store, "天文摄影", DIVE_NONE)
     entry = store.interests["天文摄影"]
@@ -273,7 +270,7 @@ def _feedback(store: LifeStore, recent: list[str], bot: list[str], now: float = 
 
 
 def test_social_feedback_counts_ok_and_confused_once_per_reply(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     ok_term, bad_term = _term(store, "哈基米"), _term(store, "南北绿豆")
     recent = ["看这猫", "哈基米来了", "哈哈哈哈确实", "南北绿豆懂吧", "啥意思", "?"]
     bot    = ["哈基米来了", "南北绿豆懂吧"]
@@ -292,7 +289,7 @@ def test_social_feedback_counts_ok_and_confused_once_per_reply(tmp_path: Path) -
 def test_social_feedback_ignores_old_suggestions_unanswered_lines_and_her_own_followups(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     old = _term(store, "老梗", last_suggested=NOW - 3 * HOUR)
     assert _feedback(store, ["老梗哈哈", "哈哈哈"], ["老梗哈哈"]) is False and "use_ok" not in old
     fresh = _term(store, "新梗")
@@ -303,7 +300,7 @@ def test_social_feedback_ignores_old_suggestions_unanswered_lines_and_her_own_fo
 
 
 def test_expression_feedback_uses_the_pattern_overlap(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     expr  = {
         "id"            : "x1",
         "situation"     : "夸可爱",
@@ -322,7 +319,7 @@ def test_expression_feedback_uses_the_pattern_overlap(tmp_path: Path) -> None:
 def test_habit_halves_the_cooldown_and_is_preferred_while_confused_terms_are_suppressed(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     cfg = make_cfg(active_use_probability=1.0, suggest_cooldown_hours=6.0)
     habit = _term(
         store,
@@ -362,7 +359,7 @@ def test_habit_halves_the_cooldown_and_is_preferred_while_confused_terms_are_sup
 def test_turn_context_applies_feedback_from_the_ordered_recent_lines_and_reports_a_change(
     tmp_path: Path,
 ) -> None:
-    store   = _store(tmp_path)
+    store   = new_store(tmp_path)
     entry   = _term(store, "哈基米")
     payload = {
         "version"      : 1,
@@ -468,7 +465,7 @@ def test_exploration_draws_half_from_the_frontier_and_marks_it_tried(tmp_path: P
 async def test_a_session_started_from_the_frontier_marks_it_tried_and_remembers_it_was_exploration(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.frontier.append(
         {"topic": "赤道仪", "from_episode": "e1", "added_at": NOW, "tried": False}
     )
@@ -530,20 +527,19 @@ def _thread(
     tid: str, status: str, notes: list[str], depth: int = 0, parent: str = ""
 ) -> dict[str, Any]:
     return {
-        "id"            : tid,
-        "title"         : f"课题{tid}",
-        "why"           : "",
-        "next_query"    : f"查{tid}",
-        "status"        : status,
-        "steps"         : 1,
-        "empty_streak"  : 0,
-        "cooldown_until": 0.0,
-        "notes"         : [{"episode_id": n, "note": "要点"} for n in notes],
-        "takeaway"      : "",
-        "created_at"    : NOW - DAY,
-        "updated_at"    : NOW - 100,
-        "parent_id"     : parent,
-        "depth"         : depth,
+        "id"          : tid,
+        "title"       : f"课题{tid}",
+        "why"         : "",
+        "next_query"  : f"查{tid}",
+        "status"      : status,
+        "steps"       : 1,
+        "empty_streak": 0,
+        "notes"       : [{"episode_id": n, "note": "要点"} for n in notes],
+        "takeaway"    : "",
+        "created_at"  : NOW - DAY,
+        "updated_at"  : NOW - 100,
+        "parent_id"   : parent,
+        "depth"       : depth,
     }
 
 
@@ -582,7 +578,7 @@ async def _wind(store: LifeStore, reply: dict[str, Any], **cfg: Any):
 async def test_done_threads_become_learnings_and_open_one_deeper_followup_per_day(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(_episode(1))
     store.threads.append(_thread("t1", "reviewing", ["e1"]))
     reply = {
@@ -594,7 +590,9 @@ async def test_done_threads_become_learnings_and_open_one_deeper_followup_per_da
             "parent_id" : "t1",
             "title"     : "赤道仪怎么调平",
             "why"       : "接着想",
+            "done_when" : "知道调平的步骤",
             "next_query": "赤道仪 调平",
+            "kind"      : "practice",
         },
     }
     result, ai = await _wind(store, reply)
@@ -608,7 +606,7 @@ async def test_done_threads_become_learnings_and_open_one_deeper_followup_per_da
     ) == ("课题t1", "三脚架稳比贵重要", "t1", ["e1"])
     child = next(t for t in store.threads if t["id"] != "t1")
     assert (child["parent_id"], child["depth"], child["status"]) == ("t1", 1, "open")
-    assert store.state["followup_day"] == "2026-11-05"
+    assert store.state["done_on"]["followup"] == "2026-11-05"
     assert "followup" in ai.calls[0][1][0]["content"]
 
 
@@ -624,34 +622,41 @@ async def test_followups_are_validated_one_per_day_and_at_most_three_levels_deep
             ],
         }
         if parent:
-            out["followup"] = {"parent_id": parent, "title": title, "why": "", "next_query": "q"}
+            out["followup"] = {
+                "parent_id" : parent,
+                "title"     : title,
+                "why"       : "",
+                "done_when" : "知道答案",
+                "next_query": "q",
+                "kind"      : "fact",
+            }
         return out
 
-    store = _store(tmp_path / "a")
+    store = new_store(tmp_path / "a")
     store.episodes.append(_episode(1))
     store.threads.append(_thread("t1", "reviewing", ["e1"], depth=2))
     assert (await _wind(store, reply("t1", "t1")))[0].followup  # 第 3 层
     assert next(t for t in store.threads if t["id"] != "t1")["depth"] == 3
-    deep = _store(tmp_path / "b")
+    deep = new_store(tmp_path / "b")
     deep.episodes.append(_episode(1))
     deep.threads.append(_thread("t1", "reviewing", ["e1"], depth=3))
     assert (
         not (await _wind(deep, reply("t1", "t1")))[0].followup and len(deep.threads) == 1
     )  # 会是第 4 层
     for case, parent in (("unknown", "zzz"), ("blocked", "t1")):
-        s = _store(tmp_path / case)
+        s = new_store(tmp_path / case)
         s.episodes.append(_episode(1))
         s.threads.append(_thread("t1", "reviewing", ["e1"]))
         title = "含屏蔽词的问题" if case == "blocked" else "后续问题"
         assert not (await _wind(s, reply("t1", parent, title), blocked_keywords=["屏蔽词"]))[
             0
         ].followup
-    once = _store(tmp_path / "once")
+    once = new_store(tmp_path / "once")
     once.episodes.append(_episode(1))
-    once.state["followup_day"] = "2026-11-05"
+    once.state["done_on"] = {"followup": "2026-11-05"}
     once.threads.append(_thread("t1", "reviewing", ["e1"]))
     assert not (await _wind(once, reply("t1", "t1")))[0].followup
-    undone = _store(tmp_path / "undone")  # 没 done 的小课题不能提后续
+    undone = new_store(tmp_path / "undone")  # 没 done 的小课题不能提后续
     undone.episodes.append(_episode(1))
     undone.threads.append(_thread("t1", "reviewing", ["e1"]))
     bad                              = reply("t1", "t1")
@@ -719,7 +724,7 @@ def _call(store: LifeStore, text: str, recent: list[str] | None = None):
 def test_turn_context_gives_one_learning_on_topic_and_two_plus_a_growth_line_when_asked(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _learn(store)
     response, dirty = _call(store, "我想买个三脚架拍星空，脚架稳不稳很重要吗")
     lines = response["life_lines"]
@@ -727,7 +732,7 @@ def test_turn_context_gives_one_learning_on_topic_and_two_plus_a_growth_line_whe
     assert "- 三脚架稳比贵重要" in lines and "赤道仪要先调平" not in lines and dirty
     assert store.learnings[0]["last_used"] == NOW
     assert (
-        _call(_store(tmp_path / "e"), "我想买个三脚架拍星空")[0] is None
+        _call(new_store(tmp_path / "e"), "我想买个三脚架拍星空")[0] is None
     )  # 没有学到的东西就没有这一块
     asked, _ = _call(store, "最近学到啥了没")
     text = asked["life_lines"]
@@ -759,7 +764,7 @@ def test_followup_threads_get_a_planner_bonus_and_plans_can_mention_the_next_que
         for t in (base, child)
     }
     assert scores["b"] == scores["a"] + 4
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(child)
     plan = _call(store, "等会干嘛")[0]["life_lines"]
     assert "想接着查：查b（接着上次查明白的事往下问）" in plan
@@ -779,7 +784,7 @@ def test_followup_threads_get_a_planner_bonus_and_plans_can_mention_the_next_que
 @pytest.mark.asyncio
 async def test_weekly_input_includes_the_weeks_learnings(tmp_path: Path) -> None:
     sunday = at(23, 0, day=8)
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append({**_episode(5), "at": sunday.timestamp() - 600, "day": "2026-11-08"})
     store.journal.append(
         {
@@ -856,7 +861,7 @@ def test_injected_text_is_orientation_plus_one_hard_boundary() -> None:
 
 
 def test_status_shows_preferences_unreliable_sources_habits_and_frontier(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     reinforce.update_preference(store.state, "activity", "interest_dive", 1.0)
     reinforce.update_preference(store.state, "activity", "hot_scroll", -1.0)
     reinforce.update_preference(store.state, "source", "zhihu_hot", -1.0)

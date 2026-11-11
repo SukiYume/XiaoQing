@@ -146,7 +146,7 @@ Statistics use integer minor-unit fields.
 ```text
 /pendo search <关键词> [type=] [range=] [status=] [category=]
 /pendo confirm <id>
-/pendo snooze <id> <10m|1h|19:00>
+/pendo snooze <id> <10m|30min|1h|1d|19:00>
 /pendo undo [1..5]
 /pendo settings view
 /pendo settings reminder on|off
@@ -247,20 +247,21 @@ Restart restores configured models.
 **Participation**
 
 - Messages addressed to her always get a reply: private chat, `/xc`, a group `@` of the persona, a quote of her message, or her name used as a call. A call is the name at the start of a sentence ("小青，……") or within or at the end of a sentence in a calling tone ("行吧小青你赢了", "在吗小青"). A message that `@`s someone else without `@`ing her does not count.
-- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call gets a reply that the model writes from the current topic and routine. During class or sleep she still replies, more slowly and briefly.
+- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call gets a reply that the model writes from the current topic and routine. During class or sleep she still replies, more slowly and briefly. When one person sends several messages in a row, she waits for the last one and answers them together.
 - Other group turns pass frequency limits, participation probability, and PFC context planning. Group planning remains enabled regardless of the optional private-chat planner setting.
-- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. A busy or sleeping routine multiplies the probability by a routine factor. The suppression eases when she has stayed silent through several messages and falls to at most half.
+- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. A message that directly follows her own reply skips the probability roll and goes to the planner. A busy or sleeping routine multiplies the probability by a routine factor. The suppression eases when she has stayed silent through several messages and falls to at most half.
 - The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation. Pronouns that point to her, follow-up messages, and messages naming other members are judged from context.
 - The planner selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Unfinished intermediate actions, invalid actions, and unavailable planning leave the group turn waiting.
-- Private chat retains its configured direct-reply and planning paths. Unaddressed group turns reach the agent only after the planner decides to speak and the message explicitly points to her.
+- Private chat retains its configured direct-reply and planning paths. Unaddressed group turns stay in chat and never go to the agent.
 - New user messages before delivery trigger a context review through the reasoning route. Matching snapshots reuse the result. Review failure withholds the remaining reply.
 - Global, conversation, user-concurrency, and daily-user quotas apply before generation.
+- A failed turn sends no error code to the chat. Unaddressed turns stay silent. Private or addressed turns get one short in-character line, at most once per conversation in ten minutes. Details go to the log.
 
 **Persona**
 
 `plugins/xiaoqing_chat/config/persona.md` holds facts, speaking style, chat and task reply examples, and mood.
 Chat, agent, planning, and review use this same card. Changes apply to the next message.
-The default character is a second-year residential university student who studies physics at 快逃科学技术研究院.
+The default character is a second-year residential undergraduate majoring in astronomy at 快逃科学技术研究院.
 
 She strongly prefers cats and has a black-and-white cat called 小黑 at home.
 She has broad interests, personal tastes, daily activities, and recurring jokes. Her speech uses short QQ-style text.
@@ -290,7 +291,7 @@ Memory, planning state, and background learning commit or start after OneBot con
 | AI routes | `chat` for replies, `reasoning` for planning and background analysis, `checker` for review, `vision` for images |
 | Input segments | `text`, `at`, `reply`, `face`, `mface`, `image`, mixed messages |
 | Output media | `[想发表情:描述]`, `[想发QQ表情:描述]`, `[想发图片:描述]` markers become `image` / `face`. |
-| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, and `life.turn_context` and `life.export_memes` through `life_context`. |
+| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. `inbound_backlog` lets her wait until someone sending several messages in a row has finished. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, and `life.turn_context` and `life.export_memes` through `life_context`. |
 | Behavior configuration | `plugins/xiaoqing_chat/config/xiaoqing_config.json`, merged with `config.plugins.xiaoqing_chat` |
 | Runtime data | `data/xiaoqing_chat/`: history, vector memories, profiles, goals, PFC, action history, expressions, jargon, reviews, media library, summary cache, plus self-statements, open threads, and proactive pacing under `life/` |
 
@@ -318,7 +319,7 @@ External text reaches the model only as low-trust data. Slang and expressions re
 
 | Item | Content |
 |---|---|
-| Command | `/life [status|recent|slang|threads|methods|works|dossier|memes|meme|run|forget|login|logout|help]` |
+| Command | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
 | Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
 | Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat` |
 | Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
@@ -339,8 +340,9 @@ Each handoff receives the same persona from `xiaoqing_chat`. Ordinary chat conti
       "enabled": true,
       "ai": {
         "routes": {
-          "agent": {"models": ["deepseek-pro", "deepseek-flash"]},
-          "triage": {"models": ["deepseek-flash"]}
+          "agent":  ["gpt-terra", "deepseek-flash"],
+          "triage": ["gpt-terra", "deepseek-flash"],
+          "vision": ["gpt-terra", "glm-4.6v"]
         }
       }
     }
@@ -354,11 +356,13 @@ Each handoff receives the same persona from `xiaoqing_chat`. Ordinary chat conti
   Python, Shell, and file operations follow `/shell`. SSH and Codex follow `/ssh` and `/codex` in `plugin.json`.
   These commands are currently for Bot administrators.
 - On explicit invocation, `triage` classifies chat, new task, progress query, stop request, or additional requirements for a running task.
-  Chat returns to `xiaoqing_chat`.
-- Tasks run in the background. Results within 12 seconds become the current-turn reply.
-  Longer tasks first send a short reply, then deliver results to the original conversation.
+  The decision and the chat draft start together: chat uses the draft already in progress, and a task discards it.
+- Tasks run in the background. Results within `inline_wait_seconds` (12 by default) become the current-turn reply.
+  Longer tasks end the turn quietly, keep running, and deliver results to the original conversation.
   Group results mention the initiator. Text and images share a message. Other files use QQ file upload.
-- Each conversation has a persistent working directory. Follow-up tasks receive recent task records.
+- Each conversation has a persistent working directory. One person's tasks in one conversation form a continuous task session:
+  follow-ups such as "the second one" still see earlier requests, commands, and full results.
+  The session restarts after `session_idle_minutes` (120 by default) of silence or `/agent new`, and a new session receives recent task records.
   A group shares its directory and records. All group members can view tasks, whose records identify initiators.
   Only initiators and Bot administrators can stop tasks or add requirements.
   Administrator and other-user quotas are separate. Other-user tasks keep administrator capacity.
@@ -373,16 +377,17 @@ Each handoff receives the same persona from `xiaoqing_chat`. Ordinary chat conti
 /agent stop [任务ID|all]
 /agent history
 /agent result <任务ID>
+/agent new
 /agent help
 ```
 
 | Item | Content |
 |---|---|
-| AI routes | `agent` for execution, with `tools` support. Optional `triage` for decisions. |
-| Tools | `run_python`, `run_shell`, `read_file`, `write_file`, `update_plan`, `send_message`, `wait`, `final_answer`, `xiaoqing_commands`, `xiaoqing_command`, `ssh_servers`, `ssh_run`, `codex_run` |
+| AI routes | `agent` for execution, with `tools` support. Optional `triage` for decisions. Optional `vision` for `read_image`. |
+| Tools | `run_python`, `run_shell`, `read_file`, `write_file`, `read_image`, `update_plan`, `send_message`, `wait`, `final_answer`, `xiaoqing_commands`, `xiaoqing_command`, `ssh_servers`, `ssh_run`, `codex_run` |
 | Capabilities and services | `command_runner`, `local_tools`. Supplies `agent.handle_turn` and `agent.report_delivery`. Calls `codex.agent_task` and `qingssh.agent_command`. |
 | Runtime boundaries | Independent subprocess trees. Timeout, output overflow, stop, and shutdown remove whole trees. Steps and total duration bound tasks. |
-| Runtime data | `data/xiaoqing_agent/`: conversation directories, task records, execution records |
+| Runtime data | `data/xiaoqing_agent/`: conversation directories, task records, per-initiator task sessions, execution records |
 
 [XiaoQing Agent (Chinese)](../../plugins/xiaoqing_agent/README.md) describes all settings, tools, and data directories.
 
@@ -1214,7 +1219,7 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `twitter` | `scheduled_fetch` | Daily 03:00 | `silent` | Fetch new images in the background. |
 | `xiaoqing_chat` | `scheduled_daily_life` | Daily 05:30 | `silent` | Plan the persona's small daily-life events from the persona card and routine. |
 | `xiaoqing_chat` | `scheduled_life_memes` | Minutes 07 and 37 every hour | `silent` | Import memes collected by `xiaoqing_life` into the emoji library (`life.enable_life_memes`). |
-| `xiaoqing_chat` | `scheduled_proactive` | Every 20 minutes | `targeted` | Speak up in a quiet group as a member. Requires `proactive.enabled`, default off. |
+| `xiaoqing_chat` | `scheduled_proactive` | Every 20 minutes | `targeted` | Speak up in a quiet group as a member. Controlled by `proactive.enabled`, which the shipped behavior configuration turns on. |
 | `xiaoqing_life` | `scheduled_tick` | Every 15 minutes | `silent` | Decide from routine, budget, and interests whether to browse. Browsing runs in a background task. Requires `enabled`, default off. |
 
 Pendo briefings, journal reminders, and financial summaries run every minute.

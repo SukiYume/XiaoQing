@@ -57,12 +57,12 @@ def test_disabled_asleep_busy_and_running_do_nothing() -> None:
 
 def test_wind_down_is_chosen_only_with_todays_episodes_and_not_yet_done() -> None:
     near  = Presence("free", "", 30)
-    today = [{"id": "e1", "day": "2026-11-05"}]
+    today = [{"id": "e1", "at": NOW - 600}]
     assert _decide(presence=near, episodes=today).choice == planner.WIND_DOWN
-    done = default_state() | {"wound_down_day": "2026-11-05"}
+    done = default_state() | {"done_on": {"wind_down": "2026-11-05"}}
     assert _decide(presence=near, episodes=today, state=done).reason == "winding_down"
     assert (
-        _decide(presence=near, episodes=[{"id": "x", "day": "2026-11-04"}]).reason == "winding_down"
+        _decide(presence=near, episodes=[{"id": "x", "at": NOW - 86400}]).reason == "winding_down"
     )
     far = Presence("free", "", 61)
     assert _decide(presence=far, episodes=today).choice != planner.WIND_DOWN
@@ -81,6 +81,27 @@ def test_daily_budgets_and_rolling_activity_window() -> None:
     assert _decide(state=busy_log).reason == "activity_limit"  # 45 分钟
     old_log = default_state() | {"activity_log": [{"start": NOW - 20000, "end": NOW - 12000}]}
     assert _decide(state=old_log).choice != planner.REST  # 窗口外
+
+
+def test_overlapping_activity_spans_count_once() -> None:
+    """手动浏览和还没走完的名义时段重叠：生产里 13+37 分钟的两段实际只占 40 分钟。"""
+
+    start   = NOW - 50 * 60
+    overlap = default_state() | {
+        "activity_log": [
+            {"start": start, "end": start + 13 * 60},
+            {"start": start + 3 * 60, "end": start + 40 * 60},
+        ]
+    }
+    assert round(planner._window_minutes(overlap, NOW, 180)) == 40
+    assert _decide(state=overlap).reason != "activity_limit"
+    nested = default_state() | {
+        "activity_log": [
+            {"start": NOW - 3000, "end": NOW - 300},
+            {"start": NOW - 2000, "end": NOW - 1000},
+        ]
+    }
+    assert round(planner._window_minutes(nested, NOW, 180)) == 45
 
 
 def test_gap_and_failure_backoff_are_skipped_by_manual_runs_only() -> None:
@@ -104,13 +125,12 @@ def test_probability_roll() -> None:
 
 def _thread(**kw: Any) -> dict[str, Any]:
     return {
-        "id"            : "t1",
-        "title"         : "猎户座",
-        "next_query"    : "猎户座 拍摄",
-        "status"        : "open",
-        "steps"         : 0,
-        "updated_at"    : NOW,
-        "cooldown_until": 0.0,
+        "id"        : "t1",
+        "title"     : "猎户座",
+        "next_query": "猎户座 拍摄",
+        "status"    : "open",
+        "steps"     : 0,
+        "updated_at": NOW,
         **kw,
     }
 
@@ -131,7 +151,7 @@ def test_thread_penalties_cooldown_and_step_limit() -> None:
     assert decision.scores[planner.THREAD] == pytest.approx(60 + 12 - 36)
     assert decision.scores[planner.HOT_SCROLL] == 40.0 > decision.scores[planner.THREAD]
     assert decision.choice == planner.INTEREST  # 连续续做课题后插入按兴趣搜 (35+20)
-    assert planner.THREAD not in _decide(threads=[_thread(cooldown_until=NOW + 1)]).scores
+    assert planner.THREAD not in _decide(threads=[_thread(last_session_day="2026-11-05")]).scores
     assert planner.THREAD not in _decide(threads=[_thread(steps=3)]).scores
     assert planner.THREAD not in _decide(threads=[_thread(status="reviewing")]).scores
 

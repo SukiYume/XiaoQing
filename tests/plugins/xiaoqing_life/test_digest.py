@@ -101,7 +101,7 @@ def test_valid_digest_passes_every_check() -> None:
     assert result.terms[0].term == "哈基米" and result.terms[0].item_id == "bili_popular:1"
     assert result.expressions[0].pattern == "X基础，Y不基础"
     assert result.memes == [("c1.1#0", "当反应图")]
-    assert result.thread and result.thread.action == "open"
+    assert result.thread and result.thread.title
 
 
 def test_out_of_range_refs_and_items_are_dropped() -> None:
@@ -153,7 +153,7 @@ def test_limits_profanity_blocklist_and_duplicates() -> None:
         meme_pictures=[],
     )
     result = digest.validate(raw, items, max_memes=2)
-    assert len(result.terms) == digest.MAX_TERMS and len({t.term for t in result.terms}) == 5
+    assert len(result.terms) == digest.TERMS_PER_DIGEST and len({t.term for t in result.terms}) == 5
     assert len(result.looked_at) == 1  # 同一条目只记一次
 
     bad = _raw(
@@ -189,3 +189,30 @@ def test_extract_json_tolerates_wrapping_and_rejects_garbage() -> None:
     assert digest.extract_json("{broken") is None
     assert digest.extract_json("[1, 2]") is None
     assert digest.DigestResult().empty
+
+
+def test_browsing_can_only_open_a_thread_never_advance_one() -> None:
+    """推进小课题只在研究循环里做（要摘录、过滤“材料没说明”、对着 done_when）；浏览时说 progress / answered 不算。"""
+
+    items = _items()
+    for action in ("progress", "answered", "none"):
+        raw = {
+            "thread": {
+                "action": action,
+                "title" : "猫为什么爱纸箱",
+                "note"  : "查明白了",
+                "refs"  : ["i1"],
+            }
+        }
+        assert digest.validate(raw, items, max_memes=0).thread is None
+    opened = {
+        "thread": {
+            "action"   : "open",
+            "title"    : "猫为什么爱纸箱",
+            "done_when": "知道原因",
+            "kind"     : "fact",
+            "refs"     : ["i1"],
+        }
+    }
+    thread = digest.validate(opened, items, max_memes=0).thread
+    assert thread is not None and (thread.done_when, thread.kind) == ("知道原因", "fact")

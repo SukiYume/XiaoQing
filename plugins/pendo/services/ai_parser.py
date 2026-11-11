@@ -13,12 +13,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from dateutil import parser
 
+from core.ai import declare_route_defaults
 from core.args import parse_int
 from core.public_errors import public_error_message
 
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.settings_utils import parse_custom_settings
 from ..utils.time_utils import (
+    CN_WEEKDAYS,
     TimezoneHelper,
     now_in_timezone,
     parse_and_localize,
@@ -30,8 +32,22 @@ from .rule_parser import RuleParser
 if TYPE_CHECKING:
     from .db import Database
 
-logger                  = logging.getLogger(__name__)
-WEEKDAY_NAMES   : Final = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+logger = logging.getLogger(__name__)
+
+# 把自然语言解析成日程、待办、记账字段；主配置里只需要给 parse 指定模型。
+declare_route_defaults(
+    "pendo",
+    {
+        "parse": {
+            "temperature"           : 0.3,
+            "max_tokens"            : 1000,
+            "timeout_seconds"       : 30,
+            "total_timeout_seconds" : 60,
+            "max_retry"             : 1,
+            "retry_interval_seconds": 1,
+        }
+    },
+)
 MOOD_WORD_GROUPS: Final = (
     "positive",
     "negative",
@@ -189,6 +205,9 @@ class AIParser:
   "milestones": [
     {{"name": "节点名称", "time": "YYYY-MM-DDTHH:MM:SS（用户本地墙钟时间，不带时区）"}}
   ],
+  "add_nodes": [
+    {{"name": "新增节点名称", "time": "YYYY-MM-DDTHH:MM:SS", "end_time": null}}
+  ],
   "notes": "备注内容或null"
 }}
 
@@ -198,6 +217,7 @@ class AIParser:
 - 所有时间都表示用户本地墙钟时间，严禁添加Z、UTC或+/-HH:MM时区后缀
 - 创建模式下，指定日期且省略钟点时默认09:00；完全未提供日期时start_time留null，交由系统询问
 - 局部模式只返回明确指定或修改的字段；未提及的日期、钟点、标题、分类、提醒、地点等字段全部省略，保留原有值
+- 编辑已有多节点集合时，用户明确要求新增、追加节点，使用add_nodes列出本次新增的节点，允许只有一个节点；每项包含name、time和可选end_time、notes。日期明确且省略钟点时默认09:00。已有节点保持原值。新增节点的时间只放在add_nodes内；remind_offsets只作用于本次新增节点。普通字段修改时省略add_nodes。创建模式省略add_nodes
 - milestones 只用于两个及以上独立时间节点；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
 - 若用户描述两个及以上独立事项的具名时间点(如注册截止、材料提交等事件节点)，填milestones列表，start_time/end_time留null
 - 只有一个时间点的截止、申请、提交、面试、会议等普通单次日程必须写入start_time，milestones留空列表[]
@@ -210,6 +230,7 @@ class AIParser:
 - 重复范围（未来一个月、截至某日）必须体现在COUNT或UNTIL中；COUNT按范围内实际发生次数计算，包含首次；COUNT与UNTIL只使用一个
 - 普通会议的开始与结束使用start_time/end_time；独立事项的具名时间点使用milestones。end_time须晚于start_time
 - 用户明确要求多节点（如“多节点”“分成几个节点”“每天一个节点”）时必须填milestones：给出的每个日期或时间点各成一个节点，连续多天的活动每天一个节点，start_time/end_time留null；此规则优先于上一条的普通会议写法
+- 节点名称写该节点的含义：用户给了名称就照用（如“会议开始”“会议结束”“材料提交”）；没给时按顺序写“第一天”“第二天”或该时间点要做的事。日期和钟点只放在time里，不能用日期充当节点名称
 - 提醒支持: 分钟/小时/天/周
 - remind_offsets必须为字符串数组，每项格式为“提前正整数分钟/小时/天/周”；提前一小时→["提前1小时"]，半小时→["提前30分钟"]，提前一天和一小时→["提前1天", "提前1小时"]
 - 每个数组元素代表一次提醒；提前一小时三十分钟→["提前90分钟"]。禁止输出裸数字、对象、负数、ISO时长（如PT1H）
@@ -315,7 +336,7 @@ class AIParser:
     def _prompt_time_context(self, user_id: str) -> tuple[str, str]:
         """返回用户本地的当前时间文本和星期文本。"""
         user_now = now_in_timezone(user_id, self.db)
-        return user_now.strftime("%Y-%m-%d %H:%M"), WEEKDAY_NAMES[user_now.weekday()]
+        return user_now.strftime("%Y-%m-%d %H:%M"), CN_WEEKDAYS[user_now.weekday()]
 
     def _fallback_event_result(
         self, source_text: str, user_id: str, *, partial: bool
@@ -463,12 +484,26 @@ class AIParser:
 
         offsets = self._normalize_offset_list(parsed.get("remind_offsets"))
         # 原文中完整、明确的提前提醒优先使用本地解析，避免模型改写单位或漏字段。
-        source_offsets = self._explicit_source_offsets(source_text)
+        # 结构化写入的提醒已经是调用方给定的字段，正文里碰巧出现“提前…提醒”不能改掉它。
+        source_offsets = (
+            []
+            if parsed.get("parse_source") == "record"
+            else self._explicit_source_offsets(source_text)
+        )
         if source_offsets:
             offsets = source_offsets
         milestones = self._normalize_milestones(parsed.get("milestones"))
+        if result.get("rrule"):
+            # 重复日程只按 rrule 展开：模型同时给出节点时只借第一个节点补开始时间，
+            # 否则首尾节点会被当成每次的起止时间。
+            if milestones and not result.get("start_time"):
+                result["start_time"] = milestones[0]["time"]
+            milestones = []
         self._apply_event_milestones(result, milestones, offsets, user_id)
         self._apply_event_reminders(result, parsed, offsets, user_id)
+        if partial and parsed.get("add_nodes"):
+            # 保留整个追加请求，由编辑入口一次校验；无效节点使整次追加失败。
+            result["add_nodes"] = parsed["add_nodes"]
         return result
 
     @staticmethod
@@ -724,7 +759,8 @@ class AIParser:
         """解析偏移量字符串"""
         text = str(offset).strip().lower()
         text = re.sub(r"^提前\s*", "", text)
-        text = re.sub(r"\s*提醒$", "", text).strip()
+        # “提前半小时提醒我”“提前一天叫我一下”：结尾的提醒说法不是时长。
+        text = re.sub(r"\s*(?:提醒|通知|叫)我?(?:一下|下)?$", "", text).strip()
         if not text or OFFSET_TOKEN_RE.sub("", text).strip():
             return None
         seconds = 0.0

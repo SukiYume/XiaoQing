@@ -608,16 +608,15 @@ def test_checker_asks_for_verbatim_evidence_and_known_source_ids():
     assert "只列材料中存在的消息编号" in _TURN_READING_PROMPT
 
 
-def test_checker_treats_insisting_on_being_human_as_in_persona():
+def test_checker_uses_the_same_identity_boundary_as_the_persona():
     from plugins.xiaoqing_chat.llm.reply_checker import _EVIDENCE_REVIEW_PROMPT
     from plugins.xiaoqing_chat.persona import bundled_persona_card
 
     prompt = _EVIDENCE_REVIEW_PROMPT.substitute(bot_name="小青", persona_policy="")
-    assert "坚持自己是真人、用玩笑带过属于符合人设" in prompt
-    assert "只是复述对方的词来反问、装傻或否认，不算自曝" in prompt
-    assert "引用、转述、翻译和讨论这些词" in prompt
-    assert "声称自己是真人时，persona_grounded=false" not in prompt
-    assert "活生生的真人" in bundled_persona_card().facts("小青")
+    assert "她在群里是真人" in prompt and "都是出戏" in prompt
+    assert "引用、转述、翻译和讨论" in prompt
+    facts = bundled_persona_card().facts("小青")
+    assert "你是活生生的人" in facts and "角色设定" not in facts and "模型生成" not in facts
 
 
 @pytest.mark.parametrize("hard_failure", [False, True])

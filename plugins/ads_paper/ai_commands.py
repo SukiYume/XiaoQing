@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
+from core.ai import declare_route_defaults
 from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_message, public_error_response
 
@@ -15,6 +16,20 @@ from .paper_commands import paper_list_text, resolve_bibcode_arg, resolve_paper_
 from .storage import PaperStorage
 
 logger = logging.getLogger(__name__)
+
+# 论文摘要：主配置里只需要给 summary 指定模型。
+declare_route_defaults(
+    "ads_paper",
+    {
+        "summary": {
+            "temperature"          : 0.7,
+            "max_tokens"           : 1200,
+            "timeout_seconds"      : 60,
+            "total_timeout_seconds": 90,
+            "max_retry"            : 0,
+        }
+    },
+)
 
 
 def _utc_today() -> date:

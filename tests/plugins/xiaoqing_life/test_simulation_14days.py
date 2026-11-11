@@ -1,4 +1,4 @@
-"""14 天可控时钟模拟（DESIGN §9.5）：假来源让话题 A 总被喜欢、B 总被讨厌，某来源总失败，晚上 19 点收获高。
+"""14 天可控时钟模拟：假来源让话题 A 总被喜欢、B 总被讨厌，某来源总失败，晚上 19 点收获高。
 
 断言：偏好倒向 A 和高收获活动、失败来源降权后恢复、高收获时段形成习惯、frontier 从标签长出并被试过、
 小课题收获变成 learnings 且后续问题加深、社交反馈把一个词变成 habit 而把另一个压下去。
@@ -18,7 +18,8 @@ import pytest
 from plugins.xiaoqing_life import lifecycle as lc
 from plugins.xiaoqing_life import planner, reinforce, wind_down
 from plugins.xiaoqing_life import turn_context as tc
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.activity import SessionDeps
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceError
 from plugins.xiaoqing_life.stores import LifeStore, default_state
 from tests.plugins.xiaoqing_life.support import (
@@ -302,20 +303,19 @@ async def test_fourteen_days_of_feedback_shape_choices_habits_and_curiosity(tmp_
     parent = "t0"
     store.threads.append(
         {
-            "id"            : "t0",
-            "title"         : "课题0",
-            "why"           : "",
-            "next_query"    : "q0",
-            "status"        : "reviewing",
-            "steps"         : 1,
-            "empty_streak"  : 0,
-            "cooldown_until": 0.0,
-            "notes"         : [{"episode_id": "ev0", "note": "n"}],
-            "takeaway"      : "",
-            "created_at"    : 0.0,
-            "updated_at"    : world.now.timestamp(),
-            "parent_id"     : "",
-            "depth"         : 0,
+            "id"          : "t0",
+            "title"       : "课题0",
+            "why"         : "",
+            "next_query"  : "q0",
+            "status"      : "reviewing",
+            "steps"       : 1,
+            "empty_streak": 0,
+            "notes"       : [{"episode_id": "ev0", "note": "n"}],
+            "takeaway"    : "",
+            "created_at"  : 0.0,
+            "updated_at"  : world.now.timestamp(),
+            "parent_id"   : "",
+            "depth"       : 0,
         }
     )
     depths: list[int] = []
@@ -338,7 +338,9 @@ async def test_fourteen_days_of_feedback_shape_choices_habits_and_curiosity(tmp_
             "parent_id" : parent,
             "title"     : f"后续{night + 1}",
             "why"       : "",
+            "done_when" : "知道答案",
             "next_query": f"q{night + 1}",
+            "kind"      : "fact",
         }
         reply = {
             "diary"  : {"date": day, "text": "今天。", "episode_ids": [f"ev{night + 1}"]},

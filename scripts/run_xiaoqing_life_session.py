@@ -10,6 +10,7 @@
     python scripts/run_xiaoqing_life_session.py --no-ai --activity hot_scroll                          # 只看取材
     python scripts/run_xiaoqing_life_session.py --activity wind_down --advance-minutes 40
     python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "猎户座怎么拍"      # 研究循环
+    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "水珠为什么在热锅上跑" --kind fact --done-when "知道原因" --query "莱顿弗罗斯特效应"
     python scripts/run_xiaoqing_life_session.py --data-dir work/xiaoqing_life/x --activity work_on    # 整理作品
     python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "…" --bili-credential 凭证文件.json
 
@@ -57,17 +58,13 @@ from plugins.xiaoqing_life import (
     research,  # noqa: E402
 )
 from plugins.xiaoqing_life import threads as thread_ops  # noqa: E402
+from plugins.xiaoqing_life.activity import SessionDeps  # noqa: E402
 from plugins.xiaoqing_life.bili_auth import BiliCredential  # noqa: E402
 from plugins.xiaoqing_life.config import parse_life_config, route_configured  # noqa: E402
+from plugins.xiaoqing_life.fetching import gather, interest_topics, open_items  # noqa: E402
 from plugins.xiaoqing_life.lifecycle import seed_interests  # noqa: E402
 from plugins.xiaoqing_life.safety import is_blocked, is_profane, quote_in_source  # noqa: E402
-from plugins.xiaoqing_life.session import (  # noqa: E402
-    SessionDeps,
-    _gather,
-    _open_items,
-    _topics,
-    run_session,
-)
+from plugins.xiaoqing_life.session import run_session  # noqa: E402
 from plugins.xiaoqing_life.sources.base import BoundedFetcher, SourceItem  # noqa: E402
 from plugins.xiaoqing_life.stores import LifeStore  # noqa: E402
 from plugins.xiaoqing_life.wind_down import run_wind_down  # noqa: E402
@@ -311,13 +308,13 @@ async def _main(args: argparse.Namespace) -> int:
                     print("第一轮行动：", opening)
             work_before = copy.deepcopy(store.works)
             if args.no_ai:
-                items, failures = await _gather(life_cfg, decision, fetch)
+                items, failures = await gather(life_cfg, decision, fetch)
                 on_items(items)
-                opened = await _open_items(
+                opened = await open_items(
                     life_cfg,
                     fetch,
                     items[: life_cfg.max_items_per_session],
-                    _topics(store, life_cfg, moment.timestamp()),
+                    interest_topics(store, life_cfg, moment.timestamp()),
                 )
                 result["opened"] = [
                     {
@@ -358,7 +355,7 @@ async def _main(args: argparse.Namespace) -> int:
                         raw_box.get("raw"),
                     )
                     print("整理结果：", json.dumps(result["work_ops"], ensure_ascii=False))
-                elif raw_box:
+                elif "raw" in raw_box:  # term_lookup 不调模型，raw_box 里只有 thread_id
                     verdict = digest_mod.validate(
                         raw_box["raw"],
                         raw_box["items"],
@@ -457,6 +454,17 @@ def _decision(
 
     if args.activity == "hot_scroll":
         return planner.Decision("hot_scroll", "forced", {}, {"source": args.source})
+    if args.activity == "interest_dive" and args.chat_topic:
+        # 去看睡前挑出来的群聊话题：搜索词取她挑的时候写的（没有就用 --query / 话题本身）。
+        picks = store.state.get("chat_topics", [])
+        pick  = next((p for p in picks if p.get("topic") == args.chat_topic), {})
+        query = args.query or str(pick.get("query") or args.chat_topic)
+        return planner.Decision(
+            "interest_dive",
+            "forced",
+            {},
+            {"query": query, "explored": True, "chat_topic": args.chat_topic},
+        )
     if args.activity == "interest_dive":
         query = (
             args.query
@@ -517,6 +525,8 @@ def _pick_thread(args: Any, store: LifeStore, cfg: Any, moment: datetime) -> dic
             next_query=args.query or args.thread,
             now=moment.timestamp(),
             topic=thread_ops.pick_topic(store.interests, args.topic, args.thread, args.query),
+            done_when=args.done_when,
+            kind=args.kind,
         )
         if opened is None:
             raise SystemExit("小课题名额已满，无法开新的")
@@ -594,6 +604,20 @@ def main() -> int:
     )
     parser.add_argument(
         "--topic", default="", help="thread_continue：新开小课题的话题（正式流程里由消化给出）"
+    )
+    parser.add_argument(
+        "--done-when", default="", help="thread_continue：新开小课题“弄明白到什么程度就算完”"
+    )
+    parser.add_argument(
+        "--chat-topic",
+        default = "",
+        help    = "interest_dive：去看睡前挑出的群聊话题（搜索词取挑的时候写的，或 --query）",
+    )
+    parser.add_argument(
+        "--kind",
+        default = "",
+        choices = ("", "fact", "practice"),
+        help    = "thread_continue：新开小课题的问题类型（fact 先查百科维基，practice 先搜 B站）",
     )
     parser.add_argument(
         "--work", default="", help="work_on：作品 ID 或标题（缺省取第一个进行中的）"

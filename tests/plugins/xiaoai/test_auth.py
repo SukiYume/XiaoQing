@@ -217,6 +217,17 @@ async def test_read_only_retries_after_refresh_and_actions_never_replay(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_cloud_rate_limit_is_reported_as_such_not_as_a_login_problem(monkeypatch):
+    from core.bounded_http import HttpStatusError
+
+    monkeypatch.setattr(client, "request_json", AsyncMock(side_effect=HttpStatusError(429)))
+    account = client.TokenAccount(object(), credentials(), AsyncMock())
+    with pytest.raises(client.BridgeError, match="限流") as exc:
+        await account.mi_request("xiaomiio", "https://api.io.mi.com/app/home/device_list", {}, {})
+    assert not isinstance(exc.value, client.AuthRequired)
+
+
+@pytest.mark.asyncio
 async def test_service_login_requires_user_validation_and_preserves_secrets():
     async with auth.session_factory() as session:
         with aioresponses() as mocked:

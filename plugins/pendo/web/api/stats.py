@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from calendar import monthrange
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -14,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ...models.item import EventItem
 from ...services.db import Database
 from ...utils.currency import currency_code
-from ...utils.time_utils import TimezoneHelper, now_in_timezone
+from ...utils.time_utils import CN_WEEKDAYS, TimezoneHelper, now_in_timezone
 from ..analytics.diary_overview import build_diary_overview
 from ..analytics.ledger_insights import build_ledger_insights
 from ..analytics.notes_overview import build_notes_overview
@@ -40,8 +41,6 @@ LEDGER_HISTOGRAM_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
     ("300-1000", 300, 1000),
     ("1000+", 1000, None),
 )
-
-_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 
 def _today(db: Database | None = None, owner_id: str | None = None) -> date:
@@ -71,7 +70,11 @@ def _day_in_range(value: date | None, start: date, end: date) -> bool:
 def _coarse_timestamp_dates(start: date, end: date) -> tuple[str, str]:
     """给混合偏移时间保留全球最大时差所需的两日粗筛余量。"""
 
-    return (start - timedelta(days=2)).isoformat(), (end + timedelta(days=2)).isoformat()
+    margin = timedelta(days=2)
+    # 日期两端贴着可表示范围时直接取边界，不能让 9999 年的查询算出越界日期。
+    lower = date.min if start - date.min < margin else start - margin
+    upper = date.max if date.max - end < margin else end + margin
+    return lower.isoformat(), upper.isoformat()
 
 
 def _event_time_slot(hour: int) -> str:
@@ -110,6 +113,25 @@ def _aggregate_ledger_periods(
         elif transaction_type == "expense":
             periods[period]["expense"] = total
     return list(periods.values())
+
+
+def _ledger_monthly_rows(
+    conn: sqlite3.Connection, owner_id: str, currency: str, start: str, end: str
+) -> list[Any]:
+    """按月、按收支类型汇总一个币种在闭区间日期内的账目金额。"""
+
+    return conn.execute(
+        f"""
+        SELECT strftime('%Y-%m', ledger_date) AS month,
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
+        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
+        AND ledger_date BETWEEN ? AND ?
+        GROUP BY month, ledger_kind ORDER BY month
+    """,
+        (owner_id, currency, start, end),
+    ).fetchall()
 
 
 def _validate_date_bounds(start: str, end: str) -> tuple[str, str]:
@@ -236,18 +258,7 @@ def ledger_stats(
     currency = currency_code(currency)
     conn     = db.get_connection()
 
-    monthly = conn.execute(
-        f"""
-        SELECT strftime('%Y-%m', ledger_date) AS month,
-               transaction_type AS ledger_kind,
-               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND ledger_date BETWEEN ? AND ?
-        GROUP BY month, ledger_kind ORDER BY month
-    """,
-        (owner_id, currency, start, end),
-    ).fetchall()
+    monthly = _ledger_monthly_rows(conn, owner_id, currency, start, end)
 
     by_category = conn.execute(
         f"""
@@ -486,7 +497,7 @@ def task_stats(
         )
         entry[activity] = count
     weekly        = [weekly_map[key] for key in sorted(weekly_map)]
-    new_this_week = sum(int(item["created"]) for item in weekly)
+    created_count = sum(int(item["created"]) for item in weekly)
 
     category_counts = sorted(
         text_category_counter.items(),
@@ -509,7 +520,8 @@ def task_stats(
                     key=lambda item: str(item[0] or ""),
                 )
             ],
-            "new_this_week": new_this_week,
+            # 所选范围内新建的任务数，不限于本周。
+            "created_count": created_count,
         },
         "message": "",
     }
@@ -644,7 +656,7 @@ def event_stats(
     time_slots = [{"slot": slot, "count": slot_counter[slot]} for slot in sorted(slot_counter)]
     weekday_slots = [
         {
-            "weekday": _WEEKDAY_LABELS[weekday],
+            "weekday": CN_WEEKDAYS[weekday],
             "slot"   : slot,
             "count"  : count,
         }
@@ -687,21 +699,10 @@ def ledger_comparison(
     conn          = db.get_connection()
     month_window  = [_shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
     query_start   = _shift_months(month_window[0], -12).isoformat()
-    query_end     = _shift_months(current_month, 1).isoformat()
+    query_end = (_shift_months(current_month, 1) - timedelta(days=1)).isoformat()
 
     # 同比窗口已经覆盖当前窗口和环比基线，一次查询即可满足三种比较。
-    monthly_rows = conn.execute(
-        f"""
-        SELECT strftime('%Y-%m', ledger_date) AS month,
-               transaction_type AS ledger_kind,
-               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND ledger_date >= ? AND ledger_date < ?
-        GROUP BY month, ledger_kind ORDER BY month
-    """,
-        (owner_id, currency, query_start, query_end),
-    ).fetchall()
+    monthly_rows = _ledger_monthly_rows(conn, owner_id, currency, query_start, query_end)
 
     monthly_map: dict[str, JsonObject] = {}
     for month, transaction_type, total in monthly_rows:

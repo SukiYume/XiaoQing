@@ -569,6 +569,114 @@ def persona_identity_consistency_check(
     return None
 
 
+# 网址、域名和邮箱：她只会转述眼前有的，自己报不出一个真链接。
+_LINK_RE = re.compile(
+    r"(?:https?://|www\.)[^\s，。！？、；）)】\]]+"
+    r"|(?<![A-Za-z0-9-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:com|cn|net|org|io|cc|top|xyz|tv|me)(?![A-Za-z])"
+    r"(?:/[^\s，。！？、；）)】\]]*)?"
+)
+
+
+def ungrounded_link_check(*, reply: str, sources: Sequence[str]) -> ReplyCheckResult | None:
+    """回复里出现了对话、读图结果和资料里都没有的网址或邮箱：拦下重写。
+
+    模型偶尔会在句尾带出一段训练语料里的垃圾链接（“搭配的夸克网盘……https://pan.……”）。
+    通知截图上的邮箱、对方发来的链接、生活记录里的视频地址都在 ``sources`` 里，照常能说；
+    带代码的回复（示例里的网址是内容）不查。
+    """
+
+    text = str(reply or "")
+    if "`" in text:
+        return None
+    known = "\n".join(str(source or "") for source in sources).casefold()
+    for match in _LINK_RE.finditer(text):
+        link = match.group(0).rstrip(".:：/").casefold()
+        if link and link not in known:
+            return ReplyCheckResult(
+                suitable = False,
+                reason   = (
+                    f"回复里的“{match.group(0)[:60]}”在对话和资料里都没有出现过，"
+                    "她不会凭空给出网址或邮箱；去掉这句，只说眼前有依据的内容"
+                ),
+                need_replan  = True,
+                severity     = "hard",
+                failure_code = "context_grounding",
+            )
+    return None
+
+
+_ASKS_REASON_RE = re.compile(r"为什么|为啥|为何|咋|怎么|凭什么|何必|原因|理由|缘故|why", re.I)
+
+
+def narrated_motive_check(*, reply: str, current_text: str) -> ReplyCheckResult | None:
+    """没人问原因，回复却以“因为”起头：多半是把自己为什么接话说了出来，重写成直接接话。
+
+    规划器的想法随提示词交给生成，偶尔会被当成要回答的问题（“因为阿梨发的图写着深夜……这个反差
+    挺好接话的”）。对方问了为什么、怎么回事时，“因为……”是正常回答，不拦。
+    """
+
+    if not str(reply or "").lstrip().startswith("因为") or _ASKS_REASON_RE.search(
+        str(current_text or "")
+    ):
+        return None
+    return ReplyCheckResult(
+        suitable     = False,
+        reason       = "没人问原因，回复却在解释自己为什么要接这句话；直接接话，把想说的那句说出来",
+        need_replan  = False,
+        severity     = "soft",
+        failure_code = "narrated_motive",
+    )
+
+
+# 对方约她线下见面、出去玩的说法。只用来决定这一轮要不要送审和挑哪组兜底句，
+# 她答没答应由审查模型看（``agrees_offline``）：“一起看看这道题”这类线上的事也会命中。
+OFFLINE_INVITE_RE = re.compile(
+    r"(?:一起|出来|约(?:你|个|一下)?|带你|来找你|见个?面|面基)"
+    r"[^。！？!?\n]{0,12}(?:玩|吃|去|逛|看|见|聚|面基)"
+    r"|(?:周末|明天|今晚|下次)[^。！？!?\n]{0,8}(?:有空|一起|出来)"
+    r"|去不去|(?:发|爆)(?:张|个)?(?:自拍|照片)|(?:开|连)个?(?:语音|视频|麦)"
+)
+
+# 后面跟着“员、专业、比赛”之类时说的是别的东西（程序员、机器人社、AI 专业）。
+_AI_NOUN = (
+    r"(?:AI|ai|Ai|人工智能|聊天机器人|机器人|语言模型|大模型|模型|程序|bot|Bot|BOT|虚拟助手|智能助手)"
+    r"(?!员|猿|媛|社|队|专业|方向|爱好|绘|画|课|比赛|党|师)"
+)
+_AI_SELF_RE = re.compile(
+    rf"我(?:只|就|其实|确实|真的|本来|毕竟)?(?:是|只是|就是)(?:一个|个|一名|一款|一只)?{_AI_NOUN}"
+    rf"|(?:作为|身为)(?:一个|一名|一款)?{_AI_NOUN}"
+    r"|我的(?:系统)?(?:提示词|系统指令|系统设定)|(?:系统提示词?|system prompt)(?:是|如下|[:：])"
+)
+# 否认、反问和假设不是自称：“我又不是机器人”“谁说我是AI”“我要是AI早就……”。
+_AI_SELF_NEGATED_BEFORE_RE = re.compile(
+    r"(?:不|没|谁说|你说|说|哪|才|难道|怎么可能|要是|如果|假如)\s*$"
+)
+_AI_SELF_QUESTION_AFTER_RE = re.compile(r"^[^，。！!\n]{0,6}(?:吗|嘛|？|\?|还是)")
+
+
+def persona_break_check(*, reply: str) -> ReplyCheckResult | None:
+    """她在群里是真人：回复里自称 AI、模型、机器人，或说起自己的提示词，直接拦下重写。
+
+    这类出戏有固定说法，不必等审查模型：否认、反问、假设和玩笑（“你见过早八迟到的 AI 吗”）不受影响。
+    """
+
+    candidate = normalize_text(reply)
+    for match in _AI_SELF_RE.finditer(candidate):
+        before = candidate[max(0, match.start() - 6) : match.start()]
+        after  = candidate[match.end() : match.end() + 8]
+        if _AI_SELF_NEGATED_BEFORE_RE.search(before) or _AI_SELF_QUESTION_AFTER_RE.search(after):
+            continue
+        return persona_contract_rejection(
+            "回复自称 AI、模型或机器人，或谈起自己的提示词；她是真人，按人设嫌弃、反问或玩笑带过"
+        )
+    return None
+
+
+_CALCULATION_REQUEST_RE = re.compile(
+    r"一共|总共|合计|加起来|多少钱|算一下|算算|帮我算|等于(?:多少|几)|平均(?:是|多少|每)|打[一二三四五六七八九0-9.]+折"
+)
+
+
 def requires_llm_semantic_check(
     *,
     reply: str,
@@ -586,6 +694,12 @@ def requires_llm_semantic_check(
     current   = normalize_text(current_text)
     candidate = normalize_text(reply)
     if EXPLICIT_COMMUNICATION_CONSTRAINT_RE.search(current):
+        return True
+    # 对方像是在约她线下见面：她答没答应要看语义，交给审查。
+    if OFFLINE_INVITE_RE.search(current):
+        return True
+    # 对方在让她算数，回复里报了数：算没算对交给审查。
+    if _CALCULATION_REQUEST_RE.search(current) and re.search(r"[0-9]", candidate):
         return True
     if re.search(
         persona_subject_pattern(bot_name) + _DURABLE_PERSONA_QUESTION_TAIL,

@@ -41,9 +41,7 @@ class _EventParser:
 
 
 class _NoEventConflict:
-    def detect_conflict(
-        self, _user_id: str, _start_time: str, _end_time: str | None = None
-    ) -> list[Any]:
+    def detect_conflicts(self, _user_id: str, _windows: Any) -> list[Any]:
         return []
 
 

@@ -46,13 +46,17 @@ from ..utils.validators import (
 )
 from .db_auth import WebAuthRepositoryMixin
 from .db_reminders import ReminderRepositoryMixin
-from .db_schema import configure_connection, initialize_schema, reminder_fire_at_utc
+from .db_schema import (
+    SQLITE_ID_BATCH_SIZE,
+    configure_connection,
+    initialize_schema,
+    reminder_fire_at_utc,
+)
 from .event_collection_mutations import restore_collection_edit, update_collection
 
-logger                = logging.getLogger(__name__)
-_CACHE_MISS           = object()
-_SQLITE_ID_BATCH_SIZE = 500
-_SQL_IDENTIFIER       = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+logger          = logging.getLogger(__name__)
+_CACHE_MISS     = object()
+_SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def _is_iso_date(value: str) -> bool:
@@ -871,8 +875,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 deleted   = False,
                 item_type = item_type,
             )
-            for offset in range(0, len(active_ids), _SQLITE_ID_BATCH_SIZE):
-                batch        = active_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            for offset in range(0, len(active_ids), SQLITE_ID_BATCH_SIZE):
+                batch        = active_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
                 cursor.execute(
                     "UPDATE items SET deleted = 1, deleted_at = ?, updated_at = ?, "
@@ -928,8 +932,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> list[str]:
         """按用户、删除状态和可选类型筛 ID，并保持调用方原有顺序。"""
         matched: set[str] = set()
-        for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-            batch             = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(item_ids), SQLITE_ID_BATCH_SIZE):
+            batch             = item_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders      = ",".join("?" for _ in batch)
             where             = ["owner_id = ?", f"id IN ({placeholders})"]
             params: list[Any] = [owner_id, *batch]
@@ -1108,8 +1112,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         unique_ids = list(dict.fromkeys(str(value) for value in collection_ids if value))
         collections: dict[str, dict[str, Any]] = {}
         conn = self.get_connection()
-        for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             rows         = conn.execute(
                 f"SELECT * FROM event_collections "
@@ -1132,11 +1136,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         *,
         expected_version: int | None         = None,
         operation_log: dict[str, Any] | None = None,
+        new_nodes: Sequence[EventItem]       = (),
     ) -> bool:
         resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
         if resolved_id is None:
             return False
-        if not self._EVENT_COLLECTION_UPDATE_FIELDS.intersection(updates):
+        if not self._EVENT_COLLECTION_UPDATE_FIELDS.intersection(updates) and not new_nodes:
             return False
         update_collection(
             self,
@@ -1145,6 +1150,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             updates,
             expected_version = expected_version,
             operation_log    = operation_log,
+            new_nodes        = new_nodes,
         )
         return True
 
@@ -1440,8 +1446,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return {}
         conn                   = self.get_connection()
         items: dict[str, Item] = {}
-        for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             rows         = conn.execute(
                 f"SELECT * FROM items WHERE owner_id = ? AND deleted = 0 "
@@ -1837,6 +1843,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             totals["balance"] = round(totals["income"] - totals["expense"], 2)
         return result
 
+    def _single_currency_conditions(
+        self, owner_id: str, filters: dict[str, Any] | None, currency: str
+    ) -> tuple[list[str], list[Any]]:
+        """列表筛选条件再限定一个币种；没写币种的历史账目按 CNY 算。"""
+        where, params = self._item_list_conditions(owner_id, filters)
+        where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
+        params.append(currency.strip().upper() or "CNY")
+        return where, params
+
     def aggregate_item_amounts(
         self,
         owner_id: str,
@@ -1846,9 +1861,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> dict[str, tuple[int, int]]:
         """按交易类型汇总单币种金额；缺失币种按历史默认 CNY 解释。"""
 
-        where, params = self._item_list_conditions(owner_id, filters)
-        where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
-        params.append(currency.strip().upper() or "CNY")
+        where, params = self._single_currency_conditions(owner_id, filters, currency)
         rows = (
             self.get_connection()
             .execute(
@@ -1881,9 +1894,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> dict[str, tuple[int, int]]:
         """按账目日期汇总单币种收支分值，不物化账目行。"""
 
-        where, params = self._item_list_conditions(owner_id, filters)
-        where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
-        params.append(currency.strip().upper() or "CNY")
+        where, params = self._single_currency_conditions(owner_id, filters, currency)
         rows = (
             self.get_connection()
             .execute(
@@ -2545,8 +2556,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             base_params.extend([category_filter, ItemType.EVENT.value, owner_id, category_filter])
 
         items_by_id: dict[str, Item] = {}
-        for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(item_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = item_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             where        = [f"id IN ({placeholders})", *base_where]
             rows         = conn.execute(
@@ -2559,6 +2570,50 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     items_by_id[item.id] = item
         return items_by_id
 
+    def _collapse_recurring_hits(self, owner_id: str, item_ids: list[str]) -> list[str]:
+        """同一重复日程的多次实例只保留一个：还没开始的最近一次，都已过去时取最后一次。
+
+        保留的实例排在该日程第一次出现的位置，其余命中的相对顺序不变。
+        """
+        now_text                                    = utc_now_iso()
+        groups   : dict[str, list[tuple[str, str]]] = {}
+        member_of: dict[str, str]                   = {}
+        conn                                        = self.get_connection()
+        for offset in range(0, len(item_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = item_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
+            placeholders = ",".join("?" for _ in batch)
+            rows         = conn.execute(
+                f"""
+                SELECT id, event_collection_id, start_time FROM items
+                WHERE owner_id = ? AND deleted = 0 AND type = '{ItemType.EVENT.value}'
+                  AND event_collection_kind = 'recurring' AND event_collection_id IS NOT NULL
+                  AND id IN ({placeholders})
+                """,
+                [owner_id, *batch],
+            ).fetchall()
+            for row in rows:
+                collection_id = str(row["event_collection_id"])
+                groups.setdefault(collection_id, []).append(
+                    (str(row["start_time"] or ""), str(row["id"]))
+                )
+                member_of[str(row["id"])] = collection_id
+
+        keep: dict[str, str] = {}
+        for collection_id, members in groups.items():
+            upcoming            = [member for member in members if member[0] >= now_text]
+            keep[collection_id] = min(upcoming)[1] if upcoming else max(members)[1]
+
+        collapsed: list[str] = []
+        emitted  : set[str]  = set()
+        for item_id in item_ids:
+            owner_collection = member_of.get(item_id)
+            if owner_collection is None:
+                collapsed.append(item_id)
+            elif owner_collection not in emitted:
+                emitted.add(owner_collection)
+                collapsed.append(keep[owner_collection])
+        return collapsed
+
     def search_items_page(
         self,
         owner_id: str,
@@ -2566,11 +2621,19 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         filters: dict[str, Any] | None = None,
         limit: int                     = 100,
         offset: int                    = 0,
+        *,
+        collapse_recurring: bool = False,
     ) -> tuple[list[Item], int]:
-        """全文搜索，返回当前页条目与总匹配数。"""
+        """全文搜索，返回当前页条目与总匹配数。
+
+        ``collapse_recurring`` 让同一重复日程只占一条结果：聊天端一页只有十几条，
+        不折叠时一个每周例会就能把其他命中全部挤出去。
+        """
         page_size = max(0, int(limit))
         start     = max(0, int(offset))
         merged_ids = self._search_item_ids(owner_id, query, filters=filters)
+        if collapse_recurring:
+            merged_ids = self._collapse_recurring_hits(owner_id, merged_ids)
         total = len(merged_ids)
         if not total or page_size <= 0:
             return [], total
@@ -2611,8 +2674,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         now                     = utc_now_iso()
         affected                = 0
         restored_ids: list[str] = []
-        for offset in range(0, len(restorable_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = restorable_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(restorable_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = restorable_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             cursor.execute(
                 f"""
@@ -2710,8 +2773,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             created_at=timestamp,
         )
         marked = 0
-        for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             cursor.execute(
                 f"""
@@ -3058,8 +3121,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 ).fetchone()
                 if version_row is None or int(version_row["version"]) != details["after_version"]:
                     raise ItemVersionConflictException(restored_id)
-            for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-                batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            for offset in range(0, len(item_ids), SQLITE_ID_BATCH_SIZE):
+                batch        = item_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
                 cursor.execute(
                     f"UPDATE items SET {set_clause}, version = version + 1 "
@@ -3413,8 +3476,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
         if missing_user_ids:
             conn = self.get_connection()
-            for offset in range(0, len(missing_user_ids), _SQLITE_ID_BATCH_SIZE):
-                batch        = missing_user_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            for offset in range(0, len(missing_user_ids), SQLITE_ID_BATCH_SIZE):
+                batch        = missing_user_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
                 rows         = conn.execute(
                     f"SELECT * FROM user_settings WHERE user_id IN ({placeholders})",

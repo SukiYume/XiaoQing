@@ -575,8 +575,7 @@
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_goal_reset.py",
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_reply_generation.py",
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_review_lifecycle.py",
-        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_review_store.py",
-        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_anthropomorphic_experiment.py"
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_review_store.py"
       ],
       "dynamic_codes": [
         "xiaoqing_chat.xc",

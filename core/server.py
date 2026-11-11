@@ -276,10 +276,12 @@ class _InboundEventDispatcher:
         *,
         max_workers: int,
         queue_size: int,
-        drain_timeout_seconds: float = 5.0,
-        allow_lazy_start: bool       = False,
+        drain_timeout_seconds: float                      = 5.0,
+        allow_lazy_start: bool                            = False,
+        on_admit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._handler     = handler
+        self._on_admit    = on_admit
         self._max_workers = max(1, int(max_workers))
         self._queue_size  = max(0, int(queue_size))
         # queue_size is the waiting backlog. Running workers are additional
@@ -392,6 +394,11 @@ class _InboundEventDispatcher:
         )
         lane = self._lanes.setdefault(key, _InboundEventLane())
         lane.pending.append(ticket)
+        if self._on_admit is not None:
+            try:
+                self._on_admit(payload)
+            except Exception:
+                logger.exception("Inbound event admission observer failed")
         self._inflight += 1
         assert self._drained is not None
         self._drained.clear()
@@ -2056,10 +2063,11 @@ class InboundManager:
         inbound_ws_uri: str,
         token: str,
         handler: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]],
-        ws_max_workers: int                 = DEFAULT_INBOUND_WS_MAX_WORKERS,
-        ws_queue_size: int                  = DEFAULT_INBOUND_WS_QUEUE_SIZE,
+        ws_max_workers: int = DEFAULT_INBOUND_WS_MAX_WORKERS,
+        ws_queue_size: int = DEFAULT_INBOUND_WS_QUEUE_SIZE,
         ws_broadcast_timeout_seconds: float = DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
-        trusted_tls_proxy: bool             = False,
+        trusted_tls_proxy: bool = False,
+        on_event_admitted: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if type(trusted_tls_proxy) is not bool:
             raise TypeError("trusted_tls_proxy must be a boolean")
@@ -2085,6 +2093,7 @@ class InboundManager:
         self._token             = token
         self._auth_lock         = threading.RLock()
         self._handler           = handler
+        self._on_event_admitted = on_event_admitted
         self._ws_max_workers    = _parse_positive_int(
             ws_max_workers,
             default   = DEFAULT_INBOUND_WS_MAX_WORKERS,
@@ -2150,6 +2159,7 @@ class InboundManager:
         default_ws_broadcast_timeout_seconds: float = (
             DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS
         ),
+        on_event_admitted: Callable[[dict[str, Any]], None] | None = None,
     ) -> "InboundManager | None":
         spec = _parse_inbound_manager_spec(
             config,
@@ -2173,6 +2183,7 @@ class InboundManager:
             ws_queue_size                = spec.ws_queue_size,
             ws_broadcast_timeout_seconds = spec.ws_broadcast_timeout_seconds,
             trusted_tls_proxy            = spec.trusted_tls_proxy,
+            on_event_admitted            = on_event_admitted,
         )
 
     async def broadcast(self, action: dict[str, Any]) -> BroadcastResult:
@@ -2393,6 +2404,7 @@ class InboundManager:
             max_workers           = self._ws_max_workers,
             queue_size            = self._ws_queue_size,
             drain_timeout_seconds = 5.0,
+            on_admit              = self._on_event_admitted,
         )
         self._event_dispatcher = dispatcher
         await dispatcher.start()

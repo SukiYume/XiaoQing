@@ -1,4 +1,4 @@
-"""第二轮行为：softmax 选活动、名义浏览时段、经历细节与链接、兴趣合并、取用精度、评论预选、消化时刻提示。"""
+"""浏览的细节：softmax 选活动、名义浏览时段、经历细节与链接、兴趣合并、取用精度、评论预选、消化时刻提示。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ import pytest
 from plugins.xiaoqing_life import digest, planner
 from plugins.xiaoqing_life import lifecycle as lc
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.config import parse_life_config
+from plugins.xiaoqing_life.fetching import pick_clicks, prescore
 from plugins.xiaoqing_life.planner import HOT_SCROLL, INTEREST, Decision
 from plugins.xiaoqing_life.safety import clean_text
-from plugins.xiaoqing_life.session import SessionDeps, pick_clicks, prescore, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import bilibili
 from plugins.xiaoqing_life.sources.base import SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
@@ -28,18 +30,13 @@ from tests.plugins.xiaoqing_life.support import (
     bili_video,
     comments_payload,
     make_cfg,
+    new_store,
     popular_payload,
 )
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
 HOUR   = 3600.0
-
-
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
 
 
 # ───────────────────────────── A1 softmax ─────────────────────────────
@@ -110,7 +107,7 @@ def _fetch() -> FakeFetcher:
 
 @pytest.mark.asyncio
 async def test_session_has_a_nominal_span_and_episodes_are_spread_inside_it(tmp_path: Path) -> None:
-    store    = _store(tmp_path)
+    store    = new_store(tmp_path)
     decision = Decision(HOT_SCROLL, "sampled", {}, {"source": "bili_popular"})
     await run_session(store, make_cfg(), decision, _deps(_fetch(), FakeAI(DIGEST)))
     state = store.state
@@ -125,7 +122,7 @@ async def test_session_has_a_nominal_span_and_episodes_are_spread_inside_it(tmp_
 
 @pytest.mark.asyncio
 async def test_span_per_activity_is_configurable_and_failure_shortens_it(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     cfg = make_cfg(session_minutes={"hot_scroll": [30, 30]})
     await run_session(
         store,
@@ -134,7 +131,7 @@ async def test_span_per_activity_is_configurable_and_failure_shortens_it(tmp_pat
         _deps(_fetch(), FakeAI(DIGEST)),
     )
     assert store.state["last_session_end"] - store.state["last_session_at"] == 30 * 60
-    failing = _store(tmp_path / "f")
+    failing = new_store(tmp_path / "f")
     await run_session(
         failing,
         cfg,
@@ -203,14 +200,14 @@ def _call(store: LifeStore, text: str, **kw: Any) -> dict[str, Any] | None:
 
 
 def test_turn_context_only_surfaces_episodes_already_reached(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [_episode(1, 600), _episode(2, -600, title="还没刷到的视频")]
     lines = _call(store, "最近刷到啥好玩的")["life_lines"]
     assert "标题1" in lines and "还没刷到的视频" not in lines
 
 
 def test_turn_context_says_what_she_is_doing_without_unreached_titles(tmp_path: Path) -> None:
-    store                  = _store(tmp_path)
+    store                  = new_store(tmp_path)
     store.state["current"] = {
         "choice": "interest_dive",
         "query" : "天文摄影",
@@ -237,7 +234,7 @@ def test_turn_context_says_what_she_is_doing_without_unreached_titles(tmp_path: 
 def test_episode_line_states_what_it_was_about_and_gives_the_link_only_on_request(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(
         _episode(
             1,
@@ -261,7 +258,7 @@ def test_episode_line_states_what_it_was_about_and_gives_the_link_only_on_reques
 
 @pytest.mark.asyncio
 async def test_committed_episode_keeps_gist_uploader_and_url(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     fetch = FakeFetcher(
         {
             "/popular": popular_payload(
@@ -284,7 +281,7 @@ async def test_committed_episode_keeps_gist_uploader_and_url(tmp_path: Path) -> 
 
 
 def test_named_yesterday_or_day_before_restricts_to_that_day(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(1, 2 * HOUR, day="2026-11-05", title="今天的视频"),
         _episode(2, 26 * HOUR, day="2026-11-04", title="昨天的视频"),
@@ -365,7 +362,7 @@ def test_consolidation_snapshots_are_deterministic_once_per_topic_and_tier() -> 
 
 
 def test_snapshots_answer_questions_about_what_she_likes(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.snapshots.append(
         {
             "topic"     : "天文摄影",
@@ -399,7 +396,7 @@ def _term(store: LifeStore, name: str, meaning: str, **kw: Any) -> None:
 
 
 def test_single_character_terms_are_never_understood_hits(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "草", "笑")
     _term(store, "绷不住", "忍不住笑")
     response = _call(store, "草 真的绷不住了")
@@ -407,7 +404,7 @@ def test_single_character_terms_are_never_understood_hits(tmp_path: Path) -> Non
 
 
 def test_stopword_bigrams_do_not_make_a_term_usable(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "哈基米", "这个就是什么时候都可以用的")
     payload = {
         "text"         : "今天我们觉得这个真的是什么",
@@ -423,7 +420,7 @@ def test_stopword_bigrams_do_not_make_a_term_usable(tmp_path: Path) -> None:
 
 
 def test_dirty_only_when_something_actually_changed(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "哈基米", "对猫咪的爱称")
     payload = {"text": "看这个哈基米", "recent": [], "bot_recent": [], "unknown_terms": []}
     response, dirty = tc.turn_context(store, make_cfg(), payload, MOMENT, random.Random(0.99 and 1))
@@ -495,7 +492,7 @@ def test_digest_prompt_carries_time_weekday_and_the_routine_activity() -> None:
 @pytest.mark.asyncio
 async def test_session_passes_the_routine_activity_into_the_digest_prompt(tmp_path: Path) -> None:
     ai    = FakeAI({"looked_at": []})
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     await run_session(
         store,
         make_cfg(),

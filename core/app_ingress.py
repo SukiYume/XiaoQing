@@ -18,6 +18,7 @@ from .app_support import (
 from .constants import (
     DEFAULT_INBOUND_WS_QUEUE_SIZE,
 )
+from .inbound_backlog import InboundBacklog
 from .lifecycle import (
     DeferredCancellation as _DeferredCancellation,
 )
@@ -59,6 +60,8 @@ class AppIngressMixin:
             source_client: OneBotWsClient | None = None,
         ) -> None:
             raise NotImplementedError
+
+        inbound_backlog: InboundBacklog
 
         _inbound_candidates_active: set[InboundManager]
 
@@ -167,6 +170,7 @@ class AppIngressMixin:
                 ws_client.update(ws_uri, "", credentials_trusted=False)
                 return
             ws_client.set_on_connect(self._on_ws_connected)
+            ws_client.set_on_event_queued(self.inbound_backlog.arrived)
             self.ws_client                  = ws_client
             self._ws_client_auth_quarantine = None
             self._ws_client_auth_generation = self._onebot_auth_generation
@@ -203,9 +207,10 @@ class AppIngressMixin:
         try:
             with self._inbound_candidates_lock:
                 desired = InboundManager.from_config(
-                    config  = config,
-                    token   = inbound_token,
-                    handler = self._handle_inbound_event,
+                    config            = config,
+                    token             = inbound_token,
+                    handler           = self._handle_inbound_event,
+                    on_event_admitted = self.inbound_backlog.arrived,
                 )
                 if desired is not None:
                     self._inbound_candidates_active.add(desired)

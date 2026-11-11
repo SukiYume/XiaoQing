@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .safety import clean_text, is_blocked, overlap, similar
-from .stores import new_id
+from .stores import done_today, mark_done, new_id
 
 MAX_METHODS     = 30
 MAX_SELECTED    = 2
@@ -90,7 +90,7 @@ def apply_extracted(
     相似时不新建，只给那条 ``wins += 1``。
     """
 
-    if not isinstance(raw, list) or state.get("method_day") == day:
+    if not isinstance(raw, list) or done_today(state, "method", day):
         return False
     for row in raw:
         if not isinstance(row, dict):
@@ -108,7 +108,7 @@ def apply_extracted(
         applies = clean_text(row.get("applies_to"), APPLIES_CHARS)
         if not text or is_blocked(f"{text} {applies}", blocked):
             continue
-        state["method_day"] = day
+        mark_done(state, "method", day)
         twin = next((m for m in active(methods) if similar(text, str(m.get("text", "")))), None)
         if twin is not None:
             twin["wins"] = int(twin.get("wins", 0)) + 1

@@ -176,6 +176,8 @@ class CommandOutcome:
     # None 表示插件尚未提供分页完整性证据；False 表示已到查询末页。
     has_more: bool | None = None
     page    : int | None  = None
+    # 插件提供的确定命令：用户明确同意当前待确认操作后，可原样续执行。
+    confirmation_command: str = ""
 
 
 class DeliverySegments(list[dict[str, Any]]):

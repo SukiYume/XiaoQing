@@ -1075,3 +1075,24 @@ def test_command_list_decodes_only_requested_page(db, monkeypatch, kind):
     result = asyncio.run(listing("paged", "", SimpleNamespace()))
     assert "work" in result["message"]
     decode.assert_not_called()
+
+
+def test_long_note_without_title_keeps_full_body_and_derives_a_short_title(tmp_path: Path) -> None:
+    """没写 title: 的长笔记（生产里 622 字的提示词）一次存下：标题取首行开头，正文完整保留。"""
+    db       = Database(str(tmp_path / "long-note.db"))
+    owner_id = "long-note"
+    body     = (
+        "::OBJECTIVE{site_design|pri:OVERRIDE_ALL}\n  target: 构建页面达到奖项级视觉标准\n"
+        + "\n".join(f"::CHECK{{dimension_{index}|standard:award_tier}}" for index in range(20))
+    )
+    assert len(body) > 600
+    try:
+        created = asyncio.run(NoteHandler(db).create_note(owner_id, body, SimpleNamespace()))
+        assert created["status"] == "success"
+        note = db.get_item(created["item_id"], owner_id)
+        assert note.content == body
+        assert note.title == "::OBJECTIVE{site_design|pri:OVERRIDE_ALL…"  # 首行开头 40 字
+        short = asyncio.run(NoteHandler(db).create_note(owner_id, "买猫粮", SimpleNamespace()))
+        assert db.get_item(short["item_id"], owner_id).title == "买猫粮"
+    finally:
+        db.cleanup()

@@ -207,109 +207,115 @@ Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或
 
 ## 🧠 AI/VLM 注册表
 
-统一 AI 配置分为四层：
+AI 配置分两块，密钥单独放：
 
-1. `config.ai.providers`：服务地址与公开连接参数。
-2. `config.ai.models`：可复用模型 profile、模型名、模态和请求默认值。
-3. `config.plugins.<name>.ai.routes`：插件任务到模型 profile 的有序链。
-4. `secrets.ai.providers`：Provider API Key。
+1. **模型**（`config.ai`）：`providers` 写服务地址，`models` 给每个要用的模型起一个名字。
+2. **谁用哪个模型**（`config.plugins.<name>.ai.routes`）：给插件的每条 route 列出模型名，第一个是主模型，后面的依次兜底。
+3. `secrets.ai.providers`：各 Provider 的 API Key。
 
-### Provider
+采样温度、输出预算、超时和重试属于任务本身（闲聊要活、审查要稳、分流要快），由各插件在代码里声明默认值，主配置不用写；确实要改某一项时，再把那条 route 写成对象覆盖。
 
 ```json
 {
   "ai": {
     "providers": {
-      "deepseek": {
-        "api_base": "https://api.deepseek.com",
-        "endpoint_path": "/chat/completions",
-        "proxy": ""
+      "openai":   {"api_base": "https://api.openai.com/v1", "max_tokens_field": "max_completion_tokens"},
+      "deepseek": {"api_base": "https://api.deepseek.com"}
+    },
+    "models": {
+      "gpt-terra":      {"provider": "openai", "model": "gpt-6.1-terra", "modalities": ["text", "image"], "request_defaults": {"reasoning_effort": "none"}},
+      "deepseek-flash": {"provider": "deepseek", "model": "deepseek-flash", "modalities": ["text"], "request_defaults": {"thinking": {"type": "disabled"}}}
+    }
+  },
+  "plugins": {
+    "xiaoqing_chat": {
+      "ai": {
+        "routes": {
+          "chat":    ["gpt-terra", "deepseek-flash"],
+          "checker": ["gpt-terra", "deepseek-flash"]
+        }
       }
     }
   }
 }
 ```
+
+### Provider
 
 | 字段 | 类型 | 默认值 | 规则 |
 |---|---|---|---|
 | `api_base` | absolute HTTP(S) URL | 必填 | 包含 scheme 与主机，省略凭据、query 和 fragment |
 | `endpoint_path` | absolute URL path | `/chat/completions` | 以 `/` 开头，省略 query 与 fragment |
 | `proxy` | absolute HTTP(S) URL or empty string | `""` | 当前 Provider 的可选代理 |
+| `max_tokens_field` | `max_tokens` 或 `max_completion_tokens` | `max_tokens` | 这家接口接收输出预算用的字段名。OpenAI 当前的模型只认 `max_completion_tokens`；route 里统一写 `max_tokens`，Core 发请求时换成这里指定的字段 |
 
-### 模型 profile
-
-```json
-{
-  "ai": {
-    "models": {
-      "deepseek-flash": {
-        "provider": "deepseek",
-        "model": "deepseek-flash",
-        "modalities": ["text"],
-        "request_defaults": {
-          "thinking": {"type": "disabled"}
-        }
-      }
-    }
-  }
-}
-```
+### 模型
 
 | 字段 | 类型 | 规则 |
 |---|---|---|
 | `provider` | string | 引用 `config.ai.providers` 中的名称 |
 | `model` | string | 发送给上游 API 的模型名 |
 | `modalities` | string[] | 非空集合，成员为 `text`、`image`、`audio` |
-| `request_defaults` | object | 模型级附加请求字段。Core 保留 `model`、`messages`、`stream`、采样参数和工具字段 |
+| `request_defaults` | object | 这个模型每次请求都带上的附加字段（如关闭思考）。Core 保留 `model`、`messages`、`stream`、采样参数和工具字段 |
+| `fixed_sampling` | bool，默认 `false` | 模型自带固定采样、不接受 `temperature` / `top_p` 时设为 `true`，Core 不发这两个字段 |
+
+同一个上游模型通常只需要定义一次。只有确实要两种固定用法（比如一个开思考、一个不开）时才起两个名字。
 
 ### 插件 route
 
+route 的值可以是一个模型名、一个模型名列表，或一个对象：
+
 ```json
 {
-  "plugins": {
-    "xiaoqing_chat": {
-      "ai": {
-        "routes": {
-          "chat": {
-            "models": ["chatgpt", "deepseek-flash", "glm-5.2"],
-            "temperature": 0.8,
-            "max_tokens": 2000,
-            "timeout_seconds": 30,
-            "total_timeout_seconds": 60
-          }
-        }
-      }
-    }
+  "routes": {
+    "triage":  "gpt-terra",
+    "chat":    ["gpt-terra", "deepseek-flash", "glm-5.2"],
+    "checker": {"models": ["gpt-terra", "deepseek-flash"], "timeout_seconds": 20}
   }
 }
 ```
 
-| 字段 | 默认值与范围 | 说明 |
+写成对象时可用的字段如下。取值顺序是：主配置里这条 route 写明的 > 插件声明的默认值 > 下表的 Core 默认值。
+
+| 字段 | Core 默认值与范围 | 说明 |
 |---|---|---|
-| `models` | 必填非空列表 | 按顺序排列主 profile 与 fallback profile |
+| `models` | 必填，一个名字或非空列表 | 按顺序排列主模型与兜底模型 |
 | `temperature` | 可选，`0..2` | route 采样温度 |
 | `top_p` | 可选，`0..1` | route nucleus sampling |
 | `max_tokens` | 可选，`1..1000000` | route 输出 token 上限 |
 | `timeout_seconds` | `30`，`0.1..600` | 单次上游请求预算 |
-| `total_timeout_seconds` | `max(timeout, 60)`，`0.1..1800` | 全部重试与 fallback 的总预算 |
-| `max_retry` | `1`，`0..10` | 每个 profile 的重试次数 |
+| `total_timeout_seconds` | `max(timeout, 60)`，`0.1..1800` | 全部重试与兜底的总预算 |
+| `max_retry` | `1`，`0..10` | 每个模型的重试次数 |
 | `retry_interval_seconds` | `0.5`，`0..60` | 指数退避基数 |
-| `fallback_on` | Core 默认错误集合 | 触发下一 profile 的错误类别 |
+| `fallback_on` | Core 默认错误集合 | 触发下一个模型的错误类别 |
 | `request_defaults` | `{}` | route 级附加请求字段 |
 
-### AI 参数的唯一配置入口
+内置插件声明的默认值（`declare_route_defaults`，在各插件代码里）：
 
-`chat-latest` 使用固定采样默认值。Core 为该模型省略 `temperature` 和 `top_p`，并将统一的 `max_tokens` 输出预算转换为上游的 `max_completion_tokens`。其他模型沿用路由采样参数。
+| 插件 route | 用途 | temperature / top_p | max_tokens | 单次 / 总超时（秒） | 重试 |
+|---|---|---|---|---|---|
+| `xiaoqing_chat.chat` | 日常回复 | 0.8 / 0.6 | 768 | 15 / 60 | 1 |
+| `xiaoqing_chat.reasoning` | 规划、记忆检索、摘要、表达学习、生活记录抽取 | 0.6 / 0.9 | 2048 | 15 / 45 | 1 |
+| `xiaoqing_chat.checker` | 回复审查 | 0 / 0.8 | 8192 | 12 / 30 | 0 |
+| `xiaoqing_chat.vision` | 读图 | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
+| `xiaoqing_agent.agent` | 办事执行 | 0.2 / — | — | 180 / 600 | 1 |
+| `xiaoqing_agent.triage` | 分流 | 0.1 / — | — | 15 / 20 | 1 |
+| `xiaoqing_agent.vision` | `read_image` 读本地图片 | 0.2 / — | 800 | 20 / 60 | 1 |
+| `xiaoqing_life.reasoning` | 消化、研究、睡前整理 | 0.6 / 0.9 | 2048 | 30 / 120 | 1 |
+| `xiaoqing_life.vision` | 梗图判定 | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
+| `pendo.parse` | 自然语言解析 | 0.3 / — | 1000 | 30 / 60 | 1 |
+| `xiaoai.plan` | 米家操作规划 | 0 / — | 1600 | 25 / 28 | 0 |
+| `ads_paper.summary` | 论文摘要 | 0.7 / — | 1200 | 60 / 90 | 0 |
 
-`gpt-6-luna` 同样使用 `max_completion_tokens`。通过当前 Chat Completions 接口调用工具时，在模型的 `request_defaults` 中设置 `"reasoning_effort": "none"`；该模式保留路由的 `temperature` 和 `top_p`。
+### AI 参数从哪里来
 
-常规采样参数、输出预算、单次超时、总超时和重试统一放在 `config.plugins.<plugin>.ai.routes.<route>`。供应商连接信息放在 `config.ai.providers`，模型定义放在 `config.ai.models`，密钥放在 `secrets.ai.providers`。可选的 `model_aliases` 提供命令短名称。`/xc model default` 自动选择 `routes.chat.models` 中第一个可用的 profile。
+供应商连接信息放在 `config.ai.providers`，模型定义放在 `config.ai.models`，密钥放在 `secrets.ai.providers`，每条 route 用哪些模型放在 `config.plugins.<plugin>.ai.routes.<route>`。采样、输出预算、超时和重试由插件声明默认值，需要时在同一条 route 里覆盖。可选的 `model_aliases` 给 `/xc model` 提供命令短名称，不写时直接用模型名。`/xc model default` 自动选择 `routes.chat` 中第一个可用的模型。
 
-XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行与交付检查使用 `agent`，任务分流使用 `triage`。常规插件调用沿用路由参数。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
+XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行使用 `agent`，任务分流使用 `triage`（没配时复用 `agent`），`read_image` 使用 `vision`。常规插件调用沿用路由参数。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
 
-`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都在主配置的对应路由中设置，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段、`default_model_alias` 或 `ai` 注册表时，加载报错并指出主配置位置。
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都属于对应的 route，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段、`default_model_alias` 或 `ai` 注册表时，加载报错并指出主配置位置。
 
-DEBUG 日志记录最终采用的路由、模型 profile、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
+DEBUG 日志记录最终采用的路由、模型、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
 
 ### Provider secret
 
@@ -376,7 +382,7 @@ context.get_settings_snapshot()
 | `plugins.pendo.web_port` | `12001` | Web Listener 端口，范围 `1..65535` |
 | `plugins.pendo.web_session_cookie_secure` | `false` | HTTPS 部署使用 `true`，为浏览器会话 Cookie 添加 Secure |
 | `plugins.pendo.web_demo_enabled` | `false` | Web Demo 空间开关 |
-| `plugins.pendo.ai.routes.parse` | route object | 自然语言结构化解析模型链 |
+| `plugins.pendo.ai.routes.parse` | 模型名列表 | 自然语言结构化解析用的模型 |
 
 Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化会重建插件拥有的 Web Server。
 登录 Code 与浏览器会话有效期为 7 天，Widget Token 有效期为 365 天。
@@ -390,11 +396,10 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_chat.ai.routes.chat` | 主回复 route |
 | `plugins.xiaoqing_chat.ai.routes.checker` | 回复检查 route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | 规划与推理 route |
-| `plugins.xiaoqing_chat.ai.routes.vision` | 图片理解 route，profile 需要 `image` modality |
-| `plugins.xiaoqing_chat.ai.model_aliases` | 用户别名到 route profile 的映射 |
+| `plugins.xiaoqing_chat.ai.routes.vision` | 图片理解 route，模型需要 `image` modality |
+| `plugins.xiaoqing_chat.ai.model_aliases` | 可选：`/xc model` 用的短名称到模型名的映射 |
 
-四条 XiaoQing Chat route 分别拥有模型顺序、单次超时、总超时和重试策略。
-发行配置的 `checker` route 通过 `request_defaults.thinking.type = "disabled"` 关闭思考以缩短审查延迟。
+四条 XiaoQing Chat route 各自指定模型顺序；采样、单次超时、总超时和重试由插件声明默认值，见上文“插件 route”的表。
 行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者合并时文件中的值优先。
 [XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#行为配置) 逐组说明这些字段。
 
@@ -406,6 +411,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 |---|---|---|
 | `plugins.xiaoqing_agent.enabled` | `false` | 总开关。关闭时 `xiaoqing_chat` 照常回复，与没有安装 agent 时一致，修改后下一条消息生效 |
 | `plugins.xiaoqing_agent.ai.routes.agent` | 必填 | 执行 route，模型需支持 `tools` 调用 |
+| `plugins.xiaoqing_agent.ai.routes.vision` | 不配则读图不可用 | `read_image` 读本地图片用的 route，模型需要 `image` modality |
 | `plugins.xiaoqing_agent.ai.routes.triage` | 复用 `agent` | “聊天还是做事”判断 route，建议快速、关闭思考的模型 |
 | `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | 当轮等待结果的秒数，超出后先回一句再后台交付 |
 | `plugins.xiaoqing_agent.task_timeout_seconds` | `1800` | 单个任务总时长 |

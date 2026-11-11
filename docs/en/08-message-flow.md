@@ -310,6 +310,10 @@ HTTP and WebSocket share a scheduler keyed by session:
 - `ws_queue_size`, range `1..10000`, controls the waiting backlog.
 - Total admission capacity equals workers plus backlog. HTTP and WebSocket share one bounded scheduler.
 
+Both entries register a message event in `InboundBacklog` when they queue it and remove it when handling starts.
+Entries are kept per conversation and sender, serve only as a hint, take no part in scheduling, and expire after 60 seconds.
+A plugin that declares the `inbound_backlog` capability can ask, while handling one message, which later messages from the same sender are still queued.
+
 ### Dispatcher
 
 `max_concurrency` limits globally active message handlers.
@@ -357,6 +361,7 @@ Each event turn has a request ID. Check logs in this order:
 | Permission and scene decisions | `command_access` in `core/router.py` |
 | Agent command executor | `run_command_text` in `core/dispatcher.py` |
 | Session | `core/session.py` |
+| Queued-message registry | `core/inbound_backlog.py` |
 | Plugin generations and execution | `core/plugin_generation.py`, `core/plugin_runtime.py`, `core/plugin_execution.py` |
 | Outbound receipts | `core/delivery.py`, `core/app_delivery.py` |
 | Configuration revision | `core/config.py`, `core/app_config_apply.py` |

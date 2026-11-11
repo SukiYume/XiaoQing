@@ -248,7 +248,7 @@ class TestSearchAndImport:
         calls = []
 
         class _ItemsRepo:
-            def search_items_page(self, owner_id, query, filters, *, limit, offset):
+            def search_items_page(self, owner_id, query, filters, *, limit, offset, **_options):
                 calls.append((owner_id, query, filters))
                 assert limit == 15
                 assert offset == 0

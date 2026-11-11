@@ -1,9 +1,8 @@
-"""运行中任务的登记、后台执行、当轮交付或主动发送、停止与关闭收尾。"""
+"""运行中任务的登记、接着办事会话后台执行、当轮交付或主动发送、停止与关闭收尾。"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import sys
 import time
@@ -13,7 +12,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from core.ai import AIError
 from core.delivery import DeliveryReceipt, DeliverySegments
 
 from . import receipts
@@ -24,14 +22,15 @@ from .delivery import (
     outcome_message,
     upload_each,
 )
-from .loop import complete, parse_tool_calls, run_agent_loop
+from .loop import run_agent_loop
 from .prompts import (
-    build_delivery_messages,
-    build_task_messages,
+    build_system_message,
+    build_turn_message,
     capability_summary,
     configured_bot_name,
     current_time,
 )
+from .sessions import Session, SessionStore, settle_turn
 from .shells import resolve_shell
 from .tasks import (
     MAX_RECORDS_PER_CHAT,
@@ -44,7 +43,7 @@ from .tasks import (
     new_task_id,
     record_initiator,
 )
-from .tools import ToolEnv, build_tools
+from .tools import Tool, ToolEnv, build_tools, catalog_lines
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +55,6 @@ _PLAN_MARKS                 = {"done": "✓", "in_progress": "▶", "pending": "
 _MAX_NOTE_CHARS             = 1000
 _MAX_PENDING_NOTES          = 10
 _MAX_AWAITING_REPORTS       = 200
-_REVIEW_TIMEOUT_SECONDS     = 20.0
-_REVIEW_STATES              = frozenset({"done", "unfinished", "needs_user", "blocked"})
-# 这些工具只负责控制流程，不是执行回报里的事实。
-_CONTROL_TOOLS = frozenset(
-    {
-        "final_answer",
-        "send_message",
-        "update_plan",
-        "wait",
-        "xiaoqing_commands",
-    }
-)
 
 
 @dataclass
@@ -99,60 +86,6 @@ class _Resend:
         )
 
 
-def _delivery_evidence(
-    task: AgentTask, env: ToolEnv, outcome: Outcome, messages: list[dict[str, Any]]
-) -> tuple[list[str], list[str]]:
-    """交付核对的执行回报，以及工具原始回报（核对不可用时直接交付它们）。"""
-
-    evidence: list[str] = [
-        f"本轮执行已结束。执行状态：{outcome.status}。停止原因：{task.error or '无'}。"
-    ]
-    evidence.extend(env.closed_scopes.values())
-    reports: list[str] = []
-    for entry in messages[2:]:
-        if entry["role"] == "assistant":
-            evidence.extend(
-                f"调用 {call.name}：{call.arguments}"
-                for call in parse_tool_calls(entry)
-                if call.name not in _CONTROL_TOOLS
-            )
-        elif entry["role"] == "tool" and entry["name"] not in _CONTROL_TOOLS:
-            evidence.append(f"工具 {entry['name']} 回报：{entry['content']}")
-            reports.append(str(entry["content"]))
-        elif entry["role"] == "user":
-            evidence.append(str(entry["content"]))
-    return evidence, reports
-
-
-def _parse_verdict(content: Any) -> tuple[str, str, list[str]]:
-    """解析交付核对的输出：(回复, 验收状态, 待办事项)。
-
-    状态不在约定范围内时为空，任务结局退回执行阶段的状态；只有 ``unfinished`` 带回待办事项。
-    """
-
-    payload = json.loads(content if isinstance(content, str) and content.strip() else "{}")
-    if not isinstance(payload, dict) or not isinstance(payload.get("reply"), str):
-        raise ValueError("delivery review requires a reply")
-    state = payload.get("state")
-    state = state if state in _REVIEW_STATES else ""
-    items = payload.get("unfinished")
-    if state != "unfinished" or not isinstance(items, list):
-        return payload["reply"].strip(), state, []
-    return (
-        payload["reply"].strip(),
-        state,
-        [item.strip() for item in items if isinstance(item, str) and item.strip()],
-    )
-
-
-def _final_status(executed: str, reviewed: str) -> str:
-    """任务记录的结局：交付核对给出的验收状态优先；执行没走完时不会因核对升级成 done。"""
-
-    if executed != "done":
-        return reviewed if reviewed in {"needs_user", "blocked"} else "failed"
-    return reviewed or "done"
-
-
 def _scene(chat: ChatRef) -> str:
     if chat.is_private:
         return "和发起人的私聊"
@@ -168,6 +101,7 @@ class AgentRuntime:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir                             = data_dir
         self.store                                = TaskStore(data_dir)
+        self.sessions                             = SessionStore(data_dir)
         self.running: dict[str, AgentTask]        = {}
         self.accepting                            = True
         self._deliveries: set[asyncio.Task[None]] = set()
@@ -223,13 +157,13 @@ class AgentRuntime:
         source: str,
         sender: str                       = "",
         admin: bool                       = False,
-        continues: str                    = "",
-        thread: Sequence[str]             = (),
+        plugins: tuple[str, ...]          = (),
         history: Sequence[dict[str, Any]] = (),
         images: Sequence[str]             = (),
         image_files: Sequence[str]        = (),
         quoted_text: str                  = "",
         persona: str                      = "",
+        recent_self: str                  = "",
     ) -> AgentTask | str:
         """登记并在后台启动任务；不能启动时返回给发起人看的原因。"""
 
@@ -246,13 +180,13 @@ class AgentRuntime:
             chat         = chat,
             request_text = request_text.strip(),
             source       = source,
-            continues    = continues,
-            thread       = list(thread),
+            plugins      = plugins,
             quoted_text  = quoted_text.strip(),
             image_files  = list(image_files),
             sender       = sender.strip(),
             admin        = admin,
             persona      = persona,
+            recent_self  = recent_self.strip(),
         )
         self.running[task_id] = task
         task.runner           = asyncio.create_task(
@@ -277,7 +211,13 @@ class AgentRuntime:
         task: AgentTask,
         history: list[dict[str, Any]],
         images: list[str],
-    ) -> tuple[ToolEnv, dict[str, Any], list[dict[str, Any]]]:
+    ) -> tuple[ToolEnv, dict[str, Tool], list[dict[str, Any]], Session]:
+        """准备这一轮：接上发起人的办事会话（隔太久没说话就开新会话），追加这句话。
+
+        新加载的服务（分流这次选的、会话里还没用过的）把命令说明附在这一轮的请求里；
+        会话里已经用过的服务说明前面就有，直接沿用。
+        """
+
         workspace = self.workspace(task.chat)
         out_dir   = workspace / "out" / task.task_id
         await asyncio.to_thread(out_dir.mkdir, parents=True, exist_ok=True)
@@ -293,30 +233,57 @@ class AgentRuntime:
             deadline      = time.monotonic() + config.task_timeout_seconds,
             send_progress = partial(self._send_progress, context, task),
         )
-        tools = build_tools(env, loaded_plugins=frozenset(context.list_plugins()))
-        recent = await self.recent_records(task.chat, config.history_tasks)
+        tools = build_tools(env)
         now, zone = current_time(context)
-        messages = build_task_messages(
+        system = build_system_message(
             bot_name     = configured_bot_name(context),
             sender       = task.sender,
             task         = task,
-            now          = now,
             timezone     = zone,
             scene        = _scene(task.chat),
             python       = env.python,
             shell        = shell.label,
             workspace    = str(workspace),
-            out_dir      = str(out_dir),
             tool_names   = tuple(tools),
-            history      = history,
-            recent       = recent,
-            images       = images,
             capabilities = capability_summary(
                 context.get_command_catalog(),
                 getattr(context, "principal", None),
             ),
         )
-        return env, tools, messages
+        session = await self.sessions.load(task.chat, idle_seconds=config.session_idle_minutes * 60)
+        recent: list[dict[str, Any]] = []
+        if session is None:
+            session = Session(system)
+            recent  = await self.recent_records(task.chat, config.history_tasks)
+        # 当前身份、人设和工具以本轮配置为准；已经发生的对话继续保留。
+        session.system       = system
+        task.continues       = session.last_task_id
+        env.session_requests = tuple(
+            text for turn in session.turns for text in (turn["request"], *turn.get("updates", ()))
+        )
+        known                = set(session.plugins)
+        contracts: list[str] = []
+        for root in context.get_command_catalog():
+            if root.plugin in known:
+                env.selected_plugins.add(root.plugin)
+            elif root.plugin in task.plugins:
+                lines = catalog_lines(context, root.name)
+                if lines:
+                    env.selected_plugins.add(root.plugin)
+                    env.catalog_plugins.add(root.plugin)
+                    contracts.extend(lines)
+        turn = build_turn_message(
+            task      = task,
+            now       = now,
+            timezone  = zone,
+            out_dir   = str(out_dir),
+            history   = history,
+            since     = session.updated_at,
+            recent    = recent,
+            images    = images,
+            contracts = contracts,
+        )
+        return env, tools, [*session.messages(), turn], session
 
     async def _run(
         self,
@@ -328,57 +295,18 @@ class AgentRuntime:
     ) -> None:
         env       : ToolEnv | None       = None
         outcome   : Outcome | None       = None
+        session   : Session | None       = None
         transcript: list[dict[str, Any]] = []
-        # 交付核对给出的验收状态；没有核对或核对不可用时为空。
-        reviewed = ""
         try:
             await self.store.save(task)
-            env, tools, messages = await self._prepare(context, config, task, history, images)
+            env, tools, messages, session = await self._prepare(
+                context, config, task, history, images
+            )
             # 执行循环会压缩较早的输出；执行记录另存一份完整的模型与工具往返。
             transcript = list(messages)
             async with asyncio.timeout(config.task_timeout_seconds + _HARD_TIMEOUT_GRACE):
-                for delivery_attempt in range(2):
-                    outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
-                    if not (task.command_results or env.closed_scopes):
-                        break
-                    # 成功与失败都核对正文；附件、执行状态和写入结果沿用执行阶段的结果。
-                    evidence, reports = _delivery_evidence(task, env, outcome, messages)
-                    task.activity = "核对结果"
-                    task.steps += 1
-                    review = build_delivery_messages(
-                        task, evidence, history, outcome.text if outcome.authored else ""
-                    )
-                    reply, reviewed, unfinished = await self._review_delivery(
-                        env, task, review, transcript
-                    )
-                    targets = [*task.thread, task.request_text]
-                    pending = [item for item in unfinished if any(item in text for text in targets)]
-                    if (
-                        delivery_attempt == 0
-                        and pending
-                        and outcome.status == "done"
-                        and task.steps < config.max_steps
-                        and env.remaining() > 5
-                    ):
-                        listing    = "、".join(f"“{item}”" for item in pending)
-                        correction = {
-                            "role": "user",
-                            "content": (
-                                f"交付核对：{listing}尚未完成。依据发起人原话和已有回报完成这一部分，再交付；"
-                                "已经写入的不再写一遍，需要的内容原话里没有时直接问发起人。"
-                            ),
-                        }
-                        transcript.append(correction)
-                        messages.append(correction)
-                        continue
-                    outcome.text = reply or (
-                        "工具回报拿到了，整理回复这一步没接上。当前回报：\n"
-                        + "\n\n".join(reports + list(env.closed_scopes.values()))
-                    )
-                    break
-            assert outcome is not None
-            task.status    = _final_status(outcome.status, reviewed)
-            outcome.status = task.status
+                outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
+            task.status = outcome.status
         except asyncio.CancelledError:
             task.status = "cancelled" if self.accepting else "interrupted"
             self._resolve_waiter(task, Outcome("这个任务已经停下了。", status=task.status))
@@ -399,7 +327,13 @@ class AgentRuntime:
             task.outcome     = outcome
             task.activity    = "已结束"
             self.running.pop(task.task_id, None)
-            await asyncio.shield(self._persist(task, transcript))
+            # 执行记录只存系统提示和这一轮：前面的轮次在各自任务的执行记录里。
+            start = len(session.messages()) if session is not None else 0
+            await asyncio.shield(self._persist(task, transcript[:1] + transcript[start:]))
+            if session is not None and env is not None:
+                await asyncio.shield(
+                    self._remember_turn(config, task, session, env, transcript[start:], outcome)
+                )
             logger.info(
                 "xiaoqing_agent task finished task=%s status=%s steps=%d elapsed=%.1fs"
                 " model_calls=%d model_s=%.1f tool_s=%.1f",
@@ -424,33 +358,36 @@ class AgentRuntime:
             if not self._resolve_waiter(task, outcome):
                 await self._deliver(context, task, outcome)
 
-    async def _review_delivery(
+    async def _remember_turn(
         self,
-        env: ToolEnv,
+        config: AgentConfig,
         task: AgentTask,
-        review: list[dict[str, str]],
-        transcript: list[dict[str, Any]],
-    ) -> tuple[str, str, list[str]]:
-        """交付核对：返回最终回复、验收状态与尚未完成的事项；核对不可用时全部为空。"""
+        session: Session,
+        env: ToolEnv,
+        messages: list[dict[str, Any]],
+        outcome: Outcome | None,
+    ) -> None:
+        """把这一轮接到会话后面：下一句话接着这里说，前面的结果和服务说明都在。"""
 
+        if not messages:
+            return
+        reply = outcome.text if outcome is not None else "（这件事被停下了，没有做完。）"
+        turn  = {
+            "task_id" : task.task_id,
+            "request" : task.request_text,
+            "updates" : list(env.user_updates),
+            "reply"   : reply,
+            "plugins" : sorted(env.catalog_plugins),
+            "messages": settle_turn(messages, reply),
+        }
         try:
-            async with asyncio.timeout(min(_REVIEW_TIMEOUT_SECONDS, max(1.0, env.remaining()))):
-                message = await complete(
-                    env,
-                    review,
-                    None,
-                    extra_payload={"response_format": {"type": "json_object"}},
-                )
-            content = message.get("content")
-            transcript.extend([*review, {"role": "assistant", "content": str(content)}])
-            return _parse_verdict(content)
-        except (AIError, RuntimeError, TimeoutError, ValueError) as exc:
+            await self.sessions.append(task.chat, session, turn, max_turns=config.session_max_turns)
+        except Exception as exc:
             logger.warning(
-                "xiaoqing_agent delivery review failed task=%s error_type=%s",
+                "xiaoqing_agent session save failed task=%s error_type=%s",
                 task.task_id,
                 type(exc).__name__,
             )
-            return "", "", []
 
     def _forget(self, task: AgentTask, runner: asyncio.Task[None]) -> None:
         """任务协程结束后总是注销；还没开始就被取消的任务不会进入 ``_run`` 的收尾。"""

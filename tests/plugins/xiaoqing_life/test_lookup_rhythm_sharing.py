@@ -1,4 +1,4 @@
-"""第三轮：词条自动查实队列与暴力词、弹幕密集点、梗图预选、探针、节律亲和、打算意图、分享候选。"""
+"""查词与梗图、节律与意图、主动分享：词条自动查实队列与暴力词、弹幕密集点、梗图预选、探针、节律亲和、打算意图、分享候选。"""
 
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ from plugins.xiaoqing_life import digest, memes, planner
 from plugins.xiaoqing_life import main as life_main
 from plugins.xiaoqing_life import persona_bridge as pb
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.safety import is_violent_term
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import watch
 from plugins.xiaoqing_life.sources.base import SourceComment, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
@@ -32,18 +33,13 @@ from tests.plugins.xiaoqing_life.support import (
     fixed_clock,
     make_cfg,
     make_context,
+    new_store,
     popular_payload,
 )
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
 HOUR   = 3600.0
-
-
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
 
 
 # ───────────────────────────── A1 词条 ─────────────────────────────
@@ -76,7 +72,7 @@ def test_violent_terms_are_checked_against_the_term_text_only() -> None:
 async def test_new_short_candidate_terms_are_queued_for_baike_once_and_bounded(
     tmp_path: Path,
 ) -> None:
-    store             = _store(tmp_path)
+    store             = new_store(tmp_path)
     store.terms["旧词"] = {
         "term"          : "旧词",
         "meaning"       : "m",
@@ -97,10 +93,10 @@ async def test_new_short_candidate_terms_are_queued_for_baike_once_and_bounded(
     )
     fetch = FakeFetcher(
         {
-            "/popular"           : popular_payload(bili_video(1, "标题")),
-            "/reply/main"        : comments_payload(*[bili_reply(c.text) for c in comments]),
+            "/popular": popular_payload(bili_video(1, "标题")),
+            "/reply/main": comments_payload(*[bili_reply(c.text, sub=(c.text,)) for c in comments]),
             "/web-interface/view": {"code": -404},
-            "/tag/archive"       : {"code": -404},
+            "/tag/archive": {"code": -404},
         }
     )
     reply = {
@@ -200,7 +196,7 @@ def test_merge_puts_digest_picks_first_dedupes_and_caps() -> None:
 async def test_session_sends_preselected_pictures_to_the_vision_judge_up_to_the_cap(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     fetch = FakeFetcher(
         {
             "/popular"   : popular_payload(bili_video(1, "视频")),
@@ -248,7 +244,7 @@ async def test_session_sends_preselected_pictures_to_the_vision_judge_up_to_the_
 
 @pytest.mark.asyncio
 async def test_probe_mode_reports_online_life_only_when_enabled(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     response, dirty = tc.turn_context(
         store, make_cfg(), {"version": 1, "mode": "probe"}, MOMENT, random.Random(0)
     )
@@ -281,13 +277,12 @@ def _choose(cfg, presence, state=None, **kw: Any) -> planner.Decision:
 
 def _thread() -> dict[str, Any]:
     return {
-        "id"            : "t1",
-        "title"         : "课题",
-        "next_query"    : "q",
-        "status"        : "open",
-        "steps"         : 0,
-        "updated_at"    : NOW,
-        "cooldown_until": 0.0,
+        "id"        : "t1",
+        "title"     : "课题",
+        "next_query": "q",
+        "status"    : "open",
+        "steps"     : 0,
+        "updated_at": NOW,
     }
 
 
@@ -365,7 +360,7 @@ def test_activity_affinity_anime_meal_and_no_browse() -> None:
 
 @pytest.mark.asyncio
 async def test_meal_time_caps_the_items_digested(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     fetch = FakeFetcher(
         {
             "/popular"           : popular_payload(*[bili_video(n, f"视频{n}") for n in range(1, 9)]),
@@ -418,7 +413,7 @@ def _proactive(store: LifeStore, **extra: Any) -> dict[str, Any] | None:
 
 
 def test_proactive_mode_offers_recent_reached_share_episodes_minus_excluded(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(1, 2 * HOUR),
         _episode(2, 5 * HOUR),
@@ -443,7 +438,7 @@ def test_proactive_mode_offers_recent_reached_share_episodes_minus_excluded(tmp_
         "e2"
     ]
     assert _proactive(store, exclude_ids=["e1", "e2", "zz"]) is None
-    assert _proactive(_store(tmp_path / "empty")) is None
+    assert _proactive(new_store(tmp_path / "empty")) is None
 
 
 # ───────────────────────────── B4 意图 ─────────────────────────────
@@ -464,7 +459,7 @@ def _call(store: LifeStore, text: str, slots: list[str] | None = None) -> dict[s
 def test_plan_questions_get_the_rest_of_todays_routine_and_the_threads_next_step(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(
         {
             "id"        : "t1",
@@ -526,7 +521,7 @@ async def test_service_adds_the_routine_slots_only_for_plan_questions(
 
 
 def test_recent_week_like_and_link_intents_keep_the_guidance_line(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(_episode(1, HOUR))
     store.state["diary"] = {"day": "2026-11-05", "text": "今天刷了猫视频", "episode_ids": ["e1"]}
     store.journal.append(
@@ -563,7 +558,7 @@ def test_recent_week_like_and_link_intents_keep_the_guidance_line(tmp_path: Path
 
 
 def test_follow_up_about_the_video_she_just_mentioned_brings_its_gist_back(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(
             1,

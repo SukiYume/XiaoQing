@@ -4,6 +4,7 @@
     python -m scripts.chat_eval run --set quality --gate     # 质量探针；机器门禁不过时退出码为 1
     python -m scripts.chat_eval run --driver live --set life # 真实 main.py + 假 NapCat 跑生活连续性
     python -m scripts.chat_eval run --suite otaku --no-judge # 只跑一个剧本，只做规则检查
+    python -m scripts.chat_eval run --timezone UTC           # 上海深夜开跑时，让她按白天的钟点过作息
     python -m scripts.chat_eval judge <结果目录>             # 对已有结果重新评审
     python -m scripts.chat_eval replay <聊天数据目录> g978321 阿禾 "你怎么不理我" --at
     python -m scripts.chat_eval calibrate                    # 只校准审查器的误杀与漏放
@@ -79,7 +80,11 @@ def default_out_dir(driver: str) -> Path:
 
 
 def run_inproc(
-    out_dir: Path, suites: dict[str, Suite], seed: int, online_life: bool = False
+    out_dir: Path,
+    suites: dict[str, Suite],
+    seed: int,
+    online_life: bool = False,
+    timezone: str     = "",
 ) -> list[str]:
     """每个剧本一个进程：插件运行时状态是进程级单例，并行跑必须隔离。返回失败的剧本。"""
 
@@ -99,6 +104,7 @@ def run_inproc(
                         "--out-dir",
                         str(out_dir),
                         *(["--online-life"] if online_life else []),
+                        *(["--timezone", timezone] if timezone else []),
                     ],
                     cwd    = PROJECT_ROOT,
                     stdout = log,
@@ -128,6 +134,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     out_dir = (args.out_dir or default_out_dir(args.driver)).resolve()
     out_dir.mkdir(parents=True, exist_ok=False)
     prepare_fixtures(out_dir / "fixtures")
+    drivers.set_timezone(args.timezone)
     (out_dir / "manifest.json").write_text(
         json.dumps(
             {
@@ -135,6 +142,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "driver"     : args.driver,
                 "suites"     : list(suites),
                 "seed"       : args.seed,
+                "timezone"   : drivers.ZONE.key,
                 "scenarios"  : {name: suite.turns() for name, suite in suites.items()},
                 "media_truth": MEDIA_TRUTH,
             },
@@ -145,7 +153,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     failed: list[str] = []
     if args.driver == "inproc":
-        failed = run_inproc(out_dir, suites, args.seed, args.online_life)
+        failed = run_inproc(out_dir, suites, args.seed, args.online_life, args.timezone or "")
     else:
         try:
             asyncio.run(
@@ -202,6 +210,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
+    drivers.set_timezone(args.timezone)
     asyncio.run(
         drivers.run_inproc_suite(
             args.name,
@@ -237,6 +246,10 @@ def build_parser() -> argparse.ArgumentParser:
         action = "store_true",
         help   = "（inproc）为任意剧本接上预置的 xiaoqing_life；online_life 组始终接上",
     )
+    run.add_argument(
+        "--timezone",
+        help="小青这次按哪个时区的钟点过作息（如 UTC）；上海深夜开跑时换一个此刻是白天的时区",
+    )
     run.add_argument("--out-dir", type=Path)
     run.add_argument("--no-judge", action="store_true", help="只做规则检查，不调用评审模型")
     run.add_argument("--calibrate", action="store_true", help="另外校准审查器，结果计入门禁")
@@ -271,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--seed", type=int, required=True)
     worker.add_argument("--out-dir", type=Path, required=True)
     worker.add_argument("--online-life", action="store_true")
+    worker.add_argument("--timezone")
     worker.set_defaults(handler=cmd_worker)
     return parser
 

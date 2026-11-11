@@ -443,7 +443,7 @@ class TestOperationsAndExport:
         result = asyncio.run(handle_snooze("u1", "evt123 10m", reminder_service))
 
         assert result["status"] == "success"
-        assert "已将提醒延后到: 2030-01-01T11:00:00+08:00" in result["message"]
+        assert "已将提醒延后到: 01月01日 11:00" in result["message"]
         db.update_item.assert_called_once()
         assert db.update_item.call_args.args[1] == {
             "remind_times": [

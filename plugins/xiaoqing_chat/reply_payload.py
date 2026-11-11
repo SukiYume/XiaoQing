@@ -8,7 +8,7 @@ from typing import Any
 
 from core.plugin_base import emoji, face, image, segments, text
 
-from .llm.postprocess import split_chat_reply
+from .llm.postprocess import LONG_BUBBLE_CHARS, split_chat_reply
 from .media_registry import MEDIA_PLACEHOLDER_RE, rebuild_message_content
 from .message_parts import (
     message_parts_to_legacy,
@@ -16,7 +16,7 @@ from .message_parts import (
     template_with_fallback_placeholders,
 )
 
-# 聊天气泡行尾的单个句号像公文；省略号、连用标点和代码块保持原样。
+# 聊天气泡行尾的单个句号像公文；省略号、连用标点和代码块保持原样。讲解、文稿这类长气泡的标点不动。
 _LONE_FULL_STOP_RE = re.compile(r"(?<![。.…])。$", re.MULTILINE)
 
 
@@ -103,7 +103,7 @@ def _build_reply_payload_core(
     for part in parts:
         if not part or not part.strip():
             continue
-        if not part.lstrip().startswith("```"):
+        if not part.lstrip().startswith("```") and len(part) <= LONG_BUBBLE_CHARS:
             part = _LONE_FULL_STOP_RE.sub("", part)
         batch_segments, batch_indexes, structured_parts = _build_batch_segments(
             part, media_sequence

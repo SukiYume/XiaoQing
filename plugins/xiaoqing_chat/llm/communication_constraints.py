@@ -243,6 +243,19 @@ def requested_char_count(text: str) -> CharTarget | None:
     return targets[0] if len(targets) == 1 else None
 
 
+_LENGTH_HINT_RE = re.compile(r"[一二两三四五六七八九十百千0-9]+ *(?:句|字)")
+
+
+def mentions_length(text: str) -> bool:
+    """对方提到了几句话、多少字（“用一句话安利”“写个800字”），不管是不是精确的要求。"""
+
+    return (
+        requested_sentence_count(text) is not None
+        or requested_char_count(text) is not None
+        or _LENGTH_HINT_RE.search(str(text or "")) is not None
+    )
+
+
 def content_char_count(text: str) -> int:
     """按发出去的字数算：去掉空白和 [想发…] 这类标记，标点照常计入。"""
 

@@ -19,9 +19,16 @@ from ..utils.time_utils import (
     require_canonical_utc_timestamp,
     utc_now_iso,
 )
+from .db_schema import SQLITE_ID_BATCH_SIZE
 
-# SQLite 默认变量上限留有余量，批量查询统一分片。
-_SQLITE_ID_BATCH_SIZE = 500
+# 提醒行对应的时刻仍在条目当前的 remind_times 里（查询里条目别名 i、提醒行别名 rl）。
+# 已从条目上移除的提醒会留下历史行，不能再进入投递队列。
+_REMINDER_STILL_SCHEDULED_SQL = """EXISTS (
+    SELECT 1
+    FROM json_each(CASE WHEN json_valid(i.remind_times) THEN i.remind_times ELSE '[]' END)
+         AS active_reminder
+    WHERE CAST(active_reminder.value AS TEXT) = rl.remind_time
+)"""
 
 
 class ReminderRepositoryMixin:
@@ -77,6 +84,20 @@ class ReminderRepositoryMixin:
             raise ValueError("scheduled delivery identity fields must be non-empty")
         return cast(tuple[str, str, str], identity)
 
+    @classmethod
+    def _open_lease(
+        cls, now: datetime | None, lease_seconds: int, subject: str
+    ) -> tuple[str, str, str]:
+        """一次领取用的 token、当前时刻和租约到期时刻（后两者为 UTC 秒级文本）。"""
+        if lease_seconds <= 0:
+            raise ValueError(f"{subject} lease must be positive")
+        current = cls._as_utc(now or datetime.now(UTC), f"{subject} claim time")
+        return (
+            uuid.uuid4().hex,
+            current.isoformat(timespec="seconds"),
+            (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds"),
+        )
+
     def log_reminder(self, item_id: str, remind_time: str, sent: bool = True) -> None:
         """记录提醒发送（UPSERT：首次 INSERT，重复发送 UPDATE repeat_count + last_sent_at）"""
         require_canonical_utc_timestamp(remind_time, "remind_time")
@@ -107,13 +128,8 @@ class ReminderRepositoryMixin:
         lease_seconds: int   = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
     ) -> str | None:
         """原子领取一个尚未发送的提醒。"""
-        if lease_seconds <= 0:
-            raise ValueError("reminder claim lease must be positive")
+        token, now_text, lease_text = self._open_lease(now, lease_seconds, "reminder claim")
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        current = self._as_utc(now or datetime.now(UTC), "reminder claim time")
-        token   = uuid.uuid4().hex
-        now_text = current.isoformat(timespec="seconds")
-        lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         conn = self.get_connection()
         with conn:
             cursor = conn.execute(
@@ -180,13 +196,8 @@ class ReminderRepositoryMixin:
         lease_seconds: int   = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
     ) -> dict[str, str] | None:
         """原子创建或领取一个持久化调度投递记录。"""
-        if lease_seconds <= 0:
-            raise ValueError("scheduled delivery lease must be positive")
+        token, now_text, lease_text = self._open_lease(now, lease_seconds, "scheduled delivery")
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
-        current = self._as_utc(now or datetime.now(UTC), "scheduled delivery claim time")
-        now_text = current.isoformat(timespec="seconds")
-        token = uuid.uuid4().hex
-        lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         delivery_key = self.scheduled_delivery_key(task, owner, period)
         conn         = self.get_connection()
         with conn:
@@ -290,13 +301,8 @@ class ReminderRepositoryMixin:
         """原子领取一个已发送提醒的下一次重复投递。"""
         if expected_repeat_count < 1:
             raise ValueError("expected repeat count must be positive")
-        if lease_seconds <= 0:
-            raise ValueError("reminder repeat lease must be positive")
+        token, now_text, lease_text = self._open_lease(now, lease_seconds, "reminder repeat")
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        current = self._as_utc(now or datetime.now(UTC), "reminder repeat claim time")
-        token   = uuid.uuid4().hex
-        now_text = current.isoformat(timespec="seconds")
-        lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         conn = self.get_connection()
         with conn:
             cursor = conn.execute(
@@ -736,8 +742,8 @@ class ReminderRepositoryMixin:
         unique_ids = list(dict.fromkeys(str(value) for value in item_ids if value))
         log_maps: dict[str, dict[str, dict[str, Any]]] = {item_id: {} for item_id in unique_ids}
         conn = self.get_connection()
-        for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+        for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
+            batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             rows         = conn.execute(
                 f"""
@@ -763,14 +769,33 @@ class ReminderRepositoryMixin:
 
         current = self._as_utc(now or datetime.now(UTC), "reminder queue time")
         now_text = current.isoformat(timespec="seconds")
-        initial_cutoff = (
-            current - timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS)
-        ).isoformat(timespec="seconds")
+        window = timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS)
         retry_cutoff = (
             current - timedelta(seconds=PendoConfig.REMINDER_STALE_AFTER_SECONDS)
         ).isoformat(timespec="seconds")
         conn = self.get_connection()
         with conn:
+            # 上次检查之后才到点的提醒是停机或卡顿期间错过的，在补发上限内照常投递；
+            # 早于上次检查的未发提醒是创建时就已过期的，继续按检查窗口作废。
+            initial_start = current - window
+            heartbeat     = conn.execute(
+                "SELECT checked_at FROM scheduler_heartbeats WHERE name = 'reminders'"
+            ).fetchone()
+            if heartbeat is not None:
+                last_check     = datetime.fromisoformat(str(heartbeat["checked_at"]))
+                catch_up_start = max(
+                    last_check - window,
+                    current - timedelta(seconds=PendoConfig.REMINDER_CATCH_UP_SECONDS),
+                )
+                initial_start = min(initial_start, catch_up_start)
+            initial_cutoff = initial_start.isoformat(timespec="seconds")
+            conn.execute(
+                """
+                INSERT INTO scheduler_heartbeats (name, checked_at) VALUES ('reminders', ?)
+                ON CONFLICT(name) DO UPDATE SET checked_at = excluded.checked_at
+                """,
+                (now_text,),
+            )
             conn.execute(
                 """
                 UPDATE reminder_logs
@@ -785,7 +810,7 @@ class ReminderRepositoryMixin:
                 (now_text, initial_cutoff, retry_cutoff),
             )
             rows = conn.execute(
-                """
+                f"""
                 SELECT i.id, i.type, i.title, i.tags, i.owner_id, i.context,
                        i.start_time, i.location, i.notes, i.plan_date, i.deadline_at,
                        i.priority, i.status, i.remind_times, i.event_collection_id,
@@ -810,13 +835,7 @@ class ReminderRepositoryMixin:
                     i.type != 'event' OR i.event_role IS NULL
                     OR i.event_role IN ('single', 'multi_node_child', 'recurring_occurrence')
                   )
-                  AND EXISTS (
-                    SELECT 1
-                    FROM json_each(
-                      CASE WHEN json_valid(i.remind_times) THEN i.remind_times ELSE '[]' END
-                    ) AS active_reminder
-                    WHERE CAST(active_reminder.value AS TEXT) = rl.remind_time
-                  )
+                  AND {_REMINDER_STILL_SCHEDULED_SQL}
                 GROUP BY i.id
                 ORDER BY due_at_utc, i.id
                 """,
@@ -844,7 +863,7 @@ class ReminderRepositoryMixin:
         """
         rows = (
             self.get_connection()
-            .execute("""
+            .execute(f"""
             SELECT rl.id, rl.item_id, rl.remind_time,
                    rl.repeat_count, COALESCE(rl.last_sent_at, rl.sent_at) AS last_sent_at
             FROM reminder_logs rl
@@ -852,13 +871,7 @@ class ReminderRepositoryMixin:
                 AND i.deleted = 0
                 AND (i.type != 'task' OR COALESCE(i.status, 'open') = 'open')
             WHERE rl.sent_at IS NOT NULL AND rl.confirmed_at IS NULL
-              AND EXISTS (
-                SELECT 1
-                FROM json_each(
-                  CASE WHEN json_valid(i.remind_times) THEN i.remind_times ELSE '[]' END
-                ) AS active_reminder
-                WHERE CAST(active_reminder.value AS TEXT) = rl.remind_time
-              )
+              AND {_REMINDER_STILL_SCHEDULED_SQL}
             ORDER BY rl.sent_at
         """)
             .fetchall()

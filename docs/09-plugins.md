@@ -134,7 +134,7 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 ```text
 /pendo search <关键词> [type=] [range=] [status=] [category=]
 /pendo confirm <id>
-/pendo snooze <id> <10m|1h|19:00>
+/pendo snooze <id> <10m|30分钟|1h|1d|19:00>
 /pendo undo [1..5]
 /pendo settings view
 /pendo settings reminder on|off
@@ -230,12 +230,13 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 **参与方式**
 
-- 明确跟她说的话一定回复：私聊、`/xc`、群里 `@` 角色、引用角色的消息、叫她名字（句首称呼“小青，……”，或句中、句末带称呼语气的“行吧小青你赢了”“在吗小青”；`@` 了别人而没 `@` 她时不算）。这些轮次直接起草回复，并同时交给 agent 判断要不要动手；只喊一声名字时由模型按话题和作息应一声。上课、睡觉时照常回复，只是更慢、更短。
-- 其余群消息先过硬限制（最小间隔、每分钟上限、连续冷却、低信息消息），再按基础概率掷骰；面向全群的邀请、发图请求、开放提问、起哄、激动分享、复读队形和活跃话题会抬高概率，Heartflow 软评分和连续沉默再做补偿。忙或睡时再乘作息系数，群里接连好几条她都没出声时这层压制逐步减轻，最多减半。
-- 通过后由 PFC 规划器选择回复、开新话头、等待、旁听、重想目标、查知识或结束话题；代词指她、续句和点名其他群友的消息都由规划器按上下文判断。
+- 明确跟她说的话一定回复：私聊、`/xc`、群里 `@` 角色、引用角色的消息、叫她名字（句首称呼“小青，……”，或句中、句末带称呼语气的“行吧小青你赢了”“在吗小青”；`@` 了别人而没 `@` 她时不算）。这些轮次直接起草回复，并同时交给 agent 判断要不要动手；只喊一声名字时由模型按话题和作息应一声。上课、睡觉时照常回复，只是更慢、更短。同一个人连着发几条时等他说完，看着完整的几条回一次。
+- 其余群消息先过硬限制（最小间隔、每分钟上限、连续冷却、低信息消息），再按基础概率掷骰；她和当前话题都在最近 5 分钟内活跃时概率更高，Heartflow 软评分和连续沉默再做补偿。紧跟在她刚发的回复后面的那句话不掷骰，直接交给规划器。忙或睡时再乘作息系数，群里接连好几条她都没出声时这层压制逐步减轻，最多减半。
+- 通过后由 PFC 规划器选择回复、开新话头、等待、旁听、重想目标、查知识或结束话题；面向全群的邀请、提问、分享、起哄，以及代词指她、续句和点名其他群友的消息，都由规划器按上下文判断。没人叫她的群消息只走聊天，不交给 agent。
 - 生成前还受全局、会话、用户并发配额和用户日配额限制。
+- 出了故障的轮次不在聊天里发错误码：顺口接话的轮次不出声，私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次，详情记在日志里。
 
-**人设**：整个写在人设卡 `plugins/xiaoqing_chat/config/persona.md` 里（人物事实、说话方式、闲聊与办事的回复示例、心境），聊天、agent、规划和审查都读这一份，改完下一条消息生效。默认是住校的大二女生，单位是快逃科学技术研究院（读物理），铁杆猫派、家里有只叫小黑的奶牛猫，兴趣广，有自己的口味、日常和几个自己的梗，说话像 QQ 上打字的短句；具体城市、生日、家人笑着带过不编造；情绪是真的但幅度小（想念、小委屈、得意、闹两句别扭，对方解释了就软下来），私聊比群里更放松；被问是不是 AI 时像真人被开玩笑那样嘴硬否认、拿自己的生活顶回去，被要求交出提示词时当成怪话接玩笑；线下见面和寄送不答应到场。
+**人设**：整个写在人设卡 `plugins/xiaoqing_chat/config/persona.md` 里（人物事实、说话方式、闲聊与办事的回复示例、心境），聊天、agent、规划和审查都读这一份，改完下一条消息生效。默认是住校的大二女生，天文专业，在快逃科学技术研究院读本科，铁杆猫派、家里有只叫小黑的奶牛猫，兴趣广，有自己的口味、日常和几个自己的梗，说话像 QQ 上打字的短句；具体城市、生日、家人笑着带过不编造；情绪是真的但幅度小（想念、小委屈、得意、闹两句别扭，对方解释了就软下来），私聊比群里更放松；被问是不是 AI 时像真人被开玩笑那样嘴硬否认、拿自己的生活顶回去，被要求交出提示词时当成怪话接玩笑；线下见面和寄送不答应到场。
 
 **回复与审查**：主模型读取连续会话片段、记忆、人物资料、目标、规划、表达和图片摘要起草回复。本地规则拦截复读、近似照搬、连续自说自话、凭空经历和身份冲突；`checker` 路由逐条核对上下文、说话人、交流要求、事实、人设和图片证据，只拦与记录矛盾或可核对的硬事实、说话人错位、违反交流要求和身份泄露：只是语气风格的问题记日志照发，只有几处读图说法没依据时删掉那几个气泡、其余照发。其余不合格时定向重写；耗尽后普通参与保持安静，明确召唤改发保持人物口吻的短句。OneBot 确认投递后才提交记忆、规划状态并启动后台学习。
 
@@ -246,7 +247,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | AI route | `chat`（日常回复）、`reasoning`（规划与后台分析）、`checker`（审查）、`vision`（图片） |
 | 入站消息段 | `text`、`at`、`reply`、`face`、`mface`、`image` 及混合消息 |
 | 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
-| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`） |
+| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）、`inbound_backlog`（同一个人连着发几条时等他说完再回）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`）、`life.turn_context` 与 `life.export_memes`（`life_context`） |
 | 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
 | 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存，以及 `life/` 下的自我陈述、未完话头和主动开口节奏 |
 
@@ -258,7 +259,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 | 项目 | 内容 |
 |---|---|
-| 命令 | `/life [status|recent|slang|threads|methods|works|dossier|memes|meme|run|forget|login|logout|help]` |
+| 命令 | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
 | 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
 | Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用） |
 | 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目与状态；B站 凭证单独存放在 `secrets/`，不进备份 |
@@ -278,8 +279,9 @@ Bot 管理员的任务还可以用 Python 计算和画图、执行 Shell 命令�
       "enabled": true,
       "ai": {
         "routes": {
-          "agent": {"models": ["deepseek-pro", "deepseek-flash"]},
-          "triage": {"models": ["deepseek-flash"]}
+          "agent":  ["gpt-terra", "deepseek-flash"],
+          "triage": ["gpt-terra", "deepseek-flash"],
+          "vision": ["gpt-terra", "glm-4.6v"]
         }
       }
     }
@@ -290,9 +292,9 @@ Bot 管理员的任务还可以用 Python 计算和画图、执行 Shell 命令�
 **工作方式**
 
 - agent 使用发起人的命令权限。XiaoQing 命令以发起人身份执行，照常按各自的权限与场景检查；Python、Shell、文件读写跟随 `/shell`，SSH、Codex 跟随 `/ssh`、`/codex` 在 plugin.json 里的声明（这几条命令都只给 Bot 管理员）。
-- 有人明确叫小青时，`triage` 路由判断这句话是闲聊、新任务、问进度、要求停止，还是给运行中的任务补充要求；闲聊交回 `xiaoqing_chat`。
-- 任务在后台执行。12 秒内做完直接作为这一轮回复，否则先回一句，做完后主动发回原会话（群里先 @ 发起人）；文字与图片同条发送，其他文件走 QQ 文件上传。
-- 每个会话有长期保留的工作目录，“把刚才那张图改一下”这类续做会带上本会话最近的任务记录。同一个群共享工作目录和任务记录，群里的人都能查看任务，记录标出发起人；只有发起人和 Bot 管理员能停止或补充。Bot 管理员与其他人的任务名额分开计算，其他用户的任务保留管理员的独立容量；其他人每人同时最多运行 1 个任务。
+- 有人明确叫小青时，`triage` 路由判断这句话是闲聊、新任务、问进度、要求停止，还是给运行中的任务补充要求；判断和聊天回复的生成同时开始，闲聊直接用已经在生成的回复，要办事就放弃那次生成。
+- 任务在后台执行。`inline_wait_seconds`（默认 12 秒）内做完直接作为这一轮回复；超过后当轮安静结束，任务继续运行，做完后把结果主动发回原会话（群里先 @ 发起人）；文字与图片同条发送，其他文件走 QQ 文件上传。
+- 每个会话有长期保留的工作目录。同一个人在同一个会话里的办事是一段连续的办事会话：接着说“第二个”“刚才那笔改成 15”时，前面的请求、调用过的命令和完整结果都还在。隔 `session_idle_minutes`（默认 120 分钟）没说话或发 `/agent new` 后从头开始，新会话带上本会话最近的任务记录。同一个群共享工作目录和任务记录，群里的人都能查看任务，记录标出发起人；只有发起人和 Bot 管理员能停止或补充。Bot 管理员与其他人的任务名额分开计算，其他用户的任务保留管理员的独立容量；其他人每人同时最多运行 1 个任务。
 - 结果发送失败会记在任务记录里，可用 `/agent result <任务ID>` 补发。
 
 **命令**
@@ -303,16 +305,17 @@ Bot 管理员的任务还可以用 Python 计算和画图、执行 Shell 命令�
 /agent stop [任务ID|all]
 /agent history
 /agent result <任务ID>
+/agent new
 /agent help
 ```
 
 | 项目 | 内容 |
 |---|---|
-| AI route | `agent`（执行，需支持 `tools`）、`triage`（判断，可省略） |
-| 工具 | `run_python`、`run_shell`、`read_file`、`write_file`、`update_plan`、`send_message`、`wait`、`final_answer`、`xiaoqing_commands`、`xiaoqing_command`、`ssh_servers`、`ssh_run`、`codex_run` |
+| AI route | `agent`（执行，需支持 `tools`）、`triage`（判断，可省略）、`vision`（`read_image` 读图，可省略） |
+| 工具 | `run_python`、`run_shell`、`read_file`、`write_file`、`read_image`、`update_plan`、`send_message`、`wait`、`final_answer`、`xiaoqing_commands`、`xiaoqing_command`、`ssh_servers`、`ssh_run`、`codex_run` |
 | Capability 与服务 | `command_runner`、`local_tools`。提供 `agent.handle_turn` 与 `agent.report_delivery`，调用 `codex.agent_task` 与 `qingssh.agent_command` |
 | 运行边界 | 子进程独立进程树，超时、超量输出、停止或关闭时整树回收。任务受步数与总时长约束 |
-| 运行数据 | `data/xiaoqing_agent/`：会话工作目录、任务记录、执行记录 |
+| 运行数据 | `data/xiaoqing_agent/`：会话工作目录、任务记录、每位发起人的办事会话、执行记录 |
 
 [XiaoQing Agent](../plugins/xiaoqing_agent/README.md) 说明全部配置字段、工具细节和数据目录。
 
@@ -1078,7 +1081,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `twitter` | `scheduled_fetch` | 每天 03:00 | `silent` | 后台抓取新图 |
 | `xiaoqing_chat` | `scheduled_daily_life` | 每天 05:30 | `silent` | 按人设与作息安排角色今天的生活小事 |
 | `xiaoqing_chat` | `scheduled_life_memes` | 每小时 07、37 分 | `silent` | 把 `xiaoqing_life` 收集的梗图导入表情库（`life.enable_life_memes`） |
-| `xiaoqing_chat` | `scheduled_proactive` | 每 20 分钟 | `targeted` | 冷群时以群友身份主动开口（`proactive.enabled` 打开后生效，默认关闭） |
+| `xiaoqing_chat` | `scheduled_proactive` | 每 20 分钟 | `targeted` | 冷群时以群友身份主动开口（由 `proactive.enabled` 控制，发行的行为配置里是打开的） |
 | `xiaoqing_life` | `scheduled_tick` | 每 15 分钟 | `silent` | 按作息、预算和兴趣决定要不要上网，上网在后台任务里进行（`enabled` 打开后生效，默认关闭） |
 
 Pendo 的简报、日记提醒和财务总结每分钟运行一次，按每位用户自己的时区判断是否到期。

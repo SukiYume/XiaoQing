@@ -81,15 +81,22 @@ def _min_reply_interval(cfg, *, active_topic: bool) -> float:
     return interval
 
 
-def _hard_limit_reason(cfg, decision: ReplyGateDecision, text: str, *, is_private: bool) -> str:
-    """限流、冷却和明显不该接的消息无论其他信号如何都拦下。"""
+def _hard_limit_reason(
+    cfg, decision: ReplyGateDecision, text: str, *, is_private: bool, follow_up: bool = False
+) -> str:
+    """限流、冷却和明显不该接的消息无论其他信号如何都拦下。
+
+    ``follow_up``：这句紧跟着她的发言、多半在接她的话时不算每分钟上限。她刚问了“推番还是推游戏”，
+    对方答“番”，不能因为这一分钟说得多就不理；最小间隔和连续冷却照旧。
+    """
 
     if decision.min_interval_seconds > 0 and (
         decision.seconds_since_last_reply < decision.min_interval_seconds
     ):
         return "min_interval"
     if (
-        cfg.max_replies_per_minute > 0
+        not follow_up
+        and cfg.max_replies_per_minute > 0
         and decision.replies_last_minute >= cfg.max_replies_per_minute
     ):
         return "max_replies_per_minute"
@@ -155,13 +162,17 @@ async def decide_reply(
     is_private: bool,
     enable_private_brain_chat: bool,
     *,
-    routine_factor: float = 1.0,
+    routine_factor: float   = 1.0,
+    follows_own_reply: bool = False,
 ) -> bool:
     """判断普通消息是否主动参与，并把决策细节记入运行状态供日志使用。
 
     明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复；这里只处理硬频控、
     普通插话概率、heartflow 软加分和静默期补偿。``routine_factor`` 是作息给的乘数，
     最后作用在概率上：角色在上课或睡觉时更少插话，群里一直热闹而她没出声时压得轻一些。
+
+    ``follows_own_reply``：这句话紧跟在她刚发的消息后面，多半是在接她的话（损她一句、
+    给她起外号，不一定带名字）。不掷骰子，过了硬频控就交给规划器看该不该接。
     """
 
     cfg    = runtime.cfg
@@ -184,17 +195,23 @@ async def decide_reply(
         should_reply             = False,
         reason                   = "",
         seconds_since_last_reply = since,
-        min_interval_seconds=_min_reply_interval(cfg, active_topic=active_topic),
+        min_interval_seconds     = _min_reply_interval(
+            cfg, active_topic=active_topic or follows_own_reply
+        ),
         replies_last_minute    = len(window),
         max_replies_per_minute = cfg.max_replies_per_minute,
         cooldown_left_seconds  = max(0.0, state.get_continuous_cooldown_until(chat_id) - now),
         active_topic           = active_topic,
     )
-    if reason := _hard_limit_reason(cfg, decision, text, is_private=is_private):
+    if reason := _hard_limit_reason(
+        cfg, decision, text, is_private=is_private, follow_up=follows_own_reply
+    ):
         decision = dataclasses.replace(decision, reason=reason)
     elif enable_private_brain_chat and is_private:
         # 深度对话模式下跳过概率控制。
         decision = dataclasses.replace(decision, should_reply=True, reason="private_brain_chat")
+    elif follows_own_reply and not is_private:
+        decision = dataclasses.replace(decision, should_reply=True, reason="follows_own_reply")
     else:
         probability = _participation_probability(cfg, active_topic=active_topic)
         score = None

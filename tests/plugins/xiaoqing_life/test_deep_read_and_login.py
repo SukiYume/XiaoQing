@@ -1,4 +1,4 @@
-"""第五轮里程碑 1：深读（简介 / 置顶 / UP 主回复 / 字幕 / 百科 / 维基）与 B站 扫码登录。"""
+"""深读（简介 / 置顶 / UP 主回复 / 字幕 / 百科 / 维基）与 B站 扫码登录。"""
 
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ from multidict import CIMultiDict
 from core.delivery import SENSITIVE_ACTION_KEY
 from plugins.xiaoqing_life import bili_auth, commands, digest
 from plugins.xiaoqing_life import main as life_main
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.config import parse_life_config
+from plugins.xiaoqing_life.fetching import open_items
 from plugins.xiaoqing_life.planner import HOT_SCROLL, Decision
-from plugins.xiaoqing_life.session import SessionDeps, _open_items, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import baike, bilibili, deep, subtitle, wiki
 from plugins.xiaoqing_life.sources.base import (
     BoundedFetcher,
@@ -41,6 +43,7 @@ from tests.plugins.xiaoqing_life.support import (
     fixed_clock,
     make_cfg,
     make_context,
+    new_store,
     popular_payload,
 )
 
@@ -566,12 +569,6 @@ def _deps(fetch: FakeFetcher, ai: FakeAI, **kw: Any) -> SessionDeps:
     )
 
 
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
-
-
 def _cfg(**kw: Any) -> Any:
     return make_cfg(seed_interests=["猫猫"], **kw)
 
@@ -603,7 +600,7 @@ def _calls(fetch: FakeFetcher, fragment: str) -> list[tuple[str, dict[str, str]]
 async def test_logged_in_session_reads_subtitles_and_marks_the_episode_watched(
     tmp_path: Path,
 ) -> None:
-    store, ai, fetch = _store(tmp_path), FakeAI(DIGEST), _session_fetch()
+    store, ai, fetch = new_store(tmp_path), FakeAI(DIGEST), _session_fetch()
     await run_session(store, _cfg(), _hot(), _deps(fetch, ai, subtitles_ok=lambda: True))
     first, second = store.episodes
     assert (first["depth"], first["subtitle_partial"]) == ("watched", False)
@@ -620,7 +617,7 @@ async def test_logged_in_session_reads_subtitles_and_marks_the_episode_watched(
 
 
 async def test_partial_subtitles_flag_the_episode(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     fetch = _session_fetch(subtitle_body=_body(120, width=30))
     await run_session(store, _cfg(), _hot(), _deps(fetch, ai, subtitles_ok=lambda: True))
     assert (store.episodes[0]["depth"], store.episodes[0]["subtitle_partial"]) == ("watched", True)
@@ -631,7 +628,7 @@ async def test_subtitles_not_requested_when_logged_out_or_switched_off(tmp_path:
         ({}, _cfg()),  # 未登录 / 凭证失效：subtitles_ok 为 False
         ({"subtitles_ok": lambda: True}, _cfg(sources={"bili_subtitles": False})),
     ):
-        store, ai, fetch = _store(tmp_path / str(len(kwargs))), FakeAI(DIGEST), _session_fetch()
+        store, ai, fetch = new_store(tmp_path / str(len(kwargs))), FakeAI(DIGEST), _session_fetch()
         await run_session(store, cfg, _hot(), _deps(fetch, ai, **kwargs))
         assert _calls(fetch, "player/wbi") == [] and _calls(fetch, "web-interface/nav") == []
         assert fetch.public_calls == []
@@ -640,12 +637,12 @@ async def test_subtitles_not_requested_when_logged_out_or_switched_off(tmp_path:
 
 async def test_deep_read_is_capped_and_only_for_interest_hits(tmp_path: Path) -> None:
     # max_deep_reads_per_session = 0：谁也不深读，也不请求 ps=20
-    store, ai, fetch = _store(tmp_path / "a"), FakeAI(DIGEST), _session_fetch()
+    store, ai, fetch = new_store(tmp_path / "a"), FakeAI(DIGEST), _session_fetch()
     await run_session(store, _cfg(max_deep_reads_per_session=0), _hot(), _deps(fetch, ai))
     assert {e["depth"] for e in store.episodes} == {"skim"}
     assert {c[1]["ps"] for c in _calls(fetch, "reply/main")} == {"10"}
     # 默认 1：只有命中兴趣的 i1 深读（ps=20），没命中兴趣的 i2 不读
-    store, ai, fetch = _store(tmp_path / "b"), FakeAI(DIGEST), _session_fetch()
+    store, ai, fetch = new_store(tmp_path / "b"), FakeAI(DIGEST), _session_fetch()
     await run_session(store, _cfg(), _hot(), _deps(fetch, ai))
     sizes = {c[1]["oid"]: c[1]["ps"] for c in _calls(fetch, "reply/main")}
     assert sizes == {"1": "20", "2": "10"}
@@ -657,14 +654,14 @@ async def test_two_interest_hits_with_cap_one_read_only_the_top(tmp_path: Path) 
     cfg    = make_cfg()
     items  = await bilibili.popular(fetch, [])
     topics = ["猫猫"]
-    out    = await _open_items(cfg, fetch, items, topics)
+    out    = await open_items(cfg, fetch, items, topics)
     assert sum(bool(i.passages) for i in out) == 1
-    both = await _open_items(make_cfg(max_deep_reads_per_session=2), fetch, items, topics)
+    both = await open_items(make_cfg(max_deep_reads_per_session=2), fetch, items, topics)
     assert sum(bool(i.passages) for i in both) == 2
-    none = await _open_items(cfg, fetch, items, ["完全不相关的兴趣"])
+    none = await open_items(cfg, fetch, items, ["完全不相关的兴趣"])
     assert not any(i.passages for i in none)
     # 不被“看”的条目（max_watch=0）没有原始简介，也不会深读
-    unwatched = await _open_items(make_cfg(max_watch_per_session=0), fetch, items, topics)
+    unwatched = await open_items(make_cfg(max_watch_per_session=0), fetch, items, topics)
     assert not any(i.passages for i in unwatched)
 
 
@@ -689,7 +686,7 @@ async def test_digest_material_refs_and_quotes_on_passages() -> None:
         {"id": "p1.2", "kind": "subtitle", "at": "3:20", "text": "这一段是字幕"},
     ]
     texts = digest.ref_texts(items)
-    assert texts["p1.2"] == "这一段是字幕" and digest._item_of("p1.2") == "i1"
+    assert texts["p1.2"] == "这一段是字幕" and digest.owner_ref("p1.2") == "i1"
     raw = {
         "looked_at": [{"item": "i1", "reaction": "有意思", "feeling": "like"}],
         "terms"    : [
@@ -1361,7 +1358,7 @@ async def test_login_status_confirms_with_nav_and_notices_invalidation(tmp_path:
 async def test_deep_prompt_and_state_never_carry_credentials(tmp_path: Path) -> None:
     """有凭证的完整一次上网：提示词与存储里没有凭证值。"""
 
-    store, ai, fetch = _store(tmp_path), FakeAI(DIGEST), _session_fetch()
+    store, ai, fetch = new_store(tmp_path), FakeAI(DIGEST), _session_fetch()
     credential = bili_auth.BiliCredential(tmp_path / "life")
     _write(credential.path, _cookie_doc(SECRET_SESS))
     await run_session(store, _cfg(), _hot(), _deps(fetch, ai, subtitles_ok=credential.usable))

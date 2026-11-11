@@ -9,10 +9,10 @@ import math
 from typing import Any
 
 from .config import LifeConfig
+from .days import DAY
 from .safety import normalize_for_match, similar
 from .stores import MAX_EXPRESSIONS, MAX_INTERESTS, MAX_TERMS, SEEN_DAYS, new_id
 
-DAY                     = 86400.0
 MAX_SOURCES             = 20
 MAX_EVIDENCE            = 20
 INTEREST_HALF_LIFE_DAYS = 30.0
@@ -67,7 +67,34 @@ def upsert_term(
     _add_source(entry, item_id)
     entry["last_seen"] = max(float(entry.get("last_seen", 0.0)), now)
     entry["verified"]  = bool(entry.get("verified")) or verified
+    entry["voices"]    = max(int(entry.get("voices", 0)), int(fields.get("voices", 0)))
     return entry
+
+
+KNOWN_VOICES = 3
+CHAT_SOURCE  = "chat"
+
+
+def is_known(entry: dict[str, Any]) -> bool:
+    """算不算“听懂了、可以用”：百科查实，或在两个地方见过，或一次就见到三处以上的人在用。
+
+    群友在聊天里用到她收着的说法也算一个地方（``CHAT_SOURCE``）；她自己说的不算。
+    """
+
+    return (
+        bool(entry.get("verified"))
+        or len(entry.get("sources", [])) >= 2
+        or int(entry.get("voices", 0)) >= KNOWN_VOICES
+    )
+
+
+def heard_in_chat(entry: dict[str, Any], now: float) -> None:
+    """群友用到了这个说法：记一个来源，够条件就直接算听懂。"""
+
+    if _add_source(entry, CHAT_SOURCE):
+        entry["last_seen"] = max(float(entry.get("last_seen", 0.0)), now)
+    if entry.get("status") == "candidate" and is_known(entry):
+        entry["status"] = "known"
 
 
 def _status_for(entry: dict[str, Any], now: float, cfg: LifeConfig) -> str | None:
@@ -76,7 +103,7 @@ def _status_for(entry: dict[str, Any], now: float, cfg: LifeConfig) -> str | Non
     idle = now - float(entry.get("last_seen", now))
     if idle > cfg.term_forget_days * DAY:
         return None
-    known = len(entry.get("sources", [])) >= 2 or bool(entry.get("verified"))
+    known = is_known(entry)
     if not known:
         age = now - float(entry.get("first_seen", now))
         return None if age > cfg.term_candidate_days * DAY else "candidate"
@@ -110,15 +137,18 @@ def upsert_expression(
     key = normalize_for_match(str(fields.get("pattern", "")))
     if not key:
         return None
+    example = str(fields.get("example", ""))[:80]
     for entry in expressions:
         if normalize_for_match(str(entry.get("pattern", ""))) == key:
             _add_source(entry, item_id)
             entry["last_seen"] = max(float(entry.get("last_seen", 0.0)), now)
+            entry.setdefault("example", example)
             return entry
     entry = {
         "id"            : new_id("x"),
         "situation"     : str(fields.get("situation", ""))[:60],
         "pattern"       : str(fields.get("pattern", ""))[:100],
+        "example"       : example,
         "kind"          : "move" if fields.get("kind") == "move" else "phrase",
         "sources"       : [item_id],
         "first_seen"    : now,
@@ -240,24 +270,36 @@ def interest_score(entry: dict[str, Any], now: float) -> float:
     return total
 
 
+def _positive_times(entry: dict[str, Any], start: float, end: float) -> dict[Any, float]:
+    """时间窗内正向证据：不同条目 → 最早的时间。"""
+
+    times: dict[Any, float] = {}
+    for e in entry.get("evidence", []):
+        at = float(e.get("at", 0.0))
+        if e.get("delta", 0) > 0 and start <= at < end:
+            times[e.get("item")] = min(at, times.get(e.get("item"), at))
+    return times
+
+
 def _positive_items(entry: dict[str, Any], start: float, end: float) -> int:
-    items = {
-        e.get("item")
-        for e in entry.get("evidence", [])
-        if e.get("delta", 0) > 0 and start <= float(e.get("at", 0.0)) < end
-    }
-    return len(items)
+    return len(_positive_times(entry, start, end))
+
+
+# “常刷到”要是不同的几次上网：同一次刷到两条（或一次研究搜出好几条）只算试探。
+REPEAT_SPREAD_SEC = 12 * 3600
 
 
 def interest_stage(entry: dict[str, Any], now: float) -> str:
-    """1 条证据 tentative；近 14 天 ≥2 条不同来源 repeated；前后两个 14 天窗口各 ≥2 consistent。"""
+    """1 条证据 tentative；近 14 天 ≥2 条不同来源、且最早和最晚隔了半天以上 repeated；
+    前后两个 14 天窗口各 ≥2 consistent。"""
 
     window = 14 * DAY
-    recent = _positive_items(entry, now - window, now + 1)
+    recent = _positive_times(entry, now - window, now + 1)
     before = _positive_items(entry, now - 2 * window, now - window)
-    if recent >= 2 and before >= 2:
+    spread = max(recent.values()) - min(recent.values()) if recent else 0.0
+    if len(recent) >= 2 and before >= 2:
         return "consistent"
-    if recent >= 2:
+    if len(recent) >= 2 and spread >= REPEAT_SPREAD_SEC:
         return "repeated"
     return "tentative" if entry.get("evidence") else "none"
 
@@ -328,12 +370,14 @@ def interest_weights(interests: dict[str, dict[str, Any]], now: float) -> dict[s
 SNAPSHOT_TIERS = (2, 4, 8)
 
 
-def _snapshot_text(topic: str, stage: str, total: int, liked: int) -> str:
+def _snapshot_text(topic: str, stage: str, total: int, liked: int, span: float = 14 * DAY) -> str:
     # 次数留在快照字段里给 /life 和测试看；交给她的文字只说程度，免得被当成报数念出来。
     mood = "大多挺喜欢" if liked * 2 > total else "看是看了，没那么喜欢"
     if stage == "consistent":
         return f"这阵子一直常刷到{topic}相关的内容，{mood}"
-    return f"这两周常刷到{topic}相关的内容，{mood}"
+    # 证据只跨了几天就别说“这两周”。
+    when = "这两周" if span >= 7 * DAY else "最近几天"
+    return f"{when}常刷到{topic}相关的内容，{mood}"
 
 
 def consolidate(
@@ -357,15 +401,15 @@ def consolidate(
         times = [float(e.get("at", now)) for e in evidence]
         snapshots.append(
             {
-                "topic"         : topic,
-                "tier"          : tier,
-                "stage"         : stage,
+                "topic": topic,
+                "tier": tier,
+                "stage": stage,
                 "evidence_count": len(evidence),
-                "liked"         : liked,
-                "since"         : min(times),
-                "until"         : max(times),
-                "created_at"    : now,
-                "text"          : _snapshot_text(topic, stage, len(evidence), liked),
+                "liked": liked,
+                "since": min(times),
+                "until": max(times),
+                "created_at": now,
+                "text": _snapshot_text(topic, stage, len(evidence), liked, max(times) - min(times)),
             }
         )
         made += 1

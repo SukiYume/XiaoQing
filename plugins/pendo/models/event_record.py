@@ -23,6 +23,17 @@ def _wall_time(value: str) -> str:
 
 WallTime = Annotated[str, AfterValidator(_wall_time)]
 
+_OFFSET_UNITS = ((7 * 86400, "周"), (86400, "天"), (3600, "小时"), (60, "分钟"))
+
+
+def _offset_text(seconds: int) -> str:
+    """提醒规则的提前秒数写回“提前N单位”；准点或不能整除到分钟时为空。"""
+
+    for size, unit in _OFFSET_UNITS:
+        if seconds > 0 and seconds % size == 0:
+            return f"提前{seconds // size}{unit}"
+    return ""
+
 
 class EventNode(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
@@ -49,6 +60,7 @@ class EventRecord(BaseModel):
     location      : str = ""
     notes         : str = ""
     category      : str = ""
+    force         : bool = Field(default=False, description="用户已明确允许冲突时设为 true。")
     start_time    : WallTime | None = Field(default=None, description="single、recurring 必填。")
     end_time      : WallTime | None = None
     nodes         : list[EventNode] = Field(default_factory=list, description="multi_node 至少两个。")
@@ -88,6 +100,52 @@ class EventRecord(BaseModel):
             if not _OFFSET_RE.fullmatch(offset):
                 raise ValueError(f"提醒“{offset}”需写成“提前正整数分钟/小时/天/周”")
         return self
+
+    @classmethod
+    def from_parsed(cls, parsed: dict[str, Any]) -> EventRecord | None:
+        """把 ``event add`` 已经解析好的结果还原成结构化记录，供冲突确认原样执行。
+
+        只接受 AI 解析的墙钟时间结果；规则兜底带程序偏移或绝对提醒，无法无损还原时返回 ``None``，
+        确认交回普通流程，不能让确认执行的内容和发起人看到的不一样。
+        """
+
+        if parsed.get("parse_source") != "ai":
+            return None
+        rules = parsed.get("reminder_rules") or []
+        offsets = [_offset_text(int(rule.get("offset_seconds", 0))) for rule in rules]
+        fields: dict[str, Any] = {
+            "title"         : str(parsed.get("title") or "").strip(),
+            "content"       : str(parsed.get("content") or ""),
+            "location"      : str(parsed.get("location") or ""),
+            "notes"         : str(parsed.get("notes") or ""),
+            "category"      : str(parsed.get("category") or ""),
+            "remind_offsets": [offset for offset in offsets if offset],
+        }
+        milestones = parsed.get("milestones") or []
+        if len(milestones) >= 2:
+            fields["kind"]  = "multi_node"
+            fields["nodes"] = [
+                {
+                    "name": str(node.get("name") or ""),
+                    "time": str(node.get("time") or "")[:16],
+                    **({"end_time": str(node["end_time"])[:16]} if node.get("end_time") else {}),
+                }
+                for node in milestones
+            ]
+        else:
+            fields["kind"]       = "recurring" if parsed.get("rrule") else "single"
+            fields["start_time"] = str(parsed.get("start_time") or "")[:16] or None
+            if parsed.get("end_time"):
+                fields["end_time"] = str(parsed["end_time"])[:16]
+            if parsed.get("rrule"):
+                fields["rrule"] = str(parsed["rrule"])
+        try:
+            record: EventRecord = cls.model_validate(
+                {key: value for key, value in fields.items() if value not in ("", [], None)}
+            )
+        except ValueError:
+            return None
+        return record
 
     def parsed_fields(self) -> dict[str, Any]:
         """与 AI 解析输出同结构的字段，交给解析器的结果整理逻辑。"""

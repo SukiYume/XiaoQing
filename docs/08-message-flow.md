@@ -321,6 +321,8 @@ HTTP 与 WebSocket 入口共享按会话键调度器：
 - `ws_queue_size` 配置范围为 `1..10000`，控制等待 backlog。
 - 总接纳容量为 worker 与 backlog 之和，HTTP 与 WebSocket 共用同一个有界调度器。
 
+两个入口把消息事件放进队列时在 `InboundBacklog` 登记，事件开始处理时注销。登记按“会话 + 发送者”分开，只作提示、不参与调度，60 秒后自动失效。声明了 `inbound_backlog` capability 的插件处理一条消息时，可以查询同一个人后面还排着哪些消息。
+
 ### Dispatcher
 
 `max_concurrency` 限制全局活动消息处理数。
@@ -375,6 +377,7 @@ Listener、token、管理员状态与插件 Context 按 revision 发布。
 | 权限与场景判断 | `core/router.py` 的 `command_access` |
 | agent 命令执行器 | `core/dispatcher.py` 的 `run_command_text` |
 | Session | `core/session.py` |
+| 排队消息登记 | `core/inbound_backlog.py` |
 | 插件代与执行 | `core/plugin_generation.py`, `core/plugin_runtime.py`, `core/plugin_execution.py` |
 | 出站回执 | `core/delivery.py`, `core/app_delivery.py` |
 | 配置 revision | `core/config.py`, `core/app_config_apply.py` |

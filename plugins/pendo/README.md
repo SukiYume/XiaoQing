@@ -51,7 +51,11 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo event reminders confirm <id> [today|future|all|提醒时间]
 ```
 
-`e`、`calendar`、`日程`、`事件` 是 `event` 的别名。单次日程对应一个 leaf。重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。
+`e`、`calendar`、`日程`、`事件` 是 `event` 的别名。单次日程对应一个 leaf。重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。`event list` 的节点行在节点 ID 后标出所属集合 ID（`（集合 xxxxxxxx）`），整组修改或删除可以直接使用；跨天日程的结束时间带上日期。多节点创建回报逐行列出节点 ID。
+
+新建日程统一走 `event add`：由插件的解析模型判断单次、重复还是多节点，并给出标题、时间、节点名称和提醒；Agent 代为执行时把发起人原话里的类型说法、节点名称、时间和提醒原样写进内容，不自行拆成结构化字段。只提供日期时默认 09:00。修改同样交给解析器：`event edit <id> <原话中的修改>` 按节点或单次日程 ID 原地修改（比如 `标题改为会议开始`、`推迟到两周后的同一时间`），保留节点 ID、所属集合和提醒规则，改开始时间会同步移动提醒，修改里同时写了“提前 N 提醒”时提醒规则一并换成新的；集合 ID 修改整体标题、分类、地点和备注。集合的分类、地点和标签会同步到仍沿用集合原值的节点，重复日程的标题和备注也同步到各次实例；单独改过的节点保持不变。多节点日程按每个节点自己的时间段检查冲突。
+
+多节点集合支持追加一个或多个节点，例如 `/pendo event edit <集合ID> 添加一个节点，12月9日下午三点验收，提前30分钟提醒`。AI 解析本次新增节点，插件将节点和提醒一起写入原集合，返回新增节点 ID，并更新集合时间范围。新增节点默认继承集合的提醒规则，指令指定的提前提醒只作用于本次新增节点；准点提醒始终保留。原有节点保持原值。追加操作支持 `/pendo undo`；节点已有后续修改时会提示先处理后续操作。追加使用多节点集合 ID，单个节点 ID 会返回集合 ID 提示。
 
 ---
 
@@ -104,7 +108,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo diary delete <日期|ID>
 ```
 
-`d`、`journal`、`日记` 是 `diary` 的别名。同一天可以保存多篇日记。`diary_date` 表示归属日期，`entry_time` 表示记录时刻，模板回答保存在 `template_answers`。
+`d`、`journal`、`日记` 是 `diary` 的别名。同一天可以保存多篇日记。`diary_date` 表示归属日期，`entry_time` 表示记录时刻，模板回答保存在 `template_answers`。开头的“明天”“后天”这类词算正文，不会把日记记到未来的日期；写明的日期照用。模板日记最后一步保存失败时会话停在最后一题，前面的回答保留。
 
 ---
 
@@ -114,6 +118,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo ledger add
 /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer|type:] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注]
 /pendo ledger quick <金额> <描述> [字段...]
+/pendo ledger record <JSON>
 /pendo ledger list [范围] [type:] [account:] [to:] [merchant:] [cat:] [amount:min..max] [all|page:n] [ex]
 /pendo ledger view <id>
 /pendo ledger edit <id> <字段:值>...
@@ -123,6 +128,8 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 
 `bill`、`finance`、`记账`、`账单` 是 `ledger` 的别名。空参数的 `ledger add` 会启动多轮会话。金额和描述由用户填写，交易类型、账户和分类可按编号选择。`amount_cents` 是统计主字段，`amount` 是展示镜像。转账使用 `transaction_type=transfer`。
 
+`ledger record <JSON>` 一次保存一笔结构化账目，供 Agent 这类调用方使用：必填 `amount_cents`（金额的分，正整数）和 `title`；`transaction_type` 默认 `expense`，`category` 默认其他，`account` 默认现金，`date` 默认今天，`currency` 默认 CNY。转账的分类默认是转账，`to_account` 必填且与转出账户不同。`category_from`、`account_from` 填本人已有账目的 ID，沿用那笔的分类、账户，与 `category`、`account` 分别二选一。
+
 ---
 
 ## ⏰ 搜索、提醒和设置
@@ -130,7 +137,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 ```text
 /pendo search <关键词> [#标签|tag=] [type=] [range=] [status=] [category=] [transaction_type=] [account=] [merchant=]
 /pendo confirm <id>
-/pendo snooze <id> <10m|1h|19:00>
+/pendo snooze <id> <10m|30分钟|1h|1d|19:00>
 /pendo undo [1..5]
 /pendo settings
 /pendo settings reminder on|off
@@ -245,7 +252,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 /pendo export 本月随笔 month note,diary
 ```
 
-`/pendo import` 返回 Web Transfer 入口说明。Transfer 页面处理 `.pendo.zip` Bundle，提供检查、样例预览、执行、跳过、覆盖、生成副本和操作日志。Bundle 包含版本化 manifest、校验和与结构化数据文件。
+`/pendo import` 返回 Web Transfer 入口说明。Transfer 页面处理 `.pendo.zip` Bundle，提供检查、样例预览、执行、跳过、覆盖、生成副本和操作日志。默认隔离导入；“跳过已有”会认本账号同类型的同 ID 记录和此前导入过的同来源记录（原记录不动），把自己的备份导回来不会重复；“覆盖”只匹配此前导入过的同来源记录，外部 ID 不能指定覆盖哪条原有记录。Bundle 包含版本化 manifest、校验和与结构化数据文件。
 
 ---
 
@@ -268,6 +275,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `event_collections` | 重复日程与多节点日程集合 |
 | `reminder_logs` | 提醒队列、投递租约以及发送与确认历史 |
 | `scheduled_delivery_outbox` | 定时消息待办与逐目标确认 |
+| `scheduler_heartbeats` | 提醒检查上次运行到的时刻 |
 | `operation_logs` | 编辑、删除与撤销快照 |
 | `user_settings` | 时区、静默时段、简报和 AI 授权 |
 | `transfer_logs` | Bundle 导入日志 |
@@ -287,13 +295,13 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `pendo_reminders` | 每分钟 | `targeted` 私聊 | 日程与待办提醒 |
 | `pendo_daily_briefing` | 每分钟 | `targeted` 私聊 | 检查用户本地每日简报时间 |
 | `pendo_diary_reminder` | 每分钟 | `targeted` 私聊 | 检查用户本地日记提醒时间 |
-| `pendo_migrate_todos` | 每天 00:05 | `targeted` 私聊 | 顺延昨日 open 计划待办并通知所有者 |
+| `pendo_migrate_todos` | 每小时的 05 分 | `targeted` 私聊 | 用户本地跨天后顺延昨日 open 计划待办并通知所有者（按日幂等） |
 | `pendo_prune_operation_logs` | 每天 00:15 | `silent` | 清理过期操作日志与撤销快照 |
 | `pendo_weekly_finance_summary` | 每分钟 | `targeted` 私聊 | 用户本地时区周日 21:00 的财务周报 |
 | `pendo_month_end_finance_summary` | 每分钟 | `targeted` 私聊 | 用户本地时区月末 21:00 的财务月报 |
 | `pendo_cleanup_demo_data` | 每 6 小时的 15 分 | `silent` | 清理过期 Demo 数据 |
 
-每日简报、日记提醒和财务总结都按每位用户自己的时区判断到期：任务每分钟运行一次，到达用户本地时刻后把该周期写入 `scheduled_delivery_outbox`。已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递，日记提醒按所属日期检查是否已经补写。日程与待办提醒在领取后同样进入恢复窗口，租约阻止并发重复投递。静默任务由 Core 保持零消息投递。
+每日简报、日记提醒和财务总结都按每位用户自己的时区判断到期：任务每分钟运行一次，到达用户本地时刻后把该周期写入 `scheduled_delivery_outbox`；设定时刻那一分钟没跑到（重启、卡顿）时，之后 2 小时内仍会补发当天这一次，不跨零点。已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递，日记提醒按所属日期检查是否已经补写。日程与待办提醒在领取后同样进入恢复窗口，租约阻止并发重复投递。提醒检查记录上次运行到的时刻：停机或卡顿期间到点的提醒在恢复后 6 小时内照常补发，并在消息里注明晚了多久；创建时就已过期超过 2 分钟的提醒、以及超过补发期限的提醒不再发送，在提醒列表里显示为“已过期（未发送）”。静默任务由 Core 保持零消息投递。
 
 ---
 
@@ -330,3 +338,5 @@ python -m mypy plugins/pendo
 ```
 
 工程边界与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+`event add` 和 `event record` 遇到时间冲突时，会通过通用命令结果提供确认命令 `/pendo event record <JSON>`（带 `force`）。`event add` 的确认命令由这次已解析、已展示给用户的结果还原而来，确认时不再调用解析模型；规则兜底解析的结果无法无损还原时不提供，确认交回普通流程。Agent 收到用户对原操作的明确同意后直接执行该命令。`event record` 只按已确定的结构化字段写入，不作为 Agent 新建日程的入口。

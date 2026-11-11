@@ -251,6 +251,12 @@ class OneBotMediaCapability(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class InboundBacklogCapability(Protocol):
+    """当前事件的发送者在本会话里已经到达、还没开始处理的消息。"""
+
+    def waiting(self) -> tuple[dict[str, Any], ...]: ...
+
+
 class PluginConfigSubscription(Protocol):
     def subscribe(
         self,
@@ -389,6 +395,7 @@ class PluginCapabilities:
     is_system          : bool                               = False
     secret_admin       : SecretAdminCapability | None       = None
     onebot_media       : OneBotMediaCapability | None       = None
+    inbound_backlog    : InboundBacklogCapability | None    = None
     config_subscription: PluginConfigSubscription | None    = None
     codex_arxiv_summary: CodexArxivSummaryCapability | None = None
     voice_synthesis    : VoiceSynthesisCapability | None    = None

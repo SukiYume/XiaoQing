@@ -206,76 +206,32 @@ The process creates log handlers during startup. Restart the main process after 
 
 ## 🧠 AI/VLM registry
 
-The common AI configuration has four layers:
+AI configuration has two parts, with credentials kept separately:
 
-1. `config.ai.providers`: service addresses and public connection parameters.
-2. `config.ai.models`: reusable model profiles, model names, modalities, and request defaults.
-3. `config.plugins.<name>.ai.routes`: ordered profile chains for plugin tasks.
-4. `secrets.ai.providers`: provider API keys.
+1. **Models** (`config.ai`): `providers` holds service addresses and `models` gives each model you use a name.
+2. **Who uses which model** (`config.plugins.<name>.ai.routes`): each plugin route lists model names. The first is the primary model and the rest are ordered fallbacks.
+3. `secrets.ai.providers`: provider API keys.
 
-### Provider
+Sampling temperature, output budget, timeouts and retries belong to the task itself, so each plugin declares defaults in code and the main configuration can leave them out. To change one, write that route as an object and override the field.
 
 ```json
 {
   "ai": {
     "providers": {
-      "deepseek": {
-        "api_base": "https://api.deepseek.com",
-        "endpoint_path": "/chat/completions",
-        "proxy": ""
-      }
-    }
-  }
-}
-```
-
-| Field | Type | Default | Rule |
-|---|---|---|---|
-| `api_base` | absolute HTTP(S) URL | Necessary | Include scheme and host. Omit credentials, query, and fragment. |
-| `endpoint_path` | absolute URL path | `/chat/completions` | Start with `/`. Omit query and fragment. |
-| `proxy` | absolute HTTP(S) URL or empty string | `""` | Optional proxy for this provider |
-
-### Model profile
-
-```json
-{
-  "ai": {
+      "openai":   {"api_base": "https://api.openai.com/v1", "max_tokens_field": "max_completion_tokens"},
+      "deepseek": {"api_base": "https://api.deepseek.com"}
+    },
     "models": {
-      "deepseek-flash": {
-        "provider": "deepseek",
-        "model": "deepseek-flash",
-        "modalities": ["text"],
-        "request_defaults": {
-          "thinking": {"type": "disabled"}
-        }
-      }
+      "gpt-terra":      {"provider": "openai", "model": "gpt-6.1-terra", "modalities": ["text", "image"], "request_defaults": {"reasoning_effort": "none"}},
+      "deepseek-flash": {"provider": "deepseek", "model": "deepseek-flash", "modalities": ["text"], "request_defaults": {"thinking": {"type": "disabled"}}}
     }
-  }
-}
-```
-
-| Field | Type | Rule |
-|---|---|---|
-| `provider` | string | Reference a name in `config.ai.providers`. |
-| `model` | string | Model name sent to the upstream API |
-| `modalities` | string[] | Nonempty set containing `text`, `image`, or `audio` |
-| `request_defaults` | object | Additional model request fields. Core reserves `model`, `messages`, `stream`, sampling parameters, and tool fields. |
-
-### Plugin route
-
-```json
-{
+  },
   "plugins": {
     "xiaoqing_chat": {
       "ai": {
         "routes": {
-          "chat": {
-            "models": ["deepseek-flash", "glm-5.2"],
-            "temperature": 0.8,
-            "max_tokens": 2000,
-            "timeout_seconds": 30,
-            "total_timeout_seconds": 60
-          }
+          "chat":    ["gpt-terra", "deepseek-flash"],
+          "checker": ["gpt-terra", "deepseek-flash"]
         }
       }
     }
@@ -283,32 +239,82 @@ The common AI configuration has four layers:
 }
 ```
 
-| Field | Default and range | Description |
+### Provider
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `api_base` | absolute HTTP(S) URL | required | Includes scheme and host; omits credentials, query and fragment |
+| `endpoint_path` | absolute URL path | `/chat/completions` | Starts with `/`; omits query and fragment |
+| `proxy` | absolute HTTP(S) URL or empty string | `""` | Optional proxy for this provider |
+| `max_tokens_field` | `max_tokens` or `max_completion_tokens` | `max_tokens` | Field name this API uses for the output budget. Current OpenAI models accept only `max_completion_tokens`; routes always say `max_tokens` and Core sends the field named here |
+
+### Model
+
+| Field | Type | Rule |
 |---|---|---|
-| `models` | Necessary nonempty list | Primary and fallback profiles in order |
-| `temperature` | Optional, `0..2` | Route sampling temperature |
-| `top_p` | Optional, `0..1` | Route nucleus sampling |
-| `max_tokens` | Optional, `1..1000000` | Route output-token limit |
-| `timeout_seconds` | `30`, `0.1..600` | One upstream-request budget |
-| `total_timeout_seconds` | `max(timeout, 60)`, `0.1..1800` | Total budget for retries and fallback |
-| `max_retry` | `1`, `0..10` | Retry count per profile |
-| `retry_interval_seconds` | `0.5`, `0..60` | Exponential-backoff base |
-| `fallback_on` | Core default error set | Error categories that trigger the next profile |
+| `provider` | string | Name from `config.ai.providers` |
+| `model` | string | Model name sent to the upstream API |
+| `modalities` | string[] | Non-empty set drawn from `text`, `image`, `audio` |
+| `request_defaults` | object | Extra fields sent with every request to this model, such as disabling thinking. Core reserves `model`, `messages`, `stream`, sampling parameters and tool fields |
+| `fixed_sampling` | bool, default `false` | Set to `true` for a model with fixed sampling that rejects `temperature` / `top_p`; Core then omits both |
+
+Define each upstream model once. Give it two names only when you need two fixed modes, such as one with thinking and one without.
+
+### Plugin route
+
+A route value is a model name, a list of model names, or an object:
+
+```json
+{
+  "routes": {
+    "triage":  "gpt-terra",
+    "chat":    ["gpt-terra", "deepseek-flash", "glm-5.2"],
+    "checker": {"models": ["gpt-terra", "deepseek-flash"], "timeout_seconds": 20}
+  }
+}
+```
+
+The object form accepts the fields below. Values resolve in this order: what the route says in the main configuration, then the default declared by the plugin, then the Core default in this table.
+
+| Field | Core default and range | Description |
+|---|---|---|
+| `models` | required; one name or a non-empty list | Primary model followed by ordered fallbacks |
+| `temperature` | optional, `0..2` | Route sampling temperature |
+| `top_p` | optional, `0..1` | Route nucleus sampling |
+| `max_tokens` | optional, `1..1000000` | Route output token limit |
+| `timeout_seconds` | `30`, `0.1..600` | Budget for one upstream request |
+| `total_timeout_seconds` | `max(timeout, 60)`, `0.1..1800` | Budget for all retries and fallbacks |
+| `max_retry` | `1`, `0..10` | Retries per model |
+| `retry_interval_seconds` | `0.5`, `0..60` | Exponential backoff base |
+| `fallback_on` | Core default error set | Error categories that trigger the next model |
 | `request_defaults` | `{}` | Additional route request fields |
 
-### Single source of AI parameters
+Defaults declared by the bundled plugins (`declare_route_defaults`, in each plugin's code):
 
-`chat-latest` uses fixed sampling defaults. Core omits `temperature` and `top_p` for this model and maps the shared `max_tokens` budget to the upstream `max_completion_tokens` field. Other models retain route sampling settings.
+| Plugin route | Purpose | temperature / top_p | max_tokens | Request / total timeout (s) | Retries |
+|---|---|---|---|---|---|
+| `xiaoqing_chat.chat` | Replies | 0.8 / 0.6 | 768 | 15 / 60 | 1 |
+| `xiaoqing_chat.reasoning` | Planning, memory retrieval, summaries, expression learning, life-record extraction | 0.6 / 0.9 | 2048 | 15 / 45 | 1 |
+| `xiaoqing_chat.checker` | Reply review | 0 / 0.8 | 8192 | 12 / 30 | 0 |
+| `xiaoqing_chat.vision` | Image reading | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
+| `xiaoqing_agent.agent` | Task execution | 0.2 / — | — | 180 / 600 | 1 |
+| `xiaoqing_agent.triage` | Triage | 0.1 / — | — | 15 / 20 | 1 |
+| `xiaoqing_agent.vision` | `read_image` on local images | 0.2 / — | 800 | 20 / 60 | 1 |
+| `xiaoqing_life.reasoning` | Digest, research, wind-down | 0.6 / 0.9 | 2048 | 30 / 120 | 1 |
+| `xiaoqing_life.vision` | Meme image check | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
+| `pendo.parse` | Natural-language parsing | 0.3 / — | 1000 | 30 / 60 | 1 |
+| `xiaoai.plan` | Mi Home action planning | 0 / — | 1600 | 25 / 28 | 0 |
+| `ads_paper.summary` | Paper summaries | 0.7 / — | 1200 | 60 / 90 | 0 |
 
-`gpt-6-luna` also uses `max_completion_tokens`. For tool calling through the current Chat Completions endpoint, set `"reasoning_effort": "none"` in the model's `request_defaults`; this mode retains the route's `temperature` and `top_p`.
+### Where AI parameters come from
 
-Configure sampling, token limits, request and aggregate timeouts, and retries in `config.plugins.<plugin>.ai.routes.<route>`. Provider connections remain in `config.ai.providers`, model definitions in `config.ai.models`, and credentials in `secrets.ai.providers`. Optional `model_aliases` provide command shortcuts. `/xc model default` selects the first available profile in `routes.chat.models`.
+Provider connections live in `config.ai.providers`, model definitions in `config.ai.models`, credentials in `secrets.ai.providers`, and the models each route uses in `config.plugins.<plugin>.ai.routes.<route>`. Plugins declare defaults for sampling, output budget, timeouts and retries; override them in the same route when needed. Optional `model_aliases` give `/xc model` short names; without them the model names are used directly. `/xc model default` selects the first available model in `routes.chat`.
 
-XiaoQing Chat loads a typed snapshot of the main routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution and delivery review use `agent`; task classification uses `triage`. Routine calls inherit route settings. Explicit long-form requests can increase output and time budgets; truncated image analysis can increase its output budget. Workflow deadlines still bound optional work and whole Agent tasks.
+XiaoQing Chat loads a typed snapshot of these routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution uses `agent`, task triage uses `triage` (falling back to `agent` when it is not configured), and `read_image` uses `vision`. Routine calls inherit route settings. Explicit long-form requests can increase output and time budgets; a truncated image analysis can increase its output budget. Optional work and whole Agent tasks remain bound by their own business limits.
 
-Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding main routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields, `default_model_alias` and a nested `ai` registry with an error that points to the main configuration.
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` manages persona, memory and participation behavior. Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields, `default_model_alias` and a nested `ai` registry with an error that points to the main configuration.
 
-DEBUG logs record resolved model profiles and request settings. These records contain parameter metadata; keys and message content remain private.
+DEBUG logs record resolved routes, models and request settings. These records contain parameter metadata; keys and message content remain private.
 
 ### Provider secret
 
@@ -376,7 +382,7 @@ context.get_settings_snapshot()
 | `plugins.pendo.web_port` | `12001` | Web listener port, `1..65535` |
 | `plugins.pendo.web_session_cookie_secure` | `false` | Use `true` for HTTPS to add Secure to browser session cookies. |
 | `plugins.pendo.web_demo_enabled` | `false` | Web demo-space switch |
-| `plugins.pendo.ai.routes.parse` | route object | Model chain for natural-language structured parsing |
+| `plugins.pendo.ai.routes.parse` | list of model names | Models for natural-language structured parsing |
 
 Pendo publishes its five Web fields atomically by configuration revision.
 Listener address changes rebuild the plugin-owned Web server.
@@ -391,11 +397,10 @@ See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, dem
 | `plugins.xiaoqing_chat.ai.routes.chat` | Main reply route |
 | `plugins.xiaoqing_chat.ai.routes.checker` | Reply-checking route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | Planning and reasoning route |
-| `plugins.xiaoqing_chat.ai.routes.vision` | Image-understanding route. Profiles must include `image` modality. |
-| `plugins.xiaoqing_chat.ai.model_aliases` | User-alias to route-profile mapping |
+| `plugins.xiaoqing_chat.ai.routes.vision` | Image-understanding route. Models must include `image` modality. |
+| `plugins.xiaoqing_chat.ai.model_aliases` | Optional short names for `/xc model`, mapped to model names |
 
-Each of the four XiaoQing Chat routes has its own model order, request timeout, total timeout, and retry policy.
-The distributed `checker` route sets `request_defaults.thinking.type = "disabled"` to reduce review latency.
+Each of the four XiaoQing Chat routes names its own model order. The plugin declares defaults for sampling, request timeout, total timeout and retries; see the table under "Plugin route" above.
 Behavior, participation, memory, and expression parameters are in `plugins/xiaoqing_chat/config/xiaoqing_config.json`.
 They can also appear under `config.plugins.xiaoqing_chat`. File values take priority during merging.
 See [XiaoQing Chat configuration (Chinese)](../../plugins/xiaoqing_chat/README.md) for field groups.
@@ -409,6 +414,7 @@ All users can use it within their own permissions. The default state is disabled
 |---|---|---|
 | `plugins.xiaoqing_agent.enabled` | `false` | Main switch. When disabled, `xiaoqing_chat` replies normally, as with an absent agent. Changes apply to the next message. |
 | `plugins.xiaoqing_agent.ai.routes.agent` | Necessary | Execution route. The model must support `tools` calls. |
+| `plugins.xiaoqing_agent.ai.routes.vision` | Image reading is unavailable without it | Route `read_image` uses for local images. Models must include `image` modality. |
 | `plugins.xiaoqing_agent.ai.routes.triage` | Reuse `agent` | Chat-or-task decision route. A fast model with thinking disabled is recommended. |
 | `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | Current-turn wait in seconds. Longer tasks send an initial reply and deliver results in the background. |
 | `plugins.xiaoqing_agent.task_timeout_seconds` | `1800` | Total task duration |

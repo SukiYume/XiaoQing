@@ -35,7 +35,7 @@ OTHER_ID = "3632293749"
 def _group_event(*segments: dict) -> dict:
     return {
         "self_id"   : BOT_ID,
-        "group_id"  : 100000001,
+        "group_id"  : 123456789,
         "user_id"   : 503906146,
         "message_id": 9,
         "message"   : list(segments),
@@ -64,7 +64,7 @@ async def _chat_text(event: dict, clean_text: str, state=None) -> str:
     from plugins.xiaoqing_chat.handlers import _chat_text_for_turn
 
     return await _chat_text_for_turn(
-        clean_text, event, "小青", state or _state_with_history(), "g100000001"
+        clean_text, event, "小青", state or _state_with_history(), "g123456789"
     )
 
 
@@ -271,7 +271,7 @@ async def test_prepare_turn_keeps_stop_requests_for_context_planning(tmp_path, s
     history = [StoredMessage(role="user", name="Dimi", user_id=2, ts=1, content="在")]
     state = _state_with_history(*history)
     context = SimpleNamespace(data_dir=tmp_path, logger=Mock())
-    hctx  = HandlerContext("g100000001", runtime, state, {}, tmp_path, "小青", context)
+    hctx  = HandlerContext("g123456789", runtime, state, {}, tmp_path, "小青", context)
     event = _group_event(*segments)
     attention = AsyncMock(return_value=(AttentionDecision(False, False), False))
     with patch.multiple(
@@ -565,10 +565,10 @@ async def _run_group_turn(tmp_path, text: str, entry: str, action: str):
     state                                       = ChatRuntimeState()
     now                                         = time.time()
     state.memory_store.append(
-        "g100000001", role="user", name="甲", user_id=2, ts=now - 60, local_id="m1", content="小青"
+        "g123456789", role="user", name="甲", user_id=2, ts=now - 60, local_id="m1", content="小青"
     )
     state.memory_store.append(
-        "g100000001",
+        "g123456789",
         role       = "assistant",
         name       = "小青",
         ts         = now - 50,
@@ -584,7 +584,7 @@ async def _run_group_turn(tmp_path, text: str, entry: str, action: str):
     if entry == "command":
         event["_xc_command_forced"] = True
     context = SimpleNamespace(data_dir=tmp_path, logger=Mock())
-    hctx     = HandlerContext("g100000001", runtime, state, {}, tmp_path, "小青", context)
+    hctx     = HandlerContext("g123456789", runtime, state, {}, tmp_path, "小青", context)
     response = {
         "choices": [
             {"message": {"content": json.dumps({"action": action, "reason": "上下文判断"})}}

@@ -12,7 +12,9 @@ from core.ai import (
     AIConfigError,
     AIRequestError,
     complete_configured_route,
+    declare_route_defaults,
     list_configured_models,
+    resolve_route_config,
 )
 
 
@@ -161,12 +163,13 @@ def test_ai_model_listing_preserves_order_without_exposing_credentials() -> None
 
 
 @pytest.mark.asyncio
-async def test_gpt_6_luna_preserves_sampling_with_reasoning_disabled() -> None:
+async def test_provider_names_the_output_budget_field() -> None:
+    """有的接口只认 max_completion_tokens：在供应商上写一次，路由照常用 max_tokens。"""
+
     config, secrets = _settings()
-    model                     = config["ai"]["models"]["primary-text"]
-    model["model"]            = "gpt-6-luna"
-    model["request_defaults"] = {"reasoning_effort": "none"}
-    session                   = _Session(_Response(200, _completion()))
+    config["ai"]["providers"]["primary"]["max_tokens_field"] = "max_completion_tokens"
+    config["ai"]["models"]["primary-text"]["request_defaults"] = {"reasoning_effort": "none"}
+    session = _Session(_Response(200, _completion()))
     await complete_configured_route(
         session     = session,
         config      = config,
@@ -184,13 +187,20 @@ async def test_gpt_6_luna_preserves_sampling_with_reasoning_disabled() -> None:
     assert payload["temperature"] == 0.4
     assert payload["top_p"] == 0.9
 
+    config["ai"]["providers"]["primary"]["max_tokens_field"] = "tokens"
+    with pytest.raises(AIConfigError, match="max_tokens_field"):
+        list_configured_models(
+            config=config, secrets=secrets, plugin_name="demo", route_name="chat"
+        )
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget", [None, 512])
-async def test_chat_latest_uses_supported_sampling_and_completion_budget(budget) -> None:
+async def test_fixed_sampling_model_omits_sampling_parameters(budget) -> None:
     config, secrets = _settings()
-    config["ai"]["models"]["primary-text"]["model"] = "chat-latest"
-    session                                         = _Session(_Response(200, _completion()))
+    config["ai"]["providers"]["primary"]["max_tokens_field"] = "max_completion_tokens"
+    config["ai"]["models"]["primary-text"]["fixed_sampling"] = True
+    session = _Session(_Response(200, _completion()))
     await complete_configured_route(
         session     = session,
         config      = config,
@@ -206,6 +216,57 @@ async def test_chat_latest_uses_supported_sampling_and_completion_budget(budget)
     assert "max_tokens" not in payload
     assert "temperature" not in payload
     assert "top_p" not in payload
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["primary-text", ["primary-text", "backup-text"], {"models": "primary-text"}],
+)
+def test_route_may_be_written_as_just_its_models(route) -> None:
+    config, secrets = _settings()
+    config["plugins"]["demo"]["ai"]["routes"]["chat"] = route
+    models                                            = list_configured_models(
+        config=config, secrets=secrets, plugin_name="demo", route_name="chat"
+    )
+    expected = [route] if isinstance(route, str) else route
+    expected = [expected["models"]] if isinstance(expected, dict) else expected
+    assert [model.name for model in models] == expected
+    # 只写模型时，调用参数取 Core 默认值。
+    resolved = resolve_route_config(config, "demo", "chat")
+    assert (resolved.timeout_seconds, resolved.total_timeout_seconds, resolved.max_retry) == (
+        30.0,
+        60.0,
+        1,
+    )
+    assert resolved.temperature is None and resolved.max_tokens is None
+
+
+def test_plugin_declared_defaults_fill_what_the_config_leaves_out() -> None:
+    config, _secrets = _settings()
+    routes         = config["plugins"]["demo"]["ai"]["routes"]
+    routes["chat"] = ["primary-text"]
+    declare_route_defaults(
+        "demo",
+        {"chat": {"temperature": 0.8, "max_tokens": 768, "timeout_seconds": 15, "max_retry": 2}},
+    )
+    try:
+        declared = resolve_route_config(config, "demo", "chat")
+        assert (declared.temperature, declared.max_tokens) == (0.8, 768)
+        assert (declared.timeout_seconds, declared.total_timeout_seconds) == (15.0, 60.0)
+        assert declared.max_retry == 2
+        # 主配置里写明的优先；没写的仍取插件声明的。
+        routes["chat"] = {"models": ["primary-text"], "temperature": 0.2}
+        explicit       = resolve_route_config(config, "demo", "chat")
+        assert (explicit.temperature, explicit.max_tokens) == (0.2, 768)
+        # 别的插件、别的 route 不受影响。
+        routes["other"] = ["primary-text"]
+        assert resolve_route_config(config, "demo", "other").temperature is None
+        # 用哪些模型只能在主配置里定。
+        with pytest.raises(AIConfigError, match="unsupported keys: models"):
+            declare_route_defaults("demo", {"chat": {"models": ["primary-text"]}})
+        assert resolve_route_config(config, "demo", "chat").max_tokens == 768
+    finally:
+        declare_route_defaults("demo", {})
 
 
 @pytest.mark.asyncio

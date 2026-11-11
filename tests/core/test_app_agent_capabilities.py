@@ -519,8 +519,13 @@ async def test_command_runner_closes_sessions_opened_by_the_command(temp_app_roo
     app = XiaoQingApp(temp_app_root)
 
     async def game(_command, _args, _event, context):
+        from core.delivery import CommandOutcome, DeliverySegments
+
         await context.create_session({"step": 1})
-        return [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}]
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}],
+            outcome=CommandOutcome("incomplete", confirmation_command="/guess accept game-123"),
+        )
 
     _register_command(app, "guess_number", "guess", game)
     runner = _plugin_context_for(
@@ -532,6 +537,8 @@ async def test_command_runner_closes_sessions_opened_by_the_command(temp_app_roo
     ).capabilities.command_runner
 
     reply = await runner.run("/guess")
+    assert reply.command_outcome.state == "incomplete"
+    assert reply.command_outcome.confirmation_command == "/guess accept game-123"
     assert [segment["data"]["text"] for segment in reply] == [
         "游戏开始，请输入数字",
         "（这条命令停在了等待回复的交互步骤，操作没有完成，会话已结束。请改用一次性写法，比如补全参数或使用跳过确认的选项；需要发起人决定的，先把情况告诉发起人。）",

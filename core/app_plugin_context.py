@@ -22,6 +22,7 @@ from .capabilities import (
     CodexArxivSummaryService,
     CommandRunnerService,
     ConfigSubscriptionService,
+    InboundBacklogService,
     LifeContextService,
     LocalToolsService,
     OneBotMediaService,
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from .app_identity import AppIdentityService
     from .config import ConfigManager, ConfigSnapshot
     from .dispatcher import Dispatcher
+    from .inbound_backlog import InboundBacklog
     from .metrics import MetricsCollector
     from .plugin_manager import PluginManager
     from .router import CommandRouter
@@ -91,6 +93,7 @@ class AppPluginContextMixin:
         metrics                        : MetricsCollector
         session_manager                : SessionManager
         dispatcher                     : Dispatcher
+        inbound_backlog                : InboundBacklog
         _plugin_settings_cache         : dict[tuple[str, int], PluginSettingsSnapshot]
         _plugin_settings_cache_revision: int | None
 
@@ -481,6 +484,14 @@ class AppPluginContextMixin:
         if "onebot_media" in declared_capabilities:
             onebot_media = OneBotMediaService(self._request_onebot_action)
 
+        inbound_backlog = None
+        if "inbound_backlog" in declared_capabilities and principal.kind == "user":
+            inbound_backlog = InboundBacklogService(
+                functools.partial(
+                    self.inbound_backlog.waiting, principal.user_id, principal.group_id
+                )
+            )
+
         config_subscription = None
         if "config_subscription" in declared_capabilities:
 
@@ -611,6 +622,7 @@ class AppPluginContextMixin:
             is_system           = is_system,
             secret_admin        = secret_admin,
             onebot_media        = onebot_media,
+            inbound_backlog     = inbound_backlog,
             config_subscription = config_subscription,
             codex_arxiv_summary = codex_arxiv_summary,
             voice_synthesis     = voice_synthesis,

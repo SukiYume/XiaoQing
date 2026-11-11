@@ -922,11 +922,19 @@ class Dispatcher:
                     "text": "（这条命令停在了等待回复的交互步骤，操作没有完成，会话已结束。请改用一次性写法，比如补全参数或使用跳过确认的选项；需要发起人决定的，先把情况告诉发起人。）"
                 },
             }
-            receipt = getattr(result, "delivery_receipt", None)
-            result  = DeliverySegments(
+            receipt       = getattr(result, "delivery_receipt", None)
+            prior_outcome = getattr(result, "command_outcome", None)
+            result        = DeliverySegments(
                 [*result, note],
                 receipt if isinstance(receipt, DeliveryReceipt) else None,
-                outcome=CommandOutcome("incomplete"),
+                outcome=CommandOutcome(
+                    "incomplete",
+                    confirmation_command=(
+                        prior_outcome.confirmation_command
+                        if isinstance(prior_outcome, CommandOutcome)
+                        else ""
+                    ),
+                ),
             )
         return result
 

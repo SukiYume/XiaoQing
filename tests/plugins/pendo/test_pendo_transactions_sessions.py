@@ -982,23 +982,18 @@ def test_reminder_conflict_compares_absolute_time_across_offsets():
     class _FakeDb:
         settings = SimpleNamespace(get_user_settings=lambda _user_id: {"timezone": "Asia/Shanghai"})
 
-        def get_all_items(self, user_id, filters=None, *, page_size=200):
+        def get_events_for_range(self, user_id, start_date, end_date):
             assert user_id == "u-shanghai"
-            assert filters == {"type": "event"}
-            assert page_size == 200
+            assert start_date <= end_date
             return [existing]
 
     service = ReminderService(db=_FakeDb())
 
-    conflicts = service.detect_conflict(
-        "u-shanghai",
-        "2030-01-02T02:30:00+00:00",
-        "2030-01-02T03:00:00+00:00",
+    conflicts = service.detect_conflicts(
+        "u-shanghai", [("2030-01-02T02:30:00+00:00", "2030-01-02T03:00:00+00:00")]
     )
-    adjacent = service.detect_conflict(
-        "u-shanghai",
-        "2030-01-02T03:00:00+00:00",
-        "2030-01-02T03:30:00+00:00",
+    adjacent = service.detect_conflicts(
+        "u-shanghai", [("2030-01-02T03:00:00+00:00", "2030-01-02T03:30:00+00:00")]
     )
 
     assert conflicts == [

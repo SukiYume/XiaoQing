@@ -6,6 +6,7 @@ import re
 
 from .llm.check_result import ReplyRejected
 from .llm.local_checks import (
+    OFFLINE_INVITE_RE,
     heuristic_check,
     requires_configured_profile_boundary,
 )
@@ -64,11 +65,6 @@ _SOCIAL_TURN_RE = re.compile(
 
 # 约她线下见面、出去玩：人设里一律婉拒，所以婉拒本身永远是安全的兜底，不该说“没跟上”。
 INVITE_DECLINE_FALLBACKS = ("这次就不去啦，你们玩得开心", "我就不去啦，回来给我讲讲")
-_INVITE_TURN_RE          = re.compile(
-    r"(?:一起|出来|约(?:你|个|一下)?|带你|来找你|见个?面|面基)"
-    r"[^。！？!?\n]{0,12}(?:玩|吃|去|逛|看|见|聚|面基)"
-    r"|(?:周末|明天|今晚|下次)[^。！？!?\n]{0,8}(?:有空|一起|出来)"
-)
 
 _PUBLIC_IDENTITY_FALLBACK_MAX_CHARS = 120
 
@@ -170,9 +166,9 @@ def queue_reply_regeneration(
             )
         elif allows_low_stakes_persona_fiction(plan.runtime) and persona_question:
             correction = (
-                "保留稳定人设和可靠记忆；若要讲自己的故事，只能改成普通、低风险、"
-                "不可核验且与人设一致的日常小片段。删除精确身份、现实关系、重大经历、"
-                "现实承诺以及拿个人故事给外部事实作证的内容。"
+                "保留稳定人设和可靠记忆。对方问起你以前的事、小习惯或身边日常的小细节时，答一件不带具体日期、"
+                "不可核验且与人设一致的日常小事；今天和这几天具体发生了什么以生活记录为准。"
+                "删除精确身份、现实关系、重大经历、现实承诺以及拿个人故事给外部事实作证的内容。"
                 "如果用户问的是普通知识、事情本身或当下看法，就直接回答，不要硬塞个人故事。"
             )
         elif allows_low_stakes_persona_fiction(plan.runtime):
@@ -310,7 +306,7 @@ def _forced_fallback_texts(
         if failure_code == "media_grounding":
             step = "reply.check.exhausted.media_grounding"
         return texts, step
-    if failure_code in {"persona_grounding", "context_grounding", ""} and _INVITE_TURN_RE.search(
+    if failure_code in {"persona_grounding", "context_grounding", ""} and OFFLINE_INVITE_RE.search(
         str(plan.text or "")
     ):
         return INVITE_DECLINE_FALLBACKS, step

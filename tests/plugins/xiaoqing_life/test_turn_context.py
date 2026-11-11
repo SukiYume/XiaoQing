@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from plugins.xiaoqing_life import turn_context as tc
 from plugins.xiaoqing_life.stores import LifeStore
-from tests.plugins.xiaoqing_life.support import at, make_cfg
+from tests.plugins.xiaoqing_life.support import at, make_cfg, new_store
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
@@ -26,17 +25,10 @@ class Rng(random.Random):
         return self.value
 
 
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
-
-
 def _episode(n: int, title: str, ago: float, **kw: Any) -> dict[str, Any]:
     return {
         "id"       : f"e{n}",
         "at"       : NOW - ago,
-        "day"      : datetime.fromtimestamp(NOW - ago, MOMENT.tzinfo).strftime("%Y-%m-%d"),
         "activity" : "hot_scroll",
         "source"   : "bili_popular",
         "item_id"  : f"bili_popular:{n}",
@@ -87,7 +79,7 @@ def _call(
 def test_asking_about_recent_life_gives_up_to_three_recent_episodes_share_first(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(1, "猫猫的一天", 2 * HOUR),
         _episode(2, "新显卡评测", 5 * HOUR, share=True),
@@ -109,7 +101,7 @@ def test_asking_about_recent_life_gives_up_to_three_recent_episodes_share_first(
 def test_referring_to_the_past_widens_to_a_week_with_summaries_after_detail_days(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [_episode(1, "昨天的视频", 28 * HOUR), _episode(2, "上周的视频", 8 * DAY)]
     near, _ = _call(store, "你昨天看了什么")
     assert "昨天 10:00 刷B站热门，点开了「昨天的视频」" in near["life_lines"]
@@ -126,7 +118,7 @@ def test_referring_to_the_past_widens_to_a_week_with_summaries_after_detail_days
 def test_topic_overlap_surfaces_one_recent_episode_and_unrelated_chat_gets_nothing(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(1, "猎户座大星云拍摄教程", 6 * HOUR, topics=["天文摄影"]),
         _episode(2, "新显卡评测", 3 * HOUR, topics=["装机"]),
@@ -142,14 +134,14 @@ def test_topic_overlap_surfaces_one_recent_episode_and_unrelated_chat_gets_nothi
 
 
 def test_episodes_she_just_talked_about_are_not_offered_again(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(_episode(1, "猫猫的一天", 2 * HOUR))
     response, _ = _call(store, "最近刷到啥好玩的", bot_recent=["我刚看了个猫猫的一天，笑死"])
     assert response is None
 
 
 def test_threads_are_phrased_by_state(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads += [
         {
             "id"      : "t1",
@@ -182,7 +174,7 @@ def test_threads_are_phrased_by_state(tmp_path: Path) -> None:
 def test_understood_terms_come_from_the_message_or_recent_turns_and_include_fading(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "哈基米", "对猫咪的爱称", usage="看到猫时感叹")
     _term(store, "南北绿豆", "对哈基米的另一种说法", status="fading")
     _term(store, "没出现", "不相关")
@@ -195,7 +187,7 @@ def test_understood_terms_come_from_the_message_or_recent_turns_and_include_fadi
 
 
 def test_usable_term_needs_known_fresh_relevant_unspoken_and_cooled(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "哈基米", "对猫咪的爱称", usage="看到猫图拍得好可爱时感叹")
     ask = "你家猫图拍得好可爱，是什么猫"
     response, dirty = _call(store, ask, rng=0.0)
@@ -217,7 +209,7 @@ def test_usable_term_needs_known_fresh_relevant_unspoken_and_cooled(tmp_path: Pa
 
 
 def test_expression_hint_needs_situation_overlap_and_respects_cooldown(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.expressions.append(
         {
             "id"            : "x1",
@@ -237,7 +229,7 @@ def test_expression_hint_needs_situation_overlap_and_respects_cooldown(tmp_path:
 
 
 def test_unknown_terms_are_queued_without_session_info_and_deduplicated(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _term(store, "哈基米", "已知")
     response, dirty = _call(
         store, "你好", unknown=["绝绝子", "绝绝子", "哈基米", "nmsl", "加微信领福利", " "]
@@ -249,14 +241,14 @@ def test_unknown_terms_are_queued_without_session_info_and_deduplicated(tmp_path
     assert _call(store, "你好", unknown=["绝绝子"], cfg=off)[1] is False
     assert store.state["lookup_queue"] == []
     for n in range(30):
-        tc.enqueue_unknown(store, [f"词{n}"], make_cfg())
+        tc.enqueue_unknown(store, [f"词{n}"], make_cfg(), NOW)
     assert len(store.state["lookup_queue"]) == 20
 
 
 def test_proactive_mode_returns_no_candidates_for_now_and_bad_payloads_are_tolerated(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(_episode(1, "猫猫的一天", HOUR, share=True))
     proactive = _call(store, "", mode="proactive")[0]
     assert proactive["share_candidates"][0]["episode_id"] == "e1" and proactive["life_lines"] == ""
@@ -278,3 +270,41 @@ def test_proactive_mode_returns_no_candidates_for_now_and_bad_payloads_are_toler
     )
     assert len(clean["text"]) == 500 and len(clean["recent"]) == 8 and len(clean["unknown"]) == 3
     assert len(clean["unknown"][0]) == 12
+
+
+def _payload(text: str, **kw: Any) -> dict[str, Any]:
+    return {"version": 1, "mode": "reply", "text": text, "recent": [], "bot_recent": [], **kw}
+
+
+def test_a_learning_already_said_in_the_thread_line_is_not_repeated(tmp_path: Path) -> None:
+    """真实回放：同一句改正后的说法在给聊天的生活块里出现了三次（小课题行、自己查明白的、更正行）。"""
+
+    store    = new_store(tmp_path)
+    takeaway = "不粘锅涂层建议低于250℃使用，约260℃以上才分解"
+    store.threads.append(
+        {"id": "t1", "title": "不粘锅能烧到多少度", "why": "怕烧坏", "status": "done",
+         "takeaway": takeaway, "confidence": "verified", "notes": [], "updated_at": NOW - DAY}
+    )  # fmt: skip
+    store.learnings.append(
+        {"id": "l1", "topic": "不粘锅能烧到多少度", "text": takeaway, "thread_id": "t1",
+         "episode_ids": [], "created_at": NOW - DAY, "last_used": 0.0, "confidence": "verified"}
+    )  # fmt: skip
+    reply, _ = tc.turn_context(
+        store, make_cfg(), _payload("不粘锅能烧到多少度来着"), MOMENT, Rng(0.9)
+    )
+    assert reply is not None
+    assert reply["life_lines"].count(takeaway) == 1
+
+
+def test_terms_she_verified_are_handed_back_for_the_group_jargon(tmp_path: Path) -> None:
+    store                    = new_store(tmp_path)
+    store.terms["city不city"] = {
+        "term": "city不city", "meaning": "时髦不时髦", "usage": "", "tone": "中性", "sources": ["baike:city不city"],
+        "status": "known", "verified": True, "first_seen": NOW, "last_seen": NOW, "last_suggested": 0.0,
+    }  # fmt: skip
+    request = _payload(
+        "你这身也太city不city了", is_private=False, unknown_terms=["city不city", "依托答辩"]
+    )
+    reply, _ = tc.turn_context(store, make_cfg(), request, MOMENT, Rng(0.9))
+    assert reply is not None
+    assert reply["verified_terms"] == [{"term": "city不city", "meaning": "时髦不时髦"}]
