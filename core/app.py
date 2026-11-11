@@ -41,6 +41,7 @@ from .constants import (
     DEFAULT_SESSION_TIMEOUT_SEC,
 )
 from .dispatcher import AdjustableSemaphore, Dispatcher
+from .inbound_backlog import InboundBacklog
 from .interfaces import (
     PluginPrincipal,
     PluginSettingsSnapshot,
@@ -110,7 +111,9 @@ class XiaoQingApp(
         self.http_sender: OneBotHttpSender | None   = None
         self.ws_client: OneBotWsClient | None       = None
         self.inbound_manager: InboundManager | None = None
-        self.identity_service                       = AppIdentityService()
+        # 已到达、还没开始处理的消息：两个入站通道登记，聊天插件据此判断对方是不是还在接着说。
+        self.inbound_backlog  = InboundBacklog()
+        self.identity_service = AppIdentityService()
 
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()

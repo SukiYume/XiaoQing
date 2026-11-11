@@ -81,15 +81,30 @@ def test_import_execute_isolates_external_ids_and_selected_types(
     )
     assert skip_response.status_code == 200
     skip_body = skip_response.json()["data"]["results"]
-    assert skip_body["inserted"] == 1
-    assert skip_body["updated"] == 0
-    assert skip_body["skipped"] == 0
-    assert "内部 UUID" in skip_response.json()["data"]["details"]["inserted"][0]["reason"]
+    # 跳过会认本人现有的同类型同 ID 条目：自己的备份导回来不重复，原条目不动。
+    assert skip_body == {"inserted": 0, "updated": 0, "skipped": 1, "failed": 0}
+    assert "同 ID" in skip_response.json()["data"]["details"]["skipped"][0]["reason"]
     assert temp_db.get_item("task_existing", owner_id=OWNER_ID).title == "旧任务"
     assert temp_db.get_item("note_subset", owner_id=OWNER_ID) is None
+    assert temp_db.count_items(OWNER_ID, {"type": "task"}) == 1
 
     # Overwrite targets only a same-owner/type record previously imported with
-    # this provenance source ID. It never treats the external ID as a DB key.
+    # this provenance source ID. It never treats the external ID as a DB key:
+    # 没有同来源的导入记录时新增一条，现有的同 ID 条目保持原样。
+    first_overwrite = client.post(
+        "/api/transfer/import/execute",
+        headers={
+            **auth_headers,
+            "X-Transfer-Options": json.dumps(
+                {"types": ["task"], "conflict_policy": "overwrite", "force": True}
+            ),
+        },
+        content=bundle_bytes,
+    )
+    first_overwrite_body = first_overwrite.json()["data"]["results"]
+    assert (first_overwrite_body["inserted"], first_overwrite_body["updated"]) == (1, 0)
+    assert "内部 UUID" in first_overwrite.json()["data"]["details"]["inserted"][0]["reason"]
+    assert temp_db.get_item("task_existing", owner_id=OWNER_ID).title == "旧任务"
     overwrite_bundle = _build_sample_bundle_bytes(
         {
             "task": [

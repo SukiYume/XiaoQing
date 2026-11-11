@@ -1,7 +1,9 @@
 """小课题状态机：open → reviewing → done（或 parked / dropped）。打算和完成分开，没查完只能说“在查”。
 
-``reviewing`` 到 ``done`` 要睡前整理写收获并引用经历 ID；答完或步数到上限时先进 ``reviewing``。
-研究卡住（stuck）时搁置（``parked``），过了 ``park_days`` 天可以被再拿起；搁置两次后再卡住就放弃。
+小课题只由研究循环（``research``）推进：浏览时的消化只能开新课题。``reviewing`` 到 ``done`` 要睡前整理
+写收获并引用经历 ID；答完或步数到上限时先进 ``reviewing``。研究卡住（stuck）或连续两次研究都没有真收获时
+搁置（``parked``），过了 ``park_days`` 天可以被再拿起；搁置两次后再卡住就放弃。``done_when`` 是开题时定下的
+“弄明白到什么程度就算完”，研究对着它判断答没答完，免得越查越细。同一个小课题一天只查一次（``planner``）。
 """
 
 from __future__ import annotations
@@ -9,11 +11,11 @@ from __future__ import annotations
 from typing import Any
 
 from .config import LifeConfig
+from .days import DAY
 from .lifecycle import merge_topic
-from .planner import THREAD_COOLDOWN_SECONDS, similar
+from .safety import similar
 from .stores import new_id
 
-DAY               = 86400.0
 DONE_KEEP_SECONDS = 30 * 86400
 MAX_DEPTH         = 3
 MAX_NOTES         = 16  # 一次研究最多 3 轮 × 3 条要点
@@ -25,6 +27,9 @@ PARK_LIMIT_DAYS   = 30
 MAX_PARK_COUNT    = 2
 DEFAULT_PARK_WHY  = "资料不太够"
 ACTIVE            = ("open", "reviewing")
+# fact：事实、原理、定义、来历，先查百科 / 维基；practice：做法、体验、评测、梗怎么用，先搜 B站。
+QUESTION_KINDS = ("fact", "practice")
+STALL_WHY      = "连着两次都没查到新东西"
 
 
 def on_thread_event(thread: dict[str, Any], kind: str, **data: Any) -> None:
@@ -80,6 +85,8 @@ def open_thread(
     parent_id: str = "",
     depth: int     = 0,
     topic: str     = "",
+    done_when: str = "",
+    kind: str      = "",
 ) -> dict[str, Any] | None:
     """名额已满或已有相近的小课题时不新开；后续问题带 ``parent_id`` 和 ``depth``（最多 3 层）。"""
 
@@ -89,31 +96,33 @@ def open_thread(
     if find_similar(threads, title) is not None:
         return None
     thread = {
-        "id"            : new_id("t"),
-        "title"         : title,
-        "topic"         : topic.strip()[:12] or title[:8],
-        "why"           : why.strip()[:60],
-        "next_query"    : (next_query.strip() or title)[:30],
-        "status"        : "open",
-        "steps"         : 0,
-        "empty_streak"  : 0,
-        "cooldown_until": 0.0,
-        "notes"         : [],
-        "takeaway"      : "",
-        "created_at"    : now,
-        "updated_at"    : now,
-        "parent_id"     : parent_id,
-        "depth"         : depth,
-        "open_question" : "",
-        "next_action"   : {},
-        "actions"       : [],
-        "corrections"   : [],
-        "methods_used"  : [],
-        "park_reason"   : "",
-        "resume_hint"   : "",
-        "parked_until"  : 0.0,
-        "park_count"    : 0,
-        "drop_reason"   : "",
+        "id"           : new_id("t"),
+        "title"        : title,
+        "topic"        : topic.strip()[:12] or title[:8],
+        "why"          : why.strip()[:60],
+        "done_when"    : done_when.strip()[:30],
+        "kind"         : kind if kind in QUESTION_KINDS else "",
+        "next_query"   : (next_query.strip() or title)[:30],
+        "status"       : "open",
+        "steps"        : 0,
+        "empty_streak" : 0,
+        "notes"        : [],
+        "note_seq"     : 0,
+        "takeaway"     : "",
+        "created_at"   : now,
+        "updated_at"   : now,
+        "parent_id"    : parent_id,
+        "depth"        : depth,
+        "open_question": "",
+        "next_action"  : {},
+        "actions"      : [],
+        "corrections"  : [],
+        "methods_used" : [],
+        "park_reason"  : "",
+        "resume_hint"  : "",
+        "parked_until" : 0.0,
+        "park_count"   : 0,
+        "drop_reason"  : "",
     }
     threads.append(thread)
     on_thread_event(thread, "opened", now=now)
@@ -123,37 +132,9 @@ def open_thread(
 # ───────────────────────────── 笔记 ─────────────────────────────
 
 
-def _note_number(note: dict[str, Any]) -> int:
-    ident = str(note.get("id") or "")
-    return int(ident[1:]) if ident[:1] == "n" and ident[1:].isdigit() else 0
-
-
-def ensure_note_ids(thread: dict[str, Any]) -> None:
-    """旧笔记没有 ID 时按顺序补 ``n<k>``，不改已有的。"""
-
-    notes = thread.setdefault("notes", [])
-    seq   = max([int(thread.get("note_seq", 0)), *(_note_number(n) for n in notes)])
-    for note in notes:
-        if not note.get("id"):
-            seq += 1
-            note["id"] = f"n{seq}"
-    thread["note_seq"] = seq
-
-
-def _add_note(thread: dict[str, Any], episode_id: str, note: str) -> None:
-    if note.strip():
-        ensure_note_ids(thread)
-        thread["note_seq"] += 1
-        thread["notes"].append(
-            {"id": f"n{thread['note_seq']}", "episode_id": episode_id, "note": note.strip()[:80]}
-        )
-        del thread["notes"][:-MAX_NOTES]
-
-
 def live_notes(thread: dict[str, Any]) -> list[dict[str, Any]]:
     """没被后来的发现取代的笔记。"""
 
-    ensure_note_ids(thread)
     return [n for n in thread.get("notes", []) if not n.get("superseded_by")]
 
 
@@ -168,8 +149,7 @@ def add_finding(
 ) -> str:
     """研究要点 → 笔记 ``{id, episode_id, note, quote, at, kind}``；有效 ``revises`` 同时记一条更正。"""
 
-    ensure_note_ids(thread)
-    thread["note_seq"] += 1
+    thread["note_seq"] = int(thread.get("note_seq", 0)) + 1
     note_id = f"n{thread['note_seq']}"
     old = next((n for n in live_notes(thread) if n.get("id") == revises), None) if revises else None
     thread["notes"].append(
@@ -199,35 +179,23 @@ def add_finding(
     return note_id
 
 
-def record_step(
-    thread: dict[str, Any],
-    cfg: LifeConfig,
-    *,
-    episode_id: str,
-    note: str,
-    new_content: bool,
-    now: float,
-) -> None:
-    """续查一步：有新内容步数 +1；连续两次没有就冷却 180 分钟；步数到上限进回看。"""
+def record_step(thread: dict[str, Any], cfg: LifeConfig, *, new_content: bool, now: float) -> bool:
+    """记一次研究：有真要点步数 +1，到上限进回看；没有就记空步。连着两次空步返回 True（调用方搁置它）。"""
 
     thread["updated_at"] = now
     if not new_content:
         thread["empty_streak"] = int(thread.get("empty_streak", 0)) + 1
-        if thread["empty_streak"] >= 2:
-            thread["cooldown_until"] = now + THREAD_COOLDOWN_SECONDS
-            thread["empty_streak"]   = 0
-        return
+        return bool(thread["empty_streak"] >= 2)
     thread["empty_streak"] = 0
     thread["steps"]        = int(thread.get("steps", 0)) + 1
-    _add_note(thread, episode_id, note)
     if thread["steps"] >= cfg.thread_max_steps:
         thread["status"] = "reviewing"
+    return False
 
 
-def mark_answered(thread: dict[str, Any], *, episode_id: str, note: str, now: float) -> None:
+def mark_answered(thread: dict[str, Any], now: float) -> None:
     thread["updated_at"] = now
-    _add_note(thread, episode_id, note)
-    thread["status"] = "reviewing"
+    thread["status"]     = "reviewing"
 
 
 def finish(thread: dict[str, Any], takeaway: str, episode_ids: list[str], now: float) -> bool:
@@ -269,6 +237,7 @@ def park(
         drop(thread, now, why)
         return "dropped"
     thread["status"]       = "parked"
+    thread["empty_streak"] = 0
     thread["park_reason"]  = why
     thread["resume_hint"]  = hint.strip()[:30]
     thread["parked_until"] = now + cfg.park_days * DAY

@@ -24,30 +24,51 @@ def test_is_brain_chat_active_keeps_private_brain_mode_when_forced() -> None:
     assert is_brain_chat_active(runtime, is_private=True) is True
 
 
+def _failing_smalltalk(mp: pytest.MonkeyPatch) -> None:
+    mp.setattr(
+        "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
+        AsyncMock(side_effect=RuntimeError("internal /tmp/secrets/token.txt leak")),
+    )
+    mp.setattr("plugins.xiaoqing_chat.handlers._last_stalled_notice", {})
+
+
 @pytest.mark.asyncio
-async def test_handle_smalltalk_hides_internal_exception_details() -> None:
+async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_code() -> None:
+    from plugins.xiaoqing_chat.handlers import _STALLED_REPLIES, handle_smalltalk
+
+    context        = MagicMock()
+    context.logger = MagicMock()
+    event          = {"message_type": "private", "user_id": 123, "message_id": 456}
+
+    with pytest.MonkeyPatch.context() as mp:
+        _failing_smalltalk(mp)
+        first  = await handle_smalltalk("你好", event, context)
+        second = await handle_smalltalk("在吗", {**event, "message_id": 457}, context)
+
+    assert [segment["data"]["text"] for segment in first] == [first[0]["data"]["text"]]
+    assert first[0]["data"]["text"] in _STALLED_REPLIES
+    # 故障还在持续：同一会话不再重复说，也不出现错误码和异常内容。
+    assert second == []
+    assert "XQ-PLUGIN" not in str(first) and "internal" not in str(first)
+    # 诊断信息照常记进日志，供排查。
+    assert context.logger.error.called
+
+
+@pytest.mark.asyncio
+async def test_a_failed_group_interjection_is_silent() -> None:
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
     context        = MagicMock()
     context.logger = MagicMock()
-
-    event = {
-        "message_type": "private",
-        "user_id"     : 123,
-        "message_id"  : 456,
-    }
+    event          = {"message_type": "group", "group_id": 9, "user_id": 123, "message_id": 456}
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(
-            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
-            AsyncMock(side_effect=RuntimeError("internal /tmp/secrets/token.txt leak")),
-        )
-        result = await handle_smalltalk("你好", event, context)
-
-    rendered = str(result)
-    assert "XQ-PLUGIN-UNEXPECTED" in rendered
-    assert "internal" not in rendered
-    assert "/tmp/secrets" not in rendered
+        _failing_smalltalk(mp)
+        assert await handle_smalltalk("今天好冷", event, context) == []
+        # 被点名时才说一句“卡了”。
+        addressed = await handle_smalltalk("小青在吗", {**event, "_xc_forced": True}, context)
+    assert len(addressed) == 1 and "XQ-PLUGIN" not in str(addressed)
+    assert context.logger.error.called
 
 
 @pytest.mark.asyncio

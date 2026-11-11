@@ -1,115 +1,108 @@
 # XiaoQing Life 架构
 
-设计依据见 [DESIGN.md](DESIGN.md)（实现规格）。本文记录已实现部分的模块与数据流。
+目标与原则见 [DESIGN.md](DESIGN.md)，功能与配置见 [README.md](README.md)。本文写现在的模块、数据流和约定。
 
 ## 数据流
 
 ```text
 Core scheduler ── */15 min ──► main.scheduled_tick
-                                 │ planner.decide（无模型）：开关 / 作息 / 预算 / 间隔 / 概率 → 打分选活动
+                                 │ repair.run（一次性修旧数据）→ 跨日时记 daily_summary → roll_day
+                                 │ planner.decide（无模型）：开关 / 作息 / 预算 / 间隔 / 骰子 → 打分 → softmax 选活动
                                  ▼
-                               rest / wind_down：只写 last_decision
+                               rest：只写 last_decision        wind_down：睡前整理（1 次 reasoning）
                                  │ 其余
-                                 ▼  登记的后台任务（单飞，shutdown 取消）
-                               session.run_session
-                                 ├─ sources/*    取材（固定域名，有界 HTTP，单来源失败只影响自己）
-                                 ├─ seen 过滤    看过的不再消化
-                                 ├─ digest       1 次 reasoning（调用前先占预算）→ 严格本地核对
-                                 └─ stores       经历、词条、表达、兴趣、小课题、seen、状态
+                                 ▼ 登记的后台任务（单飞，shutdown 取消）
+                               session.run_session ─► _start（记时段、决策）→ 按活动分派 → stats.record_session
+                                 ├─ hot_scroll / interest_dive ─► fetching（取材）→ seen 过滤 → digest（1 次 reasoning）
+                                 │                                → activity（写经历、学说法、记兴趣、收拾、记时段）
+                                 │                                → 消化提议的小课题过门槛就开（session.worth_opening）
+                                 ├─ term_lookup  ─► 百科卡片：查实的说法 known，查不到的 30 天内不再排队
+                                 ├─ thread_continue ─► research（每轮：行动 → 1 次 reasoning → 本地核对 → 立即提交）
+                                 └─ work_on ─► work_on（读待核实条目 → 1 次 reasoning → 核对改动 → 提交）
 
-xiaoqing_chat.reply_plan ──► life.turn_context ──► turn_context.py（纯内存，不碰磁盘、网络、模型）
+xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认的黑话）─► life.turn_context
+                               ◄─ life_lines / slang_notes / expression_hint / verified_terms（回写黑话库）
 ```
 
-定时回调只做同步门控和决策，必须在 Core 60 秒预算内返回；上网本身是 `LifeRuntime.spawn` 登记的后台任务，`shutdown` 取消并等待，再把存储刷盘。
+定时回调只做同步门控和决策，必须在 Core 60 秒预算内返回；上网本身是 `LifeRuntime.spawn` 登记的后台任务，
+`shutdown` 取消并等待，再把存储刷盘。`turn_context` 在事件循环里同步读写内存，不碰磁盘、网络、模型，
+它对状态的改动随后由登记的后台任务落盘。
 
 ## 模块
+
+模块之间是单向依赖：活动（`session` / `research` / `work_on`）都依赖 `fetching` 和 `activity`，彼此不互相导入。
 
 | 模块 | 职责 |
 |---|---|
 | `main.py` | `init` / `shutdown` / `handle`（/life）/ `scheduled_tick` / `turn_context` / `export_memes`；`LifeRuntime` 持有存储、唯一的上网任务与登记的后台任务 |
-| `config.py` | `LifeConfig`：读 `config.plugins.xiaoqing_life`，越界钳制，类型错回默认；`route_configured` |
-| `persona_bridge.py` | 延迟导入 `xiaoqing_chat` 读人设卡事实与〔作息〕，求距离睡觉的分钟数；读不到退回 `quiet_hours`；时间用配置时区 |
-| `safety.py` | 外部文本清洗、注入样句删除、屏蔽词、脏话判断、摘录核对用的归一化 |
-| `sources/base.py` | `SourceItem` / `SourceComment` / `SourceError`、`Fetcher` 协议、`BoundedFetcher`（`aiohttp_request_bounded` + `parse_bounded_json`） |
-| `sources/bilibili.py` | 热门、排行（前 30）、搜索、热评（含楼中楼与图片地址，评论与楼中楼合计受限） |
-| `sources/hotlists.py` | 知乎热榜、微博热搜（只读 `realtime`，跳过 `hotgov` 与广告）、百度热搜（递归取嵌套卡片） |
-| `sources/baike.py` | 百科词条卡片；desc / abstract 表明是流行语才算查到 |
-| `planner.py` | 门控 `gate`、打分 `choose`、话题选择 `choose_topic`（70% 兴趣加权 / 30% 探索种子，相似话题降权）、`Decision` |
-| `digest.py` | 消化提示词（外部文本只在 user 消息的 JSON 里）、编号体系 `i1` / `c1.1` / `c1.1.r1`、本地核对 |
-| `session.py` | 一次上网的编排与提交；失败路径只记 `last_failure_at` |
-| `lifecycle.py` | 词条 candidate → known → fading → 删除、表达、经历保留、seen、兴趣证据与阶段（纯函数，时间由调用方传入） |
-| `threads.py` | 小课题状态机 open → reviewing → done / dropped；`finish` 要求引用已有经历 ID |
-| `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；损坏恢复；预算 `reserve_llm_call` |
-| `turn_context.py` | 聊天侧取用的选择规则与文本块；`unknown_terms` 入队 |
-| `reinforce.py` | 自我强化的纯函数：收获公式、EMA 偏好、来源可靠性、习惯分桶、好奇边界（frontier）、说法的社交反馈 |
-| `sources/watch.py` | “看”视频：详情、标签、弹幕（XML，按归一化文本计频、30 秒分桶找最密时间点） |
-| `memes.py` | 梗图：固定图床下载、vision 判定、sha256 去重落盘、淘汰与撤销记录、分页导出、开关 |
-| `wind_down.py` | 睡前整理：日记（引用经历 ID 与日期）、小课题收获 / 继续 / 放弃、周日周记，本地核对 |
+| `config.py` | `LifeConfig`：读 `config.plugins.xiaoqing_life`，越界钳制，类型错回默认 |
+| `days.py` | 她的一天：凌晨 5 点分界的 `day_key` / `life_date`；`episode_day` 按经历时间戳现算；`DAY` |
+| `persona_bridge.py` | 读人设卡事实与〔作息〕：此刻在做什么、离睡觉 / 醒来多少分钟；读不到退回 `quiet_hours` |
+| `planner.py` | 门控 `gate`、打分 `choose`、话题选择 `choose_topic`、`Decision`；分数与因素写进 `last_decision` |
+| `session.py` | 入口 `run_session`、浏览（取材 → 消化 → 提交）、查词、消化提议的开题门槛 |
+| `fetching.py` | 取材：热榜、B站搜索、点开条目（详情 / 弹幕 / 热评 / 深读）、按兴趣预选、来源成败 |
+| `activity.py` | 一次活动的公共部分：`SessionDeps` / `SessionOutcome`、写经历、学词条 / 表达 / 兴趣、收拾、记时段、记失败、写回强化 |
+| `digest.py` | 浏览消化的提示词（外部文本只在 user 消息的 JSON 里）、编号体系 `i1` / `c1.1` / `c1.1.r1` / `d1.1` / `p1.1`、本地核对；`LEARN_FIELDS` / `LEARN_RULES` 与研究共用 |
+| `research.py` | 有限步骤的研究：第一轮怎么查（`first_action`）、研究提示词、要点核对（摘录、`is_gap`、`is_rumor`）、每轮提交、空研究与搁置 |
+| `threads.py` | 小课题状态机 open → reviewing → done / parked / dropped；笔记、更正、步数 |
+| `knowledge.py` | 靠不靠得住：`assess`（同一 UP 主算一个来源；百科 / 维基或两个独立来源才算 verified）、`is_rumor`、`hedge` |
+| `chat_topics.py` | 群聊话题词：听到（`heard_topics`）→ 睡前挑（`chat_topics`）→ 去看 / 火花 |
+| `wind_down.py` | 睡前整理：日记、小课题收获与可信度、核实课题的开与结、后续问题、方法提炼、开作品、挑群聊话题、周记 |
+| `lifecycle.py` | 词条 candidate → known → fading → 删除、表达、经历保留、seen、兴趣证据与阶段、快照（纯函数） |
+| `reinforce.py` | 自我强化：收获公式、EMA 偏好、来源可靠性、习惯分桶、好奇边界（`frontier_ok` 挡掉泛词和投稿活动标签）、说法的社交反馈 |
+| `methods.py` | 查法：睡前提炼、相近小课题复用、wins / 退役 |
+| `works.py` / `work_on.py` | 小作品的数据、核对规则、聊天侧作品行 / 整理作品这一种活动 |
+| `dossier.py` | 主题档案：从小课题、作品、经历确定性同步的“来龙去脉”快照；召回与更正行 |
+| `memes.py` | 梗图：固定图床下载、vision 判定、sha256 去重落盘、淘汰与撤销、分页导出 |
+| `turn_context.py` | 聊天侧取用：按问法选经历 / 小课题 / 档案 / 作品 / 打算 / 查明白的事，780 字预算按优先级整段取舍、同一句不说两遍；听懂与可以用的说法；表达提示；分享候选；`verified_terms` |
+| `stats.py` | 每天的运行计数（只记数），跨日一行汇总，`/life stats` |
+| `repair.py` | 旧数据升级：日记和睡前整理的日期按“她的一天”重算、各项每日标记收进 `done_on`、清掉研究条目留下的兴趣证据和好奇边界。每项在 `state.repairs` 记一次名字，只执行一次 |
+| `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；预算 `reserve_llm_call`；`done_today` / `mark_done`；查词落空记录 |
+| `safety.py` | 外部文本清洗、注入样句、屏蔽词、脏话、摘录核对用的归一化、相似度 |
+| `bili_auth.py` | B站扫码登录与凭证（只读，Cookie 只发 `api.bilibili.com`，凭证不进日志 / 状态 / 提示词） |
 | `commands.py` | `/life` 子命令文本 |
+| `sources/` | `base`（有界 HTTP、条目模型）、`bilibili`、`hotlists`、`watch`（弹幕）、`deep`（简介全文 / 置顶 / 字幕）、`subtitle`（WBI）、`baike`、`wiki`、`reference`（研究和作品核实共用的查百科 / 维基） |
+
+## 小课题与研究
+
+- **开题**：浏览消化提议，门槛是有 `done_when`、问题类型（`fact` / `practice`），并且起因是她点开、喜欢或又爱又嫌的那条；
+  睡前的后续问题同样要 `done_when` 和类型。名额 `max_open_threads`，相近的不开。
+- **推进**：只由研究循环推进。`planner` 一天只给同一个小课题一次（`last_session_day`）。第一轮怎么查：上次留下且没连着
+  落空的 `next_action` → 问题类型（fact 先 lookup、practice 先 search）→ 哪种连着两次落空就换另一种 → 研究行动偏好。
+  任何一轮这条路没东西就换另一种查法再试一次。
+- **真进展**：要点要附逐字摘录并经本地核对；“材料没有说明 / 没给出 / 不足以”这类不算要点（`is_gap`），营销谣言材料
+  不能当依据（`is_rumor`）。一次研究有真要点记一步，到 `thread_max_steps` 进回看；没有就记空步，连着两次搁置。
+  answered → 回看；stuck → 搁置（核实课题已经查到依据时进回看）。
+- **收尾**：睡前整理 done 时按笔记所引经历判断可信度，写进小课题和“自己查明白的事”。事实类、只有一个来源的开核实课题
+  （`verifies` / `claim` / `claim_basis`）；核实课题 done 时按 verdict 更新原来那条和原小课题，refuted 在原小课题上记更正。
 
 ## 关键约定
 
-- **证据**：词条与表达只来自外部材料；同一 `item_id` 不重复计作独立来源；兴趣证据同一 `item_id` 只计一次；`seen` 表里的条目不再消化，所以“回忆”不新增证据。
-- **预算**：先 `reserve_llm_call`（计数 +1 并落盘）再调用模型；失败不退还；跨日按配置时区重置。查词（百科）不调模型。
-- **休息**：没有候选或门控不满足时只更新 `last_decision`，不写经历、不编造“刚才睡了一觉”。
-- **一致性**：`turn_context` 在事件循环里同步读内存；它对 `last_suggested`、`lookup_queue` 的修改随后由登记的后台任务落盘。
-- **失败**：所有来源失败、模型未配置 / 失败 / 输出读不懂，本次不产生经历和学习结果；`last_failure_at` 触发 `failure_backoff_minutes` 退避。
-- **日志**：`xiaoqing_life step=<步骤>`，只记名称、数量、原因、错误类型。
+- **证据**：词条与表达只来自外部材料；同一 `item_id` 不重复计作独立来源；新词条要材料里不止一处在用（`digest.voices`）。
+  兴趣证据只来自浏览时她点开的条目，研究搜出来的不算（小课题话题每天记一条）；`seen` 里的条目不再消化。
+- **她的一天**：凌晨 5 点分界。预算计数、睡前整理、日记日期、周记（周一凌晨仍算周日）、“昨天 / 前天”都按它；
+  经历上不另存日子，按时间戳现算。一天只做一次的事记在 `state.done_on`（wind_down / followup / method / verify）。
+- **预算**：先 `reserve_llm_call`（计数 +1 并落盘）再调用模型；失败不退还。查词（百科）不调模型。
+- **休息**：没有候选或门控不满足时只更新 `last_decision`，不写经历。
+- **失败**：所有来源失败、模型未配置 / 失败 / 输出读不懂，本次不产生经历和学习结果；`last_failure_at` 触发退避。
+- **群聊话题**：聊天只在群聊、只给 `mention_policy` 判为可以自然提起的话题词；life 侧 `is_private` 不是明确的 false 一律
+  不收；搜索词只来自她睡前写的，原话题词不直接发给外部网站。
+- **日志**：`xiaoqing_life step=<步骤>`，只记名称、数量、原因、错误类型；`step=daily_summary` 是前一天的计数。
 
-## 与 Core 的桥
+## 与 Core 和聊天的桥
 
-`life.turn_context`、`life.export_memes` 在 `core/models.py` 的服务契约中声明：只有 `xiaoqing_life` 能导出、只有 `xiaoqing_chat` 能调用。`core/capabilities.py:LifeContextService` 校验载荷与返回类型，`core/app_plugin_context.py` 在调用方声明 `uses_services` 时才签发 `capabilities.life_context`。数据只关于小青自己，不按用户身份门控，系统主体也可用。
+`life.turn_context`、`life.export_memes` 在 `core/models.py` 的服务契约中声明：只有 `xiaoqing_life` 能导出、只有
+`xiaoqing_chat` 能调用；`core/capabilities.py:LifeContextService` 只校验载荷和返回类型是映射，字段由两边约定：
 
-## 第二轮增补
-
-- **选活动**：分数过 softmax（`choice_temperature`）抽样，`last_decision` 记分数、选中项与概率。
-- **名义浏览时段**：每次上网开始时按活动抽一个时长，`last_session_at` / `last_session_end` / `activity_log` 按它记，间隔从结束算起；经历时间戳均匀撒在时段内，`turn_context` 只给 `at ≤ 现在` 的，时段内另给一句“你这会儿正在……”（不含未刷到的标题）。
-- **经历**：额外存 `gist`、`uploader`、`url`、`duration_s`、`dense_moment`；链接只在对方要链接 / 问哪个视频 / 谁做的时给；明说昨天 / 前天只看那一天。
-- **兴趣**：话题先并到相近的已有兴趣（`similar`，≤12 字）；种子兴趣常量底分不衰减，证据半衰期 30 天；到 repeated / consistent 生成 2/4/8 档巩固快照。
-- **B 站条目 ID** 与来源无关（`bili:<aid>`），热门 / 搜索 / 排行的同一视频只算一个独立来源。
-- **Core**：`Content-Encoding: deflate` 同时接受 zlib 封装与裸 deflate（B 站弹幕接口返回裸 deflate），限额不变。
-- **真实验证**：`scripts/run_xiaoqing_life_session.py`。
-
-## 第三轮增补
-
-- **主动分享**：`turn_context(mode="proactive")` 返回 `share_candidates`（她最近真的刷到、想分享的经历，以及作品更新），请求里的 `exclude` 排除这个会话已分享过的；xiaoqing_chat 的群聊与白名单私聊主动开口用它，投递确认后记下已分享的 ID。
-- **探针**：`turn_context(mode="probe")` 在插件开启时返回 `{"version":1,"online_life":true}`，xiaoqing_chat 的每日生活小事据此不写具体视频和帖子，避免和真实上网记录打架。
-- **节律**：`planner` 读作息活动文字，按 `activity_affinity` 调整打分（刷番偏动画话题、吃饭偏热榜且条目减半、社 / 活动 / 课 / 实验 / 考试即使空闲也不上网）；醒来后 `MORNING_WINDOW_MIN`（120 分钟）内续做小课题加 `MORNING_THREAD_BONUS`（6 分）。
-- **按意图取用**：`turn_context` 按问法给不同的块：近况（今天的日记或经历、在查的小课题）、这周（周记 / 近几天日记与快照）、最近迷上什么（快照）、等会儿干嘛（今天剩下的作息时段与小课题的下一步，标明只是打算）、要链接或问哪个视频（标题、UP 主、链接）、追问刚提到的视频（简介摘要）。
-- **取材细节**：新的、≤8 字的未查实词条自动进百科待查队列；暴力 / 自伤 / 诅咒类说法不收为词条；弹幕最密点忽略开头；梗图按点赞、文字长度与格式做确定性预选，聊天侧导入前再校验图片字节。
-
-## 第四轮增补
-
-- **新状态**：`state.preferences` / `source_health` / `habits` / `topic_penalty` / `last_reward` / `followup_day`，新集合 `frontier.json`、`learnings.json`；词条和表达条目上多了 `use_ok` / `use_confused` / `fps` / `suppressed_until`；小课题多了 `parent_id` / `depth`；经历多了 `tags`。
-- **决策**：`planner.choose` 的打分在活动偏好、搜索接口不稳、探索欲（+10）、有前因的小课题（+4）之后做 softmax；因素记在 `last_decision.factors`。
-- **只有真实信号**：偏好来自她自己的喜欢 / 不喜欢和真实进展；失败和全是看过的不更新偏好，只影响来源可靠性；社交反馈来自群友的真实回应。
-
-## 第五轮增补
-
-```text
-thread_continue ─► research.run（每轮：行动 → 1 次 reasoning → 本地核对 → 立即提交）
-                     ├─ search / deep_read / lookup（sources/deep.py、subtitle.py、baike.read、wiki.py）
-                     ├─ 要点 → 小课题笔记 n<k>（带摘录）；revises → 更正；stuck → 搁置；answered → 回看
-                     └─ methods.select（≤2 条）→ 提示；done 时 wins；睡前提炼新方法
-wind_down ─► work.start（works.candidate_topics → start_work）、methods 提炼、dossier.sync
-work_on   ─► works.run（todo 查证 → 1 次 reasoning → apply_ops → 读物成为经历）
-housekeeping ─► dossier.sync（先于清理）→ works.housekeep → threads.prune
-turn_context ─► 档案召回 / 更正行 / 作品行 / 摘录块 / 走向快照行 → 780 字预算（按优先级整段取舍）
-```
-
-| 模块 | 职责 |
+| 方向 | 字段 |
 |---|---|
-| `bili_auth.py` | B站扫码登录：`BiliCredential`（懒加载、按 mtime 重读、失效标记）、`BiliLogin`（单一进行中的登录、后台轮询、取消 / 关闭）、凭证文件的目录保护与原子写；Cookie 只由 `BoundedFetcher` 附给 `api.bilibili.com` |
-| `sources/deep.py` | 深读：简介全文切段、UP 主置顶 / 回复、字幕；`depth_of`、`assign_refs` |
-| `sources/subtitle.py` | WBI 签名（只用于字幕接口）、轨道选择、字幕文件主机校验（`hdslb.com`，不带 Cookie）、全文 / 6 段节选 |
-| `sources/wiki.py` | 中文维基阅读（通用 User-Agent，开关 `wiki_read`）；`baike.read` 同样给出带段落的条目 |
-| `research.py` | 有限步骤的研究循环：首轮行动选择、研究提示、本地核对、每轮提交、名义时段按轮数均分 |
-| `methods.py` | 方法复用：选择、使用记录、wins / 退役、睡前提炼的核对 |
-| `works.py` | 小作品：开始的依据核对、`work_on` 会话、op 核对（片单名字必须在所引经历里）、21 天搁置 / 180 天保留、聊天侧作品行 / 摘录 / 分享候选 |
-| `dossier.py` | 主题档案：`sync` 幂等、确定性；档案存快照副本，经历和小课题被清理后仍在；召回与更正行 |
+| 聊天 → life（`mode=reply`） | `text`、`recent`、`bot_recent`、`is_private`、`unknown_terms`（本群没确认的黑话）、`topics`（仅群聊） |
+| life → 聊天 | `life_lines`、`slang_notes`、`expression_hint`、`episode_ids`、`term_keys`、`verified_terms`（百科查实的说法，聊天回写黑话库） |
+| `mode=proactive` / `probe` | 分享候选 / `{"version":1,"online_life":true}` |
 
-- **新集合**：`methods.json`、`works.json`、`dossiers.json`；`state.bili_login`（只含有效 / 失效与时间，不含凭证值）、`state.research_action` 偏好、`state.last_work_start` / `last_work_on_at` / `method_day`。凭证文件不在 `LifeStore` 里。
-- **档案为什么不用事件钩子**：小课题和作品的状态变化会被 `dossier.sync` 从当前状态幂等地读出来，不依赖进程级全局回调，也就不会在不同存储之间串；小课题上的 `events` 只是有界的记录。
-- **作品不是学习来源**：作品条目只引用经历 ID，不进词条、表达、兴趣证据；`work_on` 读物产生的经历同样不做词条 / 表达学习。
-- **聊天侧预算**：`life_lines` 总长 ≤780 字（xiaoqing_chat 截 800）；开头说明和结尾依据必留，其余按“作品摘录 > 档案召回 > 正在做 > 经历 > 小课题行 > 作品行 > 打算 > 自己查明白的 / 查法 > 回顾快照 > 更正行”整段取舍。
-- **验证**：`tests/plugins/xiaoqing_life/test_round5_*.py` 与 `test_simulation_round5.py`（可控时钟的 23 天时间线：话题长成作品、研究搁置后再拿起并更正、方法提炼与复用、兴趣变冷快照）。
+## 验证
+
+`tests/plugins/xiaoqing_life/`：按模块的测试（`test_planner`、`test_research`、`test_digest`、`test_turn_context`……）、
+生产案例（`test_research_production_cases.py`）、对照 dafeiyu 的话题与知识门控（`test_friends_topics_and_knowledge.py`）、
+活动比例（`test_planner_mix.py`）、14 天与 23 天可控时钟模拟。真实端点与真实模型的回放用
+`scripts/run_xiaoqing_life_session.py`（`--activity`、`--thread`、`--kind`、`--done-when`、`--chat-topic`、`--bili-credential`）。

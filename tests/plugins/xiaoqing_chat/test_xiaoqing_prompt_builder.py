@@ -123,7 +123,7 @@ def test_default_persona_card_moods_only_describe_current_conversation_style() -
     assert "女生" in facts and "大二" in facts and "物理" in facts
     assert "动画" in facts and "天文" in facts
     chat = cfg.personality.card.scoped(SCOPE_CHAT, "小青")
-    assert "接梗往前推一步" in chat and "追问留给确实缺的信息" in chat
+    assert "接梗往前推一步" in chat and "说到位就停" in chat
     assert "追问服务于交流推进" in cfg.personality.card.scoped(SCOPE_DEEP, "小青")
     assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 

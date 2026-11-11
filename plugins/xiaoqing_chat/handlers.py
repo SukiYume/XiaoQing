@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import random
 import re
 import time
@@ -15,7 +16,7 @@ from core.delivery import SENSITIVE_ACTION_KEY
 from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
 from core.message import extract_text
 from core.plugin_base import segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import public_error_message
 
 from .agent_bridge import (
     AGENT_PLUGIN,
@@ -49,19 +50,27 @@ from .chat_runtime import (
 from .commands import reset_transient_conversation_state
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
 from .expression.bw_reflect_tracker import tick_reflect_tracker
+from .follow_ups import (
+    BURST_TEXTS_KEY,
+    carry_attention,
+    carry_text,
+    sender_has_follow_up,
+    take_carried_attention,
+    take_carried_texts,
+)
 from .frequency_control import decide_reply
 from .generation_limiter import CHAT_SUPERSEDED, GenerationLimitExceeded
 from .handler_context import HandlerContext
 from .life.closing_guard import should_stay_silent
 from .life.daily_life import day_key, ensure_today
 from .life.online import probe_online_life
-from .life.schedule import delay_factor, participation_factor, routine_slot_now
+from .life.schedule import routine_factor, routine_slot_now
 from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
 from .logging_utils import log_step
 from .media.event_media import build_effective_user_text
 from .memory.local_ids import allocate_local_id
-from .memory.memory import idle_gap_before_turn
+from .memory.memory import idle_gap_before_turn, is_conversation_reply
 from .memory.review_sessions import get_goal_override
 from .message_parts import (
     build_text_message_parts,
@@ -151,6 +160,36 @@ _EXTERNAL_HEADLINE_CHARS   = 160
 
 # 同一会话已有一轮在生成时，新一轮最多排队这么久；旧一轮看到新消息会在下一个检查点退出。
 _CHAT_GENERATION_QUEUE_SECONDS = 20.0
+
+# 被叫到却出了故障（模型全挂、内部异常）时说的话：像手机卡了，不许诺回头再说。
+_STALLED_REPLIES = ("我这边卡了 消息半天发不出去", "等等 我这边卡住了", "网卡成 PPT 了")
+# 故障多半会持续一阵：同一会话这么久内只说一次，之后就当没接上。
+_STALLED_NOTICE_GAP_SECONDS            = 600.0
+_FORCED_EVENT_KEY                      = "_xc_forced"
+_last_stalled_notice: dict[str, float] = {}
+
+
+def _reply_after_failure(context, exc: Exception, event: dict[str, Any]) -> list[dict[str, Any]]:
+    """闲聊这一轮出了故障：记诊断日志，聊天里不出现错误码。
+
+    她只是顺口接话时就当没接上；私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次。
+    """
+
+    public_error_message(context, exc, logger=context.logger, component="xiaoqing_chat.smalltalk")
+    if not (event.get(_FORCED_EVENT_KEY) or is_private_event(event)):
+        return []
+    chat_id = event_chat_id(event)
+    now     = time.monotonic()
+    if now - _last_stalled_notice.get(chat_id, -_STALLED_NOTICE_GAP_SECONDS) < (
+        _STALLED_NOTICE_GAP_SECONDS
+    ):
+        return []
+    for stale in [
+        key for key, at in _last_stalled_notice.items() if now - at >= _STALLED_NOTICE_GAP_SECONDS
+    ]:
+        del _last_stalled_notice[stale]
+    _last_stalled_notice[chat_id] = now
+    return segments(random.choice(_STALLED_REPLIES))
 
 
 def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | None = None) -> bool:
@@ -289,12 +328,7 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
             )
             return []
         except Exception as exc:
-            return public_error_response(
-                context,
-                exc,
-                logger    = context.logger,
-                component = "xiaoqing_chat.smalltalk",
-            )
+            return _reply_after_failure(context, exc, event)
     return []
 
 
@@ -565,6 +599,12 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
         enable_private_brain_chat = brain_chat_enabled,
         called_by_name            = called_by_name,
     )
+    # 他上一条是在跟她说话、她等他说完没回：接着发的这一条也算在跟她说（@ 了别人的除外）。
+    continued = take_carried_attention(event) and not other_mentions(event)
+    if continued and not attention.forced:
+        attention = dataclasses.replace(
+            attention, mentioned=True, forced=True, force_reason="continued"
+        )
     log_step(
         context,
         runtime,
@@ -578,6 +618,7 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
             "reply_to_bot"      : attention.reply_to_bot,
             "forced"            : attention.forced,
             "force_reason"      : attention.force_reason,
+            "continued"         : continued,
             "brain_chat_enabled": brain_chat_enabled,
             "msg_id"            : event.get("message_id"),
             "user_id"           : event.get("user_id"),
@@ -693,6 +734,27 @@ def spawn_daily_life(context, runtime, state, secrets: dict[str, Any], *, bot_na
     spawn_bg_task(context, generate(), name="daily_life:today")
 
 
+# 她发言之后这么久以内紧跟着的那句话，才算在接她的话。
+_FOLLOW_UP_WINDOW_SECONDS = 120.0
+
+
+async def _follows_own_reply(event: dict[str, Any], hctx: HandlerContext) -> bool:
+    """这句话是不是紧跟在她刚发的聊天回复后面，而且没有 @ 别人。"""
+
+    if other_mentions(event):
+        return False
+    current = event.get("message_id")
+    recent = await hctx.state.memory_store.get_recent_async(hctx.chat_id, max_items=3)
+    for message in reversed(recent):
+        if message.role == "user" and current is not None and message.message_id == current:
+            continue
+        return (
+            is_conversation_reply(message)
+            and time.time() - float(message.ts or 0.0) <= _FOLLOW_UP_WINDOW_SECONDS
+        )
+    return False
+
+
 def _apply_routine(event: dict[str, Any], hctx: HandlerContext) -> float:
     """按人设卡〔作息〕记下此刻的作息底色和延迟乘数，返回普通群聊插话概率的乘数。"""
 
@@ -707,10 +769,10 @@ def _apply_routine(event: dict[str, Any], hctx: HandlerContext) -> float:
     event["_xc_routine_availability"] = slot.availability if slot is not None else "free"
     if not life.schedule_affects_pacing:
         return 1.0
-    event["_xc_delay_factor"] = delay_factor(
+    event["_xc_delay_factor"] = routine_factor(
         slot, busy=life.busy_delay_factor, asleep=life.asleep_delay_factor
     )
-    return participation_factor(
+    return routine_factor(
         slot, busy=life.busy_participation_factor, asleep=life.asleep_participation_factor
     )
 
@@ -738,6 +800,7 @@ async def _prepare_smalltalk_turn(
         await _maybe_reset_idle_conversation(event, context, runtime, state, chat_id=chat_id)
 
     attention, is_private = await _resolve_attention(text, event, context, hctx)
+    event[_FORCED_EVENT_KEY] = attention.forced
     if is_private and await _private_closing_settled(text, event, hctx):
         log_step(
             context,
@@ -756,7 +819,8 @@ async def _prepare_smalltalk_turn(
         text,
         is_private,
         runtime.cfg.brain_chat.enable_private_brain_chat,
-        routine_factor=routine_factor,
+        routine_factor    = routine_factor,
+        follows_own_reply = not is_private and await _follows_own_reply(event, hctx),
     )
     # 先用上一轮状态完成回复门控，再记录本轮观察到的新目标。这样当前消息不会先把
     # 自己标成“活跃话题”，同时即使本轮不回复，后续仍能看到真正的新话题。
@@ -784,6 +848,33 @@ async def _prepare_smalltalk_turn(
     )
 
 
+async def _yields_to_follow_up(
+    prepared: PreparedSmalltalkTurn, event: dict[str, Any], context, hctx: HandlerContext
+) -> bool:
+    """对方还在接着发消息：这一条记下不回，等排在后面的那一轮看着完整的几条一起回。
+
+    显式命令（``/xc 内容``）照常回复。
+    """
+
+    if event.get("_xc_command_forced") or not sender_has_follow_up(event, context):
+        return False
+    async with chat_lock(hctx.chat_id):
+        await ensure_user_message_recorded(
+            prepared.text, event, context, hctx.runtime, state=hctx.state
+        )
+    if prepared.forced:
+        carry_attention(event)
+    carry_text(event, prepared.text)
+    log_step(
+        context,
+        hctx.runtime,
+        chat_id = hctx.chat_id,
+        step    = "smalltalk.yield_to_follow_up",
+        fields  = {"phase": "before_generation", "forced": prepared.forced},
+    )
+    return True
+
+
 async def _maybe_reply_smalltalk(
     clean_text: str,
     event: dict[str, Any],
@@ -805,7 +896,11 @@ async def _maybe_reply_smalltalk(
 
     t0       = time.monotonic()
     prepared = await _prepare_smalltalk_turn(clean_text, event, context, hctx)
+    # 前几条让出来的话先取走：没准备成（被门控挡下）的轮次也要取，不能留给更后面不相干的消息。
+    event[BURST_TEXTS_KEY] = take_carried_texts(event)
     if prepared is None:
+        return []
+    if await _yields_to_follow_up(prepared, event, context, hctx):
         return []
 
     async def chat(deciding: asyncio.Task[Any] | None) -> list[dict[str, Any]]:
@@ -813,7 +908,7 @@ async def _maybe_reply_smalltalk(
             prepared, event, context, hctx, started_at=t0, deciding=deciding
         )
 
-    # 私聊和群里明确跟她说的话并行判断工具需求；其余群消息先由 PFC 决定参与。
+    # 私聊和群里明确跟她说的话并行判断工具需求；没人叫她的群消息只走聊天，由 PFC 决定参与。
     if (prepared.is_private or prepared.forced) and agent_may_take_over(prepared, event, context):
         return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
     return await chat(None)
@@ -847,23 +942,6 @@ async def _reply_with_chat(
                 # 生成比 agent 的判断先完成，而 agent 要接手：这次的聊天回复不发。
                 generated.cancel_speculative_memory()
                 return []
-            if (
-                not prepared.is_private
-                and generated.reply
-                and generated.pfc_result is not None
-                and generated.pfc_result.action in ("direct_reply", "send_new_message")
-                and agent_may_take_over(prepared, event, context)
-            ):
-
-                async def deliver(decision: asyncio.Task[Any] | None) -> list[dict[str, Any]]:
-                    if decision is not None and await asyncio.shield(decision) is not None:
-                        generated.cancel_speculative_memory()
-                        return []
-                    return await finalize_smalltalk_turn(
-                        prepared, generated, event, context, hctx, started_at=started_at
-                    )
-
-                return await answer_with_agent_or_chat(prepared, event, context, hctx, deliver)
             return await finalize_smalltalk_turn(
                 prepared,
                 generated,

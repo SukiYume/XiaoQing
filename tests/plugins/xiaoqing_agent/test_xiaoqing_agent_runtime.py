@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.ai import AIError
 from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from core.interfaces import ACTION_BYPASS_SINK_KEY
+from core.router import build_command_catalog_node
 from plugins.xiaoqing_agent.config import AgentConfig
 from plugins.xiaoqing_agent.runtime import AgentRuntime
-from plugins.xiaoqing_agent.tasks import Actor, ChatRef, Outcome, TaskStore
+from plugins.xiaoqing_agent.tasks import Actor, AgentTask, ChatRef, Outcome, TaskStore
 from tests.helpers.xiaoqing_agent_test_support import (
     ADMIN_ID,
     GROUP_ID,
@@ -38,14 +38,303 @@ CHAT = ChatRef(ADMIN_ID, None)
 ADMIN = Actor(ADMIN_ID, admin=True)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["needs_user", "blocked", "unfinished"])
+async def test_explicit_final_status_is_preserved_without_rewriting(tmp_path, state):
+    context = FakeAgentContext(
+        tmp_path,
+        ai=FakeAI(
+            [
+                ai_response(
+                    "", [tool_call("final_answer", {"text": "当前完成情况。", "state": state})]
+                ),
+            ]
+        ),
+    )
+    task = AgentRuntime(tmp_path).start(
+        context, CONFIG, CHAT, request_text="查看进展", source="chat"
+    )
+    await task.runner
+    assert task.status == state and len(context.ai.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_selected_services_still_use_current_permission_and_catalog(tmp_path):
+    root = build_command_catalog_node(
+        "inventory",
+        {
+            "name"      : "stock",
+            "triggers"  : ["stock"],
+            "help"      : "库存",
+            "permission": "bot_admin",
+        },
+        root=True,
+    )
+    context = FakeAgentContext(tmp_path, catalog=(root,), is_admin=False)
+    runtime = AgentRuntime(tmp_path)
+    task = AgentTask("selected", CHAT, "查询库存", "chat", plugins=("inventory", "unknown"))
+    env, _tools, messages, _session = await runtime._prepare(context, CONFIG, task, [], [])
+    assert env.selected_plugins == set()
+    assert "本轮所用服务" not in messages[1]["content"]
+
+
+def _reservation_root():
+    return build_command_catalog_node(
+        "reservation",
+        {
+            "name"    : "reserve",
+            "triggers": ["reserve"],
+            "help"    : "登记预约",
+            "usage"   : "/reserve <JSON>",
+            "effect"  : "write",
+        },
+        root=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_confirmation_continues_the_same_session_and_runs_the_plugin_command(tmp_path):
+    """冲突后回一句“添加”：接在同一份对话后面，模型看到插件给的确认命令，原样执行后回复。"""
+
+    confirm = '/reserve {"title":"甲","force":true}'
+    runner  = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=[
+                DeliverySegments(
+                    [{"type": "text", "data": {"text": "预约冲突，输入 yes 确认"}}],
+                    outcome=CommandOutcome("incomplete", confirmation_command=confirm),
+                ),
+                DeliverySegments(
+                    [{"type": "text", "data": {"text": "已创建预约，编号 aabb1122"}}],
+                    outcome=CommandOutcome("completed"),
+                ),
+            ]
+        )
+    )
+
+    def first_call(_route, messages, _kwargs):
+        assert "本轮所用服务的命令说明" in messages[-1]["content"]
+        return ai_response(
+            "", [tool_call("xiaoqing_command", {"commands": ['/reserve {"title":"甲"}']})]
+        )
+
+    def run_confirmed(_route, messages, _kwargs):
+        # 前一轮的冲突回报和确认命令都在上下文里；服务说明不再重复给。
+        assert confirm in str(messages)
+        assert messages[-1]["role"] == "user" and messages[-1]["content"].endswith("本轮原话：添加")
+        assert "本轮所用服务的命令说明" not in messages[-1]["content"]
+        return ai_response("", [tool_call("xiaoqing_command", {"commands": [confirm]})])
+
+    context = FakeAgentContext(
+        tmp_path,
+        catalog        = (_reservation_root(),),
+        command_runner = runner,
+        ai             = FakeAI(
+            [
+                first_call,
+                ai_response("甲和已有预约冲突了，还要约吗？"),
+                run_confirmed,
+                ai_response("约好了，编号 aabb1122。"),
+            ]
+        ),
+    )
+    runtime = AgentRuntime(tmp_path)
+    first   = runtime.start(
+        context, CONFIG, CHAT, request_text="创建甲预约", source="chat", plugins=("reservation",)
+    )
+    await first.runner
+    assert first.status == "needs_user" and first.outcome.text == "甲和已有预约冲突了，还要约吗？"
+    second = runtime.start(context, CONFIG, CHAT, request_text="添加", source="chat")
+    await second.runner
+    assert second.status == "done" and second.outcome.text == "约好了，编号 aabb1122。"
+    assert second.continues == first.task_id
+    assert runner.run.call_args.args == (confirm,) and len(context.ai.calls) == 4
+    # 同一会话的系统提示不变，前面的消息原样作为前缀，模型的提示缓存能命中。
+    first_request, second_request = context.ai.calls[0][1], context.ai.calls[2][1]
+    assert second_request[: len(first_request)] == first_request
+
+
+@pytest.mark.asyncio
+async def test_recent_self_rides_each_turn_and_the_card_keeps_the_session(tmp_path):
+    context = FakeAgentContext(tmp_path, ai=FakeAI([_final("好"), _final("改好了")]))
+    runtime = AgentRuntime(tmp_path)
+    for text, recent in (("建个日程", "你最近说过：在图书馆"), ("改一下", "你最近说过：回宿舍了")):
+        task = runtime.start(
+            context,
+            CONFIG,
+            CHAT,
+            request_text = text,
+            source       = "chat",
+            persona      = "人设卡",
+            recent_self  = recent,
+        )
+        await task.runner
+    first, second = context.ai.calls[0][1], context.ai.calls[1][1]
+    # 同一张人设卡接着同一会话；近况写在每轮请求里，系统提示不变。
+    assert second[: len(first)] == first and "人设卡" in first[0]["content"]
+    assert "在图书馆" in first[-1]["content"] and "回宿舍了" in second[-1]["content"]
+    assert "回宿舍了" not in second[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_plugins_check_fields_against_everything_the_initiator_said_in_the_session(tmp_path):
+    """回答澄清（“描述”）时金额和分类在前一句里：会话里发起人说过的话都交给插件核对来源。"""
+
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "已记"}}])
+    )
+    context = FakeAgentContext(
+        tmp_path,
+        command_runner = runner,
+        ai             = FakeAI(
+            [
+                ai_response("“很久以前”是描述还是日期？"),
+                _command("/ledger add 159.7 很久以前 cat:餐饮"),
+                ai_response("记好了"),
+            ]
+        ),
+    )
+    runtime = AgentRuntime(tmp_path)
+    for text in ("记账 159.7 很久以前 餐饮", "描述"):
+        task = runtime.start(context, CONFIG, CHAT, request_text=text, source="chat", admin=True)
+        await task.runner
+    assert runner.run.await_args.kwargs["request_texts"] == ("记账 159.7 很久以前 餐饮", "描述")
+
+
+@pytest.mark.asyncio
+async def test_trimmed_command_help_is_loaded_again_when_the_service_is_selected(tmp_path):
+    from dataclasses import replace
+
+    context = FakeAgentContext(
+        tmp_path,
+        catalog = (_reservation_root(),),
+        ai      = FakeAI([ai_response("请补充时间") for _ in range(3)]),
+    )
+    runtime = AgentRuntime(tmp_path)
+    for request in ("预约甲", "时间还没定", "定在周五下午"):
+        task = runtime.start(
+            context,
+            replace(CONFIG, session_max_turns=1),
+            CHAT,
+            request_text = request,
+            source       = "chat",
+            plugins      = ("reservation",),
+        )
+        await task.runner
+    prompts = [call[1][-1]["content"] for call in context.ai.calls]
+    assert "本轮所用服务的命令说明" in prompts[0]
+    assert "本轮所用服务的命令说明" not in prompts[1]
+    assert "本轮所用服务的命令说明" in prompts[2]
+
+
+@pytest.mark.asyncio
+async def test_inflight_updates_remain_available_to_plugins_in_the_next_turn(tmp_path):
+    runtime = AgentRuntime(tmp_path)
+
+    def add_note(_route, _messages, _kwargs):
+        task = next(iter(runtime.running.values()))
+        task.notes.append("数量改成2")
+        return ai_response("收到")
+
+    runner = SimpleNamespace(run=AsyncMock(return_value=[]))
+    context = FakeAgentContext(
+        tmp_path,
+        command_runner = runner,
+        ai             = FakeAI(
+            [add_note, ai_response("按2份准备"), _command("/reserve 2"), ai_response("好了")]
+        ),
+    )
+    for request in ("准备一份", "就这样"):
+        task = runtime.start(context, CONFIG, CHAT, request_text=request, source="chat")
+        await task.runner
+    requests = runner.run.await_args.kwargs["request_texts"]
+    assert requests[0] == "准备一份" and requests[-1] == "就这样"
+    assert any("数量改成2" in text for text in requests)
+
+
+@pytest.mark.asyncio
+async def test_sessions_belong_to_one_initiator_and_expire_or_reset(tmp_path):
+    from dataclasses import replace
+
+    context = FakeAgentContext(tmp_path, ai=FakeAI([]))
+    runtime = AgentRuntime(tmp_path)
+    # 不附最近任务记录，只看会话本身接没接上。
+    config = replace(CONFIG, history_tasks=0)
+    alice = ChatRef(ADMIN_ID, GROUP_ID)
+    bob   = ChatRef(MEMBER_ID, GROUP_ID)
+
+    async def run(chat, text, config=config):
+        context.ai.script.append(ai_response(f"回复：{text}"))
+        task = runtime.start(context, config, chat, request_text=text, source="chat")
+        await task.runner
+        return context.ai.calls[-1][1]
+
+    await run(alice, "第一件事")
+    assert "第一件事" in str(await run(alice, "接着说"))
+    # 同一个群里别人说话是另一份会话。
+    assert "第一件事" not in str(await run(bob, "我的事"))
+    # 隔太久没说话就开新会话；关掉会话时每句话都从头开始。
+    assert "第一件事" not in str(
+        await run(alice, "过了很久", replace(config, session_idle_minutes=0))
+    )
+    await runtime.sessions.clear(alice)
+    assert "接着说" not in str(await run(alice, "从头来"))
+
+
+@pytest.mark.asyncio
+async def test_plain_text_reply_is_delivered_without_another_model_call(tmp_path):
+    context = FakeAgentContext(tmp_path, ai=FakeAI([ai_response("请补充另外两笔明细。")]))
+    runtime = AgentRuntime(tmp_path)
+    task = runtime.start(context, CONFIG, CHAT, request_text="记三笔账，只给了一笔", source="chat")
+    await task.runner
+    assert task.outcome.text == "请补充另外两笔明细。" and len(context.ai.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_done_claim_over_a_pending_confirmation_is_recorded_as_needs_user(tmp_path):
+    """说已完成、但写入还在等发起人决定：记成 needs_user；插件给的确认命令写在回报里。"""
+
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=DeliverySegments(
+                [{"type": "text", "data": {"text": "时间冲突，回复确认"}}],
+                outcome=CommandOutcome("incomplete", confirmation_command="/reserve force 甲"),
+            )
+        )
+    )
+    context = FakeAgentContext(
+        tmp_path,
+        catalog        = (_reservation_root(),),
+        command_runner = runner,
+        ai             = FakeAI(
+            [
+                _command("/reserve 甲"),
+                ai_response(
+                    "",
+                    [
+                        tool_call(
+                            "final_answer", {"text": "甲和别的冲突了，还加吗？", "state": "done"}
+                        )
+                    ],
+                ),
+            ]
+        ),
+    )
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context, CONFIG, CHAT, request_text="预约甲", source="chat", plugins=("reservation",)
+    )
+    await task.runner
+    assert task.status == "needs_user"
+    assert "/reserve force 甲" in context.ai.calls[-1][1][-1]["content"]
+
+
 def _final(text: str, files: list[str] | None = None) -> dict:
     return ai_response("", [tool_call("final_answer", {"text": text, "files": files or []})])
 
 
 def _command(command: str) -> dict:
-    return ai_response(
-        "", [tool_call("xiaoqing_command", {"command": command, "delivery": "continue"})]
-    )
+    return ai_response("", [tool_call("xiaoqing_command", {"commands": [command]})])
 
 
 def _gate(release: asyncio.Event, response: dict):
@@ -59,84 +348,6 @@ def _gate(release: asyncio.Event, response: dict):
 def _records(data_dir: Path, chat: ChatRef = CHAT) -> list[dict]:
     path = data_dir / "tasks" / f"{chat.key}.json"
     return json.loads(path.read_text(encoding="utf-8"))["tasks"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "pending,failed", [("买2个苹果", False), ("查CHIME目录", False), ("买2个苹果", True)]
-)
-async def test_delivery_repairs_only_unfinished_original_request_once(tmp_path, pending, failed):
-    first = DeliverySegments(
-        [
-            {
-                "type": "text",
-                "data": {"text": "商店：苹果10金币一个" if not failed else "商店连接超时"},
-            }
-        ],
-        outcome=CommandOutcome("error" if failed else "completed"),
-    )
-    runner = SimpleNamespace(
-        run=AsyncMock(
-            side_effect=[first, [{"type": "text", "data": {"text": "购买成功：苹果2个"}}]]
-        )
-    )
-    script = [
-        ai_response("", [tool_call("xiaoqing_command", {"command": "/shop", "delivery": "reply"})]),
-        ai_response(
-            json.dumps(
-                {
-                    "reply"     : "只查到了商店，购买还没完成。",
-                    "state"     : "unfinished",
-                    "unfinished": [pending],
-                },
-                ensure_ascii=False,
-            )
-        ),
-    ]
-    repaired = pending == "买2个苹果" and not failed
-    if repaired:
-        script.extend(
-            [
-                ai_response(
-                    "",
-                    [
-                        tool_call(
-                            "xiaoqing_command", {"command": "/buy apple 2", "delivery": "reply"}
-                        )
-                    ],
-                ),
-                # 再次声称未完成也只能结束本轮，避免核对器造成循环购买。
-                ai_response(
-                    json.dumps(
-                        {
-                            "reply"     : "买好了，2个苹果。",
-                            "state"     : "unfinished",
-                            "unfinished": [pending],
-                        },
-                        ensure_ascii=False,
-                    )
-                ),
-            ]
-        )
-    context = FakeAgentContext(tmp_path, ai=FakeAI(script), command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context,
-        CONFIG,
-        CHAT,
-        request_text = "给宠物买2个苹果",
-        source       = "chat",
-        admin        = True,
-    )
-    outcome = await runtime.wait_inline(context, task, 5)
-    assert outcome is not None
-    await wait_until(lambda: task.runner.done())
-    assert runner.run.await_count == (2 if repaired else 1)
-    assert all("CHIME" not in call.args[0] for call in runner.run.await_args_list)
-    if repaired:
-        assert outcome.text == "买好了，2个苹果。"
-    if failed:
-        assert outcome.status == "failed"
 
 
 @pytest.mark.asyncio
@@ -159,194 +370,6 @@ async def test_fast_task_is_handed_to_the_waiting_turn(tmp_path: Path) -> None:
     transcript = json.loads((tmp_path / "transcripts" / f"{task.task_id}.json").read_text("utf-8"))
     assert transcript["messages"][0]["role"] == "system"
     assert "算 2^100" in transcript["messages"][1]["content"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("review", "status"),
-    [
-        (
-            ai_response(
-                json.dumps(
-                    {"reply": "指令发过去了，设备还没确认灯的状态。", "state": "blocked"},
-                    ensure_ascii=False,
-                )
-            ),
-            "blocked",
-        ),
-        # 核对不可用时任务结局沿用执行阶段的状态。
-        (ai_response(), "done"),
-        (AIError("offline"), "done"),
-    ],
-)
-async def test_delivery_review_uses_tool_facts_and_preserves_files_without_repeating_writes(
-    tmp_path: Path,
-    review,
-    status: str,
-) -> None:
-    work = tmp_path / "workspaces" / CHAT.key
-    work.mkdir(parents=True)
-    evidence = work / "device.txt"
-    evidence.write_text("已接收，状态待确认", encoding="utf-8")
-    tool_reply = (
-        "已接收；状态待确认。" + "设备回报。" * 300 + "中段事实仍需核对" + "设备回报。" * 300
-    )
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=[{"type": "text", "data": {"text": tool_reply}}])
-    )
-    ai = FakeAI(
-        [
-            ai_response(
-                "",
-                [
-                    tool_call(
-                        "xiaoqing_command", {"delivery": "continue", "command": "/米家 调用 {}"}
-                    )
-                ],
-            ),
-            _final("灯关了", ["device.txt"]),
-            review,
-        ]
-    )
-    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context,
-        CONFIG,
-        CHAT,
-        request_text = "关灯",
-        source       = "chat",
-        admin        = True,
-        persona      = "你是小青，说话自然、直接。",
-    )
-    outcome = await runtime.wait_inline(context, task, 5)
-    assert outcome is not None
-    await task.runner
-
-    assert "灯关了" not in outcome.text
-    assert "确认" in outcome.text
-    assert outcome.files == [str(evidence.resolve())]
-    assert outcome.status == status and task.steps == 3
-    assert _records(tmp_path)[-1]["status"] == status
-    runner.run.assert_awaited_once()
-    assert context.actions == []
-    _, messages, kwargs = ai.calls[-1]
-    assert kwargs.get("tools") is None and "temperature" not in kwargs
-    assert "你是小青" in messages[0]["content"]
-    assert any("中段事实仍需核对" in str(message.get("content")) for message in messages)
-    assert "中段事实仍需核对" not in task.command_results[0]
-    assert kwargs["extra_payload"]["response_format"] == {"type": "json_object"}
-    assert len(messages) == 2
-    assert "本轮原话：关灯" in messages[-1]["content"]
-    assert "执行阶段的答复草稿：\n灯关了" in messages[-1]["content"]
-    await runtime.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_stopped_task_reviews_unsupported_claims_without_retrying_commands(tmp_path):
-    runner = SimpleNamespace(
-        run=AsyncMock(
-            return_value=[
-                {"type": "text", "data": {"text": "检索结果只有占位内容，缺少真实标题和链接"}}
-            ]
-        )
-    )
-    ai = FakeAI(
-        [
-            *[
-                ai_response(
-                    "",
-                    [
-                        tool_call(
-                            "xiaoqing_command",
-                            {"delivery": "continue", "command": "/paper search FRB"},
-                        )
-                    ],
-                )
-                for _ in range(3)
-            ],
-            ai_response("", [tool_call("wait", {"seconds": 600})]),
-            ai_response("没查到，不过另一条查询通道肯定可用，还有一篇我凭记忆补充的论文。"),
-            ai_response(
-                json.dumps(
-                    {
-                        "reply": "这次没拿到真实的论文标题和链接，返回内容一直没变，我就停了。",
-                        "state": "blocked",
-                    },
-                    ensure_ascii=False,
-                )
-            ),
-        ]
-    )
-    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task = runtime.start(context, CONFIG, CHAT, request_text="找论文", source="chat", admin=True)
-    outcome = await runtime.wait_inline(context, task, 5)
-    assert outcome is not None
-    await task.runner
-    # 执行停在半路，核对判定受阻：记为 blocked，而不是笼统的 failed。
-    assert outcome.status == "blocked" and task.status == "blocked"
-    assert _records(tmp_path)[-1]["status"] == "blocked"
-    assert "真实的论文标题和链接" in outcome.text and "肯定可用" not in outcome.text
-    assert runner.run.await_count == 3 and len(ai.calls) == 6
-    assert ai.calls[-1][2].get("tools") is None
-    assert "缺少真实标题和链接" in str(ai.calls[-1][1])
-    assert "肯定可用" not in str(ai.calls[-1][1])
-    assert "执行状态：failed" in str(ai.calls[-1][1])
-    await runtime.shutdown()
-
-
-_QUESTION = "查到了两个同名记录，你要改哪一个？"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "review",
-    [
-        ai_response(json.dumps({"reply": _QUESTION, "state": "needs_user"}, ensure_ascii=False)),
-        ai_response("not json"),
-        ai_response(json.dumps({"state": "done"})),
-        AIError("offline"),
-    ],
-)
-async def test_needs_user_question_is_delivered_and_unusable_review_falls_back_to_full_facts(
-    tmp_path, review
-):
-    facts  = "记录 A：" + "甲" * 1400 + "；记录 B：" + "乙" * 1400 + "末尾完整事实"
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=[{"type": "text", "data": {"text": facts}}])
-    )
-    ai = FakeAI(
-        [
-            ai_response(
-                "", [tool_call("xiaoqing_command", {"command": "/records", "delivery": "reply"})]
-            ),
-            review,
-        ]
-    )
-    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context,
-        CONFIG,
-        CHAT,
-        request_text = "改同名记录",
-        source       = "chat",
-        admin        = True,
-    )
-    outcome = await runtime.wait_inline(context, task, 5)
-    await task.runner
-    assert runner.run.await_count == 1 and len(ai.calls) == 2
-    if isinstance(review, dict) and "needs_user" in str(review):
-        assert outcome.text == _QUESTION
-        assert task.status == outcome.status == "needs_user"
-    else:
-        assert facts in outcome.text and "末尾完整事实" in outcome.text
-        assert task.status == outcome.status == "done"
-    assert _records(tmp_path)[-1]["status"] == task.status
-    assert "本轮原话：改同名记录" in ai.calls[-1][1][1]["content"]
-    assert "执行阶段的答复草稿" not in ai.calls[-1][1][1]["content"]
-    await runtime.shutdown()
 
 
 @pytest.mark.asyncio
@@ -547,7 +570,9 @@ async def test_shutdown_interrupts_tasks_and_restart_sweeps_leftovers(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_recent_records_feed_follow_up_tasks(tmp_path: Path) -> None:
+async def test_a_new_session_starts_from_recent_records(tmp_path: Path) -> None:
+    from dataclasses import replace
+
     context = FakeAgentContext(
         tmp_path,
         ai=FakeAI([_final("画好了 sin.png", ["sin.png"]), _final("改成红色了")]),
@@ -561,16 +586,17 @@ async def test_recent_records_feed_follow_up_tasks(tmp_path: Path) -> None:
     assert await runtime.wait_inline(context, first, 5) is not None
     await wait_until(lambda: first.runner.done())
 
+    # 会话过期后开新会话：最近的任务记录给出前面做过什么。
     second = runtime.start(
         context,
-        CONFIG,
+        replace(CONFIG, session_idle_minutes=0),
         CHAT,
         request_text = "把刚才的图改成红色",
         source       = "chat",
         admin        = True,
     )
     assert await runtime.wait_inline(context, second, 5) is not None
-    prompt = context.ai.calls[1][1][1]["content"]
+    prompt = context.ai.calls[1][1][-1]["content"]
     assert f"[{first.task_id}] done · 画 sin → 画好了 sin.png" in prompt
     assert "sin.png" in prompt
 
@@ -905,12 +931,8 @@ def _command_runner(tmp_path: Path, receipts: _ReceiptLog) -> tuple[SimpleNamesp
 
 def _command_steps(files: list[str]) -> list[dict]:
     return [
-        ai_response(
-            "", [tool_call("xiaoqing_command", {"delivery": "continue", "command": "/arxiv"})]
-        ),
-        ai_response(
-            "", [tool_call("xiaoqing_command", {"delivery": "continue", "command": "/twimg"})]
-        ),
+        ai_response("", [tool_call("xiaoqing_command", {"commands": ["/arxiv"]})]),
+        ai_response("", [tool_call("xiaoqing_command", {"commands": ["/twimg"]})]),
         _final("图来了", files),
         ai_response("图来了"),
     ]
@@ -993,77 +1015,51 @@ async def test_stopping_a_task_releases_its_command_receipts(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_review_sees_thread_chat_and_draft_and_repairs_only_listed_fragments(
-    tmp_path: Path,
-) -> None:
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "已创建一个单次事件"}}])
-    )
-    ai = FakeAI(
-        [
-            _command("/shop"),
-            _final("已创建"),
-            ai_response(
-                json.dumps(
-                    {
-                        "reply"     : "只建了单次事件，还不是多节点。",
-                        "state"     : "unfinished",
-                        "unfinished": ["多节点事件", "不在验收目标里的片段"],
-                    },
-                    ensure_ascii=False,
-                )
-            ),
-            _command("/shop2"),
-            _final("已改成多节点"),
-            ai_response(json.dumps({"reply": "改好了", "state": "done"}, ensure_ascii=False)),
-        ]
-    )
-    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context,
-        CONFIG,
-        CHAT,
-        request_text = "改",
-        source       = "chat",
-        admin        = True,
-        continues    = "aaa111",
-        thread       = ["添加一个多节点事件 11.14-15", "创建，提前一天提醒"],
-        history      = [{"role": "user", "name": "主人", "user_id": ADMIN_ID, "text": "之前聊的"}],
-    )
-    outcome = await runtime.wait_inline(context, task, 5)
-    await task.runner
+async def test_each_turn_carries_only_the_chat_since_the_previous_turn(tmp_path: Path) -> None:
+    import time
 
-    assert outcome is not None and outcome.text == "改好了"
-    review = ai.calls[2][1][-1]["content"]
-    assert "1. 添加一个多节点事件 11.14-15" in review.splitlines()
-    assert "2. 创建，提前一天提醒" in review.splitlines()
-    assert "本轮原话：改" in review.splitlines()
-    assert "主人（本人）: 之前聊的" in review
-    assert "执行阶段的答复草稿：" in review and review.endswith("已创建")
-    correction = ai.calls[3][1][-1]["content"]
-    assert "“多节点事件”" in correction and "不在验收目标里" not in correction
-    assert runner.run.await_count == 2
-    record = _records(tmp_path)[-1]
-    assert record["continues"] == "aaa111" and record["thread"] == task.thread
-    assert "goal" not in record
+    context = FakeAgentContext(tmp_path, ai=FakeAI([_final("好"), _final("改好了")]))
+    runtime = AgentRuntime(tmp_path)
+    old     = {
+        "role"   : "user",
+        "name"   : "主人",
+        "user_id": ADMIN_ID,
+        "text"   : "之前聊的",
+        "ts"     : time.time() - 60,
+    }
+    first = runtime.start(
+        context, CONFIG, CHAT, request_text="建个多节点事件", source="chat", history=[old]
+    )
+    await first.runner
+    new = {
+        "role"   : "user",
+        "name"   : "主人",
+        "user_id": ADMIN_ID,
+        "text"   : "顺便说一句",
+        "ts"     : time.time() + 1,
+    }
+    second = runtime.start(
+        context, CONFIG, CHAT, request_text="改", source="chat", history=[old, new]
+    )
+    await second.runner
+    assert "主人（本人）: 之前聊的" in context.ai.calls[0][1][-1]["content"]
+    turn = context.ai.calls[1][1][-1]["content"]
+    assert "顺便说一句" in turn and "之前聊的" not in turn
+    assert turn.splitlines()[-1] == "本轮原话：改"
+    assert _records(tmp_path)[-1]["continues"] == first.task_id
     await runtime.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_needs_user_review_is_delivered_even_when_items_are_listed(tmp_path: Path) -> None:
+async def test_needs_user_task_is_settled_and_not_swept_as_interrupted(tmp_path: Path) -> None:
     runner = SimpleNamespace(
         run=AsyncMock(return_value=[{"type": "text", "data": {"text": "有两条同名记录"}}])
     )
     ai = FakeAI(
         [
             _command("/shop"),
-            _final("我改了第一条"),
             ai_response(
-                json.dumps(
-                    {"reply": "要改哪一条？", "state": "needs_user", "unfinished": ["改同名记录"]},
-                    ensure_ascii=False,
-                )
+                "", [tool_call("final_answer", {"text": "要改哪一条？", "state": "needs_user"})]
             ),
         ]
     )
@@ -1075,43 +1071,10 @@ async def test_needs_user_review_is_delivered_even_when_items_are_listed(tmp_pat
     outcome = await runtime.wait_inline(context, task, 5)
     await task.runner
     assert outcome is not None and outcome.text == "要改哪一条？"
-    assert runner.run.await_count == 1 and len(ai.calls) == 3
     assert task.status == outcome.status == "needs_user"
-    assert _records(tmp_path)[-1]["status"] == "needs_user"
     # 等待发起人回答的任务已经收尾，重启时不会被当成中断。
     assert await runtime.store.mark_interrupted() == 0
     assert _records(tmp_path)[-1]["status"] == "needs_user"
-    await runtime.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_unfinished_review_after_the_correction_round_is_recorded_as_unfinished(
-    tmp_path: Path,
-) -> None:
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "已保存第一笔"}}])
-    )
-    verdict = ai_response(
-        json.dumps(
-            {
-                "reply"     : "第一笔记好了，第二笔还没记。",
-                "state"     : "unfinished",
-                "unfinished": ["第二笔"],
-            },
-            ensure_ascii=False,
-        )
-    )
-    ai = FakeAI([_command("/ledger one"), _final("记好了"), verdict, _final("记好了"), verdict])
-    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
-    runtime = AgentRuntime(tmp_path)
-    task    = runtime.start(
-        context, CONFIG, CHAT, request_text="记两笔：第一笔和第二笔", source="chat", admin=True
-    )
-    outcome = await runtime.wait_inline(context, task, 5)
-    await task.runner
-    assert outcome is not None and outcome.text == "第一笔记好了，第二笔还没记。"
-    assert task.status == outcome.status == "unfinished"
-    assert _records(tmp_path)[-1]["status"] == "unfinished"
     await runtime.shutdown()
 
 

@@ -25,6 +25,7 @@ XiaoQing Core
   ├─ 服务调用 ───────────── agent.handle_turn / agent.report_delivery → xiaoqing_agent
   ├─ AI capability ──────── chat / reasoning / checker / vision
   ├─ onebot_media ───────── get_msg / get_image         │
+  ├─ inbound_backlog ────── 同一发送者排着的后续消息    │
   └─ Delivery ───────────── ordered batches + receipt    │
                     │                                    │
                     ▼                                    ▼
@@ -49,16 +50,17 @@ xiaoqing_chat
 
 | 模块 | 职责 |
 |---|---|
-| `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、热加载文件 |
+| `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` 与 `inbound_backlog` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、热加载文件 |
 | `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口 |
-| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额，`observe_outgoing_action` |
-| `agent_bridge.py` | 私聊并行判断工具需求；群聊在 PFC 允许发言后判断工具需求。执行结果与投递回执写回原会话 |
+| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额，`observe_outgoing_action`；这一轮出故障时聊天里不出现错误码：顺口接话的轮次安静结束，私聊或被点名时回一句“卡了”（同一会话十分钟内只说一次），诊断信息照常进日志 |
+| `agent_bridge.py` | 私聊和群里明确跟她说的话，判断工具需求与生成聊天回复同时开始：判断为闲聊用已在生成的回复，agent 接手就放弃这次生成；没人叫她的群消息不交给 agent。一件事分几条说时把连着的几条连成一句请求；agent 要反问而对方的下一条已经到了时，这句反问不发。执行结果与投递回执写回原会话 |
 | `commands.py` | `/xc` 管理子命令：统计、重置、配置、记忆、表达、黑话、审查、模型切换 |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
 | `chat_runtime.py` | 配置热加载、AI route 上下文、`llm_call_config`、屏蔽规则与会话锁 |
+| `follow_ups.py` | 对方连着发几条时等他说完再回：经 `inbound_backlog` 看同一个人后面有没有排着的聊天消息（命令、单独一个链接、@ 了别人的话和空消息不算）；让出这一轮时把“在跟她说话”和没回的话带给下一轮（45 秒内有效） |
 | `attention_gate.py` | 记录 `@`、引用、叫名字和命令来源；私聊和群里明确跟她说的话设置直接回复标记 |
-| `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读。低信息。点名他人的消息不算线索 |
+| `participation.py` | 识别只有协议表情码、无内容媒体和标点的低信息群消息，这类消息不启动规划 |
 | `frequency_control.py` | 硬频控、参与概率、Heartflow 软加分、沉默补偿，记录 `ReplyGateDecision` |
 | `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额。上一轮回复交给 Core 后到回执结算前，同会话下一轮在配额内等待 |
 | `brain_chat.py` | 私聊深度对话：在说话方式后追加人设卡的〔深度对话〕一节，思考等级、上下文长度和温度 |
@@ -88,11 +90,12 @@ xiaoqing_chat
 |---|---|
 | `gateway.py` | 到 Core AI capability 的薄适配：路由、固定模型、响应提取 |
 | `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数。从主配置路由生成参数快照，`as_kwargs()` 传给网关，长文请求按字数提高预算 |
-| `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示 |
-| `postprocess.py` | 保留回复内容，按自然边界组织气泡；按逗号拆时大约每 `clause_bubble_chars` 字一个气泡 |
+| `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示；对话最多带最近 20 条、1400 字（规划和审查用同一份截法）；按她最近几条回复给出换开头、不带装饰、回短一点的提醒 |
+| `postprocess.py` | 保留回复内容，按自然边界组织气泡：她自己用空行分了段就一段一个气泡（段内标点不动）；一整段的长内容按句子分成几条；短回复按句、按逗号拆，大约每 `clause_bubble_chars` 字一个气泡。超过 80 字的气泡是讲解或文稿，行尾句号照原样留着 |
+| `decorations.py` | 发出前去掉句尾带出来的垃圾词（`strip_junk_tail`，对话里本来就在说这个词时不动），并收拾装饰：她最近 6 条里用过 emoji、句尾波浪号、括号动作或 QQ 表情，这条就去掉；句尾当文字打出来的表情名换成真正的 QQ 表情。清单、代码和长文不动。agent 当轮交回的办事回复也过一遍（没有表情素材，表情名直接去掉） |
 | `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数、篇幅字数）与群内定义 |
 | `media_evidence.py` | 图片证据块：附件状态、缺图说明。`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
-| `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复，以及是否需要语义审查 |
+| `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复、没人问原因却以“因为”起头解释自己为什么接话（`narrated_motive_check`），以及是否需要语义审查 |
 | `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释 → 明确篇幅要求的本地字数核对（其他都通过后才看，不够按 soft 处理）。`TurnReadingCache` 缓存本轮独立阅读 |
 | `evidence.py` | 证据契约：审查模型列出的陈述必须能在原文找到出处，并保持主体与语气 |
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
@@ -137,9 +140,9 @@ xiaoqing_chat
 | 模块 | 职责 |
 |---|---|
 | `daily_life.py` | 每天的生活小事：生成（失败后退避）、按日期存取、只交出已过时间点的、被问到过去时组合前几天的生活 |
-| `schedule.py` | 解析人设卡〔作息〕，取此刻命中的时段，给出作息底色、插话概率乘数和打字延迟乘数 |
+| `schedule.py` | 解析人设卡〔作息〕，取此刻命中的时段，给出作息底色、今天这一天的安排（`day_plan_text`）、插话概率与打字延迟的乘数（`routine_factor`） |
 | `closing_guard.py` | 私聊收尾沉默：对方只回收尾话、角色已经收过尾时本轮不回复 |
-| `self_timeline.py` | 角色说过的近况、打算和承诺：存储、按会话可见范围筛选（承诺和私聊里涉及对方的近况只留在原会话）、过期与结束、保留一周历史、提示块 |
+| `self_timeline.py` | 角色说过的近况、打算、承诺和讲过的往事：存储、按会话可见范围筛选（承诺和私聊里涉及对方的近况只留在原会话）、过期与结束、保留一周历史、提示块。往事（`story`）留 90 天以上、不和近况抢名额，单独取用 |
 | `open_loops.py` | 群友有时间点的未完话头：存储、去重、按说话人取“顺口问 / 对方在答”、提示块 |
 | `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头；打算与承诺每次读、近况按会话限频、兜底句不读；校验类别、说话人、ID 与时间，按会话串行，提交时核对重置代际 |
 | `proactive.py` | 主动开口：时段、作息、群安静程度与节奏检查，起草、本地复读检查、人设自检，投递回执提交 |
@@ -180,7 +183,6 @@ xiaoqing_chat
 | 目录 | 内容 |
 |---|---|
 | `config/` | `config.py`（Pydantic 模型、交叉约束、加载顺序）与 `xiaoqing_config.json` |
-| `experiments/` | `anthropomorphic_group.py`：拟人大群实验 runner |
 | `utils/` | `json_parsing.py`（收窄与修复模型 JSON）、`text.py`（`clip_text`）、`wall_clock.py`（按 Core 时区格式化时间） |
 
 ---
@@ -190,7 +192,7 @@ xiaoqing_chat
 | 入口 | 调用方 | 职责 |
 |---|---|---|
 | `init(context)` | PluginManager | 开放后台任务、绑定 store、加载媒体注册表 |
-| `handle(command, args, event, context)` | Router | `/xc` 命令。聊天内容交给 `handle_smalltalk`，群聊统一进入 PFC |
+| `handle(command, args, event, context)` | Router | `/xc` 命令。`/xc` 后的聊天内容交给 `handle_smalltalk`，按直接回复起草（`force_reason=command`） |
 | `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始消息段 |
 | `handle_smalltalk(clean_text, event, context)` | Dispatcher | 闲聊决策与回复链路 |
 | `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息。本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过。带敏感标记的动作直接跳过 |
@@ -217,12 +219,13 @@ handle_smalltalk → _prepare_smalltalk_turn
   ├─ life.schedule                          作息底色、插话与延迟乘数写到事件上
   ├─ frequency_control.decide_reply         群聊：硬频控 → 概率 → Heartflow → 沉默补偿 → 作息乘数
   ├─ 记录本轮观察到的目标
+  ├─ follow_ups                             同一个人后面还排着聊天消息 → 这条记下不回，等最后一条一起回
   └─ PreparedSmalltalkTurn
   │
   ▼
-agent_bridge（私聊且 agent 已开启时）
+agent_bridge（私聊或群里明确跟她说话，且 agent 已开启时）
   ├─ agent decide 与下面的聊天生成同时开始
-  ├─ 判断为闲聊 / agent 不可用 → 继续用生成好的回复
+  ├─ 判断为闲聊 / agent 不可用 / 出错 → 继续用生成好的回复（生成先完成时等判断出来再发）
   └─ agent 接手 → 放弃生成并让出名额 → agent act → 回复带回执返回 Core
   │
   ▼
@@ -233,8 +236,8 @@ turn_generation.generate_smalltalk_turn
   ├─ 会话锁内：确保用户消息已记录，取 PFC 快照
   ├─ 后台预取记忆
   └─ 三条路径之一：
-       forced  → 私聊直接起草
-       planner → 群聊统一进入 run_pfc_once → 发言决定后起草 → 可选工具接管
+       forced  → 私聊和群里明确跟她说的话直接起草
+       planner → 没人叫她的群消息进入 run_pfc_once → 发言决定后起草
        direct  → 私聊可选规划关闭时直接起草
          │
          ▼
@@ -248,6 +251,7 @@ turn_generation.generate_smalltalk_turn
   ▼
 turn_delivery.finalize_smalltalk_turn
   ├─ 过期检查（超出最近 15 条、会话重置）；新用户消息触发上下文复核，气泡之间与末条前再次检查
+  ├─ 生成期间对方又发来了消息（follow_ups）→ 这条回复不发，由排在后面的那一轮回
   ├─ 要接的话不在最近 5 条里时首个气泡引用原消息
   ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔（正向 WS 下中间气泡绕过 Core 的事件收集直接发出）
   ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
@@ -266,13 +270,14 @@ turn_delivery.finalize_smalltalk_turn
 | 字段 | 含义 |
 |---|---|
 | `forced` | 直接回复标记：私聊（按配置），以及群里 `@` 她、引用她的话或叫她名字（`chat_event.is_called_by_name`；`@` 了别人而没 `@` 她时不算） |
-| `force_reason` | `command`、`private` 或 `addressed` |
+| `force_reason` | `command`、`private`、`addressed`，或 `continued`（他上一条是在跟她说话、她等他说完没回，接着发的这一条也算） |
 | `mentioned` / `direct_mentioned` | 命令、私聊、引用、叫名字或 `@` 的显式来源信息 |
 | `reply_to_bot` | 引用的 `message_id` 是角色历史消息 |
 
 普通参与由 `frequency_control.decide_reply` 决定，顺序固定：
 
 1. `_hard_limit_reason`：最小间隔（活跃话题使用更短的间隔）、每分钟上限、连续冷却、低信息。点名他人不拦，交给规划器按话题判断。
+   紧跟在她刚发的回复后面（两分钟内、没 `@` 别人）的那句话多半在接她的话：不算每分钟上限、不掷骰子，过了最小间隔和连续冷却就直接交给规划器（`follows_own_reply`）。
 2. `_participation_probability`：基础概率。活跃话题按配置提高概率，取最大值。
 3. Heartflow：`score - base_score` 的正值部分按 `probability + (1 - probability) × Δ` 抬高。
 4. `_streak_adjusted`：连续沉默 3 轮 ×1.2（≤ 0.90），5 轮 ×1.4（≤ 0.95）。
@@ -306,7 +311,9 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 1. `ReplyGenerationPlan` 一次性收集：近期历史、记忆与人物资料（`context_builder`）、表达与黑话、知识、关键词反应规则、规划目标、人设边界和前台调用参数。每次重试复用同一份计划。
 2. `llm/prompt_builder.py` 生成消息列表。`llm/gateway.py` 通过当前插件的 AI capability 调用 `chat` 路由，会话或全局模型覆盖通过 `pinned_model` 生效。
-3. `llm/postprocess.py` 清理并分段。`media/marker_resolver.py` 解析 `[想发…]` 标记。
+3. `llm/postprocess.py` 清理并分段；对方要的是一篇有篇幅的成品（“写个 800 字的检讨”）时整篇作为一条发出，段落和标点照原样。`media/marker_resolver.py` 解析 `[想发…]` 标记。
+   可发的表情和图片不是每轮都摆给她（`reply_plan.offers_outbound_media`）：对方要表情、要图时一定给，平常她最近 6 条没带过装饰才有三成机会给，其余轮次提示词里只说“这一条只发文字”。
+   规划器的想法以“你刚才心里的盘算”交给生成；私聊和被点名的轮次没有经过规划器，提示词里不出现这一块。
 4. `llm/reply_checker.py` 审查。被拒后由 `reply_fallbacks.py` 选择下一步。
 5. 上游返回 `request_too_large` 时把历史减半并作废已取的记忆，再试一次。
 
@@ -320,7 +327,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 `heuristic_check` 依次检查：空回复。与最近 `max_repeat_compare` 条角色消息完全相同或相似度 ≥ `similarity_threshold`。原样复述自己刚说过的整句（≥ 8 字）。去掉 `[…]` 标记和标点后与最近 6 条角色消息的相似度 ≥ 0.75（`_near_copy_of_recent`，至少 12 字）。连续 `max_assistant_in_row` 条角色发言。只发一个媒体时跳过复读比较。
 
-其他规则：`grounded_self_history_check`（角色自称的经历、关系、近况需要依据）、`grounded_context_history_check`（群友经历需要依据）、`persona_identity_consistency_check`（性别等身份表述与人设一致）、`media_meta_reply_check`（只发媒体却在答需要文字的问题）。`requires_llm_semantic_check` 决定 `risk` 模式下是否需要语义审查。
+其他规则：`persona_break_check`（自称 AI、模型、机器人或谈起自己的提示词；否认、反问和假设不算）、`ungrounded_link_check`（回复里的网址、域名或邮箱在别人发的消息、读图结果和资料里都找不到；生成后、送审前就查）、`grounded_self_history_check`（角色自称的经历、关系、近况需要依据）、`grounded_context_history_check`（群友经历需要依据）、`persona_identity_consistency_check`（性别等身份表述与人设一致）、`media_meta_reply_check`（只发媒体却在答需要文字的问题）、`narrated_motive_check`（没人问原因，回复却以“因为”起头解释自己为什么接话；生成后、送审前就查，按 soft 重写）。`requires_llm_semantic_check` 决定 `risk` 模式下是否需要语义审查。
 
 ### 语义审查（`llm/reply_checker.py`）
 
@@ -332,7 +339,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 说话人 | `speaker_correct` |
 | 交流要求 | `instruction_followed` |
 | 事实 | `factually_plausible` |
-| 人设 | `persona_grounded`、`persona_claims`：按人设坚持真人身份、用玩笑带过属于符合人设。承认是 AI / 模型 / 程序，或提到提示词、系统设定、指令时为 false |
+| 人设 | `persona_grounded`、`persona_claims`：按人设坚持真人身份、用玩笑带过属于符合人设。承认是 AI / 模型 / 程序，或提到提示词、系统设定、指令时为 false。`agrees_offline` 单独记她有没有答应线下见面、一起出门、收寄东西或语音视频；人设卡写明“只在线上来往”时为 true 即判人设硬错误 |
 | 图片证据 | `image_evidence_respected`、`visual_claims` |
 | 模板化 | `non_template` |
 
@@ -357,8 +364,8 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 只有几处读图说法没依据、其余都审过 | 删掉含这几处的气泡照发其余的（`reply.check.trimmed`）；删完不剩时按下一行处理 |
 | 还有重写次数 | 按 `failure_code` 生成定向修正提示（soft 只调语气措辞，hard 只承接可见依据） |
 | 普通参与，耗尽 | `persona_grounding` / `context_grounding` / `instruction_following` 安静。其他需要重规划的问题抛出 `ReplyRejected` 交给 PFC。不需要重规划时安静 |
-| 私聊直接回复，耗尽，只剩 soft 且本地规则通过 | 接受该候选（`reply.check.exhausted.accept`） |
-| 私聊直接回复，耗尽，仍有 hard | 按原因选择兜底句（`reply.check.exhausted.forced_fallback`），跳过与最近发言重复的句子，最后退到 `PRESENCE_FALLBACK` |
+| 私聊直接回复，耗尽，本地规则通过，且只剩 soft，或 hard 问题不属于人设、读图、没审成这三类 | 接受该候选（`reply.check.exhausted.accept`） |
+| 私聊直接回复，耗尽，人设 / 读图类 hard 或本地规则不过 | 按原因选择兜底句（`reply.check.exhausted.forced_fallback`），跳过与最近发言重复的句子，最后退到 `PRESENCE_FALLBACK` |
 
 兜底句集合为 `ALL_FALLBACK_TEXTS`，评测脚本据此识别审查耗尽后的回复。
 
@@ -426,7 +433,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ## 🔐 错误与日志
 
-模块内的解析、类型转换和文件操作捕获具体异常。AI provider、动态 capability、媒体解码、后台任务和生命周期属于隔离边界，统一记录脱敏错误类别并返回受控降级结果。
+模块内的解析、类型转换和文件操作捕获具体异常。AI provider、动态 capability、媒体解码、后台任务和生命周期属于隔离边界，统一记录脱敏错误类别并返回受控降级结果。闲聊轮次里没预料到的异常（包括聊天模型整条链失败）由 `handlers._reply_after_failure` 收口：经 `public_error_message` 记一条诊断日志，聊天里不发错误码；没人叫她的轮次不出声，私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次。
 
 `logging_utils.log_step` 以 `xiaoqing_chat step=<步骤>` 输出结构化字段，QQ 号、群号、URL、profile 和自由文本按规则脱敏。主要步骤：
 
@@ -434,10 +441,15 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 |---|---|
 | `smalltalk.recv` | 收到消息，带召唤判定字段 |
 | `smalltalk.no_reply` | 门控未通过，带原因、概率、掷值 |
-| `smalltalk.explicit_silence` / `smalltalk.ignore` | 停聊请求 / 屏蔽词 |
+| `smalltalk.ignore` / `smalltalk.closing_silence` | 屏蔽词 / 私聊已经收过尾 |
+| `smalltalk.yield_to_follow_up` | 同一个人后面还排着消息，这一条不回 |
+| `smalltalk.stale.drop` | 生成好的回复不发：目标过期、话题已变，或对方又发来了消息（`reason=sender_continued`） |
+| `smalltalk.agent.decided` / `declined` / `handled` / `question_withheld` | agent 判断接手 / 不接手 / 已交回当轮回复 / 反问被收回 |
 | `smalltalk.generation_limited` | 生成配额不足 |
 | `smalltalk.forced_direct` / `smalltalk.pfc.done` / `smalltalk.planner.disabled` | 三条生成路径 |
+| `reply.checker.skip` | 本地规则在送审前拦下候选 |
 | `reply.check.start` / `result` / `regen` / `timeout` / `error` | 审查过程 |
+| `reply.check.soft_pass` / `reply.check.trimmed` | 软问题照发 / 删掉没依据的读图气泡后照发 |
 | `reply.check.exhausted.accept` / `forced_fallback` / `proactive_silence` | 重写耗尽后的处理 |
 
 ---
@@ -447,7 +459,9 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 要改的行为 | 位置 |
 |---|---|
 | 召唤条件 | `attention_gate.py` |
-| 低信息消息和句首称呼识别 | `participation.py` |
+| 低信息消息 | `participation.py` |
+| 叫她名字的识别 | `chat_event.py` |
+| 连发消息的等待 | `follow_ups.py` |
 | 频控与概率 | `frequency_control.py` |
 | 规划 | `planning/` |
 | 生成上下文 | `context_builder.py`、`reply_plan.py`、`llm/prompt_builder.py` |

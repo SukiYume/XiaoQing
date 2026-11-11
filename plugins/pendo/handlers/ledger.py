@@ -60,6 +60,8 @@ _TRANSACTION_TYPE_ICONS: Final = {
     "transfer": "🔁",
 }
 _MAX_ACCOUNT_CHARS: Final = 80
+_MAX_TITLE_CHARS: Final = 200
+_MAX_MERCHANT_CHARS: Final = 120
 _COMMON_LEDGER_ACCOUNTS: Final = ("现金", "微信", "支付宝", "银行卡", "信用卡")
 _FIELD_RE: Final = re.compile(r'(?<!\S)(?P<key>[A-Za-z_]{2,}):(?!//)(?P<value>"[^"]*"|“[^”]*”|\S+)')
 _QUICK_LEDGER_FIELDS: Final = frozenset(
@@ -294,23 +296,6 @@ def _valid_session_state(step: str, data: dict[str, Any]) -> bool:
     return True
 
 
-def _quick_as_record(data: dict[str, Any]) -> dict[str, Any]:
-    """快捷记账解析出的字段换成结构化记账的字段名。"""
-
-    return {
-        "amount_cents"    : data["amount_cents"],
-        "title"           : data["title"],
-        "transaction_type": data["transaction_type"],
-        "category"        : data.get("ledger_category") or "",
-        "account"         : data.get("account_name") or "",
-        "to_account"      : data.get("counter_account_name") or "",
-        "merchant"        : data.get("merchant") or "",
-        "date"            : data.get("ledger_date") or "",
-        "currency"        : data.get("currency") or "CNY",
-        "remark"          : data.get("remark") or "",
-    }
-
-
 class LedgerHandler(DbOpsMixin):
     """记账处理器
 
@@ -338,15 +323,7 @@ class LedgerHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         command = parts[0].lower()
         rest    = parts[1] if len(parts) > 1 else ""
-        # 由 Agent 代为执行时 Core 传入发起人本人的原话，分类与账户要能在原话里找到。
-        source_text = "\n".join(getattr(context, "request_texts", ()))
 
-        if command in {"add", "quick"} and rest.strip() and source_text:
-            # 代为执行的快捷记账和结构化记账走同一套原话核对。
-            data, error = self._parse_quick_ledger_data(rest)
-            if error:
-                return {"status": "error", "message": error}
-            return await self._record(user_id, _quick_as_record(data), source_text, group_id)
         if command == "add":
             if rest.strip():
                 return await self.quick_add(user_id, rest, context, group_id)
@@ -360,7 +337,7 @@ class LedgerHandler(DbOpsMixin):
                 payload = None
             if not isinstance(payload, dict):
                 return {"status": "error", "message": "❌ 记账字段需要一个 JSON 对象"}
-            return await self._record(user_id, payload, source_text, group_id)
+            return await self._record(user_id, payload, group_id)
         if command == "list":
             return await self.list_ledger(user_id, rest, context)
         if command == "view":
@@ -374,12 +351,12 @@ class LedgerHandler(DbOpsMixin):
         return {"status": "error", "message": f"❌ 未知命令: {command}\n\n{self._show_usage()}"}
 
     async def _record(
-        self, user_id: str, payload: dict[str, Any], source_text: str, group_id: int | None
+        self, user_id: str, payload: dict[str, Any], group_id: int | None
     ) -> CommandMessage:
-        """校验并保存一笔结构化账目；字段来源只按 Core 传入的原话核对，参数里自带的 source_text 不算数。"""
+        """校验并保存一笔结构化账目。"""
 
         try:
-            record = LedgerRecord.model_validate({**payload, "source_text": source_text})
+            record = LedgerRecord.model_validate(payload)
         except ValidationError as exc:
             return {
                 "status" : "error",
@@ -629,6 +606,11 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """最后一步: 输入商户/对方并保存。"""
         merchant = text.strip()
+        if len(merchant) > _MAX_MERCHANT_CHARS:
+            return {
+                "status" : "info",
+                "message": f"❌ 商户不能超过 {_MAX_MERCHANT_CHARS} 个字符，请重新输入：",
+            }
         if merchant and merchant not in {"0", "跳过", "默认", "无", "-"}:
             data["merchant"] = merchant
         # 先校验并持久化，成功后再结束会话：校验或保存失败时草稿保留，用户只需改有问题的字段。
@@ -636,8 +618,10 @@ class LedgerHandler(DbOpsMixin):
         if result.get("status") == "success":
             await safe_end_session(context)
         else:
+            # 入口把 error 当作会话失败并结束会话；草稿要留着重填，所以这里用 info。
             result = {
                 **result,
+                "status": "info",
                 "message": (
                     f"{result.get('message', '')}\n\n"
                     '草稿已保留，可以重新输入商户；输入"退出"放弃本次记账。'
@@ -654,6 +638,12 @@ class LedgerHandler(DbOpsMixin):
         """步骤2: 输入描述，然后进入类型选择"""
         if not text:
             return {"status": "info", "message": "❌ 描述不能为空，请输入："}
+        # 在这一步就校验长度：留到最后保存才失败，用户改不了已经填过的描述。
+        if len(text) > _MAX_TITLE_CHARS:
+            return {
+                "status" : "info",
+                "message": f"❌ 描述不能超过 {_MAX_TITLE_CHARS} 个字符，请重新输入：",
+            }
 
         data["title"] = text
         session.set("data", data)

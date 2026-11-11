@@ -10,14 +10,16 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import chat_topics as chat_topics_mod
 from . import dossier as dossier_mod
+from . import knowledge, reinforce, stats
 from . import methods as methods_mod
-from . import reinforce
 from . import works as works_mod
 from .config import LifeConfig
-from .lifecycle import DAY, expression_status, term_key
+from .days import DAY, day_key, episode_day, life_date
+from .lifecycle import expression_status, heard_in_chat, term_key
 from .safety import is_blocked, is_profane, normalize_for_match, overlap
-from .stores import MAX_LOOKUP_QUEUE, LifeStore
+from .stores import MAX_LOOKUP_QUEUE, LifeStore, lookup_missed
 
 MAX_TEXT_CHARS      = 500
 MAX_RECENT          = 8
@@ -107,11 +109,17 @@ def clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "recent": texts("recent", MAX_RECENT, 200),
         "bot_recent": texts("bot_recent", MAX_BOT_RECENT, 200),
         "unknown": texts("unknown_terms", MAX_UNKNOWN_TERMS, MAX_UNKNOWN_CHARS, newest=False),
+        # 群里最近的话题词（聊天侧只从群聊、只取能自然提起的给）；私聊一律不收。
+        "topics": (
+            []
+            if payload.get("is_private") is not False
+            else chat_topics_mod.clean_topics(payload.get("topics"))
+        ),
     }
 
 
 def _day_label(at: datetime, moment: datetime) -> str:
-    gap = (moment.date() - at.date()).days
+    gap = (life_date(moment) - life_date(at)).days
     return {0: "今天", 1: "昨天", 2: "前天"}.get(gap, f"{at.month}月{at.day}日")
 
 
@@ -145,9 +153,9 @@ def _named_days(text: str, moment: datetime) -> set[str]:
 
     days: set[str] = set()
     if "昨天" in text:
-        days.add((moment - timedelta(days=1)).strftime("%Y-%m-%d"))
+        days.add(day_key(moment - timedelta(days=1)))
     if "前天" in text:
-        days.add((moment - timedelta(days=2)).strftime("%Y-%m-%d"))
+        days.add(day_key(moment - timedelta(days=2)))
     return days
 
 
@@ -191,7 +199,7 @@ def select_episodes(
             return talked, asking
     named = _named_days(text, moment)
     if named:
-        day_pool = [e for e in pool if e.get("day") in named]
+        day_pool = [e for e in pool if episode_day(e, moment.tzinfo) in named]
         day_pool.sort(key=lambda e: (bool(e.get("share")), float(e["at"])), reverse=True)
         return day_pool[:ASK_EPISODES], asking
     if link:
@@ -225,10 +233,16 @@ def episode_line(
     tail  = f"（链接 {episode['url']}）" if link and episode.get("url") else ""
     if (moment - at).days >= cfg.episode_detail_days:
         return f"- {label}刷到过「{title}」{who}（细节记不清了）{tail}"
-    gist  = f"，讲的是：{episode['gist']}" if episode.get("gist") else ""
+    why = f"（听群里在聊「{episode['chat_topic']}」才去搜的）" if episode.get("chat_topic") else ""
+    # B站很多视频的简介只有一个“-”：没有内容就不说“讲的是”。
+    gist = (
+        f"，讲的是：{episode['gist']}"
+        if len(normalize_for_match(str(episode.get("gist") or ""))) >= 2
+        else ""
+    )
     dense = f"（{episode['dense_moment']}）" if episode.get("dense_moment") else ""
     feel  = f"，你当时觉得：{episode['reaction']}" if episode.get("reaction") else ""
-    return f"- {label} {at:%H:%M} {_opening(episode, title, who)}{gist}{dense}{feel}{tail}"
+    return f"- {label} {at:%H:%M} {_opening(episode, title, who)}{why}{gist}{dense}{feel}{tail}"
 
 
 def _opening(episode: dict[str, Any], title: str, who: str) -> str:
@@ -285,7 +299,9 @@ def select_thread(
         return f"你在查的小事：{title}（还没查完；{'；'.join(parts)}）", thread
     if thread.get("status") == "reviewing":
         return f"你在查的小事：{title}（查得差不多了，还没想好怎么总结）", thread
-    takeaway = str(thread.get("takeaway") or "")
+    takeaway = knowledge.hedge(
+        str(thread.get("takeaway") or ""), str(thread.get("confidence") or "")
+    )
     return (f"你前几天查过：{title}，收获：{takeaway}", thread) if takeaway else ("", thread)
 
 
@@ -377,6 +393,10 @@ def wants_plans(text: str) -> bool:
     return bool(_PLAN_RE.search(text))
 
 
+def _learned(row: dict[str, Any]) -> str:
+    return knowledge.hedge(str(row.get("text", "")), str(row.get("confidence") or ""))
+
+
 def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[list[str], bool]:
     """自己查明白的事：话题对上给 1 条；问“最近学到啥 / 有什么收获”给 ≤2 条加一句确定性的成长概括。"""
 
@@ -387,7 +407,7 @@ def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[l
     text = req["text"]
     if _LEARN_RE.search(text):
         picked = rows[:MAX_ASKED_LEARNINGS]
-        lines  = [f"- {r['text']}" for r in picked]
+        lines  = [f"- {_learned(r)}" for r in picked]
         if growth := growth_line(rows, now):
             lines.append(f"- {growth}")
         if method:
@@ -399,7 +419,7 @@ def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[l
         if not scored:
             return ([f"- {method}"] if method else []), False
         picked = [max(scored, key=lambda pair: pair[0])[1]]
-        lines = [f"- {picked[0]['text']}"]
+        lines = [f"- {_learned(picked[0])}"]
         if method:
             lines.append(f"- {method}")
     for row in picked:
@@ -432,6 +452,22 @@ def plan_lines(store: LifeStore, routine_slots: list[str]) -> list[str]:
         follow = "（接着上次查明白的事往下问）" if thread.get("parent_id") else "（还没查完）"
         lines.append(f"- 想接着查：{thread.get('next_query') or thread.get('title')}{follow}")
     return lines
+
+
+_REPEAT_MIN_CHARS = 8
+
+
+def _not_repeated(lines: list[str], shown: list[str]) -> list[str]:
+    """去掉内容已经出现在前面那几行里的行（小课题行“收获：X”之后，“自己查明白的：X”就不再说一遍）。"""
+
+    seen = normalize_for_match(" ".join(shown))
+    kept = []
+    for line in lines:
+        body = normalize_for_match(line.removeprefix("- "))
+        if len(body) >= _REPEAT_MIN_CHARS and body in seen:
+            continue
+        kept.append(line)
+    return kept
 
 
 def build_life_lines(
@@ -476,9 +512,10 @@ def build_life_lines(
         )
     ):
         thread_line = ""
+    learn = _not_repeated(learn, [thread_line, *recall_part])
     recap = []
     diary = store.state.get("diary") or {}
-    if asking and diary.get("day") == moment.strftime("%Y-%m-%d") and diary.get("text"):
+    if asking and diary.get("day") == day_key(moment) and diary.get("text"):
         recap.append(f"- 今天大概：{diary['text']}")
     recap += recap_lines(store, req, moment)
     if (tone := tone_line(store, req, now)) and tone not in recap:
@@ -648,7 +685,9 @@ def pick_expression(
 def build_slang_notes(
     store: LifeStore, req: dict[str, Any], now: float, cfg: LifeConfig, rng: random.Random
 ) -> tuple[str, list[str], bool]:
-    heard  = understood_terms(store, req)
+    heard = understood_terms(store, req)
+    for _, entry in heard:
+        heard_in_chat(entry, now)
     lines  = [f"- {_term_line(entry)}" for _, entry in heard]
     keys   = [key for key, _ in heard]
     usable = pick_usable_term(store, req, now, cfg, rng)
@@ -670,14 +709,31 @@ def build_expression_hint(
     if entry is None:
         return ""
     entry["last_suggested"] = now
-    return f"当{entry['situation'].removeprefix('当')}：{entry['pattern']}"
+    hint                    = f"当{entry['situation'].removeprefix('当')}：{entry['pattern']}"
+    example                 = str(entry.get("example") or "")
+    # 原话只用来听语气和节奏：话题不同，照搬过来对不上。
+    return f"{hint}（网友原话是“{example}”，学这个路子，句子自己说）" if example else hint
 
 
 # ───────────────────────────── 听不懂的词入队 ─────────────────────────────
 
 
-def enqueue_unknown(store: LifeStore, words: list[str], cfg: LifeConfig) -> bool:
-    """只把词本身放进待查队列（不记来自哪个会话）；已知、脏话、屏蔽词不入队。"""
+def verified_unknown(store: LifeStore, words: list[str]) -> list[dict[str, str]]:
+    """聊天交来的没确认的说法里，她已经去百科查实了的：把意思交回去，聊天的黑话库据此标成已确认。"""
+
+    rows = []
+    for word in words:
+        entry = store.terms.get(term_key(word))
+        if entry is not None and entry.get("verified") and entry.get("meaning"):
+            rows.append({"term": word, "meaning": str(entry["meaning"])[:MAX_VERIFIED_MEANING]})
+    return rows[:MAX_UNKNOWN_TERMS]
+
+
+MAX_VERIFIED_MEANING = 120
+
+
+def enqueue_unknown(store: LifeStore, words: list[str], cfg: LifeConfig, now: float) -> bool:
+    """只把词本身放进待查队列（不记来自哪个会话）；已知、脏话、屏蔽词、30 天内查过没查到的不入队。"""
 
     queue: list[str] = store.state["lookup_queue"]
     changed          = False
@@ -686,6 +742,7 @@ def enqueue_unknown(store: LifeStore, words: list[str], cfg: LifeConfig) -> bool
             continue
         if (
             term_key(word) in store.terms
+            or lookup_missed(store.state, word, now)
             or is_profane(word)
             or is_blocked(word, cfg.blocked_keywords)
         ):
@@ -709,7 +766,13 @@ def turn_context(
     if req["mode"] == "probe":
         return {"version": 1, "online_life": True}, False
     dirty = False
-    if cfg.source_on("baike_lookup") and enqueue_unknown(store, req["unknown"], cfg):
+    if req["topics"] and chat_topics_mod.record_heard(
+        store.state, req["topics"], moment.timestamp(), cfg.blocked_keywords
+    ):
+        dirty = True
+    if cfg.source_on("baike_lookup") and enqueue_unknown(
+        store, req["unknown"], cfg, moment.timestamp()
+    ):
         dirty = True
     if req["mode"] == "proactive":
         candidates = share_candidates(store, req, moment, cfg)
@@ -742,9 +805,23 @@ def turn_context(
     )
     dirty = dirty or bool(touched)
     slang, term_keys, used = build_slang_notes(store, req, now, cfg, rng)
-    hint  = build_expression_hint(store, req, now, cfg, rng)
-    dirty = dirty or used or bool(hint)
-    if not (life_lines or slang or hint):
+    hint     = build_expression_hint(store, req, now, cfg, rng)
+    verified = verified_unknown(store, req["unknown"])
+    dirty    = dirty or used or bool(hint)
+    # 只计数，不单为它落盘：随下一次写入一起保存（重启前没写的这几轮会丢，可以接受）。
+    stats.bump(
+        store.state,
+        day_key(moment),
+        {
+            "chat.turns"         : 1,
+            "chat.life"          : bool(life_lines),
+            "chat.slang"         : bool(slang),
+            "chat.hint"          : bool(hint),
+            "chat.topics_heard"  : len(req["topics"]),
+            "chat.verified_terms": len(verified),
+        },
+    )
+    if not (life_lines or slang or hint or verified):
         return None, dirty
     return (
         {
@@ -755,6 +832,7 @@ def turn_context(
             "share_candidates": [],
             "episode_ids"     : episode_ids,
             "term_keys"       : term_keys,
+            "verified_terms"  : verified,
         },
         dirty,
     )

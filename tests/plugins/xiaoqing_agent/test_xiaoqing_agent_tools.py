@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import re
 import sys
 import time
@@ -26,6 +25,7 @@ from plugins.xiaoqing_agent.tools import (
     ToolError,
     ToolResult,
     build_tools,
+    catalog_lines,
     codex_session_label,
     execute_tool,
     parse_arguments,
@@ -33,30 +33,184 @@ from plugins.xiaoqing_agent.tools import (
 from tests.helpers.asyncio_tools import run_with_subprocess_loop
 from tests.helpers.xiaoqing_agent_test_support import ADMIN_ID, GROUP_ID, FakeAgentContext
 
+
+@pytest.mark.asyncio
+async def test_final_answer_exposes_and_preserves_clarification_state(tmp_path):
+    env   = _env(tmp_path, FakeAgentContext(tmp_path / "data"))
+    tools = _tools(env)
+    state = tools["final_answer"].schema()["function"]["parameters"]["properties"]["state"]
+    assert "needs_user" in state["enum"]
+    assert "state" not in tools["send_message"].parameters["properties"]
+    result = await execute_tool(
+        tools,
+        env,
+        "final_answer",
+        {
+            "text" : "请补充另外两项明细。",
+            "state": "needs_user",
+        },
+    )
+    assert result.final.status == "needs_user"
+
+
+@pytest.mark.asyncio
+async def test_writes_go_through_the_one_command_entry_and_run_once(tmp_path):
+    """写入和查询走同一个入口：服务范围、权限和重复写入照常核对，回报交回模型。"""
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "已修改"}}])
+    )
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_declared_catalog(), command_runner=runner
+    )
+    env     = _env(tmp_path, context)
+    tools   = build_tools(env)
+    command = "/demo add 苹果 3"
+    blocked = await execute_tool(tools, env, "xiaoqing_command", {"commands": [command]})
+    # 还没选用的服务先查用法再用。
+    assert blocked.state == "error" and "demo 服务" in blocked.content
+    assert runner.run.await_count == 0
+    await execute_tool(tools, env, "xiaoqing_commands", {"query": "demo add"})
+    written = await execute_tool(tools, env, "xiaoqing_command", {"commands": [command]})
+    assert written.state == "ok" and written.final is None and not written.halts_batch
+    assert runner.run.call_args.args == (command,)
+    again = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo  add 苹果  3"]})
+    assert again.state == "blocked" and again.halts_batch and runner.run.await_count == 1
+    other = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo add 苹果 4"]})
+    assert other.state == "ok" and runner.run.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["error", "incomplete"])
+async def test_unfinished_write_stops_the_round_and_cannot_be_called_done(tmp_path, state):
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=DeliverySegments(
+                [
+                    {
+                        "type": "text",
+                        "data": {
+                            "text": "❌ 保存失败" if state == "error" else "冲突，输入 yes 确认"
+                        },
+                    }
+                ],
+                outcome=CommandOutcome(state),
+            )
+        )
+    )
+    env = _env(
+        tmp_path,
+        FakeAgentContext(tmp_path / "data", catalog=_declared_catalog(), command_runner=runner),
+    )
+    tools = build_tools(env)
+    env.selected_plugins.add("demo")
+    stopped = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo add 甲"]})
+    assert stopped.state == "error" and stopped.halts_batch and stopped.final is None
+    # 待确认回报里的交互提示不转述给发起人，由执行阶段问清楚。
+    assert ("等待发起人决定" in stopped.content) == (state == "incomplete")
+    early = await execute_tool(tools, env, "final_answer", {"text": "都保存好了", "state": "done"})
+    assert early.final.status == ("needs_user" if state == "incomplete" else "unfinished")
+    asked = await execute_tool(
+        tools, env, "final_answer", {"text": "甲没保存上，要换个写法吗？", "state": "needs_user"}
+    )
+    assert asked.final.status == "needs_user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["none", "error", "incomplete", "duplicate", "update"])
+async def test_a_command_list_runs_in_order_and_stops_at_the_first_unfinished_write(tmp_path, stop):
+    async def run(command, **_kwargs):
+        if stop == "update":
+            env.task.notes.append("乙先别记")
+        state = stop if stop in {"error", "incomplete"} and command.endswith("乙") else "completed"
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": f"{command}: {state}"}}],
+            outcome=CommandOutcome(state, confirmation_command="/demo add 乙 --force"),
+        )
+
+    runner = SimpleNamespace(run=AsyncMock(side_effect=run))
+    env = _env(
+        tmp_path,
+        FakeAgentContext(tmp_path / "data", catalog=_declared_catalog(), command_runner=runner),
+    )
+    env.selected_plugins.add("demo")
+    commands = [
+        "/demo add 甲",
+        "/demo add 甲" if stop == "duplicate" else "/demo add 乙",
+        "/demo add 丙",
+    ]
+    result   = await execute_tool(_tools(env), env, "xiaoqing_command", {"commands": commands})
+    executed = [call.args[0] for call in runner.run.call_args_list]
+    if stop == "none":
+        assert executed == ["/demo add 甲", "/demo add 乙", "/demo add 丙"]
+        assert result.state == "ok" and not result.halts_batch
+    elif stop == "update":
+        # 发起人中途补充要求：剩下的不执行，交给模型按新要求重新安排。
+        assert executed == ["/demo add 甲"] and "补充了要求" in result.content
+    else:
+        assert executed == (
+            ["/demo add 甲"] if stop == "duplicate" else ["/demo add 甲", "/demo add 乙"]
+        )
+        assert result.halts_batch and "后面 1 条没有执行" in result.content
+        # 插件给的确认命令写在回报里，发起人同意后由模型原样执行。
+        assert ("/demo add 乙 --force" in result.content) == (stop == "incomplete")
+    assert all(command in result.content for command in executed)
+
+
+@pytest.mark.asyncio
+async def test_background_acceptance_is_reported_back_without_halting(tmp_path):
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=DeliverySegments([], outcome=CommandOutcome("accepted")))
+    )
+    env = _env(
+        tmp_path,
+        FakeAgentContext(tmp_path / "data", catalog=_declared_catalog(), command_runner=runner),
+    )
+    tools = build_tools(env)
+    _grant(env, "/demo add 甲")
+    result = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo add 甲"]})
+    assert result.state == "accepted" and result.final is None and not result.halts_batch
+
+
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("delivery", [None, "unknown", 1])
-async def test_command_requires_valid_delivery_before_execution(tmp_path, delivery):
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"commands": "/catalog"},
+        {"commands": []},
+        {"commands": ["/catalog", " "]},
+        {"command": "/catalog"},
+        {"commands": ["/catalog"] * 21},
+    ],
+)
+async def test_command_list_shape_is_checked_before_execution(tmp_path, args):
     runner = SimpleNamespace(run=AsyncMock())
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
-    args = {"command": "/catalog"}
-    if delivery is not None:
-        args["delivery"] = delivery
     result = await execute_tool(_tools(env), env, "xiaoqing_command", args)
-    assert result.state == "error" and "delivery" in result.content
+    assert result.state == "error" and "commands" in result.content
     runner.run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "delivery,expected_calls", [("reply", 1), ("all_pages", 2), ("continue", 1)]
-)
-async def test_command_delivery_uses_explicit_pages_and_result_text(
-    tmp_path, delivery, expected_calls
+@pytest.mark.parametrize("all_pages", ["yes", 1])
+async def test_command_rejects_a_non_boolean_all_pages_before_execution(tmp_path, all_pages):
+    runner = SimpleNamespace(run=AsyncMock())
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"commands": ["/catalog"], "all_pages": all_pages}
+    )
+    assert result.state == "error" and "all_pages" in result.content
+    runner.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_pages,expected_calls", [(False, 1), (True, 2)])
+async def test_command_results_use_explicit_pages_and_result_text(
+    tmp_path, all_pages, expected_calls
 ):
     runner = SimpleNamespace(
         run=AsyncMock(
@@ -76,14 +230,12 @@ async def test_command_delivery_uses_explicit_pages_and_result_text(
     )
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
     result = await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"command": "/catalog", "delivery": delivery}
+        _tools(env), env, "xiaoqing_command", {"commands": ["/catalog"], "all_pages": all_pages}
     )
-    assert runner.run.await_count == expected_calls
+    assert runner.run.await_count == expected_calls and result.final is None
     assert "查看详情" not in result.content and "试试其他功能" not in result.content
-    assert (result.final is None) == (delivery == "continue")
-    if delivery == "all_pages":
-        assert "第一项" in result.final.text and "第二项" in result.final.text
-        assert "后续分页：无" in result.final.text
+    assert ("第二项" in result.content) == all_pages
+    assert ("分页已取齐" in result.content) == all_pages
 
 
 @pytest.fixture
@@ -129,8 +281,8 @@ def ledger_pages(tmp_path, request):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ledger_pages", [11, 21], indirect=True)
-@pytest.mark.parametrize("delivery", ["all_pages", "reply", "continue"])
-async def test_real_pendo_filtered_pagination(tmp_path, ledger_pages, delivery):
+@pytest.mark.parametrize("all_pages", [True, False])
+async def test_real_pendo_filtered_pagination(tmp_path, ledger_pages, all_pages):
     from plugins.pendo.main import _format_result
 
     calls     = []
@@ -152,27 +304,23 @@ async def test_real_pendo_filtered_pagination(tmp_path, ledger_pages, delivery):
         _tools(env),
         env,
         "xiaoqing_command",
-        {
-            "command" : "/pendo ledger list " + filters,
-            "delivery": delivery,
-        },
+        {"commands": ["/pendo ledger list " + filters], "all_pages": all_pages},
     )
     total = sum(
         item.title.startswith("记录") for item in ledger_pages.db.get_all_items("pagination-user")
     )
-    assert len(calls) == ((total + 9) // 10 if delivery == "all_pages" else 1)
-    expected = range(total) if delivery == "all_pages" else range(total - 10, total)
+    assert len(calls) == ((total + 9) // 10 if all_pages else 1)
+    expected = range(total) if all_pages else range(total - 10, total)
     for index in expected:
         assert result.content.count(f"记录{index:03d}") == 1
-    assert "排除" not in result.content
-    assert (result.final is None) == (delivery == "continue")
-    assert ("分页已取齐" in result.content) == (delivery == "all_pages")
+    assert "排除" not in result.content and result.final is None
+    assert ("分页已取齐" in result.content) == all_pages
     original = ledger_pages._parse_list_filters(filters)
     for page, command in enumerate(calls[1:], 2):
         parsed = ledger_pages._parse_list_filters(command.removeprefix("/pendo ledger list "))
         assert parsed == replace(original, page=page, range_text="2026-03-01..2026-03-31")
         assert responses[page - 2]["outcome"].next_command == command
-    assert responses[-1]["outcome"].has_more == (delivery != "all_pages")
+    assert responses[-1]["outcome"].has_more == (not all_pages)
 
 
 @pytest.mark.asyncio
@@ -205,8 +353,8 @@ async def test_real_pendo_single_empty_all_and_middle_page(
         env,
         "xiaoqing_command",
         {
-            "command" : "/pendo ledger list " + query,
-            "delivery": "all_pages",
+            "commands" : ["/pendo ledger list " + query],
+            "all_pages": True,
         },
     )
     assert len(re.findall(r"记录\d{3}|排除\d", result.content)) == expected
@@ -246,8 +394,8 @@ async def test_real_pendo_partial_results_survive_stop(tmp_path, ledger_pages, f
         env,
         "xiaoqing_command",
         {
-            "command" : "/pendo ledger list 2026-03",
-            "delivery": "all_pages",
+            "commands" : ["/pendo ledger list 2026-03"],
+            "all_pages": True,
         },
     )
     assert "尚未取齐" in result.content and "分页已取齐" not in result.content
@@ -273,14 +421,12 @@ async def test_missing_navigation_never_implies_complete(tmp_path, has_more):
         env,
         "xiaoqing_command",
         {
-            "command" : "/catalog",
-            "delivery": "all_pages",
+            "commands" : ["/catalog"],
+            "all_pages": True,
         },
     )
     assert "分页已取齐" not in result.content
-    if has_more is not False:
-        assert "后续分页：无" not in result.content
-    assert ("尚未取齐" if has_more is True else "完整性未知") in result.content
+    assert ("尚未取齐" in result.content) is (has_more is True)
 
 
 @pytest.mark.asyncio
@@ -330,21 +476,18 @@ async def test_pagination_preserves_partial_results_and_stops_on_failure_or_upda
         env.context.capabilities, command_runner=SimpleNamespace(run=command)
     )
     result = await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"command": "/catalog", "delivery": "all_pages"}
+        _tools(env), env, "xiaoqing_command", {"commands": ["/catalog"], "all_pages": True}
     )
-    assert len(calls) <= 2
-    assert (result.final is not None) == (failure == "error")
+    assert len(calls) <= 2 and result.final is None
     assert "第1次" in result.content
     if failure in {"cycle", "budget"}:
         assert result.state == "blocked" and "尚未取齐" in result.content
     elif failure == "error":
         assert result.state == "error"
-        assert result.final.status == "failed"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("delivery", ["reply", "continue"])
-async def test_delivery_preserves_command_attachment_without_copying_path(tmp_path, delivery):
+async def test_final_answer_attaches_command_files_without_copying_path(tmp_path):
     runner = SimpleNamespace(
         run=AsyncMock(
             return_value=[
@@ -356,12 +499,9 @@ async def test_delivery_preserves_command_attachment_without_copying_path(tmp_pa
         )
     )
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
-    result = await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"command": "/picture", "delivery": delivery}
-    )
-    if delivery == "continue":
-        assert result.final is None
-        result = await execute_tool(_tools(env), env, "final_answer", {"text": "图片给你了"})
+    result = await execute_tool(_tools(env), env, "xiaoqing_command", {"commands": ["/picture"]})
+    assert result.final is None
+    result = await execute_tool(_tools(env), env, "final_answer", {"text": "图片给你了"})
     assert result.final is not None and len(result.final.files) == 1
     assert Path(result.final.files[0]).read_bytes() == PNG_BYTES
     text_only = await execute_tool(
@@ -389,33 +529,44 @@ def _command_env(tmp_path: Path, reply: Any) -> tuple[ToolEnv, AsyncMock]:
     return _env(tmp_path, context), run
 
 
+def _grant(env: ToolEnv, *commands: str) -> None:
+    """只测执行的用例：命令所属的服务视为本轮已选用。"""
+    for command in commands:
+        token = command.lstrip("/").split(maxsplit=1)[0]
+        root = next(
+            root
+            for root in env.context.get_command_catalog()
+            if token in (root.name, *root.aliases)
+        )
+        env.selected_plugins.add(root.plugin)
+
+
 async def _search(env: ToolEnv, command: str) -> ToolResult:
-    return await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": command}
-    )
+    _grant(env, command)
+    return await execute_tool(_tools(env), env, "xiaoqing_command", {"commands": [command]})
+
+
+_REPEAT_HINT = "重复不会得到不同结果"
 
 
 @pytest.mark.asyncio
-async def test_identical_command_and_result_report_no_progress_then_close_the_scope(tmp_path):
+async def test_identical_call_and_result_get_a_hint_then_stop_the_loop(tmp_path):
     env, _ = _command_env(tmp_path, lambda command: "两篇论文及链接")
     first  = await _search(env, "/paper search FRB")
     second = await _search(env, "/paper  search FRB")
     third  = await _search(env, "/paper search FRB")
-    assert first.progress and first.content.startswith("两篇论文及链接")
-    assert not second.progress and second.state == "ok"
-    assert "命令和结果相同" in second.content
-    assert third.state == "blocked" and third.final is None
-    assert env.closed_scopes
-    assert "两篇论文及链接" in third.content
+    assert first.content.startswith("两篇论文及链接") and not first.stop
+    assert second.state == "ok" and _REPEAT_HINT in second.content and not second.stop
+    assert "两篇论文及链接" in third.content and third.stop
 
 
 @pytest.mark.asyncio
-async def test_different_commands_with_the_same_text_are_new_progress(tmp_path):
+async def test_different_commands_with_the_same_text_are_not_repeats(tmp_path):
     env, run = _command_env(tmp_path, lambda command: "没有找到相关记录")
     for command in ("/paper search FRB", "/paper search repeater", "/paper search host"):
         result = await _search(env, command)
-        assert result.progress and "命令和结果相同" not in result.content
-    assert run.await_count == 3 and not env.closed_scopes
+        assert _REPEAT_HINT not in result.content and not result.stop
+    assert run.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -424,21 +575,19 @@ async def test_same_command_that_differs_only_by_record_id_counts_as_a_repeat(tm
     env, _ = _command_env(tmp_path, lambda command: f"已创建，ID {next(ids)}")
     first  = await _search(env, "/paper search FRB")
     second = await _search(env, "/paper search FRB")
-    assert first.progress
-    assert not second.progress and "命令和结果相同（记录 ID 除外）" in second.content
+    assert _REPEAT_HINT not in first.content and _REPEAT_HINT in second.content
 
 
 @pytest.mark.asyncio
 async def test_deleting_two_different_records_is_not_a_repeat(tmp_path):
     env, _ = _command_env(tmp_path, lambda command: "已删除")
-    first  = await _search(env, "/paper search 3f2a9c1b")
+    await _search(env, "/paper search 3f2a9c1b")
     second = await _search(env, "/paper search 9d8e7f6a")
-    assert first.progress and second.progress
-    assert "命令和结果相同" not in second.content
+    assert _REPEAT_HINT not in second.content
 
 
 @pytest.mark.asyncio
-async def test_repeated_service_failure_closes_same_command_across_page_changes(tmp_path):
+async def test_repeated_service_failure_stops_only_the_identical_call(tmp_path):
     from tests.core.test_command_catalog import _load_catalog
 
     runner = SimpleNamespace(
@@ -452,15 +601,15 @@ async def test_repeated_service_failure_closes_same_command_across_page_changes(
         tmp_path,
         FakeAgentContext(tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner),
     )
-    for page in (2, 2, 3):
-        result = await execute_tool(
-            _tools(env),
-            env,
-            "xiaoqing_command",
-            {"command": f"/color search 红 --page {page}", "delivery": "continue"},
+    env.selected_plugins.add("color")
+    results = [
+        await execute_tool(
+            _tools(env), env, "xiaoqing_command", {"commands": [f"/color search 红 --page {page}"]}
         )
-    assert result.state == "blocked"
-    assert runner.run.await_count == 2
+        for page in (2, 3, 2, 2)
+    ]
+    assert [bool(result.stop) for result in results] == [False, False, False, True]
+    assert _REPEAT_HINT in results[2].content and runner.run.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -476,9 +625,7 @@ async def test_denied_catalog_and_command_report_blocked_without_running(tmp_pat
     for query in ("ssh", "qingssh", "shell", "codex", "问答库"):
         result = await execute_tool(tools, env, "xiaoqing_commands", {"query": query})
         assert result.state == "blocked" and "权限" in result.content
-    denied = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/ssh list"}
-    )
+    denied = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/ssh list"]})
     assert denied.state == "blocked"
     runner.run.assert_not_awaited()
 
@@ -499,10 +646,10 @@ async def test_unchanged_help_is_bounded_and_new_queries_remain_available(tmp_pa
     results = [
         await execute_tool(tools, env, "xiaoqing_commands", {"query": "github"}) for _ in range(3)
     ]
-    assert [result.state for result in results] == ["ok", "ok", "blocked"]
-    assert results[0].progress and not results[1].progress
+    assert [bool(result.stop) for result in results] == [False, False, True]
+    assert _REPEAT_HINT in results[1].content
     new_query = await execute_tool(tools, env, "xiaoqing_commands", {"query": "color"})
-    assert new_query.state == "ok" and new_query.progress
+    assert new_query.state == "ok" and not new_query.stop
 
 
 @pytest.mark.asyncio
@@ -519,15 +666,13 @@ async def test_command_outcome_is_visible_to_model_without_text_prefix(tmp_path,
         )
     )
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
-    result = await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": "/demo"}
-    )
+    result = await execute_tool(_tools(env), env, "xiaoqing_command", {"commands": ["/demo"]})
     assert f"执行状态：{state}" in result.content
     assert result.state == ("ok" if state == "completed" else "error")
 
 
 @pytest.mark.asyncio
-async def test_background_acceptance_closes_only_its_command(tmp_path):
+async def test_background_acceptance_tells_the_model_not_to_wait_or_repeat(tmp_path):
     from core.delivery import CommandOutcome, DeliverySegments
     from tests.core.test_command_catalog import _load_catalog
 
@@ -542,18 +687,12 @@ async def test_background_acceptance_closes_only_its_command(tmp_path):
     context = FakeAgentContext(
         tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
     )
-    env     = _env(tmp_path, context)
-    tools   = _tools(env)
-    started = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/tw_fetch"}
-    )
-    repeated = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/tw_fetch"}
-    )
-    cached = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/twimg"}
-    )
-    assert started.state == "accepted" and repeated.state == "blocked"
+    env   = _env(tmp_path, context)
+    tools = _tools(env)
+    _grant(env, "/tw_fetch", "/twimg")
+    started = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/tw_fetch"]})
+    cached  = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/twimg"]})
+    assert started.state == "accepted" and "不用等待或重复调用" in started.content
     assert cached.content == "已有缓存图片" and cached.state == "ok"
     assert runner.run.await_count == 2
 
@@ -742,8 +881,8 @@ def _env(
     )
 
 
-def _tools(env: ToolEnv, plugins: tuple[str, ...] = ()) -> dict:
-    return build_tools(env, loaded_plugins=frozenset(plugins))
+def _tools(env: ToolEnv) -> dict:
+    return build_tools(env)
 
 
 def test_python_tool_computes_and_reports_new_files(tmp_path: Path) -> None:
@@ -766,7 +905,7 @@ def test_python_tool_computes_and_reports_new_files(tmp_path: Path) -> None:
 
         failed = await execute_tool(tools, env, "run_python", {"code": "raise SystemExit('boom')"})
         assert "exit_code=1" in failed.content and "boom" in failed.content
-        assert failed.state == "error" and not failed.progress
+        assert failed.state == "error"
         assert env.script_counter == 2
 
     run_with_subprocess_loop(scenario)
@@ -982,9 +1121,7 @@ async def test_xiaoqing_command_tools_search_catalog_and_convert_replies(tmp_pat
     none = await execute_tool(tools, env, "xiaoqing_commands", {"query": "不存在的东西"})
     assert "没有匹配" in none.content
 
-    reply = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
-    )
+    reply = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/pendo todo list"]})
     runner.run.assert_awaited_once_with(
         "/pendo todo list", sender_name="", operation_id="abc123-1", request_texts=("原话",)
     )
@@ -999,15 +1136,13 @@ async def test_xiaoqing_command_tools_search_catalog_and_convert_replies(tmp_pat
     runner.run.return_value = [
         {"type": "image", "data": {"file": "base64://" + base64.b64encode(other_png).decode()}},
     ]
-    again = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
-    )
+    again  = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/pendo todo list"]})
     second = env.out_dir / "command-image-2.png"
     assert str(second) in again.content
     assert saved.read_bytes() == PNG_BYTES and second.read_bytes() == other_png
 
 
-def test_optional_tools_follow_capabilities_and_loaded_plugins(tmp_path: Path) -> None:
+def test_optional_tools_follow_core_capabilities(tmp_path: Path) -> None:
     bare = _env(tmp_path / "bare")
     assert set(_tools(bare)) == {
         "run_python",
@@ -1028,8 +1163,8 @@ def test_optional_tools_follow_capabilities_and_loaded_plugins(tmp_path: Path) -
     )
     full = _env(tmp_path / "full", context)
     assert {"xiaoqing_commands", "xiaoqing_command"} <= set(_tools(full))
-    assert "codex_run" not in _tools(full) and "ssh_run" not in _tools(full)
-    loaded = _tools(full, ("codex", "qingssh"))
+    # agent 不按插件名开放：Core 只在发起人能用 /ssh、/codex 时发出对应能力。
+    loaded = _tools(full)
     assert {"codex_run", "ssh_servers", "ssh_run"} <= set(loaded)
     for tool in loaded.values():
         schema = tool.schema()
@@ -1055,7 +1190,7 @@ async def test_ssh_tools_format_remote_results(tmp_path: Path) -> None:
         ),
     )
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ssh_agent=ssh))
-    tools = _tools(env, ("qingssh",))
+    tools = _tools(env)
 
     assert "10.0.0.5" in (await execute_tool(tools, env, "ssh_servers", {})).content
     ok = await execute_tool(tools, env, "ssh_run", {"server": "lab", "command": "uptime"})
@@ -1088,7 +1223,7 @@ async def test_codex_tool_uses_a_per_chat_session_and_returns_images(tmp_path: P
         )
     )
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", codex_agent=codex))
-    tools  = _tools(env, ("codex",))
+    tools  = _tools(env)
     result = await execute_tool(
         tools, env, "codex_run", {"prompt": "写个爬虫", "timeout_minutes": 2}
     )
@@ -1105,7 +1240,7 @@ async def test_codex_tool_uses_a_per_chat_session_and_returns_images(tmp_path: P
 async def test_unavailable_services_become_tool_errors(tmp_path: Path) -> None:
     ssh = SimpleNamespace(run=AsyncMock(side_effect=RuntimeError("plugin service is unavailable")))
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ssh_agent=ssh))
-    tools  = _tools(env, ("qingssh",))
+    tools  = _tools(env)
     result = await execute_tool(tools, env, "ssh_run", {"server": "lab", "command": "ls"})
     assert result.content.startswith("错误：RuntimeError")
 
@@ -1128,9 +1263,7 @@ async def test_command_voice_video_and_files_are_exposed_as_local_paths(tmp_path
     )
     context = FakeAgentContext(tmp_path / "data", command_runner=runner)
     env   = _env(tmp_path, context)
-    reply = await execute_tool(
-        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": "/语音 晚安"}
-    )
+    reply = await execute_tool(_tools(env), env, "xiaoqing_command", {"commands": ["/语音 晚安"]})
     assert f"命令返回的语音（可放进 final_answer.files 发出去）: {voice}" in reply.content
     saved = env.out_dir / "command-video-1.mp4"
     assert saved.read_bytes() == b"mp4" and str(saved) in reply.content
@@ -1221,11 +1354,11 @@ async def test_members_get_command_tools_only_and_send_only_what_commands_return
     )
     context = FakeAgentContext(tmp_path / "data", is_admin=False, command_runner=runner)
     env = _env(tmp_path, context, admin=False)
-    tools = _tools(env, ("qingssh", "codex"))
+    tools = _tools(env)
+    # 只能用命令时没有可轮询的外部状态，不提供 wait：插件的后台任务由插件通知。
     assert set(tools) == {
         "update_plan",
         "send_message",
-        "wait",
         "final_answer",
         "xiaoqing_commands",
         "xiaoqing_command",
@@ -1238,9 +1371,7 @@ async def test_members_get_command_tools_only_and_send_only_what_commands_return
         assert refused.final is None and "不是这次命令返回的文件" in refused.content
     assert env.send_progress.sent == []  # type: ignore[attr-defined]
 
-    reply = await execute_tool(
-        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/apod"}
-    )
+    reply = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/apod"]})
     assert str(picture) in reply.content
     sent = await execute_tool(
         tools, env, "final_answer", {"text": "今天的图", "files": [str(picture)]}
@@ -1326,18 +1457,8 @@ def test_local_tools_need_the_core_capability_even_for_an_admin_task(tmp_path: P
 
 
 def _declared_catalog(**root_overrides: Any) -> tuple[Any, ...]:
-    """一个虚构插件：record 声明为写入并带结构化参数，devices 无参数，list 只读。"""
+    """一个虚构插件：add 声明为写入，设备和 list 只读。"""
 
-    record_parameters = {
-        "type"      : "object",
-        "properties": {
-            "amount": {"type": "integer"},
-            "title" : {"type": "string"},
-            "unit"  : {"type": "string", "default": "个"},
-        },
-        "required"            : ["amount", "title"],
-        "additionalProperties": False,
-    }
     root = build_command_catalog_node(
         "demo",
         {
@@ -1347,27 +1468,7 @@ def _declared_catalog(**root_overrides: Any) -> tuple[Any, ...]:
             "usage"   : "/demo <subcommand>",
             **root_overrides,
             "subcommands": [
-                {
-                    "name"            : "record",
-                    "help"            : "结构化记一条",
-                    "usage"           : "/demo record <JSON>",
-                    "effect"          : "write",
-                    "structured_input": {
-                        "name"       : "demo_record",
-                        "description": "一次记一条，数量和名称分别传入。",
-                        "parameters" : record_parameters,
-                    },
-                },
-                {
-                    "name"            : "设备",
-                    "help"            : "列设备",
-                    "usage"           : "/demo 设备",
-                    "effect"          : "read",
-                    "structured_input": {
-                        "name"      : "demo_devices",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                },
+                {"name": "设备", "help": "列设备", "usage": "/demo 设备", "effect": "read"},
                 {"name": "list", "help": "列出", "usage": "/demo list", "effect": "read"},
                 {
                     "name"  : "add",
@@ -1383,44 +1484,6 @@ def _declared_catalog(**root_overrides: Any) -> tuple[Any, ...]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "admin,group,available", [(True, None, True), (False, None, False), (True, GROUP_ID, False)]
-)
-async def test_structured_tools_come_from_plugin_declarations(tmp_path, admin, group, available):
-    """工具名、说明和参数都来自插件声明；发起人此刻用不了的命令不生成工具。"""
-
-    runner = SimpleNamespace(run=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]))
-    catalog = _declared_catalog(permission="bot_admin", contexts=["private"])
-    context = FakeAgentContext(
-        tmp_path / "data", catalog=catalog, command_runner=runner, is_admin=admin, group_id=group
-    )
-    env                   = _env(tmp_path, context)
-    env.task.request_text = "记 3 个苹果"
-    env.user_updates.append("再加一句：是红的")
-    tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent", "demo"}))
-    assert ("demo_record" in tools) == available and ("demo_devices" in tools) == available
-    if not available:
-        return
-    record = tools["demo_record"]
-    assert (
-        record.description.startswith("一次记一条") and "/demo record <JSON>" in record.description
-    )
-    assert record.parameters["required"] == ["amount", "title"]
-    # 没写说明时用命令自己的 help。
-    assert tools["demo_devices"].description.startswith("列设备")
-
-    await execute_tool(tools, env, "demo_devices", {})
-    await execute_tool(tools, env, "demo_record", {"amount": 3, "title": "苹果"})
-    first, second = runner.run.await_args_list
-    assert first.args[0] == "/demo 设备"
-    assert second.args[0] == '/demo record {"amount": 3, "title": "苹果"}'
-    # 发起人原话按先后交给插件，由插件自己核对。
-    assert second.kwargs["request_texts"] == ("记 3 个苹果", "再加一句：是红的")
-    rejected = await execute_tool(tools, env, "demo_devices", {"x": 1})
-    assert rejected.state == "error" and runner.run.await_count == 2
-
-
-@pytest.mark.asyncio
 async def test_identical_write_runs_once_per_task_whatever_the_plugin(tmp_path):
     """声明为写入的命令，同一任务里完全相同的第二次不执行；读命令、不同内容和失败后的重试照常执行。"""
 
@@ -1429,79 +1492,171 @@ async def test_identical_write_runs_once_per_task_whatever_the_plugin(tmp_path):
     context = FakeAgentContext(
         tmp_path / "data", catalog=_declared_catalog(), command_runner=runner
     )
-    env = _env(tmp_path, context)
-    tools = build_tools(env, loaded_plugins=frozenset({"demo"}))
-    item = {"amount": 3, "title": "苹果"}
-
-    first  = await execute_tool(tools, env, "demo_record", item)
-    repeat = await execute_tool(tools, env, "demo_record", {**item, "title": " 苹果", "unit": "个"})
-    typed  = await execute_tool(
-        tools,
-        env,
-        "xiaoqing_command",
-        {"delivery": "continue", "command": "/示例 record " + json.dumps(item)},
+    env                   = _env(tmp_path, context)
+    env.task.request_text = "记 3 个苹果"
+    env.user_updates.append("再加一句：是红的")
+    tools = build_tools(env)
+    _grant(env, "/demo add 苹果 3")
+    first  = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo add 苹果 3"]})
+    repeat = await execute_tool(
+        tools, env, "xiaoqing_command", {"commands": ["/demo add  苹果 3 "]}
     )
-    other = await execute_tool(tools, env, "demo_record", {**item, "amount": 4})
+    alias = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/示例 add 苹果 3"]})
+    other = await execute_tool(tools, env, "xiaoqing_command", {"commands": ["/demo add 苹果 4"]})
     assert first.state == "ok" and other.state == "ok"
-    for blocked in (repeat, typed):
-        assert blocked.state == "blocked" and not blocked.progress
+    for blocked in (repeat, alias):
+        assert blocked.state == "blocked"
         assert "2cfae294" in blocked.content and "没有再执行" in blocked.content
     assert runner.run.await_count == 2
+    # 发起人原话按先后交给插件，由插件自己核对。
+    assert runner.run.call_args.kwargs["request_texts"] == ("记 3 个苹果", "再加一句：是红的")
 
-    free_text = {"delivery": "continue", "command": "/demo add  记一条  备忘"}
-    await execute_tool(tools, env, "xiaoqing_command", free_text)
-    again = await execute_tool(
-        tools, env, "xiaoqing_command", {**free_text, "command": "/demo add 记一条 备忘"}
-    )
-    assert again.state == "blocked" and runner.run.await_count == 3
-
-    listing = {"delivery": "continue", "command": "/demo list"}
+    listing = {"commands": ["/demo list"]}
     await execute_tool(tools, env, "xiaoqing_command", listing)
     await execute_tool(tools, env, "xiaoqing_command", listing)
-    assert runner.run.await_count == 5
+    assert runner.run.await_count == 4
 
     runner.run = AsyncMock(
         side_effect=[[{"type": "text", "data": {"text": "❌ 暂时不可用"}}], saved]
     )
     retry_env = _env(tmp_path / "retry", context)
-    retry = build_tools(retry_env, loaded_plugins=frozenset({"demo"}))
-    await execute_tool(retry, retry_env, "demo_record", item)
-    retried = await execute_tool(retry, retry_env, "demo_record", item)
+    retry     = build_tools(retry_env)
+    _grant(retry_env, "/demo add 苹果 3")
+    await execute_tool(retry, retry_env, "xiaoqing_command", {"commands": ["/demo add 苹果 3"]})
+    retried = await execute_tool(
+        retry, retry_env, "xiaoqing_command", {"commands": ["/demo add 苹果 3"]}
+    )
     assert retried.state == "ok" and runner.run.await_count == 2
 
 
-def test_structured_tool_name_never_replaces_a_builtin_tool(tmp_path):
-    root = build_command_catalog_node(
-        "demo",
-        {
-            "name"            : "demo",
-            "triggers"        : ["demo"],
-            "help"            : "示例",
-            "usage"           : "/demo <JSON>",
-            "structured_input": {"name": "final_answer", "parameters": {"type": "object"}},
-        },
-        root=True,
+# ──────────────────── 少走冗余步骤：交付方式、同轮顺序与服务范围 ────────────────────
+
+
+def _loop_env(tmp_path: Path, script: list, run) -> tuple[ToolEnv, dict, Any]:
+    from tests.helpers.xiaoqing_agent_test_support import FakeAI
+
+    runner = SimpleNamespace(run=AsyncMock(side_effect=run))
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_declared_catalog(), command_runner=runner, ai=FakeAI(script)
     )
-    runner = SimpleNamespace(run=AsyncMock())
-    context = FakeAgentContext(tmp_path / "data", catalog=(root,), command_runner=runner)
     env = _env(tmp_path, context)
-    tools = build_tools(env, loaded_plugins=frozenset({"demo"}))
-    assert tools["final_answer"].description.startswith("交付最终结果")
+    env.selected_plugins.add("demo")
+    return env, build_tools(env), runner
 
 
-def test_shipped_plugin_declarations_become_tools(tmp_path):
-    """仓库里的 pendo 与米家声明照样生成原来那几个工具，agent 里没有它们的专门代码。"""
+@pytest.mark.asyncio
+async def test_write_results_are_told_in_the_persona_not_forwarded(tmp_path):
+    """多笔写入在一次调用里按顺序提交；写完后不把插件原文直接发出，由 final_answer 按人设交代。"""
+    from plugins.xiaoqing_agent.loop import run_agent_loop
+    from tests.helpers.xiaoqing_agent_test_support import ai_response, tool_call
 
+    async def run(command, **_kwargs):
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": f"✅ 已记下{command.split()[-1]}"}}],
+            outcome=CommandOutcome("completed"),
+        )
+
+    def persona(_route, messages, _kwargs):
+        reports = [m["content"] for m in messages if m.get("role") == "tool"]
+        assert len(reports) == 1 and "已记下甲" in reports[0] and "已记下乙" in reports[0]
+        return ai_response(
+            "", [tool_call("final_answer", {"text": "甲乙都记上了", "state": "done"})]
+        )
+
+    script = [
+        ai_response(
+            "",
+            [
+                tool_call("xiaoqing_command", {"commands": ["/demo add 甲", "/demo add 乙"]}),
+            ],
+        ),
+        persona,
+    ]
+    env, tools, runner = _loop_env(tmp_path, script, run)
+    outcome = await run_agent_loop(env, tools, [{"role": "user", "content": "记甲和乙"}])
+    assert (outcome.text, outcome.status) == ("甲乙都记上了", "done")
+    assert runner.run.await_count == 2 and len(env.context.ai.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_write_skips_the_rest_of_the_same_round(tmp_path):
+    """“先删旧的再建新的”排在同一轮：删除失败时后面的创建不再执行，交回模型重新安排。"""
+    from plugins.xiaoqing_agent.loop import run_agent_loop
+    from tests.helpers.xiaoqing_agent_test_support import ai_response, tool_call
+
+    async def run(command, **_kwargs):
+        failed = command.startswith("/demo add 删除")
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": "❌ 找不到记录" if failed else "已保存"}}],
+            outcome=CommandOutcome("error" if failed else "completed"),
+        )
+
+    def replan(_route, messages, _kwargs):
+        skipped = [
+            m for m in messages if m.get("role") == "tool" and m.get("tool_call_id") == "create"
+        ]
+        assert skipped and "没有执行" in skipped[0]["content"]
+        return ai_response(
+            "",
+            [
+                tool_call(
+                    "final_answer", {"text": "旧记录没找到，先没建新的。", "state": "needs_user"}
+                )
+            ],
+        )
+
+    script = [
+        ai_response(
+            "",
+            [
+                tool_call("xiaoqing_command", {"commands": ["/demo add 删除旧的"]}, "delete"),
+                tool_call("xiaoqing_command", {"commands": ["/demo add 新的"]}, "create"),
+            ],
+        ),
+        replan,
+    ]
+    env, tools, runner = _loop_env(tmp_path, script, run)
+    outcome = await run_agent_loop(env, tools, [{"role": "user", "content": "删掉旧的再建新的"}])
+    assert runner.run.await_count == 1 and outcome.status == "needs_user"
+
+
+@pytest.mark.asyncio
+async def test_update_keeps_selected_services(tmp_path):
+    """运行中补充要求不清空已选服务：继续用同一服务的命令时不必重新查帮助。"""
+    from plugins.xiaoqing_agent.loop import run_agent_loop
+    from tests.helpers.xiaoqing_agent_test_support import ai_response, tool_call
+
+    async def run(command, **_kwargs):
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": "设备：灯"}}], outcome=CommandOutcome("completed")
+        )
+
+    def after_update(_route, messages, kwargs):
+        assert "再看一下" in messages[-1]["content"]
+        return ai_response("", [tool_call("xiaoqing_command", {"commands": ["/demo 设备"]})])
+
+    def first(_route, _messages, _kwargs):
+        env.task.notes.append("再看一下设备")
+        return ai_response("", [tool_call("final_answer", {"text": "好", "state": "done"})])
+
+    script = [
+        first,
+        after_update,
+        ai_response("", [tool_call("final_answer", {"text": "设备：灯", "state": "done"})]),
+    ]
+    env, tools, runner = _loop_env(tmp_path, script, run)
+    outcome = await run_agent_loop(env, tools, [{"role": "user", "content": "看设备"}])
+    assert outcome.text == "设备：灯" and runner.run.await_count == 1
+
+
+def test_catalog_lines_describe_each_parent_once(tmp_path):
+    """整份服务说明里父级用途只交代一次，篇幅不随子命令数量成倍增长。"""
     from tests.core.test_command_catalog import _load_catalog
 
-    runner = SimpleNamespace(run=AsyncMock())
-    context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
-    )
-    env = _env(tmp_path, context)
-    tools = build_tools(env, loaded_plugins=frozenset({"pendo", "xiaoai"}))
-    for name in ("pendo_ledger_add", "xiaoai_devices", "xiaoai_capabilities", "xiaoai_execute"):
-        assert name in tools
-    assert "source_text" not in tools["pendo_ledger_add"].parameters["properties"]
-    without = build_tools(env, loaded_plugins=frozenset({"xiaoai"}))
-    assert "pendo_ledger_add" not in without
+    context = FakeAgentContext(tmp_path / "data", catalog=_load_catalog().roots)
+    lines = catalog_lines(context, "pendo event")
+    text  = "\n\n".join(lines)
+    assert text.count("上级用途：pendo：") == 1
+    assert "/pendo event edit <id> <内容>" in text and "/pendo event delete <id>" in text
+    later = [line for line in lines if line.startswith("/pendo event add")]
+    assert later and "上级用途" not in later[0]

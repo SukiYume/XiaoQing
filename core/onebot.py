@@ -526,13 +526,14 @@ class OneBotWsClient(_EndpointAuthHolder):
             auth_token,
             credentials_trusted=credentials_trusted,
         )
-        self._auth_state_lock                                  = threading.RLock()
-        self._connected_auth_generation: int | None            = None
-        self._event_loop: asyncio.AbstractEventLoop | None     = None
-        self._ws: Any | None                                   = None
-        self._running                                          = False
-        self._accepting_events                                 = True
-        self._on_connect: Callable[[], Awaitable[None]] | None = None
+        self._auth_state_lock                                          = threading.RLock()
+        self._connected_auth_generation: int | None                    = None
+        self._event_loop: asyncio.AbstractEventLoop | None             = None
+        self._ws: Any | None                                           = None
+        self._running                                                  = False
+        self._accepting_events                                         = True
+        self._on_connect: Callable[[], Awaitable[None]] | None         = None
+        self._on_event_queued: Callable[[dict[str, Any]], None] | None = None
         self._message_queues: dict[
             str,
             asyncio.Queue[_QueuedOneBotEvent | dict[str, Any]],
@@ -563,6 +564,10 @@ class OneBotWsClient(_EndpointAuthHolder):
     def set_on_connect(self, callback: Callable[[], Awaitable[None]]) -> None:
         """设置连接成功回调"""
         self._on_connect = callback
+
+    def set_on_event_queued(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """事件放进按发送者排队的队列时通知一声（只是登记，不影响排队）。"""
+        self._on_event_queued = callback
 
     @property
     def ws_uri(self) -> str:
@@ -1370,6 +1375,11 @@ class OneBotWsClient(_EndpointAuthHolder):
         if queue is None:
             queue = asyncio.Queue(maxsize=self._queue_size)
             self._message_queues[key] = queue
+        if self._on_event_queued is not None:
+            try:
+                self._on_event_queued(event)
+            except Exception:
+                logger.exception("OneBot event queue observer failed")
 
         self._queue_last_activity[key] = time.time()
         # 如果队列已满，丢弃最旧的消息

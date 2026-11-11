@@ -26,6 +26,8 @@ _OPENING_PAIRS = {
 }
 _CLAUSE_TRAILING_COMMAS = "，,、"
 _BRACKET_SPAN           = 60
+# 超过这么多字的一条是讲解、文稿这类成品：标点照原样发，不按聊天短句去掉行尾句号。
+LONG_BUBBLE_CHARS = 80
 
 
 def _pairs_nearby(text: str, index: int, closer: str) -> bool:
@@ -273,6 +275,16 @@ def _spread_clauses(
     return result
 
 
+def _merge_to_limit(pieces: list[str], limit: int, *, joiner: str) -> list[str]:
+    """气泡数超出上限时，把合起来最短的相邻两段并成一条，直到不超出。"""
+
+    merged = list(pieces)
+    while len(merged) > max(1, limit):
+        pair = min(range(len(merged) - 1), key=lambda i: len(merged[i]) + len(merged[i + 1]))
+        merged[pair : pair + 2] = [merged[pair] + joiner + merged[pair + 1]]
+    return merged
+
+
 def process_llm_response(
     response_text: str,
     cfg: ResponsePostProcessConfig,
@@ -281,10 +293,15 @@ def process_llm_response(
     enable_splitter: bool = True,
     clause_split: bool    = True,
 ) -> list[str]:
-    """清理回复并分成气泡。
+    """清理回复并分成气泡，正文不截断。
 
-    先按句末标点分句；气泡数没用完时再按逗号、省略号把较长的句子拆开（``clause_split``，
-    对方要求了句数或篇幅时由调用方关闭）。超出气泡数的内容收进最后一条，正文不截断。
+    - 她自己用空行分了段（讲解、步骤、带代码）：一段一个气泡，段内的句子和标点不动；段数超过
+      气泡上限时把最短的相邻两段并成一条。
+    - 一整段的长内容（超过 ``clause_split_max_chars``）：按句子分成几条，每条里句子连着写。
+    - 其余的短回复：按句末标点分句，气泡数没用完时再按逗号、省略号把较长的句子拆开
+      （``clause_split``，对方要求了句数或篇幅时由调用方关闭）。
+
+    对方要的是一篇成品（检讨、文案）时调用方关掉 ``enable_splitter``，整篇作为一条发出。
     """
     text            = response_text or ""
     structured_text = (
@@ -307,6 +324,10 @@ def process_llm_response(
 
     splitter: ResponseSplitterConfig = cfg.splitter
     if splitter.enable and enable_splitter:
+        limit      = max(1, splitter.max_sentence_num)
+        paragraphs = split_chat_reply(text)
+        if len(paragraphs) > 1:
+            return _merge_to_limit(paragraphs, limit, joiner="\n")
         sentences = []
         for sentence in split_sentences(text):
             while "```" not in sentence and len(sentence) > splitter.max_length:
@@ -317,8 +338,8 @@ def process_llm_response(
                 sentence = sentence[boundary + 1 :].strip()
             if sentence:
                 sentences.append(sentence)
-        # 分段数量限制消息气泡数；剩余内容完整收进最后一条。
-        limit = max(1, splitter.max_sentence_num)
+        if len(text) > splitter.clause_split_max_chars:
+            return _merge_to_limit(sentences, limit, joiner="")
         if clause_split and splitter.clause_split:
             sentences = _spread_clauses(
                 sentences,
@@ -327,8 +348,9 @@ def process_llm_response(
                 max_chars    = splitter.clause_split_max_chars,
                 bubble_chars = splitter.clause_bubble_chars,
             )
+        # 句子比气泡多时，排在后面的几句连着写进最后一条。
         if len(sentences) > limit:
-            sentences = sentences[: limit - 1] + ["\n".join(sentences[limit - 1 :])]
+            sentences = sentences[: limit - 1] + ["".join(sentences[limit - 1 :])]
         return sentences
 
     return [text]

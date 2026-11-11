@@ -12,7 +12,7 @@ from ...services.db import Database
 from ...utils.currency import currency_label
 from ...utils.formatters import ledger_amount_yuan
 from ...utils.identifiers import public_id
-from ...utils.time_utils import TimezoneHelper, now_in_timezone
+from ...utils.time_utils import CN_WEEKDAYS, TimezoneHelper, now_in_timezone
 from ..analytics.event_schedule import build_event_schedule, ensure_datetime
 from ..analytics.ledger_insights import build_ledger_insights
 from ..analytics.notes_overview import build_notes_widget_overview
@@ -28,9 +28,10 @@ PanelSection                        = Literal["tasks", "ledger", "notes"]
 WidgetSection                       = Literal["tasks", "ledger", "notes", "all"]
 PanelBuilder                        = Callable[[Database, str, datetime], JsonObject]
 
-_WEEKDAY_LABELS: Final                           = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-_SECTION_ORDER : Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
-_LINKS         : Final                           = {
+_SECTION_ORDER  : Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
+_MIN_WIDGET_YEAR: Final                           = 1970
+_MAX_WIDGET_YEAR: Final                           = 9000
+_LINKS          : Final                           = {
     "dashboard": "#/dashboard",
     "events"   : "#/events",
     "tasks"    : "#/tasks",
@@ -47,8 +48,11 @@ def _parse_now(value: str | None, owner_id: str, db: Database) -> datetime:
         return now_in_timezone(owner_id, db).replace(tzinfo=None, microsecond=0)
     try:
         parsed = TimezoneHelper.parse(text, TimezoneHelper.get_user_timezone(owner_id, db))
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise HTTPException(status_code=422, detail="now must be a valid ISO datetime") from exc
+    # 摘要要往后展开三十天，贴着可表示范围两端的时刻会算出越界日期。
+    if not _MIN_WIDGET_YEAR <= parsed.year <= _MAX_WIDGET_YEAR:
+        raise HTTPException(status_code=422, detail="now is outside the supported range")
     return parsed.replace(tzinfo=None, microsecond=0)
 
 
@@ -253,7 +257,7 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
 
     return {
         "date": {
-            "weekday": _WEEKDAY_LABELS[now.weekday()],
+            "weekday": CN_WEEKDAYS[now.weekday()],
             "month"  : now.month,
             "day"    : now.day,
         },
@@ -268,7 +272,11 @@ def _parse_calendar_sync_date(value: str, field_name: str) -> date:
     """解析日历同步自然日，并对调用方返回明确的 422。"""
 
     parsed = parse_iso_date(value)
-    if parsed is None or len(str(value).strip()) != 10:
+    if (
+        parsed is None
+        or len(str(value).strip()) != 10
+        or not _MIN_WIDGET_YEAR <= parsed.year <= _MAX_WIDGET_YEAR
+    ):
         raise HTTPException(status_code=422, detail=f"{field_name} must be a valid ISO date")
     return parsed
 

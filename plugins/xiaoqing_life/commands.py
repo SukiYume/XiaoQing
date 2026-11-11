@@ -5,11 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from . import reinforce
+from . import chat_topics, dossier, reinforce
 from .config import LifeConfig
-from .lifecycle import DAY, term_key
+from .days import DAY, day_key
+from .knowledge import HYPOTHESIS
+from .lifecycle import term_key
 from .persona_bridge import Presence
 from .stores import LifeStore
+from .works import FORMS
 
 HELP_TEXT = """🌐 小青的网上生活
 
@@ -18,6 +21,7 @@ HELP_TEXT = """🌐 小青的网上生活
 /life slang           词条前 15
 /life threads         小课题（含搁置原因、最新要点、更正数）
 /life methods         她自己摸索出的查法
+/life stats           最近 7 天的运行计数（上网、研究、小课题、核实、查词、交给聊天的）
 /life works           她在慢慢整理的小作品
 /life dossier [话题]  主题档案（不带话题列出全部）
 /life memes           梗图列表
@@ -54,7 +58,7 @@ def status_text(
     state    = store.state
     decision = state.get("last_decision") or {}
     now      = moment.timestamp()
-    same_day = state.get("day") == moment.strftime("%Y-%m-%d")
+    same_day = state.get("day") == day_key(moment)
     sessions = state.get("sessions_today", 0) if same_day else 0
     calls    = state.get("llm_calls_today", 0) if same_day else 0
     lines    = [
@@ -108,7 +112,17 @@ def _reinforcement_lines(store: LifeStore, now: float) -> list[str]:
     if habit := reinforce.habit_text(state):
         lines.append(f"习惯：{habit}")
     untried = sum(1 for f in store.frontier if not f.get("tried"))
-    lines.append(f"好奇边界 {untried} 个待试，自己查明白的事 {len(store.learnings)} 件")
+    unsure  = sum(1 for r in store.learnings if r.get("confidence") == HYPOTHESIS)
+    lines.append(
+        f"好奇边界 {untried} 个待试，自己查明白的事 {len(store.learnings)} 件"
+        + (f"（其中 {unsure} 件只有一个来源，还没核实）" if unsure else "")
+    )
+    heard = len(state.get("heard_topics", []))
+    picks = [p["topic"] for p in chat_topics.fresh(state, now)]
+    if heard or picks:
+        lines.append(
+            f"群里听到的话题 {heard} 个" + (f"，想去看看：{'、'.join(picks)}" if picks else "")
+        )
     factors = (state.get("last_decision") or {}).get("factors")
     if factors:
         lines.append(f"上次决策的自我强化因素：{factors}")
@@ -193,6 +207,8 @@ def route(args: str) -> tuple[str, str]:
     head, _, rest = (args or "").strip().partition(" ")
     aliases: dict[str, Any] = {
         ""       : "status",
+        "stats"  : "stats",
+        "统计"     : "stats",
         "status" : "status",
         "状态"     : "status",
         "recent" : "recent",
@@ -225,8 +241,6 @@ def route(args: str) -> tuple[str, str]:
 
 
 def works_text(store: LifeStore) -> str:
-    from .works import FORMS
-
     if not store.works:
         return "还没有作品。"
     lines = []
@@ -245,8 +259,6 @@ def works_text(store: LifeStore) -> str:
 
 
 def dossier_text(store: LifeStore, topic: str, moment: datetime) -> str:
-    from . import dossier
-
     if not topic:
         return dossier.list_text(store.dossiers, moment)
     entry = dossier.find_recall(store.dossiers, topic, fallback=False)

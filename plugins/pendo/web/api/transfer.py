@@ -57,8 +57,9 @@ _PREVIEWS           : OrderedDict[str, tuple[str, float, list[JsonObject]]] = Or
 
 def _remember_preview(owner_id: str, samples: list[JsonObject]) -> str:
     now = time.monotonic()
-    for token, (_owner, expires_at, _samples) in list(_PREVIEWS.items()):
-        if expires_at <= now:
+    # 每位用户只留最近一次预检：样例覆盖整份备份，反复预检大文件不能让旧结果堆在内存里。
+    for token, (owner, expires_at, _samples) in list(_PREVIEWS.items()):
+        if expires_at <= now or owner == owner_id:
             _PREVIEWS.pop(token, None)
     token            = secrets.token_urlsafe(24)
     _PREVIEWS[token] = (owner_id, now + _PREVIEW_TTL_SECONDS, samples)
@@ -85,8 +86,9 @@ def _sample_rows(records: list[JsonObject]) -> list[JsonObject]:
 
 # 上传大小限制：100 MB；同时约束记录数量，防止小体积压缩包展开成
 # 不受控的 Python/SQLite 工作量。
-MAX_UPLOAD_SIZE : Final = 100 * 1024 * 1024
-DEFAULT_TIMEZONE: Final = "Asia/Shanghai"
+MAX_UPLOAD_SIZE          : Final = 100 * 1024 * 1024
+MAX_UPLOAD_FILENAME_CHARS: Final = 255
+DEFAULT_TIMEZONE         : Final = "Asia/Shanghai"
 
 JsonObject      = dict[str, Any]
 ConflictPolicy  = Literal["isolate", "skip", "overwrite", "duplicate"]
@@ -461,6 +463,19 @@ def _parse_import_options(options: str | None) -> dict[str, Any]:
     return normalized
 
 
+def _upload_filename(request: Request) -> str | None:
+    """解码上传文件名请求头；只用于审计展示，编码不合法或过长时在读请求体之前拒绝。"""
+
+    raw = request.headers.get("x-transfer-filename", "")
+    try:
+        filename = unquote(raw, encoding="utf-8", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Invalid upload filename") from exc
+    if len(filename) > MAX_UPLOAD_FILENAME_CHARS or any(ord(char) < 32 for char in filename):
+        raise HTTPException(status_code=422, detail="Invalid upload filename")
+    return filename or None
+
+
 async def _read_upload_body(request: Request) -> bytes:
     """读取请求体，并在解析压缩包前执行声明值和实际值双重限流。"""
 
@@ -573,12 +588,28 @@ def _decode_import_context(value: Any) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {}
 
 
+def _matchable_source_id(context: Any) -> str:
+    """读取条目或集合上记录的导入来源 ID；隔离导入、损坏或没有来源的记录不参与匹配。"""
+
+    import_context = _decode_import_context(context).get("import")
+    if not isinstance(import_context, dict) or import_context.get("policy") == "isolate":
+        return ""
+    return str(import_context.get("source_id") or "")
+
+
 def _index_imported_item_sources(
     db: Database,
     owner_id: str,
     item_types: set[str],
+    *,
+    include_own_ids: bool = False,
 ) -> dict[tuple[str, str], str]:
-    """一次读取已导入来源，供 skip/overwrite 规划复用。"""
+    """一次读取已导入来源，供 skip/overwrite 规划复用。
+
+    ``include_own_ids`` 只给“跳过”用：用户自己现有的同类型条目按自身 ID 也算已存在，
+    把本账号导出的备份再导回来时不会整份重复。跳过不改动原条目；“覆盖”不走这条路，
+    外部 ID 仍然不能指定要覆盖哪条现有记录。
+    """
 
     if not item_types:
         return {}
@@ -596,15 +627,13 @@ def _index_imported_item_sources(
         )
         .fetchall()
     )
-    sources: dict[tuple[str, str], str] = {}
+    sources: dict[tuple[str, str], str] = (
+        {(str(row["type"]), str(row["id"])): str(row["id"]) for row in rows}
+        if include_own_ids
+        else {}
+    )
     for row in rows:
-        import_context = _decode_import_context(row["context"]).get("import")
-        if not isinstance(import_context, dict):
-            continue
-        if import_context.get("policy") == "isolate":
-            continue
-        source_id = str(import_context.get("source_id") or "")
-        if source_id:
+        if source_id := _matchable_source_id(row["context"]):
             sources.setdefault((str(row["type"]), source_id), str(row["id"]))
     return sources
 
@@ -695,8 +724,10 @@ def _new_import_collection_id(db: Database) -> str:
 def _index_imported_collection_sources(
     db: Database,
     owner_id: str,
+    *,
+    include_own_ids: bool = False,
 ) -> dict[str, str]:
-    """一次读取当前所有者的非隔离集合来源索引。"""
+    """一次读取当前所有者的非隔离集合来源索引；``include_own_ids`` 的含义同条目索引。"""
 
     rows = (
         db.get_connection()
@@ -710,15 +741,11 @@ def _index_imported_collection_sources(
         )
         .fetchall()
     )
-    sources: dict[str, str] = {}
+    sources: dict[str, str] = (
+        {str(row["id"]): str(row["id"]) for row in rows} if include_own_ids else {}
+    )
     for row in rows:
-        import_context = _decode_import_context(row["context"]).get("import")
-        if not isinstance(import_context, dict):
-            continue
-        if import_context.get("policy") == "isolate":
-            continue
-        source_id = str(import_context.get("source_id") or "")
-        if source_id:
+        if source_id := _matchable_source_id(row["context"]):
             sources.setdefault(source_id, str(row["id"]))
     return sources
 
@@ -742,7 +769,7 @@ def _prepare_collection_import_operations(
         return [], {}, []
 
     existing_sources = (
-        _index_imported_collection_sources(db, owner_id)
+        _index_imported_collection_sources(db, owner_id, include_own_ids=conflict_policy == "skip")
         if conflict_policy in {"skip", "overwrite"}
         else {}
     )
@@ -764,7 +791,7 @@ def _prepare_collection_import_operations(
                 (
                     "skipped",
                     {"type": EVENT_COLLECTION_TYPE, **collection},
-                    "同来源日程集合已存在",
+                    "同 ID 或同来源日程集合已存在",
                 )
             )
             continue
@@ -1080,7 +1107,9 @@ def _plan_item_imports(
     """为选中记录分配动作和内部 ID，并记录跳过决定。"""
 
     existing_sources = (
-        _index_imported_item_sources(db, owner_id, selected_types)
+        _index_imported_item_sources(
+            db, owner_id, selected_types, include_own_ids=conflict_policy == "skip"
+        )
         if conflict_policy in {"skip", "overwrite"}
         else {}
     )
@@ -1096,7 +1125,7 @@ def _plan_item_imports(
         existing_id = existing_sources.get((str(record["type"]), source_id))
         if existing_id and conflict_policy == "skip":
             item_id_map[source_id] = existing_id
-            decisions.append(("skipped", record, "同类型、同来源记录已存在"))
+            decisions.append(("skipped", record, "同类型的同 ID 或同来源记录已存在"))
             continue
 
         action = "update" if existing_id and conflict_policy == "overwrite" else "insert"
@@ -1305,6 +1334,7 @@ async def execute_import(
     """读取并解析 bundle，在所有者级锁内离线规划和原子提交。"""
 
     parsed_options = _parse_import_options(x_transfer_options)
+    filename       = _upload_filename(request)
     file_bytes     = await _read_upload_body(request)
     parsed, valid_records, errors = await run_in_threadpool(_inspect_bundle_data, file_bytes)
     raw_bundle_id = parsed.manifest.get("bundle_id")
@@ -1321,12 +1351,7 @@ async def execute_import(
                 parsed_options = parsed_options,
                 owner_id       = owner_id,
                 db             = db,
-                filename       = unquote(
-                    request.headers.get("x-transfer-filename", ""),
-                    encoding = "utf-8",
-                    errors   = "strict",
-                )
-                or None,
+                filename       = filename,
             ),
         )
 

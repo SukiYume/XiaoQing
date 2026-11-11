@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -27,6 +28,7 @@ import time
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,8 +41,124 @@ BEHAVIOR_FILE   = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "xiaoq
 PERSONA_FILE    = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "persona.md"
 ZONE            = ZoneInfo("Asia/Shanghai")
 NAPCAT_PORT     = 11990
+# 评测用的时区；为空时用配置文件里的。小青按这个时区的钟点过作息，见 ``set_timezone``。
+_timezone_override = ""
 # 只有这几种准备需要改行为配置，端到端驱动把这些剧本放到最后逐个跑。
 BEHAVIOR_SETUPS = frozenset({"busy_persona", "proactive"})
+
+
+def set_timezone(name: str | None) -> None:
+    """让这次评测里的小青按 ``name`` 时区的钟点过日子。
+
+    评测跑在真实时钟上：上海的凌晨开跑，她按作息在睡觉，插话变少、回复犯困，分数没法和白天的
+    比。换一个此刻是白天的时区（比如 ``UTC``），预置数据的日期和 Bot 配置一起跟着换。
+    """
+
+    global ZONE, _timezone_override
+    if name:
+        ZONE               = ZoneInfo(name)
+        _timezone_override = name
+
+
+def _eval_config() -> dict[str, Any]:
+    config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    if _timezone_override:
+        config["timezone"] = _timezone_override
+    return config
+
+
+def redact_secrets(text: str) -> str:
+    """结果文件里不留凭据：Bearer 令牌和 key=value 形式的密钥换成占位。"""
+
+    text = str(text or "")
+    text = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", text)
+    text = re.sub(
+        r"(api[_-]?key|token|secret|password)\s*[:=]\s*\S+",
+        r"\1=[REDACTED]",
+        text,
+        flags=re.I,
+    )
+    return text[:800]
+
+
+class _NullLogger:
+    """进程内驱动逐轮换上自己的记录器；这里只收下没人接的错误。"""
+
+    def __init__(self, errors: list[str]) -> None:
+        self._errors = errors
+
+    def debug(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    info = warning = debug
+
+    def error(self, *args: Any, **_kwargs: Any) -> None:
+        self._errors.append(str(args[0]) if args else "error")
+
+    exception = error
+
+
+def make_plugin_context(
+    *,
+    session: Any,
+    config: dict[str, Any],
+    secrets: dict[str, Any],
+    data_dir: Path,
+    user_id: int,
+    group_id: int | None,
+    request_id: str,
+) -> Any:
+    """进程内驱动用的插件上下文：模型真实调用，发送一律记为成功。
+
+    和生产上下文一样，插件只拿得到 AI 路由能力，读不到统一密钥。
+    """
+
+    from core.ai import complete_configured_route, list_configured_models
+    from core.capabilities import AIService
+    from core.delivery import receipt_from_action, strip_receipt
+    from core.interfaces import PluginCapabilities, PluginSettingsSnapshot
+
+    errors           : list[str]            = []
+    delivered_actions: list[dict[str, Any]] = []
+
+    async def send_action(action: dict[str, Any]) -> bool:
+        delivered_actions.append(strip_receipt(action))
+        receipt = receipt_from_action(action)
+        if receipt is not None:
+            await receipt.record(True)
+        return True
+
+    async def complete_ai_route(**kwargs: Any) -> Any:
+        return await complete_configured_route(
+            session=session, config=config, secrets=secrets, plugin_name="xiaoqing_chat", **kwargs
+        )
+
+    def list_ai_models(**kwargs: Any) -> Any:
+        return list_configured_models(
+            config=config, secrets=secrets, plugin_name="xiaoqing_chat", **kwargs
+        )
+
+    return SimpleNamespace(
+        config=config,
+        get_settings_snapshot=lambda: PluginSettingsSnapshot(config=config, secrets={}, revision=0),
+        errors            = errors,
+        delivered_actions = delivered_actions,
+        secrets           = {},
+        capabilities=PluginCapabilities(ai=AIService(complete_ai_route, list_ai_models)),
+        plugin_name      = "xiaoqing_chat",
+        plugin_dir       = PROJECT_ROOT / "plugins" / "xiaoqing_chat",
+        data_dir         = data_dir,
+        http_session     = session,
+        send_action      = send_action,
+        logger           = _NullLogger(errors),
+        current_user_id  = user_id,
+        current_group_id = group_id,
+        request_id       = request_id,
+        admin_ids        = [],
+        state            = {},
+        is_admin=lambda _uid, _gid=None: False,
+        check_permission=lambda _uid, _perm: False,
+    )
 
 
 # ── 事件与记录 ──────────────────────────────────────────────────────────
@@ -273,18 +391,17 @@ def seed_online_life(life_dir: Path) -> None:
         "threads",
         [
             {
-                "id"            : "tseed01",
-                "title"         : seed["thread"]["title"],
-                "why"           : seed["thread"]["why"],
-                "next_query"    : seed["thread"]["next_query"],
-                "status"        : "open",
-                "steps"         : 1,
-                "empty_streak"  : 0,
-                "cooldown_until": 0.0,
-                "notes"         : [{"episode_id": "seed01", "note": "三脚架要稳"}],
-                "takeaway"      : "",
-                "created_at"    : now.timestamp() - 86400,
-                "updated_at"    : now.timestamp() - 7200,
+                "id"          : "tseed01",
+                "title"       : seed["thread"]["title"],
+                "why"         : seed["thread"]["why"],
+                "next_query"  : seed["thread"]["next_query"],
+                "status"      : "open",
+                "steps"       : 1,
+                "empty_streak": 0,
+                "notes"       : [{"episode_id": "seed01", "note": "三脚架要稳"}],
+                "takeaway"    : "",
+                "created_at"  : now.timestamp() - 86400,
+                "updated_at"  : now.timestamp() - 7200,
             }
         ],
     )
@@ -404,10 +521,6 @@ async def run_inproc_suite(
     from core.interfaces import PluginCapabilities
     from plugins.xiaoqing_chat import main as chat
     from plugins.xiaoqing_chat import reply_generator
-    from plugins.xiaoqing_chat.experiments.anthropomorphic_group import (
-        make_experiment_context,
-        redact_secrets,
-    )
     from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
     from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
@@ -419,7 +532,7 @@ async def run_inproc_suite(
     data_dir.mkdir(parents=True, exist_ok=False)
     for episode in range(len(suite.episodes)):
         seed_data(data_dir, suite.setup, group_id=suite_group(suite_index, episode))
-    config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    config = _eval_config()
     secrets = json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
     online_life                    = online_life or "online_life" in suite.setup
     life_bridge: LifeBridge | None = None
@@ -470,7 +583,7 @@ async def run_inproc_suite(
                         last_bot_id = last_bot_id,
                     )
                     token   = current_row.set(row)
-                    context = make_experiment_context(
+                    context = make_plugin_context(
                         session    = session,
                         config     = config,
                         secrets    = secrets,
@@ -708,10 +821,12 @@ class BehaviorOverride:
     def __init__(self, backup_dir: Path) -> None:
         self.original = BEHAVIOR_FILE.read_bytes()
         self.digest   = hashlib.sha256(self.original).hexdigest()
+        self.applied  = False
         (backup_dir / "xiaoqing_config.backup.json").write_bytes(self.original)
 
     def apply(self, **sections: dict[str, Any]) -> None:
-        data = json.loads(self.original.decode("utf-8"))
+        self.applied = True
+        data         = json.loads(self.original.decode("utf-8"))
         for key, value in sections.items():
             data[key] = {**data.get(key, {}), **value}
         BEHAVIOR_FILE.write_text(
@@ -721,6 +836,10 @@ class BehaviorOverride:
         time.sleep(1.1)
 
     def restore(self) -> None:
+        # 没改过就不写回：评测跑着的时候有人改了行为配置，不能拿开跑时的快照盖掉。
+        if not self.applied:
+            return
+        self.applied = False
         BEHAVIOR_FILE.write_bytes(self.original)
         if hashlib.sha256(BEHAVIOR_FILE.read_bytes()).hexdigest() != self.digest:
             raise RuntimeError(f"行为配置恢复后哈希不一致，备份在 {BEHAVIOR_FILE}")
@@ -763,7 +882,7 @@ class LiveBot:
         ]
 
     def _write_config(self) -> Path:
-        config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+        config = _eval_config()
         config.update(
             {
                 "data_root"            : str(self.data),
@@ -983,7 +1102,6 @@ async def replay(chat_data: Path, chat_id: str, speaker: str, text: str, *, at_b
     from core.delivery import DeliverySegments
     from plugins.xiaoqing_chat import main as chat
     from plugins.xiaoqing_chat import reply_generator
-    from plugins.xiaoqing_chat.experiments.anthropomorphic_group import make_experiment_context
     from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
     from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
@@ -1040,7 +1158,7 @@ async def replay(chat_data: Path, chat_id: str, speaker: str, text: str, *, at_b
         )
         try:
             async with aiohttp.ClientSession() as session:
-                context = make_experiment_context(
+                context = make_plugin_context(
                     session    = session,
                     config     = config,
                     secrets    = secrets,

@@ -697,9 +697,20 @@ async def _collected_new_emoji(
             ),
             source_user_id=str(event.get("user_id") or ""),
         )
-    except Exception:
+    except Exception as exc:
+        # 收不进来也不影响这一轮回复，但要留下痕迹：此前失败是静默的，生产上看不出偷没偷到图。
+        fields               = _event_media_log_fields(event)
+        fields["error_type"] = type(exc).__name__
+        media_log(
+            context, runtime, step="media.emoji.collect_error", fields=fields, level="warning"
+        )
         return False
-    return collected is not None and collected[1]
+    if collected is None:
+        return False
+    fields = _event_media_log_fields(event)
+    fields.update({"media_hash": rendered.media_hash[:12], "new": bool(collected[1])})
+    media_log(context, runtime, step="media.emoji.collect", fields=fields)
+    return bool(collected[1])
 
 
 async def render_event_media(event: dict[str, Any], *, context, runtime) -> list[RenderedMedia]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import re
 import time
 from typing import Any
@@ -15,6 +16,8 @@ from . import home, login
 from .auth import token_identity
 from .client import AuthRequired, BridgeError, read_json, reserve_request, services, write_json
 from .feeding import reject_unchecked_forwarding
+
+logger = logging.getLogger(__name__)
 
 HELP = """🏠 小爱 · 家庭助手
 ━━━━━━━━━━━━
@@ -223,7 +226,8 @@ async def handle(
         return segments("请私聊发送 /小爱 登录，用米家 App 扫码完成授权。")
     except BridgeError as exc:
         return segments(str(exc))
-    except Exception:
+    except Exception as exc:
+        logger.warning("xiaoai request failed error_type=%s", type(exc).__name__)
         return segments(
             "小爱请求未能完成。请核对设备状态，并运行 /小爱 检查；可发送 /小爱 登录 重新授权。"
         )

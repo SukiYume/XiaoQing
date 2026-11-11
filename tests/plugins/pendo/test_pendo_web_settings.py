@@ -516,7 +516,7 @@ def test_note_and_event_handlers_apply_persisted_default_category(db: Database) 
 
     class _ReminderService:
         @staticmethod
-        def detect_conflict(*_args: object, **_kwargs: object) -> list[object]:
+        def detect_conflicts(*_args: object, **_kwargs: object) -> list[object]:
             return []
 
     event_result = asyncio.run(

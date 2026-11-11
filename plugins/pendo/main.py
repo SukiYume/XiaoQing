@@ -679,7 +679,7 @@ def _format_result(result: Any) -> list[dict[str, Any]]:
         if isinstance(result, dict) and result.get("status") == "error"
         else CommandOutcome("completed")
     )
-    if isinstance(result, dict) and result.get("status") == "success":
+    if isinstance(result, dict) and result.get("status") in {"success", "need_confirm"}:
         explicit_outcome = result.get("outcome")
         if isinstance(explicit_outcome, CommandOutcome):
             outcome = explicit_outcome
@@ -810,7 +810,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                     "",
                     "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险。",
                     "支持类型: event、task/todo、note、diary、ledger，以及多节点/重复日程的 event_collection。",
-                    "冲突策略: 跳过同 ID、覆盖同 ID、生成副本；重复 bundle 默认阻止二次导入，可在 Web 勾选强制重新导入。",
+                    "冲突策略: 隔离导入（默认）、跳过已有（同 ID 或此前同来源导入的记录，原记录不动）、覆盖此前同来源导入的记录、生成副本。重复 bundle 默认阻止二次导入，可在 Web 勾选强制重新导入。",
                 ]
             )
         )
@@ -1048,7 +1048,7 @@ HELP_MAP = {
         "⏰ 提醒操作",
         "• /pendo confirm <id> - 确认刚收到的那条提醒",
         "• /pendo snooze <id> <时间> - 延后刚收到的提醒",
-        "  - 时间格式: 10m, 10min, 1h, 1d, 19:00",
+        "  - 时间格式: 10m, 10min, 30分钟, 1h, 2小时, 1d, 19:00",
         "  - 例: /pendo confirm abc12345",
         "  - 例: /pendo snooze abc12345 10m",
         "• 管理未来提醒: /pendo event reminders set/delete/confirm <id> ...",
@@ -1070,7 +1070,7 @@ HELP_MAP = {
         "  - 聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险",
         "  - 请使用 Web 数据迁移页上传 .pendo.zip，页面会先做预检再写入数据库",
         "  - 支持类型: event、task/todo、note、diary、ledger、event_collection",
-        "  - 支持策略: 跳过同 ID、覆盖同 ID、生成副本；重复 bundle 默认阻止二次导入",
+        "  - 支持策略: 隔离导入（默认）、跳过已有（同 ID 或同来源）、覆盖此前同来源导入的记录、生成副本；重复 bundle 默认阻止二次导入",
         "  - 例: /pendo import",
         "  - 例: /pendo web token",
     ],

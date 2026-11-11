@@ -14,6 +14,14 @@ def single_line_text(value: Any) -> str:
     return " ".join(text.split())
 
 
+def collection_node_title(collection_title: Any, node_title: Any) -> str:
+    """集合标题和节点标题合成“集合 · 节点”；重复日程两者相同时只写一次。"""
+
+    collection_text = str(collection_title or "") or "无标题"
+    node_text       = str(node_title or "") or "无标题"
+    return collection_text if collection_text == node_text else f"{collection_text} · {node_text}"
+
+
 def ledger_amount_yuan(item: Any) -> float:
     """读取账目金额（元），优先使用当前规范的整数分字段。"""
 
@@ -212,7 +220,13 @@ class ItemFormatter:
         start_str = ItemFormatter.format_time(start_time, tz=tz)
 
         if end_time:
-            end_str = ItemFormatter.format_time(end_time, tz=tz)
+            # 跨天的结束时间带上日期，避免“09:00 - 09:00”看起来像零时长。
+            same_day = ItemFormatter.format_datetime(
+                start_time, "%Y-%m-%d", tz=tz
+            ) == ItemFormatter.format_datetime(end_time, "%Y-%m-%d", tz=tz)
+            end_str = ItemFormatter.format_datetime(
+                end_time, "%H:%M" if same_day else "%m-%d %H:%M", tz=tz
+            )
             return f"{start_str} - {end_str}"
 
         return start_str

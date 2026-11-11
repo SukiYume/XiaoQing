@@ -4,7 +4,7 @@
   "description": "拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
   "entry": "main.py",
   "concurrency": "parallel",
-  "capabilities": ["onebot_media"],
+  "capabilities": ["onebot_media", "inbound_backlog"],
   "uses_services": ["agent.handle_turn", "agent.report_delivery", "life.turn_context", "life.export_memes"],
   "services": [
     {
@@ -201,7 +201,6 @@
       "id": "xiaoqing_chat.proactive",
       "handler": "scheduled_proactive",
       "delivery": "targeted",
-      "group_ids": [],
       "cron": {"minute": "*/20"},
       "description": "冷群时以群友身份主动开口；plugins.xiaoqing_chat.proactive.enabled 打开后生效"
     }

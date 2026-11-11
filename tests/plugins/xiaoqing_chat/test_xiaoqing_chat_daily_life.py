@@ -160,7 +160,7 @@ def test_mood_is_shared_across_chats_and_turns_sleepy_at_night() -> None:
 
 def test_casual_reply_is_split_into_clause_bubbles() -> None:
     cfg = ResponsePostProcessConfig()
-    # 大约每 16 字一个气泡：二十来字的一句发两条，更长的才拆满三条，短句不拆。
+    # 大约每 22 字一个气泡：二三十字的一句发两条，四十多字才拆满三条，短句不拆。
     assert process_llm_response(
         "我周末经常睡到中午，几点起嘛……看我什么时候被饿醒了", cfg, bot_name="小青"
     ) == [
@@ -173,8 +173,16 @@ def test_casual_reply_is_split_into_clause_bubbles() -> None:
         bot_name="小青",
     ) == [
         "我周末经常睡到中午，几点起嘛……",
+        "看我什么时候被饿醒了，反正闹钟是叫不醒我的",
+    ]
+    assert process_llm_response(
+        "我周末经常睡到中午，几点起嘛……看我什么时候被饿醒了，反正闹钟是叫不醒我的，室友喊我也没用",
+        cfg,
+        bot_name="小青",
+    ) == [
+        "我周末经常睡到中午，几点起嘛……",
         "看我什么时候被饿醒了",
-        "反正闹钟是叫不醒我的",
+        "反正闹钟是叫不醒我的，室友喊我也没用",
     ]
     assert process_llm_response("你才胖了，懂不懂啦", cfg, bot_name="小青") == [
         "你才胖了，懂不懂啦"

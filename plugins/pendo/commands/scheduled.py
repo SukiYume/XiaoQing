@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import calendar
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
@@ -22,9 +22,10 @@ from ..utils.db_ops import (
     get_database,
     get_user_settings_bundle_map,
 )
-from ..utils.formatters import ledger_amount_yuan
+from ..utils.formatters import collection_node_title, ledger_amount_yuan
 from ..utils.settings_utils import save_user_setting
 from ..utils.time_utils import (
+    CN_WEEKDAYS,
     TimezoneHelper,
     get_user_now_from_settings,
     now_in_timezone,
@@ -367,7 +368,7 @@ async def _send_daily_briefing_for_user(
         return
     first_due = custom_settings.get(
         "last_daily_briefing_date"
-    ) != current_date and _is_scheduled_minute(
+    ) != current_date and _is_within_schedule_window(
         user_now, str(user_settings.get("daily_report_time") or "08:00")
     )
     periods = await _periods_to_deliver(
@@ -436,8 +437,16 @@ async def _active_user_bundles(db: Database) -> tuple[list[str], dict[str, Setti
     )
 
 
-async def send_daily_briefings(context: object, db: Database) -> ActionList:
-    """向到达本地配置时刻且尚未发送的用户投递每日简报。"""
+async def _run_for_active_users(
+    context: object,
+    db: Database,
+    component: str,
+    deliver: Callable[[_ScheduleRun, str, SettingsBundle], Awaitable[None]],
+) -> ActionList:
+    """对每个活跃用户执行一次定时投递。
+
+    读不到用户或设置时整轮跳过；单个用户出错只记录，不影响其他用户。
+    """
 
     run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
@@ -447,21 +456,27 @@ async def send_daily_briefings(context: object, db: Database) -> ActionList:
             context,
             exc,
             logger    = logger,
-            component = "pendo.scheduled.daily_briefing",
+            component = f"pendo.scheduled.{component}",
         )
         return run.messages
 
     for user_id in user_ids:
         try:
-            await _send_daily_briefing_for_user(run, user_id, bundles[user_id])
+            await deliver(run, user_id, bundles[user_id])
         except Exception as exc:
             public_error_message(
                 context,
                 exc,
                 logger    = logger,
-                component = "pendo.scheduled.daily_briefing_user",
+                component = f"pendo.scheduled.{component}_user",
             )
     return run.messages
+
+
+async def send_daily_briefings(context: object, db: Database) -> ActionList:
+    """向到达本地配置时刻且尚未发送的用户投递每日简报。"""
+
+    return await _run_for_active_users(context, db, "daily_briefing", _send_daily_briefing_for_user)
 
 
 async def _send_diary_reminder_for_user(
@@ -477,7 +492,7 @@ async def _send_diary_reminder_for_user(
     current_date    = user_now.date().isoformat()
     first_due       = custom_settings.get(
         "last_diary_remind_date"
-    ) != current_date and _is_scheduled_minute(
+    ) != current_date and _is_within_schedule_window(
         user_now, str(user_settings.get("diary_remind_time") or "21:30")
     )
     periods = await _periods_to_deliver(
@@ -536,29 +551,7 @@ async def _deliver_diary_reminder(
 async def check_diary_reminders(context: object, db: Database) -> ActionList:
     """在每个用户的本地提醒时刻检查当天是否缺少日记。"""
 
-    run = _ScheduleRun(context, db, datetime.now(UTC))
-    try:
-        user_ids, bundles = await _active_user_bundles(db)
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "pendo.scheduled.diary_reminder",
-        )
-        return run.messages
-
-    for user_id in user_ids:
-        try:
-            await _send_diary_reminder_for_user(run, user_id, bundles[user_id])
-        except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "pendo.scheduled.diary_reminder_user",
-            )
-    return run.messages
+    return await _run_for_active_users(context, db, "diary_reminder", _send_diary_reminder_for_user)
 
 
 async def prune_operation_logs(_context: object, db: Database) -> ActionList:
@@ -617,7 +610,7 @@ async def _send_finance_summary_for_user(
     )
     first_due = (
         is_period_end
-        and _is_scheduled_minute(user_now, "21:00")
+        and _is_within_schedule_window(user_now, "21:00")
         and bundle["custom_settings"].get(schedule.marker_name) != current_date
     )
     periods = await _periods_to_deliver(
@@ -693,31 +686,12 @@ async def _send_finance_summaries(
     db: Database,
     schedule: _FinanceSchedule,
 ) -> ActionList:
-    """共享周报和月报的用户遍历、错误隔离与批量设置读取。"""
+    """周报和月报共用同一套用户遍历，只有调度常量不同。"""
 
-    run = _ScheduleRun(context, db, datetime.now(UTC))
-    try:
-        user_ids, bundles = await _active_user_bundles(db)
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = f"pendo.scheduled.{schedule.component}",
-        )
-        return run.messages
+    async def deliver(run: _ScheduleRun, user_id: str, bundle: SettingsBundle) -> None:
+        await _send_finance_summary_for_user(run, user_id, bundle, schedule)
 
-    for user_id in user_ids:
-        try:
-            await _send_finance_summary_for_user(run, user_id, bundles[user_id], schedule)
-        except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = f"pendo.scheduled.{schedule.component}_user",
-            )
-    return run.messages
+    return await _run_for_active_users(context, db, schedule.component, deliver)
 
 
 async def send_weekly_finance_summaries(context: object, db: Database) -> ActionList:
@@ -918,8 +892,12 @@ async def _send_private_or_collect(
     return False
 
 
-def _is_scheduled_minute(current_time: datetime, target_time: str) -> bool:
-    """仅在合法 ``HH:MM`` 与当前本地分钟完全一致时返回真。"""
+def _is_within_schedule_window(current_time: datetime, target_time: str) -> bool:
+    """当前本地时间落在合法 ``HH:MM`` 起的补发窗口内时返回真。
+
+    只认整分钟会让那一分钟恰好停机或卡顿的日子整天收不到；窗口不跨零点，
+    当天是否已发由调用方的日期标记和投递记录保证只发一次。
+    """
 
     try:
         target_hour, target_minute = map(int, target_time.split(":"))
@@ -927,7 +905,8 @@ def _is_scheduled_minute(current_time: datetime, target_time: str) -> bool:
         return False
     if not 0 <= target_hour <= 23 or not 0 <= target_minute <= 59:
         return False
-    return current_time.hour == target_hour and current_time.minute == target_minute
+    elapsed = (current_time.hour - target_hour) * 60 + current_time.minute - target_minute
+    return 0 <= elapsed < PendoConfig.SCHEDULED_DELIVERY_GRACE_MINUTES
 
 
 async def _generate_finance_summary_content(
@@ -1190,7 +1169,7 @@ def _build_briefing_event_entries(
         if event.event_collection_id:
             collection_title = collections.get(event.event_collection_id, {}).get("title")
             if isinstance(collection_title, str) and collection_title:
-                title = f"{collection_title} · {title}"
+                title = collection_node_title(collection_title, title)
         start_time = _normalize_briefing_datetime(event.start_time, user_timezone)
         if start_time is not None and today <= start_time < tomorrow:
             entries.append(
@@ -1212,9 +1191,8 @@ def _format_daily_briefing(
     current_dt: datetime,
 ) -> str:
     """格式化每日简报，不执行数据库或网络操作。"""
-    current_date  = current_dt.strftime("%Y年%m月%d日")
-    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    weekday       = weekday_names[current_dt.weekday()]
+    current_date = current_dt.strftime("%Y年%m月%d日")
+    weekday      = CN_WEEKDAYS[current_dt.weekday()]
 
     lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
 

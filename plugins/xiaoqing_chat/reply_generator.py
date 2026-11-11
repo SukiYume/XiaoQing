@@ -17,11 +17,14 @@ from .context_builder import (
     retrieve_memory_context,
 )
 from .llm.check_result import ReplyCheckResult, ReplyRejected, checker_unavailable
-from .llm.communication_constraints import requested_char_count, requested_sentence_count
+from .llm.communication_constraints import mentions_length, requested_char_count
+from .llm.decorations import strip_junk_tail, tame_decorations
 from .llm.gateway import LLMError, chat_completions_with_fallback_paths
 from .llm.local_checks import (
     heuristic_check,
     media_meta_reply_check,
+    narrated_motive_check,
+    ungrounded_link_check,
 )
 from .llm.media_evidence import (
     event_has_current_image,
@@ -37,6 +40,7 @@ from .llm.prompt_builder import (
 from .llm.reply_checker import TurnReadingCache, check_reply
 from .logging_utils import append_timing, log_step, safe_correlation_id
 from .media.marker_resolver import (
+    COMMON_QQ_FACE_LABELS,
     ResolvedMarker,
     parse_marker,
     resolve_marker,
@@ -45,9 +49,8 @@ from .media.marker_resolver import (
     text_without_outbound_marker,
 )
 from .memory.local_ids import replace_local_ids_with_text, reply_is_stale
-from .message_parts import (
-    normalize_message_parts,
-)
+from .memory.memory import is_conversation_reply
+from .message_parts import normalize_message_parts, render_stored_message
 from .planning.planned_action import PlannedAction
 from .reply_draft import (
     RejectedCandidate,
@@ -71,6 +74,9 @@ from .reply_plan import (
 
 # 这些软问题仍要重写：没照对方明说的要求做（比如篇幅），或者读图结论有出入。
 _REWRITE_SOFT_CODES = frozenset({"instruction_following", "media_grounding", "checker_unavailable"})
+# 重写用完后这几类仍不发原稿：出戏或答应了线下、读图读错、没审成。其余的（接得不够准、
+# 多说了一句没依据的话、没完全照要求）照发最后一稿：比“脑子卡壳了”这类兜底句更像人。
+_NEVER_SEND_CODES = frozenset({"persona_grounding", "media_grounding", "checker_unavailable"})
 
 _REASONING_TURN_RE = re.compile(
     r"(?:\d(?:[\d.,]*\d)?\s*(?:公斤|千克|克|厘米|毫米|米|公里|立方|每立方|%|％|kg|km|cm))"
@@ -81,18 +87,21 @@ _REASONING_TURN_RE = re.compile(
 # 路由、人物边界与确定性文本修复
 
 
-# 对方提到几句话、多少字（“用一句话安利”“写个800字”），不管是不是精确的要求都按原句分段。
-_LENGTH_HINT_RE = re.compile(r"[一二两三四五六七八九十百千\d]+\s*(?:句|字)")
-
-
 def _allows_clause_bubbles(text: str) -> bool:
-    """对方要求了几句话或多少字时按原句分段，分句气泡会让句数和篇幅看起来不对。"""
+    """对方提到了几句话或多少字时按原句分段，分句气泡会让句数和篇幅看起来不对。"""
 
-    return (
-        requested_sentence_count(text) is None
-        and requested_char_count(text) is None
-        and _LENGTH_HINT_RE.search(str(text or "")) is None
-    )
+    return not mentions_length(text)
+
+
+# 对方要的篇幅到这个字数，要的就是一篇成品。
+_DOCUMENT_CHARS = 100
+
+
+def _wants_whole_document(text: str) -> bool:
+    """对方要一篇有篇幅的成品（“写个800字的检讨”）：整篇一条发出，段落和标点照原样。"""
+
+    length = requested_char_count(text)
+    return length is not None and length.mode != "at_most" and length.count >= _DOCUMENT_CHARS
 
 
 def _needs_reasoning_route(text: str) -> bool:
@@ -154,6 +163,14 @@ def _strip_sender_vocative(text: str, sender: str) -> str:
         return text
     stripped = re.sub(rf"^\s*{re.escape(name)}\s*[，,、:：]\s*", "", text, count=1)
     return stripped if stripped.strip() else text
+
+
+def _recent_reply_texts(plan: ReplyGenerationPlan) -> list[str]:
+    """她在这段对话里已经发出的聊天回复（旧→新），用来看装饰是不是刚用过。"""
+
+    return [
+        render_stored_message(message) for message in plan.history if is_conversation_reply(message)
+    ]
 
 
 def _earlier_context(plan: ReplyGenerationPlan) -> str:
@@ -297,6 +314,10 @@ async def _request_reply_candidate(
         **foreground.request_controls(),
     )
     raw = _strip_sender_vocative(raw, event_sender_name(plan.event))
+    raw = strip_junk_tail(
+        raw, plan.text + "".join(render_stored_message(message) for message in plan.history)
+    )
+    raw = tame_decorations(raw, _recent_reply_texts(plan), COMMON_QQ_FACE_LABELS)
     if _is_turn_stale(plan.chat_id, plan.event):
         log_step(
             plan.context,
@@ -320,10 +341,33 @@ async def _request_reply_candidate(
     return raw
 
 
+def _link_sources(plan: ReplyGenerationPlan, trimmed_history: Any, memory_block: str) -> list[str]:
+    """她能转述的网址和邮箱出自哪里：别人发的消息和插件通知、读图结果、生活记录、工具信息和记忆。
+
+    她自己之前的聊天回复不算：上一条凭空带出的链接不能给下一条当依据。
+    """
+
+    said = [
+        render_stored_message(message)
+        for message in trimmed_history
+        if not is_conversation_reply(message)
+    ]
+    return [
+        *said,
+        plan.text,
+        plan.life_block,
+        plan.tool_info_block,
+        plan.knowledge_block,
+        plan.profile_block,
+        memory_block,
+    ]
+
+
 def _precheck_candidate(
     plan: ReplyGenerationPlan,
     raw: str,
     trimmed_history: Any,
+    memory_block: str = "",
 ) -> RejectedCandidate | None:
     if not raw or not plan.runtime.cfg.reply_check.enable_reply_checker:
         return None
@@ -331,8 +375,9 @@ def _precheck_candidate(
     raw_parts     = process_llm_response(
         precheck_text,
         plan.runtime.cfg.postprocess,
-        bot_name     = plan.bot_name,
-        clause_split = _allows_clause_bubbles(plan.text),
+        bot_name        = plan.bot_name,
+        enable_splitter = not _wants_whole_document(plan.text),
+        clause_split    = _allows_clause_bubbles(plan.text),
     )
     raw_draft = build_reply_draft(raw_parts, raw_text=raw, rewritten_text=raw)
     if raw_draft is None:
@@ -344,6 +389,12 @@ def _precheck_candidate(
         similarity_threshold = plan.runtime.cfg.reply_check.similarity_threshold,
         max_assistant_in_row = plan.runtime.cfg.reply_check.max_assistant_in_row,
     )
+    if result is None or result.suitable:
+        result = ungrounded_link_check(
+            reply=raw_draft.text, sources=_link_sources(plan, trimmed_history, memory_block)
+        )
+    if result is None or result.suitable:
+        result = narrated_motive_check(reply=raw_draft.text, current_text=plan.text)
     if result is None or result.suitable:
         return None
     log_step(
@@ -443,8 +494,9 @@ async def _resolve_candidate_draft(
     parts = process_llm_response(
         marker_text,
         plan.runtime.cfg.postprocess,
-        bot_name     = plan.bot_name,
-        clause_split = _allows_clause_bubbles(plan.text),
+        bot_name        = plan.bot_name,
+        enable_splitter = not _wants_whole_document(plan.text),
+        clause_split    = _allows_clause_bubbles(plan.text),
     )
     draft = build_reply_draft(parts, raw_text=raw, rewritten_text=marker_text)
     if draft is None and resolved_marker is not None:
@@ -646,7 +698,9 @@ async def _check_candidate_draft(
         result                      = check,
         draft                       = draft,
         allow_after_regen_exhausted = (
-            check.failure_code != "checker_unavailable" and not check.is_hard and deterministic_ok
+            deterministic_ok
+            and check.severity != "infra"
+            and (not check.is_hard or check.failure_code not in _NEVER_SEND_CODES)
         ),
     )
 
@@ -778,7 +832,7 @@ async def _generate_checked_draft(
         if candidate is None:
             return None
 
-        rejected   = _precheck_candidate(plan, candidate, trimmed_history)
+        rejected   = _precheck_candidate(plan, candidate, trimmed_history, memory_block)
         regen_step = "reply.pre_heuristic.regen"
         if rejected is None:
             draft = await _resolve_candidate_draft(plan, candidate, trimmed_history)

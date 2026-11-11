@@ -17,7 +17,7 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-from . import bili_auth, commands, persona_bridge
+from . import bili_auth, commands, persona_bridge, repair, stats
 from . import digest as digest_mod
 from . import memes as memes_mod
 from . import turn_context as turn_context_mod
@@ -192,7 +192,15 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
     moment   = runtime.clock(context)
     store    = runtime.store
     presence = persona_bridge.availability(context, cfg, moment)
-    roll_day(store.state, day_key(moment))
+    repair.run(store, moment.tzinfo, moment.timestamp())  # 一次性；之后随下一次落盘保存
+    previous, today = str(store.state.get("day") or ""), day_key(moment)
+    if previous and previous != today:
+        logger.info(
+            "xiaoqing_life step=daily_summary day=%s %s",
+            previous,
+            stats.summary(store.state, previous),
+        )
+    roll_day(store.state, today)
     seed_interests(store.interests, cfg.seed_interests, moment.timestamp())
     return decide(
         cfg,
@@ -362,6 +370,8 @@ async def handle(
             return segments(commands.works_text(store))
         if action == "dossier":
             return segments(commands.dossier_text(store, rest, moment))
+        if action == "stats":
+            return segments(stats.stats_text(store.state))
         if action == "methods":
             return segments(commands.methods_text(store))
         if action == "memes":

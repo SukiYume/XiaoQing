@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from ...config import PendoConfig
 from ...models.item import EventItem
 from ...services.db import Database
+from ...services.db_schema import SQLITE_ID_BATCH_SIZE
 from ...services.event_graph import EventGraphService
 from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper
@@ -20,9 +21,8 @@ JsonObject          = dict[str, Any]
 ReminderStatus      = Literal["pending", "sent", "confirmed"]
 EventWithCollection = tuple[EventItem, JsonObject | None]
 
-_EVENT_KINDS      : Final = frozenset({"", "all", "single", "multi_node", "recurring"})
-_REMINDER_FILTERS : Final = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
-_SQLITE_BATCH_SIZE: Final = 500
+_EVENT_KINDS     : Final = frozenset({"", "all", "single", "multi_node", "recurring"})
+_REMINDER_FILTERS: Final = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +178,10 @@ def _build_reminder_rows(event: EventItem, reminder_logs: list[JsonObject]) -> l
                 "sent_at"     : log.get("sent_at") if log else None,
                 "confirmed_at": log.get("confirmed_at") if log else None,
                 "repeat_count": int(log.get("repeat_count") or 0) if log else 0,
+                # 从未发出就作废的提醒：状态仍归入 confirmed，页面据此显示“已过期”。
+                "missed": bool(
+                    log and log.get("user_action") == "expired" and not log.get("sent_at")
+                ),
             }
         )
     return rows
@@ -238,8 +242,8 @@ def _fetch_reminder_logs_by_event_ids(
     unique_ids = [event_id for event_id in dict.fromkeys(event_ids) if event_id]
     logs_by_event: dict[str, list[JsonObject]] = {event_id: [] for event_id in unique_ids}
     conn = db.get_connection()
-    for offset in range(0, len(unique_ids), _SQLITE_BATCH_SIZE):
-        batch        = unique_ids[offset : offset + _SQLITE_BATCH_SIZE]
+    for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
+        batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
         placeholders = ",".join("?" for _ in batch)
         rows         = conn.execute(
             f"""

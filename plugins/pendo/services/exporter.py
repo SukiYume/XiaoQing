@@ -76,6 +76,14 @@ def _sanitize_user_id(user_id: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", user_id)
 
 
+_MAX_EXPORT_STEM_CHARS  = 80
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
+
+
 def _sanitize_export_filename(raw_name: str) -> str:
     """清洗导出文件名，保留可读性并强制 .md 后缀。"""
     name = (raw_name or "").strip().strip('"').strip("'")
@@ -84,9 +92,14 @@ def _sanitize_export_filename(raw_name: str) -> str:
     name = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", name).strip(" .")
     if not name:
         return ""
-    if not name.lower().endswith(".md"):
-        name = f"{name}.md"
-    return name
+    stem = name[:-3] if name.lower().endswith(".md") else name
+    # 文件系统单个文件名上限约 255 字节；Windows 还保留 CON、NUL 等设备名。
+    stem = stem[:_MAX_EXPORT_STEM_CHARS].strip(" .")
+    if not stem:
+        return ""
+    if stem.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        stem = f"_{stem}"
+    return f"{stem}.md"
 
 
 class ExporterService:

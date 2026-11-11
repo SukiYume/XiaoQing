@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from plugins.xiaoqing_chat.config.config import MemoryConfig, PersonalityConfig
-from plugins.xiaoqing_chat.experiments.anthropomorphic_group import score_turn
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
@@ -156,61 +155,3 @@ def test_planner_json_extractors_accept_fenced_values_without_surrounding_prose(
     assert parse_first_json_array('```json\n[{"action":"wait"}]\n```') == [{"action": "wait"}]
     assert parse_first_json_object('```json\n{"action":"reply"}\n```') == {"action": "reply"}
     assert parse_first_json_object('prefix {"action":"reply"}') is None
-
-
-def _turn(*, expected_action: str = "reply", with_input_image: bool = False) -> dict:
-    segments = [{"type": "text", "data": {"text": "小青看看"}}]
-    if with_input_image:
-        segments.append({"type": "image", "data": {"file": "input.png"}})
-    return {
-        "expected_action" : expected_action,
-        "rubric_tags"     : [],
-        "message_segments": segments,
-    }
-
-
-def test_anthropomorphic_score_marks_unobserved_dimensions_na() -> None:
-    result = score_turn(
-        _turn(),
-        [{"type": "text", "data": {"text": "我觉得挺有意思的"}}],
-    )
-
-    assert result["scores"]["context_understanding"] is None
-    assert result["scores"]["topic_tracking"] is None
-    assert result["scores"]["persona_consistency"] is None
-    assert "context_understanding" in result["applicable_dimensions"]
-    assert "context_understanding" not in result["observed_dimensions"]
-    assert result["evidence"]["context_understanding"].startswith("not observed")
-
-
-def test_anthropomorphic_score_does_not_award_default_media_score_for_input() -> None:
-    result = score_turn(
-        _turn(with_input_image=True),
-        [{"type": "text", "data": {"text": "这是一张猫猫图片"}}],
-    )
-
-    assert result["scores"]["multimodal_natural"] is None
-    assert "multimodal_natural" not in result["observed_dimensions"]
-
-
-def test_anthropomorphic_score_uses_actual_bot_media_output() -> None:
-    result = score_turn(
-        _turn(with_input_image=False),
-        [
-            {"type": "text", "data": {"text": "这是一张猫猫图片"}},
-            {"type": "image", "data": {"file": "bot-output.png"}},
-        ],
-    )
-
-    assert result["scores"]["multimodal_natural"] == 2
-    assert "media_mechanical" in result["failure_tags"]
-    assert result["status"] == "REVIEW"
-
-
-def test_missing_reply_average_uses_only_observed_dimensions() -> None:
-    result = score_turn(_turn(with_input_image=True), [])
-
-    assert result["status"] == "REVIEW"
-    assert result["scores"]["trigger_reasonable"] == 1
-    assert result["scores"]["multimodal_natural"] is None
-    assert result["average"] == 2.0

@@ -49,6 +49,16 @@ class SecretAdminService:
 
 
 @dataclass(frozen=True)
+class InboundBacklogService:
+    """只读：当前事件的发送者自己在本会话里排着的消息，看不到其他人和其他会话。"""
+
+    _waiting: Callable[[], tuple[dict[str, Any], ...]]
+
+    def waiting(self) -> tuple[dict[str, Any], ...]:
+        return self._waiting()
+
+
+@dataclass(frozen=True)
 class OneBotMediaService:
     _request: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 

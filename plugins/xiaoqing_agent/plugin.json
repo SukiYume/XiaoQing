@@ -23,8 +23,8 @@
         {
             "name": "agent",
             "triggers": ["agent"],
-            "help": "执行任务并交付结果，status 查运行状态，stop 停止任务，history 查记录，result 补发结果。短任务当轮交付，耗时任务后台继续并按实际进展反馈；任务权限跟随发起人。",
-            "usage": "/agent <run|status|stop|history|result|help> [参数]",
+            "help": "执行任务并交付结果，status 查运行状态，stop 停止任务，history 查记录，result 补发结果，new 开始新的办事会话。短任务当轮交付，耗时任务后台继续并按实际进展反馈；同一个人接着说会接上前面的事；任务权限跟随发起人。",
+            "usage": "/agent <run|status|stop|history|result|new|help> [参数]",
             "contexts": ["private", "group"],
             "examples": ["/agent status"],
             "invalid_examples": ["/agent unknown-command"],
@@ -69,6 +69,15 @@
                     "usage": "/agent result <任务ID>",
                     "examples": ["/agent result a1b2c3"],
                     "invalid_examples": ["/agent result"]
+                },
+                {
+                    "name": "new",
+                    "aliases": ["新会话", "clear"],
+                    "help": "忘掉你在本会话里和小青办过的事，下一件事从头开始；任务记录照常保留",
+                    "usage": "/agent new",
+                    "match": "exact",
+                    "examples": ["/agent new"],
+                    "invalid_examples": ["/agent new extra"]
                 },
                 {
                     "name": "help",

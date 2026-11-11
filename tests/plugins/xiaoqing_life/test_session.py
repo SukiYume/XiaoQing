@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.planner import (
     HOT_SCROLL,
     INTEREST,
@@ -16,7 +17,7 @@ from plugins.xiaoqing_life.planner import (
     THREAD,
     Decision,
 )
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceError
 from plugins.xiaoqing_life.stores import LifeStore
 from tests.plugins.xiaoqing_life.support import (
@@ -27,6 +28,7 @@ from tests.plugins.xiaoqing_life.support import (
     bili_video,
     comments_payload,
     make_cfg,
+    new_store,
     popular_payload,
 )
 
@@ -69,6 +71,8 @@ DIGEST = {
         "action"    : "open",
         "title"     : "猫为什么爱纸箱",
         "why"       : "好奇",
+        "done_when" : "知道猫爱钻纸箱的原因",
+        "kind"      : "fact",
         "next_query": "猫 纸箱 原因",
         "note"      : "",
         "refs"      : ["i1"],
@@ -81,7 +85,8 @@ def _fetch(**extra: Any) -> FakeFetcher:
         "/popular"   : popular_payload(bili_video(1, "猫猫的一天"), bili_video(2, "新显卡评测")),
         "/reply/main": lambda params: (
             comments_payload(
-                bili_reply("哈基米这也太可爱了吧"), bili_reply("这就是传说中的猫猫基础")
+                bili_reply("哈基米这也太可爱了吧", sub=("哈基米！",)),
+                bili_reply("这就是传说中的猫猫基础"),
             )
             if params["oid"] == "1"
             else comments_payload(bili_reply("价格劝退"))
@@ -105,31 +110,21 @@ def _deps(fetch: FakeFetcher, ai: FakeAI, **kw: Any) -> SessionDeps:
     )
 
 
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
-
-
 def _hot() -> Decision:
     return Decision(HOT_SCROLL, "best_score", {HOT_SCROLL: 40.0}, {"source": "bili_popular"})
 
 
 @pytest.mark.asyncio
 async def test_successful_session_lands_everything_with_evidence(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     outcome = await run_session(store, make_cfg(), _hot(), _deps(_fetch(), ai))
 
     assert (outcome.status, outcome.episodes, outcome.terms) == ("ok", 2, 1)
     assert len(ai.calls) == 1 and ai.calls[0][0] == "reasoning"
     assert [e["item_id"] for e in store.episodes] == ["bili:1", "bili:2"]
     first = store.episodes[0]
-    assert (first["activity"], first["feeling"], first["share"], first["day"]) == (
-        HOT_SCROLL,
-        "like",
-        True,
-        "2026-11-05",
-    )
+    assert (first["activity"], first["feeling"], first["share"]) == (HOT_SCROLL, "like", True)
+    assert "day" not in first  # 哪一天按时间戳现算，不另存
     assert first["term_keys"] == ["哈基米"] and first["title"] == "猫猫的一天"
     # 词条只收有真实摘录的那个，且来源是它出现的条目
     assert list(store.terms) == ["哈基米"] and store.terms["哈基米"]["sources"] == ["bili:1"]
@@ -147,7 +142,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
     assert state["activity_log"][0]["start"] == NOW and state["recent"][-1]["choice"] == HOT_SCROLL
     assert "interest_dive" not in json.dumps(state["last_decision"])
     # 重启后仍在
-    again = _store(tmp_path)
+    again = new_store(tmp_path)
     assert len(again.episodes) == 2 and again.state["llm_calls_today"] == 1
     # 直接送进模型的材料里没有链接
     assert "http" not in ai.calls[0][1][1]["content"]
@@ -155,7 +150,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_second_run_with_only_seen_items_makes_no_model_call(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     await run_session(store, make_cfg(), _hot(), _deps(_fetch(), ai))
     outcome = await run_session(store, make_cfg(), _hot(), _deps(_fetch(), ai))
     assert outcome.reason == "all_seen" and len(ai.calls) == 1
@@ -164,7 +159,7 @@ async def test_second_run_with_only_seen_items_makes_no_model_call(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_all_sources_failing_records_a_failure_and_nothing_else(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     down = {
         name: SourceError("x", "Timeout")
         for name in ("/popular", "/ranking", "hot-lists", "hotSearch")
@@ -177,7 +172,7 @@ async def test_all_sources_failing_records_a_failure_and_nothing_else(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_hot_scroll_falls_back_to_the_next_enabled_source(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI({"looked_at": []})
+    store, ai = new_store(tmp_path), FakeAI({"looked_at": []})
     fetch = _fetch(
         **{
             "/popular" : SourceError("x", "Timeout"),
@@ -201,7 +196,7 @@ async def test_hot_scroll_falls_back_to_the_next_enabled_source(tmp_path: Path) 
 async def test_model_failure_or_garbage_yields_no_learning_but_burns_budget(
     tmp_path: Path, reply: Any
 ) -> None:
-    store, ai = _store(tmp_path), FakeAI(reply)
+    store, ai = new_store(tmp_path), FakeAI(reply)
     outcome = await run_session(store, make_cfg(), _hot(), _deps(_fetch(), ai))
     assert outcome.status == "failed"
     assert (
@@ -216,7 +211,7 @@ async def test_model_failure_or_garbage_yields_no_learning_but_burns_budget(
 
 @pytest.mark.asyncio
 async def test_missing_model_route_skips_the_call_and_the_budget(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     outcome = await run_session(store, make_cfg(), _hot(), _deps(_fetch(), ai, reasoning_ok=False))
     assert outcome.reason == "model_not_configured" and ai.calls == []
     assert store.state["llm_calls_today"] == 0 and store.episodes == []
@@ -225,7 +220,7 @@ async def test_missing_model_route_skips_the_call_and_the_budget(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_exhausted_daily_model_budget_makes_no_call(tmp_path: Path) -> None:
-    store, ai = _store(tmp_path), FakeAI(DIGEST)
+    store, ai = new_store(tmp_path), FakeAI(DIGEST)
     outcome = await run_session(
         store, make_cfg(max_llm_calls_per_day=0), _hot(), _deps(_fetch(), ai)
     )
@@ -233,21 +228,21 @@ async def test_exhausted_daily_model_budget_makes_no_call(tmp_path: Path) -> Non
 
 
 def _thread_store(tmp_path: Path, **thread: Any) -> LifeStore:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(
         {
-            "id"            : "t1",
-            "title"         : "猫为什么爱纸箱",
-            "why"           : "好奇",
-            "next_query"    : "猫 纸箱",
-            "status"        : "open",
-            "steps"         : 0,
-            "empty_streak"  : 0,
-            "cooldown_until": 0.0,
-            "notes"         : [],
-            "takeaway"      : "",
-            "created_at"    : NOW - 86400,
-            "updated_at"    : NOW - 86400,
+            "id"          : "t1",
+            "title"       : "猫为什么爱纸箱",
+            "why"         : "好奇",
+            "next_query"  : "猫 纸箱",
+            "kind"        : "practice",  # 走 B站搜索
+            "status"      : "open",
+            "steps"       : 0,
+            "empty_streak": 0,
+            "notes"       : [],
+            "takeaway"    : "",
+            "created_at"  : NOW - 86400,
+            "updated_at"  : NOW - 86400,
             **thread,
         }
     )
@@ -305,7 +300,7 @@ async def test_thread_continue_answered_moves_to_reviewing_immediately(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_thread_continue_without_news_cools_down_after_two_empty_steps(
+async def test_thread_continue_without_news_parks_after_two_empty_sessions(
     tmp_path: Path,
 ) -> None:
     store = _thread_store(tmp_path)
@@ -325,7 +320,7 @@ async def test_thread_continue_without_news_cools_down_after_two_empty_steps(
         _continue(),
         _deps(fetch, ai),
     )
-    assert store.threads[0]["cooldown_until"] == NOW + 180 * 60 and store.threads[0]["steps"] == 0
+    assert store.threads[0]["status"] == "parked" and store.threads[0]["steps"] == 0
 
 
 @pytest.mark.asyncio
@@ -342,7 +337,7 @@ async def test_digest_without_progress_counts_as_an_empty_step(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_interest_dive_search_failure_falls_back_to_popular(tmp_path: Path) -> None:
-    store    = _store(tmp_path)
+    store    = new_store(tmp_path)
     fetch    = _fetch(**{"/search/type": SourceError("x", "code_412")})
     decision = Decision(INTEREST, "best_score", {}, {"query": "天文摄影"})
     outcome  = await run_session(
@@ -353,7 +348,7 @@ async def test_interest_dive_search_failure_falls_back_to_popular(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_term_lookup_verifies_slang_and_settles_the_queue(tmp_path: Path) -> None:
-    store                       = _store(tmp_path)
+    store                       = new_store(tmp_path)
     store.state["lookup_queue"] = ["哈基米", "普通词", "超时词", "第四个"]
     slang                       = {"title": "哈基米", "desc": "网络流行语", "abstract": "对猫咪的爱称。"}
 
@@ -376,7 +371,7 @@ async def test_term_lookup_verifies_slang_and_settles_the_queue(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_term_lookup_with_every_request_failing_is_a_failure(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.state["lookup_queue"] = ["甲"]
     decision = Decision(TERM_LOOKUP, "best_score", {}, {"terms": ["甲"]})
     fetch = FakeFetcher({"Baike": SourceError("baike", "TimeoutError")})
@@ -397,7 +392,7 @@ async def test_logs_never_contain_external_text(
         }
     )
     digest = {"looked_at": [{"item": "i1", "reaction": f"想法{canary}", "feeling": "like"}]}
-    store, ai = _store(tmp_path), FakeAI(digest, RuntimeError(canary))
+    store, ai = new_store(tmp_path), FakeAI(digest, RuntimeError(canary))
     with caplog.at_level("DEBUG"):
         await run_session(store, make_cfg(), _hot(), _deps(fetch, ai))
         down = FakeFetcher({"/popular": SourceError(canary, "Timeout")})

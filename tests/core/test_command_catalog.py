@@ -225,7 +225,7 @@ def test_help_resolves_aliases_at_every_level(query: str, code: str) -> None:
 
 
 def test_agent_exact_help_preserves_every_published_parameter_and_example() -> None:
-    from plugins.xiaoqing_agent.tools import _catalog_lines
+    from plugins.xiaoqing_agent.tools import catalog_lines
 
     fixture = _load_catalog()
     context = SimpleNamespace(get_command_catalog=lambda: fixture.roots, principal=None)
@@ -233,10 +233,10 @@ def test_agent_exact_help_preserves_every_published_parameter_and_example() -> N
         if root.plugin in {"xiaoqing_agent", "xiaoqing_chat"}:
             continue
         for node in root.walk():
-            text = "\n".join(_catalog_lines(context, " ".join(node.path)))
+            text = "\n".join(catalog_lines(context, " ".join(node.path)))
             assert node.usage in text and node.help_text in text, node.code
             assert all(example in text for example in node.examples), node.code
-    text = "\n".join(_catalog_lines(context, "pendo 记账 add"))
+    text = "\n".join(catalog_lines(context, "pendo 记账 add"))
     assert "currency:" in text and "remark:" in text and "cat:" in text
     assert "pendo.pendo.ledger.edit" not in text
 
@@ -522,7 +522,7 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
         await user_server._event_dispatcher.stop()
 
 
-# ──────────────────── 读写性质与结构化参数声明 ────────────────────
+# ──────────────────── 读写性质声明 ────────────────────
 
 
 def _manifest_with(**node: Any) -> dict[str, Any]:
@@ -541,33 +541,12 @@ def _manifest_with(**node: Any) -> dict[str, Any]:
     }
 
 
-def test_effect_and_structured_input_reach_the_published_catalog():
-    parameters = {"type": "object", "properties": {"title": {"type": "string"}}}
-    manifest   = PluginManifest.model_validate(
-        _manifest_with(
-            effect           = "write",
-            structured_input = {
-                "name"       : "demo_record",
-                "description": " 记一条 ",
-                "parameters" : parameters,
-            },
-        )
-    )
+def test_effect_reaches_the_published_catalog():
+    manifest = PluginManifest.model_validate(_manifest_with(effect="write"))
     root = build_command_catalog_node("demo", manifest.commands[0].model_dump(), root=True)
     record = root.children[0]
-    assert (root.effect, root.structured_input) == (None, None)
-    assert record.effect == "write"
-    assert record.structured_input is not None
-    assert record.structured_input.name == "demo_record"
-    assert record.structured_input.description == "记一条"
-    assert record.structured_input.parameters() == parameters
-    assert not record.structured_input.takes_no_arguments()
-    # 取到的是副本，改了不影响目录。
-    record.structured_input.parameters()["properties"].clear()
-    assert record.structured_input.parameters() == parameters
-    published = record.to_dict()
-    assert published["effect"] == "write"
-    assert published["structured_input"]["parameters"] == parameters
+    assert (root.effect, record.effect) == (None, "write")
+    assert record.to_dict()["effect"] == "write"
     json.dumps(root.to_dict(), ensure_ascii=False)
 
 
@@ -575,42 +554,10 @@ def test_effect_and_structured_input_reach_the_published_catalog():
     "node",
     [
         {"effect": "delete"},
-        {"structured_input": {"name": "Demo", "parameters": {"type": "object"}}},
-        {"structured_input": {"name": "demo record", "parameters": {"type": "object"}}},
-        {"structured_input": {"name": "demo_record", "parameters": {"type": "array"}}},
-        {
-            "structured_input": {
-                "name"      : "demo_record",
-                "parameters": {"type": "object", "properties": []},
-            }
-        },
-        {
-            "structured_input": {
-                "name"      : "demo_record",
-                "parameters": {"type": "object", "x": float("nan")},
-            }
-        },
-        {"structured_input": {"name": "demo_record", "parameters": {"type": "object"}, "extra": 1}},
+        # 只靠命令声明使用插件：不再接受专用工具的结构化参数声明。
+        {"structured_input": {"name": "demo_record", "parameters": {"type": "object"}}},
     ],
 )
 def test_invalid_command_declarations_are_rejected(node):
     with pytest.raises(ValueError):
         PluginManifest.model_validate(_manifest_with(**node))
-
-
-def test_structured_input_names_are_unique_within_a_plugin():
-    declared = {"name": "demo_record", "parameters": {"type": "object"}}
-    manifest = _manifest_with(structured_input=declared)
-    manifest["commands"][0]["structured_input"] = declared
-    with pytest.raises(ValueError, match="declared twice"):
-        PluginManifest.model_validate(manifest)
-
-
-def test_shipped_structured_input_names_are_unique_across_plugins():
-    names = [
-        node.structured_input.name
-        for root in _load_catalog().roots
-        for node in root.walk()
-        if node.structured_input is not None
-    ]
-    assert names and len(names) == len(set(names))

@@ -278,7 +278,6 @@ Core 在导入插件前检查 `dependencies` 中的模块可用性。
 | `examples` | string[] | `[]` | 正确样例，最多 16 条 |
 | `invalid_examples` | string[] | `[]` | 参数、场景或权限错误样例，最多 16 条 |
 | `effect` | `read` / `write` | 不声明 | 命令只查询还是会新增、修改、删除数据，见下文 |
-| `structured_input` | object | 不声明 | 命令接受一个 JSON 对象作为全部参数时的声明，见下文 |
 | `subcommands` | array | `[]` | 子命令节点 |
 
 子命令节点：
@@ -295,7 +294,6 @@ Core 在导入插件前检查 `dependencies` 中的模块可用性。
 | `examples` | string[] | `[]` | 正确样例 |
 | `invalid_examples` | string[] | `[]` | 错误样例 |
 | `effect` | `read` / `write` | 不声明 | 不继承父节点 |
-| `structured_input` | object | 不声明 | 不继承父节点 |
 | `subcommands` | array | `[]` | 下一层节点 |
 
 整棵命令目录最多 8 层、512 个节点。
@@ -330,44 +328,11 @@ Router 依次比较 `priority` 和触发词长度。
 Core 为上述叶节点生成稳定 code `example.todo.add`。
 插件通过 `context.command_invocation` 获取已解析节点和剩余参数。
 
-#### 读写性质与结构化参数
+#### 读写性质
 
-这两项让 Agent 这类调用方按声明统一处理所有插件，不需要为某个插件写专门代码。
-
-`effect` 说明命令会不会改动数据：`read` 只查询，`write` 会新增、修改或删除。
+`effect` 说明命令会不会改动数据：`read` 只查询，`write` 会新增、修改或删除。Agent 这类调用方按这项声明统一处理所有插件，不需要为某个插件写专门代码。
 小青 agent 在同一个任务里不会把完全相同的 `write` 命令执行第二遍，读命令照常重复执行。
 命令文本完全相同、每次执行却有不同效果的命令（比如逐步撤销）也照实声明 `write`；需要重复时 agent 会先向发起人确认。
-
-`structured_input` 声明命令接受一个 JSON 对象作为全部参数：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `name` | string | 调用方使用的稳定标识，小写字母开头，3–64 位小写字母、数字或下划线；同一插件内唯一 |
-| `description` | string | 给调用方的用法说明，省略时使用命令的 `help` |
-| `parameters` | object | 这个 JSON 对象的 JSON Schema，`type` 必须是 `object`，序列化后不超过 16000 字符 |
-
-调用方把参数对象序列化后接在命令路径后面执行，例如 `/pendo ledger record {"amount_cents":1250,"title":"早餐"}`；
-`parameters` 没有任何字段时只发送命令路径。
-插件仍要自己校验参数，schema 只用来告诉调用方怎么填。
-小青 agent 为发起人此刻能用的每条这类命令生成一个同名工具。
-
-```json
-{
-  "name": "record",
-  "help": "JSON 结构化记一条",
-  "usage": "/todo record <JSON>",
-  "effect": "write",
-  "structured_input": {
-    "name": "todo_record",
-    "parameters": {
-      "type": "object",
-      "properties": {"title": {"type": "string"}, "plan": {"type": "string", "description": "YYYY-MM-DD"}},
-      "required": ["title"],
-      "additionalProperties": false
-    }
-  }
-}
-```
 
 ### 调度字段
 
@@ -914,7 +879,7 @@ Core 按服务名核验固定所有者和调用方。
 `command_runner` 在一次性的会话空间里执行命令，不读取也不替换用户正在进行的交互会话。
 命令新开的会话先交给插件的 `close_session` 回收资源再丢弃。
 命令返回的 `DeliverySegments` 连同发送回执原样交回调用方，由它随实际发送结算，`run(..., operation_id=...)` 让每次调用有独立的请求 ID。
-`run(..., request_texts=...)` 传入发起人本人这次说的原话（按先后，最后一条最新，Core 只保留最近 16 条、每条截断到 4000 字），命令在 `context.request_texts` 里读到；插件用它核对写入的字段和数量确实出自原话。用户直接发命令时 `context.request_texts` 为空，普通消息事件不能带入这个值。
+`run(..., request_texts=...)` 传入发起人本人这次说的原话（按先后，最后一条最新，Core 只保留最近 16 条、每条截断到 4000 字），命令在 `context.request_texts` 里读到。只在确有必要时用它（比如实体设备的出粮份数要对得上原话）；一般的写入按参数执行，和用户直接发送时一样，不拿原话做字面比对。用户直接发命令时 `context.request_texts` 为空，普通消息事件不能带入这个值。
 发送回执在提交前收集这条回复每条物理消息的 ID（`DeliveryReceipt.message_ids`，长回复被拆成几条时每条都有），插件在提交回调里把状态和真实消息对应起来，不必事后回填。
 
 Core 派生能力与会话使用同一套命令权限：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，会话每次继续前复核此人此刻仍能用这个插件的至少一条顶层命令（撤权或场景不再允许时会话关闭）。
@@ -928,6 +893,7 @@ Manifest capability 集合：
 | `local_tools` | 本机执行代码、读写文件前向 Core 复核发起人仍能用 `/shell`（仅 `xiaoqing_agent`） |
 | `config_subscription` | 接收当前插件配置 revision |
 | `execution_timeout_exempt` | 由插件生命周期控制长任务超时 |
+| `inbound_backlog` | 查询当前事件的发送者在本会话里已到达、还没开始处理的消息（仅 `xiaoqing_chat`） |
 | `onebot_media` | 查询受控 OneBot 消息与媒体 |
 | `secret_admin` | 管理员 secret 命令能力 |
 

@@ -132,7 +132,7 @@ def state_text(slot: RoutineSlot | None) -> str:
 # 问到她自己几点起、几点睡、什么时候有课或有空。
 _ROUTINE_QUESTION_RE = re.compile(
     r"几点(?:起|醒|睡|上课|下课|吃饭|有空|忙完)|什么时候(?:起|醒|睡|上课|下课|有空|忙完)"
-    r"|早起|起得早|起床|作息|课表|几点到几点"
+    r"|早起|起得早|起床|作息|课表|几点到几点|有课|没课|满课"
 )
 _ROUTINE_TAG_RE = re.compile(r"\s*[（(][忙睡闲][)）]\s*$")
 
@@ -153,16 +153,11 @@ def routine_block(lines: Sequence[str]) -> str:
     )
 
 
-def participation_factor(slot: RoutineSlot | None, *, busy: float, asleep: float) -> float:
-    """普通群聊插话概率的乘数；明确召唤不受影响。"""
+def routine_factor(slot: RoutineSlot | None, *, busy: float, asleep: float) -> float:
+    """这个时段对应的乘数：空闲为 1，忙或睡时取调用方给的值。
 
-    if slot is None or slot.availability == "free":
-        return 1.0
-    return asleep if slot.availability == "asleep" else busy
-
-
-def delay_factor(slot: RoutineSlot | None, *, busy: float, asleep: float) -> float:
-    """打字延迟的乘数：忙或睡时回得更慢。"""
+    插话概率（忙或睡时少插话，明确召唤不受影响）和打字延迟（忙或睡时回得慢）都按它取。
+    """
 
     if slot is None or slot.availability == "free":
         return 1.0
@@ -172,6 +167,44 @@ def delay_factor(slot: RoutineSlot | None, *, busy: float, asleep: float) -> flo
 @functools.lru_cache(maxsize=8)
 def _parsed_routine(lines: tuple[str, ...]) -> tuple[RoutineSlot, ...]:
     return parse_routine(lines)
+
+
+_WEEKDAY_NAMES = "一二三四五六日"
+
+
+def _clock(minute: int) -> str:
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def day_plan_text(slots: Sequence[RoutineSlot], moment: datetime) -> str:
+    """她今天按作息的安排，按开始时间排。
+
+    回复和审查只知道“此刻在做什么”时，被问到“今天下午有课吗”“早八上完回宿舍了吗”就无从说起：
+    怎么答都没有依据。今天具体发生了什么仍以生活记录为准，这里只是这一天的框架。
+    """
+
+    today = sorted(
+        (slot for slot in slots if moment.weekday() in slot.days), key=lambda slot: slot.start
+    )
+    if not today:
+        return ""
+    items = "；".join(f"{_clock(slot.start)}-{_clock(slot.end)} {slot.activity}" for slot in today)
+    return (
+        f"按作息你今天（周{_WEEKDAY_NAMES[moment.weekday()]}）的安排：{items}。"
+        "没写到的时段是自己的时间。被问到今天有没有课、某个时段在哪在干嘛时可以照这个说。"
+    )
+
+
+def routine_day_plan(card, moment: datetime) -> str:
+    """从人设卡读取作息，给出她今天的安排；没写作息或格式不对时为空。"""
+
+    lines = getattr(card, "routine", ())
+    if not lines:
+        return ""
+    try:
+        return day_plan_text(_parsed_routine(tuple(lines)), moment)
+    except ValueError:
+        return ""
 
 
 def routine_slot_now(card, moment: datetime) -> RoutineSlot | None:

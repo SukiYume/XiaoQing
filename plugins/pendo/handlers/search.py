@@ -29,9 +29,11 @@ from ..utils.formatters import (
     TYPE_NAMES,
     UNSAFE_CONTROL_RE,
     ItemFormatter,
+    collection_node_title,
     ledger_amount_yuan,
     single_line_text,
 )
+from ..utils.identifiers import public_id
 from ..utils.time_utils import (
     TimezoneHelper,
     get_user_local_wall_time,
@@ -122,8 +124,9 @@ class SearchHandler:
             user_id,
             query,
             filters,
-            limit  = _SEARCH_RESULT_LIMIT,
-            offset = 0,
+            limit              = _SEARCH_RESULT_LIMIT,
+            offset             = 0,
+            collapse_recurring = True,
         )
         results = cast(list[SearchItem], raw_results)
 
@@ -394,8 +397,7 @@ class SearchHandler:
     ) -> str:
         title = single_line_text(item.title)
         if isinstance(item, EventItem) and collection_title:
-            collection = single_line_text(collection_title) or "无标题"
-            title      = f"{collection} · {title or '无标题'}"
+            title = collection_node_title(single_line_text(collection_title), title)
         if not title:
             title = single_line_text(item.content) or "无标题"
         return ItemFormatter.truncate_content(title, _SEARCH_TITLE_MAX_CHARS, "...")
@@ -455,6 +457,13 @@ class SearchHandler:
             remind_times = parse_remind_times(item.remind_times)
             if remind_times:
                 details.append(f"🔔{len(remind_times)}个提醒")
+        if (
+            isinstance(item, EventItem)
+            and item.event_collection_kind == "recurring"
+            and item.event_collection_id
+        ):
+            # 重复日程只列最近的一次，其余实例用集合 ID 查看。
+            details.append(f"🔄重复日程 集合 {public_id(item.event_collection_id)}")
         if preview := self._get_content_preview(item, query):
             details.append(f"「{preview}」")
         return details

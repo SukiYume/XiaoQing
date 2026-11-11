@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, cast
 
@@ -132,15 +133,24 @@ class ReminderService:
         is_delivery_retry = (type(failure_count) is int and failure_count > 0) or bool(
             log and log.get("state") == "claimed"
         )
+        if log and log.get("confirmed_at"):
+            return None
+        # 已入队的提醒由数据库按上次检查时刻判定是否过期（过期的已标成 confirmed）；
+        # 这里只拦没有队列行的旧数据和超过保鲜期的重试。
         allowed_overdue_seconds = (
             PendoConfig.REMINDER_STALE_AFTER_SECONDS
             if is_delivery_retry
+            else PendoConfig.REMINDER_CATCH_UP_SECONDS
+            if log
             else PendoConfig.REMINDER_CHECK_WINDOW_SECONDS
         )
         if overdue_seconds > allowed_overdue_seconds:
             return None
-        if log and log.get("confirmed_at"):
-            return None
+        late_seconds = (
+            int(overdue_seconds)
+            if not is_delivery_retry and overdue_seconds > PendoConfig.REMINDER_CHECK_WINDOW_SECONDS
+            else 0
+        )
 
         claim_token = self.db.claim_reminder(
             item.id,
@@ -164,7 +174,7 @@ class ReminderService:
                     ),
                 )
                 return None
-            message = self._build_reminder_message(item, remind_time)
+            message = self._build_reminder_message(item, remind_time, late_seconds=late_seconds)
             return self._make_msg(item, message, remind_time, claim_token)
         except Exception:
             self.db.release_reminder_claim(item.id, remind_time, claim_token)
@@ -357,54 +367,73 @@ class ReminderService:
             ),
         )
 
-    def detect_conflict(
-        self, user_id: str, start_time: str, end_time: str | None = None
+    def detect_conflicts(
+        self, user_id: str, windows: Sequence[tuple[str, str | None]]
     ) -> list[dict[str, Any]]:
-        """按绝对时间检测半开区间冲突，兼容无时区和带偏移的 ISO 时间。"""
-        start_dt = self._parse_user_time(start_time, user_id)
-        end_dt   = (
-            self._parse_user_time(end_time, user_id) if end_time else start_dt + timedelta(hours=1)
+        """依次检查各时间段，返回第一个有冲突的时间段撞上的日程；都不冲突时为空。
+
+        时间段是半开区间，按绝对时间比较，兼容无时区和带偏移的 ISO 时间。
+        没写结束时间的时间段和已有日程都按一小时算。候选日程只按全部时间段的首尾范围
+        读取一次：重复日程一次展开几百个实例，不能每个实例都把用户的全部日程读一遍。
+        """
+        default_duration = timedelta(hours=1)
+        spans: list[tuple[datetime, datetime]] = []
+        for start_time, end_time in windows:
+            start_dt = self._parse_user_time(start_time, user_id)
+            end_dt   = (
+                self._parse_user_time(end_time, user_id)
+                if end_time
+                else start_dt + default_duration
+            )
+            if end_dt <= start_dt:
+                raise ValueError("日程结束时间必须晚于开始时间")
+            spans.append((start_dt, end_dt))
+        if not spans:
+            return []
+
+        # 范围向前多取一小时：没写结束时间的已有日程从更早开始也可能压到第一个时间段。
+        events = self.db.get_events_for_range(
+            user_id,
+            (min(start for start, _end in spans) - default_duration).isoformat(),
+            max(end for _start, end in spans).isoformat(),
         )
-        if end_dt <= start_dt:
-            raise ValueError("日程结束时间必须晚于开始时间")
-
-        # SQLite 中混存无偏移和带偏移 ISO 字符串时，字典序不等于绝对时间顺序；
-        # 因此只在 SQL 层筛选类型，再统一本地化后比较。分页接口避免静默漏掉第
-        # 1001 条以后仍可能冲突的日程。
-        items = self.db.get_all_items(user_id, filters={"type": "event"}, page_size=200)
-        conflicts: list[dict[str, Any]] = []
-
-        for item in items:
-            item_start_text = getattr(item, "start_time", None)
-            if not item_start_text:
-                continue
+        candidates: list[tuple[datetime, datetime, Any]] = []
+        for item in events:
             try:
-                item_start    = self._parse_user_time(str(item_start_text), user_id)
-                item_end_text = getattr(item, "end_time", None)
-                item_end      = (
-                    self._parse_user_time(str(item_end_text), user_id)
-                    if item_end_text
-                    else item_start + timedelta(hours=1)
+                item_start = self._parse_user_time(str(item.start_time), user_id)
+                item_end   = (
+                    self._parse_user_time(str(item.end_time), user_id)
+                    if item.end_time
+                    else item_start + default_duration
                 )
             except (TypeError, ValueError):
                 logger.warning("跳过时间格式无效的已有日程")
                 continue
+            candidates.append((item_start, item_end, item))
 
-            # 区间重叠：item 与 [start_dt, end_dt) 有交叉
-            if not (end_dt <= item_start or start_dt >= item_end):
-                conflicts.append(
-                    {
-                        "id"        : item.id,
-                        "title"     : item.title,
-                        "start_time": item_start_text,
-                        "end_time"  : getattr(item, "end_time", None),
-                    }
-                )
-
-        return conflicts
+        for start_dt, end_dt in spans:
+            # 区间重叠：已有日程与 [start_dt, end_dt) 有交叉
+            conflicts = [
+                {
+                    "id"        : item.id,
+                    "title"     : item.title,
+                    "start_time": item.start_time,
+                    "end_time"  : item.end_time,
+                }
+                for item_start, item_end, item in candidates
+                if not (end_dt <= item_start or start_dt >= item_end)
+            ]
+            if conflicts:
+                return conflicts
+        return []
 
     def _build_reminder_message(
-        self, item: Any, remind_time: str, repeat_count: int | None = None
+        self,
+        item: Any,
+        remind_time: str,
+        repeat_count: int | None = None,
+        *,
+        late_seconds: int = 0,
     ) -> str:
         """构建日程或待办提醒，集合条目同时展示集合标题和节点标题。"""
         item_type = get_item_type_value(getattr(item, "type", None), default="")
@@ -422,8 +451,11 @@ class ReminderService:
             else None
         )
         if collection:
-            lines.append(f"🗓️ {collection.get('title') or '无标题'}")
-            lines.append(f"📌 {title}")
+            collection_title = collection.get("title") or "无标题"
+            lines.append(f"🗓️ {collection_title}")
+            # 重复日程的实例与集合同名，不再重复一行。
+            if title != collection_title:
+                lines.append(f"📌 {title}")
         elif item_type == "task":
             lines.append(f"✅ {title}")
         else:
@@ -454,6 +486,8 @@ class ReminderService:
         )
         if reminder_slot:
             lines.append(f"🔔 对应提醒点: {reminder_slot}")
+        if late_seconds > 0:
+            lines.append(f"⚠️ 服务中断期间到点，晚了{self._format_duration(late_seconds)}送达")
 
         if getattr(item, "location", None):
             lines.append(f"📍 {item.location}")

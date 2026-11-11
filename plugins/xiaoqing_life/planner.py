@@ -9,12 +9,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import reinforce
+from . import chat_topics, reinforce
 from .config import LifeConfig
+from .days import day_key, episode_day
 from .lifecycle import interest_weights
 from .persona_bridge import Presence
 from .safety import similar
-from .works import best_candidate
+from .stores import done_today
+from .works import WORK_ON, best_candidate
 
 REST        = "rest"
 WIND_DOWN   = "wind_down"
@@ -22,7 +24,6 @@ THREAD      = "thread_continue"
 HOT_SCROLL  = "hot_scroll"
 INTEREST    = "interest_dive"
 TERM_LOOKUP = "term_lookup"
-WORK_ON     = "work_on"
 
 EXPLORATION_QUERIES = (
     "天文摄影",
@@ -38,16 +39,18 @@ EXPLORATION_QUERIES = (
 )
 # 热榜源的抽取权重（只在已开启的里面抽）。
 HOT_SOURCE_WEIGHTS = {
-    "bili_popular": 0.4,
-    "zhihu_hot"   : 0.2,
-    "weibo_hot"   : 0.2,
-    "bili_ranking": 0.1,
+    "bili_popular": 0.3,
+    "bili_ranking": 0.3,
+    "zhihu_hot"   : 0.15,
+    "weibo_hot"   : 0.15,
     "baidu_hot"   : 0.1,
 }
-THREAD_COOLDOWN_SECONDS = 180 * 60
-_RECENT_WINDOW          = 3
-_SIMILAR_PENALTY        = 0.2
-_EXPLORE_SHARE          = 0.3
+# 翻排行榜时进哪个分区（B站 rid）：动画、游戏各占两份，知识、音乐、鬼畜、科技各一份。
+# 全站热门什么都有，刷出来的常常和她没关系；分区榜才是她平时会逛的地方。按小时轮换，不占随机数。
+RANKING_ZONES    = ("1", "4", "36", "1", "3", "4", "119", "188")
+_RECENT_WINDOW   = 3
+_SIMILAR_PENALTY = 0.2
+_EXPLORE_SHARE   = 0.3
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +76,6 @@ class Decision:
         }
 
 
-def day_key(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%d")
-
-
 def _rest(reason: str, scores: dict[str, float] | None = None) -> Decision:
     return Decision(REST, reason, scores or {})
 
@@ -85,18 +84,29 @@ def _rest(reason: str, scores: dict[str, float] | None = None) -> Decision:
 
 
 def _window_minutes(state: dict[str, Any], now: float, window_minutes: float) -> float:
-    """滚动窗口内累计上网分钟数（与窗口相交的部分）。"""
+    """滚动窗口内累计上网分钟数（与窗口相交的部分）。
+
+    时段先按并集合并：手动触发的一次浏览和还没走完的名义时段重叠时，重叠部分只算一次。
+    """
 
     start = now - window_minutes * 60.0
-    total = 0.0
-    for span in state.get("activity_log", []):
-        a, b = float(span.get("start", 0.0)), float(span.get("end", 0.0))
-        total += max(0.0, min(b, now) - max(a, start))
+    spans = sorted(
+        (max(float(span.get("start", 0.0)), start), min(float(span.get("end", 0.0)), now))
+        for span in state.get("activity_log", [])
+    )
+    total  = 0.0
+    cursor = start
+    for a, b in spans:
+        a = max(a, cursor)
+        if b > a:
+            total += b - a
+            cursor = b
     return total / 60.0
 
 
-def _has_episode_today(episodes: list[dict[str, Any]], day: str) -> bool:
-    return any(e.get("day") == day for e in episodes)
+def _has_episode_today(episodes: list[dict[str, Any]], moment: datetime) -> bool:
+    day = day_key(moment)
+    return any(episode_day(e, moment.tzinfo) == day for e in episodes)
 
 
 def _affinity_hit(cfg: LifeConfig, presence: Presence | None, kind: str) -> bool:
@@ -133,7 +143,7 @@ def gate(
     same_day = state.get("day") == day
     llm_used = state.get("llm_calls_today", 0) if same_day else 0
     if until is not None and until <= cfg.wind_down_minutes:
-        if state.get("wound_down_day") != day and _has_episode_today(episodes, day):
+        if not done_today(state, "wind_down", day) and _has_episode_today(episodes, moment):
             if cfg.max_llm_calls_per_day <= llm_used:
                 return _rest("llm_exhausted")
             return Decision(WIND_DOWN, "before_sleep")
@@ -155,6 +165,8 @@ def gate(
         return _rest("min_gap")
     if now - float(state.get("last_failure_at", 0.0)) < cfg.failure_backoff_minutes * 60.0:
         return _rest("failure_backoff")
+    if cfg.source_on("bili_search") and chat_topics.spark(state, now):
+        return None  # 刚挑出来想去看看的群聊话题：这次不掷骰子
     habit = reinforce.habit_multiplier(state, moment)
     if rng.random() >= min(1.0, cfg.session_probability * habit):
         return _rest("dice")
@@ -188,6 +200,8 @@ MEAL_HOT_BONUS            = 10.0
 MORNING_WINDOW_MIN        = 120
 MORNING_THREAD_BONUS      = 6.0
 PARKED_RESUME_PENALTY     = 8.0
+CHAT_TOPIC_BONUS          = 4.0  # dafeiyu：有朋友聊过的话题可以看时，探索 +4
+CHAT_TOPIC_SHARE          = 0.5
 
 
 def _anime_topic(rng: random.Random) -> str:
@@ -249,18 +263,22 @@ def _thread_score(thread: dict[str, Any], state: dict[str, Any], now: float) -> 
 
 
 def _best_thread(
-    cfg: LifeConfig, state: dict[str, Any], threads: list[dict[str, Any]], now: float
+    cfg: LifeConfig, state: dict[str, Any], threads: list[dict[str, Any]], moment: datetime
 ) -> tuple[dict[str, Any], float] | None:
+    """可续做的小课题里分最高的。同一个小课题一天最多查一次（隔天接着查），免得一天都耗在一个问题上。"""
+
+    now                                       = moment.timestamp()
+    today                                     = day_key(moment)
     best: tuple[dict[str, Any], float] | None = None
     for thread in threads:
+        if thread.get("last_session_day") == today:
+            continue
         status = thread.get("status")
         if status == "parked":
             # 搁置的小课题过了 ``parked_until`` 才作为续做候选，分数 −8。
             if float(thread.get("parked_until", 0.0)) > now:
                 continue
         elif status != "open" or int(thread.get("steps", 0)) >= cfg.thread_max_steps:
-            continue
-        if float(thread.get("cooldown_until", 0.0)) > now:
             continue
         score = _thread_score(thread, state, now) - (
             PARKED_RESUME_PENALTY if status == "parked" else 0.0
@@ -322,6 +340,10 @@ def _interest_params(
 ) -> dict[str, Any]:
     if anime and rng.random() < ANIME_TOPIC_SHARE:
         return {"query": _anime_topic(rng), "explored": False}
+    picks = chat_topics.fresh(state, now)
+    if picks and rng.random() < CHAT_TOPIC_SHARE:
+        # 朋友们在聊的：搜她睡前自己写下的搜索词；话题本身不是她的兴趣证据。
+        return {"query": picks[0]["query"], "explored": True, "chat_topic": picks[0]["topic"]}
     topic, explored, from_frontier = choose_topic(
         cfg, state, interests, now, rng, frontier, force_explore=overdue
     )
@@ -377,7 +399,7 @@ def choose(
     research_ok = (
         cfg.source_on("bili_search") or cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
     )
-    if research_ok and (found := _best_thread(cfg, state, threads, now)):
+    if research_ok and (found := _best_thread(cfg, state, threads, moment)):
         thread, score = found
         since_wake     = presence.minutes_since_wake if presence is not None else None
         morning        = since_wake is not None and since_wake <= MORNING_WINDOW_MIN
@@ -393,6 +415,7 @@ def choose(
         scores[HOT_SCROLL] = 40.0 - (15.0 if repeated else 0.0) + (MEAL_HOT_BONUS if meal else 0.0)
         build[HOT_SCROLL] = lambda: {
             "source": _weighted_pick(rng, hot),
+            "zone"  : RANKING_ZONES[int(now // 3600) % len(RANKING_ZONES)],
             **({"item_cap": max(1, cfg.max_items_per_session // 2)} if meal else {}),
         }
     if cfg.source_on("bili_search"):
@@ -413,6 +436,9 @@ def choose(
         scores[INTEREST] += EXPLORE_BONUS if overdue else 0.0
         if overdue:
             factors["explore"] = EXPLORE_BONUS
+        if chat_topics.fresh(state, now):
+            scores[INTEREST] += CHAT_TOPIC_BONUS
+            factors["chat_topic"] = CHAT_TOPIC_BONUS
         build[INTEREST] = lambda: _interest_params(
             cfg, state, interests, now, rng, frontier, anime=anime, overdue=overdue
         )

@@ -16,7 +16,7 @@ from plugins.xiaoqing_chat import agent_bridge, handlers
 from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.handler_context import HandlerContext
-from plugins.xiaoqing_chat.life.self_timeline import SelfTimelineStore
+from plugins.xiaoqing_chat.life.self_timeline import SelfTimelineStore, new_entry
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.smalltalk_models import PreparedSmalltalkTurn
 
@@ -120,6 +120,10 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
         )
     )
     hctx, context = _hctx(tmp_path, agent)
+    promise = new_entry(
+        chat_id="g67890", kind="promise", text="弄完图告诉你", hours=6, source="chat"
+    )
+    hctx.state.self_timeline.apply(added=[promise], chat_id="g67890", max_entries=20)
 
     result = await _delegate(_prepared(), _event(), context, hctx)
 
@@ -141,6 +145,8 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
     assert turn["persona"].startswith("你的名字是小青。")
     assert "记好了，打车 32" in turn["persona"]
     assert "又喝，明早有你受的" not in turn["persona"]
+    # 近况每轮不同，单独交：人设卡在一个办事会话里保持不变。
+    assert "弄完图告诉你" in turn["recent_self"] and "弄完图告诉你" not in turn["persona"]
 
     quiet_side_effects["ensure_user_message_recorded"].assert_awaited_once()
     append = hctx.state.memory_store.append
@@ -265,7 +271,13 @@ async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
     reply = await _delegate(_prepared(text="刚才那笔改成微信"), _event(), context, hctx)
     assert isinstance(reply, DeliverySegments)
     assert reply[0]["data"]["text"] == "改好了，走的微信"
-    assert "记好了，98，走的支付宝" in agent_context.ai.calls[-1][1][1]["content"]
+    # 接着说：前一轮的交付（final_answer 的调用）在同一份办事会话里。
+    delivered = [
+        json.loads(call["function"]["arguments"]).get("text")
+        for message in agent_context.ai.calls[-1][1][:-1]
+        for call in message.get("tool_calls") or ()
+    ]
+    assert "记好了，98，走的支付宝" in delivered
     await reply.delivery_receipt.record(True)
     hctx.state.memory_store.append.assert_called_once()
     await agent_main.shutdown(agent_context)
@@ -558,6 +570,34 @@ async def test_chat_reply_finished_first_waits_for_the_decision_and_is_dropped(t
 
 
 @pytest.mark.asyncio
+async def test_failed_agent_handoff_generates_one_chat_reply(tmp_path):
+    limiter, _slots = _slot_spy()
+    generated = MagicMock()
+    reply     = [{"type": "text", "data": {"text": "agent 的结果"}}]
+
+    async def generate(*_args):
+        return generated
+
+    with (
+        patch.object(
+            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
+        ),
+        patch.object(agent_bridge, "_decide", AsyncMock(return_value=object())),
+        patch.object(agent_bridge, "_act", AsyncMock(return_value=None)),
+        patch.object(handlers, "generate_smalltalk_turn", generate),
+        patch.object(
+            handlers, "finalize_smalltalk_turn", AsyncMock(return_value=reply)
+        ) as finalize,
+    ):
+        result = await handlers._maybe_reply_smalltalk(
+            "画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
+        )
+
+    assert result == reply
+    finalize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_turns_the_agent_cannot_take_skip_the_decision(tmp_path):
     limiter, slots = _slot_spy()
     normal = [{"type": "text", "data": {"text": "普通回复"}}]
@@ -784,45 +824,100 @@ async def test_concurrent_replies_keep_their_own_message_ids(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "planner_action,take_over", [("wait", True), ("direct_reply", True), ("direct_reply", False)]
-)
-async def test_group_agent_runs_after_planner_allows_participation(planner_action, take_over):
-    from dataclasses import replace
-
-    from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
-
-    limiter, slots = _slot_spy()
-    prepared = replace(_prepared(), forced=False)
-    generated = SimpleNamespace(
-        reply="聊天回复" if planner_action == "direct_reply" else "",
-        pfc_result=PFCRunResult(reply="", action=planner_action, reason="规划决定", ended=False),
-        cancel_speculative_memory=Mock(),
+async def test_a_request_split_over_several_messages_reaches_the_agent_whole(
+    tmp_path, quiet_side_effects
+):
+    agent = SimpleNamespace(
+        handle_turn=AsyncMock(
+            side_effect=[
+                {"handled": True, "decision": {"action": "task"}},
+                {
+                    "handled"   : True,
+                    "segments"  : [{"type": "text", "data": {"text": "记好了"}}],
+                    "reply_text": "记好了",
+                    "task_id"   : "t1",
+                    "status"    : "done",
+                },
+            ]
+        ),
+        report_delivery=AsyncMock(),
     )
-    order = []
+    hctx, context = _hctx(tmp_path, agent)
+    event = {**_event(), "_xc_burst_texts": ["帮我记一笔"]}
 
-    async def generate(*_args):
-        order.append("planner")
-        return generated
+    result = await _delegate(_prepared(text="18 块 麻辣烫 微信"), event, context, hctx)
 
-    async def decide(*_args):
-        assert order == ["planner"]
-        order.append("agent")
-        return object() if take_over else None
+    assert isinstance(result, DeliverySegments)
+    assert agent.handle_turn.await_args_list[0].args[0]["text"] == "帮我记一笔\n18 块 麻辣烫 微信"
 
-    agent_reply = [{"type": "text", "data": {"text": "工具结果"}}]
-    chat_reply  = [{"type": "text", "data": {"text": "聊天回复"}}] if generated.reply else []
-    with (
-        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=prepared)),
-        patch.object(handlers, "generate_smalltalk_turn", generate),
-        patch.object(handlers, "finalize_smalltalk_turn", AsyncMock(return_value=chat_reply)),
-        patch.object(agent_bridge, "_decide", AsyncMock(side_effect=decide)) as decision,
-        patch.object(agent_bridge, "_act", AsyncMock(return_value=agent_reply)) as act,
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "帮我画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
-    assert decision.await_count == (1 if planner_action == "direct_reply" else 0)
-    assert act.await_count == (1 if planner_action == "direct_reply" and take_over else 0)
-    assert result == (agent_reply if act.await_count else chat_reply)
-    assert slots == ["enter", "exit"]
+
+@pytest.mark.asyncio
+async def test_a_question_the_next_message_already_answers_is_not_sent(
+    tmp_path, quiet_side_effects
+):
+    from plugins.xiaoqing_chat import follow_ups
+
+    agent = SimpleNamespace(
+        handle_turn=AsyncMock(
+            side_effect=[
+                {"handled": True, "decision": {"action": "task"}},
+                {
+                    "handled"   : True,
+                    "segments"  : [{"type": "text", "data": {"text": "记什么呀？"}}],
+                    "reply_text": "记什么呀？",
+                    "task_id"   : "t1",
+                    "status"    : "needs_user",
+                },
+            ]
+        ),
+        report_delivery=AsyncMock(),
+    )
+    hctx, context = _hctx(tmp_path, agent)
+    waiting = ({"message_id": 100, "message": [{"type": "text", "data": {"text": "18 块"}}]},)
+    context.capabilities = PluginCapabilities(
+        is_bot_admin = True,
+        agent_turn   = agent,
+        inbound_backlog=SimpleNamespace(waiting=lambda: waiting),
+    )
+    follow_ups._carried.clear()
+    try:
+        result = await _delegate(_prepared(text="小青，帮我记一笔"), _event(), context, hctx)
+        # 追问没发；这句请求照常记进聊天记录，下一条算接着跟她说。
+        assert result == []
+        quiet_side_effects["ensure_user_message_recorded"].assert_awaited()
+        agent.report_delivery.assert_awaited_once_with("t1", None)
+        assert follow_ups.take_carried_attention({**_event(), "message_id": 100}) is True
+    finally:
+        follow_ups._carried.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_finished_result_is_sent_even_when_more_messages_are_waiting(
+    tmp_path, quiet_side_effects
+):
+    agent = SimpleNamespace(
+        handle_turn=AsyncMock(
+            side_effect=[
+                {"handled": True, "decision": {"action": "task"}},
+                {
+                    "handled"   : True,
+                    "segments"  : [{"type": "text", "data": {"text": "记好了"}}],
+                    "reply_text": "记好了",
+                    "task_id"   : "t1",
+                    "status"    : "done",
+                },
+            ]
+        ),
+        report_delivery=AsyncMock(),
+    )
+    hctx, context = _hctx(tmp_path, agent)
+    waiting = ({"message_id": 100, "message": [{"type": "text", "data": {"text": "谢谢"}}]},)
+    context.capabilities = PluginCapabilities(
+        is_bot_admin = True,
+        agent_turn   = agent,
+        inbound_backlog=SimpleNamespace(waiting=lambda: waiting),
+    )
+
+    result = await _delegate(_prepared(text="小青，记一笔 25 午饭"), _event(), context, hctx)
+
+    assert isinstance(result, DeliverySegments)

@@ -25,7 +25,7 @@ from core.router import CommandCatalogNode, command_access, resolve_catalog_invo
 
 from . import receipts
 from .config import PLUGIN_NAME, AgentConfig
-from .prompts import HIDDEN_CAPABILITY_PLUGINS, command_allowed
+from .prompts import command_allowed
 from .shells import ShellSpec
 from .tasks import AgentTask, Outcome
 
@@ -44,12 +44,13 @@ _MAX_WRITE_CHARS      = 2_000_000
 _MAX_CATALOG_LINES    = 40
 _READ_SKIP_CHARS      = 1 << 20
 _TRUNCATION_MARKER    = "\n…（中间输出已省略）…\n"
+_CATALOG_CODE_RE      = re.compile(r"命令码：([^；\s]+)；")
+_MAX_BATCH_COMMANDS   = 20
+_NOTES_STOP           = "没有执行：发起人刚补充了要求，剩下的命令按新要求重新安排。"
 _AGENT_DIR            = ".agent"
 _CODEX_SESSION_PREFIX = "agent-"
-# 只管流程、本身不产出事实的工具：调用它们不算任务有了进展。
-NO_PROGRESS_TOOLS = frozenset({"wait", "send_message", "update_plan", "xiaoqing_commands"})
-# 某条路径被权限或场景挡住时，其余事项照常推进。
-_BLOCKED_SCOPE_NOTE = "其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+# 这两个工具同一调用得到相同结果时提醒一次，第三次收尾：重复不会得到不同结果。
+_REPEAT_CHECKED_TOOLS = frozenset({"xiaoqing_command", "xiaoqing_commands"})
 # 命令回报里的记录 ID（UUID、32 位或 8 位十六进制）：判断重复调用时不算差异。
 _RECORD_ID_RE = re.compile(
     r"\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}|[0-9a-f]{8})\b",
@@ -62,9 +63,12 @@ class ToolResult:
     content        : str
     final          : Outcome | None                                = None
     state          : Literal["ok", "error", "accepted", "blocked"] = "ok"
-    progress       : bool                                          = True
     command_outcome: CommandOutcome | None                         = None
     truncated      : bool                                          = False
+    # 写入没有完成（失败或待确认）：同一轮里排在后面的调用按原计划已不成立，不再执行。
+    halts_batch: bool = False
+    # 非空时执行循环就此收尾：同一调用反复得到相同结果，再试也不会不同。
+    stop: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,13 +106,20 @@ class ToolEnv:
     media_counter  : int = 0
     command_counter: int = 0
     # 本次命令返回的本地文件；发起人不能读写本机文件时，只能发出这些和产出目录里的文件。
-    command_files      : set[Path] = field(default_factory=set)
-    observations       : dict[str, dict[str, int]] = field(default_factory=dict)
-    closed_scopes      : dict[str, str] = field(default_factory=dict)
-    wait_blocked_reason: str = ""
-    user_updates       : list[str] = field(default_factory=list)
+    command_files: set[Path] = field(default_factory=set)
+    user_updates : list[str] = field(default_factory=list)
+    # 发起人在这个办事会话前几轮说的原话（旧→新）；和本轮原话、补充一起交给插件核对字段来源。
+    session_requests: tuple[str, ...] = ()
+    # 同一调用（工具、参数和去掉记录 ID 的结果）出现的次数。
+    repeats: dict[str, int] = field(default_factory=dict)
     # 本任务里已经成功执行的写入命令（规范化后的命令 → 回报里的记录 ID）：完全相同的不再执行第二遍。
     writes: dict[str, str] = field(default_factory=dict)
+    # 本轮可直接执行命令的服务：分流选定或用 xiaoqing_commands 查过用法的；其他服务先查再用。
+    selected_plugins: set[str] = field(default_factory=set)
+    # 本轮实际提供了命令说明的服务，随该轮保存和裁剪。
+    catalog_plugins: set[str] = field(default_factory=set)
+    # 失败、待确认、被权限挡住或后台接收、还没有后续成功结果的命令（命令码 → 状态）。
+    unresolved_commands: dict[str, str] = field(default_factory=dict)
     # 模型调用次数与累计耗时、工具累计耗时（秒），任务结束时写进日志。
     model_calls  : int   = 0
     model_seconds: float = 0.0
@@ -277,8 +288,7 @@ async def _run_in_workspace(env: ToolEnv, argv: list[str], timeout: float) -> To
     failed = result.timed_out or result.output_limited or result.exit_code != 0
     return ToolResult(
         _format_process(result, env.config.max_tool_output_chars, _changed(before, after)),
-        state    = "error" if failed else "ok",
-        progress = not failed,
+        state="error" if failed else "ok",
     )
 
 
@@ -451,13 +461,6 @@ async def _update_plan(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
 
 
 async def _wait(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    if env.wait_blocked_reason or env.task.command_results:
-        return ToolResult(
-            env.wait_blocked_reason
-            or "当前命令没有提供可轮询入口，等待无法取得新的执行状态。请交付已有结果，或继续其他独立操作。",
-            state    = "blocked",
-            progress = False,
-        )
     seconds = args.get("seconds")
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
         raise ToolError("seconds 必须是正数")
@@ -475,13 +478,33 @@ async def _final_answer(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise ToolError("这些文件不存在，请检查路径后再交付: " + ", ".join(missing))
-    return ToolResult("已交付", final=Outcome(answer, [str(path) for path in files], authored=True))
+    status = args.get("state", "done")
+    if status not in {"done", "needs_user", "blocked", "unfinished"}:
+        raise ToolError("state 需为 done、needs_user、blocked 或 unfinished")
+    return ToolResult(
+        "已交付",
+        final=Outcome(answer, [str(path) for path in files], status=settled_status(env, status)),
+    )
+
+
+def settled_status(env: ToolEnv, claimed: str) -> str:
+    """任务记录的结局：模型明确说了等发起人、受阻或没做完时照记；否则按命令结果判断。
+
+    还有命令等发起人决定（比如时间冲突）记 needs_user，被权限挡住记 blocked，失败或后台接收记 unfinished。
+    """
+
+    states = set(env.unresolved_commands.values())
+    if claimed != "done" or not states:
+        return claimed
+    if "incomplete" in states:
+        return "needs_user"
+    return "blocked" if "blocked" in states else "unfinished"
 
 
 # ──────────────────── XiaoQing 命令 ────────────────────
 
 
-def _catalog_lines(context: Any, query: str, *, include_unavailable: bool = False) -> list[str]:
+def catalog_lines(context: Any, query: str, *, include_unavailable: bool = False) -> list[str]:
     roots = tuple(
         root
         for root in context.get_command_catalog()
@@ -508,6 +531,8 @@ def _catalog_lines(context: Any, query: str, *, include_unavailable: bool = Fals
                 if needle == node.code.casefold():
                     exact.update(child.code for child in node.walk())
     lines: list[str] = []
+    # 上级用途在同一份输出里只交代一次：整份插件目录里逐行重复父级说明会把篇幅翻倍。
+    described: set[tuple[str, ...]] = set()
     for root in roots:
         nodes                                                = root.walk() if needle else (root,)
         ancestors: dict[tuple[str, ...], CommandCatalogNode] = {}
@@ -532,9 +557,12 @@ def _catalog_lines(context: Any, query: str, *, include_unavailable: bool = Fals
             if not exact and terms and not all(term in haystack for term in terms):
                 continue
             line = f"{node.usage} — {node.help_text}"
-            if needle and parents:
+            described.add(node.path)
+            pending = [parent for parent in parents if parent.path not in described]
+            if needle and pending:
+                described.update(parent.path for parent in pending)
                 line += "\n上级用途：" + "；".join(
-                    f"{parent.name}：{parent.help_text}" for parent in parents
+                    f"{parent.name}：{parent.help_text}" for parent in pending
                 )
             if tuple(node.contexts) == ("private",):
                 line += "（仅私聊）"
@@ -553,14 +581,10 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     page = args.get("page", 1)
     if type(page) is not int or page < 1:
         raise ToolError("page 必须是正整数")
-    lines   = _catalog_lines(env.context, query)
+    lines   = catalog_lines(env.context, query)
     heading = ""
-    if not lines and query.strip() and _catalog_lines(env.context, query, include_unavailable=True):
-        reason = (
-            "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
-        )
-        env.closed_scopes["unavailable_catalog"] = reason
-        return ToolResult(reason, state="blocked", progress=False)
+    if not lines and query.strip() and catalog_lines(env.context, query, include_unavailable=True):
+        return ToolResult("匹配的功能需要当前身份没有的权限。", state="blocked")
     if not lines and query.strip():
         terms = query.strip().lstrip("/").casefold().split()
         for root in env.context.get_command_catalog():
@@ -570,11 +594,7 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
                 root.code.casefold(),
                 *(alias.casefold() for alias in root.aliases),
             } and not command_allowed(root, env.context.principal):
-                reason = (
-                    "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，" + _BLOCKED_SCOPE_NOTE
-                )
-                env.closed_scopes[root.plugin] = reason
-                return ToolResult(reason, state="blocked", progress=False)
+                return ToolResult("当前身份没有使用这个插件的权限。", state="blocked")
             if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
                 branch     = resolve_catalog_invocation(root, " ".join(terms[1:])).node
                 candidates = [
@@ -584,16 +604,15 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
                     in {node.name.casefold(), *(alias.casefold() for alias in node.aliases)}
                 ]
                 for node in candidates or branch.children or (branch,):
-                    lines.extend(_catalog_lines(env.context, node.code))
+                    lines.extend(catalog_lines(env.context, node.code))
                 heading = "完整路径未匹配，以下为该入口的相关命令；按列出的用法选择：\n\n"
                 break
     if not lines:
         return ToolResult(
             "当前可用目录没有匹配的命令。可查询顶层目录确认能力范围。",
-            state    = "error",
-            progress = False,
+            state="error",
         )
-    suffix                 = "" if query else "\n（用 query 查某个插件的子命令，例如 query=pendo）"
+    suffix                 = "" if query else "\n（用 query 查某个插件的子命令，例如 query=插件名）"
     pages: list[list[str]] = [[]]
     size                   = 0
     for line in lines:
@@ -607,6 +626,15 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         size += len(line) + 2
     if page > len(pages):
         return ToolResult(f"没有第 {page} 页；共 {len(pages)} 页。")
+    if query:
+        # 只记录这一页实际交给模型的说明；命令码的第一段是插件名。
+        plugins = {
+            code.split(".", 1)[0]
+            for line in pages[page - 1]
+            for code in _CATALOG_CODE_RE.findall(line)
+        }
+        env.selected_plugins.update(plugins)
+        env.catalog_plugins.update(plugins)
     if page < len(pages):
         suffix += f"\n（共 {len(lines)} 条；继续使用相同 query，page={page + 1}）"
     return ToolResult(heading + "\n\n".join(pages[page - 1]) + suffix)
@@ -689,130 +717,173 @@ async def _segments_to_text(
 
 
 async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    """按调用时声明的交付方式执行；完整列表沿插件提供的导航取齐。"""
+    """按顺序执行一组命令，回报交回模型。
 
-    command  = _string_arg(args, "command").strip()
-    delivery = _string_arg(args, "delivery")
-    if delivery not in ("continue", "reply", "all_pages"):
-        raise ToolError("delivery 需要为 continue、reply 或 all_pages。")
+    某条写入没有完成（失败、待确认或重复）时停在那一条，后面的不执行；发起人中途补充要求时同样停下。
+    执行出错的那条变成错误回报，前面已经执行的回报照样交回。
+    """
+
+    commands  = args.get("commands")
+    all_pages = args.get("all_pages", False)
+    if (
+        not isinstance(commands, list)
+        or not 1 <= len(commands) <= _MAX_BATCH_COMMANDS
+        or not all(isinstance(item, str) and item.strip() for item in commands)
+    ):
+        raise ToolError(f"commands 需要是 1–{_MAX_BATCH_COMMANDS} 条非空命令文本的数组。")
+    if type(all_pages) is not bool:
+        raise ToolError("all_pages 需要是 true 或 false。")
+    results: list[tuple[str, ToolResult]] = []
+    for index, command in enumerate(commands):
+        if index and env.task.notes:
+            results.append((command, ToolResult(_NOTES_STOP, state="error")))
+            break
+        result = await _run_one_command(env, command.strip(), all_pages)
+        results.append((command, result))
+        if result.halts_batch:
+            break
+    if len(commands) == 1:
+        return results[0][1]
+    skipped = len(commands) - len(results)
+    reports = [f"{command}\n{result.content}" for command, result in results]
+    if skipped:
+        reports.append(f"本组在第 {len(results)} 条停止，后面 {skipped} 条没有执行。")
+    states = [result.state for _command, result in results]
+    return ToolResult(
+        "\n\n".join(reports),
+        state=next((state for state in ("blocked", "error", "accepted") if state in states), "ok"),
+        command_outcome=results[-1][1].command_outcome,
+        truncated=any(result.truncated for _command, result in results),
+        halts_batch=results[-1][1].halts_batch,
+    )
+
+
+async def _run_one_command(env: ToolEnv, command: str, all_pages: bool) -> ToolResult:
+    """执行一条命令；查询带 all_pages 时沿插件给的下一页取齐。"""
+
+    resolved = resolve_command(env.context, command)
+    if resolved is not None and resolved[1].node.effect == "write":
+        return await _run_write(env, command)
     visited   : set[str]   = set()
     outputs   : list[str]  = []
     first_page: int | None = None
     truncated              = False
     while True:
         visited.add(command)
-        try:
-            result = await _run_xiaoqing_command(env, command)
-        except (ToolError, OSError, ValueError, TypeError, RuntimeError) as exc:
-            result = ToolResult(
-                f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error", progress=False
-            )
+        result = await _run_safely(env, command)
         if not outputs and result.command_outcome is not None:
             first_page = result.command_outcome.page
         truncated    = truncated or result.truncated
         next_command = result.command_outcome.next_command if result.command_outcome else ""
         outputs.append(result.content)
-        if delivery != "all_pages" or result.state != "ok" or not next_command or env.task.notes:
+        if not all_pages or result.state != "ok" or not next_command or env.task.notes:
             break
         if next_command in visited or len(visited) >= env.config.max_steps or env.remaining() <= 5:
             return ToolResult(
                 "\n\n".join(outputs)
                 + f"\n分页尚未取齐，本次自动翻页已停止。待取页面：{next_command}",
-                state    = "blocked",
-                progress = False,
+                state="blocked",
             )
         command = next_command
     result.content = "\n\n".join(outputs)
-    if delivery == "all_pages":
-        if result.state != "ok" or next_command or env.task.notes or truncated:
-            result.content += f"\n结果范围：分页尚未取齐，已保留本次取得的结果。待核对命令：{next_command or command}"
-            if truncated:
-                result.content += "\n部分页面正文因输出预算被截断。"
-        elif result.command_outcome is not None and result.command_outcome.has_more is True:
-            result.content += "\n结果范围：分页尚未取齐，插件报告存在后续页，续页命令缺失。"
-        elif result.command_outcome is not None and result.command_outcome.has_more is False:
-            if first_page is not None and first_page > 1:
-                result.content += (
-                    f"\n结果范围：已取至末页；本次从第 {first_page} 页开始，前序页尚未取齐。"
-                )
-            elif first_page == 1:
-                result.content += "\n结果范围：分页已取齐，本次查询范围内的清单可交付。"
-            else:
-                result.content += "\n结果范围：已确认末页；本次起始页未知，完整性未知。"
-        else:
-            result.content += "\n结果范围：本次查询成功；完整性未知，插件尚未提供可验证的分页终点。"
-    if delivery != "continue" and result.state in {"ok", "accepted"} and not env.task.notes:
-        result.final = Outcome(result.content, [str(path) for path in sorted(env.command_files)])
-    elif delivery != "continue" and result.state == "error":
-        result.final = Outcome(
-            result.content, [str(path) for path in sorted(env.command_files)], status="failed"
+    if not all_pages:
+        return result
+    page = result.command_outcome
+    if result.state != "ok" or next_command or env.task.notes or truncated:
+        result.content += (
+            f"\n结果范围：分页尚未取齐，已保留本次取得的结果。待核对命令：{next_command or command}"
         )
+        if truncated:
+            result.content += "\n部分页面正文因输出预算被截断。"
+    elif page is not None and page.has_more is True:
+        result.content += "\n结果范围：分页尚未取齐，插件报告存在后续页，续页命令缺失。"
+    elif page is not None and page.has_more is False:
+        if first_page is not None and first_page > 1:
+            result.content += (
+                f"\n结果范围：已取至末页；本次从第 {first_page} 页开始，前序页尚未取齐。"
+            )
+        elif first_page == 1:
+            result.content += "\n结果范围：分页已取齐，本次查询范围内的清单完整。"
+    # 插件没说明分页情况时不加标注：结果照原样交给模型，不诱导它为“完整性”再查一遍。
+    return result
+
+
+async def _run_safely(env: ToolEnv, command: str) -> ToolResult:
+    """执行一条命令；执行出错时变成错误回报，同一组里前面的结果不受影响。取消照常向上传播。"""
+
+    try:
+        return await _run_xiaoqing_command(env, command)
+    except (ToolError, OSError, ValueError, TypeError, RuntimeError) as exc:
+        return ToolResult(f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error")
+
+
+async def _run_write(env: ToolEnv, command: str) -> ToolResult:
+    """执行一条写入；没有完成时同一组、同一轮后面的命令不再执行，由模型看过这项回报后重新安排。"""
+
+    result             = await _run_safely(env, command)
+    result.halts_batch = result.state not in {"ok", "accepted"}
+    outcome            = result.command_outcome
+    if outcome is not None and outcome.state == "incomplete":
+        # 待确认的回报里有写给执行方的交互提示（比如“输入 yes 确认”），不能原样转述给发起人。
+        result.content += "\n这项变更等待发起人决定，尚未写入。"
+        if outcome.confirmation_command:
+            result.content += (
+                "发起人同意后执行插件给的这条命令（原样）：" + outcome.confirmation_command
+            )
     return result
 
 
 def _write_key(invocation: Any) -> str:
-    """声明为写入的命令的规范形式：完全相同的两次写入在同一任务里只执行一次。
+    """写入命令的规范形式（命令码加空白归一后的参数）：完全相同的两次写入在同一任务里只执行一次。"""
 
-    结构化参数按 schema 补上顶层默认值、去掉字符串首尾空白、键排序，省略字段和显式写默认值算同一次；
-    其他命令按空白归一后的参数文本比较。
-    """
+    return f"{invocation.node.code} " + " ".join(invocation.arguments.split())
 
-    node      = invocation.node
-    arguments = invocation.arguments.strip()
-    declared  = node.structured_input
-    if declared is not None and arguments.startswith("{"):
-        try:
-            values = json.loads(arguments)
-        except ValueError:
-            values = None
-        if isinstance(values, dict):
-            properties = declared.parameters().get("properties", {})
-            merged     = {
-                name: spec["default"] for name, spec in properties.items() if "default" in spec
-            }
-            merged.update(values)
-            canonical = {
-                name: value.strip() if isinstance(value, str) else value
-                for name, value in merged.items()
-            }
-            return f"{node.code} " + json.dumps(canonical, ensure_ascii=False, sort_keys=True)
-    return f"{node.code} " + " ".join(arguments.split())
+
+def resolve_command(context: Any, command: str) -> tuple[CommandCatalogNode, Any] | None:
+    """按命令目录解析一条命令：返回顶层入口与具体调用；不是已知入口时为 ``None``。"""
+
+    tokens = command.strip().lstrip("/").split(maxsplit=1)
+    if not tokens:
+        return None
+    scope = tokens[0].casefold()
+    for root in context.get_command_catalog():
+        if scope in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+            return root, resolve_catalog_invocation(root, tokens[1] if len(tokens) > 1 else "")
+    return None
 
 
 async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
-    tokens = command.lstrip("/").split(maxsplit=1)
-    scope       = tokens[0].casefold()
-    command_key = scope
-    is_help     = False
-    write_key   = ""
-    for root in env.context.get_command_catalog():
-        if scope in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
-            scope       = root.plugin
-            invocation  = resolve_catalog_invocation(root, tokens[1] if len(tokens) > 1 else "")
-            command_key = invocation.node.code
-            is_help     = invocation.node.name == "help" or root.name == "help"
-            denied      = command_access(invocation.node, env.context.principal)
-            if denied:
-                reason = (
-                    "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，"
-                    + _BLOCKED_SCOPE_NOTE
+    command_key = command.lstrip("/").split(maxsplit=1)[0].casefold()
+    is_help   = False
+    write_key = ""
+    resolved  = resolve_command(env.context, command)
+    if resolved is not None:
+        root, invocation = resolved
+        scope       = root.plugin
+        command_key = invocation.node.code
+        is_help     = invocation.node.name == "help" or root.name == "help"
+        if command_access(invocation.node, env.context.principal):
+            env.unresolved_commands[command_key] = "blocked"
+            return ToolResult("当前身份或会话场景不能使用这条命令。", state="blocked")
+        if invocation.node.effect == "write":
+            if not is_help and scope not in env.selected_plugins:
+                # 还没看过说明的服务：查询直接执行（写错了插件自己会报）；写入先把说明交给模型，
+                # 省掉“被拒 → 再查用法”的那一轮。说明给过之后这个服务就可以直接用。
+                env.selected_plugins.add(scope)
+                env.catalog_plugins.add(scope)
+                usage = "\n\n".join(catalog_lines(env.context, root.name))
+                return ToolResult(
+                    f"没有执行：上下文里还没有 {scope} 服务的命令说明。说明如下，按它核对参数后直接执行。\n\n"
+                    + truncate(usage, env.config.max_tool_output_chars),
+                    state="error",
                 )
-                env.closed_scopes[command_key] = reason
-                return ToolResult(reason, state="blocked", progress=False)
-            if invocation.node.effect == "write":
-                write_key = _write_key(invocation)
-            break
-    closed = env.closed_scopes.get(scope) or env.closed_scopes.get(command_key)
-    if closed and not is_help:
-        return ToolResult(closed, state="blocked", progress=False)
+            write_key = _write_key(invocation)
     if write_key in env.writes:
         written = env.writes[write_key]
         return ToolResult(
-            f"这次写入和本任务前面已经成功执行的一次完全相同（{('记录 ID：' + written) if written else '见前面的回报'}），"
-            "没有再执行。发起人给了几项就写几项，不用重复的内容凑数量；"
-            "原话里确实有两项一模一样的内容时，先向发起人确认。",
-            state    = "blocked",
-            progress = False,
+            f"这次写入和本任务前面成功执行的一次完全相同（{('记录 ID：' + written) if written else '见前面的回报'}），"
+            "没有再执行。",
+            state="blocked",
         )
     runner = getattr(env.context.capabilities, "command_runner", None)
     if runner is None:
@@ -820,12 +891,12 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
     env.task.activity = f"执行 {command.split()[0][:30]}"
     # 每次调用一个独立的操作标识：插件按它防重复结算时，同一任务里两次独立调用不会被当成一次。
     env.command_counter += 1
-    # 发起人本人的原话交给插件，由插件核对写入的字段和数量确实出自原话。
+    # 发起人本人在这个会话里的原话交给插件，由插件核对写入的字段和数量确实出自原话。
     result = await runner.run(
         command,
         sender_name   = env.task.sender,
         operation_id  = f"{env.task.task_id}-{env.command_counter}",
-        request_texts = (env.task.request_text, *env.user_updates),
+        request_texts = (*env.session_requests, env.task.request_text, *env.user_updates),
     )
     receipt, outcome = (
         (result.delivery_receipt, result.command_outcome)
@@ -840,64 +911,41 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
         raise
     if receipt is not None:
         await receipts.hold(env.task.held_receipts, receipt, files)
-    env.task.command_results.append(truncate(f"{command}\n{body}", 1200))
-    env.task.command_results = env.task.command_results[-4:]
     if is_help:
-        return ToolResult(body, progress=False)
-    if outcome is not None and outcome.state == "accepted":
-        reason                         = "后台任务已接收。当前命令没有轮询接口，本轮交付接收状态；其他独立事项可继续。"
-        env.closed_scopes[command_key] = reason
-        env.wait_blocked_reason        = reason
-        body += "\n执行状态：accepted；" + reason
-        return ToolResult(body, state="accepted")
-    # 同一条命令得到同样的回报才算重复；记录 ID 每次不同，不能算作新信息。
-    observation = f"{' '.join(command.split())}\n{_RECORD_ID_RE.sub('#', body)}"
-    fingerprint = hashlib.sha256(observation.encode("utf-8")).hexdigest()
-    observed = env.observations.setdefault(scope, {})
-    observed[fingerprint] = observed.get(fingerprint, 0) + 1
+        return ToolResult(body)
     failed = (outcome is not None and outcome.state in {"error", "incomplete"}) or body.startswith(
         "❌"
     )
+    if (
+        failed
+        or (outcome is not None and outcome.state == "accepted")
+        or _TRUNCATION_MARKER in body
+    ):
+        env.unresolved_commands[command_key] = (
+            outcome.state
+            if outcome is not None and outcome.state != "completed"
+            else ("error" if failed else "truncated")
+        )
+    else:
+        env.unresolved_commands.pop(command_key, None)
     if write_key and not failed:
         record_match          = _RECORD_ID_RE.search(body)
         env.writes[write_key] = record_match.group(0) if record_match else ""
-    if failed:
-        env.wait_blocked_reason = (
-            "当前命令返回失败或不完整结果。可根据帮助修正参数；等待本身无法取得新结果。"
-        )
-    elif not env.closed_scopes:
-        env.wait_blocked_reason = ""
-    if outcome is not None and outcome.state == "error" and observed[fingerprint] >= 2:
-        reason                         = "该命令已重复返回相同失败，本轮停止重试；交付已取得的结果与未完成范围。"
-        env.closed_scopes[command_key] = reason
-        env.wait_blocked_reason        = reason
+    if outcome is not None and outcome.state == "accepted":
         return ToolResult(
-            body + "\n" + reason, state="blocked", progress=False, command_outcome=outcome
-        )
-    if observed[fingerprint] >= 3:
-        reason                   = "该命令已连续多次得到相同结果，重复调用没有取得新信息。本轮停止这一路径，交付已有结果与缺口；其他独立事项可继续。"
-        env.closed_scopes[scope] = reason
-        env.wait_blocked_reason  = reason
-        return ToolResult(body + "\n" + reason, state="blocked", progress=False)
-    if observed[fingerprint] == 2 and not failed:
-        body += (
-            "\n与本任务前面一次调用的命令和结果相同（记录 ID 除外），重复同样的调用不会得到不同结果。"
-            "需要不同结果时换用其他写法或参数；做不到时向发起人说明缺口。"
+            body + "\n执行状态：accepted；后台已接收，完成后由插件通知，不用等待或重复调用。",
+            state           = "accepted",
+            command_outcome = outcome,
         )
     if outcome is not None:
         body += f"\n执行状态：{outcome.state}"
         if outcome.next_command:
             body += f"；下一页：{outcome.next_command}"
-        elif outcome.has_more is False:
-            body += "；后续分页：无（插件已确认末页）"
         elif outcome.has_more is True:
             body += "；后续分页：存在，续页命令缺失"
-        else:
-            body += "；分页完整性：未知"
     return ToolResult(
         body,
         state           = "error" if failed else "ok",
-        progress        = observed[fingerprint] == 1 and not failed,
         command_outcome = outcome,
         truncated       = _TRUNCATION_MARKER in body,
     )
@@ -937,8 +985,7 @@ async def _ssh_run(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     failed = bool(result.get("timed_out")) or result.get("exit_code") != 0
     return ToolResult(
         f"{status}\n{truncate(output, env.config.max_tool_output_chars)}",
-        state    = "error" if failed else "ok",
-        progress = not failed,
+        state="error" if failed else "ok",
     )
 
 
@@ -989,15 +1036,14 @@ async def _codex_run(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         lines.insert(0, "Codex 任务没有成功完成（失败、超时、被取消或退出码非零）。")
     return ToolResult(
         "\n".join(lines),
-        state    = "ok" if succeeded else "error",
-        progress = succeeded,
+        state="ok" if succeeded else "error",
     )
 
 
 # ──────────────────── 工具目录 ────────────────────
 
 
-def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, Tool]:
+def build_tools(env: ToolEnv) -> dict[str, Tool]:
     """按发起人的权限和当前可用能力生成工具表；用不了的工具不出现在模型面前。
 
     执行代码、读写本机文件（``local_tools``）、SSH 与 Codex 都由 Core 只签发给 Bot 管理员，
@@ -1088,54 +1134,83 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
             _send_message,
         ),
         Tool(
-            "wait",
-            "等待一段时间（最多 600 秒），用于轮询需要时间的外部状态。",
-            _object({"seconds": {"type": "number"}}, ["seconds"]),
-            _wait,
-        ),
-        Tool(
             "final_answer",
-            "交付最终结果并结束任务。text 按共享人设表达，包含所需结果和关键事实；"
-            "清单、代码和文稿按用户请求完整提供。省略 files 自动附上本次命令返回的文件；"
-            "指定 files 时使用工具返回的原始路径，空数组表示只交付文字。",
-            _object({"text": {"type": "string"}, "files": _FILES_PROPERTY}, ["text"]),
+            "交付回复并结束这一轮。三种情况用它：要发起人回答或决定（state=needs_user）、做不到（state=blocked）、"
+            "要附文件；其余办完了直接回复文字即可。text 是发给发起人的回复，按人设说，清单、代码和文稿按请求完整给出。"
+            "省略 files 时附上本次命令返回的文件；指定 files 时用工具返回的原始路径，空数组表示不附文件。",
+            _object(
+                {
+                    "text" : {"type": "string"},
+                    "files": _FILES_PROPERTY,
+                    "state": {
+                        "type": "string",
+                        "enum": ["done", "needs_user", "blocked", "unfinished"],
+                        "description": "needs_user 要发起人回答或决定，blocked 权限或服务阻碍，unfinished 还有已授权的事没做完；省略时按命令结果判断。",
+                    },
+                },
+                ["text"],
+            ),
             _final_answer,
         ),
     ]
     capabilities = env.context.capabilities
+    # 只有能再次查看外部状态（本机进程、远端服务器、Codex）时等待才有意义；插件命令的后台任务由插件通知。
+    if any(
+        getattr(capabilities, name, None) is not None
+        for name in ("local_tools", "ssh_agent", "codex_agent")
+    ):
+        tools.append(
+            Tool(
+                "wait",
+                "等待一段时间（最多 600 秒），只用于轮询之后还能再查看的外部状态，比如远端任务。",
+                _object({"seconds": {"type": "number"}}, ["seconds"]),
+                _wait,
+            )
+        )
     if getattr(capabilities, "command_runner", None) is not None:
         tools += [
             Tool(
                 "xiaoqing_commands",
-                "查询 XiaoQing 已有命令及用法（日程待办 pendo、论文、天文等）。"
-                "不带 query 列顶层命令；query 可填完整路径、别名或空格分隔关键词。"
-                "例如 pendo ledger add 直接给出该命令的完整参数、默认值和全部示例；"
-                "pendo 记账 搜索相关命令。按 page 翻页，帮助可复用。",
+                "查询 XiaoQing 已有命令及用法。上下文里已经有某个服务的命令说明时直接用，不必再查；"
+                "要用其他服务或用法不明时再查，查过的服务随后可以直接执行。"
+                "不带 query 列顶层命令；query 可填完整路径、别名或空格分隔关键词："
+                "完整路径（如“插件名 子命令”）给出该命令的参数、默认值和全部示例，关键词搜索相关命令。按 page 翻页。",
                 _object({"query": {"type": "string"}, "page": {"type": "integer", "minimum": 1}}),
                 _xiaoqing_commands,
             ),
             Tool(
                 "xiaoqing_command",
-                "以发起人的身份执行一条 XiaoQing 命令并返回回复，例如 '/pendo todo list'；"
-                "权限和场景限制与发起人本人直接发送时相同。"
-                "按已有说明填写参数，用法不明时通过 xiaoqing_commands 查询；支持单次调用的命令。"
-                "需要 @ 某人时写 [CQ:at,qq=QQ号]。代码执行、远端命令和编程任务优先使用本轮提供的专用工具；"
+                "以发起人的身份按顺序执行一组 XiaoQing 命令，查询和写入都用它；权限和场景限制与发起人本人发送时相同，"
+                "只支持单次调用的命令。\n"
+                "- 参数按上下文里的命令说明填写。还没有说明的服务：查询可以直接执行，写入会先返回该服务的说明。\n"
+                "- 参数、默认值和确认方式由命令说明定义。接受自然语言的参数保留用户的具体要求，指代补成明确对象；"
+                "结构化参数按说明对应字段。\n"
+                "- 参数已齐备的多条命令放进同一个 commands，按请求的顺序执行；依赖前一条结果的命令在拿到结果后组织。"
+                "某条写入失败、待确认或重复时停在那一条，后面的不执行。\n"
+                "- 修改作用于原记录；删除限定到指定对象和数量。\n"
+                "- 需要完整分页清单时带 all_pages。\n"
+                "- 需要 @ 某人时写 [CQ:at,qq=QQ号]。代码执行、远端命令和编程任务在本轮提供时改用 run_python、ssh_run、codex_run；"
                 "插件的会话列表、配置、历史等管理功能通过对应命令查询。",
                 _object(
                     {
-                        "command" : {"type": "string"},
-                        "delivery": {
-                            "type": "string",
-                            "enum": ["reply", "all_pages", "continue"],
-                            "description": "交付方式：当前结果足够时选 reply；需要完整分页列表时选 all_pages，程序自动沿下一页继续，并依据插件元数据报告完整性。以上方式在本批调用后结束执行并交付文字和附件，整理、解释和用户要求的建议也由交付阶段完成。原请求中还有其他独立操作需要调用工具时选 continue。",
+                        "commands": {
+                            "type"       : "array",
+                            "items"      : {"type": "string"},
+                            "minItems"   : 1,
+                            "maxItems"   : _MAX_BATCH_COMMANDS,
+                            "description": "要执行的命令，按顺序；只有一条时也写成数组。",
+                        },
+                        "all_pages": {
+                            "type"       : "boolean",
+                            "description": "查询需要完整分页清单时为 true：程序沿插件给的下一页自动取齐，并报告完整性。",
                         },
                     },
-                    ["command", "delivery"],
+                    ["commands"],
                 ),
                 _xiaoqing_command,
             ),
         ]
-    if getattr(capabilities, "ssh_agent", None) is not None and "qingssh" in loaded_plugins:
+    if getattr(capabilities, "ssh_agent", None) is not None:
         tools += [
             Tool(
                 "ssh_servers",
@@ -1157,7 +1232,7 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 _ssh_run,
             ),
         ]
-    if getattr(capabilities, "codex_agent", None) is not None and "codex" in loaded_plugins:
+    if getattr(capabilities, "codex_agent", None) is not None:
         tools.append(
             Tool(
                 "codex_run",
@@ -1179,64 +1254,27 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 _codex_run,
             )
         )
-    if getattr(capabilities, "command_runner", None) is not None:
-        tools += _structured_command_tools(env, loaded_plugins, {tool.name for tool in tools})
     return {tool.name: tool for tool in tools}
 
 
-def _structured_command_tools(
-    env: ToolEnv, loaded_plugins: frozenset[str], taken: set[str]
-) -> list[Tool]:
-    """插件在命令声明里给了结构化参数的命令各成一个工具；只列发起人此刻能用的。
+def _note_repeat(env: ToolEnv, name: str, raw_arguments: Any, result: ToolResult) -> None:
+    """同一调用得到相同结果（记录 ID 不算差异）：第二次在回报里提醒，第三次让执行循环收尾。"""
 
-    工具名、说明和参数都来自插件声明，agent 不认识具体插件；调用时照常走以发起人身份执行命令的那条路。
-    """
-
-    principal         = getattr(env.context, "principal", None)
-    found: list[Tool] = []
-    for root in env.context.get_command_catalog():
-        if root.plugin not in loaded_plugins or root.plugin in HIDDEN_CAPABILITY_PLUGINS:
-            continue
-        for node in root.walk():
-            declared = node.structured_input
-            if declared is None:
-                continue
-            if principal is not None and command_access(node, principal) is not None:
-                continue
-            if declared.name in taken:
-                logger.warning(
-                    "xiaoqing_agent structured tool skipped name=%s command=%s reason=name_taken",
-                    declared.name,
-                    node.code,
-                )
-                continue
-            taken.add(declared.name)
-            description = declared.description or node.help_text
-            found.append(
-                Tool(
-                    declared.name,
-                    f"{description}（对应命令 {node.usage}）",
-                    declared.parameters(),
-                    _structured_handler(node),
-                )
-            )
-    return found
-
-
-def _structured_handler(node: CommandCatalogNode) -> ToolHandler:
-    """把工具参数作为一个 JSON 对象接在命令路径后面执行；schema 没有字段时只发命令路径。"""
-
-    path    = "/" + " ".join(node.path)
-    no_args = node.structured_input is not None and node.structured_input.takes_no_arguments()
-
-    async def handler(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-        if no_args:
-            if args:
-                raise ToolError("这个工具不需要参数。")
-            return await _run_xiaoqing_command(env, path)
-        return await _run_xiaoqing_command(env, f"{path} {json.dumps(args, ensure_ascii=False)}")
-
-    return handler
+    try:
+        arguments = json.dumps(parse_arguments(raw_arguments), ensure_ascii=False, sort_keys=True)
+    except ToolError:
+        arguments = str(raw_arguments)
+    observation = f"{name}\n{' '.join(arguments.split())}\n{_RECORD_ID_RE.sub('#', result.content)}"
+    fingerprint = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+    count = env.repeats.get(fingerprint, 0) + 1
+    env.repeats[fingerprint] = count
+    if count == 2:
+        result.content += (
+            "\n（这次调用和结果都和本任务前面一次相同，重复不会得到不同结果：换个做法，"
+            "或者直接把已有结果和缺口告诉发起人。）"
+        )
+    elif count >= 3:
+        result.stop = "同一调用三次得到相同结果"
 
 
 def parse_arguments(raw: Any) -> dict[str, Any]:
@@ -1263,41 +1301,19 @@ async def execute_tool(
 
     tool = tools.get(name)
     if tool is None:
-        return ToolResult(
-            f"错误：没有名为 {name} 的工具。可用: {', '.join(tools)}", state="error", progress=False
-        )
-    started = time.perf_counter()
+        return ToolResult(f"错误：没有名为 {name} 的工具。可用: {', '.join(tools)}", state="error")
+    started       = time.perf_counter()
+    model_seconds = env.model_seconds
     try:
         result = await tool.handler(env, parse_arguments(raw_arguments))
     except ToolError as exc:
-        result = ToolResult(f"错误：{exc}", state="error", progress=False)
+        result = ToolResult(f"错误：{exc}", state="error")
     except (OSError, ValueError, TypeError, RuntimeError, PermissionError) as exc:
-        result = ToolResult(
-            f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error", progress=False
-        )
+        result = ToolResult(f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error")
     finally:
-        env.tool_seconds += time.perf_counter() - started
-    if name == "xiaoqing_commands" and result.state == "ok":
-        fingerprint           = hashlib.sha256(result.content.encode("utf-8")).hexdigest()
-        observed              = env.observations.setdefault("tool:xiaoqing_commands", {})
-        observed[fingerprint] = observed.get(fingerprint, 0) + 1
-        if observed[fingerprint] >= 3:
-            result = ToolResult(
-                result.content + "\n这份帮助已重复取得，用法保持不变。请按已有信息执行或交付阻碍。",
-                state    = "blocked",
-                progress = False,
-            )
-        elif observed[fingerprint] == 2:
-            result = ToolResult(
-                result.content + "\n这份帮助与此前相同，可复用已有用法。", progress=False
-            )
-    if result.state == "error" and name not in {
-        "wait",
-        "send_message",
-        "update_plan",
-        "final_answer",
-    }:
-        env.wait_blocked_reason = "工具已返回错误，可根据回报修正输入。当前回报没有提供可轮询状态。"
-    elif result.progress and not env.closed_scopes and name not in NO_PROGRESS_TOOLS:
-        env.wait_blocked_reason = ""
+        env.tool_seconds += max(
+            0.0, time.perf_counter() - started - (env.model_seconds - model_seconds)
+        )
+    if name in _REPEAT_CHECKED_TOOLS:
+        _note_repeat(env, name, raw_arguments, result)
     return result

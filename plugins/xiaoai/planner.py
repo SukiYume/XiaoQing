@@ -6,10 +6,24 @@ import json
 import re
 from typing import Any
 
-from core.ai import AIError
+from core.ai import AIError, declare_route_defaults
 
 from .catalog import capabilities, resolve_device
 from .client import BridgeError
+
+# 自然语言解析：输出是一份结构化操作，要稳；总时长留在一次命令的执行预算之内。
+declare_route_defaults(
+    "xiaoai",
+    {
+        "plan": {
+            "temperature"          : 0,
+            "max_tokens"           : 1600,
+            "timeout_seconds"      : 25,
+            "total_timeout_seconds": 28,
+            "max_retry"            : 0,
+        }
+    },
+)
 
 
 async def _json(context: Any, system: str, payload: dict[str, Any]) -> dict[str, Any]:

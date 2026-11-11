@@ -15,6 +15,8 @@ from ..config import PendoConfig
 
 logger = logging.getLogger(__name__)
 
+CN_WEEKDAYS: Final[tuple[str, ...]] = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
 _COMMON_STORAGE_DATETIME_FIELDS: Final = (
     "created_at",
     "updated_at",
@@ -429,7 +431,19 @@ def _parse_time_range_core(
 
     match = re.fullmatch(r"last(\d+)d", tr)
     if match:
-        return now - timedelta(days=int(match.group(1))), now
+        try:
+            return now - timedelta(days=int(match.group(1))), now
+        except OverflowError as exc:
+            raise ValueError(f"时间范围过大: {time_range}") from exc
+
+    # MM-DD 按今年的这一天
+    if re.fullmatch(r"\d{2}-\d{2}", tr):
+        try:
+            return _day_range(datetime.strptime(f"{now.year}-{tr}", "%Y-%m-%d"))
+        except ValueError:
+            if strict:
+                raise ValueError(f"无法解析时间范围: {time_range}") from None
+            return today
 
     keyword_range = _calendar_keyword_ranges(now).get(tr)
     if keyword_range:
@@ -482,30 +496,47 @@ def parse_diary_range(
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def parse_delay_time(
-    delay_str: str, current_due: str | None = None, now: datetime | None = None
-) -> str | None:
-    """解析延后时间，返回 ISO 时间字符串"""
+_DELAY_UNITS: Final = {
+    "m"      : "minutes",
+    "min"    : "minutes",
+    "mins"   : "minutes",
+    "minute" : "minutes",
+    "minutes": "minutes",
+    "分"      : "minutes",
+    "分钟"     : "minutes",
+    "h"      : "hours",
+    "hr"     : "hours",
+    "hrs"    : "hours",
+    "hour"   : "hours",
+    "hours"  : "hours",
+    "小时"     : "hours",
+    "d"      : "days",
+    "day"    : "days",
+    "days"   : "days",
+    "天"      : "days",
+}
+_MAX_DELAY: Final = timedelta(days=366)
+_DELAY_RE : Final = re.compile(
+    r"(\d{1,6})\s*(" + "|".join(sorted(_DELAY_UNITS, key=len, reverse=True)) + r")"
+)
+
+
+def parse_delay_time(delay_str: str, now: datetime | None = None) -> str | None:
+    """解析延后时间（相对当前时刻的时长，或当天的 HH:MM），返回 ISO 时间字符串"""
     if not delay_str:
         return None
 
     now  = now or TimezoneHelper.now()
     text = str(delay_str).strip().lower()
 
-    # 相对时间: 1h, 30m, 2d
-    match = re.match(r"^(\d+)([hmd])$", text)
+    # 相对时间: 1h, 30m, 2d，以及 10min、2小时、3天 这类常见写法
+    match = _DELAY_RE.fullmatch(text)
     if match:
-        num  = int(match.group(1))
-        unit = match.group(2)
-        base = now
-        if current_due:
-            try:
-                base = datetime.fromisoformat(current_due)
-            except (ValueError, TypeError):
-                # 解析失败，使用当前时间作为基准
-                pass
-        deltas = {"h": timedelta(hours=num), "m": timedelta(minutes=num), "d": timedelta(days=num)}
-        return (base + deltas[unit]).isoformat()
+        delta = timedelta(**{_DELAY_UNITS[match.group(2)]: int(match.group(1))})
+        # 延后是“过一会儿再提醒”，超过一年的写法按输入有误处理。
+        if delta > _MAX_DELAY:
+            return None
+        return (now + delta).isoformat(timespec="seconds")
 
     # 绝对时间: HH:MM
     if ":" in text:
@@ -514,7 +545,7 @@ def parse_delay_time(
             candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if candidate < now:
                 candidate += timedelta(days=1)
-            return candidate.isoformat()
+            return candidate.isoformat(timespec="seconds")
         except (ValueError, AttributeError):
             # 时间格式解析失败
             pass

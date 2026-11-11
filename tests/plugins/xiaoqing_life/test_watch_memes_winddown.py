@@ -14,7 +14,8 @@ from typing import Any
 import pytest
 
 from plugins.xiaoqing_life import digest, memes, planner, wind_down
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.activity import SessionDeps
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import bilibili, hotlists, watch
 from plugins.xiaoqing_life.sources.base import (
     BoundedFetcher,
@@ -34,18 +35,13 @@ from tests.plugins.xiaoqing_life.support import (
     bili_video,
     comments_payload,
     make_cfg,
+    new_store,
     popular_payload,
 )
 
 MOMENT = at(23, 0)
 NOW    = MOMENT.timestamp()
 DAY    = 86400.0
-
-
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
 
 
 # ───────────────────────────── 弹幕 ─────────────────────────────
@@ -218,7 +214,7 @@ def test_danmaku_lines_are_valid_quote_sources_and_one_video_is_one_source() -> 
 
 @pytest.mark.asyncio
 async def test_session_watches_clicked_videos_and_stores_dense_moment(tmp_path: Path) -> None:
-    store  = _store(tmp_path)
+    store  = new_store(tmp_path)
     routes = {
         "/popular"   : popular_payload(bili_video(1, "视频一"), bili_video(2, "视频二")),
         "/reply/main": comments_payload(bili_reply("好看")),
@@ -359,7 +355,7 @@ def test_verdict_must_be_strictly_true_clean_and_unblocked() -> None:
 
 @pytest.mark.asyncio
 async def test_collect_accepts_stores_dedupes_and_skips_unsafe(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     a, b, c = _png(1), _png(2), _png(3)
     items = _meme_items(
         "https://i0.hdslb.com/a.png",
@@ -396,7 +392,7 @@ async def test_collect_accepts_stores_dedupes_and_skips_unsafe(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_collect_respects_budget_per_session_cap_and_switches(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     url   = "https://i0.hdslb.com/a.png"
     items, images = _meme_items(url), {url: _png(5)}
     assert (
@@ -422,7 +418,7 @@ async def test_collect_respects_budget_per_session_cap_and_switches(tmp_path: Pa
 async def test_eviction_removes_the_longest_unexported_and_leaves_a_revocation(
     tmp_path: Path,
 ) -> None:
-    store  = _store(tmp_path)
+    store  = new_store(tmp_path)
     urls   = [f"https://i0.hdslb.com/{n}.png" for n in range(3)]
     images = {u: _png(10 + n) for n, u in enumerate(urls)}
     stamps = iter([NOW, NOW + 10, NOW + 20])
@@ -456,7 +452,7 @@ async def test_eviction_removes_the_longest_unexported_and_leaves_a_revocation(
 
 @pytest.mark.asyncio
 async def test_export_pagination_revocation_and_switches(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     for n in range(3):
         payload = _png(40 + n)
         sha     = __import__("hashlib").sha256(payload).hexdigest()
@@ -557,18 +553,17 @@ def _episode(n: int, ago: float = 600.0) -> dict[str, Any]:
 
 def _thread(tid: str, status: str, notes: list[str]) -> dict[str, Any]:
     return {
-        "id"            : tid,
-        "title"         : f"课题{tid}",
-        "why"           : "",
-        "next_query"    : "q",
-        "status"        : status,
-        "steps"         : 1,
-        "empty_streak"  : 0,
-        "cooldown_until": 0.0,
-        "notes"         : [{"episode_id": n, "note": "要点"} for n in notes],
-        "takeaway"      : "",
-        "created_at"    : NOW - DAY,
-        "updated_at"    : NOW - 100,
+        "id"          : tid,
+        "title"       : f"课题{tid}",
+        "why"         : "",
+        "next_query"  : "q",
+        "status"      : status,
+        "steps"       : 1,
+        "empty_streak": 0,
+        "notes"       : [{"episode_id": n, "note": "要点"} for n in notes],
+        "takeaway"    : "",
+        "created_at"  : NOW - DAY,
+        "updated_at"  : NOW - 100,
     }
 
 
@@ -589,7 +584,7 @@ async def _run(store: LifeStore, ai: FakeAI, moment: datetime = MOMENT, **cfg: A
 
 @pytest.mark.asyncio
 async def test_wind_down_writes_a_validated_diary_and_finishes_threads(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [_episode(1), _episode(2)]
     store.threads += [
         _thread("t1", "reviewing", ["e1"]),
@@ -612,10 +607,15 @@ async def test_wind_down_writes_a_validated_diary_and_finishes_threads(tmp_path:
     result = await _run(store, ai)
     assert (result.status, result.diary, result.done, result.dropped) == ("ok", True, 1, 1)
     state = store.state
-    assert state["wound_down_day"] == "2026-11-05" and state["diary"]["episode_ids"] == ["e1", "e2"]
+    assert state["done_on"]["wind_down"] == "2026-11-05" and state["diary"]["episode_ids"] == [
+        "e1",
+        "e2",
+    ]
     assert state["llm_calls_today"] == 1
     statuses = {t["id"]: t["status"] for t in store.threads}
+    # t1 的收获只有一个来源：记为没核实；它不是事实类问题，不自动开核实课题
     assert statuses == {"t1": "done", "t2": "open", "t3": "dropped"}
+    assert store.learnings[0]["confidence"] == "hypothesis"
     assert store.threads[0]["takeaway"] == "查明白了"
     assert (
         store.journal[-1]["kind"] == "diary"
@@ -636,21 +636,17 @@ async def test_diary_must_cite_todays_real_episodes_and_the_right_date(tmp_path:
         {"date": "2026-11-05", "text": "", "episode_ids": ["e1"]},
         {"date": "2026-11-05", "text": "含屏蔽词 自定义词", "episode_ids": ["e1"]},
     ):
-        store = _store(tmp_path / str(abs(hash(json.dumps(diary)))))
+        store = new_store(tmp_path / str(abs(hash(json.dumps(diary)))))
         store.episodes.append(_episode(1))
         result = await _run(store, FakeAI({"diary": diary}), blocked_keywords=["自定义词"])
         assert result.status == "failed" and result.reason == "diary_invalid"
-        assert (
-            store.state["wound_down_day"] == ""
-            and store.journal == []
-            and store.state["diary"] == {}
-        )
+        assert store.state["done_on"] == {} and store.journal == [] and store.state["diary"] == {}
         assert store.state["llm_calls_today"] == 1  # 失败也计预算
 
 
 @pytest.mark.asyncio
 async def test_reviewing_thread_needs_a_takeaway_citing_its_own_episodes(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append(_episode(1))
     store.threads += [
         _thread("t1", "reviewing", ["e1"]),
@@ -673,34 +669,32 @@ async def test_reviewing_thread_needs_a_takeaway_citing_its_own_episodes(tmp_pat
 async def test_wind_down_skips_without_episodes_or_budget_and_never_writes_on_model_failure(
     tmp_path: Path,
 ) -> None:
-    empty = _store(tmp_path / "a")
+    empty = new_store(tmp_path / "a")
     ai    = FakeAI()
     assert (await _run(empty, ai)).reason == "no_episodes" and ai.calls == []
-    tomorrow = _store(tmp_path / "b")
-    tomorrow.episodes.append({**_episode(1), "day": "2026-11-04"})
-    assert (await _run(tomorrow, ai)).reason == "no_episodes"
-    future = _store(tmp_path / "c")
+    yesterday = new_store(tmp_path / "b")
+    yesterday.episodes.append(_episode(1, ago=26 * 3600))  # 昨天晚上 9 点
+    assert (await _run(yesterday, ai)).reason == "no_episodes"
+    future = new_store(tmp_path / "c")
     future.episodes.append(_episode(1, ago=-600))  # 还没刷到的不算
     assert (await _run(future, ai)).reason == "no_episodes"
-    broke = _store(tmp_path / "d")
+    broke = new_store(tmp_path / "d")
     broke.episodes.append(_episode(1))
     assert (
         await _run(broke, ai, max_llm_calls_per_day=0)
     ).reason == "llm_exhausted" and ai.calls == []
     for reply in (RuntimeError("boom"), "不是 json"):
-        store = _store(tmp_path / str(id(reply)))
+        store = new_store(tmp_path / str(id(reply)))
         store.episodes.append(_episode(1))
         out = await _run(store, FakeAI(reply))
-        assert (
-            out.status == "failed" and store.journal == [] and store.state["wound_down_day"] == ""
-        )
+        assert out.status == "failed" and store.journal == [] and store.state["done_on"] == {}
 
 
 @pytest.mark.asyncio
 async def test_weekly_note_on_sunday_cites_diary_dates_and_episode_ids(tmp_path: Path) -> None:
     sunday = at(23, 0, day=8)  # 2026-11-08 周日
     assert sunday.weekday() == 6
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes.append({**_episode(5), "at": sunday.timestamp() - 600, "day": "2026-11-08"})
     store.journal += [
         {
@@ -734,7 +728,7 @@ async def test_weekly_note_on_sunday_cites_diary_dates_and_episode_ids(tmp_path:
         and store.journal[-1]["dates"] == ["2026-11-06", "2026-11-07"]
     )
     assert json.loads(ai.calls[0][1][1]["content"])["untrusted_record"]["weekly_requested"] is True
-    again = _store(tmp_path / "again")
+    again = new_store(tmp_path / "again")
     again.episodes.append({**_episode(5), "at": sunday.timestamp() - 600, "day": "2026-11-08"})
     again.journal += store.journal[:2]
     bad = {
@@ -743,7 +737,7 @@ async def test_weekly_note_on_sunday_cites_diary_dates_and_episode_ids(tmp_path:
     }
     out = await _run(again, FakeAI(bad), sunday)
     assert out.diary and not out.weekly and [j["kind"] for j in again.journal].count("weekly") == 0
-    weekday = _store(tmp_path / "weekday")
+    weekday = new_store(tmp_path / "weekday")
     weekday.episodes.append(_episode(1))
     weekday.journal += store.journal[:2]
     fake = FakeAI(
@@ -761,7 +755,7 @@ def test_journal_is_kept_eight_weeks_and_wind_down_passes_the_llm_gate() -> None
     assert len(journal) == 1
     cfg = make_cfg(choice_temperature=0.5)
     near  = type(FREE)("free", "", 20)
-    today = [{"id": "e1", "day": "2026-11-05"}]
+    today = [{"id": "e1", "at": NOW - 600}]
     state = default_state() | {"day": "2026-11-05", "llm_calls_today": 30}
     out   = planner.decide(cfg, state, today, [], {}, MOMENT, near, random.Random(0))
     assert out.reason == "llm_exhausted"

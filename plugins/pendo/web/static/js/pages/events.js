@@ -133,13 +133,15 @@ function watchReminderExpiry(content) {
     };
 }
 
-function reminderStatusLabel(status) {
+function reminderStatusLabel(status, missed = false) {
+    if (missed) return '已过期';
     if (status === 'confirmed') return '已确认';
     if (status === 'sent') return '已发送';
     return '待发送';
 }
 
-function reminderMetaLabel(status, repeatCount, wasSent = false) {
+function reminderMetaLabel(status, repeatCount, wasSent = false, missed = false) {
+    if (missed) return '提醒时间已过，未发送';
     if (status === 'confirmed') {
         return wasSent ? '已发送并确认' : '已提前确认，本次不会发送';
     }
@@ -783,9 +785,11 @@ function renderTimelineEntries(items, events = new Map((_state.overview?.events 
             const itemKind = normalizedKind(item.kind);
             const dotKind = itemKind === 'multi_node' ? 'multi-node' : itemKind === 'recurring' ? 'recurring' : '';
             const collectionTitle = item.collection?.title || event?.collection?.title || '';
-            const title = collectionTitle
-                ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}`
-                : item.title || '(无标题)';
+            // 重复日程的实例与集合同名，只写一次。
+            const nodeTitle = item.title || event?.title || '(无标题)';
+            const title     = collectionTitle && collectionTitle !== nodeTitle
+                ? `${collectionTitle} · ${nodeTitle}`
+                : nodeTitle;
             const reminderTotal = finiteCount(item.reminder_total);
             return `
                 <article class="events-timeline-item">
@@ -1496,7 +1500,7 @@ function renderDetailBody(detail) {
                             <div class="events-detail-row">
                                 <div>
                                     <div class="events-detail-row-title">${escapeHtml(formatEventDateTime(row.time))}</div>
-                                    <div class="events-detail-row-meta" data-reminder-meta>${escapeHtml(reminderMetaLabel(status, repeatCount, Boolean(row.sent_at)))}</div>
+                                    <div class="events-detail-row-meta" data-reminder-meta>${escapeHtml(reminderMetaLabel(status, repeatCount, Boolean(row.sent_at), row.missed === true))}</div>
                                 </div>
                                 <div class="events-detail-reminder-actions">
                                     <button
@@ -1507,7 +1511,7 @@ function renderDetailBody(detail) {
                                         data-reminder-confirmed="${isConfirmed ? 'true' : 'false'}"
                                         ${canToggle ? '' : 'disabled'}
                                     >${isConfirmed ? '重新开启' : '提前确认'}</button>
-                                    <span class="events-status ${status}" data-reminder-status>${reminderStatusLabel(status)}</span>
+                                    <span class="events-status ${status}" data-reminder-status>${reminderStatusLabel(status, row.missed === true)}</span>
                                 </div>
                             </div>
                         `;

@@ -83,6 +83,7 @@ Manifest capabilities correspond to narrow privileged objects that Core maintain
 | `delivery.py` | In-process send receipts, targeted schedule results, commit after acknowledgement |
 | `durable_fanout.py` | Persistent progress and recovery for multi-target notifications |
 | `async_keyed_lock.py` | Asynchronous locks that serialize operations by business key |
+| `inbound_backlog.py` | Per-sender registry of messages that have arrived but are not being handled yet; backs the `inbound_backlog` capability |
 
 Session manages user-driven multi-turn interactions.
 Scheduler manages time-driven tasks and their broadcast, targeted, or silent delivery modes.

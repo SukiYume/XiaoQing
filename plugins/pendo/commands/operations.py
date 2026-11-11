@@ -14,6 +14,7 @@ from ..models.item import EventItem, Item, TaskItem, get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.error_handlers import error_result, success_result
+from ..utils.formatters import ItemFormatter
 from ..utils.identifiers import public_id
 from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
 
@@ -186,7 +187,8 @@ async def _apply_snooze(
         )
         if confirm_result.get("status") != "success":
             return _error_result("提醒时间已更新，但原提醒状态记录失败")
-    return _success_result(f"已将提醒延后到: {new_remind_time}")
+    shown = ItemFormatter.format_datetime(new_remind_time, "%m月%d日 %H:%M", tz=timezone)
+    return _success_result(f"已将提醒延后到: {shown}")
 
 
 async def handle_snooze(
@@ -217,7 +219,7 @@ async def handle_snooze(
     try:
         new_remind_time = _parse_snooze_time(time_arg, now=user_now)
     except ValueError:
-        return _error_result("无法解析延后时间，请使用 10m、1h、1d 或 19:00 等格式")
+        return _error_result("无法解析延后时间，请使用 10m、30分钟、1h、1d 或 19:00 等格式")
     return await _apply_snooze(
         reminder_service,
         user_id,

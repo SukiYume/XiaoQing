@@ -485,7 +485,7 @@ def marker_media_part(context, resolved: ResolvedMarker) -> dict[str, Any] | Non
 
 
 # 内置目录里常用、含义明确的 QQ 表情；模型照这些名字写描述才能稳定命中。
-_COMMON_QQ_FACE_LABELS = (
+COMMON_QQ_FACE_LABELS = (
     "微笑",
     "呲牙",
     "偷笑",
@@ -533,5 +533,5 @@ async def build_media_candidates_block(
     lines  = ["可发素材（想发时把括号前的名字照抄进描述，括号里是说明；没有合适的就不发）："]
     if labels:
         lines.append("- 表情包：" + " | ".join(labels))
-    lines.append("- QQ表情：" + "、".join(_COMMON_QQ_FACE_LABELS))
+    lines.append("- QQ表情：" + "、".join(COMMON_QQ_FACE_LABELS))
     return "\n".join(lines)

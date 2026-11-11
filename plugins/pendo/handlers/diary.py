@@ -186,6 +186,13 @@ class DiaryHandler(DbOpsMixin):
 
         user_now = await get_user_local_wall_time(user_id, self.db)
         diary_date = parse_date_optional(first_arg, now=user_now)
+        if (
+            diary_date
+            and diary_date > user_now.strftime("%Y-%m-%d")
+            and not any(char.isdigit() for char in first_arg)
+        ):
+            # “明天 要考试了”这类开头是正文，不是给明天写日记；写明的日期照用。
+            diary_date = None
 
         if diary_date:
             # 第一个参数是日期
@@ -560,13 +567,9 @@ class DiaryHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 模板会话状态损坏，请重新开始"}
 
         answers.append(text)
-        session.set("answers", answers)
         step += 1
-        session.set("step", step)
 
         if step == len(prompts):
-            await safe_end_session(context)
-
             diary_date  = session.get("diary_date")
             template_id = session.get("template_id")
             group_id    = session.get("group_id")
@@ -575,12 +578,13 @@ class DiaryHandler(DbOpsMixin):
                 or not isinstance(template_id, str)
                 or template_id not in self.templates
             ):
+                await safe_end_session(context)
                 return {"status": "error", "message": "❌ 会话数据缺失，无法提交模板日记"}
             group_id_val = (
                 group_id if isinstance(group_id, int) and not isinstance(group_id, bool) else None
             )
 
-            return await self._submit_template_result(
+            result = await self._submit_template_result(
                 user_id,
                 diary_date,
                 template_id,
@@ -589,7 +593,22 @@ class DiaryHandler(DbOpsMixin):
                 group_id_val,
                 context,
             )
+            if result.get("status") == "success":
+                await safe_end_session(context)
+                return result
+            # 保存失败时会话停在最后一题、前面的回答都留着；入口把 error 当作会话失败并结束会话，
+            # 所以这里用 info。
+            return {
+                "status": "info",
+                "message": (
+                    f"{result.get('message', '')}\n\n"
+                    f"前面的回答已保留，请重新回答最后一题：{prompts[-1]}\n"
+                    '(发送"退出"放弃本次日记)'
+                ),
+            }
 
+        session.set("answers", answers)
+        session.set("step", step)
         next_question = prompts[step]
         return {"status": "question", "message": f"{step + 1}/{len(prompts)}: {next_question}"}
 

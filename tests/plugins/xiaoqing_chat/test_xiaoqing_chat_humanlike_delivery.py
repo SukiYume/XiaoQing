@@ -320,7 +320,7 @@ def test_older_image_outside_the_window_stays_quotable():
         StoredMessage(
             role="user", name="阿禾", content=f"闲聊{index}", ts=time.time() - 500 + index
         )
-        for index in range(15)
+        for index in range(25)
     ]
     history = [poster, *chatter]
     dialogue = build_dialogue_prompt(history, bot_name="小青")

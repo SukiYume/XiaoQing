@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ..models.item import EventItem
 from ..utils.time_utils import TimezoneHelper, resolve_source_wall_time
-from ..utils.validators import normalize_event_fields
+from ..utils.validators import normalize_event_fields, with_start_time_reminder_rule
 from .event_support import event_display_timezone, format_event_edit_datetime
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,13 @@ class EventEditingMixin:
     _LOCATION_EDIT_RE = re.compile(
         r"(@|地点|位置|场地|地址|(?:会场|会议地点)\s*(?:改为|改成|改到|在|[:：]))"
     )
-    _NOTES_EDIT_RE         = re.compile(r"(?:备注|说明)\s*(?:改为|改成|设为|设置为|为|成|[:：])?\s*(.+)")
+    # “备注”要出现在一句的开头或“把/添加”之后，“说明”还要带上“改为/：”才算修改备注：
+    # 标题或地点里的“产品说明会”“备注栏”不能把后半截写进备注。
+    _NOTES_EDIT_RE = re.compile(
+        r"(?:^|[\s，,。；;]|添加|增加|加上|加个|把|将)"
+        r"(?:备注\s*(?:改为|改成|设为|设置为|为|成|[:：])?|说明\s*(?:改为|改成|设为|设置为|[:：]))"
+        r"\s*(.+)"
+    )
     _EDIT_VALUE_STOP_CHARS = " ，,。；;\n\t"
     _AI_EDIT_FIELDS        = (
         "title",
@@ -65,15 +71,33 @@ class EventEditingMixin:
         """
         explicit_updates = self._parse_explicit_edit_updates(changes, current_event)
         parsed           = await self._parse_ai_edit_updates(changes, current_event)
-        updates          = self._merge_ai_edit_updates(
+        if parsed.get("add_nodes"):
+            # 追加时由 AI 区分节点描述和集合修改，局部备注保持在节点内。
+            explicit_updates = {
+                key: value for key, value in explicit_updates.items() if key in parsed
+            }
+        updates = self._merge_ai_edit_updates(
             changes,
             current_event,
             parsed,
             explicit_updates,
         )
 
-        if parsed.get("remind_times") and not explicit_updates:
-            updates["remind_times"] = parsed["remind_times"]
+        if parsed.get("add_nodes"):
+            updates["add_nodes"]           = parsed["add_nodes"]
+            updates["node_reminder_rules"] = parsed.get("reminder_rules")
+            for key in ("start_time", "end_time"):
+                updates.pop(key, None)
+            if parsed.get("notes") is not None:
+                updates["notes"] = parsed["notes"]
+            return updates
+
+        if not explicit_updates:
+            # 提醒规则和提醒时间一起改：只改时间时，下次改期会按旧规则把这次的提醒换回去。
+            if parsed.get("reminder_rules"):
+                updates["reminder_rules"] = with_start_time_reminder_rule(parsed["reminder_rules"])
+            elif parsed.get("remind_times"):
+                updates["remind_times"] = parsed["remind_times"]
 
         if (
             not explicit_updates
@@ -107,9 +131,15 @@ class EventEditingMixin:
             f"用户修改指令：{changes}。"
             f"相对说法（如“两周后的同一时间”）以原时间为基准换算。"
             f"请只返回需要修改的字段，未提及的字段不要更改。"
-            f'若用户未明确要求修改标题（如使用"改名""重命名""标题改为"等词），'
-            f"则不要返回title字段。"
+            f"按语义区分改名与改时间：名称写入title，日期和钟点写入时间字段。"
+            f"“改成会议结束”可表示把名称改为“会议结束”；修改结束时间需要具体的时间要求。"
+            f"仅改名时保留原有起止时间。"
         )
+        if current_event.event_collection_kind == "multi_node":
+            edit_prompt += (
+                "目标属于多节点日程。追加节点使用add_nodes，仅列出本次新增节点。"
+                "新增节点的名称放在name中，集合标题保持原值；明确要求改集合标题时返回title。"
+            )
 
         try:
             parsed = await self.ai_parser.parse_event_with_ai(
@@ -334,7 +364,8 @@ class EventEditingMixin:
         if cls._TITLE_RENAME_RE.search(normalized_changes):
             return True
 
-        if title == normalized_changes:
+        named = re.sub(r"^(?:改成|改为)\s*", "", normalized_changes).strip("“”\"'")
+        if title == named:
             return cls._TITLE_SCHEDULE_RE.search(normalized_changes) is None
 
         # 没有明确改名指令时，不接受 AI 从时间、地点或备注编辑中补写的新标题。

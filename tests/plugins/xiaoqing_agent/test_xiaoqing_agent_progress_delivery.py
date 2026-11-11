@@ -58,7 +58,7 @@ async def test_progress_feedback_and_receipts_follow_each_send(
         deadline      = time.monotonic() + 600,
         send_progress = partial(runtime._send_progress, context, task),
     )
-    tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent"}))
+    tools  = build_tools(env)
     before = time.monotonic()
     result = await execute_tool(tools, env, "send_message", {"text": "进度", "files": files})
 

@@ -7,6 +7,7 @@ agent 能用哪些工具由发起人自己的权限决定。能力缺失、agent
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -18,9 +19,12 @@ from core.message import extract_text, sender_display_name
 
 from .chat_event import event_sender_name
 from .chat_runtime import chat_lock
+from .follow_ups import burst_text, carry_attention, sender_has_follow_up
 from .handler_context import HandlerContext
 from .life.self_timeline import self_timeline_block
+from .llm.decorations import tame_decorations
 from .logging_utils import log_step
+from .media.marker_resolver import COMMON_QQ_FACE_LABELS
 from .memory.local_ids import allocate_local_id
 from .message_parts import build_text_message_parts
 from .planning.action_history import ActionRecord
@@ -37,6 +41,7 @@ _AGENT_DECIDE_TIMEOUT_SECONDS = 25.0
 _AGENT_TURN_TIMEOUT_SECONDS   = 50.0
 _HISTORY_ITEMS                = 12
 _QUOTE_TIMEOUT_SECONDS        = 5.0
+_FACE_MARKER_RE               = re.compile(r" ?\[想发QQ表情:[^\[\]]{1,24}\]$")
 _MAX_QUOTED_CHARS             = 2000
 
 
@@ -231,7 +236,7 @@ def _agent_reply_receipt(
 def agent_may_take_over(
     prepared: PreparedSmalltalkTurn, event: dict[str, Any], context: Any
 ) -> bool:
-    """检查显式消息指向和工具能力；群聊调用方先完成 PFC 参与判断。"""
+    """这一轮能不能交给 agent：装了 agent、话是对她说的（私聊或群里明确跟她说），且不是 agent 自己发起的命令。"""
 
     agent = getattr(getattr(context, "capabilities", None), "agent_turn", None)
     # 私聊里每句话都是对角色说的；开启私聊脑内对话时私聊不算强制召唤，但同样要交给 agent。
@@ -264,20 +269,19 @@ def _fall_back_to_chat(context: Any, exc: Exception) -> None:
     )
 
 
-async def _agent_persona(hctx: HandlerContext) -> str:
-    """人物事实和〔办事〕各节，加上她最近说过的近况和答应过的事。"""
+async def _agent_recent_self(hctx: HandlerContext) -> str:
+    """她最近说过的近况和答应过的事；随每轮交给 agent，人设卡本身另交。"""
 
-    persona = hctx.runtime.cfg.personality.card.for_agent(hctx.bot_name)
-    life    = hctx.runtime.cfg.life
+    life = hctx.runtime.cfg.life
     if not life.enable_self_timeline:
-        return persona
+        return ""
     entries = await asyncio.to_thread(
         hctx.state.self_timeline.visible,
         hctx.chat_id,
         limit=int(life.self_timeline_max_injected),
     )
-    block = self_timeline_block(entries)
-    return f"{persona}\n\n{block}" if block else persona
+    block: str = self_timeline_block(entries)
+    return block
 
 
 async def _decide(
@@ -293,21 +297,29 @@ async def _decide(
     agent   = context.capabilities.agent_turn
     started = time.monotonic()
     try:
-        quoted_text, quoted_images = await _quoted_message(event, context)
+        # 取引用、读历史和近况互不相干，一起等，判断能早点开始。
+        (quoted_text, quoted_images), history, recent_self = await asyncio.gather(
+            _quoted_message(event, context),
+            _recent_history(hctx, event),
+            _agent_recent_self(hctx),
+        )
         turn = {
-            "text"       : prepared.text,
+            # 他一件事分几条说时，前几条和这一条连起来才是完整的请求。
+            "text"       : burst_text(event, prepared.text),
             "user_id"    : event.get("user_id"),
             "group_id"   : event.get("group_id"),
             "message_id" : event.get("message_id"),
             "is_private" : prepared.is_private,
             "bot_name"   : hctx.bot_name,
             "sender_name": event_sender_name(event),
-            "history"    : await _recent_history(hctx, event),
+            "history"    : history,
             "images"     : [*_image_urls(event.get("message")), *quoted_images],
             "image_files": _image_files(event),
             "quoted_text": quoted_text,
             # 人设只写在人设卡里：agent 拿人物事实和〔办事〕各节，和平时聊天是同一个人。
-            "persona": await _agent_persona(hctx),
+            # 人设卡在一个办事会话里不变；近况每轮不同，单独交。
+            "persona"    : hctx.runtime.cfg.personality.card.for_agent(hctx.bot_name),
+            "recent_self": recent_self,
         }
         result = await asyncio.wait_for(
             agent.handle_turn({**turn, "phase": "decide"}),
@@ -322,6 +334,28 @@ async def _decide(
         return None
     _log_agent_step(context, hctx, "smalltalk.agent.decided", elapsed_ms=elapsed_ms)
     return _AgentPlan(turn, result.get("decision"), started)
+
+
+def _tamed_segments(message: list[Any], history: Any) -> list[Any]:
+    """办事的短回复和聊天一样收拾装饰：她最近几条用过波浪号或 emoji，这条就不带。
+
+    agent 这边没有表情素材，句尾当文字打出来的表情名直接去掉。
+    """
+
+    recent = [
+        str(item.get("text") or "")
+        for item in history
+        if isinstance(item, dict) and item.get("role") == "assistant"
+    ]
+    tamed: list[Any] = []
+    for segment in message:
+        data = segment.get("data") if isinstance(segment, dict) else None
+        if isinstance(segment, dict) and segment.get("type") == "text" and isinstance(data, dict):
+            text    = tame_decorations(str(data.get("text") or ""), recent, COMMON_QQ_FACE_LABELS)
+            text    = _FACE_MARKER_RE.sub("", text).rstrip() or str(data.get("text") or "")
+            segment = {**segment, "data": {**data, "text": text}}
+        tamed.append(segment)
+    return tamed
 
 
 async def _act(
@@ -346,9 +380,21 @@ async def _act(
     message = result.get("segments") if isinstance(result, dict) else None
     if not isinstance(result, dict) or not result.get("handled") or not isinstance(message, list):
         return None
-    reply_text = str(result.get("reply_text") or "")
-    task_id    = str(result.get("task_id") or "")
+    message    = _tamed_segments(message, plan.turn.get("history") or ())
+    reply_text = "".join(
+        str(segment.get("data", {}).get("text", ""))
+        for segment in message
+        if isinstance(segment, dict) and segment.get("type") == "text"
+    ).strip()
+    task_id = str(result.get("task_id") or "")
     await _record_agent_request(prepared.text, task_id, event, context, hctx)
+    if result.get("status") == "needs_user" and sender_has_follow_up(event, context):
+        # 她要问的话对方已经在下一条里说了（“帮我记一笔”“18 块 麻辣烫”）：这句追问不发，
+        # 下一条接在同一个办事会话后面，直接办完。
+        carry_attention(event)
+        _log_agent_step(context, hctx, "smalltalk.agent.question_withheld", task_id=task_id)
+        await _report_delivery(context, task_id, None)
+        return []
     _log_agent_step(
         context,
         hctx,
@@ -374,11 +420,11 @@ async def answer_with_agent_or_chat(
     hctx: HandlerContext,
     chat: Callable[[asyncio.Task[Any] | None], Coroutine[Any, Any, list[dict[str, Any]]]],
 ) -> list[dict[str, Any]]:
-    """agent 判断和聊天生成同时开始，闲聊不用先等判断。
+    """agent 的判断和聊天生成同时开始，闲聊不用先等判断。
 
     判断为闲聊时直接用已经在生成的回复；agent 接手时立刻放弃这次生成（让出会话的生成
     名额），聊天回复不会发出。``chat`` 收到判断任务：生成比判断先完成时，要等判断出来
-    再决定发不发。
+    再决定发不发。办事时白丢的是一次生成调用，换来每句闲聊少等一次判断。
     """
 
     deciding = asyncio.create_task(_decide(prepared, event, context, hctx))

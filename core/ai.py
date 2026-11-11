@@ -1,8 +1,12 @@
 """统一的 LLM/VLM 配置解析、路由与有界请求。
 
-模型连接信息由 core 持有。插件只通过声明过的 route 发起调用，既不需要复制
-provider 凭据，也无法读取其他插件或其他 route 的密钥。route 中的模型名按顺序
-组成调用链：第一个是主模型，其余只在明确允许的故障类型下依次降级。
+配置分两块：``config.ai`` 定义供应商和模型，``config.plugins.<插件>.ai.routes`` 给插件的每条
+route 指定用哪些模型（第一个是主模型，其余只在明确允许的故障类型下依次降级）。
+各条 route 的采样、输出预算、超时与重试由插件用 ``declare_route_defaults`` 声明默认值，
+主配置只在需要改动时才写。
+
+模型连接信息由 core 持有。插件只通过自己的 route 发起调用，既不需要复制
+provider 凭据，也无法读取其他插件或其他 route 的密钥。
 """
 
 from __future__ import annotations
@@ -45,6 +49,22 @@ _RESERVED_PAYLOAD_KEYS = frozenset(
         "tool_choice",
     }
 )
+# route 里除模型列表以外可以设置的调用参数；插件声明默认值时只能用这些。
+_ROUTE_OPTION_KEYS = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "timeout_seconds",
+        "total_timeout_seconds",
+        "max_retry",
+        "retry_interval_seconds",
+        "fallback_on",
+        "request_defaults",
+    }
+)
+# 上游接口接收输出预算用的字段名。
+_MAX_TOKENS_FIELDS    = frozenset({"max_tokens", "max_completion_tokens"})
 _SUPPORTED_MODALITIES = frozenset({"text", "image", "audio"})
 _DEFAULT_FALLBACK_ON  = frozenset(
     {
@@ -73,6 +93,10 @@ _AI_JSON_MIME = MimePolicy(
     structured_suffixes = frozenset({"+json"}),
     allow_missing       = True,
 )
+
+
+# 插件名 → route 名 → 该 route 的默认调用参数。插件导入时声明，热重载时整份覆盖。
+_declared_route_defaults: dict[str, dict[str, dict[str, Any]]] = {}
 
 
 class AIError(RuntimeError):
@@ -131,6 +155,10 @@ class _AIModelTarget:
     proxy           : str
     modalities      : tuple[str, ...]
     request_defaults: dict[str, Any]
+    # 上游接收输出预算的字段名；有的接口只认 max_completion_tokens。
+    max_tokens_field: str = "max_tokens"
+    # 模型自带固定采样时不发 temperature / top_p。
+    fixed_sampling: bool = False
 
     @property
     def url(self) -> str:
@@ -297,12 +325,48 @@ def _proxy_url(value: str, label: str) -> str:
     return value
 
 
+def declare_route_defaults(plugin_name: str, routes: Mapping[str, Mapping[str, Any]]) -> None:
+    """插件声明自己各条 route 的默认调用参数：采样、输出预算、超时与重试。
+
+    这些参数属于任务本身（闲聊要活、审查要稳、分流要快），由写插件的人定；主配置里的
+    route 只需要写用哪些模型，写了同名参数时以主配置为准。用哪些模型不能在这里声明。
+    同一个插件再次声明时整份覆盖。
+    """
+
+    if not isinstance(plugin_name, str) or _NAME_RE.fullmatch(plugin_name) is None:
+        raise AIConfigError("route defaults need a valid plugin name")
+    declared: dict[str, dict[str, Any]] = {}
+    for route_name, options in _named_mapping(routes, f"{plugin_name} route defaults").items():
+        label   = f"{plugin_name} route defaults.{route_name}"
+        unknown = set(_mapping(options, label)) - _ROUTE_OPTION_KEYS
+        if unknown:
+            raise AIConfigError(f"{label} contains unsupported keys: {', '.join(sorted(unknown))}")
+        declared[route_name] = dict(options)
+    _declared_route_defaults[plugin_name] = declared
+
+
+def _route_settings(value: Any, label: str) -> Mapping[str, Any]:
+    """route 可以只写模型：一个模型名或一个模型名列表；要改调用参数时才写成对象。"""
+
+    if isinstance(value, str):
+        return {"models": [value]}
+    if isinstance(value, (list, tuple)):
+        return {"models": value}
+    route = _mapping(value, label)
+    if isinstance(route.get("models"), str):
+        return {**route, "models": [route["models"]]}
+    return route
+
+
 def resolve_route_config(
     config: Mapping[str, Any],
     plugin_name: str,
     route_name: str,
 ) -> AIRouteConfig:
-    """从主配置解析路由，供请求执行和插件预算使用。"""
+    """从主配置解析路由，供请求执行和插件预算使用。
+
+    调用参数的取值顺序：主配置里这条 route 写明的 > 插件声明的默认值 > Core 默认值。
+    """
     plugins       = _mapping(config.get("plugins", {}), "config.plugins")
     plugin_config = _mapping(plugins.get(plugin_name, {}), f"config.plugins.{plugin_name}")
     ai_config     = _mapping(plugin_config.get("ai", {}), f"config.plugins.{plugin_name}.ai")
@@ -312,8 +376,11 @@ def resolve_route_config(
     )
     if route_name not in routes:
         raise AIConfigError(f"AI route is not configured: {plugin_name}.{route_name}")
-    label   = f"config.plugins.{plugin_name}.ai.routes.{route_name}"
-    route   = _mapping(routes[route_name], label)
+    label = f"config.plugins.{plugin_name}.ai.routes.{route_name}"
+    route = {
+        **_declared_route_defaults.get(plugin_name, {}).get(route_name, {}),
+        **_route_settings(routes[route_name], label),
+    }
     timeout = _required(
         _bounded_float(
             route.get("timeout_seconds"),
@@ -428,6 +495,16 @@ def _model_targets(
         )
         if not endpoint_path.startswith("/") or "?" in endpoint_path or "#" in endpoint_path:
             raise AIConfigError(f"{provider_label}.endpoint_path must be an absolute URL path")
+        max_tokens_field = _optional_string(
+            provider_config, "max_tokens_field", default="max_tokens", label=provider_label
+        )
+        if max_tokens_field not in _MAX_TOKENS_FIELDS:
+            raise AIConfigError(
+                f"{provider_label}.max_tokens_field must be max_tokens or max_completion_tokens"
+            )
+        fixed_sampling = model_config.get("fixed_sampling", False)
+        if not isinstance(fixed_sampling, bool):
+            raise AIConfigError(f"{label}.fixed_sampling must be a boolean")
         target = _AIModelTarget(
             name     = profile_name,
             provider = provider_name,
@@ -455,6 +532,8 @@ def _model_targets(
                 model_config.get("request_defaults"),
                 f"{label}.request_defaults",
             ),
+            max_tokens_field = max_tokens_field,
+            fixed_sampling   = fixed_sampling,
         )
         if not target.api_key:
             if pinned_model is not None:
@@ -628,10 +707,9 @@ def _request_payload(
         payload["tool_choice"] = materialize_snapshot_value(options.tool_choice)
     if options.extra_payload is not None:
         payload.update(_payload_mapping(options.extra_payload, "AI request extra_payload"))
-    if target.model in {"chat-latest", "gpt-6-luna"} and "max_tokens" in payload:
-        payload["max_completion_tokens"] = payload.pop("max_tokens")
-    if target.model == "chat-latest":
-        # This model uses fixed sampling defaults.
+    if target.max_tokens_field != "max_tokens" and "max_tokens" in payload:
+        payload[target.max_tokens_field] = payload.pop("max_tokens")
+    if target.fixed_sampling:
         payload.pop("temperature", None)
         payload.pop("top_p", None)
     return payload
@@ -851,5 +929,6 @@ __all__ = [
     "AIModelInfo",
     "AIRequestError",
     "complete_configured_route",
+    "declare_route_defaults",
     "list_configured_models",
 ]

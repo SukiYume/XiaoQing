@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from plugins.xiaoqing_life.config import LifeConfig, parse_life_config
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.sources.base import SourceError
+from plugins.xiaoqing_life.stores import LifeStore
 from tests.helpers.settings_snapshot import settings_snapshot
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -24,6 +25,14 @@ def at(hour: int, minute: int = 0, day: int = 5) -> datetime:
 
 
 FREE = Presence("free", "", None)
+
+
+def new_store(tmp_path: Path) -> LifeStore:
+    """空的网上生活存储（落在 ``tmp_path/life``）。"""
+
+    store = LifeStore(tmp_path / "life")
+    store.load()
+    return store
 
 
 class FakeFetcher:

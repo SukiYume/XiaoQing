@@ -1,4 +1,4 @@
-"""第五轮里程碑 3：小作品、主题档案、780 字预算。"""
+"""小作品、主题档案、780 字预算。"""
 
 from __future__ import annotations
 
@@ -12,23 +12,18 @@ import pytest
 
 from plugins.xiaoqing_life import commands, dossier, planner, wind_down, works
 from plugins.xiaoqing_life import turn_context as tc
+from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.config import parse_life_config
 from plugins.xiaoqing_life.planner import WORK_ON, Decision
-from plugins.xiaoqing_life.session import SessionDeps, run_session
+from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import FakeAI, FakeFetcher, at, make_cfg
+from tests.plugins.xiaoqing_life.support import FakeAI, FakeFetcher, at, make_cfg, new_store
 
 pytestmark = pytest.mark.asyncio
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
 DAY    = 86400.0
-
-
-def _store(tmp_path: Path) -> LifeStore:
-    store = LifeStore(tmp_path / "life")
-    store.load()
-    return store
 
 
 def _episode(n: int, *, title: str = "", topics: list[str] | None = None, feeling: str = "like",
@@ -78,7 +73,7 @@ def _start_raw(**kw: Any) -> dict[str, Any]:
 
 async def test_start_needs_a_grounded_topic(tmp_path: Path) -> None:
     cfg   = make_cfg()
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [_episode(1), _episode(2)]
     # 依据 1：并入的兴趣是 repeated
     assert works.start_work(store, cfg, _start_raw(episode_ids=[]), NOW) is None
@@ -87,19 +82,19 @@ async def test_start_needs_a_grounded_topic(tmp_path: Path) -> None:
     assert made is not None and made["status"] == "drafting" and made["form"] == "list"
     assert store.state["last_work_start"] == NOW and store.works == [made]
     # 依据 2：引用 ≥2 条喜欢的同话题经历，且跨开约一天（一下午刷出来的不算成形）
-    same = _store(tmp_path / "s")
+    same = new_store(tmp_path / "s")
     same.episodes += [_episode(1), _episode(2, ago=2 * 3600.0)]
     assert works.start_work(same, cfg, _start_raw(), NOW) is None
-    other = _store(tmp_path / "b")
+    other = new_store(tmp_path / "b")
     other.episodes += [_episode(1), _episode(2, ago=2 * DAY)]
     assert works.start_work(other, cfg, _start_raw(episode_ids=["e1"]), NOW) is None
     assert works.start_work(other, cfg, _start_raw(), NOW) is not None
     # 经历要是喜欢的、同话题的
-    dull = _store(tmp_path / "c")
+    dull = new_store(tmp_path / "c")
     dull.episodes += [_episode(1, feeling="meh"), _episode(2, topics=["做饭"])]
     assert works.start_work(dull, cfg, _start_raw(), NOW) is None
     # 依据 3：30 天内 done 的小课题话题相近
-    done = _store(tmp_path / "d")
+    done = new_store(tmp_path / "d")
     done.threads.append(
         {
             "id"        : "t",
@@ -117,7 +112,7 @@ async def test_start_needs_a_grounded_topic(tmp_path: Path) -> None:
 
 
 async def test_start_respects_slots_gap_blocklist_and_shape(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _repeated_interest(store)
     store.episodes += [_episode(1), _episode(2)]
     assert works.start_work(store, make_cfg(max_active_works=0), _start_raw(), NOW) is None
@@ -142,7 +137,7 @@ async def test_start_respects_slots_gap_blocklist_and_shape(tmp_path: Path) -> N
 
 
 async def test_candidate_topics_are_capped_and_exclude_running_works(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     for topic in ("独立游戏", "天文摄影", "骑行", "烘焙"):
         _repeated_interest(store, topic)
     assert len(works.candidate_topics(store, make_cfg(), NOW)) == 3
@@ -150,17 +145,17 @@ async def test_candidate_topics_are_capped_and_exclude_running_works(tmp_path: P
     store.works.append(_work(topic="独立游戏"))
     assert works.candidate_topics(store, make_cfg(max_active_works=2), NOW)[:1] != ["独立游戏"]
     assert works.candidate_topics(store, make_cfg(), NOW) == []  # 名额满
-    gap = _store(tmp_path / "g")
+    gap = new_store(tmp_path / "g")
     _repeated_interest(gap)
     gap.state["last_work_start"] = NOW - DAY
     assert works.candidate_topics(gap, make_cfg(), NOW) == []
-    liked = _store(tmp_path / "l")
+    liked = new_store(tmp_path / "l")
     liked.episodes += [_episode(1), _episode(2)]
     assert works.candidate_topics(liked, make_cfg(), NOW) == []  # 同一会儿的两条：还不算
     liked.episodes[1]["at"] = NOW - 2 * DAY
     assert works.candidate_topics(liked, make_cfg(), NOW) == ["独立游戏"]
     # 兴趣证据都在一个下午里：也还不算成形
-    burst = _store(tmp_path / "burst")
+    burst = new_store(tmp_path / "burst")
     _repeated_interest(burst)
     for row in burst.interests["独立游戏"]["evidence"]:
         row["at"] = NOW - 3600
@@ -184,7 +179,7 @@ def _diary(ids: list[str]) -> dict[str, Any]:
 
 
 async def test_wind_down_offers_candidates_and_starts_at_most_one_work(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     _repeated_interest(store)
     store.episodes += [_episode(1), _episode(2)]
     reply = {"diary": _diary(["e1"]), "work": _start_raw()}
@@ -194,13 +189,13 @@ async def test_wind_down_offers_candidates_and_starts_at_most_one_work(tmp_path:
     assert len(store.works) == 1 and store.works[0]["title"] == "独立游戏片单"
     assert "独立游戏" in store.dossiers  # 开作品同时建了档案
     # 没有候选时不给这一项，且模型硬给也不会开
-    plain = _store(tmp_path / "p")
+    plain = new_store(tmp_path / "p")
     plain.episodes.append(_episode(1, feeling="meh"))
     _r, ai2 = await _wind(plain, {"diary": _diary(["e1"]), "work": _start_raw(episode_ids=["e1"])})
     assert "work_candidates" not in json.loads(ai2.calls[0][1][1]["content"])["untrusted_record"]
     assert plain.works == []
     # 已有的作品出现在记录里
-    again = _store(tmp_path / "a")
+    again = new_store(tmp_path / "a")
     again.works.append(_work())
     again.episodes.append(_episode(1))
     _r, ai3 = await _wind(again, {"diary": _diary(["e1"])})
@@ -405,7 +400,7 @@ def _decision() -> Decision:
 
 
 def _work_store(tmp_path: Path, **kw: Any) -> LifeStore:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.episodes += [
         _episode(1, title="星露谷物语 评测", tags=["独立游戏"]),
         _episode(2, title="空洞骑士 通关"),
@@ -722,7 +717,7 @@ def _chat(store: LifeStore, text: str, *, recent: list[str] | None = None, bot: 
 
 
 async def test_work_line_by_progress_and_topic(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     work = _work(entries=[_entry(1), _entry(2)], last_ops=["星露谷物语：种田很治愈"])
     store.works.append(work)
     text = _chat(store, "你最近在干嘛")["life_lines"]
@@ -745,7 +740,7 @@ async def test_work_line_by_progress_and_topic(tmp_path: Path) -> None:
 
 
 async def test_excerpt_block_when_she_is_asked_to_show_it(tmp_path: Path) -> None:
-    store   = _store(tmp_path)
+    store   = new_store(tmp_path)
     entries = [_entry(n, "point", f"第{n}条内容写得挺认真的呢") for n in range(1, 9)]
     entries[2] = _entry(3, "todo", "还没核实的一条", check="词")
     store.works.append(_work(intro="我整理的独立游戏", entries=entries))
@@ -774,7 +769,7 @@ async def test_excerpt_block_when_she_is_asked_to_show_it(tmp_path: Path) -> Non
 async def test_work_share_candidate_comes_after_episodes_and_is_capped_at_three(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.works.append(
         _work(last_ops=["星露谷物语：种田很治愈"], last_add_at=NOW - 3600, entries=[_entry(1)])
     )
@@ -821,7 +816,7 @@ def _thread(**kw: Any) -> dict[str, Any]:
 
 
 async def test_sync_builds_a_dossier_from_threads_and_is_idempotent(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads += [
         _thread(),
         _thread(
@@ -857,7 +852,7 @@ async def test_sync_builds_a_dossier_from_threads_and_is_idempotent(tmp_path: Pa
 async def test_dossier_keeps_its_own_snapshots_after_threads_and_episodes_are_pruned(
     tmp_path: Path,
 ) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(
         _thread(
             corrections = [{"before": "怕冷", "after": "安全感", "at": NOW - 3 * DAY}],
@@ -881,7 +876,7 @@ async def test_dossier_keeps_its_own_snapshots_after_threads_and_episodes_are_pr
 
 
 async def test_highlights_keep_first_two_and_latest_four(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(_thread())
     store.episodes += [
         _episode(n, title=f"星空{n}", topics=["天文摄影"], ago=(20 - n) * DAY * 0.5)
@@ -904,7 +899,7 @@ async def test_highlights_keep_first_two_and_latest_four(tmp_path: Path) -> None
 
 
 async def test_correction_dedup_cap_and_work_entries(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     fixes = [{"before": f"旧{n}", "after": f"新{n}", "at": NOW - (10 - n) * DAY} for n in range(8)]
     store.threads.append(_thread(corrections=fixes))
     store.works += [_work(id=f"w{n}", topic="天文摄影", title=f"作品{n}") for n in range(6)]
@@ -925,7 +920,7 @@ def _topic(n: int) -> str:
 
 
 async def test_dossier_retention_and_total_cap(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads += [
         _thread(id=f"t{n}", topic=_topic(n), updated_at=NOW - n * 1000.0) for n in range(70)
     ]
@@ -936,7 +931,7 @@ async def test_dossier_retention_and_total_cap(tmp_path: Path) -> None:
     store.threads.clear()
     dossier.sync(store, make_cfg(dossier_keep_days=30), NOW + 40 * DAY)
     assert store.dossiers == {}
-    keep = _store(tmp_path / "k")
+    keep = new_store(tmp_path / "k")
     keep.threads.append(_thread(updated_at=NOW - 100 * DAY, created_at=NOW - 110 * DAY))
     dossier.sync(keep, make_cfg(), NOW)
     assert "天文摄影" in keep.dossiers
@@ -945,17 +940,17 @@ async def test_dossier_retention_and_total_cap(tmp_path: Path) -> None:
 
 
 async def test_housekeeping_syncs_before_pruning(tmp_path: Path) -> None:
-    from plugins.xiaoqing_life.session import _housekeeping
+    from plugins.xiaoqing_life.activity import housekeeping
 
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads.append(_thread(status="done", takeaway="查明白了", updated_at=NOW - 40 * DAY))
-    _housekeeping(store, make_cfg(), NOW)
+    housekeeping(store, make_cfg(), NOW)
     assert store.threads == []  # 30 天的保留期过了
     assert store.dossiers["天文摄影"]["questions"][0]["takeaway"] == "查明白了"
 
 
 def _dossier_store(tmp_path: Path) -> LifeStore:
-    store = _store(tmp_path)
+    store = new_store(tmp_path)
     store.threads += [
         _thread(status="done", takeaway="加长曝光就能拍到", title="星空为什么拖线", updated_at=NOW - 2 * DAY,
                 corrections=[{"before": "怕冷才拖线", "after": "地球自转", "at": NOW - 4 * DAY}]),
@@ -1045,8 +1040,8 @@ async def test_dossier_commands(tmp_path: Path) -> None:
     shown = commands.dossier_text(store, "天文摄影", MOMENT)
     assert shown.startswith("关于天文摄影（") and "印象深的" in shown
     assert commands.dossier_text(store, "不存在的话题", MOMENT) == "没有这个话题的档案。"
-    assert commands.dossier_text(_store(tmp_path / "e"), "", MOMENT) == "还没有主题档案。"
-    assert commands.works_text(_store(tmp_path / "w")) == "还没有作品。"
+    assert commands.dossier_text(new_store(tmp_path / "e"), "", MOMENT) == "还没有主题档案。"
+    assert commands.works_text(new_store(tmp_path / "w")) == "还没有作品。"
     store.works[0]["entries"] = [_entry(1, "todo", "待核实的"), _entry(2, "point", "确定的")]
     text                      = commands.works_text(store)
     assert (
@@ -1257,13 +1252,13 @@ async def test_a_check_that_found_nothing_rests_then_gives_up() -> None:
     todo = _entry(1, kind="todo", check="联机")
     work = _work(entries=[todo])
     assert works.todo_check(work, NOW) is todo
-    works._note_check_try(work, "w1", [], NOW)
+    works.note_check_try(work, "w1", [], NOW)
     assert works.todo_check(work, NOW + DAY) is None  # 歇 7 天
     assert works.todo_check(work, NOW + 8 * DAY) is todo
-    works._note_check_try(work, "w1", [], NOW + 8 * DAY)
+    works.note_check_try(work, "w1", [], NOW + 8 * DAY)
     assert works.todo_check(work, NOW + 30 * DAY) is None  # 两次都没结果：不再查
     assert work["entries"][0]["kind"] == "todo"  # 仍是待核实
     # 核实了就不记失败
     fresh = _work(entries=[_entry(2, kind="todo", check="联机")])
-    works._note_check_try(fresh, "w2", [("verify", {"id": "w2"})], NOW)
+    works.note_check_try(fresh, "w2", [("verify", {"id": "w2"})], NOW)
     assert "check_tries" not in fresh["entries"][0]

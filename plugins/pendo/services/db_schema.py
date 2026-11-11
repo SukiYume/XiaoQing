@@ -20,6 +20,9 @@ _ADD_COLUMN_NAME = re.compile(
     re.IGNORECASE,
 )
 
+# SQLite 默认绑定变量上限留有余量；按 ID 批量读写统一用这个分片大小。
+SQLITE_ID_BATCH_SIZE = 500
+
 
 def _sqlite_casefold(value: Any) -> str:
     """为 SQLite 查询提供与 Python 过滤路径一致的 Unicode casefold。"""
@@ -405,6 +408,13 @@ def _create_scheduled_delivery_schema(cursor: sqlite3.Cursor) -> None:
         "CREATE INDEX IF NOT EXISTS idx_scheduled_delivery_claim "
         "ON scheduled_delivery_outbox(state, claim_expires_at, next_attempt_at)"
     )
+    # 调度任务上次跑到的时刻：重启后据此区分“停机期间到点”和“创建时就已过期”的提醒。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scheduler_heartbeats (
+            name TEXT PRIMARY KEY,
+            checked_at TEXT NOT NULL
+        )
+    """)
 
 
 def _create_audit_schema(cursor: sqlite3.Cursor) -> None:

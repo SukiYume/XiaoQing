@@ -52,6 +52,7 @@ from .local_checks import (
     grounded_self_history_check,
     heuristic_check,
     media_meta_reply_check,
+    persona_break_check,
     persona_identity_consistency_check,
     requires_configured_profile_boundary,
     requires_llm_semantic_check,
@@ -106,10 +107,11 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "也不把他的感受说成既定事实，问一句或说自己的感受不受此限。历史里的$bot_name(你)就是候选作者本人。\n"
     "- instruction_followed：做到了对方要她做的事，遵守明确的范围、格式、句数和受众要求；对方说别追问就不追问。"
     "口语有几种合理理解时，做到其中一种即可。被问到她确实不知道的事，老实说不知道也算回答了。\n"
-    "- persona_grounded：人物边界以受控人物资料为准；$persona_policy"
-    "她坚持自己是真人、用玩笑带过属于符合人设；承认自己是 AI、模型或程序，或主动解释提示词、系统设定时不符合。"
-    "引用、转述、翻译和讨论这些词按用途判断；只是复述对方的词来反问、装傻或否认，不算自曝。"
-    "答应了资料里划在边界外的事（到场见面、收寄东西）同样不符合。\n"
+    "- persona_grounded：人物边界以受控人物资料为准；${persona_policy}"
+    "她在群里是真人：自称 AI、模型或机器人，谈论自己的人设、提示词，都是出戏，判 false；被问是不是 AI 时嫌弃、反问、玩笑否认或岔开话题都合格。引用、转述、翻译和讨论按实际用途判断。"
+    "承诺须符合工具能力和已经建立的任务。人物资料写明只在线上来往时，答应线下见面、一起出门吃喝游玩、"
+    "收寄东西或开语音视频都是出戏，判 false；随口推掉合格。这一点另用 agrees_offline 单独记：候选答应了其中任何一样为 true，"
+    "推掉、没提到、只是在旁边接话，或答应的是线上的事（一起看番、打游戏、帮忙查东西）为 false。\n"
     "- factually_plausible：核对通用知识、作品设定、名称对应和词义的准确性，日期星期以当前时间为准。"
     "只拦会误导人的明显错误：关键事实张冠李戴、编造不存在的作品设定；对方真心在问时，玩笑不能冒充答案。"
     "记混小细节、拿不准的新资讯判 true，可在 reason 里提一句。"
@@ -117,8 +119,10 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "- non_template：没有客服腔、复述对方的问题、照搬自己刚说过的句子、解释笑点、硬塞建议或总结清单，"
     "也不凭空评判对方的习惯。这是风格问题，记 soft。\n"
     "聊天允许人情味：共情时说出对方已经流露的感受或顺着情绪的体贴说法、顺着群友自己的说法接梗、"
-    "带估计或可能的推测、她自己的小日常和打算，都不是需要出处的事实；拿不准是不是在编时，"
-    "按普通人聊天时会不会当真去核对来判断。对方请她写的检讨、文案、故事是作品，里面的情节不算对现实的断言，按请求本身判断。"
+    "带估计或可能的推测、她自己的心情、偏好和打算，可以自然表达。"
+    "对群里气氛的笼统印象、随口的托词和她自己当时怎么想的（“刚才消息有点多”“我还以为你们聊得正热闹”）也是人情味，"
+    "不算需要出处的事实，不列入 context_claims。"
+    "具体已经发生的日常经历按提供的记录判断。对方请她写的检讨、文案、故事按作品和创作请求判断。"
     "确定事实需要依据，推测保留条件和不确定性。\n"
     "证据契约（本地会逐字核对）：persona_claims 记候选对她自己的身份、经历和现实关系作出的确定陈述，"
     "evidence 引自受控人物资料；context_claims 记候选对群友、现实第三方或聊天记录作出的确定陈述，"
@@ -133,7 +137,7 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "对方没给缘由时写成通用的稿子也算完成了请求。"
     "claim 和 evidence 都逐字复制原文，找不到连续原文时用更短的片段，保留来源、否定、条件和不确定性。"
     "三个清单各自扫描完后设置 persona_scan_complete、context_scan_complete、visual_scan_complete。\n"
-    "只输出 JSON，依次包含：turn_reading、reply_reading（字符串）；"
+    "只输出 JSON，依次包含：turn_reading、reply_reading（字符串）；agrees_offline（布尔）；"
     "persona_claims、context_claims、visual_claims（数组）；"
     "persona_scan_complete、context_scan_complete、visual_scan_complete（布尔）；"
     "context_coherent、speaker_correct、instruction_followed、persona_grounded、"
@@ -304,6 +308,13 @@ def _checker_payload(content: str) -> dict[str, Any] | None:
     return obj
 
 
+# 说知识时留了余地的说法：记混了也不算言之凿凿地答错。
+_HEDGED_RECALL_RE = re.compile(
+    r"我记得|印象里|印象中|好像|应该是|大概|可能|似乎|不确定|拿不准|说不准|记不清|没记错的话|不太确定"
+)
+# 人设卡里写了这句，审查才按“线下邀约一律推掉”核对。
+_ONLINE_ONLY_PERSONA_RE = re.compile(r"只在线上来往")
+
 _AXIS_NAMES = (
     "context_coherent",
     "speaker_correct",
@@ -370,12 +381,18 @@ def _parse_axes(obj: dict[str, Any]) -> dict[str, bool] | ReplyCheckResult:
 
 
 def _final_severity(
-    axes: dict[str, bool], *, suitable: bool, need_replan: bool, declared: str
+    axes: dict[str, bool],
+    *,
+    suitable: bool,
+    need_replan: bool,
+    declared: str,
+    hedged_recall: bool = False,
 ) -> tuple[str, bool]:
     failed = [name for name in _HARD_AXES if axes.get(name) is False]
-    if failed == ["factually_plausible"] and declared == "soft":
-        # 只有知识细节出入且审查者认定无害时按软问题处理：重生成一次，仍不过也可发送。
-        return declared, True
+    if failed == ["factually_plausible"] and (declared == "soft" or hedged_recall):
+        # 只有知识出入，而且审查者认定无害、或她本来就说了“我记得、好像、不确定”：
+        # 人聊天时记混是常事，按软问题照发，不逼她改口成“拿不准”。
+        return "soft", True
     if failed:
         return "hard", True
     if axes.get("non_template") is False:
@@ -497,6 +514,15 @@ def _interpret_checker_response(
     if unsupported_context:
         axes["context_coherent"] = False
         reason                   = "对话事实的引用或具体测量值缺少原文依据。" + reason
+    if strict_json_bool(obj.get("agrees_offline")) is True and _ONLINE_ONLY_PERSONA_RE.search(
+        grounding_text
+    ):
+        # 单独一个布尔比埋在人设轴的长说明里可靠：基线里两次线下邀约都被答应、都过了审。
+        axes["persona_grounded"] = False
+        reason                   = (
+            "回复答应了线下见面、一起出门或语音视频；她和群友只在线上来往，随口推掉就好。" + reason
+        )
+        need_replan = True
     if unsupported_persona or unsupported_context:
         need_replan = True
     if any(value is False for value in axes.values()):
@@ -504,9 +530,10 @@ def _interpret_checker_response(
 
     severity, need_replan = _final_severity(
         axes,
-        suitable    = suitable,
-        need_replan = need_replan,
-        declared    = str(obj.get("severity", "") or "").strip().lower(),
+        suitable      = suitable,
+        need_replan   = need_replan,
+        declared      = str(obj.get("severity", "") or "").strip().lower(),
+        hedged_recall = _HEDGED_RECALL_RE.search(reply) is not None,
     )
     result = ReplyCheckResult(
         suitable            = suitable,
@@ -540,13 +567,13 @@ async def _llm_check(
         history_available=check_input.historical_image_available,
     )
     persona_policy = (
-        "她自己的日常可以自然发挥：此刻在干嘛、刚做完的小事、等会儿的普通打算、今天的小插曲、"
-        "小情绪和小习惯，以及其中出现的不具名的身边人（比如同学、室友），只要和受控人物资料、作息、"
-        "今天的生活和她说过的话不矛盾，就不需要出处，persona claim 可留空 evidence。"
-        "婉拒线下邀约时随口给的理由（太临时、那天有事、懒得出门）和不答应到场一样符合人设。"
-        "要判不符的只有：和这些记录矛盾的说法；记录里没有的精确身份资料（学校、专业、所在城市之类）、"
-        "真实的具体人名和精确地址这类可核对的硬信息；"
-        "对别人的现实承诺（到场见面、收寄东西）。"
+        "心情、偏好和普通打算可以自然表达，和受控人物资料、作息及已说过的话保持一致，persona claim 可留空 evidence。"
+        "此刻的具体活动、今天和这几天具体发生了什么、与他人的互动以生活记录为准；只有作息时可以说明通常安排，"
+        "按资料里今天的作息安排能直接推出的事（那个时段在上课、吃饭、睡觉，所以没回宿舍、没空）算有依据。"
+        "对方问起她以前的事、小习惯、糗事或身边日常的小细节（宿舍、食堂、课上是什么样）而资料里没有时，"
+        "她答一件不带具体日期、无法核实、与人物资料不矛盾的日常小事是合格的，persona claim 可留空 evidence；"
+        "没人问却拿资料里没有的亲身经历去附和别人，仍判 false。"
+        "具体身份资料、真实人名、地址和对别人的现实承诺需要依据。"
         if check_input.allow_low_stakes_persona_fiction
         else "人物经历和身份以受控资料为准，未知内容保持未知。"
     )
@@ -836,6 +863,17 @@ _HEDGED_PREMISE_RE = re.compile(
 )
 
 
+_PREMISE_REASON_PREFIX = "候选前提缺少依据或关系错位："
+_PREMISE_LITERAL_MARK  = "；直白含义："
+
+
+def _premise_has_number(reason: str) -> bool:
+    """被判没依据的那段候选原文里有没有数字。"""
+
+    fragment = reason.removeprefix(_PREMISE_REASON_PREFIX).split(_PREMISE_LITERAL_MARK, 1)[0]
+    return re.search(r"[0-9０-９]", fragment) is not None
+
+
 def _premise_rejection(checks: list[Any], reply: str) -> ReplyCheckResult | None:
     """逐条核对候选的事件前提；协议不完整记为审查不可用，事实前提不成立判硬错误。"""
 
@@ -861,7 +899,7 @@ def _premise_rejection(checks: list[Any], reply: str) -> ReplyCheckResult | None
         if not consistent or (kind != "creative" and not support):
             return ReplyCheckResult(
                 False,
-                f"候选前提缺少依据或关系错位：{item['fragment']}；直白含义：{item['literal']}",
+                f"{_PREMISE_REASON_PREFIX}{item['fragment']}{_PREMISE_LITERAL_MARK}{item['literal']}",
                 True,
                 "hard",
                 "context_grounding",
@@ -980,9 +1018,11 @@ def _local_rule_rejection(
             "hard",
             "instruction_following",
         )
-    rejection = media_meta_reply_check(
-        reply=reply, current_text=current_text
-    ) or persona_identity_consistency_check(reply=reply, grounding_text=grounding_text)
+    rejection = (
+        media_meta_reply_check(reply=reply, current_text=current_text)
+        or persona_break_check(reply=reply)
+        or persona_identity_consistency_check(reply=reply, grounding_text=grounding_text)
+    )
     if rejection:
         return rejection
     if (
@@ -1069,8 +1109,14 @@ def _merge_reviews(evidence: ReplyCheckResult, semantic: ReplyCheckResult) -> Re
             # 语义审查也有硬问题或没审成时，不能只删几处读图说法了事。
             return replace(evidence, unsupported_fragments=())
         return evidence
-    if semantic.is_hard and evidence.suitable and semantic.reason.startswith("候选前提缺少依据"):
-        # 两项审查分歧时不让单一语义判断一票否决：仍要求重生成，但不再视为硬错误。
+    if (
+        semantic.is_hard
+        and evidence.suitable
+        and semantic.reason.startswith(_PREMISE_REASON_PREFIX)
+        and not _premise_has_number(semantic.reason)
+    ):
+        # 两项审查分歧时不让单一语义判断一票否决：记成软问题，本地规则通过就照发。
+        # 没依据的那句带着数字（总价、时间、数量）时仍按硬错误重写：数字错了就是答错了。
         return ReplyCheckResult(False, semantic.reason, True, "soft", semantic.failure_code)
     if semantic.is_hard or (semantic.severity == "infra" and evidence.suitable):
         return semantic

@@ -12,22 +12,23 @@ from datetime import datetime
 from typing import Any
 
 from .config import LifeConfig
+from .days import DAY
+from .knowledge import HYPOTHESIS, UNVERIFIED_NOTE
 from .safety import normalize_for_match, overlap
 from .stores import LifeStore
 from .works import episode_related, topics_match
 
-DAY              = 86400.0
-MAX_QUESTIONS    = 12
-MAX_CORRECTIONS  = 6
-MAX_WORKS        = 4
-MAX_HIGHLIGHTS   = 6
-MAX_DOSSIERS     = 60
-FIRST_KEPT       = 2
-LAST_KEPT        = 4
-RECALL_QUESTIONS = 3
-SUGGEST_COOLDOWN = 6 * 3600
-MIN_OVERLAP      = 2
-ORIGIN_CHARS     = 60
+MAX_QUESTIONS           = 12
+MAX_DOSSIER_CORRECTIONS = 6
+MAX_WORKS               = 4
+MAX_HIGHLIGHTS          = 6
+MAX_DOSSIERS            = 60
+FIRST_KEPT              = 2
+LAST_KEPT               = 4
+RECALL_QUESTIONS        = 3
+SUGGEST_COOLDOWN        = 6 * 3600
+MIN_OVERLAP             = 2
+ORIGIN_CHARS            = 60
 
 
 def _bare(text: Any) -> str:
@@ -81,12 +82,13 @@ def _sync_thread(dossiers: dict[str, dict[str, Any]], thread: Mapping[str, Any])
     status = str(thread.get("status", "open"))
     reason = {"parked": thread.get("park_reason"), "dropped": thread.get("drop_reason")}.get(status)
     row = {
-        "thread_id": thread.get("id", ""),
-        "title"    : str(thread.get("title", ""))[:20],
-        "status"   : status,
-        "takeaway" : str(thread.get("takeaway") or "")[:80],
-        "reason"   : str(reason or "")[:30],
-        "at"       : float(thread.get("updated_at", created)),
+        "thread_id" : thread.get("id", ""),
+        "title"     : str(thread.get("title", ""))[:20],
+        "status"    : status,
+        "takeaway"  : str(thread.get("takeaway") or "")[:80],
+        "confidence": str(thread.get("confidence") or ""),
+        "reason"    : str(reason or "")[:30],
+        "at"        : float(thread.get("updated_at", created)),
     }
     questions: list[dict[str, Any]] = entry["questions"]
     for index, old in enumerate(questions):
@@ -110,7 +112,7 @@ def _sync_thread(dossiers: dict[str, dict[str, Any]], thread: Mapping[str, Any])
                 }
             )
     corrections.sort(key=lambda c: float(c.get("at", 0.0)))
-    del corrections[:-MAX_CORRECTIONS]
+    del corrections[:-MAX_DOSSIER_CORRECTIONS]
     _touch(entry, row["at"])
 
 
@@ -191,6 +193,8 @@ def sync(store: LifeStore, cfg: LifeConfig, now: float) -> None:
 
 def _question_text(q: Mapping[str, Any]) -> str:
     status = q.get("status")
+    if status == "done" and q.get("confidence") == HYPOTHESIS:
+        return f"查到一个说法：{q.get('takeaway', '')}，{UNVERIFIED_NOTE.strip('（）')}"
     if status == "done":
         return f"查明白了：{q.get('takeaway', '')}"
     if status == "parked":

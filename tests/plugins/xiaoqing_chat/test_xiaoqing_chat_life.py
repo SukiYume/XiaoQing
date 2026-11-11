@@ -18,9 +18,8 @@ from plugins.xiaoqing_chat.life.closing_guard import bot_closed, closing_kinds, 
 from plugins.xiaoqing_chat.life.open_loops import OpenLoopStore
 from plugins.xiaoqing_chat.life.schedule import (
     current_slot,
-    delay_factor,
     parse_routine,
-    participation_factor,
+    routine_factor,
     state_text,
 )
 from plugins.xiaoqing_chat.life.self_timeline import (
@@ -90,10 +89,10 @@ def test_routine_slots_follow_days_order_and_midnight() -> None:
 
 def test_routine_pacing_and_prompt_text() -> None:
     busy, asleep = parse_routine(ROUTINE)[0], parse_routine(ROUTINE)[2]
-    assert participation_factor(busy, busy=0.5, asleep=0.1) == 0.5
-    assert participation_factor(asleep, busy=0.5, asleep=0.1) == 0.1
-    assert participation_factor(None, busy=0.5, asleep=0.1) == 1.0
-    assert delay_factor(asleep, busy=1.5, asleep=3.0) == 3.0
+    assert routine_factor(busy, busy=0.5, asleep=0.1) == 0.5
+    assert routine_factor(asleep, busy=0.5, asleep=0.1) == 0.1
+    assert routine_factor(None, busy=0.5, asleep=0.1) == 1.0
+    assert routine_factor(asleep, busy=1.5, asleep=3.0) == 3.0
     assert "上课" in state_text(busy) and "回得短一点" in state_text(busy)
     assert state_text(None) == ""
 

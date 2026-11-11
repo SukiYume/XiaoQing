@@ -9,7 +9,8 @@
             "triggers": ["xiaoai", "小爱", "米家"],
             "admin_only": true,
             "contexts": ["private"],
-            "help": "米家设备查询、控制与天气，仅管理员私聊使用。真人可直接发送需求；Agent 使用 xiaoai_devices → xiaoai_capabilities → xiaoai_execute 直接调用。设备与能力编号取自本次查询；天气用 /米家 天气 城市。",
+            "effect": "write",
+            "help": "米家设备查询、控制与天气，仅管理员私聊使用。直接写需求（如 /米家 关灯泡），插件自己选择设备、规划并校验操作；代为执行时把发起人原话原样写在 /米家 后面，不自行拆成设备编号和参数。天气用 /米家 天气 城市。",
             "usage": "/米家 <自然语言|设备|刷新设备|能力 设备名|接口 设备名 [页码]|设置|调用 JSON|份量 [设备名] 克数|天气 [城市]|天气城市 城市|登录|选择 序号|续期|状态|检查|帮助>",
             "examples": ["/米家 设备", "/米家 帮助", "/米家 家里温湿度是多少", "/米家 关灯泡，开台灯", "/米家 空调调成制冷26度", "/米家 天气 北京"],
             "invalid_examples": ["/小爱 执行"],
@@ -17,19 +18,9 @@
                 {"name": "设备", "help": "查看设备名称、编号与在线状态。后续操作使用返回的设备标识。", "usage": "/米家 设备", "effect": "read", "examples": ["/米家 设备"], "invalid_examples": ["/米家 设备 多余参数"]},
                 {
                     "name": "数据",
-                    "help": "返回设备结构化JSON，供Agent选择设备；包含编号、名称、房间、型号与在线状态。",
+                    "help": "返回设备结构化JSON；包含编号、名称、房间、型号与在线状态。",
                     "usage": "/米家 数据",
                     "effect": "read",
-                    "structured_input": {
-                        "name": "xiaoai_devices",
-                        "description": "列出米家设备编号、名称及在线状态。设备任务先调用此工具。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": [],
-                            "additionalProperties": false
-                        }
-                    },
                     "examples": ["/米家 数据"],
                     "invalid_examples": ["/米家 数据 多余参数"]
                 },
@@ -40,24 +31,6 @@
                     "help": "返回设备结构化能力，每页6项，页码从1开始；包含编号、输入类型、枚举、范围与份量换算。设备名称可含空格。",
                     "usage": "/米家 接口 <设备名或编号> [页码]",
                     "effect": "read",
-                    "structured_input": {
-                        "name": "xiaoai_capabilities",
-                        "description": "读取指定设备的结构化能力，每页6项；按返回的下一页提示继续读取所需能力。包含属性权限、枚举、参数范围和单位换算；只使用返回的能力编号。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "device": {
-                                    "type": "string"
-                                },
-                                "page": {
-                                    "type": "integer",
-                                    "minimum": 1
-                                }
-                            },
-                            "required": ["device"],
-                            "additionalProperties": false
-                        }
-                    },
                     "examples": ["/米家 接口 d1", "/米家 接口 d1 2"],
                     "invalid_examples": ["/米家 接口 d1 0"]
                 },
@@ -66,84 +39,6 @@
                     "help": "直接执行JSON operations（1–12项），全部校验后开始操作。每项需要device、capability、op；read只带这三项，set另带value，action带按inputs顺序的args数组（零参数可省略或[]）。编号来自数据/接口；出粮args为克数，一份乘grams_per_portion。返回已提交、回报值或待确认状态。",
                     "usage": "/米家 调用 <JSON>",
                     "effect": "write",
-                    "structured_input": {
-                        "name": "xiaoai_execute",
-                        "description": "直接提交米家结构化操作，由插件校验执行，省去插件模型解析。先读取设备能力。查询用read，设置用set和value，动作用action和args数组（无参数可省略或传[]）。数值参数按能力给出的单位和换算填写（如 grams_per_portion），严格保留任务里的数量，取整由插件完成。动作成功码表示云端已接收；完成状态按属性回读或设备事件判断，待确认时按已提交交代。复杂字符串协议或含义不明时向用户确认。设备任务统一使用这三个专用工具。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "operations": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": 12,
-                                    "items": {
-                                        "anyOf": [
-                                            {
-                                                "type": "object",
-                                                "properties": {
-                                                    "device": {
-                                                        "type": "string"
-                                                    },
-                                                    "capability": {
-                                                        "type": "string"
-                                                    },
-                                                    "op": {
-                                                        "type": "string",
-                                                        "enum": ["read"]
-                                                    }
-                                                },
-                                                "required": ["device", "capability", "op"],
-                                                "additionalProperties": false
-                                            },
-                                            {
-                                                "type": "object",
-                                                "properties": {
-                                                    "device": {
-                                                        "type": "string"
-                                                    },
-                                                    "capability": {
-                                                        "type": "string"
-                                                    },
-                                                    "op": {
-                                                        "type": "string",
-                                                        "enum": ["set"]
-                                                    },
-                                                    "value": {}
-                                                },
-                                                "required": ["device", "capability", "op", "value"],
-                                                "additionalProperties": false
-                                            },
-                                            {
-                                                "type": "object",
-                                                "properties": {
-                                                    "device": {
-                                                        "type": "string"
-                                                    },
-                                                    "capability": {
-                                                        "type": "string"
-                                                    },
-                                                    "op": {
-                                                        "type": "string",
-                                                        "enum": ["action"]
-                                                    },
-                                                    "args": {
-                                                        "type": "array",
-                                                        "items": {},
-                                                        "default": [],
-                                                        "description": "按能力 inputs 顺序填写；零参数动作默认 []"
-                                                    }
-                                                },
-                                                "required": ["device", "capability", "op"],
-                                                "additionalProperties": false
-                                            }
-                                        ]
-                                    }
-                                }
-                            },
-                            "required": ["operations"],
-                            "additionalProperties": false
-                        }
-                    },
                     "examples": ["/米家 调用 {\"operations\":[{\"device\":\"d1\",\"capability\":\"p2.1\",\"op\":\"read\"}]}"],
                     "invalid_examples": ["/米家 调用 []"]
                 },
@@ -157,7 +52,7 @@
                 {"name": "续期", "help": "更新已有登录授权，失效时返回重新登录提示。", "usage": "/米家 续期", "examples": ["/米家 续期"], "invalid_examples": ["/米家 续期 多余参数"]},
                 {"name": "状态", "help": "查看本地授权及待完成登录状态；云端连通性用检查。", "usage": "/米家 状态", "effect": "read", "examples": ["/米家 状态"], "invalid_examples": ["/米家 状态 多余参数"]},
                 {"name": "检查", "help": "检查云端授权及小爱音箱连接。", "usage": "/米家 检查", "effect": "read", "examples": ["/米家 检查"], "invalid_examples": ["/米家 检查 多余参数"]},
-                {"name": "执行", "help": "将原话交给已绑定小爱音箱；返回音箱应答或提交状态，设备效果以回报或现场确认。Agent设备操作使用结构化调用。", "usage": "/米家 执行 <原话>", "effect": "write", "examples": ["/米家 执行 现在几点"], "invalid_examples": ["/米家 执行"]},
+                {"name": "执行", "help": "将原话交给已绑定小爱音箱；返回音箱应答或提交状态，设备效果以回报或现场确认。设备查询和控制直接用 /米家 <原话>。", "usage": "/米家 执行 <原话>", "effect": "write", "examples": ["/米家 执行 现在几点"], "invalid_examples": ["/米家 执行"]},
                 {"name": "帮助", "help": "查看常用入口；/help 米家 子命令 获取完整参数和示例。", "usage": "/米家 帮助", "effect": "read", "examples": ["/米家 帮助"], "invalid_examples": ["/米家 帮助 多余参数"], "aliases": ["help"]}
             ]
         }

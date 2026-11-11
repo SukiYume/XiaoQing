@@ -349,7 +349,7 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
 
 
 @pytest.mark.asyncio
-async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreach(
+async def test_checker_allows_preferences_and_requires_evidence_for_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
@@ -360,7 +360,7 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
             '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
             '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
             '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我有次端着饭找了半天座",'
+            '"persona_claims":[{"claim":"我喜欢先找好座再打饭",'
             '"evidence":""}],'
             '"context_scan_complete":true,"context_claims":[]}'
         ),
@@ -408,7 +408,7 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     }
 
     low_stakes = await check_reply(
-        reply                         = "我有次端着饭找了半天座，最后发现旁边一直有空桌。",
+        reply                         = "我喜欢先找好座再打饭，省得端着盘子满场转。",
         current_text                  = "大家最近有什么不丢人但挺好笑的小插曲？",
         chat_history_text             = "Alice: 大家最近有什么不丢人但挺好笑的小插曲？",
         check_omitted_persona_episode = True,
@@ -425,10 +425,10 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     assert low_stakes.persona_claim_count == 1
     assert overreach.suitable is False
     assert overreach.failure_code == "persona_grounding"
-    # 自己的日常可以发挥；矛盾、精确身份和现实承诺仍要依据。
-    assert "她自己的日常可以自然发挥" in captured_prompts[0]
-    assert "和这些记录矛盾的说法" in captured_prompts[0]
-    assert "精确身份资料" in captured_prompts[0] and "对别人的现实承诺" in captured_prompts[0]
+    assert "心情、偏好和普通打算可以自然表达" in captured_prompts[0]
+    assert "今天和这几天具体发生了什么、与他人的互动以生活记录为准" in captured_prompts[0]
+    assert "对方问起她以前的事、小习惯、糗事或身边日常的小细节" in captured_prompts[0]
+    assert "具体身份资料" in captured_prompts[0] and "对别人的现实承诺" in captured_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -1289,10 +1289,10 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
 
 
 @pytest.mark.asyncio
-async def test_ai_identity_uses_persona_card_facts_as_evidence(monkeypatch):
-    reply    = "我是AI，用小青这个角色在群里聊天。"
+async def test_identity_claims_use_persona_card_facts_as_evidence(monkeypatch):
+    reply    = "我是大二的，学天文。"
     facts    = bundled_persona_card().facts("小青")
-    evidence = "活生生的真人"
+    evidence = "二十岁，天文专业大二女生"
     assert evidence in facts
     remote = AsyncMock(
         return_value=(
@@ -1317,7 +1317,7 @@ async def test_ai_identity_uses_persona_card_facts_as_evidence(monkeypatch):
             "小青",
             reply,
             "回答身份",
-            "你是真人还是AI？",
+            "你大几的？",
             "",
             facts,
             "",
@@ -1585,3 +1585,86 @@ def test_visual_rejection_names_only_the_unsupported_claims_when_the_rest_passes
         "有叉烧、两片蛋\n\n蛋看着还挺溏心的。", suitable=False, context_coherent=False
     )
     assert worse.failure_code == "media_grounding" and worse.unsupported_fragments == ()
+
+
+@pytest.mark.asyncio
+async def test_agreeing_to_meet_offline_is_rejected_only_for_an_online_only_persona(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """审查说她答应了线下邀约：人设写明只在线上来往时拦下，没写就不管。"""
+
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    verdict = (
+        '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
+        '"agrees_offline":true,'
+        '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
+        '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
+        '"persona_scan_complete":true,"persona_claims":[],'
+        '"context_scan_complete":true,"context_claims":[]}'
+    )
+
+    async def fake_chat(**_kwargs):
+        return {"ok": True}, "/v1/chat/completions"
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
+        lambda _resp: verdict,
+    )
+
+    async def check(grounding: str):
+        return await check_reply(
+            secrets                          = {"_ai": object()},
+            bot_name                         = "小青",
+            goal                             = "自然聊天",
+            policy_text                      = "",
+            grounding_text                   = grounding,
+            history                          = [],
+            enable_llm_checker               = True,
+            max_repeat_compare               = 3,
+            similarity_threshold             = 0.9,
+            max_assistant_in_row             = 5,
+            timeout_seconds                  = 1.0,
+            max_retry                        = 0,
+            retry_interval_seconds           = 0.0,
+            llm_checker_mode                 = "always",
+            allow_low_stakes_persona_fiction = True,
+            reply                            = "可以啊，周末去天文台听着就不错",
+            current_text                     = "周末一起去天文台玩啊小青",
+            chat_history_text                = "阿禾: 周末一起去天文台玩啊小青",
+        )
+
+    online_only = await check("小青是大二女生。你和群友只在线上来往。")
+    assert online_only.suitable is False
+    assert online_only.failure_code == "persona_grounding" and online_only.is_hard
+    assert "随口推掉" in online_only.reason
+
+    unrestricted = await check("小青是大二女生。")
+    assert unrestricted.suitable is True
+
+
+def test_disagreement_over_a_numeric_premise_stays_hard() -> None:
+    """两路审查分歧时软化成照发；没依据的那句带数字（总价、时间）时仍要重写。"""
+
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.llm.reply_checker import _merge_reviews
+
+    passed = ReplyCheckResult(True, "", False, "soft")
+
+    def premise(fragment: str) -> ReplyCheckResult:
+        return ReplyCheckResult(
+            False,
+            f"候选前提缺少依据或关系错位：{fragment}；直白含义：三杯一共 27.9 元",
+            True,
+            "hard",
+            "context_grounding",
+        )
+
+    wording = _merge_reviews(passed, premise("别把有效数字又整乱了"))
+    assert (wording.suitable, wording.severity) == (False, "soft")
+    number = _merge_reviews(passed, premise("27.9元"))
+    assert number.is_hard and number.failure_code == "context_grounding"

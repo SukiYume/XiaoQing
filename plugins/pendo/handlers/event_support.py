@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..utils.formatters import ItemFormatter, MessageBuilder
 from ..utils.identifiers import public_id
-from ..utils.time_utils import TimezoneHelper, parse_remind_times
+from ..utils.time_utils import CN_WEEKDAYS, TimezoneHelper, parse_remind_times
 from ..utils.validators import (
     build_remind_times_from_rules,
     derive_reminder_rules,
@@ -19,18 +19,10 @@ from ..utils.validators import (
 
 _REMINDER_STATUS_LABELS: Final[dict[str, str]] = {
     "✅": "✅ 已确认",
+    "⌛": "⌛ 已过期（未发送）",
     "📩": "📩 已发送未确认",
     "⏳": "⏳ 待发送",
 }
-CN_WEEKDAYS: Final[tuple[str, ...]] = (
-    "周一",
-    "周二",
-    "周三",
-    "周四",
-    "周五",
-    "周六",
-    "周日",
-)
 
 
 def event_display_timezone(event: Any) -> ZoneInfo:
@@ -280,11 +272,14 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
         f"🗓️ {event.get('title', '无标题')}",
         f"🗺️ 多时间节点事件 ({len(milestones)}个节点)",
     ]
-    for milestone in milestones:
+    raw_node_ids = event.get("node_ids")
+    node_ids     = raw_node_ids if isinstance(raw_node_ids, list) else []
+    for index, milestone in enumerate(milestones):
         milestone_time = ItemFormatter.format_datetime(
             milestone.get("time", ""), "%m-%d %H:%M", tz=display_timezone
         )
-        lines.append(f"📌 {milestone.get('name', '')}  {milestone_time}")
+        node_id = f"  {public_id(node_ids[index])}" if index < len(node_ids) else ""
+        lines.append(f"📌 {milestone.get('name', '')}  {milestone_time}{node_id}")
 
     if event.get("location"):
         lines.append(f"📍 {event['location']}")
@@ -344,6 +339,10 @@ def format_conflicts(conflicts: list[dict[str, Any]], event: dict[str, Any]) -> 
 
 
 def get_remind_status(log: dict[str, Any] | None) -> str:
+    # 创建或导入时就已过期、或停机超过补发期限的提醒从未发出；库里同样是 confirmed，
+    # 要和用户确认过的区分开。
+    if log and log.get("user_action") == "expired" and not log.get("sent_at"):
+        return "⌛"
     if log and log.get("confirmed_at"):
         return "✅"
     if log and log.get("sent_at"):

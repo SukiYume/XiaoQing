@@ -108,10 +108,11 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
     )
     factory_calls = 0
 
-    def build_candidate(*, config, token, handler):
+    def build_candidate(*, config, token, handler, on_event_admitted):
         nonlocal factory_calls
         factory_calls += 1
         assert handler == app._handle_inbound_event
+        assert on_event_admitted == app.inbound_backlog.arrived
         if factory_calls == 1:
             assert token == "rev1-old"
             app._apply_security_snapshot(new_snapshot)

@@ -22,7 +22,7 @@ from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
 from ..utils.wall_clock import describe_now, local_datetime
 from .open_loops import OpenLoop, same_topic
-from .self_timeline import SELF_KINDS, SelfEntry, new_entry
+from .self_timeline import SELF_KINDS, STORY, SelfEntry, new_entry
 
 _DIALOGUE_ITEMS = 8
 _LINE_CHARS     = 200
@@ -43,6 +43,11 @@ _STATE_CUE_RE = re.compile(
     r"我|咱|刚|正在|正往|还在|在(?:宿舍|食堂|图书馆|教室|实验室|路上|床上|上课|吃)|下课|上课|起床|"
     r"吃饭|睡觉|作业|实验|报告|ddl|DDL|困|累|饿"
 )
+# 讲自己以前的事：漏记了下次就会讲出另一个版本，每条都读。
+_STORY_CUE_RE = re.compile(
+    r"我.{0,12}(?:有次|有一次|有一回|上次|那次|那会儿|以前|之前|小时候|当时|曾经)"
+    r"|(?:有次|有一次|有一回|小时候|大一|高中|初中|去年|刚入学).{0,20}我"
+)
 # 没有第一人称也可能是在交差：“照片整理好了”。
 _DONE_RE = re.compile(r"好了|好啦|弄完|搞定|做完|办完|写完|查到|查完|整理好|发你|发给你|给你了")
 _chat_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
@@ -62,6 +67,7 @@ _SYSTEM = """你在帮一个聊天角色整理两份记录，只输出一个 JSO
 - kind=state：她此刻或刚才在做什么、身体或心情（如“在吃午饭”“刚忙完”“有点困”）。
 - kind=plan：她自己接下来要做的事（如“晚上去看电影”）。
 - kind=promise：她答应对方要做的事（如“弄完告诉你”“明天帮你查”），counterpart 写答应了谁。
+- kind=story：她讲出来的一件自己以前的事、小习惯、糗事，或身边日常的小细节（如“大一找教学楼绕了两圈才找到门”“宿舍十一月中还没来暖气”）。text 写清这件事本身，不超过 50 字；hours 填 4000。人设里本来就有的喜好不用记。
 - shareable：这条只讲她自己的活动或状态、没涉及对方、也没透露你们聊过什么时为 true，她在别的聊天里也会记得；涉及对方或你们之间的事为 false。
 - 只记她当真说出的事。玩笑、反问、假设、引用或转述别人的话、角色扮演、评价别人、泛泛的观点都不记。
 - text 是省略主语的短语，不超过 30 字。hours 是这条大约多少小时后不再成立。
@@ -121,6 +127,8 @@ def worth_extracting(
 
     if self_enabled:
         if _COMMITMENT_CUE_RE.search(reply) or (open_self and _DONE_RE.search(reply)):
+            return True
+        if _STORY_CUE_RE.search(reply):
             return True
         if state_read_due and _STATE_CUE_RE.search(reply):
             return True
@@ -214,7 +222,8 @@ def parse_result(
         ):
             added.append(entry)
 
-    known_self_ids                       = {entry.entry_id for entry in open_self}
+    # 讲过的往事不会“办完”，不接受结束。
+    known_self_ids                       = {e.entry_id for e in open_self if e.kind != STORY}
     resolved_self: list[tuple[str, str]] = []
     for item in _list(data, "resolved_self"):
         if isinstance(item, dict) and str(item.get("id")) in known_self_ids:
@@ -281,6 +290,10 @@ async def extract_life_records(
         now        = time.time()
         generation = await asyncio.to_thread(state.open_loops.generation, chat_id)
         open_self = await asyncio.to_thread(state.self_timeline.visible, chat_id, now=now, limit=20)
+        # 讲过的往事也给模型看：同一件事再讲一遍不重复记。
+        open_self += await asyncio.to_thread(
+            state.self_timeline.stories, chat_id, now=now, limit=20
+        )
         open_loops = (
             [
                 loop

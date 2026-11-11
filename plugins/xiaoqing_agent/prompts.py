@@ -1,4 +1,4 @@
-"""判断、执行与最终交付的提示词。"""
+"""判断与执行两阶段的提示词：系统提示跟随配置，日常续聊追加请求并复用既有消息。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _PROMPT_DIR = Path(__file__).resolve().parents[1] / "xiaoqing_chat" / "config"
 _LOCAL_ENVIRONMENT = """- 系统：{os_name}；Python {py_version}（{python}）。本机系统时区可能不同，代码里取当前时间请用 zoneinfo.ZoneInfo("{timezone}")
 - Shell：{shell}
 - 工作目录：{workspace}（这个会话专用，文件会一直保留，之后的任务可以接着用）
-- 本次任务的产出放在：{out_dir}"""
+- 每轮请求里会给出这次的产出目录"""
 
 _LOCAL_METHOD = """本机操作在本会话工作目录内完成。其他会话的文件与记录保持隔离。
 计算和数据处理使用工具实际运行；图片内容使用 read_image 获取。
@@ -65,43 +65,6 @@ def configured_persona(context: PluginContextProtocol) -> str:
     )
     persona: str = config.personality.card.for_agent(configured_bot_name(context))
     return persona
-
-
-def acceptance_target(task: AgentTask) -> str:
-    """执行与交付核对共用的验收目标：续接任务逐字列出发起人本人说过的要求。"""
-
-    current = f"本轮原话：{task.request_text}"
-    if not task.thread:
-        return current
-    lines = [f"{number}. {text}" for number, text in enumerate(task.thread, 1)]
-    return (
-        "验收目标（发起人本人的原话，按时间顺序；本轮续接这些要求，全部满足才算完成）：\n"
-        + "\n".join(lines)
-        + f"\n{current}"
-    )
-
-
-def build_delivery_messages(
-    task: AgentTask,
-    evidence: Sequence[str],
-    history: Sequence[dict[str, Any]],
-    draft: str = "",
-) -> list[dict[str, str]]:
-    """核对阶段读取验收目标、聊天上下文、工具回报与执行阶段的答复草稿，以共享人设整理最终正文。"""
-    system = _read_stage_prompt("交付核对").format(
-        persona=task.persona or "用自然、直接的口吻交代结果。"
-    )
-    sections = [acceptance_target(task)]
-    chat     = _chat_section(history, task.chat.user_id)
-    if chat:
-        sections.append(chat)
-    sections.append("执行回报：\n" + "\n\n".join(evidence))
-    if draft:
-        sections.append("执行阶段的答复草稿：\n" + draft)
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n\n".join(sections)},
-    ]
 
 
 def configured_bot_name(context: Any) -> str:
@@ -154,7 +117,9 @@ def capability_summary(
             scope += f"（当前身份无权使用，需要 {root.permission} 权限）"
         usage   = root.usage.strip()
         command = usage if usage.startswith("/") else f"/{root.name}"
-        lines.append(f"{command}：{help_text[:_CAPABILITY_HELP_CHARS]}{scope}")
+        lines.append(
+            f"{command}：{help_text[:_CAPABILITY_HELP_CHARS]}{scope}（服务：{root.plugin}）"
+        )
     return "\n".join(lines)
 
 
@@ -174,7 +139,7 @@ def _history_lines(history: Sequence[dict[str, Any]], speaker: int | None) -> li
 
 
 def _chat_section(history: Sequence[dict[str, Any]], speaker: int | None) -> str:
-    """执行与交付核对看到的最近聊天；没有可用记录时为空。"""
+    """执行阶段看到的最近聊天；没有可用记录时为空。"""
 
     lines = _history_lines(history, speaker)
     if not lines:
@@ -198,12 +163,15 @@ def build_triage_messages(
     history: Sequence[dict[str, Any]],
     running: Sequence[AgentTask],
     recent: Sequence[dict[str, Any]],
-    quoted: str           = "",
-    images: int           = 0,
-    capabilities: str     = "",
-    initiator: int | None = None,
-    now: str              = "",
+    session: Sequence[dict[str, Any]] = (),
+    quoted: str                       = "",
+    images: int                       = 0,
+    capabilities: str                 = "",
+    initiator: int | None             = None,
+    now: str                          = "",
 ) -> list[dict[str, Any]]:
+    """``session`` 是说话人办事会话里最近的几轮；这几轮不再在“最近完成的任务”里重复列出。"""
+
     sections: list[str] = []
     if capabilities:
         sections.append("XiaoQing 现成功能：\n" + capabilities)
@@ -212,6 +180,17 @@ def build_triage_messages(
         sections.append("最近聊天：\n" + "\n".join(chat_lines[-10:]))
     if running:
         sections.append("正在运行的任务：\n" + "\n".join(_running_line(task) for task in running))
+    if session:
+        sections.append(
+            "说话人正在和你办的事（最近几轮，旧→新）：\n"
+            + "\n".join(
+                f"[{turn.get('task_id', '?')}] {str(turn.get('request') or '')[:200]}"
+                f" → {str(turn.get('reply') or '')[:300]}".replace("\n", " ")
+                for turn in session
+            )
+        )
+    shown  = {turn.get("task_id") for turn in session}
+    recent = [item for item in recent if item.get("task_id") not in shown]
     if recent:
         sections.append("最近完成的任务：\n" + "\n".join(describe_record(item) for item in recent))
     if quoted:
@@ -219,7 +198,7 @@ def build_triage_messages(
     if images:
         sections.append(f"说话人这条消息附带 {images} 张图片。")
     if now:
-        sections.insert(0, f"现在是 {now}")
+        sections.append(f"现在是 {now}")
     sections.append(f"说话人现在说：{text}")
     system = _read_stage_prompt("判断").format(bot=bot_name)
     return [
@@ -228,24 +207,21 @@ def build_triage_messages(
     ]
 
 
-def build_task_messages(
+def build_system_message(
     *,
     bot_name: str,
     sender: str,
     task: AgentTask,
-    now: str,
     timezone: str,
     scene: str,
     python: str,
     shell: str,
     workspace: str,
-    out_dir: str,
     tool_names: Sequence[str],
-    history: Sequence[dict[str, Any]],
-    recent: Sequence[dict[str, Any]],
-    images: Sequence[str],
     capabilities: str = "",
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
+    """执行阶段的系统提示：身份、环境、原则和人设。配置稳定时保持相同前缀。"""
+
     extra: list[str] = []
     if "xiaoqing_command" in tool_names:
         extra.append(
@@ -264,7 +240,6 @@ def build_task_messages(
             timezone   = timezone,
             shell      = shell,
             workspace  = workspace,
-            out_dir    = out_dir,
         )
         method = _LOCAL_METHOD
     else:
@@ -274,18 +249,50 @@ def build_task_messages(
     system = _read_stage_prompt("执行").format(
         bot         = bot_name,
         requester   = requester,
-        now         = now,
-        timezone    = timezone,
         scene       = scene,
         environment = environment,
         method      = method,
         extra       = "\n".join(extra),
         persona     = task.persona or f"用{bot_name}平时自然、直接的口吻交代结果。",
     )
-    sections = [acceptance_target(task)]
-    if task.quoted_text:
-        sections.append(f"发起人引用的消息（上下文材料）：{task.quoted_text}")
+    return {"role": "system", "content": system}
+
+
+def build_turn_message(
+    *,
+    task: AgentTask,
+    now: str,
+    timezone: str,
+    out_dir: str,
+    history: Sequence[dict[str, Any]],
+    since: float,
+    recent: Sequence[dict[str, Any]],
+    images: Sequence[str],
+    contracts: Sequence[str],
+) -> dict[str, Any]:
+    """会话里的一轮请求：新加载的服务说明、近况和近期聊天，末尾放当前时间与发起人的原话。
+
+    ``since`` 是上一轮结束的时刻，只附这之后的聊天；``recent`` 只在开新会话时给，接着说时前面的
+    结果都在上下文里。
+    """
+
+    sections: list[str] = []
+    if contracts:
+        sections.append("本轮所用服务的命令说明（可直接执行）：\n" + "\n\n".join(contracts))
+    if task.recent_self:
+        sections.append(task.recent_self)
+    chat = _chat_section(
+        [item for item in history if float(item.get("ts") or since + 1) > since],
+        task.chat.user_id,
+    )
+    if chat:
+        sections.append(chat)
+    if recent:
+        sections.append(
+            "这个会话最近的任务：\n" + "\n".join(describe_record(item) for item in recent)
+        )
     if task.admin:
+        sections.append(f"这次的产出放在：{out_dir}")
         if task.image_files:
             sections.append(
                 "已经下载到本机的图片（可以直接打开处理）：\n" + "\n".join(task.image_files)
@@ -294,19 +301,8 @@ def build_task_messages(
             sections.append("图片链接（需要时可以下载）：\n" + "\n".join(images))
     elif task.image_files or images:
         sections.append("发起人附带了图片，但这次没有办法查看图片内容。")
-    chat = _chat_section(history, task.chat.user_id)
-    if chat:
-        sections.append(chat)
-    if recent:
-        sections.append(
-            "这个会话最近的任务：\n" + "\n".join(describe_record(item) for item in recent)
-        )
-        results = [
-            str(result) for item in recent[-2:] for result in item.get("command_results", [])[-2:]
-        ]
-        if results:
-            sections.append("最近命令回报（当时的执行结果，供追问定位）：\n" + "\n\n".join(results))
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n\n".join(sections)},
-    ]
+    if task.quoted_text:
+        sections.append(f"发起人引用的消息（上下文材料）：{task.quoted_text}")
+    sections.append(f"当前时间：{now}（{timezone}）")
+    sections.append(f"本轮原话：{task.request_text}")
+    return {"role": "user", "content": "\n\n".join(sections)}

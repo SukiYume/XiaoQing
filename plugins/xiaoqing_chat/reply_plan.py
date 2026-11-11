@@ -27,16 +27,18 @@ from .context_builder import (
 from .life.daily_life import day_key, past_block, recent_days, refers_to_past, today_block
 from .life.online import EMPTY_ONLINE_LIFE, OnlineLife, fetch_online_life
 from .life.open_loops import open_loop_block
-from .life.schedule import asks_about_routine, routine_block
+from .life.schedule import asks_about_routine, routine_block, routine_day_plan
 from .life.self_timeline import self_timeline_block
 from .llm.communication_constraints import requested_char_count
+from .llm.decorations import RECENT_WINDOW, has_decoration
 from .llm.llm_config import LLMCallConfig
 from .logging_utils import log_step
 from .media.marker_resolver import (
     build_media_candidates_block,
 )
-from .memory.memory import active_conversation_suffix
+from .memory.memory import active_conversation_suffix, is_conversation_reply
 from .memory.review_sessions import build_policy_block
+from .message_parts import render_stored_message
 from .planning.planned_action import PlannedAction
 from .utils.wall_clock import local_datetime
 
@@ -232,20 +234,21 @@ def _load_life_blocks(
     routine = str(event.get("_xc_routine_text") or "").strip()
     if routine:
         parts.append("作息底色：" + routine)
-    # 被问到几点起、几点有课时，她当然知道自己的日程；平时只用作语气底色。
-    if (
-        life.enable_schedule_state
-        and asks_about_routine(text)
-        and (block := routine_block(runtime.cfg.personality.card.routine))
-    ):
-        parts.append(block)
     moment = local_datetime()
+    if life.enable_schedule_state:
+        card = runtime.cfg.personality.card
+        # 她当然知道自己的日程：被问到几点起、哪天有课时给整份作息，平时只给今天这一天的安排。
+        asked = routine_block(card.routine) if asks_about_routine(text) else ""
+        if block := asked or routine_day_plan(card, moment):
+            parts.append(block)
     if life.enable_daily_life:
         if block := today_block(state.daily_life.get(day_key(moment)), moment):
             parts.append(block)
     if life.enable_self_timeline:
-        entries = state.self_timeline.visible(chat_id, limit=int(life.self_timeline_max_injected))
-        if block := self_timeline_block(entries):
+        limit = int(life.self_timeline_max_injected)
+        entries = state.self_timeline.visible(chat_id, limit=limit)
+        stories = state.self_timeline.stories(chat_id, limit=limit)
+        if block := self_timeline_block(entries, stories=stories):
             parts.append(block)
     if refers_to_past(text):
         days    = recent_days(state.daily_life, moment) if life.enable_daily_life else []
@@ -278,6 +281,32 @@ async def _load_reply_history(
         recent, idle_gap_seconds=float(runtime.cfg.memory.conversation_idle_gap_seconds)
     )
     return active, tuple(recent[: len(recent) - len(active)][-6:])
+
+
+# 对方点名要表情或图：这一轮一定给可发素材。
+_ASKS_FOR_MEDIA_RE = re.compile(
+    r"表情|狗头|斗图|贴图|(?:发|来|整|丢|甩)(?:一?[个张点])?(?:图|照片|梗)|(?:图|照片)(?:呢|发|来)"
+)
+# 平常的闲聊里，隔几条才有一条想到带表情。
+_MEDIA_OFFER_PROBABILITY = 0.3
+
+
+def offers_outbound_media(text: str, history: Any, *, roll: float | None = None) -> bool:
+    """这一轮要不要把可发的表情和图片摆给她。
+
+    每轮都摆着，她几乎句句想带一个表情（基线里三成的闲聊带了标记），发出前再靠代码去掉；被去掉时
+    还会把表情的名字当字打在句尾。现在只在对方要表情、要图时一定给；平常她最近几条没带过装饰才有
+    三成机会给，其余的轮次提示词里不出现表情这回事。
+    """
+
+    if _ASKS_FOR_MEDIA_RE.search(str(text or "")):
+        return True
+    recent = [
+        render_stored_message(message) for message in history if is_conversation_reply(message)
+    ][-RECENT_WINDOW:]
+    if any(has_decoration(reply) for reply in recent):
+        return False
+    return (random.random() if roll is None else roll) < _MEDIA_OFFER_PROBABILITY
 
 
 def foreground_call_config(runtime: ChatRuntime, text: str) -> LLMCallConfig:
@@ -411,6 +440,7 @@ async def prepare_reply_generation(
             is_private    = is_private,
             unknown_words = action.unknown_words,
             chat_id       = chat_id,
+            state         = state,
         ),
     )
     life_block, jargon_explanation, expression_block = _merge_online_life(
@@ -431,10 +461,12 @@ async def prepare_reply_generation(
         goal     = effective_goal,
     )
 
-    try:
-        media_candidates = await build_media_candidates_block(context, runtime, chat_id=chat_id)
-    except Exception:
-        media_candidates = ""
+    media_candidates = ""
+    if offers_outbound_media(text, history):
+        try:
+            media_candidates = await build_media_candidates_block(context, runtime, chat_id=chat_id)
+        except Exception:
+            media_candidates = ""
 
     return ReplyGenerationPlan(
         text               = text,

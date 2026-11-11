@@ -57,14 +57,7 @@ ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper`
     "ads_paper": {
       "ai": {
         "routes": {
-          "summary": {
-            "models": ["deepseek-pro", "glm-5.2"],
-            "temperature": 0.7,
-            "max_tokens": 1200,
-            "timeout_seconds": 60,
-            "total_timeout_seconds": 90,
-            "max_retry": 0
-          }
+          "summary": ["deepseek-pro", "glm-5.2"]
         }
       }
     }

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ..core.exceptions import ItemNotFoundException, ItemVersionConflictException
+from ..models.item import EventItem
 from ..utils.time_utils import (
     TimezoneHelper,
     normalize_event_collection_datetimes_for_storage,
@@ -13,6 +15,7 @@ from ..utils.time_utils import (
     require_canonical_utc_storage,
     utc_now_iso,
 )
+from ..utils.validators import validate_item_data
 
 if TYPE_CHECKING:
     from .db import Database
@@ -28,13 +31,14 @@ def update_collection(
     expected_version: int | None                                            = None,
     expected_child_versions: dict[str, int] | None                          = None,
     operation_log: dict[str, Any] | None                                    = None,
+    new_nodes: Sequence[EventItem]                                          = (),
 ) -> int:
     """在持有写锁时校验整个集合，并原子提交元信息和叶子更新。"""
     clean = {
         key: value for key, value in updates.items() if key in db._EVENT_COLLECTION_UPDATE_FIELDS
     }
     pending_children = child_updates or {}
-    if not clean and not pending_children:
+    if not clean and not pending_children and not new_nodes:
         return 0
     changed_children: dict[str, dict[str, Any]] = {}
     user_timezone                               = TimezoneHelper.get_user_timezone(owner_id, db)
@@ -52,6 +56,8 @@ def update_collection(
         before_version = int(current["version"])
         if expected_version is not None and before_version != expected_version:
             raise ItemVersionConflictException(collection_id)
+        if new_nodes and current["kind"] != "multi_node":
+            raise ValueError("追加节点需要多节点集合")
         normalized = normalize_event_collection_datetimes_for_storage(
             {"timezone": current["timezone"], **clean, "updated_at": now},
             user_timezone,
@@ -71,18 +77,31 @@ def update_collection(
         missing = pending_children.keys() - children.keys()
         if missing:
             raise ItemNotFoundException(min(missing))
+        # 节点创建时从集合抄来的字段跟着集合改：仍等于集合旧值的节点更新，单独改过的保持原样。
+        # 多节点的标题是节点名、备注是节点自己的，只有重复日程的实例与集合共用这两项。
+        inherited: tuple[str, ...] = ("location", "tags", "content")
+        if current["kind"] == "recurring":
+            inherited += ("title", "notes")
         for child_id, child in children.items():
             if child is None:
                 raise ItemNotFoundException(child_id)
             child_changes: dict[str, Any] = {
                 key: clean[key] for key in ("category", "timezone") if key in clean
             }
+            child_values = child.to_dict()
+            for key in inherited:
+                empty: Any = [] if key == "tags" else ""
+                if (
+                    key in clean
+                    and (child_values.get(key) or empty) == (current.get(key) or empty)
+                    and (clean[key] or empty) != (child_values.get(key) or empty)
+                ):
+                    child_changes[key] = clean[key] or empty
             if child_id in pending_children:
                 times, rules = pending_children[child_id]
                 child_changes.update(remind_times=times, reminder_rules=rules)
             if not child_changes:
                 continue
-            old_child        = child.to_dict()
             normalized_child = normalize_item_datetimes_for_storage(
                 {"type": "event", "timezone": normalized["timezone"], **child_changes},
                 user_timezone,
@@ -90,7 +109,7 @@ def update_collection(
             require_canonical_utc_storage(normalized_child)
             child_changes              = {key: normalized_child[key] for key in child_changes}
             changed_children[child_id] = {
-                "old_values"    : {key: old_child.get(key) for key in child_changes},
+                "old_values"    : {key: child_values.get(key) for key in child_changes},
                 "before_version": child.version,
                 "after_version" : child.version + 1,
             }
@@ -104,6 +123,47 @@ def update_collection(
                 db._sync_reminder_logs(cursor, child_id, child_changes["remind_times"])
             if db._FTS_FIELDS & child_changes.keys():
                 db._refresh_fts(child_id, conn)
+        if new_nodes:
+            # 计入已删除节点的序号，追加时保留已有节点标识。
+            next_index = int(
+                cursor.execute(
+                    "SELECT COALESCE(MAX(event_index), 0) FROM items WHERE event_collection_id = ?",
+                    (collection_id,),
+                ).fetchone()[0]
+            )
+            for index, node in enumerate(new_nodes, next_index + 1):
+                validated = validate_item_data(
+                    {
+                        **node.to_dict(),
+                        "owner_id"             : owner_id,
+                        "event_collection_id"  : collection_id,
+                        "event_collection_kind": "multi_node",
+                        "event_role"           : "multi_node_child",
+                        "event_index"          : index,
+                        "event_node_key"       : f"m{index:02d}",
+                        "timezone"             : normalized["timezone"],
+                        "category"             : clean.get("category", current["category"]),
+                        "created_at"           : now,
+                        "updated_at"           : now,
+                    }
+                )
+                validated    = normalize_item_datetimes_for_storage(validated, user_timezone)
+                prepared     = db._prepare_data(validated)
+                columns      = ", ".join(db._quote_col(key) for key in prepared)
+                placeholders = ", ".join("?" for _ in prepared)
+                cursor.execute(
+                    f"INSERT INTO items ({columns}) VALUES ({placeholders})",
+                    list(prepared.values()),
+                )
+                db._sync_reminder_logs(cursor, node.id, validated["remind_times"])
+                db._update_fts(node.id, validated, conn)
+                changed_children[node.id] = {"created": True, "after_version": node.version}
+            bounds = cursor.execute(
+                "SELECT MIN(start_time), MAX(COALESCE(end_time, start_time)) FROM items "
+                "WHERE event_collection_id = ? AND owner_id = ? AND deleted = 0",
+                (collection_id, owner_id),
+            ).fetchone()
+            clean.update(start_time=bounds[0], end_time=bounds[1])
         data        = db._prepare_event_collection_data({**clean, "updated_at": now})
         assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
         cursor.execute(
@@ -168,6 +228,18 @@ def restore_collection_edit(
             if child is None or int(child["version"]) != snapshot["after_version"]:
                 return {"status": "error", "message": "集合节点已有后续修改，请先处理最新操作"}
         for child_id, snapshot in snapshots.items():
+            if snapshot.get("created"):
+                cursor.execute(
+                    "UPDATE items SET deleted = 1, deleted_at = ?, updated_at = ?, "
+                    "version = version + 1 WHERE id = ? AND owner_id = ?",
+                    (now, now, child_id, owner_id),
+                )
+                cursor.execute(
+                    "DELETE FROM reminder_logs WHERE item_id = ? AND sent_at IS NULL AND confirmed_at IS NULL",
+                    (child_id,),
+                )
+                cursor.execute("DELETE FROM items_fts WHERE id = ?", (child_id,))
+                continue
             data        = db._prepare_data({**snapshot["old_values"], "updated_at": now})
             assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
             cursor.execute(
@@ -204,7 +276,7 @@ def restore_collection_edit(
                 previous_details["after_version"] = new_version
                 for child_id, snapshot in previous_details.get("children", {}).items():
                     restored = snapshots.get(child_id)
-                    if restored and snapshot["after_version"] == restored["before_version"]:
+                    if restored and snapshot["after_version"] == restored.get("before_version"):
                         snapshot["after_version"] = restored["after_version"] + 1
                 cursor.execute(
                     "UPDATE operation_logs SET details = ? WHERE id = ?",

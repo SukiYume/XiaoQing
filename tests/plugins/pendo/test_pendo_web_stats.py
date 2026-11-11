@@ -587,7 +587,7 @@ def test_task_stats_separates_created_done_and_cancelled_weeks(db: Database) -> 
     assert weekly["2026-W10"]["cancelled"] == 1
     assert weekly["2026-W11"]["created"] == 3
     assert data["totals"] == {"open": 3, "done": 1, "cancelled": 1, "closed": 2}
-    assert data["new_this_week"] == 4
+    assert data["created_count"] == 4
     assert data["by_plan"] == [
         {"plan": "2026-03-20", "count": 1},
         {"plan": "2026-03-25", "count": 1},

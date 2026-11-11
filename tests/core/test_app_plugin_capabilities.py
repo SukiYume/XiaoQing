@@ -942,3 +942,39 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     assert group_b["_provider_name"] == "deepseek"
     assert "全局运行时模型" in global_result[0]["data"]["text"]
     assert state.global_active_provider == "glm"
+
+
+@pytest.mark.unit
+def test_inbound_backlog_capability_is_scoped_to_the_current_sender(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+
+    def message(message_id: int, user_id: int, group_id: int | None) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "post_type" : "message",
+            "user_id"   : user_id,
+            "message_id": message_id,
+            "message"   : [{"type": "text", "data": {"text": f"消息{message_id}"}}],
+        }
+        if group_id is not None:
+            event["group_id"] = group_id
+        return event
+
+    app.inbound_backlog.arrived(message(1, 12345, 777))
+    app.inbound_backlog.arrived(message(2, 99999, 777))
+    app.inbound_backlog.arrived(message(3, 12345, None))
+
+    context = _plugin_context_for(
+        app,
+        "xiaoqing_chat",
+        user_id               = 12345,
+        group_id              = 777,
+        manifest_capabilities = frozenset({"inbound_backlog"}),
+    )
+    backlog = context.capabilities.inbound_backlog
+    assert backlog is not None
+    # 只看得到这位发送者在这个群里排着的消息：别人的、他在私聊里的都不在。
+    assert [item["message_id"] for item in backlog.waiting()] == [1]
+
+    # 没在 Manifest 里声明的插件拿不到这项能力。
+    undeclared = _plugin_context_for(app, "xiaoqing_chat", user_id=12345, group_id=777)
+    assert undeclared.capabilities.inbound_backlog is None

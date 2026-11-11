@@ -33,34 +33,23 @@ class PendoConfig:
 
     # 提醒配置
     REMINDER_CHECK_WINDOW_SECONDS                  = 120  # 提醒检查时间窗口（秒）
+    REMINDER_CATCH_UP_SECONDS                      = 6 * 60 * 60  # 停机期间到点的提醒最多补发多久以前的
     REMINDER_CLAIM_LEASE_SECONDS                   = 120  # 原子领取后的 worker lease
-    REMINDER_MAX_RETRY                             = 3  # 提醒发送最大重试次数
     REMINDER_REPEAT_INTERVAL_SECONDS               = 300  # 未确认提醒重复间隔（秒），默认5分钟
     REMINDER_MAX_REPEATS                           = 3  # 未确认提醒最大重复次数
     REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS = 600
     REMINDER_STALE_AFTER_SECONDS                   = 24 * 60 * 60  # 服务长时间离线后不复活旧提醒
     REMINDER_LOG_RETENTION_DAYS                    = 90  # 已确认提醒历史保留天数
-
-    # 搜索配置
-    DEFAULT_SEARCH_LIMIT = 50  # 默认搜索结果数量
+    SCHEDULED_DELIVERY_GRACE_MINUTES               = 120  # 简报、日记提醒、财务总结错过设定时刻后的补发时长
 
     # 日程配置
     EVENT_MAX_RRULE_COUNT = 365  # 重复日程最大次数
-
-    # AI配置
-    AI_PARSE_TIMEOUT     = 30  # AI解析超时时间（秒）
-    AI_PARSE_TEMPERATURE = 0.3  # AI解析温度参数
-    AI_MAX_TOKENS        = 1000  # AI最大token数
-    AI_FALLBACK_TO_RULES = True  # AI失败时是否回退到规则解析
 
     LOG_OPERATION_RETENTION_DAYS = 90  # 操作日志保留天数
     UNDO_WINDOW_MINUTES          = 5  # 删除与编辑共享的固定可撤销窗口
     UNDO_HINT                    = f"💡 {UNDO_WINDOW_MINUTES}分钟内可用 /pendo undo 撤销"
     # 分页配置
     LIST_PAGE_SIZE = 10  # 列表分页大小
-
-    # 任务展示配置
-    TASK_OVERDUE_PREVIEW_COUNT = 5  # 逾期任务预览数量
 
     # 搜索展示配置
     SEARCH_CONTENT_PREVIEW_LENGTH = 50  # 搜索结果内容预览长度
@@ -103,8 +92,6 @@ class PendoConfig:
     @classmethod
     def validate(cls) -> None:
         """验证配置合理性"""
-        if cls.TASK_OVERDUE_PREVIEW_COUNT <= 0:
-            raise ValueError("TASK_OVERDUE_PREVIEW_COUNT must be positive")
         if cls.LIST_PAGE_SIZE <= 0:
             raise ValueError("LIST_PAGE_SIZE must be positive")
         if cls.EVENT_MAX_RRULE_COUNT <= 0:

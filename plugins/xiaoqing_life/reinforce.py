@@ -48,9 +48,46 @@ GENERIC_TOPICS = frozenset(
         "动画",
         "影视",
         "综合",
+        "科普",
+        "科学",
+        "科学科普",
+        "美食",
+        "美食制作",
+        "美食视频",
+        "厨艺",
+        "常识",
+        "测试",
+        "指南",
+        "合集",
+        "系统",
+        "判断",
+        "温度",
+        "开箱",
+        "测评",
+        "4K",
     }
 )
-_SERIAL_RE           = re.compile(r"[0-9０-９]|[·・]|第.{1,3}[期集话章]")
+_SERIAL_RE = re.compile(r"[0-9０-９]|[·・]|第.{1,3}[期集话章]")
+# B站投稿活动、平台激励和购物节标签（“九月打卡挑战”“夏日美食大作战”“618哔买清单”
+# “B站年度知识分享官评选”）不是她会去找的话题。
+_CAMPAIGN_RE = re.compile(
+    r"挑战|大作战|评选|打卡|分享官|新星计划|激励计划|成长计划|征稿|投稿|哔买|好物|种草|双十一|双11|618|vlog",
+    re.IGNORECASE,
+)
+MAX_FRONTIER_TAGS = 3
+
+
+def frontier_ok(topic: str) -> bool:
+    """能当作可探索话题：不太泛、不是期数 / 编号栏目、不是投稿活动标签。"""
+
+    return (
+        len(topic) >= 2
+        and topic not in GENERIC_TOPICS
+        and not _SERIAL_RE.search(topic)
+        and not _CAMPAIGN_RE.search(topic)
+    )
+
+
 FRONTIER_TOPIC_CHARS = 12
 FEEDBACK_WINDOW_SEC  = 2 * 3600
 MAX_FINGERPRINTS     = 10
@@ -224,14 +261,18 @@ def grow_frontier(
     blocked: tuple[str, ...],
     now: float,
 ) -> int:
-    """喜欢的经历带来新的可探索话题：视频标签、消化话题、小课题关键词。返回新增条数。"""
+    """喜欢的经历带来新的可探索话题：消化写的话题优先，再加至多 3 个视频标签。返回新增条数。
+
+    标签是 UP 主自己填的，常混着投稿活动、购物节和泛词，所以要过 ``frontier_ok``，而且只取前几个。
+    """
 
     added = 0
     for row in liked_rows:
-        words = [*row.get("tags", []), *row.get("topics", []), *extra_words.get(row["id"], [])]
+        tags  = [t for t in row.get("tags", []) if frontier_ok(str(t).strip())][:MAX_FRONTIER_TAGS]
+        words = [*row.get("topics", []), *tags, *extra_words.get(row["id"], [])]
         for raw in words:
             topic = str(raw).strip()[:FRONTIER_TOPIC_CHARS]
-            if len(topic) < 2 or topic in GENERIC_TOPICS or _SERIAL_RE.search(topic):
+            if not frontier_ok(topic):
                 continue
             if is_blocked(topic, blocked) or _strong(interests, topic):
                 continue
@@ -256,7 +297,7 @@ def frontier_weights(frontier: list[dict[str, Any]], now: float) -> dict[str, fl
     return {
         f["topic"]: 1.0 / (1.0 + max(0.0, now - float(f.get("added_at", now))) / 86400.0)
         for f in frontier
-        if not f.get("tried")
+        if not f.get("tried") and frontier_ok(str(f.get("topic", "")))
     }
 
 

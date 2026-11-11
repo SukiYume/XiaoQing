@@ -18,6 +18,7 @@ from .brain_chat import (
     maybe_add_mode_indicator,
 )
 from .chat_runtime import chat_lock
+from .follow_ups import carry_attention, carry_text, sender_has_follow_up
 from .frequency_control import record_reply_frequency
 from .llm.topic_shift import reply_should_be_withheld
 from .logging_utils import accumulate_timing, log_step
@@ -299,8 +300,34 @@ async def _drop_if_context_changed(
     return changed
 
 
+def _yield_to_follow_up(finalization: _SmalltalkFinalization, *, phase: str) -> bool:
+    """生成期间对方又发来了消息：这条回复不发，让排在后面的那一轮看着完整的几条一起回。"""
+
+    event = finalization.event
+    if event.get("_xc_command_forced") or not sender_has_follow_up(event, finalization.context):
+        return False
+    if finalization.prepared.forced:
+        carry_attention(event)
+    carry_text(event, finalization.prepared.text)
+    finalization.generated.cancel_speculative_memory()
+    log_step(
+        finalization.context,
+        finalization.hctx.runtime,
+        chat_id = finalization.hctx.chat_id,
+        step    = "smalltalk.stale.drop",
+        fields  = {
+            "phase"   : phase,
+            "reason"  : "sender_continued",
+            "local_id": finalization.generated.local_id,
+        },
+    )
+    return True
+
+
 async def _confirm_delivery_context(finalization: _SmalltalkFinalization, *, phase: str) -> bool:
     """在投递边界复核最新上下文，模型等待期间有新消息时最多刷新一次。"""
+    if _yield_to_follow_up(finalization, phase=phase):
+        return False
     for _attempt in range(2):
         checked = split_history_at(finalization.hctx.chat_id, finalization.generated.local_id)
         if await _drop_if_context_changed(finalization, history=checked):

@@ -223,7 +223,7 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
     )
 
     class _ItemsRepo:
-        def search_items_page(self, owner_id, query, filters, *, limit, offset):
+        def search_items_page(self, owner_id, query, filters, *, limit, offset, **_options):
             calls["search"] = (owner_id, query, filters, limit, offset, threading.get_ident())
             return [event], 22
 
