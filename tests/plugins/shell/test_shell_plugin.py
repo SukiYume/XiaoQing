@@ -241,7 +241,7 @@ class TestCommandSplit:
         if shell_main.sys.platform == "win32":
             assert result == ["echo", r"C:\Users\user\Desktop\a.py"]
         else:
-            assert result == ["echo", "C:UserstestuserDesktopa.py"]
+            assert result == ["echo", "C:UsersuserDesktopa.py"]
 
     def test_forward_slash_path_normalized_for_current_platform(self):
         """用户统一输入 / 路径，后端按当前系统规范化"""
@@ -253,9 +253,7 @@ class TestCommandSplit:
 
     def test_windows_options_are_not_paths(self):
         """cmd /c copy /Y 中的 /c 和 /Y 不是路径"""
-        result = shell_main._split_command(
-            "cmd /c copy /Y C:/Users/user/a.py C:/Users/user/b.py"
-        )
+        result = shell_main._split_command("cmd /c copy /Y C:/Users/user/a.py C:/Users/user/b.py")
         assert result[1] == "/c"
         assert result[3] == "/Y"
 
