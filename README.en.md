@@ -5,7 +5,7 @@
 <p align="center">
   <img src="docs/assets/xiaoqing-full-body.png" alt="Full-body illustration of XiaoQing, an astronomy sophomore with gray-lavender hair and a blue cardigan, waving while holding an observation notebook" width="300">
   <br>
-  <strong>Meet XiaoQing, a 20-year-old astronomy sophomore who loves the stars and everyday chats.</strong>
+  <strong>XiaoQing · Escape Institute of Science &amp; Technology</strong>
 </p>
 
 The complete manual is available in [English](docs/en/README.md) and [Chinese](docs/README.md). Plugin guides, maintenance rules, and the changelog are maintained in Chinese; links to these documents are marked "Chinese".
