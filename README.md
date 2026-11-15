@@ -6,7 +6,7 @@
 
 <img src="docs/assets/xiaoqing-full-body.png" alt="小青的全身立绘：灰紫短发、蓝色开衫，抱着观测笔记挥手的天文专业大二女生" width="300">
 
-**小青 · 二十岁，天文专业大二在读。喜欢星空，也爱和群友聊日常。**
+**小青 · 快逃科学技术研究院**
 
 **基于 OneBot v11 和 Python asyncio 的插件化 QQ 助手**
 
