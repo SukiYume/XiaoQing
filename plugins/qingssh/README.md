@@ -9,8 +9,10 @@ QingSSH 为 Bot 管理员提供 SSH 远程控制（支持私聊和群聊），�
 全部 Manifest 入口均为 Bot 管理员命令，支持私聊和群聊。群里的命令输出全群可见。安装 SSH 后端：
 
 ```bash
-pip install paramiko
+python -m pip install -e ".[ssh]"
 ```
+
+未安装 `paramiko` 时插件仍会加载，使用 SSH 时提示安装依赖。安装后发送 `/reload` 重载插件。
 
 远端命令继承目标 SSH 账号权限。服务器配置、私钥、密码 secret 与 Bot 管理员列表共同构成运行安全边界。
 
@@ -48,6 +50,8 @@ pip install paramiko
 
 独立入口与相应 `/ssh` 子命令共享相同权限、参数和连接策略。
 
+`/ssh add` 带参数时为快速添加：端口默认 22，用户名默认 `root`，使用 SSH Agent 认证。密码认证只能在管理员私聊中用不带参数的引导式 `/ssh add`。
+
 ---
 
 ## ⚙️ 服务器配置
@@ -72,7 +76,7 @@ data/qingssh/servers.json
 }
 ```
 
-`auth_type` 接受 `agent`、`key` 和 `password`。密码通过管理员私聊的 `/ssh add` 引导输入（群里添加服务器只能选密钥或 SSH Agent，选密码会被拒绝），由 Core 密钥存储保存。`servers.json` 记录插件生成的 `password_ref`。配置写入和 secret 写入采用补偿式事务，任一步异常都会收敛已创建资源。
+`auth_type` 接受 `agent`、`key` 和 `password`。密码通过管理员私聊的 `/ssh add` 引导输入（群里添加服务器只能选密钥或 SSH Agent，选密码会被拒绝），由 Core 密钥存储保存。`servers.json` 只记录指向密码的引用 `password_ref`，不含密码本身。
 
 主机名、端口、用户名、服务器别名和路径均执行长度、字符与范围校验。
 
@@ -87,7 +91,7 @@ data/qingssh/servers.json
 - 单跳 `ProxyJump`。
 - 结构可验证的 `ssh -W` ProxyCommand。
 
-Host Key 始终通过 `~/.ssh/known_hosts` 严格验证。新主机与指纹变化需要管理员先核对指纹并更新 `known_hosts`。本地命令型 ProxyCommand 会在配置解析边界被拒绝。
+Host Key 始终通过 `~/.ssh/known_hosts` 严格验证。新主机与指纹变化需要管理员先核对指纹并更新 `known_hosts`。本地命令型 ProxyCommand 会被拒绝。
 
 ---
 
@@ -112,10 +116,11 @@ help
 | `状态`、`status` | 当前服务器、目录、环境变量数和已执行命令数 |
 | `历史`、`history` | 最近 20 条命令 |
 | `!!` | 重复上一条命令 |
-| `停止` | 终止当前远端命令进程组 |
+| `停止`、`stop`、`ctrl+c` | 终止当前远端命令进程组 |
+| `showimg <路径> [--page N]` | 查看远端图片，见“远程图片” |
 | `退出`、`取消`、`exit`、`quit`、`q` | 关闭会话与 SSH 连接 |
 
-会话按“用户 + 私聊或群 + 服务器”隔离，空闲期为 10 分钟。每个后台命令具有唯一 `job_id`，会话事务提交后才启动 SSH 通道。任务完成时按 `job_id` 原子更新状态。
+会话按“用户 + 私聊或群 + 服务器”隔离，空闲期为 10 分钟。
 
 `停止` 先向远端进程组发送 `TERM`。随后按需要发送 `KILL`，并清理本地通道。远端 PID 已确认时返回终止状态。PID 握手进行期间返回远端状态待确认提示。
 
@@ -125,11 +130,15 @@ help
 
 ## 📌 输出预算
 
-远端命令内容会完整交给 SSH Shell。QQ 侧采用有界投影，长输出归档到：
+远端命令内容会完整交给 SSH Shell。QQ 侧只发送有界的输出，长输出归档到：
 
 ```text
 data/qingssh/command_outputs/ssh-output-*.txt
 ```
+
+归档完成后，QQ 里会显示归档文件名。任务被取消时，远端进程会被终止，临时归档被清理；远端状态待确认时会给出明确提示。
+
+连接和输出上限在 `config/config.json` 的 `plugins.qingssh` 下配置，全部字段和默认值如下，都可省略：
 
 ```json
 {
@@ -152,11 +161,22 @@ data/qingssh/command_outputs/ssh-output-*.txt
 }
 ```
 
-交互会话里 `command_timeout_seconds=0` 表示由管理员主动终止长任务（agent 服务按自己传入的超时执行，缺省 30 秒）。QQ 预算控制 action 数、累计文字、单条消息、首尾保留、发送频率与等待时间。归档预算控制单文件字节、尾部保留和文件数量。达到归档预算时保存受控首尾。
+| 字段 | 取值范围 | 说明 |
+| --- | --- | --- |
+| `command_timeout_seconds` | 0 或正数 | 命令超时秒数 |
+| `max_connections` | 至少 1 | 同时活跃的 SSH 连接上限 |
+| `qq_max_actions` | 2～20 | 单条命令输出最多发送的 QQ 消息数 |
+| `qq_max_text_chars` | 1024～60000 | 单条命令输出发送的文字总量 |
+| `qq_max_message_chars` | 256～3000 | 单条 QQ 消息的字符数 |
+| `qq_head_chars` | 至少 256 | 输出超出预算时保留的开头字符数 |
+| `qq_tail_chars` | 至少 128 | 输出超出预算时保留的结尾字符数 |
+| `qq_send_interval_seconds` | 0～60 | 相邻消息的发送间隔 |
+| `qq_send_timeout_seconds` | 大于 0，至多 300 | 单条消息的发送等待时间 |
+| `archive_max_bytes` | 1 MiB～1 GiB | 单个归档文件的字节上限，达到后只保存开头和结尾 |
+| `archive_tail_bytes` | 64 KiB～`archive_max_bytes` 的一半 | 归档达到上限后保留的结尾字节数 |
+| `archive_retention_files` | 1～1000 | 保留的归档文件数量 |
 
-任务取消会先收敛远端进程，再清理临时归档。完成的长输出归档向 QQ 展示文件名，内部完成日志记录归档是否创建。归档位置由本机数据目录与归档配置确定。
-
-连接、命令通道或 SFTP 在线程中创建时，取消流程等待创建结果并关闭返回资源。远端状态待确认时保留明确提示。文字和图片投递收到 `False` 时按失败处理，成功计数仅包含已接受的发送。
+范围之外或相互冲突的取值（例如 `qq_head_chars` 与 `qq_tail_chars` 之和超过 `qq_max_text_chars`）会被拒绝。交互会话里 `command_timeout_seconds` 为 0 表示不设超时，由管理员用 `停止` 终止长任务；agent 服务按自己传入的超时执行，缺省 30 秒。
 
 ---
 
@@ -184,7 +204,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理。发送异常与
 
 ## ⏰ 生命周期
 
-插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 以 Core `silent` 模式对比 Core Session 与活动连接，回收失去会话所有者的连接。小青 agent 的一次性连接不属于任何会话，清理时跳过。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
+插件每分钟检查一次，回收已没有会话所有者的连接；小青 agent 的一次性连接不受影响。卸载、重载或 Bot 关闭时，活动命令、SSH 连接、跳板连接、SFTP 和临时归档都会被清理。
 
 ---
 
@@ -200,7 +220,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理。发送异常与
 
 ## 💾 日志与审计
 
-普通日志记录操作类型、状态、长度、计数、错误类别和单向摘要。远端命令、输出、密码、私钥内容、主机凭据与用户文本保留在日志边界之外。
+日志只记录操作类型、状态、长度、计数、错误类别和不可还原的摘要，不记录远端命令、输出、密码、私钥内容、主机凭据与用户文本。
 
 ---
 
@@ -208,7 +228,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理。发送异常与
 
 | 现象 | 检查项 |
 | --- | --- |
-| 提示 Paramiko 缺失 | 安装 `paramiko`，随后重载插件 |
+| 提示 Paramiko 缺失 | 运行 `python -m pip install -e ".[ssh]"`，随后 `/reload` |
 | Host Key 校验失败 | 核对服务器指纹并维护 `~/.ssh/known_hosts` |
 | 认证失败 | 核对 `auth_type`、私钥、agent 或 Core secret |
 | 跳板连接失败 | 检查 `ProxyJump`、`ssh -W` 参数和跳板 Host Key |

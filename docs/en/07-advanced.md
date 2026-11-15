@@ -2,7 +2,7 @@
 
 [中文](../07-advanced.md) | English
 
-This chapter covers permissions, long tasks, scheduling, declared services, embedded Web services, caches, concurrency, and production operation.
+This chapter covers permissions, long tasks, scheduling, declared services, embedded Web services, URL processing, smalltalk providers, concurrency, caches, and persistent state. It also covers the private-API register, debugging and verification, and production operation.
 See [plugin development](03-plugin-development.md) for basic procedures.
 
 ## ⚙️ Private API register
@@ -44,7 +44,7 @@ Declare branches with different permissions as separate subcommands.
 For example, `/mc run` is for Bot administrators. `/mc say` is public.
 
 `/xc reset confirm` is for group administrators in groups. `/xc reset` supports private chat.
-Confirm that processing entered through the necessary subcommand.
+Confirm that processing entered through that subcommand.
 For example, color writes accept only `add` and `delete` nodes.
 
 Use `context.capabilities.is_bot_admin` for object-level rules, such as stopping a task as its initiator or a Bot administrator.
@@ -124,37 +124,7 @@ Unsent attachments or task completion release pending reservations.
 
 ## ⏰ Scheduled tasks
 
-Declare cron in the manifest:
-
-```json
-{
-  "schedule": [
-    {
-      "id": "example.daily",
-      "handler": "scheduled_daily",
-      "cron": {"hour": 8, "minute": 0},
-      "delivery": "broadcast",
-      "group_ids": [123456789],
-      "description": "每日摘要",
-      "enabled": true
-    }
-  ]
-}
-```
-
-Entry function:
-
-```python
-async def scheduled_daily(context):
-    return segments("今日摘要")
-```
-
-When a task becomes due, Core resolves the schedule delivery mode and target groups.
-`broadcast` sends one common result to all target groups.
-`targeted` validates and sends `ScheduledDelivery` results. `silent` runs only the task.
-
-`group_ids` follows declaration order. Deployment config `config.plugins.<plugin>.schedules.<schedule ID>.group_ids` takes precedence over the entry. When neither sets targets, or the value is `null`, Core uses global `default_group_ids`.
-Handlers that manage receipts per target can read the same resolved targets with `context.default_groups()`.
+See [schedule fields](03-plugin-development.md#schedule-fields) and [schedule functions](03-plugin-development.md#schedule-functions) for manifest `schedule` entries, delivery modes, target-group resolution order, and entry functions.
 
 Common CronTrigger fields:
 
@@ -170,21 +140,7 @@ Schedule updates and plugin generations share one publication boundary.
 
 ## 🧩 Declared services
 
-Core maintains a closed service catalog. Manifests declare owners and callers:
-
-```json
-{
-  "services": [
-    {
-      "name": "voice.synthesize_text",
-      "callback": "synthesize_text",
-      "callers": ["smalltalk"]
-    }
-  ]
-}
-```
-
-Consumer declaration:
+Core maintains a closed service catalog. Provider plugins declare exports with `services`; see [declared services and capabilities](03-plugin-development.md#-declared-services-and-capabilities) for the fields. A consumer declares:
 
 ```json
 {
@@ -192,13 +148,13 @@ Consumer declaration:
 }
 ```
 
-Core validates the service name, owner, caller, callback, and necessary capability.
+Core validates the service name, owner, caller, callback, and required capability.
 Service calls enter the provider plugin's execution gate. Generation draining protects these calls.
 
-Update these items together when you add a service bridge:
+Update these items together when you add a service bridge or capability:
 
-1. `PluginServiceName`
-2. Service owner and caller contracts
+1. `PluginServiceName` or `PluginCapabilityName`
+2. Service owner and caller contracts, or the set of plugins that can request the capability
 3. Protocol or capability type
 4. Manifest
 5. Authorization and lifecycle tests
@@ -372,6 +328,14 @@ python scripts/run_full_uat.py
 
 ## 🛡️ Production operation
 
+Running instances manage existing secret paths with `/set_secret`.
+The watcher stages complete, valid external changes to the secrets file alone.
+Current administrators check the field-path summary and confirm with `/reload`.
+Schedule public configuration changes and complete two-source replacements during shutdown windows.
+After file updates, restart the service. Startup pairs public configuration and secrets in a confirmed revision.
+
+Production uses a dedicated Bot user, minimum file permissions, explicit network egress, log rotation, data backups, and health checks.
+
 ### Windows
 
 ```text
@@ -386,12 +350,6 @@ It rechecks PID, process name, and absolute command path before process terminat
 CIM identity reads use three short retries.
 For elevated processes, one UAC-elevated stop instance revalidates and removes the process tree.
 After the completion message appears, double-click `scripts/run-bot.vbs` to restart.
-
-Production instances manage existing secret paths with `/set_secret`.
-The watcher stages complete, valid external changes to the secrets file alone.
-Current administrators check the field-path summary and confirm with `/reload`.
-Schedule public configuration changes and complete two-source replacements during shutdown windows.
-After file updates, restart the service. Startup pairs public configuration and secrets in a confirmed revision.
 
 ### systemd
 
@@ -420,8 +378,6 @@ The project entry is `python main.py`.
 The repository `Dockerfile` is the container build entry. `.dockerignore` excludes local configuration and secrets, runtime data, logs, tests, and local work directories, so the image contains only runtime code and resources.
 Mount `config/`, `data/`, and `logs/` during deployment.
 Connect inbound ports to a controlled proxy network.
-
-Production uses a dedicated Bot user, minimum file permissions, explicit network egress, log rotation, data backups, and health checks.
 
 ## 🧭 Next steps
 

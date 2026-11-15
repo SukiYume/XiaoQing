@@ -72,19 +72,23 @@ Dispatcher builds `MessageContext` from the event. Key fields follow:
 
 | Field | Description |
 |---|---|
-| `event` | Normalized OneBot event |
+| `request_id` | Request tracking ID |
+| `event` | Validated OneBot event |
 | `text` | Text extracted from segments |
 | `clean_text` | Text after Bot-name and command-prefix processing |
 | `user_id` | Current user |
 | `group_id` | Current group, empty in private chat |
-| `message_id` | OneBot message ID |
-| `has_command_prefix` | Original message contains a command prefix |
-| `has_prefix` | Original message contains a command prefix or Bot name |
 | `is_private` | Private-chat flag |
+| `has_bot_name` | The text contains the Bot name anywhere |
+| `has_command_prefix` | Original message starts with a command prefix |
+| `has_prefix` | Original message starts with a command prefix, contains the Bot name, or mentions the Bot |
+| `is_only_bot_name` | Only the Bot name, or only a Bot mention without a picture |
 | `is_at_me` | Bot-mention flag |
-| `is_reply_to_bot` | Reply-to-Bot flag |
-| `principal` | User, group role, administrator capabilities |
-| `request_id` | Request tracking ID |
+| `is_url_only` | `clean_text` is a single HTTP/HTTPS URL |
+| `is_empty` | No text, media, or mention; only an active session accepts it |
+| `cached_session` | Active-session snapshot from stage A, used only as a routing hint |
+
+Core issues the principal (user, group role, administrator capabilities) when it calls a plugin for the event. It is not part of `MessageContext`.
 
 Bot names and command prefixes follow configuration order. Example:
 
@@ -107,14 +111,17 @@ Stage A uses these signals to decide whether a message enters business processin
 - Ordinary group messages permitted by configuration
 - Smalltalk Provider observation requirements
 
-Group mute state affects ordinary-chat and URL paths at this stage.
-Commands and sessions continue under their own permission and scene contracts.
+An empty message with no text, media, or mention is accepted only by an active session.
+
+Group mute is not decided at this stage. While a group is muted, B skips URL parsing and G skips smalltalk. Commands, Bot-name-only messages, and active sessions continue as usual.
+
+After gating and before B, Dispatcher passes every message that is not skipped to the Smalltalk Provider's `observe_message()`, including ordinary group chat that does not address the Bot. URLs, commands, command-prefixed text, and active-session input are skipped and are not observed.
 
 ## 🔄 5. Dispatcher A–G stages
 
 ### A. Processing gates
 
-This stage establishes message context and checks group rules, identity, and mute state.
+This stage builds the message context and decides whether the message enters business processing. See [processing gates](#-4-processing-gates) for the signals and the observation point.
 
 ### B. URL parsing
 
@@ -123,7 +130,8 @@ The URL passes the safe-network boundary before content extraction.
 
 ### C. Bot-name response
 
-When the message contains only the Bot name, Dispatcher creates a name response or calls the Smalltalk Provider name scene.
+When the message contains only the Bot name (or only a Bot mention without a picture), Dispatcher calls the Smalltalk Provider's `call_bot_name_only()`; see [`call_bot_name_only()`](03-plugin-development.md#call_bot_name_only).
+When the provider is unavailable or fails, Dispatcher replies with a Core preset phrase.
 
 ### D. Active session
 
@@ -135,8 +143,8 @@ await plugin.handle_session(text, event, context, session)
 
 The same session key executes serially.
 Plugins commit working copies with `update_session()` or end the flow with `end_session()`.
-Before the call, `command_access` rechecks current access to at least one top-level command from the session plugin.
-Revoked permission or a prohibited scene closes the session and returns an explanation.
+Before the call, Dispatcher rechecks current access to at least one top-level command from the session plugin as described in the [permission model](07-advanced.md#-permission-model). Revoked permission or a prohibited scene closes the session and returns an explanation.
+When the user sends `退出`, `取消`, `exit`, `quit`, or `q`, Core calls the plugin's [`close_session()`](03-plugin-development.md#close_session) and then ends the session. That message does not reach `handle_session()`.
 
 ### E. Command
 
@@ -162,9 +170,18 @@ These steps precede the call:
 `command_access` is the project-wide permission decision function.
 `context.command_invocation` gives the parsed result to the plugin.
 
+Agent task commands use `Dispatcher.run_command_text`.
+They execute only this stage as the initiator, with the same permission and scene checks as direct messages.
+They use a one-time session namespace.
+New sessions pass to plugin `close_session()` for cleanup before disposal.
+
+Each call has an independent operation identifier.
+The request ID has format `original-request-ID.command.<operation-id>`.
+Command `DeliverySegments` and receipts return unchanged to the agent.
+
 ### F. Command fallback
 
-When prefixed text has no catalog match, Dispatcher returns a help message and query entry point.
+When a message starts with a command prefix, the first character after the prefix is a letter, and the command catalog has no match, Dispatcher returns a help message and query entry point.
 
 ### G. Smalltalk Provider
 
@@ -176,21 +193,9 @@ The initiator's permissions determine available tools.
 Chat generation runs concurrently. A chat decision uses that reply. Agent takeover discards it.
 When the agent is disabled, chooses chat, or fails, the original flow continues.
 Before generating a reply, `xiaoqing_chat` recalls this turn's memory from `xiaoqing_memory` through `memory.recall`: the speaker's page, the group page, related past events, her own recent statuses and stories, and any due open thread to ask about. The recall is an in-memory read.
-It also asks `xiaoqing_life` through `life.turn_context` for online experiences, slang, and expressions relevant to the topic.
+It also asks `xiaoqing_life` through `life.turn_context` for online experiences, slang, and expressions relevant to the topic; this request has a time limit.
+A missing result from either read counts as empty.
 After delivery is confirmed and history is persisted, messages are written to the unified memory through `memory.record`.
-The request has a time limit. A missing result counts as empty.
-
-The observation entry receives ordinary-chat candidates.
-Earlier stages handle commands, URLs, sessions, and command-prefixed text.
-
-Agent task commands use `Dispatcher.run_command_text`.
-They execute only stage E as the initiator, with the same permission and scene checks as direct messages.
-They use a one-time session namespace.
-New sessions pass to plugin `close_session` for cleanup before disposal.
-
-Each call has an independent operation identifier.
-The request ID has format `original-request-ID.command.<operation-id>`.
-Command `DeliverySegments` and receipts return unchanged to the agent.
 
 ## 🔄 6. Router
 
@@ -287,6 +292,7 @@ The marker is removed before transport.
 ### Receipts
 
 Delivery returns transport results to receipt objects.
+`DeliveryReceipt` tracks all physical actions for one logical reply. Final success, definite failure, and unknown results enter the commit, rollback, and unknown callbacks respectively.
 Plugins with commit-after-ack requirements commit reminder, task, or notification state after successful delivery.
 For split messages, transport records each confirmed physical message ID before its result.
 After all acknowledgements, the commit callback reads every ID from `message_ids`.
@@ -294,10 +300,9 @@ XiaoQing Chat maps persona messages to actual messages with these IDs.
 It can recognize a group member's reply to any split part.
 
 The event-scoped action sink stages actions and owns their subsequent settlement.
-When `send_with_receipt` observes staged state, it leaves receipts pending.
-Final success, definite failure, and unknown results enter their respective callbacks.
+When `send_with_receipt` observes staged state, it leaves receipts pending. Plugin send helpers and the transport layer keep the same settlement authority, so split messages do not count success twice.
 Active WebSocket connection notifications and the read loop run concurrently.
-The read loop consumes echo receipts. Connection closure cleans up notification tasks.
+The read loop consumes echo receipts. Connection closure cleans up notification tasks and pending requests together.
 
 ## 🔄 11. Concurrency and ordering
 

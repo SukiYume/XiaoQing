@@ -12,11 +12,7 @@ QingPet 随 XiaoQing 加载。在已安装项目依赖的环境中运行：
 python main.py
 ```
 
-启动日志应包含 QingPet Manifest 加载和 SQLite 初始化结果。数据库路径为：
-
-```text
-data/qingpet/qingpet/qingpet.db
-```
+启动日志应包含 QingPet Manifest 加载和 SQLite 初始化结果，数据库文件应已创建（位置见 [README.md](README.md) 的“数据与备份”）。
 
 ---
 
@@ -29,7 +25,7 @@ data/qingpet/qingpet/qingpet.db
 /宠物 管理 配置 查看
 ```
 
-配置回复应包含 `enabled`、经济倍率和衰减倍率。回复还应包含交易开关和活动开关。
+配置回复应列出插件状态、经济倍率、衰减倍率、交易功能、活动功能和敏感词数量。
 
 ---
 
@@ -51,8 +47,6 @@ data/qingpet/qingpet/qingpet.db
 - 状态卡显示五项属性、阶段、经验和资产；
 - 三个照料动作分别更新状态、经验、任务进度与资产账本；
 - 短时间重复操作返回冷却提示。
-
-蛋累计 10 经验后孵化。后续进化同时使用经验、年龄和照顾评分。
 
 ---
 
@@ -131,7 +125,7 @@ data/qingpet/qingpet/qingpet.db
 
 ## ✅ 8. 验证定时任务
 
-保持 Bot 运行并观察日志与数据：
+保持 Bot 运行并观察日志与数据。衰减提醒、展示会结算和周排行结果按 `targeted` 方式投递到目标群，目标群取自 `config.plugins.qingpet.schedules.<任务 ID>.group_ids`，没写时为全局 `default_group_ids`（见 [README.md](README.md) 的“定时任务”）；先确认目标群已配置，否则观察不到这些群消息。时间按 `config.timezone`（默认 `Asia/Shanghai`）计：
 
 | 时间 | 验证点 |
 | --- | --- |
@@ -140,16 +134,10 @@ data/qingpet/qingpet/qingpet.db
 | 次日 00:00 | 每日计数重置与宠物年龄增长 |
 | 周一 10:00 | 周排行奖励与称号结算 |
 
-验证生产数据前，使用 SQLite `Connection.backup()` 生成一致备份。备份包含 WAL 中已提交的数据。验证使用备份副本和隔离数据目录。
-
 ---
 
 ## 📌 9. 自动化回归
 
-```bash
-python -m ruff check plugins/qingpet tests/plugins/qingpet
-python -m mypy plugins/qingpet
-python -m pytest -q tests/plugins -k qingpet -n 2
-```
+运行 [README.md](README.md) “开发验证”里的 ruff、mypy 和 pytest 三条命令。
 
 全部检查通过后，再使用 `/宠物 帮助` 在目标 QQ 客户端确认手机端分页和消息长度。

@@ -161,17 +161,17 @@ sequenceDiagram
 
 | 表 | 关系 |
 | --- | --- |
-| `items` | 全部业务 leaf 与普通条目 |
-| `event_collections` | 一对多组织日程 leaf |
-| `reminder_logs` | 提醒状态、租约和重试信息 |
+| `items` | 日程 leaf、待办、笔记、日记和账本主记录 |
+| `event_collections` | 重复日程与多节点日程集合，一对多组织日程 leaf |
+| `reminder_logs` | 提醒队列、投递租约、重试信息以及发送与确认历史 |
 | `scheduled_delivery_outbox` | 定时消息与逐目标确认 |
 | `scheduler_heartbeats` | 提醒检查上次运行到的时刻 |
-| `operation_logs` | 操作审计和撤销快照 |
-| `user_settings` | 每用户设置与版本号 |
+| `operation_logs` | 编辑、删除的操作审计和撤销快照 |
+| `user_settings` | 每用户设置（时区、静默时段、简报、日记提醒、AI 授权）与版本号 |
 | `transfer_logs`、`imported_bundles` | Bundle 导入审计与身份 |
-| `login_code_registry` | 一次性 Code 摘要 |
-| `web_session_registry` | 浏览器会话摘要与设备信息 |
-| `widget_token_registry` | Widget Token ID 与撤销状态 |
+| `login_code_registry` | 一次性 Code 摘要和期限 |
+| `web_session_registry` | 浏览器会话摘要、设备信息和期限 |
+| `widget_token_registry` | Widget Token ID、期限与撤销状态 |
 | `schema_migrations` | 已应用 migration 记录 |
 
 `services/db_schema.py` 创建基础表，并按版本应用增量列 migration。启动事务会把 schema 变更与版本记录一起提交。
@@ -180,7 +180,15 @@ sequenceDiagram
 
 完整时刻采用规范 UTC 字符串。`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。自然语言解析结果中的年月日和钟点属于本地墙钟字段，AI 输出进入业务模型时清除自行附加的时区偏移。随后由用户或日程 IANA 时区解析为唯一时刻。
 
-账本以 `amount_cents` 作为整数统计字段，`amount` 用于展示。导入流程会规范化两个字段。
+Markdown 导出使用调用用户的时区上下文。日期范围与渲染采用同一时区，时间字符串包含偏移。Widget 日历字段提供带偏移的 ISO 时间，展示日期仍使用用户自然日。
+
+账本以 `amount_cents` 作为整数统计字段，`amount` 用于展示。导入流程会规范化两个字段。`utils/currency.py` 提供币种标准化、标签与分组函数。聊天统计、定时摘要和 Web 聚合先按币种分组，再计算收支和分类指标。各币种保留独立计量，汇率转换需要单独的数据来源与业务契约。
+
+### 更新与恢复契约
+
+Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在存储事务中检查版本。冲突返回 409，遗漏完整编辑版本返回 422。前端失败分支保留弹窗输入。绝对提醒 `remind_times` 被显式提交时清除存量规则，再执行完整规范化。同时提交规则时按显式规则计算。截止时间修改合并当前规则后重建队列。
+
+软删除清除待发队列并保留已发送、已确认历史。撤销删除在同一事务恢复条目、全文索引和提醒队列。已完成历史的唯一键避免重复初次投递。重复日程持续使用原始 `DTSTART` 和 `COUNT`，历史实例在展开结果中过滤。
 
 ---
 
@@ -192,15 +200,9 @@ sequenceDiagram
 
 集合元信息的修改由 `services/event_collection_mutations.py` 在一个事务里完成。节点创建时从集合抄来的字段跟着集合改：分类和时区下发到全部节点；地点、标签和内容只下发到仍等于集合旧值的节点；重复日程的实例与集合同名同备注，这两项按同一规则下发，多节点日程的节点名和节点备注归节点自己。受影响节点的旧值写入同一条撤销快照。
 
+时间冲突待确认时，`event add` 由这次已解析、已展示的结果还原出结构化命令 `/pendo event record <JSON>`（带 `force`），通过通用命令结果交给调用方，确认时不再调用解析模型；规则兜底解析的结果无法无损还原时不提供该命令，确认交回普通流程。`event record` 只按已确定的结构化字段写入；它不带 `force` 遇到冲突时同样返回这条带 `force` 的确认命令。
+
 ---
-
-### 更新与恢复契约
-
-Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在存储事务中检查版本。冲突返回 409，遗漏完整编辑版本返回 422。前端失败分支保留弹窗输入。绝对提醒 `remind_times` 被显式提交时清除存量规则，再执行完整规范化。同时提交规则时按显式规则计算。截止时间修改合并当前规则后重建队列。
-
-软删除清除待发队列并保留已发送、已确认历史。撤销删除在同一事务恢复条目、全文索引和提醒队列。已完成历史的唯一键避免重复初次投递。重复日程持续使用原始 `DTSTART` 和 `COUNT`，历史实例在展开结果中过滤。
-
-`utils/currency.py` 提供币种标准化、标签与分组函数。聊天统计、定时摘要和 Web 聚合先按币种分组，再计算收支和分类指标。各币种保留独立计量，汇率转换需要单独的数据来源与业务契约。
 
 ## ⏰ 提醒与定时投递
 
@@ -217,7 +219,7 @@ claim 记录 token、到期时刻、下一次尝试时刻和失败次数。条�
 
 Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻。提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
 
-每日简报、日记提示和财务摘要使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态。首次入队的条件是用户本地时间落在设定时刻起 `SCHEDULED_DELIVERY_GRACE_MINUTES`（120 分钟）内且当天尚未发送，窗口不跨零点；设定时刻那一分钟没跑到时当天仍能补发一次。Core 使用 `targeted` 模式向用户私聊投递。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`。该任务每日清理过期操作日志与撤销快照。
+每日简报、日记提示和财务摘要使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态。首次入队的条件是用户本地时间落在设定时刻起 `SCHEDULED_DELIVERY_GRACE_MINUTES`（120 分钟）内且当天尚未发送，窗口不跨零点；设定时刻那一分钟没跑到时当天仍能补发一次。已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递，日记提示按所属日期检查是否已经补写。Core 使用 `targeted` 模式向用户私聊投递。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`。该任务每日清理过期操作日志与撤销快照。
 
 ---
 
@@ -260,17 +262,21 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 4. `/api/widget/*` 同时校验 JWT 签名、scope、期限和注册表状态。
 5. 撤销操作更新当前 owner 的有效记录。
 
-`/api/widget/summary` 提供最多 5 条日程和主屏面板。`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 从源码顶部读取 Web 地址与 Widget Token。Keychain 保存上次成功运行日。同步至少回看过去 30 天，并查询未来 30 天。游标更早时，脚本补齐间隔。每次读取一个服务端窗口和一个 iOS 目标日历窗口。脚本以 Pendo 条目 ID 原地新增、更新和清理带同步标记的托管事件。全部对账成功后，脚本推进游标。
-
 两类凭据使用相同的秒级期限计算约定，并拥有独立的认证依赖和权限范围。
+
+---
+
+## 📱 Scriptable 日历同步
+
+`/api/widget/summary` 提供最多 5 条日程和主屏面板。`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 从源码顶部读取 Web 地址与 Widget Token。
+
+同步仅在 Scriptable App 内直接运行脚本时触发，小组件渲染时不执行。Keychain 保存上次成功运行日。每次至少回看过去 30 天，并查询未来 30 天；游标更早时，脚本从游标续传，补齐间隔并重新对账近期的修改和删除。每次读取一个服务端窗口和一个 iOS 目标日历窗口，不遍历或删除窗口外的日历事件。脚本以 Pendo 条目 ID 原地新增、更新和清理带同步标记的托管事件，全部对账成功后推进游标。
 
 ---
 
 ## 📌 Bundle 导入与导出
 
-传输包按 LF 分隔 NDJSON 记录，JSON 字符串中的 U+2028、U+2029 等 Unicode 字符保留原值。每个数据文件最多 100,000 条，六类成员合计最多 600,000 条，导入与导出共享容量。上传文件名通过 UTF-8 百分号编码进入 `X-Transfer-Filename`，服务端解码后写入审计。
-
-Markdown 导出使用调用用户的时区上下文。日期范围与渲染采用同一时区，时间字符串包含偏移。Widget 日历字段提供带偏移的 ISO 时间，展示日期仍使用用户自然日。
+传输包按 LF 分隔 NDJSON 记录，JSON 字符串中的 U+2028、U+2029 等 Unicode 字符保留原值。每个数据文件和六类成员合计的容量上限见 [README.md](README.md) 的“数据一致性与恢复”，导入与导出共享同一容量。上传文件名通过 UTF-8 百分号编码进入 `X-Transfer-Filename`，服务端解码后写入审计。
 
 `web/services/transfer_bundle.py` 负责导出版本化 `.pendo.zip`，`bundle_import.py` 负责检查和样例预览，`web/api/transfer.py` 编排事务执行。导入过程包括：
 
@@ -283,6 +289,8 @@ Markdown 导出使用调用用户的时区上下文。日期范围与渲染采�
 7. 记录 `transfer_logs`。
 
 聊天端 `ExporterService` 生成 Markdown 档案，并通过 Core 文件发送能力投递。
+
+---
 
 ## 🔐 并发边界
 
@@ -327,10 +335,4 @@ Markdown 导出使用调用用户的时区上下文。日期范围与渲染采�
 
 ## ✅ 验证
 
-Pendo 回归测试位于 `tests/plugins/pendo/`，覆盖聊天命令、Session、数据库、提醒租约、Web 认证、API、Bundle、Demo、时区和生命周期。
-
-```bash
-python -m pytest -q tests/plugins/pendo
-python -m ruff check plugins/pendo
-python -m mypy plugins/pendo
-```
+Pendo 回归测试位于 `tests/plugins/pendo/`，覆盖聊天命令、Session、数据库、提醒租约、Web 认证、API、Bundle、Demo、时区和生命周期。运行命令见 [README.md](README.md) 的“开发验证”。

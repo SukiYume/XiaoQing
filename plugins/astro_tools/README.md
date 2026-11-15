@@ -9,6 +9,7 @@ Astro Tools 通过 `/astro` 提供天文时间、坐标、单位、红移、公�
 - 命令支持群聊与私聊。
 - Astropy 提供时间、坐标、单位和宇宙学计算。
 - SciPy 提供宇宙学距离与时间积分。
+- 两者随 `python -m pip install -e ".[astro]"` 安装，在 Manifest 中为可选依赖：缺失时插件仍会加载，依赖它们的计算子命令不可用，太阳系内置资料（`/astro obj sun` 等）不受影响。
 - SIMBAD 查询需要外部网络。
 
 ---
@@ -45,7 +46,7 @@ Astro Tools 通过 `/astro` 提供天文时间、坐标、单位、红移、公�
 
 ## ⚙️ 配置与数据
 
-当前时间由 astropy 给出，SIMBAD 查询走 Core 的有界 HTTP 请求。运行结果即时计算，持久数据目录仅用于框架统一路径所有权。
+无需配置，也不产生数据文件，结果即时计算。当前时间由 Astropy 给出，SIMBAD 查询经 Core 的 HTTP 请求发出。
 
 SIMBAD 请求采用客户端 timeout 与总 deadline。输入数值、坐标、单位和红移在计算前完成范围校验。
 
@@ -60,7 +61,7 @@ SIMBAD 请求采用客户端 timeout 与总 deadline。输入数值、坐标、�
 | 大于等于 2，小于 20 | `1.5 M^3.5` |
 | 大于等于 20 | `2500 M` |
 
-每个分段边界采用右侧区间。结果用于经验估算。`formula calc lifetime` 使用独立的寿命近似。
+结果用于经验估算。`formula calc lifetime` 使用独立的寿命近似。
 
 ---
 

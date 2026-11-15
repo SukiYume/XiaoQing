@@ -4,6 +4,14 @@
 
 ---
 
+## 🔐 使用条件
+
+- 命令支持群聊与私聊。
+- 生成 PNG 色卡需要 `matplotlib` 与 `numpy`，随 `python -m pip install -e ".[plugins]"` 安装；它们在 Manifest 中是可选依赖，缺失时插件仍会加载，查询、搜索等文字功能不受影响，`--picture` 色卡不可用。
+- 添加和删除自定义色需要 Bot 管理员身份（`config/secrets.json` 的 `admin_user_ids`）。
+
+---
+
 ## ⌨️ 命令
 
 <!-- manifest-command-aliases:start -->
@@ -29,7 +37,23 @@ RGB 和 CMYK 接受逗号或空格分隔。三组整数自动按 RGB 处理，�
 
 添加自定义色时，解析器优先识别末尾完整的三整数 RGB，例如 `/color add 深蓝 0 0 255`。单独的三位 HEX 仍按 HEX 处理。
 
-`-n/-r/-x/-c/-a/-s/-t/-w/-d` 与对应长选项均可使用。`-p` 与 `--picture` 都是图片选项。分页统一使用位置页码或 `--page`，`-l/--list` 用于浏览颜色目录。
+子命令也可写成选项形式，例如 `/color -n 乳白 -p`：
+
+| 选项 | 等价子命令 |
+| --- | --- |
+| `-n`、`--name` | `name` |
+| `-r`、`--rgb` | `rgb` |
+| `-x`、`--hex` | `hex` |
+| `-c`、`--cmyk` | `cmyk` |
+| `-l`、`--list` | `list` |
+| `-q`、`--search`、`-a`、`--accord` | `search` |
+| `-s`、`--stellar` | `star` |
+| `-t`、`--spectype` | `stars` |
+| `-w`、`--write` | `add` |
+| `-d`、`--delete` | `delete` |
+| `-h`、`--help` | `help` |
+
+`-p` 与 `--picture` 是图片选项。分页统一使用位置页码或 `--page`。
 
 ---
 
@@ -65,7 +89,7 @@ RGB 和 CMYK 接受逗号或空格分隔。三组整数自动按 RGB 处理，�
 
 ## 🎨 自定义颜色
 
-群聊使用群作用域，私聊使用当前用户作用域。写入和删除只走 `add`、`delete` 子命令（含 `-w`、`-d` 等别名），它们在 plugin.json 里需要 Bot 管理员权限，由 Core 检查。把 `-w` 写在其他参数后面不会当成写入。同一作用域的成员可查询：
+群聊使用群作用域，私聊使用当前用户作用域；同一作用域的成员都可查询其中的自定义色。写入和删除只走 `add`、`delete` 子命令，它们需要 Bot 管理员权限（在 `plugin.json` 中声明，由 Core 检查）。把 `-w` 写在其他参数后面不会当成写入。数据保存在：
 
 ```text
 data/color/custom_colors_group_<群号>.json
@@ -90,9 +114,9 @@ data/color/custom_colors_private_<用户号>.json
 
 ## 💾 图片缓存
 
-色卡文件名由规范名称和 RGB 的 SHA-256 内容身份生成，目录为 `data/color/images/`。缓存最多 256 项、32 MiB，保留期为 30 天。图片渲染使用可选依赖 `matplotlib` 和 `numpy`，并在线程执行池中完成。
+色卡文件名由规范名称和 RGB 的 SHA-256 内容身份生成，目录为 `data/color/images/`。缓存最多 256 项、32 MiB，保留期为 30 天。图片渲染在线程执行池中完成。
 
-日志记录操作类型、数量和字节信息，查询文本、自定义名称与完整路径保留在日志边界之外。
+日志里只有操作类型、数量和字节信息，不记录查询文本、自定义名称与完整路径。
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## ⌨️ Dispatcher 入口
 
-Core 在 `config/config.json` 中选择闲聊 provider：
+闲聊 provider 在 `config/config.json` 中选择，省略时为 `smalltalk`：
 
 ```json
 {
@@ -16,7 +16,7 @@ Core 在 `config/config.json` 中选择闲聊 provider：
 }
 ```
 
-消息通过命令、Session、静音和 Dispatcher 门控后，Core 才调用 `handle_smalltalk`。选择 `xiaoqing_chat` 时，相应回落消息交给 XiaoQing Chat。
+消息先经过命令、会话和静音等处理，剩下的才交给闲聊 provider。取值 `smalltalk` 时由本插件处理（见下文）。取值 `xiaoqing_chat` 时这些消息交给 XiaoQing Chat，群里没有点名机器人的普通消息也会进入闲聊。
 
 ---
 
@@ -49,9 +49,7 @@ data/smalltalk/QA_private_<用户号>.json
 data/smalltalk/QA_audit.json
 ```
 
-主文件更新由进程内锁和原子写保护。变更审计最多保存 5000 条，记录操作、作用域、操作者和问题原文（至多 128 字）。群号和用户号校验在作用域创建前完成。
-
-磁盘提交与内存缓存发布属于同一次更新事务。调用取消后，已经开始的线程写入完成缓存发布再释放作用域锁。下一次编辑读取最新状态。
+变更审计最多保存 5000 条，记录操作、作用域、操作者和问题原文（至多 128 字）。
 
 ---
 
@@ -63,15 +61,27 @@ data/smalltalk/QA_audit.json
 2. `data/smalltalk/responses.json` 的 `responses` 数组。
 3. 内置短回复。
 
-每个集合最多接收 200 条唯一非空字符串，单条上限为 1000 个字符。加载器会过滤结构、类型、长度和重复值。
+文件内容形如：
+
+```json
+{
+  "小青": ["在的在的", "嗯？"]
+}
+```
+
+```json
+{
+  "responses": ["在的在的", "嗯？"]
+}
+```
+
+键名固定为 `小青` 和 `responses`，不随 `bot_name` 变化。每个集合最多接收 200 条唯一非空字符串，单条上限为 1000 个字符，不合格的条目会被忽略。
 
 ---
 
 ## 💬 Chat 服务
 
-精确 QA 命中时直接返回本地回答。其余闲聊通过 Core 签发的 `context.capabilities.chat_reply` 调用 `chat.reply`，并传递当前 `user_id` 与 `group_id` actor 字段。
-
-服务权限由 `smalltalk` Manifest 的 `uses_services` 和 `chat` Manifest 的调用者白名单共同约束。provider 异常或消息段校验异常时，用户收到固定降级提示。日志记录脱敏错误类别。
+精确 QA 命中时直接返回本地回答。其余闲聊调用 `chat` 插件的 `chat.reply` 服务，并把当前用户和群一并传入。调用失败或返回内容异常时，用户收到固定提示“暂时无法回复，请稍后再试~”。
 
 ---
 
@@ -89,15 +99,15 @@ data/smalltalk/QA_audit.json
 }
 ```
 
-字段接受 0～1 的有限数字。默认值为 `0.2`。命中概率且回复是 3000 字符以内的纯文本时，插件调用 `voice.synthesize_text`。混合媒体与语音服务异常会保留原文本回复。
+字段接受 0～1 的有限数字，默认 `0.2`；取值非法时关闭语音转换。命中概率且回复是纯文本、长度不超过 `voice` 插件的 500 字符上限时，插件调用 `voice.synthesize_text`。包含图片等非文本内容的回复，以及语音服务出错时，保留原文本回复。
 
 ---
 
 ## 🔐 并发与隐私
 
-插件 Manifest 使用 `parallel`。QA 文件写入由各文件锁串行化，远端 Chat 调用共享 `chat` 插件的并发与额度边界。
+闲聊回复调用 `chat` 插件，并发和额度受 `chat` 插件限制。
 
-日志记录操作、长度、数量、状态和错误类别。QA 回答、闲聊正文、语音文本和 actor 标识保留在普通日志边界之外。
+日志只记录操作、长度、数量、状态和错误类别，不记录 QA 回答、闲聊正文、语音文本以及用户和群标识。
 
 ---
 

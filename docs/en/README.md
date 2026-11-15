@@ -51,7 +51,7 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 |---|---|---|
 | `xiaoqing_chat` | [README (Chinese)](../../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | [README (Chinese)](../../plugins/xiaoqing_agent/README.md) | The README includes module structure, runtime boundaries, and data. |
-| `xiaoqing_life` | [README (Chinese)](../../plugins/xiaoqing_life/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) holds the implementation spec. |
+| `xiaoqing_life` | [README (Chinese)](../../plugins/xiaoqing_life/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) explains the design choices. |
 | `xiaoqing_memory` | [README (Chinese)](../../plugins/xiaoqing_memory/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_memory/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_memory/DESIGN.md) explains the design choices. |
 | `pendo` | [README (Chinese)](../../plugins/pendo/README.md) | [ARCHITECTURE (Chinese)](../../plugins/pendo/ARCHITECTURE.md) |
 
@@ -61,13 +61,14 @@ Each other plugin has a `README.md` in its directory. The [plugin manual](09-plu
 
 - `docs/` contains the complete Chinese manual, and `docs/en/` contains the complete English manual. Both use matching plain filenames and language links at the top of each page.
 - Chinese documents are the authoritative maintenance source. Update both versions in the same change when editing capabilities, commands, parameters, defaults, permissions, or deployment steps.
-- The root README is available in both languages. Plugin guides, acceptance guides, maintenance rules, and the changelog are maintained in Chinese; English manual links to these documents are marked "Chinese".
-- The root README supplies the project entry point and the shortest startup procedure.
+- The root README is available in both languages and supplies the project entry point and the shortest startup procedure.
+- Plugin guides, acceptance guides, maintenance rules, and the changelog are maintained in Chinese; English manual links to these documents are marked "Chinese".
 - Each document in `docs/00-09` owns one topic.
 - Plugin READMEs address plugin users and deployers.
 - Plugin ARCHITECTURE documents address plugin maintainers.
+- Plugin DESIGN documents explain design choices.
 - Command manifests define runtime help, permissions, scenes, and examples. Declare permissions here. Core evaluates them centrally.
-- READMEs describe current capabilities, procedures, and runtime contracts. Put version changes, one-time migrations, and release verification in the changelog.
+- READMEs, ARCHITECTURE and DESIGN documents, and `docs/` pages describe current capabilities, procedures, and runtime contracts. Put version changes, one-time migrations, and release verification in the changelog.
 - The changelog records version changes and verification results.
 
 Code, configuration examples, manifests, and test contracts define the commands, fields, defaults, and paths in these documents.

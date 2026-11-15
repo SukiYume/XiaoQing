@@ -91,11 +91,9 @@ Inbound 的接纳容量为 `inbound_ws_max_workers + ws_queue_size`。
   → XiaoQing Inbound
 ```
 
-跨容器受控网络可设置 `inbound_trusted_tls_proxy: true`，并通过防火墙将 Listener 流量限定到代理来源。
-
 `inbound_http_base` 使用 `http://`，`inbound_ws_uri` 使用 `ws://`。
 XiaoQing Listener 负责明文 HTTP/WS 协议，TLS 终止由外层代理或网络层提供。
-配置非 loopback 主机时同时设置 `inbound_trusted_tls_proxy: true`，并把主机防火墙入口限定到代理来源。
+Listener 绑定非 loopback 主机（例如跨容器的受控网络）时，必须同时设置 `inbound_trusted_tls_proxy: true`，并通过主机防火墙把入口限定到代理来源。
 
 ### 运行时与数据
 
@@ -106,8 +104,7 @@ XiaoQing Listener 负责明文 HTTP/WS 协议，TLS 终止由外层代理或网�
 | `enable_plugin_watcher` | boolean | `false` | 热重载 | 插件文件 watcher 开关 |
 | `enable_plugin_schedules` | boolean | `true` | 重新加载 | 插件定时任务总开关；隔离运行（如全量 UAT）设为 `false`，跨过计划时间也不会调用外部账号或投递消息 |
 | `plugin_poll_interval` | number | `3600`，`0.01..86400` | 热重载 | 插件文件轮询秒数 |
-| `session_timeout` | number | `300`，`0 < value <= 604800` | 热重载 | Session 默认空闲秒数 |
-| `timezone` | IANA timezone | `"Asia/Shanghai"` | 热重载 | Scheduler 与业务时钟时区 |
+| `session_timeout` | number | `300`，`0.001..604800` | 热重载 | Session 默认空闲秒数 |
 
 `data_root` 可使用项目相对路径或部署主机绝对路径，并保持在 `plugins/` 源码树之外。
 每个插件获得 `data_root/<plugin_name>/`。
@@ -159,18 +156,18 @@ CIM 命令行读取采用三次有界重试。
 }
 ```
 
-| 字段 | 范围 | 说明 |
-|---|---|---|
-| `timeout_seconds` | `0` 或 `0.1..86400` | 单次插件入口预算。`0` 由插件自身生命周期控制 |
-| `parallel_limit` | `1..1024` | `parallel` 插件入口并发 |
-| `admission_queue_limit` | `0..10000` | 插件入口等待队列 |
-| `sync_parallel_limit` | `1..3` | 单插件同步 worker 并发 |
-| `sync_queue_limit` | `0..10000` | 单插件同步等待队列 |
-| `failure_threshold` | `1..10000` | 熔断计数阈值 |
-| `cooldown_seconds` | `0.1..86400` | 熔断冷却时间 |
-| `drain_timeout_seconds` | `0.1..3600` | 卸载排空预算 |
-| `global_sync_queue_limit` | `1..100000` | 全局同步等待队列 |
-| `overrides` | object | 按插件覆盖上述策略 |
+| 字段 | 默认值 | 范围 | 说明 |
+|---|---|---|---|
+| `timeout_seconds` | `60` | `0` 或 `0.1..86400` | 单次插件入口预算。`0` 由插件自身生命周期控制 |
+| `parallel_limit` | `4` | `1..1024` | `parallel` 插件入口并发 |
+| `admission_queue_limit` | `64` | `0..10000` | 插件入口等待队列 |
+| `sync_parallel_limit` | `1` | `1..3` | 单插件同步 worker 并发 |
+| `sync_queue_limit` | `16` | `0..10000` | 单插件同步等待队列 |
+| `failure_threshold` | `3` | `1..10000` | 熔断计数阈值 |
+| `cooldown_seconds` | `60` | `0.1..86400` | 熔断冷却时间 |
+| `drain_timeout_seconds` | `5` | `0.1..3600` | 卸载排空预算 |
+| `global_sync_queue_limit` | `256` | `1..100000` | 全局同步等待队列 |
+| `overrides` | `{}` | object | 按插件覆盖上述策略 |
 
 Manifest `concurrency: sequential` 将该插件入口并发固定为 1。
 `parallel` 使用 `parallel_limit`。
@@ -307,13 +304,11 @@ route 的值可以是一个模型名、一个模型名列表，或一个对象�
 | `xiaoai.plan` | 米家操作规划 | 0 / — | 1600 | 25 / 28 | 0 |
 | `ads_paper.summary` | 论文摘要 | 0.7 / — | 1200 | 60 / 90 | 0 |
 
-### AI 参数从哪里来
+### 聊天与 Agent 如何使用 route
 
-供应商连接信息放在 `config.ai.providers`，模型定义放在 `config.ai.models`，密钥放在 `secrets.ai.providers`，每条 route 用哪些模型放在 `config.plugins.<plugin>.ai.routes.<route>`。采样、输出预算、超时和重试由插件声明默认值，需要时在同一条 route 里覆盖。可选的 `model_aliases` 给 `/xc model` 提供命令短名称，不写时直接用模型名。`/xc model default` 自动选择 `routes.chat` 中第一个可用的模型。
+XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行使用 `agent`，任务分流使用 `triage`（没配时复用 `agent`），`read_image` 使用 `vision`。常规插件调用沿用路由参数。`/xc model default` 自动选择 `routes.chat` 中第一个可用的模型。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
 
-XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行使用 `agent`，任务分流使用 `triage`（没配时复用 `agent`），`read_image` 使用 `vision`。常规插件调用沿用路由参数。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
-
-`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都属于对应的 route，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段、`default_model_alias` 或 `ai` 注册表时，加载报错并指出主配置位置。
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都属于对应的 route，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段或 `ai` 注册表时，加载报错并指出主配置位置。
 
 DEBUG 日志记录最终采用的路由、模型、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
 
@@ -336,10 +331,10 @@ DEBUG 日志记录最终采用的路由、模型、采样值、输出预算、�
 
 AI Service 先调用 route 中首个具备密钥的 profile，并对 transport、timeout、rate limit、server error、model unavailable、invalid response 和 empty response 执行有界重试与顺序 fallback。
 `fallback_on` 还可选择 `request_timeout` 与 `conflict`。
-认证、权限、请求参数和配置错误由当前调用插件处理。
+认证、权限、请求参数和配置错误既不重试也不换下一个模型，直接交给当前调用的插件处理。
 `total_timeout_seconds` 覆盖整条模型链。
 
-供应商凭据块缺失、`api_key` 缺失、空字符串和纯空白字符串都会使对应模型暂时不可用。Core 在请求前按顺序跳过这些条目，可选模型列表只包含可用项。显式固定到缺密钥模型、整条路由缺少可用密钥时会报配置错误。无效地址、未知模型引用和错误密钥类型仍会触发校验。上游返回认证失败时沿用原有错误处理规则。
+供应商凭据块缺失、`api_key` 缺失、空字符串和纯空白字符串都会使对应模型暂时不可用。Core 在请求前按顺序跳过这些条目，可选模型列表只包含可用项。显式固定到缺密钥模型、整条路由缺少可用密钥时会报配置错误。无效地址、未知模型引用和错误密钥类型会触发校验错误。
 
 ---
 
@@ -412,9 +407,9 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_chat.ai.routes.checker` | 回复检查 route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | 规划与推理 route |
 | `plugins.xiaoqing_chat.ai.routes.vision` | 图片理解 route，模型需要 `image` modality |
-| `plugins.xiaoqing_chat.ai.model_aliases` | 可选：`/xc model` 用的短名称到模型名的映射 |
+| `plugins.xiaoqing_chat.ai.model_aliases` | 可选：`/xc model` 用的短名称到模型名的映射，不写时直接用模型名 |
 
-四条 XiaoQing Chat route 各自指定模型顺序；采样、单次超时、总超时和重试由插件声明默认值，见上文“插件 route”的表。
+四条 XiaoQing Chat route 各自指定模型顺序，调用参数的默认值见上文“插件 route”的表。
 行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者逐层合并，config 中的值优先。
 [XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#️-行为配置) 逐组说明这些字段。
 
@@ -447,8 +442,8 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | `plugins.xiaoqing_life.enabled` | `false` | 总开关。关闭时定时任务不做事，`life.turn_context` 返回 `None`，聊天与没装时一致 |
 | `plugins.xiaoqing_life.ai.routes.reasoning` | 必填 | 消化、研究、整理和睡前写日记用的 route；缺失时上网只记“模型未配置”并退避 |
 | `plugins.xiaoqing_life.ai.routes.vision` | 无 | 梗图安全判定；缺失时不收梗图 |
-| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | 每天（配置时区自然日）最多上网次数 |
-| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | 所有模型调用合计，调用前先计数，失败不退还 |
+| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | 她的一天（配置时区，凌晨 5 点分界）最多上网次数 |
+| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | 同一天内所有模型调用合计，调用前先计数，失败不退还 |
 | `plugins.xiaoqing_life.browse_when_busy` | `false` | 作息为“忙”时是否允许偷偷刷一下 |
 | `plugins.xiaoqing_life.blocked_keywords` | `[]` | 在内置屏蔽词之外再丢弃的内容 |
 
@@ -549,7 +544,6 @@ Core 顶层敏感字段：
 
 | 命名空间 | 字段 | 用途 |
 |---|---|---|
-| `plugins.arxiv_filter` | `feishu_webhook` | 飞书推送 Webhook |
 | `plugins.flickr` | `api_key` | Flickr App Garden 公共只读 API Key |
 | `plugins.wolframalpha` | `appid` | Wolfram\|Alpha App ID |
 | `plugins.voice` | `subscription_key`、`region`、`voice_name`、`style`、`role`、`proxy` | Azure Speech 凭据、音色与代理 |
@@ -640,5 +634,5 @@ Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。
 ## 🧭 下一步
 
 - 首次部署：[快速开始](01-getting-started.md)
-- 插件字段：[插件目录](09-plugins.md)
+- 插件字段：[插件使用手册](09-plugins.md)
 - 网络与消息路径：[消息处理流程](08-message-flow.md)

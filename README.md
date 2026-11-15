@@ -62,7 +62,7 @@ XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人�
 - 一个 OneBot v11 实现，推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
 - 可访问 QQ 与所需第三方服务的网络环境
 
-根目录 `requirements.txt` 包含 Core、默认插件和 Pendo Web 的直接依赖。Jupyter 内核与 arXiv 本地模型按对应插件文档准备。
+根目录 `requirements.txt` 包含 Core、默认插件、Pendo Web 和 Jupyter 内核的直接依赖。arXiv 本地推理的可选依赖与模型资产按 arXiv Filter 插件文档准备。
 
 ### 2. 安装项目
 
@@ -81,7 +81,7 @@ cp config/config.json.example config/config.json
 cp config/secrets.json.example config/secrets.json
 ```
 
-最小 `config/config.json` 示例：
+编辑复制出来的 `config/config.json`，核对以下字段：
 
 ```json
 {
@@ -101,7 +101,9 @@ cp config/secrets.json.example config/secrets.json
 }
 ```
 
-最小 `config/secrets.json` 示例：
+示例文件中的 `default_group_ids` 是占位值 `123456789`，定时任务未指定群时向这些群发送消息，请改成自己的群号或留空 `[]`。
+
+编辑复制出来的 `config/secrets.json`，至少设置以下字段：
 
 ```json
 {
@@ -127,7 +129,7 @@ Content-Type: application/json
 
 服务端使用 Bearer 认证。OneBot 的 `secret` / `X-Signature` 实现 HMAC 签名。上报端仅配置该字段时，服务端返回 401。HTTP 上报端需要支持自定义 `Authorization` 请求头。WebSocket 提供另一种接入方式。
 
-标准 HTTP 上报通过 `onebot_http_base` 对应的 OneBot action API 发送回复。插件投递状态在成功回执后提交。事件响应为 `{}`。部署者需要开启 NapCat 的 HTTP API，并在 XiaoQing 中配置匹配的 OneBot 凭据。
+标准 HTTP 上报通过 `onebot_http_base` 对应的 OneBot action API 发送回复。插件投递状态在成功回执后提交。事件响应为 `{}`。部署者需要开启 NapCat 的 HTTP API，使其监听 `onebot_http_base` 指向的端口（示例为 11001）。NapCat 设置了 access token 时，在 `secrets.json` 顶层配置相同值的 `onebot_token`；未设置则保持空字符串。
 
 开发验收客户端可发送 `X-XiaoQing-Response-Mode: actions`。客户端接收自定义 `{"actions": [...]}` 正文，并负责执行其中的动作。本地命令矩阵使用此模式。
 
@@ -149,7 +151,7 @@ Inbound 默认绑定 loopback。启用 HTTP 或 WebSocket Inbound 时，请设�
 python main.py
 ```
 
-启动日志会列出已加载插件和 OneBot 连接状态。随后在 QQ 中依次发送：
+启动日志会列出已加载插件和 OneBot 连接状态。随后用 `admin_user_ids` 中的 QQ 私聊小青，依次发送：
 
 ```text
 /help
@@ -160,6 +162,8 @@ python main.py
 /xc 你好
 /pendo
 ```
+
+`/xc` 需要先按 [快速开始](docs/01-getting-started.md#ai-插件配置) 配好 AI 模型和密钥，否则无法生成回复。
 
 ---
 
@@ -229,7 +233,7 @@ python main.py
 
 Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令、Web 控制台与 Scriptable 小组件共享同一份 SQLite 数据。
 
-浏览器登录码的兑换期为 7 天，兑换后建立 7 天 HttpOnly Cookie 会话。Scriptable 小组件使用默认 365 天的只读 Bearer Token。两类凭据统一采用秒级期限和摘要存储。
+浏览器登录码的兑换期为 7 天，兑换后建立 7 天 HttpOnly Cookie 会话。Scriptable 小组件使用有效期 365 天的只读 Bearer Token。两类凭据统一采用秒级期限和摘要存储。
 
 - [使用说明](plugins/pendo/README.md)
 - [架构说明](plugins/pendo/ARCHITECTURE.md)
@@ -344,7 +348,7 @@ python scripts/run_full_uat.py
 | [配置详解](docs/06-configuration.md) | 配置、secrets、部署和热重载 |
 | [高级主题](docs/07-advanced.md) | 会话、调度、权限和 Web 插件 |
 | [消息流程](docs/08-message-flow.md) | 事件接收到回复发送的完整链路 |
-| [插件功能](docs/09-plugins.md) | 内置插件的命令与配置入口 |
+| [插件使用手册](docs/09-plugins.md) | 内置插件的命令与配置入口 |
 | [更新记录](CHANGELOG.md) | 版本变化和升级影响 |
 
 ---

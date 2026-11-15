@@ -24,7 +24,9 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 /宠物 帮助 管理
 ```
 
-帮助类别也可直接作为子命令，例如 `/宠物 社交`。
+除管理外的帮助类别也可直接作为子命令，例如 `/宠物 社交`；`/宠物 管理` 是群管理入口，管理类帮助用 `/宠物 帮助 管理`。
+
+`领养`、`群任务` 和全部 `管理` 子命令只能在群聊里使用，其余命令的私聊用法见“私聊定位”。
 
 ---
 
@@ -126,15 +128,14 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 
 状态值随时间衰减，托管期间采用减半衰减。健康过低会使宠物进入生病状态。长期照顾偏低可能触发旅行。治疗和召回提供恢复路径。
 
-数据库的 `decay_remainders` 保存各属性尚未达到整数扣减的小数余额，使不同结算间隔和重启后的累计衰减保持一致。每日计数、签到、连续天数和周榜使用 `Asia/Shanghai` 业务日期；定时任务触发时刻使用 Core 的调度时区配置。
+各属性尚未达到整数扣减的小数衰减会保存下来，使不同结算间隔和重启后的累计衰减保持一致。每日计数、签到、连续天数和周榜使用 `Asia/Shanghai` 业务日期。
 
 ---
 
 ## 🔐 经济与风控
 
-- 金币和友情点余额以 `users` 表为准；
-- 金币和友情点的每次变化与余额更新在同一事务中写入 `asset_ledger`，到期挂单退还的道具也记一条；
-- 群统计会计算余额与资产账本的差异；
+- 金币和友情点的每次变化都与余额更新在同一事务中记入资产账本，到期挂单退还的道具也记一条；
+- 群统计会对账余额与资产账本的差异；
 - 关键行为受冷却、每日次数、群响应限频和重复行为收益衰减约束；
 - 互访、小游戏、治疗、交易、任务与活动奖励采用原子事务或幂等标识；
 - 昵称、留言和展示文本执行长度、控制字符与敏感词校验。
@@ -176,7 +177,7 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 | `activity_enabled` | 布尔值 | `true` |
 | `sensitive_words` | 字符串列表，最多 100 项，每项不超过 64 字 | 空 |
 
-`/宠物 管理 配置 设置` 只能修改 `economy_multiplier`、`decay_multiplier`、`trade_enabled` 和 `activity_enabled`。`enabled` 通过 `/宠物 管理 开启` 和 `/宠物 管理 关闭` 切换。`sensitive_words` 是本群追加的敏感词，叠加在内置词之上，用于宠物名和留言校验，目前没有命令能修改它，`/宠物 管理 配置 查看` 只显示数量。
+`/宠物 管理 配置 设置` 只能修改 `economy_multiplier`、`decay_multiplier`、`trade_enabled` 和 `activity_enabled`。`enabled` 通过 `/宠物 管理 开启` 和 `/宠物 管理 关闭` 切换。`sensitive_words` 是本群追加的敏感词，叠加在内置词之上，用于宠物名和留言校验。没有命令能修改它，`/宠物 管理 配置 查看` 只显示数量。
 
 ---
 
@@ -195,6 +196,8 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 
 ## ⏰ 定时任务
 
+触发时刻按 `config.timezone`（默认 `Asia/Shanghai`）计。
+
 | 任务 | 周期 | Core 投递 | 职责 |
 | --- | --- | --- | --- |
 | `qingpet_decay` | 每分钟 | `targeted` | 应用状态衰减，并把阈值提醒交给 Core 按群投递 |
@@ -207,27 +210,15 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 
 ---
 
-## 🔐 数据与内部边界
+## 🔐 数据与备份
 
-正常加载时，SQLite 数据库位于：
+所有群的数据保存在同一个 SQLite 文件中：
 
 ```text
 data/qingpet/qingpet/qingpet.db
 ```
 
-一个 `Database` 组合多个 repository mixin，共享同一个 SQLite 文件、连接生命周期和事务边界：
-
-| 模块 | 职责 |
-| --- | --- |
-| `services/database.py` | 组合入口、线程连接和关闭生命周期 |
-| `services/database_schema.py` | 表、索引、migration 和约束 |
-| `services/database_identity.py` | 用户、宠物、背包和群配置 |
-| `services/database_community.py` | 任务、活动、留言、交易和展示会 |
-| `services/database_actions.py` | 配额、资产和宠物动作事务 |
-| `services/database_scheduler.py` | 周期结算、到期清理和经济快照 |
-| 领域 service | 宠物、社交、道具、经济、用户和管理用例 |
-
-运行数据由插件和管理员备份流程管理。表结构版本记在 SQLite 的 `PRAGMA user_version`（当前为 7）。需要升级表结构时，先用 SQLite 在线备份生成 `qingpet.db.pre-migration-v<旧版本号>.bak` 一致快照（同名备份已在就不重做）。快照包含 WAL 中已提交的数据。管理员的日常备份同样使用 SQLite 备份接口。
+运行数据由插件和管理员备份流程管理。表结构版本记在 SQLite 的 `PRAGMA user_version`（当前为 7）。需要升级表结构时，插件先用 SQLite 在线备份生成 `qingpet.db.pre-migration-v<旧版本号>.bak` 一致快照（同名备份已在就不重做）。快照包含 WAL 中已提交的数据。管理员的日常备份同样使用 SQLite 备份接口（`sqlite3.Connection.backup()`），验证或排查时在备份副本和隔离数据目录上操作。
 
 ---
 
@@ -251,7 +242,7 @@ data/qingpet/qingpet/qingpet.db
 ```bash
 python -m ruff check plugins/qingpet tests/plugins/qingpet
 python -m mypy plugins/qingpet
-python -m pytest -q tests/plugins -k qingpet -n 2
+python -m pytest -q tests/plugins/qingpet -n 2
 ```
 
 首次部署流程见 [QUICKSTART.md](QUICKSTART.md)，维护约定见 [AGENTS.md](AGENTS.md)。

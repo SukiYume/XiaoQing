@@ -30,17 +30,18 @@
 | 模块 | 职责 |
 |---|---|
 | `main.py` | 入口：`init` / `shutdown`、四个服务回调（`record`、`recall`、`search`、`forget`）、定时检查 `scheduled_tick`、`/mem` 命令；`MemoryRuntime` 持有存储和唯一的整理任务 |
-| `config.py` | `config.plugins.xiaoqing_memory` 的解析与钳制；`reasoning` 路由的调用参数 |
+| `config.py` | `config.plugins.xiaoqing_memory` 的解析与钳制；`reasoning` 路由的调用参数（`declare_route_defaults`） |
 | `model.py` | 事件、笔记、页面的数据结构与 JSON 转换；类型、来源、可信度、用法、状态的取值；页面小节和字数上限 |
-| `scopes.py` | 范围合法性、可见性（笔记、事件、页面行）、调用方规则（能写什么、作用范围怎么定）、来源链检查 |
+| `scopes.py` | 范围合法性；可见性（`note_visible`、`event_visible`、页面行 `line_visible`，整个插件只有这一处判断）；调用方规则（能写什么、作用范围怎么定，`request_scope`）；来源链检查 |
 | `events.py` | 每个范围按月的 JSONL 事件日志：追加、幂等键去重、编号、读取时跳过坏行、按月删除 |
-| `store.py` | 状态文件、按范围懒加载的笔记和页面、每日预算、统计、清空范围 |
+| `store.py` | 状态文件、按范围懒加载的笔记和页面、每日预算、统计、清空范围、忘掉的内容不被写回 |
 | `ops.py` | `memory.record`：事件追加和笔记操作（新增、导入、更新、结束）的逐条核对 |
-| `recall.py` | `memory.recall`：各段常驻块的选择、排序和预算，到期话头，自我记录；自我页逐行带上引用的网上生活条目键（`self_lines`），群聊带话题词 |
+| `recall.py` | `memory.recall`：各段常驻块的选择、排序和预算，到期话头，自我记录；自我页逐行给出（`self_lines`，见“关键约定”），群聊带话题词 |
 | `search.py` | `memory.search`：按关键词、对象、类型查笔记、页面和事件 |
 | `forget.py` | `memory.forget`：清空范围、删一个人、删指定笔记 |
 | `topics.py` | 群里的话题词：清洗、按话题合并（用法取更谨慎的）、保留期和上限；回复时取这两三天可以自然提起的，主动开口时取还记着的全部 |
 | `render.py` | 页面行和笔记写成给模型看的文字，标注用法、可信度和时间久了 |
+| `text.py` | 共用的文字工具：空白归一、截断、相邻两字重合打分、摘录核对 |
 | `commands.py` | `/mem` 的子命令解析和输出 |
 | `consolidate/runner.py` | 整理编排：门控、预算、代际核对、四步的顺序和提交、统计 |
 | `consolidate/extract.py` | 第一步：事件批次、写笔记的提示词、摘录和说话人核对、去重和改口；群聊顺带产出话题词（出处必须是群友的消息） |
@@ -51,12 +52,20 @@
 
 ## 关键约定
 
-- **事件是底座**。事件之上的每一层都能从下一层重建：`/mem rebuild` 从笔记重写页面；笔记和页面记 `prompt_version`，改了提示词可以只重建旧版本的内容。
-- **每条笔记带出处**。整理写的笔记引用事件编号并附逐字摘录（空白归一后比较）；她自己的记录引用她发出的那条消息；导入的旧数据记来源键、可信度为 `legacy`。
+- **重建**。`/mem rebuild` 从笔记重写页面；笔记和页面记 `prompt_version`，改了提示词可以只重建旧版本的内容。
+- **出处核对**。整理写的笔记引用事件编号并附逐字摘录，空白归一后比较；她自己的记录引用她发出的那条消息；导入的旧数据记来源键、可信度为 `legacy`。
 - **页面每行引用笔记**。读取时一行引用的笔记全部可见、至少一条有效、没有被撤回才显示；清理时依据都不在的行删掉。
-- **取用只读内存**。`recall` 不调模型、不等磁盘（首次加载除外）；取用次数只改内存，随定时检查和关闭落盘。
+- **取用不等磁盘**。`recall` 只读内存（首次加载除外）；取用次数只改内存，随定时检查和关闭落盘。
 - **写入串行**。同一范围的写入经 `write:<范围>` 异步锁串行；整理经 `consolidate:<范围>` 锁，一个范围同时只有一次整理。
 - **代际**。清空范围时代际加一；整理开始时记下代际，提交前核对，期间被清空的结果丢弃。chat 侧推送的幂等键也带重置代际，重置后的新消息照常写入。
+- **删掉的内容不被写回**。删除后，正在等模型返回的整理和还没整理的旧消息稍后仍会写东西，`store.put_notes` 写入前用 `_from_forgotten_locked` 挡掉三种：
+  - 笔记自己被忘掉的；
+  - 它要替换的那条（`supersedes`）被忘掉的（改口时换了新 ID）；
+  - 它说的是被忘掉的人，而且依据（`observed_at`，没有就用 `created_at`）早于忘掉的那一刻的。
+
+  前两种靠进程内的短期标记 `store._forgotten`（范围和笔记 ID → 忘掉的时刻），保留一小时，整理的模型调用不会拖过这个时间，重启后失效。第三种记在范围状态的 `forgotten_subjects`（人物主体 → 忘掉的时刻），随 `state.json` 持久保存，他之后说的话照常记；清空整个范围时一并清掉。`put_page` 同样去掉引用了被忘掉笔记的行和简介，一点不剩就不写；清空范围时，`global` 里 `origin_scope` 是这个范围的自我记录，连同 `global` 页面上照它们写的行和简介一起去掉。
+- **读不出输出的批次**。第一步（`runner.extract_scope`）读不出模型输出里的 JSON 对象时，这一批不算整理过：水位不动，在范围状态的 `unparsed`（`first_seq` 是这一批第一条事件的编号，`tries` 是同一批已连着读不出的次数）里记一次，这个范围这次整理在这一批停下，下次再试。`first_seq` 对得上才累加，连着第 3 次（`_UNPARSED_TRIES`）读不出时放过：水位前移到这一批末尾，`unparsed` 清空，继续后面的批。读出了对象（空对象表示这一批没有要记的）就正常前移并清掉 `unparsed`；统计里记 `extract.unparsed` 和 `extract.abandoned`。
+- **自我页和网上生活按条目键去重**。`recall` 返回自我页时另按行给出 `self_lines`，每行带它引用的网上生活条目在 xiaoqing_life 里的键（`life_keys`）和是不是只引用了网上生活条目（`life_only`）；`life.turn_context` 交出细节的条目带同样的键（`shown_keys`）。聊天（`memory/client.py`）去掉 `life_only` 且键和 `shown_keys` 有交集的行：一行常概括好几条经历，其中一条这一轮已由 life 给了细节，这一行就先不放，细节以 life 给的为准。另有依据的行和一句话简介照常保留。
 
 ## 与 Core 和三个插件的桥
 
@@ -69,7 +78,7 @@ Core 的服务契约（`core/models.py`）固定了四条服务的所有者和�
 | `memory.search` | `xiaoqing_chat` |
 | `memory.forget` | `xiaoqing_chat` |
 
-`core/capabilities.py` 的 `MemoryService` 把调用方名字、主体类型和主体所在的范围（群聊 `g<群号>`，私聊 `u<QQ号>`，系统主体为空）写进载荷，覆盖调用方填的同名字段；只声明了的方法可用。插件里用 `context.capabilities.memory`。
+`core/capabilities.py` 的 `MemoryService` 把调用方名字、主体类型和主体所在的范围（群聊 `g<群号>`，私聊 `u<QQ号>`，系统主体为空）写进载荷，覆盖调用方填的同名字段；只声明了的方法可用。用户主体发起的调用，作用范围必须等于主体所在的范围（不填就用它）；系统主体（定时任务）按调用方声明的范围执行；life 只能用 `global`。插件里用 `context.capabilities.memory`。
 
 各调用方的接入点：
 

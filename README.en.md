@@ -53,15 +53,15 @@ Install reviewed first-party plugins or other trusted plugins.
 
 See [Architecture](docs/en/02-architecture.md) and [Message flow](docs/en/08-message-flow.md).
 
-## First start
+## Getting started
 
 ### 1. Prepare the environment
 
 Python `3.11+`, a OneBot v11 implementation, and network access to QQ and applicable external services are necessary.
 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) is a supported deployment choice in this guide.
 
-The root `requirements.txt` contains direct dependencies for Core, default plugins, and Pendo Web.
-The Jupyter and arXiv plugin guides describe their optional kernels and local models.
+The root `requirements.txt` contains direct dependencies for Core, default plugins, Pendo Web, and the Jupyter kernel.
+The arXiv Filter guide describes its optional local-inference dependencies and model assets.
 
 ### 2. Install the project
 
@@ -80,7 +80,7 @@ cp config/config.json.example config/config.json
 cp config/secrets.json.example config/secrets.json
 ```
 
-A minimal `config/config.json` example follows:
+Edit the copied `config/config.json` and check these fields:
 
 ```json
 {
@@ -100,7 +100,9 @@ A minimal `config/config.json` example follows:
 }
 ```
 
-A minimal `config/secrets.json` example follows:
+The example file sets `default_group_ids` to the placeholder `123456789`. Schedules without their own groups send to these groups, so change it to your own group IDs or leave it empty (`[]`).
+
+Edit the copied `config/secrets.json` and set at least these fields:
 
 ```json
 {
@@ -132,7 +134,8 @@ The reporter must send a custom `Authorization` header. WebSocket is another con
 
 Standard HTTP reports send replies through the OneBot action API at `onebot_http_base`.
 The plugin delivery state commits after a successful receipt. The event response is `{}`.
-Enable the NapCat HTTP API. Set the matching OneBot credentials in XiaoQing.
+Enable the NapCat HTTP API so that it listens on the port in `onebot_http_base` (11001 in the example).
+If NapCat sets an access token, set the same value as top-level `onebot_token` in `secrets.json`. Otherwise keep it as an empty string.
 
 A development acceptance client can send `X-XiaoQing-Response-Mode: actions`.
 It receives a custom `{"actions": [...]}` body and must execute those actions.
@@ -161,7 +164,7 @@ python main.py
 ```
 
 Startup logs show loaded plugins and OneBot connection status.
-Send these commands in QQ:
+In a private chat with XiaoQing, send these commands from a QQ account listed in `admin_user_ids`:
 
 ```text
 /help
@@ -172,6 +175,8 @@ Send these commands in QQ:
 /xc 你好
 /pendo
 ```
+
+`/xc` needs an AI model and key configured as described in [Getting started](docs/en/01-getting-started.md#ai-plugin-configuration). Without them, it cannot generate replies.
 
 ## Command help
 
@@ -250,7 +255,7 @@ Pendo uses one data model for events, tasks, notes, diaries, accounts, and remin
 Chat commands, the Web console, and Scriptable widgets share one SQLite database.
 Browser login codes have a seven-day redemption period.
 Redemption creates a seven-day HttpOnly Cookie session.
-Scriptable widgets use read-only Bearer tokens with a default lifetime of 365 days.
+Scriptable widgets use read-only Bearer tokens with a lifetime of 365 days.
 Both credential types use second-resolution expiry and digest storage.
 
 See the [user guide (Chinese)](plugins/pendo/README.md), [architecture (Chinese)](plugins/pendo/ARCHITECTURE.md),
@@ -375,7 +380,7 @@ python scripts/run_full_uat.py --plan-only
 python scripts/run_full_uat.py
 ```
 
-See [First start](docs/en/01-getting-started.md) for UAT stages, report locations, and external-scenario options.
+See [Getting started](docs/en/01-getting-started.md) for UAT stages, report locations, and external-scenario options.
 
 ## Documentation
 
@@ -384,7 +389,7 @@ See [First start](docs/en/01-getting-started.md) for UAT stages, report location
 | [Online documentation](https://paris.escape.ac.cn/note/XiaoQing/) | Browser version of the project manual. |
 | [Documentation index](docs/en/README.md) | Reading routes and topic index. |
 | [Overview](docs/en/00-overview.md) | Functions, concepts, and directories. |
-| [First start](docs/en/01-getting-started.md) | Installation, settings, connections, and initial verification. |
+| [Getting started](docs/en/01-getting-started.md) | Installation, settings, connections, and initial verification. |
 | [Architecture](docs/en/02-architecture.md) | Components, service boundaries, and data flow. |
 | [Plugin development](docs/en/03-plugin-development.md) | Manifests, entry points, sessions, schedules, and tests. |
 | [Core modules](docs/en/04-core-modules.md) | Responsibilities of `core/` modules. |
@@ -395,7 +400,7 @@ See [First start](docs/en/01-getting-started.md) for UAT stages, report location
 | [Plugins](docs/en/09-plugins.md) | Built-in commands and settings. |
 | [Changelog (Chinese)](CHANGELOG.md) | Version changes and upgrade effects. |
 
-## Fault isolation
+## Troubleshooting
 
 ### Startup and replies
 

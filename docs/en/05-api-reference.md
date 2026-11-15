@@ -31,7 +31,7 @@ OneBot message-segment structure:
 |---|---|---|
 | `text(content)` | `text` | Text |
 | `image(file_path)` | `image` | Local image, with path converted to a `file://` URI |
-| `emoji(file_path, summary="")` | `emoji` | Local emoji image and optional summary |
+| `emoji(file_path, *, summary="")` | `emoji` | Local emoji image and optional summary |
 | `image_url(url)` | `image` | Remote image URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | Local audio |
@@ -45,7 +45,7 @@ from core.plugin_base import image, segments, text
 
 reply = [
     text("结果如下"),
-    image("data/example/result.png"),
+    image(str(context.data_dir / "result.png")),
 ]
 
 plain_reply = segments("完成")
@@ -64,8 +64,8 @@ build_action(
 ) -> dict[str, Any] | None
 ```
 
-With `group_id`, this function creates `send_group_msg`. Other user-scoped calls create `send_private_msg`.
-Empty segments return an empty action.
+With `group_id`, this function creates `send_group_msg`; otherwise, with `user_id`, it creates `send_private_msg`.
+It returns `None` for empty segments or when both `group_id` and `user_id` are `None`.
 
 ### Text boundaries
 
@@ -105,7 +105,7 @@ file_uri_to_path(value: str) -> Path | None
 
 This function converts message-segment `file://` URIs to local paths.
 It supports `file:///C:/x`, `file://C:/x`, `file://localhost/x`, and UNC.
-Other URI types return `None`. Core handles URI generation for `image()` and `record()`.
+Other URI types return `None`. `image()`, `emoji()`, and `record()` do the reverse: they convert a local path to a `file://` URI.
 
 ### External commands
 
@@ -117,12 +117,9 @@ result = await run_process(argv, timeout=30, cwd=workdir, max_capture_bytes=64 *
 
 Commands run in independent process trees. Windows uses Job objects. POSIX uses process groups.
 Standard output and standard error share a capture budget.
-
 Timeout, budget exhaustion, or caller cancellation removes the complete process tree.
-Cleanup also removes background children left after the command exits. These children stop during cleanup.
-`ProcessResult` contains `exit_code`, `stdout`, `stderr`, `timed_out`, and `output_limited`.
-
-`exit_code` is `None` when Core terminates the process.
+Cleanup also removes background children left after the command exits, so they never extend the command's run time.
+`ProcessResult` contains `exit_code` (`None` when Core terminates the process), `stdout`, `stderr`, `timed_out`, and `output_limited`.
 
 ### Command requester
 
@@ -171,8 +168,22 @@ write_json(path: Path, data: Any) -> None
 
 `atomic_write_bytes()` commits bytes through a temporary file in the same directory, `fsync`, and atomic replacement.
 `atomic_write_text()` uses UTF-8 with the same primitive.
-`load_json()` and `write_json()` use `AtomicJsonStore`.
+`load_json()` and `write_json()` read and write through `AtomicJsonStore`.
 Persistent data paths use `context.data_dir` as their root.
+
+```python
+from core.atomic_store import AtomicJsonStore
+
+store = AtomicJsonStore(path: Path)
+store.read(default, *, raise_on_error=False)
+store.write(value) -> None
+store.write_with_backup(value) -> None
+```
+
+`AtomicJsonStore` keeps its backup in `<file name>.bak` in the same directory.
+`write()` saves the previous content, if it still parses, as the backup before writing, so the backup is the previous generation; `write_with_backup()` writes the new value atomically and makes the backup the same generation as the main file.
+`read()` returns `default` when the file does not exist. When the main file cannot be parsed it falls back to the backup (and writes the backup back to the main file), or returns `default` when there is no usable backup; which generation it falls back to depends on the write method the writer chose.
+With `raise_on_error=True` it never uses the backup: an unparsable main file raises the parse error, which suits authorization data that must not roll back to an older state.
 
 ```python
 from core.atomic_store import quarantine_corrupt_file
@@ -237,16 +248,20 @@ await context.send_action(action: dict[str, Any]) -> bool | None
 `None` means the transport might have submitted an action and the final result is unknown.
 For unknown results, the business layer keeps pending state. This prevents duplicate messages from automatic retries.
 
-Mark messages with credentials, such as login codes or tokens, as sensitive before delivery:
+Send private messages that carry credentials, such as login codes or tokens, with `send_sensitive_private`, which marks the action as sensitive:
 
 ```python
-from core.delivery import SENSITIVE_ACTION_KEY
+from core.delivery import send_sensitive_private
 
-action = build_action(segments(message), user_id, None)
-action[SENSITIVE_ACTION_KEY] = True
-await context.send_action(action)
+delivered = await send_sensitive_private(context, user_id, segments(message))
 ```
 
+```python
+await send_sensitive_private(context, recipient: int, message: list[dict[str, Any]]) -> bool | None
+```
+
+It returns `True` for confirmed delivery, `False` for a definite failure or when the send itself raises, and `None` when the result is unknown.
+To build the action yourself, set the `core.delivery.SENSITIVE_ACTION_KEY` key to `True` for the same effect.
 Marked actions bypass `core.observe_outgoing_action` observers, including chat-context recording.
 The delivery layer removes this marker and internal receipt fields before serialization.
 Pendo Web login codes and widget tokens use this marker.
@@ -311,12 +326,13 @@ context.get_mute_remaining(group_id: int) -> float
 
 ```python
 context.reload_config() -> None
-context.reload_plugins() -> asyncio.Task[None] | None
+context.reload_plugins() -> asyncio.Task[bool] | None
 context.get_command_catalog() -> tuple[CommandCatalogNode, ...]
 context.list_plugins() -> list[str]
 ```
 
 These are in-process APIs for trusted plugins. Loaded plugins can call them directly.
+`reload_plugins()` reloads in the background and returns the task immediately; a task result of `True` means the reload completed. It returns `None` while the application is stopping or when the environment does not support hot reload.
 Bot Core user commands are authorized per their own manifest declarations; Dispatcher checks them with `command_access` before the call.
 `/help` and `/plugins` are public. `/reload` and `/metrics` need a Bot administrator and work in private and group chats. Mute commands need a Bot administrator and only work in groups. `/set_secret` and `/get_secret` need a Bot administrator and only work in private chats. See the [command entry index](09-plugins.md#️-command-entry-index).
 Deployers protect code-call boundaries through plugin source review.
@@ -348,9 +364,7 @@ Deployers protect code-call boundaries through plugin source review.
 `is_bot_admin` and `is_system` always return booleans.
 Application-issued contexts always supply the `ai` service.
 Actual calls depend on the current plugin's routes, providers, models, and credentials.
-Other optional services depend on manifest `capabilities`, `uses_services`, service bindings, and the current principal.
-
-Their values are `None` when conditions remain unmet.
+Other optional services depend on manifest `capabilities`, `uses_services`, service bindings, and the current principal; the property is `None` when these conditions are not met.
 The protocol declares service properties optional. Minimal context implementations and test doubles can thus express unavailable services.
 
 ### AI Capability
@@ -416,7 +430,7 @@ from core.ai import first_json_object
 first_json_object(text: str) -> dict[str, Any] | None
 ```
 
-This returns the first JSON object in a model's output. Models often add explanatory text around the JSON or wrap the whole reply in a ``` code fence: the function strips the leading and trailing fence markers, then tries to parse from each `{` in turn, and the first one that parses as an object is the result. It returns `None` when there is none; what to do then is up to the caller.
+This returns the first JSON object in a model's output. Models often add explanatory text around the JSON or wrap the answer in a ``` code fence: when the text contains complete fenced blocks, the function searches each block first; with no fenced block, or no object inside one, it strips the leading and trailing fence markers and searches the whole text. Searching means trying to parse from each `{` in turn, and the first one that parses as an object is the result. It returns `None` when there is none; what to do then is up to the caller.
 
 ## ⌨️ Command catalog types
 
@@ -450,7 +464,7 @@ node.to_dict() -> dict[str, Any]
 
 `walk()` returns this node and all descendants in catalog order.
 `resolve_child()` resolves a direct child by canonical name or alias.
-`to_dict()` returns the public catalog in a JSON-serializable structure.
+`to_dict()` returns the public catalog in a JSON-serializable structure, with children expanded recursively. The keys `help`, `match`, and `subcommands` correspond to the properties `help_text`, `match_mode`, and `children`; the other keys match the property names.
 
 ### `CommandInvocation`
 
@@ -485,12 +499,14 @@ Command execution, session continuation, Core-issued derived capabilities, and t
 
 | Interface | Description |
 |---|---|
-| `DeliveryReceipt(expected_actions, commit, rollback, unknown)` | Receipt for one logical reply. All physical acknowledgements trigger `commit`. Definite failure triggers `rollback`. Unknown results trigger `unknown`. Settlement occurs at most once. |
-| `receipt.record(delivered)` | Record one transport result: `True`, `False`, or `None` for unknown. |
+| `DeliveryReceipt(*, expected_actions, commit, rollback, unknown)` | Receipt for one logical reply; pass all four arguments by keyword. All physical acknowledgements trigger `commit`. Definite failure triggers `rollback`. Unknown results trigger `unknown`. Settlement occurs at most once. |
+| `await receipt.record(delivered)` | Record one transport result: `True`, `False`, or `None` for unknown. |
 | `receipt.message_ids` | Confirmed physical message IDs in send order, including every split-reply part. Read these in the commit callback. |
 | `receipt.resolved` / `committed` / `outcome` | Settlement state, commit-callback success, final three-state result |
-| `DeliverySegments(values, receipt)` | Segments with a receipt. Plugin entries return them. Core settles the receipt with actual delivery. |
-| `send_with_receipt(send_action, action, receipt)` | Proactively send one action with a receipt and settle its result exactly once. |
+| `DeliverySegments(values, receipt=None, *, outcome=None)` | Segments with a receipt. Plugin entries return them. Core settles the receipt with actual delivery. The receipt and the command outcome are on the `delivery_receipt` and `command_outcome` properties. |
+| `CommandOutcome(state, next_command="", result_text="", has_more=None, page=None, confirmation_command="")` | Execution state and machine-readable result of a command, carried by the `outcome` of `DeliverySegments`. `state` is `completed`, `accepted` (the background task is accepted and the owning plugin announces completion), `error`, or `incomplete`. `next_command` points to the next page. `has_more` is `None` when pagination completeness is unknown and `False` on the last page. `page` is the current page number. `confirmation_command` is the command that continues a pending operation unchanged once the user explicitly agrees. |
+| `merge_delivery_outcomes(outcomes)` | Combine the delivery results of several parts into one: `False` if any part definitely failed, `True` if all were definitely delivered, otherwise `None`. |
+| `await send_with_receipt(send_action, action, receipt)` | Proactively send one action with a receipt and settle its result exactly once. |
 
 ## 🌐 Session API
 
@@ -515,7 +531,7 @@ await context.has_session() -> bool
 Successful return commits that copy. Exceptions and cancellation roll back the transaction.
 `has_session()` queries active state.
 
-Expiry ends a session. The plugin can later call `create_session()` to start a new session.
+Expiry ends a session, and the plugin can then call `create_session()` to start a new one.
 
 ### `Session` properties
 
@@ -550,7 +566,7 @@ Make persistent changes in the working copy supplied to `context.update_session(
 ## 📌 Argument parsing
 
 ```python
-from core.args import chinese_number, parse, parse_int, tokenize
+from core.args import chinese_number, parse, parse_int, quote_token, tokenize
 ```
 
 ### `parse()`
@@ -568,6 +584,8 @@ args.has("v")  # True
 ```
 
 This supports single-letter short options, ASCII long options, `--key=value`, and the `--` option terminator.
+The non-option word right after an option is its value (`--limit 5`); an option without a value is a switch whose value is `FLAG_VALUE` (`"true"`).
+The returned `ParsedArgs` also has `raw` (the original string) and `options` (a dict from option name to value); `len(args)` is the number of positional arguments, and `bool(args)` is `False` when the original string is blank.
 
 ### `parse_int()`
 
@@ -585,6 +603,23 @@ chinese_number(text: str) -> int | None
 
 Reads Chinese numerals such as “八百”, “一百零五”, and “十二万” as an integer. It returns `None` when the text contains anything else.
 A spoken form that drops the final unit counts in the next lower unit: “一百二” is 120, “一千五” is 1500, and “三万五” is 35000.
+
+### `tokenize()`
+
+```python
+tokenize(text: str, *, strict: bool = False) -> list[str]
+```
+
+This splits text on whitespace, treating quoted content as one word; `parse()` uses it to split its input.
+By default an unclosed quote falls back to whitespace splitting. With `strict=True` it raises `ValueError`, for callers that need strict command syntax.
+
+### `quote_token()`
+
+```python
+quote_token(value: str) -> str
+```
+
+This encodes a string as one word that `tokenize()` restores losslessly: a nonempty string without whitespace, quotes, or backslashes is returned unchanged, and anything else is quoted. A non-`str` argument raises `TypeError`.
 
 ## ⌨️ Plugin entry signatures
 
@@ -662,8 +697,8 @@ Core validates targets, constructs OneBot actions, and sends them.
 `targeted` handlers construct target messages with Core types:
 
 ```python
-ScheduledDelivery.group(group_id, message_segments, receipt=None)
-ScheduledDelivery.private(user_id, message_segments, receipt=None)
+ScheduledDelivery.group(group_id, message, *, receipt=None)
+ScheduledDelivery.private(user_id, message, *, receipt=None)
 ```
 
 Group targets must belong to the current schedule's Core-resolved `group_ids`.

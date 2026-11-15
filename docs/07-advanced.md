@@ -2,7 +2,7 @@
 
 中文 | [English](en/07-advanced.md)
 
-本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。
+本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、URL 处理、闲聊 Provider、并发、缓存和持久状态的开发者，并说明第三方私有 API 的登记、调试验证和生产运行方式。
 基础插件流程见 [插件开发指南](03-plugin-development.md)。
 
 ---
@@ -122,36 +122,7 @@ agent 还示范了回执的转交：它调用的命令若带发送回执（比�
 
 ## ⏰ 定时任务
 
-Manifest 声明 cron：
-
-```json
-{
-  "schedule": [
-    {
-      "id": "example.daily",
-      "handler": "scheduled_daily",
-      "cron": {"hour": 8, "minute": 0},
-      "delivery": "broadcast",
-      "group_ids": [123456789],
-      "description": "每日摘要",
-      "enabled": true
-    }
-  ]
-}
-```
-
-入口函数：
-
-```python
-async def scheduled_daily(context):
-    return segments("今日摘要")
-```
-
-Core 在任务到期时解析每个 schedule 的投递模式与目标群。
-`broadcast` 将统一结果发送到全部目标群，`targeted` 校验并发送 `ScheduledDelivery` 目标结果，`silent` 只运行任务。
-`group_ids` 列表按声明顺序生效。
-部署配置 `config.plugins.<插件名>.schedules.<任务 ID>.group_ids` 写了时优先于条目，两处都没写或为 `null` 时使用全局 `default_group_ids`。
-需要逐目标管理回执的处理器可通过 `context.default_groups()` 读取同一解析结果。
+Manifest 的 `schedule` 条目、投递模式、目标群的解析顺序和入口函数见 [调度字段](03-plugin-development.md#调度字段) 与 [调度函数](03-plugin-development.md#调度函数)。
 
 常用 CronTrigger 字段：
 
@@ -169,21 +140,7 @@ Core 在任务到期时解析每个 schedule 的投递模式与目标群。
 
 ## 🧩 声明式服务
 
-Core 维护封闭服务表，Manifest 声明所有者和调用方：
-
-```json
-{
-  "services": [
-    {
-      "name": "voice.synthesize_text",
-      "callback": "synthesize_text",
-      "callers": ["smalltalk"]
-    }
-  ]
-}
-```
-
-消费插件声明：
+Core 维护封闭服务表。提供插件用 `services` 声明导出，字段见 [声明式服务与 capability](03-plugin-development.md#-声明式服务与-capability)；消费插件声明：
 
 ```json
 {
@@ -194,10 +151,10 @@ Core 维护封闭服务表，Manifest 声明所有者和调用方：
 Core 校验服务名、所有者、调用方、callback 和所需 capability。
 服务调用进入提供插件的执行 gate，并受代际排空保护。
 
-新增服务桥接需要同步更新：
+新增服务桥接或 capability 需要同步更新：
 
-1. `PluginServiceName`
-2. 服务所有者与调用方契约
+1. `PluginServiceName` 或 `PluginCapabilityName`
+2. 服务所有者与调用方契约，或 capability 的可申请插件集合
 3. Protocol 或 capability 类型
 4. Manifest
 5. 授权与生命周期测试
@@ -386,6 +343,13 @@ python scripts/run_full_uat.py
 
 ## 🛡️ 生产运行
 
+运行中的实例通过 `/set_secret` 管理已有 secret 路径。
+完整有效的 secrets 单文件外部变更由 watcher 暂存，当前管理员收到字段路径摘要后使用 `/reload` 确认。
+公开配置变更和双来源整体替换安排在停服窗口内。
+部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
+
+生产环境应为 Bot 进程设置专用用户、最小文件权限、明确网络出口、日志轮转、数据备份和健康检查。
+
 ### Windows
 
 ```text
@@ -399,11 +363,6 @@ scripts/run-bot.vbs
 CIM 身份读取经过三次短重试。
 提升权限创建的进程由一次 UAC 提升后的停止实例重新验证并回收。
 完成提示出现后可双击 `scripts/run-bot.vbs` 重启。
-
-生产运行实例通过 `/set_secret` 管理已有 secret 路径。
-完整有效的 secrets 单文件外部变更由 watcher 暂存，当前管理员收到字段路径摘要后使用 `/reload` 确认。
-公开配置变更和双来源整体替换安排在停服窗口内。
-部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
 
 ### systemd
 
@@ -432,12 +391,10 @@ WantedBy=multi-user.target
 仓库 `Dockerfile` 提供容器构建入口，`.dockerignore` 排除本地配置与密钥、运行数据、日志、测试和本地工作目录，镜像只包含运行代码与资源。
 部署时挂载 `config/`、`data/` 与 `logs/`，并将 Inbound 端口连接到受控代理网络。
 
-生产环境应为 Bot 进程设置专用用户、最小文件权限、明确网络出口、日志轮转、数据备份和健康检查。
-
 ---
 
 ## 🧭 下一步
 
 - 组件所有权：[系统架构](02-architecture.md)
 - 配置预算：[配置详解](06-configuration.md)
-- 插件专项实现：[插件目录](09-plugins.md)
+- 插件专项实现：[插件使用手册](09-plugins.md)

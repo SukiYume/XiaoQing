@@ -55,7 +55,7 @@ Router 从已验证 Manifest 构建只读命令目录，并把解析结果放入
 | `plugin_generation.py` | 插件代际创建、发布、回滚、排空和回收 |
 | `plugin_runtime.py` | 运行入口、声明式服务、调用授权和代际守卫 |
 | `plugin_execution.py` | 按插件并发、队列、超时、熔断、同步 bulkhead 和公平调度 |
-| `plugin_data.py` | 项目级数据目录、布局升级和路径所有权 |
+| `plugin_data.py` | 插件数据目录 `data_root/<插件名>/` 的创建、身份校验和路径所有权 |
 
 插件加载按目录规范名排序。
 Watcher 构建稳定快照，Generation 负责原子发布，Runtime 负责调用边界，Execution 负责资源预算。
@@ -166,14 +166,8 @@ AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据�
 资源创建和回收由同一所有权边界配对。
 应用关闭按依赖关系逆序执行。
 
-`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action。
-动作进入收集队列时保留待结算状态，实际传输的成功、失败和未知结果分别决定提交、回滚与未知处理。
-Core 接管的收据由传输层计数，插件发送帮助器保留同一结算权，避免拆分消息重复累计成功。
-每条物理消息确认发出后，传输层先登记它的消息 ID 再记下结果，提交回调从 `message_ids` 读到整条回复的全部 ID。
-标准 HTTP 上报完成真实 Action 投递后才返回事件确认。
-
-主动 WebSocket 的连接通知与读循环并发运行，通知中的 Action 可以通过持续运行的读循环接收 echo。
-连接结束时统一回收通知任务与待响应请求。
+`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action，并按实际传输结果提交、回滚或记为未知。
+暂存、拆分消息的消息 ID、HTTP 事件确认和主动 WebSocket 通知的结算流程见 [消息处理流程的回执](08-message-flow.md#回执)。
 
 ---
 

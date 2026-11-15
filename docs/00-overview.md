@@ -24,7 +24,7 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 项目适合运行在个人电脑、家庭服务器、NAS、可信内网服务或受反向代理保护的私人服务器。
 
 运行环境要求 Python 3.11 及以上版本。
-维护者使用统一代码格式器和行为回归检查，具体约定见 [代码与验证约定](03-plugin-development.md#代码与验证约定)。
+维护者使用统一代码格式器和行为回归检查，具体约定见 [代码与验证约定](03-plugin-development.md#-代码与验证约定)。
 
 ---
 
@@ -82,7 +82,7 @@ Core 由同一目录生成：
 - 权限与场景校验
 - 示例和错误示例测试
 
-Manifest 声明命令的使用者和使用场景。Core 的 `command_access` 统一检查这些声明。命令执行、每次会话继续和 Core 派生能力均调用此函数。agent 的本机工具、SSH 和 Codex 分别跟随 `/shell`、`/ssh` 和 `/codex` 的权限。插件代码将管理员检查交给 Core。
+Manifest 声明命令的使用者和使用场景，Core 的 `command_access` 统一检查这些声明，规则见 [系统架构的消息分发](02-architecture.md#-消息分发)。
 
 帮助系统支持逐层浏览：
 

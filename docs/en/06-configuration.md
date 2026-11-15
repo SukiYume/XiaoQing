@@ -87,12 +87,9 @@ Public HTTPS/WSS
   → XiaoQing Inbound
 ```
 
-Controlled networks between containers can set `inbound_trusted_tls_proxy: true`.
-Use a firewall to restrict listener traffic to proxy sources.
-
 `inbound_http_base` uses `http://`. `inbound_ws_uri` uses `ws://`.
 XiaoQing listeners handle plaintext HTTP/WS. An outer proxy or network layer supplies TLS termination.
-For a non-loopback host, also set `inbound_trusted_tls_proxy: true` and restrict host firewall access to proxy sources.
+A listener bound to a non-loopback host (for example on a controlled network between containers) must also set `inbound_trusted_tls_proxy: true`, and the host firewall must restrict access to proxy sources.
 
 ### Runtime and data
 
@@ -103,8 +100,7 @@ For a non-loopback host, also set `inbound_trusted_tls_proxy: true` and restrict
 | `enable_plugin_watcher` | boolean | `false` | Live reload | Plugin file-watcher switch |
 | `enable_plugin_schedules` | boolean | `true` | Reload | Master switch for plugin schedules; isolated runs (such as the full UAT) set it to `false` so passing a schedule time never calls external accounts or delivers messages |
 | `plugin_poll_interval` | number | `3600`, `0.01..86400` | Live reload | Plugin file-polling interval in seconds |
-| `session_timeout` | number | `300`, `0 < value <= 604800` | Live reload | Default session idle timeout in seconds |
-| `timezone` | IANA timezone | `"Asia/Shanghai"` | Live reload | Scheduler and business-clock timezone |
+| `session_timeout` | number | `300`, `0.001..604800` | Live reload | Default session idle timeout in seconds |
 
 `data_root` accepts project-relative paths or absolute host paths. Keep it outside the `plugins/` source tree.
 Each plugin receives `data_root/<plugin_name>/`.
@@ -159,18 +155,18 @@ After shutdown completes, double-click `scripts/run-bot.vbs` to restart.
 }
 ```
 
-| Field | Range | Description |
-|---|---|---|
-| `timeout_seconds` | `0` or `0.1..86400` | One plugin-entry budget. `0` assigns control to the plugin lifecycle. |
-| `parallel_limit` | `1..1024` | Entry concurrency for `parallel` plugins |
-| `admission_queue_limit` | `0..10000` | Plugin-entry waiting queue |
-| `sync_parallel_limit` | `1..3` | Synchronous worker concurrency per plugin |
-| `sync_queue_limit` | `0..10000` | Synchronous waiting queue per plugin |
-| `failure_threshold` | `1..10000` | Circuit-breaker failure threshold |
-| `cooldown_seconds` | `0.1..86400` | Circuit-breaker cooldown |
-| `drain_timeout_seconds` | `0.1..3600` | Unload draining budget |
-| `global_sync_queue_limit` | `1..100000` | Global synchronous waiting queue |
-| `overrides` | object | Per-plugin overrides of these policies |
+| Field | Default | Range | Description |
+|---|---|---|---|
+| `timeout_seconds` | `60` | `0` or `0.1..86400` | One plugin-entry budget. `0` assigns control to the plugin lifecycle. |
+| `parallel_limit` | `4` | `1..1024` | Entry concurrency for `parallel` plugins |
+| `admission_queue_limit` | `64` | `0..10000` | Plugin-entry waiting queue |
+| `sync_parallel_limit` | `1` | `1..3` | Synchronous worker concurrency per plugin |
+| `sync_queue_limit` | `16` | `0..10000` | Synchronous waiting queue per plugin |
+| `failure_threshold` | `3` | `1..10000` | Circuit-breaker failure threshold |
+| `cooldown_seconds` | `60` | `0.1..86400` | Circuit-breaker cooldown |
+| `drain_timeout_seconds` | `5` | `0.1..3600` | Unload draining budget |
+| `global_sync_queue_limit` | `256` | `1..100000` | Global synchronous waiting queue |
+| `overrides` | `{}` | object | Per-plugin overrides of these policies |
 
 Manifest `concurrency: sequential` fixes entry concurrency at 1. `parallel` uses `parallel_limit`.
 Synchronous libraries enter synchronous budgets through `run_sync()`.
@@ -305,13 +301,11 @@ Defaults declared by the bundled plugins (`declare_route_defaults`, in each plug
 | `xiaoai.plan` | Mi Home action planning | 0 / — | 1600 | 25 / 28 | 0 |
 | `ads_paper.summary` | Paper summaries | 0.7 / — | 1200 | 60 / 90 | 0 |
 
-### Where AI parameters come from
+### How chat and the agent use routes
 
-Provider connections live in `config.ai.providers`, model definitions in `config.ai.models`, credentials in `secrets.ai.providers`, and the models each route uses in `config.plugins.<plugin>.ai.routes.<route>`. Plugins declare defaults for sampling, output budget, timeouts and retries; override them in the same route when needed. Optional `model_aliases` give `/xc model` short names; without them the model names are used directly. `/xc model default` selects the first available model in `routes.chat`.
+XiaoQing Chat loads a typed snapshot of these routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution uses `agent`, task triage uses `triage` (falling back to `agent` when it is not configured), and `read_image` uses `vision`. Routine calls inherit route settings. `/xc model default` selects the first available model in `routes.chat`. Explicit long-form requests can increase output and time budgets; a truncated image analysis can increase its output budget. Optional work and whole Agent tasks remain bound by their own business limits.
 
-XiaoQing Chat loads a typed snapshot of these routes. Replies use `chat`; planning, memory retrieval, summarization and expression learning use `reasoning`; reply review uses `checker`; image analysis uses `vision`. Agent execution uses `agent`, task triage uses `triage` (falling back to `agent` when it is not configured), and `read_image` uses `vision`. Routine calls inherit route settings. Explicit long-form requests can increase output and time budgets; a truncated image analysis can increase its output budget. Optional work and whole Agent tasks remain bound by their own business limits.
-
-`plugins/xiaoqing_chat/config/xiaoqing_config.json` manages persona, memory and participation behavior. Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields, `default_model_alias` and a nested `ai` registry with an error that points to the main configuration.
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` manages persona, memory and participation behavior. Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields and a nested `ai` registry with an error that points to the main configuration.
 
 DEBUG logs record resolved routes, models and request settings. These records contain parameter metadata; keys and message content remain private.
 
@@ -336,10 +330,10 @@ Call parameters finally override sampling and budget fields.
 AI Service first calls the route's first available profile.
 It applies bounded retries and ordered fallback for transport, timeout, rate-limit, server, model-unavailable, invalid-response, and empty-response errors.
 `fallback_on` can also include `request_timeout` and `conflict`.
-The calling plugin handles authentication, permission, request-parameter, and configuration errors.
+Authentication, permission, request-parameter, and configuration errors are neither retried nor passed to the next model; they go straight to the calling plugin.
 `total_timeout_seconds` covers the complete model chain.
 
-Missing provider credentials, absent `api_key`, empty strings and whitespace-only keys make that model unavailable. Core skips unavailable entries in order before sending requests, and model lists show available entries. Pinning a model with a missing key or using a route with no usable keys produces an explicit configuration error. Malformed URLs, unknown model references and invalid key types remain validation errors. Upstream authentication failures retain their existing error behavior.
+Missing provider credentials, absent `api_key`, empty strings and whitespace-only keys make that model unavailable. Core skips unavailable entries in order before sending requests, and model lists show available entries. Pinning a model with a missing key or using a route with no usable keys produces an explicit configuration error. Malformed URLs, unknown model references and invalid key types raise validation errors.
 
 
 ## ⚙️ Plugin configuration namespaces
@@ -414,9 +408,9 @@ See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, dem
 | `plugins.xiaoqing_chat.ai.routes.checker` | Reply-checking route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | Planning and reasoning route |
 | `plugins.xiaoqing_chat.ai.routes.vision` | Image-understanding route. Models must include `image` modality. |
-| `plugins.xiaoqing_chat.ai.model_aliases` | Optional short names for `/xc model`, mapped to model names |
+| `plugins.xiaoqing_chat.ai.model_aliases` | Optional short names for `/xc model`, mapped to model names; without them the model names are used directly |
 
-Each of the four XiaoQing Chat routes names its own model order. The plugin declares defaults for sampling, request timeout, total timeout and retries; see the table under "Plugin route" above.
+Each of the four XiaoQing Chat routes names its own model order; the defaults for its call parameters are in the table under "Plugin route" above.
 Behavior, participation, memory, and expression parameters are in `plugins/xiaoqing_chat/config/xiaoqing_config.json`.
 They can also appear under `config.plugins.xiaoqing_chat`. The two merge level by level, and config values take priority.
 See [XiaoQing Chat configuration (Chinese)](../../plugins/xiaoqing_chat/README.md) for field groups.
@@ -429,7 +423,7 @@ All users can use it within their own permissions. The default state is disabled
 | Path | Default | Description |
 |---|---|---|
 | `plugins.xiaoqing_agent.enabled` | `false` | Main switch. When disabled, `xiaoqing_chat` replies normally, as with an absent agent. Changes apply to the next message. |
-| `plugins.xiaoqing_agent.ai.routes.agent` | Necessary | Execution route. The model must support `tools` calls. |
+| `plugins.xiaoqing_agent.ai.routes.agent` | Required | Execution route. The model must support `tools` calls. |
 | `plugins.xiaoqing_agent.ai.routes.vision` | Image reading is unavailable without it | Route `read_image` uses for local images. Models must include `image` modality. |
 | `plugins.xiaoqing_agent.ai.routes.triage` | Reuse `agent` | Chat-or-task decision route. A fast model with thinking disabled is recommended. |
 | `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | Current-turn wait in seconds. Longer tasks send an initial reply and deliver results in the background. |
@@ -454,10 +448,10 @@ XiaoQing's own online life. The default state is disabled.
 | Path | Default | Description |
 |---|---|---|
 | `plugins.xiaoqing_life.enabled` | `false` | Main switch. When disabled, the schedule does nothing, `life.turn_context` returns `None`, and chat behaves as without the plugin. |
-| `plugins.xiaoqing_life.ai.routes.reasoning` | Necessary | Route for digesting, research, works, and the bedtime journal. Without it, browsing records "model not configured" and backs off. |
+| `plugins.xiaoqing_life.ai.routes.reasoning` | Required | Route for digesting, research, consolidation, and the bedtime journal. Without it, browsing records "model not configured" and backs off. |
 | `plugins.xiaoqing_life.ai.routes.vision` | None | Meme safety review. Without it, no memes are collected. |
-| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | Browsing sessions per day, by calendar day in the configured timezone |
-| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | All model calls combined. Each call is counted before it runs and is not refunded on failure. |
+| `plugins.xiaoqing_life.max_sessions_per_day` | `5` | Browsing sessions per day of her life (configured timezone, day boundary at 05:00) |
+| `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | All model calls combined within the same day. Each call is counted before it runs and is not refunded on failure. |
 | `plugins.xiaoqing_life.browse_when_busy` | `false` | Whether a quick browse is allowed during a busy routine slot |
 | `plugins.xiaoqing_life.blocked_keywords` | `[]` | Extra keywords whose content is discarded, on top of the built-in list |
 
@@ -555,7 +549,6 @@ Plugin fields in example secrets:
 
 | Namespace | Fields | Purpose |
 |---|---|---|
-| `plugins.arxiv_filter` | `feishu_webhook` | Feishu notification webhook |
 | `plugins.flickr` | `api_key` | Flickr App Garden public read-only API key |
 | `plugins.wolframalpha` | `appid` | Wolfram\|Alpha App ID |
 | `plugins.voice` | `subscription_key`, `region`, `voice_name`, `style`, `role`, `proxy` | Azure Speech credentials, voice settings, proxy |

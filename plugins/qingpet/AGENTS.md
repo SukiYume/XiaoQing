@@ -26,13 +26,18 @@
 | --- | --- |
 | `main.py` | 初始化、关闭、命令路由、权限上下文和调度入口 |
 | `commands/basic_commands.py` | 领养与基础照料 |
-| `commands/advanced_commands.py` | 训练、探索、治疗、道具与商店、社交（送礼、互访、留言、排行）、任务、活动、小游戏和称号 |
+| `commands/advanced_commands.py` | 训练、探索、治疗、改名、道具与商店、社交（送礼、互访、留言、排行）、任务、活动、小游戏和称号 |
 | `commands/new_commands.py` | 召回、装扮、交易和展示会 |
 | `commands/admin_commands.py` | 群开关与配置、重置与删除宠物、封禁、日志、统计、展示会公告和活动管理 |
 | `commands/parsing.py` | 命令层共用的参数拆分与目标 QQ 解析 |
 | `models/` | 用户、宠物、道具、背包、群配置和日志模型 |
-| `services/database.py` | Repository 组合入口与连接生命周期 |
-| `services/database_*` | Schema、身份、社区、动作、调度和共享存储能力 |
+| `services/database.py` | 一个 `Database` 组合多个 repository mixin，共享同一个 SQLite 文件、连接生命周期和事务边界；负责线程连接、迁移前备份和关闭 |
+| `services/database_schema.py` | 表、索引、migration 和约束 |
+| `services/database_identity.py` | 用户、宠物、背包和群配置 |
+| `services/database_community.py` | 任务、活动、留言、交易和展示会 |
+| `services/database_actions.py` | 配额、资产和宠物动作事务 |
+| `services/database_scheduler.py` | 周期结算、到期清理和经济快照 |
+| `services/database_clock.py`、`database_support.py`、`database_types.py`、`database_repository_base.py` | 可替换的 UTC 时钟、仓储共享的每日金币上限与背包读写、事务输入与结果值对象、mixin 的最小连接契约 |
 | 其他 `services/` | 宠物、用户、道具、社交、经济和管理用例 |
 | `utils/` | 路由、校验、格式化、时间和常量 |
 
@@ -42,16 +47,12 @@
 
 ## 🔐 数据安全
 
-生产数据库路径为：
-
-```text
-data/qingpet/qingpet/qingpet.db
-```
+数据库位置、备份方式和升级前的自动快照见 [README.md](README.md) 的“数据与备份”。
 
 开发与测试遵循以下约定：
 
 - 测试使用 `tmp_path` 创建独立 SQLite 数据库；
-- 数据迁移先使用 SQLite `Connection.backup()` 在线备份生成一致快照。快照包含 WAL 中已提交的数据。随后在快照副本上验证；
+- 数据迁移先按 README 的备份方式生成一致快照，随后在快照副本上验证；
 - 清理脚本的目标限定为测试目录、缓存目录或显式传入路径；
 - Schema 变更采用兼容 migration，并添加已有数据库升级测试；
 - 资产与状态修复通过事务 service 和审计记录执行；
@@ -98,7 +99,7 @@ data/qingpet/qingpet/qingpet.db
 
 ## ⏰ 时间与调度
 
-时间计算通过 `services/database_clock.py` 和 `utils/time.py` 进入数据库事务。测试使用可控时钟。
+时间计算通过 `services/database_clock.py` 和 `utils/time.py` 进入数据库事务。测试使用可控时钟。宠物表的 `decay_remainders` 列保存各属性尚未达到整数扣减的小数余额，使不同结算间隔和重启后的累计衰减保持一致，修改衰减逻辑时要保持这一点。
 
 调度入口保持轻量，实际结算由 `database_scheduler.py` 和领域 service 完成：
 
@@ -125,19 +126,20 @@ data/qingpet/qingpet/qingpet.db
 5. 保持手机端摘要短小，并通过分类帮助展示细节；
 6. 更新 README 和 Manifest 文档契约测试。
 
-公开错误信息使用稳定中文提示。日志记录操作类型、长度、数量、状态和摘要，用户文本与敏感值留在日志边界之外。
+公开错误信息使用稳定中文提示。日志只记录操作类型、长度、数量、状态和摘要，不记录用户文本与敏感值。
 
 ---
 
 ## 🛠️ Schema 修改
 
 1. 在 `database_schema.py` 定义新表、列、索引或约束；
-2. 为已有数据库增加幂等 migration；
-3. 在对应 repository 文件实现读写；
-4. 在 `database.py` 组合所需 mixin；
-5. 更新关闭、连接登记和事务测试；
-6. 添加新库创建、旧库升级和并发访问测试；
-7. 更新 README 的数据边界。
+2. 为已有数据库增加幂等 migration（新增列登记在 `_LEGACY_COLUMN_MIGRATIONS`，每次启动按列是否存在补齐）；
+3. 提升 `CURRENT_SCHEMA_VERSION`。版本号写在 `PRAGMA user_version`，由初始化事务写入；旧于当前版本的数据库在升级前会按旧版本号生成 `.pre-migration-v<旧版本号>.bak` 快照；
+4. 在对应 repository 文件实现读写；
+5. 在 `database.py` 组合所需 mixin；
+6. 更新关闭、连接登记和事务测试，以及断言版本号的测试；
+7. 添加新库创建、旧库升级和并发访问测试；
+8. 更新 README“数据与备份”里的当前版本号。
 
 Repository 拆分保持一个 `Database` 组合对象和一个 SQLite 文件。
 

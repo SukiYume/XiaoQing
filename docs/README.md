@@ -34,7 +34,7 @@
 1. 阅读 [项目概览](00-overview.md)，了解 OneBot、Core、插件和数据目录。
 2. 按 [快速开始](01-getting-started.md) 完成安装、配置、接入和启动。
 3. 通过 [配置详解](06-configuration.md) 完成生产参数与 secrets 设置。
-4. 在 [插件目录](09-plugins.md) 选择功能，并进入对应插件 README。
+4. 在 [插件使用手册](09-plugins.md) 选择功能，并进入对应插件 README。
 
 ### 开发插件
 
@@ -58,12 +58,12 @@
 |---|---|---|
 | `xiaoqing_chat` | [README](../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE](../plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | [README](../plugins/xiaoqing_agent/README.md) | README 内含模块结构、运行边界与数据说明 |
-| `xiaoqing_life` | [README](../plugins/xiaoqing_life/README.md) | [ARCHITECTURE](../plugins/xiaoqing_life/ARCHITECTURE.md)，实现规格见 [DESIGN](../plugins/xiaoqing_life/DESIGN.md) |
+| `xiaoqing_life` | [README](../plugins/xiaoqing_life/README.md) | [ARCHITECTURE](../plugins/xiaoqing_life/ARCHITECTURE.md)，设计取舍见 [DESIGN](../plugins/xiaoqing_life/DESIGN.md) |
 | `xiaoqing_memory` | [README](../plugins/xiaoqing_memory/README.md) | [ARCHITECTURE](../plugins/xiaoqing_memory/ARCHITECTURE.md)，设计取舍见 [DESIGN](../plugins/xiaoqing_memory/DESIGN.md) |
 | `pendo` | [README](../plugins/pendo/README.md) | [ARCHITECTURE](../plugins/pendo/ARCHITECTURE.md) |
 
 其他插件均在各自目录提供 `README.md`。
-[插件目录](09-plugins.md) 提供统一入口。
+[插件使用手册](09-plugins.md) 提供统一入口。
 
 ---
 
@@ -71,13 +71,14 @@
 
 - `docs/` 保存完整中文手册，`docs/en/` 保存完整英文手册；两套手册使用对应的普通文件名，通过页首链接切换语言。
 - 中文文档是权威维护版本。修改手册中的功能、命令、参数、默认值、权限或部署步骤时，在同一变更中同步英文版本。
-- 根目录 README 保留中英两版。插件说明、测试验收指南、维护约定和 Changelog 统一维护中文版本，英文手册中的相关链接标注为 Chinese。
-- 根目录 README 提供项目入口和最短启动路径。
+- 根目录 README 保留中英两版，提供项目入口和最短启动路径。
+- 插件说明、测试验收指南、维护约定和 Changelog 统一维护中文版本，英文手册中的相关链接标注为 Chinese。
 - `docs/00-09` 分别维护一个明确主题。
 - 插件 README 面向插件用户和部署者。
 - 插件 ARCHITECTURE 面向插件维护者。
+- 插件 DESIGN 说明设计取舍。
 - 命令 Manifest 定义运行时帮助、权限、场景和样例。维护者在 Manifest 中声明权限。Core 统一检查权限。
-- 所有 README 只描述当前能力、使用方法和运行契约；版本变化、一次性迁移与发布验证统一写入 Changelog。
+- 所有 README、ARCHITECTURE、DESIGN 和 `docs/` 页面只描述当前能力、使用方法和运行契约；版本变化、一次性迁移与发布验证统一写入 Changelog。
 - Changelog 记录版本变化与验证结果。
 
 文档中的命令、字段、默认值和路径以代码、配置示例、Manifest 和测试契约为依据。

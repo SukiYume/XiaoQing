@@ -15,7 +15,7 @@ Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务�
 | 模块参数 | `section=tasks\|ledger\|notes\|all\|auto` |
 | 鉴权 | `Authorization: Bearer <widget_token>` |
 | 权限范围 | `GET /api/widget/*` |
-| 默认期限 | 365 天 |
+| 有效期 | 365 天（固定值，不可配置） |
 
 `tasks`、`ledger` 与 `notes` 返回日程和一个指定面板，`all` 返回日程及三个面板。
 `auto` 按小时在 `tasks → ledger → notes` 之间轮换。
@@ -31,7 +31,7 @@ Widget Token 是只读 Bearer 凭据，与浏览器 Cookie 会话使用独立权
 /pendo web widget-token
 ```
 
-默认期限由 `WEB_WIDGET_TOKEN_EXPIRE_SECONDS` 定义。
+Token 有效期固定为 365 天，不可配置。
 每次签发生成独立 `jti`，服务端在 `pendo.db` 中保存摘要、用户、签发时间和绝对到期时间。
 
 吊销当前用户的 Widget Token：
@@ -59,10 +59,9 @@ const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
 const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 ```
 
-常见地址：
-
-- 本机：`http://127.0.0.1:12001`
-- 反向代理子路径：`https://example.com/pendo`
+`BASE_URL` 填手机能访问到的 Pendo Web 根地址，例如反向代理子路径 `https://example.com/pendo`。
+Pendo Web 默认只监听服务器的 `127.0.0.1:12001`，手机上的 `127.0.0.1` 指手机自己，不能填入。
+局域网或公网访问需要 TLS 反向代理，要求见 [Pendo 插件 README](../plugins/pendo/README.md)。
 
 `TOKEN` 填写 `/pendo web widget-token` 返回的完整值。
 接口返回 401 时，在 QQ 私聊生成新 Token，并替换脚本顶部的 `TOKEN`。
@@ -132,11 +131,12 @@ const SYNC_CALENDAR_NAME = 'Pendo';
 - 接口查询与 iOS 目标日历查询各执行一次；游标在接口读取和全部日历对账成功后推进。
 - 目标日历缺失、接口失败或事件保存失败时保留原游标，下一次运行继续处理同一窗口。
 
-日历写入采用按 Pendo-ID 对账策略：
-
+日历写入按 `Pendo-ID` 对账。
 有时刻的日程通过带 UTC 偏移的 ISO 时间表示真实时刻，设备按该时刻写入日历。
 服务端使用日程时间轴生成偏移，覆盖用户与设备时区不同以及夏令时回拨的重复墙钟时间。
 全天日程保留纯日期语义。
+
+具体写入规则：
 
 - 有明确时间的日程默认持续 1 小时；有效结束时间优先使用接口值。
 - 仅含日期的日程写为持续 1 天的全天事件。

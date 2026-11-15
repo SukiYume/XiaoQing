@@ -35,7 +35,7 @@ OneBot 消息段结构：
 |---|---|---|
 | `text(content)` | `text` | 文本 |
 | `image(file_path)` | `image` | 本地图片，路径转换为 `file://` URI |
-| `emoji(file_path, summary="")` | `emoji` | 本地表情图片与可选摘要 |
+| `emoji(file_path, *, summary="")` | `emoji` | 本地表情图片与可选摘要 |
 | `image_url(url)` | `image` | 远程图片 URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | 本地语音 |
@@ -49,7 +49,7 @@ from core.plugin_base import image, segments, text
 
 reply = [
     text("结果如下"),
-    image("data/example/result.png"),
+    image(str(context.data_dir / "result.png")),
 ]
 
 plain_reply = segments("完成")
@@ -68,8 +68,8 @@ build_action(
 ) -> dict[str, Any] | None
 ```
 
-`group_id` 存在时生成 `send_group_msg`，其余用户作用域生成 `send_private_msg`。
-空消息段返回空 Action。
+`group_id` 存在时生成 `send_group_msg`，否则 `user_id` 存在时生成 `send_private_msg`。
+消息段为空，或 `group_id` 与 `user_id` 都为 `None` 时返回 `None`。
 
 ### 文本边界
 
@@ -108,7 +108,7 @@ file_uri_to_path(value: str) -> Path | None
 ```
 
 此函数将消息段中的 `file://` URI 转换为本地路径。它兼容 `file:///C:/x`、`file://C:/x`、`file://localhost/x` 和 UNC。其他 URI 类型返回 `None`。
-`image()`、`record()` 生成 URI 的方向由 Core 处理。
+`image()`、`emoji()`、`record()` 方向相反，把本地路径转换为 `file://` URI。
 
 ### 外部命令
 
@@ -169,8 +169,22 @@ write_json(path: Path, data: Any) -> None
 
 `atomic_write_bytes()` 通过同目录临时文件、`fsync` 和原子替换提交字节。
 `atomic_write_text()` 使用 UTF-8 编码调用同一原语。
-`load_json()` 与 `write_json()` 使用 `AtomicJsonStore`。
+`load_json()` 与 `write_json()` 分别通过 `AtomicJsonStore` 读和写。
 持久数据路径以 `context.data_dir` 为根。
+
+```python
+from core.atomic_store import AtomicJsonStore
+
+store = AtomicJsonStore(path: Path)
+store.read(default, *, raise_on_error=False)
+store.write(value) -> None
+store.write_with_backup(value) -> None
+```
+
+`AtomicJsonStore` 用同目录的 `<文件名>.bak` 保存备份。
+`write()` 写入前把仍可解析的旧内容存为备份，备份是上一代；`write_with_backup()` 原子写入新值并让备份与主文件同代。
+`read()` 在文件不存在时返回 `default`；主文件无法解析时退回备份（并把备份写回主文件），没有可用备份则返回 `default`，退回到哪一代由写入方选的方法决定。
+`raise_on_error=True` 时不使用备份，主文件无法解析就直接抛出解析错误，适合不能回滚到旧状态的授权类数据。
 
 ```python
 from core.atomic_store import quarantine_corrupt_file
@@ -234,16 +248,20 @@ await context.send_action(action: dict[str, Any]) -> bool | None
 返回 `True` 表示拆分后的全部 Action 已确认交给投递边界，`False` 表示至少一个 Action 已确认失败，`None` 表示传输端可能已经提交 Action 且最终结果未知。
 结果未知时由业务层保留待确认状态，避免自动重试造成重复消息。
 
-携带登录码、Token 等凭据的消息在发送前设置敏感标记：
+携带登录码、Token 等凭据的私聊消息用 `send_sensitive_private` 发送，它给 Action 打上敏感标记：
 
 ```python
-from core.delivery import SENSITIVE_ACTION_KEY
+from core.delivery import send_sensitive_private
 
-action = build_action(segments(message), user_id, None)
-action[SENSITIVE_ACTION_KEY] = True
-await context.send_action(action)
+delivered = await send_sensitive_private(context, user_id, segments(message))
 ```
 
+```python
+await send_sensitive_private(context, recipient: int, message: list[dict[str, Any]]) -> bool | None
+```
+
+返回 `True` 表示确认送达，`False` 表示明确失败或发送本身抛出异常，`None` 表示结果未知。
+需要自行构造 Action 时，把 `core.delivery.SENSITIVE_ACTION_KEY` 键设为 `True` 即可达到同样效果。
 带标记的 Action 不会交给 `core.observe_outgoing_action` 观察者（例如聊天插件的上下文记录），投递层在序列化前移除该标记和内部收据字段。
 Pendo 的 Web 登录码与 Widget Token 使用该标记。
 
@@ -306,12 +324,13 @@ context.get_mute_remaining(group_id: int) -> float
 
 ```python
 context.reload_config() -> None
-context.reload_plugins() -> asyncio.Task[None] | None
+context.reload_plugins() -> asyncio.Task[bool] | None
 context.get_command_catalog() -> tuple[CommandCatalogNode, ...]
 context.list_plugins() -> list[str]
 ```
 
 这些方法属于受信任插件的进程内 API，已加载插件可直接调用。
+`reload_plugins()` 在后台重载并立即返回任务，任务结果为 `True` 表示重载完成；正在停止或当前环境不支持热重载时返回 `None`。
 Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在调用前用 `command_access` 校验：`/help`、`/plugins` 对所有人开放；`/reload`、`/metrics` 需要 Bot 管理员，私聊、群聊均可；静音命令需要 Bot 管理员且仅限群聊；`/set_secret`、`/get_secret` 需要 Bot 管理员且仅限私聊。完整列表见[插件使用手册的命令入口速查](09-plugins.md#️-命令入口速查)。
 部署者通过插件来源审查保护代码调用边界。
 
@@ -410,7 +429,7 @@ from core.ai import first_json_object
 first_json_object(text: str) -> dict[str, Any] | None
 ```
 
-取模型输出里的第一个 JSON 对象。模型常在 JSON 前后加解释文字，或整段包在 ``` 代码围栏里：函数先去掉首尾的围栏标记，再从每个 `{` 起尝试解析，第一个能解析成对象的就是结果；取不到返回 `None`。取不到时怎么办由调用方决定。
+取模型输出里的第一个 JSON 对象。模型常在 JSON 前后加解释文字，或把答案包在 ``` 代码围栏里：文本里有完整的围栏块时，函数先在各个围栏块里找；没有围栏块或围栏里没有对象，再去掉首尾的围栏标记，在全文里找。“找”是从每个 `{` 起尝试解析，第一个能解析成对象的就是结果；取不到返回 `None`，怎么办由调用方决定。
 
 ---
 
@@ -445,7 +464,7 @@ node.to_dict() -> dict[str, Any]
 
 `walk()` 按目录顺序返回自身与全部后代。
 `resolve_child()` 按规范名或别名解析直接子节点。
-`to_dict()` 返回可直接 JSON 序列化的公开目录。
+`to_dict()` 返回可直接 JSON 序列化的公开目录，子节点递归展开。其中 `help`、`match`、`subcommands` 三个键分别对应属性 `help_text`、`match_mode`、`children`，其余键与属性同名。
 
 ### `CommandInvocation`
 
@@ -478,12 +497,14 @@ command_access(node, principal, *, is_bot_admin=None) -> str | None
 
 | 接口 | 说明 |
 |---|---|
-| `DeliveryReceipt(expected_actions, commit, rollback, unknown)` | 一个逻辑回复的回执。全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`，至多结算一次 |
-| `receipt.record(delivered)` | 记录一次传输结果：`True`、`False` 或 `None`（未知） |
+| `DeliveryReceipt(*, expected_actions, commit, rollback, unknown)` | 一个逻辑回复的回执，四个参数都按关键字传入。全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`，至多结算一次 |
+| `await receipt.record(delivered)` | 记录一次传输结果：`True`、`False` 或 `None`（未知） |
 | `receipt.message_ids` | 已确认发出的各条物理消息 ID，按发送顺序。长回复被拆成几条时每条都有，提交回调里读取 |
 | `receipt.resolved` / `committed` / `outcome` | 是否已结算、提交回调是否成功、最终三态结果 |
-| `DeliverySegments(values, receipt)` | 带回执的消息段。插件入口返回它，Core 随实际投递结算 |
-| `send_with_receipt(send_action, action, receipt)` | 主动发送一条带回执的 Action，并确保结果恰好结算一次 |
+| `DeliverySegments(values, receipt=None, *, outcome=None)` | 带回执的消息段。插件入口返回它，Core 随实际投递结算；回执和命令结局分别在 `delivery_receipt`、`command_outcome` 属性上 |
+| `CommandOutcome(state, next_command="", result_text="", has_more=None, page=None, confirmation_command="")` | 命令的执行状态与机器可读结果，经 `DeliverySegments` 的 `outcome` 带出。`state` 取 `completed`、`accepted`（后台已接收，完成通知由原插件负责）、`error`、`incomplete`；`next_command` 指向下一页；`has_more` 为 `None` 表示分页完整性未知，`False` 表示末页；`page` 是当前页码；`confirmation_command` 是用户明确同意待确认操作后可原样续执行的命令 |
+| `merge_delivery_outcomes(outcomes)` | 把几部分各自的送达结果合成一个：任一部分明确失败为 `False`，全部明确送达为 `True`，其余为 `None` |
+| `await send_with_receipt(send_action, action, receipt)` | 主动发送一条带回执的 Action，并确保结果恰好结算一次 |
 
 ---
 
@@ -510,8 +531,7 @@ await context.has_session() -> bool
 成功返回会提交副本，异常与取消会回滚该次事务。
 `has_session()` 查询活动状态。
 
-Session 到期后结束。
-后续插件可再次调用 `create_session()` 建立新会话。
+Session 到期后结束，插件可以再调用 `create_session()` 建立新会话。
 
 ### `Session` 属性
 
@@ -546,7 +566,7 @@ session.is_expired() -> bool
 ## 📌 参数解析
 
 ```python
-from core.args import chinese_number, parse, parse_int, tokenize
+from core.args import chinese_number, parse, parse_int, quote_token, tokenize
 ```
 
 ### `parse()`
@@ -564,6 +584,8 @@ args.has("v")  # True
 ```
 
 支持单字母短选项、ASCII 长选项、`--key=value` 和 `--` 选项终止符。
+选项后面紧跟的非选项词是它的值（`--limit 5`），没有值的选项是开关，取值为 `FLAG_VALUE`（`"true"`）。
+返回的 `ParsedArgs` 还有 `raw`（原始字符串）和 `options`（选项名到值的字典）两个属性；`len(args)` 是位置参数个数，原始字符串去掉空白后为空时 `bool(args)` 为 `False`。
 
 ### `parse_int()`
 
@@ -581,6 +603,23 @@ chinese_number(text: str) -> int | None
 
 把“八百”“一百零五”“十二万”这类中文数字读成整数；含有别的字符时返回 `None`。
 末尾省掉单位的口语读法按上一级单位的下一位算：“一百二”是 120，“一千五”是 1500，“三万五”是 35000。
+
+### `tokenize()`
+
+```python
+tokenize(text: str, *, strict: bool = False) -> list[str]
+```
+
+按空白分词，引号包住的内容算一个词，`parse()` 用它切分。
+默认把未闭合的引号退回按空白切分；`strict=True` 时抛出 `ValueError`，适合需要严格命令语法的调用方。
+
+### `quote_token()`
+
+```python
+quote_token(value: str) -> str
+```
+
+把一个字符串编码成可由 `tokenize()` 无损还原的单个词：不含空白、引号和反斜杠的非空串原样返回，其余加引号。参数不是 `str` 时抛出 `TypeError`。
 
 ---
 
@@ -657,8 +696,8 @@ Core 负责目标校验、OneBot Action 构建与最终发送。
 `targeted` 处理器通过 Core 类型构造目标消息：
 
 ```python
-ScheduledDelivery.group(group_id, message_segments, receipt=None)
-ScheduledDelivery.private(user_id, message_segments, receipt=None)
+ScheduledDelivery.group(group_id, message, *, receipt=None)
+ScheduledDelivery.private(user_id, message, *, receipt=None)
 ```
 
 群目标必须属于当前 schedule 经 Core 解析后的 `group_ids`。

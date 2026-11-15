@@ -30,6 +30,8 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
    python -m pip install -e ".[plugins]"
    ```
 
+   其中 Pillow 是必需依赖，缺少时插件不会加载，日志记录缺失的模块名。
+
 2. 在 [Flickr App Garden](https://www.flickr.com/services/apps/create/apply/) 创建非商业 API Key。Flickr 申请页会依据账号方案显示可用资格。
 
 3. 将 Key 写入 `config/secrets.json`：
@@ -46,17 +48,19 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 
 `api_key` 属于私密配置。仓库中的 `config/secrets.json.example` 只保存占位值，真实 Key 由部署环境管理。
 
-首次部署在启动 Bot 前保存完整 secrets 文件。运行实例已包含示例中的 Flickr 路径时，也可在管理员私聊中提交：
+首次部署在启动 Bot 前保存完整 secrets 文件。运行实例的 secrets 已包含该路径时，也可在管理员私聊中更新：
 
 ```text
 /set_secret plugins.flickr.api_key <你的 API Key>
 ```
 
-运行实例需要新增 Flickr 路径时，可写入完整有效的 `config/secrets.json`。公开配置保持当前版本时，watcher 暂存候选并私聊管理员显示 `plugins.flickr.api_key` 已新增。核对后发送 `/reload` 应用。通知与日志仅记录字段路径，API Key 保留在 secrets 来源中。
+运行实例需要新增该路径时，做法见 [Bot Core 插件说明](../bot_core/README.md)的“Secret 管理”。
 
 ---
 
 ## ⌨️ 命令
+
+子命令有中文别名：`search`（`搜索`）、`commons`（`典藏`、`公共典藏`）、`user`（`作者`、`用户`）、`album`（`相册`）、`more`（`更多`、`下一张`）、`info`（`详情`、`信息`）、`help`（`帮助`、`?`）。完整参数与错误样例可通过 `/help flickr` 查看。
 
 ### 今日精选
 
@@ -145,7 +149,7 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 - 公共无 OAuth 调用遵循 Flickr Safe Search 可见范围，只读取公开照片。
 - 图片下载仅接受 `https://live.staticflickr.com`，每次重新校验域名、TLS、重定向、MIME、字节、像素、尺寸和帧数。
 - 外部标题、作者、标签和描述均经过字符数与 UTF-8 字节预算处理。
-- 回复中的许可来自 Flickr 照片元数据。All Rights Reserved 照片可在私人 Bot 会话中浏览，复制、转载和再利用需取得对应权利。
+- 回复中的许可来自 Flickr 照片元数据。All Rights Reserved 照片的展示不代表授权，复制、转载和再利用需取得对应权利。
 
 ---
 
@@ -158,8 +162,6 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 | API Key | `config/secrets.json` | Git 忽略的部署私密配置 |
 
 插件热重载和进程重启会清空浏览会话。图片缓存采用内容来源哈希命名并保留在 `data/flickr/`，可随运行数据一起备份或清理。
-
-会话锁在当前调用及等待者退出后回收。反复查询无会话的 `more` 或 `info` 会返回提示，并释放临时锁条目。
 
 ---
 

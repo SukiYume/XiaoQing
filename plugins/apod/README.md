@@ -7,8 +7,8 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 ## 🔐 使用条件
 
 - 命令支持群聊与私聊。
-- 运行依赖为 Beautiful Soup 与 Pillow。
-- 网络需要访问 `science.nasa.gov` 和图片主机 `assets.science.nasa.gov`。插件同时支持旧页面主机 `apod.nasa.gov`。
+- 必需依赖为 Beautiful Soup（`bs4`）与 Pillow，随 `python -m pip install -e ".[plugins]"` 安装；缺少时插件不会加载，日志记录缺失的模块名。
+- 网络需要访问 NASA 的 APOD 页面和图片主机，主机清单见“配置与调度”。
 
 ---
 
@@ -46,15 +46,17 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 }
 ```
 
-每日 13:30 任务采用 Core `broadcast` 模式，将结果发送到该 schedule 的目标群：部署配置 `config.plugins.apod.schedules.apod_daily.group_ids` 写了就用它，没写时使用 `default_group_ids`。生产调度请配置至少一个目标群。
+每日 13:30（按 `config.timezone` 计，默认 `Asia/Shanghai`）的任务采用 Core `broadcast` 模式，将结果发送到该 schedule 的目标群：部署配置 `config.plugins.apod.schedules.apod_daily.group_ids` 写了就用它，没写时使用 `default_group_ids`。请配置至少一个目标群，否则定时任务没有投递对象。
 
-`url` 和 `allowed_hosts` 均可省略。内置主机白名单包含 `science.nasa.gov`、`assets.science.nasa.gov` 和 `apod.nasa.gov`，`allowed_hosts` 用于增加其他可信主机。配置为 `https://apod.nasa.gov/apod/astropix.html` 时自动改用 NASA Science 的 APOD 首页。管理员指定的其他页面（包括历史 `image-article` 页面）按配置地址读取。
+`url` 和 `allowed_hosts` 均可省略。内置主机白名单包含页面主机 `science.nasa.gov`、图片主机 `assets.science.nasa.gov` 和旧页面主机 `apod.nasa.gov`，`allowed_hosts` 用于增加其他可信主机。配置为 `https://apod.nasa.gov/apod/astropix.html` 时自动改用 NASA Science 的 APOD 首页。管理员指定的其他页面（包括历史 `image-article` 页面）按配置地址读取。
+
+---
 
 ## 🌐 页面解析
 
 APOD 页面使用 `.hds-media-detail-hero` 作为主体。插件从主体内的 `h1` 或 `h2` 提取作品标题，从 `.media-detail-hero__description` 提取说明，从 `.media-detail-hero__meta-table` 提取日期和署名。正文会截断投稿公告、迁移公告和次日预告。
 
-媒体提取限定在 `.media-detail-hero__media` 内，支持图片、iframe 和 video；视频优先展示实际媒体链接。响应式图片优先选取 `srcset` 中宽度不超过 1600 像素的最大候选，随后使用 `src` 或 `data-src`。所有下载候选继续通过主机白名单检查。旧页面继续支持 `center` 标题和 Explanation 段落。
+媒体提取限定在 `.media-detail-hero__media` 内，支持图片、iframe 和 video；视频优先展示实际媒体链接。响应式图片优先选取 `srcset` 中宽度不超过 1600 像素的最大候选，随后使用 `src` 或 `data-src`。旧页面继续支持 `center` 标题和 Explanation 段落。
 
 ---
 

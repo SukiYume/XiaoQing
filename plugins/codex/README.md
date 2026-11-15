@@ -4,11 +4,18 @@
 
 ---
 
+## 🔐 使用条件
+
+- 本机已安装 Codex CLI 并已登录，Bot 进程的账户能直接运行它；可执行文件默认为 `codex`，可用 `codex_bin` 指定路径。
+- Pillow 用于校验图片产物，随 `python -m pip install -e ".[plugins]"` 安装；它在 Manifest 中是可选依赖，缺失时插件仍会加载，文本任务照常运行，图片产物校验不可用。
+
+---
+
 ## 🔐 权限与运行边界
 
 Manifest 将 `/codex` 标记为 `admin_only: true`，支持私聊和群聊。群里的任务进度和结果全群可见。可用用户来自 `config/secrets.json` 的 `admin_user_ids`。
 
-Codex CLI 以 Bot 进程身份启动，文件系统权限由 Bot 账户、`sandbox`、`approval_policy` 和工作目录共同决定。`danger-full-access` 会授予 CLI Bot 账户可达的文件系统权限。生产配置建议采用受控的 `allowed_cwd_roots`、可信管理员列表和专用工作目录。
+Codex CLI 以 Bot 进程身份启动，文件系统权限由 Bot 账户、`sandbox`、`approval_policy` 和工作目录共同决定。`danger-full-access` 会授予 CLI Bot 账户可达的文件系统权限。建议采用受控的 `allowed_cwd_roots`、可信管理员列表和专用工作目录。
 
 ---
 
@@ -62,7 +69,6 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
       "job_timeout_seconds": 3600,
-      "protected_sessions": ["astro-ph"],
       "arxiv_summary": {
         "label": "astro-ph",
         "cwd": "C:/workspace/arxiv",
@@ -73,7 +79,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 }
 ```
 
-省略 `default_cwd` 时，插件使用 `data/codex/workspaces/`。省略 `allowed_cwd_roots` 时，该列表包含默认工作目录。`sandbox` 接受 `read-only`、`workspace-write`、`danger-full-access`。`approval_policy` 接受 `untrusted`、`on-failure`、`on-request`、`never`。
+省略 `default_cwd` 时，插件使用 `data/codex/workspaces/`。省略 `allowed_cwd_roots` 时，该列表包含默认工作目录。`sandbox` 接受 `read-only`、`workspace-write`、`danger-full-access`。`approval_policy` 接受 `untrusted`、`on-failure`、`on-request`、`never`。`protected_sessions` 默认为空，列出的会话标签需要 `/codex delete … --protected` 才能删除；arXiv 摘要会话的标签自动加入其中。
 
 ---
 
@@ -100,7 +106,9 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 ## 💬 arXiv 摘要会话
 
-`arxiv_filter` 通过 `codex.enqueue_arxiv_summary` 服务把当天 positive 论文交给固定会话，默认标签为 `astro-ph`。输入日期采用有效的 `YYYY-MM-DD`，单次最多包含 512 个 `arxiv.org/abs` 或 `arxiv.org/pdf` 链接。
+`arxiv_filter` 通过 `codex.enqueue_arxiv_summary` 服务把当天 positive 论文交给固定会话。该服务只允许 `arxiv_filter` 调用：定时推荐由系统发起，用户手动触发 `/arxiv` 时，发起人需有权使用 `/codex`。输入日期采用有效的 `YYYY-MM-DD`，单次最多包含 512 个 `arxiv.org/abs` 或 `arxiv.org/pdf` 链接。
+
+摘要会话由 `arxiv_summary` 配置：`label` 是会话标签，默认 `astro-ph`；`cwd` 是工作目录，默认同 `default_cwd`；`methodology` 是方法文件，默认 `arxiv-summary-methodology.md`。
 
 插件会把版本号、PDF 后缀和查询参数统一为 HTTPS abs 链接，并以“源列表日期 + 规范化链接集合”作为任务身份：
 
@@ -109,7 +117,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 - 同一日期出现新链接集合：创建新任务。
 - 已有失败记录：再次创建总结任务。
 
-首次使用会话时，插件先提交一条内部初始化任务建立摘要规则，再提交当天总结。每次总结任务都要求 Codex 读取 `arxiv_summary.methodology` 指向的方法文件。`astro-ph` 自动加入受保护会话列表。删除该会话使用：
+首次使用会话时，插件先提交一条内部初始化任务建立摘要规则，再提交当天总结。每次总结任务都要求 Codex 读取 `arxiv_summary.methodology` 指向的方法文件。摘要会话自动加入受保护会话列表，以默认标签为例，删除它使用：
 
 ```text
 /codex delete astro-ph --force --protected
@@ -119,7 +127,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 ## 🛠 小青 agent 任务
 
-`xiaoqing_agent` 通过 `codex.agent_task` 服务把编程任务交给 Codex 并等待结束。服务按 `/codex` 在 plugin.json 里的声明签发给能用 `/codex` 的发起人（`/codex` 需要 Bot 管理员权限）。
+`xiaoqing_agent` 通过 `codex.agent_task` 服务把编程任务交给 Codex 并等待结束。该服务只允许 `xiaoqing_agent` 调用，并且只在消息发起人本身有权使用 `/codex`（即 Bot 管理员）时可用。
 
 - 每个 QQ 会话使用一个名为 `agent-<会话>` 的 Codex 会话，后续任务沿用同一个 thread。会话不存在时按请求的 `cwd`（须在 `allowed_cwd_roots` 内）或默认工作目录创建。
 - 任务带 `suppress_delivery` 标记，结果文本与图片产物路径交还 agent，由 agent 转述，Codex 不单独往聊天里发送。

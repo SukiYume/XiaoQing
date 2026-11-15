@@ -19,7 +19,7 @@ QQ ↔ OneBot implementation ↔ XiaoQing Core ↔ plugins
 
 You can run the project on a personal computer, home server, NAS, trusted private network, or private server with a reverse proxy.
 
-Python 3.11 or later is necessary. Maintainers use a common code formatter and behavior regression checks. See [code and verification conventions](03-plugin-development.md#code-and-verification-conventions).
+Python 3.11 or later is necessary. Maintainers use a common code formatter and behavior regression checks. See [code and verification conventions](03-plugin-development.md#-code-and-verification-conventions).
 
 ## ✨ Capabilities
 
@@ -69,9 +69,7 @@ The manifest command tree is the authoritative runtime command catalog. Core gen
 - Permission and scene checks
 - Tests for valid and invalid examples
 
-The manifest declares who can use each command and in which scene. Core `command_access` evaluates these declarations centrally.
-Command execution and each session continuation use this check. Core-issued capabilities also use it.
-For example, agent local tools, SSH, and Codex follow `/shell`, `/ssh`, and `/codex` permissions. Plugin code delegates administrator checks to Core.
+The manifest declares who can use each command and in which scene. Core `command_access` evaluates these declarations centrally. See [message dispatch in the architecture chapter](02-architecture.md#-message-dispatch) for the rules.
 
 Help supports hierarchical browsing:
 

@@ -24,10 +24,9 @@ cd XiaoQing
 python -m pip install -r requirements.txt
 ```
 
-The root dependency list covers Core, default plugins, and Pendo Web. Additional resources are necessary for these functions:
+The root dependency list covers Core, default plugins, Pendo Web, and the Jupyter kernel (`ipykernel`). Additional resources are necessary for these functions:
 
-- An available Jupyter kernel is necessary for the Jupyter plugin.
-- Local arXiv Filter inference uses model assets in `plugins/arxiv_filter/best_model/`.
+- Local arXiv Filter inference uses model assets in `plugins/arxiv_filter/best_model/` and the optional dependencies commented out at the end of `requirements.txt` (`torch`, `transformers`, and others; `python -m pip install ".[arxiv-ml]"` also installs them).
 - Service credentials are necessary for Flickr, Wolfram|Alpha, voice, and other external API plugins.
 
 ## ⚙️ 2. Create configuration files
@@ -74,14 +73,7 @@ Keep `config/secrets.json` on the deployment host. Set file read permissions for
 The project Git ignore rules cover the active secrets file.
 
 Write the complete configuration before the first startup.
-During operation, an administrator can send `/set_secret <existing-path> <value>` in private chat to submit one secret change.
-To add paths, write a complete, valid `secrets.json` file.
-The watcher stages this candidate when `config.json` remains at the currently confirmed version.
-
-It privately lists added, removed, and changed fields to current administrators. It hides all credential values.
-Check the notification. Send `/reload` to confirm and apply the candidate.
-
-To change `config.json` or replace both sources, stop the service first. Save complete files, then start a new process.
+See [configuration live reload](06-configuration.md#️-configuration-live-reload) for changing secrets while the service runs.
 
 ### AI plugin configuration
 
@@ -136,6 +128,8 @@ See [configuration](06-configuration.md) for all fields, model fallback, plugin 
 
 ## ⚙️ 3. Configure OneBot
 
+Outbound requests (HTTP actions and the active WebSocket) use top-level `onebot_token` in `config/secrets.json`. This applies to both connection modes: when OneBot enables Bearer authentication, set the same token. Otherwise keep it as an empty string. An empty string in a valid secrets snapshot selects the anonymous connection mode agreed by both services.
+
 ### Passive inbound
 
 In passive mode, OneBot sends events to XiaoQing.
@@ -160,7 +154,7 @@ Use this XiaoQing configuration:
 HTTP `/event` and WebSocket `/ws` share `inbound_token`, session ordering, and a bounded admission queue.
 Set a nonempty `inbound_token` when you enable an inbound listener.
 
-Enable the OneBot HTTP API. Configure the reply channel with `onebot_http_base` and `secrets.onebot_token`.
+Enable the OneBot HTTP API and point `onebot_http_base` at it. The reply channel uses `onebot_token` as its token.
 Standard event reports receive a `{}` acknowledgement. The action API sends the messages.
 
 Configuration with only `secret`/`X-Signature` receives HTTP 401. The Bearer request header is necessary for HTTP event reports.
@@ -178,9 +172,6 @@ In active mode, XiaoQing connects to OneBot:
   "onebot_http_base": "http://127.0.0.1:11001"
 }
 ```
-
-If OneBot enables Bearer authentication, set top-level `onebot_token` in `config/secrets.json`.
-An empty string in a valid secrets snapshot selects the anonymous connection mode agreed by both services.
 
 ### Network boundary
 
@@ -281,10 +272,10 @@ The temporary configuration disables plugin schedules (`enable_plugin_schedules=
 |---|---|
 | `ws-matrix` / `http-matrix` | Valid examples, invalid examples, permissions, and scenes for all manifest commands through WebSocket and HTTP inbound |
 | `core-pressure` | Core concurrency, overload, and recovery load tests |
-| `compileall` / `ruff` / `mypy` | The same static checks as CI |
+| `chat-quality` | Real-model chat-quality probes. Set `--include-chat-quality` explicitly. It runs after `core-pressure`. |
+| `compileall` / `ruff` / `format` / `mypy` | Compilation check, Ruff, format check, and type check |
 | `pytest` | Full test suite |
 | `diff` | `git diff --check` |
-| `chat-quality` | Real-model chat-quality probes. Set `--include-chat-quality` explicitly. |
 
 Reports are in `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`. Common options follow:
 

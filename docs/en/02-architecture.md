@@ -105,6 +105,8 @@ Inbound Bearer tokens and outbound OneBot tokens have separate management.
 
 The WebSocket client in `onebot.py` connects to OneBot, receives events, and sends actions.
 Connection management uses bounded exponential backoff, jitter, a stability window, and wake-up on configuration changes.
+After a connection opens, its connect-notification callback can await action echoes, so the callback and the receive loop run concurrently and the receive loop processes the echoes.
+When the connection closes, Core cancels and awaits its callback tasks together.
 
 ### Outbound delivery
 
@@ -123,28 +125,26 @@ It collects each message ID in order in `message_ids`.
 In the commit callback, the plugin associates business records with the actual messages.
 Before delivery, Core checks image and file paths, sizes, types, and read budgets.
 
-The event collection queue owns subsequent settlement of collected actions. Successful collection leaves receipts pending.
-The WebSocket connection callback and receive loop run concurrently. The receive loop processes echoes that the callback awaits.
-When the connection closes, Core cancels and awaits its callback tasks together.
+Replies produced by an event are first collected in the event collection queue. The queue owns their subsequent settlement: successful collection leaves receipts pending, and a receipt commits or rolls back only after the action is actually delivered.
 
 ## 💬 Message dispatch
 
 `Dispatcher` converts OneBot events to `MessageContext`. It runs the fixed A–G sequence:
 
-1. Processing gates
-2. URL parsing
-3. Bot-name response
-4. Active session
-5. Command
-6. Command fallback message
-7. Smalltalk Provider
+- A. Processing gates
+- B. URL parsing
+- C. Bot-name response
+- D. Active session
+- E. Command
+- F. Command fallback message
+- G. Smalltalk Provider
 
 `Router` uses the read-only manifest command catalog to match triggers and parse subcommands.
-Before a plugin call, Dispatcher checks permissions and scenes with `command_access`.
-This is the project-wide permission decision function.
-Session continuation checks, Core-issued capabilities, and the agent's model-visible command list all call this function.
-Plugin code delegates administrator checks to Core.
 Startup detects trigger conflicts at the same priority and reports errors.
+
+Before a plugin call, Dispatcher checks permissions and scenes with `command_access`.
+`command_access` is the project-wide permission decision function: command execution, session continuation checks, Core-issued capabilities, and the agent's model-visible command list all call it.
+Plugin code delegates administrator checks to Core.
 
 [Message flow](08-message-flow.md) describes the input, early-return conditions, and observation points for each stage.
 
@@ -237,12 +237,6 @@ During unload or reload, old-generation schedules stop triggering before resourc
 Composite plugins can create internal services in `init()` and close resources in `shutdown()`.
 Pendo uses this model for FastAPI, SQLite, frontend resources, reminder scheduling, and chat commands.
 
-`App.shutdown_errors` exposes shutdown results as a read-only snapshot.
-The entry point awaits `App.stop()`, then checks the snapshot. Resource-cleanup errors cause a failure exit status.
-Runtime acceptance checks the exit status, shutdown-complete log, and port release.
-The chat plugin cancels background waits within the shared shutdown budget.
-It reserves time for cancellation cleanup and the final disk flush.
-
 Embedded services follow these ownership rules:
 
 - The plugin lifecycle owns service startup and shutdown.
@@ -332,6 +326,10 @@ Core scheduler ── xiaoqing_memory.tick (every 30 min) ──► consolidatio
 3. Drain plugin entries and background resources.
 4. Close plugins, network connections, and shared services in reverse order.
 5. Flush persistent state and logs.
+
+`XiaoQingApp.shutdown_errors` exposes the resource errors left unresolved by the latest shutdown as a read-only snapshot.
+The process entry point awaits `XiaoQingApp.stop()`, then checks the snapshot and exits with a failure status if it contains errors.
+Runtime acceptance checks the exit status, shutdown-complete log, and port release.
 
 ## 🏗️ Data ownership
 

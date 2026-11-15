@@ -40,7 +40,7 @@
 
 管理员私聊 `/米家 <自然语言>` 可查询或控制米家设备。插件自动整理设备的 MIoT 属性、动作和事件，提供 `/米家 设备`、`/米家 能力 <编号>` 与结构化调用，供小青 Agent 使用。温湿度直接读取传感器，天气使用 Open-Meteo；红外灯泡支持开关，红外空调支持模式、温度、风速和扫风，其中部分扩展经小爱静默转发并标记待确认。
 
-安装 `python -m pip install -e ".[xiaoai]"`，通过 `/小爱 登录` 扫码、`/小爱 选择 1` 绑定。自然语言使用 `plugins.xiaoai.ai.routes.plan`。默认城市和喂食份量可分别用 `/米家 天气城市 北京`、`/米家 份量 <编号> 10` 设置。自动续期和重新登录提醒持续生效。详见 [米家插件说明](../plugins/xiaoai/README.md)。
+安装 `python -m pip install -e ".[xiaoai]"`，通过 `/小爱 登录` 扫码、`/小爱 选择 1` 绑定。自然语言使用 `plugins.xiaoai.ai.routes.plan`。默认城市和喂食份量可分别用 `/米家 天气城市 北京`、`/米家 份量 <编号> 10` 设置。插件每 30 分钟检查一次授权并自动续期，需要重新登录时私聊提醒绑定人。详见 [米家插件说明](../plugins/xiaoai/README.md)。
 
 ### `bot_core`：Core 管理入口
 
@@ -94,6 +94,7 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 
 ```text
 /pendo event add <内容>
+/pendo event record <JSON> [--force]
 /pendo event list [today|tomorrow|week|month|year|YYYY-MM|start..end]
 /pendo event view <id>
 /pendo event edit <id> <内容>
@@ -122,7 +123,7 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 ```text
 /pendo note add|list|view|edit|append|tag|untag|link|delete ...
 /pendo diary add|template|list|view|delete ...
-/pendo ledger add|quick|list|view|edit|delete|summary ...
+/pendo ledger add|record|quick|list|view|edit|delete|summary ...
 ```
 
 笔记支持分类、标签、引用和关联条目。
@@ -134,7 +135,7 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 ```text
 /pendo search <关键词> [type=] [range=] [status=] [category=]
 /pendo confirm <id>
-/pendo snooze <id> <10m|30分钟|1h|1d|19:00>
+/pendo snooze <id> <10m|1h|1d|HH:MM>
 /pendo undo [1..5]
 /pendo settings view
 /pendo settings reminder on|off
@@ -150,14 +151,8 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 `ai_consent` 管理日记正文的外部 AI 分析授权。
 
 日程与待办提醒始终私聊条目所有者。
-提醒 claim 按 OneBot 回执完成或释放。
-条目写入与编辑同步维护提醒队列，调度查询使用规范的秒级 UTC 触发时刻。
-
-软删除保留提醒历史，撤销删除会恢复仍需执行的提醒。
-重复规则的 `COUNT` 约束整个原始序列。
-查询窗口内的生成保持同一计数起点。
-备份采用 JSON 记录边界读取，中文文件名通过 UTF-8 百分号编码传递。
-导出规模与导入校验限制保持一致。
+删除的条目可以撤销，撤销后仍需执行的提醒一并恢复。
+重复日程的次数上限（`COUNT`）按整个序列计算，不随查询的时间范围变化。
 
 Web 控制台的日程详情可逐条提前确认未到期提醒，确认后可在原位置重新开启。
 提醒到期后操作按钮自动禁用。
@@ -174,6 +169,7 @@ Web 控制台的日程详情可逐条提前确认未到期提醒，确认后可�
 /pendo import
 ```
 
+`web start` 和 `web stop` 只给 Bot 管理员。
 一次性登录码有效期为 7 天，兑换后的 HttpOnly 浏览器会话有效期为 7 天。
 Widget Bearer Token 有效期为 365 天，权限范围限定为 `/api/widget/*`。
 登录凭据摘要、浏览器会话、Widget 登记和全部业务表位于 `data/pendo/pendo.db`。
@@ -259,7 +255,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 | 项目 | 内容 |
 |---|---|
-| 命令 | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
+| 命令 | `/life [status\|recent\|slang\|threads\|methods\|stats\|works\|dossier\|memes\|meme\|run\|forget\|login\|logout\|help]` |
 | 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
 | Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用）；使用 `memory.record`，把经历、日记和查明白的事发布到统一记忆 |
 | 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目与状态；B站 凭证单独存放在 `secrets/`，不进备份 |
@@ -270,7 +266,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 | 项目 | 内容 |
 |---|---|
-| 命令 | `/mem [status|stats|page|search|why|forget|consolidate|rebuild|help]` |
+| 命令 | `/mem [status\|stats\|page\|search\|why\|forget\|consolidate\|rebuild\|help]` |
 | 定时 | `xiaoqing_memory.tick` 每 30 分钟检查一次：夜间窗口里或积压够多时在后台整理 |
 | Capability 与服务 | 提供 `memory.record`（`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用）、`memory.recall`（`xiaoqing_chat`、`xiaoqing_agent` 调用）、`memory.search` 与 `memory.forget`（`xiaoqing_chat` 调用） |
 | 运行数据 | `data/xiaoqing_memory/`：按范围按月的原始记录、笔记、页面和状态 |
@@ -691,7 +687,7 @@ https://example.com/article
 
 HTML 上限为 2 MiB，图片上限为 5 MiB、2000 万像素和 120 帧，并发网页预览上限为 4。
 图片缓存位于 `data/url_parser/url_previews/`，上限为 128 项、128 MiB、7 天。
-[URL Parser README](../plugins/url_parser/README.md) 提供元数据优先级与站点适配说明。
+[URL Parser README](../plugins/url_parser/README.md) 提供元数据优先级与支持范围说明。
 
 ### `github`：GitHub Trending
 
@@ -991,8 +987,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 
 下表由各插件 `plugin.json` 整理，列出全部顶层命令、别名、权限与场景。
 子命令、参数和样例以 `/help <命令>` 为准。
-权限中“群管理员”包括当前群群主、群管理员和 Bot 管理员。
-子命令可以在此基础上收紧权限。
+表中列的是顶层命令的权限。子命令可以在此基础上收紧，见各插件条目；条目里说的“群管理员”包括当前群群主、群管理员和 Bot 管理员。
 
 | 插件 | 命令与别名 | 权限 | 场景 |
 |---|---|---|---|
@@ -1078,7 +1073,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `pendo` | `scheduled` | 每分钟 | `targeted` | 日程与待办提醒 |
 | `pendo` | `scheduled_daily_briefing` | 每分钟 | `targeted` | 用户本地时间的每日简报 |
 | `pendo` | `scheduled_diary_reminder` | 每分钟 | `targeted` | 用户本地时间的日记提醒 |
-| `pendo` | `scheduled_migrate_todos` | 每天 00:05 | `targeted` | 顺延昨日未完成的计划待办 |
+| `pendo` | `scheduled_migrate_todos` | 每小时 05 分 | `targeted` | 用户本地日期跨天后顺延昨日未完成的计划待办（每人每天一次） |
 | `pendo` | `scheduled_prune_operation_logs` | 每天 00:15 | `silent` | 清理过期操作日志与撤销快照 |
 | `pendo` | `scheduled_weekly_finance_summary` | 每分钟 | `targeted` | 用户本地周日 21:00 财务周报 |
 | `pendo` | `scheduled_month_end_finance_summary` | 每分钟 | `targeted` | 用户本地月末 21:00 财务月报 |
@@ -1091,6 +1086,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `qingssh` | `cleanup_orphans` | 每分钟 | `silent` | 断开已没有活跃会话的 SSH 连接 |
 | `signin` | `scheduled_yingshi` | 每天 00:30 | `broadcast` | 影视飓风每日签到 |
 | `twitter` | `scheduled_fetch` | 每天 03:00 | `silent` | 后台抓取新图 |
+| `xiaoai` | `scheduled_auth` | 每 30 分钟 | `targeted` | 检查米家与小爱授权，自动续期；需要重新登录时私聊提醒 |
 | `xiaoqing_chat` | `scheduled_daily_life` | 每天 05:30 | `silent` | 按人设与作息安排角色今天的生活小事 |
 | `xiaoqing_chat` | `scheduled_life_memes` | 每小时 07、37 分 | `silent` | 把 `xiaoqing_life` 收集的梗图导入表情库（`life.enable_life_memes`） |
 | `xiaoqing_chat` | `scheduled_memory_sync` | 每小时 13、43 分 | `silent` | 把各会话还没推给统一记忆的消息推过去（首次启动导入旧数据、推送失败后补推） |

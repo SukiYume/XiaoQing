@@ -6,9 +6,9 @@
 
 ## 🔐 权限与主机边界
 
-Manifest 将命令标记为 `admin_only: true`，支持私聊和群聊。群里的命令输出全群可见。子进程继承 Bot 账户的文件、网络和进程权限。命令启用列表用于降低误触概率。操作系统低权限账户、容器或专用执行服务负责安全隔离。
+命令只有 Bot 管理员能用，支持私聊和群聊。群里的命令输出全群可见。子进程继承 Bot 账户的文件、网络和进程权限，已启用的解释器和程序可按自身能力访问文件、网络和子进程。命令启用列表只用于降低误触概率，不是安全隔离，安全隔离要靠操作系统低权限账户、容器或专用执行服务。
 
-入站鉴权、Bot 管理员列表、终端配置和启用列表共同构成部署边界。生产环境建议采用专用低权限 Bot 账户和最小 `replace` 列表。
+入站鉴权、Bot 管理员列表、终端配置和启用列表共同决定谁能在主机上执行什么，应一起审查。建议使用专用低权限 Bot 账户和最小的 `replace` 列表。
 
 ---
 
@@ -20,7 +20,7 @@ Manifest 将命令标记为 `admin_only: true`，支持私聊和群聊。群里�
 /shell help
 ```
 
-Manifest 等价入口为 `/shell`、`/sh` 和 `/exec`。`list` 显示当前启用入口及其在所选终端中的可用状态。
+`/shell` 也可写作 `/sh`、`/exec`。`list`（别名 `列表`、`-l`、`--list`）显示当前启用的命令入口及其在所选终端中的可用状态，某个命令缺失时其余入口照常显示。`help` 的别名为 `帮助`、`?`、`-h`、`--help`。
 
 Git Bash 示例：
 
@@ -37,7 +37,7 @@ Git Bash 示例：
 
 ## ⚙️ 终端配置
 
-终端选项位于 `config/config.json` 的 `plugins.shell.terminal`。
+终端选项位于 `config/config.json` 的 `plugins.shell.terminal`，省略时使用 `direct` 后端。
 
 ### Git Bash
 
@@ -54,9 +54,7 @@ Git Bash 示例：
 }
 ```
 
-Git Bash 使用 `--noprofile --norc -c` 启动。部署者在配置中填写实际可执行文件路径。
-
-入口可用性逐项检查。某个命令缺失时，已发现的可用入口继续显示。
+Git Bash 使用 `--noprofile --norc -c` 启动，`executable` 必须填写。
 
 ### Direct
 
@@ -95,13 +93,13 @@ Direct 后端将首个 token 解析为 Bot 进程 PATH 中的外部程序或明�
 
 | 字段 | 规则 |
 | --- | --- |
-| `whitelist` | 命令首入口字符串列表 |
-| `whitelist_mode=replace` | 使用自定义列表作为完整启用集合 |
-| `whitelist_mode=extend` | 将自定义项加入项目默认集合 |
-| `timeout` | 有限正数秒，默认 30 |
-| `disable_whitelist` | JSON 布尔值 `true` 开启全部首入口 |
+| `whitelist` | 命令首入口字符串列表；未配置时使用项目内置的默认命令集合 |
+| `whitelist_mode=replace` | 使用自定义列表作为完整启用集合（默认） |
+| `whitelist_mode=extend` | 将自定义项加入项目内置的默认集合 |
+| `timeout` | 有限正数秒，默认 30；其他取值回退到 30 |
+| `disable_whitelist` | JSON 布尔值 `true` 开启全部首入口，下节列出的复合语法和高风险模式仍被拒绝 |
 
-空的 `replace` 列表会关闭全部命令入口。配置项按严格类型解析。
+空的 `replace` 列表会关闭全部命令入口。配置项按严格类型解析。用 `/shell list` 查看当前实际启用的入口。
 
 ---
 
@@ -116,10 +114,6 @@ Direct 后端将首个 token 解析为 Bot 进程 PATH 中的外部程序或明�
 - stdout 与 stderr 共享至少 64 KiB 原始捕获预算。
 - QQ 回复正文共享 4000 字符首尾预算。
 - 进程返回码、stdout 和 stderr 分区展示。
-
-进程树归属、输出预算和超时回收由 Core 的 `core.process_tree` 实现，小青 agent 的本机工具用的是同一套。
-
-已启用解释器和程序可按自身能力访问文件、网络和子进程。管理员应把启用列表与主机权限一起审查。
 
 ---
 
@@ -138,7 +132,7 @@ QQ 输入建议使用 `/`：
 
 ## 💾 审计
 
-敏感审计记录请求 ID、状态、返回码、命令长度和进程内单向指纹。原始命令、stdout、stderr 和配置 secret 保留在普通日志边界之外。
+日志只记录请求 ID、状态、返回码、命令长度和一个仅在进程内有效的指纹，不记录原始命令、stdout、stderr 和配置中的密钥。
 
 ---
 

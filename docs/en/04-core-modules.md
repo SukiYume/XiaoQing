@@ -49,7 +49,7 @@ Router builds a read-only command catalog from validated manifests. It puts pars
 | `plugin_generation.py` | Plugin generation creation, publication, rollback, draining, cleanup |
 | `plugin_runtime.py` | Runtime entry points, declared services, call authorization, generation guards |
 | `plugin_execution.py` | Per-plugin concurrency, queues, timeouts, circuit breaking, synchronous bulkheads, fair scheduling |
-| `plugin_data.py` | Project data directories, layout upgrades, path ownership |
+| `plugin_data.py` | Creation, identity checks, and path ownership for plugin data directories `data_root/<plugin name>/` |
 
 Plugins load in canonical directory-name order.
 Watcher builds stable snapshots. Generation owns atomic publication. Runtime owns call boundaries. Execution owns resource budgets.
@@ -68,7 +68,7 @@ Core validates Python module dependencies before import. It reports command-trig
 | `context.py` | `PluginContext` implementation, scoped views, convenience methods |
 | `interfaces.py` | Protocols, principals, capabilities, interfaces between modules |
 | `capabilities.py` | Core-issued capability implementations, including agent command execution, local-tool authorization, and Codex/SSH bridges |
-| `plugin_base.py` | Message segments, actions, synchronous tasks, file and split utilities. conversion between `file://` URIs and local paths |
+| `plugin_base.py` | Message segments, actions, synchronous tasks, file and split utilities. Conversion between `file://` URIs and local paths |
 
 The current plugin name, user, group, request ID, and principal determine the context.
 Ordinary plugins receive configuration and secrets for their current namespace.
@@ -146,21 +146,8 @@ AI Service resolves providers, models, plugin routes, and credentials from the s
 The same ownership boundary pairs resource creation with cleanup.
 Application shutdown follows the reverse dependency order.
 
-`DeliveryReceipt` tracks all physical actions necessary for one logical reply.
-Actions remain pending when they enter the collection queue.
-Actual transport success, failure, and unknown results select commit, rollback, and unknown-result handling respectively.
-The transport layer counts receipts that Core owns.
-
-Plugin send helpers keep the same settlement authority.
-This prevents duplicate success counts for split messages.
-After each physical message receives acknowledgement, the transport records its message ID before its result.
-The commit callback reads all IDs for the complete reply from `message_ids`.
-
-Standard HTTP reports acknowledge events after actual action delivery completes.
-
-Active WebSocket connection notifications and the read loop run concurrently.
-The read loop continues to receive echoes for notification actions.
-When the connection ends, Core cleans up notification tasks and pending requests together.
+`DeliveryReceipt` tracks all physical actions for one logical reply. It commits, rolls back, or records an unknown result from the actual transport result.
+For staging, message IDs of split replies, HTTP event acknowledgement, and active WebSocket notifications, see [receipts in message flow](08-message-flow.md#receipts).
 
 ## 🩺 Troubleshooting index
 

@@ -117,12 +117,11 @@ python scripts/format_code.py --check plugins/hello
 git diff --check
 ```
 
-提交前使用 `python scripts/format_code.py --check` 检查全仓格式。
-新增插件沿用局部赋值对齐、紧凑表达与关键业务边界中文注释。
+全仓门禁与代码约定见 [代码与验证约定](#-代码与验证约定)。
 
 ---
 
-## 代码与验证约定
+## 📏 代码与验证约定
 
 项目支持 Python 3.11 及以上版本。
 Python 代码采用局部赋值对齐、100 列内的紧凑表达和解释业务边界的中文注释。
@@ -170,9 +169,9 @@ git diff --check
 ```
 
 先运行受影响模块的测试，再执行全仓库门禁。
-格式操作校验语法树保持一致。测试覆盖当前功能的行为契约；业务修复补充或调整对应功能的用例，不单独保留针对某次修复的测试。
+测试覆盖当前功能的行为契约；业务修复补充或调整对应功能的用例，不单独保留针对某次修复的测试。
 测试数据使用临时目录或临时数据库。
-重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`），也可以单独运行 `python scripts/check_redundancy.py`：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（8 行以下的小函数和只有 `...` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在脚本的 `ALLOWED` 里写明原因。
+重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`），也可以单独运行 `python scripts/check_redundancy.py`：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（函数体不到 8 行的小函数，以及只有 `...`、`pass` 或 `raise NotImplementedError` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在脚本的 `ALLOWED` 里写明原因。
 
 README 描述当前用法和配置。
 ARCHITECTURE 描述模块职责、数据流与所有权。
@@ -255,7 +254,7 @@ Core 在导入插件前检查 `dependencies` 中的模块可用性。
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `name` | string | 必填 | 可由 `importlib.util.find_spec()` 定位的 Python 模块名 |
+| `name` | string | 必填 | Core 不导入即可定位的 Python 模块名，不能以 `plugins` 开头 |
 | `required` | boolean | `true` | 模块缺失时控制插件加载结果 |
 | `description` | string / `null` | `null` | 依赖用途说明 |
 
@@ -326,7 +325,7 @@ Router 依次比较 `priority` 和触发词长度。
 }
 ```
 
-Core 为上述叶节点生成稳定 code `example.todo.add`。
+Core 为上述叶节点生成稳定 code `example.todo.add`，由插件名 `example`、命令名 `todo` 和子命令名 `add` 组成。
 插件通过 `context.command_invocation` 获取已解析节点和剩余参数。
 
 #### 读写性质
@@ -353,7 +352,7 @@ Core 为上述叶节点生成稳定 code `example.todo.add`。
 |---|---|---|---|
 | `handler` | string | 必填 | 入口模块中的公开异步函数名 |
 | `cron` | object | 必填 | APScheduler `CronTrigger` 参数 |
-| `id` | string / `null` | `null` | 全局任务 ID。省略时由 Core 生成稳定 ID |
+| `id` | string / `null` | `null` | 插件内唯一的任务 ID。省略时使用 `handler` |
 | `delivery` | `broadcast` / `targeted` / `silent` | `broadcast` | Core 执行的投递模式 |
 | `group_ids` | positive integer[] / `null` | `null` | 投递群。省略时使用 `default_group_ids` |
 | `description` | string / `null` | `null` | 任务说明 |
@@ -368,7 +367,7 @@ Scheduler 在插件发布时校验 handler、cron、任务 ID、投递模式和�
 
 `broadcast` 与 `targeted` 的目标群取以下来源中第一个写了的：部署配置 `config.plugins.<插件名>.schedules.<任务 ID>.group_ids`、条目中的 `group_ids`、全局 `default_group_ids`。
 任务 ID 是条目的 `id`，没写 `id` 时是 `handler`；部署配置里写空列表表示这个任务不发往任何群。
-目标群在每次执行时读取，改 config 后 `/reload` 即生效。
+目标群保持 `group_ids` 列表中的顺序，在每次执行时读取，改 config 后 `/reload` 即生效。
 `plugin.json` 随仓库发布，不写真实群号；只属于某个部署的目标群写在部署配置里。
 `silent` 不声明 `group_ids`。
 插件重载会替换该插件拥有的调度任务。
@@ -429,6 +428,23 @@ async def handle_session(text, event, context, session): ...
 
 处理函数读取传入快照，并通过 `context.update_session()` 提交持久修改。
 
+### `close_session()`
+
+Core 结束会话时调用，插件在这里回收连接、后台任务等资源；没有实现时会话直接结束：
+
+```python
+async def close_session(event, context, session): ...
+```
+
+以下情况会调用它：
+
+- 用户发送退出词。
+- 此人不再能使用该插件的任何顶层命令。
+- `handle_session()` 抛出异常。
+- 命令执行器丢弃它新开的一次性会话。
+
+这里抛出的异常只被记录，会话照常结束。
+
 ### `handle_smalltalk()`
 
 插件作为 `smalltalk_provider` 时调用：
@@ -437,9 +453,19 @@ async def handle_session(text, event, context, session): ...
 async def handle_smalltalk(text, event, context): ...
 ```
 
+### `observe_message()`
+
+`smalltalk_provider` 可选提供。Core 在处理门控之后、URL 阶段之前调用它，让 provider 观察没有被跳过的消息，返回值被忽略：
+
+```python
+async def observe_message(clean_text, event, context): ...
+```
+
+URL、命令、带命令前缀的文本和活动会话的输入被跳过，不会被观察。
+
 ### `handle_url()`
 
-`url_parser` 类插件可提供：
+名为 `url_parser` 的插件可提供：
 
 ```python
 async def handle_url(url, event, context): ...
@@ -454,11 +480,11 @@ async def call_bot_name_only(context):
     return segments("我在")
 ```
 
-只叫名字（正文只有 Bot 名称，或只 `@` 机器人、没带图）多半是在看机器人在不在，要快：Core 对所有闲聊插件都调用这个入口，不走 `handle_smalltalk()`。`xiaoqing_chat` 从 `bot_name_only_replies` 里随机回一句，发出后记进聊天记录，这个人接下来一分钟内的那句算在跟她说。
+只叫名字（正文只有 Bot 名称，或只 `@` 机器人、没带图）多半是在看机器人在不在，要快：Core 调用当前 `smalltalk_provider` 的这个入口，不走 `handle_smalltalk()`。`xiaoqing_chat` 从 `bot_name_only_replies` 里随机回一句，发出后记进聊天记录，这个人接下来一分钟内的那句算在跟她说。
 
 ### 入口选择顺序
 
-完成消息清洗、群聊门控和静音判断后，Dispatcher 按消息形态选择入口：
+完成消息清洗和群聊门控后，Dispatcher 按消息形态选择入口，群静音期间跳过 `handle_url()` 和 `handle_smalltalk()`：
 
 1. 纯 URL 调用 `handle_url()`。
 2. 只包含 Bot 名称时调用 `call_bot_name_only()`。
@@ -466,7 +492,7 @@ async def call_bot_name_only(context):
 4. 命令目录命中后调用 `handle()`。
 5. 普通文本回落到当前 `smalltalk_provider` 的 `handle_smalltalk()`。
 
-带命令前缀的未知命令由 Core 返回统一提示。
+以命令前缀开头、前缀后第一个字符是字母而没有匹配命令的消息，由 Core 返回统一提示。
 会话、命令和 URL 输入受观察边界保护，闲聊 provider 只观察符合消息策略的普通对话。
 
 ### 生命周期
@@ -572,9 +598,9 @@ Core 已对插件入口的调用次数、耗时、错误和取消进行统一计
 
 ### 权限与静音
 
-`plugin.json` 的 `admin_only`、`permission` 和 `contexts` 声明命令的使用者和使用场景。Core 在调用插件前通过 `core.router.command_access` 检查这些声明。
-插件代码将管理员检查交给 Core。
-命令里需要区分权限的分支（比如只给管理员的写操作）声明成单独的子命令，并在处理时确认调用是从这个子命令进来的。
+命令的使用者和使用场景由 `plugin.json` 的 `admin_only`、`permission` 和 `contexts` 声明，Core 在调用插件前通过 `core.router.command_access` 检查，插件代码不自行判断管理员。
+需要区分权限的分支（比如只给管理员的写操作）声明成单独的子命令，处理时确认调用来自这个子命令。
+检查路径与示例见 [权限模型](07-advanced.md#-权限模型)。
 
 ```python
 context.mute_group(group_id, duration_minutes=30)
@@ -596,7 +622,7 @@ is_scheduled = context.capabilities.is_system
 
 `context.principal` 保存用户、群、会话类型和投递目标。
 `context.capabilities` 保存 Core 按插件声明与当前身份签发的窄能力。
-`is_bot_admin` 只用于对象层面的规则（比如只有发起人或 Bot 管理员能停止某个任务），命令能不能用由 Manifest 声明、Core 判断。
+`is_bot_admin` 只用于对象层面的规则，命令能不能用由 Manifest 声明、Core 判断，见 [权限模型](07-advanced.md#-权限模型)。
 主动 OneBot Action 使用 `await context.send_action(action)`。
 管理型插件可通过自身命令权限调用 `context.reload_config()` 或 `context.reload_plugins()`。
 完整签名与 capability 属性见 [API 参考](05-api-reference.md#-plugincontext)。
@@ -639,7 +665,8 @@ active = await context.has_session()
 群聊键由群 ID 与用户 ID 组成，私聊键由用户 ID 组成。
 Session 超时后结束。
 后续业务可再次调用 `create_session()` 开始新流程。
-每次继续前 Core 复核此人此刻仍能用这个插件的至少一条顶层命令（同一处权限判断），撤权或场景不再允许时会话关闭。
+用户发送 `退出`、`取消`、`exit`、`quit` 或 `q` 时，Core 调用 `close_session()` 后结束会话，这条消息不会到达 `handle_session()`。
+每次继续前 Core 按 [权限模型](07-advanced.md#-权限模型) 复核此人此刻仍能用这个插件的至少一条顶层命令，撤权或场景不再允许时会话关闭。
 
 ---
 
@@ -881,7 +908,24 @@ Manifest 的 `services` 声明导出，`uses_services` 声明消费，Core 校�
 | `callers` | Core 服务表规定的调用插件集合 |
 | `required_capability` | 特定桥接需要的附加 capability，普通服务省略 |
 
-当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用），小青网上生活的两条桥：`life.turn_context` 与 `life.export_memes`（`xiaoqing_life` 提供，`xiaoqing_chat` 调用；数据只关于小青自己，不按用户身份门控，系统主体也可用），以及小青统一记忆的四条桥：`memory.record`（`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用）、`memory.recall`（`xiaoqing_chat`、`xiaoqing_agent` 调用）、`memory.search` 与 `memory.forget`（`xiaoqing_chat` 调用），都由 `xiaoqing_memory` 提供，经 `capabilities.memory` 使用；Core 把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效，系统主体也可用。
+当前服务集合包括 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary` 和 `core.observe_outgoing_action`。
+小青 agent 增加四条桥：
+
+- `xiaoqing_agent` 向 `xiaoqing_chat` 提供 `agent.handle_turn` 与 `agent.report_delivery`，后者回报当轮回复是否发出。
+- `codex` 向 `xiaoqing_agent` 提供 `codex.agent_task`。
+- `qingssh` 向 `xiaoqing_agent` 提供 `qingssh.agent_command`。
+
+小青网上生活增加两条桥：
+
+- `xiaoqing_life` 向 `xiaoqing_chat` 提供 `life.turn_context` 与 `life.export_memes`。数据只关于小青自己，不按用户身份门控，系统主体也可用。
+
+小青统一记忆增加四条桥，都由 `xiaoqing_memory` 提供，经 `capabilities.memory` 使用：
+
+- `memory.record` 由 `xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用。
+- `memory.recall` 由 `xiaoqing_chat`、`xiaoqing_agent` 调用。
+- `memory.search` 与 `memory.forget` 由 `xiaoqing_chat` 调用。
+
+Core 把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效，系统主体也可用。
 Core 按服务名核验固定所有者和调用方。
 `agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查。
 `codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。
@@ -893,23 +937,22 @@ Core 按服务名核验固定所有者和调用方。
 `run(..., request_texts=...)` 传入发起人本人这次说的原话（按先后，最后一条最新，Core 只保留最近 16 条、每条截断到 4000 字），命令在 `context.request_texts` 里读到。只在确有必要时用它（比如实体设备的出粮份数要对得上原话）；一般的写入按参数执行，和用户直接发送时一样，不拿原话做字面比对。用户直接发命令时 `context.request_texts` 为空，普通消息事件不能带入这个值。
 发送回执在提交前收集这条回复每条物理消息的 ID（`DeliveryReceipt.message_ids`，长回复被拆成几条时每条都有），插件在提交回调里把状态和真实消息对应起来，不必事后回填。
 
-Core 派生能力与会话使用同一套命令权限：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，会话每次继续前复核此人此刻仍能用这个插件的至少一条顶层命令（撤权或场景不再允许时会话关闭）。
-全部经过 `core.router.command_access`，与命令执行是同一处判断。
+Core 派生能力（密钥管理、arXiv 的 Codex 摘要、agent 的本机工具、SSH 和 Codex）与会话续接使用同一套命令权限，全部经过 `core.router.command_access`，细则见 [权限模型](07-advanced.md#-权限模型)。
 
 Manifest capability 集合：
 
-| 名称 | 用途 |
-|---|---|
-| `command_runner` | 以发起人身份执行已发布命令，权限与场景检查同本人直接发送（仅 `xiaoqing_agent`） |
-| `local_tools` | 本机执行代码、读写文件前向 Core 复核发起人仍能用 `/shell`（仅 `xiaoqing_agent`） |
-| `config_subscription` | 接收当前插件配置 revision |
-| `execution_timeout_exempt` | 由插件生命周期控制长任务超时 |
-| `inbound_backlog` | 查询当前事件的发送者在本会话里已到达、还没开始处理的消息（仅 `xiaoqing_chat`） |
-| `onebot_media` | 查询受控 OneBot 消息与媒体 |
-| `secret_admin` | 管理员 secret 命令能力 |
+| 名称 | 用途 | 可申请的插件 |
+|---|---|---|
+| `command_runner` | 以发起人身份执行已发布命令，权限与场景检查同本人直接发送 | `xiaoqing_agent` |
+| `local_tools` | 本机执行代码、读写文件前向 Core 复核发起人仍能用 `/shell` | `xiaoqing_agent` |
+| `config_subscription` | 接收当前插件配置 revision | `pendo` |
+| `execution_timeout_exempt` | 由插件生命周期控制长任务超时 | `codex`、`jupyter`、`qingssh`、`shell` |
+| `inbound_backlog` | 查询当前事件的发送者在本会话里已到达、还没开始处理的消息 | `xiaoqing_chat` |
+| `onebot_media` | 查询受控 OneBot 消息与媒体 | `xiaoqing_chat` |
+| `secret_admin` | 管理员 secret 命令能力 | `bot_core` |
 
 Core 按插件规范名核验 capability 申请。
-新增跨插件桥接或 capability 时，同步更新 schema、Protocol、所有者、调用方、Manifest 和授权测试。
+新增桥接或 capability 需要同步更新的内容见 [声明式服务](07-advanced.md#-声明式服务)。
 
 ---
 
@@ -956,6 +999,7 @@ Shell、Jupyter、Codex 和远端管理等敏感操作使用 `core.sensitive_aud
 
 ## ✅ 文档与测试契约
 
+各类文档的职责见 [验证与文档](#验证与文档)。
 每个插件 README 采用统一顺序：
 
 1. 功能简介
@@ -983,4 +1027,4 @@ Manifest 中的 `examples` 与 `invalid_examples` 覆盖每个命令节点。
 
 - 公开签名：[API 参考](05-api-reference.md)
 - 高级运行模式：[高级主题](07-advanced.md)
-- 完整插件目录：[插件目录](09-plugins.md)
+- 完整插件目录：[插件使用手册](09-plugins.md)

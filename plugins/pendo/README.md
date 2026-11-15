@@ -31,7 +31,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 | `/pendo help <模块>` | 指定模块的命令与示例 |
 | `/help pendo` | Core 生成的 Pendo 插件目录 |
 
-模块名包括 `event`、`todo`、`note`、`diary`、`ledger`、`search`、`settings`、`web`、`export` 和 `import`。
+模块名包括 `event`、`todo`、`note`、`diary`、`ledger`、`search`、`settings`、`web`、`export` 和 `import`。`h`、`帮助`、`?` 是 `help` 的别名。
 
 ---
 
@@ -51,11 +51,13 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo event reminders confirm <id> [today|future|all|提醒时间]
 ```
 
-`e`、`calendar`、`日程`、`事件` 是 `event` 的别名。单次日程对应一个 leaf。重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。`event list` 的节点行在节点 ID 后标出所属集合 ID（`（集合 xxxxxxxx）`），整组修改或删除可以直接使用；跨天日程的结束时间带上日期。多节点创建回报逐行列出节点 ID。
+`e`、`calendar`、`日程`、`事件` 是 `event` 的别名，`reminder` 是 `reminders` 的别名，`remove`、`rm` 是 `reminders delete` 的别名。单次日程对应一个 leaf。重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。`event list` 的节点行在节点 ID 后标出所属集合 ID（`（集合 xxxxxxxx）`），整组修改或删除可以直接使用；跨天日程的结束时间带上日期。多节点创建回报逐行列出节点 ID。
 
-新建日程统一走 `event add`：由插件的解析模型判断单次、重复还是多节点，并给出标题、时间、节点名称和提醒；Agent 代为执行时把发起人原话里的类型说法、节点名称、时间和提醒原样写进内容，不自行拆成结构化字段。只提供日期时默认 09:00。修改同样交给解析器：`event edit <id> <原话中的修改>` 按节点或单次日程 ID 原地修改（比如 `标题改为会议开始`、`推迟到两周后的同一时间`），保留节点 ID、所属集合和提醒规则，改开始时间会同步移动提醒，修改里同时写了“提前 N 提醒”时提醒规则一并换成新的；集合 ID 修改整体标题、分类、地点和备注。集合的分类、地点和标签会同步到仍沿用集合原值的节点，重复日程的标题和备注也同步到各次实例；单独改过的节点保持不变。多节点日程按每个节点自己的时间段检查冲突。
+新建日程统一走 `event add`：由插件的解析模型判断单次、重复还是多节点，并给出标题、时间、节点名称和提醒。只提供日期时默认 09:00。修改同样交给解析器：`event edit <id> <原话中的修改>` 按节点或单次日程 ID 原地修改（比如 `标题改为会议开始`、`推迟到两周后的同一时间`），保留节点 ID、所属集合和提醒规则，改开始时间会同步移动提醒，修改里同时写了“提前 N 提醒”时提醒规则一并换成新的；集合 ID 修改整体标题、分类、地点和备注。集合的分类、地点和标签会同步到仍沿用集合原值的节点，重复日程的标题和备注也同步到各次实例；单独改过的节点保持不变。多节点日程按每个节点自己的时间段检查冲突。
 
 多节点集合支持追加一个或多个节点，例如 `/pendo event edit <集合ID> 添加一个节点，12月9日下午三点验收，提前30分钟提醒`。AI 解析本次新增节点，插件将节点和提醒一起写入原集合，返回新增节点 ID，并更新集合时间范围。新增节点默认继承集合的提醒规则，指令指定的提前提醒只作用于本次新增节点；准点提醒始终保留。原有节点保持原值。追加操作支持 `/pendo undo`；节点已有后续修改时会提示先处理后续操作。追加使用多节点集合 ID，单个节点 ID 会返回集合 ID 提示。
+
+`event add` 遇到时间冲突时先返回冲突说明，等你确认后再创建；已知冲突时可在命令末尾加 `--force` 直接创建。确认时执行的是插件给出的续执行命令 `/pendo event record <JSON>`（带 `force`），按已解析好的结构化字段写入，不再调用解析模型。该命令只在你明确同意重叠安排后执行，Agent 代为操作时同样如此；`event record` 不用于手工新建日程。
 
 ---
 
@@ -149,11 +151,9 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo settings ai_consent on|off
 ```
 
-`config` 和 `setting` 是 `settings` 的别名。操作快照保留 5 分钟，`undo` 可将查询窗口缩小到 1～5 分钟。`ai_consent` 控制日记正文向已配置外部 AI 的发送授权，默认值为 `off`。本地规则始终可用。
+`s`、`搜索`、`查找` 是 `search` 的别名；`确认`、`延后`、`撤销` 分别是 `confirm`、`snooze`、`undo` 的别名；`setting`、`config`、`设置` 是 `settings` 的别名，`view` 的别名是 `show`，`ai_consent` 的别名是 `ai_privacy`。操作快照保留 5 分钟，`undo` 可将查询窗口缩小到 1～5 分钟。`ai_consent` 控制日记正文向已配置外部 AI 的发送授权，默认值为 `off`。本地规则始终可用。
 
-日程与待办提醒通过 OneBot 私聊发送给条目所有者。条目写入与编辑会同步生成以 `fire_at_utc` 查询的提醒队列行。提醒键使用秒级 UTC。
-
-Web 控制台的日程详情按提醒点提供“提前确认”和“重新开启”操作。按钮仅在提醒触发前可用。提前确认会停止该提醒的首次与重复投递，重新开启会恢复原触发时刻的待发送状态。
+日程与待办提醒通过 OneBot 私聊发送给条目所有者。
 
 ---
 
@@ -169,6 +169,8 @@ Web 控制台的日程详情按提醒点提供“提前确认”和“重新开�
 /pendo web widget-token
 /pendo web widget-revoke
 ```
+
+`webui`、`网页` 是 `web` 的别名，`widget_token`、`widget_revoke` 是 `widget-token`、`widget-revoke` 的别名。`start` 和 `stop` 控制所有用户共享的 Web 服务，需要机器人管理员权限；其余命令普通用户可用，签发和吊销的都是自己的登录码与 Widget Token。
 
 运行参数位于 `config/config.json`：
 
@@ -186,19 +188,7 @@ Web 控制台的日程详情按提醒点提供“提前确认”和“重新开�
 }
 ```
 
-默认地址为 `http://127.0.0.1:12001`。局域网或公网监听需要 TLS 反向代理和 `web_session_cookie_secure: true`。Demo 模式适用于受控的本地演示环境。
-
-TLS 反向代理场景使用以下 Cookie 设置：
-
-```json
-{
-  "plugins": {
-    "pendo": {
-      "web_session_cookie_secure": true
-    }
-  }
-}
-```
+默认地址为 `http://127.0.0.1:12001`。局域网或公网监听需要 TLS 反向代理，并把 `web_session_cookie_secure` 设为 `true`。Demo 模式适用于受控的本地演示环境。
 
 ### 登录 Code 与浏览器会话
 
@@ -208,7 +198,7 @@ TLS 反向代理场景使用以下 Cookie 设置：
 
 ### Widget Token
 
-`/pendo web widget-token` 返回 365 天 Bearer JWT，权限范围限定为 `/api/widget/*` 的 GET 接口。`/pendo web widget-revoke` 撤销当前用户的有效 Widget Token。浏览器会话与 Widget Token 共享秒级时间计算，分别使用独立凭据类型和权限范围。`PENDO_WEB_TOKEN_SECRET` 用于保持 Widget JWT 签名密钥稳定。
+`/pendo web widget-token` 返回 365 天 Bearer JWT，权限范围限定为 `/api/widget/*` 的 GET 接口。`/pendo web widget-revoke` 撤销当前用户的有效 Widget Token。浏览器会话与 Widget Token 共享秒级时间计算，分别使用独立凭据类型和权限范围。签名密钥见下文“依赖与配置”。
 
 Widget 接口：
 
@@ -218,14 +208,14 @@ GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 Authorization: Bearer <widget_token>
 ```
 
-摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程。Scriptable 每次至少回看过去 30 天。成功游标更早时，脚本补齐间隔。脚本按 Pendo 条目 ID 原地新增、更新和清理托管事件。Keychain 保存同步游标。脚本从源码顶部读取 Web 地址与 Widget Token。脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`。配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
+摘要接口返回最多 5 条近期日程，日历接口返回最长 3660 天闭区间内的完整日程。Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，在源码顶部填写 Web 地址与 Widget Token；它展示主屏摘要，并在 Scriptable App 内直接运行时把日程同步到 iOS 日历。配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)，同步窗口与对账规则见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ### 页面
 
 | 页面 | 主要功能 |
 | --- | --- |
 | Dashboard | 核心摘要 |
-| Events | 日程、集合、提醒及未到期提醒的确认开关 |
+| Events | 日程、集合和提醒；日程详情按提醒点提供“提前确认”和“重新开启”，仅在提醒触发前可用：提前确认停止该提醒的首次与重复投递，重新开启恢复原触发时刻的待发送状态 |
 | Tasks | 待办看板、筛选和状态切换 |
 | Ledger | 记账、账户、筛选和统计 |
 | Notes | 笔记、分类、标签和关联 |
@@ -252,39 +242,21 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 /pendo export 本月随笔 month note,diary
 ```
 
-`/pendo import` 返回 Web Transfer 入口说明。Transfer 页面处理 `.pendo.zip` Bundle，提供检查、样例预览、执行、跳过、覆盖、生成副本和操作日志。默认隔离导入；“跳过已有”会认本账号同类型的同 ID 记录和此前导入过的同来源记录（原记录不动），把自己的备份导回来不会重复；“覆盖”只匹配此前导入过的同来源记录，外部 ID 不能指定覆盖哪条原有记录。Bundle 包含版本化 manifest、校验和与结构化数据文件。
+`导出`、`导入` 是 `export`、`import` 的别名。`/pendo import` 返回 Web Transfer 入口说明。Transfer 页面处理 `.pendo.zip` Bundle，提供检查、样例预览、执行、跳过、覆盖、生成副本和操作日志。默认隔离导入；“跳过已有”会认本账号同类型的同 ID 记录和此前导入过的同来源记录（原记录不动），把自己的备份导回来不会重复；“覆盖”只匹配此前导入过的同来源记录，外部 ID 不能指定覆盖哪条原有记录。Bundle 包含版本化 manifest、校验和与结构化数据文件。
 
 ---
 
 ## 💾 数据一致性与恢复
 
 - Web 完整编辑携带打开表单时的版本号。另一个窗口先保存时，旧窗口收到冲突提示并保留输入，重新读取后可继续编辑。
-- 普通用户可以签发和吊销自己的访问令牌。共享 Web 服务的 `start` 与 `stop` 命令需要机器人管理员权限。
 - 日程省略时区时使用用户设置。Markdown 日期范围与时间显示使用用户时区，具体时间保留 UTC 偏移。Widget 日历同步也保留偏移，手机改变时区后真实时刻保持一致。
-- 修改任务截止时间会重算相对提醒。明确清空提醒会同步清除规则。撤销删除在同一事务恢复条目与待发队列，已发送或已确认历史继续保留。
+- 修改任务截止时间会重算相对提醒。明确清空提醒会同步清除规则。撤销删除会一并恢复条目与待发提醒，已发送或已确认历史继续保留。
 - 账目支持三字母币种代码。收支、结余、分类与账户统计按币种分组，各币种金额独立展示。系统当前没有汇率换算功能。Ledger 与 Stats 支持输入三位币种代码，默认 CNY。Dashboard 默认展示 CNY 走势，并列出其他币种汇总。Widget 按币种标注明细与摘要。
-- `.pendo.zip` 每类数据最多 100,000 条，五类条目与日程集合合计最多 600,000 条。导入与导出采用相同记录容量。单个解压成员最多 50 MiB，全部解压成员合计最多 100 MiB，上传最多 100 MiB。Unicode 正文和中文、表情文件名支持往返。
+- `.pendo.zip` 每类数据最多 100,000 条，五类条目与日程集合共六类成员合计最多 600,000 条。导入与导出采用相同记录容量。单个解压成员最多 50 MiB，全部解压成员合计最多 100 MiB，上传最多 100 MiB。Unicode 正文和中文、表情文件名支持往返。
 
 ## 💾 数据模型
 
-运行数据位于 `data/pendo/pendo.db`。主要表如下：
-
-| 表 | 内容 |
-| --- | --- |
-| `items` | 日程 leaf、待办、笔记、日记和账本主记录 |
-| `event_collections` | 重复日程与多节点日程集合 |
-| `reminder_logs` | 提醒队列、投递租约以及发送与确认历史 |
-| `scheduled_delivery_outbox` | 定时消息待办与逐目标确认 |
-| `scheduler_heartbeats` | 提醒检查上次运行到的时刻 |
-| `operation_logs` | 编辑、删除与撤销快照 |
-| `user_settings` | 时区、静默时段、简报和 AI 授权 |
-| `transfer_logs` | Bundle 导入日志 |
-| `imported_bundles` | 已执行 Bundle 身份 |
-| `login_code_registry` | 一次性登录 Code 摘要和期限 |
-| `web_session_registry` | 浏览器会话摘要、设备和期限 |
-| `widget_token_registry` | Widget Token 身份、期限与撤销状态 |
-
-所有业务查询按 `owner_id`（所属 QQ 用户）隔离。数据库使用 WAL、外键、busy timeout、事务和 schema migration。自然语言中的日程钟点先按用户或日程 IANA 时区解释，时间戳按 UTC 保存，展示时转换回对应 IANA 时区。
+运行数据位于 `data/pendo/pendo.db`（SQLite）。所有业务查询按 `owner_id`（所属 QQ 用户）隔离。自然语言中的日程钟点先按用户或日程 IANA 时区解释，时间戳按 UTC 保存，展示时转换回对应 IANA 时区。表结构、连接与 schema migration 见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
@@ -301,7 +273,11 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `pendo_month_end_finance_summary` | 每分钟 | `targeted` 私聊 | 用户本地时区月末 21:00 的财务月报 |
 | `pendo_cleanup_demo_data` | 每 6 小时的 15 分 | `silent` | 清理过期 Demo 数据 |
 
-每日简报、日记提醒和财务总结都按每位用户自己的时区判断到期：任务每分钟运行一次，到达用户本地时刻后把该周期写入 `scheduled_delivery_outbox`；设定时刻那一分钟没跑到（重启、卡顿）时，之后 2 小时内仍会补发当天这一次，不跨零点。已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递，日记提醒按所属日期检查是否已经补写。日程与待办提醒在领取后同样进入恢复窗口，租约阻止并发重复投递。提醒检查记录上次运行到的时刻：停机或卡顿期间到点的提醒在恢复后 6 小时内照常补发，并在消息里注明晚了多久；创建时就已过期超过 2 分钟的提醒、以及超过补发期限的提醒不再发送，在提醒列表里显示为“已过期（未发送）”。静默任务由 Core 保持零消息投递。
+每日简报、日记提醒和财务总结按每位用户自己的时区判断到期：任务每分钟运行一次，用户本地时刻一到就投递该周期。设定时刻那一分钟没跑到（重启、卡顿）时，之后 2 小时内仍会补发当天这一次，不跨零点；进程中断或投递失败后按原周期日期继续投递，日记提醒还会检查当天是否已经补写。
+
+日程与待办提醒记录上次检查到的时刻：停机或卡顿期间到点的提醒在恢复后 6 小时内照常补发，并在消息里注明晚了多久。创建时就已过期超过 2 分钟的提醒、以及超过补发期限的提醒不再发送，在提醒列表里显示为“已过期（未发送）”。
+
+静默任务不向任何人发送消息。
 
 ---
 
@@ -309,7 +285,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 Pendo 依赖 `python-dateutil`、`fastapi`、`uvicorn`、`PyJWT`、`pydantic` 和 `starlette`。项目常规安装会包含这些运行依赖。
 
-Web 签名 secret 优先读取环境变量 `PENDO_WEB_TOKEN_SECRET`。未设置时，Pendo 在自己的数据目录生成并保存一个随机密钥。重启后继续使用同一密钥。自然语言解析和日记分析使用 Core AI 注册表中的 `plugins.pendo.ai.routes.parse` 模型链（发行配置为 `deepseek-flash → glm-5.2`），日记正文的外部分析受用户 `ai_consent` 设置控制。
+Web 签名 secret（用于保持 Widget JWT 签名密钥稳定）优先读取环境变量 `PENDO_WEB_TOKEN_SECRET`。未设置时，Pendo 在自己的数据目录生成并保存一个随机密钥。重启后继续使用同一密钥。自然语言解析和日记分析使用 Core AI 注册表中的 `plugins.pendo.ai.routes.parse` 模型链（发行配置为 `deepseek-flash → glm-5.2`），日记正文的外部分析受用户 `ai_consent` 设置控制。
 
 ---
 
@@ -338,5 +314,3 @@ python -m mypy plugins/pendo
 ```
 
 工程边界与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-
-`event add` 和 `event record` 遇到时间冲突时，会通过通用命令结果提供确认命令 `/pendo event record <JSON>`（带 `force`）。`event add` 的确认命令由这次已解析、已展示给用户的结果还原而来，确认时不再调用解析模型；规则兜底解析的结果无法无损还原时不提供，确认交回普通流程。Agent 收到用户对原操作的明确同意后直接执行该命令。`event record` 只按已确定的结构化字段写入，不作为 Agent 新建日程的入口。

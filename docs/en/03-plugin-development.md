@@ -113,10 +113,9 @@ python scripts/format_code.py --check plugins/hello
 git diff --check
 ```
 
-Use `python scripts/format_code.py --check` to check formatting across the repository before submission.
-New plugins follow local assignment alignment, compact expressions, and Chinese comments at key business boundaries.
+Repository-wide checks and code conventions: see [code and verification conventions](#-code-and-verification-conventions).
 
-## Code and verification conventions
+## 📏 Code and verification conventions
 
 The project supports Python 3.11 or later.
 Python code uses local assignment alignment, compact expressions within 100 columns, and Chinese comments that explain business boundaries.
@@ -168,18 +167,15 @@ git diff --check
 ```
 
 Run affected-module tests first. Then run repository-wide checks.
-Formatting operations check syntax-tree equivalence. Tests cover the behavior contracts of current features; a business fix adds or adjusts cases for the affected feature instead of keeping a test dedicated to one fix.
+Tests cover the behavior contracts of current features; a business fix adds or adjusts cases for the affected feature instead of keeping a test dedicated to one fix.
 Test data uses temporary directories or databases.
-The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.
+The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...`, `pass`, or `raise NotImplementedError` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.
 
 READMEs describe current use and configuration.
 ARCHITECTURE documents describe module responsibilities, data flow, and ownership.
 The project manual describes public contracts.
-Keep commands, permissions, and aliases consistent with `plugin.json`.
-
-Link to shared conventions between modules.
-Review records track issue disposition, repair batches, and final verification separately.
-Mark a review closed after all work completes.
+Keep commands, permissions, and aliases consistent with `plugin.json`, and link to shared conventions between modules.
+Review records track issue disposition, repair batches, and final verification separately, and a review is marked closed after all work completes.
 
 ## 💾 Plugin directories and distribution resources
 
@@ -218,7 +214,7 @@ Keep source and resource paths inside the real plugin directory.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `schema_version` | `1` | `1` | Manifest schema version |
-| `name` | string | Necessary | Canonical plugin name, equal to its directory name |
+| `name` | string | Required | Canonical plugin name, equal to its directory name |
 | `version` | string | `0.0.0` | Plugin version |
 | `description` | string | Empty | User-visible function summary |
 | `author` | string | Empty | Author information |
@@ -253,7 +249,7 @@ Dependency fields:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | Necessary | Python module name that `importlib.util.find_spec()` can locate |
+| `name` | string | Required | Python module name that Core can locate without importing it. It must not start with `plugins` |
 | `required` | boolean | `true` | Controls plugin loading when the module is missing |
 | `description` | string / `null` | `null` | Dependency purpose |
 
@@ -267,14 +263,14 @@ Top-level command object:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | Necessary | Stable command name used in the command code |
-| `triggers` | string[] | Necessary | Nonempty, unique top-level triggers. matching is case-sensitive |
-| `help` | string | Necessary | Function summary |
+| `name` | string | Required | Stable command name used in the command code |
+| `triggers` | string[] | Required | Nonempty, unique top-level triggers. Matching is case-sensitive |
+| `help` | string | Required | Function summary |
 | `usage` | string | `/<first trigger>` | Complete usage |
 | `admin_only` | boolean | `false` | Top-level Bot administrator shortcut. `true` normalizes to `bot_admin` |
 | `permission` | `public` / `bot_admin` / `group_admin` | `public` | Permission level |
 | `contexts` | Array of `private` / `group` | Both | Allowed scenes |
-| `priority` | integer | `0` | Top-level routing priority. larger values match first |
+| `priority` | integer | `0` | Top-level routing priority. Larger values match first |
 | `examples` | string[] | `[]` | Valid examples, maximum 16 |
 | `invalid_examples` | string[] | `[]` | Invalid argument, scene, or permission examples, maximum 16 |
 | `effect` | `read` / `write` | Undeclared | Whether the command only reads or also adds, changes, or deletes data. See below |
@@ -284,10 +280,10 @@ Subcommand node:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | Necessary | Canonical name, unique among siblings |
+| `name` | string | Required | Canonical name, unique among siblings |
 | `aliases` | string[] | `[]` | Aliases, unique among siblings |
-| `help` | string | Necessary | Function summary |
-| `usage` | string | Necessary | Complete usage |
+| `help` | string | Required | Function summary |
+| `usage` | string | Required | Complete usage |
 | `match` | `prefix` / `exact` | `prefix` | `prefix` keeps following business arguments. `exact` accepts only the complete node path. |
 | `permission` | Permission enum | Parent value | A child can set stricter permissions. |
 | `contexts` | Scene array | Parent value | A child can restrict scenes. |
@@ -325,7 +321,7 @@ If two plugins declare the same trigger and priority, the loading transaction ra
 }
 ```
 
-Core generates stable code `example.todo.add` for this leaf node.
+Core generates stable code `example.todo.add` for this leaf node, made of plugin name `example`, command name `todo`, and subcommand name `add`.
 The plugin gets the parsed node and remaining arguments through `context.command_invocation`.
 
 #### Read/write effect
@@ -350,11 +346,11 @@ Declare `write` honestly even for commands whose identical text has a different 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `handler` | string | Necessary | Public asynchronous function name in the entry module |
-| `cron` | object | Necessary | APScheduler `CronTrigger` arguments |
-| `id` | string / `null` | `null` | Global task ID. Core generates a stable ID when omitted |
+| `handler` | string | Required | Public asynchronous function name in the entry module |
+| `cron` | object | Required | APScheduler `CronTrigger` arguments |
+| `id` | string / `null` | `null` | Task ID, unique within the plugin. Defaults to `handler` when omitted |
 | `delivery` | `broadcast` / `targeted` / `silent` | `broadcast` | Delivery mode that Core executes |
-| `group_ids` | positive integer[] / `null` | `null` | Target groups. omission uses `default_group_ids` |
+| `group_ids` | positive integer[] / `null` | `null` | Target groups. Omission uses `default_group_ids` |
 | `description` | string / `null` | `null` | Task description |
 | `enabled` | boolean | `true` | Task enabled state |
 
@@ -367,7 +363,7 @@ When a task becomes due, Core applies its delivery mode:
 
 `broadcast` and `targeted` take target groups from the first source that sets them: deployment config `config.plugins.<plugin>.schedules.<schedule ID>.group_ids`, the entry's `group_ids`, then global `default_group_ids`.
 The schedule ID is the entry's `id`, or its `handler` when `id` is omitted. An empty list in the deployment config sends the schedule to no group.
-Core reads targets on every run, so a config change applies after `/reload`.
+Targets keep the order of `group_ids`. Core reads them on every run, so a config change applies after `/reload`.
 `plugin.json` ships with the repository and holds no real group IDs; deployment-specific targets belong in the deployment config.
 `silent` omits `group_ids`. Plugin reload replaces schedules owned by that plugin.
 
@@ -411,7 +407,7 @@ words = tokenize(args, strict=True)
 
 `parse()` supports single-letter short options, ASCII long options, `--key=value`, and the `--` option terminator.
 By default, `tokenize()` splits unclosed quotes on whitespace.
-Use `strict=True` when complete quotes are necessary for the command protocol.
+Use `strict=True` when the command protocol requires complete quotes.
 `parse_int()` accepts ASCII decimal integers. It returns a range-checked `int` or `None`.
 See [argument parsing](05-api-reference.md#-argument-parsing) for the complete return structure.
 
@@ -425,6 +421,23 @@ async def handle_session(text, event, context, session): ...
 
 The handler reads the supplied snapshot. It commits persistent changes through `context.update_session()`.
 
+### `close_session()`
+
+Core calls this entry when it ends a session. The plugin releases connections, background tasks, and other resources here. Without it, the session simply ends:
+
+```python
+async def close_session(event, context, session): ...
+```
+
+Core calls it in these cases:
+
+- The user sends an exit word.
+- The user can no longer use any top-level command of the plugin.
+- `handle_session()` raises an exception.
+- The command runner discards the one-time session that a command opened.
+
+An exception raised here is only logged, and the session still ends.
+
 ### `handle_smalltalk()`
 
 Core calls this entry when the plugin is the `smalltalk_provider`:
@@ -433,9 +446,19 @@ Core calls this entry when the plugin is the `smalltalk_provider`:
 async def handle_smalltalk(text, event, context): ...
 ```
 
+### `observe_message()`
+
+A `smalltalk_provider` can supply this entry. Core calls it after the processing gates and before the URL stage so that the provider observes every message that is not skipped. The return value is ignored:
+
+```python
+async def observe_message(clean_text, event, context): ...
+```
+
+URLs, commands, command-prefixed text, and active-session input are skipped and are not observed.
+
 ### `handle_url()`
 
-A plugin such as `url_parser` can supply this entry:
+A plugin named `url_parser` can supply this entry:
 
 ```python
 async def handle_url(url, event, context): ...
@@ -450,12 +473,11 @@ async def call_bot_name_only(context):
     return segments("我在")
 ```
 
-A Bot-name-only message (only the Bot name, or only an `@` of the bot without a picture) usually checks whether the bot is online, so it must be fast: Core calls this entry for every smalltalk provider instead of `handle_smalltalk()`. `xiaoqing_chat` picks a random line from `bot_name_only_replies`, records it in the chat history once sent, and treats the same person's next message within a minute as addressed to her.
-The persona answers from the current topic and routine, and this entry is not called.
+A Bot-name-only message (only the Bot name, or only an `@` of the bot without a picture) usually checks whether the bot is online, so it must be fast: Core calls this entry of the current `smalltalk_provider` instead of `handle_smalltalk()`. `xiaoqing_chat` picks a random line from `bot_name_only_replies`, records it in the chat history once sent, and treats the same person's next message within a minute as addressed to her.
 
 ### Entry selection order
 
-After message cleaning, group gating, and mute checks, Dispatcher selects an entry from the message form:
+After message cleaning and group gating, Dispatcher selects an entry from the message form. While a group is muted, it skips `handle_url()` and `handle_smalltalk()`:
 
 1. A URL-only message calls `handle_url()`.
 2. A Bot-name-only message calls `call_bot_name_only()`.
@@ -463,7 +485,7 @@ After message cleaning, group gating, and mute checks, Dispatcher selects an ent
 4. A command-catalog match calls `handle()`.
 5. Ordinary text calls the current `smalltalk_provider` entry `handle_smalltalk()`.
 
-Core returns a common message for unknown prefixed commands.
+Core returns a common message when a message starts with a command prefix, the first character after the prefix is a letter, and no command matches.
 Observation boundaries protect session, command, and URL inputs.
 The smalltalk provider observes ordinary conversation that satisfies message policy.
 
@@ -571,11 +593,10 @@ Use it for caches and task registries. Write persistent state to `context.data_d
 
 ### Permissions and mute state
 
-Declare command users and scenes in `plugin.json` through `admin_only`, `permission`, and `contexts`.
-Core checks them before plugin calls with `core.router.command_access`.
-Plugin code delegates administrator checks to Core.
-Declare branches with different permissions, such as administrator-only writes, as separate subcommands.
-During handling, confirm that the call came through the necessary subcommand.
+`plugin.json` declares command users and scenes through `admin_only`, `permission`, and `contexts`.
+Core checks them before plugin calls with `core.router.command_access`, and plugin code does not decide administrator access itself.
+Declare branches with different permissions, such as administrator-only writes, as separate subcommands. During handling, confirm that the call came through that subcommand.
+See the [permission model](07-advanced.md#-permission-model) for the check paths and examples.
 
 ```python
 context.mute_group(group_id, duration_minutes=30)
@@ -597,8 +618,7 @@ is_scheduled = context.capabilities.is_system
 
 `context.principal` stores the user, group, conversation type, and delivery targets.
 `context.capabilities` stores narrow capabilities issued by Core from plugin declarations and current identity.
-Use `is_bot_admin` for object-level rules, such as stopping a task as its initiator or a Bot administrator.
-Manifest declarations and Core decide command access.
+Use `is_bot_admin` only for object-level rules. Manifest declarations and Core decide command access; see the [permission model](07-advanced.md#-permission-model).
 
 Send proactive OneBot actions with `await context.send_action(action)`.
 Management plugins can call `context.reload_config()` or `context.reload_plugins()` under their command permissions.
@@ -641,7 +661,8 @@ Group keys contain group ID and user ID. Private keys contain user ID.
 A timeout ends the session.
 
 Later operations can call `create_session()` to start a new flow.
-Before continuation, Core rechecks access to at least one top-level command from the plugin through the common permission function.
+When the user sends `退出`, `取消`, `exit`, `quit`, or `q`, Core calls `close_session()` and then ends the session. That message does not reach `handle_session()`.
+Before continuation, Core rechecks access to at least one top-level command from the plugin as described in the [permission model](07-advanced.md#-permission-model).
 Revoked permission or a prohibited scene closes the session.
 
 ## 💬 Message returns
@@ -882,7 +903,7 @@ Service fields:
 | `name` | Stable name in the Core service catalog |
 | `callback` | Public asynchronous function name in the entry module |
 | `callers` | Calling plugin set specified by the Core service catalog |
-| `required_capability` | Additional capability for a specific bridge. ordinary services omit it |
+| `required_capability` | Additional capability for a specific bridge. Ordinary services omit it |
 
 Current services include `voice.synthesize_text`, `chat.reply`, `codex.enqueue_arxiv_summary`, and `core.observe_outgoing_action`.
 XiaoQing Agent adds four bridges:
@@ -920,33 +941,30 @@ Serial plugins thus remain available during long commands.
 The user's current interactive session remains separate.
 New command sessions first pass to plugin `close_session` for cleanup, then Core discards them.
 Returned `DeliverySegments` and receipts pass unchanged to the caller for settlement with actual delivery.
-`run(..., request_texts=...)` passes the initiator's own words in this agent session, oldest first (Core keeps the latest 16, each cut to 4000 characters). The command reads them from `context.request_texts` to check that written fields and counts come from what the person said. They are empty when a user sends the command directly, and an ordinary message event cannot supply them.
+`run(..., request_texts=...)` passes the initiator's own words in this agent session, oldest first (Core keeps the latest 16, each cut to 4000 characters). The command reads them from `context.request_texts`. Use them only when necessary, for example when the portion count for a physical feeder must match what the person said. Ordinary writes follow their arguments, as when a user sends the command directly, and do not compare literally against the original words. `context.request_texts` is empty when a user sends the command directly, and an ordinary message event cannot supply it.
 
 `run(..., operation_id=...)` gives each call an independent request ID.
 Before commit, receipts collect each physical message ID in `DeliveryReceipt.message_ids`.
 Split replies include an ID for each physical message.
 The commit callback associates state with actual messages at commit time.
 
-Core capabilities and sessions use the same command permissions.
-Secret management follows `/set_secret`. arXiv Codex summaries follow `/codex`.
-Session continuation rechecks current access to at least one plugin top-level command.
-Revoked permission or a prohibited scene closes the session.
-All checks use `core.router.command_access`, the command-execution permission function.
+Core-derived capabilities (secret management, arXiv Codex summaries, agent local tools, SSH, and Codex) and session continuation use the same command permissions.
+All checks use `core.router.command_access`, the command-execution permission function; see the [permission model](07-advanced.md#-permission-model).
 
 Manifest capabilities:
 
-| Name | Purpose |
-|---|---|
-| `command_runner` | Execute published commands as the initiator with normal permission and scene checks. `xiaoqing_agent` only |
-| `local_tools` | Recheck initiator access to `/shell` before local code execution or file operations. `xiaoqing_agent` only |
-| `config_subscription` | Receive configuration revisions for the current plugin |
-| `execution_timeout_exempt` | Let the plugin lifecycle manage long-task timeouts |
-| `inbound_backlog` | List messages from the current event's sender in this chat that have arrived but are not being handled yet. `xiaoqing_chat` only |
-| `onebot_media` | Query controlled OneBot messages and media |
-| `secret_admin` | Administrator secret-command capability |
+| Name | Purpose | Plugins that can request it |
+|---|---|---|
+| `command_runner` | Execute published commands as the initiator with normal permission and scene checks | `xiaoqing_agent` |
+| `local_tools` | Recheck initiator access to `/shell` before local code execution or file operations | `xiaoqing_agent` |
+| `config_subscription` | Receive configuration revisions for the current plugin | `pendo` |
+| `execution_timeout_exempt` | Let the plugin lifecycle manage long-task timeouts | `codex`, `jupyter`, `qingssh`, `shell` |
+| `inbound_backlog` | List messages from the current event's sender in this chat that have arrived but are not being handled yet | `xiaoqing_chat` |
+| `onebot_media` | Query controlled OneBot messages and media | `xiaoqing_chat` |
+| `secret_admin` | Administrator secret-command capability | `bot_core` |
 
 Core validates capability requests by canonical plugin name.
-When you add a bridge or capability, update the schema, protocol, owner, callers, manifest, and authorization tests together.
+See [declared services](07-advanced.md#-declared-services) for what to update together when you add a bridge or capability.
 
 ## 🔄 Error handling
 
@@ -989,6 +1007,7 @@ Logs keep stable operation, status, request ID, job ID, return code, and excepti
 
 ## ✅ Documentation and test contracts
 
+See [verification and documentation](#verification-and-documentation) for what each kind of document covers.
 Use this order in each plugin README:
 
 1. Function summary

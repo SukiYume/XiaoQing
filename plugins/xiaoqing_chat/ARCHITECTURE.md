@@ -53,8 +53,8 @@ xiaoqing_chat
 |---|---|
 | `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` 与 `inbound_backlog` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、`life.turn_context` 与 `life.export_memes`、`memory.record` / `recall` / `search` / `forget`、定时任务、热加载文件 |
 | `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口、定时任务（生活小事、梗图同步、统一记忆补推、主动开口） |
-| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额，`observe_outgoing_action`；这一轮出故障时聊天里不出现错误码：顺口接话的轮次安静结束，私聊或被点名时回一句“卡了”（同一会话十分钟内只说一次），诊断信息照常进日志 |
-| `agent_bridge.py` | 私聊和群里明确跟她说的话，判断工具需求与生成聊天回复同时开始：判断为闲聊用已在生成的回复，agent 接手就放弃这次生成；没人叫她的群消息不交给 agent。一件事分几条说时把连着的几条连成一句请求；agent 要反问而对方的下一条已经到了时，这句反问不发。执行结果与投递回执写回原会话 |
+| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额，`observe_outgoing_action`；一轮出故障时由 `_reply_after_failure` 收口（见“错误与日志”）；有会话等着清长期记忆时，任何会话来消息都经 `_retry_pending_forgets` 触发一次后台重试（见“状态与持久化”） |
+| `agent_bridge.py` | 私聊和群里明确跟她说的话交给 agent 判断，与聊天生成并行（流程见“单轮数据流”）；没人叫她的群消息不交给 agent。一件事分几条说时把连着的几条连成一句请求；agent 要反问而对方的下一条已经到了时，这句反问不发。执行结果与投递回执写回原会话 |
 | `commands.py` | `/xc` 管理子命令：统计、重置（同时清空统一记忆里这个会话）、配置、记忆（`memory.search`）、表达、黑话、审查、模型切换 |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
@@ -73,7 +73,7 @@ xiaoqing_chat
 | `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
 | `reply_fallbacks.py` | 被拒后的定向重写提示、只删没依据的读图气泡（`trim_unsupported_bubbles`）和直接回复兜底句（`ALL_FALLBACK_TEXTS`） |
-| `turn_delivery.py` | 打字延迟、过期丢弃（超出最近 15 条、之后有人叫停、话题已换或会话重置）、要接的话不在最近 5 条里时引用原消息、分批外发、投递后提交与回滚 |
+| `turn_delivery.py` | 打字延迟、过期丢弃与引用原消息（阈值见“单轮数据流”）、分批外发、按气泡回执结算、投递后提交与回滚 |
 | `post_reply_tasks.py` | 投递成功后的表达学习、策略复盘、未完话头结算和生活记录抽取任务 |
 | `reply_media.py` | 回复链路的媒体桥接与素材使用记录 |
 | `reply_payload.py` | 把消息部件编排为展示文本和可投递批次 |
@@ -92,9 +92,9 @@ xiaoqing_chat
 |---|---|
 | `gateway.py` | 到 Core AI capability 的薄适配：路由、固定模型、响应提取 |
 | `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数。从主配置路由生成参数快照，`as_kwargs()` 传给网关，长文请求按字数提高预算 |
-| `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示；对话最多带最近 20 条、1400 字（规划和审查用同一份截法）；按她最近几条回复给出换开头、不带装饰、回短一点的提醒 |
-| `postprocess.py` | 保留回复内容，按自然边界组织气泡：她自己用空行分了段就一段一个气泡（段内标点不动）；一整段的长内容按句子分成几条；短回复按句、按逗号拆，大约每 `clause_bubble_chars` 字一个气泡。超过 80 字的气泡是讲解或文稿，行尾句号照原样留着 |
-| `decorations.py` | 发出前去掉句尾带出来的垃圾词（`strip_junk_tail`，对话里本来就在说这个词时不动），并收拾装饰：她最近 6 条里用过 emoji、句尾波浪号、括号动作或 QQ 表情，这条就去掉；句尾当文字打出来的表情名换成真正的 QQ 表情。清单、代码和长文不动。agent 当轮交回的办事回复也过一遍（没有表情素材，表情名直接去掉） |
+| `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示；`build_dialogue_prompt` 把对话写成逐行文本，截短时最多留最近 20 条（`max_items`）和 `max_chars` 字（回复 1400，规划器 1200，话题收尾判断 2200）；读多少历史由调用方决定：回复读 `max_context_size` 条，规划器读 `max(60, max_context_size × 3)` 条；按她最近几条回复给出换开头、不带装饰、回短一点的提醒 |
+| `postprocess.py` | 保留回复内容，只按自然边界组织气泡（空行分段、按句、按逗号与各字数阈值的规则见 README“投递”），并清掉开头泄漏的“你：”示例标签 |
+| `decorations.py` | 发出前去掉句尾垃圾词（`strip_junk_tail`），并按她最近 6 条回复收拾装饰、把句尾打成文字的表情名换成 QQ 表情（规则见 README“投递”）。agent 当轮交回的办事回复也过一遍：没有表情素材，表情名直接去掉 |
 | `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数、篇幅字数）与群内定义 |
 | `media_evidence.py` | 图片证据块：附件状态、缺图说明。`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
 | `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复、没人问原因却以“因为”起头解释自己为什么接话（`narrated_motive_check`），以及是否需要语义审查 |
@@ -111,7 +111,7 @@ xiaoqing_chat
 | `pfc_engine.py` | PFC 会话准备、动作规划、等待、重想和状态提交 |
 | `pfc_action_planner.py` | 把上下文转换为有界动作计划 |
 | `pfc_goal_analyzer.py` | 依据可见对话和行动历史更新短期目标 |
-| `pfc_state.py` | PFC 状态持久化与并发写入。取快照时登记轮次号，更新的轮次写回后，迟到的旧快照不再写回 |
+| `pfc_state.py` | PFC 状态持久化与并发写入。取快照时登记轮次号，更新的轮次写回后，迟到的旧快照不再写回（回复本身照常记进聊天记录） |
 | `pfc_utils.py` | 从模型返回值中提取结构化列表 |
 | `planned_action.py` | 不可变的规划动作 |
 | `goal_state.py` | 会话目标与活跃话题 |
@@ -122,13 +122,13 @@ xiaoqing_chat
 
 | 模块 | 职责 |
 |---|---|
-| `client.py` | 统一记忆的客户端：近期历史里没推过的消息推给 `memory.record`（推过的键记在 `memory_outbox.json`，失败时留着下次补推），第一次推送某个会话时导入它的旧数据；`recall` / `search` / `forget_chat` 包装，能力缺失、超时或出错一律当空 |
-| `legacy.py` | 把一个会话的旧数据（向量库里的人物事实和话题摘要、人物资料目录、`life/self_timeline.json`、`life/open_loops/`）写成导入操作，只读不改 |
+| `client.py` | 统一记忆的客户端：近期历史里没推过的消息推给 `memory.record`（推过的键记在 `memory_outbox.json`，失败时留着下次补推），第一次推送某个会话时导入它已有的数据文件（见 `legacy.py`）；`recall` / `search` / `forget_chat` 包装，能力缺失、超时或出错一律当空；会话重置后的待清与重试见“状态与持久化”的“长期记忆的清除” |
+| `legacy.py` | 第一次推送某个会话时导入的数据源（`vdb/memory.docs.json` 里的人物事实和话题摘要、`person_profiles/<会话>/` 下的人物资料、`life/self_timeline.json`、`life/open_loops/`），写成导入操作，只读不改 |
 | `memory.py` | `StoredMessage` 与按会话持久化的近期历史 |
 | `local_ids.py` | 会话内 `mN` 消息编号的分配、查找与替换 |
-| `memory_db.py` | 管理员知识库的向量索引；同一份索引里旧版本留下的会话文档只供首次导入读取，重置时按会话删除 |
+| `memory_db.py` | 管理员知识库的向量索引；同一份索引（`vdb/memory.docs.json`）里的会话文档只在首次导入时由 `legacy.py` 读取，重置时按会话删除 |
 | `vector_store.py` | 本地哈希向量索引，文档与矩阵一致性缓存 |
-| `person_profile.py` | 会话的重置代际标记：重置时更新，后台任务提交前核对 |
+| `person_profile.py` | 会话的重置代际标记（`person_profiles/<会话>/.generation`）：重置时更新，后台任务提交前核对；重置时一并删掉该目录里的人物资料 JSON 和 `hippo_memorizer/<会话>.json` |
 | `knowledge_base.py` | 管理员批准的知识文件，全有或全无的有界索引 |
 | `review_sessions.py` | 人工复盘会话与策略 |
 
@@ -141,12 +141,20 @@ xiaoqing_chat
 | `closing_guard.py` | 私聊收尾沉默：对方只回收尾话、角色已经收过尾时本轮不回复 |
 | `self_timeline.py` | 角色说过的近况、打算、承诺和讲过的往事：数据结构、校验（类别、存活时间、只讲她自己时各会话共用）和提示块。记录存在统一记忆里；往事（`story`）留 90 天以上、不和近况抢名额，单独取用 |
 | `open_loops.py` | 群友有时间点的未完话头：数据结构、同一件事的判断、回复里有没有问到和提示块。记录存在统一记忆里，按说话人取“顺口问 / 对方在答”由统一记忆的取用给出 |
-| `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头；打算与承诺每次读、近况按会话限频、兜底句不读；办事回复（`source=agent`）不新增自我陈述，只记话头、结掉已有记录；已有记录经 `memory.search` 读取，校验类别、说话人、ID 与时间后写成笔记操作，连同没推过的消息一次交给 `memory.record`；按会话串行，提交前核对重置代际 |
-| `proactive.py` | 群聊主动开口：时段、作息、群安静程度与节奏检查；组装材料（可以说的事：分享候选、当天小事和细节、推送全文和配图里看到的内容；说的时候要对得上的：作息、自我页和她说过的事、群页、前几次主动说的话和有没有人接；再加最近 40 条群聊）；起草、本地复读检查、发送前自检（拦下时带理由重写一次）；投递回执提交时写聊天记录和节奏记录 |
-| `proactive_private.py` | 私聊主动联系（`proactive.private_user_ids` 白名单，默认空即不运行）：由头是和她记得的这位朋友的事（统一记忆里的人物页）对得上的分享候选、他到期的未完话头，或聊过的朋友 `private_miss_after_days` 天没说话；每天次数、间隔、对方刚说过话、上一条没回、同一经历只分享一次逐条检查；起草、本地复读检查、发送前自检和回执复用群聊流程 |
+| `extract.py` | 投递后一次 `reasoning` 调用同时抽取自我陈述和未完话头（读取时机和办事回复的处理见 README“生活连续性”，办事回复以 `source=agent` 区分）；已有记录经 `memory.search` 读取，校验类别、说话人、ID 与时间后写成笔记操作，连同没推过的消息一次交给 `memory.record`；按会话串行，提交前核对重置代际 |
+| `proactive.py` | 群聊主动开口（行为见 README“主动开口”）：时段、作息、群安静程度与节奏的门控，组装材料，起草 → 本地复读检查 → 发送前自检（拦下时带理由重写一次），投递回执提交时写聊天记录和节奏记录 |
+| `proactive_private.py` | 私聊主动联系（`proactive.private_user_ids` 白名单，默认空即不运行）：判断由头并逐项检查次数、间隔和回复状态（见 README“私聊主动联系”）；人物页取自统一记忆；起草、本地复读检查、发送前自检和回执复用群聊流程 |
 | `proactive_state.py` | 节奏记录：每个会话上次主动开口的时间、当天次数、上次尝试时间、已分享的网上经历 ID（最近 20 个）和最近 5 次主动说的话；群聊键是 `g<群号>`，私聊键是 `private:<QQ号>` |
 | `push_log.py` | 推送记录：其他插件刚推送的全文（至多 3000 字）和本地配图路径，每个会话最近 6 条、一天半以内；配图第一次要用时经 `vision` 路由看一遍，看到的内容写成文字存回记录 |
-| `online.py` | 经 `life.turn_context` 向 `xiaoqing_life` 取网上经历、用语与表达：请求不含用户 ID 与群号；能力缺失、开关关闭、超时、异常或格式不对一律当空；请求里群聊带统一记忆给的本群话题词（回复时是这两三天的几个，主动开口取分享候选时是这个群还记着的全部，对方据此标出 `heard_here`），以及本群黑话块这一轮按已确认的释义解释过的说法（`explained_terms`，网上生活不再解释一遍；本群只是猜测的不算）；`reply_plan` 先取网上生活，再拼生活块：`life_lines` 追加到 `life_block`，自我页里只引用了 `shown_keys` 里那几条经历、查明白的事或日记的行不再放（同一件事只说一遍，细节以网上生活给的为准），`slang_notes` 追加到 `jargon_explanation`，`expression_hint` 只在没有群内表达时补位；`sync_life_memes` 按游标（`life/life_memes_cursor.json`）逐页拉 `life.export_memes`，经 `emoji_library.import_external_emoji` / `remove_external_emoji` 导入和删除（只动 `life:` 来源的条目） |
+| `online.py` | 经 `life.turn_context` 向 `xiaoqing_life` 取网上经历、用语与表达（契约见表后），并把梗图同步进表情库（`sync_life_memes`） |
+
+`online.py` 的契约：
+
+- 请求不含用户 ID 与群号。能力缺失、开关关闭、超时、异常或格式不对一律当空。
+- 群聊请求带统一记忆给的本群话题词：回复时是这两三天的几个，主动开口取分享候选时是这个群还记着的全部，`xiaoqing_life` 据此标出 `heard_here`。
+- 群聊请求还带本群黑话块这一轮按已确认的释义解释过的说法（`explained_terms`，网上生活不再解释一遍；本群只是猜测的不算）。
+- `reply_plan` 先取网上生活，再拼生活块：`life_lines` 追加到 `life_block`；自我页里只引用了 `shown_keys` 里那几条经历、查明白的事或日记的行不再放（同一件事只说一遍，细节以网上生活给的为准）；`slang_notes` 追加到 `jargon_explanation`；`expression_hint` 只在没有群内表达时补位。
+- `sync_life_memes` 按游标（`life/life_memes_cursor.json`）逐页拉 `life.export_memes`，经 `emoji_library.import_external_emoji` / `remove_external_emoji` 导入和删除，只动 `life:` 来源的条目。
 
 ### `expression/`：表达与黑话
 
@@ -181,7 +189,8 @@ xiaoqing_chat
 
 | 目录 | 内容 |
 |---|---|
-| `config/` | `config.py`（Pydantic 模型、交叉约束、加载顺序）与 `xiaoqing_config.json` |
+| `config/` | `config.py`（Pydantic 模型、交叉约束、加载顺序）、`xiaoqing_config.json`（行为默认值）、`persona.md`（默认人设卡，见“配置生命周期”）和 `agent.md`（agent 判断与执行两个阶段的提示词，由 `xiaoqing_agent` 的 `prompts.py` 按 `## 判断`、`## 执行` 分节逐轮读取） |
+| `media/qq_face_builtin_catalog.json` | QQ 表情内置目录，`qq_face_catalog.py` 与运行时观察目录合并；`plugin.json` 的 `watch_files` 监听它 |
 | `utils/` | `json_parsing.py`（收窄与修复模型 JSON）、`text.py`（`clip_text`）、`wall_clock.py`（按 Core 时区格式化时间） |
 
 ---
@@ -194,7 +203,12 @@ xiaoqing_chat
 | `handle(command, args, event, context)` | Router | `/xc` 命令。`/xc` 后的聊天内容交给 `handle_smalltalk`，按直接回复起草（`force_reason=command`） |
 | `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始消息段 |
 | `handle_smalltalk(clean_text, event, context)` | Dispatcher | 闲聊决策与回复链路 |
+| `call_bot_name_only(context)` | Core | 只喊名字、只 `@` 她时的预设短应答（`name_call.py`，由 `main.py` 导出），不走模型 |
 | `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息。本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过。带敏感标记的动作直接跳过 |
+| `scheduled_daily_life(context)` | 定时任务（每天 05:30） | 安排今天的生活小事；`life.enable_daily_life` 关闭时不做事 |
+| `scheduled_life_memes(context)` | 定时任务（每小时 7、37 分） | 把 `xiaoqing_life` 的梗图同步进表情库；`life.enable_life_memes` 关闭或能力缺失时不做事 |
+| `scheduled_memory_sync(context)` | 定时任务（每小时 13、43 分） | 先重试待清的长期记忆，再把各会话还没推给统一记忆的消息推过去 |
+| `scheduled_proactive(context)` | 定时任务（每 20 分钟，目标群） | 群聊与私聊主动开口；`proactive.enabled` 关闭时不做事 |
 | `shutdown(context)` | PluginManager | 停止接收任务、刷盘、取消并等待后台任务 |
 
 ---
@@ -252,10 +266,12 @@ turn_delivery.finalize_smalltalk_turn
   ├─ 生成期间对方又发来了消息（follow_ups）→ 这条回复不发，由排在后面的那一轮回
   ├─ 要接的话不在最近 5 条里时首个气泡引用原消息
   ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔（正向 WS 下中间气泡绕过 Core 的事件收集直接发出）
+  ├─ 每个气泡单独结算回执：中途因过期停发，或某个气泡发送失败、结果未知时，聊天记录只记已发出的气泡
+  │  （结果未知的算可能已被看到），没发出去的不记
   ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
   │                 → 聊天记录落盘后推给 memory.record
   │                 → post_reply_tasks：表达学习、策略复盘、未完话头结算、生活记录抽取
-  └─ 投递拒绝 / 异常 → 回滚待提交状态
+  └─ 一个气泡都没发出 / 投递拒绝 / 异常 → 回滚待提交状态
 ```
 
 阶段之间通过 `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 和 `ReplyPayload` 模型传递数据。规划器选择 `wait` / `listening` 时本轮立即以不发言结束，Core 按“群 + 用户”串行处理事件。handler 内等待会推迟同一个人后续消息的处理，并占住会话生成配额。被审查拒绝的普通参与轮次会写回 PFC 快照，让下一轮从新状态出发。
@@ -285,7 +301,7 @@ turn_delivery.finalize_smalltalk_turn
 
 Core 提取正文时只保留文本段。`handlers._label_other_mentions` 把 `@` 其他成员的段落按原位置还原为 `@名字` 再进入有效文本、媒体合成和历史，规划器和回复提示依据这份文本及上下文判断接收对象和参与时机。
 
-私聊深度对话模式跳过第 2～5 步。群里明确跟她说的话（`forced`）不经这里，和私聊一样直接起草，并同时交给 agent 判断。私聊通过后按配置选择 PFC 或直接起草。其余群消息通过后统一由 PFC 根据完整上下文决定回复或旁听。中间动作未完成时返回 wait。
+私聊深度对话模式跳过第 2～5 步。群里明确跟她说的话（`forced`）不经这里，和私聊一样直接起草（与 agent 并行见“单轮数据流”）。私聊通过后按配置选择 PFC 或直接起草。其余群消息通过后统一由 PFC 根据完整上下文决定回复或旁听。中间动作未完成时返回 wait。
 
 ---
 
@@ -308,11 +324,11 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 起草由 `reply_plan.py` 与 `reply_generator.py` 完成：
 
-1. `ReplyGenerationPlan` 一次性收集：近期历史、统一记忆的取用结果（说话人页面、群页、相关旧事、她自己的页面与近况、到期话头）、表达与黑话、知识、关键词反应规则、规划目标、人设边界和前台调用参数。每次重试复用同一份计划。
+1. `ReplyGenerationPlan` 一次性收集：近期历史、统一记忆的取用结果（取哪些见 README“记忆取用”，取用时机见 `reply_plan.py` 一行）、表达与黑话、知识、关键词反应规则、规划目标、人设边界和前台调用参数。每次重试复用同一份计划。
 2. `llm/prompt_builder.py` 生成消息列表。`llm/gateway.py` 通过当前插件的 AI capability 调用 `chat` 路由，会话或全局模型覆盖通过 `pinned_model` 生效。
-3. `llm/postprocess.py` 清理并分段；对方要的是一篇有篇幅的成品（“写个 800 字的检讨”）时整篇作为一条发出，段落和标点照原样。`media/marker_resolver.py` 解析 `[想发…]` 标记。
    可发的表情和图片不是每轮都摆给她（`reply_plan.offers_outbound_media`）：对方要表情、要图时一定给，平常她最近 6 条没带过装饰才有三成机会给，其余轮次提示词里只说“这一条只发文字”。
    规划器的想法以“你刚才心里的盘算”交给生成；私聊和被点名的轮次没有经过规划器，提示词里不出现这一块。
+3. `llm/postprocess.py` 清理并分段（规则见 README“投递”）；`media/marker_resolver.py` 解析 `[想发…]` 标记。
 4. `llm/reply_checker.py` 审查。被拒后由 `reply_fallbacks.py` 选择下一步。
 5. 上游返回 `request_too_large` 时把历史减半，再试一次。
 
@@ -324,9 +340,24 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ### 本地规则（`llm/local_checks.py`）
 
-`heuristic_check` 依次检查：空回复。与最近 `max_repeat_compare` 条角色消息完全相同或相似度 ≥ `similarity_threshold`。原样复述自己刚说过的整句（≥ 8 字）。去掉 `[…]` 标记和标点后与最近 6 条角色消息的相似度 ≥ 0.75（`_near_copy_of_recent`，至少 12 字）。连续 `max_assistant_in_row` 条角色发言。只发一个媒体时跳过复读比较。
+规则的行为描述见 README“回复审查”，这里列函数和阈值。`heuristic_check` 依次检查前五项，其余各由自己的函数承担：
 
-其他规则：`persona_break_check`（自称 AI、模型、机器人或谈起自己的提示词；否认、反问和假设不算）、`ungrounded_link_check`（回复里的网址、域名或邮箱在别人发的消息、读图结果和资料里都找不到；生成后、送审前就查）、`grounded_self_history_check`（角色自称的经历、关系、近况需要依据）、`grounded_context_history_check`（群友经历需要依据）、`persona_identity_consistency_check`（性别等身份表述与人设一致）、`media_meta_reply_check`（只发媒体却在答需要文字的问题）、`narrated_motive_check`（没人问原因，回复却以“因为”起头解释自己为什么接话；生成后、送审前就查，按 soft 重写）。`requires_llm_semantic_check` 决定 `risk` 模式下是否需要语义审查。
+| 规则 | 函数 / 判定 |
+|---|---|
+| 空回复 | `heuristic_check` |
+| 复读 | 与最近 `max_repeat_compare` 条角色消息完全相同或相似度 ≥ `similarity_threshold`；只发一个媒体时跳过复读比较 |
+| 整句照搬 | 原样复述自己刚说过的整句（≥ 8 字） |
+| 近似照搬 | 去掉 `[…]` 标记和标点后与最近 6 条角色消息的相似度 ≥ 0.75（`_near_copy_of_recent`，至少 12 字） |
+| 连续发言 | 连续 `max_assistant_in_row` 条角色发言 |
+| 自称 AI | `persona_break_check`：自称 AI、模型、机器人或谈起自己的提示词；否认、反问和假设不算 |
+| 凭空链接 | `ungrounded_link_check`：网址、域名或邮箱在别人发的消息、读图结果和资料里都找不到；生成后、送审前就查 |
+| 自述经历 | `grounded_self_history_check`：角色自称的经历、关系、近况需要依据 |
+| 群友经历 | `grounded_context_history_check`：群友经历需要依据 |
+| 身份一致 | `persona_identity_consistency_check`：性别等身份表述与人设一致 |
+| 只发媒体 | `media_meta_reply_check`：只发媒体却在答需要文字的问题 |
+| 编造动机 | `narrated_motive_check`：没人问原因，回复却以“因为”起头解释自己为什么接话；生成后、送审前就查，按 soft 重写 |
+
+`requires_llm_semantic_check` 决定 `risk` 模式下是否需要语义审查。
 
 ### 语义审查（`llm/reply_checker.py`）
 
@@ -342,9 +373,16 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 图片证据 | `image_evidence_respected`、`visual_claims` |
 | 模板化 | `non_template` |
 
-`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气；这一轮从统一记忆取到的、关于人和群的每一行也编进证据索引（`m1`、`m2`……），关于群友的陈述可以引用她记得的事。`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用主配置 `ai.routes.checker.total_timeout_seconds`。独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
+`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气；这一轮从统一记忆取到的、关于人和群的每一行也编进证据索引（`m1`、`m2`……），关于群友的陈述可以引用她记得的事。`llm/arithmetic.py` 核对数值推导。部分模型把 `response_format` 当成要输出的外壳，把审查结论放进 `{"type": "json_object", "content": …}` 的 `content`（对象或 JSON 字符串），`_checker_payload` 同样解析。
 
-独立阅读使用对话原文、当前消息、发言者、本群用语和角色名。候选内容独立于这些材料。`TurnReadingCache` 按材料缓存一份阅读。`always` 模式下，`reply_generator` 在请求候选前启动预读。语义审查等待阅读结果，再比较候选。重写时材料相同则复用。上下文缩减或材料变化时重新阅读。审查超时取消本次等待，进行中的阅读留给下一次尝试。阅读失败或无效时，当前审查记为不可用并清空缓存。下一次尝试重新阅读。生成结束时取消并回收剩余阅读任务。`risk` 模式在需要远程审查时启动阅读，重写时复用。
+`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。独立阅读使用对话原文、当前消息、发言者、本群用语和角色名，候选内容独立于这些材料。两路候选审查并行执行，共用主配置 `ai.routes.checker.total_timeout_seconds`，任一路确认的硬错误都会生效。`TurnReadingCache` 按材料缓存一份阅读，并管理它的超时复用与任务回收：
+
+- `always` 模式下，`reply_generator` 在请求候选前启动预读；`risk` 模式在需要远程审查时启动阅读。
+- 语义审查等待阅读结果，再比较候选。
+- 重写时材料相同则复用；上下文缩减或材料变化时重新阅读。
+- 审查超时取消本次等待，进行中的阅读留给下一次尝试。
+- 阅读失败或无效时，当前审查记为不可用并清空缓存，下一次尝试重新阅读。
+- 生成结束时取消并回收剩余阅读任务。
 
 图像证据由 `llm/media_evidence.py` 统一提供给生成与审查，区分“附件存在”和“画面已读出”。缺图时的说明要求像群友一样随口说图没加载出来，不使用画面、读取、解析这类说法。附和用户对未知画面的评价也算确认画面。
 
@@ -402,7 +440,8 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 消息编号 | 首次分配时读取已有历史的最大 `mN`，覆盖重启、闲置重置和缓存淘汰后的续写 |
 | QQ 消息 ID | 角色发言在投递回执提交时连同全部消息 ID 写入（`message_id` 为第一条，`extra_message_ids` 为拆分后的其余各条），不事后回填。引用判断检查记录的全部 ID |
 | 会话锁 | 锁缓存 + 弱引用注册表。缓存淘汰后持有者与等待者仍共享原锁 |
-| 重置代际 | `person_profiles/<会话>/.generation` 标记。重置在共享路径锁内更新标记、清理旧资料文件和旧话题摘要文件（`hippo_memorizer/`）、删除这个会话的旧向量文档，并经 `memory.forget` 清空统一记忆里的这个会话。后台任务在远程调用前记录代际，提交时核对；推给统一记忆的幂等键也带代际 |
+| 重置代际 | `person_profiles/<会话>/.generation` 标记。`reset_chat_session` 先清聊天历史，再在共享路径锁内更新标记、清理人物资料文件和话题摘要文件（`hippo_memorizer/`）、删除这个会话在向量库里的文档，接着清各 store 里这个会话的状态，最后清长期记忆（下一行）。后台任务在远程调用前记录代际，提交时核对；推给统一记忆的幂等键也带代际 |
+| 长期记忆的清除 | `memory/client.py` 的 `forget_chat(context, chat_id)` 在这个会话的推送锁内让记忆插件清空它的范围（`memory.forget`，`all=True`，超时 `RECORD_TIMEOUT` 8 秒）。**返回值**：`True` 只表示记忆插件确认已清掉；服务不在、超时或出错时返回 `False`，本地状态照样已清空，`commands.py` 的重置回复据此说明没能确认。**待清记录**：没得到确认的会话记进 `memory_outbox.json` 的 `forgetting`（`mark_forgetting`），确认后 `mark_cleared`。**待清期间不推不读**：`push_pending` 先重试清除，没清成就不推；`recall` / `search` 经 `_awaiting_forget` 直接返回空。**重试时机**：这个会话的下一次推送；`scheduled_memory_sync` 开头的 `retry_forgets`（每小时 13、43 分，覆盖重置后还没有新消息、没有历史文件的会话）；任何会话来消息时，`handlers._retry_pending_forgets` 经 `forget_retry_due` 在后台试一次，两次之间至少隔 `FORGET_RETRY_SECONDS`（30 秒，按数据目录计），不等结果 |
 | 表达与黑话 | 加载结果携带基线，保存时以基线向最新磁盘状态合并增量 |
 | 表情库 | 收集和使用计数在索引路径锁内提交。耗时修复在锁外分析，按旧快照校验后提交差量 |
 | 连续会话边界 | 到达 `conversation_idle_gap_seconds` 时保留原始历史，目标、PFC 和行动历史切换到新片段 |

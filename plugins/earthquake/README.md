@@ -4,6 +4,16 @@
 
 ---
 
+## 🔐 使用条件
+
+- 命令支持群聊与私聊。
+- 必需依赖为 `requests`、`beautifulsoup4`（模块名 `bs4`）和 `Pillow`，随 `python -m pip install -e ".[plugins]"` 安装；缺少时插件不会加载，日志记录缺失的模块名。
+- 手动查询需要访问微博与新浪图片域名。
+- 自动投递需要至少一个目标群，配置方式见“定时投递”。
+- 无需配置密钥。
+
+---
+
 ## ⌨️ 命令
 
 <!-- manifest-command-aliases:start -->
@@ -24,13 +34,13 @@
 
 ## ⏰ 定时投递
 
-Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`：
+Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`（任务 ID `poll`）。目标群取自部署配置 `config.plugins.earthquake.schedules.poll.group_ids`，没写时使用 `default_group_ids`。一次检查按以下顺序执行：
 
 1. 优先续发 `earthquake_delivery.json` 中的待办事件；
 2. 拉取并校验微博卡片；
 3. 扫描新事件，并筛选 4.0 级及以上记录用于投递；
 4. 按定时任务目标群逐个发送并原子记录确认状态；
-5. 全部目标都有结论后提交微博游标和检查点。结果未知（OneBot 已接收但没有回执）按 at-most-once 视为完成，避免重复快讯，代价是该目标可能漏收；明确失败的目标保留待下一轮重试。
+5. 全部目标都有结论后提交微博游标和检查点。投递结果按 at-most-once 记录，语义同 [CHIME/FRB 插件说明](../chime/README.md)的“定时通知”：结果未知的目标视为完成，明确失败的目标保留待办，下一次定时检查重试。
 
 低震级记录会进入扫描进度，待办事件会在重启后继续投递。目标群为空、网络异常或部分目标发送异常时，现有投递游标保持原值。
 
@@ -59,15 +69,13 @@ Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`：
 - 微博正文会清理脚本、样式、HTML 标签和控制字符；
 - 单条卡片的解析异常局限在该记录内。
 
-插件使用 `requests`、`beautifulsoup4` 和 `Pillow`。微博会话在当前插件代内复用，并在 15 分钟后轮换。
+微博会话在当前插件代内复用，并在 15 分钟后轮换。
 
 ---
 
 ## 📌 信息用途
 
 微博访客接口提供尽力而为的消息提醒。应急判断请同时使用中国地震台网官方 App、微信服务号、小程序和所在地权威应急渠道复核。
-
-插件凭据配置为空集。手动查询需要访问微博与新浪图片域名；自动投递需要部署配置 `config.plugins.earthquake.schedules.poll.group_ids` 或全局 `default_group_ids` 解析出至少一个目标群。
 
 ---
 
@@ -82,7 +90,7 @@ Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`：
 | 现象 | 检查项 |
 | --- | --- |
 | 手动查询暂时失败 | 检查微博访客接口、网络连通性和运行日志 |
-| 自动消息持续待办 | 检查默认群、Bot 发送权限与待办文件 |
+| 自动消息持续待办 | 检查目标群配置（`schedules.poll.group_ids` 或 `default_group_ids`）、Bot 发送权限与待办文件 |
 | 状态文件进入隔离副本 | 检查检查点内容和数据目录写权限 |
 | 图片下载失败 | 检查新浪图片域名、图片预算和 Pillow 解码日志 |
 

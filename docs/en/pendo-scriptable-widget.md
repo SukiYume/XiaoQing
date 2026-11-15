@@ -14,7 +14,7 @@ It shows upcoming events, tasks, finances, or notes on the home screen.
 | Section parameter | `section=tasks\|ledger\|notes\|all\|auto` |
 | Authentication | `Authorization: Bearer <widget_token>` |
 | Permission scope | `GET /api/widget/*` |
-| Default lifetime | 365 days |
+| Lifetime | 365 days (fixed, not configurable) |
 
 `tasks`, `ledger`, and `notes` return events and one specified panel.
 `all` returns events and all three panels.
@@ -29,7 +29,7 @@ Run this command in QQ private chat:
 /pendo web widget-token
 ```
 
-`WEB_WIDGET_TOKEN_EXPIRE_SECONDS` defines the default lifetime.
+The token lifetime is fixed at 365 days and is not configurable.
 Each issuance creates an independent `jti`.
 The server stores its digest, user, issuance time, and absolute expiry time in `pendo.db`.
 
@@ -56,10 +56,9 @@ const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
 const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 ```
 
-Common addresses:
-
-- Local host: `http://127.0.0.1:12001`
-- Reverse-proxy subpath: `https://example.com/pendo`
+Set `BASE_URL` to the Pendo Web root address that the phone can reach, such as the reverse-proxy subpath `https://example.com/pendo`.
+Pendo Web listens only on the server's `127.0.0.1:12001` by default. On the phone, `127.0.0.1` means the phone itself, so do not use it.
+LAN or public access needs a TLS reverse proxy. See the [Pendo plugin README (Chinese)](../../plugins/pendo/README.md) for the requirements.
 
 Set `TOKEN` to the complete value returned by `/pendo web widget-token`.
 For HTTP 401, generate a new token in QQ private chat and replace `TOKEN` at the script top.
@@ -90,11 +89,10 @@ The interface supplies original-currency totals. Additional sources and rules ar
 2. Run `/pendo web widget-token` in QQ private chat.
 3. Create a script and paste the complete `pendo_widget.js` content.
 4. Set `BASE_URL` and `TOKEN` at the script top.
-5. Run the script in the Scriptable app.
-6. Confirm that the summary loads.
-7. Add a Scriptable widget to the iPhone home screen.
-8. Select the Pendo script.
-9. For a medium widget, set its parameter to `tasks`, `ledger`, `notes`, or `auto`.
+5. Run the script in the Scriptable app and confirm that the summary loads.
+6. Add a Scriptable widget to the iPhone home screen.
+7. Select the Pendo script.
+8. For a medium widget, set its parameter to `tasks`, `ledger`, `notes`, or `auto`.
 
 For a custom server port, update both `config.plugins.pendo.web_port` and script `BASE_URL`.
 
@@ -130,11 +128,13 @@ A successful-day cursor in Keychain controls the window:
 - A missing calendar, API failure, or event-save failure keeps the original cursor.
   The next run processes the same window again.
 
-Calendar writes reconcile by Pendo ID.
+Calendar writes reconcile by `Pendo-ID`.
 Timed events represent actual instants with offset-aware ISO timestamps. Devices write those instants to the calendar.
 The server derives offsets from the event timeline.
 This covers different user/device timezones and repeated wall-clock times during daylight-saving rollback.
 All-day events keep date-only semantics.
+
+The write rules follow:
 
 - Timed events default to 1 hour. Valid API end times take priority.
 - Date-only events become 1-day all-day events.

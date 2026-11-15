@@ -29,11 +29,10 @@ cd XiaoQing
 python -m pip install -r requirements.txt
 ```
 
-根依赖清单覆盖 Core、默认插件和 Pendo Web。
+根依赖清单覆盖 Core、默认插件、Pendo Web 和 Jupyter 内核（`ipykernel`）。
 以下能力需要额外运行资源：
 
-- Jupyter 插件需要可用的 Jupyter kernel。
-- arXiv Filter 的本地推理需要 `plugins/arxiv_filter/best_model/` 模型资产。
+- arXiv Filter 的本地推理需要 `plugins/arxiv_filter/best_model/` 模型资产，以及 `requirements.txt` 末尾注释的可选依赖（`torch`、`transformers` 等，也可执行 `python -m pip install ".[arxiv-ml]"` 安装）。
 - Flickr、Wolfram|Alpha、语音和其他外部 API 插件需要对应服务凭据。
 
 ---
@@ -81,12 +80,8 @@ cp config/secrets.json.example config/secrets.json
 将 `config/secrets.json` 保存在部署主机，并为文件设置与 Bot 进程相匹配的读取权限。
 项目的 Git 忽略规则覆盖正式 secrets 文件。
 
-首次部署在启动前写入完整配置。
-服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。
-新增路径可直接写入完整、有效的 `secrets.json`。
-当 `config.json` 保持当前已确认版本时，watcher 暂存候选。Core 私聊当前管理员，列出新增、删除和修改的字段路径。所有凭据值保持隐藏。
-核对通知后发送 `/reload` 确认并应用。
-修改 `config.json` 或同时替换两个来源时，先停止服务，保存完整文件，再启动新进程。
+首次部署在启动前写好完整配置。
+服务运行期间修改密钥的流程见 [配置详解的配置热重载](06-configuration.md#️-配置热重载)。
 
 ### AI 插件配置
 
@@ -143,6 +138,8 @@ cp config/secrets.json.example config/secrets.json
 
 ## ⚙️ 3. 配置 OneBot
 
+出站请求（HTTP Action 与主动 WebSocket）使用 `config/secrets.json` 顶层的 `onebot_token`，两种接入方式都适用：OneBot 启用 Bearer 鉴权时填写相同的 token；未启用时保持空字符串，有效 secrets 快照中的空字符串表示双方约定的匿名连接模式。
+
 ### 被动 Inbound
 
 被动模式由 OneBot 向 XiaoQing 推送事件。
@@ -167,7 +164,7 @@ XiaoQing 侧配置：
 HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和有界接纳队列。
 启用任一 Inbound Listener 时，请设置非空 `inbound_token`。
 
-同时开启 OneBot HTTP API，用 `onebot_http_base` 和 `secrets.onebot_token` 配置回复通道。
+同时开启 OneBot HTTP API，并用 `onebot_http_base` 指向它，回复通道的 token 使用 `onebot_token`。
 标准上报收到 `{}` 确认，消息通过 action API 实际发送。
 `secret`/`X-Signature` 单独配置会收到 401。
 此服务的 HTTP 上报使用 Bearer 请求头。
@@ -185,9 +182,6 @@ HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和
   "onebot_http_base": "http://127.0.0.1:11001"
 }
 ```
-
-OneBot 服务启用 Bearer 鉴权时，在 `config/secrets.json` 顶层配置 `onebot_token`。
-有效 secrets 快照中的空字符串表示双方约定的匿名连接模式。
 
 ### 网络边界
 
@@ -290,10 +284,10 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 |---|---|
 | `ws-matrix` / `http-matrix` | 通过 WebSocket 与 HTTP Inbound 执行全部 Manifest 命令的正确样例、错误样例、权限和场景 |
 | `core-pressure` | Core 并发、过载与恢复压测 |
-| `compileall` / `ruff` / `mypy` | 与 CI 相同的静态门禁 |
+| `chat-quality` | 真实模型聊天质量探针，需要 `--include-chat-quality` 显式开启，开启后排在 `core-pressure` 之后 |
+| `compileall` / `ruff` / `format` / `mypy` | 编译检查、Ruff、格式检查与类型检查 |
 | `pytest` | 全量测试 |
 | `diff` | `git diff --check` |
-| `chat-quality` | 真实模型聊天质量探针，需要 `--include-chat-quality` 显式开启 |
 
 报告位于 `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`。
 常用选项：
@@ -352,5 +346,5 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 ## 🧭 下一步
 
 - 生产参数与安全设置：[配置详解](06-configuration.md)
-- 插件功能入口：[插件目录](09-plugins.md)
+- 插件功能入口：[插件使用手册](09-plugins.md)
 - 消息排障：[消息处理流程](08-message-flow.md)

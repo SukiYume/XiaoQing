@@ -80,19 +80,23 @@ Dispatcher 从事件构建 `MessageContext`。
 
 | 字段 | 说明 |
 |---|---|
-| `event` | 标准化 OneBot 事件 |
+| `request_id` | 请求追踪 ID |
+| `event` | 校验后的 OneBot 事件 |
 | `text` | 消息段提取的文本 |
 | `clean_text` | Bot 名称与命令前缀处理后的文本 |
 | `user_id` | 当前用户 |
 | `group_id` | 当前群，私聊为空 |
-| `message_id` | OneBot 消息 ID |
-| `has_command_prefix` | 原消息包含命令前缀 |
-| `has_prefix` | 原消息包含命令前缀或 Bot 名称 |
 | `is_private` | 私聊标记 |
+| `has_bot_name` | 文本任意位置包含 Bot 名称 |
+| `has_command_prefix` | 原消息以命令前缀开头 |
+| `has_prefix` | 原消息以命令前缀开头、包含 Bot 名称或 @Bot |
+| `is_only_bot_name` | 只叫 Bot 名称，或只 @Bot 且没带图 |
 | `is_at_me` | @Bot 标记 |
-| `is_reply_to_bot` | 引用 Bot 消息标记 |
-| `principal` | 用户、群角色和管理员能力 |
-| `request_id` | 请求追踪 ID |
+| `is_url_only` | `clean_text` 是单个 HTTP/HTTPS URL |
+| `is_empty` | 没有文本、媒体和 @，只允许活动 Session 接收 |
+| `cached_session` | Step A 取得的活动 Session 快照，只作路由提示 |
+
+用户、群角色和管理员能力（principal）在调用插件时由 Core 按事件签发，不属于 `MessageContext`。
 
 Bot 名称和命令前缀按配置顺序处理。
 例如：
@@ -118,8 +122,11 @@ Step A 根据以下信号决定消息是否进入业务流程：
 - 配置允许的群聊普通消息
 - Smalltalk Provider 的观察需求
 
-群聊静音状态在此阶段参与普通聊天与 URL 路径判断。
-命令与会话按各自权限和场景继续处理。
+没有文本、媒体和 @ 的空消息只有活动 Session 能接收。
+
+群聊静音不在这一步判断：静音期间，B 跳过 URL 解析，G 跳过闲聊；命令、只叫 Bot 名称和活动 Session 照常处理。
+
+门控之后、进入 B 之前，Dispatcher 把没有被跳过的消息交给 Smalltalk Provider 的 `observe_message()`，其中包括没有叫到 Bot 的群聊普通消息。URL、命令、带命令前缀的文本和活动 Session 的输入被跳过，不被观察。
 
 ---
 
@@ -127,7 +134,7 @@ Step A 根据以下信号决定消息是否进入业务流程：
 
 ### A. 处理门控
 
-完成消息上下文、群聊规则、身份和静音判断。
+构建消息上下文并决定消息是否进入业务流程，信号与观察时机见 [处理门控](#-4-处理门控)。
 
 ### B. URL 解析
 
@@ -136,7 +143,8 @@ URL 先通过安全网络边界，再进入内容提取。
 
 ### C. Bot 名称回应
 
-用户消息只包含 Bot 名称时，Dispatcher 生成名称回应或交给 Smalltalk Provider 的名称场景。
+用户消息只包含 Bot 名称（或只 @Bot 且没带图）时，Dispatcher 调用 Smalltalk Provider 的 `call_bot_name_only()`，见 [`call_bot_name_only()`](03-plugin-development.md#call_bot_name_only)。
+Provider 不可用或出错时，Dispatcher 回复 Core 的预设短语。
 
 ### D. 活跃会话
 
@@ -148,8 +156,8 @@ await plugin.handle_session(text, event, context, session)
 
 同一会话键的请求串行执行。
 插件通过 `update_session()` 提交工作副本，或通过 `end_session()` 结束流程。
-调用前用 `command_access` 复核此人此刻仍能用会话所属插件的至少一条顶层命令。
-撤权或场景不再允许时关闭会话并回复说明。
+调用前按 [权限模型](07-advanced.md#-权限模型) 复核此人此刻仍能用会话所属插件的至少一条顶层命令，撤权或场景不再允许时关闭会话并回复说明。
+用户发送 `退出`、`取消`、`exit`、`quit` 或 `q` 时，Core 调用插件的 [`close_session()`](03-plugin-development.md#close_session) 后结束会话，这条消息不会到达 `handle_session()`。
 
 ### E. 命令
 
@@ -174,9 +182,14 @@ Router 从命令目录解析顶层触发词和递归子命令：
 
 解析结果通过 `context.command_invocation` 传给插件。
 
+agent 执行任务时调用的命令走 `Dispatcher.run_command_text`：以发起人身份、只走本步骤，与本人直接发送同一处权限与场景检查。
+在一次性的会话空间里执行，命令新开的会话先交给插件的 `close_session()` 收尾再丢弃。
+每次调用带独立的操作标识（请求 ID 为 `原请求ID.command.<操作标识>`）。
+命令返回的 `DeliverySegments` 连同回执原样交回 agent。
+
 ### F. 命令兜底
 
-带命令前缀的文本在命令目录中缺少匹配项时，Dispatcher 返回帮助提示和查询入口。
+消息以命令前缀开头、前缀后的第一个字符是字母，而命令目录中没有匹配项时，Dispatcher 返回帮助提示和查询入口。
 
 ### G. Smalltalk Provider
 
@@ -185,14 +198,6 @@ Router 从命令目录解析顶层触发词和递归子命令：
 有人明确召唤小青时，`xiaoqing_chat` 经 `agent.handle_turn` 让 `xiaoqing_agent` 判断是否需要动手做事（能用哪些工具由发起人的权限决定），同时照常生成聊天回复：判断为闲聊就用这份回复，agent 接手则放弃它。
 agent 未开启、判断为闲聊或调用失败时继续原流程。
 生成回复前，`xiaoqing_chat` 经 `memory.recall` 向 `xiaoqing_memory` 取一次这一轮的记忆（说话人的页面、群页、相关旧事、她自己的近况和往事、可以顺口问的到期话头），纯内存读取；经 `life.turn_context` 向 `xiaoqing_life` 取和当前话题相关的网上经历、用语与表达，限时取用。两者取不到时都当作没有。回复确认发出、聊天记录落盘后，消息经 `memory.record` 写进统一记忆。
-
-观察入口接收普通聊天候选消息。
-命令、URL、Session 和命令前缀文本在前述阶段完成处理。
-
-agent 执行任务时调用的命令走 `Dispatcher.run_command_text`：以发起人身份、只走 Step E，与本人直接发送同一处权限与场景检查。
-在一次性的会话空间里执行，命令新开的会话先交给插件的 `close_session` 收尾再丢弃。
-每次调用带独立的操作标识（请求 ID 为 `原请求ID.command.<操作标识>`）。
-命令返回的 `DeliverySegments` 连同回执原样交回 agent。
 
 ---
 
@@ -297,14 +302,14 @@ HTTP 上报的 Bearer 凭据与 OneBot action API 凭据分别配置。
 ### 回执
 
 Delivery 层将投递结果返回给回执对象。
+`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action，最终传输成功、明确失败和结果未知分别进入提交、回滚和未知回调。
 需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。
 长消息被拆成几条时，每条确认发出后先登记它的消息 ID 再记下结果。
 全部确认后提交回调从 `message_ids` 读到整条回复的全部 ID，`xiaoqing_chat` 据此把角色发言和真实消息一一对应，群友引用其中任何一条都能被识别。
 
 事件作用域中的 action sink 只暂存动作，并持有后续结算权。
-`send_with_receipt` 观察到暂存状态时保持收据待定。
-最终传输成功、明确失败和结果未知分别进入对应回调。
-主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费，通知任务随连接断开回收。
+`send_with_receipt` 观察到暂存状态时保持收据待定；插件发送帮助器与传输层保留同一结算权，拆分消息不会重复累计成功。
+主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费；连接结束时统一回收通知任务与待响应请求。
 
 ---
 

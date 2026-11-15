@@ -4,6 +4,15 @@
 
 ---
 
+## 🔐 使用条件
+
+- 命令支持群聊与私聊。
+- 必需依赖为 `beautifulsoup4`（模块名 `bs4`），随 `python -m pip install -e ".[plugins]"` 安装；缺少时插件不会加载，日志记录缺失的模块名。
+- 网络需要访问 `https://github.com`，也可通过可选代理，见“可选代理”。
+- 定时推送需要至少一个目标群，配置方式见“定时任务与历史”。
+
+---
+
 ## ⌨️ 命令
 
 <!-- manifest-command-aliases:start -->
@@ -36,13 +45,11 @@
 - 描述、语言、计数字段和控制字符分别经过规范化；
 - QQ 消息最多展示 10 个完整仓库块，并受 Core 单条文本长度保护。
 
-Trending 页面结构变化时，维护者需要同步更新解析规则和测试夹具。
-
 ---
 
 ## ⏰ 定时任务与历史
 
-Manifest 每天 08:30 按调度器时区运行 `scheduled`。任务使用 Core `broadcast` 模式。Core 把结果投递到该 schedule 的目标群。成功抓取后，插件写入以下文件：
+Manifest 每天 08:30（按 `config.timezone` 计，默认 `Asia/Shanghai`）运行 `scheduled`（任务 ID `daily`），推送每日榜单。任务使用 Core `broadcast` 模式，目标群取自部署配置 `config.plugins.github.schedules.daily.group_ids`，没写时使用 `default_group_ids`；请配置至少一个目标群，否则没有投递对象。每次成功抓取（含手动命令）后，插件写入以下文件，`<range>` 为 `daily`、`weekly` 或 `monthly`：
 
 ```text
 data/github/trending_<range>_latest.json
@@ -55,7 +62,7 @@ data/github/history/trending_<range>_<YYYY-MM-DD>.json
 
 ## 📌 可选代理
 
-插件凭据字段只有可选代理。在 `config/secrets.json` 中配置：
+代理是插件唯一的私密配置项，可省略。在 `config/secrets.json` 中配置：
 
 ```json
 {
@@ -67,7 +74,7 @@ data/github/history/trending_<range>_<YYYY-MM-DD>.json
 }
 ```
 
-代理地址接受结构完整的 HTTP 或 HTTPS URL。代理负责目标 DNS 连接，属于管理员信任边界。日志会保留代理凭据之外的请求状态信息。
+代理地址接受结构完整的 HTTP 或 HTTPS URL。配置代理后，GitHub 域名解析由代理完成，请只使用可信代理。日志不记录代理账号密码。
 
 ---
 

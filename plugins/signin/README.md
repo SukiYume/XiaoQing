@@ -1,6 +1,6 @@
 # ✅ 影视飓风远端签到
 
-`signin` 使用一组有赞/影视飓风共享凭据执行远端签到。部署者提供这些凭据。Manifest 将命令限定为 Bot 管理员入口。手动调用和定时调用按顺序执行。
+`signin` 使用部署者配置的一组有赞/影视飓风凭据执行远端签到，所有调用共用这一组凭据。命令只有 Bot 管理员能用。
 
 ---
 
@@ -15,7 +15,7 @@
 
 `yingshi`、`yingshijufeng` 和 `y` 指向同一签到流程。`帮助` 和 `?` 是 `help` 的别名。
 
-Manifest 每天 00:30 按调度器时区以 Core `broadcast` 模式运行 `scheduled_yingshi`。插件并发模式为 `sequential`，同一组共享凭据按调用顺序访问远端服务。
+每天 00:30 自动签到一次，时间按 `config.timezone`（默认 `Asia/Shanghai`）计，结果以 `broadcast` 模式发到目标群。目标群由 `config/config.json` 的 `plugins.signin.schedules.yingshi.group_ids` 指定，没写时使用全局 `default_group_ids`。插件的并发模式为 `sequential`：手动签到和定时签到按调用顺序依次访问远端服务。
 
 ---
 
@@ -38,7 +38,7 @@ Manifest 每天 00:30 按调度器时区以 Core `broadcast` 模式运行 `sched
 }
 ```
 
-四个字段接受非空字符串或整数。凭据通过插件 secret 快照读取，并保留在聊天消息、公开配置和普通日志边界之外。
+四个字段接受非空字符串或整数。凭据不会出现在聊天消息、公开配置和日志里。
 
 ---
 

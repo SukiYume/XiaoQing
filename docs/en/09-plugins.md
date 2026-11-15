@@ -41,7 +41,7 @@ AI routes are under `config.plugins.<plugin_name>.ai.routes`.
 
 Administrator private chats support `/米家 <natural language>` for device queries and controls. The plugin discovers MIoT properties, actions and events, and publishes device, capability and structured-call commands for the XiaoQing agent. Sensor queries read cloud properties; weather uses Open-Meteo. Infrared bulbs expose power; air conditioners expose mode, temperature, fan and swing, with selected extensions using silent speaker forwarding and an unconfirmed status.
 
-Install `python -m pip install -e ".[xiaoai]"`, use `/小爱 登录` for QR authorization and `/小爱 选择 1` to bind. Configure `plugins.xiaoai.ai.routes.plan` for natural language. Set the weather city with `/米家 天气城市 北京` and portion grams with `/米家 份量 <ID> 10`. Automatic renewal and reauthorization alerts remain available. See the [plugin guide (Chinese)](../../plugins/xiaoai/README.md).
+Install `python -m pip install -e ".[xiaoai]"`, use `/小爱 登录` for QR authorization and `/小爱 选择 1` to bind. Configure `plugins.xiaoai.ai.routes.plan` for natural language. Set the weather city with `/米家 天气城市 北京` and portion grams with `/米家 份量 <ID> 10`. The plugin checks authorization every 30 minutes and renews it; when a new login is required it sends a private reminder to the bound user. See the [plugin guide (Chinese)](../../plugins/xiaoai/README.md).
 
 ### `bot_core`: Core management
 
@@ -133,7 +133,7 @@ One-line input can also include reminders, category, priority, and tags.
 ```text
 /pendo note add|list|view|edit|append|tag|untag|link|delete ...
 /pendo diary add|template|list|view|delete ...
-/pendo ledger add|quick|list|view|edit|delete|summary ...
+/pendo ledger add|record|quick|list|view|edit|delete|summary ...
 ```
 
 Notes support categories, tags, references, and related items.
@@ -146,7 +146,7 @@ Statistics use integer minor-unit fields.
 ```text
 /pendo search <关键词> [type=] [range=] [status=] [category=]
 /pendo confirm <id>
-/pendo snooze <id> <10m|30min|1h|1d|19:00>
+/pendo snooze <id> <10m|1h|1d|HH:MM>
 /pendo undo [1..5]
 /pendo settings view
 /pendo settings reminder on|off
@@ -161,16 +161,8 @@ Statistics use integer minor-unit fields.
 Operation snapshots last 5 minutes.
 `ai_consent` controls permission for external AI analysis of journal bodies.
 Event and task reminders always use private messages to the item owner.
-OneBot receipts complete or release reminder claims.
-Item writes and edits update reminder queues together.
-Schedule queries use canonical UTC trigger times with second precision.
-
-Soft deletion keeps reminder history. Undo restores reminders with pending execution.
-Recurrence `COUNT` constrains the entire original sequence.
-Generation within a query window keeps the same count origin.
-
-Backups read at JSON record boundaries. Chinese filenames use UTF-8 percent encoding.
-Export scale and import-validation limits remain consistent.
+A deleted item can be restored with undo, which also restores its reminders that are still due.
+The occurrence limit of a recurring event (`COUNT`) applies to the whole series and does not depend on the queried time range.
 
 Web event details permit early confirmation of each future reminder.
 Users can enable it again at the same location after confirmation.
@@ -188,6 +180,7 @@ State changes affect only the current user, current event, and specified reminde
 /pendo import
 ```
 
+`web start` and `web stop` are for Bot administrators only.
 One-time login codes have a 7-day lifetime. Redeemed HttpOnly browser sessions also last 7 days.
 Widget Bearer tokens last 365 days and permit only `/api/widget/*`.
 Credential digests, browser sessions, widget registrations, and business tables are in `data/pendo/pendo.db`.
@@ -246,14 +239,9 @@ Restart restores configured models.
 
 **Participation**
 
-- Messages addressed to her always get a reply: private chat, `/xc`, a group `@` of the persona, a quote of her message, or her name used as a call. A call is the name at the start of a sentence ("小青，……") or within or at the end of a sentence in a calling tone ("行吧小青你赢了", "在吗小青"). A message that `@`s someone else without `@`ing her does not count.
-- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call (or a bare `@`) gets an instant preset reply from `bot_name_only_replies` without a model call; the same person's next message within a minute counts as addressed to her, and if that message is already queued the call itself gets no reply. During class or sleep she still replies, more slowly and briefly. When one person sends several messages in a row, she waits for the last one and answers them together.
-- Other group turns pass frequency limits, participation probability, and PFC context planning. Group planning remains enabled regardless of the optional private-chat planner setting.
-- Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. A message that directly follows her own reply skips the probability roll and goes to the planner. A busy or sleeping routine multiplies the probability by a routine factor. The suppression eases when she has stayed silent through several messages and falls to at most half.
-- The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation. Pronouns that point to her, follow-up messages, and messages naming other members are judged from context.
-- The planner selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Unfinished intermediate actions, invalid actions, and unavailable planning leave the group turn waiting.
-- Private chat retains its configured direct-reply and planning paths. Unaddressed group turns stay in chat and never go to the agent.
-- New user messages before delivery trigger a context review through the reasoning route. Matching snapshots reuse the result. Review failure withholds the remaining reply.
+- Messages addressed to her always get a reply: private chat, `/xc`, a group `@` of the persona, a quote of her message, or her name used as a call. A call is the name at the start of a sentence ("小青，……") or within or at the end of a sentence in a calling tone ("行吧小青你赢了", "在吗小青"). A message that `@`s someone else without `@`ing her does not count. These turns draft a reply directly and also go to the agent for a task decision. A bare name call (or a bare `@`) gets an instant preset reply from `bot_name_only_replies` without a model call; the same person's next message within a minute counts as addressed to her, and if that message is already queued the call itself gets no reply. During class or sleep she still replies, more slowly and briefly. When one person sends several messages in a row, she waits for the last one and answers them together.
+- Other group messages first pass the hard limits (minimum interval, per-minute cap, consecutive cooldown, low-information messages) and then a roll against the base probability. The probability is higher when she and the current topic were both active in the last 5 minutes; the Heartflow soft score and consecutive silence compensate further. A message that directly follows her own reply skips the roll and goes to the planner. A busy or sleeping routine multiplies the probability by a routine factor; the suppression eases when she has stayed silent through several messages and falls to at most half.
+- Turns that pass go to the PFC planner, which selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Invitations, questions, sharing, and banter addressed to the whole group, as well as pronouns that point to her, follow-up messages, and messages naming other members, are judged by the planner from context. Unaddressed group messages stay in chat and never go to the agent.
 - Global, conversation, user-concurrency, and daily-user quotas apply before generation.
 - A failed turn sends no error code to the chat. Unaddressed turns stay silent. Private or addressed turns get one short in-character line, at most once per conversation in ten minutes. Details go to the log.
 
@@ -319,7 +307,7 @@ External text reaches the model only as low-trust data. Slang and expressions re
 
 | Item | Content |
 |---|---|
-| Command | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
+| Command | `/life [status\|recent\|slang\|threads\|methods\|stats\|works\|dossier\|memes\|meme\|run\|forget\|login\|logout\|help]` |
 | Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
 | Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat`. Uses `memory.record` to publish experiences, diary entries, and verified learnings to the unified memory. |
 | Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
@@ -339,7 +327,7 @@ The plugin is enabled by default. Consolidation needs `ai.routes.reasoning`.
 
 | Item | Content |
 |---|---|
-| Command | `/mem [status|stats|page|search|why|forget|consolidate|rebuild|help]` |
+| Command | `/mem [status\|stats\|page\|search\|why\|forget\|consolidate\|rebuild\|help]` |
 | Schedule | `xiaoqing_memory.tick` checks every 30 minutes and consolidates in the background at night or on backlog. |
 | Capabilities and services | Supplies `memory.record` (called by `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`), `memory.recall` (called by `xiaoqing_chat`, `xiaoqing_agent`), and `memory.search` and `memory.forget` (called by `xiaoqing_chat`). |
 | Runtime data | `data/xiaoqing_memory/`: raw records per scope and month, notes, pages, and state |
@@ -814,7 +802,7 @@ HTML limit is 2 MiB. Image limits are 5 MiB, 20 million pixels, and 120 frames.
 At most 4 page previews run concurrently.
 
 `data/url_parser/url_previews/` has limits of 128 entries, 128 MiB, and 7 days.
-[URL Parser README (Chinese)](../../plugins/url_parser/README.md) describes metadata priority and site adapters.
+[URL Parser README (Chinese)](../../plugins/url_parser/README.md) describes metadata priority and the supported page types.
 
 ### `github`: GitHub Trending
 
@@ -1140,8 +1128,7 @@ Configuration, credentials, network calls, data files, and schedules are empty s
 
 This table comes from plugin `plugin.json` files and lists all top-level commands, aliases, permissions, and scenes.
 Use `/help <command>` for subcommands, arguments, and examples.
-Group administrator permission includes the current group owner, group administrators, and Bot administrators.
-Subcommands can set stricter permissions.
+The table lists the permission of each top-level command. Subcommands can set stricter permissions; see each plugin entry. In those entries, "group administrator" includes the current group owner, group administrators, and Bot administrators.
 
 | Plugin | Commands and aliases | Permission | Scene |
 |---|---|---|---|
@@ -1226,7 +1213,7 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `pendo` | `scheduled` | Every minute | `targeted` | Event and task reminders |
 | `pendo` | `scheduled_daily_briefing` | Every minute | `targeted` | Daily briefing at each user's local time |
 | `pendo` | `scheduled_diary_reminder` | Every minute | `targeted` | Journal reminder at each user's local time |
-| `pendo` | `scheduled_migrate_todos` | Daily 00:05 | `targeted` | Roll over yesterday's incomplete planned tasks. |
+| `pendo` | `scheduled_migrate_todos` | Minute 05 every hour | `targeted` | After a user's local date changes, roll over yesterday's incomplete planned tasks (once per user per day). |
 | `pendo` | `scheduled_prune_operation_logs` | Daily 00:15 | `silent` | Remove expired operation logs and undo snapshots. |
 | `pendo` | `scheduled_weekly_finance_summary` | Every minute | `targeted` | Weekly finance summary, user-local Sunday 21:00 |
 | `pendo` | `scheduled_month_end_finance_summary` | Every minute | `targeted` | Monthly finance summary, user-local month-end 21:00 |
@@ -1239,6 +1226,7 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `qingssh` | `cleanup_orphans` | Every minute | `silent` | Disconnect SSH connections without active sessions. |
 | `signin` | `scheduled_yingshi` | Daily 00:30 | `broadcast` | Daily Yingshijufeng sign-in |
 | `twitter` | `scheduled_fetch` | Daily 03:00 | `silent` | Fetch new images in the background. |
+| `xiaoai` | `scheduled_auth` | Every 30 minutes | `targeted` | Check Mi Home and XiaoAi authorization and renew it; send a private reminder when a new login is required. |
 | `xiaoqing_chat` | `scheduled_daily_life` | Daily 05:30 | `silent` | Plan the persona's small daily-life events from the persona card and routine. |
 | `xiaoqing_chat` | `scheduled_life_memes` | Minutes 07 and 37 every hour | `silent` | Import memes collected by `xiaoqing_life` into the emoji library (`life.enable_life_memes`). |
 | `xiaoqing_chat` | `scheduled_memory_sync` | Minutes 13 and 43 every hour | `silent` | Push messages not yet sent to the unified memory (seeds old data on first start and retries failed pushes). |

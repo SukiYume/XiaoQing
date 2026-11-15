@@ -7,8 +7,8 @@ ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper`
 ## 🔐 使用条件
 
 - NASA ADS Token 用于检索与 BibTeX。
-- `aiohttp` 提供 ADS API 请求。
-- 统一 AI `summary` route 提供中文摘要增强。
+- `aiohttp` 提供 ADS API 请求，属于核心依赖，随基础安装；缺少时插件不会加载，日志记录缺失的模块名。
+- 统一 AI `summary` route 提供中文摘要；未配置时 `/paper summarize` 仍可使用。
 
 ---
 
@@ -32,6 +32,10 @@ ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper`
 | `/paper help` | 群聊、私聊 | 插件帮助 |
 
 `ID` 支持 arXiv ID、arXiv URL 和 ADS bibcode。完整子命令与错误样例可通过 `/help ads_paper` 查看。
+
+`/paper daily` 依据 ADS `entdate` 选择 UTC 当天记录，并按 `entdate` 降序、bibcode 升序排列。`/paper author` 按 ADS `date` 降序展示作者的近期论文。引用网络中的“本次展示参考文献”表示当前返回的最多 5 篇记录；被引用次数使用论文的 ADS `citation_count` 字段。
+
+`/paper summarize` 按配置给出三种结果：`summary` route 可用时输出中文摘要；未配置 AI 能力时输出 ADS 原文摘要并提示配置；中文摘要生成失败时输出 ADS 原文摘要和错误说明。
 
 ---
 
@@ -65,11 +69,11 @@ ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper`
 }
 ```
 
-Provider 地址位于项目级 `config.ai.providers`，模型 profile 位于 `config.ai.models`，API Key 位于 `secrets.ai.providers`。ADS Token 负责论文检索，AI `summary` route 负责中文摘要；route 可用状态决定摘要展示层级。
+Provider 地址位于项目级 `config.ai.providers`，模型 profile 位于 `config.ai.models`，API Key 位于 `secrets.ai.providers`。ADS Token 负责论文检索，AI `summary` route 负责中文摘要。
 
 ---
 
-## 🔐 数据与权限
+## 💾 数据
 
 数据位于 `data/ads_paper/`：
 
@@ -81,13 +85,7 @@ Provider 地址位于项目级 `config.ai.providers`，模型 profile 位于 `co
 | `deadlines.json` | 截稿日期 |
 | `references_<user_id>.bib` | 个人 BibTeX 文献库 |
 
-JSON 使用原子写入。解析异常时，插件保留源文件，并生成 `.corrupt-*` 隔离副本。副本名称包含内容摘要。写入路径进入保护状态。数据恢复后，服务继续运行。
-
-BibTeX 扫描器按条目结构解析内容。扫描器处理邮箱、URL、注释和字段值中的 `@`。
-
-`/paper daily` 依据 ADS `entdate` 选择 UTC 当天记录，并按 `entdate` 降序、bibcode 升序排列。
-
-`/paper author` 按 ADS `date` 降序展示作者的近期论文。引用网络中的“本次展示参考文献”表示当前返回的最多 5 篇记录；被引用次数使用论文的 ADS `citation_count` 字段。
+JSON 使用原子写入。某个数据文件解析异常时，插件保留源文件，另存一份文件名带内容摘要的 `.corrupt-*` 副本，并拒绝读写该文件，对应命令返回错误。人工修复源文件后再次执行命令即可恢复。
 
 ---
 
