@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 
 from plugins.xiaoqing_memory.events import month_of
-from plugins.xiaoqing_memory.model import GLOBAL
+from plugins.xiaoqing_memory.model import GLOBAL, Page, PageLine
 from plugins.xiaoqing_memory.store import MemoryStore
 from tests.plugins.xiaoqing_memory.support import (
     ALI,
@@ -312,3 +312,50 @@ def test_forget_scope_bumps_generation_and_drops_shared_self_notes(temp_data_dir
     assert store.note(GLOBAL, keep["ids"][0]) is not None
     # 重置后的新消息继续编号，旧键可以重新写入。
     assert record(store, caller, "u7", events=[bot_event("在宿舍躺着", "b1")])["seqs"] == [2]
+
+
+def test_forget_scope_scrubs_what_the_self_page_wrote_from_its_shared_notes(temp_data_dir) -> None:
+    """清空会话时，自我页上照它的自我记录写的行和简介一起去掉，哪怕这句还引用着别处的笔记。"""
+
+    store = new_store(temp_data_dir)
+    ids   = []
+    for scope, text, key in (("u7", "在宿舍躺着", "b1"), ("u8", "在图书馆", "c1")):
+        caller = chat_user(scope)
+        record(store, caller, scope, events=[bot_event(text, key)])
+        out = record(
+            store,
+            caller,
+            scope,
+            ops=[
+                {
+                    "op"     : "add",
+                    "kind"   : "self.state",
+                    "text"   : text,
+                    "scope"  : "global",
+                    "sources": [{"key": key}],
+                }
+            ],
+        )
+        ids.append(out["ids"][0])
+    gone, kept = ids
+    store.put_page(
+        Page(
+            subject        = "self",
+            scope          = GLOBAL,
+            brief          = "白天在图书馆，晚上在宿舍躺着",
+            brief_note_ids = (gone, kept),
+            sections       = {
+                "recent": (
+                    PageLine("在宿舍躺着", (gone,)),
+                    PageLine("在图书馆", (kept,)),
+                )
+            },
+        )
+    )
+
+    store.forget_scope("u7")
+
+    page = store.page(GLOBAL, "self")
+    assert page is not None
+    assert page.brief == "" and page.note_ids() == {kept}
+    assert [line.text for _, _, line in page.lines()] == ["在图书馆"]

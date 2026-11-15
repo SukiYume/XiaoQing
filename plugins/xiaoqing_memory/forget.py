@@ -25,6 +25,8 @@ def forget(store: MemoryStore, payload: Mapping[str, Any], *, scope: str) -> dic
         ids     = [note.id for note in store.notes(scope).values() if note.subject == subject]
         removed += store.remove_notes(scope, ids)
         store.drop_pages(scope, [subject])
+        # 别的页面（比如群页）上引用了这个人的笔记的行也去掉。
+        store.scrub_pages(scope, ids)
     ids = [str(item) for item in listing(payload.get("ids")) if str(item)]
     if ids:
         removed += store.remove_notes(scope, ids)

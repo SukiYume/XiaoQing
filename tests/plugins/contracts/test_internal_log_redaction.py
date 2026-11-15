@@ -107,12 +107,15 @@ def test_bot_core_mask_failure_logs_only_type(caplog: pytest.LogCaptureFixture) 
 @pytest.mark.asyncio
 async def test_xiaoqing_memory_failure_logs_only_the_error_type(
     caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
     class ExplodingMemory:
         async def recall(self, _payload):
             raise RuntimeError(SENSITIVE_ERROR)
 
-    context = SimpleNamespace(capabilities=SimpleNamespace(memory=ExplodingMemory()))
+    context = SimpleNamespace(
+        data_dir=tmp_path, capabilities=SimpleNamespace(memory=ExplodingMemory())
+    )
 
     with caplog.at_level(logging.INFO):
         result = await memory_client.recall(context, purpose="reply", chat_id="u1", text="hello")

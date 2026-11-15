@@ -145,6 +145,64 @@ async def test_sync_retries_a_pending_forget_for_a_chat_with_no_history_file(tmp
 
 
 @pytest.mark.asyncio
+async def test_reset_while_the_memory_service_is_away_is_not_reported_as_done(tmp_path) -> None:
+    """推过消息的会话，重置时记忆服务暂时不在：返回没清成并记下待清，服务回来后先清掉。"""
+
+    state, harness, flaky, context = _setup(tmp_path, "u7")
+    _say(state, "u7", "我叫阿梨", "m1")
+    await memory_client.push_pending(context, state, "u7", bot_name="小青")
+    assert len(harness.store.events.events("u7")) == 1
+
+    context.capabilities = SimpleNamespace()
+    state.memory_store.clear("u7")
+    assert await memory_client.forget_chat(context, "u7") is False
+    assert memory_client.outbox_for(tmp_path).forgetting() == ["u7"]
+
+    context.capabilities = SimpleNamespace(memory=flaky)
+    await memory_client.sync_all(context, state, bot_name="小青")
+    assert memory_client.outbox_for(tmp_path).forgetting() == []
+    assert harness.store.events.events("u7") == []
+    # 清掉之后再重置，服务又不在：已经没有东西留在长期记忆里，算清成。
+    context.capabilities = SimpleNamespace()
+    assert await memory_client.forget_chat(context, "u7") is True
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_read_from_a_scope_that_is_waiting_to_be_cleared(tmp_path) -> None:
+    """清理失败、等着重试的这段时间里，取用和查找都当作没有长期记忆，旧内容不进回复。"""
+
+    state, harness, flaky, context = _setup(tmp_path, "u7")
+    _say(state, "u7", "我下周去杭州面试", "m1")
+    await memory_client.push_pending(context, state, "u7", bot_name="小青")
+    flaky.inner      = harness.service("u7")
+    reads: list[str] = []
+
+    async def recall(payload: dict[str, Any]) -> Any:
+        reads.append("recall")
+        return await harness.service("u7").recall(payload)
+
+    async def search(payload: dict[str, Any]) -> Any:
+        reads.append("search")
+        return await harness.service("u7").search(payload)
+
+    flaky.recall = recall
+    flaky.search = search
+    await memory_client.recall(context, purpose="reply", chat_id="u7", text="在吗")
+    await memory_client.search(context, "u7", {"query": "杭州"})
+    assert reads == ["recall", "search"]
+
+    flaky.down = True
+    assert await memory_client.forget_chat(context, "u7") is False
+    flaky.down = False
+
+    assert await memory_client.recall(context, purpose="reply", chat_id="u7", text="在吗") == (
+        memory_client.EMPTY_RECALL
+    )
+    assert await memory_client.search(context, "u7", {"query": "杭州"}) == []
+    assert reads == ["recall", "search"], "待清期间不向记忆服务读这个范围"
+
+
+@pytest.mark.asyncio
 async def test_forget_without_a_memory_service_has_nothing_left_to_clear(tmp_path) -> None:
     context = SimpleNamespace(data_dir=tmp_path, capabilities=SimpleNamespace())
 

@@ -4,8 +4,9 @@
   推送失败时留在本地，下一次持久化或定时同步时再推，记忆插件按幂等键去重。第一次推送某个会话时，
   这个会话的旧数据（人物事实、话题摘要、自我陈述、未完话头）一起导入。
 - 读：``memory.recall`` 取这一轮的常驻块，``memory.search`` 查她自己的记录和旧事。
-- 清：重置会话时让记忆插件清空这个范围。没清成的会话记在 ``memory_outbox.json`` 里，清掉之前不往
-  这个范围推新消息（否则新旧记忆混在一起），下一次推送或定时同步时先重试。
+- 清：重置会话时让记忆插件清空这个范围。没清成（超时、出错，或记忆服务这会儿不在）的会话记在
+  ``memory_outbox.json`` 里；清掉之前不往这个范围推新消息，也不从它读（旧记忆不再进回复），下一次
+  推送或定时同步时先重试。
 
 能力缺失、插件关闭、超时或出错一律当作没有长期记忆：读取给空结果，写入留在本地队列里。
 """
@@ -112,16 +113,37 @@ class Outbox:
         with self._lock:
             return sorted(self._load()["forgetting"])
 
-    def set_forgetting(self, chat_id: str, pending: bool) -> None:
+    def has_remote(self, chat_id: str) -> bool:
+        """这个会话有东西进过长期记忆、还没清掉：推过消息、导入过旧数据，或已经在等着清。"""
+
+        with self._lock:
+            data     = self._load()
+            imported = data["migrated"].get(chat_id)
+            return (
+                chat_id in data["chats"]
+                or chat_id in data["forgetting"]
+                or (isinstance(imported, dict) and not imported.get("cleared_at"))
+            )
+
+    def mark_forgetting(self, chat_id: str) -> None:
         with self._lock:
             waiting = self._load()["forgetting"]
-            if pending == (chat_id in waiting):
-                return
-            if pending:
+            if chat_id not in waiting:
                 waiting[chat_id] = {"at": time.time()}
-            else:
-                del waiting[chat_id]
-            self._store.write(self._load())
+                self._store.write(self._load())
+
+    def mark_cleared(self, chat_id: str) -> None:
+        """长期记忆清掉了：不再等着清，导入过的旧数据也记为已清。"""
+
+        with self._lock:
+            data     = self._load()
+            imported = data["migrated"].get(chat_id)
+            changed  = data["forgetting"].pop(chat_id, None) is not None
+            if isinstance(imported, dict) and not imported.get("cleared_at"):
+                imported["cleared_at"] = time.time()
+                changed                = True
+            if changed:
+                self._store.write(data)
 
 
 _outboxes: dict[str, Outbox]                        = {}
@@ -298,19 +320,35 @@ async def _forget_scope(context: Any, box: Outbox, chat_id: str) -> bool:
     cleared = (
         await _call(context, "forget", {"scope": chat_id, "all": True}, RECORD_TIMEOUT) is not None
     )
-    await asyncio.to_thread(box.set_forgetting, chat_id, not cleared)
+    await asyncio.to_thread(box.mark_cleared if cleared else box.mark_forgetting, chat_id)
     return cleared
 
 
 async def forget_chat(context: Any, chat_id: str) -> bool:
-    """重置会话时清掉它的长期记忆，返回清没清成；没接长期记忆时没有东西要清，算清成。"""
+    """重置会话时清掉它的长期记忆，返回清没清成。
+
+    记忆服务这会儿不在时：这个会话有东西进过长期记忆就记下待清、返回没清成；从来没有东西
+    进去过（没接长期记忆的部署）才算清成。
+    """
 
     box = outbox_for(Path(context.data_dir))
     async with _push_lock(chat_id):
+        had_remote = box.has_remote(chat_id)
         await asyncio.to_thread(box.forget, chat_id)
-        if capability(context) is None:
-            return True
-        return await _forget_scope(context, box, chat_id)
+        if capability(context) is not None:
+            return await _forget_scope(context, box, chat_id)
+        if had_remote:
+            await asyncio.to_thread(box.mark_forgetting, chat_id)
+        return not had_remote
+
+
+def _awaiting_forget(context: Any, chat_id: str) -> bool:
+    """这个会话的长期记忆还等着清：这期间读到的都是该清掉的旧内容，一律当作没有。"""
+
+    # 没有记忆服务时本来就读不到东西，不必看待清记录。
+    if capability(context) is None:
+        return False
+    return chat_id in outbox_for(Path(context.data_dir)).forgetting()
 
 
 # ───────────────────────────── 取用 ─────────────────────────────
@@ -507,10 +545,14 @@ async def recall(
     }
     if speaker_id:
         payload["speaker"] = {"user_id": int(speaker_id), "name": speaker_name[:32]}
+    if _awaiting_forget(context, chat_id):
+        return EMPTY_RECALL
     return parse_recall(await _call(context, "recall", payload, RECALL_TIMEOUT))
 
 
 async def search(context: Any, chat_id: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if _awaiting_forget(context, chat_id):
+        return []
     result = await _call(context, "search", {**payload, "scope": chat_id}, SEARCH_TIMEOUT)
     items  = result.get("items") if isinstance(result, dict) else None
     return [item for item in items or () if isinstance(item, dict)]

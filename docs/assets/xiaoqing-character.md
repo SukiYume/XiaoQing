@@ -24,4 +24,3 @@ Composition: vertical portrait canvas, centered character, complete head-to-toe 
 Background: genuine transparent alpha around the character. The artwork consists of the single character and her notebook. The canvas is clean and text-free.
 Deliver a finished, high-quality original character illustration suitable for both light and dark GitHub README backgrounds.
 ```
-

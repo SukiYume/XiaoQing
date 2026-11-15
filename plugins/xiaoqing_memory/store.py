@@ -284,7 +284,10 @@ class MemoryStore:
     # ── 清空 ──
 
     def forget_scope(self, scope: str) -> int:
-        """清空一个范围：代际加一，删掉事件、笔记和页面，以及从这里记进 ``global`` 的自我记录。"""
+        """清空一个范围：代际加一，删掉事件、笔记和页面，以及从这里记进 ``global`` 的自我记录。
+
+        ``global`` 的页面上照这些自我记录写的行和简介一起去掉。
+        """
 
         with self._lock:
             state                  = self._state["scopes"].setdefault(scope, _scope_state())
@@ -309,6 +312,7 @@ class MemoryStore:
                 shared.pop(note_id, None)
             if gone:
                 self._save_notes_locked(GLOBAL)
+                self.scrub_pages(GLOBAL, gone)
             self._state_store().write(self._state)
             generation = state["generation"]
         self.events.forget(scope)
