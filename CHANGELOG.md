@@ -19,15 +19,15 @@
   - 新增提交前检查：克隆后执行一次 `git config core.hooksPath .githooks` 启用。不想公开的词（群友昵称、单位名等）一行一个写进 `config/private_terms.txt`，这个文件不进 Git 和 Docker 构建。
 - 发布前在生产机上备份 `data/xiaoqing_chat/`。旧数据第一次推送时自动导入统一记忆，旧文件只读不改：`vdb/` 里的人物事实和话题摘要、`person_profiles/`、`life/self_timeline.json`、`life/open_loops/` 和已经不再使用的 `thinking_back/`、`fact_extraction/`、`hippo_memorizer/`（话题摘要）原样留在磁盘上，下一个版本删除；重置会话时照旧删掉这个会话的这些文件。
 - xiaoqing_chat 行为配置的 `memory` 一节只剩 `enable_memory_retrieval`、`conversation_idle_gap_seconds`、`top_k`、`min_score`；`life.self_timeline_max_entries`、`life.open_loop_max_per_chat` 去掉了（上限和保留期由统一记忆管），`summarizer` 一节（话题摘要）和 `memory_db_save_debounce_seconds` 也去掉了。旧字段写在配置里会被忽略。
-- 插件开发和嵌入方的接口变化：`PluginManager.load_all()` 改为协程（`await plugin_manager.load_all()`），`load_plugin()` 和 `wait_inits()` 去掉；`CommandSpec` 去掉 `admin_only`、必须带命令声明，用 `CommandSpec.from_manifest(插件名, 命令声明, handler)` 构造；`InboundServer` 必须传入 `event_dispatcher`；`CommandSpec` 去掉 `help_text`、`usage`；`PluginContext.config_manager` 和 `core.interfaces.ConfigManagerLike` 删除（这个字段原来恒为 `None`）；没有 `handle_session` 的插件不再在会话续接时被以 `handle("__session__", …)` 的形式调用。`plugin.json` 的写法没有变化。
+- 插件开发和嵌入方的接口变化：`PluginManager.load_all()` 改为协程（`await plugin_manager.load_all()`），`load_plugin()` 和 `wait_inits()` 去掉；`CommandSpec` 去掉 `admin_only`、`help_text` 和 `usage`，必须带命令声明，用 `CommandSpec.from_manifest(插件名, 命令声明, handler)` 构造；`InboundServer` 必须传入 `event_dispatcher`；`PluginContext.config_manager` 和 `core.interfaces.ConfigManagerLike` 删除（这个字段原来恒为 `None`）；没有 `handle_session` 的插件不再在会话续接时被以 `handle("__session__", …)` 的形式调用。`plugin.json` 的写法没有变化。
 - `command_prefixes` 现在由配置层校验：写了就必须是非空列表、每项非空（不写时是 `["/"]`）。空列表（带前缀的命令全部失效）和含空串的列表（每条消息都算命令）原来能加载，现在启动和 `/reload` 时按配置无效拒绝。
 - xiaoqing_chat 的行为文件只读 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，不再回退到插件根目录下的同名文件。
-- 这些旧写法和旧数据格式不再读取（生产上都已经没有）：codex 平铺写的 `arxiv_summary_label` / `arxiv_summary_cwd` / `arxiv_summary_methodology`（写在 `arxiv_summary` 一节下的 `label` / `cwd` / `methodology`）；黑话库的 `is_global` 标记；表情库索引的单值 `source_chat_id`；表达反思队列“每个会话一个字典”的格式；jupyter 对旧 `figures` 目录的清理和 xiaoqing_life 的一次性数据修复也一并去掉。
+- 这些旧写法和旧数据格式不再读取：codex 平铺写的 `arxiv_summary_label` / `arxiv_summary_cwd` / `arxiv_summary_methodology`（写在 `arxiv_summary` 一节下的 `label` / `cwd` / `methodology`）；黑话库的 `is_global` 标记；表情库索引的单值 `source_chat_id`；表达反思队列“每个会话一个字典”的格式；jupyter 对旧 `figures` 目录的清理和 xiaoqing_life 的一次性数据修复也一并去掉。
 - arxiv_filter：没配 `model.path`、也没设 `ARXIV_MODEL_PATH` 时只回退到 `best_model/`，不再自动去找 `best_model_interest`、`best_model_knn`、`best_model_title`。随仓库的配置写了 `model.path`，不受影响。
 - Pendo 看板接口 `/api/dashboard` 的 `summary.diary_month` 改名为 `summary.diary_recent`（它数的一直是近 30 天的篇数）；自带的网页已同步，自己写了客户端读这个字段的要跟着改。
 - **依赖**：`aiohttp` 的下限提到 3.14.4（原来限制在 3.14 以下，装到的 3.13.x 有 22 个已公开的漏洞，包括 HTTP 解析器和 WebSocket 内存耗尽）。升级后在运行环境里执行一次 `pip install -r requirements.txt`。
 - qingpet 的表结构升到第 7 版：去掉只写不读的 `schema_migrations` 表（版本只记在 `PRAGMA user_version`）和与主键列完全相同的索引 `idx_daily_likes`。第一次启动时自动升级，升级前照例留一份 `qingpet.db.pre-migration-v6.bak`。
-- 这两处旧兼容去掉了：Pendo 网页接口的旧路径 `/diary/templates`（现在只有 `/config/diary/templates`）；Core 把 `plugins/<name>/data/` 搬到数据根目录的迁移（插件的数据只在 `data_root/<插件名>/` 下，插件目录里名叫 `data` 的目录只是普通源码目录）。同步脚本和忽略规则里为这两处、以及为 Minecraft 旧配置文件 `plugins/minecraft/config.json` 留的排除项一并去掉：生产上残留的这个旧文件会在下一次同步时删除（服务器地址在 `config.plugins.minecraft.servers`）。
+- 这两处旧兼容去掉了：Pendo 网页接口的旧路径 `/diary/templates`（现在只有 `/config/diary/templates`）；Core 把 `plugins/<name>/data/` 搬到数据根目录的迁移（插件的数据只在 `data_root/<插件名>/` 下，插件目录里名叫 `data` 的目录只是普通源码目录）。同步脚本和忽略规则里为这两处、以及为 Minecraft 旧配置文件 `plugins/minecraft/config.json` 留的排除项一并去掉：部署目录里残留的这个旧文件会在下一次同步时删除（服务器地址在 `config.plugins.minecraft.servers`）。
 - `ws_queue_size` 在每一层都是正整数：入站服务器和 OneBot 客户端不再各自解释 0（配置层本来就要求 1 到 10000，0 只可能来自直接构造；`OneBotWsClient(queue_size=0)` 现在报错）。
 - `scripts/check_private.py` 更严：用户目录还匹配反斜杠写法（`C:\Users\<名>`）和 `/home/<名>`，提交里带这类路径会被拦下。完整 UAT 报告里 WebSocket 矩阵阶段的名字改为 `ws-matrix`（与 `--phases` 的取值一致），报告 JSON 去掉 `environment_policy`、`python_version_gate`、`version_gate` 三个常量字段。
 - xiaoqing_chat 行为配置去掉 `expression.max_injected` 和 `reflection.max_avoid_patterns`（都不起作用）；部署配置里还留着这两个键也不会报错。
@@ -73,6 +73,7 @@
   - 评测和重放用的配置去掉各插件的 `schedules`，xiaoqing_chat 只保留 `ai`，本机部署配置里的目标群和覆盖不会带进评测。
   - 新增 `scripts/check_private.py` 和 `.githooks/pre-commit`：从本机 `secrets.json`（8 个字符以上的字符串、6 位以上的数字）、`config.json`（6 位以上的数字和用户目录）和 `config/private_terms.txt` 收集私有值，要提交的文件里出现就拒绝提交，只报文件和字段路径、不打印值；两份 `.example` 里本来公开的值不算。`--all` 检查全部文件。
   - arxiv_filter 插件目录里的 `config.json` 没有动：里面是模型路径、阈值和代理，部署上要改时用 `ARXIV_MODEL_PATH`、`ARXIV_PROXY` 环境变量覆盖。
+- 以上几项（统一记忆、只喊名字、部署设置）的验证：完整测试 7907 项通过、1 项跳过，Ruff、格式检查和 487 个源文件的类型检查通过；记忆组 13 个进程内剧本评审分合计 256/260、规则发现 0 条，端到端的 `mem_agent_prefs` 整理并开新办事会话后记账直接按微信；本机部署配置经 Core 校验，定时目标按新来源解析出原来的目标群，提交前检查对全部文件无命中、暂存一个含私有值的文件时拒绝提交。全部 46 个进程内剧本（`--timezone Asia/Dhaka`，让她此刻处在下午课后的空闲时段）跑一遍，和改动前相同的 45 个剧本评审分合计 907 → 909；审查器校准放行 12/12、拦截 12/12（全量运行里一次 11/12，单独复跑两次都是 12/12）。用 11-12 生产快照的 18 个真实场景重放：没有报错和被审查拦下的回复，副群只喊一声的那句走了预设短应答，agent 接不接手和生产一致，说话人块无重复、群聊提示词里没有私聊内容。发布前清理之后重跑了完整测试（7908 项通过、1 项跳过）、Ruff、978 个文件的格式检查、487 个源文件的类型检查和提交前检查（代码与文档无命中）；评测剧本和生产快照重放没有重跑。
 - **统一记忆：用生产快照连续模拟多个晚上，修好六处**。之前的重放每天从零迁移、只跑一晚，而且放开了预算。这次在 11-12 快照的副本上用真实模型和每天 16 次的预算，按 30 分钟一次的定时检查推进模拟时钟：一组从上线那一刻起跑 7 晚，一组把 10-26 到 11-12 的聊天按原时间逐条写入、跑 18 晚。查出的问题和改法：
   - **夜间核对会删掉对的记忆**。同一批行隔一两晚就重核一次，判定有随机性：被删的 6 条里有 3 条先在页面上留了 5–10 晚，被删那晚判定的那句原文逐字支持（原话“我有一张健身卡”，页面写“他说自己有健身卡”这一类）。挑行先看取用次数，常被取用的行夜夜重核、别的行轮不到；“部分支持”改好的说法在下次重写页面时又从笔记写回去，有一行被改了五种说法。现在依据都核对过的行不再核对；核对过的笔记不因为后来的一次判断被撤回，判为不支持时只删这一行、撤回还没核对过的依据；部分支持时只依据一条笔记的，笔记也改成核对后的说法。核对时附上原话前面的几条聊天和每条的日期星期（抽取时模型看到了前文，核对时没看到；笔记里从“下周一”这类说法换算出的日期，不看日期核对不了）。
   - **写着日子的事过了还当“最近在忙”**。一次出差的车次、一场研讨会、群里约好的“明天中午”聚餐，30 天后显示得和当天一样。现在事件行带星期，提示词给出今天的日期，笔记和页面把时间写成具体日期；过了某一天就不再是眼下的事的笔记记下那一天（模型给的日期要能解析，不早于说话前一天、不晚于一年后，否则不用），过了那天带“写着的日子已经过了”，页面待重写、改成已经发生的说法或删掉，再留 30 天后结束。“最近在忙”“最近在做的”里两周前说的带“约 N 天前的事”。“很久以前的事”原来按被印证或被取用的时间算，每轮都取用的行永远不会变旧，改成只按说起和印证的时间算。
@@ -123,7 +124,7 @@
   - xiaoqing_life 只有测试在调的 `bilibili.hot_comments`、小课题事件里传了不存的 `reason` / `correction`、经历写入统一记忆时永远为空的 `day`。
   - 照抄 core 的定义：`plugins/chat` 的 JSON MIME 策略、Pendo 自己写的“带敏感标记的私聊发送”，改为引用 core。`core.plugin_base.__all__` 补上文档里一直当公开接口写的 `bounded_external_text`、`has_control_characters`、`gather_bounded`。
 - 同一轮改的文档（都是文档说的和代码做的不一样）：arxiv_filter README 的推理 CLI 示例用了不存在的 `--input`；xiaoqing_life README 写小课题“最多同时 2 个”（默认 1 个）、域名清单漏了扫码登录和评论配图用的域名、`/life run` 跳过什么在三处写法各不相同；xiaoqing_chat README 的 `memory.top_k`、深度对话“更低温度”、`fallback_idle_replies` 的适用范围和 `/xc config` 里两行标签；xiaoqing_memory、codex、qingssh、qingpet、Minecraft、小爱、astro_tools、echo、smalltalk、bot_core、color 的 README 各有几处；`docs/07` 中英文对 `BoundedFileCache` 的描述；以及二十多处过时的模块说明和注释。
-- **通读之后的结构清理**。上一条里记下的几处“同一件事有几套写法”，这一轮收成一套：
+- **通读之后的结构清理**。“逐文件通读”里记下的几处“同一件事有几套写法”，各收成一套：
   - **插件只有一条加载路径**。原来有两条：没有事件循环时走同步的 `load_plugin`，再由 `wait_inits` 汇合初始化；有事件循环时走热加载用的候选代路径。生产启动一直走后者，前者只有测试在用，却带着一整套自己的机制（待发布表、初始化任务表、回滚收尾任务、`wait_inits` 的共享批次）。现在启动就是 `await plugin_manager.load_all()`，和热加载是同一趟收敛；同步 `load_plugin`、`wait_inits` 和那套机制删掉，`core/plugin_generation.py` 从 3039 行减到 2439 行。卸载、重载、回滚里五处各写一遍的“把这一代从路由、服务和登记表里摘掉”收成 `_forget_plugin_generation` 一个方法，哪些场合保留隔离标记和名字归属写在它的说明里。只测同步机制的 24 个测试删掉，其余改成走生产路径。
   - **命令权限只存一份**。`CommandSpec` 去掉 `admin_only`，一定带着 `plugin.json` 里的命令声明（`CommandSpec.from_manifest`）；分发器和路由里“命令没有声明时按 `admin_only` 判权”的回退删掉。`plugin.json` 里的 `admin_only: true` 写法不变，仍然归一成 `permission: bot_admin`。
   - **入站服务器不再自带事件分发器**。`InboundServer` 的分发器一律由 `InboundManager` 建好交给它；“没给就自己建一个、第一次收到事件时自己启动、重启时重建”的独立运行模式只有测试在用，挪到了测试辅助里。WebSocket 事件处理里只有测试会走的“直接给字典”分支也去掉。
@@ -162,11 +163,10 @@
   - **模型答非所问，那批消息就永远不整理了**。夜间整理时模型的输出读不出 JSON，原来当成“这一批没有要记的”，水位照样前移。现在这一批不算整理过，下次再试；同一批连着三次读不出来才放过，免得它挡住后面的消息。
   - **提交前检查在 PSD 上误报**。检查原来把所有文件硬解成文本再找，压缩像素数据里一段连续的数字会碰巧命中。现在二进制文件按字节查元数据里常见的 UTF-8 和 UTF-16 写法（UTF-16 写的值原来反而查不到），命中处前后紧挨着字母或数字的不算。
   - 依赖：见升级须知。`aioresponses` 还按 3.14 之前的签名构造响应，测试里用一个薄封装补上新加的参数。
-- **定下来的几处**：
+- **几处只留一种规则**：
   - **几部分的送达结果只有一条合并规则**：任一部分明确没发出去就算没发出去，全部确认才算送达，其余算未知（`core.delivery.merge_delivery_outcomes`）。agent 的任务交付状态本来就是这样；命令回执原来在“部分送达”时记未知，现在和命令由本人直接发送时一样回滚，之后可以重来。
   - `ws_queue_size`、qingpet 表结构、两处旧兼容：见升级须知。
   - 验证：完整测试 8082 项通过、2 项跳过（在 aiohttp 3.14.5 上；按 CI 的严格跳过门禁运行，退出码 0），Ruff、格式检查、492 个源文件的类型检查、重复代码检查和提交前检查通过；qingpet 用生产数据库的副本升到第 7 版后数据和完整性检查无误。
-- 这一轮的验证：完整测试 7907 项通过、1 项跳过，Ruff、格式检查和 487 个源文件的类型检查通过；记忆组 13 个进程内剧本评审分合计 256/260、规则发现 0 条，端到端的 `mem_agent_prefs` 整理并开新办事会话后记账直接按微信；本机部署配置经 Core 校验，定时目标按新来源解析出原来的目标群，提交前检查对全部文件无命中、暂存一个含私有值的文件时拒绝提交。全部 46 个进程内剧本（`--timezone Asia/Dhaka`，让她此刻处在下午课后的空闲时段）跑一遍，和改动前相同的 45 个剧本评审分合计 907 → 909；审查器校准放行 12/12、拦截 12/12（全量运行里一次 11/12，单独复跑两次都是 12/12）。用 11-12 生产快照的 18 个真实场景重放：没有报错和被审查拦下的回复，副群只喊一声的那句走了预设短应答，agent 接不接手和生产一致，说话人块无重复、群聊提示词里没有私聊内容。发布前清理之后重跑了完整测试（7908 项通过、1 项跳过）、Ruff、978 个文件的格式检查、487 个源文件的类型检查和提交前检查（代码与文档无命中）；评测剧本和生产快照重放没有重跑。
 
 ## 5.2.0 — 2026-11-11
 
