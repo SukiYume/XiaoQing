@@ -23,14 +23,12 @@ def forget(store: MemoryStore, payload: Mapping[str, Any], *, scope: str) -> dic
     if user_id > 0:
         subject = person_subject(user_id)
         ids     = [note.id for note in store.notes(scope).values() if note.subject == subject]
-        removed += store.remove_notes(scope, ids)
+        # 他的页面整份删掉；别的页面（比如群页）上引用了他的笔记的行也去掉。
+        removed += store.forget_notes(scope, ids)
         store.drop_pages(scope, [subject])
-        # 别的页面（比如群页）上引用了这个人的笔记的行也去掉。
-        store.scrub_pages(scope, ids)
     ids = [str(item) for item in listing(payload.get("ids")) if str(item)]
     if ids:
-        removed += store.remove_notes(scope, ids)
-        store.scrub_pages(scope, ids)
+        removed += store.forget_notes(scope, ids)
         # 从这个会话记进 ``global`` 的自我记录也能删。
         own = [
             note_id
@@ -38,6 +36,5 @@ def forget(store: MemoryStore, payload: Mapping[str, Any], *, scope: str) -> dic
             if (note := store.note(GLOBAL, note_id)) is not None
             and note.data.get("origin_scope") == scope
         ]
-        removed += store.remove_notes(GLOBAL, own)
-        store.scrub_pages(GLOBAL, own)
+        removed += store.forget_notes(GLOBAL, own)
     return {"version": 1, "scope": scope, "removed": removed}

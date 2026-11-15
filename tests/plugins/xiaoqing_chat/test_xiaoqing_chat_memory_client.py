@@ -162,9 +162,6 @@ async def test_reset_while_the_memory_service_is_away_is_not_reported_as_done(tm
     await memory_client.sync_all(context, state, bot_name="小青")
     assert memory_client.outbox_for(tmp_path).forgetting() == []
     assert harness.store.events.events("u7") == []
-    # 清掉之后再重置，服务又不在：已经没有东西留在长期记忆里，算清成。
-    context.capabilities = SimpleNamespace()
-    assert await memory_client.forget_chat(context, "u7") is True
 
 
 @pytest.mark.asyncio
@@ -203,11 +200,39 @@ async def test_nothing_is_read_from_a_scope_that_is_waiting_to_be_cleared(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_forget_without_a_memory_service_has_nothing_left_to_clear(tmp_path) -> None:
-    context = SimpleNamespace(data_dir=tmp_path, capabilities=SimpleNamespace())
+async def test_memory_written_only_by_the_agent_is_still_cleared_after_an_outage(tmp_path) -> None:
+    """聊天没往这个会话推过东西、只有 agent 记过：服务不在时重置同样记下待清，回来后清掉。"""
 
-    assert await memory_client.forget_chat(context, "u7") is True
-    assert memory_client.outbox_for(tmp_path).forgetting() == []
+    from plugins.xiaoqing_agent.memory import record_task
+    from plugins.xiaoqing_agent.tasks import AgentTask, ChatRef, Outcome
+
+    harness = MemoryHarness(tmp_path / "memory")
+    agent   = SimpleNamespace(
+        capabilities=SimpleNamespace(memory=harness.service("u7", caller="xiaoqing_agent"))
+    )
+    task = AgentTask(
+        task_id      = "t1",
+        chat         = ChatRef(7, None),
+        request_text = "记一笔午饭",
+        source       = "command",
+        status       = "done",
+        finished_at  = time.time(),
+    )
+    await record_task(agent, task, [], [], Outcome("记好了"))
+    assert harness.notes("u7")
+
+    chat_dir = tmp_path / "chat"
+    context = SimpleNamespace(data_dir=chat_dir, capabilities=SimpleNamespace())
+    assert await memory_client.forget_chat(context, "u7") is False
+    assert memory_client.outbox_for(chat_dir).forgetting() == ["u7"]
+
+    context.capabilities = SimpleNamespace(memory=harness.service("u7"))
+    state = ChatRuntimeState()
+    state.memory_store.bind_data_dir(chat_dir)
+    await memory_client.sync_all(context, state, bot_name="小青")
+
+    assert harness.notes("u7") == {} or len(harness.notes("u7")) == 0
+    assert memory_client.outbox_for(chat_dir).forgetting() == []
 
 
 def _write_legacy(root, chat_id: str) -> None:

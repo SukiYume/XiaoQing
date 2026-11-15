@@ -12,13 +12,17 @@ import pytest
 from plugins.xiaoqing_memory.config import MemoryConfig
 from plugins.xiaoqing_memory.consolidate import pages as pages_mod
 from plugins.xiaoqing_memory.consolidate.runner import (
+    Deps,
     consolidate_scope,
+    consolidate_self,
+    extract_scope,
     nightly_pass,
     prune_scope,
     rewrite_page,
     verify_lines,
 )
-from plugins.xiaoqing_memory.model import PAGE_LIMITS, Page, PageLine, page_kind
+from plugins.xiaoqing_memory.forget import forget
+from plugins.xiaoqing_memory.model import GLOBAL, PAGE_LIMITS, Note, Page, PageLine, page_kind
 from plugins.xiaoqing_memory.recall import recall
 from tests.plugins.xiaoqing_memory.support import (
     ALI,
@@ -729,3 +733,111 @@ def test_closed_self_records_are_kept_one_week_but_stories_stay() -> None:
     assert "old_state" in result.removed
     assert "new_state" not in result.removed and result.changed["new_state"].status == "done"
     assert "story" not in result.removed and "story" not in result.changed
+
+
+class _HeldModel:
+    """模型调用停在半路，等测试放行后才返回预置的输出。"""
+
+    def __init__(self, output: dict) -> None:
+        self.output  = output
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self, _messages) -> str:
+        self.started.set()
+        await self.release.wait()
+        return json.dumps(self.output, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_scope_cleared_while_the_self_page_is_being_written_stays_cleared(
+    temp_data_dir,
+) -> None:
+    """自我页正写到一半，一个会话被清空：照它的自我记录写的内容不会随模型的输出写回来。"""
+
+    store = new_store(temp_data_dir)
+    store.put_notes(
+        GLOBAL,
+        [
+            Note(
+                id          = note_id,
+                kind        = "self.story",
+                scope       = GLOBAL,
+                subject     = "self",
+                text        = text,
+                data        = {"origin_scope": origin},
+                created_at  = T0,
+                observed_at = T0,
+            )
+            for note_id, text, origin in (
+                ("gone", "在私聊里讲的往事", "u7"),
+                ("kept", "在别处讲的往事", "u8"),
+            )
+        ],
+    )
+    model = _HeldModel(
+        {
+            "brief"      : "在私聊里讲的往事，在别处讲的往事",
+            "brief_notes": ["gone", "kept"],
+            "sections"   : {},
+        }
+    )
+    running = asyncio.create_task(
+        consolidate_self(
+            store,
+            CFG,
+            Deps(complete=model, bot_name="小青", zone=ZONE, clock=lambda: T0),
+            force=True,
+        )
+    )
+    await model.started.wait()
+
+    await asyncio.to_thread(forget, store, {"all": True}, scope="u7")
+    model.release.set()
+    await running
+
+    assert store.note(GLOBAL, "gone") is None
+    page = store.page(GLOBAL, "self")
+    assert page is None or "私聊" not in json.dumps(page.to_json(), ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_note_forgotten_while_a_batch_is_being_read_is_not_written_back(
+    temp_data_dir,
+) -> None:
+    """一批消息正交给模型，其中印证的旧笔记被删掉：模型说“还是这件事”，也不把它写回来。"""
+
+    store = new_store(temp_data_dir)
+    store.put_notes(
+        GROUP,
+        [
+            Note(
+                id          = "old",
+                kind        = "person.fact",
+                scope       = GROUP,
+                subject     = f"person:{ALI}",
+                text        = "养了一只橘猫",
+                created_at  = T0,
+                observed_at = T0,
+            )
+        ],
+    )
+    _seed(store, [((ALI, "阿梨"), "养了一只橘猫")])
+    model   = _HeldModel({"same": [{"id": "old", "source": "e1", "quote": "养了一只橘猫"}]})
+    running = asyncio.create_task(
+        extract_scope(
+            store,
+            CFG,
+            Deps(complete=model, bot_name="小青", zone=ZONE, clock=lambda: T0 + 200),
+            GROUP,
+            force=True,
+        )
+    )
+    await model.started.wait()
+
+    removed = await asyncio.to_thread(forget, store, {"ids": ["old"]}, scope=GROUP)
+    model.release.set()
+    await running
+
+    assert removed["removed"] == 1
+    assert store.note(GROUP, "old") is None

@@ -125,7 +125,7 @@ async def handle_internal(
         )
         if not memory_cleared:
             return segments(
-                "⚠️ 会话记忆已重置，但长期记忆这次没清掉，之后会自动重试；清掉之前新聊的内容不会记进长期记忆。"
+                "⚠️ 会话记忆已重置，但没能确认长期记忆已经清掉，之后会自动重试；清掉之前新聊的内容不会记进长期记忆。"
             )
         return segments("✅ 已重置会话记忆")
 

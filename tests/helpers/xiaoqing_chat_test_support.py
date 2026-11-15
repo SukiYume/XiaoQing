@@ -130,6 +130,22 @@ def _make_hctx(
     )
 
 
+class _EmptyMemory:
+    """在场、但什么都没记的统一记忆：读取都是空的，清空会得到确认。"""
+
+    async def record(self, _payload: dict[str, Any]) -> None:
+        return None
+
+    async def recall(self, _payload: dict[str, Any]) -> None:
+        return None
+
+    async def search(self, _payload: dict[str, Any]) -> None:
+        return None
+
+    async def forget(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"version": 1, "scope": payload.get("scope"), "generation": 1}
+
+
 def _set_context_principal(
     context,
     event: dict[str, Any],
@@ -149,6 +165,7 @@ def _set_context_principal(
     context.capabilities = PluginCapabilities(
         is_bot_admin = is_bot_admin,
         ai           = _provider_test_ai(),
+        memory       = _EmptyMemory(),  # type: ignore[arg-type]
     )
     context.config = {
         **dict(getattr(context, "config", {}) or {}),
@@ -225,6 +242,8 @@ def mock_context(tmp_path: Path):
     context.state            = {}
     context.logger           = MagicMock()
     context.session_manager  = None
+    # 统一记忆在场并确认清空：重置的回复才是“已重置”。
+    context.capabilities.memory = _EmptyMemory()
     return with_settings_reader(context)
 
 

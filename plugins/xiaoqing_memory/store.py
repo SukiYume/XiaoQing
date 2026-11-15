@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ from .scopes import valid_scope
 from .text import mapping
 
 STATS_DAYS = 14
+
+
+# 忘掉的笔记记这么久：只为挡住删除时正在进行的那一轮整理，模型调用不会拖过这个时间。
+_FORGOTTEN_KEEP_SECONDS = 3600.0
 
 
 def _scope_state() -> dict[str, Any]:
@@ -41,7 +46,9 @@ class MemoryStore:
         self._notes: dict[str, dict[str, Note]] = {}
         self._pages: dict[str, dict[str, Page]] = {}
         self._dirty_notes: set[str]             = set()
-        self._state                             = self._load_state()
+        # 被忘掉的笔记（范围, ID）→ 忘掉的时刻。删除时正在进行的整理稍后才写回，靠它认出不该写回的。
+        self._forgotten: dict[tuple[str, str], float] = {}
+        self._state                                   = self._load_state()
 
     # ── 文件 ──
 
@@ -195,6 +202,40 @@ class MemoryStore:
             if changed:
                 self._save_notes_locked(scope)
 
+    def put_consolidated(
+        self, scope: str, notes: Iterable[Note], *, generation: int | None = None
+    ) -> bool:
+        """整理把笔记写回：这期间被忘掉的不写回；范围已被清空（代际变了）时一条都不写，返回 ``False``。"""
+
+        with self._lock:
+            if generation is not None and self.generation(scope) != generation:
+                return False
+            gone = self._forgotten_locked([scope])
+            self.put_notes(scope, [note for note in notes if note.id not in gone])
+            return True
+
+    def forget_notes(self, scope: str, ids: Iterable[str]) -> int:
+        """忘掉这些笔记：删除，页面上照它们写的行和简介一起去掉；正在进行的整理也不会把它们写回。"""
+
+        with self._lock:
+            wanted  = list(ids)
+            removed = self.remove_notes(scope, wanted)
+            self._mark_forgotten_locked(scope, wanted)
+            self.scrub_pages(scope, wanted)
+            return removed
+
+    def _mark_forgotten_locked(self, scope: str, ids: Iterable[str]) -> None:
+        now    = time.time()
+        cutoff = now - _FORGOTTEN_KEEP_SECONDS
+        for key in [key for key, at in self._forgotten.items() if at < cutoff]:
+            del self._forgotten[key]
+        for note_id in ids:
+            self._forgotten[(scope, note_id)] = now
+
+    def _forgotten_locked(self, scopes: Iterable[str]) -> set[str]:
+        wanted = set(scopes)
+        return {note_id for (scope, note_id) in self._forgotten if scope in wanted}
+
     def remove_notes(self, scope: str, ids: Iterable[str]) -> int:
         with self._lock:
             current = self._notes_locked(scope)
@@ -244,13 +285,24 @@ class MemoryStore:
         with self._lock:
             return self._pages_locked(scope).get(subject)
 
-    def put_page(self, page: Page) -> None:
+    def put_page(self, page: Page) -> Page | None:
+        """写入页面，返回实际写下的那一份。
+
+        引用了已被忘掉的笔记的行和简介先去掉（页面是照删除之前的笔记写的）；一点不剩时不写，
+        返回 ``None``。
+        """
+
         with self._lock:
-            pages               = self._pages_locked(page.scope)
-            pages[page.subject] = page
-            self._pages_store(page.scope).write(
+            gone = self._forgotten_locked([page.scope, GLOBAL]) & page.note_ids()
+            kept = page.without_notes(gone) if gone else page
+            if kept is None:
+                return None
+            pages               = self._pages_locked(kept.scope)
+            pages[kept.subject] = kept
+            self._pages_store(kept.scope).write(
                 {subject: item.to_json() for subject, item in pages.items()}
             )
+            return kept
 
     def drop_pages(self, scope: str, subjects: Iterable[str]) -> None:
         with self._lock:
@@ -296,8 +348,9 @@ class MemoryStore:
             state["unparsed"]      = None
             state["last_event_at"] = 0.0
             state["topics"]        = []
-            self._notes[scope]     = {}
-            self._pages[scope]     = {}
+            self._mark_forgotten_locked(scope, list(self._notes_locked(scope)))
+            self._notes[scope] = {}
+            self._pages[scope] = {}
             for folder in ("notes", "pages"):
                 for suffix in ("", ".bak"):
                     path = self.data_dir / folder / f"{scope}.json{suffix}"
@@ -312,6 +365,7 @@ class MemoryStore:
                 shared.pop(note_id, None)
             if gone:
                 self._save_notes_locked(GLOBAL)
+                self._mark_forgotten_locked(GLOBAL, gone)
                 self.scrub_pages(GLOBAL, gone)
             self._state_store().write(self._state)
             generation = state["generation"]

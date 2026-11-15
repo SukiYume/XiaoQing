@@ -164,8 +164,9 @@ async def extract_scope(
         merged: dict[str, Note] = {}
         for note in [*result.touched, *result.added, *result.superseded]:
             merged[note.id] = note
-        if merged:
-            store.put_notes(scope, merged.values())
+        if not store.put_consolidated(scope, merged.values(), generation=generation):
+            counters.add("extract.reset")
+            break
         changes: dict[str, Any] = {
             "watermark"           : batch[-1].seq,
             "last_consolidated_at": now,
@@ -257,13 +258,16 @@ async def rewrite_page(
         page  = pages.append_fallback(old, subject, scope, fresh)
         if page is None or (old is not None and page == old):
             return counters
-        counters.add("pages.appended")
+        rewritten = False
     else:
-        counters.add("pages.rewritten")
-    if store.generation(scope) != generation:
+        rewritten = True
+    # 模型在写的时候这个范围被清空了，或者页面引用的笔记被忘掉了：不把旧内容写回去。
+    written = store.put_page(page) if store.generation(scope) == generation else None
+    if written is None:
         counters.add("pages.reset")
         return counters
-    store.put_page(page)
+    page = written
+    counters.add("pages.rewritten" if rewritten else "pages.appended")
     logger.info(
         "xiaoqing_memory step=page scope=%s subject=%s chars=%d lines=%d",
         scope,
@@ -378,8 +382,7 @@ async def verify_lines(
                             text=applied.corrected[note_id][: text_limit(note.kind)]
                         )
                     changed.append(note)
-                if changed:
-                    store.put_notes(scope, changed)
+                store.put_consolidated(scope, changed)
                 store.put_page(applied.page)
         logger.info(
             "xiaoqing_memory step=verify lines=%d verdicts=%s",
@@ -399,8 +402,7 @@ def prune_scope(store: MemoryStore, cfg: MemoryConfig, scope: str, now: float) -
         else set()
     )
     result = prune.prune_notes(store.notes(scope), cfg, now, dead_seqs=dead)
-    if result.changed:
-        store.put_notes(scope, result.changed.values())
+    store.put_consolidated(scope, result.changed.values())
     if result.removed:
         store.remove_notes(scope, result.removed)
     counters.merge(result.counts())

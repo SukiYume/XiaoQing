@@ -922,7 +922,7 @@ async def test_reset_says_so_when_long_term_memory_was_not_cleared(mock_context)
         result = await commands.handle_internal("重置", "", event, mock_context)
 
     text = result[0]["data"]["text"]
-    assert "长期记忆这次没清掉" in text and "自动重试" in text
+    assert "没能确认长期记忆已经清掉" in text and "自动重试" in text
     assert "✅" not in text
 
 

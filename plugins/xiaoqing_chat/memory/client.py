@@ -4,7 +4,7 @@
   推送失败时留在本地，下一次持久化或定时同步时再推，记忆插件按幂等键去重。第一次推送某个会话时，
   这个会话的旧数据（人物事实、话题摘要、自我陈述、未完话头）一起导入。
 - 读：``memory.recall`` 取这一轮的常驻块，``memory.search`` 查她自己的记录和旧事。
-- 清：重置会话时让记忆插件清空这个范围。没清成（超时、出错，或记忆服务这会儿不在）的会话记在
+- 清：重置会话时让记忆插件清空这个范围。没得到它确认（超时、出错，或记忆服务不在）的会话记在
   ``memory_outbox.json`` 里；清掉之前不往这个范围推新消息，也不从它读（旧记忆不再进回复），下一次
   推送或定时同步时先重试。
 
@@ -113,18 +113,6 @@ class Outbox:
         with self._lock:
             return sorted(self._load()["forgetting"])
 
-    def has_remote(self, chat_id: str) -> bool:
-        """这个会话有东西进过长期记忆、还没清掉：推过消息、导入过旧数据，或已经在等着清。"""
-
-        with self._lock:
-            data     = self._load()
-            imported = data["migrated"].get(chat_id)
-            return (
-                chat_id in data["chats"]
-                or chat_id in data["forgetting"]
-                or (isinstance(imported, dict) and not imported.get("cleared_at"))
-            )
-
     def mark_forgetting(self, chat_id: str) -> None:
         with self._lock:
             waiting = self._load()["forgetting"]
@@ -133,17 +121,9 @@ class Outbox:
                 self._store.write(self._load())
 
     def mark_cleared(self, chat_id: str) -> None:
-        """长期记忆清掉了：不再等着清，导入过的旧数据也记为已清。"""
-
         with self._lock:
-            data     = self._load()
-            imported = data["migrated"].get(chat_id)
-            changed  = data["forgetting"].pop(chat_id, None) is not None
-            if isinstance(imported, dict) and not imported.get("cleared_at"):
-                imported["cleared_at"] = time.time()
-                changed                = True
-            if changed:
-                self._store.write(data)
+            if self._load()["forgetting"].pop(chat_id, None) is not None:
+                self._store.write(self._load())
 
 
 _outboxes: dict[str, Outbox]                        = {}
@@ -315,7 +295,7 @@ async def sync_all(context: Any, state: Any, *, bot_name: str) -> int:
 
 
 async def _forget_scope(context: Any, box: Outbox, chat_id: str) -> bool:
-    """让记忆插件清空这个范围；没清成就记下待清。调用方持有这个会话的推送锁。"""
+    """让记忆插件清空这个范围；没得到它的确认就记下待清。调用方持有这个会话的推送锁。"""
 
     cleared = (
         await _call(context, "forget", {"scope": chat_id, "all": True}, RECORD_TIMEOUT) is not None
@@ -327,19 +307,14 @@ async def _forget_scope(context: Any, box: Outbox, chat_id: str) -> bool:
 async def forget_chat(context: Any, chat_id: str) -> bool:
     """重置会话时清掉它的长期记忆，返回清没清成。
 
-    记忆服务这会儿不在时：这个会话有东西进过长期记忆就记下待清、返回没清成；从来没有东西
-    进去过（没接长期记忆的部署）才算清成。
+    只有记忆服务确认清掉才算清成。服务不在、超时或出错时聊天无从知道那边还有没有这个会话的
+    东西（agent 办事也会往里记），一律记下待清、返回没清成。
     """
 
     box = outbox_for(Path(context.data_dir))
     async with _push_lock(chat_id):
-        had_remote = box.has_remote(chat_id)
         await asyncio.to_thread(box.forget, chat_id)
-        if capability(context) is not None:
-            return await _forget_scope(context, box, chat_id)
-        if had_remote:
-            await asyncio.to_thread(box.mark_forgetting, chat_id)
-        return not had_remote
+        return await _forget_scope(context, box, chat_id)
 
 
 def _awaiting_forget(context: Any, chat_id: str) -> bool:

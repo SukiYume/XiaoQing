@@ -81,3 +81,6 @@ docs/remote-sync.md
 plugins/arxiv_filter/best_model*
 plugins/arxiv_filter/train_model/**/cache
 plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
+
+# 还在做、这一版先不带的材料
+docs/character-design
