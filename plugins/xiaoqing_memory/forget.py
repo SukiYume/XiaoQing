@@ -21,11 +21,7 @@ def forget(store: MemoryStore, payload: Mapping[str, Any], *, scope: str) -> dic
     except (TypeError, ValueError):
         user_id = 0
     if user_id > 0:
-        subject = person_subject(user_id)
-        ids     = [note.id for note in store.notes(scope).values() if note.subject == subject]
-        # 他的页面整份删掉；别的页面（比如群页）上引用了他的笔记的行也去掉。
-        removed += store.forget_notes(scope, ids)
-        store.drop_pages(scope, [subject])
+        removed += store.forget_subject(scope, person_subject(user_id))
     ids = [str(item) for item in listing(payload.get("ids")) if str(item)]
     if ids:
         removed += store.forget_notes(scope, ids)

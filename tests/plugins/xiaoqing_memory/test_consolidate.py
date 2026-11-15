@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from datetime import datetime
 
 import pytest
@@ -799,6 +800,131 @@ async def test_scope_cleared_while_the_self_page_is_being_written_stays_cleared(
     assert store.note(GLOBAL, "gone") is None
     page = store.page(GLOBAL, "self")
     assert page is None or "私聊" not in json.dumps(page.to_json(), ensure_ascii=False)
+
+
+def _old_fact(store) -> None:
+    store.put_notes(
+        GROUP,
+        [
+            Note(
+                id          = "old",
+                kind        = "person.fact",
+                scope       = GROUP,
+                subject     = f"person:{ALI}",
+                text        = "养了一只橘猫",
+                created_at  = T0,
+                observed_at = T0,
+            )
+        ],
+    )
+
+
+_REVISED = "其实养的是两只橘猫"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "payload"),
+    [
+        # 模型说“改口了”：解析时给新说法换了新 ID，只在 supersedes 里记着旧的那条。
+        (
+            {"changed": [{"id": "old", "source": "e1", "quote": _REVISED, "text": _REVISED}]},
+            {"ids": ["old"]},
+        ),
+        (
+            {"changed": [{"id": "old", "source": "e1", "quote": _REVISED, "text": _REVISED}]},
+            {"user_id": ALI},
+        ),
+        # 模型另写了一条关于他的新笔记：依据是忘掉他之前说的话。
+        (
+            {
+                "notes": [
+                    {
+                        "kind"  : "person.fact",
+                        "about" : ALI,
+                        "source": "e1",
+                        "quote" : _REVISED,
+                        "text"  : _REVISED,
+                    }
+                ]
+            },
+            {"user_id": ALI},
+        ),
+    ],
+)
+async def test_nothing_derived_from_forgotten_input_is_written_after_the_model_returns(
+    temp_data_dir, answer: dict, payload: dict
+) -> None:
+    store = new_store(temp_data_dir)
+    _old_fact(store)
+    _seed(store, [((ALI, "阿梨"), _REVISED)])
+    model   = _HeldModel(answer)
+    running = asyncio.create_task(
+        extract_scope(
+            store,
+            CFG,
+            Deps(complete=model, bot_name="小青", zone=ZONE, clock=lambda: T0 + 200),
+            GROUP,
+            force=True,
+        )
+    )
+    await model.started.wait()
+
+    await asyncio.to_thread(forget, store, payload, scope=GROUP)
+    model.release.set()
+    await running
+
+    assert store.notes(GROUP) == {}
+
+
+@pytest.mark.unit
+def test_messages_from_before_a_person_was_forgotten_do_not_bring_him_back(temp_data_dir) -> None:
+    """忘掉一个人时还没整理的旧消息，之后整理到也不再记成关于他的事；他之后说的照常记。"""
+
+    store = new_store(temp_data_dir)
+    _old_fact(store)
+    _seed(store, [((ALI, "阿梨"), _REVISED)])
+    forget(store, {"user_id": ALI}, scope=GROUP)
+
+    earlier = FakeModel(
+        {
+            "notes": [
+                {
+                    "kind"  : "person.fact",
+                    "about" : ALI,
+                    "source": "e1",
+                    "quote" : _REVISED,
+                    "text"  : _REVISED,
+                }
+            ]
+        }
+    )
+    _run(extract_scope(store, CFG, deps(earlier), GROUP, force=True))
+    assert store.notes(GROUP) == {}
+
+    later = time.time() + 60
+    record(
+        store,
+        chat_user(GROUP),
+        GROUP,
+        events=[user_event("我搬到杭州了", ALI, "阿梨", "after", ts=later)],
+        now=later,
+    )
+    current = FakeModel(
+        {
+            "notes": [
+                {
+                    "kind"  : "person.fact",
+                    "about" : ALI,
+                    "source": "e2",
+                    "quote" : "我搬到杭州了",
+                    "text"  : "搬到杭州了",
+                }
+            ]
+        }
+    )
+    _run(extract_scope(store, CFG, deps(current, clock=lambda: later + 10), GROUP, force=True))
+    assert [note.text for note in store.notes(GROUP).values()] == ["搬到杭州了"]
 
 
 @pytest.mark.asyncio

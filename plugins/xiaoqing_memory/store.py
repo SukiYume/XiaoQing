@@ -191,12 +191,16 @@ class MemoryStore:
         return merged
 
     def put_notes(self, scope: str, notes: Iterable[Note]) -> None:
+        """写入笔记。出自已被忘掉的内容的不写（见 ``_from_forgotten_locked``）。"""
+
         with self._lock:
             current = self._notes_locked(scope)
             changed = False
             for note in notes:
                 if note.scope != scope:
                     raise ValueError("note scope mismatch")
+                if self._from_forgotten_locked(scope, note):
+                    continue
                 current[note.id] = note
                 changed          = True
             if changed:
@@ -205,23 +209,60 @@ class MemoryStore:
     def put_consolidated(
         self, scope: str, notes: Iterable[Note], *, generation: int | None = None
     ) -> bool:
-        """整理把笔记写回：这期间被忘掉的不写回；范围已被清空（代际变了）时一条都不写，返回 ``False``。"""
+        """整理把笔记写回；范围在这期间被清空（代际变了）时一条都不写，返回 ``False``。"""
 
         with self._lock:
             if generation is not None and self.generation(scope) != generation:
                 return False
-            gone = self._forgotten_locked([scope])
-            self.put_notes(scope, [note for note in notes if note.id not in gone])
+            self.put_notes(scope, notes)
             return True
 
+    def _from_forgotten_locked(self, scope: str, note: Note) -> bool:
+        """这条笔记出自已被忘掉的内容，不该写入。
+
+        删除时可能有整理正等着模型返回，也可能有还没整理的旧消息；它们稍后写下的东西是照删除
+        之前的内容来的。三种情况：笔记自己被忘掉了；它要替换的那条被忘掉了（改口时换了新 ID）；
+        它说的是一个被忘掉的人，依据是忘掉之前说的话。
+        """
+
+        if (scope, note.id) in self._forgotten:
+            return True
+        if note.supersedes and (scope, note.supersedes) in self._forgotten:
+            return True
+        marks  = self._state["scopes"].get(scope, {}).get("forgotten_subjects") or {}
+        cutoff = marks.get(note.subject)
+        if not isinstance(cutoff, (int, float)) or cutoff <= 0:
+            return False
+        return (note.observed_at or note.created_at) <= cutoff
+
     def forget_notes(self, scope: str, ids: Iterable[str]) -> int:
-        """忘掉这些笔记：删除，页面上照它们写的行和简介一起去掉；正在进行的整理也不会把它们写回。"""
+        """忘掉这些笔记：删除，页面上照它们写的行和简介一起去掉；之后也不会被写回。"""
 
         with self._lock:
             wanted  = list(ids)
             removed = self.remove_notes(scope, wanted)
             self._mark_forgotten_locked(scope, wanted)
             self.scrub_pages(scope, wanted)
+            return removed
+
+    def forget_subject(self, scope: str, subject: str, *, now: float | None = None) -> int:
+        """忘掉一个人：删掉关于他的笔记和他的页面，别的页面上引用这些笔记的行一起去掉。
+
+        记下这一刻：依据早于它的、关于他的笔记之后不再写入（正在进行的整理、还没整理的旧消息）。
+        他之后再说的话照常记。
+        """
+
+        with self._lock:
+            ids = [
+                note.id for note in self._notes_locked(scope).values() if note.subject == subject
+            ]
+            removed = self.forget_notes(scope, ids)
+            self.drop_pages(scope, [subject])
+            state                       = self._state["scopes"].setdefault(scope, _scope_state())
+            marks                       = dict(state.get("forgotten_subjects") or {})
+            marks[subject]              = time.time() if now is None else now
+            state["forgotten_subjects"] = marks
+            self._state_store().write(self._state)
             return removed
 
     def _mark_forgotten_locked(self, scope: str, ids: Iterable[str]) -> None:
@@ -342,12 +383,14 @@ class MemoryStore:
         """
 
         with self._lock:
-            state                  = self._state["scopes"].setdefault(scope, _scope_state())
-            state["generation"]    = int(state.get("generation") or 0) + 1
-            state["watermark"]     = 0
-            state["unparsed"]      = None
-            state["last_event_at"] = 0.0
-            state["topics"]        = []
+            state               = self._state["scopes"].setdefault(scope, _scope_state())
+            state["generation"] = int(state.get("generation") or 0) + 1
+            state["watermark"]  = 0
+            state["unparsed"]   = None
+            # 整个范围清空后，旧消息已经都不在了，不必再记着谁被忘掉过。
+            state["forgotten_subjects"] = {}
+            state["last_event_at"]      = 0.0
+            state["topics"]             = []
             self._mark_forgotten_locked(scope, list(self._notes_locked(scope)))
             self._notes[scope] = {}
             self._pages[scope] = {}
