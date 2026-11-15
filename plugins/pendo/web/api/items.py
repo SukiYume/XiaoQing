@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field, StrictInt
 from ...models.item import get_item_type_value
 from ...services.db import Database
 from ...utils.identifiers import public_id
-from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ...utils.validators import (
     LEDGER_TRANSACTION_TYPES,
@@ -23,9 +22,12 @@ from ...utils.validators import (
 from ..deps import get_current_user, get_db
 from ..utils import (
     amount_filter_cents,
+    category_or_default,
+    clean_optional_text,
     infer_item_query_type,
     item_to_dict,
     normalize_choice_query,
+    normalize_currency_query,
     normalize_item_type_query,
 )
 
@@ -59,8 +61,7 @@ def _entry_time_for_diary_date(now_iso: str, diary_date: str | None) -> str:
     date_part = str(diary_date or "").strip()
     if not date_part:
         return now_iso
-    time_part = now_iso[11:19] if len(now_iso) >= 19 else "00:00:00"
-    return f"{date_part}T{time_part}"
+    return f"{date_part}T{now_iso[11:19]}"
 
 
 EVENT_MUTABLE_FIELDS: Final = frozenset(
@@ -560,16 +561,16 @@ def _build_update_operation_log(
 ) -> dict[str, Any]:
     """为所有用户编辑记录前后值，数据库事务补齐实际版本。"""
 
-    note_updates = {field: value for field, value in updates.items() if field != "last_viewed"}
-    if not note_updates:
+    edited = {field: value for field, value in updates.items() if field != "last_viewed"}
+    if not edited:
         return {"user_id": owner_id, "action": "update", "item_type": item_type}
     return {
         "user_id"  : owner_id,
         "action"   : f"edit_{item_type}",
         "item_type": item_type,
         "details"  : {
-            "updates"   : note_updates,
-            "old_values": {field: current.get(field) for field in note_updates if field in current},
+            "updates"   : edited,
+            "old_values": {field: current.get(field) for field in edited if field in current},
         },
     }
 
@@ -607,21 +608,19 @@ def aggregate_items(
         for key, value in (
             ("type", item_type),
             ("transaction_type", transaction_type),
-            ("account_name", str(account_name or "").strip() or None),
-            ("counter_account_name", str(counter_account_name or "").strip() or None),
-            ("merchant", str(merchant or "").strip() or None),
+            ("account_name", clean_optional_text(account_name)),
+            ("counter_account_name", clean_optional_text(counter_account_name)),
+            ("merchant", clean_optional_text(merchant)),
             ("amount_min", amount_min),
             ("amount_max", amount_max),
         )
         if value is not None
     }
-    if category and category.strip():
-        filters["ledger_category"] = category.strip()
+    if category := clean_optional_text(category):
+        filters["ledger_category"] = category
     filters.update(_resolve_date_filters(item_type, date_field, start_date, end_date))
 
-    currency = currency.strip().upper() or "CNY"
-    if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
-        raise HTTPException(status_code=422, detail="currency 必须为三个字母的币种代码")
+    currency = normalize_currency_query(currency) or "CNY"
     summary = db.aggregate_item_amounts(owner_id, filters, currency=currency)
     amounts: dict[str, int] = dict.fromkeys(LEDGER_TRANSACTION_TYPES, 0)
     count                   = 0
@@ -726,17 +725,17 @@ def item_date_bounds(
     filters = {
         key: value
         for key, value in (
-            ("tags", str(tags or "").strip() or None),
-            ("keyword", str(keyword or "").strip() or None),
-            ("account_name", str(account_name or "").strip() or None),
+            ("tags", clean_optional_text(tags)),
+            ("keyword", clean_optional_text(keyword)),
+            ("account_name", clean_optional_text(account_name)),
             ("transaction_type", transaction_type),
             ("amount_min", amount_min),
             ("amount_max", amount_max),
         )
         if value is not None
     }
-    if category and category.strip():
-        filters[_resolve_category_field(item_type)] = category.strip()
+    if category := clean_optional_text(category):
+        filters[_resolve_category_field(item_type)] = category
     bounds = db.get_item_date_bounds(owner_id, item_type, currency=currency, filters=filters)
     return {"ok": True, "data": bounds, "message": ""}
 
@@ -769,11 +768,8 @@ def list_items(
 ) -> dict[str, object]:
     """按同一过滤契约返回当前页条目和完整匹配总数。"""
 
-    item_type = normalize_item_type_query(type)
-    if currency is not None:
-        currency = currency.strip().upper() or None
-    if currency and (len(currency) != 3 or not currency.isascii() or not currency.isalpha()):
-        raise HTTPException(status_code=422, detail="currency 必须为三个字母的币种代码")
+    item_type        = normalize_item_type_query(type)
+    currency         = normalize_currency_query(currency)
     status           = normalize_choice_query(status, TASK_STATUSES, "status")
     transaction_type = normalize_choice_query(
         transaction_type,
@@ -812,21 +808,21 @@ def list_items(
         for key, value in (
             ("type", item_type),
             ("status", status),
-            ("tags", str(tags or "").strip() or None),
-            ("keyword", str(keyword or "").strip() or None),
+            ("tags", clean_optional_text(tags)),
+            ("keyword", clean_optional_text(keyword)),
             ("currency", currency),
             ("priority", priority),
             ("transaction_type", transaction_type),
-            ("account_name", str(account_name or "").strip() or None),
-            ("counter_account_name", str(counter_account_name or "").strip() or None),
-            ("merchant", str(merchant or "").strip() or None),
+            ("account_name", clean_optional_text(account_name)),
+            ("counter_account_name", clean_optional_text(counter_account_name)),
+            ("merchant", clean_optional_text(merchant)),
             ("amount_min", amount_min),
             ("amount_max", amount_max),
         )
         if value is not None
     }
-    if category and category.strip():
-        filters[_resolve_category_field(item_type)] = category.strip()
+    if category := clean_optional_text(category):
+        filters[_resolve_category_field(item_type)] = category
     filters.update(_resolve_date_filters(item_type, date_field, start_date, end_date, date_range))
     filters["sort_field"] = sort
     filters["sort_order"] = normalized_order
@@ -894,9 +890,8 @@ def create_item(
 
     if item_type == "event" and not item_data.get("timezone"):
         item_data["timezone"] = str(TimezoneHelper.get_user_timezone(owner_id, db))
-    category = str(item_data.get("category") or "").strip()
-    if item_type in {"event", "note"} and (not category or category == "未分类"):
-        item_data["category"] = resolve_default_category(db, owner_id)
+    if item_type in {"event", "note"}:
+        item_data["category"] = category_or_default(db, owner_id, item_data.get("category"))
     if item_type == "diary":
         if not item_data.get("entry_time"):
             # 日记发生时间是用户墙钟；数据库入口会按用户时区唯一化并转 UTC。
@@ -952,12 +947,10 @@ def update_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     requested_updates = body.model_dump(exclude_unset=True)
-    if not requested_updates:
-        raise HTTPException(status_code=422, detail="No fields to update")
     requested_updates.pop("version", None)
     requested_fields = set(requested_updates)
     if not requested_fields:
-        raise HTTPException(status_code=422, detail="No mutable fields to update")
+        raise HTTPException(status_code=422, detail="No fields to update")
 
     item_type = get_item_type_value(getattr(item, "type", None), default="")
     allowed_fields = MUTABLE_FIELDS_BY_TYPE.get(item_type)
@@ -1057,7 +1050,6 @@ def delete_item(
     else:
         success = db.delete_item(
             item_id,
-            soft          = True,
             owner_id      = owner_id,
             operation_log = {
                 "user_id"  : owner_id,

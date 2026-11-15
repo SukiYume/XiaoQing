@@ -10,7 +10,7 @@ import pytest
 
 from plugins.xiaoqing_chat.commands import reset_chat_session as _reset_chat_session
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-from plugins.xiaoqing_chat.context_builder import expression_context, jargon_context
+from plugins.xiaoqing_chat.context_builder import expression_context, jargon_block
 from plugins.xiaoqing_chat.expression.bw_expression_learner import LearnedExpression, upsert_learned
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
 from plugins.xiaoqing_chat.expression.bw_jargon_miner import mine_jargon
@@ -96,16 +96,16 @@ def test_local_meme_definition_and_transfer_candidates_are_scoped(state, tmp_pat
                 confirmed     = True,
             ),
             JargonRecord("电子烧水", scope_chat_id="g2", meaning="另一个群的私有定义"),
-            JargonRecord("电子烧水", is_global=True, meaning="全局词典中的旧含义"),
+            JargonRecord("电子烧水", meaning="没有会话的旧词条含义"),
         ]
     )
-    block = jargon_context(state, tmp_path, "g1", [], "电子烧水是什么意思")
+    block = jargon_block(state, tmp_path, "g1", "电子烧水是什么意思")[0]
     assert "动静很大" in block and "轻松自嘲" in block
     assert "私有定义" not in block and "旧含义" not in block
-    transfer = jargon_context(state, tmp_path, "g1", [], "会议开了三小时还没决定")
+    transfer = jargon_block(state, tmp_path, "g1", "会议开了三小时还没决定")[0]
     assert "无效会议" in transfer
     state.memory_store.append("g1", role="assistant", name="小青", content="又在电子烧水了")
-    assert jargon_context(state, tmp_path, "g1", [], "今天又开会") == ""
+    assert jargon_block(state, tmp_path, "g1", "今天又开会")[0] == ""
 
 
 @pytest.mark.asyncio
@@ -128,7 +128,7 @@ async def test_meme_extraction_accepts_supported_correction(state):
     ]
     response = {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
     with patch(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
         new=AsyncMock(return_value=(response, "test")),
     ):
         await mine_jargon(
@@ -149,7 +149,7 @@ async def test_meme_extraction_accepts_supported_correction(state):
 async def _mine(state, text: str, items: list[dict]) -> None:
     response = {"choices": [{"message": {"content": json.dumps(items, ensure_ascii=False)}}]}
     with patch(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
         new=AsyncMock(return_value=(response, "test")),
     ):
         await mine_jargon(
@@ -214,7 +214,7 @@ async def _infer(db: dict, verdict: dict) -> tuple[int, AsyncMock]:
 
     response = {"choices": [{"message": {"content": json.dumps(verdict, ensure_ascii=False)}}]}
     with patch(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
         new=AsyncMock(return_value=(response, "test")),
     ) as call:
         changed = await _infer_pending_meanings(
@@ -316,7 +316,7 @@ async def test_stored_context_is_where_the_term_was_used(state):
         ]
     }
     with patch(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
         new=AsyncMock(return_value=(response, "test")),
     ):
         await mine_jargon(
@@ -339,10 +339,10 @@ def test_unconfirmed_meaning_is_a_marked_guess_and_never_a_transfer_candidate(st
             )
         ]
     )
-    mentioned = jargon_context(state, tmp_path, "g1", [], "空转是什么意思")
+    mentioned = jargon_block(state, tmp_path, "g1", "空转是什么意思")[0]
     assert "空转：忙碌却没有进展" in mentioned and "未经本群确认的猜测" in mentioned
     assert "无效忙碌" not in mentioned and "轻松自嘲" not in mentioned
-    assert jargon_context(state, tmp_path, "g1", [], "今天忙了一天没进展") == ""
+    assert jargon_block(state, tmp_path, "g1", "今天忙了一天没进展")[0] == ""
 
 
 @pytest.mark.asyncio
@@ -361,14 +361,17 @@ async def test_empty_expression_result_still_mines_jargon(state, tmp_path):
         ) as mine,
     ):
         changed = await extract_and_learn(
-            context      = context,
-            bot_name     = "小青",
-            chat_id      = "g1",
-            memory_store = state.memory_store,
-            expr_store   = state.bw_expr_store,
-            jargon_store = state.bw_jargon_store,
-            recorder     = state.bw_recorder,
-            personality  = XiaoQingChatConfig().personality,
+            context              = context,
+            bot_name             = "小青",
+            chat_id              = "g1",
+            memory_store         = state.memory_store,
+            expr_store           = state.bw_expr_store,
+            jargon_store         = state.bw_jargon_store,
+            recorder             = state.bw_recorder,
+            personality          = XiaoQingChatConfig().personality,
+            min_interval_seconds = 60.0,
+            min_messages         = 10,
+            max_store            = 2000,
             **MODEL,
         )
     assert changed == 1
@@ -395,6 +398,7 @@ async def test_reset_during_expression_review_drops_new_learned_record(state, tm
                 chat_id      = "g1",
                 learned      = [LearnedExpression("作业太多", "用副本比喻作业", "m1")],
                 self_reflect = True,
+                max_store    = 2000,
                 bot_name     = "小青",
                 personality  = XiaoQingChatConfig().personality,
                 **MODEL,
@@ -439,3 +443,19 @@ async def test_profile_question_uses_semantic_checker_for_natural_boundary():
         )
     assert result.suitable
     remote.assert_awaited_once()
+
+
+def test_only_confirmed_group_meanings_count_as_already_explained(state, tmp_path):
+    """交给网上生活的“已经解释过”只算本群确认的释义；本群只是猜测时，网上查实的意思照常给。"""
+
+    from plugins.xiaoqing_chat.context_builder import jargon_block
+
+    state.bw_jargon_store.save(
+        [
+            JargonRecord("电子烧水", scope_chat_id="g1", meaning="没有进展", confirmed=True),
+            JargonRecord("空转", scope_chat_id="g1", meaning="忙碌却没有进展"),
+        ]
+    )
+    block, explained = jargon_block(state, tmp_path, "g1", "电子烧水和空转是什么意思")
+    assert "电子烧水" in block and "空转" in block
+    assert explained == ("电子烧水",)

@@ -171,7 +171,7 @@ def test_dashboard_markup_normalizes_response_and_uses_accessible_navigation() -
                 tasks_pending: -3,
                 tasks_done_recent: 2.9,
                 ledger_month_expense: Number.POSITIVE_INFINITY,
-                diary_month: 4,
+                diary_recent: 4,
             },
             events_agenda: [{
                 start_time: '2099-03-05T09:00:00+00:00',
@@ -237,12 +237,12 @@ def test_dashboard_ignores_stale_or_destroyed_loads() -> None:
 
         __dataChangeCallback();
         assert.equal(requests.length, 2);
-        requests[1].resolve({ data: { summary: { diary_month: 2 } } });
+        requests[1].resolve({ data: { summary: { diary_recent: 2 } } });
         await __flushPromises();
         const newestMarkup = container.innerHTML;
         assert.match(newestMarkup, /近 30 天共写了 2 篇/);
 
-        requests[0].resolve({ data: { summary: { diary_month: 99 } } });
+        requests[0].resolve({ data: { summary: { diary_recent: 99 } } });
         await __flushPromises();
         assert.equal(container.innerHTML, newestMarkup);
 
@@ -252,7 +252,7 @@ def test_dashboard_ignores_stale_or_destroyed_loads() -> None:
         assert.equal(requests.length, 3);
         client.destroy();
         container.innerHTML = '<main>其他页面</main>';
-        requests[2].resolve({ data: { summary: { diary_month: 88 } } });
+        requests[2].resolve({ data: { summary: { diary_recent: 88 } } });
         await __flushPromises();
         assert.equal(container.innerHTML, '<main>其他页面</main>');
         assert.equal(__unsubscribeCount, 2);

@@ -191,10 +191,7 @@ class _FakeGroupConfig:
 
 
 class _FakeDB:
-    def get_recent_command_count(self, user_id, group_id, window_seconds):
-        return 0
-
-    def get_group_recent_command_count(self, group_id, window_seconds):
+    def get_recent_command_count(self, group_id, window_seconds, *, user_id=None):
         return 0
 
     def record_command_timestamp(self, user_id, group_id):

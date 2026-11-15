@@ -14,6 +14,20 @@
         "接着说",
         "我想一下"
     ],
+    "bot_name_only_replies": [
+        "在",
+        "在呢",
+        "嗯？",
+        "咋了",
+        "怎么啦",
+        "我在",
+        "来了来了",
+        "在的在的",
+        "叫我干嘛",
+        "有事吗",
+        "嗯嗯？",
+        "在，咋啦"
+    ],
     "pfc_planner_fail_window_seconds": 60.0,
     "pfc_planner_fail_threshold": 2,
     "pfc_planner_backoff_seconds": 120.0,
@@ -41,17 +55,9 @@
     },
     "memory": {
         "enable_memory_retrieval": true,
-        "planner_question": true,
         "conversation_idle_gap_seconds": 1800,
-        "agent_on_direct_miss_requires_reference": true,
-        "max_agent_iterations": 5,
-        "agent_timeout_seconds": 120,
         "top_k": 3,
-        "min_score": 0.12,
-        "max_block_chars": 1200,
-        "enable_thinking_back_cache": true,
-        "thinking_back_window_seconds": 1800,
-        "thinking_back_max_entries": 200
+        "min_score": 0.12
     },
     "reply_check": {
         "enable_reply_checker": true,
@@ -83,8 +89,7 @@
         "session_timeout_seconds": 7200,
         "resend_interval_seconds": 1800,
         "session_cooldown_seconds": 3600,
-        "goal_lock_seconds": 3600,
-        "max_avoid_patterns": 30
+        "goal_lock_seconds": 3600
     },
     "brain_chat": {
         "enable_private_brain_chat": false,
@@ -94,16 +99,9 @@
         "brain_mode_indicator": "🧠 深度对话模式",
         "show_mode_indicator": false
     },
-    "summarizer": {
-        "enable_topic_summarizer": true,
-        "min_messages_per_update": 6,
-        "max_cache_topics": 20,
-        "enable_private_summary": true
-    },
     "expression": {
         "enable_expression_learning": true,
         "enable_expression_selector": true,
-        "max_injected": 1,
         "max_store": 200
     },
     "knowledge": {
@@ -162,12 +160,10 @@
         "busy_delay_factor": 1.6,
         "asleep_delay_factor": 2.0,
         "enable_self_timeline": true,
-        "self_timeline_max_entries": 80,
         "self_timeline_max_injected": 8,
         "self_state_extract_interval_seconds": 600,
         "enable_open_loops": true,
         "open_loop_followup_hours": 36,
-        "open_loop_max_per_chat": 60,
         "enable_daily_life": true,
         "enable_online_life": true,
         "online_life_timeout_seconds": 0.8,

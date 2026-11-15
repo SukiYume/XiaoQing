@@ -27,8 +27,7 @@ async def test_app_start(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager methods
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     await app.start()
@@ -37,8 +36,7 @@ async def test_app_start(temp_app_root: Path):
     assert app.http_session is not None
 
     # Verify plugins are loaded
-    app.plugin_manager.load_all.assert_called_once()
-    await app.plugin_manager.wait_inits()
+    app.plugin_manager.load_all.assert_awaited_once()
 
     # Verify session cleanup task is created
     assert app._session_cleanup_task is not None
@@ -55,8 +53,7 @@ async def test_app_start_defers_plugin_schedule_callbacks_until_one_startup_reco
 ):
     app = XiaoQingApp(temp_app_root)
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    app.plugin_manager.wait_inits = AsyncMock()
-    app.plugin_manager.load_all = Mock(side_effect=lambda: app._reschedule("test_plugin"))
+    app.plugin_manager.load_all = AsyncMock(side_effect=lambda: app._reschedule("test_plugin"))
     app.scheduler.replace_prefix = Mock()
 
     await app.start()
@@ -72,9 +69,8 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
 ):
     from core.config import ConfigSnapshot
 
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     old_config = {
@@ -154,9 +150,8 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
     timeout_seconds: float,
     expected_attempts: int,
 ):
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     app._claim_or_reuse_startup_owner = Mock(return_value=None)
@@ -188,9 +183,8 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
 async def test_app_start_failure_rolls_back_every_resource_and_allows_retry(
     temp_app_root: Path,
 ):
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     first_session = MagicMock(close=AsyncMock())
@@ -243,9 +237,8 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
 ):
     from core.config import ConfigSnapshot
 
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     first_session = MagicMock(close=AsyncMock())
@@ -302,9 +295,8 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
 async def test_start_rollback_cleanup_failure_retains_ownership_and_blocks_retry(
     temp_app_root: Path,
 ):
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     session = MagicMock(close=AsyncMock())
@@ -341,12 +333,11 @@ async def test_concurrent_and_repeated_start_calls_create_one_runtime(temp_app_r
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def wait_inits() -> None:
+    async def load_all() -> None:
         entered.set()
         await release.wait()
 
-    app.plugin_manager.load_all = Mock()
-    app.plugin_manager.wait_inits = AsyncMock(side_effect=wait_inits)
+    app.plugin_manager.load_all = AsyncMock(side_effect=load_all)
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     session = MagicMock(close=AsyncMock())
@@ -367,8 +358,7 @@ async def test_concurrent_and_repeated_start_calls_create_one_runtime(temp_app_r
 
         assert app.http_session is original_session
         session_cls.assert_called_once()
-        app.plugin_manager.load_all.assert_called_once()
-        app.plugin_manager.wait_inits.assert_awaited_once()
+        app.plugin_manager.load_all.assert_awaited_once()
         await app.stop()
 
     session.close.assert_awaited_once()
@@ -381,12 +371,11 @@ async def test_start_cancellation_finishes_rollback_before_propagating(temp_app_
     entered = asyncio.Event()
     blocker = asyncio.Event()
 
-    async def wait_inits() -> None:
+    async def load_all() -> None:
         entered.set()
         await blocker.wait()
 
-    app.plugin_manager.load_all = Mock()
-    app.plugin_manager.wait_inits = AsyncMock(side_effect=wait_inits)
+    app.plugin_manager.load_all = AsyncMock(side_effect=load_all)
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     first_session = MagicMock(close=AsyncMock())
@@ -409,7 +398,7 @@ async def test_start_cancellation_finishes_rollback_before_propagating(temp_app_
         assert app._lifecycle_state.value == "new"
         assert app._stopping is False
 
-        app.plugin_manager.wait_inits = AsyncMock()
+        app.plugin_manager.load_all = AsyncMock()
         await app.start()
         assert app.http_session is second_session
         await app.stop()
@@ -421,10 +410,9 @@ async def test_start_fatal_is_task_safe_and_rolls_back(temp_app_root: Path):
     class StartupFatal(BaseException):
         pass
 
-    app                         = XiaoQingApp(temp_app_root)
-    fatal                       = StartupFatal("plugin init fatal")
-    app.plugin_manager.load_all = Mock()
-    app.plugin_manager.wait_inits = AsyncMock(side_effect=fatal)
+    app   = XiaoQingApp(temp_app_root)
+    fatal = StartupFatal("plugin init fatal")
+    app.plugin_manager.load_all = AsyncMock(side_effect=fatal)
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     session = MagicMock(close=AsyncMock())
 
@@ -508,9 +496,8 @@ async def test_runtime_config_ws_fatal_is_task_safe(temp_app_root: Path):
 async def test_start_after_terminal_stop_is_rejected_and_stop_is_idempotent(
     temp_app_root: Path,
 ):
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     session = MagicMock(close=AsyncMock())
@@ -537,7 +524,6 @@ async def test_start_after_terminal_stop_is_rejected_and_stop_is_idempotent(
         "client_session",
         "http_sender",
         "load_all",
-        "wait_inits",
         "scheduler",
         "reschedule",
         "ws_constructor",
@@ -564,11 +550,8 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
     app = XiaoQingApp(temp_app_root)
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    app.plugin_manager.load_all = Mock(
+    app.plugin_manager.load_all = AsyncMock(
         side_effect=[RuntimeError("load failed"), None] if failure_phase == "load_all" else None
-    )
-    app.plugin_manager.wait_inits = AsyncMock(
-        side_effect=[RuntimeError("init failed"), None] if failure_phase == "wait_inits" else None
     )
 
     if failure_phase == "scheduler":
@@ -664,9 +647,8 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_start_creates_shared_http_session_with_default_timeout(temp_app_root: Path):
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     mock_session             = MagicMock()
@@ -700,9 +682,8 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     task_cancelled: dict[str, bool] = {"config": False, "plugin": False, "ws": False}
@@ -799,9 +780,8 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
 @pytest.mark.unit
 async def test_app_start_binds_inbound_status_providers(temp_app_root: Path):
     """Test inbound manager gets status providers before startup."""
-    app                           = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app                         = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     mock_manager       = MagicMock()
@@ -834,8 +814,7 @@ async def test_app_start_with_http_configured(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     await app.start()
@@ -863,8 +842,7 @@ async def test_app_start_with_ws_disabled(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     await app.start()
@@ -886,8 +864,7 @@ async def test_app_stop(temp_app_root: Path):
     app.plugin_manager.unload_plugin = AsyncMock()
 
     # Start the app first
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     await app.start()
 

@@ -1,0 +1,214 @@
+{
+  "name": "xiaoqing_memory",
+  "version": "0.1.0",
+  "description": "小青的统一记忆：聊天、办事和网上生活共用的原始记录、笔记与页面，每晚整理一次",
+  "author": "XiaoQing",
+  "entry": "main.py",
+  "concurrency": "parallel",
+  "services": [
+    {
+      "name": "memory.record",
+      "callback": "record",
+      "callers": [
+        "xiaoqing_chat",
+        "xiaoqing_agent",
+        "xiaoqing_life"
+      ]
+    },
+    {
+      "name": "memory.recall",
+      "callback": "recall",
+      "callers": [
+        "xiaoqing_chat",
+        "xiaoqing_agent"
+      ]
+    },
+    {
+      "name": "memory.search",
+      "callback": "search",
+      "callers": [
+        "xiaoqing_chat"
+      ]
+    },
+    {
+      "name": "memory.forget",
+      "callback": "forget",
+      "callers": [
+        "xiaoqing_chat"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "mem",
+      "triggers": [
+        "mem"
+      ],
+      "help": "小青的统一记忆：看各范围的数量和页面、查出处、删除或立刻整理。仅 Bot 管理员，私聊。",
+      "usage": "/mem [status|stats|page|search|why|forget|consolidate|rebuild|help]",
+      "permission": "bot_admin",
+      "contexts": [
+        "private"
+      ],
+      "examples": [
+        "/mem status"
+      ],
+      "invalid_examples": [
+        "/mem unknown-command"
+      ],
+      "subcommands": [
+        {
+          "name": "status",
+          "aliases": [
+            "状态"
+          ],
+          "help": "各范围的事件、笔记、页面数量，水位，今天整理用了几次模型",
+          "usage": "/mem status",
+          "examples": [
+            "/mem status"
+          ],
+          "invalid_examples": [
+            "/mem status extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "stats",
+          "aliases": [
+            "统计"
+          ],
+          "help": "最近 7 天的整理与取用计数",
+          "usage": "/mem stats",
+          "examples": [
+            "/mem stats"
+          ],
+          "invalid_examples": [
+            "/mem stats extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        },
+        {
+          "name": "page",
+          "aliases": [
+            "页面"
+          ],
+          "help": "看一个范围的页面列表，或某个人、群、她自己的页面",
+          "usage": "/mem page <范围> [QQ号|group|self]",
+          "examples": [
+            "/mem page global self",
+            "/mem page g123456 group"
+          ],
+          "invalid_examples": [
+            "/mem page"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "search",
+          "aliases": [
+            "搜索"
+          ],
+          "help": "在一个范围里查笔记、页面和原始记录",
+          "usage": "/mem search <范围> <关键词>",
+          "examples": [
+            "/mem search g123456 面试"
+          ],
+          "invalid_examples": [
+            "/mem search"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "why",
+          "aliases": [
+            "出处"
+          ],
+          "help": "一条笔记的出处原文",
+          "usage": "/mem why <笔记ID>",
+          "examples": [
+            "/mem why n1a2b3c4d"
+          ],
+          "invalid_examples": [
+            "/mem why"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "forget",
+          "aliases": [
+            "忘记"
+          ],
+          "help": "清空一个范围，或删一个人、一条笔记",
+          "usage": "/mem forget <范围> [QQ号|笔记ID]",
+          "examples": [
+            "/mem forget u123456"
+          ],
+          "invalid_examples": [
+            "/mem forget"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "consolidate",
+          "aliases": [
+            "整理"
+          ],
+          "help": "立刻整理一次，不受每日预算限制",
+          "usage": "/mem consolidate [范围]",
+          "examples": [
+            "/mem consolidate",
+            "/mem consolidate g123456"
+          ],
+          "invalid_examples": [
+            "/mem consolidate x y"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "rebuild",
+          "aliases": [
+            "重建"
+          ],
+          "help": "从笔记重写一个范围的全部页面",
+          "usage": "/mem rebuild <范围>",
+          "examples": [
+            "/mem rebuild g123456"
+          ],
+          "invalid_examples": [
+            "/mem rebuild"
+          ],
+          "permission": "bot_admin"
+        },
+        {
+          "name": "help",
+          "aliases": [
+            "帮助"
+          ],
+          "help": "命令说明",
+          "usage": "/mem help",
+          "examples": [
+            "/mem help"
+          ],
+          "invalid_examples": [
+            "/mem help extra"
+          ],
+          "match": "exact",
+          "permission": "bot_admin"
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "id": "xiaoqing_memory.tick",
+      "handler": "scheduled_tick",
+      "delivery": "silent",
+      "cron": {
+        "minute": "*/30"
+      },
+      "description": "落盘取用计数；夜间窗口里或积压够多时整理有新事件的范围，窗口里每天另做一次自我页、核对和全量清理；enabled 关闭时不整理"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 """
 Pendo Markdown 导出服务。
 
-插件端只保留导出能力：
+聊天端只提供导出（导入由 Web 端的传输流程完成）：
 - `/pendo export <filename> [range] [type]`
 - 生成单个 Markdown 档案文件
 - 由上层命令处理器负责将文件通过 OneBot 发给 QQ 用户
@@ -19,8 +19,14 @@ from typing import Any, ClassVar, Protocol
 from ..models.item import get_item_type_value
 from ..utils.currency import currency_label
 from ..utils.error_handlers import error_result, success_result
+from ..utils.formatters import PRIORITY_NAMES, collection_node_title
 from ..utils.identifiers import public_id
-from ..utils.time_utils import TimezoneHelper, parse_search_date_range
+from ..utils.time_utils import (
+    CALENDAR_RANGE_KEYWORDS,
+    TimezoneHelper,
+    parse_search_date_range,
+)
+from ..utils.tokens import shell_tokens
 
 logger                               = logging.getLogger(__name__)
 _EXPORT_TIMEZONE: ContextVar[tzinfo] = ContextVar(
@@ -30,16 +36,6 @@ _EXPORT_TIMEZONE: ContextVar[tzinfo] = ContextVar(
 
 class _ExportItemsRepository(Protocol):
     """导出器依赖的最小条目仓储接口。"""
-
-    def get_items(
-        self,
-        owner_id: str,
-        filters: dict[str, Any] | None = None,
-        limit: int                     = 100,
-        offset: int                    = 0,
-        *,
-        use_cache: bool = True,
-    ) -> list[Any]: ...
 
     def get_all_items(
         self,
@@ -105,6 +101,7 @@ def _sanitize_export_filename(raw_name: str) -> str:
 class ExporterService:
     """Pendo 导出服务。"""
 
+    _ALL_WORDS      : ClassVar[frozenset[str]] = frozenset({"all", "全部", "*"})
     _EXPORT_TYPE_MAP: ClassVar[dict[str, str]] = {
         "event" : "event",
         "todo"  : "task",
@@ -196,7 +193,12 @@ class ExporterService:
         )
 
     def _parse_export_args(self, args: str) -> dict[str, Any]:
-        tokens = self._tokenize_args(args)
+        try:
+            tokens = [
+                token.strip() for token in shell_tokens(args or "", "导出参数") if token.strip()
+            ]
+        except ValueError as exc:
+            return error_result(str(exc))
         if tokens and tokens[0].lower() == "md":
             tokens = tokens[1:]
 
@@ -238,49 +240,19 @@ class ExporterService:
             "type_label" : type_info["label"],
         }
 
-    def _tokenize_args(self, args: str) -> list[str]:
-        pattern           = r'"([^"]+)"|\'([^\']+)\'|(\S+)'
-        tokens: list[str] = []
-        for match in re.finditer(pattern, args or ""):
-            token = next((group for group in match.groups() if group), "")
-            if token:
-                tokens.append(token.strip())
-        return tokens
-
     def _looks_like_range_spec(self, token: str) -> bool:
         normalized = (token or "").strip().lower()
         if not normalized:
             return False
-        if normalized in {
-            "all",
-            "全部",
-            "*",
-            "today",
-            "tomorrow",
-            "week",
-            "month",
-            "year",
-            "今天",
-            "本周",
-            "本月",
-            "今年",
-        }:
+        if normalized in self._ALL_WORDS or normalized in CALENDAR_RANGE_KEYWORDS:
             return True
         if ".." in normalized:
             return True
-        if re.fullmatch(r"last\d+d", normalized):
-            return True
-        if re.fullmatch(r"\d{4}", normalized):
-            return True
-        if re.fullmatch(r"\d{4}-\d{2}", normalized):
-            return True
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
-            return True
-        return False
+        return re.fullmatch(r"last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2}", normalized) is not None
 
     def _parse_range_spec(self, token: str | None) -> dict[str, Any]:
         normalized = (token or "").strip()
-        if not normalized or normalized.lower() in {"all", "*"} or normalized == "全部":
+        if not normalized or normalized.lower() in self._ALL_WORDS:
             return {
                 "status"    : "success",
                 "start_date": None,
@@ -319,7 +291,7 @@ class ExporterService:
         for part in parts:
             mapped = self._EXPORT_TYPE_MAP.get(part)
             if mapped is None:
-                allowed = ", ".join(["event", "todo", "note", "ledger", "diary"])
+                allowed = ", ".join(self._TYPE_EXPORT_NAMES[t] for t in self._TYPE_ORDER)
                 return error_result(f"未知导出类型: {part}\n可选类型: {allowed}")
             if mapped == "all":
                 selected = list(self._TYPE_ORDER)
@@ -679,9 +651,7 @@ class ExporterService:
         collection_title = str(collection.get("title") or "").strip()
         if not collection_title:
             return title
-        if collection_title == title:
-            return title
-        return f"{collection_title} · {title}"
+        return collection_node_title(collection_title, title)
 
     def _build_body_sections(self, item_type: str, item: Any) -> list[str]:
         sections: list[str] = []
@@ -732,7 +702,7 @@ class ExporterService:
     def _get_event_collection(self, item: Any) -> dict[str, Any] | None:
         collection_id = getattr(item, "event_collection_id", None)
         owner_id      = getattr(item, "owner_id", None)
-        if not collection_id or not hasattr(self.db, "get_event_collection"):
+        if not collection_id:
             return None
         cache_key = (str(owner_id) if owner_id else None, str(collection_id))
         if cache_key in self._event_collection_cache:
@@ -797,18 +767,13 @@ class ExporterService:
         return lines
 
     def _format_priority(self, value: Any) -> str:
-        mapping = {
-            1: "P1 / 紧急",
-            2: "P2 / 高",
-            3: "P3 / 中",
-            4: "P4 / 低",
-            5: "P5 / 最低",
-        }
         raw = getattr(value, "value", value)
         try:
-            return mapping.get(int(raw), str(raw))
+            level = int(raw)
         except (TypeError, ValueError):
             return self._value_or_dash(raw)
+        name = PRIORITY_NAMES.get(level)
+        return f"P{level} / {name}" if name else str(raw)
 
     def _format_task_status(self, value: Any) -> str:
         mapping = {
@@ -874,8 +839,6 @@ class ExporterService:
         items: list[Any],
         counts: dict[str, int],
     ) -> None:
-        if not hasattr(self.db, "log_transfer"):
-            return
         try:
             self.db.log_transfer(
                 owner_id=user_id,

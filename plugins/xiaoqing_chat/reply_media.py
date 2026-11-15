@@ -1,7 +1,7 @@
 """闲聊链路的媒体桥接。
 
-本模块只负责三件事：把入站媒体转成可持久化记录、把出站 parts 同步到媒体注册表，
-以及在消息确认送达后登记媒体使用次数。消息 parts 始终是结构事实来源，展示文本和旧版
+把入站媒体转成可持久化记录、把出站 parts 同步到媒体注册表、在消息确认送达后登记媒体
+使用次数，并给回复加发送前缀、整理展示文本。消息 parts 始终是结构事实来源，展示文本和
 ``content + media_items`` 仅在边界处派生，避免三套表示各自演化。
 """
 
@@ -17,6 +17,7 @@ from .media.qq_face_catalog import mark_qq_face_used_by_id
 from .media_registry import normalize_media_refs, upsert_registered_media_items
 from .message_parts import (
     build_text_message_parts,
+    is_media_part,
     normalize_message_parts,
     replace_message_media_parts,
 )
@@ -25,8 +26,6 @@ from .task_scheduler import schedule_media_registry_flush
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime, ChatRuntimeState
-
-_MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
 
 
 def _log_media_bookkeeping_failure(context: Any, operation: str, exc: Exception) -> None:
@@ -43,7 +42,7 @@ def _first_media_part(
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
     for part in normalize_message_parts(parts):
-        if str(part.get("kind", "") or "").strip() in _MEDIA_PART_KINDS:
+        if is_media_part(part):
             return dict(part)
     return None
 
@@ -134,17 +133,11 @@ def sync_message_parts_to_registry(
     if not normalized_parts:
         return ()
     # 登记完整元数据，否则压缩后的引用会让注册表永远缺少画面描述。
-    media_items = normalize_media_refs(
-        [part for part in normalized_parts if part.get("kind") != "text"]
-    )
-    media_store        = state.media_store
+    media_items = normalize_media_refs([part for part in normalized_parts if is_media_part(part)])
+    media_store = state.media_store
     synced_media_items = cast(
         list[dict[str, Any]],
-        upsert_registered_media_items(
-            media_items,
-            store   = media_store,
-            compact = False,
-        ),
+        upsert_registered_media_items(media_items, store=media_store),
     )
     if media_items and media_store.is_dirty():
         # 刷盘属于旁路维护；调度失败不能让已经生成的回复消失。

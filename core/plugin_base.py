@@ -1,21 +1,24 @@
-"""插件基础工具：消息段构建、外部文本清洗、同步函数卸载、JSON 读写与长消息拆分。
+"""插件基础工具：消息段构建、外部文本清洗与预览截断、同步函数卸载与有界并发、配置取值、
+JSON 读写与长消息拆分。
 
 所有插件应该从这个模块导入基础功能。
 """
 
 import asyncio
+import base64
 import inspect
+import io
 import json
 import logging
 import math
 import re
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
 from urllib.parse import unquote, urlparse
 
 from .atomic_store import AtomicJsonStore, atomic_write_bytes, atomic_write_text
-from .constants import MAX_MESSAGE_TEXT_LENGTH
+from .constants import DEFAULT_BOT_NAME, MAX_MESSAGE_TEXT_LENGTH
 from .interfaces import PluginContextProtocol
 from .plugin_execution import offload_plugin_sync
 
@@ -26,7 +29,9 @@ T        = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
-_EXTERNAL_ANSI_PATTERN    = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
+_EXTERNAL_ANSI_PATTERN = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
+# 与 ``has_control_characters(allow_formatting_whitespace=True, include_c1=True)`` 判定的是
+# 同一组字符：这里用来替换，那边用来拒绝。
 _EXTERNAL_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
@@ -78,24 +83,29 @@ def bounded_external_text(
     value: object,
     *,
     max_chars: int,
-    max_bytes: int,
-    default: str     = "",
-    suffix: str      = "…",
-    strip_ansi: bool = True,
-    strip: bool      = True,
-    truncate: bool   = True,
+    max_bytes: int | None = None,
+    default: str          = "",
+    suffix: str           = "…",
+    strip_ansi: bool      = True,
+    strip: bool           = True,
+    truncate: bool        = True,
 ) -> str:
     """Turn an untrusted scalar into visible text under character and UTF-8 budgets.
 
     Containers, booleans and non-finite floats are rejected instead of stringified.
     ANSI terminal sequences and C0/C1 controls are removed before either budget is
-    measured. Set ``truncate=False`` for protocol fields where a partial value would
-    be misleading. Those fields fall back to ``default`` instead.
+    measured. ``max_bytes`` defaults to ``max_chars * 4``, the UTF-8 worst case, so
+    only a tighter byte budget needs to be passed. Set ``truncate=False`` for
+    protocol fields where a partial value would be misleading. Those fields fall
+    back to ``default`` instead.
     """
 
-    for name, limit in (("max_chars", max_chars), ("max_bytes", max_bytes)):
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError(f"{name} must be a positive integer")
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0:
+        raise ValueError("max_chars must be a positive integer")
+    if max_bytes is None:
+        max_bytes = max_chars * 4
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
     if not isinstance(default, str) or not isinstance(suffix, str):
         raise TypeError("default and suffix must be strings")
 
@@ -213,6 +223,33 @@ def record(file_path: str) -> dict[str, Any]:
     return {"type": "record", "data": {"file": _to_file_uri(file_path)}}
 
 
+def qr_image(content: str) -> dict[str, Any]:
+    """把一段文字做成二维码 PNG，返回 ``base64://`` 图片消息段。
+
+    二维码库用到时才导入，缺少时抛 ``ImportError``，由调用方换成自己的提示。内容可能是登录
+    凭据的一部分：这里不记日志，调用方也不应记录它。
+    """
+
+    import qrcode
+
+    output = io.BytesIO()
+    qrcode.make(content, box_size=6, border=4).save(output, format="PNG")
+    return {
+        "type": "image",
+        "data": {"file": "base64://" + base64.b64encode(output.getvalue()).decode()},
+    }
+
+
+def requester_user_id(context: Any, event: Mapping[str, Any]) -> int | None:
+    """发起这条命令的用户 ID：先取 ``context.current_user_id``，没有再取事件里的 ``user_id``。
+
+    不是正整数时返回 ``None``，由调用方决定怎么拒绝。
+    """
+
+    value = getattr(context, "current_user_id", None) or event.get("user_id")
+    return value if type(value) is int and value > 0 else None
+
+
 def segments(payload: Any) -> Segments:
     """
     将任意返回值转换为标准消息段列表。
@@ -296,6 +333,38 @@ async def gather_bounded(
                 awaitable.close()
         raise
     return list(results)
+
+
+# ============================================================
+# 配置取值
+# ============================================================
+
+
+def config_bool(value: Any, default: bool) -> bool:
+    """配置里的开关：只认真正的布尔值，其他类型（包括 0/1 和字符串）一律用默认值。"""
+    return value if isinstance(value, bool) else default
+
+
+def config_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    """配置里的整数：只认整数（布尔值不算），夹到 ``[minimum, maximum]``；其他类型用默认值。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def config_float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
+    """配置里的小数：认整数和浮点数（布尔值不算），夹到范围内；其他类型和 NaN、无穷用默认值。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    number = float(value)
+    if not math.isfinite(number):
+        return default
+    return min(maximum, max(minimum, number))
+
+
+def resolve_bot_name(value: object) -> str:
+    """配置里的 ``bot_name``：去掉首尾空白；为空或没配时用 ``DEFAULT_BOT_NAME``。"""
+    return str(value or "").strip() or DEFAULT_BOT_NAME
 
 
 # ============================================================
@@ -432,13 +501,24 @@ __all__ = [
     "image_url",
     "face",
     "record",
+    "qr_image",
+    "requester_user_id",
     "segments",
     "build_action",
     "split_message_segments",
     "head_tail_preview",
     "file_uri_to_path",
+    # 外部文本
+    "bounded_external_text",
+    "has_control_characters",
     # 异步工具
     "run_sync",
+    "gather_bounded",
+    # 配置取值
+    "config_bool",
+    "config_int",
+    "config_float",
+    "resolve_bot_name",
     # 文件工具
     "ensure_dir",
     "load_json",

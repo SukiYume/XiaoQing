@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
+from core.models import PluginCommandManifest
 from core.router import CommandCatalogNode, CommandRouter, CommandSpec
 from plugins.bot_core import main as bot_core
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -958,13 +959,10 @@ async def test_command_aliases_route_through_manifest(mock_context, alias, name)
     router = CommandRouter()
     for command in manifest["commands"]:
         router.register(
-            CommandSpec(
-                plugin     = "bot_core",
-                name       = command["name"],
-                triggers   = command["triggers"],
-                help_text  = command.get("help", ""),
-                admin_only = command.get("admin_only", False),
-                handler    = bot_core.handle,
+            CommandSpec.from_manifest(
+                "bot_core",
+                PluginCommandManifest.model_validate(command).model_dump(),
+                bot_core.handle,
             )
         )
     matched = router.resolve(alias)
@@ -1084,7 +1082,7 @@ class TestStructuredCommandCatalog:
             for index in range(bot_core.HELP_PAGE_SIZE + bot_core.HELP_TEXT_PAGE_SIZE + 1)
         )
 
-        text_page, text_pages = bot_core._text_catalog_page(nodes, 1)
+        text_page, text_pages = bot_core._page_slice(nodes, 1, bot_core.HELP_TEXT_PAGE_SIZE)
         json_page, json_pages = bot_core._catalog_page(nodes, 1)
 
         assert len(text_page) == bot_core.HELP_TEXT_PAGE_SIZE

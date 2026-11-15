@@ -3,17 +3,20 @@ arXiv 多兴趣模型训练脚本
 ==========================
 
 使用 sentence-transformers embedding + 多兴趣聚类 + 逻辑回归完成兴趣预测的训练。
-提供与主训练脚本一致的配置与元数据输出约定。
+
+产物写入 best_model_interest/：artifacts.joblib、meta.json、interest_clusters.json、
+validation_scored.csv，以及推理层读取的 training_config.json（model_type、
+runtime_model_path、optimal_threshold、input_mode 等）。meta.json 和
+interest_clusters.json 只供人查看。
 """
 
 from __future__ import annotations
 
 import json
-import math
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import joblib
 import numpy as np
@@ -22,20 +25,16 @@ import torch
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    average_precision_score,
-    classification_report,
-    f1_score,
-    roc_auc_score,
-)
 from sklearn.preprocessing import normalize
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from plugins.arxiv_filter.numerics import stable_softmax
+    from plugins.arxiv_filter.inference.multi_interest_backend import ModelArtifacts
+    from plugins.arxiv_filter.numerics import build_interest_features, interest_feature_names
     from plugins.arxiv_filter.train_model.interest_model import training_utils as _training
 else:
-    from ...numerics import stable_softmax
+    from ...inference.multi_interest_backend import ModelArtifacts
+    from ...numerics import build_interest_features, interest_feature_names
     from . import training_utils as _training
 
 _log = _training.timestamp_log
@@ -49,6 +48,17 @@ _PLUGIN_DIR = _TRAIN_DIR.parent
 # =============================================================================
 
 
+def _validate_hyperparameters(
+    *, encoder_name: object, n_interests: object, batch_size: object, beta: object
+) -> None:
+    """配置对象和模型构造函数共用的超参数校验。"""
+
+    _training.require_encoder_name(encoder_name)
+    _training.require_int("n_interests", n_interests)
+    _training.require_int("batch_size", batch_size)
+    _training.require_finite("beta", beta, positive=True)
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     input_path: Path = _TRAIN_DIR / "arxiv_papers_with_abstract.csv"
@@ -58,22 +68,14 @@ class TrainingConfig:
     #   "allenai/specter2_base"                    — 专为科学论文设计，需单独下载 (~440 MB)
     #   "sentence-transformers/all-MiniLM-L6-v2"  — 速度快但质量较低
     encoder_name: str = "sentence-transformers/all-mpnet-base-v2"
-    # n_interests 选择依据（基于 2756 个正样本的实际话题分布）：
-    #   n=6 的问题：FRB 占正样本 29.5%，但 KMeans 分给它 3/6 个 cluster；
-    #               WD（4.1%）/ 纯 Pulsar（6.5%）/ Gaia（7.2%）无专属 cluster，
-    #               导致这些话题的 max_sim 偏低，通过率极差（WD 16.7%，Gaia 7.1%）。
-    #   若要降低上述偏差，可在对照实验中评估 n=9：FRB 仍占 2~3 个 cluster，但腾出空间给：
-    #               ① 纯 Pulsar / 磁星 / 射电暂现源
-    #               ② White Dwarf / 长周期暂现源 / 致密双星
-    #               ③ Gaia / 测光巡天 / 恒星参数
-    #               ④ 时域天文 / 变星 / 超新星
-    #               ⑤ 软件工具 / 数据方法（防止"垃圾桶"cluster）
-    #   如果重新训练后 WD/Pulsar 仍有遗漏，可尝试 n=11~12。
+    # n_interests：兴趣中心个数。正样本里 FRB 占比很高，中心太少时低频话题（WD、纯 Pulsar、
+    # Gaia）分不到专属中心，max_sim 偏低、通过率差；_balance_cluster_input 先压制 FRB 这类
+    # 密集话题再聚类。重新训练后低频话题仍有遗漏时，可增大 n_interests 对照评估。
     n_interests: int   = 6
     batch_size : int   = 256
     val_size   : float = 0.15
     # beta 影响阈值选取方向：
-    #   beta=2.0 → 严重偏向 Recall，threshold 极低 → 推的数量过多（原始问题）
+    #   beta=2.0 → 偏向 Recall，最优阈值很低，推荐数量偏多，因此由 min_threshold 给阈值设下限
     #   beta=1.0 → F1，Precision/Recall 对等（可用于更克制的推荐实验）
     #   beta=0.5 → 偏向 Precision，threshold 较高 → 推的更少但更准
     beta: float = 2.0
@@ -84,18 +86,16 @@ class TrainingConfig:
     max_len      : int   = 512
 
     def __post_init__(self) -> None:
-        if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
-            raise ValueError("encoder_name must be a non-empty string")
-        for name in ("n_interests", "batch_size", "max_len"):
-            value = getattr(self, name)
-            if type(value) is not int or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
+        _validate_hyperparameters(
+            encoder_name = self.encoder_name,
+            n_interests  = self.n_interests,
+            batch_size   = self.batch_size,
+            beta         = self.beta,
+        )
+        _training.require_int("max_len", self.max_len)
         if not 0 < self.val_size < 1:
             raise ValueError("val_size must be between 0 and 1")
-        if not math.isfinite(self.beta) or self.beta <= 0:
-            raise ValueError("beta must be a finite positive number")
-        if not math.isfinite(self.min_threshold):
-            raise ValueError("min_threshold must be finite")
+        _training.require_finite("min_threshold", self.min_threshold)
         if self.split_mode not in {"random", "time"}:
             raise ValueError("split_mode must be 'random' or 'time'")
 
@@ -188,29 +188,6 @@ def split_dataframe(
 
 
 # =============================================================================
-# 模型 Artifacts
-# =============================================================================
-
-
-@dataclass(slots=True)
-class ModelArtifacts:
-    encoder_name    : str
-    n_interests     : int
-    embedding_dim   : int
-    interest_centers: np.ndarray
-    pos_centroid    : np.ndarray
-    neg_centroid    : np.ndarray | None
-    classifier      : LogisticRegression
-    threshold       : float
-    threshold_beta  : float
-    cluster_keywords: list[str]
-    cluster_sizes   : list[int]
-    cluster_examples: list[list[str]]
-    feature_names   : list[str]
-    columns         : dict[str, str | None]
-
-
-# =============================================================================
 # 多兴趣模型
 # =============================================================================
 
@@ -225,18 +202,12 @@ class MultiInterestArxivModel:
         random_state: int     = 42,
         max_len: int | None   = None,
     ):
-        if not isinstance(encoder_name, str) or not encoder_name.strip():
-            raise ValueError("encoder_name must be a non-empty string")
-        for name, value in (("n_interests", n_interests), ("batch_size", batch_size)):
-            if type(value) is not int or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
-        if (
-            isinstance(threshold_beta, bool)
-            or not isinstance(threshold_beta, (int, float))
-            or not math.isfinite(float(threshold_beta))
-            or threshold_beta <= 0
-        ):
-            raise ValueError("threshold_beta must be a finite positive number")
+        _validate_hyperparameters(
+            encoder_name = encoder_name,
+            n_interests  = n_interests,
+            batch_size   = batch_size,
+            beta         = threshold_beta,
+        )
         self.encoder_name   = encoder_name
         self.n_interests    = n_interests
         self.batch_size     = batch_size
@@ -244,31 +215,18 @@ class MultiInterestArxivModel:
         self.random_state   = random_state
 
         _log(f"Loading encoder: {encoder_name}")
-        self.encoder = _training.apply_max_len(
-            _training.load_sentence_transformer_class()(encoder_name), max_len
-        )
+        self.encoder       = _training.load_sentence_encoder(encoder_name, max_len)
         self.embedding_dim = int(self.encoder.get_sentence_embedding_dimension())
         if self.embedding_dim <= 0:
             raise ValueError("encoder returned an invalid embedding dimension")
         self.artifacts: ModelArtifacts | None = None
-        self._use_fp16                        = torch.cuda.is_available()
-        if self._use_fp16:
+        if torch.cuda.is_available():
             _log("Enabled fp16 encoding (CUDA detected)")
 
     def encode_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
-        kw: dict[str, Any] = {
-            "batch_size"          : self.batch_size,
-            "show_progress_bar"   : True,
-            "convert_to_numpy"    : True,
-            "normalize_embeddings": True,
-        }
-        if self._use_fp16:
-            with torch.amp.autocast("cuda"):
-                emb = self.encoder.encode(texts, **kw)
-        else:
-            emb = self.encoder.encode(texts, **kw)
+        emb = _training.encode_normalized(self.encoder, texts, self.batch_size, show_progress=True)
         return _training.validate_embedding_matrix(
             emb,
             expected_rows = len(texts),
@@ -372,82 +330,6 @@ class MultiInterestArxivModel:
         return centers.astype(np.float32), keywords, sizes, examples
 
     # ------------------------------------------------------------------
-    # 特征构建
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _build_features(
-        embeddings: np.ndarray,
-        interest_centers: np.ndarray,
-        pos_centroid: np.ndarray,
-        neg_centroid: np.ndarray | None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
-        """返回 (feature_matrix, best_interest, max_sim, feature_names)"""
-        centers = np.asarray(interest_centers)
-        if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] == 0:
-            raise ValueError("interest_centers must be a non-empty two-dimensional matrix")
-        embeddings = _training.validate_embedding_matrix(
-            embeddings,
-            expected_rows = len(embeddings),
-            expected_dim  = centers.shape[1],
-            name          = "embeddings",
-        )
-        if np.asarray(pos_centroid).shape != (centers.shape[1],):
-            raise ValueError("pos_centroid dimension does not match embeddings")
-        if neg_centroid is not None and np.asarray(neg_centroid).shape != (centers.shape[1],):
-            raise ValueError("neg_centroid dimension does not match embeddings")
-        n_k           = interest_centers.shape[0]
-        feature_names = [f"sim_interest_{i}" for i in range(n_k)] + [
-            "max_sim",
-            "mean_sim",
-            "std_sim",
-            "min_sim",
-            "top1_top2_margin",
-            "entropy",
-            "concentration",
-            "sim_to_pos_centroid",
-            "sim_to_neg_centroid",
-            "contrast_pos_neg",  # sim_pos − sim_neg：离正空间比负空间近多少
-        ]
-
-        if len(embeddings) == 0:
-            empty: np.ndarray = np.zeros((0, len(feature_names)), dtype=np.float32)
-            return empty, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32), feature_names
-
-        sims = embeddings @ interest_centers.T
-        max_sim = sims.max(axis=1)
-        best_interest = sims.argmax(axis=1)
-
-        sorted_sims = np.sort(sims, axis=1)
-        top2 = sorted_sims[:, -2] if sims.shape[1] > 1 else sorted_sims[:, -1]
-
-        probs = stable_softmax(sims, axis=1)
-        entropy = -np.sum(probs * np.log(probs + 1e-12), axis=1)
-
-        sim_pos = (embeddings @ pos_centroid.reshape(-1, 1)).ravel()
-        sim_neg = (
-            (embeddings @ neg_centroid.reshape(-1, 1)).ravel()
-            if neg_centroid is not None
-            else np.zeros(len(embeddings), dtype=np.float32)
-        )
-
-        cols = [
-            sims,
-            max_sim[:, None],
-            sims.mean(axis=1, keepdims=True),
-            sims.std(axis=1, keepdims=True),
-            sims.min(axis=1, keepdims=True),
-            (sorted_sims[:, -1] - top2)[:, None],
-            entropy[:, None],
-            probs.max(axis=1, keepdims=True),
-            sim_pos[:, None],
-            sim_neg[:, None],
-            (sim_pos - sim_neg)[:, None],  # contrast: 离正样本重心比负样本重心近多少
-        ]
-        X = np.concatenate(cols, axis=1).astype(np.float32)
-        return X, best_interest, max_sim, feature_names
-
-    # ------------------------------------------------------------------
     # 训练
     # ------------------------------------------------------------------
 
@@ -509,9 +391,7 @@ class MultiInterestArxivModel:
         )
 
         _log("Building features & fitting LogisticRegression...")
-        X, _, _, feature_names = self._build_features(
-            embeddings, centers, pos_centroid, neg_centroid
-        )
+        X, _, _ = build_interest_features(embeddings, centers, pos_centroid, neg_centroid)
 
         clf = LogisticRegression(
             max_iter     = 3000,
@@ -535,7 +415,7 @@ class MultiInterestArxivModel:
             cluster_keywords = kw,
             cluster_sizes    = sizes,
             cluster_examples = examples,
-            feature_names    = feature_names,
+            feature_names    = interest_feature_names(centers.shape[0]),
             columns          = columns,
         )
 
@@ -573,7 +453,7 @@ class MultiInterestArxivModel:
             threshold = min_threshold
             # 写入训练配置的分数必须对应最终部署阈值。
             best_fb = _training.fbeta_at_threshold(y_true, y_score, threshold, self.threshold_beta)
-        self.artifacts.threshold = threshold
+        self.artifacts = replace(self.artifacts, threshold=threshold)
         return threshold, best_fb
 
     # ------------------------------------------------------------------
@@ -619,7 +499,7 @@ class MultiInterestArxivModel:
                 name          = "precomputed embeddings",
             )
 
-        X, best_interest, max_sim, _ = self._build_features(
+        X, best_interest, max_sim = build_interest_features(
             emb, a.interest_centers, a.pos_centroid, a.neg_centroid
         )
         proba     = a.classifier.predict_proba(X)[:, 1]
@@ -662,32 +542,9 @@ class MultiInterestArxivModel:
         )
         y_score, y_pred = scored["interest_prob"].to_numpy(), scored["pred_label"].to_numpy()
 
-        has_both                  = len(np.unique(y_true)) >= 2
-        metrics: dict[str, float] = {
-            "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
-            "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
-            "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-            "precision_at_5": _training.precision_at_k(y_true, y_score, 5),
-            "precision_at_10": _training.precision_at_k(y_true, y_score, 10),
-            "precision_at_20": _training.precision_at_k(y_true, y_score, 20),
-            "threshold": float(self.artifacts.threshold),
-        }
-
-        print(f"\n{'=' * 72}\n[{name}] Metrics\n{'=' * 72}")
-        for k, v in metrics.items():
-            print(f"{k:20s}: {'nan' if isinstance(v, float) and np.isnan(v) else f'{v:.4f}'}")
-        print(f"\n{'=' * 72}\n[{name}] Classification Report\n{'=' * 72}")
-        print(
-            classification_report(
-                y_true,
-                y_pred,
-                labels        = [0, 1],
-                target_names  = ["negative", "positive"],
-                digits        = 4,
-                zero_division = 0,
-            )
+        return _training.report_interest_metrics(
+            y_true, y_score, y_pred, threshold=self.artifacts.threshold, name=name
         )
-        return metrics
 
     # ------------------------------------------------------------------
     # 保存

@@ -25,6 +25,7 @@ from tests.helpers.settings_snapshot import settings_snapshot
 ROOT           = REPOSITORY_ROOT
 PRIVATE_TARGET = DeliveryTarget("private", 10001)
 GROUP_TARGET   = DeliveryTarget("group", 20001)
+_SERVERS_FILE  = "deployment-servers.json"
 
 
 class _Context:
@@ -39,8 +40,13 @@ class _Context:
         self.data_dir   = plugin_dir / "runtime-data"
         self.request_id = "mc-test-request"
         self.send_action = AsyncMock(return_value=True)
-        self.secrets = {"plugins": {"minecraft": {profile: password}}}
-        self.config  = {"default_group_ids": [GROUP_TARGET.target_id]}
+        self.secrets                = {"plugins": {"minecraft": {profile: password}}}
+        self.config: dict[str, Any] = {"default_group_ids": [GROUP_TARGET.target_id]}
+        servers                     = plugin_dir / _SERVERS_FILE
+        if servers.is_file():
+            self.config["plugins"] = {
+                "minecraft": {"servers": json.loads(servers.read_text(encoding="utf-8"))}
+            }
 
     def get_settings_snapshot(self):
         return settings_snapshot(config=self.config, secrets=self.secrets)
@@ -105,10 +111,9 @@ def _context(
 
 
 def _write_config(tmp_path: Path, server: dict[str, Any], *, profile: str = "default") -> None:
-    (tmp_path / "config.json").write_text(
-        json.dumps({profile: server}),
-        encoding="utf-8",
-    )
+    """登记这次测试的部署配置 ``plugins.minecraft.servers``；之后建的 ``_Context`` 会带上它。"""
+
+    (tmp_path / _SERVERS_FILE).write_text(json.dumps({profile: server}), encoding="utf-8")
 
 
 def _server_config(**overrides: Any) -> dict[str, Any]:
@@ -196,7 +201,25 @@ class TestMinecraftConfiguration:
     @pytest.mark.asyncio
     async def test_missing_config_returns_fixed_error(self, tmp_path: Path) -> None:
         result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        assert "未找到 config.json" in result[0]["data"]["text"]
+        assert "plugins.minecraft.servers" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_servers_come_from_the_deployment_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """服务器写在部署配置里；插件目录里遗留的旧 config.json 不读。"""
+
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        (tmp_path / "config.json").write_text(
+            json.dumps({"default": _server_config(host="legacy.invalid")}), encoding="utf-8"
+        )
+        missing = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "plugins.minecraft.servers" in missing[0]["data"]["text"]
+        assert _FakeRconClient.instances == []
+
+        _write_config(tmp_path, _server_config(host="mc.example"))
+        await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert _FakeRconClient.instances[-1].host == "mc.example"
 
     @pytest.mark.asyncio
     async def test_connect_without_profile_returns_usage(self, tmp_path: Path) -> None:
@@ -276,23 +299,15 @@ class TestMinecraftConfiguration:
         assert "未找到 config/secrets.json" in result[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_non_object_and_invalid_json_are_rejected(self, tmp_path: Path) -> None:
-        config_path = tmp_path / "config.json"
-        config_path.write_text("[]", encoding="utf-8")
+    async def test_non_object_servers_and_missing_profile_are_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / _SERVERS_FILE).write_text("[]", encoding="utf-8")
         non_object = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        config_path.write_text("{invalid", encoding="utf-8")
-        malformed = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        assert "顶层必须是对象" in non_object[0]["data"]["text"]
-        assert "不是有效 JSON" in malformed[0]["data"]["text"]
-
-    @pytest.mark.asyncio
-    async def test_missing_profile_and_oversized_config_are_rejected(self, tmp_path: Path) -> None:
-        (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+        (tmp_path / _SERVERS_FILE).write_text("{}", encoding="utf-8")
         missing = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        (tmp_path / "config.json").write_bytes(b" " * (mc_main.MC_MAX_CONFIG_BYTES + 1))
-        oversized = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "plugins.minecraft.servers 必须是对象" in non_object[0]["data"]["text"]
         assert "未找到指定服务器配置" in missing[0]["data"]["text"]
-        assert "64 KiB" in oversized[0]["data"]["text"]
 
     @pytest.mark.asyncio
     async def test_invalid_optional_log_path_does_not_block_rcon(
@@ -536,8 +551,49 @@ class TestMinecraftCommands:
         result = await mc_main._handle_connect("default", other, _context(tmp_path))
 
         conn = reset_minecraft_runtime.get_connection(other)
-        assert "不在定时推送的目标群" in result[0]["data"]["text"]
+        assert "不在日志转发的目标群" in result[0]["data"]["text"]
         assert conn is not None and conn.log_monitor is None
+
+    @pytest.mark.asyncio
+    async def test_schedule_targets_in_the_deployment_config_decide_log_forwarding(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        (tmp_path / "latest.log").write_text("old history\n", encoding="utf-8")
+        _write_config(tmp_path, _server_config(log_file="latest.log"))
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        other                                               = DeliveryTarget("group", 20002)
+        context                                             = _Context(tmp_path)
+        context.config["plugins"]["minecraft"]["schedules"] = {
+            "check_log": {"group_ids": [other.target_id]}
+        }
+
+        result = await mc_main._handle_connect(
+            "default", other, cast(PluginContextProtocol, cast(object, context))
+        )
+
+        conn = reset_minecraft_runtime.get_connection(other)
+        assert "日志监控: ✅ 已启用" in result[0]["data"]["text"]
+        assert conn is not None and conn.log_monitor is not None
+
+    def test_log_targets_resolve_like_core_schedules(self, tmp_path: Path) -> None:
+        context = _Context(tmp_path)
+        default = GROUP_TARGET.target_id
+
+        def receives(group_ids: Any) -> bool:
+            context.config["plugins"] = {
+                "minecraft": {"schedules": {"check_log": {"group_ids": group_ids}}}
+            }
+            return mc_main._group_receives_logs(
+                cast(PluginContextProtocol, cast(object, context)), default
+            )
+
+        # null 和没写一样回到 default_group_ids；空列表是覆盖，哪个群都不转发。
+        assert receives(None) is True
+        assert receives([]) is False
+        assert receives([20002]) is False
 
     @pytest.mark.asyncio
     async def test_command_success_empty_failure_and_target_isolation(

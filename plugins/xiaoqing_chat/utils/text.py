@@ -1,4 +1,4 @@
-"""通用文本截断工具。"""
+"""通用文本工具：截断。"""
 
 from __future__ import annotations
 

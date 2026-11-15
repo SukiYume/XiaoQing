@@ -517,10 +517,9 @@ class SessionManager:
     async def _await_transaction_future(self, future: asyncio.Future[T]) -> T:
         """Await a callback without allowing it to swallow caller cancellation.
 
-        ``Task.cancelling()`` and ``Task.uncancel()`` do not exist on Python
-        3.10. Shielding gives this manager an explicit cancellation boundary.
-        The manager records cancellation of the update task and forwards it to
-        the callback. After callback cleanup, the manager raises cancellation
+        Shielding gives this manager an explicit cancellation boundary. The
+        manager records cancellation of the update task and forwards it to the
+        callback. After callback cleanup, the manager raises cancellation
         again. This also applies when the callback catches ``CancelledError``
         and returns normally.
         """
@@ -566,19 +565,14 @@ class SessionManager:
         Synchronous callbacks need the same cancellation boundary as async
         callbacks.  A callback can cancel its own current task and return
         without another await. The explicit checkpoint delivers that pending
-        cancellation before the manager may publish the working copy.  This
-        remains compatible with Python 3.10 and does not depend on
-        ``Task.cancelling`` or ``Task.uncancel``.
+        cancellation before the manager may publish the working copy.
         """
 
         result = callback(working)
-        if inspect.isawaitable(result):
-            if isinstance(result, asyncio.Future):
-                cancellation = await SessionManager._cancel_and_drain_scheduled(result)
-                if cancellation is not None:
-                    raise cancellation
-                raise TypeError("session callback must not return a scheduled Task or Future")
+        if inspect.isawaitable(result) and not isinstance(result, asyncio.Future):
             result = await result
+        # 已经调度的 Task / Future（不论是回调直接返回，还是协程的返回值）都不允许
+        # 作为结果：先取消并抽干，不能留下无人等待的后台任务。
         if isinstance(result, asyncio.Future):
             cancellation = await SessionManager._cancel_and_drain_scheduled(result)
             if cancellation is not None:
@@ -623,9 +617,6 @@ class SessionManager:
         candidate          = self._clone(transaction.working)
         candidate.user_id  = key[0]
         candidate.group_id = key[1]
-        candidate.timeout  = _normalize_timeout(candidate.timeout)
-        if not isinstance(candidate.data, dict):
-            raise TypeError("session data must be a dict")
 
         candidate.updated_at = time.time()
         candidate.version    = transaction.original.version + 1

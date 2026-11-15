@@ -12,14 +12,12 @@ import tests.helpers.server_test_support as _fixture_support
 from tests.helpers.server_test_support import (
     ClientSession,
     InboundManager,
-    InboundServer,
+    StandaloneInboundServer,
     WSServerHandshakeError,
-    _inflight_count,
     _lane_count,
     _make_server,
     _onebot_message_payload,
     _parse_http_base,
-    _parse_non_negative_int,
     _parse_positive_int,
     _parse_ws_uri,
     cancellation_resistant_callback,
@@ -71,16 +69,6 @@ def test_parse_ws_uri_invalid():
 
 
 @pytest.mark.unit
-def test_parse_non_negative_int():
-    """Test _parse_non_negative_int utility"""
-    assert _parse_non_negative_int(5, default=10) == 5
-    assert _parse_non_negative_int(0, default=10) == 0
-    assert _parse_non_negative_int(-5, default=10) == 0  # Negative becomes 0
-    assert _parse_non_negative_int("invalid", default=10) == 10
-    assert _parse_non_negative_int(None, default=10) == 10
-
-
-@pytest.mark.unit
 def test_parse_positive_int():
     """Test _parse_positive_int utility"""
     assert _parse_positive_int(5, default=10, min_value=1) == 5
@@ -94,7 +82,7 @@ def test_parse_positive_int():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_inbound_server_site_start_failure_cleans_runner(mock_handler):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "test_token",
@@ -126,7 +114,7 @@ async def test_inbound_server_site_start_failure_cleans_runner(mock_handler):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_inbound_server_stop_waits_for_concurrent_start(mock_handler):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "test_token",
@@ -165,7 +153,7 @@ async def test_inbound_server_stop_waits_for_concurrent_start(mock_handler):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_inbound_server_concurrent_starts_bind_once(mock_handler):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "test_token",
@@ -239,12 +227,12 @@ async def test_inbound_manager_stop_waits_for_concurrent_start():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.parametrize("task_kind", ["handler", "close", "worker"])
+@pytest.mark.parametrize("task_kind", ["close", "worker"])
 async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
     mock_handler,
     task_kind: str,
 ):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "test_token",
@@ -257,30 +245,18 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
 
     resist_cancellation = cancellation_resistant_callback(entered, cancelled, release)
 
-    if task_kind == "handler":
-
-        async def resistant_handler(_payload: dict[str, Any]) -> list[dict[str, Any]]:
-            await resist_cancellation()
-            return []
-
-        server.handler = resistant_handler
-        task           = asyncio.create_task(server._invoke_handler({}))
+    task = asyncio.create_task(resist_cancellation())
+    if task_kind == "close":
+        server._ws_close_tasks.add(task)
     else:
-        task = asyncio.create_task(resist_cancellation())
-        if task_kind == "close":
-            server._ws_close_tasks.add(task)
-        else:
-            server._ws_worker_tasks = [task]
+        server._ws_worker_tasks = [task]
 
     await entered.wait()
     try:
         with pytest.raises(RuntimeError, match="cleanup failed"):
             await asyncio.wait_for(server.stop(), timeout=0.5)
         assert cancelled.is_set()
-        if task_kind == "handler":
-            assert task.cancelled()
-            assert _inflight_count(server._event_dispatcher) == 1
-        elif task_kind == "close":
+        if task_kind == "close":
             assert not task.done()
             assert task in server._ws_close_tasks
         else:
@@ -291,10 +267,6 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
     finally:
         release.set()
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
-        for _ in range(20):
-            if _inflight_count(server._event_dispatcher) == 0:
-                break
-            await asyncio.sleep(0)
         await server.stop()
 
 
@@ -304,7 +276,7 @@ async def test_scheduled_websocket_close_isolates_fatal(mock_handler):
     class CloseFatal(BaseException):
         pass
 
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "old-token",
@@ -402,7 +374,7 @@ async def test_server_token_rotation_revokes_old_ws_and_accepts_new_token(
         seen_message_ids.append(event["message_id"])
         return [{"action": "ack", "params": {"message_id": event["message_id"]}}]
 
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host           = "127.0.0.1",
         port           = unused_tcp_port,
         token          = "old-token",

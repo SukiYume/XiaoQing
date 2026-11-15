@@ -43,7 +43,7 @@
 		{
 			"name": "urllib3",
 			"required": false,
-			"description": "可选 requests 重试策略实现"
+			"description": "requests 的底层连接库；core 的有界 HTTP 请求用它设置连接与读取超时"
 		},
 		{
 			"name": "pandas",

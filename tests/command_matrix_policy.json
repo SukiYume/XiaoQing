@@ -39,13 +39,17 @@
     "xiaoai": {"risk": "privileged", "dependency": "external", "sensitive": true},
     "xiaoqing_agent": {"risk": "privileged", "dependency": "local", "sensitive": true},
     "xiaoqing_chat": {"risk": "isolated_state", "dependency": "external", "sensitive": false},
-    "xiaoqing_life": {"risk": "privileged", "dependency": "external", "sensitive": true}
+    "xiaoqing_life": {"risk": "privileged", "dependency": "external", "sensitive": true},
+    "xiaoqing_memory": {"risk": "privileged", "dependency": "local", "sensitive": true}
   },
   "commands": {
     "xiaoqing_agent.agent.help": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只返回帮助"},
     "xiaoqing_agent.agent.status": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读取运行中任务"},
     "xiaoqing_agent.agent.history": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读取本会话任务记录"},
     "xiaoqing_agent.agent.result": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只重发本会话已有的任务结果"},
+    "xiaoqing_memory.mem.status": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读各范围的计数"},
+    "xiaoqing_memory.mem.stats": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读每日计数"},
+    "xiaoqing_memory.mem.help": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只返回帮助"},
     "xiaoqing_life.life.status": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
     "xiaoqing_life.life.recent": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},
     "xiaoqing_life.life.slang": {"risk": "read_only", "dependency": "local", "sensitive": false, "reason": "只读内存快照"},

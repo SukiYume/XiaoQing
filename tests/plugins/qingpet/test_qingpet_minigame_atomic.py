@@ -9,7 +9,8 @@ import pytest
 
 from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.services import social_service as social_module
-from plugins.qingpet.services.database import Database, MinigameOutcome
+from plugins.qingpet.services.database import Database
+from plugins.qingpet.services.database_types import MinigameOutcome
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
@@ -44,7 +45,9 @@ def _state(db: Database) -> tuple:
     return (
         tuple(user),
         tuple(pet),
-        conn.execute("SELECT COUNT(*) FROM minigame_cooldowns").fetchone()[0],
+        conn.execute(
+            "SELECT COUNT(*) FROM action_quotas WHERE action LIKE 'minigame:%'"
+        ).fetchone()[0],
         conn.execute(
             "SELECT COUNT(*) FROM asset_ledger WHERE reason != 'account_opening'"
         ).fetchone()[0],
@@ -58,7 +61,6 @@ def _settle(db: Database, reference_id: str = "game:test"):
         GROUP,
         "dice",
         reference_id     = reference_id,
-        daily_coin_limit = 500,
         cooldown_seconds = 120,
         outcome_factory  = lambda _pet, _opponent: MinigameOutcome(
             requested_coins = 20,
@@ -101,7 +103,7 @@ class _CommitFailingConnection:
 @pytest.mark.parametrize(
     "fragment",
     [
-        "INSERT INTO MINIGAME_COOLDOWNS",
+        "INSERT INTO ACTION_QUOTAS",
         "UPDATE USERS SET COINS",
         "INSERT INTO ASSET_LEDGER",
         "UPDATE PETS SET EXPERIENCE",
@@ -150,7 +152,6 @@ def test_same_reference_replays_original_outcome_without_new_random_or_assets(tm
 
     kwargs = {
         "reference_id"    : "game:same",
-        "daily_coin_limit": 500,
         "cooldown_seconds": 120,
         "outcome_factory" : make_outcome,
     }

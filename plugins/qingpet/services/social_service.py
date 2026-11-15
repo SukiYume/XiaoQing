@@ -9,12 +9,15 @@ from ..utils.constants import (
     COOLDOWN_TIMES,
     DAILY_LIMITS,
     DEFAULT_ITEMS,
+    GIFT_FRIENDSHIP_GAIN,
     MINIGAME_CONFIG,
+    VISIT_COIN_REWARD,
     PetPersonality,
 )
-from ..utils.formatters import format_pet_card
+from ..utils.formatters import format_pet_card, rank_label
 from ..utils.validators import validate_item_amount, validate_sensitive_content
-from .database import Database, MinigameAtomicResult, MinigameOutcome
+from .database import Database
+from .database_types import MinigameAtomicResult, MinigameOutcome
 
 _RPS_CHOICES = {
     "石头"      : "rock",
@@ -34,7 +37,15 @@ class SocialService:
         self.db = db
 
     @staticmethod
+    def _request_reference(kind: str, message_id: str | None, *parts: object) -> str:
+        """由消息 ID 和请求参数算出幂等引用串；同一条消息重投会得到同一个引用。"""
+        request_token = str(message_id or secrets.token_hex(16))
+        material      = "\0".join((request_token, *(str(part) for part in parts)))
+        return f"{kind}:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+
+    @classmethod
     def _minigame_reference(
+        cls,
         game_type: str,
         user_id: str,
         group_id: int,
@@ -42,9 +53,9 @@ class SocialService:
         opponent_user_id: str | None = None,
         message_id: str | None       = None,
     ) -> str:
-        request_token = str(message_id or secrets.token_hex(16))
-        material = f"{request_token}\0{game_type}\0{group_id}\0{user_id}\0{opponent_user_id or ''}"
-        return f"pet-minigame:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+        return cls._request_reference(
+            "pet-minigame", message_id, game_type, group_id, user_id, opponent_user_id or ""
+        )
 
     @staticmethod
     def _reward_suffix(result: MinigameAtomicResult, *, offered_coins: bool) -> str:
@@ -68,16 +79,15 @@ class SocialService:
         *,
         message_id: str | None = None,
     ) -> tuple[bool, str]:
-        request_token = str(message_id or secrets.token_hex(16))
-        material      = f"{request_token}\0{group_id}\0{visitor_user_id}\0{target_user_id}"
-        reference_id  = f"pet-visit:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
-        result        = self.db.visit_pet_atomic(
+        reference_id = self._request_reference(
+            "pet-visit", message_id, group_id, visitor_user_id, target_user_id
+        )
+        result = self.db.visit_pet_atomic(
             visitor_user_id,
             target_user_id,
             group_id,
-            coin_reward       = 5,
+            coin_reward       = VISIT_COIN_REWARD,
             daily_visit_limit = DAILY_LIMITS["visit"],
-            daily_coin_limit  = DAILY_LIMITS["coins"],
             cooldown_seconds  = COOLDOWN_TIMES["visit"],
             reference_id      = reference_id,
         )
@@ -115,20 +125,19 @@ class SocialService:
         if item_id not in DEFAULT_ITEMS:
             return False, "道具不存在或不可赠送"
 
-        friendship_gain = 2
         success, reason = self.db.gift_item_atomic(
             from_user_id,
             to_user_id,
             group_id,
             item_id,
             amount,
-            friendship_gain,
+            GIFT_FRIENDSHIP_GAIN,
             DAILY_LIMITS["gift"],
             COOLDOWN_TIMES["gift"],
         )
 
         if success:
-            return True, f"礼物发送成功！双方各获得{friendship_gain}友情点"
+            return True, f"礼物发送成功！双方各获得{GIFT_FRIENDSHIP_GAIN}友情点"
         return False, reason or "送礼失败"
 
     # ──────────────────── 查看他人宠物卡片 ────────────────────
@@ -157,7 +166,7 @@ class SocialService:
         if not target_pet:
             return False, "对方没有宠物"
 
-        like_limit = DAILY_LIMITS.get("like_per_target", 3)
+        like_limit = DAILY_LIMITS["like_per_target"]
         success    = self.db.like_pet_atomic(user_id, target_user_id, group_id, like_limit)
         if success:
             return True, f"你摸了摸{target_pet.name}，它看起来很开心！👋"
@@ -186,7 +195,7 @@ class SocialService:
             to_user_id,
             group_id,
             message,
-            DAILY_LIMITS.get("message", 10),
+            DAILY_LIMITS["message"],
         )
         if result.success:
             return True, f"已给{result.pet_name}留言：{message}"
@@ -211,22 +220,13 @@ class SocialService:
     def get_ranking(
         self, group_id: int, ranking_type: str = "care_score", limit: int = 10
     ) -> list[tuple[str, str, float]]:
-        if ranking_type in {"care_score", "intimacy", "experience"}:
-            rows = self.db.get_pet_ranking(group_id, ranking_type, limit)
-            return [
-                (
-                    row["user_id"],
-                    row["pet_name"],
-                    round(float(row["score"]), 1),
-                )
-                for row in rows
-            ]
         if ranking_type == "coins":
             # 排行榜由数据库一次 JOIN 聚合，避免随榜单长度增加查询次数。
             rows = self.db.get_coins_ranking(group_id, limit)
             return [(row["user_id"], row["pet_name"], row["coins"]) for row in rows]
-
-        return []
+        # 数据库只认 care_score / intimacy / experience，其他类型返回空榜。
+        rows = self.db.get_pet_ranking(group_id, ranking_type, limit)
+        return [(row["user_id"], row["pet_name"], round(float(row["score"]), 1)) for row in rows]
 
     # ──────────────────── 小游戏 ──────────────────────────────────
 
@@ -281,8 +281,7 @@ class SocialService:
             reference_id=self._minigame_reference(
                 "rock_paper_scissors", user_id, group_id, message_id=message_id
             ),
-            daily_coin_limit = DAILY_LIMITS["coins"],
-            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            cooldown_seconds = int(config["cooldown"]),
             outcome_factory  = outcome_factory,
         )
         if not settlement.success:
@@ -322,7 +321,7 @@ class SocialService:
                 exp          = config["win_exp"]
             elif player_dice == pet_dice:
                 outcome_text = "平局"
-                coins        = 5
+                coins        = config["draw_coins"]
                 exp          = 0
             else:
                 outcome_text = "你输了"
@@ -344,8 +343,7 @@ class SocialService:
             group_id,
             "dice",
             reference_id=self._minigame_reference("dice", user_id, group_id, message_id=message_id),
-            daily_coin_limit = DAILY_LIMITS["coins"],
-            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            cooldown_seconds = int(config["cooldown"]),
             outcome_factory  = outcome_factory,
         )
         if not settlement.success:
@@ -396,11 +394,11 @@ class SocialService:
                 outcome_key = "win"
             elif my_speed == target_speed:
                 coins       = config["second_coins"]
-                exp         = 3
+                exp         = config["draw_exp"]
                 outcome_key = "draw"
             else:
                 coins       = config["lose_coins"]
-                exp         = 2
+                exp         = config["lose_exp"]
                 outcome_key = "lose"
             return MinigameOutcome(
                 requested_coins = coins,
@@ -424,8 +422,7 @@ class SocialService:
                 opponent_user_id = target_user_id,
                 message_id       = message_id,
             ),
-            daily_coin_limit = DAILY_LIMITS["coins"],
-            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            cooldown_seconds = int(config["cooldown"]),
             minimum_energy   = int(config["energy_cost"]),
             outcome_factory  = outcome_factory,
         )
@@ -461,12 +458,12 @@ class SocialService:
         if not settlement.winners:
             return "🏆 展示会已结束（无投票数据）"
 
-        medals = ["🥇", "🥈", "🥉"]
-        lines  = [f"🏆 {settlement.title} 结果", ""]
+        lines = [f"🏆 {settlement.title} 结果", ""]
 
         for index, winner in enumerate(settlement.winners):
-            medal = medals[index] if index < len(medals) else f"#{index + 1}"
-            line  = f"{medal} {winner.pet_name} ({winner.user_id}) - {winner.vote_count}票"
+            line = (
+                f"{rank_label(index)} {winner.pet_name} ({winner.user_id}) - {winner.vote_count}票"
+            )
             if winner.coins_granted > 0:
                 line += f" +{winner.coins_granted}金币"
             if index == 0:

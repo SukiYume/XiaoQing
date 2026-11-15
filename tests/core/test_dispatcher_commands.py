@@ -110,14 +110,16 @@ class TestExecuteCommand:
         mock_admin_check.is_admin = Mock(return_value=False)
 
         handler = AsyncMock()
-        spec    = CommandSpec(
-            plugin     = "admin",
-            name       = "reload",
-            triggers   = ["reload"],
-            help_text  = "重载",
-            admin_only = True,
-            handler    = handler,
-            priority   = 0,
+        spec    = CommandSpec.from_manifest(
+            "admin",
+            {
+                "name"      : "reload",
+                "triggers"  : ["reload"],
+                "help"      : "重载",
+                "priority"  : 0,
+                "permission": "bot_admin",
+            },
+            handler,
         )
 
         result = await dispatcher._execute_command((spec, ""), sample_message_context)
@@ -139,14 +141,11 @@ class TestExecuteCommand:
         old_gate = PluginExecutionGate("parallel", plugin_name="stateful")
         new_gate = PluginExecutionGate("parallel", plugin_name="stateful")
         old_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "stale"}}])
-        old_spec = CommandSpec(
-            plugin         = "stateful",
-            name           = "work",
-            triggers       = ["work"],
-            help_text      = "work",
-            admin_only     = False,
-            handler        = old_handler,
-            execution_gate = old_gate,
+        old_spec = CommandSpec.from_manifest(
+            "stateful",
+            {"name": "work", "triggers": ["work"], "help": "work"},
+            old_handler,
+            old_gate,
         )
 
         # Model the exact race: routing retained the old spec, then unload or
@@ -172,22 +171,19 @@ class TestExecuteCommand:
         sample_message_context: MessageContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        canary  = "CR219_DISPATCHER_SECRET"
-        context = SimpleNamespace(
-            request_id = sample_message_context.request_id,
-            secrets    = {"token": canary},
+        canary                   = "CR219_DISPATCHER_SECRET"
+        dispatcher.build_context = Mock(
+            side_effect=lambda _plugin, _user, _group, request_id, principal: SimpleNamespace(
+                request_id = request_id,
+                secrets    = {"token": canary},
+                principal  = principal,
+            )
         )
-        dispatcher.build_context = Mock(return_value=context)
         handler = AsyncMock(
             side_effect=RuntimeError(f"Authorization: Bearer {canary} C:\\private\\{canary}.txt")
         )
-        spec = CommandSpec(
-            plugin     = "public_demo",
-            name       = "demo",
-            triggers   = ["demo"],
-            help_text  = "demo",
-            admin_only = False,
-            handler    = handler,
+        spec = CommandSpec.from_manifest(
+            "public_demo", {"name": "demo", "triggers": ["demo"], "help": "demo"}, handler
         )
 
         with caplog.at_level("ERROR"):

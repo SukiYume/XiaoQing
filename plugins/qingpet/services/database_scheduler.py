@@ -5,13 +5,10 @@ import logging
 import sqlite3
 from datetime import date, timedelta
 
+from ..utils.constants import WEEKLY_RANKING_REWARDS
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
-from .database_support import (
-    _DAILY_COIN_LIMIT,
-    _WEEKLY_RANKING_REWARDS,
-    _log_database_failure,
-)
+from .database_support import _CARE_SCORE_SQL, _log_database_failure
 from .database_types import (
     CoinLedgerReconciliation,
     DailyResetResult,
@@ -21,6 +18,9 @@ from .database_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 定时结算领取后的租约：进程中途退出时，超过这个时长其他进程可以重新领取。
+_SCHEDULER_LEASE_SECONDS = 300
 
 
 class SchedulerRepositoryMixin(DatabaseRepositorySupport):
@@ -76,18 +76,20 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         if claim.rowcount != 1:
             return False
 
-        seller_id      = str(row["seller_user_id"])
-        group_id       = int(row["group_id"])
-        item_id        = str(row["item_id"])
-        amount         = int(row["amount"])
-        items          = self._load_inventory_items(conn, seller_id, group_id)
-        items[item_id] = int(items.get(item_id, 0)) + amount
-        self._save_inventory_items(conn, seller_id, group_id, items)
-        conn.execute(
-            """INSERT INTO asset_ledger
-               (user_id, group_id, asset_type, delta, reason, reference_id, created_at)
-               VALUES (?, ?, 'item', ?, 'trade_expiry_refund', ?, ?)""",
-            (seller_id, group_id, amount, f"trade-expire:{row['id']}", now),
+        seller_id = str(row["seller_user_id"])
+        group_id  = int(row["group_id"])
+        item_id   = str(row["item_id"])
+        amount    = int(row["amount"])
+        self._add_inventory_item_in_transaction(conn, seller_id, group_id, item_id, amount)
+        self._record_asset_delta(
+            conn,
+            user_id      = seller_id,
+            group_id     = group_id,
+            asset_type   = "item",
+            delta        = amount,
+            reason       = "trade_expiry_refund",
+            reference_id = f"trade-expire:{row['id']}",
+            created_at   = now,
         )
         return True
 
@@ -199,7 +201,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 conn,
                 job_name,
                 period_key,
-                300,
+                _SCHEDULER_LEASE_SECONDS,
             ):
                 conn.rollback()
                 return None
@@ -242,13 +244,12 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 conn,
                 job_name,
                 period_key,
-                300,
+                _SCHEDULER_LEASE_SECONDS,
             ):
                 conn.rollback()
                 return None
             ranking = conn.execute(
-                """SELECT user_id, name AS pet_name,
-                          (hunger + mood + clean + energy + health) / 5.0 AS score
+                f"""SELECT user_id, name AS pet_name, {_CARE_SCORE_SQL} AS score
                    FROM pets WHERE group_id = ?
                    ORDER BY score DESC, user_id ASC LIMIT 3""",
                 (group_id,),
@@ -261,10 +262,9 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                     conn,
                     user_id,
                     group_id,
-                    _WEEKLY_RANKING_REWARDS[index],
+                    WEEKLY_RANKING_REWARDS[index],
                     reason       = "weekly_ranking",
                     reference_id = f"weekly:{period_key}:{index}:{user_id}",
-                    daily_limit  = _DAILY_COIN_LIMIT,
                     now_iso      = now.isoformat(),
                 )
                 title_granted = index == 0 and self._grant_temporary_title_in_transaction(
@@ -332,7 +332,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
             _log_database_failure("cleanup_expired_titles", exc)
             return 0
 
-    # ─────────────────── 金币排行（单次 JOIN 聚合）────────────────
+    # ─────────────────── 群经济快照与排行 ────────────────
 
     def get_group_economy_snapshot(
         self,
@@ -356,15 +356,13 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                """
+                f"""
                 WITH pet_stats AS (
                     SELECT
                         COUNT(*) AS total_pets,
                         COALESCE(SUM(experience), 0) AS total_experience,
                         COALESCE(SUM(intimacy), 0) AS total_intimacy,
-                        COALESCE(AVG(
-                            (hunger + mood + clean + energy + health) / 5.0
-                        ), 0.0) AS average_care_score
+                        COALESCE(AVG({_CARE_SCORE_SQL}), 0.0) AS average_care_score
                     FROM pets
                     WHERE group_id = ?
 
@@ -485,7 +483,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
 
     def get_pet_ranking(self, group_id: int, ranking_type: str, limit: int = 10) -> list[dict]:
         expressions = {
-            "care_score": "(hunger + mood + clean + energy + health) / 5.0",
+            "care_score": _CARE_SCORE_SQL,
             "intimacy"  : "intimacy",
             "experience": "experience",
         }

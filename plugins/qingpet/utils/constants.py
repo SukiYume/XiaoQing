@@ -74,7 +74,8 @@ class PetStatus(enum.Enum):
     SICK      = "生病"
     SLEEPING  = "睡觉中"
     TRAVELING = "旅行中"
-    DEAD      = "已死亡"
+    # 现行规则不会再让宠物死亡；保留它只为正确读取旧版本写入的数据。
+    DEAD = "已死亡"
 
 
 class ItemType(enum.Enum):
@@ -134,10 +135,47 @@ DAILY_LIMITS: dict[str, int] = {
     "explore"        : 3,
     "visit"          : 5,
     "gift"           : 3,
+    "treat"          : 20,
     "like_per_target": 3,  # 每人每日对同一宠物的点赞次数限制
     "message"        : 10,  # 每日留言次数限制
     "free_feed"      : 5,  # 每日免费苹果喂食次数限制
 }
+
+# 五种照料动作及其展示名；每日次数、冷却和活动进度都按这些动作名计。
+PET_ACTION_LABELS: dict[str, str] = {
+    "feed"   : "喂食",
+    "clean"  : "清洁",
+    "play"   : "玩耍",
+    "train"  : "训练",
+    "explore": "探索",
+}
+
+# 照料动作的基础金币奖励（再乘群经济倍率和反脚本衰减）。
+ACTION_BASE_COINS: dict[str, int] = {
+    "feed" : 5,
+    "clean": 3,
+    "play" : 5,
+    "train": 10,
+}
+
+# 互访：访客和被访者各自请求的金币；送礼：双方各得的友情点。
+VISIT_COIN_REWARD    = 5
+GIFT_FRIENDSHIP_GAIN = 2
+
+# 睡觉是固定时长的有限状态；每睡满一分钟恢复的精力。
+SLEEP_DURATION_SECONDS  = 60
+SLEEP_ENERGY_PER_MINUTE = 2
+
+# 个人每日任务模板：(动作, 目标次数, 奖励金币)
+DAILY_TASK_TEMPLATES = (
+    ("feed", 3, 30),
+    ("clean", 2, 20),
+    ("play", 3, 25),
+    ("visit", 2, 20),
+)
+
+# 周排行前三名的金币奖励
+WEEKLY_RANKING_REWARDS = (100, 50, 30)
 
 EVOLUTION_CONDITIONS: dict[tuple[PetStage, str], tuple[PetStage, str | None]] = {
     (PetStage.EGG, "hatched")          : (PetStage.YOUNG, None),
@@ -215,6 +253,9 @@ TRAVEL_THRESHOLDS: dict[str, float] = {
     "care_score_threshold" : 0.15,  # 综合评分低于15%触发旅行
     "travel_duration_hours": 24,  # 旅行持续时间（小时）
     "recall_cost_coins"    : 50,  # 召回费用
+    "return_stat_value"    : 50,  # 旅行到期自动回家时，饥饿/心情/清洁/精力恢复到的值
+    "recall_stat_value"    : 60,  # 付费提前召回时，上述四项恢复到的值
+    "recovered_health"     : 80,  # 旅行结束后的健康值
 }
 
 # 反脚本配置
@@ -242,6 +283,7 @@ MINIGAME_CONFIG = {
     },
     "dice": {
         "win_coins" : 20,
+        "draw_coins": 5,
         "lose_coins": 0,
         "win_exp"   : 8,
         "cooldown"  : 120,
@@ -251,6 +293,8 @@ MINIGAME_CONFIG = {
         "second_coins": 15,
         "lose_coins"  : 0,
         "win_exp"     : 10,
+        "draw_exp"    : 3,
+        "lose_exp"    : 2,
         "cooldown"    : 300,
         "energy_cost" : 15,
     },
@@ -283,7 +327,7 @@ TITLES: dict[str, _TitleConfig] = {
         "duration_days": None,
     },
     "宠物大师": {
-        "description"  : "养育出精英成熟期宠物",
+        "description"  : "把宠物养到成熟期，照顾评分达到 0.9",
         "duration_days": None,
     },
     "百万富翁": {

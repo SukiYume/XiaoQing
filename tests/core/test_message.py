@@ -6,6 +6,7 @@ from typing import Any
 
 from core.message import (
     compile_bot_name_pattern,
+    configured_command_prefixes,
     contains_bot_name,
     extract_text,
     has_at_mention,
@@ -262,6 +263,11 @@ class TestParseTextCommandContext:
             bot_name_pattern = pattern,
         )
         assert clean == "help"
+
+
+def test_configured_command_prefixes_default_to_slash():
+    assert configured_command_prefixes({}) == ("/",)
+    assert configured_command_prefixes({"command_prefixes": ("#", "!")}) == ("#", "!")
 
 
 class TestIsCleanTextUrlOnly:

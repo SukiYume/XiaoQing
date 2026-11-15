@@ -60,45 +60,6 @@ class ItemVersionConflictException(PendoException):
         )
 
 
-class InvalidTimeFormatException(PendoException):
-    """用户提供的时间无法按要求解析。"""
-
-    def __init__(self, time_str: str, expected_format: str | None = None) -> None:
-        format_hint = f"\n期望格式: {expected_format}" if expected_format else ""
-        super().__init__(
-            f"Invalid time format: {time_str}",
-            f"❌ 时间格式不正确: {time_str}{format_hint}",
-        )
-
-
-class PastTimeException(PendoException):
-    """不允许使用已经过去的时间。"""
-
-    def __init__(self, time_str: str) -> None:
-        super().__init__(f"Time is in the past: {time_str}", f"❌ 时间 {time_str} 已过去")
-
-
-class InvalidDateRangeException(PendoException):
-    """日期范围的起止顺序或格式无效。"""
-
-    def __init__(self, start: str, end: str) -> None:
-        super().__init__(
-            f"Invalid date range: {start} to {end}",
-            f"❌ 日期范围无效: {start} 到 {end}",
-        )
-
-
-class NaturalLanguageParseException(PendoException):
-    """自然语言输入无法转换为结构化条目。"""
-
-    def __init__(self, input_text: str, reason: str | None = None) -> None:
-        reason_msg = f": {reason}" if reason else ""
-        super().__init__(
-            f"Failed to parse: {input_text}{reason_msg}",
-            f"❓ 无法理解你的输入{reason_msg}",
-        )
-
-
 class MissingRequiredFieldException(PendoException):
     """创建或修改条目时缺少必填字段。"""
 
@@ -106,19 +67,3 @@ class MissingRequiredFieldException(PendoException):
         description = field_desc or field_name
         super().__init__(f"Missing required field: {field_name}", f"❓ 请提供{description}")
         self.field_name = field_name
-
-
-class InvalidFieldValueException(PendoException):
-    """字段值不在允许范围内。"""
-
-    def __init__(
-        self,
-        field_name: str,
-        value: str,
-        valid_values: list[str] | None = None,
-    ) -> None:
-        valid_msg = f"\n有效值: {', '.join(valid_values)}" if valid_values else ""
-        super().__init__(
-            f"Invalid value for {field_name}: {value}",
-            f"❌ {field_name} 的值 '{value}' 无效{valid_msg}",
-        )

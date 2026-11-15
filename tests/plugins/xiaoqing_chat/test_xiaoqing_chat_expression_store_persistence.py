@@ -84,7 +84,6 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
                 meaning              = "meaning",
                 raw_content          = ["a", "b"],
                 chat_id_counts       = [["chat-1", 2]],
-                is_global            = True,
                 count                = 2,
                 confirmed            = True,
                 last_inference_count = 1,
@@ -102,7 +101,6 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
     assert rec.meaning == "meaning"
     assert rec.raw_content == ["a", "b"]
     assert rec.chat_id_counts == [["chat-1", 2]]
-    assert rec.is_global is True
     assert rec.confirmed is True
 
 
@@ -116,7 +114,7 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
                     "content"             : "坏字段也保留条目",
                     "raw_content"         : "不能拆成字符",
                     "chat_id_counts"      : ["bad", ["chat-1", "2"], ["", 9]],
-                    "is_global"           : "false",
+                    "is_global"           : True,  # 旧版本的全局标记：忽略，不报错
                     "count"               : "not-an-int",
                     "is_jargon"           : "false",
                     "is_complete"         : 1,  # 旧字段名不再被读取
@@ -135,11 +133,67 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
 
     assert record.raw_content == []
     assert record.chat_id_counts == [["chat-1", 2]]
-    assert record.is_global is False
+    assert record.scope_chat_id == ""
+    assert not record.visible_to("chat-1")
     assert record.count == 0
     assert record.confirmed is False
     assert record.last_inference_count == 0
     assert record.updated_at > 0
+
+
+def test_jargon_records_without_a_chat_stay_invisible_and_survive_read_modify_write(tmp_path):
+    path = tmp_path / "bw_learner" / "jargon.json"
+    path.parent.mkdir(parents=True)
+    legacy = {
+        "content"       : "旧词条",
+        "meaning"       : "没有会话的旧释义",
+        "raw_content"   : ["旧上下文"],
+        "chat_id_counts": [["chat-9", 4]],
+        "count"         : 4,
+        "confirmed"     : True,
+        "is_global"     : False,
+        "updated_at"    : 5.0,
+    }
+    path.write_text(
+        json.dumps(
+            [
+                legacy,
+                {
+                    "content"      : "本群词条",
+                    "scope_chat_id": "chat-1",
+                    "meaning"      : "本群释义",
+                    "count"        : 1,
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    store = JargonStore()
+    store.bind(tmp_path)
+    items      = store.load()
+    legacy_key = JargonStore.key_for("旧词条")
+
+    assert not items[legacy_key].visible_to("chat-1")
+    assert items[JargonStore.key_for("本群词条", "chat-1")].visible_to("chat-1")
+
+    items[JargonStore.key_for("本群词条", "chat-1")].count += 1
+    store.save(items)
+    reloaded = JargonStore()
+    reloaded.bind(tmp_path)
+    after = reloaded.load()
+
+    kept = after[legacy_key]
+    assert (kept.meaning, kept.raw_content, kept.chat_id_counts) == (
+        "没有会话的旧释义",
+        ["旧上下文"],
+        [["chat-9", 4]],
+    )
+    assert (kept.count, kept.confirmed, kept.updated_at, kept.scope_chat_id) == (4, True, 5.0, "")
+    assert after[JargonStore.key_for("本群词条", "chat-1")].count == 2
+
+    reloaded.clear("chat-1")
+    assert set(reloaded.load()) == {legacy_key}
 
 
 def test_jargon_store_merges_concurrent_incremental_updates(tmp_path):
@@ -213,10 +267,8 @@ def test_reflect_tracker_store_persistence(tmp_path):
 
     reloaded = ReflectTrackerStore()
     reloaded.bind(tmp_path)
-    loaded = reloaded.load()
+    [state] = reloaded.get_trackers("chat-1")
 
-    assert "chat-1" in loaded
-    state = loaded["chat-1"]
     assert state.operator_chat_id == "chat-1"
     assert state.expression_id == "exp-1"
     assert state.created_time > 0

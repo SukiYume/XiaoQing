@@ -22,17 +22,23 @@ EXIT_CODE_ERROR       = -1
 class SessionKeys:
     """集中定义会话字典键，避免跨模块使用不同拼写。"""
 
-    STATE             = "state"
-    STEP              = "step"
-    SERVER_NAME       = "server_name"
-    SERVER_CONFIG     = "server_config"
-    COMMAND_COUNT     = "command_count"
-    HOST              = "host"
-    CWD               = "cwd"  # 当前工作目录
-    ENV_VARS          = "env_vars"  # 环境变量字典
-    HISTORY           = "history"  # 命令历史列表
-    USERNAME_OVERRIDE = "username_override"  # 用户名覆盖（用于 user@server 格式）
-    CURRENT_TASK      = "current_task"  # 当前命令的不可变 job_id（绝不存 asyncio.Task）
+    STATE         = "state"
+    STEP          = "step"
+    SERVER_NAME   = "server_name"
+    SERVER_CONFIG = "server_config"
+    COMMAND_COUNT = "command_count"
+    CWD           = "cwd"  # 当前工作目录
+    ENV_VARS      = "env_vars"  # 环境变量字典
+    HISTORY       = "history"  # 命令历史列表
+    CURRENT_TASK  = "current_task"  # 当前命令的不可变 job_id（绝不存 asyncio.Task）
+
+
+class SessionState:
+    """``SessionKeys.STATE`` 的取值：引导添加、空闲已连接、命令运行中。"""
+
+    ADDING    = "adding"
+    CONNECTED = "connected"
+    EXECUTING = "executing"
 
 
 MAX_HISTORY_LENGTH = 20

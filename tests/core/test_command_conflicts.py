@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from core.models import PluginCommandManifest
 from core.router import CommandRouter, CommandSpec
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -23,14 +24,8 @@ def _command_spec(plugin_name: str, command_name: str) -> CommandSpec:
         (ROOT / "plugins" / plugin_name / "plugin.json").read_text(encoding="utf-8")
     )
     command = next(item for item in manifest["commands"] if item["name"] == command_name)
-    return CommandSpec(
-        plugin     = plugin_name,
-        name       = command["name"],
-        triggers   = command["triggers"],
-        help_text  = command["help"],
-        admin_only = bool(command.get("admin_only", False)),
-        handler    = _handler,
-        priority   = command.get("priority", 0),
+    return CommandSpec.from_manifest(
+        plugin_name, PluginCommandManifest.model_validate(command).model_dump(), _handler
     )
 
 
@@ -47,7 +42,7 @@ def test_exec_trigger_is_owned_only_by_shell() -> None:
     resolved = router.resolve("exec echo stable")
     assert resolved is not None
     assert resolved[0].plugin == "shell"
-    assert resolved[0].admin_only is True
+    assert resolved[0].catalog.permission == "bot_admin"
 
 
 def test_explicit_aliases_keep_both_admin_execution_backends_available() -> None:

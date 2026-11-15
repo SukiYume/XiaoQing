@@ -105,7 +105,7 @@ def test_overlapping_activity_spans_count_once() -> None:
 
 
 def test_gap_and_failure_backoff_are_skipped_by_manual_runs_only() -> None:
-    recent = default_state() | {"last_session_at": NOW - 60 * 60}
+    recent = default_state() | {"last_session_end": NOW - 60 * 60}
     assert _decide(state=recent).reason == "min_gap"
     assert _decide(state=recent, manual=True).choice != planner.REST
     failed = default_state() | {"last_failure_at": NOW - 30 * 60}

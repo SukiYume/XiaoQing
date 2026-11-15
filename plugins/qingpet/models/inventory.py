@@ -51,10 +51,6 @@ class Inventory:
         """判断指定道具是否达到所需数量。"""
         return self.items.get(item_id, 0) >= amount
 
-    def add_item(self, item_id: str, amount: int = 1) -> None:
-        """增加指定道具数量。"""
-        self.items[item_id] = self.items.get(item_id, 0) + amount
-
     def remove_item(self, item_id: str, amount: int = 1) -> bool:
         """库存充足时扣除道具，并在数量归零时移除键。"""
         current = self.items.get(item_id, 0)

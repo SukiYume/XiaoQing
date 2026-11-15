@@ -3,6 +3,13 @@
 输入是角色刚刚发出的一条发言（聊天回复、agent 回复或后台结果、主动开口）和它之前的几条
 对话。模型只能新增有原话依据的记录，或结束材料里已有的记录；ID、会话归属、过期时间和
 发言人都由这里校验，模型给出的说话人必须出现在对话行里。
+
+agent 回复说的是办事进度（“在帮你记账”“到点提醒你”“查完发你”）：提醒、日程和后台任务由工具
+兑现，agent 自己的任务记录在跟，不是她的近况和欠着的事。这类发言只用来记群友的话头、结束
+已有的自我记录，不新增自我记录。
+
+记录存在统一记忆里：已有记录经 ``memory.search`` 读取，结果连同还没推送的消息一次交给
+``memory.record``，每条自我记录都引用她这条发言，记忆插件再核对一遍出处。
 """
 
 from __future__ import annotations
@@ -18,6 +25,8 @@ from weakref import WeakValueDictionary
 
 from ..llm.gateway import LLMError, chat_completions
 from ..llm.llm_config import LLMCallConfig
+from ..memory import client as memory_client
+from ..memory.person_profile import get_profile_generation
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
 from ..utils.wall_clock import describe_now, local_datetime
@@ -25,6 +34,8 @@ from .open_loops import OpenLoop, same_topic
 from .self_timeline import SELF_KINDS, STORY, SelfEntry, new_entry
 
 _DIALOGUE_ITEMS = 8
+# 办事回复的来源名（agent 当轮回复和后台结果）。
+AGENT_SOURCE    = "agent"
 _LINE_CHARS     = 200
 _MAX_NEW_SELF   = 4
 _MAX_NEW_LOOPS  = 3
@@ -56,9 +67,9 @@ _last_state_read: dict[str, float] = {}
 
 
 def _canned_replies() -> frozenset[str]:
-    from ..reply_fallbacks import ALL_FALLBACK_TEXTS
+    from ..reply_fallbacks import ALL_FALLBACK_TEXTS, GENERATION_BUSY_REPLY
 
-    return ALL_FALLBACK_TEXTS | {"消息有点多，我缓一下再回"}
+    return ALL_FALLBACK_TEXTS | {GENERATION_BUSY_REPLY}
 
 
 _SYSTEM = """你在帮一个聊天角色整理两份记录，只输出一个 JSON 对象。
@@ -119,18 +130,20 @@ def worth_extracting(
     self_enabled: bool,
     loops_enabled: bool,
     state_read_due: bool = True,
+    new_self: bool       = True,
 ) -> bool:
     """没有任何可能产生记录的线索时省掉这次调用。
 
     打算、承诺和交差的线索每次都读；只有近况线索时，``state_read_due`` 为假就跳过。
+    ``new_self`` 为假（办事回复）时只看交差和话头的线索。
     """
 
     if self_enabled:
-        if _COMMITMENT_CUE_RE.search(reply) or (open_self and _DONE_RE.search(reply)):
+        if open_self and _DONE_RE.search(reply):
             return True
-        if _STORY_CUE_RE.search(reply):
+        if new_self and (_COMMITMENT_CUE_RE.search(reply) or _STORY_CUE_RE.search(reply)):
             return True
-        if state_read_due and _STATE_CUE_RE.search(reply):
+        if new_self and state_read_due and _STATE_CUE_RE.search(reply):
             return True
     # ``open_loops`` 只含这段对话里说话人的话头：对方可能正在说结果，或者角色正在问。
     if loops_enabled and (open_loops or any(_TIME_CUE_RE.search(line) for line in dialogue[-4:])):
@@ -262,8 +275,56 @@ def _chat_lock(chat_id: str) -> asyncio.Lock:
     return lock
 
 
+def _ops(
+    *,
+    added: Sequence[SelfEntry],
+    resolved: Sequence[tuple[str, str]],
+    loops: Sequence[dict[str, Any]],
+    closed: set[str],
+    asked: set[str],
+    source_key: str,
+    now: float,
+) -> list[dict[str, Any]]:
+    """把校验过的抽取结果写成统一记忆的笔记操作。"""
+
+    ops: list[dict[str, Any]] = []
+    for entry in added:
+        ops.append(
+            {
+                "op"     : "add",
+                "kind"   : f"self.{entry.kind}",
+                "text"   : entry.text,
+                "hours"  : max(0.0, entry.expires_at - entry.ts) / 3600.0,
+                "scope"  : "global" if entry.shared else "",
+                "sources": [{"key": source_key}],
+                "data"   : {"counterpart": entry.counterpart, "source": entry.source},
+            }
+        )
+    ops.extend({"op": "close", "id": entry_id, "status": status} for entry_id, status in resolved)
+    for loop in loops:
+        ops.append(
+            {
+                "op"  : "add",
+                "kind": "person.loop",
+                "text": loop["title"],
+                "data": {
+                    "user_id"  : loop["user_id"],
+                    "user_name": loop["user_name"],
+                    "due_at"   : loop["due_at"],
+                },
+            }
+        )
+    ops.extend({"op": "close", "id": loop_id, "status": "done"} for loop_id in sorted(closed))
+    ops.extend(
+        {"op": "update", "id": loop_id, "data": {"loop": "asked", "asked_at": now}}
+        for loop_id in sorted(asked)
+    )
+    return ops
+
+
 async def extract_life_records(
     *,
+    context: Any,
     state: Any,
     life_cfg: Any,
     secrets: dict[str, Any],
@@ -273,14 +334,17 @@ async def extract_life_records(
     history: Sequence[Any],
     source: str,
 ) -> bool:
-    """对最新一条角色发言做一次抽取并写入；没有调用模型时返回 False。
+    """对最新一条角色发言做一次抽取并写入统一记忆；没有调用模型时返回 False。
 
     同一会话的抽取串行执行，后一条发言能看到前一条写入的记录。
     """
 
     self_enabled  = bool(life_cfg.enable_self_timeline)
     loops_enabled = bool(life_cfg.enable_open_loops)
+    new_self      = source != AGENT_SOURCE
     if not (self_enabled or loops_enabled) or secrets.get("_ai") is None:
+        return False
+    if memory_client.capability(context) is None:
         return False
     dialogue, reply, speakers = _dialogue_lines(history, bot_name)
     if not reply or reply.strip() in _canned_replies():
@@ -288,23 +352,16 @@ async def extract_life_records(
         return False
     async with _chat_lock(chat_id):
         now        = time.time()
-        generation = await asyncio.to_thread(state.open_loops.generation, chat_id)
-        open_self = await asyncio.to_thread(state.self_timeline.visible, chat_id, now=now, limit=20)
+        data_dir   = context.data_dir
+        generation = await asyncio.to_thread(get_profile_generation, data_dir, chat_id)
         # 讲过的往事也给模型看：同一件事再讲一遍不重复记。
-        open_self += await asyncio.to_thread(
-            state.self_timeline.stories, chat_id, now=now, limit=20
-        )
+        known_self, known_loops = await memory_client.self_records(context, chat_id)
+        open_self  = known_self if self_enabled else []
         open_loops = (
-            [
-                loop
-                for loop in await asyncio.to_thread(state.open_loops.pending, chat_id, now=now)
-                if loop.user_id in speakers
-            ]
+            [loop for loop in known_loops if loop.user_id in speakers and loop.status != "closed"]
             if loops_enabled
             else []
         )
-        if not self_enabled:
-            open_self = []
         interval       = float(getattr(life_cfg, "self_state_extract_interval_seconds", 0.0))
         state_read_due = now - _last_state_read.get(chat_id, 0.0) >= interval
         if not worth_extracting(
@@ -315,6 +372,7 @@ async def extract_life_records(
             self_enabled   = self_enabled,
             loops_enabled  = loops_enabled,
             state_read_due = state_read_due,
+            new_self       = new_self,
         ):
             return False
         _last_state_read[chat_id] = now
@@ -343,29 +401,24 @@ async def extract_life_records(
             speakers   = speakers,
             now        = now,
         )
-
-        def commit() -> None:
-            # 抽取期间会话被重置时，旧对话里的记录不能写回来。
-            with state.open_loops.generation_guard(chat_id, generation) as current:
-                if not current:
-                    return
-                if self_enabled and (added or resolved):
-                    state.self_timeline.apply(
-                        added       = added,
-                        resolved    = resolved,
-                        chat_id     = chat_id,
-                        max_entries = int(life_cfg.self_timeline_max_entries),
-                        now         = now,
-                    )
-                if not loops_enabled:
-                    return
-                for loop in loops:
-                    state.open_loops.add(
-                        chat_id, max_loops=int(life_cfg.open_loop_max_per_chat), now=now, **loop
-                    )
-                state.open_loops.close(chat_id, closed, now=now)
-                for loop_id in asked:
-                    state.open_loops.mark_asked(chat_id, loop_id, now=now)
-
-        await asyncio.to_thread(commit)
+        if not self_enabled:
+            added, resolved = [], []
+        if not new_self:
+            added = []
+        if not loops_enabled:
+            loops, closed, asked = [], set(), set()
+        # 抽取期间会话被重置时，旧对话里的记录不能写回来。
+        if await asyncio.to_thread(get_profile_generation, data_dir, chat_id) != generation:
+            return True
+        ops = _ops(
+            added      = added,
+            resolved   = resolved,
+            loops      = loops,
+            closed     = closed,
+            asked      = asked,
+            source_key = memory_client.event_key(generation, history[-1]),
+            now        = now,
+        )
+        if ops:
+            await memory_client.push_pending(context, state, chat_id, bot_name=bot_name, ops=ops)
     return True

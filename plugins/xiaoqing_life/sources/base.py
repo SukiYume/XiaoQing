@@ -8,9 +8,9 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -26,15 +26,14 @@ from core.bounded_http import (
     parse_bounded_json,
     validate_bounded_xml,
 )
+from core.safe_http import BROWSER_USER_AGENT
 
 from ..safety import clean_text, is_blocked
 
+T = TypeVar("T")
+
 REQUEST_TIMEOUT_SECONDS = 10
-USER_AGENT              = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
-ALLOWED_HOSTS = frozenset(
+ALLOWED_HOSTS           = frozenset(
     {
         "api.bilibili.com",
         "api.zhihu.com",
@@ -177,6 +176,38 @@ class BoundedFetcher:
             return ""
         return self._credential.cookie_header()
 
+    async def _get(
+        self,
+        source: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        limits: BodyLimits,
+        mime_policy: MimePolicy,
+        params: Mapping[str, str] | None,
+        parse: Callable[[Any], T],
+    ) -> T:
+        """有界 GET + 解析；网络、大小、类型和解析上的失败都只留下来源名与异常类型。"""
+
+        request_kwargs: dict[str, Any] = {
+            "timeout": aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+        }
+        if params is not None:
+            request_kwargs["params"] = dict(params)
+        try:
+            response = await aiohttp_request_bounded(
+                self._session,
+                "GET",
+                url,
+                limits         = limits,
+                mime_policy    = mime_policy,
+                headers        = headers,
+                request_kwargs = request_kwargs,
+            )
+            return parse(response)
+        except (BoundedHttpError, aiohttp.ClientError, TimeoutError) as exc:
+            raise SourceError(source, type(exc).__name__) from None
+
     async def get_public_json(self, url: str) -> Any:
         """取字幕文件：只允许 https 的 ``hdslb.com`` 及其子域，不带 Cookie 与 Referer。"""
 
@@ -184,21 +215,15 @@ class BoundedFetcher:
         host  = (parts.hostname or "").lower()
         if parts.scheme != "https" or not is_subtitle_host(host) or parts.port not in (None, 443):
             raise SourceError("http", "host_not_allowed")
-        try:
-            response = await aiohttp_request_bounded(
-                self._session,
-                "GET",
-                url,
-                limits      = _SUBTITLE_LIMITS,
-                mime_policy = _MIME_POLICY,
-                headers     = {"User-Agent": USER_AGENT, "Accept": "application/json, */*"},
-                request_kwargs={"timeout": aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)},
-            )
-            return parse_bounded_json(response, limits=_SUBTITLE_JSON)
-        except BoundedHttpError as exc:
-            raise SourceError("hdslb", type(exc).__name__) from None
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise SourceError("hdslb", type(exc).__name__) from None
+        return await self._get(
+            "hdslb",
+            url,
+            headers     = {"User-Agent": BROWSER_USER_AGENT, "Accept": "application/json, */*"},
+            limits      = _SUBTITLE_LIMITS,
+            mime_policy = _MIME_POLICY,
+            params      = None,
+            parse=lambda response: parse_bounded_json(response, limits=_SUBTITLE_JSON),
+        )
 
     async def get_json(
         self, url: str, *, params: Mapping[str, str] | None = None, referer: str = ""
@@ -207,7 +232,7 @@ class BoundedFetcher:
         if host not in ALLOWED_HOSTS:
             raise SourceError("http", "host_not_allowed")
         headers = {
-            "User-Agent": WIKI_USER_AGENT if host == WIKI_HOST else USER_AGENT,
+            "User-Agent": WIKI_USER_AGENT if host == WIKI_HOST else BROWSER_USER_AGENT,
             "Accept"    : "application/json, text/plain, */*",
         }
         if referer:
@@ -215,24 +240,15 @@ class BoundedFetcher:
         cookie = self._cookie_for(host)
         if cookie:
             headers["Cookie"] = cookie
-        try:
-            response = await aiohttp_request_bounded(
-                self._session,
-                "GET",
-                url,
-                limits         = _BODY_LIMITS,
-                mime_policy    = _MIME_POLICY,
-                headers        = headers,
-                request_kwargs = {
-                    "params" : dict(params or {}),
-                    "timeout": aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS),
-                },
-            )
-            payload = parse_bounded_json(response, limits=_JSON_LIMITS)
-        except BoundedHttpError as exc:
-            raise SourceError(host, type(exc).__name__) from None
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise SourceError(host, type(exc).__name__) from None
+        payload = await self._get(
+            host,
+            url,
+            headers     = headers,
+            limits      = _BODY_LIMITS,
+            mime_policy = _MIME_POLICY,
+            params      = params or {},
+            parse=lambda response: parse_bounded_json(response, limits=_JSON_LIMITS),
+        )
         # 带了 Cookie 的响应说“未登录”：凭证已失效，之后不再附 Cookie。
         if cookie and isinstance(payload, dict) and payload.get("code") == -101:
             assert self._credential is not None
@@ -247,27 +263,18 @@ class BoundedFetcher:
         host = (urlsplit(url).hostname or "").lower()
         if host not in ALLOWED_HOSTS:
             raise SourceError("http", "host_not_allowed")
-        headers = {"User-Agent": USER_AGENT, "Accept": "text/xml, application/xml, */*"}
+        headers = {"User-Agent": BROWSER_USER_AGENT, "Accept": "text/xml, application/xml, */*"}
         if referer:
             headers["Referer"] = referer
-        try:
-            response = await aiohttp_request_bounded(
-                self._session,
-                "GET",
-                url,
-                limits         = _BODY_LIMITS,
-                mime_policy    = XML_MIME_POLICY,
-                headers        = headers,
-                request_kwargs = {
-                    "params" : dict(params or {}),
-                    "timeout": aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS),
-                },
-            )
-            return validate_bounded_xml(response, limits=_XML_LIMITS)
-        except BoundedHttpError as exc:
-            raise SourceError(host, type(exc).__name__) from None
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise SourceError(host, type(exc).__name__) from None
+        return await self._get(
+            host,
+            url,
+            headers     = headers,
+            limits      = _BODY_LIMITS,
+            mime_policy = XML_MIME_POLICY,
+            params      = params or {},
+            parse=lambda response: validate_bounded_xml(response, limits=_XML_LIMITS),
+        )
 
 
 def to_int(value: Any) -> int:

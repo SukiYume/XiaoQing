@@ -26,7 +26,12 @@ from ..utils.formatters import (
     collection_node_title,
     is_tag_token,
 )
-from ..utils.identifiers import new_internal_id, public_id
+from ..utils.identifiers import (
+    is_canonical_internal_id,
+    is_public_id_reference,
+    new_internal_id,
+    public_id,
+)
 from ..utils.session_utils import safe_create_session
 from ..utils.settings_utils import resolve_default_category
 from ..utils.time_utils import (
@@ -50,6 +55,8 @@ from ..utils.validators import (
 )
 from .event_editing import EventEditAIParserProtocol, EventEditingMixin
 from .event_support import (
+    MONTH_DAY_TIME,
+    SHORT_MONTH_DAY_TIME,
     ensure_event_reminder_rules,
     ensure_event_reminders,
     ensure_start_time_reminder,
@@ -75,6 +82,7 @@ TIME_RANGE_RE       = re.compile(r"^(last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2
 FORCE_FLAG_RE       = re.compile(r"(?:^|\s)--force(?=\s|$)")
 
 
+_UNTITLED_EVENT = "无标题日程"
 _QUOTED_TEXT_RE = re.compile(r"\"[^\"]*\"|“[^”]*”|'[^']*'")
 
 
@@ -142,14 +150,14 @@ def _collection_fields(
         "id"      : collection_id,
         "owner_id": user_id,
         "kind"    : kind,
-        "title"   : parsed_data.get("title", "无标题日程"),
+        "title"   : parsed_data.get("title", _UNTITLED_EVENT),
         "content" : parsed_data.get("content", ""),
-        "category": parsed_data.get("category", "未分类"),
+        "category": parsed_data.get("category", PendoConfig.DEFAULT_CATEGORY),
         "location": parsed_data.get("location", ""),
         "tags"    : parsed_data.get("tags", []),
         "notes"   : parsed_data.get("notes", ""),
         "context" : parsed_data.get("context", {}),
-        "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+        "timezone": parsed_data.get("timezone", PendoConfig.DEFAULT_TIMEZONE),
     }
 
 
@@ -320,10 +328,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             await safe_create_session(
                 context,
                 initial_data={
-                    "type"    : PendoConfig.SESSION_TYPE_EVENT_INFO,
-                    "owner_id": user_id,
-                    "group_id": group_id,
-                    "data"    : result.get("data", parsed),
+                    "type": PendoConfig.SESSION_TYPE_EVENT_INFO,
+                    "data": result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
             )
@@ -331,10 +337,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             await safe_create_session(
                 context,
                 initial_data={
-                    "type"    : PendoConfig.SESSION_TYPE_EVENT_CONFLICT,
-                    "owner_id": user_id,
-                    "group_id": group_id,
-                    "data"    : result.get("data", parsed),
+                    "type": PendoConfig.SESSION_TYPE_EVENT_CONFLICT,
+                    "data": result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
             )
@@ -487,13 +491,13 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         event_item = EventItem(
             owner_id       = user_id,
             timezone       = parsed_data["timezone"],
-            title          = parsed_data.get("title", "无标题日程"),
+            title          = parsed_data.get("title", _UNTITLED_EVENT),
             content        = parsed_data.get("content", ""),
             start_time     = parsed_data["start_time"],
             end_time       = parsed_data.get("end_time"),
             location       = parsed_data.get("location", ""),
             tags           = parsed_data.get("tags", []),
-            category       = parsed_data.get("category", "未分类"),
+            category       = parsed_data.get("category", PendoConfig.DEFAULT_CATEGORY),
             context        = parsed_data.get("context", {}),
             remind_times   = remind_times,
             reminder_rules = reminder_rules,
@@ -579,13 +583,13 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             instance_item   = EventItem(
                 owner_id     = user_id,
                 timezone     = parsed_data["timezone"],
-                title        = parsed_data.get("title", "无标题日程"),
+                title        = parsed_data.get("title", _UNTITLED_EVENT),
                 content      = parsed_data.get("content", ""),
                 start_time   = instance_dt.isoformat(),
                 end_time     = instance_end_dt.isoformat() if instance_end_dt else None,
                 location     = parsed_data.get("location", ""),
                 tags         = parsed_data.get("tags", []),
-                category     = parsed_data.get("category", "未分类"),
+                category     = parsed_data.get("category", PendoConfig.DEFAULT_CATEGORY),
                 context      = parsed_data.get("context", {}),
                 remind_times = build_remind_times_from_rules(
                     instance_dt.isoformat(),
@@ -729,7 +733,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 end_time              = milestone.get("end_time"),
                 location              = parsed_data.get("location", ""),
                 tags                  = parsed_data.get("tags", []),
-                category              = parsed_data.get("category", "未分类"),
+                category              = parsed_data.get("category", PendoConfig.DEFAULT_CATEGORY),
                 context               = parsed_data.get("context", {}),
                 remind_times          = node_reminders,
                 reminder_rules        = reminder_rules,
@@ -896,17 +900,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         return " ".join(range_parts) or "today", category, tag, None
 
     @staticmethod
-    def _event_sort_key(event: EventItem, current_dt: datetime) -> datetime:
-        """把日程开始时间统一到用户时区后排序。"""
-        try:
-            return cast(
-                datetime,
-                TimezoneHelper.parse(event.start_time or "", current_dt.tzinfo),
-            )
-        except (TypeError, ValueError):
-            return datetime.max.replace(tzinfo=current_dt.tzinfo)
-
-    @staticmethod
     def _event_matches_list_filters(
         event: EventItem,
         collection: dict[str, Any] | None,
@@ -922,6 +915,21 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         event_tags      = set(event.tags or [])
         collection_tags = set((collection or {}).get("tags") or [])
         return not tag or tag in event_tags or tag in collection_tags
+
+    async def _parse_user_time_range(
+        self, user_id: str, text: str
+    ) -> tuple[datetime, str, str] | None:
+        """按用户时区解析时间范围，返回 (用户当前时间, 起, 止)；无法解析时返回 ``None``。"""
+        current_dt = await run_sync(now_in_timezone, user_id, self.db)
+        try:
+            start_date, end_date = parse_event_time_range(
+                text,
+                now=current_dt.replace(tzinfo=None),
+                strict=True,
+            )
+        except ValueError:
+            return None
+        return current_dt, start_date, end_date
 
     async def list_events(
         self, user_id: str, time_range: str, context: PendoContext
@@ -942,14 +950,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if filter_error:
             return filter_error
 
-        current_dt = await run_sync(now_in_timezone, user_id, self.db)
-        try:
-            start_date, end_date = parse_event_time_range(
-                time_range,
-                now=current_dt.replace(tzinfo=None),
-                strict=True,
-            )
-        except ValueError:
+        parsed_range = await self._parse_user_time_range(user_id, time_range)
+        if parsed_range is None:
             return {
                 "status": "error",
                 "message": (
@@ -957,6 +959,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                     "last7d 或 YYYY-MM-DD..YYYY-MM-DD"
                 ),
             }
+        current_dt, start_date, end_date = parsed_range
 
         events = await self._fetch_event_rows(user_id, start_date, end_date)
 
@@ -985,7 +988,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 tag_filter,
             )
         ]
-        events.sort(key=lambda event: self._event_sort_key(event, current_dt))
+        events.sort(key=lambda event: self._sort_instant(event.start_time or "", current_dt))
         return self._format_event_list_result(
             events,
             collection_map,
@@ -1077,7 +1080,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             owner_id              = user_id,
             title                 = str(collection.get("title") or ""),
             content               = str(collection.get("content") or ""),
-            category              = str(collection.get("category") or "未分类"),
+            category              = str(collection.get("category") or PendoConfig.DEFAULT_CATEGORY),
             location              = str(collection.get("location") or ""),
             tags                  = list(collection.get("tags") or []),
             notes                 = str(collection.get("notes") or ""),
@@ -1186,8 +1189,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        if not event:
-            return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
         event = cast(EventItem, event)
 
         updates = await self._parse_updates(changes, event)
@@ -1300,7 +1301,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
     async def handle_reminders(
         self, user_id: str, args: str, context: PendoContext
     ) -> CommandMessage:
-        """分发提醒子命令：set <id> <描述> 或 list [范围]"""
+        """分发提醒子命令。
+
+        set <id> <描述>、confirm、delete/remove/rm 各有处理函数；list [范围] 和其余参数
+        （日期范围或日程 ID）走提醒列表；snooze 属于顶层命令，只返回正确用法。
+        """
         parts = (args or "").split(maxsplit=1)
         if parts and parts[0].lower() == "set":
             rest = parts[1] if len(parts) > 1 else ""
@@ -1459,7 +1464,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         confirmed_count = 0
         parsed_count    = 0
         for event, remind_time in matched:
-            remind_dt = self._normalize_remind_time(remind_time, now)
+            remind_dt = TimezoneHelper.try_parse(remind_time, now.tzinfo)
             if remind_dt is None:
                 continue
             parsed_count += 1
@@ -1518,23 +1523,22 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return [
                 remind_time
                 for remind_time in remind_times
-                if (parsed := EventHandler._normalize_remind_time(remind_time, now)) is not None
+                if (parsed := TimezoneHelper.try_parse(remind_time, now.tzinfo)) is not None
                 and parsed > now
             ]
         if lowered == "today":
             return [
                 remind_time
                 for remind_time in remind_times
-                if (parsed := EventHandler._normalize_remind_time(remind_time, now)) is not None
+                if (parsed := TimezoneHelper.try_parse(remind_time, now.tzinfo)) is not None
                 and parsed.date() == now.date()
             ]
 
-        matched = [
+        return [
             remind_time
             for remind_time in remind_times
             if EventHandler._matches_reminder_selector(remind_time, selector, now)
         ]
-        return matched
 
     @classmethod
     def _ambiguous_selection(
@@ -1550,18 +1554,17 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return None
         lines = [f"⚠️ {selector} 匹配到 {len(matches)} 个提醒，请写出完整的日期时间再{action}："]
         for event, remind_time in matches[:10]:
-            parsed = cls._normalize_remind_time(remind_time, now)
+            parsed = TimezoneHelper.try_parse(remind_time, now.tzinfo)
             shown  = parsed.strftime("%Y-%m-%d %H:%M:%S %z") if parsed else remind_time
             lines.append(f"• {event.title or '无标题'}：{shown}")
         return {"status": "need_info", "message": "\n".join(lines)}
 
-    @staticmethod
-    def _normalize_remind_time(remind_time: str, reference: datetime) -> datetime | None:
-        """把提醒时间统一到当前用户时区。"""
-        try:
-            return cast(datetime, TimezoneHelper.parse(remind_time, reference.tzinfo))
-        except (TypeError, ValueError):
-            return None
+    @classmethod
+    def _sort_instant(cls, value: str, reference: datetime) -> datetime:
+        """把开始/提醒时间统一到用户时区后排序；无法解析的排在最后。"""
+        return TimezoneHelper.try_parse(value, reference.tzinfo) or datetime.max.replace(
+            tzinfo=reference.tzinfo
+        )
 
     @classmethod
     def _matches_reminder_selector(
@@ -1571,10 +1574,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not selector:
             return False
 
-        normalized = cls._normalize_remind_time(remind_time, reference)
+        normalized = TimezoneHelper.try_parse(remind_time, reference.tzinfo)
         if normalized is None:
             return False
-        requested = cls._normalize_remind_time(selector, reference)
+        requested = TimezoneHelper.try_parse(selector, reference.tzinfo)
         if requested is not None:
             # 在 UTC 时间轴上比较：夏令时回拨时两个 fold 的墙钟相同，真实时刻相差一小时。
             # 输入写了秒就精确到秒，否则精确到分钟。
@@ -1582,7 +1585,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 return int(requested.timestamp()) == int(normalized.timestamp())
             return int(requested.timestamp()) // 60 == int(normalized.timestamp()) // 60
 
-        formats = ("%m-%d %H:%M", "%m月%d日 %H:%M", "%H:%M")
+        formats = (SHORT_MONTH_DAY_TIME, MONTH_DAY_TIME, "%H:%M")
         for fmt in formats:
             try:
                 parsed = datetime.strptime(selector, fmt)
@@ -1620,8 +1623,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        if not event:
-            return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
         event = cast(EventItem, event)
 
         # 用 AI 解析提醒描述，事件开始时间是偏移计算基准。
@@ -1647,7 +1648,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         display_timezone = event_display_timezone(event)
         for t in remind_times:
             lines.append(
-                f"  ⏰ {ItemFormatter.format_datetime(t, '%m月%d日 %H:%M', tz=display_timezone)}"
+                f"  ⏰ {ItemFormatter.format_datetime(t, MONTH_DAY_TIME, tz=display_timezone)}"
             )
         lines.append(f"\n💡 用 /pendo event reminders {event.display_id} 查看详情")
         return {"status": "success", "message": "\n".join(lines)}
@@ -1729,18 +1730,13 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return await self._format_reminders_by_id(user_id, query)
 
         # 按用户时区解析范围，显式错误不得静默回退到今天。
-        current_dt = await run_sync(now_in_timezone, user_id, self.db)
-        try:
-            start_date, end_date = parse_event_time_range(
-                query,
-                now=current_dt.replace(tzinfo=None),
-                strict=True,
-            )
-        except ValueError:
+        parsed_range = await self._parse_user_time_range(user_id, query)
+        if parsed_range is None:
             return {
                 "status" : "error",
                 "message": "❌ 无法解析提醒时间范围",
             }
+        current_dt, start_date, end_date = parsed_range
         start_dt, end_dt = datetime.fromisoformat(start_date), datetime.fromisoformat(end_date)
 
         # 直接读取该用户全部有提醒日程，避免“提前 30 天”一类
@@ -1761,12 +1757,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return {"status": "success", "message": f"🔔 {title} 没有提醒"}
 
         # 按最早的范围内提醒时间排序
-        event_reminders.sort(
-            key=lambda pair: (
-                self._normalize_remind_time(pair[1][0], current_dt)
-                or datetime.max.replace(tzinfo=current_dt.tzinfo)
-            )
-        )
+        event_reminders.sort(key=lambda pair: self._sort_instant(pair[1][0], current_dt))
         reminder_events = [event for event, _remind_times in event_reminders]
         collection_map, log_maps = await run_sync(
             self._load_reminder_list_metadata,
@@ -1778,7 +1769,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         for event, remind_times in event_reminders:
             log_map  = log_maps.get(str(event.id), {})
             time_str = ItemFormatter.format_datetime(
-                event.start_time or "", "%m月%d日 %H:%M", tz=display_timezone
+                event.start_time or "", MONTH_DAY_TIME, tz=display_timezone
             )
             display_title = event.title or "无标题"
             if getattr(event, "event_collection_id", None):
@@ -1787,7 +1778,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                     display_title = collection_node_title(collection.get("title"), event.title)
             message += f"\n🗓️ {time_str} {display_title} {event.display_id}\n"
             for t in remind_times:
-                t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M", tz=display_timezone)
+                t_str = ItemFormatter.format_datetime(t, SHORT_MONTH_DAY_TIME, tz=display_timezone)
                 status = get_remind_status(log_map.get(t))
                 message += f"  ⏰ {t_str} {status}\n"
 
@@ -1838,12 +1829,12 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         builder.add_line(f"🔔 {collection.get('title') or '无标题'}")
         builder.add_line(f"📌 {event.title or '无标题'}")
         builder.add_line(
-            f"🗓️ 节点时间: {ItemFormatter.format_datetime(event.start_time or '', '%m月%d日 %H:%M', tz=display_timezone)}"
+            f"🗓️ 节点时间: {ItemFormatter.format_datetime(event.start_time or '', MONTH_DAY_TIME, tz=display_timezone)}"
         )
         builder.add_line("─" * 30)
         for index, remind_time in enumerate(remind_times, 1):
             time_str = ItemFormatter.format_datetime(
-                remind_time, "%m月%d日 %H:%M", tz=display_timezone
+                remind_time, MONTH_DAY_TIME, tz=display_timezone
             )
             status = get_remind_status_label(log_map.get(remind_time))
             builder.add_line(f"⏰ 提醒 {index}: {time_str}  {status}")
@@ -1866,7 +1857,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             builder.add_blank()
             display_timezone = event_display_timezone(child)
             child_time       = ItemFormatter.format_datetime(
-                child.start_time or "", "%m月%d日 %H:%M", tz=display_timezone
+                child.start_time or "", MONTH_DAY_TIME, tz=display_timezone
             )
             builder.add_line(f"{index}. 📌 {child_time} {child.title or '无标题'}")
             if not remind_times:
@@ -1875,7 +1866,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 log_map = log_maps.get(str(child.id), {})
                 for remind_time in remind_times:
                     formatted_time = ItemFormatter.format_datetime(
-                        remind_time, "%m-%d %H:%M", tz=display_timezone
+                        remind_time, SHORT_MONTH_DAY_TIME, tz=display_timezone
                     )
                     status = get_remind_status(log_map.get(remind_time))
                     builder.add_line(f"     ⏰ {formatted_time} {status}")
@@ -1889,7 +1880,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         cls, t_str: str, start_dt: datetime, end_dt: datetime, reference: datetime
     ) -> bool:
         """判断单个提醒时间是否在查询范围内"""
-        remind_dt = cls._normalize_remind_time(t_str, reference)
+        remind_dt = TimezoneHelper.try_parse(t_str, reference.tzinfo)
         if remind_dt is None:
             return False
         return start_dt <= remind_dt.replace(tzinfo=None) <= end_dt
@@ -1925,9 +1916,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
     def _looks_like_id(self, text: str) -> bool:
         """判断是否像完整 UUID 或 8 位用户标识。"""
-        if not text:
-            return False
-        return re.fullmatch(r"(?:[0-9a-f]{8}|[0-9a-f]{32})", text, re.IGNORECASE) is not None
+        return is_public_id_reference(text) or is_canonical_internal_id(text)
 
     async def _missing_event_message(self, user_id: str, event_id: str) -> CommandMessage:
         """ID 不对应任何日程时的回复：属于其他类型的条目给出指路提示，否则报找不到。"""

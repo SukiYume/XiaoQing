@@ -230,7 +230,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 **参与方式**
 
-- 明确跟她说的话一定回复：私聊、`/xc`、群里 `@` 角色、引用角色的消息、叫她名字（句首称呼“小青，……”，或句中、句末带称呼语气的“行吧小青你赢了”“在吗小青”；`@` 了别人而没 `@` 她时不算）。这些轮次直接起草回复，并同时交给 agent 判断要不要动手；只喊一声名字时由模型按话题和作息应一声。上课、睡觉时照常回复，只是更慢、更短。同一个人连着发几条时等他说完，看着完整的几条回一次。
+- 明确跟她说的话一定回复：私聊、`/xc`、群里 `@` 角色、引用角色的消息、叫她名字（句首称呼“小青，……”，或句中、句末带称呼语气的“行吧小青你赢了”“在吗小青”；`@` 了别人而没 `@` 她时不算）。这些轮次直接起草回复，并同时交给 agent 判断要不要动手；只喊一声名字或只 `@` 她时立刻回一句预设短应答（`bot_name_only_replies`），不走模型，这个人接下来一分钟内的那句算在跟她说，他紧跟着已经发了下一条时这一声不应。上课、睡觉时照常回复，只是更慢、更短。同一个人连着发几条时等他说完，看着完整的几条回一次。
 - 其余群消息先过硬限制（最小间隔、每分钟上限、连续冷却、低信息消息），再按基础概率掷骰；她和当前话题都在最近 5 分钟内活跃时概率更高，Heartflow 软评分和连续沉默再做补偿。紧跟在她刚发的回复后面的那句话不掷骰，直接交给规划器。忙或睡时再乘作息系数，群里接连好几条她都没出声时这层压制逐步减轻，最多减半。
 - 通过后由 PFC 规划器选择回复、开新话头、等待、旁听、重想目标、查知识或结束话题；面向全群的邀请、提问、分享、起哄，以及代词指她、续句和点名其他群友的消息，都由规划器按上下文判断。没人叫她的群消息只走聊天，不交给 agent。
 - 生成前还受全局、会话、用户并发配额和用户日配额限制。
@@ -247,9 +247,9 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | AI route | `chat`（日常回复）、`reasoning`（规划与后台分析）、`checker`（审查）、`vision`（图片） |
 | 入站消息段 | `text`、`at`、`reply`、`face`、`mface`、`image` 及混合消息 |
 | 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
-| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）、`inbound_backlog`（同一个人连着发几条时等他说完再回）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`）、`life.turn_context` 与 `life.export_memes`（`life_context`） |
+| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）、`inbound_backlog`（同一个人连着发几条时等他说完再回）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`）、`life.turn_context` 与 `life.export_memes`（`life_context`）、`memory.record` / `recall` / `search` / `forget`（`memory`） |
 | 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
-| 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存，以及 `life/` 下的自我陈述、未完话头和主动开口节奏 |
+| 运行数据 | `data/xiaoqing_chat/`：近期聊天历史、推给统一记忆的进度、知识库索引、目标、PFC、行动历史、表达与黑话、复盘、媒体库，以及 `life/` 下的每日生活小事、主动开口节奏和其他插件的推送记录；长期记忆在 `xiaoqing_memory` |
 
 [用户手册](../plugins/xiaoqing_chat/README.md) 逐项说明参与规则、全部配置字段和排障方法，[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 说明模块与数据流，[上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 说明自动化测试与真实模型评测。
 
@@ -261,8 +261,19 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 |---|---|
 | 命令 | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
 | 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
-| Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用） |
+| Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用）；使用 `memory.record`，把经历、日记和查明白的事发布到统一记忆 |
 | 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目与状态；B站 凭证单独存放在 `secrets/`，不进备份 |
+
+### `xiaoqing_memory`：小青的统一记忆
+
+`xiaoqing_memory` 是小青的长期记忆。聊天把每条消息、她说出口的近况和承诺、群友的未完话头写进来，agent 写每次办事的经过，网上生活写她的经历和日记；每晚整理成关于每个人、每个群和她自己的页面，每行引用有原话出处的笔记。每轮回复前聊天取一次说话人的页面、群页、相关旧事和她自己的近况，agent 开新办事会话时取发起人的页面。私聊的事不进群，一个群的事不进另一个群，他在群里说过的自己的事可以带进和他本人的私聊；来源链里有网页文字的内容不给 agent。默认开启，整理需要配置 `ai.routes.reasoning`。`/mem` 命令只给 Bot 管理员、只在私聊用。详见 [XiaoQing Memory](../plugins/xiaoqing_memory/README.md)。
+
+| 项目 | 内容 |
+|---|---|
+| 命令 | `/mem [status|stats|page|search|why|forget|consolidate|rebuild|help]` |
+| 定时 | `xiaoqing_memory.tick` 每 30 分钟检查一次：夜间窗口里或积压够多时在后台整理 |
+| Capability 与服务 | 提供 `memory.record`（`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用）、`memory.recall`（`xiaoqing_chat`、`xiaoqing_agent` 调用）、`memory.search` 与 `memory.forget`（`xiaoqing_chat` 调用） |
+| 运行数据 | `data/xiaoqing_memory/`：按范围按月的原始记录、笔记、页面和状态 |
 
 ### `xiaoqing_agent`：任务代理
 
@@ -409,8 +420,8 @@ APOD 抓取 NASA 当前 Astronomy Picture of the Day 页面，返回图片或视
 命令使用空参数，默认读取 `https://science.nasa.gov/apod/`，返回图片或视频链接、标题、说明、日期、署名和原页面链接。
 可通过 `config.plugins.apod.url` 与 `allowed_hosts` 设置页面和附加媒体主机。
 内置允许 `science.nasa.gov`、`assets.science.nasa.gov` 和 `apod.nasa.gov`，配置为 `astropix.html` 入口时改用默认首页。
-每天 13:30 使用 Core `broadcast` 模式向 schedule 的 `group_ids` 投递。
-字段省略时使用 `default_group_ids`。
+每天 13:30 使用 Core `broadcast` 模式向这个 schedule 的目标群投递。
+目标群可写在部署配置 `plugins.apod.schedules.apod_daily.group_ids`，没写时使用 `default_group_ids`。
 
 页面、重定向和媒体均经过 HTTPS、公网 DNS、响应大小、MIME、尺寸和像素校验。
 缓存位于 `data/apod/`。
@@ -597,7 +608,7 @@ QingSSH 为 Bot 管理员提供 SSH profile、`~/.ssh/config` 导入、持久会
 /ssh list
 /ssh add [名称 主机 [端口] [用户名]]
 /ssh remove <服务器名>
-/ssh import [Host名|all]
+/ssh import [Host名|all|全部]
 /ssh config
 /ssh status
 /ssh disconnect [服务器名]
@@ -651,13 +662,13 @@ Minecraft 插件让 Bot 管理员在私聊或群里连接 Java Edition RCON，�
 /mc disconnect
 ```
 
-`plugins/minecraft/config.json` 保存 host、port 和 `log_file`，`secrets.plugins.minecraft.<profile>` 保存同名 RCON 密码。
+`config.plugins.minecraft.servers.<profile>` 保存 host、port 和 `log_file`，`secrets.plugins.minecraft.<profile>` 保存同名 RCON 密码。
 每个私聊或群各有一条连接。
 命令按连接锁顺序执行。
 `/mc say`、`/mc tell` 以 `tellraw` 文本组件发出，带上发言人的 QQ 名字，消息里的目标选择器和命令都只当文字。
 
 配置日志文件后，调度任务每 5 秒识别玩家聊天、加入、离开、死亡和进度，并转发到连接所属的私聊或群。
-群只有在 `default_group_ids` 里才会收到转发，其他群连接时会说明只能用命令。
+群只有在日志任务的目标群里才会收到转发（部署配置 `plugins.minecraft.schedules.check_log.group_ids`，没写时为 `default_group_ids`），其他群连接时会说明只能用命令。
 游标位于 `data/minecraft/log_cursors/`，投递确认后提交。
 RCON 采用明文协议，生产连接应使用回环监听、SSH 隧道或受保护网络。
 [Minecraft README](../plugins/minecraft/README.md) 提供协议与转发预算。
@@ -1042,13 +1053,14 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `xiaoqing_agent` | `/agent` | 公开（工具按发起人权限） | 私聊、群聊 |
 | `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
 | `xiaoqing_life` | `/life` | Bot 管理员 | 私聊、群聊 |
+| `xiaoqing_memory` | `/mem` | Bot 管理员 | 私聊 |
 
 ---
 
 ## ⏰ 定时任务总表
 
 时间按 `config.timezone`（默认 `Asia/Shanghai`）解释。
-`broadcast` 把同一结果发到该任务的目标群（未声明 `group_ids` 时使用 `default_group_ids`），`targeted` 由插件逐个返回私聊或群目标，`silent` 只运行不发消息。
+`broadcast` 把同一结果发到该任务的目标群（部署配置 `plugins.<插件名>.schedules.<任务 ID>.group_ids` 优先，其次是条目的 `group_ids`，都没写时使用 `default_group_ids`），`targeted` 由插件逐个返回私聊或群目标，`silent` 只运行不发消息。
 投递模式说明见 [插件开发指南的调度字段](03-plugin-development.md#调度字段)。
 
 | 插件 | Handler | 时间 | 投递 | 作用 |
@@ -1081,8 +1093,10 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `twitter` | `scheduled_fetch` | 每天 03:00 | `silent` | 后台抓取新图 |
 | `xiaoqing_chat` | `scheduled_daily_life` | 每天 05:30 | `silent` | 按人设与作息安排角色今天的生活小事 |
 | `xiaoqing_chat` | `scheduled_life_memes` | 每小时 07、37 分 | `silent` | 把 `xiaoqing_life` 收集的梗图导入表情库（`life.enable_life_memes`） |
+| `xiaoqing_chat` | `scheduled_memory_sync` | 每小时 13、43 分 | `silent` | 把各会话还没推给统一记忆的消息推过去（首次启动导入旧数据、推送失败后补推） |
 | `xiaoqing_chat` | `scheduled_proactive` | 每 20 分钟 | `targeted` | 冷群时以群友身份主动开口（由 `proactive.enabled` 控制，发行的行为配置里是打开的） |
-| `xiaoqing_life` | `scheduled_tick` | 每 15 分钟 | `silent` | 按作息、预算和兴趣决定要不要上网，上网在后台任务里进行（`enabled` 打开后生效，默认关闭） |
+| `xiaoqing_life` | `scheduled_tick` | 每 15 分钟 | `silent` | 按作息、预算和兴趣决定要不要上网，上网在后台任务里进行（`enabled` 打开后生效，默认关闭）；检查后把新经历发布到统一记忆 |
+| `xiaoqing_memory` | `scheduled_tick` | 每 30 分钟 | `silent` | 落盘取用计数；夜间窗口里或积压够多时在后台整理有新事件的范围，窗口里每天另做一次自我页、核对和全量清理（`enabled` 关闭时不整理） |
 
 Pendo 的简报、日记提醒和财务总结每分钟运行一次，按每位用户自己的时区判断是否到期。
 
@@ -1115,8 +1129,8 @@ data/<plugin_name>/
 运行时命令契约由 Manifest 与 UAT 验证：
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh --phases ws-matrix --matrix-plugins <plugin_name>
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py --phases ws-matrix --matrix-plugins <plugin_name>
 ```
 
 外部服务场景通过 `--include-external --scenario-fixtures <文件>` 加入，聊天质量场景通过 `--include-chat-quality` 加入。

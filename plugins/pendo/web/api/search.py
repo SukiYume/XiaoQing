@@ -13,6 +13,7 @@ from ...utils.time_utils import now_in_timezone
 from ...utils.validators import LEDGER_TRANSACTION_TYPES, TASK_STATUSES
 from ..deps import get_current_user, get_db
 from ..utils import (
+    clean_optional_text,
     collection_payload,
     infer_item_query_type,
     item_to_dict,
@@ -21,12 +22,6 @@ from ..utils import (
 )
 
 router = APIRouter()
-
-
-def _clean_optional_text(value: str | None) -> str | None:
-    """去除查询文本首尾空格，空白值视为未提供。"""
-
-    return str(value or "").strip() or None
 
 
 def _build_search_filters(
@@ -38,19 +33,19 @@ def _build_search_filters(
     account_name: str | None,
     merchant: str | None,
 ) -> dict[str, Any]:
-    """规范搜索筛选，并拒绝被旧实现静默忽略的冲突组合。"""
+    """规范搜索筛选；``category`` 与 ``ledger_category`` 同时给出，或类型专属筛选互相矛盾时返回 422。"""
 
     item_type        = normalize_item_type_query(item_type)
-    category         = _clean_optional_text(category)
-    ledger_category  = _clean_optional_text(ledger_category)
+    category         = clean_optional_text(category)
+    ledger_category  = clean_optional_text(ledger_category)
     status           = normalize_choice_query(status, TASK_STATUSES, "status")
     transaction_type = normalize_choice_query(
         transaction_type,
         LEDGER_TRANSACTION_TYPES,
         "transaction_type",
     )
-    account_name = _clean_optional_text(account_name)
-    merchant     = _clean_optional_text(merchant)
+    account_name = clean_optional_text(account_name)
+    merchant     = clean_optional_text(merchant)
     if category and ledger_category:
         raise HTTPException(
             status_code = 422,

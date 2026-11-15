@@ -3,7 +3,6 @@
 import asyncio
 import json
 import time
-import uuid
 from pathlib import Path
 from typing import ClassVar, cast
 from unittest.mock import AsyncMock, Mock
@@ -137,15 +136,6 @@ def test_adnmb_rebuilds_client_when_uuid_changes(monkeypatch, tmp_path):
     assert first is not second
     assert first.uuid == "uuid-1"
     assert second.uuid == "uuid-2"
-
-
-def test_adnmb_client_uses_cache_dir_based_fallback_uuid(tmp_path):
-    client_a = AdnmbClient(session=object(), cache_dir=tmp_path / "a", uuid="")
-    client_b = AdnmbClient(session=object(), cache_dir=tmp_path / "b", uuid="")
-
-    assert uuid.UUID(client_a.uuid)
-    assert uuid.UUID(client_b.uuid)
-    assert client_a.uuid != client_b.uuid
 
 
 def test_adnmb_get_client_reuses_fallback_uuid_client(tmp_path):
@@ -282,7 +272,7 @@ async def test_adnmb_client_get_passes_timeout(tmp_path):
             captured.update(kwargs)
             return _Response()
 
-    client = AdnmbClient(session=_Session(), cache_dir=tmp_path, uuid="")
+    client = AdnmbClient(session=_Session(), cache_dir=tmp_path, uuid="uuid")
     await client._get("forum_list")
 
     assert captured["timeout"] is not None

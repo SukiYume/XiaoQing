@@ -71,7 +71,6 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
         principal             = principal,
         manifest_capabilities = frozenset({"secret_admin"}),
     )
-    assert bot_context.config_manager is None
     assert set(bot_context.secrets["plugins"]) == {"bot_core"}
     assert "onebot_token" not in bot_context.secrets
     assert bot_context.capabilities.is_bot_admin is True

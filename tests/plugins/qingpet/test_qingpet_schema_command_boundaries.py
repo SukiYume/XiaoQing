@@ -28,7 +28,9 @@ from plugins.qingpet.commands.advanced_commands import (
 )
 from plugins.qingpet.commands.basic_commands import handle_feed, handle_status
 from plugins.qingpet.services import database as database_module
-from plugins.qingpet.services.database import Database, PetActionAtomicResult
+from plugins.qingpet.services import database_clock
+from plugins.qingpet.services.database import Database
+from plugins.qingpet.services.database_types import PetActionAtomicResult
 from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
@@ -86,10 +88,6 @@ def test_database_initialization_schema_is_complete_and_idempotent(tmp_path):
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
         }
-        migration_versions = [
-            int(row[0])
-            for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")
-        ]
 
         assert schema_after == schema_before
         assert {
@@ -105,8 +103,44 @@ def test_database_initialization_schema_is_complete_and_idempotent(tmp_path):
             "trg_users_nonnegative_insert",
             "trg_users_nonnegative_update",
         } <= trigger_names
-        assert migration_versions == [1, 2, 3, 4, 5, 6]
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    finally:
+        db.cleanup()
+
+
+def test_version_six_database_loses_its_retired_bookkeeping(tmp_path) -> None:
+    """第 6 版的库升级时：迁移记录表和与主键重复的索引被去掉，升级前留一份备份，数据不动。"""
+
+    db_path = tmp_path / "qingpet-v6.db"
+    Database(str(db_path)).cleanup()
+    with closing(sqlite3.connect(db_path)) as connection:
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE INDEX idx_daily_likes "
+            "ON daily_likes(user_id, target_user_id, group_id, like_date)"
+        )
+        connection.execute(
+            "INSERT INTO daily_likes (user_id, target_user_id, group_id, like_date) "
+            "VALUES ('a', 'b', 1, '2026-11-01')"
+        )
+        connection.execute("PRAGMA user_version=6")
+        connection.commit()
+
+    db = Database(str(db_path))
+    try:
+        connection = db._get_connection()
+        names      = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+            )
+        }
+        assert not {"schema_migrations", "idx_daily_likes"} & names
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("SELECT COUNT(*) FROM daily_likes").fetchone()[0] == 1
+        assert db_path.with_name(db_path.name + ".pre-migration-v6.bak").is_file()
     finally:
         db.cleanup()
 
@@ -555,9 +589,16 @@ def test_feed_blocks_when_daily_limit_reached():
     user_service = UserService(temp_db)
     pet_service  = PetService(temp_db)
 
-    user                  = user_service.get_or_create_user("limit_user", 70012)
-    user.today_feed_count = DAILY_LIMITS["feed"]
-    temp_db.update_user(user)
+    user = user_service.get_or_create_user("limit_user", 70012)
+    # 今天的次数记在 action_quotas 里，判定只看这张表。
+    conn = temp_db._get_connection()
+    conn.execute(
+        """INSERT INTO action_quotas
+           (user_id, group_id, action, period_date, action_count, available_at)
+           VALUES ('limit_user', 70012, 'feed', ?, ?, 0)""",
+        (database_clock.business_date(), DAILY_LIMITS["feed"]),
+    )
+    conn.commit()
     pet_service.adopt_pet("limit_user", 70012, "满满")
     pet = temp_db.get_pet("limit_user", 70012)
     assert pet is not None

@@ -192,6 +192,61 @@ async def test_app_run_job_exposes_core_resolved_groups_to_self_delivering_plugi
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("schedules", "manifest_groups", "expected_groups"),
+    [
+        # 部署配置里写了这个定时任务的目标群：优先于清单和全局默认。
+        ({"poll": {"group_ids": [909]}}, [101], [909]),
+        # 显式空列表也是覆盖：这个任务不向任何群投递。
+        ({"poll": {"group_ids": []}}, [101], []),
+        # 别的任务的覆盖不影响这一个。
+        ({"other": {"group_ids": [909]}}, [101], [101]),
+        ({}, None, [303]),
+    ],
+)
+async def test_deployment_config_overrides_schedule_targets(
+    temp_app_root: Path,
+    schedules: dict,
+    manifest_groups: list[int] | None,
+    expected_groups: list[int],
+) -> None:
+    """真实群号只写在私有配置里：``plugins.<插件>.schedules.<任务>.group_ids`` 在执行时生效。"""
+
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, default_group_ids=[303], plugins={"test_plugin": {"schedules": schedules}})
+    app._send_action = AsyncMock(return_value=True)
+    app.plugin_manager.build_context = Mock(
+        side_effect=lambda name, *, principal: _plugin_context_for(app, name, principal=principal)
+    )
+
+    await app._run_job(
+        AsyncMock(return_value=[]),
+        "test_plugin",
+        manifest_groups,
+        loaded_plugin=SimpleNamespace(execution_gate=None),
+        schedule_id="poll",
+    )
+
+    principal = app.plugin_manager.build_context.call_args.kwargs["principal"]
+    assert [target.group_id for target in principal.delivery_targets] == expected_groups
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_invalid_schedule_override_skips_the_run(temp_app_root: Path) -> None:
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, plugins={"test_plugin": {"schedules": {"poll": {"group_ids": "123"}}}})
+    handler                          = AsyncMock()
+    app.plugin_manager.build_context = Mock()
+
+    await app._run_job(handler, "test_plugin", [101], schedule_id="poll")
+
+    handler.assert_not_awaited()
+    app.plugin_manager.build_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_app_run_job_rejects_invalid_group_ids_before_plugin_execution(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
     _set_app_config(app, default_group_ids=[123, "invalid"])

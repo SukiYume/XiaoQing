@@ -295,14 +295,11 @@ def _register_command(
     )
     app.router.register(
         CommandSpec(
-            plugin     = plugin,
-            name       = trigger,
-            triggers   = [trigger],
-            help_text  = "测试命令",
-            admin_only = permission == "bot_admin",
-            handler    = handler,
-            usage      = f"/{trigger} [参数]",
-            catalog    = root,
+            plugin   = plugin,
+            name     = trigger,
+            triggers = [trigger],
+            handler  = handler,
+            catalog  = root,
         )
     )
 
@@ -740,9 +737,18 @@ def test_shipped_manifests_declare_the_agent_bridges() -> None:
         "agent.report_delivery",
         "life.turn_context",
         "life.export_memes",
+        "memory.record",
+        "memory.recall",
+        "memory.search",
+        "memory.forget",
     }
     agent = load("xiaoqing_agent")
-    assert set(agent.uses_services) == {"codex.agent_task", "qingssh.agent_command"}
+    assert set(agent.uses_services) == {
+        "codex.agent_task",
+        "qingssh.agent_command",
+        "memory.record",
+        "memory.recall",
+    }
     assert [service.name for service in agent.services] == [
         "agent.handle_turn",
         "agent.report_delivery",

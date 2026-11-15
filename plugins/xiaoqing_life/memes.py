@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import logging
+import statistics
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any
 from core.atomic_store import atomic_write_bytes
 
 from .config import LifeConfig
+from .days import DAY
 from .digest import extract_json
 from .safety import clean_text, is_blocked, is_profane
 from .sources.base import SourceItem
@@ -35,8 +37,8 @@ MAX_REVOKED = 100
 MEME_REFERER = "https://www.bilibili.com/"
 _MIME = {".gif": "image/gif", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
-# 下载并校验后的图片：(bytes, 扩展名如 ".png")。None 表示不可用。
-Download = Callable[[str], Awaitable["tuple[bytes, str] | None"]]
+# 下载并校验图片 ``(地址, 字节上限)``：成功给 (bytes, 扩展名如 ".png")，None 表示不可用。
+Download = Callable[[str, int], Awaitable["tuple[bytes, str] | None"]]
 # 视觉调用：(messages) -> 文本。
 Vision = Callable[[list[dict[str, Any]]], Awaitable[str]]
 
@@ -176,12 +178,6 @@ _PREFERRED_EXT      = (".gif", ".webp", ".png")
 SHORT_COMMENT_CHARS = 20
 
 
-def _median(values: list[int]) -> float:
-    ordered = sorted(values)
-    mid     = len(ordered) // 2
-    return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
-
-
 def preselect(items: list[SourceItem]) -> list[tuple[str, str]]:
     """确定性预选评论配图：点赞不低于该条目评论中位数，且评论短（≤20 字）或没有文字；
     gif / webp / png 优先于可能很大的 jpg，再按点赞从高到低。视觉判定仍然决定收不收。"""
@@ -191,7 +187,7 @@ def preselect(items: list[SourceItem]) -> list[tuple[str, str]]:
         likes = [c.likes for c in item.comments]
         if not likes:
             continue
-        median = _median(likes)
+        median = statistics.median(likes)
         for comment in item.comments:
             if comment.likes < median or len(comment.text) > SHORT_COMMENT_CHARS:
                 continue
@@ -241,7 +237,7 @@ def _evict(store: LifeStore, cfg: LifeConfig, now: float) -> None:
 
 
 def prune_tombstones(store: LifeStore, now: float) -> None:
-    cutoff = now - TOMBSTONE_KEEP_DAYS * 86400
+    cutoff = now - TOMBSTONE_KEEP_DAYS * DAY
     for sha in [
         s
         for s, m in store.memes.items()
@@ -304,7 +300,7 @@ async def _collect_one(
     day: str,
     now: Callable[[], float],
 ) -> int:
-    got = await download(url)
+    got = await download(url, cfg.max_meme_bytes)
     if got is None:
         return 0
     payload, ext = got
@@ -443,7 +439,7 @@ async def set_enabled(store: LifeStore, short: str, on: bool, now: float) -> str
 
 
 def list_text(store: LifeStore) -> str:
-    rows = [m for m in store.memes.values() if m.get("status") in ("ready", "pending", "off")]
+    rows = _active(store)
     if not rows:
         return "还没有收集到梗图。"
     rows.sort(key=lambda m: float(m.get("created_at", 0.0)), reverse=True)

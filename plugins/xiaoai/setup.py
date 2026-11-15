@@ -11,14 +11,16 @@ from pathlib import Path
 
 import aiohttp
 
+from core.private_files import protect_directory
+
 from .client import (
     BridgeError,
     directive_spec,
     fetch_spec,
-    protect_directory,
     save_binding,
     services,
     speaker_candidates,
+    speaker_profile,
 )
 
 
@@ -56,15 +58,7 @@ async def setup(directory: Path, region: str, audible: bool) -> None:
             raise BridgeError("音箱序号无效。")
         speaker, device = candidates[int(selected) - 1]
         directive = directive_spec(await fetch_spec(session, device["model"]))
-        profile   = {
-            "name"     : device["name"],
-            "model"    : device["model"],
-            "did"      : str(device["did"]),
-            "mina_id"  : speaker["deviceID"],
-            "region"   : region,
-            "silent"   : not audible,
-            "directive": directive,
-        }
+        profile   = speaker_profile(speaker, device, directive, region, not audible)
         protect_directory(directory)
         # 全部检查通过后写入一个账号的令牌和绑定，密码仅存在本进程内存。
         account.token["_refreshed_at"] = {sid: time.time() for sid in ("xiaomiio", "micoapi")}

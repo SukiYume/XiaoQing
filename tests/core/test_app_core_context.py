@@ -262,7 +262,6 @@ def test_app_plugin_context_scopes_and_freezes_config_and_secrets(temp_app_root:
 
     assert context.config["plugins"] == {"alpha": {"enabled": True}}
     assert context.secrets == {"plugins": {"alpha": {"token": "a"}}}
-    assert context.config_manager is None
     with pytest.raises(TypeError):
         context.config["plugins"]["alpha"]["enabled"] = False
     with pytest.raises(TypeError):
@@ -363,4 +362,3 @@ def test_app_plugin_context_initial_settings_share_one_generation(temp_app_root:
     assert refreshed.revision == 12
     assert refreshed.config["plugins"]["alpha"]["generation"] == "new-public"
     assert refreshed.secrets["plugins"]["alpha"]["generation"] == "new-private"
-    assert context.config_manager is None

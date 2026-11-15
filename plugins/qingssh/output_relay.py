@@ -18,6 +18,8 @@ from typing import Any, BinaryIO, cast
 
 from core.plugin_base import bounded_external_text
 
+from .config import COMMAND_TIMEOUT
+
 _FINAL_RESERVE_CHARS       = 512
 _ARCHIVE_MARKER            = b"\n\n--- output exceeded archive budget; middle omitted ---\n\n"
 _ARCHIVE_WRITE_BATCH_BYTES = 256 * 1024
@@ -53,7 +55,7 @@ def _float_option(options: Mapping[str, Any], name: str, default: float) -> floa
 class SSHOutputPolicy:
     """单条命令的消息与归档预算，不限制远端命令本身。"""
 
-    command_timeout_seconds : float = 30.0
+    command_timeout_seconds : float = float(COMMAND_TIMEOUT)
     qq_max_actions          : int   = 6
     qq_max_text_chars       : int   = 10_000
     qq_max_message_chars    : int   = 1_800

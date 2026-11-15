@@ -10,16 +10,17 @@ from pathlib import Path
 from typing import Any
 
 from core.clock import now_in_configured_timezone
-from core.constants import DEFAULT_BOT_NAME
 from core.interfaces import PluginContextProtocol, PluginPrincipal
+from core.plugin_base import resolve_bot_name
 from core.router import CommandCatalogNode, command_access
 
+from .config import PLUGIN_NAME
 from .tasks import AgentTask, describe_record, record_initiator
 
 # 执行规则与人设放在一起维护；每轮读取，修改后下一轮生效。
 _PROMPT_DIR = Path(__file__).resolve().parents[1] / "xiaoqing_chat" / "config"
 
-# Bot 管理员的任务可以执行代码、读写本机文件，和 /shell、/jupyter 同权限。
+# Bot 管理员的任务可以执行代码、读写本机文件，和 /shell 同权限。
 _LOCAL_ENVIRONMENT = """- 系统：{os_name}；Python {py_version}（{python}）。本机系统时区可能不同，代码里取当前时间请用 zoneinfo.ZoneInfo("{timezone}")
 - Shell：{shell}
 - 工作目录：{workspace}（这个会话专用，文件会一直保留，之后的任务可以接着用）
@@ -37,7 +38,7 @@ _COMMAND_HINT = "XiaoQing 现成功能（详细参数通过 xiaoqing_commands �
 _SSH_HINT     = "远端操作使用 ssh_servers / ssh_run。"
 _CODEX_HINT   = "较大的编程任务可交给 codex_run。"
 # 这两个插件不作为可调用功能列出：agent 自身，以及只接受真人消息的聊天入口。
-HIDDEN_CAPABILITY_PLUGINS = frozenset({"xiaoqing_agent", "xiaoqing_chat"})
+HIDDEN_CAPABILITY_PLUGINS = frozenset({PLUGIN_NAME, "xiaoqing_chat"})
 _CAPABILITY_HELP_CHARS    = 120
 
 
@@ -70,8 +71,7 @@ def configured_persona(context: PluginContextProtocol) -> str:
 def configured_bot_name(context: Any) -> str:
     """配置的 bot 名字，没配时用 Core 的默认名。"""
 
-    name = str(context.get_settings_snapshot().config.get("bot_name") or "").strip()
-    return name or DEFAULT_BOT_NAME
+    return resolve_bot_name(context.get_settings_snapshot().config.get("bot_name"))
 
 
 def current_time(context: Any) -> tuple[str, str]:
@@ -219,8 +219,12 @@ def build_system_message(
     workspace: str,
     tool_names: Sequence[str],
     capabilities: str = "",
+    memory: str       = "",
 ) -> dict[str, Any]:
-    """执行阶段的系统提示：身份、环境、原则和人设。配置稳定时保持相同前缀。"""
+    """执行阶段的系统提示：身份、环境、原则、记忆和人设。配置稳定时保持相同前缀。
+
+    ``memory`` 是开会话时从统一记忆取的、关于发起人的记忆，会话内不变。
+    """
 
     extra: list[str] = []
     if "xiaoqing_command" in tool_names:
@@ -253,6 +257,7 @@ def build_system_message(
         environment = environment,
         method      = method,
         extra       = "\n".join(extra),
+        memory      = memory.strip() or "（暂时没有）",
         persona     = task.persona or f"用{bot_name}平时自然、直接的口吻交代结果。",
     )
     return {"role": "system", "content": system}

@@ -297,6 +297,12 @@ def _validate_policy_record(
             _string_tuple(record[field], label=f"{label}.{field}", allow_empty=False)
 
 
+def _code_matches_prefix(code: str, prefix: str) -> bool:
+    """命令码等于前缀，或是前缀下的子命令码（``a.b`` 属于 ``a``，``ab`` 不属于）。"""
+
+    return code == prefix or code.startswith(f"{prefix}.")
+
+
 def policy_for(code: str, plugin: str, policy: dict[str, Any]) -> PolicyDecision:
     """先应用插件默认值，再按最长稳定命令码前缀覆盖。"""
 
@@ -311,7 +317,7 @@ def policy_for(code: str, plugin: str, policy: dict[str, Any]) -> PolicyDecision
     matching = [
         (prefix, record)
         for prefix, record in policy["commands"].items()
-        if code == prefix or code.startswith(f"{prefix}.")
+        if _code_matches_prefix(code, prefix)
     ]
     for _prefix, record in sorted(matching, key=lambda item: item[0].count(".")):
         merged.update(record)
@@ -340,7 +346,7 @@ def validate_policy_against_catalog(
     stale_prefixes = sorted(
         prefix
         for prefix in policy["commands"]
-        if not any(code == prefix or code.startswith(f"{prefix}.") for code in codes)
+        if not any(_code_matches_prefix(code, prefix) for code in codes)
     )
     if stale_prefixes:
         raise MatrixError(f"以下命令策略已失效: {stale_prefixes}")
@@ -744,6 +750,15 @@ def _sanitize_text(value: str, redactions: tuple[str, ...]) -> str:
     return value
 
 
+def _decode_body(raw: bytes) -> Any:
+    """HTTP 响应体按 JSON 解析；不是 JSON 时原文包成 ``{"raw": ...}``。"""
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"raw": raw.decode("utf-8", errors="replace")}
+
+
 class EventClient:
     """串行发送带唯一消息 ID 的真实 OneBot 事件。"""
 
@@ -814,18 +829,11 @@ class EventClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 status = response.status
                 raw    = response.read()
-            try:
-                payload: Any = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                payload = {"raw": raw.decode("utf-8", errors="replace")}
-            return EventResponse(status, payload, (time.perf_counter() - started) * 1_000)
+            return EventResponse(status, _decode_body(raw), (time.perf_counter() - started) * 1_000)
         except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                payload = {"raw": raw.decode("utf-8", errors="replace")}
-            return EventResponse(exc.code, payload, (time.perf_counter() - started) * 1_000)
+            return EventResponse(
+                exc.code, _decode_body(exc.read()), (time.perf_counter() - started) * 1_000
+            )
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return EventResponse(
                 None,
@@ -1034,6 +1042,8 @@ def build_matrix(
             raise MatrixError(f"{code} 的 contexts 非法")
         decision = policy_for(code, plugin, policy)
 
+        # (类型, 序号, 消息, 语义预期)：样例、错误样例和别名只在这几项上不同。
+        variants: list[tuple[str, int, str, str]] = []
         for kind, field, expectation in (
             ("normal", "examples", "observable_business_reply"),
             ("invalid", "invalid_examples", "rejected_without_unhandled_exception"),
@@ -1044,27 +1054,7 @@ def build_matrix(
             for index, example in enumerate(examples, 1):
                 if not isinstance(example, str) or not example.strip():
                     raise MatrixError(f"{code} 含空 {field}")
-                cases.extend(
-                    MatrixCase(
-                        case_id              = _case_id(code, kind, scope, index, example),
-                        plugin               = plugin,
-                        code                 = code,
-                        kind                 = kind,
-                        example_index        = index,
-                        message              = example,
-                        scope                = scope,
-                        actor                = _actor_for(permission, scope),
-                        permission           = permission,
-                        risk                 = decision.risk,
-                        dependency           = decision.dependency,
-                        sensitive            = decision.sensitive,
-                        policy_reason        = decision.reason,
-                        semantic_expectation = expectation,
-                        invalid_expect_any   = decision.invalid_expect_any,
-                        invalid_reject_any   = decision.invalid_reject_any,
-                    )
-                    for scope in contexts
-                )
+                variants.append((kind, index, example, expectation))
 
         aliases = record.get("aliases")
         if not isinstance(aliases, list):
@@ -1072,28 +1062,31 @@ def build_matrix(
         for index, alias in enumerate(aliases, 1):
             if not isinstance(alias, str) or not alias:
                 raise MatrixError(f"{code} 含空别名")
-            message = _alias_message(record, alias)
-            cases.extend(
-                MatrixCase(
-                    case_id              = _case_id(code, "alias", scope, index, message),
-                    plugin               = plugin,
-                    code                 = code,
-                    kind                 = "alias",
-                    example_index        = index,
-                    message              = message,
-                    scope                = scope,
-                    actor                = _actor_for(permission, scope),
-                    permission           = permission,
-                    risk                 = decision.risk,
-                    dependency           = decision.dependency,
-                    sensitive            = decision.sensitive,
-                    policy_reason        = decision.reason,
-                    semantic_expectation = "alias_reaches_same_command_path",
-                    invalid_expect_any   = decision.invalid_expect_any,
-                    invalid_reject_any   = decision.invalid_reject_any,
-                )
-                for scope in contexts
+            variants.append(
+                ("alias", index, _alias_message(record, alias), "alias_reaches_same_command_path")
             )
+        cases.extend(
+            MatrixCase(
+                case_id              = _case_id(code, kind, scope, index, message),
+                plugin               = plugin,
+                code                 = code,
+                kind                 = kind,
+                example_index        = index,
+                message              = message,
+                scope                = scope,
+                actor                = _actor_for(permission, scope),
+                permission           = permission,
+                risk                 = decision.risk,
+                dependency           = decision.dependency,
+                sensitive            = decision.sensitive,
+                policy_reason        = decision.reason,
+                semantic_expectation = expectation,
+                invalid_expect_any   = decision.invalid_expect_any,
+                invalid_reject_any   = decision.invalid_reject_any,
+            )
+            for kind, index, message, expectation in variants
+            for scope in contexts
+        )
 
         first_example = str(record["examples"][0])
         if permission != "public":
@@ -1149,60 +1142,115 @@ def build_matrix(
     return cases
 
 
+def _transport_failure(response: EventResponse) -> str | None:
+    """入站传输没有带回至少一条 OneBot action 时的失败码；传输成功返回 ``None``。
+
+    已有部分 action 之后出现协议错误（``ws_error``）也算失败。通用矩阵和业务场景共用这条边界。
+    """
+
+    payload = response.payload
+    if response.transport_error:
+        return "transport_error"
+    if response.status != 200:
+        return "unexpected_http_status"
+    if isinstance(payload, dict) and payload.get("ws_error"):
+        return "websocket_error"
+    actions = payload.get("actions") if isinstance(payload, dict) else None
+    if not isinstance(actions, list):
+        return "invalid_onebot_response"
+    if not actions:
+        return "missing_reply_action"
+    return None
+
+
+def _persisted_response(
+    response: EventResponse,
+    *,
+    sensitive: bool,
+    redactions: tuple[str, ...],
+) -> dict[str, Any]:
+    """结果行里两类用例都要写的响应字段；敏感命令的回复不落盘，其余先脱敏。"""
+
+    payload = response.payload
+    actions = payload.get("actions") if isinstance(payload, dict) else None
+    text    = response_text(payload)
+    return {
+        "http_status" : response.status,
+        "duration_ms" : round(response.duration_ms, 2),
+        "action_count": len(actions) if isinstance(actions, list) else 0,
+        "response_text": (
+            "<REDACTED_SENSITIVE_RESPONSE>" if sensitive else _sanitize_text(text, redactions)
+        ),
+        "transport_error": _sanitize_text(response.transport_error or "", redactions) or None,
+    }
+
+
 def evaluate_response(
     case: MatrixCase,
     response: EventResponse,
     *,
     redactions: tuple[str, ...],
 ) -> dict[str, Any]:
-    text = response_text(response.payload)
-    actions = response.payload.get("actions") if isinstance(response.payload, dict) else None
-    failure: str | None = None
-    semantic_strength = "observable_reply"
-    if response.transport_error:
-        failure = "transport_error"
-    elif response.status != 200:
-        failure = "unexpected_http_status"
-    elif isinstance(response.payload, dict) and response.payload.get("ws_error"):
-        failure = "websocket_error"
-    elif not isinstance(actions, list):
-        failure = "invalid_onebot_response"
-    elif not actions:
-        failure = "missing_reply_action"
-    elif PUBLIC_ERROR_CODE in text:
-        failure = "unhandled_plugin_exception"
-    elif case.kind == "invalid" and (case.invalid_expect_any or case.invalid_reject_any):
-        semantic_strength = "strict_invalid_assertion"
-        if case.invalid_expect_any and not any(
-            marker in text for marker in case.invalid_expect_any
-        ):
-            failure = "invalid_rejection_not_observed"
-        elif any(marker in text for marker in case.invalid_reject_any):
-            failure = "invalid_forbidden_reply_observed"
-    elif case.kind == "permission_denied":
-        semantic_strength = "strict_core_assertion"
-        expected          = "管理员" if case.permission == "group_admin" else "权限不足"
-        if expected not in text:
-            failure = "permission_denial_not_observed"
-    elif case.kind == "context_denied":
-        semantic_strength = "strict_core_assertion"
-        if "当前会话类型不支持此命令" not in text:
-            failure = "context_denial_not_observed"
+    text                = response_text(response.payload)
+    failure: str | None = _transport_failure(response)
+    semantic_strength   = "observable_reply"
+    if failure is None:
+        if PUBLIC_ERROR_CODE in text:
+            failure = "unhandled_plugin_exception"
+        elif case.kind == "invalid" and (case.invalid_expect_any or case.invalid_reject_any):
+            semantic_strength = "strict_invalid_assertion"
+            if case.invalid_expect_any and not any(
+                marker in text for marker in case.invalid_expect_any
+            ):
+                failure = "invalid_rejection_not_observed"
+            elif any(marker in text for marker in case.invalid_reject_any):
+                failure = "invalid_forbidden_reply_observed"
+        elif case.kind == "permission_denied":
+            semantic_strength = "strict_core_assertion"
+            expected          = "管理员" if case.permission == "group_admin" else "权限不足"
+            if expected not in text:
+                failure = "permission_denial_not_observed"
+        elif case.kind == "context_denied":
+            semantic_strength = "strict_core_assertion"
+            if "当前会话类型不支持此命令" not in text:
+                failure = "context_denial_not_observed"
 
-    persisted_text = (
-        "<REDACTED_SENSITIVE_RESPONSE>" if case.sensitive else _sanitize_text(text, redactions)
-    )
     return {
         **case.public_dict(),
         "execution_status" : "failed" if failure else "passed_runtime_contract",
         "failure"          : failure,
-        "http_status"      : response.status,
-        "duration_ms"      : round(response.duration_ms, 2),
-        "action_count"     : len(actions) if isinstance(actions, list) else 0,
         "semantic_strength": semantic_strength,
-        "response_text"    : persisted_text,
-        "transport_error"  : _sanitize_text(response.transport_error or "", redactions) or None,
+        **_persisted_response(response, sensitive=case.sensitive, redactions=redactions),
     }
+
+
+def _selection_skip_reason(
+    *,
+    plugin: str,
+    codes: tuple[str, ...],
+    risk: str,
+    dependency: str,
+    plugins: frozenset[str],
+    code_prefixes: tuple[str, ...],
+    risks: frozenset[str],
+    dependencies: frozenset[str],
+) -> str | None:
+    """命令行筛选条件（插件、命令码前缀、风险、依赖）排除某项的原因；入选返回 ``None``。
+
+    ``codes`` 是这一项涉及的命令码：任意一个落在所选前缀下即算入选。
+    """
+
+    if plugins and plugin not in plugins:
+        return "plugin_filter"
+    if code_prefixes and not any(
+        _code_matches_prefix(code, prefix) for code in codes for prefix in code_prefixes
+    ):
+        return "code_filter"
+    if risk not in risks:
+        return "risk_policy"
+    if dependency not in dependencies:
+        return "dependency_policy"
+    return None
 
 
 def execute_matrix(
@@ -1213,9 +1261,9 @@ def execute_matrix(
     dependencies: frozenset[str],
     plugins: frozenset[str],
     code_prefixes: tuple[str, ...],
-    kinds: frozenset[str] = CASE_KINDS,
+    kinds: frozenset[str],
     plan_only: bool,
-    scenarios_only: bool = False,
+    scenarios_only: bool,
     delay_ms: int,
     redactions: tuple[str, ...],
 ) -> list[dict[str, Any]]:
@@ -1230,20 +1278,25 @@ def execute_matrix(
             skip_reason = "scenarios_only"
         elif case.kind not in kinds:
             skip_reason = "kind_filter"
-        elif plugins and case.plugin not in plugins:
-            skip_reason = "plugin_filter"
-        elif code_prefixes and not any(
-            case.code == prefix or case.code.startswith(f"{prefix}.") for prefix in code_prefixes
-        ):
-            skip_reason = "code_filter"
-        elif case.risk not in risks:
-            skip_reason = "risk_policy"
-        elif case.dependency not in dependencies:
-            skip_reason = "dependency_policy"
-        elif case.risk != "read_only" and case.kind in {"normal", "invalid", "alias"}:
-            # 单条样例没有前置 fixture、动态 ID 串联和清理能力。允许它直接写状态
-            # 会制造残留，也会把“对象不存在”误计成通过，因此统一交给业务场景层。
-            skip_reason = "business_scenario_required"
+        else:
+            skip_reason = _selection_skip_reason(
+                plugin        = case.plugin,
+                codes         = (case.code,),
+                risk          = case.risk,
+                dependency    = case.dependency,
+                plugins       = plugins,
+                code_prefixes = code_prefixes,
+                risks         = risks,
+                dependencies  = dependencies,
+            )
+            if (
+                skip_reason is None
+                and case.risk != "read_only"
+                and case.kind in {"normal", "invalid", "alias"}
+            ):
+                # 单条样例没有前置 fixture、动态 ID 串联和清理能力。允许它直接写状态
+                # 会制造残留，也会把“对象不存在”误计成通过，因此统一交给业务场景层。
+                skip_reason = "business_scenario_required"
 
         if skip_reason:
             results.append(
@@ -1292,23 +1345,11 @@ def _scenario_step_result(
 ) -> dict[str, Any]:
     """执行 include/exclude/capture 严格断言，并只在全部通过后发布变量。"""
 
-    text = response_text(response.payload)
-    actions = response.payload.get("actions") if isinstance(response.payload, dict) else None
-    failure : str | None = None
-    details : list[str] = []
+    text                     = response_text(response.payload)
+    failure : str | None     = _transport_failure(response)
+    details : list[str]      = []
     captured: dict[str, str] = {}
-    if response.transport_error:
-        failure = "transport_error"
-    elif response.status != 200:
-        failure = "unexpected_http_status"
-    elif isinstance(response.payload, dict) and response.payload.get("ws_error"):
-        # 与通用矩阵共用传输成功边界：已有部分 action 后出现协议错误也算失败。
-        failure = "websocket_error"
-    elif not isinstance(actions, list):
-        failure = "invalid_onebot_response"
-    elif not actions:
-        failure = "missing_reply_action"
-    else:
+    if failure is None:
         for expected in step.expect_all:
             rendered = _render_scenario_template(expected, values)
             if rendered not in text:
@@ -1339,9 +1380,6 @@ def _scenario_step_result(
         # 通过校验的捕获值（例如新建资源的编号）在文案断言失败时也要保留，
         # 后续清理步骤才能定位并删除资源；普通业务步骤仍因失败而停止。
         values.update(captured)
-    persisted_text = (
-        "<REDACTED_SENSITIVE_RESPONSE>" if scenario.sensitive else _sanitize_text(text, redactions)
-    )
     persisted_message = (
         "<REDACTED_SENSITIVE_COMMAND>"
         if scenario.sensitive
@@ -1370,13 +1408,9 @@ def _scenario_step_result(
         ),
         "failure"          : failure,
         "failure_details"  : details,
-        "http_status"      : response.status,
-        "duration_ms"      : round(response.duration_ms, 2),
-        "action_count"     : len(actions) if isinstance(actions, list) else 0,
         "semantic_strength": "strict_business_reply",
         "captured_names"   : sorted(captured),
-        "response_text"    : persisted_text,
-        "transport_error"  : _sanitize_text(response.transport_error or "", redactions) or None,
+        **_persisted_response(response, sensitive=scenario.sensitive, redactions=redactions),
     }
 
 
@@ -1405,20 +1439,19 @@ def execute_business_scenarios(
         missing_fixtures        = sorted(set(scenario.required_fixtures) - set(fixture_values))
         if plan_only:
             skip_reason = "plan_only"
-        elif plugins and scenario.plugin not in plugins:
-            skip_reason = "plugin_filter"
-        elif code_prefixes and not any(
-            code == prefix or code.startswith(f"{prefix}.")
-            for code in scenario.covers
-            for prefix in code_prefixes
-        ):
-            skip_reason = "code_filter"
-        elif scenario.risk not in risks:
-            skip_reason = "risk_policy"
-        elif scenario.dependency not in dependencies:
-            skip_reason = "dependency_policy"
-        elif missing_fixtures:
-            skip_reason = "missing_fixture:" + ",".join(missing_fixtures)
+        else:
+            skip_reason = _selection_skip_reason(
+                plugin        = scenario.plugin,
+                codes         = scenario.covers,
+                risk          = scenario.risk,
+                dependency    = scenario.dependency,
+                plugins       = plugins,
+                code_prefixes = code_prefixes,
+                risks         = risks,
+                dependencies  = dependencies,
+            )
+            if skip_reason is None and missing_fixtures:
+                skip_reason = "missing_fixture:" + ",".join(missing_fixtures)
 
         values = {"run_id": run_id, **(runtime_values or {}), **fixture_values}
         scenario_failed = False
@@ -1544,14 +1577,10 @@ def _probe_health(endpoint: str, token: str, *, timeout: float) -> dict[str, Any
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
-        try:
-            payload: Any = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            payload = {"raw": raw.decode("utf-8", errors="replace")}
         return {
             "status"     : response.status,
             "duration_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "payload"    : payload,
+            "payload"    : _decode_body(raw),
         }
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return {
@@ -1739,7 +1768,7 @@ def render_report(summary: dict[str, Any]) -> str:
     execution = summary["execution"]
     cleanup   = summary["cleanup"]
     health    = summary["health"]
-    transport = summary.get("transport", "http")
+    transport = summary["transport"]
     failures  = execution["failed_runtime_contract"] + business["failed_steps"]
     if failures:
         verdict = f"发现 {failures} 条运行态契约失败"
@@ -2045,7 +2074,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     if unknown_plugins:
         raise MatrixError(f"未知插件筛选: {sorted(unknown_plugins)}")
     for prefix in code_prefixes:
-        if not any(case.code == prefix or case.code.startswith(prefix + ".") for case in cases):
+        if not any(_code_matches_prefix(case.code, prefix) for case in cases):
             raise MatrixError(f"未知命令筛选: {prefix}")
     redactions = (
         token,

@@ -172,6 +172,7 @@ git diff --check
 先运行受影响模块的测试，再执行全仓库门禁。
 格式操作校验语法树保持一致。测试覆盖当前功能的行为契约；业务修复补充或调整对应功能的用例，不单独保留针对某次修复的测试。
 测试数据使用临时目录或临时数据库。
+重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`），也可以单独运行 `python scripts/check_redundancy.py`：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（8 行以下的小函数和只有 `...` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在脚本的 `ALLOWED` 里写明原因。
 
 README 描述当前用法和配置。
 ARCHITECTURE 描述模块职责、数据流与所有权。
@@ -365,8 +366,10 @@ Scheduler 在插件发布时校验 handler、cron、任务 ID、投递模式和�
 - `targeted`：接收 `ScheduledDelivery` 目标消息，校验群目标属于该 schedule 的群列表，并支持受控私聊目标；
 - `silent`：执行 handler 并保持零投递目标，忽略返回载荷，同时拒绝该调度上下文的主动发送。
 
-`broadcast` 与 `targeted` 使用条目中的 `group_ids`。
-字段省略或为 `null` 时使用全局 `default_group_ids`。
+`broadcast` 与 `targeted` 的目标群取以下来源中第一个写了的：部署配置 `config.plugins.<插件名>.schedules.<任务 ID>.group_ids`、条目中的 `group_ids`、全局 `default_group_ids`。
+任务 ID 是条目的 `id`，没写 `id` 时是 `handler`；部署配置里写空列表表示这个任务不发往任何群。
+目标群在每次执行时读取，改 config 后 `/reload` 即生效。
+`plugin.json` 随仓库发布，不写真实群号；只属于某个部署的目标群写在部署配置里。
 `silent` 不声明 `group_ids`。
 插件重载会替换该插件拥有的调度任务。
 
@@ -414,7 +417,7 @@ words = tokenize(args, strict=True)
 `tokenize()` 默认把未闭合引号按空白切分。
 命令协议需要完整引号时使用 `strict=True`。
 `parse_int()` 接受 ASCII 十进制整数，并返回经过范围校验的 `int` 或 `None`。
-完整返回结构见 [API 参考的参数解析](05-api-reference.md#参数解析)。
+完整返回结构见 [API 参考的参数解析](05-api-reference.md#-参数解析)。
 
 ### `handle_session()`
 
@@ -451,7 +454,7 @@ async def call_bot_name_only(context):
     return segments("我在")
 ```
 
-`smalltalk_provider` 是 `xiaoqing_chat` 时，Core 把只叫名字的消息交给它的 `handle_smalltalk()`，由角色按当时的话题和作息应答，不调用这个入口。
+只叫名字（正文只有 Bot 名称，或只 `@` 机器人、没带图）多半是在看机器人在不在，要快：Core 对所有闲聊插件都调用这个入口，不走 `handle_smalltalk()`。`xiaoqing_chat` 从 `bot_name_only_replies` 里随机回一句，发出后记进聊天记录，这个人接下来一分钟内的那句算在跟她说。
 
 ### 入口选择顺序
 
@@ -596,7 +599,7 @@ is_scheduled = context.capabilities.is_system
 `is_bot_admin` 只用于对象层面的规则（比如只有发起人或 Bot 管理员能停止某个任务），命令能不能用由 Manifest 声明、Core 判断。
 主动 OneBot Action 使用 `await context.send_action(action)`。
 管理型插件可通过自身命令权限调用 `context.reload_config()` 或 `context.reload_plugins()`。
-完整签名与 capability 属性见 [API 参考](05-api-reference.md#plugincontext)。
+完整签名与 capability 属性见 [API 参考](05-api-reference.md#-plugincontext)。
 
 ---
 
@@ -751,6 +754,14 @@ response = await fetch_public_html(url, timeout_seconds=10)
 安全 HTTP 客户端逐跳校验 scheme、DNS、目标网段和重定向，并固定已验证地址。
 返回正文受压缩与解压预算约束。
 
+同一个模块里还有几件各插件共用的小工具：
+
+| 名称 | 用途 |
+|---|---|
+| `BROWSER_USER_AGENT` | 需要以浏览器身份请求时使用的 User-Agent |
+| `validated_proxy_url(value, *, allow_path=False)` | 校验配置里的代理地址，原样返回合法值，否则抛 `ValueError`（错误信息不含凭据） |
+| `split_https_url_on_hosts(url, hosts)` | 地址是指向名单内主机的 https 地址（不带用户信息、默认端口）时返回拆开的结果，否则返回 `None`；只看写法，不做 DNS |
+
 ### 外部文本与图片
 
 第三方服务、RCON、SSH 和网页内容进入消息前，通过共享边界完成字符与媒体校验：
@@ -870,7 +881,7 @@ Manifest 的 `services` 声明导出，`uses_services` 声明消费，Core 校�
 | `callers` | Core 服务表规定的调用插件集合 |
 | `required_capability` | 特定桥接需要的附加 capability，普通服务省略 |
 
-当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用），以及小青网上生活的两条桥：`life.turn_context` 与 `life.export_memes`（`xiaoqing_life` 提供，`xiaoqing_chat` 调用；数据只关于小青自己，不按用户身份门控，系统主体也可用）。
+当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用），小青网上生活的两条桥：`life.turn_context` 与 `life.export_memes`（`xiaoqing_life` 提供，`xiaoqing_chat` 调用；数据只关于小青自己，不按用户身份门控，系统主体也可用），以及小青统一记忆的四条桥：`memory.record`（`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用）、`memory.recall`（`xiaoqing_chat`、`xiaoqing_agent` 调用）、`memory.search` 与 `memory.forget`（`xiaoqing_chat` 调用），都由 `xiaoqing_memory` 提供，经 `capabilities.memory` 使用；Core 把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效，系统主体也可用。
 Core 按服务名核验固定所有者和调用方。
 `agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查。
 `codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。

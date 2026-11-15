@@ -13,7 +13,8 @@ from core.lifecycle import to_thread_owned
 
 from ..llm.gateway import (
     LLMError,
-    chat_completions_raw_with_fallback_paths,
+    ai_disabled,
+    chat_completions_raw_with_profile,
     extract_response_content,
 )
 from ..llm.llm_config import LLMCallConfig
@@ -74,29 +75,8 @@ _HEDGED_MEANING_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# 计数与脱敏审计
+# 脱敏审计
 # ---------------------------------------------------------------------------
-
-
-def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[Any]]:
-    """递增当前会话计数，并只保留最常见的三十个会话。"""
-
-    out: list[list[Any]] = []
-    found                = False
-    for item in chat_counts:
-        if not isinstance(item, list) or len(item) < 2:
-            continue
-        cid = str(item[0])
-        cnt = int(item[1] or 0)
-        if cid == chat_id:
-            out.append([cid, cnt + 1])
-            found = True
-        else:
-            out.append([cid, cnt])
-    if not found:
-        out.append([chat_id, 1])
-    out.sort(key=lambda x: (-int(x[1] or 0), str(x[0])))
-    return out[:30]
 
 
 def _log_jargon_step(
@@ -136,7 +116,7 @@ async def _extract_candidates(
         "jargon.extract.start", chat_id=chat_id, fields={"model": secrets.get("model", "")}
     )
     try:
-        resp, _path = await chat_completions_raw_with_fallback_paths(
+        resp, _ = await chat_completions_raw_with_profile(
             route   = "reasoning",
             secrets = secrets,
             messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(dialogue=dialogue)}],
@@ -227,8 +207,7 @@ def _apply_candidate(
         db[key] = rec
     rec.count          = int(rec.count or 0) + 1
     rec.updated_at     = now
-    chat_id_counts     = rec.chat_id_counts if isinstance(rec.chat_id_counts, list) else []
-    rec.chat_id_counts = _bump_chat_count(chat_id_counts, chat_id)
+    rec.chat_id_counts = store.bump_chat_count(rec.chat_id_counts, chat_id)
     context = _term_context(messages, rendered, term, bot_name=bot_name)
     if context and context not in rec.raw_content:
         rec.raw_content.append(context)
@@ -264,8 +243,7 @@ async def _infer_pending_meanings(
     pending = [
         (rec, contexts)
         for rec in db.values()
-        if not rec.is_global
-        and rec.scope_chat_id == chat_id
+        if rec.scope_chat_id == chat_id
         and not rec.confirmed
         and rec.count >= int(infer_threshold)
         and rec.last_inference_count < rec.count
@@ -276,7 +254,7 @@ async def _infer_pending_meanings(
         t0       = time.monotonic()
         numbered = "\n\n".join(f"[{number}]\n{text}" for number, text in enumerate(contexts, 1))
         try:
-            resp, _path = await chat_completions_raw_with_fallback_paths(
+            resp, _ = await chat_completions_raw_with_profile(
                 route    = "reasoning",
                 secrets  = secrets,
                 messages = [
@@ -329,8 +307,6 @@ async def _infer_pending_meanings(
             rec.confirmed = True
         elif meaning and not rec.meaning:
             rec.meaning = meaning
-        # 模型输出可以解释术语，但绝不能扩大其可见范围。
-        rec.is_global            = False
         rec.last_inference_count = rec.count
         rec.updated_at           = time.time()
         changed += 1
@@ -355,7 +331,7 @@ async def mine_jargon(
         if expected_generation is None
         else expected_generation
     )
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return 0
     dialogue = render_dialogue(messages, bot_name=bot_name)
     if not dialogue:

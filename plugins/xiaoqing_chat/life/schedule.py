@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+from core.clock import WEEKDAY_NAMES
+
 Availability = Literal["free", "busy", "asleep"]
 
 _WEEKDAY_CHARS = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
@@ -61,7 +63,9 @@ def _parse_days(spec: str) -> frozenset[int]:
     raise ValueError(f"作息条目的日子看不懂：{spec}")
 
 
-def _parse_clock(value: str) -> int:
+def parse_clock(value: str) -> int:
+    """``HH:MM`` 转成当天的第几分钟（``24:00`` 算一天的末尾）。"""
+
     hours, minutes = (int(part) for part in value.split(":"))
     if hours > 24 or minutes > 59 or (hours == 24 and minutes):
         raise ValueError(f"作息条目的时间不对：{value}")
@@ -76,7 +80,7 @@ def parse_routine(lines: Sequence[str]) -> tuple[RoutineSlot, ...]:
         match = _LINE_RE.match(str(line or "").strip())
         if match is None:
             raise ValueError(f"作息条目要写成“日子 开始-结束 在做什么（忙/睡/闲）”：{line}")
-        start, end = _parse_clock(match.group("start")), _parse_clock(match.group("end"))
+        start, end = parse_clock(match.group("start")), parse_clock(match.group("end"))
         if start == end:
             raise ValueError(f"作息条目的开始和结束不能相同：{line}")
         slots.append(
@@ -131,7 +135,7 @@ def state_text(slot: RoutineSlot | None) -> str:
 
 # 问到她自己几点起、几点睡、什么时候有课或有空。
 _ROUTINE_QUESTION_RE = re.compile(
-    r"几点(?:起|醒|睡|上课|下课|吃饭|有空|忙完)|什么时候(?:起|醒|睡|上课|下课|有空|忙完)"
+    r"几点的?(?:课|起|醒|睡|上课|下课|吃饭|有空|忙完)|什么时候的?(?:课|起|醒|睡|上课|下课|有空|忙完)"
     r"|早起|起得早|起床|作息|课表|几点到几点|有课|没课|满课"
 )
 _ROUTINE_TAG_RE = re.compile(r"\s*[（(][忙睡闲][)）]\s*$")
@@ -169,9 +173,6 @@ def _parsed_routine(lines: tuple[str, ...]) -> tuple[RoutineSlot, ...]:
     return parse_routine(lines)
 
 
-_WEEKDAY_NAMES = "一二三四五六日"
-
-
 def _clock(minute: int) -> str:
     return f"{minute // 60:02d}:{minute % 60:02d}"
 
@@ -190,7 +191,7 @@ def day_plan_text(slots: Sequence[RoutineSlot], moment: datetime) -> str:
         return ""
     items = "；".join(f"{_clock(slot.start)}-{_clock(slot.end)} {slot.activity}" for slot in today)
     return (
-        f"按作息你今天（周{_WEEKDAY_NAMES[moment.weekday()]}）的安排：{items}。"
+        f"按作息你今天（周{WEEKDAY_NAMES[moment.weekday()]}）的安排：{items}。"
         "没写到的时段是自己的时间。被问到今天有没有课、某个时段在哪在干嘛时可以照这个说。"
     )
 

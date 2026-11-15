@@ -463,7 +463,7 @@ async def test_three_rounds_split_the_span_and_commit_each_round(tmp_path: Path)
     # 一次研究只算一步：三轮都有收获也不会一次就查到上限
     assert thread["steps"] == 1 and thread["status"] == "open"
     # 名义时段按轮数均分，每轮的经历落在自己那一段里
-    start, end = store.state["last_session_at"], store.state["last_session_end"]
+    start, end = store.state["current"]["start"], store.state["last_session_end"]
     seg = (end - start) / 3
     assert 20 * 60 <= end - start <= 40 * 60
     for n, episode in enumerate(store.episodes):

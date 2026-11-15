@@ -1,6 +1,7 @@
 """提供短期登录码交换、浏览器会话和公共演示认证路由。"""
 
 import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -52,17 +53,25 @@ def _device_payload(session: WebSessionInfo, current_session: WebSession) -> dic
     }
 
 
+def _cookie_attributes() -> dict[str, Any]:
+    """会话 Cookie 的写入与删除共用的属性；删除必须带同样的属性才能命中同一个 Cookie。"""
+
+    return {
+        "httponly": True,
+        "secure"  : PendoConfig.runtime().web_session_cookie_secure,
+        "samesite": "strict",
+        "path"    : "/",
+    }
+
+
 def _set_session_cookie(response: Response, session: WebSession) -> None:
     """写入与服务端会话同寿命、仅同站脚本不可读的 Cookie。"""
 
     response.set_cookie(
-        key      = SESSION_COOKIE_NAME,
-        value    = session.session_id,
-        max_age  = max(1, int(session.expires_at - time.time())),
-        httponly = True,
-        secure   = PendoConfig.runtime().web_session_cookie_secure,
-        samesite = "strict",
-        path     = "/",
+        key     = SESSION_COOKIE_NAME,
+        value   = session.session_id,
+        max_age = max(1, int(session.expires_at - time.time())),
+        **_cookie_attributes(),
     )
 
 
@@ -185,11 +194,5 @@ def logout(
     """撤销当前服务端会话，并使用相同属性删除浏览器 Cookie。"""
 
     revoke_web_session(session.session_id)
-    response.delete_cookie(
-        key      = SESSION_COOKIE_NAME,
-        httponly = True,
-        secure   = PendoConfig.runtime().web_session_cookie_secure,
-        samesite = "strict",
-        path     = "/",
-    )
+    response.delete_cookie(key=SESSION_COOKIE_NAME, **_cookie_attributes())
     return {"ok": True, "data": {}, "message": ""}

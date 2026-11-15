@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, tzinfo
 from math import isfinite
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
 
+from ..config import PendoConfig
 from ..models.item import ItemType
 from ..utils.identifiers import public_id
+from ..utils.settings_utils import resolve_default_category
+from ..utils.time_utils import now_in_timezone
 from ..utils.validators import ledger_amount_filter_to_cents
+
+if TYPE_CHECKING:
+    from ..services.db import Database
 
 logger                            = logging.getLogger(__name__)
 _COLLECTION_PAYLOAD_FIELDS: Final = (
@@ -24,6 +30,38 @@ _COLLECTION_PAYLOAD_FIELDS: Final = (
     "location",
     "notes",
 )
+
+
+def clean_optional_text(value: str | None) -> str | None:
+    """去除查询文本首尾空白；空白或缺省视为未提供。"""
+
+    return str(value or "").strip() or None
+
+
+def normalize_currency_query(value: str | None) -> str | None:
+    """规范币种查询值为大写三字母代码；空白视为未提供，其他写法返回 422。"""
+
+    code = (value or "").strip().upper()
+    if not code:
+        return None
+    if len(code) != 3 or not code.isascii() or not code.isalpha():
+        raise HTTPException(status_code=422, detail="currency 必须为三个字母的币种代码")
+    return code
+
+
+def category_or_default(db: Database, owner_id: str, value: object) -> str:
+    """空白或占位的“未分类”换成用户设置的默认分类；其他值只去首尾空白。"""
+
+    category = str(value or "").strip()
+    if not category or category == PendoConfig.DEFAULT_CATEGORY:
+        return resolve_default_category(db, owner_id)
+    return category
+
+
+def timezone_name_of(local_now: datetime) -> str:
+    """用户本地时间所在的 IANA 时区名；时间不带命名时区时用 Pendo 默认时区。"""
+
+    return str(getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE)
 
 
 def normalize_item_type_query(value: str | None) -> str | None:
@@ -125,8 +163,11 @@ def item_to_dict(item: object) -> dict[str, Any]:
     return result
 
 
-def parse_iso_date(value: str | None) -> date | None:
-    """从 ISO 日期或日期时间中提取日期；非法值返回 ``None``。"""
+def parse_iso_date(value: object, zone: tzinfo | None = None) -> date | None:
+    """从 ISO 日期或日期时间中提取日期；非法值返回 ``None``。
+
+    给了 ``zone`` 时，带偏移的时间先换到这个时区再取日期。
+    """
     if not value:
         return None
     text = str(value).strip()
@@ -135,6 +176,43 @@ def parse_iso_date(value: str | None) -> date | None:
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
-        return datetime.fromisoformat(text).date()
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if zone is not None and parsed.tzinfo is not None:
+        parsed = parsed.astimezone(zone)
+    return parsed.date()
+
+
+def parse_argument_day(value: str | None, field_name: str) -> date | None:
+    """解析可选日期参数；空白视为未提供，显式的非法值抛 ``ValueError``。"""
+
+    if value is None or not value.strip():
+        return None
+    parsed = parse_iso_date(value)
+    if parsed is None:
+        raise ValueError(f"{field_name} must be a valid ISO date")
+    return cast(date, parsed)
+
+
+def resolve_today(db: Database, owner_id: str, today: str | None = None) -> date:
+    """显式给出的 ``today`` 优先（非法值抛 ``ValueError``），缺省是用户时区的今天。"""
+
+    return parse_argument_day(today, "today") or now_in_timezone(owner_id, db).date()
+
+
+def preset_range(preset: str, today: date) -> tuple[date, date] | None:
+    """week / month / quarter / year / last_year 预设对应的闭区间日期；其他名字返回 ``None``。
+
+    本周从周一起算，本季从季首月起算，区间都截止到 ``today``（去年是整年）。
+    """
+
+    quarter_month = ((today.month - 1) // 3) * 3 + 1
+    bounds        = {
+        "week"     : (today - timedelta(days=today.weekday()), today),
+        "month"    : (today.replace(day=1), today),
+        "quarter"  : (date(today.year, quarter_month, 1), today),
+        "year"     : (date(today.year, 1, 1), today),
+        "last_year": (date(today.year - 1, 1, 1), date(today.year - 1, 12, 31)),
+    }
+    return bounds.get(preset)

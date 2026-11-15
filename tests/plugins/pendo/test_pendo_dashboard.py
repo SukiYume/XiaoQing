@@ -180,7 +180,7 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
         "tasks_pending"       : 2,
         "tasks_done_recent"   : 1,
         "ledger_month_expense": 25.5,
-        "diary_month"         : 1,
+        "diary_recent"        : 1,
     }
     assert len(result["events_month"]) == 3
     assert result["events_month"][0]["title"] == "FRB2026会议"

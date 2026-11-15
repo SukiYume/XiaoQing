@@ -17,15 +17,17 @@ from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.planner import INTEREST, Decision
 from plugins.xiaoqing_life.session import run_session
-from plugins.xiaoqing_life.sources.base import SourceItem
+from plugins.xiaoqing_life.sources.base import SourceError, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
 from tests.plugins.xiaoqing_life.support import (
     FakeAI,
     FakeFetcher,
     at,
+    bili_video,
     comments_payload,
     make_cfg,
     new_store,
+    popular_payload,
 )
 
 MOMENT = at(23, 0)  # 2026-11-05 周四，睡前
@@ -250,8 +252,14 @@ async def test_a_dive_on_a_friends_topic_records_why_and_never_penalizes_the_top
     assert "群里朋友们最近在聊「新番推荐」" in ai.calls[0][1][0]["content"]
     assert store.state["chat_topics"][0]["tried_at"] > 0
     assert store.state["topic_penalty"] == {}  # 没看到喜欢的也不记负面证据
-    line = tc.episode_line(store.episodes[0], at(20, 0, day=6), make_cfg())
+    episode = store.episodes[0]
+    line = tc.episode_line(episode, at(20, 0, day=6), make_cfg(), here=True)
     assert "听群里在聊「新番推荐」才去搜的" in line
+    # 话题词不带会话信息：只有这个会话最近的话题对得上，才说是听这里聊到才去搜的
+    assert tc.heard_here(episode, {"topics": [{"topic": "新番推荐", "keywords": []}]})
+    assert not tc.heard_here(episode, {"topics": [{"topic": "显卡涨价", "keywords": []}]})
+    assert not tc.heard_here(episode, {"topics": []})
+    assert "听群里在聊" not in tc.episode_line(episode, at(20, 0, day=6), make_cfg())
 
 
 # ───────────────────────────── 知识门控 ─────────────────────────────
@@ -359,7 +367,7 @@ async def test_a_single_source_takeaway_is_a_hypothesis_and_gets_a_verification_
     assert check["claim_basis"] == []  # 夹具里的笔记没有摘录
     # 聊天时说清还没核实；档案也一样
     req = tc.clean_payload(_payload("最近学到啥"))
-    lines, _ = tc.learning_lines(store, req, NOW)
+    lines, _, _ = tc.learning_lines(store, req, NOW)
     assert lines[0] == f"- 铁锅导热更好{knowledge.UNVERIFIED_NOTE}"
     dossier.sync(store, make_cfg(), NOW)
     question = next(q for q in store.dossiers["烹饪物理"]["questions"] if q["thread_id"] == "t1")
@@ -570,3 +578,32 @@ async def test_terms_baike_does_not_know_are_not_queued_again_for_a_month(tmp_pa
     much_later = at(12, 0, day=30).replace(month=12)
     tc.turn_context(store, cfg, _payload(unknown_terms=["依托答辩"]), much_later, random.Random(0))
     assert store.state["lookup_queue"] == ["依托答辩"]  # 过了 30 天再查一次
+
+
+@pytest.mark.asyncio
+async def test_a_topic_search_that_falls_back_to_the_hot_list_is_not_filed_under_the_topic(
+    tmp_path: Path,
+) -> None:
+    """话题搜不到、退回热门榜刷到的东西，不是“听群里聊到才去搜的”。"""
+
+    store = new_store(tmp_path)
+    morning = at(11, 0, day=6)
+    _picked(store.state)
+    fetch = FakeFetcher(
+        {
+            "/search/type": SourceError("bili_search", "code_412"),
+            "/popular"    : popular_payload(bili_video(1, "猫猫的一天")),
+            "/reply/main" : comments_payload(),
+        }
+    )
+    reply = {
+        "looked_at": [{"item": "i1", "reaction": "好可爱", "feeling": "like", "topics": ["猫"]}]
+    }
+    ai       = FakeAI(reply)
+    decision = Decision(
+        INTEREST, "sampled", {}, {"query": "十月新番", "explored": True, "chat_topic": "新番推荐"}
+    )
+    await run_session(store, make_cfg(), decision, _deps(fetch, ai, morning))
+    assert [e["title"] for e in store.episodes] == ["猫猫的一天"]
+    assert store.episodes[0]["chat_topic"] == ""
+    assert "群里朋友们最近在聊" not in ai.calls[0][1][0]["content"]

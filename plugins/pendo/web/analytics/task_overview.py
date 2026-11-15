@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
+from ...config import PendoConfig
 from ...models.item import TaskItem, TaskStatus
 from ...services.db import Database
 from ...utils.identifiers import public_id
-from ...utils.time_utils import TimezoneHelper, now_in_timezone
-from ..utils import parse_iso_date
+from ...utils.time_utils import TimezoneHelper
+from ..utils import parse_iso_date, resolve_today
 
 JsonObject = dict[str, Any]
 
+# “再往后一周”的天数：计划日在今天之后、不晚于今天加这么多天的任务算“接下来”。
+_UP_NEXT_DAYS = 7
+
+# 下面的 SQL 片段（Widget 的有界聚合）与 ``_normalize_task``、``build_task_overview`` 里的
+# Python 规则（任务页的全量分桶）必须保持一致：计划日优先、没有计划日用本地截止日；优先级只认
+# 1-5，其余按 3；今天之前是逾期、今天起一周内是接下来。tests/plugins/pendo/test_pendo_web_tasks.py
+# 里有一条对拍测试，改任何一边都要让它继续通过。
 _TASK_PLAN_KEY_SQL = """
 CASE
   WHEN TRIM(COALESCE(plan_date, '')) != '' THEN TRIM(plan_date)
@@ -107,7 +115,7 @@ def _normalize_task(item: TaskItem, user_timezone: tzinfo) -> _TaskRecord:
         id            = item.id,
         title         = item.title,
         content       = item.content,
-        category      = (item.category or "").strip() or "未分类",
+        category      = (item.category or "").strip() or PendoConfig.DEFAULT_CATEGORY,
         status        = status,
         priority      = priority,
         plan_date     = plan_date,
@@ -154,15 +162,6 @@ def _focus_sort_key(
     return (0 if task.plan_key < today_key else 1, *_task_sort_key(task))
 
 
-def _resolve_today(db: Database, owner_id: str, today: str | None) -> date:
-    """校验显式自然日，缺省时使用用户自己的时区。"""
-
-    today_day = parse_iso_date(today)
-    if today is not None and today.strip() and today_day is None:
-        raise ValueError("today must be a valid ISO date")
-    return today_day or now_in_timezone(owner_id, db).date()
-
-
 def build_task_widget_overview(
     db: Database,
     owner_id: str,
@@ -174,9 +173,9 @@ def build_task_widget_overview(
 
     if limit <= 0:
         raise ValueError("limit must be positive")
-    today_day = _resolve_today(db, owner_id, today)
+    today_day = resolve_today(db, owner_id, today)
     today_key = today_day.isoformat()
-    next_week_key = (today_day + timedelta(days=7)).isoformat()
+    next_week_key = (today_day + timedelta(days=_UP_NEXT_DAYS)).isoformat()
     timezone_name = TimezoneHelper.get_user_timezone(owner_id, db).key
     active_cte    = f"""
         WITH active AS (
@@ -204,7 +203,7 @@ def build_task_widget_overview(
     rows = conn.execute(
         active_cte
         + """
-        SELECT id, title, status, plan_date, deadline_at, created_at
+        SELECT id, title, status, plan_date, deadline_at, created_at, plan_key
         FROM active
         ORDER BY
           CASE
@@ -244,11 +243,11 @@ def build_task_overview(
     owner_id: str,
     today: str | None = None,
 ) -> JsonObject:
-    """生成任务页所需全量任务和 Widget 所需活动分组。"""
+    """生成任务页所需的全量任务，以及逾期、聚焦、接下来、更晚和未排期的分组。"""
 
-    today_day = _resolve_today(db, owner_id, today)
+    today_day = resolve_today(db, owner_id, today)
     today_key = today_day.isoformat()
-    next_week_key = (today_day + timedelta(days=7)).isoformat()
+    next_week_key = (today_day + timedelta(days=_UP_NEXT_DAYS)).isoformat()
     tasks  = _load_all_tasks(db, owner_id)
     active = [task for task in tasks if task.status == "open"]
 

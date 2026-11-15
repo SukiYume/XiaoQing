@@ -33,7 +33,7 @@ from .jupyter_config import (
     MIN_EXECUTION_TIMEOUT,
     REPL_SESSION_TIMEOUT,
 )
-from .jupyter_models import ExecutionResult
+from .jupyter_models import ExecutionResult, truncate_with_suffix
 
 # 保留稳定的测试/扩展接缝；依赖可用状态始终从模块属性实时读取。
 JupyterKernelManager = jupyter_manager.JupyterKernelManager
@@ -135,10 +135,15 @@ class ReplState:
         return "\n".join(self.lines)
 
 
-def _validate_code_text(value: object, *, allow_empty: bool) -> str:
+def _validate_code_text(value: object, *, allow_empty: bool, prefix_allowance: int = 0) -> str:
+    """校验代码的类型、长度与控制字符；``prefix_allowance`` 给尚未剥掉的 timeout 选项留余量。"""
+
     if type(value) is not str:
         raise TypeError("Jupyter code must be a string")
-    if len(value) > MAX_CODE_CHARS or len(value.encode("utf-8")) > MAX_CODE_BYTES:
+    if (
+        len(value) > MAX_CODE_CHARS + prefix_allowance
+        or len(value.encode("utf-8")) > MAX_CODE_BYTES + prefix_allowance
+    ):
         raise JupyterCommandError(
             f"代码不能超过 {MAX_CODE_CHARS} 字或 {MAX_CODE_BYTES // 1024} KiB"
         )
@@ -156,23 +161,10 @@ def _validate_code_text(value: object, *, allow_empty: bool) -> str:
 def extract_code_and_timeout(args: object) -> tuple[str, float]:
     """只解析开头至多一个 timeout 选项，后续文本逐字作为代码。"""
 
-    if type(args) is not str:
-        raise TypeError("Jupyter code must be a string")
-    if (
-        len(args) > MAX_CODE_CHARS + _TIMEOUT_PREFIX_ALLOWANCE
-        or len(args.encode("utf-8")) > MAX_CODE_BYTES + _TIMEOUT_PREFIX_ALLOWANCE
-    ):
-        raise JupyterCommandError(
-            f"代码不能超过 {MAX_CODE_CHARS} 字或 {MAX_CODE_BYTES // 1024} KiB"
-        )
-    if has_control_characters(
-        args,
-        allow_formatting_whitespace = True,
-        include_c1                  = True,
-    ):
-        raise JupyterCommandError("代码包含不允许的控制字符")
+    # 先对整段输入设上限，再剥掉 timeout 选项后对代码本身做最终校验。
+    whole = _validate_code_text(args, allow_empty=True, prefix_allowance=_TIMEOUT_PREFIX_ALLOWANCE)
 
-    raw     = args.lstrip(" \t")
+    raw     = whole.lstrip(" \t")
     timeout = DEFAULT_TIMEOUT
     match   = _TIMEOUT_OPTION.match(raw)
     if match is not None:
@@ -185,7 +177,7 @@ def extract_code_and_timeout(args: object) -> tuple[str, float]:
     elif _TIMEOUT_TOKEN.match(raw) is not None:
         raise JupyterCommandError("timeout 选项缺少有效的 ASCII 数值")
     else:
-        code = args
+        code = whole
     return _validate_code_text(code, allow_empty=True), timeout
 
 
@@ -385,6 +377,16 @@ async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -
         return segments("❌ 内核操作失败，请稍后重试")
 
 
+def _repl_line_within_limits(line: str) -> bool:
+    """REPL 单行的长度上限与控制字符规则；换行由调用方另行处理。"""
+
+    return len(line) <= MAX_REPL_LINE_CHARS and not has_control_characters(
+        line,
+        allow_formatting_whitespace = True,
+        include_c1                  = True,
+    )
+
+
 def _load_repl_state(session: Session) -> ReplState:
     raw_lines       = session.get("code_buffer")
     execution_count = session.get("execution_count")
@@ -399,12 +401,7 @@ def _load_repl_state(session: Session) -> ReplState:
             type(line) is not str
             or "\n" in line
             or "\r" in line
-            or len(line) > MAX_REPL_LINE_CHARS
-            or has_control_characters(
-                line,
-                allow_formatting_whitespace = True,
-                include_c1                  = True,
-            )
+            or not _repl_line_within_limits(line)
         ):
             raise InvalidReplState("code buffer line is invalid")
         lines.append(line)
@@ -417,11 +414,9 @@ def _load_repl_state(session: Session) -> ReplState:
 
 
 def _code_preview(code: str) -> str:
-    suffix = "\n…（预览已截断，执行仍使用完整缓冲区）"
-    if len(code) <= MAX_REPL_PREVIEW_CHARS:
-        return code
-    kept = MAX_REPL_PREVIEW_CHARS - len(suffix)
-    return f"{code[:kept]}{suffix}"
+    return truncate_with_suffix(
+        code, MAX_REPL_PREVIEW_CHARS, "\n…（预览已截断，执行仍使用完整缓冲区）"
+    )
 
 
 def _append_repl_text(state: ReplState, user_text: object) -> tuple[str, ...]:
@@ -431,15 +426,7 @@ def _append_repl_text(state: ReplState, user_text: object) -> tuple[str, ...]:
     incoming   = tuple(normalized.split("\n"))
     if len(state.lines) + len(incoming) > MAX_REPL_LINES:
         raise JupyterCommandError(f"REPL 缓冲区最多 {MAX_REPL_LINES} 行")
-    if any(
-        len(line) > MAX_REPL_LINE_CHARS
-        or has_control_characters(
-            line,
-            allow_formatting_whitespace = True,
-            include_c1                  = True,
-        )
-        for line in incoming
-    ):
+    if not all(_repl_line_within_limits(line) for line in incoming):
         raise JupyterCommandError(f"REPL 单行不能超过 {MAX_REPL_LINE_CHARS} 字，且不能包含控制字符")
     combined = (*state.lines, *incoming)
     _validate_code_text("\n".join(combined), allow_empty=True)

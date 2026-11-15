@@ -149,7 +149,6 @@ class TestPendoRuntimeBoundaries:
             "_reconfigure_web_server",
             lambda db, before, after: reconfigurations.append((db, before, after)),
         )
-        monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
         reset_pendo_runtime_config()
 
         pendo_main.init(context)
@@ -654,7 +653,6 @@ class TestPendoRuntimeBoundaries:
             return True
 
         monkeypatch.setattr(pendo_main, "_stop_web_server_async", fake_stop_web_server_async)
-        monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
 
         context = SimpleNamespace(
             state={
@@ -690,9 +688,6 @@ class TestPendoRuntimeBoundaries:
 
         monkeypatch.setattr(pendo_main, "_stop_web_server", lambda: stopped[0])
         monkeypatch.setattr(pendo_main, "_stop_web_server_async", stop_async)
-        monkeypatch.setattr(
-            pendo_main, "cleanup_reminder_singleton", lambda: cleaned.append("reminder")
-        )
         runtime = {"services": {"ready": True}, "lifecycle_service": service}
         context = SimpleNamespace(
             state={"pendo_runtime": runtime},
@@ -711,7 +706,7 @@ class TestPendoRuntimeBoundaries:
         assert runtime["services"] == {"ready": True}
         stopped[0] = True
         cleanup()
-        assert cleaned == ["db", "reminder"]
+        assert cleaned == ["db"]
         assert service.database is None
         assert runtime == {}
 

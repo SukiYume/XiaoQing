@@ -44,7 +44,6 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     state.pfc_state_store.get_async       = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -83,10 +82,6 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
                 return_value=PFCRunResult(reply="", action="wait", reason="再观察", ended=False)
@@ -108,29 +103,6 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     assert record.action == "wait"
 
 
-def test_load_latest_topic_and_summary_skips_invalid_tail_entries(tmp_path):
-    from plugins.xiaoqing_chat.planning.goal_state import load_latest_topic_and_summary
-
-    data_dir     = tmp_path
-    chat_id      = "goal-parser-dedup"
-    summary_path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(
-        (
-            "["
-            '{"topic":"火锅选择","summary":"先看预算和口味","updated_at":1},'
-            '{"topic":"","summary":""}'
-            "]"
-        ),
-        encoding="utf-8",
-    )
-
-    topic, summary = load_latest_topic_and_summary(data_dir, chat_id)
-
-    assert topic == "火锅选择"
-    assert summary == "先看预算和口味"
-
-
 def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 
@@ -146,11 +118,11 @@ def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
         text   = "旧目录里的记忆",
         meta   = {"type": "knowledge", "global_approved": True},
     )
-    assert db.query_global("旧目录", top_k=5, type_filter="knowledge")
+    assert db.query_knowledge("旧目录", top_k=5)
 
     db.bind(second_dir)
 
-    assert db.query_global("旧目录", top_k=5, type_filter="knowledge") == []
+    assert db.query_knowledge("旧目录", top_k=5) == []
 
 
 @pytest.mark.parametrize(
@@ -210,11 +182,8 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "用户要求直接回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "用户要求直接回复",
     )
 
     with ExitStack() as stack:
@@ -237,22 +206,13 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(return_value=""),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -271,7 +231,7 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=(candidate, "primary")),
             )
         )
@@ -286,7 +246,7 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.heuristic_check",
+                "plugins.xiaoqing_chat.reply_plan.heuristic_check",
                 return_value=None,
             )
         )

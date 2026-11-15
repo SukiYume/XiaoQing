@@ -22,11 +22,13 @@ SECONDS_PER_DAY    = 86400
 # 会话交互
 EXIT_COMMANDS_SET               = frozenset({"退出", "取消", "exit", "quit", "q"})
 DEFAULT_BOT_NAME                = "小青"
+DEFAULT_COMMAND_PREFIX          = "/"
 DEFAULT_BOT_NAME_RESPONSES_LIST = ["叫我干嘛", "嗯？", "在的~", "有事吗？"]
 
 # 插件安全边界
-PLUGIN_INIT_TIMEOUT_SECONDS = 30.0  # 插件 init 函数超时时间
-VALID_PLUGIN_NAME_PATTERN   = r"^[a-zA-Z0-9_]+$"  # 插件名称只能包含字母数字下划线
+PLUGIN_INIT_TIMEOUT_SECONDS          = 30.0  # 插件 init、shutdown 单次回调的时限
+DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS = 3600.0  # 插件目录的轮询间隔
+VALID_PLUGIN_NAME_PATTERN            = r"^[a-zA-Z0-9_]+$"  # 插件名称只能包含字母数字下划线
 
 # 消息长度与发送节奏
 MAX_SHORT_TEXT_LENGTH   = 60  # 短文本最大长度

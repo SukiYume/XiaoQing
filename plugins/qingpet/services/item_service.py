@@ -20,6 +20,7 @@ _ITEMS: Mapping[str, Item] = MappingProxyType(
             health_gain   = data.get("health_gain", 0),
             clean_gain    = data.get("clean_gain", 0),
             exp_gain      = data.get("exp_gain", 0),
+            intimacy_gain = data.get("intimacy_gain", 0),
             trustee_hours = data.get("trustee_hours", 0),
         )
         for item_id, data in DEFAULT_ITEMS.items()

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -20,12 +20,12 @@ from . import activity, fetching, reinforce
 from . import digest as digest_mod
 from . import methods as methods_mod
 from . import threads as thread_ops
-from .config import LifeConfig
+from .config import REASONING_ROUTE, LifeConfig
 from .days import day_key
 from .knowledge import is_rumor
 from .lifecycle import add_interest_evidence, mark_seen
 from .safety import clean_text, is_blocked, normalize_for_match, quote_in_source
-from .sources import bilibili, deep, reference, watch
+from .sources import deep, reference, watch
 from .sources.base import Fetcher, SourceError, SourceItem
 from .sources.reference import keywords
 from .stores import LifeStore, reserve_llm_call
@@ -122,9 +122,9 @@ def build_messages(
     ]
     payload = {
         "question": {
-            "title"        : clean_text(thread.get("title"), 20),
-            "why"          : clean_text(thread.get("why"), 60),
-            "done_when"    : clean_text(thread.get("done_when"), 60),
+            "title"        : clean_text(thread.get("title"), thread_ops.TITLE_CHARS),
+            "why"          : clean_text(thread.get("why"), thread_ops.WHY_CHARS),
+            "done_when"    : clean_text(thread.get("done_when"), thread_ops.DONE_WHEN_CHARS),
             "open_question": clean_text(thread.get("open_question"), QUESTION_CHARS),
             "claim"        : clean_text(thread.get("claim"), 80),
             "claim_basis"  : [clean_text(q, 60) for q in thread.get("claim_basis", [])][:3],
@@ -177,7 +177,7 @@ def _findings(
         text  = clean_text(row.get("text"), FINDING_CHARS)
         if not (refs and quote and text) or is_blocked(text, blocked) or is_gap(text):
             continue
-        cited = [items[int(digest_mod.owner_ref(r)[1:]) - 1] for r in refs]
+        cited = [digest_mod.cited_item(r, items) for r in refs]
         # 营销、标题党、“转发保平安”式的材料不能当要点的依据。
         if is_rumor(quote) or any(is_rumor(f"{i.title} {i.text}") for i in cited):
             continue
@@ -202,11 +202,11 @@ def available_actions(
     """这一轮之后还能做的行动：关掉的、近期不稳的来源不给；deep_read 要材料里有 B站条目。"""
 
     found: list[str] = []
-    if cfg.source_on("bili_search") and reinforce.health_factor(state, "bili_search", now) >= 1.0:
+    if fetching.search_usable(cfg, state, now):
         found.append("search")
     if any(i.source.startswith("bili_") for i in items):
         found.append("deep_read")
-    if cfg.source_on("baike_lookup") or cfg.source_on("wiki_read"):
+    if fetching.lookup_usable(cfg):
         found.append("lookup")
     return (*found, "stop")
 
@@ -236,9 +236,7 @@ def finding_quote(quote: Any, refs: list[str], texts: Mapping[str, str]) -> str 
 def _next(raw: Any, items: list[SourceItem], allowed: tuple[str, ...] = ACTIONS) -> Next:
     """不在表里视为 stop；deep_read 的参数必须是本轮 B站条目编号（换算成条目 ID）；search / lookup 参数清洗后非空。"""
 
-    if not isinstance(raw, dict) or raw.get("action") not in ACTIONS:
-        return Next()
-    if raw.get("action") not in allowed:  # 关掉的来源：当作 stop
+    if not isinstance(raw, dict) or raw.get("action") not in allowed:  # 关掉的来源也当作 stop
         return Next()
     action = str(raw["action"])
     arg    = raw.get("arg")
@@ -292,10 +290,8 @@ def fallback_action(
     """这条路没东西时的另一种查法：试过 lookup 就搜，试过 search 就查词条；没有可换的返回 None。"""
 
     title     = str(thread.get("title") or "")
-    search_ok = (
-        cfg.source_on("bili_search") and reinforce.health_factor(state, "bili_search", now) >= 1.0
-    )
-    lookup_ok = cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
+    search_ok = fetching.search_usable(cfg, state, now)
+    lookup_ok = fetching.lookup_usable(cfg)
     if tried.action == "lookup" and search_ok:
         query = keywords(thread.get("next_query") or title, SEARCH_ARG_CHARS)
         return Next("search", query) if query else None
@@ -338,9 +334,8 @@ def first_action(
     4. 都说不清时按研究行动偏好取高者，平手取 search。
     """
 
-    search_on = cfg.source_on("bili_search")
-    search_ok = search_on and reinforce.health_factor(state, "bili_search", now) >= 1.0
-    lookup_ok = cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
+    search_ok = fetching.search_usable(cfg, state, now)
+    lookup_ok = fetching.lookup_usable(cfg)
     usable    = {"search": search_ok, "lookup": lookup_ok}
     saved     = thread.get("next_action") or {}
     action    = str(saved.get("action") or "")
@@ -349,7 +344,7 @@ def first_action(
         return Next(action, arg)
     title   = str(thread.get("title") or "")
     concept = lookup_concept(thread)
-    query   = clean_text(thread.get("next_query") or title, SEARCH_ARG_CHARS)
+    query   = keywords(thread.get("next_query") or title, SEARCH_ARG_CHARS)
     kind    = question_kind(thread)
     if kind == "fact" and lookup_ok and concept and not stale(thread, "lookup"):
         return Next("lookup", concept)
@@ -364,7 +359,7 @@ def first_action(
         return Next("search", query)
     if lookup_ok:
         return Next("lookup", concept)
-    if search_on:
+    if cfg.source_on("bili_search"):
         return Next("search", query)
     return None
 
@@ -407,6 +402,8 @@ def _merge_repeats(
             old["subtitle_partial"] = row["subtitle_partial"]
         if row["reaction"] and not old.get("reaction"):
             old.update(reaction=row["reaction"], feeling=row["feeling"], auto=False)
+        if row["highlight"] and not old.get("highlight"):
+            old.update(highlight=row["highlight"], highlight_from=row["highlight_from"])
         row["id"] = old["id"]
     return fresh
 
@@ -417,16 +414,7 @@ async def _deep_item(ctx: _Context, item: SourceItem) -> SourceItem:
     blocked = ctx.cfg.blocked_keywords
     if not item.desc_raw and not item.cid:
         item = await watch.watch(ctx.fetch, item, 1, blocked)
-    page: dict[str, Any] | None = None
-    if ctx.cfg.source_on("bili_comments") and ctx.cfg.max_comments_per_item > 0:
-        try:
-            page = await bilibili.reply_page(ctx.fetch, item, size=20)
-            item = replace(
-                item,
-                comments=bilibili.comments_of(page, 1, blocked, ctx.cfg.max_comments_per_item),
-            )
-        except SourceError as exc:
-            logger.info("xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason)
+    item, page = await fetching.with_comments(ctx.cfg, ctx.fetch, item, 1, size=20)
     return await deep.deep_read(
         ctx.fetch, item, 1, blocked, subtitles=ctx.subtitles, reply_page=page
     )
@@ -608,7 +596,7 @@ async def _first_round_empty(
 
 
 def _empty_session(s: LifeStore, cfg: LifeConfig, thread: dict[str, Any], now: float) -> None:
-    """一次研究没有一条真收获：记空步；连着两次就搁置（不只是冷却 3 小时后又被选中）。"""
+    """一次研究没有一条真收获：记空步；连着两次就搁置（不然隔天又被选中，还是查不到东西）。"""
 
     if thread_ops.record_step(thread, cfg, new_content=False, now=now):
         hint = str(thread.get("open_question") or "")
@@ -705,7 +693,7 @@ async def _round(
         available   = allowed,
     )
     try:
-        text = await deps.complete("reasoning", messages)
+        text = await deps.complete(REASONING_ROUTE, messages)
     except Exception as exc:
         logger.info("xiaoqing_life step=research model_failed error_type=%s", type(exc).__name__)
         return "model_failed"
@@ -742,15 +730,13 @@ async def _commit_round(
     tally: _Tally,
 ) -> bool:
     store, cfg = ctx.store, ctx.cfg
-    moment   = deps.now()
-    now      = moment.timestamp()
-    cited    = [i for f in result.findings for i in f.item_ids]
-    looked   = {seen.item_id for seen in result.digest.looked_at}
+    moment = deps.now()
+    now = moment.timestamp()
+    cited = [i for f in result.findings for i in f.item_ids]
+    looked = {seen.item_id for seen in result.digest.looked_at}
     auto_ids = [i for i in dict.fromkeys(cited) if i not in looked]
-    rows     = activity.episode_rows(
-        result.digest, items, decision, r_span[0], r_span[1], moment.tzinfo, auto_ids
-    )
-    stop                    = result.next.action == "stop"
+    rows = activity.episode_rows(result.digest, items, decision, r_span[0], r_span[1], auto_ids)
+    stop = result.next.action == "stop"
     stats: dict[str, float] = {}
 
     def apply(s: LifeStore) -> None:
@@ -794,7 +780,7 @@ async def _commit_round(
             )
         stats.update(
             liked    = activity.liked_count(fresh),
-            disliked = sum(1 for r in fresh if r["feeling"] == "dislike"),
+            disliked = activity.disliked_count(fresh),
             known    = len(activity.known_keys(s.terms) - known_before),
             exprs    = max(0, len(s.expressions) - expr_before),
             valid    = valid,
@@ -858,7 +844,8 @@ def _apply_thread(
     elif result.status == "stuck":
         hint = result.open_question or (nxt.arg if nxt.action in ("search", "lookup") else "")
         thread_ops.park(s.threads, thread, cfg, reason=result.stuck_reason, hint=hint, now=now)
-    # progress / none：步数按“一次研究”计，在 ``_finish`` 里记一次（一轮一步会让小课题一次就查到上限）。
+    # progress / none：步数按“一次研究”计，不在这里记：有收获时 ``_commit_round`` 在第一个有效轮记一次，
+    # 整次研究都没有收获由 ``_finish`` 记一次空步（一轮一步会让小课题一次就查到上限）。
     return valid
 
 

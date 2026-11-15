@@ -1,8 +1,4 @@
-"""
-存储基类
-
-为所有存储类提供通用的接口和方法，减少代码重复。
-"""
+"""按数据目录绑定、带防抖落盘的存储基类。"""
 
 from __future__ import annotations
 
@@ -105,7 +101,7 @@ class StoreBase:
     """
     存储基类，提供通用的数据目录绑定和文件操作方法。
 
-    所有存储类都应该继承此类，以获得一致的接口。
+    按会话存 JSON 的存储继承它；``ActionHistoryStore`` 和向量库 ``MemoryDB`` 各有自己的落盘方式。
     """
 
     def __init__(self) -> None:
@@ -118,12 +114,17 @@ class StoreBase:
 
     def bind(self, data_dir: Path) -> None:
         """
-        绑定数据目录。
+        绑定数据目录；目录变了就先让子类丢掉旧目录的内存缓存，重复绑定同一目录不动缓存。
 
         Args:
             data_dir: 数据目录路径
         """
+        if data_dir != self._data_dir:
+            self._drop_cache()
         self._data_dir = data_dir
+
+    def _drop_cache(self) -> None:
+        """数据目录变化时丢弃内存缓存；带缓存的子类覆盖它，默认没有缓存。"""
 
     def _resolve_path(self, *parts: str) -> Path | None:
         """

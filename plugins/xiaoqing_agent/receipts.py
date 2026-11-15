@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.delivery import DeliveryReceipt
+from core.delivery import DeliveryReceipt, merge_delivery_outcomes
 
 
 @dataclass(eq=False)
@@ -29,14 +29,9 @@ class HeldReceipt:
     results: dict[str, bool | None] = field(default_factory=dict)
 
     def combined(self) -> bool | None:
-        """全部确认才算送达，全部失败才算没发；部分送达或任一未知都记为未知。"""
+        """全部确认才算送达；任一附件没发出就算没发（和命令由本人直接发送时一样回滚）；其余为未知。"""
 
-        outcomes = [self.results.get(key, False) for key in self.files]
-        if all(item is True for item in outcomes):
-            return True
-        if all(item is False for item in outcomes):
-            return False
-        return None
+        return merge_delivery_outcomes(self.results.get(key, False) for key in self.files)
 
 
 def file_key(path: str | Path) -> str:
@@ -84,7 +79,7 @@ async def settle(
 async def release(held: list[HeldReceipt], *, keep: Iterable[str | Path] = ()) -> None:
     """不会再发的附件记为没发出，回执按已有结果结算；``keep`` 里的附件还在等发送结果，先不动。
 
-    一个附件都没发出的回执回滚；已经有附件送达或结果未知的，整份回执记为未知。
+    有附件没发出的回执回滚；其余附件全部送达才提交，有结果未知的记为未知。
     """
 
     kept                        = {file_key(path) for path in keep}

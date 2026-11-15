@@ -111,7 +111,7 @@ async def test_session_has_a_nominal_span_and_episodes_are_spread_inside_it(tmp_
     decision = Decision(HOT_SCROLL, "sampled", {}, {"source": "bili_popular"})
     await run_session(store, make_cfg(), decision, _deps(_fetch(), FakeAI(DIGEST)))
     state = store.state
-    start, end = state["last_session_at"], state["last_session_end"]
+    start, end = NOW, state["last_session_end"]
     assert start == NOW and 8 * 60 <= end - start <= 20 * 60  # hot_scroll 8~20 分钟
     assert state["activity_log"] == [{"start": start, "end": end}]
     ats = [e["at"] for e in store.episodes]
@@ -130,7 +130,7 @@ async def test_span_per_activity_is_configurable_and_failure_shortens_it(tmp_pat
         Decision(HOT_SCROLL, "sampled", {}, {"source": "bili_popular"}),
         _deps(_fetch(), FakeAI(DIGEST)),
     )
-    assert store.state["last_session_end"] - store.state["last_session_at"] == 30 * 60
+    assert store.state["last_session_end"] - NOW == 30 * 60
     failing = new_store(tmp_path / "f")
     await run_session(
         failing,
@@ -143,7 +143,7 @@ async def test_span_per_activity_is_configurable_and_failure_shortens_it(tmp_pat
 
 def test_gap_is_measured_from_the_span_end_and_the_span_blocks_new_sessions() -> None:
     cfg = make_cfg(choice_temperature=0.5, session_probability=1.0)
-    state = default_state() | {"last_session_at": NOW - 100 * 60, "last_session_end": NOW + 5 * 60}
+    state = default_state() | {"last_session_end": NOW + 5 * 60}
 
     def decide(**kw: Any) -> Decision:
         return planner.decide(cfg, state, [], [], {}, MOMENT, FREE, random.Random(0), **kw)
@@ -465,7 +465,7 @@ async def test_default_comment_budget_is_twelve() -> None:
     [item] = await bilibili.popular(
         FakeFetcher({"/popular": popular_payload(bili_video(1, "视频"))}), []
     )
-    assert len(await bilibili.hot_comments(fetch, item, 1, [], 12)) == 10
+    assert len(bilibili.comments_of(await bilibili.reply_page(fetch, item), 1, [], 12)) == 10
 
 
 # ───────────────────────────── A8 消化时刻 ─────────────────────────────

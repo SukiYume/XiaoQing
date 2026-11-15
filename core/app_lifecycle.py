@@ -20,20 +20,19 @@ from .app_support import (
     _STARTUP_OWNERSHIP_TIMEOUT_SECONDS,
     ApplicationLifecycleFatalError,
     _AppLifecycleState,
-    _coerce_runtime_number,
     _ConfigApplyOwner,
     _onebot_credentials,
     _run_background_operation,
+    _runtime_max_concurrency,
+    _runtime_plugin_poll_interval,
+    _runtime_session_timeout,
     _trusted_secrets,
 )
 from .config import ConfigManager, ConfigSnapshot
 from .constants import (
     DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
-    DEFAULT_MAX_CONCURRENCY,
-    DEFAULT_SESSION_TIMEOUT_SEC,
 )
-from .dispatcher import AdjustableSemaphore
 from .lifecycle import DeferredCancellation as _DeferredCancellation
 from .lifecycle import OwnedTaskFatalError as _OwnedTaskFatalError
 from .lifecycle import await_owned_task as _await_owned_task
@@ -57,6 +56,9 @@ class AppLifecycleMixin:
 
     # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
     if TYPE_CHECKING:
+
+        def _apply_dispatcher_concurrency(self, concurrency: int) -> None:
+            raise NotImplementedError
 
         def _configure_plugin_watch(
             self,
@@ -287,27 +289,9 @@ class AppLifecycleMixin:
         startup_snapshot = self._latest_startup_snapshot()
         startup_config   = startup_snapshot.config
 
-        # 注入的测试 dispatcher 可以没有 limiter；生产 limiter 始终原地调容。
-        concurrency = _coerce_runtime_number(
-            startup_config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key     = "max_concurrency",
-            default = DEFAULT_MAX_CONCURRENCY,
-            integer = True,
-            minimum = 1,
-            maximum = 1024,
-        )
-        session_timeout = _coerce_runtime_number(
-            startup_config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key     = "session_timeout",
-            default = DEFAULT_SESSION_TIMEOUT_SEC,
-            integer = False,
-            minimum = 0.001,
-            maximum = 604800.0,
-        )
-        if self.dispatcher.semaphore is None:
-            self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
-        elif isinstance(self.dispatcher.semaphore, AdjustableSemaphore):
-            self.dispatcher.semaphore.resize(concurrency)
+        concurrency     = _runtime_max_concurrency(startup_config)
+        session_timeout = _runtime_session_timeout(startup_config)
+        self._apply_dispatcher_concurrency(concurrency)
         self.session_manager.set_default_timeout(session_timeout)
 
         self.http_session = aiohttp.ClientSession(
@@ -319,8 +303,7 @@ class AppLifecycleMixin:
 
         self._defer_plugin_schedule_updates = True
         try:
-            self.plugin_manager.load_all()
-            await self.plugin_manager.wait_inits()
+            await self.plugin_manager.load_all()
         finally:
             self._defer_plugin_schedule_updates = False
         self.scheduler.ensure_started()
@@ -412,17 +395,9 @@ class AppLifecycleMixin:
         self._config_watch_task = asyncio.create_task(
             _run_background_operation(self.config_manager.watch)
         )
-        poll_interval = _coerce_runtime_number(
-            startup_snapshot.config.get("plugin_poll_interval", 3600),
-            key     = "plugin_poll_interval",
-            default = 3600.0,
-            integer = False,
-            minimum = 0.01,
-            maximum = 86400.0,
-        )
         self._configure_plugin_watch(
             startup_snapshot.config,
-            poll_interval=float(poll_interval),
+            poll_interval=_runtime_plugin_poll_interval(startup_snapshot.config),
         )
 
     async def stop(self) -> None:

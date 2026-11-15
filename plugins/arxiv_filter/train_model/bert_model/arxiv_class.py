@@ -29,11 +29,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    precision_recall_curve,
-)
+from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm.auto import tqdm
 
@@ -306,8 +302,8 @@ def eval_model(
     评估流程：
         1. 将模型设为评估模式（关闭 dropout 等）
         2. 禁用梯度计算
-        3. 遍历所有批次，收集预测结果
-        4. 计算准确率、分类报告和混淆矩阵
+        3. 遍历所有批次，收集正类概率
+        4. 用 PR 曲线按 F-beta 选出最优阈值，再按该阈值算准确率、分类报告和混淆矩阵
 
     参数：
         model: BERT 分类模型
@@ -315,13 +311,11 @@ def eval_model(
         device: 计算设备
         use_amp: 是否使用混合精度
         amp_dtype: 混合精度数据类型
+        threshold_beta: 选阈值时的 F-beta 的 beta
 
     返回：
-        (accuracy, average_loss, report, cm) 元组
-        - accuracy: 验证集准确率
-        - average_loss: 平均损失值
-        - report: sklearn 分类报告（包含 precision, recall, f1-score）
-        - cm: 混淆矩阵
+        ValidationMetrics：准确率、平均损失、分类报告、混淆矩阵、正类召回与 F1、
+        阈值对应的 F-beta 分数和最优阈值
     """
     model.eval()
     losses            : list[float] = []
@@ -340,9 +334,9 @@ def eval_model(
             all_labels.extend(labels.cpu().tolist())
             all_positive_probs.extend(positive_probs.cpu().tolist())
 
-    optimal_threshold, threshold_score = find_optimal_threshold(
-        all_labels,
-        all_positive_probs,
+    optimal_threshold, threshold_score = _training.best_fbeta_threshold(
+        np.asarray(all_labels),
+        np.asarray(all_positive_probs),
         beta=threshold_beta,
     )
     all_preds = [1 if prob >= optimal_threshold else 0 for prob in all_positive_probs]
@@ -382,31 +376,6 @@ def eval_model(
     )
 
 
-def find_optimal_threshold(
-    labels: list[int], positive_probs: list[float], beta: float = 1.0
-) -> tuple[float, float]:
-    if not labels or not positive_probs:
-        return 0.5, 0.0
-    if beta <= 0:
-        raise ValueError("beta must be positive")
-
-    precision, recall, thresholds = precision_recall_curve(labels, positive_probs)
-    if len(thresholds) == 0:
-        return 0.5, 0.0
-
-    beta_sq      = beta * beta
-    fbeta_scores = ((1 + beta_sq) * precision[:-1] * recall[:-1]) / np.clip(
-        (beta_sq * precision[:-1]) + recall[:-1], 1e-12, None
-    )
-    best_index = int(np.nanargmax(fbeta_scores))
-    return float(thresholds[best_index]), float(fbeta_scores[best_index])
-
-
-# =============================================================================
-# 类别平衡工具
-# =============================================================================
-
-
 # =============================================================================
 # 模型保存
 # =============================================================================
@@ -423,15 +392,17 @@ def save_training_config(
     保存训练配置到 JSON 文件
 
     保存内容：
-        - 模型名称
-        - 最大序列长度
-        - 最佳验证准确率
-        - 训练版本标识
+        - 模型名称、最大序列长度
+        - 最佳验证准确率、最佳正类 F1
+        - 最优阈值及其 F-beta 的 beta
+        - 输入模式与训练版本标识
 
     参数：
         output_dir: 输出目录
         config: 训练配置
         best_accuracy: 最佳验证准确率
+        best_positive_f1: 最佳验证正类 F1
+        optimal_threshold: 最佳模型对应的最优阈值
     """
     payload = {
         "model_name"              : config.model_name,
@@ -463,6 +434,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
         4. 创建数据加载器
         5. 加载预训练模型和分词器
         6. 创建优化器和学习率调度器
+        （1-6 由 prepare_classifier_training 完成）
         7. 训练循环：
            - 每个 epoch 训练并验证
            - 保存最佳模型
@@ -492,7 +464,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
     best_threshold_score = 0.0
     best_threshold       = 0.5
 
-    # 8. 训练循环
+    # 7. 训练循环
     for epoch in range(1, config.num_epochs + 1):
         log_epoch_header(epoch, config.num_epochs, optimizer.param_groups[-1]["lr"])
 
@@ -559,7 +531,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
                 best_threshold,
             )
 
-    # 9. 打印最终结果
+    # 8. 打印最终结果
     _log("═" * 70)
     _log("  Final Evaluation")
     _log("═" * 70)

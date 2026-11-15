@@ -34,12 +34,11 @@ def _drop_trigger(database: Database, name: str) -> None:
     database._get_connection().commit()
 
 
-def test_explicit_activity_progress_is_in_action_transaction_and_ignores_natural_toggle(tmp_path):
+def test_explicit_activity_progress_is_in_action_transaction(tmp_path):
     database, user = _setup(str(tmp_path / "action-activity.db"), group_id=73001)
     try:
         config = database.get_group_config(user.group_id)
         assert config.activity_enabled is True
-        assert config.natural_trigger_enabled is False
         activity_id = database.create_activity(
             user.group_id,
             "clean",

@@ -226,7 +226,7 @@ def test_remote_command_wrapper_falls_back_when_setsid_is_missing():
 
     channel = Channel()
     transport = SimpleNamespace(open_session=lambda: channel)
-    ssh_manager_module._open_command_channel(transport, "echo 'a b'", False, threading.Event())
+    ssh_manager_module._open_command_channel(transport, "echo 'a b'", threading.Event())
 
     assert channel.command == (
         "if command -v setsid >/dev/null 2>&1; then setsid sh -c 'echo '\"'\"'a b'\"'\"'' & "

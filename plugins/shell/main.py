@@ -14,13 +14,12 @@ import re
 import shlex
 import shutil
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from core.interfaces import PluginSettingsSnapshot
-from core.plugin_base import head_tail_preview
-from core.plugin_base import segments as _core_segments
+from core.plugin_base import Segments, head_tail_preview, segments
 from core.process_tree import run_process
 from core.public_errors import public_error_response
 from core.sensitive_audit import log_sensitive_operation, safe_request_id
@@ -34,9 +33,6 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
-
-MessageSegments = list[dict[str, Any]]
-segments        = cast(Callable[[Any], MessageSegments], _core_segments)
 
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -409,7 +405,7 @@ async def handle(
     args: str,
     event: dict[str, Any],
     context: ShellContext,
-) -> MessageSegments:
+) -> Segments:
     """处理帮助、启用列表查询和单条本地命令。"""
 
     try:
@@ -482,14 +478,11 @@ async def handle(
     except Exception as exc:
         command_text = args if isinstance(args, str) else ""
         _log_command_audit(context, command_text, status="error", exc=exc)
-        return cast(
-            MessageSegments,
-            public_error_response(
-                context,
-                exc,
-                logger    = logger,
-                component = "shell.handle",
-            ),
+        return public_error_response(
+            context,
+            exc,
+            logger    = logger,
+            component = "shell.handle",
         )
 
 
@@ -575,7 +568,7 @@ async def _git_bash_available_commands(
     return {name for name in stdout.splitlines() if name in allowed}, None
 
 
-async def _list_whitelist(context: ShellContext) -> MessageSegments:
+async def _list_whitelist(context: ShellContext) -> Segments:
     """列出当前生效的管理员命令入口及其 PATH 可用性。"""
 
     terminal = _get_terminal_settings(context)

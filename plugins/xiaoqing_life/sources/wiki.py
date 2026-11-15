@@ -10,9 +10,7 @@ from typing import Any
 
 from ..safety import clean_text, is_blocked, normalize_for_match, overlap
 from .base import (
-    TEXT_CHARS,
     Fetcher,
-    SourceError,
     SourceItem,
     as_dict,
     require_ok,
@@ -43,7 +41,7 @@ def _page_item(page: dict[str, Any], blocked: tuple[str, ...]) -> SourceItem | N
         item_id  = f"wiki_read:{pageid}",
         source   = "wiki_read",
         title    = title,
-        text     = passages[0].text[:TEXT_CHARS],
+        text     = passages[0].text,
         url      = f"https://zh.wikipedia.org/?curid={pageid}",
         heat     = 0,
         tags     = (),
@@ -67,7 +65,7 @@ def relevant(page: dict[str, Any], query: str) -> bool:
 
 
 async def read(fetch: Fetcher, query: str, blocked: Iterable[str]) -> list[SourceItem]:
-    """搜索 → 介绍段；按标题与查询的字符二元组重合排序，取 ≤2 个非空页面。"""
+    """搜索 → 介绍段；标题和查询词互相包含的排前面，其余按维基的搜索序，取 ≤2 个非空页面。"""
 
     blocked = tuple(blocked)
     payload = require_ok(
@@ -104,4 +102,4 @@ async def read(fetch: Fetcher, query: str, blocked: Iterable[str]) -> list[Sourc
     return items
 
 
-__all__ = ["SourceError", "read"]
+__all__ = ["read"]

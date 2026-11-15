@@ -9,9 +9,11 @@
 2. 消息解析 - 提取文本、user_id、group_id
 3. 触发门控 - 私聊、配置放行、has_prefix 或活跃会话
 4. URL-only 路由 - 通过门控后才交给 url_parser
-5. 会话处理 - 活跃多轮对话优先消费输入
-6. 命令路由 - 无会话消费时匹配命令并执行
-7. 闲聊处理 - 无命令时进行闲聊
+5. 只叫名字 - 消息只有 Bot 名字时直接回一句预设应答
+6. 会话处理 - 活跃多轮对话优先消费输入
+7. 命令路由 - 无会话消费时匹配命令并执行
+8. 未知命令提示 - 以 / 开头却没有匹配的命令
+9. 闲聊处理 - 无命令时进行闲聊
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from .interfaces import (
 from .message import (
     ValidatedInboundEvent,
     compile_bot_name_pattern,
+    configured_command_prefixes,
     parse_text_command_context,
     scan_message,
 )
@@ -72,6 +75,9 @@ if TYPE_CHECKING:
     from .session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
+
+# “未知命令”提示里回显用户输入的命令词时最多显示的字数。
+_UNKNOWN_COMMAND_PREVIEW_CHARS = 20
 
 
 class AdjustableSemaphore:
@@ -268,7 +274,7 @@ class MessageParser:
     def refresh_prefix_cache(self) -> None:
         config   = self._config_provider.config
         bot_name = config.get("bot_name", "")
-        prefixes = tuple(config.get("command_prefixes", ["/"]))
+        prefixes = configured_command_prefixes(config)
 
         cache_key = (bot_name, prefixes)
         if cache_key == self._prefix_cache_key:
@@ -363,7 +369,7 @@ class Dispatcher:
         plugin_registry: PluginRegistry,
         admin_check: AdminCheck,
         build_context: ContextFactory,
-        semaphore: AdjustableSemaphore | asyncio.Semaphore | None,
+        semaphore: AdjustableSemaphore | None,
         session_manager: SessionManager | None = None,
         metrics: MetricsCollector | None       = None,
         clock: IClock | None                   = None,
@@ -646,7 +652,7 @@ class Dispatcher:
         # Step F: strict-/ unknown-command hint
         if self._is_unknown_command(ctx, resolved):
             cmd_name = ctx.clean_text.split()[0]
-            safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=20)
+            safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=_UNKNOWN_COMMAND_PREVIEW_CHARS)
             logger.info("[%s] Unknown command: '%s'", ctx.request_id, cmd_name)
             return [
                 {
@@ -758,28 +764,23 @@ class Dispatcher:
         request_texts = command_request_texts(ctx.event)
         if request_texts:
             context.request_texts = request_texts
-        if spec.catalog is not None:
-            invocation                 = resolve_catalog_invocation(spec.catalog, args)
-            context.command_invocation = invocation
-            refusal                    = command_access(invocation.node, context.principal)
-            if refusal is not None:
-                logger.warning(
-                    "[%s] Command refused: %s reason=%s",
-                    ctx.request_id,
-                    invocation.node.code,
-                    refusal,
-                )
-                text = _refusal_text(
-                    invocation.node,
-                    refusal,
-                    is_private = ctx.is_private,
-                    runner     = bool(ctx.event.get(COMMAND_RUNNER_EVENT_KEY)),
-                )
-                return [{"type": "text", "data": {"text": text}}]
-        elif spec.admin_only and not self.admin_check.is_admin(ctx.user_id):
-            # 只有不经 manifest 注册的命令没有目录节点；它们只声明了 admin_only。
-            logger.warning("[%s] Permission denied for user %s", ctx.request_id, ctx.user_id)
-            return [{"type": "text", "data": {"text": "权限不足"}}]
+        invocation                 = resolve_catalog_invocation(spec.catalog, args)
+        context.command_invocation = invocation
+        refusal                    = command_access(invocation.node, context.principal)
+        if refusal is not None:
+            logger.warning(
+                "[%s] Command refused: %s reason=%s",
+                ctx.request_id,
+                invocation.node.code,
+                refusal,
+            )
+            text = _refusal_text(
+                invocation.node,
+                refusal,
+                is_private = ctx.is_private,
+                runner     = bool(ctx.event.get(COMMAND_RUNNER_EVENT_KEY)),
+            )
+            return [{"type": "text", "data": {"text": text}}]
         start_time = time.perf_counter()
         try:
 
@@ -844,13 +845,10 @@ class Dispatcher:
         """
 
         text     = str(command_text or "").strip()
-        prefixes = [
-            str(item)
-            for item in self.config_provider.config.get("command_prefixes", ["/"]) or ["/"]
-        ]
-        used = next((item for item in prefixes if item), "/")
+        prefixes = configured_command_prefixes(self.config_provider.config)
+        used     = prefixes[0]
         for prefix_text in prefixes:
-            if prefix_text and text.startswith(prefix_text):
+            if text.startswith(prefix_text):
                 text = text[len(prefix_text) :].lstrip()
                 used = prefix_text
                 break
@@ -859,7 +857,9 @@ class Dispatcher:
             return [{"type": "text", "data": {"text": "命令为空"}}]
         resolved = self.router.resolve(text)
         if resolved is None:
-            safe_cmd = Dispatcher._truncate_text(text.split()[0], max_len=20)
+            safe_cmd = Dispatcher._truncate_text(
+                text.split()[0], max_len=_UNKNOWN_COMMAND_PREVIEW_CHARS
+            )
             return [{"type": "text", "data": {"text": f"❓ 未知命令: /{safe_cmd}"}}]
         spec, _args = resolved
         if spec.plugin in excluded_plugins:
@@ -1105,14 +1105,6 @@ class Dispatcher:
                         _context,
                         session,
                     )
-                if _plugin and hasattr(_plugin.module, "handle"):
-                    return await call_plugin_callback(
-                        _plugin.module.handle,
-                        "__session__",
-                        ctx.clean_text,
-                        ctx.event,
-                        _context,
-                    )
                 return None
 
             async def run_transaction() -> list[dict[str, Any]] | None:
@@ -1235,10 +1227,8 @@ class Dispatcher:
         """
         处理只叫 bot_name 的情况
 
-        小青按当时的话题和作息应一声，私聊和群聊都交给她，不用固定的“在/有事吗”。
+        只喊一声多半是在看机器人在不在：交给闲聊插件立刻回一句短应答，不走模型。
         """
-        if self._get_smalltalk_provider() == "xiaoqing_chat":
-            return await self._dispatch_to_provider(ctx, "handle_smalltalk", (ctx.text, ctx.event))
         default_response = self.random.choice(constants.DEFAULT_BOT_NAME_RESPONSES_LIST)
         return await self._dispatch_to_provider(
             ctx,

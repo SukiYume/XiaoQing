@@ -1,14 +1,8 @@
-"""Signin 与 core 交互所需的最小类型边界。"""
+"""Signin 与 core 交互所需的最小上下文协议。"""
 
-from collections.abc import Callable
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from core.interfaces import PluginSettingsSnapshot
-from core.plugin_base import segments as _core_segments
-
-OneBotEvent     = dict[str, Any]
-MessageSegments = list[dict[str, Any]]
-segments        = cast(Callable[[Any], MessageSegments], _core_segments)
 
 
 class Context(Protocol):
@@ -19,4 +13,4 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-__all__ = ["Context", "MessageSegments", "OneBotEvent", "segments"]
+__all__ = ["Context"]

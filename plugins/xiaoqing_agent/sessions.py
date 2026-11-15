@@ -36,6 +36,8 @@ class Session:
     turns     : list[dict[str, Any]] = field(default_factory=list)
     plugins   : list[str] = field(default_factory=list)
     updated_at: float = 0.0
+    # 开会话时从统一记忆取的、关于发起人的记忆；会话内不变，系统提示保持相同。
+    memory: str = ""
 
     def messages(self) -> list[dict[str, Any]]:
         return [self.system, *(message for turn in self.turns for message in turn["messages"])]
@@ -111,6 +113,8 @@ class SessionStore:
         return self.root / f"{chat.key}-{chat.user_id}.json"
 
     def _read(self, path: Path) -> Session | None:
+        """读不出来（缺失、损坏）就当没有这份会话：它只是对话上下文，丢了从头开始，不像任务记录要隔离保留。"""
+
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -125,6 +129,7 @@ class SessionStore:
                 turns      = [dict(turn) for turn in data["turns"]],
                 plugins    = [str(item) for item in data["plugins"]],
                 updated_at = float(data["updated_at"]),
+                memory     = str(data.get("memory") or ""),
             )
         except (KeyError, TypeError, ValueError):
             logger.warning("xiaoqing_agent session malformed, starting fresh path=%s", path.name)
@@ -182,9 +187,9 @@ class SessionStore:
                 "updated_at": time.time(),
                 "plugins"   : list(plugins),
                 "system"    : base.system,
+                "memory"    : base.memory,
                 "turns"     : turns,
             }
-            path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=1) + "\n")
 
         await self._run_locked(path, update)

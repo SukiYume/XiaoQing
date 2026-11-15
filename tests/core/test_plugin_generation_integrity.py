@@ -26,6 +26,7 @@ import core.plugin_manager as plugin_manager_module
 from core.models import PluginManifest
 from core.plugin_manager import PluginManager, PluginPathError
 from core.router import CommandRouter
+from tests.helpers.plugin_manager_test_support import load_plugin_dir
 
 _PLUGIN_PREFIX  = "integrity_"
 _TRACKER_PREFIX = "xiaoqing_integrity_"
@@ -341,7 +342,7 @@ async def test_orphan_lazy_helper_bytecode_is_not_importable(tmp_path: Path) -> 
     assert cached.is_file()
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
         loaded = manager.get(name)
         assert loaded is not None
@@ -365,7 +366,7 @@ async def test_source_added_after_publication_is_not_lazy_importable(tmp_path: P
     )
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         loaded = manager.get(name)
         assert loaded is not None
 
@@ -387,7 +388,7 @@ async def test_source_finder_resume_requires_a_matching_publication_pause(
     plugin_dir = _write_plugin(manager, name, "VALUE = 'published'\n")
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         finder = manager._source_finders[name]
 
         with pytest.raises(PluginPathError, match="cannot resume plugin generation"):
@@ -431,17 +432,17 @@ async def test_async_init_cache_removal_cannot_create_two_live_generations(
     sys.modules[tracker.__name__] = tracker
 
     try:
-        first.load_plugin(first_plugin)
+        first_load = asyncio.create_task(load_plugin_dir(first, first_plugin))
         await asyncio.wait_for(tracker.started.wait(), timeout=1)
         assert sys.modules[canonical_entry] is foreign
 
-        second.load_plugin(second_plugin)
+        await load_plugin_dir(second, second_plugin)
 
         assert second.get(name) is None
         assert name not in second.list_runtime_plugins()
 
         tracker.release.set()
-        await asyncio.wait_for(first.wait_inits(), timeout=1)
+        await asyncio.wait_for(first_load, timeout=5)
 
         assert name in first._quarantined_plugins
         assert first._execution_gates[name].closed is True
@@ -476,7 +477,7 @@ async def test_unload_ignores_external_module_after_plugin_path_becomes_link(
     sys.modules[external.__name__] = external
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         assert manager.get(name) is not None
 
         plugin_dir.rename(moved_dir)
@@ -508,7 +509,7 @@ async def test_case_variant_lazy_import_cannot_alias_one_windows_source(
     (plugin_dir / "helper.py").write_text("VALUE = 42\n", encoding="utf-8")
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         loaded = manager.get(name)
         assert loaded is not None
 
@@ -559,7 +560,7 @@ async def test_nested_data_package_is_fingerprinted_and_importable(tmp_path: Pat
     assert first != second
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         loaded = manager.get(name)
         assert loaded is not None
         assert loaded.module.VALUE == "other"
@@ -568,7 +569,7 @@ async def test_nested_data_package_is_fingerprinted_and_importable(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_source_change_after_fingerprint_is_rejected_before_execution(
+async def test_source_change_after_fingerprint_never_runs_or_publishes_the_new_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -601,13 +602,13 @@ async def test_source_change_after_fingerprint_is_rejected_before_execution(
 
     monkeypatch.setattr(manager, "_authorize_plugin_snapshot", fingerprint_then_change_source)
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
+        # 候选代只执行取指纹时读到的那份字节；发布前发现磁盘已变，整代回滚、不发布。
         loaded = manager.get(name)
         assert loaded is None
-        assert tracker.safe == 0
+        assert tracker.safe <= 1
         assert tracker.evil == 0
-        assert calls == 1
         assert entry.read_bytes() == evil_bytes
     finally:
         await _force_cleanup(manager, name)
@@ -631,7 +632,7 @@ async def test_lazy_namespace_packages_are_owned_and_fully_unloaded(tmp_path: Pa
     namespace_name = f"plugins.{name}.ns"
     helper_name    = f"{namespace_name}.helper"
 
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
     helper = loaded.module.load_helper()
@@ -669,7 +670,7 @@ async def test_entry_can_join_thread_that_lazy_imports_same_generation(tmp_path:
     (plugin_dir / "helper.py").write_text("VALUE = 42\n", encoding="utf-8")
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
         loaded = manager.get(name)
         assert loaded is not None
         assert loaded.module.VALUE == 42
@@ -701,7 +702,7 @@ async def test_spec_created_before_unload_is_revoked_before_source_execution(
     sys.modules[tracker_name] = tracker
     helper_name               = f"plugins.{name}.helper"
 
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
     finder                             = manager._source_finders[name]
@@ -778,7 +779,7 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
     tracker.executions        = 0
     sys.modules[tracker_name] = tracker
     helper_name               = f"plugins.{name}.helper"
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
     finder                              = manager._source_finders[name]
@@ -843,7 +844,7 @@ async def test_purge_cannot_delete_foreign_replacement_after_drain_snapshot(
     manager    = _build_manager(tmp_path)
     name       = "integrity_purge_swap"
     plugin_dir = _write_plugin(manager, name, "VALUE = 'owned'\n")
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
     package_name                      = f"plugins.{name}"
@@ -914,8 +915,7 @@ async def test_reload_restore_collision_preserves_foreign_objects_and_quarantine
         "async def shutdown(context=None):\n"
         "    return None\n",
     )
-    manager.load_plugin(plugin_dir)
-    await manager.wait_inits()
+    await load_plugin_dir(manager, plugin_dir)
     old_plugin = manager.get(name)
     assert old_plugin is not None
     assert tracker.old_inits == 1

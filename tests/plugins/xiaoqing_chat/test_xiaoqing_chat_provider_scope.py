@@ -272,7 +272,6 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
     state.pfc_state_store.get_async       = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = True,
             last_successful_reply_action = "say_goodbye",
             goal_list                    = [],
@@ -302,7 +301,7 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
     captured: dict[str, Any] = {}
 
     async def fake_run_pfc_once(**kwargs):
-        captured["state_override"] = kwargs["state_override"]
+        captured["state"] = kwargs["state"]
         return PFCRunResult(reply="", action="wait", reason="再观察", ended=False)
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -316,10 +315,6 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
         ),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
         patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
@@ -338,7 +333,7 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
         result = await _maybe_reply_smalltalk("新消息", sample_group_event, mock_context)
 
     assert result == []
-    assert captured["state_override"].ended is False
+    assert captured["state"].ended is False
 
 
 def test_default_model_tracks_available_route_order_without_a_separate_default():

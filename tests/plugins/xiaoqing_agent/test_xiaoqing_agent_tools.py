@@ -1414,8 +1414,10 @@ async def test_command_list_only_shows_what_the_requester_may_run(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_local_tools_stop_working_as_soon_as_the_admin_is_revoked(tmp_path: Path) -> None:
-    """本机工具每次调用都向 Core 复核：撤掉 Bot 管理员后同一任务里立即失效。"""
+async def test_local_tools_stop_working_as_soon_as_the_permission_is_revoked(
+    tmp_path: Path,
+) -> None:
+    """本机工具每次调用都向 Core 复核：发起人失去 /shell 的权限后同一任务里立即失效。"""
 
     context = FakeAgentContext(tmp_path / "data")
     env     = _env(tmp_path, context)
@@ -1433,7 +1435,7 @@ async def test_local_tools_stop_working_as_soon_as_the_admin_is_revoked(tmp_path
         ("run_python", {"code": "print(1)"}),
     ):
         result = await execute_tool(tools, env, name, args)
-        assert "不是 Bot 管理员" in result.content, name
+        assert "没有使用 /shell 的权限" in result.content, name
     assert not (env.workspace / "a.txt").exists()
 
     # 能发出的文件也随之收窄到这次任务的产出。

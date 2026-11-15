@@ -46,7 +46,7 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 }
 ```
 
-每日 13:30 任务采用 Core `broadcast` 模式，将结果发送到该 schedule 的 `group_ids`；字段省略时使用 `default_group_ids`。生产调度请配置至少一个目标群。
+每日 13:30 任务采用 Core `broadcast` 模式，将结果发送到该 schedule 的目标群：部署配置 `config.plugins.apod.schedules.apod_daily.group_ids` 写了就用它，没写时使用 `default_group_ids`。生产调度请配置至少一个目标群。
 
 `url` 和 `allowed_hosts` 均可省略。内置主机白名单包含 `science.nasa.gov`、`assets.science.nasa.gov` 和 `apod.nasa.gov`，`allowed_hosts` 用于增加其他可信主机。配置为 `https://apod.nasa.gov/apod/astropix.html` 时自动改用 NASA Science 的 APOD 首页。管理员指定的其他页面（包括历史 `image-article` 页面）按配置地址读取。
 
@@ -64,7 +64,7 @@ APOD 页面使用 `.hds-media-detail-hero` 作为主体。插件从主体内的 
 
 上述三个 NASA 内置主机可使用 Clash 透明代理的保留 fake-IP 地址。请求使用安全校验阶段确定的解析地址，并验证 TLS 主机名。全局安全层拒绝其余非公网地址。管理员增加的主机需要通过公网 DNS 校验。
 
-HTML、图片字节、MIME、尺寸和像素均有校验限制。缓存名使用最终 URL 的 SHA-256 摘要。
+HTML、图片字节、MIME、尺寸和像素均有校验限制。缓存名由图片请求 URL 的 SHA-256 摘要和经内容校验的扩展名组成。
 
 ---
 

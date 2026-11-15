@@ -11,12 +11,12 @@ import pytest
 
 from plugins.adnmb import adapi
 from plugins.bot_core import main as bot_core
-from plugins.xiaoqing_chat import context_builder
 from plugins.xiaoqing_chat import main as xiaoqing_chat
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.expression import bw_jargon_miner
 from plugins.xiaoqing_chat.llm.gateway import LLMError
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.memory import client as memory_client
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
 
@@ -43,7 +43,7 @@ async def test_adnmb_internal_download_error_logs_only_type(
         "fetch_public_bytes",
         AsyncMock(side_effect=RuntimeError(SENSITIVE_ERROR)),
     )
-    client = adapi.AdnmbClient(session=object(), cache_dir=tmp_path)
+    client = adapi.AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
 
     with caplog.at_level(logging.WARNING):
         result = await client.download_image("private/image.png")
@@ -105,41 +105,20 @@ def test_bot_core_mask_failure_logs_only_type(caplog: pytest.LogCaptureFixture) 
 
 
 @pytest.mark.asyncio
-async def test_xiaoqing_memory_failure_uses_correlated_public_log(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+async def test_xiaoqing_memory_failure_logs_only_the_error_type(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(
-        context_builder,
-        "llm_call_config",
-        Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
-    )
-    context = SimpleNamespace(
-        http_session = object(),
-        logger       = logging.getLogger("test.cr219.xiaoqing.memory"),
-        request_id   = "req-cr219-memory",
-        secrets      = {"token": CANARY},
-    )
-    runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
+    class ExplodingMemory:
+        async def recall(self, _payload):
+            raise RuntimeError(SENSITIVE_ERROR)
 
-    with caplog.at_level(logging.ERROR):
-        result = await context_builder.retrieve_memory_context(
-            context          = context,
-            runtime          = runtime,
-            state            = object(),
-            secrets          = {"token": CANARY},
-            data_dir         = tmp_path,
-            chat_id          = "private-chat",
-            history          = [],
-            current_text     = "hello",
-            planner_question = "",
-            bot_name         = "小青",
-        )
+    context = SimpleNamespace(capabilities=SimpleNamespace(memory=ExplodingMemory()))
+
+    with caplog.at_level(logging.INFO):
+        result = await memory_client.recall(context, purpose="reply", chat_id="u1", text="hello")
 
     logged = _log_text(caplog)
-    assert result == ""
-    assert "req-cr219-memory" in logged
+    assert not result.available and result.blocks == {}
     assert "RuntimeError" in logged
     assert CANARY not in logged
     assert all(record.exc_info is None for record in caplog.records)
@@ -185,7 +164,7 @@ async def test_xiaoqing_internal_llm_fallback_logs_only_type(
 ) -> None:
     monkeypatch.setattr(
         pfc_action_planner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         AsyncMock(side_effect=RuntimeError(SENSITIVE_ERROR)),
     )
 
@@ -226,7 +205,7 @@ async def test_xiaoqing_jargon_fallback_logs_only_type(
 ) -> None:
     monkeypatch.setattr(
         bw_jargon_miner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         AsyncMock(side_effect=LLMError(SENSITIVE_ERROR)),
     )
     history = [StoredMessage(role="user", name="user", ts=1.0, content="hello")]

@@ -295,10 +295,10 @@ async def test_timeline_request_uses_bounded_get_and_extracts_entries(
     session              = QueuedAiohttpSession(_json_response(_timeline_payload(entries)))
     context.http_session = session
 
-    tweets, cursor, has_next = await twitter._fetch_timeline(context, 'cursor"\\value')
+    tweets, cursor = await twitter._fetch_timeline(context, 'cursor"\\value')
 
     assert tweets == [entries[1]]
-    assert (cursor, has_next) == ("next-token", True)
+    assert cursor == "next-token"
     method, url, kwargs = session.requests[0]
     assert (method, url) == ("GET", twitter._TIMELINE_URL)
     assert kwargs["allow_redirects"] is False
@@ -364,7 +364,7 @@ async def test_timeline_malformed_shapes_fail_closed(
         with pytest.raises(twitter.TwitterFetchError, match="request failed"):
             await twitter._fetch_timeline(context)
     else:
-        assert await twitter._fetch_timeline(context) == ([], None, False)
+        assert await twitter._fetch_timeline(context) == ([], None)
 
 
 @pytest.mark.asyncio
@@ -569,8 +569,8 @@ async def test_fetch_paginates_and_deduplicates_urls(
     first  = "https://pbs.twimg.com/media/a.jpg"
     second = "https://pbs.twimg.com/media/b.jpg"
     pages  = {
-        None      : ([_tweet(first, first)], "cursor-1", True),
-        "cursor-1": ([_tweet(first, second)], None, False),
+        None      : ([_tweet(first, first)], "cursor-1"),
+        "cursor-1": ([_tweet(first, second)], None),
     }
 
     async def fetch_page(_context, cursor=None):
@@ -595,7 +595,7 @@ async def test_fetch_stops_after_two_pages_without_new_images(
     async def fetch_page(_context, cursor=None):
         calls.append(cursor)
         index = len(calls)
-        return ([_tweet(f"https://pbs.twimg.com/media/{index}.jpg")], f"c{index}", True)
+        return ([_tweet(f"https://pbs.twimg.com/media/{index}.jpg")], f"c{index}")
 
     monkeypatch.setattr(twitter, "_fetch_timeline", fetch_page)
     monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=False))
@@ -618,7 +618,7 @@ async def test_fetch_reports_when_every_media_download_fails(
     monkeypatch.setattr(
         twitter,
         "_fetch_timeline",
-        AsyncMock(return_value=([_tweet(*urls)], None, False)),
+        AsyncMock(return_value=([_tweet(*urls)], None)),
     )
     monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=None))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
@@ -634,14 +634,14 @@ async def test_fetch_stops_on_empty_timeline_and_repeated_cursor(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    timeline = AsyncMock(return_value=([], None, False))
+    timeline = AsyncMock(return_value=([], None))
     monkeypatch.setattr(twitter, "_fetch_timeline", timeline)
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     assert await twitter._fetch_twitter_images(context) == 0
 
     timeline.side_effect = [
-        ([_tweet("https://pbs.twimg.com/media/a.jpg")], "same", True),
-        ([_tweet("https://pbs.twimg.com/media/b.jpg")], "same", True),
+        ([_tweet("https://pbs.twimg.com/media/a.jpg")], "same"),
+        ([_tweet("https://pbs.twimg.com/media/b.jpg")], "same"),
     ]
     monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=True))
     assert await twitter._fetch_twitter_images(context) == 2
@@ -659,9 +659,9 @@ async def test_initial_backfill_downloads_all_media_and_records_completion(
         "_fetch_timeline",
         AsyncMock(
             side_effect=[
-                ([_tweet("https://pbs.twimg.com/media/old-a.jpg")], "a", True),
-                ([_tweet("https://pbs.twimg.com/media/old-b.jpg")], "b", True),
-                ([_tweet(*urls)], None, False),
+                ([_tweet("https://pbs.twimg.com/media/old-a.jpg")], "a"),
+                ([_tweet("https://pbs.twimg.com/media/old-b.jpg")], "b"),
+                ([_tweet(*urls)], None),
             ]
         ),
     )
@@ -683,7 +683,7 @@ async def test_fetch_honors_one_page_limit_without_requiring_end_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context.secrets["plugins"]["twitter"]["max_pages"] = 1
-    timeline = AsyncMock(return_value=([_tweet("https://pbs.twimg.com/media/a.jpg")], "next", True))
+    timeline = AsyncMock(return_value=([_tweet("https://pbs.twimg.com/media/a.jpg")], "next"))
     monkeypatch.setattr(twitter, "_fetch_timeline", timeline)
     monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=True))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
@@ -706,7 +706,7 @@ async def test_duplicate_fetch_rounds_are_serialized(
         peak = max(peak, active)
         await asyncio.sleep(0.01)
         active -= 1
-        return [], None, False
+        return [], None
 
     monkeypatch.setattr(twitter, "_fetch_timeline", slow_empty_page)
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())

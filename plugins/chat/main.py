@@ -14,16 +14,16 @@ from typing import Any
 from core.async_keyed_lock import AsyncKeyedLockPool
 from core.atomic_store import AtomicJsonStore, keyed_path_lock
 from core.bounded_http import (
+    JSON_MIME_POLICY,
     BodyLimits,
     HttpStatusError,
     JsonLimits,
-    MimePolicy,
     aiohttp_request_bounded,
     parse_bounded_json,
 )
 from core.interfaces import PluginContextProtocol
 from core.lifecycle import DeferredCancellation, await_owned_task
-from core.plugin_base import run_sync, segments
+from core.plugin_base import has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
 # ============================================================
@@ -53,10 +53,6 @@ _COZE_BODY_LIMITS      = BodyLimits(
     max_decoded_bytes = 4 * 1024 * 1024,
 )
 _COZE_JSON_LIMITS = JsonLimits(max_bytes=_COZE_BODY_LIMITS.max_decoded_bytes)
-_COZE_JSON_MIME = MimePolicy(
-    exact               = frozenset({"application/json"}),
-    structured_suffixes = frozenset({"+json"}),
-)
 _QUOTA_LOCKS = AsyncKeyedLockPool(max_keys=1024)
 _QUOTA_FILENAME = "chat_quota.json"
 _QUOTA_LOCK_KEY = "chat-quota"
@@ -95,9 +91,7 @@ def _config_string(value: Any, *, allow_empty: bool = False) -> str | None:
         return None
     if not value:
         return "" if allow_empty else None
-    if len(value) > MAX_CONFIG_STRING_LENGTH or any(
-        ord(char) < 32 or ord(char) == 127 for char in value
-    ):
+    if len(value) > MAX_CONFIG_STRING_LENGTH or has_control_characters(value):
         return None
     return value
 
@@ -116,11 +110,7 @@ def _actor_identity(value: Any) -> tuple[str, str | int | None]:
 
     if type(value) is int and value >= 0:
         return str(value), value
-    if (
-        isinstance(value, str)
-        and 1 <= len(value) <= 128
-        and all(ord(char) >= 32 and ord(char) != 127 for char in value)
-    ):
+    if isinstance(value, str) and 1 <= len(value) <= 128 and not has_control_characters(value):
         return value, value
     return _ANONYMOUS_ACTOR, None
 
@@ -302,7 +292,7 @@ async def _request_coze_json(
             method,
             url,
             limits         = _COZE_BODY_LIMITS,
-            mime_policy    = _COZE_JSON_MIME,
+            mime_policy    = JSON_MIME_POLICY,
             headers        = headers,
             request_kwargs = request_kwargs,
         )

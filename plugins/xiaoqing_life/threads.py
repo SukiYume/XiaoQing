@@ -12,13 +12,13 @@ from typing import Any
 
 from .config import LifeConfig
 from .days import DAY
-from .lifecycle import merge_topic
+from .lifecycle import TOPIC_CHARS, merge_topic
 from .safety import similar
 from .stores import new_id
 
-DONE_KEEP_SECONDS = 30 * 86400
+DONE_KEEP_SECONDS = 30 * DAY
 MAX_DEPTH         = 3
-MAX_NOTES         = 16  # 一次研究最多 3 轮 × 3 条要点
+MAX_NOTES         = 16  # 默认一次研究 3 轮、每轮最多 3 条要点；只留最近这些
 MAX_ACTIONS       = 12
 MAX_CORRECTIONS   = 4
 MAX_EVENTS        = 10
@@ -26,20 +26,26 @@ MAX_PARKED        = 2
 PARK_LIMIT_DAYS   = 30
 MAX_PARK_COUNT    = 2
 DEFAULT_PARK_WHY  = "资料不太够"
-ACTIVE            = ("open", "reviewing")
+# 开题时各字段的长度上限（话题是 ``lifecycle.TOPIC_CHARS``）。
+TITLE_CHARS          = 20
+WHY_CHARS            = 60
+DONE_WHEN_CHARS      = 30
+QUERY_CHARS          = 30
+FALLBACK_TOPIC_CHARS = 8
+ACTIVE               = ("open", "reviewing")
 # fact：事实、原理、定义、来历，先查百科 / 维基；practice：做法、体验、评测、梗怎么用，先搜 B站。
 QUESTION_KINDS = ("fact", "practice")
 STALL_WHY      = "连着两次都没查到新东西"
 
 
-def on_thread_event(thread: dict[str, Any], kind: str, **data: Any) -> None:
+def on_thread_event(thread: dict[str, Any], kind: str, *, now: float) -> None:
     """小课题的重要变化（开 / 搁置 / 放弃 / 更正 / done）都从这一个函数出去：留一份有界的事件记录。
 
     主题档案不靠它推送，而是由 ``dossier.sync`` 从小课题当前状态幂等地同步。
     """
 
     events: list[dict[str, Any]] = thread.setdefault("events", [])
-    events.append({"kind": kind, "at": data.get("now", thread.get("updated_at", 0.0))})
+    events.append({"kind": kind, "at": now})
     del events[:-MAX_EVENTS]
 
 
@@ -64,14 +70,14 @@ def find_similar(threads: list[dict[str, Any]], title: str) -> dict[str, Any] | 
 def pick_topic(interests: dict[str, dict[str, Any]], topic: str, title: str, query: str) -> str:
     """话题：模型给的 > 把搜索词 / 标题并到已有兴趣 > 标题前 8 字。"""
 
-    given = topic.strip()[:12]
+    given = topic.strip()[:TOPIC_CHARS]
     if given:
         return given
     for text in (query, title):
         merged = merge_topic(interests, text) if text.strip() else ""
         if merged and merged in interests:
             return merged
-    return title.strip()[:8]
+    return title.strip()[:FALLBACK_TOPIC_CHARS]
 
 
 def open_thread(
@@ -90,7 +96,7 @@ def open_thread(
 ) -> dict[str, Any] | None:
     """名额已满或已有相近的小课题时不新开；后续问题带 ``parent_id`` 和 ``depth``（最多 3 层）。"""
 
-    title = title.strip()[:20]
+    title = title.strip()[:TITLE_CHARS]
     if not title or len(active_threads(threads)) >= cfg.max_open_threads:
         return None
     if find_similar(threads, title) is not None:
@@ -98,11 +104,11 @@ def open_thread(
     thread = {
         "id"           : new_id("t"),
         "title"        : title,
-        "topic"        : topic.strip()[:12] or title[:8],
-        "why"          : why.strip()[:60],
-        "done_when"    : done_when.strip()[:30],
+        "topic"        : topic.strip()[:TOPIC_CHARS] or title[:FALLBACK_TOPIC_CHARS],
+        "why"          : why.strip()[:WHY_CHARS],
+        "done_when"    : done_when.strip()[:DONE_WHEN_CHARS],
         "kind"         : kind if kind in QUESTION_KINDS else "",
-        "next_query"   : (next_query.strip() or title)[:30],
+        "next_query"   : (next_query.strip() or title)[:QUERY_CHARS],
         "status"       : "open",
         "steps"        : 0,
         "empty_streak" : 0,
@@ -163,20 +169,31 @@ def add_finding(
         }
     )
     if old is not None:
-        old["superseded_by"]              = note_id
-        corrections: list[dict[str, Any]] = thread.setdefault("corrections", [])
-        correction                        = {
+        old["superseded_by"] = note_id
+        add_correction(
+            thread, before=str(old.get("note", "")), after=text, episode_id=episode_id, now=now
+        )
+    del thread["notes"][:-MAX_NOTES]
+    return note_id
+
+
+def add_correction(
+    thread: dict[str, Any], *, before: str, after: str, episode_id: str, now: float
+) -> None:
+    """小课题上记一条更正（原来的说法 → 现在的说法，依据的经历），只留最近 ``MAX_CORRECTIONS`` 条。"""
+
+    corrections: list[dict[str, Any]] = thread.setdefault("corrections", [])
+    corrections.append(
+        {
             "id"        : new_id("c"),
-            "before"    : str(old.get("note", ""))[:80],
-            "after"     : text.strip()[:80],
+            "before"    : before.strip()[:80],
+            "after"     : after.strip()[:80],
             "episode_id": episode_id,
             "at"        : now,
         }
-        corrections.append(correction)
-        del corrections[:-MAX_CORRECTIONS]
-        on_thread_event(thread, "correction", now=now, correction=correction)
-    del thread["notes"][:-MAX_NOTES]
-    return note_id
+    )
+    del corrections[:-MAX_CORRECTIONS]
+    on_thread_event(thread, "correction", now=now)
 
 
 def record_step(thread: dict[str, Any], cfg: LifeConfig, *, new_content: bool, now: float) -> bool:
@@ -215,7 +232,7 @@ def drop(thread: dict[str, Any], now: float, reason: str = "") -> None:
     thread["status"]      = "dropped"
     thread["updated_at"]  = now
     thread["drop_reason"] = reason.strip()[:30]
-    on_thread_event(thread, "dropped", now=now, reason=thread["drop_reason"])
+    on_thread_event(thread, "dropped", now=now)
 
 
 # ───────────────────────────── 搁置 ─────────────────────────────
@@ -244,7 +261,7 @@ def park(
     thread["parked_at"]    = now
     thread["park_count"]   = int(thread.get("park_count", 0)) + 1
     thread["updated_at"]   = now
-    on_thread_event(thread, "parked", now=now, reason=why)
+    on_thread_event(thread, "parked", now=now)
     enforce_parked_cap(threads, now)
     return str(thread["status"])
 

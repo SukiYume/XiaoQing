@@ -8,17 +8,22 @@ from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ...config import PendoConfig
 from ...services.db import Database
 from ...utils.currency import currency_label
 from ...utils.formatters import ledger_amount_yuan
 from ...utils.identifiers import public_id
-from ...utils.time_utils import CN_WEEKDAYS, TimezoneHelper, now_in_timezone
+from ...utils.time_utils import (
+    CN_WEEKDAYS,
+    TimezoneHelper,
+    now_in_timezone,
+    parse_strict_day,
+)
 from ..analytics.event_schedule import build_event_schedule, ensure_datetime
 from ..analytics.ledger_insights import build_ledger_insights
 from ..analytics.notes_overview import build_notes_widget_overview
 from ..analytics.task_overview import build_task_widget_overview
 from ..deps import get_current_user, get_db
-from ..utils import parse_iso_date
 
 router = APIRouter()
 
@@ -81,10 +86,7 @@ def _title_text(value: str | None, fallback: str = "无标题", limit: int = 22)
 def _preview_text(value: str | None, limit: int = 26) -> str:
     """折叠正文空白并截成适合小组件的预览。"""
 
-    text = " ".join(str(value or "").strip().split())
-    if len(text) <= limit:
-        return text
-    return f"{text[: limit - 1]}…"
+    return _title_text(" ".join(str(value or "").split()), fallback="", limit=limit)
 
 
 def _format_amount(value: float, *, signed: bool = False, currency: str = "CNY") -> str:
@@ -131,28 +133,16 @@ def _event_item_payload(entry: JsonObject) -> JsonObject:
     }
 
 
-def _format_task_meta(
-    task: JsonObject,
-    today_key: str,
-    user_timezone: Any,
-) -> str:
-    """拼接任务状态与计划/截止日期。"""
+def _format_task_meta(task: JsonObject, today_key: str) -> str:
+    """拼接任务状态与计划日（``plan_key``：计划日优先，没有则取本地截止日）。"""
 
     status_map = {
         "open"     : "待办",
         "done"     : "已完成",
         "cancelled": "已取消",
     }
-    status      = status_map.get(str(task.get("status") or ""), "待办")
-    plan_date   = str(task.get("plan_date") or "")
-    deadline_at = str(task.get("deadline_at") or "")
-    due_day     = parse_iso_date(plan_date)
-    if due_day is None and deadline_at:
-        try:
-            due_day = TimezoneHelper.parse(deadline_at, user_timezone).date()
-        except (TypeError, ValueError):
-            pass
-    due_key = due_day.isoformat() if due_day is not None else ""
+    status  = status_map.get(str(task.get("status") or ""), "待办")
+    due_key = str(task.get("plan_key") or "")
     if due_key:
         if due_key == today_key:
             due_label = "今天"
@@ -271,12 +261,8 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
 def _parse_calendar_sync_date(value: str, field_name: str) -> date:
     """解析日历同步自然日，并对调用方返回明确的 422。"""
 
-    parsed = parse_iso_date(value)
-    if (
-        parsed is None
-        or len(str(value).strip()) != 10
-        or not _MIN_WIDGET_YEAR <= parsed.year <= _MAX_WIDGET_YEAR
-    ):
+    parsed = parse_strict_day(str(value).strip())
+    if parsed is None or not _MIN_WIDGET_YEAR <= parsed.year <= _MAX_WIDGET_YEAR:
         raise HTTPException(status_code=422, detail=f"{field_name} must be a valid ISO date")
     return parsed
 
@@ -333,24 +319,21 @@ def build_widget_calendar(
         seen.add(identity)
         unique_rows.append(payload)
 
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     return {
         "start_date"  : start_day.isoformat(),
         "end_date"    : end_day.isoformat(),
-        "timezone"    : TimezoneHelper.get_user_timezone(owner_id, db).key,
-        "window_start": range_start.replace(
-            tzinfo=TimezoneHelper.get_user_timezone(owner_id, db)
-        ).isoformat(),
-        "window_end": datetime.combine(
-            end_day + timedelta(days=1),
-            datetime.min.time(),
-            tzinfo=TimezoneHelper.get_user_timezone(owner_id, db),
+        "timezone"    : user_timezone.key,
+        "window_start": range_start.replace(tzinfo=user_timezone).isoformat(),
+        "window_end"  : datetime.combine(
+            end_day + timedelta(days=1), datetime.min.time(), tzinfo=user_timezone
         ).isoformat(),
         "items": unique_rows,
     }
 
 
 def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
-    """构建去重后的待办概览。"""
+    """构建待办概览：计数摘要和最该先处理的几项。"""
 
     today_key = now.strftime("%Y-%m-%d")
     overview  = build_task_widget_overview(
@@ -361,7 +344,6 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
     )
     items          = overview["items"]
     summary        = overview["summary"]
-    user_timezone  = TimezoneHelper.get_user_timezone(owner_id, db)
     secondary_bits = [f"{summary['focus_count']} 项今日聚焦"]
     if summary["overdue_count"]:
         secondary_bits.append(f"{summary['overdue_count']} 项逾期")
@@ -377,7 +359,7 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
         "items": [
             {
                 "title": _title_text(task.get("title"), limit=18),
-                "meta" : _format_task_meta(task, today_key, user_timezone),
+                "meta" : _format_task_meta(task, today_key),
             }
             for task in items
         ],
@@ -439,7 +421,7 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
                 "meta" : " · ".join(
                     part
                     for part in [
-                        getattr(item, "ledger_category", None) or "未分类",
+                        getattr(item, "ledger_category", None) or PendoConfig.DEFAULT_CATEGORY,
                         getattr(item, "ledger_date", None) or "",
                     ]
                     if part
@@ -489,7 +471,7 @@ def _build_note_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
         "items": [
             {
                 "title"  : _title_text(note.get("title"), limit=18),
-                "meta"   : note.get("category") or "未分类",
+                "meta"   : note.get("category") or PendoConfig.DEFAULT_CATEGORY,
                 "preview": _preview_text(note.get("content"), limit=22),
             }
             for note in notes
@@ -526,7 +508,7 @@ def build_widget_summary(
     return base
 
 
-@router.get("/widget/summary")  # type: ignore[untyped-decorator]
+@router.get("/widget/summary")
 def get_widget_summary(
     section: Annotated[str, Query(max_length=16)] = "auto",
     now: Annotated[str | None, Query(max_length=64)] = None,
@@ -542,7 +524,7 @@ def get_widget_summary(
     }
 
 
-@router.get("/widget/calendar")  # type: ignore[untyped-decorator]
+@router.get("/widget/calendar")
 def get_widget_calendar(
     start_date: Annotated[str, Query(min_length=10, max_length=10)],
     end_date: Annotated[str, Query(min_length=10, max_length=10)],

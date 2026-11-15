@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 import uuid
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Final, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config import PendoConfig
@@ -16,10 +15,11 @@ from ..models.item import Item, ItemType
 from ..utils.time_utils import (
     TimezoneHelper,
     normalize_datetime_for_storage,
+    parse_remind_times,
     require_canonical_utc_timestamp,
     utc_now_iso,
 )
-from .db_schema import SQLITE_ID_BATCH_SIZE
+from .db_schema import EVENT_ROLES_SQL, SQLITE_ID_BATCH_SIZE
 
 # 提醒行对应的时刻仍在条目当前的 remind_times 里（查询里条目别名 i、提醒行别名 rl）。
 # 已从条目上移除的提醒会留下历史行，不能再进入投递队列。
@@ -29,6 +29,29 @@ _REMINDER_STILL_SCHEDULED_SQL = """EXISTS (
          AS active_reminder
     WHERE CAST(active_reminder.value AS TEXT) = rl.remind_time
 )"""
+
+# 周期任务投递记录的恢复窗口：创建时间早于它的记录不再重试。
+_SCHEDULED_DELIVERY_RECOVERY_WINDOW: Final = timedelta(hours=24)
+
+ReminderStatus = Literal["pending", "sent", "confirmed"]
+
+
+def reminder_status(sent_at: object, confirmed_at: object) -> ReminderStatus:
+    """一条提醒日志的状态：已确认优先于已发送，两者都没有就是待发送。"""
+    return "confirmed" if confirmed_at else "sent" if sent_at else "pending"
+
+
+def _event_role_sql(prefix: str = "") -> str:
+    """日程只有角色已知（或旧数据的角色为空）才进入提醒；其他类型不受这条限制。"""
+    return (
+        f"({prefix}type != 'event' OR {prefix}event_role IS NULL"
+        f" OR {prefix}event_role IN {EVENT_ROLES_SQL})"
+    )
+
+
+def _open_task_sql(prefix: str = "") -> str:
+    """待办只有未完成才进入提醒；其他类型不受这条限制。"""
+    return f"({prefix}type != 'task' OR COALESCE({prefix}status, 'open') = 'open')"
 
 
 class ReminderRepositoryMixin:
@@ -85,6 +108,18 @@ class ReminderRepositoryMixin:
         return cast(tuple[str, str, str], identity)
 
     @classmethod
+    def _now_text(cls, now: datetime | None, field_name: str) -> str:
+        """当前时刻（缺省取系统 UTC 时钟）的 UTC 秒级文本。"""
+        return cls._as_utc(now or datetime.now(UTC), field_name).isoformat(timespec="seconds")
+
+    @classmethod
+    def _retry_text(cls, retry_at: datetime | None, field_name: str) -> str | None:
+        """下次允许重试的时刻（UTC 秒级文本）；不指定时为 ``None``，即立即可重试。"""
+        if not retry_at:
+            return None
+        return cls._as_utc(retry_at, field_name).isoformat(timespec="seconds")
+
+    @classmethod
     def _open_lease(
         cls, now: datetime | None, lease_seconds: int, subject: str
     ) -> tuple[str, str, str]:
@@ -99,7 +134,11 @@ class ReminderRepositoryMixin:
         )
 
     def log_reminder(self, item_id: str, remind_time: str, sent: bool = True) -> None:
-        """记录提醒发送（UPSERT：首次 INSERT，重复发送 UPDATE repeat_count + last_sent_at）"""
+        """不经租约直接记录一次提醒发送（UPSERT）。
+
+        第一次写入插入一行（``sent=False`` 时是待发送行）；该提醒已有日志且 ``sent=True`` 时，
+        重复次数加一并刷新最近发送时间；已有日志而 ``sent=False`` 时不改动。
+        """
         require_canonical_utc_timestamp(remind_time, "remind_time")
         conn   = self.get_connection()
         cursor = conn.cursor()
@@ -165,10 +204,10 @@ class ReminderRepositoryMixin:
         *,
         now: datetime,
     ) -> list[str]:
-        """读取 24 小时恢复窗口内已尝试且可重试的周期。"""
+        """读取恢复窗口（24 小时）内已尝试且可重试的周期。"""
         current = self._as_utc(now, "scheduled delivery retry time")
         now_text = current.isoformat(timespec="seconds")
-        stale_text = (current - timedelta(hours=24)).isoformat(timespec="seconds")
+        stale_text = (current - _SCHEDULED_DELIVERY_RECOVERY_WINDOW).isoformat(timespec="seconds")
         rows = (
             self.get_connection()
             .execute(
@@ -238,10 +277,8 @@ class ReminderRepositoryMixin:
     ) -> bool:
         """仅在调用方仍持有租约时把调度投递标为已发送。"""
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
-        current = self._as_utc(
-            now or datetime.now(UTC), "scheduled delivery completion time"
-        ).isoformat(timespec="seconds")
-        conn = self.get_connection()
+        current = self._now_text(now, "scheduled delivery completion time")
+        conn    = self.get_connection()
         with conn:
             cursor = conn.execute(
                 """
@@ -267,15 +304,9 @@ class ReminderRepositoryMixin:
     ) -> bool:
         """释放失败租约，使其他 worker 可在指定时间后重试。"""
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
-        current = self._as_utc(
-            now or datetime.now(UTC), "scheduled delivery release time"
-        ).isoformat(timespec="seconds")
-        retry_text = (
-            self._as_utc(retry_at, "scheduled delivery retry time").isoformat(timespec="seconds")
-            if retry_at
-            else None
-        )
-        conn = self.get_connection()
+        current    = self._now_text(now, "scheduled delivery release time")
+        retry_text = self._retry_text(retry_at, "scheduled delivery retry time")
+        conn       = self.get_connection()
         with conn:
             cursor = conn.execute(
                 """
@@ -362,12 +393,8 @@ class ReminderRepositoryMixin:
         retry_at: datetime | None = None,
     ) -> bool:
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        retry_text = (
-            self._as_utc(retry_at, "reminder retry time").isoformat(timespec="seconds")
-            if retry_at
-            else None
-        )
-        conn = self.get_connection()
+        retry_text = self._retry_text(retry_at, "reminder retry time")
+        conn       = self.get_connection()
         with conn:
             cursor = conn.execute(
                 """
@@ -409,12 +436,8 @@ class ReminderRepositoryMixin:
     ) -> bool:
         """在暂时失败或静默延迟后释放首次提醒租约。"""
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        retry_text = (
-            self._as_utc(retry_at, "reminder retry time").isoformat(timespec="seconds")
-            if retry_at
-            else None
-        )
-        conn = self.get_connection()
+        retry_text = self._retry_text(retry_at, "reminder retry time")
+        conn       = self.get_connection()
         with conn:
             cursor = conn.execute(
                 """
@@ -530,13 +553,7 @@ class ReminderRepositoryMixin:
             if item_row is None:
                 return None
 
-            try:
-                raw_times: object = json.loads(str(item_row["remind_times"] or "[]"))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                return None
-            if not isinstance(raw_times, list) or remind_time not in {
-                value for value in raw_times if isinstance(value, str)
-            }:
+            if remind_time not in parse_remind_times(item_row["remind_times"]):
                 return None
 
             current = self._as_utc(
@@ -602,15 +619,9 @@ class ReminderRepositoryMixin:
         if updated is None:
             return None
         return {
-            "outcome": "updated",
-            "time"   : str(updated["remind_time"]),
-            "status": (
-                "confirmed"
-                if updated["confirmed_at"]
-                else "sent"
-                if updated["sent_at"]
-                else "pending"
-            ),
+            "outcome"     : "updated",
+            "time"        : str(updated["remind_time"]),
+            "status"      : reminder_status(updated["sent_at"], updated["confirmed_at"]),
             "sent_at"     : updated["sent_at"],
             "confirmed_at": updated["confirmed_at"],
             "repeat_count": int(updated["repeat_count"] or 0),
@@ -638,14 +649,9 @@ class ReminderRepositoryMixin:
             f"FROM items WHERE {' AND '.join(item_where)}",
             item_params,
         )
-        row = cursor.fetchone()
-        if not row or not row["remind_times"]:
-            return 0
-        try:
-            remind_times = json.loads(row["remind_times"])
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return 0
-        if not isinstance(remind_times, list):
+        row          = cursor.fetchone()
+        remind_times = parse_remind_times(row["remind_times"]) if row else []
+        if not remind_times:
             return 0
 
         user_id       = str(row["owner_id"])
@@ -694,7 +700,7 @@ class ReminderRepositoryMixin:
 
     @staticmethod
     def _latest_confirmable_time(
-        remind_times: list[Any],
+        remind_times: list[str],
         *,
         requested_time: str | None,
         allow_future: bool,
@@ -704,13 +710,10 @@ class ReminderRepositoryMixin:
         """选择最近一个已到期提醒；显式授权时也可选择指定未来提醒。"""
         candidates: list[tuple[datetime, str]] = []
         for raw_time in remind_times:
-            if not isinstance(raw_time, str):
-                continue
             if requested_time is not None and raw_time != requested_time:
                 continue
-            try:
-                parsed_time = TimezoneHelper.parse(raw_time, timezone_info)
-            except (TypeError, ValueError):
+            parsed_time = TimezoneHelper.try_parse(raw_time, timezone_info)
+            if parsed_time is None:
                 continue
             if parsed_time <= now or (allow_future and raw_time == requested_time):
                 candidates.append((parsed_time, raw_time))
@@ -830,11 +833,8 @@ class ReminderRepositoryMixin:
                     OR rl.claim_expires_at <= ?
                   )
                   AND i.deleted = 0 AND i.type IN ('event', 'task')
-                  AND (i.type != 'task' OR COALESCE(i.status, 'open') = 'open')
-                  AND (
-                    i.type != 'event' OR i.event_role IS NULL
-                    OR i.event_role IN ('single', 'multi_node_child', 'recurring_occurrence')
-                  )
+                  AND {_open_task_sql("i.")}
+                  AND {_event_role_sql("i.")}
                   AND {_REMINDER_STILL_SCHEDULED_SQL}
                 GROUP BY i.id
                 ORDER BY due_at_utc, i.id
@@ -869,7 +869,7 @@ class ReminderRepositoryMixin:
             FROM reminder_logs rl
             JOIN items i ON rl.item_id = i.id
                 AND i.deleted = 0
-                AND (i.type != 'task' OR COALESCE(i.status, 'open') = 'open')
+                AND {_open_task_sql("i.")}
             WHERE rl.sent_at IS NOT NULL AND rl.confirmed_at IS NULL
               AND {_REMINDER_STILL_SCHEDULED_SQL}
             ORDER BY rl.sent_at
@@ -890,16 +890,13 @@ class ReminderRepositoryMixin:
         conditions = [
             f"type IN ('{ItemType.EVENT.value}', '{ItemType.TASK.value}')",
             "deleted = 0",
-            f"(type != '{ItemType.EVENT.value}' OR event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))",
-            f"(type != '{ItemType.TASK.value}' OR COALESCE(status, 'open') = 'open')",
+            _event_role_sql(),
+            _open_task_sql(),
             "remind_times IS NOT NULL",
             "remind_times != '[]'",
+            "owner_id = ?",
         ]
 
-        conditions.append("owner_id = ?")
-
-        query = f"SELECT * FROM items WHERE {' AND '.join(conditions)}"
-
-        cursor.execute(query, (owner_id,))
+        cursor.execute(f"SELECT * FROM items WHERE {' AND '.join(conditions)}", (owner_id,))
 
         return [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]

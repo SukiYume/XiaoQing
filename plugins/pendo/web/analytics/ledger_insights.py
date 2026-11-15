@@ -8,9 +8,12 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any, Literal, cast
 
+from ...config import PendoConfig
 from ...services.db import Database
 from ...utils.currency import currency_code
-from ..utils import amount_filter_cents
+from ...utils.time_utils import parse_strict_day, shift_months
+from ...utils.validators import LEDGER_TRANSACTION_TYPES
+from ..utils import amount_filter_cents, clean_optional_text
 
 JsonObject      = dict[str, Any]
 SqlParams       = list[str | int]
@@ -18,19 +21,21 @@ TransactionType = Literal["expense", "income", "transfer"]
 CompareMode     = Literal["previous_period", "previous_year_to_date", "none"]
 BucketMode      = Literal["day", "month"]
 
-_TRANSACTION_TYPES = frozenset({"expense", "income", "transfer"})
 _COMPARE_MODES = frozenset({"previous_period", "previous_year_to_date", "none"})
 _DELTA_LABELS: dict[CompareMode, str] = {
     "previous_period"      : "较上一周期",
     "previous_year_to_date": "较去年同期",
     "none"                 : "无对比周期",
 }
-_LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
-_LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({_LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
+LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
+LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
+LEDGER_CATEGORY_EXPR     = (
+    f"COALESCE(NULLIF(TRIM(ledger_category), ''), '{PendoConfig.DEFAULT_CATEGORY}')"
+)
 
 
 @dataclass(frozen=True, slots=True)
-class _LedgerFilters:
+class LedgerFilters:
     """一次账本洞察查询使用的完整筛选条件。"""
 
     owner_id        : str
@@ -47,11 +52,8 @@ class _LedgerFilters:
 def _parse_date(value: str) -> date:
     """严格解析 YYYY-MM-DD，避免宽松格式进入 SQL 日期边界。"""
 
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"日期必须是有效的 YYYY-MM-DD：{value}") from exc
-    if len(value) != 10 or parsed.isoformat() != value:
+    parsed = parse_strict_day(value)
+    if parsed is None:
         raise ValueError(f"日期必须是有效的 YYYY-MM-DD：{value}")
     return parsed
 
@@ -78,11 +80,11 @@ def _iter_bucket_keys(start: date, end: date, mode: BucketMode) -> list[str]:
     final = end.replace(day=1)
     while current <= final:
         keys.append(current.strftime("%Y-%m"))
-        current = date(current.year + current.month // 12, current.month % 12 + 1, 1)
+        current = shift_months(current, 1)
     return keys
 
 
-def _build_ledger_where(filters: _LedgerFilters) -> tuple[list[str], SqlParams]:
+def build_ledger_where(filters: LedgerFilters) -> tuple[list[str], SqlParams]:
     """生成参数化账本查询条件；金额始终以整数分字段比较。"""
 
     where = ["type = 'ledger'", "owner_id = ?", "deleted = 0"]
@@ -105,10 +107,10 @@ def _build_ledger_where(filters: _LedgerFilters) -> tuple[list[str], SqlParams]:
         where.append("ledger_date <= ?")
         params.append(filters.end_date)
     if filters.amount_min is not None:
-        where.append(f"{_LEDGER_AMOUNT_EXPR} >= ?")
+        where.append(f"{LEDGER_AMOUNT_EXPR} >= ?")
         params.append(amount_filter_cents(filters.amount_min))
     if filters.amount_max is not None:
-        where.append(f"{_LEDGER_AMOUNT_EXPR} <= ?")
+        where.append(f"{LEDGER_AMOUNT_EXPR} <= ?")
         params.append(amount_filter_cents(filters.amount_max))
     return where, params
 
@@ -149,7 +151,7 @@ def _previous_year_day(current: date) -> date:
 
 def _build_period_delta(
     conn: sqlite3.Connection,
-    filters: _LedgerFilters,
+    filters: LedgerFilters,
     current_total: float,
     compare_mode: CompareMode,
 ) -> tuple[float | None, bool]:
@@ -177,10 +179,10 @@ def _build_period_delta(
         start_date = previous_start.isoformat(),
         end_date   = previous_end.isoformat(),
     )
-    previous_where, previous_params = _build_ledger_where(previous_filters)
+    previous_where, previous_params = build_ledger_where(previous_filters)
     previous_total = _query_scalar(
         conn,
-        f"SELECT {_LEDGER_AMOUNT_TOTAL_EXPR} FROM items WHERE {' AND '.join(previous_where)}",
+        f"SELECT {LEDGER_AMOUNT_TOTAL_EXPR} FROM items WHERE {' AND '.join(previous_where)}",
         previous_params,
     )
     if previous_total == 0:
@@ -190,12 +192,12 @@ def _build_period_delta(
 
 def _build_focus_details(
     conn: sqlite3.Connection,
-    filters: _LedgerFilters,
+    filters: LedgerFilters,
     focus_total: float,
 ) -> tuple[BucketMode, list[JsonObject], list[JsonObject], list[JsonObject]]:
     """生成当前焦点类型的补零趋势、分类占比和 K 线数据。"""
 
-    where, params = _build_ledger_where(filters)
+    where, params = build_ledger_where(filters)
     focus_start = filters.start_date
     focus_end   = filters.end_date
     if not focus_start or not focus_end:
@@ -208,7 +210,7 @@ def _build_focus_details(
     bucket_mode: BucketMode = "day" if (end - start).days <= 62 else "month"
     bucket_keys             = _iter_bucket_keys(start, end, bucket_mode)
     trend_rows              = conn.execute(
-        f"""SELECT ledger_date, ROUND({_LEDGER_AMOUNT_EXPR} / 100.0, 2), created_at, id
+        f"""SELECT ledger_date, ROUND({LEDGER_AMOUNT_EXPR} / 100.0, 2), created_at, id
             FROM items
             WHERE {" AND ".join(where)} AND ledger_date IS NOT NULL
             ORDER BY ledger_date, created_at, id""",
@@ -270,22 +272,23 @@ def _build_focus_details(
 
     category_rows = conn.execute(
         f"""
-        SELECT COALESCE(NULLIF(TRIM(ledger_category), ''), '未分类') AS category,
-               {_LEDGER_AMOUNT_TOTAL_EXPR} AS total,
+        SELECT {LEDGER_CATEGORY_EXPR} AS category,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total,
                COUNT(*) AS count
         FROM items
         WHERE {" AND ".join(where)}
-        GROUP BY COALESCE(NULLIF(TRIM(ledger_category), ''), '未分类')
+        GROUP BY {LEDGER_CATEGORY_EXPR}
         ORDER BY total DESC, category ASC
         """,
         params,
     ).fetchall()
     categories: list[JsonObject] = [
         {
-            "category": str(row[0] or "未分类").strip() or "未分类",
-            "total"   : round(float(row[1] or 0), 2),
-            "count"   : int(row[2] or 0),
-            "share"   : round(float(row[1] or 0) / focus_total, 4) if focus_total else 0,
+            "category": str(row[0] or PendoConfig.DEFAULT_CATEGORY).strip()
+            or PendoConfig.DEFAULT_CATEGORY,
+            "total": round(float(row[1] or 0), 2),
+            "count": int(row[2] or 0),
+            "share": round(float(row[1] or 0) / focus_total, 4) if focus_total else 0,
         }
         for row in category_rows
     ]
@@ -307,10 +310,10 @@ def build_ledger_insights(
 ) -> JsonObject:
     """生成账本页和 Widget 共用的筛选洞察。"""
 
-    normalized_transaction_type = (transaction_type or "").strip() or None
+    normalized_transaction_type = clean_optional_text(transaction_type)
     if (
         normalized_transaction_type is not None
-        and normalized_transaction_type not in _TRANSACTION_TYPES
+        and normalized_transaction_type not in LEDGER_TRANSACTION_TYPES
     ):
         raise ValueError("transaction_type must be expense, income, transfer, or None")
     if compare_mode not in _COMPARE_MODES:
@@ -329,12 +332,12 @@ def build_ledger_insights(
     if start_day and end_day and start_day > end_day:
         raise ValueError("start_date must not be after end_date")
 
-    filters = _LedgerFilters(
+    filters = LedgerFilters(
         owner_id         = owner_id,
         currency         = currency_code(currency),
         transaction_type = cast(TransactionType | None, normalized_transaction_type),
-        category         = (category or "").strip() or None,
-        account_name     = (account_name or "").strip() or None,
+        category         = clean_optional_text(category),
+        account_name     = clean_optional_text(account_name),
         start_date       = normalized_start,
         end_date         = normalized_end,
         amount_min       = amount_min,
@@ -342,9 +345,9 @@ def build_ledger_insights(
     )
     normalized_compare_mode = cast(CompareMode, compare_mode)
     conn                    = db.get_connection()
-    base_where, base_params = _build_ledger_where(filters)
+    base_where, base_params = build_ledger_where(filters)
     totals_rows = conn.execute(
-        f"""SELECT transaction_type, {_LEDGER_AMOUNT_TOTAL_EXPR}, COUNT(*)
+        f"""SELECT transaction_type, {LEDGER_AMOUNT_TOTAL_EXPR}, COUNT(*)
             FROM items
             WHERE {" AND ".join(base_where)}
             GROUP BY transaction_type""",
@@ -383,8 +386,8 @@ def build_ledger_insights(
         "start_date"      : normalized_start,
         "end_date"        : normalized_end,
         "transaction_type": normalized_transaction_type,
-        "category"        : category,
-        "account_name"    : account_name,
+        "category"        : filters.category,
+        "account_name"    : filters.account_name,
         "amount_min"      : amount_min,
         "amount_max"      : amount_max,
     }

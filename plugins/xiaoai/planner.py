@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
-from core.ai import AIError, declare_route_defaults
+from core.ai import AIError, declare_route_defaults, first_json_object
 
 from .catalog import capabilities, resolve_device
 from .client import BridgeError
@@ -41,11 +40,8 @@ async def _json(context: Any, system: str, payload: dict[str, Any]) -> dict[str,
             ],
             extra_payload={"response_format": {"type": "json_object"}},
         )
-        content = result.content.strip()
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content)
-        value = json.loads(content)
-        if not isinstance(value, dict):
+        value = first_json_object(result.content)
+        if value is None:
             raise ValueError("object required")
         return value
     except (AIError, ValueError, TypeError):

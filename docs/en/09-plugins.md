@@ -247,7 +247,7 @@ Restart restores configured models.
 **Participation**
 
 - Messages addressed to her always get a reply: private chat, `/xc`, a group `@` of the persona, a quote of her message, or her name used as a call. A call is the name at the start of a sentence ("小青，……") or within or at the end of a sentence in a calling tone ("行吧小青你赢了", "在吗小青"). A message that `@`s someone else without `@`ing her does not count.
-- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call gets a reply that the model writes from the current topic and routine. During class or sleep she still replies, more slowly and briefly. When one person sends several messages in a row, she waits for the last one and answers them together.
+- Addressed turns draft a reply directly and also go to the agent for a task decision. A bare name call (or a bare `@`) gets an instant preset reply from `bot_name_only_replies` without a model call; the same person's next message within a minute counts as addressed to her, and if that message is already queued the call itself gets no reply. During class or sleep she still replies, more slowly and briefly. When one person sends several messages in a row, she waits for the last one and answers them together.
 - Other group turns pass frequency limits, participation probability, and PFC context planning. Group planning remains enabled regardless of the optional private-chat planner setting.
 - Active-topic probability, message length, elapsed time, and consecutive silence adjust pacing. A message that directly follows her own reply skips the probability roll and goes to the planner. A busy or sleeping routine multiplies the probability by a routine factor. The suppression eases when she has stayed silent through several messages and falls to at most half.
 - The planner evaluates the addressee, invitations, questions, sharing, closure, and requests to stop from the conversation. Pronouns that point to her, follow-up messages, and messages naming other members are judged from context.
@@ -291,9 +291,9 @@ Memory, planning state, and background learning commit or start after OneBot con
 | AI routes | `chat` for replies, `reasoning` for planning and background analysis, `checker` for review, `vision` for images |
 | Input segments | `text`, `at`, `reply`, `face`, `mface`, `image`, mixed messages |
 | Output media | `[想发表情:描述]`, `[想发QQ表情:描述]`, `[想发图片:描述]` markers become `image` / `face`. |
-| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. `inbound_backlog` lets her wait until someone sending several messages in a row has finished. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, and `life.turn_context` and `life.export_memes` through `life_context`. |
+| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. `inbound_backlog` lets her wait until someone sending several messages in a row has finished. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, `life.turn_context` and `life.export_memes` through `life_context`, and `memory.record` / `recall` / `search` / `forget` through `memory`. |
 | Behavior configuration | `plugins/xiaoqing_chat/config/xiaoqing_config.json`, merged with `config.plugins.xiaoqing_chat` |
-| Runtime data | `data/xiaoqing_chat/`: history, vector memories, profiles, goals, PFC, action history, expressions, jargon, reviews, media library, summary cache, plus self-statements, open threads, and proactive pacing under `life/` |
+| Runtime data | `data/xiaoqing_chat/`: recent history, push progress for the unified memory, knowledge index, goals, PFC, action history, expressions, jargon, reviews, media library, plus daily life, proactive pacing, and the log of other plugins' recent pushes under `life/`. Long-term memory lives in `xiaoqing_memory`. |
 
 The [user manual (Chinese)](../../plugins/xiaoqing_chat/README.md) covers participation, all settings, and troubleshooting.
 [Architecture (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) covers modules and data flow.
@@ -321,8 +321,28 @@ External text reaches the model only as low-trust data. Slang and expressions re
 |---|---|
 | Command | `/life [status|recent|slang|threads|methods|stats|works|dossier|memes|meme|run|forget|login|logout|help]` |
 | Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
-| Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat` |
+| Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat`. Uses `memory.record` to publish experiences, diary entries, and verified learnings to the unified memory. |
 | Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
+
+### `xiaoqing_memory`: XiaoQing's unified memory
+
+`xiaoqing_memory` is XiaoQing's long-term memory.
+Chat writes every message, the statuses and promises she voices, and members' dated open threads.
+The agent writes the course of each task. Online life writes her experiences and diary.
+Each night the plugin consolidates them into pages about each person, each group, and herself; every line cites notes with verbatim sources.
+Before each reply chat recalls the speaker's page, the group page, related past events, and her own recent statuses.
+The agent recalls the initiator's page when a new task session starts.
+Private-chat content never reaches a group, and one group's content never reaches another.
+What a person said about himself in a group can follow him into his own private chat. Content with web text in its source chain never reaches the agent.
+The plugin is enabled by default. Consolidation needs `ai.routes.reasoning`.
+`/mem` is for Bot administrators in private chat. See [XiaoQing Memory (Chinese)](../../plugins/xiaoqing_memory/README.md).
+
+| Item | Content |
+|---|---|
+| Command | `/mem [status|stats|page|search|why|forget|consolidate|rebuild|help]` |
+| Schedule | `xiaoqing_memory.tick` checks every 30 minutes and consolidates in the background at night or on backlog. |
+| Capabilities and services | Supplies `memory.record` (called by `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`), `memory.recall` (called by `xiaoqing_chat`, `xiaoqing_agent`), and `memory.search` and `memory.forget` (called by `xiaoqing_chat`). |
+| Runtime data | `data/xiaoqing_memory/`: raw records per scope and month, notes, pages, and state |
 
 ### `xiaoqing_agent`: Task agent
 
@@ -490,7 +510,8 @@ Results include image or video links, title, description, date, credit, and sour
 
 Built-in hosts are `science.nasa.gov`, `assets.science.nasa.gov`, and `apod.nasa.gov`.
 A configured `astropix.html` entry is read from the default homepage instead.
-Daily at 13:30, Core `broadcast` sends to schedule `group_ids`. Omission uses `default_group_ids`.
+Daily at 13:30, Core `broadcast` sends to the schedule's target groups.
+Set them in deployment config `plugins.apod.schedules.apod_daily.group_ids`; otherwise Core uses `default_group_ids`.
 
 Pages, redirects, and media pass HTTPS, public-DNS, response-size, MIME, dimension, and pixel checks.
 The cache is in `data/apod/`.
@@ -694,7 +715,7 @@ Group server creation permits key or SSH Agent authentication. Password entry us
 /ssh list
 /ssh add [名称 主机 [端口] [用户名]]
 /ssh remove <服务器名>
-/ssh import [Host名|all]
+/ssh import [Host名|all|全部]
 /ssh config
 /ssh status
 /ssh disconnect [服务器名]
@@ -757,7 +778,7 @@ Connect, disconnect, and other server commands are for Bot administrators.
 /mc disconnect
 ```
 
-`plugins/minecraft/config.json` stores host, port, and `log_file`.
+`config.plugins.minecraft.servers.<profile>` stores host, port, and `log_file`.
 `secrets.plugins.minecraft.<profile>` stores the matching RCON password.
 Each conversation has one connection. Commands execute under its connection lock.
 `/mc say` and `/mc tell` use `tellraw` text components with the sender's QQ name.
@@ -765,7 +786,7 @@ Selectors and commands within messages remain text.
 
 With a log file, the scheduled task detects chat, join, leave, death, and advancement events every 5 seconds.
 It forwards them to the connection's conversation.
-Groups receive forwarding when listed in `default_group_ids`.
+Groups receive forwarding when they are log-schedule targets: deployment config `plugins.minecraft.schedules.check_log.group_ids`, or `default_group_ids` when that is unset.
 Other groups receive a command-only explanation at connection time.
 
 Cursors are in `data/minecraft/log_cursors/` and commit after delivery acknowledgement.
@@ -1181,11 +1202,12 @@ Subcommands can set stricter permissions.
 | `xiaoqing_agent` | `/agent` | Public (tools follow initiator permissions) | Private, Group |
 | `xiaoqing_chat` | `/xc` | Public | Private, Group |
 | `xiaoqing_life` | `/life` | Bot administrator | Private, Group |
+| `xiaoqing_memory` | `/mem` | Bot administrator | Private |
 
 ## ⏰ Scheduled-task index
 
 Times use `config.timezone`, default `Asia/Shanghai`.
-`broadcast` sends one result to schedule target groups. Omitted `group_ids` uses `default_group_ids`.
+`broadcast` sends one result to schedule target groups: deployment config `plugins.<plugin>.schedules.<schedule ID>.group_ids` first, then the entry's `group_ids`, then `default_group_ids`.
 `targeted` returns individual private or group targets. `silent` executes with zero message delivery.
 See [schedule fields](03-plugin-development.md#schedule-fields).
 
@@ -1219,8 +1241,10 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `twitter` | `scheduled_fetch` | Daily 03:00 | `silent` | Fetch new images in the background. |
 | `xiaoqing_chat` | `scheduled_daily_life` | Daily 05:30 | `silent` | Plan the persona's small daily-life events from the persona card and routine. |
 | `xiaoqing_chat` | `scheduled_life_memes` | Minutes 07 and 37 every hour | `silent` | Import memes collected by `xiaoqing_life` into the emoji library (`life.enable_life_memes`). |
+| `xiaoqing_chat` | `scheduled_memory_sync` | Minutes 13 and 43 every hour | `silent` | Push messages not yet sent to the unified memory (seeds old data on first start and retries failed pushes). |
 | `xiaoqing_chat` | `scheduled_proactive` | Every 20 minutes | `targeted` | Speak up in a quiet group as a member. Controlled by `proactive.enabled`, which the shipped behavior configuration turns on. |
-| `xiaoqing_life` | `scheduled_tick` | Every 15 minutes | `silent` | Decide from routine, budget, and interests whether to browse. Browsing runs in a background task. Requires `enabled`, default off. |
+| `xiaoqing_life` | `scheduled_tick` | Every 15 minutes | `silent` | Decide from routine, budget, and interests whether to browse. Browsing runs in a background task. Requires `enabled`, default off. Afterwards, publish new experiences to the unified memory. |
+| `xiaoqing_memory` | `scheduled_tick` | Every 30 minutes | `silent` | Flush recall counters. Consolidate scopes with new events in the background at night or on backlog; once a day inside the night window, also rewrite the self page, verify notes and prune everything. No consolidation while `enabled` is off. |
 
 Pendo briefings, journal reminders, and financial summaries run every minute.
 They determine due status in each user's timezone.
@@ -1250,8 +1274,8 @@ Source synchronization, public configuration, secrets, business data, and logs u
 Manifests and UAT verify runtime command contracts:
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh --phases ws-matrix --matrix-plugins <plugin_name>
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py --phases ws-matrix --matrix-plugins <plugin_name>
 ```
 
 Add external-service scenarios with `--include-external --scenario-fixtures <file>`.

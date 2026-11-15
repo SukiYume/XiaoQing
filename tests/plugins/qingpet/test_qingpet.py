@@ -6,8 +6,8 @@ import pytest
 
 from plugins.qingpet.commands.admin_commands import handle_manage_disable, handle_manage_enable
 from plugins.qingpet.services.admin_service import set_group_config
-from plugins.qingpet.services.database import MinigameOutcome
 from plugins.qingpet.services.database_schema import _safe_add_column
+from plugins.qingpet.services.database_types import MinigameOutcome
 from plugins.qingpet.services.economy_service import EconomyService
 from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
@@ -70,7 +70,6 @@ def test_group_economy_stats_detect_unledgered_balance_drift(qingpet_db):
         123456,
         "reconciliation_test",
         reference_id     = "reconciliation-test:credit",
-        daily_coin_limit = 500,
         cooldown_seconds = 0,
         outcome_factory=lambda _pet, _opponent: MinigameOutcome(requested_coins=25),
     )

@@ -6,9 +6,6 @@
 
 import asyncio
 import importlib
-import importlib.abc
-import importlib.machinery
-import importlib.util
 import logging
 import os
 import sys
@@ -20,24 +17,24 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
+from .constants import DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
 from .interfaces import PluginContextProtocol, PluginPrincipal
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
 from .plugin_data import PluginDataMixin
 from .plugin_execution import (
+    DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
+    DEFAULT_SYNC_WORKERS,
     PluginExecutionGate,
     PluginExecutionPolicy,
     PluginSyncBroker,
 )
 from .plugin_generation import PluginGenerationMixin
 from .plugin_manager_support import (
-    _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
-    _DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS,
     _PLUGIN_IMPORT_BARRIER_COORDINATOR,
     _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS,
     _PLUGIN_IMPORT_LOCK,
     _PLUGIN_NAMESPACE_GUARD,
     _PLUGIN_NAMESPACE_OWNERS,
-    _PLUGIN_SYNC_WORKERS,
     _PROCESS_IMPORT_PATH_LEASES,
     LoadedPlugin,
     LoadedPluginService,
@@ -50,12 +47,8 @@ from .plugin_manager_support import (
     _ModuleImportBarrierCapability,
     _ModuleImportBarrierCoordinator,
     _PluginDataDirectory,
-    _PluginLoadTransaction,
-    _PluginNamespaceTombstone,
-    _ProcessImportPathLease,
     _ProcessImportPathLeaseKey,
     _release_process_import_paths,
-    _SourceOnlyNamespaceLoader,
     _SourceOnlyPluginFinder,
     _SourceOnlyPluginLoader,
     is_link_like,
@@ -71,9 +64,8 @@ from .router import CommandRouter
 
 logger = logging.getLogger(__name__)
 
-# Keep the established import surface while implementation lives in focused
-# modules.  These are real aliases to the single definitions, not duplicate
-# compatibility implementations.
+# 实现拆在几个专门模块里；这里重新导出别处（测试和夹具）按 ``core.plugin_manager``
+# 取用的名字。它们是同一份定义的别名，不是另一份实现。
 __all__ = [
     "LoadedPlugin",
     "LoadedPluginService",
@@ -89,13 +81,9 @@ __all__ = [
     "validate_plugin_module_origin",
     "_ModuleImportBarrierCapability",
     "_ModuleImportBarrierCoordinator",
-    "_PLUGIN_IMPORT_BARRIER_COORDINATOR",
     "_PLUGIN_NAMESPACE_OWNERS",
     "_PROCESS_IMPORT_PATH_LEASES",
-    "_ProcessImportPathLease",
-    "_SourceOnlyNamespaceLoader",
     "_SourceOnlyPluginLoader",
-    "_PluginNamespaceTombstone",
 ]
 
 
@@ -110,7 +98,7 @@ class PluginManager(
         plugins_dir: Path,
         router: CommandRouter,
         context_factory: Any,
-        poll_interval: float   = 3600.0,
+        poll_interval: float   = DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS,
         data_root: Path | None = None,
     ):
         import_barrier                      = _PLUGIN_IMPORT_BARRIER_COORDINATOR.capability()
@@ -144,21 +132,13 @@ class PluginManager(
         self._poll_interval                            = (
             parsed_poll_interval
             if parsed_poll_interval is not None
-            else _DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
+            else DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
         )
         self._poll_revision = 0
         self._watch_waiters_lock = threading.Lock()
         self._watch_waiters: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Event]] = {}
         self._next_watch_waiter_id = 0
         self._change_handlers: list[Any] = []
-        self._init_tasks: list[asyncio.Task[Any]] = []
-        self._init_task_plugins: dict[asyncio.Task[Any], str] = {}
-        self._pending_plugins: dict[
-            asyncio.Task[Any], tuple[PluginDefinition, ModuleType, float]
-        ] = {}
-        self._pending_transactions: dict[asyncio.Task[Any], _PluginLoadTransaction] = {}
-        self._pending_finalizers: dict[str, asyncio.Task[Any]] = {}
-        self._init_wait_task: asyncio.Task[Any] | None = None
         self._deferred_lifecycle_errors: dict[str, list[BaseException]] = {}
         self._plugin_states: dict[str, dict[str, Any]] = {}
         self._execution_gates: dict[str, PluginExecutionGate] = {}
@@ -167,9 +147,9 @@ class PluginManager(
         self._lifecycle_lock = _LazyAsyncLock()
         self._execution_policy = PluginExecutionPolicy()
         self._execution_policy_overrides: dict[str, dict[str, Any]] = {}
-        self._global_sync_queue_limit = _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT
+        self._global_sync_queue_limit = DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT
         self._sync_broker = PluginSyncBroker(
-            max_workers        = _PLUGIN_SYNC_WORKERS,
+            max_workers        = DEFAULT_SYNC_WORKERS,
             global_queue_limit = self._global_sync_queue_limit,
         )
         # Watcher failures can repeat every poll while an editor, deployer, or
@@ -686,15 +666,25 @@ class PluginManager(
         group_id: int | None              = None,
         request_id: str | None            = None,
         principal: PluginPrincipal | None = None,
+        *,
+        definition: PluginDefinition | None = None,
     ) -> PluginContextProtocol:
+        """给插件的一次回调建上下文。
+
+        能力和服务按已登记的那一代的声明签发。``init`` 跑的时候这一代还没登记（首次加载时
+        登记表里没有它，热重载时登记的是上一代），由加载方把正在加载的 ``definition`` 传进来。
+        """
+
         plugin_dir = self.plugins_dir / plugin_name
         data_dir   = self._ensure_plugin_data_dir(plugin_name)
 
         # 获取或创建插件状态
-        state         = self._plugin_states.setdefault(plugin_name, {})
-        loaded        = self._plugins.get(plugin_name)
-        capabilities  = loaded.definition.capabilities if loaded is not None else frozenset()
-        uses_services = loaded.definition.uses_services if loaded is not None else frozenset()
+        state = self._plugin_states.setdefault(plugin_name, {})
+        if definition is None:
+            loaded     = self._plugins.get(plugin_name)
+            definition = loaded.definition if loaded is not None else None
+        capabilities  = definition.capabilities if definition is not None else frozenset()
+        uses_services = definition.uses_services if definition is not None else frozenset()
 
         return cast(
             PluginContextProtocol,

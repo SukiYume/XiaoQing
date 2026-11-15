@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from ...services.db import Database
 from ...utils.settings_utils import normalize_settings_json
+from ...utils.time_utils import is_valid_timezone
 from ...utils.validators import validate_category
 from ..deps import get_current_user, get_db
 
@@ -50,10 +50,8 @@ def _normalize_settings_payload(updates: dict[str, Any]) -> dict[str, Any]:
         timezone = str(timezone).strip()
         if not timezone:
             raise ValueError("Invalid timezone")
-        try:
-            ZoneInfo(timezone)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError("Invalid timezone") from exc
+        if not is_valid_timezone(timezone):
+            raise ValueError("Invalid timezone")
         normalized["timezone"] = timezone
 
     for field in ("quiet_hours_start", "quiet_hours_end", "daily_report_time", "diary_remind_time"):

@@ -14,7 +14,6 @@ from plugins.xiaoqing_chat.config.config import (
 from plugins.xiaoqing_chat.context_builder import expression_context
 from plugins.xiaoqing_chat.expression.bw_expression_learner import _build_dialogue
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
-from plugins.xiaoqing_chat.memory.knowledge_extract import build_fact_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.persona import PersonaCard
 
@@ -75,7 +74,7 @@ def test_config_file_loader_surfaces_validation_error(tmp_path):
         load_xiaoqing_chat_config(context_config={}, plugin_dir=tmp_path)
 
 
-def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
+def test_deployment_config_deep_merge_preserves_unoverridden_file_values(tmp_path):
     import json
 
     from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
@@ -83,18 +82,11 @@ def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "xiaoqing_config.json").write_text(
-        json.dumps({"media": {"enable_inbound_media_context": False}}),
+        json.dumps({"media": {"max_media_per_message": 3, "enable_inbound_media_context": True}}),
         encoding="utf-8",
     )
     context_config = {
-        "plugins": {
-            "xiaoqing_chat": {
-                "media": {
-                    "max_media_per_message"       : 3,
-                    "enable_inbound_media_context": True,
-                }
-            }
-        }
+        "plugins": {"xiaoqing_chat": {"media": {"enable_inbound_media_context": False}}}
     }
 
     loaded = load_xiaoqing_chat_config(
@@ -132,8 +124,7 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
     runtime                               = SimpleNamespace(
         cfg=SimpleNamespace(
             expression=ExpressionConfig(
-                enable_expression_selector = True,
-                max_injected               = 5,
+                enable_expression_selector=True,
             ),
             reflection=ReflectionConfig(
                 enable_expression_reflection   = False,
@@ -174,8 +165,7 @@ def test_expression_block_never_auto_injects_unchecked_high_count_records(tmp_pa
     runtime                               = SimpleNamespace(
         cfg=SimpleNamespace(
             expression=ExpressionConfig(
-                enable_expression_selector = True,
-                max_injected               = 5,
+                enable_expression_selector=True,
             ),
             reflection=ReflectionConfig(
                 enable_expression_reflection   = False,
@@ -195,7 +185,6 @@ def test_expression_block_default_config_requires_approval_for_injection():
 
     assert cfg.reflection.require_approval_for_injection is True
     assert cfg.expression.enable_expression_selector is True
-    assert cfg.expression.max_injected == 1
 
 
 def test_expression_learning_dialogue_excludes_assistant_messages():
@@ -216,25 +205,6 @@ def test_expression_learning_dialogue_excludes_assistant_messages():
     assert "好家伙，又来了" not in dialogue
     assert "你(小青)" not in dialogue
     assert source_ids == {"t2"}
-
-
-def test_fact_prompt_uses_real_user_ids_and_skips_assistant_messages():
-    messages = build_fact_messages(
-        history=[
-            StoredMessage(role="assistant", name="小青", content="我也喜欢这个", ts=1.0),
-            StoredMessage(
-                role    = "user",
-                name    = "ExampleUser",
-                user_id = 100000103,
-                content = "我十连四发",
-                ts      = 2.0,
-            ),
-        ],
-    )
-
-    prompt = messages[1].content
-    assert "ExampleUser<100000103>：我十连四发" in prompt
-    assert "小青" not in prompt
 
 
 def test_expression_reflector_can_build_operator_review_action(tmp_path):
@@ -335,7 +305,7 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
     )
 
     # 即使随机数极端，活跃 mood 应直接复用
-    mood = _refresh_mood_state(runtime, state, "g1")
+    mood = _refresh_mood_state(runtime, state)
     assert mood == "现在心情不错"
     state.set_mood_state.assert_not_called()
 
@@ -344,12 +314,12 @@ def test_refresh_mood_state_resets_after_long_idle():
     import time
 
     from plugins.xiaoqing_chat import handlers
-    from plugins.xiaoqing_chat.handlers import SELF_MOOD_KEY, _refresh_mood_state
+    from plugins.xiaoqing_chat.handlers import _refresh_mood_state
 
     state                             = MagicMock()
     state.get_mood_state.return_value = "现在心情不错"
     # 心境是全局的：任何会话上次来消息距今超过 4h
-    handlers._last_mood_check[SELF_MOOD_KEY] = time.time() - 6 * 3600
+    handlers._last_mood_check_at = time.time() - 6 * 3600
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -363,7 +333,7 @@ def test_refresh_mood_state_resets_after_long_idle():
         )
     )
 
-    mood = _refresh_mood_state(runtime, state, "g1")
+    mood = _refresh_mood_state(runtime, state)
     assert mood in {"现在心情不错", "刚吃完饭"}
     assert state.set_mood_state.called
 
@@ -417,6 +387,9 @@ def test_main_routes_supply_distinct_runtime_parameters(tmp_path):
 def test_behavior_file_rejects_a_second_ai_registry(tmp_path):
     from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
 
-    (tmp_path / "xiaoqing_config.json").write_text('{"ai": {"routes": {}}}', encoding="utf-8")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "xiaoqing_config.json").write_text(
+        '{"ai": {"routes": {}}}', encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="AI routes belong in config.plugins.xiaoqing_chat.ai"):
         load_xiaoqing_chat_config(context_config={}, plugin_dir=tmp_path)

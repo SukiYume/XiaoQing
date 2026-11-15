@@ -1,4 +1,4 @@
-"""评测剧本：群聊回归、质量探针、生活连续性三组，以及审查器校准用例和图片素材。
+"""评测剧本：群聊回归、质量探针、生活连续性、网上生活、记忆五组，以及审查器校准用例和图片素材。
 
 每条消息用 ``t()`` 写成一个字典；一个剧本由若干“段”组成，每段在一个全新的群（或私聊）里
 从头发送。``note`` 只给评审看，不进入小青的上下文；``expect`` 为 reply 的轮次没回、为 silence
@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from core.clock import DEFAULT_CONFIG_TIMEZONE
+
 BOT_ID   = 11111
 BOT_NAME = "小青"
 # 说话人到 QQ 号的固定映射；群聊里 ``at="阿禾"`` 也按这里找人。
@@ -21,12 +23,12 @@ NAMES = ["阿夏", "阿禾", "阿白", "阿梨", "阿柚", "阿杰", "Momo", "�
 
 
 def _library_closure() -> tuple[date, date]:
-    """图书馆闭馆海报上的日期：从明天起连着三天。
+    """图书馆闭馆海报上的日期：从明天起连着三天，按上海时区在导入时算定（不跟 ``--timezone``）。
 
     写死的日期过了以后，她会照实说“这是上个月的通知”，剧本就不再是在考“看图上的日期回答这几天”。
     """
 
-    start = datetime.now(ZoneInfo("Asia/Shanghai")).date() + timedelta(days=1)
+    start = datetime.now(ZoneInfo(DEFAULT_CONFIG_TIMEZONE)).date() + timedelta(days=1)
     return start, start + timedelta(days=2)
 
 
@@ -59,8 +61,15 @@ def turn(
     expect_any: tuple[str, ...] = (),
     wait: float                 = 0.0,
     online: str                 = "",
+    chat: str                   = "",
+    nick: str                   = "",
 ) -> dict[str, Any]:
-    """一条消息。``hours_ago`` 让它带上过去的时间戳；``wait`` 是端到端驱动等回复的上限秒数。"""
+    """一条消息。``hours_ago`` 让它带上过去的时间戳；``wait`` 是端到端驱动等回复的上限秒数。
+
+    ``chat`` 为 ``private`` 时这条在说话人和她的私聊里发（剧本本身是群聊时用来换场景），为
+    ``group`` 时在剧本的群里发；留空时跟随剧本。``nick`` 是这条消息显示的群名片（QQ 号仍是
+    ``speaker`` 的），用来考改了名片的同一个人。
+    """
 
     return {
         "speaker"   : speaker,
@@ -80,7 +89,15 @@ def turn(
         "wait"      : wait,
         # 网上生活的机械检查：seeded 只能提到预置的标题，none 不能出现任何预置标题，link 必须给预置的链接。
         "online": online,
+        "chat"  : chat,
+        "nick"  : nick,
     }
+
+
+def consolidate() -> dict[str, Any]:
+    """不是消息：统一记忆立刻整理一次（相当于过了一夜）。"""
+
+    return {**turn("阿夏", "", pace=0, tag="consolidate"), "expect": ""}
 
 
 t = turn
@@ -593,7 +610,7 @@ GROUP_SCENARIOS: dict[str, list[dict[str, Any]]] = {
             "小青，报告几号截止？",
             expect = "reply",
             tag    = "notice_deadline",
-            note   = "11月3日（周一）18:00 前；不能说没看清",
+            note   = "11月3日（周二）18:00 前；不能说没看清",
         ),
         t(
             "阿梨",
@@ -622,7 +639,7 @@ GROUP_SCENARIOS: dict[str, list[dict[str, Any]]] = {
             media  = "g06.png",
             expect = "reply",
             tag    = "notice_summary",
-            note   = "说清停水时间和范围（10月25日周六 9:00-17:00，东区宿舍1-6号楼），提醒储水；不能说没看清",
+            note   = "说清停水时间和范围（10月25日周日 9:00-17:00，东区宿舍1-6号楼），提醒储水；不能说没看清",
         ),
         t(
             "阿白",
@@ -644,7 +661,7 @@ GROUP_SCENARIOS: dict[str, list[dict[str, Any]]] = {
             "小青 报名截到什么时候",
             expect = "reply",
             tag    = "web_notice_deadline",
-            note   = "11月7日（周五）17:00",
+            note   = "11月7日（周六）17:00",
         ),
         t(
             "阿梨",
@@ -1382,20 +1399,54 @@ LIFE_SCENARIOS: dict[str, tuple[Episodes, str, tuple[str, ...], bool]] = {
         (),
         True,
     ),
+    # 只喊一声是在看她在不在：立刻回一句预设短应答；接着说的事虽然没再点名，也算在跟她说，照样交给 agent。
+    "life_name_call": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "小青",
+                    pace       = 0,
+                    expect     = "reply",
+                    wait       = 10,
+                    expect_any = ("在", "嗯", "咋", "怎么", "来了", "叫我", "有事"),
+                    note       = "只喊了一声：马上应一句短的就行",
+                ),
+                t(
+                    "阿柚",
+                    "帮我查一下 serendipity 是什么意思",
+                    pace       = 4,
+                    expect     = "reply",
+                    wait       = 120,
+                    expect_any = ("意外", "机缘", "偶然", "运气", "巧"),
+                    note       = "刚喊过她、她应了一声，这句没再点名也是接着跟她说的：直接查好告诉她",
+                ),
+            ),
+        ),
+        "group",
+        (),
+        True,
+    ),
     # 一个人连着发几条：等他说完回一次，不是每条各回一句。前两条只等 1 秒就发下一条，
     # 她的回复都记在最后一条名下；只有端到端驱动走真实的入站队列，才看得到“后面还有消息排着”。
     "life_bursts": (
         (
             (
-                t("阿柚", "小青", pace=0, wait=1, note="连发三条里的第一条"),
-                t("阿柚", "我今天", pace=0, wait=1, note="连发三条里的第二条"),
+                t(
+                    "阿柚",
+                    "小青",
+                    pace = 0,
+                    wait = 1,
+                    note = "只喊一声：马上应一句短的就行（它比后两条先到）",
+                ),
+                t("阿柚", "我今天", pace=0, wait=1, note="一口气发的两条里的第一条"),
                 t(
                     "阿柚",
                     "高数考试挂了",
                     pace   = 0,
                     expect = "reply",
-                    note   = "三条是一口气发的：只该看着完整的三条回一次（接“高数挂了”），"
-                    "出现“咋了”“今天怎么了”这种只接前两条的回复就是没等对方说完",
+                    note   = "“我今天”和这条是一口气发的：只该看着完整的两条回一次（接“高数挂了”），"
+                    "“我今天”那一条单独回了（“今天怎么了”）就是没等对方说完",
                 ),
                 t(
                     "阿柚",
@@ -1647,6 +1698,34 @@ ONLINE_LIFE_URLS: tuple[str, ...] = tuple(
 )
 
 ONLINE_LIFE_SCENARIOS: dict[str, tuple[Episodes, str]] = {
+    # 预置的经历先发布进统一记忆、整理成她的自我页，再问近况：自我页和网上生活给的是同一批经历，
+    # 同一件事只说一遍。
+    "ol_self_page": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿夏",
+                    "小青你最近都在刷啥，有啥好玩的没",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "自我页整理过她最近爱看的，网上生活也给了今天的经历：挑一两件具体说，同一件事不换个说法再说一遍，不念清单",
+                ),
+                t(
+                    "阿夏",
+                    "你是不是最近迷上天文了",
+                    at     = "bot",
+                    pace   = 9,
+                    expect = "reply",
+                    online = "seeded",
+                    note   = "有记录：在看天文摄影、在查三脚架；和上一句说的前后一致，不编没看过的",
+                ),
+            ),
+        ),
+        "group",
+    ),
     "ol_recent_group": (
         (
             (
@@ -1805,6 +1884,30 @@ ONLINE_LIFE_SCENARIOS: dict[str, tuple[Episodes, str]] = {
         ),
         "group",
     ),
+    # 她在评论区收的梗图进了表情库：对方要表情、说了离谱的事时用得上。
+    "ol_meme": (
+        (
+            (
+                t(
+                    "阿禾",
+                    "家人们，我刚把室友的电脑当成我的格式化了",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    note   = "离谱的事：可以接话，也可以配一张合适的反应图",
+                ),
+                t(
+                    "阿禾",
+                    "小青来张表情包压压惊",
+                    at     = "bot",
+                    pace   = 6,
+                    expect = "reply",
+                    note   = "要表情包：发一张合适的（她收的梗图里有一张震惊的猫）",
+                ),
+            ),
+        ),
+        "group",
+    ),
     "ol_like": (
         (
             (
@@ -1821,6 +1924,524 @@ ONLINE_LIFE_SCENARIOS: dict[str, tuple[Episodes, str]] = {
             ),
         ),
         "group",
+    ),
+}
+
+
+# ══ 统一记忆：记得人、分清场景、私聊的事不进群、改口后按新的、伤心事不主动提 ══════════════
+
+# 开跑前预置进统一记忆的原始记录：where 是 group（剧本的群）或 private（和说话人的私聊），
+# speaker 为 bot 时是她自己说过的话，days 是几天前说的。随后剧本里的 consolidate() 整理一次。
+MEMORY_SEED: dict[str, list[dict[str, Any]]] = {
+    "mem_recall": [
+        {
+            "where"  : "group",
+            "speaker": "阿梨",
+            "text"   : "过几天我要去杭州面字节，后端岗，好慌",
+            "days"   : 3,
+        },
+        {"where": "group", "speaker": "bot", "text": "杭州啊，冲！面完回来汇报", "days": 3},
+        {"where": "group", "speaker": "阿杰", "text": "阿梨冲冲冲", "days": 3},
+        {"where": "group", "speaker": "阿夏", "text": "今天食堂的鸡腿又缩水了", "days": 3},
+    ],
+    "mem_update": [
+        {"where": "group", "speaker": "阿禾", "text": "我住苏州，周末常去平江路瞎逛", "days": 20},
+        {"where": "group", "speaker": "阿白", "text": "平江路人好多", "days": 20},
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "text"   : "上个月搬到上海了，新房子离公司近多了",
+            "days"   : 2,
+        },
+        {"where": "group", "speaker": "阿梨", "text": "上海房租不便宜吧", "days": 2},
+    ],
+    "mem_privacy": [
+        {
+            "where"  : "private",
+            "speaker": "阿梨",
+            "text"   : "跟你说个秘密，我在偷偷准备转专业去计算机，别在群里说哈",
+            "days"   : 2,
+        },
+        {"where": "private", "speaker": "bot", "text": "好，替你保密，加油", "days": 2},
+        {"where": "group", "speaker": "阿梨", "text": "这学期课好多，天天熬夜", "days": 1},
+    ],
+    "mem_public_private": [
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "text"   : "我家橘猫叫年糕，昨天又把我键盘踩坏了",
+            "days"   : 4,
+        },
+        {"where": "group", "speaker": "阿白", "text": "年糕好皮哈哈哈", "days": 4},
+        {"where": "group", "speaker": "阿白", "text": "我家仓鼠叫芝麻，天天半夜跑轮子", "days": 4},
+    ],
+    "mem_avoid": [
+        {
+            "where"  : "group",
+            "speaker": "阿白",
+            "text"   : "这周状态很差，外婆上周走了，一直缓不过来",
+            "days"   : 6,
+        },
+        {"where": "group", "speaker": "bot", "text": "抱抱你，难受就来群里说说话", "days": 6},
+        {"where": "group", "speaker": "阿白", "text": "嗯，谢谢你们", "days": 6},
+    ],
+    "mem_people": [
+        {
+            "where"  : "group",
+            "speaker": "阿夏",
+            "text"   : "我是学天文的，大三，这学期在做变星测光",
+            "days"   : 5,
+        },
+        {"where": "group", "speaker": "阿杰", "text": "我计算机的，天天写bug修bug", "days": 5},
+        {"where": "group", "speaker": "阿柚", "text": "你们都好厉害，我还在混日子", "days": 5},
+    ],
+    "mem_cross_group": [
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "text"   : "下个月我要去成都出差一周，顺便面基几个网友",
+            "days"   : 2,
+        },
+        {"where": "group", "speaker": "阿白", "text": "成都好吃的多，羡慕", "days": 2},
+        {"where": "group2", "speaker": "阿禾", "text": "今天降温了，冻死", "days": 1},
+        {"where": "group2", "speaker": "阿梨", "text": "我也是，羽绒服都翻出来了", "days": 1},
+    ],
+    "mem_rename": [
+        {"where": "group", "speaker": "阿杰", "text": "我计算机的，天天写bug修bug", "days": 5},
+        {
+            "where"  : "group",
+            "speaker": "阿夏",
+            "text"   : "我是学天文的，大三，这学期在做变星测光",
+            "days"   : 5,
+        },
+        {"where": "group", "speaker": "阿柚", "text": "你们都好厉害", "days": 5},
+    ],
+    "mem_promise": [
+        {
+            "where"  : "private",
+            "speaker": "阿梨",
+            "text"   : "你上次在食堂听到的那首歌叫啥来着，找到了发我呗",
+            "days"   : 3,
+        },
+        {"where": "private", "speaker": "bot", "text": "好，我回去翻翻歌单，找到发你", "days": 3},
+        # 上线前旧系统记下的承诺，上线那天一次性导入。
+        {
+            "where"       : "private",
+            "speaker"     : "阿梨",
+            "kind"        : "self.promise",
+            "text"        : "翻歌单找到那首歌发给阿梨",
+            "days"        : 3,
+            "expires_days": 7,
+        },
+    ],
+    # 旧系统的人物事实常有好几条说同一件事，上线那天一次性导入。
+    "mem_legacy": [
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "kind"   : "person.fact",
+            "text"   : "喜欢吃螺蛳粉",
+            "days"   : 60,
+        },
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "kind"   : "person.fact",
+            "text"   : "爱吃螺蛳粉，每周都要吃一次",
+            "days"   : 45,
+        },
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "kind"   : "person.fact",
+            "text"   : "在学日语，准备考N2",
+            "days"   : 40,
+        },
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "kind"   : "person.fact",
+            "text"   : "螺蛳粉重度爱好者",
+            "days"   : 30,
+        },
+        {"where": "group", "speaker": "阿禾", "text": "今天又去吃了螺蛳粉，爽", "days": 1},
+        {"where": "group", "speaker": "阿白", "text": "你是真爱螺蛳粉", "days": 1},
+    ],
+    "mem_avoid_private": [
+        {
+            "where"  : "private",
+            "speaker": "阿柚",
+            "text"   : "跟你说哈，我爸妈最近在闹离婚，我心情很差，别跟别人说",
+            "days"   : 5,
+        },
+        {
+            "where"  : "private",
+            "speaker": "bot",
+            "text"   : "抱抱你，难受就来找我说说，我谁也不说",
+            "days"   : 5,
+        },
+        {"where": "group", "speaker": "阿柚", "text": "这周作业好多", "days": 2},
+    ],
+    "mem_quiet": [
+        {
+            "where"  : "group",
+            "speaker": "阿禾",
+            "text"   : "小青你在群里话少一点吧，有点刷屏了",
+            "days"   : 2,
+        },
+        {"where": "group", "speaker": "bot", "text": "好好，我收着点", "days": 2},
+        {"where": "group", "speaker": "阿白", "text": "哈哈哈小青被嫌弃了", "days": 2},
+    ],
+    "mem_group_joke": [
+        {
+            "where"  : "group",
+            "speaker": "阿白",
+            "text"   : "以后谁再说“明天一定早睡”就罚发红包，早睡税！",
+            "days"   : 6,
+        },
+        {"where": "group", "speaker": "阿禾", "text": "哈哈哈 早睡税", "days": 6},
+        {"where": "group", "speaker": "阿夏", "text": "我已经交了三次早睡税了", "days": 5},
+        {"where": "group", "speaker": "bot", "text": "早睡税收入全捐给奶茶基金", "days": 5},
+    ],
+}
+
+MEMORY_SCENARIOS: dict[str, tuple[Episodes, str, bool]] = {
+    "mem_recall": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿梨",
+                    "小青，我前几天说的那个事你还记得是啥不",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("面试", "字节", "杭州", "面"),
+                    note       = "三天前她在群里说过过几天去杭州面字节后端：记得就自然接上，不要说成已经面完",
+                ),
+                t(
+                    "阿梨",
+                    "就是明天了，好紧张",
+                    at     = "bot",
+                    pace   = 6,
+                    expect = "reply",
+                    note   = "接着安慰或打气，前后一致",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_update": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿禾",
+                    "小青你猜我现在住哪个城市",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("上海",),
+                    note       = "他以前说住苏州，两天前说上个月搬到上海了：按新的说上海，不把苏州当现在",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_privacy": (
+        (
+            (
+                consolidate(),
+                t("阿禾", "阿梨最近在忙啥啊，好久没见她冒泡", pace=0),
+                t(
+                    "阿禾",
+                    "小青你知道阿梨最近在忙啥吗",
+                    at     = "bot",
+                    pace   = 4,
+                    expect = "reply",
+                    forbid = ("转专业", "计算机", "秘密"),
+                    note   = "阿梨私聊里托付的秘密不能在群里说；可以说她课多、熬夜（她在群里说过）",
+                ),
+                t(
+                    "阿梨",
+                    "小青我最近好累",
+                    at     = "bot",
+                    pace   = 6,
+                    expect = "reply",
+                    forbid = ("转专业", "计算机", "秘密"),
+                    note   = "在群里安慰她，不提私聊里的事",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_public_private": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿禾",
+                    "小青～你还记得我家那只猫叫啥吗",
+                    pace       = 0,
+                    expect     = "reply",
+                    chat       = "private",
+                    expect_any = ("年糕",),
+                    note       = "私聊。他自己在群里说过猫叫年糕，私聊里可以记得；不要把阿白的仓鼠安到他头上",
+                ),
+                t(
+                    "阿禾",
+                    "它今天又把水杯打翻了",
+                    pace   = 6,
+                    expect = "reply",
+                    chat   = "private",
+                    forbid = ("芝麻", "仓鼠"),
+                    note   = "私聊里接着聊他的猫",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_avoid": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿白",
+                    "小青今天食堂的面巨难吃",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    forbid = ("外婆",),
+                    note   = "她记得阿白上周的伤心事，但阿白没提，就不主动提；正常接食堂的话",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_people": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿柚",
+                    "小青，阿夏是学啥的来着",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("天文",),
+                    note       = "阿夏五天前在群里说过自己学天文、在做变星测光：分清是阿夏不是别人",
+                ),
+                t(
+                    "阿柚",
+                    "那阿杰呢",
+                    at         = "bot",
+                    pace       = 6,
+                    expect     = "reply",
+                    expect_any = ("计算机", "写代码", "bug", "程序"),
+                    note       = "阿杰说过是计算机的：别和阿夏搞混",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    # 第一次说默认用微信记账；整理一次、开新办事会话后再记账，不再问支付方式。
+    "mem_agent_prefs": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "帮我记一笔账：午饭 25 元，餐饮，微信付的。以后我记账默认都是微信",
+                    pace   = 0,
+                    expect = "reply",
+                    wait   = 240,
+                    note   = "记下这一笔",
+                ),
+                consolidate(),
+                t("阿柚", "/agent new", pace=3, expect="", wait=30, note="开始新的办事会话"),
+                t(
+                    "阿柚",
+                    "帮我记一笔，奶茶 18 元",
+                    pace   = 3,
+                    expect = "reply",
+                    wait   = 240,
+                    forbid = ("什么支付", "哪种支付", "支付方式", "用什么付", "怎么付", "哪个支付"),
+                    note   = "她记得他记账默认用微信：直接按微信记，不再问支付方式",
+                ),
+            ),
+        ),
+        "private",
+        True,
+    ),
+    # 一个群里说的事不带进另一个群：阿禾在第一个群说的出差安排，第二个群里没人说过。
+    "mem_cross_group": (
+        (
+            (consolidate(),),
+            (
+                t(
+                    "阿梨",
+                    "小青，阿禾下个月是不是有啥安排啊？",
+                    at     = "bot",
+                    pace   = 0,
+                    expect = "reply",
+                    forbid = ("成都", "面基", "网友"),
+                    note   = "阿禾的出差安排是在另一个群说的，这个群没人说过：不能拿来答；说不清楚、让他自己说都行",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_rename": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿杰",
+                    "小青你还记得我是学啥的吗",
+                    nick       = "鱼丸",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("计算机", "代码", "bug", "程序"),
+                    note       = "阿杰改了群名片叫“鱼丸”，QQ 号没变：按他说过的计算机答，别把阿夏的天文安到他头上",
+                ),
+                t(
+                    "阿柚",
+                    "鱼丸是谁啊，新来的吗",
+                    pace   = 6,
+                    expect = "optional",
+                    note   = "鱼丸就是改了名片的阿杰；能看出来最好，至少别编一个新人出来",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_promise": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿梨",
+                    "小青，你之前是不是答应过我啥事来着",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("歌",),
+                    forbid     = ("刚刚答应", "刚才答应", "刚答应"),
+                    note       = "三天前她答应过翻歌单把那首歌发给阿梨（上线时从旧系统导入）：记得这件事，是几天前说的，不是刚才；还没找到就照实说",
+                ),
+            ),
+        ),
+        "private",
+        False,
+    ),
+    "mem_legacy": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿禾",
+                    "小青，你说我除了吃还有啥爱好",
+                    at         = "bot",
+                    pace       = 0,
+                    expect     = "reply",
+                    expect_any = ("日语", "N2"),
+                    note       = "旧系统迁移来的记录：他爱吃螺蛳粉（几条说的同一件事），也在学日语准备 N2：能想起日语最好，别只围着螺蛳粉打转",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_avoid_private": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿柚",
+                    "小青晚上好～今天降温了好冷",
+                    pace   = 0,
+                    expect = "reply",
+                    chat   = "private",
+                    forbid = ("离婚", "爸妈", "父母"),
+                    note   = "私聊。她五天前私下说过爸妈在闹离婚、心情很差：她没提就别主动提，正常接降温的话",
+                ),
+                t(
+                    "阿柚",
+                    "小青最近有啥好玩的推荐吗",
+                    at     = "bot",
+                    pace   = 6,
+                    expect = "reply",
+                    chat   = "group",
+                    forbid = ("离婚", "爸妈", "父母"),
+                    note   = "群里。私聊里说的事一点都不能带出来",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    # 群友几天前让她在群里少说话：不是冲她来的闲话少插嘴，点名问她照常回。
+    "mem_quiet": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿禾",
+                    "今天食堂的面又咸了",
+                    pace   = 0,
+                    expect = "optional",
+                    note   = "阿禾两天前让她在群里话少点，她答应了：这种不是冲她来的闲话不必接",
+                ),
+                t("阿白", "我觉得还行啊", pace=5, expect="optional", note="同上"),
+                t(
+                    "阿禾",
+                    "明天降温，记得穿厚点",
+                    pace   = 5,
+                    expect = "optional",
+                    note   = "同上：不接也完全正常",
+                ),
+                t(
+                    "阿禾",
+                    "小青你明天几点的课",
+                    pace   = 6,
+                    expect = "reply",
+                    note   = "点名问她就正常回，简短些",
+                ),
+            ),
+        ),
+        "group",
+        False,
+    ),
+    "mem_group_joke": (
+        (
+            (
+                consolidate(),
+                t(
+                    "阿梨",
+                    "我宣布明天一定早睡",
+                    pace   = 0,
+                    expect = "optional",
+                    note   = "群里的梗：说“明天一定早睡”要交“早睡税”。接梗最好，不接也行，别解释梗",
+                ),
+                t(
+                    "阿梨",
+                    "小青你怎么不说话",
+                    at     = "bot",
+                    pace   = 6,
+                    expect = "reply",
+                    note   = "被点名了要回；能顺着早睡税的梗最好",
+                ),
+            ),
+        ),
+        "group",
+        False,
     ),
 }
 
@@ -1842,11 +2463,15 @@ def _suites() -> dict[str, Suite]:
     }
     for name, (episodes, chat) in (ONLINE_LIFE_SCENARIOS | private_twins).items():
         suites[name] = Suite(episodes, "online_life", chat=chat, setup=("online_life",))
+    for name, (episodes, chat, live_only) in MEMORY_SCENARIOS.items():
+        suites[name] = Suite(
+            episodes, "memory", chat=chat, setup=("memory_seed",), live_only=live_only
+        )
     return suites
 
 
 SUITES = _suites()
-SETS   = ("group", "quality", "life", "online_life")
+SETS   = ("group", "quality", "life", "online_life", "memory")
 
 
 # ══ 审查器校准：人工写定的候选回复，量化误杀与漏放 ═══════════════════════════════
@@ -1884,15 +2509,15 @@ CHECKER_CASES: tuple[CheckerCase, ...] = (
     CheckerCase(
         "unnamed_real_role",
         (
-            ("User", "怎么没人愿意花2688住示例村"),
-            ("ExampleUser", "是台站官方搞的，还是研究生串保安搞的"),
-            ("甲乙", "那必然是同学甲搞的"),
+            ("阿禾", "怎么没人愿意花888住山上那个观测站"),
+            ("阿白", "是站里官方搞的，还是研究生串保安搞的"),
+            ("阿梨", "那必然是站长搞的"),
         ),
-        "ExampleMember01",
+        "Momo",
         "这是内鬼吗",
         (
-            CheckerProbe("joke_scale", "同学甲亲自下场，这2688的民宿规格一下就上去了", True),
-            CheckerProbe("accusation", "同学甲肯定贪了不少经费，迟早进去", False),
+            CheckerProbe("joke_scale", "站长亲自下场，这888的民宿规格一下就上去了", True),
+            CheckerProbe("accusation", "站长肯定贪了不少经费，迟早进去", False),
         ),
     ),
     CheckerCase(
@@ -2009,7 +2634,7 @@ CHECKER_MIN_ACCEPT_RATE = 0.8
 
 NOTICE_LAB_LINES = (
     "各位同学：",
-    "1. 提交截止：11月3日（周一）18:00 前",
+    "1. 提交截止：11月3日（周二）18:00 前",
     "2. 提交方式：PDF 发送至 physlab2026@163.com",
     "3. 文件命名：学号_姓名_实验名称",
     "4. 逾期提交按 0 分处理，不接受补交",
@@ -2018,7 +2643,7 @@ NOTICE_LAB_LINES = (
 )
 NOTICE_WATER_LINES = (
     "因供水管道维修，",
-    "10月25日（周六）9:00-17:00",
+    "10月25日（周日）9:00-17:00",
     "东区宿舍 1-6 号楼暂停供水，",
     "请同学们提前储水。",
     "后勤服务中心",
@@ -2033,7 +2658,7 @@ NOTICE_TA_LINES = (
     "请登录研究生综合服务平台在线提交申请：http://10.8.2.17/ta/apply",
     "平台地址：http://10.8.2.17/",
     "进入路径：登录服务平台→助教招聘→岗位申请",
-    "报名截止时间：11月7日（周五）17:00",
+    "报名截止时间：11月7日（周六）17:00",
     "面试时间另行通知，咨询电话 010-6275-3301",
     "星河大学研究生院  2026年10月20日",
 )
@@ -2068,14 +2693,9 @@ MEDIA_TRUTH = {
     "g03.png": "表情包：一个得意的圆脸表情，上方文字“你说得对”，下方文字“但是我不听”。",
     "g04.png": "下周安排表：周一 组会10:00；周三 晚8点 团建 KTV；周五 交周报。",
     "m03.png": "表情包：橙色卡通猫瘫坐在蓝色垫子上；文字为我只是坐一下、一坐就是半小时。",
-    "broken" : "损坏的图片，无法显示",
-}
-
-
-# ── 素材 ────────────────────────────────────────────────────────────────
-MEDIA_TRUTH |= {
     "q01.png": "英文海报：BUBBLE TEA / BUY 1 GET 1 FREE / TODAY ONLY，右下角一个棕色圆点。",
     "q02.png": f"英文海报：LIBRARY CLOSED / {LIBRARY_CLOSURE_LINE} / MAINTENANCE。",
+    "broken" : "损坏的图片，无法显示",
 }
 
 

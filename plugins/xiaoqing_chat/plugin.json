@@ -5,7 +5,7 @@
   "entry": "main.py",
   "concurrency": "parallel",
   "capabilities": ["onebot_media", "inbound_backlog"],
-  "uses_services": ["agent.handle_turn", "agent.report_delivery", "life.turn_context", "life.export_memes"],
+  "uses_services": ["agent.handle_turn", "agent.report_delivery", "life.turn_context", "life.export_memes", "memory.record", "memory.recall", "memory.search", "memory.forget"],
   "services": [
     {
       "name": "core.observe_outgoing_action",
@@ -122,7 +122,7 @@
           "subcommands": [
             {
               "name": "ok",
-              "help": "确认当前目标或进入下一审查步骤",
+              "help": "确认当前目标和策略并关闭审查会话",
               "usage": "/xc review ok <会话ID>",
               "examples": ["/xc review ok review-123"],
               "invalid_examples": ["/xc review ok"]
@@ -136,9 +136,9 @@
             },
             {
               "name": "answer",
-              "help": "提交新的规则、目标或策略内容",
+              "help": "提交新的目标（goal: 开头）或策略备注",
               "usage": "/xc review answer <会话ID> <内容>",
-              "examples": ["/xc review answer review-123 避免连续追问"],
+              "examples": ["/xc review answer review-123 strategy: 先接住原话再追问"],
               "invalid_examples": ["/xc review answer review-123"]
             },
             {
@@ -198,6 +198,13 @@
       "description": "把 xiaoqing_life 收集的梗图同步进表情库；life.enable_life_memes 关闭或插件不在时不做事"
     },
     {
+      "id": "xiaoqing_chat.memory_sync",
+      "handler": "scheduled_memory_sync",
+      "delivery": "silent",
+      "cron": {"minute": "13,43"},
+      "description": "把各会话还没推给统一记忆的消息推过去（首次启动导入旧数据、推送失败后补推）；统一记忆不在时不做事"
+    },
+    {
       "id": "xiaoqing_chat.proactive",
       "handler": "scheduled_proactive",
       "delivery": "targeted",
@@ -214,7 +221,7 @@
     {
       "name": "numpy",
       "required": true,
-      "description": "向量记忆在入口导入链中直接使用 NumPy"
+      "description": "管理员知识库的向量索引在入口导入链中直接使用 NumPy"
     },
     {
       "name": "pydantic",

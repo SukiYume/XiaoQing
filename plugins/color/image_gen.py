@@ -17,9 +17,9 @@ from core.plugin_base import has_control_characters, run_sync
 from core.public_errors import public_error_message
 
 from .convert import validate_rgb
+from .data_manager import MAX_COLOR_NAME_CHARS
 
-MAX_IMAGE_NAME_CHARS = 64
-IMAGE_CACHE_LIMITS   = FileCacheLimits(
+IMAGE_CACHE_LIMITS = FileCacheLimits(
     max_entries = 256,
     max_bytes   = 32 * 1024 * 1024,
     ttl_seconds = 30 * 24 * 60 * 60,
@@ -63,7 +63,7 @@ def _clean_image_input(name: str, rgb: list[int]) -> tuple[str, list[int]]:
     if not isinstance(name, str):
         raise ValueError("color image name must be a string")
     cleaned_name = name.strip()
-    if not cleaned_name or len(cleaned_name) > MAX_IMAGE_NAME_CHARS:
+    if not cleaned_name or len(cleaned_name) > MAX_COLOR_NAME_CHARS:
         raise ValueError("color image name is empty or too long")
     if has_control_characters(cleaned_name):
         raise ValueError("color image name contains control characters")

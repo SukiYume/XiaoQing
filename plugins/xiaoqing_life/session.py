@@ -17,7 +17,8 @@ from . import digest as digest_mod
 from . import memes as memes_mod
 from . import threads as thread_ops
 from .activity import SessionDeps, SessionOutcome, Span
-from .config import LifeConfig
+from .config import REASONING_ROUTE, LifeConfig
+from .days import day_key
 from .lifecycle import mark_seen, term_key, upsert_term
 from .planner import (
     HOT_SCROLL,
@@ -27,15 +28,13 @@ from .planner import (
     THREAD,
     WORK_ON,
     Decision,
-    day_key,
 )
 from .sources import baike
 from .sources.base import SourceError, SourceItem
 from .stores import LifeStore, record_lookup_misses, reserve_llm_call, roll_day
+from .works import liked_episode
 
 logger = logging.getLogger(__name__)
-
-REASONING_ROUTE = "reasoning"
 
 
 # ───────────────────────────── 浏览 ─────────────────────────────
@@ -82,10 +81,7 @@ def worth_opening(proposal: digest_mod.DigestThread, episodes: list[dict[str, An
         or not proposal.item_id
     ):
         return False
-    return any(
-        e["item_id"] == proposal.item_id and e["feeling"] in ("like", "mixed") and not e.get("auto")
-        for e in episodes
-    )
+    return any(e["item_id"] == proposal.item_id and liked_episode(e) for e in episodes)
 
 
 async def _commit(
@@ -98,9 +94,9 @@ async def _commit(
     deps: SessionDeps,
 ) -> SessionOutcome:
     start, end = span
-    moment = deps.now()
-    now = moment.timestamp()
-    rows = activity.episode_rows(result, items, decision, start, end, moment.tzinfo)
+    moment                  = deps.now()
+    now                     = moment.timestamp()
+    rows                    = activity.episode_rows(result, items, decision, start, end)
     stats: dict[str, float] = {}
 
     def apply(s: LifeStore) -> None:
@@ -113,7 +109,7 @@ async def _commit(
         reinforce.grow_frontier(s.frontier, s.interests, liked, {}, cfg.blocked_keywords, now)
         stats.update(
             liked           = activity.liked_count(rows),
-            disliked        = sum(1 for r in rows if r["feeling"] == "dislike"),
+            disliked        = activity.disliked_count(rows),
             new_known       = len(activity.known_keys(s.terms) - known_before),
             new_expressions = max(0, len(s.expressions) - expr_before),
         )
@@ -197,7 +193,6 @@ async def _start(
     def apply(s: LifeStore) -> None:
         roll_day(s.state, day)
         s.state["sessions_today"]   = int(s.state.get("sessions_today", 0)) + 1
-        s.state["last_session_at"]  = span[0]
         s.state["last_session_end"] = span[1]
         s.state["current"]          = {**_doing(decision), "start": span[0], "end": span[1]}
         s.state["last_decision"]    = {**decision.record(span[0])}
@@ -239,7 +234,7 @@ async def _browse(
         subtitles  = cfg.source_on("bili_subtitles") and deps.subtitles_ok(),
     )
     result, reason = await _digest(
-        store, cfg, fresh, deps, day, str(decision.params.get("chat_topic") or "")
+        store, cfg, fresh, deps, day, activity.searched_topic(decision, fresh)
     )
     if result is None:
         return await activity.record_failure(
@@ -264,17 +259,12 @@ async def _collect_memes(
     )
     if not picks or deps.download is None or deps.vision is None:
         return 0
-    download = deps.download
-
-    async def fetch_image(url: str) -> tuple[bytes, str] | None:
-        return await download(url, cfg.max_meme_bytes)
-
     return await memes_mod.collect(
         store,
         cfg,
         items,
         picks,
-        download = fetch_image,
+        download = deps.download,
         vision   = deps.vision,
         day      = day,
         now      = lambda: deps.now().timestamp(),
@@ -338,8 +328,7 @@ async def _lookup_terms(
         reward = reinforce.session_reward(
             liked=0, disliked=0, new_known=len(found), new_expressions=0, thread_progress=0, memes=0
         )
-        reinforce.update_preference(s.state, "activity", decision.choice, reward)
-        reinforce.record_habit(s.state, moment, reward)
+        activity.apply_reward(s.state, decision, moment, reward)
 
     await store.mutate(reward_apply)
     outcome = SessionOutcome("ok", "looked_up", terms=len(found))

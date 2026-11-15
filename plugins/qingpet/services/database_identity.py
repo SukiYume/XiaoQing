@@ -7,10 +7,20 @@ from datetime import datetime
 from typing import Any
 
 from ..models import GroupConfig, GroupConfigReadError, Inventory, Pet, User
+from ..models.config import (
+    MAX_MULTIPLIER,
+    MAX_SENSITIVE_WORD_LENGTH,
+    MAX_SENSITIVE_WORDS,
+    MIN_MULTIPLIER,
+)
 from ..utils.constants import PetPersonality, PetStage, PetStatus
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
-from .database_support import _log_database_failure
+from .database_support import (
+    _adjust_item_count,
+    _log_database_failure,
+    _parse_inventory_items,
+)
 
 
 class IdentityRepositoryMixin(DatabaseRepositorySupport):
@@ -42,8 +52,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     @classmethod
     def _row_to_pet(cls, row: sqlite3.Row) -> Pet:
-        keys = row.keys()
-        pet  = Pet(
+        pet = Pet(
             id                 = row["id"],
             user_id            = row["user_id"],
             group_id           = row["group_id"],
@@ -64,25 +73,23 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             status_expire_time = datetime.fromisoformat(row["status_expire_time"])
             if row["status_expire_time"]
             else None,
-            dress_hat        = row["dress_hat"] if "dress_hat" in keys else None,
-            dress_clothes    = row["dress_clothes"] if "dress_clothes" in keys else None,
-            dress_accessory  = row["dress_accessory"] if "dress_accessory" in keys else None,
-            dress_background = row["dress_background"] if "dress_background" in keys else None,
+            dress_hat        = row["dress_hat"],
+            dress_clothes    = row["dress_clothes"],
+            dress_accessory  = row["dress_accessory"],
+            dress_background = row["dress_background"],
             last_update      = datetime.fromisoformat(row["last_update"])
             if row["last_update"]
             else database_clock.now(),
-            decay_remainders=json.loads(row["decay_remainders"])
-            if "decay_remainders" in keys
-            else {},
-            last_feed    = datetime.fromisoformat(row["last_feed"]) if row["last_feed"] else None,
-            last_clean   = datetime.fromisoformat(row["last_clean"]) if row["last_clean"] else None,
-            last_play    = datetime.fromisoformat(row["last_play"]) if row["last_play"] else None,
-            last_train   = datetime.fromisoformat(row["last_train"]) if row["last_train"] else None,
-            last_explore = datetime.fromisoformat(row["last_explore"])
+            decay_remainders=json.loads(row["decay_remainders"]),
+            last_feed=datetime.fromisoformat(row["last_feed"]) if row["last_feed"] else None,
+            last_clean=datetime.fromisoformat(row["last_clean"]) if row["last_clean"] else None,
+            last_play=datetime.fromisoformat(row["last_play"]) if row["last_play"] else None,
+            last_train=datetime.fromisoformat(row["last_train"]) if row["last_train"] else None,
+            last_explore=datetime.fromisoformat(row["last_explore"])
             if row["last_explore"]
             else None,
-            likes      = row["likes"] if "likes" in keys else 0,
-            version    = int(row["version"]) if "version" in keys else 0,
+            likes      = row["likes"],
+            version    = int(row["version"]),
             created_at = datetime.fromisoformat(row["created_at"])
             if row["created_at"]
             else database_clock.now(),
@@ -92,8 +99,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> User:
-        """从兼容新旧字段集合的数据库行构造用户对象。"""
-        keys = row.keys()
+        """从 ``SELECT *`` 得到的数据库行构造用户对象；启动时的迁移已保证列齐全。"""
         user = User(
             user_id               = row["user_id"],
             group_id              = row["group_id"],
@@ -107,23 +113,19 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             today_explore_count   = row["today_explore_count"],
             today_visit_count     = row["today_visit_count"],
             today_gift_count      = row["today_gift_count"],
-            today_free_feed_count = row["today_free_feed_count"]
-            if "today_free_feed_count" in keys
-            else 0,
-            today_message_count=row["today_message_count"] if "today_message_count" in keys else 0,
-            total_feed_count=row["total_feed_count"] if "total_feed_count" in keys else 0,
-            total_clean_count=row["total_clean_count"] if "total_clean_count" in keys else 0,
-            total_play_count=row["total_play_count"] if "total_play_count" in keys else 0,
-            total_train_count=row["total_train_count"] if "total_train_count" in keys else 0,
-            total_explore_count=row["total_explore_count"] if "total_explore_count" in keys else 0,
-            total_visit_count=row["total_visit_count"] if "total_visit_count" in keys else 0,
-            total_gift_count=row["total_gift_count"] if "total_gift_count" in keys else 0,
-            total_free_feed_count=row["total_free_feed_count"]
-            if "total_free_feed_count" in keys
-            else 0,
-            total_message_count=row["total_message_count"] if "total_message_count" in keys else 0,
-            titles=json.loads(row["titles"]) if "titles" in keys and row["titles"] else [],
-            last_visit_time=datetime.fromisoformat(row["last_visit_time"])
+            today_free_feed_count = row["today_free_feed_count"],
+            today_message_count   = row["today_message_count"],
+            total_feed_count      = row["total_feed_count"],
+            total_clean_count     = row["total_clean_count"],
+            total_play_count      = row["total_play_count"],
+            total_train_count     = row["total_train_count"],
+            total_explore_count   = row["total_explore_count"],
+            total_visit_count     = row["total_visit_count"],
+            total_gift_count      = row["total_gift_count"],
+            total_free_feed_count = row["total_free_feed_count"],
+            total_message_count   = row["total_message_count"],
+            titles                = json.loads(row["titles"]) if row["titles"] else [],
+            last_visit_time       = datetime.fromisoformat(row["last_visit_time"])
             if row["last_visit_time"]
             else None,
             last_gift_time=datetime.fromisoformat(row["last_gift_time"])
@@ -140,7 +142,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             last_active=datetime.fromisoformat(row["last_active"])
             if row["last_active"]
             else database_clock.now(),
-            version=int(row["version"]) if "version" in keys else 0,
+            version=int(row["version"]),
         )
         user.mark_persisted()
         return user
@@ -258,9 +260,15 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
         delta: int,
         reason: str,
         reference_id: str | None = None,
+        created_at: str | None   = None,
+        allow_zero: bool         = False,
     ) -> None:
-        """在调用方事务中追加一条资产余额变更记录。"""
-        if delta == 0:
+        """在调用方事务中追加一条资产余额变更记录。
+
+        ``delta`` 为 0 时默认不写；``allow_zero`` 为真则照样写一条（领奖时用来留下“已领取”的凭据）。
+        ``created_at`` 缺省取当前时钟，同一次结算要用同一个时刻时由调用方传入。
+        """
+        if delta == 0 and not allow_zero:
             return
         conn.execute(
             """INSERT INTO asset_ledger
@@ -273,7 +281,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                 delta,
                 reason,
                 reference_id,
-                database_clock.now().isoformat(),
+                created_at or database_clock.now().isoformat(),
             ),
         )
 
@@ -542,11 +550,10 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             )
             row = cursor.fetchone()
             if row:
-                items     = json.loads(row["items"]) if row["items"] else {}
                 inventory = Inventory(
                     user_id  = user_id,
                     group_id = group_id,
-                    items    = items,
+                    items    = _parse_inventory_items(row["items"]),
                     version  = int(row["version"]),
                 )
                 inventory.mark_persisted()
@@ -576,7 +583,21 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             "SELECT items FROM inventories WHERE user_id = ? AND group_id = ?",
             (user_id, group_id),
         ).fetchone()
-        return json.loads(row["items"] or "{}") if row else {}
+        return _parse_inventory_items(row["items"]) if row else {}
+
+    @classmethod
+    def _add_inventory_item_in_transaction(
+        cls,
+        conn: sqlite3.Connection,
+        user_id: str,
+        group_id: int,
+        item_id: str,
+        amount: int,
+    ) -> None:
+        """在调用方事务中给某人的背包加上 ``amount`` 个道具。"""
+        items = cls._load_inventory_items(conn, user_id, group_id)
+        _adjust_item_count(items, item_id, amount)
+        cls._save_inventory_items(conn, user_id, group_id, items)
 
     @staticmethod
     def _save_inventory_items(
@@ -604,23 +625,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             row    = cursor.fetchone()
             if row:
                 return self._parse_group_config_row(row, group_id)
-            default = GroupConfig(group_id=group_id)
-            conn.execute(
-                """INSERT OR IGNORE INTO group_configs
-                   (group_id, enabled, economy_multiplier, decay_multiplier,
-                    trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    group_id,
-                    int(default.enabled),
-                    default.economy_multiplier,
-                    default.decay_multiplier,
-                    int(default.trade_enabled),
-                    int(default.natural_trigger_enabled),
-                    int(default.activity_enabled),
-                    json.dumps(default.sensitive_words),
-                ),
-            )
+            default = self._insert_default_group_config(conn, group_id)
             conn.commit()
             return default
         except Exception as exc:
@@ -630,6 +635,28 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             raise GroupConfigReadError(group_id) from None
 
     @staticmethod
+    def _insert_default_group_config(conn: sqlite3.Connection, group_id: int) -> GroupConfig:
+        """在调用方事务里给还没有配置行的群写入默认配置（已有时不动）。"""
+
+        default = GroupConfig(group_id=group_id)
+        conn.execute(
+            """INSERT OR IGNORE INTO group_configs
+               (group_id, enabled, economy_multiplier, decay_multiplier,
+                trade_enabled, activity_enabled, sensitive_words)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                group_id,
+                int(default.enabled),
+                default.economy_multiplier,
+                default.decay_multiplier,
+                int(default.trade_enabled),
+                int(default.activity_enabled),
+                json.dumps(default.sensitive_words),
+            ),
+        )
+        return default
+
+    @staticmethod
     def _parse_group_config_row(row: sqlite3.Row, expected_group_id: int) -> GroupConfig:
         required_columns = {
             "group_id",
@@ -637,7 +664,6 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             "economy_multiplier",
             "decay_multiplier",
             "trade_enabled",
-            "natural_trigger_enabled",
             "activity_enabled",
             "sensitive_words",
         }
@@ -647,12 +673,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             raise ValueError("group config row has a mismatched group id")
 
         boolean_values: dict[str, bool] = {}
-        for column in (
-            "enabled",
-            "trade_enabled",
-            "natural_trigger_enabled",
-            "activity_enabled",
-        ):
+        for column in ("enabled", "trade_enabled", "activity_enabled"):
             value = row[column]
             if type(value) is not int or value not in (0, 1):
                 raise ValueError(f"invalid boolean group config field: {column}")
@@ -664,28 +685,28 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             ("economy_multiplier", economy_multiplier),
             ("decay_multiplier", decay_multiplier),
         ):
-            if not math.isfinite(value) or not 0.1 <= value <= 10.0:
+            if not math.isfinite(value) or not MIN_MULTIPLIER <= value <= MAX_MULTIPLIER:
                 raise ValueError(f"invalid group config multiplier: {name}")
 
         sensitive_words = json.loads(row["sensitive_words"] or "[]")
         if (
             not isinstance(sensitive_words, list)
-            or len(sensitive_words) > 100
+            or len(sensitive_words) > MAX_SENSITIVE_WORDS
             or any(
-                not isinstance(word, str) or not word or len(word) > 64 for word in sensitive_words
+                not isinstance(word, str) or not word or len(word) > MAX_SENSITIVE_WORD_LENGTH
+                for word in sensitive_words
             )
         ):
             raise ValueError("invalid group sensitive words")
 
         return GroupConfig(
-            group_id                = expected_group_id,
-            enabled                 = boolean_values["enabled"],
-            economy_multiplier      = economy_multiplier,
-            decay_multiplier        = decay_multiplier,
-            trade_enabled           = boolean_values["trade_enabled"],
-            natural_trigger_enabled = boolean_values["natural_trigger_enabled"],
-            activity_enabled        = boolean_values["activity_enabled"],
-            sensitive_words         = sensitive_words,
+            group_id           = expected_group_id,
+            enabled            = boolean_values["enabled"],
+            economy_multiplier = economy_multiplier,
+            decay_multiplier   = decay_multiplier,
+            trade_enabled      = boolean_values["trade_enabled"],
+            activity_enabled   = boolean_values["activity_enabled"],
+            sensitive_words    = sensitive_words,
         )
 
     _GROUP_CONFIG_COLUMNS = frozenset(
@@ -694,7 +715,6 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             "economy_multiplier",
             "decay_multiplier",
             "trade_enabled",
-            "natural_trigger_enabled",
             "activity_enabled",
         }
     )
@@ -708,29 +728,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
         try:
             conn = self._get_connection()
             conn.execute("BEGIN IMMEDIATE")
-            exists = conn.execute(
-                "SELECT 1 FROM group_configs WHERE group_id = ?", (group_id,)
-            ).fetchone()
-            if exists is None:
-                default = GroupConfig(group_id=group_id)
-                conn.execute(
-                    """
-                    INSERT INTO group_configs
-                    (group_id, enabled, economy_multiplier, decay_multiplier,
-                     trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        group_id,
-                        int(default.enabled),
-                        default.economy_multiplier,
-                        default.decay_multiplier,
-                        int(default.trade_enabled),
-                        int(default.natural_trigger_enabled),
-                        int(default.activity_enabled),
-                        json.dumps(default.sensitive_words),
-                    ),
-                )
+            self._insert_default_group_config(conn, group_id)
             stored = int(value) if isinstance(value, bool) else value
             conn.execute(
                 f"UPDATE group_configs SET {field} = ? WHERE group_id = ?",
@@ -742,34 +740,4 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             if conn is not None:
                 conn.rollback()
             _log_database_failure("update_group_config_field", exc)
-            return False
-
-    def update_group_config(self, config: GroupConfig) -> bool:
-        conn: sqlite3.Connection | None = None
-        try:
-            conn = self._get_connection()
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO group_configs
-                (group_id, enabled, economy_multiplier, decay_multiplier,
-                 trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    config.group_id,
-                    int(config.enabled),
-                    config.economy_multiplier,
-                    config.decay_multiplier,
-                    int(config.trade_enabled),
-                    int(config.natural_trigger_enabled),
-                    int(config.activity_enabled),
-                    json.dumps(config.sensitive_words),
-                ),
-            )
-            conn.commit()
-            return True
-        except Exception as exc:
-            if conn is not None:
-                conn.rollback()
-            _log_database_failure("update_group_config", exc)
             return False

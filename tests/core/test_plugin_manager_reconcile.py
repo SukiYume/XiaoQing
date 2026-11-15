@@ -18,6 +18,7 @@ from tests.helpers.plugin_manager_test_support import (
     _AsyncConcurrencyProbe,
     _build_definition,
     _build_manager,
+    load_plugin_dir,
     textwrap,
 )
 
@@ -296,7 +297,7 @@ async def test_reconcile_unloads_fail_closed_manifest_and_recovers_once(
         encoding="utf-8",
     )
 
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     original        = manager._plugins["demo"]
     original_gate   = original.execution_gate
     original_unload = manager._unload_plugin_once
@@ -376,7 +377,7 @@ async def test_reconcile_never_auto_retires_or_replaces_quarantined_plugin(
         "async def handle(command, args, event, context):\n    return []\n",
         encoding="utf-8",
     )
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     quarantined = manager._plugins["demo"]
     gate        = quarantined.execution_gate
     assert gate is not None
@@ -405,35 +406,6 @@ async def test_reconcile_never_auto_retires_or_replaces_quarantined_plugin(
     await manager.unload_plugin("demo")
     manager._purge_plugin_modules("demo")
     manager._release_plugin_namespace("demo")
-
-
-@pytest.mark.asyncio
-async def test_reconcile_cancels_pending_init_when_plugin_directory_disappears(
-    tmp_path: Path,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    init_task = asyncio.create_task(asyncio.sleep(3600))
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    manager._execution_gates["demo"]      = gate
-    manager._plugin_states["demo"]        = {"pending": True}
-    plugin_dir.rmdir()
-
-    await manager.reconcile_plugins()
-
-    assert init_task.cancelled()
-    assert not manager._init_tasks
-    assert not manager._init_task_plugins
-    assert not manager._pending_plugins
-    assert "demo" not in manager._execution_gates
-    assert "demo" not in manager._plugin_states
-    assert "demo" not in manager._plugins
 
 
 @pytest.mark.asyncio
@@ -567,7 +539,7 @@ async def test_reconcile_quarantines_old_entry_when_new_entry_cannot_import(
         "async def handle(command, args, event, context):\n    return []\n",
         encoding="utf-8",
     )
-    manager.load_plugin(plugin_dir)
+    await load_plugin_dir(manager, plugin_dir)
     old_plugin = manager._plugins["demo"]
     old_gate   = old_plugin.execution_gate
     (plugin_dir / "broken.py").write_text("def broken(:\n", encoding="utf-8")

@@ -140,7 +140,7 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 
 ## 🔐 网络、内容与许可边界
 
-- API 请求固定发送到 `https://api.flickr.com/services/rest`，采用 HTTPS、显式超时、响应字节上限、JSON 深度/节点上限和严格 MIME 校验。
+- API 请求固定发送到 `https://api.flickr.com/services/rest`，采用 HTTPS、显式超时、响应字节上限、JSON 深度/节点上限和 MIME 白名单校验（只接受 JSON 与 JavaScript 类型，响应体必须是合法 JSON）。
 - API Key 仅进入固定 API 请求参数。公开错误、日志和 QQ 回复均不会包含 Key。
 - 公共无 OAuth 调用遵循 Flickr Safe Search 可见范围，只读取公开照片。
 - 图片下载仅接受 `https://live.staticflickr.com`，每次重新校验域名、TLS、重定向、MIME、字节、像素、尺寸和帧数。

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 
 from core.ai import declare_route_defaults, resolve_route_config
 
+from ..constants import DEFAULT_BOT_NAME_ONLY_REPLIES, DEFAULT_FALLBACK_IDLE_REPLIES
 from ..llm.llm_config import LLMCallConfig
 from ..persona import PersonaCard, bundled_persona_card, load_persona_card, persona_card_path
 
@@ -133,7 +134,7 @@ class ResponsePostProcessConfig(BaseModel):
 class HumanizeConfig(BaseModel):
     """模拟"读消息+打字"的发送延迟，弱化 bot 秒回的机器味。
 
-    forced 路径（/xc 命令）默认跳过这套延迟，避免显式调用变慢。
+    forced 轮次（私聊、被 @、被叫到名字）默认跳过这套延迟，``apply_to_forced`` 打开后才延迟。
     """
 
     enable_typing_delay: bool = True
@@ -217,10 +218,7 @@ class PlannerConfig(BaseModel):
             if history_len >= 10:
                 return 1
             return 0
-        try:
-            return int(mode)
-        except (ValueError, TypeError):
-            return 1
+        return int(mode)
 
 
 class KeywordRule(BaseModel):
@@ -243,21 +241,14 @@ class KeywordReactionConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
+    # 回复时带上统一记忆里的群页和与这句话相关的旧事（说话人的页面总是带）。
     enable_memory_retrieval: bool = True
-    planner_question       : bool = True
     # 两条相邻消息超过这个间隔时，生成与规划只使用空档后的当前会话片段。
-    # 原始历史仍完整保留，用户明确回忆旧事时仍可通过记忆检索取回。
+    # 原始历史仍完整保留，更早的事由统一记忆按需取用。
     conversation_idle_gap_seconds: NonNegativeSeconds = 1800.0
-    # 直接向量检索未命中时，只在消息明确回指既往信息时启动昂贵的 LLM 工具代理。
-    agent_on_direct_miss_requires_reference: bool = True
-    max_agent_iterations                   : int = Field(default=5, ge=1, le=20)
-    agent_timeout_seconds                  : PositiveTimeoutSeconds = 120.0
-    top_k                                  : int = Field(default=3, ge=1, le=100)
-    min_score                              : UnitWeight = 0.12
-    max_block_chars                        : int = Field(default=1200, ge=1, le=20_000)
-    enable_thinking_back_cache             : bool               = True
-    thinking_back_window_seconds           : NonNegativeSeconds = 1800.0
-    thinking_back_max_entries              : int = Field(default=200, ge=1, le=10_000)
+    # /xc 记忆 的条数；知识库的最低相关度（知识库条数是 knowledge.top_k）。
+    top_k    : int = Field(default=3, ge=1, le=100)
+    min_score: UnitWeight = 0.12
 
 
 class ReplyCheckConfig(BaseModel):
@@ -300,13 +291,6 @@ class ReflectionConfig(BaseModel):
     resend_interval_seconds       : PositiveDurationSeconds = 1800.0
     session_cooldown_seconds      : NonNegativeSeconds      = 3600.0
     goal_lock_seconds             : NonNegativeSeconds      = 3600.0
-    max_avoid_patterns            : int = Field(default=30, ge=1, le=1000)
-
-    @model_validator(mode="after")
-    def _validate_review_batch_size(self) -> Self:
-        if self.ask_per_check > self.max_pending:
-            raise ValueError("ask_per_check must not exceed max_pending")
-        return self
 
 
 class BrainChatConfig(BaseModel):
@@ -324,19 +308,10 @@ class BrainChatConfig(BaseModel):
     show_mode_indicator: bool = False
 
 
-class SummarizerConfig(BaseModel):
-    enable_topic_summarizer: bool = True
-    # 私聊同样生成话题摘要；摘要只能在原私聊里检索到。
-    enable_private_summary : bool = True
-    min_messages_per_update: int = Field(default=12, ge=1, le=1000)
-    max_cache_topics       : int = Field(default=20, ge=1, le=1000)
-
-
 class ExpressionConfig(BaseModel):
     enable_expression_learning: bool = True
     # 审核通过的表达按当前话题筛选，每轮至多注入一条。
     enable_expression_selector: bool = True
-    max_injected              : int = Field(default=1, ge=1, le=20)
     max_store                 : int = Field(default=200, ge=1, le=10_000)
 
 
@@ -388,7 +363,6 @@ class LifeConfig(BaseModel):
     asleep_delay_factor        : float = Field(default=2.0, ge=1.0, le=10.0, allow_inf_nan=False)
     # 投递后从角色自己的回复里记下她说过的近况、打算和答应别人的事，后续保持一致。
     enable_self_timeline      : bool = True
-    self_timeline_max_entries : int = Field(default=80, ge=1, le=1000)
     self_timeline_max_injected: int = Field(default=8, ge=1, le=50)
     # 只有近况线索（没有打算、承诺、交差）时，同一会话至少隔这么久才读一次，控制调用量。
     self_state_extract_interval_seconds: NonNegativeSeconds = 600.0
@@ -397,7 +371,6 @@ class LifeConfig(BaseModel):
     # 记下群友提到的、有时间点的事（考试、面试），时间过了以后合适时顺口关心一句。
     enable_open_loops       : bool = True
     open_loop_followup_hours: float = Field(default=36.0, gt=0.0, le=720.0, allow_inf_nan=False)
-    open_loop_max_per_chat  : int = Field(default=60, ge=1, le=1000)
     # 小青的网上生活（xiaoqing_life 插件）：每轮取相关的经历、用语和表达；插件不在或关闭时行为不变。
     enable_online_life         : bool = True
     online_life_timeout_seconds: float = Field(default=0.8, gt=0.0, le=5.0, allow_inf_nan=False)
@@ -422,7 +395,7 @@ class ProactiveConfig(BaseModel):
     max_per_group_per_day   : int = Field(default=2, ge=0, le=50)
     active_hours_start      : str = "09:00"
     active_hours_end        : str = "23:00"
-    # 起草后再用审查路由做一次人设与时机自检，不通过就不发。
+    # 起草后再用审查路由做一次发送前自检（事实有出处、像她本人、不重复）；拦下时带着理由重写一次。
     enable_persona_judge: bool = True
     # 私聊主动联系（默认关闭）：只有白名单里的朋友才会收到；白名单为空时这一路完全不运行。
     private_user_ids: list[int] = Field(default_factory=list, max_length=100)
@@ -524,22 +497,19 @@ class XiaoQingChatConfig(BaseModel):
     continuous_reply_limit               : int = Field(default=3, ge=1, le=100)
     continuous_cooldown_seconds          : NonNegativeSeconds = 25.0
     max_context_size                     : int = Field(default=30, ge=1, le=200)
-    io_persist_debounce_seconds          : ShortDelaySeconds = 0.8
-    memory_db_save_debounce_seconds      : float             = Field(
-        default       = 20.0,
-        ge            = 0.0,
-        le            = 3600.0,
-        allow_inf_nan = False,
+    io_persist_debounce_seconds          : ShortDelaySeconds      = 0.8
+    pfc_planner_fail_window_seconds      : PositiveTimeoutSeconds = 60.0
+    pfc_planner_fail_threshold           : int = Field(default=2, ge=1, le=100)
+    pfc_planner_backoff_seconds          : NonNegativeSeconds = 120.0
+    pfc_followup_action_window_seconds   : NonNegativeSeconds = 120.0
+    ban_words                            : list[str] = Field(default_factory=list, max_length=1000)
+    ban_regex                            : list[str] = Field(default_factory=list, max_length=100)
+    noisy_external_source_plugins        : list[str] = Field(default_factory=list, max_length=100)
+    fallback_idle_replies                : list[str] = Field(
+        default_factory=lambda: list(DEFAULT_FALLBACK_IDLE_REPLIES)
     )
-    pfc_planner_fail_window_seconds   : PositiveTimeoutSeconds = 60.0
-    pfc_planner_fail_threshold        : int = Field(default=2, ge=1, le=100)
-    pfc_planner_backoff_seconds       : NonNegativeSeconds = 120.0
-    pfc_followup_action_window_seconds: NonNegativeSeconds = 120.0
-    ban_words                         : list[str] = Field(default_factory=list, max_length=1000)
-    ban_regex                         : list[str] = Field(default_factory=list, max_length=100)
-    noisy_external_source_plugins     : list[str] = Field(default_factory=list, max_length=100)
-    fallback_idle_replies             : list[str] = Field(
-        default_factory=lambda: ["我在听", "接着说", "我想一下"]
+    bot_name_only_replies: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_BOT_NAME_ONLY_REPLIES), max_length=100
     )
     personality     : PersonalityConfig = Field(default_factory=PersonalityConfig)
     planner         : PlannerConfig = Field(default_factory=PlannerConfig)
@@ -550,7 +520,6 @@ class XiaoQingChatConfig(BaseModel):
     goal            : GoalConfig = Field(default_factory=GoalConfig)
     reflection      : ReflectionConfig = Field(default_factory=ReflectionConfig)
     brain_chat      : BrainChatConfig = Field(default_factory=BrainChatConfig)
-    summarizer      : SummarizerConfig = Field(default_factory=SummarizerConfig)
     expression      : ExpressionConfig = Field(default_factory=ExpressionConfig)
     knowledge       : KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     media           : MediaConfig = Field(default_factory=MediaConfig)
@@ -629,30 +598,39 @@ def _retired_persona_keys(data: Mapping[str, Any]) -> list[str]:
     return found
 
 
+def behavior_config_path(plugin_dir: Path) -> Path:
+    """插件自带的行为配置文件；文件不存在时仍是这条路径（热加载据此监听）。"""
+
+    return plugin_dir / "config" / "xiaoqing_config.json"
+
+
 def load_xiaoqing_chat_config(
     *,
     context_config: Mapping[str, Any] | None,
     plugin_dir: Path,
-    filename: str = "xiaoqing_config.json",
-    logger: Any   = None,
+    logger: Any = None,
 ) -> XiaoQingChatConfig:
-    """合并 Core 配置与插件配置文件，再读入配置指向的人设卡。"""
+    """合并插件自带的行为文件和部署配置，再读入配置指向的人设卡。
 
-    data: dict[str, Any] = {}
+    仓库里的行为文件是默认值；部署配置 ``config.plugins.xiaoqing_chat`` 里写了的字段覆盖它
+    （逐层合并），所以只属于这一部署的值（谁收复盘推送、主动私聊谁）都写在私有配置里。
+    """
+
+    deployment: Mapping[str, Any] = {}
     if isinstance(context_config, Mapping):
         plugins       = context_config.get("plugins", {})
         plugin_config = plugins.get("xiaoqing_chat", {}) if isinstance(plugins, Mapping) else {}
         if isinstance(plugin_config, Mapping):
-            data = dict(plugin_config)
+            deployment = plugin_config
 
-    file_path        = plugin_dir / filename
-    config_file_path = plugin_dir / "config" / filename
-    behavior_path    = config_file_path if config_file_path.exists() else file_path
+    data: dict[str, Any] = {}
+    behavior_path        = behavior_config_path(plugin_dir)
     if behavior_path.exists():
         behavior = _read_json(behavior_path)
         if "ai" in behavior:
             raise ValueError("AI routes belong in config.plugins.xiaoqing_chat.ai")
-        data = _merge_config_mappings(data, behavior)
+        data = dict(behavior)
+    data = _merge_config_mappings(data, deployment)
 
     retired = _retired_persona_keys(data)
     if retired and logger is not None:

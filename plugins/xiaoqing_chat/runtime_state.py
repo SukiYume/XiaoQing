@@ -17,9 +17,8 @@ from .expression.bw_message_recorder import MessageRecorder
 from .expression.bw_reflect_tracker import ReflectTrackerStore
 from .generation_limiter import GenerationLimiter
 from .life.daily_life import DailyLifeStore
-from .life.open_loops import OpenLoopStore
 from .life.proactive_state import ProactiveStateStore
-from .life.self_timeline import SelfTimelineStore
+from .life.push_log import PushLogStore
 from .media_registry import MediaRegistryStore
 from .memory.memory import MemoryStore
 from .memory.memory_db import MemoryDB
@@ -51,7 +50,7 @@ class _PerChatState:
     next_local_id: dict[str, int] = field(default_factory=dict)
     # chat_id ->（情绪文本，过期时间戳）
     mood_state: dict[str, tuple[str, float]] = field(default_factory=dict)
-    # chat_id ->（调用者用户 ID，过期时间戳）
+    # chat_id -> 这一轮的 ``ReplyGateDecision``（要不要回、为什么）
     reply_gate_decision: dict[str, Any] = field(default_factory=dict)
 
 
@@ -73,17 +72,15 @@ class ChatRuntimeState:
         "_bw_tracker_store",
         "_bw_recorder",
         "_bw_jargon_store",
-        "_self_timeline",
-        "_open_loops",
         "_proactive_state",
         "_daily_life",
+        "_push_log",
         "_runtime_cache",
         "_runtime_mtime",
         "_runtime_revision",
         "_per_chat",
         "_bg_tasks",
         "_bg_tasks_by_key",
-        "_vdb_save_task",
         "_global_active_provider",
         "_active_provider_by_chat",
         "_generation_limiter",
@@ -103,10 +100,9 @@ class ChatRuntimeState:
         self._bw_tracker_store = ReflectTrackerStore()
         self._bw_recorder      = MessageRecorder()
         self._bw_jargon_store  = JargonStore()
-        self._self_timeline    = SelfTimelineStore()
-        self._open_loops       = OpenLoopStore()
         self._proactive_state  = ProactiveStateStore()
         self._daily_life       = DailyLifeStore()
+        self._push_log         = PushLogStore()
 
         self._runtime_cache: OrderedDict[str, ChatRuntime] = OrderedDict()
         # 配置文件和人设卡的修改时间，任何一个变了就重新加载。
@@ -116,7 +112,6 @@ class ChatRuntimeState:
         self._per_chat                                       = _PerChatState()
         self._bg_tasks: set[asyncio.Task[Any]]               = set()
         self._bg_tasks_by_key: dict[str, asyncio.Task[Any]]  = {}
-        self._vdb_save_task: asyncio.Task[Any] | None        = None
         self._global_active_provider: str | None             = None
         self._active_provider_by_chat: OrderedDict[str, str] = OrderedDict()
         self._generation_limiter                             = GenerationLimiter()
@@ -171,20 +166,16 @@ class ChatRuntimeState:
         return self._bw_jargon_store
 
     @property
-    def self_timeline(self) -> SelfTimelineStore:
-        return self._self_timeline
-
-    @property
-    def open_loops(self) -> OpenLoopStore:
-        return self._open_loops
-
-    @property
     def proactive_state(self) -> ProactiveStateStore:
         return self._proactive_state
 
     @property
     def daily_life(self) -> DailyLifeStore:
         return self._daily_life
+
+    @property
+    def push_log(self) -> PushLogStore:
+        return self._push_log
 
     @property
     def generation_limiter(self) -> GenerationLimiter:
@@ -331,11 +322,10 @@ class ChatRuntimeState:
         d      = self._per_chat.stats.setdefault(chat_id, {"replies": 0, "calls": 0})
         d[key] = int(d.get(key, 0)) + 1
 
-    def get_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
-        return self._per_chat.persist_tasks.get(chat_id)
-
-    def set_persist_task(self, chat_id: str, task: asyncio.Task[Any]) -> None:
-        self._per_chat.persist_tasks[chat_id] = task
+    @property
+    def persist_tasks(self) -> dict[str, asyncio.Task[Any]]:
+        """每个会话正在等防抖的聊天记录落盘任务。"""
+        return self._per_chat.persist_tasks
 
     def pop_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
         return self._per_chat.persist_tasks.pop(chat_id, None)
@@ -406,12 +396,6 @@ class ChatRuntimeState:
 
         self._discard_finished_bg_tasks()
         return set(self._bg_tasks)
-
-    def get_vdb_save_task(self) -> asyncio.Task[Any] | None:
-        return self._vdb_save_task
-
-    def set_vdb_save_task(self, task: asyncio.Task[Any] | None) -> None:
-        self._vdb_save_task = task
 
     def fetch_and_increment_local_id(self, chat_id: str) -> int:
         """原子读取并递增 local_id，返回递增前的值。"""

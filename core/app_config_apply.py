@@ -8,18 +8,22 @@ from typing import TYPE_CHECKING, Any
 
 from .app_support import (
     ApplicationLifecycleFatalError,
-    _coerce_runtime_number,
     _ConfigApplyOwner,
     _inbound_credentials,
     _onebot_credentials,
     _require_onebot_holder_credentials,
+    _run_background_operation,
+    _runtime_max_concurrency,
+    _runtime_plugin_poll_interval,
+    _runtime_session_timeout,
+    _runtime_timezone,
     _trusted_secrets,
 )
 from .config import ConfigSnapshot, ConfigSourceStatus, PendingSecretsChange
-from .constants import DEFAULT_MAX_CONCURRENCY, DEFAULT_SESSION_TIMEOUT_SEC
 from .dispatcher import AdjustableSemaphore
 from .interfaces import ACTION_BYPASS_SINK_KEY
 from .onebot import OneBotHttpSender
+from .plugin_base import text
 from .server import InboundManager
 
 if TYPE_CHECKING:
@@ -167,7 +171,7 @@ class AppConfigApplyMixin:
         if not admin_ids:
             logger.warning("Valid external secrets candidate detected, but no active admin exists")
             return
-        message = [{"type": "text", "data": {"text": _format_pending_secrets_notice(change)}}]
+        message = [text(_format_pending_secrets_notice(change))]
         for admin_id in admin_ids:
             action = {
                 "action"              : "send_private_msg",
@@ -292,8 +296,8 @@ class AppConfigApplyMixin:
             except BaseException as exc:
                 logger.exception("Could not synchronously rotate HTTP auth", exc_info=exc)
                 # HTTP senders own no background resource.  Detaching the
-                # uncertain holder is the only safe publication after a
-                # legacy or broken update implementation rejects revocation.
+                # uncertain holder is the only safe publication after its
+                # update failed to apply the revocation.
                 if self.http_sender is sender:
                     self.http_sender = None
 
@@ -424,6 +428,16 @@ class AppConfigApplyMixin:
                 return self._runtime_inbound_token
             return ""
 
+    def _apply_dispatcher_concurrency(self, concurrency: int) -> None:
+        """把分发器的并发上限调成 ``concurrency``；还不是可调 limiter 的就换成可调的。"""
+
+        limiter = self.dispatcher.semaphore
+        if isinstance(limiter, AdjustableSemaphore):
+            limiter.resize(concurrency)
+        else:
+            self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
+        self._dispatcher_concurrency = concurrency
+
     def _apply_config(self, snapshot: ConfigSnapshot) -> None:
         """应用配置变更"""
         try:
@@ -458,46 +472,19 @@ class AppConfigApplyMixin:
         config = snapshot.config
 
         # Validate every scalar before changing any runtime-owned component.
-        session_timeout = _coerce_runtime_number(
-            config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key     = "session_timeout",
-            default = DEFAULT_SESSION_TIMEOUT_SEC,
-            integer = False,
-            minimum = 0.001,
-            maximum = 604800.0,
-        )
-        concurrency = _coerce_runtime_number(
-            config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key     = "max_concurrency",
-            default = DEFAULT_MAX_CONCURRENCY,
-            integer = True,
-            minimum = 1,
-            maximum = 1024,
-        )
-        poll_interval = _coerce_runtime_number(
-            config.get("plugin_poll_interval", 3600),
-            key     = "plugin_poll_interval",
-            default = 3600.0,
-            integer = False,
-            minimum = 0.01,
-            maximum = 86400.0,
-        )
+        session_timeout = _runtime_session_timeout(config)
+        concurrency     = _runtime_max_concurrency(config)
+        poll_interval   = _runtime_plugin_poll_interval(config)
 
         self.dispatcher.refresh_prefix_cache()
         self._configure_plugin_execution(config)
-        self._configure_plugin_watch(config, poll_interval=float(poll_interval))
+        self._configure_plugin_watch(config, poll_interval=poll_interval)
         self.session_manager.set_default_timeout(session_timeout)
 
         if concurrency != self._dispatcher_concurrency:
-            limiter = self.dispatcher.semaphore
-            if isinstance(limiter, AdjustableSemaphore):
-                limiter.resize(concurrency)
-            else:
-                # 兼容外部注入的旧 Dispatcher；生产路径从构造起使用可调 limiter。
-                self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
-            self._dispatcher_concurrency = concurrency
+            self._apply_dispatcher_concurrency(concurrency)
 
-        timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
+        timezone = _runtime_timezone(config)
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -563,14 +550,9 @@ class AppConfigApplyMixin:
         *,
         owner: _ConfigApplyOwner | None = None,
     ) -> None:
-        try:
-            await self._apply_runtime_config_impl(snapshot, owner=owner)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise
-        except BaseException as exc:
-            raise ApplicationLifecycleFatalError(exc) from None
+        await _run_background_operation(
+            lambda: self._apply_runtime_config_impl(snapshot, owner=owner)
+        )
 
     async def _apply_runtime_config_impl(
         self,
@@ -583,7 +565,7 @@ class AppConfigApplyMixin:
         if not self._owns_config_apply(owner):
             return
 
-        timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
+        timezone = _runtime_timezone(config)
         if timezone != self.scheduler.timezone:
             if not self._owns_config_apply(owner):
                 return

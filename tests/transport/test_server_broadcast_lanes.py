@@ -15,7 +15,7 @@ from tests.helpers.server_test_support import (
     BlockingConcurrencyProbe,
     BroadcastResult,
     InboundManager,
-    InboundServer,
+    StandaloneInboundServer,
     _lane_count,
     _make_request_with_auth,
     _onebot_message_payload,
@@ -87,7 +87,7 @@ async def test_server_broadcast_reports_partial_failure_without_duplicate_encodi
 async def test_server_broadcast_times_out_hung_client_without_blocking_healthy_client(
     mock_handler,
 ):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host                         = "127.0.0.1",
         port                         = 8765,
         token                        = "test_token",
@@ -122,7 +122,7 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
     mock_handler,
     monkeypatch,
 ):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host                         = "127.0.0.1",
         port                         = 8765,
         token                        = "test_token",
@@ -173,7 +173,7 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_server_broadcast_preserves_caller_cancellation(mock_handler):
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host                         = "127.0.0.1",
         port                         = 8765,
         token                        = "test_token",
@@ -270,9 +270,17 @@ async def test_inbound_lanes_serialize_same_key_and_are_released(sample_server):
     probe   = BlockingConcurrencyProbe(entered, release)
 
     sample_server.handler = probe.run
-    first = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 12345}))
+    first                 = asyncio.create_task(
+        sample_server._handle_ws_event(
+            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
+        )
+    )
     await entered.wait()
-    second = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 12345}))
+    second = asyncio.create_task(
+        sample_server._handle_ws_event(
+            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
+        )
+    )
     await asyncio.sleep(0)
 
     assert probe.maximum_active == 1
@@ -306,8 +314,12 @@ async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
         return []
 
     sample_server.handler = handler
-    first                 = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 1}))
-    second                = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 2}))
+    first                 = asyncio.create_task(
+        sample_server._handle_ws_event(ws, sample_server._event_dispatcher.admit({"user_id": 1}))
+    )
+    second = asyncio.create_task(
+        sample_server._handle_ws_event(ws, sample_server._event_dispatcher.admit({"user_id": 2}))
+    )
     await asyncio.wait_for(both_entered.wait(), timeout=1)
 
     assert max_active == 2
@@ -330,9 +342,17 @@ async def test_inbound_lane_ticket_cancellation_releases_capacity(sample_server)
         return []
 
     sample_server.handler = handler
-    first = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 12345}))
+    first                 = asyncio.create_task(
+        sample_server._handle_ws_event(
+            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
+        )
+    )
     await entered.wait()
-    waiting = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 12345}))
+    waiting = asyncio.create_task(
+        sample_server._handle_ws_event(
+            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
+        )
+    )
     await asyncio.sleep(0)
 
     waiting.cancel()
@@ -352,7 +372,9 @@ async def test_inbound_lane_pool_does_not_grow_for_high_cardinality_keys(sample_
     sample_server.handler = AsyncMock(return_value=[])
 
     for user_id in range(1_000):
-        await sample_server._handle_ws_event(ws, {"user_id": user_id})
+        await sample_server._handle_ws_event(
+            ws, sample_server._event_dispatcher.admit({"user_id": user_id})
+        )
 
     assert _lane_count(sample_server._event_dispatcher) == 0
 
@@ -639,7 +661,7 @@ async def test_server_token_rotation_during_ws_prepare_rejects_connection(
 @pytest.mark.unit
 async def test_server_worker_drops_events_from_revoked_generation():
     handler = AsyncMock(return_value=[])
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host           = "127.0.0.1",
         port           = 8765,
         token          = "old-token",

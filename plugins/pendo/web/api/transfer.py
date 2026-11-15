@@ -11,10 +11,10 @@ import sqlite3
 import time
 from collections import OrderedDict
 from contextlib import AbstractAsyncContextManager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Annotated, Any, Final, Literal, cast
 from urllib.parse import unquote
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -22,34 +22,40 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, Valida
 from starlette.concurrency import run_in_threadpool
 
 from core.async_keyed_lock import AsyncKeyedLockPool
+from core.plugin_base import has_control_characters
 
+from ...config import PendoConfig
 from ...services.db import Database, DuplicateBundleImportError
 from ...utils.identifiers import new_internal_id
+from ...utils.time_utils import is_valid_timezone, parse_strict_day
 from ...utils.validators import get_item_normalizer
 from ..deps import get_current_user, get_db
 from ..services.bundle_import import inspect_bundle_bytes
 from ..services.transfer_bundle import (
-    EVENT_COLLECTION_FILE_NAME,
     EVENT_COLLECTION_TYPE,
     SUPPORTED_TYPES,
     TIME_FIELD_BY_TYPE,
-    TYPE_FILE_NAMES,
     BundleRecordLimitError,
     BundleValidationError,
     ParsedBundle,
     build_manifest,
+    bundle_file_path,
     compute_sha256,
+    dict_copy_or_empty,
+    encode_records,
     serialize_event_collection,
     serialize_item,
     write_bundle,
 )
+from ..utils import parse_iso_date, preset_range
 
-router = APIRouter()
-logger = logging.getLogger(__name__)
+router     = APIRouter()
+logger     = logging.getLogger(__name__)
+JsonObject = dict[str, Any]
 _IMPORT_LOCK_POOL = AsyncKeyedLockPool(max_keys=2_048, max_key_length=256)
 
 # 预检结果的短期样例缓存：翻看样例只用预检令牌取页，不再重新上传并全量校验整个备份。
-# 令牌绑定所有者，过期或被挤出后前端回退到重新上传；执行导入仍做完整校验。
+# 令牌绑定所有者；过期或被挤出后取页请求返回 410，前端据此改为重新上传取页；执行导入仍做完整校验。
 _PREVIEW_TTL_SECONDS: Final                                                 = 15 * 60
 _PREVIEW_MAX_ENTRIES: Final                                                 = 32
 _PREVIEWS           : OrderedDict[str, tuple[str, float, list[JsonObject]]] = OrderedDict()
@@ -88,9 +94,7 @@ def _sample_rows(records: list[JsonObject]) -> list[JsonObject]:
 # 不受控的 Python/SQLite 工作量。
 MAX_UPLOAD_SIZE          : Final = 100 * 1024 * 1024
 MAX_UPLOAD_FILENAME_CHARS: Final = 255
-DEFAULT_TIMEZONE         : Final = "Asia/Shanghai"
 
-JsonObject      = dict[str, Any]
 ConflictPolicy  = Literal["isolate", "skip", "overwrite", "duplicate"]
 ImportOutcome   = Literal["inserted", "updated", "skipped", "failed"]
 ImportOperation = tuple[str, JsonObject]
@@ -109,7 +113,7 @@ class ExportSelection(BaseModel):  # type: ignore[misc]
     preset  : str = Field(default="all", max_length=20)
     start   : str | None = Field(default=None, max_length=10)
     end     : str | None = Field(default=None, max_length=10)
-    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=128)
+    timezone: str = Field(default=PendoConfig.DEFAULT_TIMEZONE, max_length=128)
 
 
 class ExportPreviewRequest(BaseModel):  # type: ignore[misc]
@@ -174,13 +178,12 @@ def _get_import_lock(
 def _resolve_timezone(timezone: str | None) -> ZoneInfo:
     """解析 IANA 时区；空白值使用 Pendo 默认时区。"""
 
-    name = str(timezone or "").strip() or DEFAULT_TIMEZONE
+    name = str(timezone or "").strip() or PendoConfig.DEFAULT_TIMEZONE
     if len(name) > 128:
         raise HTTPException(status_code=422, detail="Invalid timezone")
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid timezone: {name}") from exc
+    if not is_valid_timezone(name):
+        raise HTTPException(status_code=422, detail=f"Invalid timezone: {name}")
+    return ZoneInfo(name)
 
 
 def resolve_range(
@@ -195,20 +198,11 @@ def resolve_range(
             detail="Range clock must be timezone-aware; host local time is not a valid fallback",
         )
     current = now.astimezone(zone) if now else datetime.now(zone)
-    today = current.date()
-    quarter_month = ((today.month - 1) // 3) * 3 + 1
-    last_year = today.year - 1
-    preset_bounds: dict[str, tuple[date | None, date | None]] = {
-        "all"      : (None, None),
-        "week"     : (today - timedelta(days=today.weekday()), today),
-        "month"    : (today.replace(day=1), today),
-        "quarter"  : (date(today.year, quarter_month, 1), today),
-        "year"     : (date(today.year, 1, 1), today),
-        "last_year": (date(last_year, 1, 1), date(last_year, 12, 31)),
-    }
-    preset = selection.preset.strip()
-    if preset in preset_bounds:
-        return preset_bounds[preset]
+    preset  = selection.preset.strip()
+    if preset == "all":
+        return None, None
+    if (bounds := preset_range(preset, current.date())) is not None:
+        return bounds
     if preset != "custom":
         raise HTTPException(status_code=422, detail=f"Unsupported export preset: {preset}")
     if not selection.start or not selection.end:
@@ -223,32 +217,10 @@ def resolve_range(
 def _parse_date(value: str) -> date:
     """严格解析 ``YYYY-MM-DD`` 日期。"""
 
-    text = value.strip()
-    try:
-        if len(text) != 10 or text[4] != "-" or text[7] != "-":
-            raise ValueError
-        return date.fromisoformat(text)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid date: {value}") from exc
-
-
-def _coerce_date(value: Any, zone: ZoneInfo | None = None) -> date | None:
-    """把持久化日期/日期时间转换为日期；带偏移值可先映射到目标时区。"""
-
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        if len(text) == 10 and text[4] == "-" and text[7] == "-":
-            return date.fromisoformat(text)
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if zone is not None and parsed.tzinfo is not None:
-            parsed = parsed.astimezone(zone)
-        return parsed.date()
-    except ValueError:
-        return None
+    parsed = parse_strict_day(value.strip())
+    if parsed is None:
+        raise HTTPException(status_code=422, detail=f"Invalid date: {value}")
+    return parsed
 
 
 def _extract_item_date(
@@ -264,10 +236,10 @@ def _extract_item_date(
             or getattr(item, "deadline_at", None)
             or getattr(item, "created_at", None)
         )
-        return _coerce_date(primary, zone)
+        return parse_iso_date(primary, zone)
     field_name = TIME_FIELD_BY_TYPE[item_type]
     value      = getattr(item, field_name, None)
-    return _coerce_date(value, zone)
+    return parse_iso_date(value, zone)
 
 
 def item_matches_range(
@@ -282,8 +254,8 @@ def item_matches_range(
     if start is None or end is None:
         return True
     if item_type == "event":
-        start_date = _coerce_date(getattr(item, "start_time", None), zone)
-        end_date   = _coerce_date(getattr(item, "end_time", None), zone)
+        start_date = parse_iso_date(getattr(item, "start_time", None), zone)
+        end_date   = parse_iso_date(getattr(item, "end_time", None), zone)
         if start_date is None:
             return False
         end_date = end_date or start_date
@@ -410,16 +382,12 @@ def _build_bundle_bytes(
 
     file_entries: list[JsonObject] = []
     for item_type, records in records_by_type.items():
-        lines = [json.dumps(record, ensure_ascii=False) for record in records]
-        content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
         file_entries.append(
             {
-                "path": EVENT_COLLECTION_FILE_NAME
-                if item_type == EVENT_COLLECTION_TYPE
-                else TYPE_FILE_NAMES[item_type],
+                "path"  : bundle_file_path(item_type),
                 "type"  : item_type,
                 "count" : len(records),
-                "sha256": compute_sha256(content),
+                "sha256": compute_sha256(encode_records(records)),
             }
         )
 
@@ -471,9 +439,18 @@ def _upload_filename(request: Request) -> str | None:
         filename = unquote(raw, encoding="utf-8", errors="strict").strip()
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=422, detail="Invalid upload filename") from exc
-    if len(filename) > MAX_UPLOAD_FILENAME_CHARS or any(ord(char) < 32 for char in filename):
+    if len(filename) > MAX_UPLOAD_FILENAME_CHARS or has_control_characters(filename):
         raise HTTPException(status_code=422, detail="Invalid upload filename")
     return filename or None
+
+
+def _upload_too_large() -> HTTPException:
+    """上传体超过大小上限时的 413。"""
+
+    return HTTPException(
+        status_code = 413,
+        detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
+    )
 
 
 async def _read_upload_body(request: Request) -> bytes:
@@ -486,10 +463,7 @@ async def _read_upload_body(request: Request) -> bytes:
         except (ValueError, TypeError):
             size = 0
         if size > MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code = 413,
-                detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
-            )
+            raise _upload_too_large()
 
     # 边接收边累计：缺少或谎报 Content-Length 时，越界即停止读取，超限流量不会先整体驻留内存。
     chunks: list[bytes] = []
@@ -497,10 +471,7 @@ async def _read_upload_body(request: Request) -> bytes:
     async for chunk in request.stream():
         received += len(chunk)
         if received > MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code = 413,
-                detail      = f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024 * 1024)} MB）",
-            )
+            raise _upload_too_large()
         chunks.append(chunk)
     file_bytes = b"".join(chunks)
     if not file_bytes:
@@ -546,31 +517,13 @@ def _selected_import_types(options: dict[str, Any], parsed: ParsedBundle) -> lis
     return selected
 
 
-def _get_item_identity(db: Database, item_id: str | None) -> dict[str, Any] | None:
-    if not item_id:
-        return None
-    row = (
-        db.get_connection()
-        .execute(
-            "SELECT id, owner_id, type, deleted FROM items WHERE id = ?",
-            (item_id,),
-        )
-        .fetchone()
-    )
-    if not row:
-        return None
-    return {
-        "id"      : row["id"],
-        "owner_id": row["owner_id"],
-        "type"    : row["type"],
-        "deleted" : int(row["deleted"] or 0),
-    }
+def _new_import_id(db: Database, table: Literal["items", "event_collections"]) -> str:
+    """生成未被全局主键占用的内部 ID；主键跨所有者唯一，已删除的行也算占用。"""
 
-
-def _new_import_item_id(db: Database) -> str:
+    conn = db.get_connection()
     while True:
         candidate = new_internal_id()
-        if _get_item_identity(db, candidate) is None:
+        if conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)).fetchone() is None:
             return candidate
 
 
@@ -656,9 +609,9 @@ def _attach_import_metadata(
 
     assigned                    = dict(payload)
     context                     = assigned.get("context")
-    assigned["context"]         = dict(context) if isinstance(context, dict) else {}
+    assigned["context"]         = dict_copy_or_empty(context)
     existing_import             = assigned["context"].get("import")
-    import_context              = dict(existing_import) if isinstance(existing_import, dict) else {}
+    import_context              = dict_copy_or_empty(existing_import)
     import_context["source_id"] = source_id
     import_context["policy"]    = conflict_policy
     if conflict_policy == "isolate":
@@ -687,38 +640,6 @@ def _assign_import_identity(
     )
     assigned["id"] = internal_id
     return assigned
-
-
-def _get_event_collection_identity(
-    db: Database, collection_id: str | None
-) -> dict[str, Any] | None:
-    if not collection_id:
-        return None
-    row = (
-        db.get_connection()
-        .execute(
-            "SELECT id, owner_id, kind, deleted FROM event_collections WHERE id = ?",
-            (collection_id,),
-        )
-        .fetchone()
-    )
-    if not row:
-        return None
-    return {
-        "id"      : row["id"],
-        "owner_id": row["owner_id"],
-        "kind"    : row["kind"],
-        "deleted" : int(row["deleted"] or 0),
-    }
-
-
-def _new_import_collection_id(db: Database) -> str:
-    """生成未被全局集合主键占用的内部 ID。"""
-
-    while True:
-        candidate = new_internal_id()
-        if _get_event_collection_identity(db, candidate) is None:
-            return candidate
 
 
 def _index_imported_collection_sources(
@@ -797,7 +718,7 @@ def _prepare_collection_import_operations(
             continue
 
         action      = "update" if existing_id and conflict_policy == "overwrite" else "insert"
-        internal_id = existing_id or _new_import_collection_id(db)
+        internal_id = existing_id or _new_import_id(db, "event_collections")
         payload     = _attach_import_metadata(
             payload,
             original_id,
@@ -896,7 +817,7 @@ def _rewrite_import_item_relationships(
     return rewritten
 
 
-@router.post("/transfer/export/preview")  # type: ignore[untyped-decorator]
+@router.post("/transfer/export/preview")
 def preview_export(
     body: ExportPreviewRequest,
     owner_id: str = Depends(get_current_user),
@@ -924,7 +845,7 @@ def preview_export(
     }
 
 
-@router.post("/transfer/export/download")  # type: ignore[untyped-decorator]
+@router.post("/transfer/export/download")
 def download_export(
     body: ExportDownloadRequest,
     owner_id: str = Depends(get_current_user),
@@ -956,7 +877,7 @@ def download_export(
     )
 
 
-@router.post("/transfer/import/inspect")  # type: ignore[untyped-decorator]
+@router.post("/transfer/import/inspect")
 async def inspect_import(
     request: Request,
     owner_id: str = Depends(get_current_user),
@@ -1004,7 +925,7 @@ async def inspect_import(
     }
 
 
-@router.post("/transfer/import/samples")  # type: ignore[untyped-decorator]
+@router.post("/transfer/import/samples")
 async def import_samples(
     request: Request,
     owner_id: str = Depends(get_current_user),
@@ -1048,6 +969,25 @@ async def import_samples(
     }
 
 
+def _manifest_bundle_id(parsed: ParsedBundle) -> str | None:
+    """清单里的 bundle_id；缺省或空值是 ``None``。"""
+
+    raw_bundle_id = parsed.manifest.get("bundle_id")
+    return str(raw_bundle_id) if raw_bundle_id else None
+
+
+def _duplicate_bundle_error(bundle_id: str | None) -> HTTPException:
+    """同一个 bundle 已导入过的 409（预检查与事务内兜底共用）。"""
+
+    return HTTPException(
+        status_code = 409,
+        detail      = {
+            "message"  : "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
+            "bundle_id": bundle_id or "",
+        },
+    )
+
+
 def _validate_import_request(
     *,
     parsed: ParsedBundle,
@@ -1059,17 +999,10 @@ def _validate_import_request(
     """验证类型选择、bundle 幂等、无效记录策略和冲突策略。"""
 
     selected_types = set(_selected_import_types(parsed_options, parsed))
-    raw_bundle_id  = parsed.manifest.get("bundle_id")
-    bundle_id      = str(raw_bundle_id) if raw_bundle_id else None
+    bundle_id      = _manifest_bundle_id(parsed)
     force          = cast(bool, parsed_options.get("force", False))
     if bundle_id and db.has_imported_bundle(owner_id, bundle_id) and not force:
-        raise HTTPException(
-            status_code = 409,
-            detail      = {
-                "message"  : "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
-                "bundle_id": bundle_id,
-            },
-        )
+        raise _duplicate_bundle_error(bundle_id)
 
     invalid_policy = cast(str, parsed_options.get("invalid_policy", "abort"))
     if errors and invalid_policy != "skip_invalid":
@@ -1129,7 +1062,7 @@ def _plan_item_imports(
             continue
 
         action = "update" if existing_id and conflict_policy == "overwrite" else "insert"
-        internal_id = existing_id or _new_import_item_id(db)
+        internal_id = existing_id or _new_import_id(db, "items")
         item_id_map[source_id] = internal_id
         planned.append((action, record, source_id, internal_id))
     return planned, item_id_map, decisions
@@ -1225,13 +1158,7 @@ def _commit_import_plan(
             collection_operations = collection_operations,
         )
     except DuplicateBundleImportError as exc:
-        raise HTTPException(
-            status_code = 409,
-            detail      = {
-                "message"  : "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
-                "bundle_id": bundle_id or "",
-            },
-        ) from exc
+        raise _duplicate_bundle_error(bundle_id) from exc
     except Exception as exc:
         if _is_unique_constraint_failure(exc):
             raise HTTPException(
@@ -1324,7 +1251,7 @@ def _execute_import_sync(
     }
 
 
-@router.post("/transfer/import/execute")  # type: ignore[untyped-decorator]
+@router.post("/transfer/import/execute")
 async def execute_import(
     request: Request,
     x_transfer_options: Annotated[str | None, Header(max_length=4096)] = None,
@@ -1337,8 +1264,7 @@ async def execute_import(
     filename       = _upload_filename(request)
     file_bytes     = await _read_upload_body(request)
     parsed, valid_records, errors = await run_in_threadpool(_inspect_bundle_data, file_bytes)
-    raw_bundle_id = parsed.manifest.get("bundle_id")
-    bundle_id     = str(raw_bundle_id) if raw_bundle_id else None
+    bundle_id = _manifest_bundle_id(parsed)
 
     async with _get_import_lock(owner_id, bundle_id):
         return cast(
@@ -1356,7 +1282,7 @@ async def execute_import(
         )
 
 
-@router.get("/transfer/logs")  # type: ignore[untyped-decorator]
+@router.get("/transfer/logs")
 def get_transfer_logs(
     owner_id: str = Depends(get_current_user),
     db: Database  = Depends(get_db),

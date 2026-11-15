@@ -174,13 +174,6 @@ def parse_first_json_value(text: str) -> dict[str, Any] | list[dict[str, Any]] |
     return None
 
 
-def extract_named_list_field(obj: dict[str, Any] | None, field: str) -> list[Any]:
-    if not isinstance(obj, dict):
-        return []
-    value = obj.get(field)
-    return value if isinstance(value, list) else []
-
-
 def strict_json_bool(value: Any) -> bool | None:
     """只接受 JSON 布尔值，不接受具有真值语义的字符串或数字。"""
     return value if type(value) is bool else None

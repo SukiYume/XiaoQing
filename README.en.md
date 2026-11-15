@@ -2,6 +2,12 @@
 
 [中文](README.md)
 
+<p align="center">
+  <img src="docs/assets/xiaoqing-full-body.png" alt="Full-body illustration of XiaoQing, an astronomy sophomore with gray-lavender hair and a blue cardigan, waving while holding an observation notebook" width="300">
+  <br>
+  <strong>Meet XiaoQing, a 20-year-old astronomy sophomore who loves the stars and everyday chats.</strong>
+</p>
+
 The complete manual is available in [English](docs/en/README.md) and [Chinese](docs/README.md). Plugin guides, maintenance rules, and the changelog are maintained in Chinese; links to these documents are marked "Chinese".
 
 XiaoQingBot is a QQ assistant with plugins. It uses OneBot v11 and Python `asyncio`.
@@ -229,6 +235,15 @@ The plugin is disabled by default. `config.plugins.xiaoqing_life.enabled` enable
 When it is disabled, chat behaves as without the plugin.
 See the [user guide (Chinese)](plugins/xiaoqing_life/README.md) and [architecture (Chinese)](plugins/xiaoqing_life/ARCHITECTURE.md).
 
+### XiaoQing Memory
+
+`xiaoqing_memory` is XiaoQing's unified memory.
+Chat, the agent, and online life write raw records through one interface; each night they are consolidated into pages about each person, each group, and herself, and every line cites its source.
+Before each turn she recalls the speaker's page, the group page, and related past events.
+Private-chat content never reaches a group, and one group's content never reaches another.
+The plugin is enabled by default; consolidation needs `ai.routes.reasoning`. Without it, the three plugins keep working without long-term memory.
+See the [user guide (Chinese)](plugins/xiaoqing_memory/README.md), [architecture (Chinese)](plugins/xiaoqing_memory/ARCHITECTURE.md), and [design (Chinese)](plugins/xiaoqing_memory/DESIGN.md).
+
 ### Pendo
 
 Pendo uses one data model for events, tasks, notes, diaries, accounts, and reminders.
@@ -356,8 +371,8 @@ git diff --check
 Complete deployment acceptance uses:
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 See [First start](docs/en/01-getting-started.md) for UAT stages, report locations, and external-scenario options.

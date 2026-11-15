@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.server import InboundServer
+from tests.helpers.server_test_support import StandaloneInboundServer
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_inbound_stop_closes_admission_and_drains_existing_handler() -> No
         await release.wait()
         return []
 
-    server                   = InboundServer("127.0.0.1", 0, "token", handler)
+    server                   = StandaloneInboundServer("127.0.0.1", 0, "token", handler)
     server._accepting_events = True
     server._site = MagicMock(stop=AsyncMock())
     server._runner = MagicMock(cleanup=AsyncMock())
@@ -48,10 +48,10 @@ async def test_inbound_stop_cancels_handler_after_deadline() -> None:
         await asyncio.Event().wait()
         return []
 
-    server                                = InboundServer("127.0.0.1", 0, "token", handler)
-    server._accepting_events              = True
+    server = StandaloneInboundServer("127.0.0.1", 0, "token", handler)
+    server._accepting_events = True
     server._handler_drain_timeout_seconds = 0.001
-    active                                = asyncio.create_task(server._invoke_handler({}))
+    active = asyncio.create_task(server._invoke_handler({}))
     await entered.wait()
     await server.stop()
     assert active.cancelled()

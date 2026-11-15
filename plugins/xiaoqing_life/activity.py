@@ -16,7 +16,7 @@ from . import dossier, reinforce
 from . import threads as thread_ops
 from . import works as works_mod
 from .config import LifeConfig
-from .days import day_key
+from .days import DAY, day_key
 from .lifecycle import (
     add_interest_evidence,
     consolidate,
@@ -31,12 +31,15 @@ from .lifecycle import (
     upsert_expression,
     upsert_term,
 )
+from .memes import Download
 from .planner import HOT_SCROLL, HOT_SOURCE_WEIGHTS, INTEREST, Decision
 from .sources import deep
 from .sources.base import Fetcher, SourceItem
-from .stores import MAX_LOOKUP_QUEUE, MAX_RECENT, LifeStore, lookup_missed, new_id
+from .stores import MAX_RECENT, LifeStore, new_id, queue_for_lookup
 
-ACTIVITY_KEEP_SEC = 24 * 3600
+ACTIVITY_KEEP_SEC = DAY
+# 经历里留下的简介：够她过后说清这条内容讲了什么。
+GIST_CHARS = 160
 
 
 FEELING_DELTA = {"like": 1.0, "dislike": -1.0, "mixed": 0.5}
@@ -56,8 +59,8 @@ class SessionDeps:
     # 她此刻的作息活动文字（"上课" "睡觉"），进入消化提示让感想贴合当下状态。
     activity_text: str = ""
     # 梗图用：下载并校验图片、视觉判定；缺省时不收梗图。
-    download: Callable[[str, int], Awaitable[tuple[bytes, str] | None]] | None = None
-    vision  : Callable[[list[dict[str, Any]]], Awaitable[str]] | None          = None
+    download: Download | None                                         = None
+    vision  : Callable[[list[dict[str, Any]]], Awaitable[str]] | None = None
     # 调试 / 验证脚本的钩子：拿到取材条目、模型原始 JSON。
     on_items : Callable[[list[SourceItem]], None] | None                 = None
     on_digest: Callable[[dict[str, Any], list[SourceItem]], None] | None = None
@@ -77,13 +80,20 @@ class SessionOutcome:
     source: str = ""
 
 
+def searched_topic(decision: Decision, items: Sequence[SourceItem]) -> str:
+    """这些条目是冲着哪个群聊话题搜来的；话题搜不到、退回热门榜刷到的不算，返回空。"""
+
+    if all(item.source in HOT_SOURCE_WEIGHTS for item in items):
+        return ""
+    return str(decision.params.get("chat_topic") or "")
+
+
 def episode_rows(
     result: digest_mod.DigestResult,
     items: list[SourceItem],
     decision: Decision,
     start: float,
     end: float,
-    tz: Any,
     auto_ids: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """经历的时间戳按顺序均匀撒在名义浏览时段 [start, end] 内：她是一条一条刷过去的。
@@ -104,26 +114,28 @@ def episode_rows(
         at   = start + (end - start) * order / (total + 1)
         rows.append(
             {
-                "id"              : new_id("e"),
-                "at"              : at,
-                "gist"            : item.text[:60] + ("…" if len(item.text) > 60 else ""),
-                "tags"            : list(item.tags),
-                "uploader"        : item.uploader,
-                "url"             : item.url,
-                "duration_s"      : item.duration_s,
-                "dense_moment"    : item.dense_moment,
-                "activity"        : decision.choice,
-                "source"          : item.source,
-                "item_id"         : item.item_id,
-                "title"           : item.title,
-                "reaction"        : seen.reaction,
-                "feeling"         : seen.feeling,
-                "share"           : seen.share,
-                "topics"          : list(seen.topics),
-                "term_keys"       : term_keys.get(item.item_id, []),
-                "thread_id"       : decision.params.get("thread_id", ""),
-                "chat_topic"      : str(decision.params.get("chat_topic") or ""),
-                "depth"           : deep.depth_of(item),
+                "id": new_id("e"),
+                "at": at,
+                "gist": item.text[:GIST_CHARS] + ("…" if len(item.text) > GIST_CHARS else ""),
+                "tags": list(item.tags),
+                "uploader": item.uploader,
+                "url": item.url,
+                "duration_s": item.duration_s,
+                "dense_moment": item.dense_moment,
+                "activity": decision.choice,
+                "source": item.source,
+                "item_id": item.item_id,
+                "title": item.title,
+                "reaction": seen.reaction,
+                "highlight": seen.highlight,
+                "highlight_from": seen.highlight_from,
+                "feeling": seen.feeling,
+                "share": seen.share,
+                "topics": list(seen.topics),
+                "term_keys": term_keys.get(item.item_id, []),
+                "thread_id": decision.params.get("thread_id", ""),
+                "chat_topic": searched_topic(decision, [item]),
+                "depth": deep.depth_of(item),
                 "subtitle_partial": item.subtitle_partial,
                 "aspects": (
                     {"like": seen.liked_part, "dislike": seen.disliked_part}
@@ -140,14 +152,6 @@ QUEUE_TERM_CHARS = 8
 
 
 MIN_TERM_VOICES = 2
-
-
-def queue_for_lookup(state: dict[str, Any], term: str, now: float) -> None:
-    """新的未查实词条自动进待查队列（有界、去重），让百科来判断是不是真的流行语；最近查过没查到的不排。"""
-
-    queue: list[str] = state.setdefault("lookup_queue", [])
-    if term not in queue and len(queue) < MAX_LOOKUP_QUEUE and not lookup_missed(state, term, now):
-        queue.append(term)
 
 
 def learn(
@@ -214,6 +218,10 @@ def liked_count(rows: list[dict[str, Any]]) -> float:
     )
 
 
+def disliked_count(rows: list[dict[str, Any]]) -> int:
+    return sum(1 for r in rows if r["feeling"] == "dislike")
+
+
 def remember_activity(state: dict[str, Any], decision: Decision, start: float, end: float) -> None:
     """``start``/``end`` 是名义浏览时段；间隔、滚动时长和“正在做什么”都按它算。"""
 
@@ -250,6 +258,16 @@ def known_keys(terms: dict[str, dict[str, Any]]) -> set[str]:
     return {k for k, e in terms.items() if is_known(e)}
 
 
+def apply_reward(
+    state: dict[str, Any], decision: Decision, moment: datetime, reward: float
+) -> None:
+    """一次上网的收获写回这种活动的偏好和习惯（``moment`` 是名义时段的开始），并留下 ``last_reward``。"""
+
+    reinforce.update_preference(state, "activity", decision.choice, reward)
+    reinforce.record_habit(state, moment, reward)
+    state["last_reward"] = round(reward, 3)
+
+
 async def reinforce_outcome(
     store: LifeStore,
     decision: Decision,
@@ -274,12 +292,10 @@ async def reinforce_outcome(
     day    = day_key(moment)
 
     def apply(s: LifeStore) -> None:
-        reinforce.update_preference(s.state, "activity", decision.choice, reward)
+        apply_reward(s.state, decision, moment, reward)
         if decision.choice == HOT_SCROLL and outcome.source in HOT_SOURCE_WEIGHTS:
             reinforce.update_preference(s.state, "source", outcome.source, reward)
-        reinforce.record_habit(s.state, moment, reward)
-        s.state["last_reward"] = round(reward, 3)
-        query                  = str(decision.params.get("query") or "")
+        query = str(decision.params.get("query") or "")
         # 朋友们在聊的话题不是她自己的兴趣：没看到喜欢的也不记负面证据。
         chat_topic = decision.params.get("chat_topic")
         if decision.choice == INTEREST and query and not chat_topic and d.get("liked", 0) == 0:

@@ -1,4 +1,4 @@
-"""按人物边界、对话历史和当前媒体构建回复提示消息。"""
+"""构建回复提示消息：人物边界、对话历史、当前媒体和近期图片，以及近期风格、长度和问句收尾的提醒。"""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+from core.plugin_base import resolve_bot_name
+
 from ..chat_event import is_bare_name_call
 from ..config.config import PersonalityConfig
-from ..constants import GENERIC_MEDIA_LABELS
 from ..memory.memory import StoredMessage, is_conversation_reply
 from ..message_parts import (
     build_text_message_parts,
@@ -19,7 +20,7 @@ from ..message_parts import (
     render_message_parts,
     render_stored_message,
 )
-from ..persona import SCOPE_CHAT, resolve_bot_name
+from ..persona import SCOPE_CHAT
 from ..utils.wall_clock import describe_now, format_local
 from .communication_constraints import (
     explicit_output_allocation,
@@ -34,6 +35,8 @@ from .media_evidence import (
     history_has_image,
     image_evidence_block,
     marker_visible_speech,
+    media_part_is_readable,
+    media_summary_label,
 )
 
 
@@ -210,7 +213,7 @@ def _marker_label_for_prompt(marker: str) -> str:
     if not match:
         return text
     label = str(match.group(2) or "").strip()
-    return re.split(r"[；;]", label, maxsplit=1)[0].strip()
+    return media_summary_label(label)
 
 
 _MARKER_SCENE_RE = re.compile(r"内容：(.+?)(?:；写着“|；梗背景：|\]$)")
@@ -493,14 +496,7 @@ def build_dialogue_prompt(
 
 
 def _has_readable_media(message: StoredMessage) -> bool:
-    for part in message.parts:
-        if not isinstance(part, dict) or part.get("kind") not in {"image", "emoji"}:
-            continue
-        description = str(part.get("description", "") or "").strip()
-        label = re.split(r"[；;]", description, maxsplit=1)[0].strip()
-        if description and label not in GENERIC_MEDIA_LABELS:
-            return True
-    return False
+    return any(media_part_is_readable(part) for part in message.parts)
 
 
 def build_recent_media_block(

@@ -29,6 +29,7 @@ from tests.helpers.plugin_manager_test_support import (
     _register_test_command,
     _write_runtime_manifest,
     call_plugin_callback,
+    load_plugin_dir,
     textwrap,
 )
 
@@ -753,8 +754,7 @@ async def test_reload_real_canonical_init_failure_restores_old_module(tmp_path: 
         encoding="utf-8",
     )
 
-    manager.load_plugin(plugin_dir)
-    await manager.wait_inits()
+    await load_plugin_dir(manager, plugin_dir)
     old_plugin  = manager._plugins["demo"]
     old_module  = old_plugin.module
     old_package = sys.modules["plugins.demo"]
@@ -797,8 +797,6 @@ async def test_reload_real_canonical_init_failure_restores_old_module(tmp_path: 
         assert resolved is not None
         assert resolved[0].handler is old_module.handle
         assert resolved[0].execution_gate is manager._execution_gates["demo"]
-        assert not manager._init_tasks
-        assert not manager._init_task_plugins
     finally:
         await manager.unload_plugin("demo")
 
@@ -977,8 +975,7 @@ async def test_recovery_init_that_resists_cancellation_keeps_exact_generation_ow
         '"commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
         encoding="utf-8",
     )
-    manager.load_plugin(plugin_dir)
-    await manager.wait_inits()
+    await load_plugin_dir(manager, plugin_dir)
     old_plugin     = manager._plugins["demo"]
     old_module     = old_plugin.module
     old_gate       = old_plugin.execution_gate

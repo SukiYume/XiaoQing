@@ -3,7 +3,8 @@
 Core 按“群 + 用户”串行处理消息：处理第一条期间，同一个人后发的几条排在队里，这一轮看不到。
 真人看到对方还在一条条往外蹦（“小青”“我今天”“考试挂了”），不会每条都回一句。经
 ``inbound_backlog`` 能力看到队里还有他的聊天消息时，这一轮就不回：消息已经记进聊天记录，排在
-最后的那一轮会看着完整的几条一起回。他刚才是在跟她说话的话，后面这几条也算在跟她说。
+最后的那一轮会看着完整的几条一起回。让出时会给后面的那一轮带两样东西（按“群 + 用户”暂存在
+进程内）：让出的话，最后一轮把几条连起来看；他刚才是在跟她说话的话，后面这几条也算在跟她说。
 """
 
 from __future__ import annotations
@@ -12,9 +13,11 @@ import re
 import time
 from typing import Any
 
-from core.message import extract_text, iter_message_segments
+from core.constants import DEFAULT_COMMAND_PREFIX
+from core.message import configured_command_prefixes, iter_message_segments
 
-from .chat_event import event_chat_id
+from .chat_event import event_chat_id, event_plain_text
+from .chat_runtime import optional_capability
 
 # 让出回复后，同一个人这么久以内发来的下一条算在接着跟她说。
 CARRY_SECONDS = 45.0
@@ -33,13 +36,14 @@ _carried      : dict[tuple[str, str], float]                   = {}
 _carried_texts: dict[tuple[str, str], tuple[float, list[str]]] = {}
 
 
-def _command_prefixes(context: Any) -> tuple[str, ...]:
+def command_prefixes(context: Any) -> tuple[str, ...]:
+    """配置里的命令前缀；读不到配置时用 ``/``。"""
+
     try:
         config = context.get_settings_snapshot().config
     except Exception:
-        return ("/",)
-    prefixes = tuple(str(item) for item in config.get("command_prefixes", ["/"]) or ["/"])
-    return tuple(prefix for prefix in prefixes if prefix) or ("/",)
+        return (DEFAULT_COMMAND_PREFIX,)
+    return configured_command_prefixes(config)
 
 
 def _is_chat_follow_up(pending: dict[str, Any], event: dict[str, Any], context: Any) -> bool:
@@ -49,8 +53,8 @@ def _is_chat_follow_up(pending: dict[str, Any], event: dict[str, Any], context: 
         return False
     message  = pending.get("message")
     segments = list(iter_message_segments(message))
-    text     = (extract_text(message) or str(pending.get("raw_message") or "")).strip()
-    if text.startswith(_command_prefixes(context)) or _URL_ONLY_RE.fullmatch(text):
+    text     = event_plain_text(pending)
+    if text.startswith(command_prefixes(context)) or _URL_ONLY_RE.fullmatch(text):
         return False
     self_id = str(event.get("self_id") or "")
     for segment in segments:
@@ -66,7 +70,7 @@ def _is_chat_follow_up(pending: dict[str, Any], event: dict[str, Any], context: 
 def sender_has_follow_up(event: dict[str, Any], context: Any) -> bool:
     """这位发送者在本会话里是不是还有聊天消息排着没处理。能力不可用或出错时当没有。"""
 
-    backlog = getattr(getattr(context, "capabilities", None), "inbound_backlog", None)
+    backlog = optional_capability(context, "inbound_backlog")
     if backlog is None:
         return False
     try:
@@ -111,18 +115,18 @@ def burst_text(event: dict[str, Any], text: str) -> str:
     return "\n".join([*earlier, text]) if earlier else text
 
 
-def carry_attention(event: dict[str, Any]) -> None:
-    """这一轮本来是在跟她说话、却让给了后面的消息：记下来，下一条也算在跟她说。"""
+def carry_attention(event: dict[str, Any], *, seconds: float = CARRY_SECONDS) -> None:
+    """这一轮本来是在跟她说话、却让给了后面的消息：记下来，``seconds`` 内的下一条也算在跟她说。"""
 
     now = time.monotonic()
-    for stale in [key for key, at in _carried.items() if now - at >= CARRY_SECONDS]:
+    for stale in [key for key, until in _carried.items() if until <= now]:
         del _carried[stale]
     if len(_carried) < _MAX_CARRIED:
-        _carried[_key(event)] = now
+        _carried[_key(event)] = now + seconds
 
 
 def take_carried_attention(event: dict[str, Any]) -> bool:
     """取走上一轮让出来的“在跟她说话”；过期的不算。"""
 
-    at = _carried.pop(_key(event), None)
-    return at is not None and time.monotonic() - at < CARRY_SECONDS
+    until = _carried.pop(_key(event), None)
+    return until is not None and time.monotonic() < until

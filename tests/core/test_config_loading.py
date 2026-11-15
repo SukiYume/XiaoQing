@@ -227,6 +227,20 @@ class TestConfigManagerReload:
         with pytest.raises(ConfigLoadError, match="data_root"):
             config_manager.reload()
 
+    @pytest.mark.parametrize("value", [[], [""], ["/", " "], "/", [1]])
+    def test_reload_rejects_command_prefixes_that_cannot_work(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+        value: object,
+    ):
+        candidate                     = config_manager.snapshot().mutable_config()
+        candidate["command_prefixes"] = value
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        with pytest.raises(ConfigLoadError, match="command_prefixes"):
+            config_manager.reload()
+
     def test_reload_accepts_non_loopback_only_with_trusted_tls_proxy_acknowledgement(
         self,
         config_manager: ConfigManager,

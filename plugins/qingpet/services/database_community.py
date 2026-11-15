@@ -6,14 +6,15 @@ import time
 from datetime import datetime, timedelta
 
 from ..models import OperationLog
-from ..utils.constants import GROUP_TASK_TEMPLATES, PetStage, PetStatus
+from ..utils.constants import (
+    DAILY_TASK_TEMPLATES,
+    GROUP_TASK_TEMPLATES,
+    PetStage,
+    PetStatus,
+)
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
-from .database_support import (
-    _DAILY_COIN_LIMIT,
-    _DAILY_TASK_TEMPLATES,
-    _log_database_failure,
-)
+from .database_support import _log_database_failure
 from .database_types import LeaveMessageAtomicResult
 
 
@@ -29,9 +30,10 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         group_id: int,
         operator_user_id: str,
         operation_type: str,
-        params: str                = "",
-        target_user_id: str | None = None,
-        result: str                = "success",
+        params: str                 = "",
+        target_user_id: str | None  = None,
+        result: str                 = "success",
+        created_at: datetime | None = None,
     ) -> None:
         conn.execute(
             """INSERT INTO operation_logs
@@ -44,7 +46,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 operation_type,
                 params,
                 result,
-                database_clock.now().isoformat(),
+                (created_at or database_clock.now()).isoformat(),
             ),
         )
 
@@ -52,19 +54,15 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn: sqlite3.Connection | None = None
         try:
             conn = self._get_connection()
-            conn.execute(
-                """INSERT INTO operation_logs
-                (group_id, user_id, target_user_id, operation_type, params, result, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    log.group_id,
-                    log.user_id,
-                    log.target_user_id,
-                    log.operation_type,
-                    log.params,
-                    log.result,
-                    log.created_at.isoformat(),
-                ),
+            self._insert_operation_log_in_transaction(
+                conn,
+                group_id         = log.group_id,
+                operator_user_id = log.user_id,
+                operation_type   = log.operation_type,
+                params           = log.params,
+                target_user_id   = log.target_user_id,
+                result           = log.result,
+                created_at       = log.created_at,
             )
             conn.commit()
             return True
@@ -240,7 +238,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         now_iso: str,
     ) -> None:
         """确保用户当天的四类个人任务均已建立。"""
-        for task_type, target, reward in _DAILY_TASK_TEMPLATES:
+        for task_type, target, reward in DAILY_TASK_TEMPLATES:
             conn.execute(
                 """INSERT OR IGNORE INTO tasks
                    (user_id, group_id, task_type, target_value, current_value,
@@ -277,7 +275,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.business_date(database_clock.now())
+            now   = database_clock.now()
+            today = database_clock.business_date(now)
             row   = conn.execute(
                 """SELECT reward_coins FROM tasks
                 WHERE user_id = ? AND group_id = ? AND task_type = ?
@@ -303,8 +302,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 int(row["reward_coins"] or 0),
                 reason       = "daily_task",
                 reference_id = f"daily-task:{today}:{group_id}:{task_type}:{user_id}",
-                daily_limit  = _DAILY_COIN_LIMIT,
-                now_iso      = database_clock.now().isoformat(),
+                now_iso      = now.isoformat(),
                 record_zero  = True,
             )
             conn.commit()
@@ -392,7 +390,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         activity_type: str,
         increment: int = 1,
     ) -> int:
-        """推进显式宠物活动；自然聊天触发由独立配置控制。"""
+        """推进显式宠物活动（群开着且活动功能开着时）。"""
         if increment <= 0:
             return 0
         config = conn.execute(
@@ -413,7 +411,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
+            now_iso = database_clock.now().isoformat()
+            row     = conn.execute(
                 """SELECT reward_coins FROM activities WHERE id = ? AND group_id = ?
                    AND current_value >= target_value""",
                 (activity_id, group_id),
@@ -423,7 +422,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 return None
             claim = conn.execute(
                 "INSERT OR IGNORE INTO activity_claims (activity_id, user_id, claimed_at) VALUES (?, ?, ?)",
-                (activity_id, user_id, database_clock.now().isoformat()),
+                (activity_id, user_id, now_iso),
             )
             if claim.rowcount != 1:
                 conn.rollback()
@@ -435,8 +434,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 int(row["reward_coins"] or 0),
                 reason       = "activity",
                 reference_id = f"activity:{activity_id}:{user_id}",
-                daily_limit  = _DAILY_COIN_LIMIT,
-                now_iso      = database_clock.now().isoformat(),
+                now_iso      = now_iso,
                 record_zero  = True,
             )
             conn.commit()
@@ -545,32 +543,31 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
             _log_database_failure("record_command_timestamp", exc)
 
-    def get_recent_command_count(self, user_id: str, group_id: int, window_seconds: int) -> int:
+    def get_recent_command_count(
+        self,
+        group_id: int,
+        window_seconds: int,
+        *,
+        user_id: str | None = None,
+    ) -> int:
+        """窗口内的命令数；给了 ``user_id`` 只数这个用户，否则数整个群。"""
         try:
             conn      = self._get_connection()
             threshold = time.time() - window_seconds
-            cursor    = conn.execute(
-                "SELECT COUNT(*) as cnt FROM command_timestamps WHERE user_id = ? AND group_id = ? AND timestamp > ?",
-                (user_id, group_id, threshold),
-            )
+            if user_id is None:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE group_id = ? AND timestamp > ?",
+                    (group_id, threshold),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id = ? AND timestamp > ?",
+                    (user_id, group_id, threshold),
+                )
             row = cursor.fetchone()
             return row["cnt"] if row else 0
         except Exception as exc:
             _log_database_failure("get_recent_command_count", exc)
-            return 0
-
-    def get_group_recent_command_count(self, group_id: int, window_seconds: int) -> int:
-        try:
-            conn      = self._get_connection()
-            threshold = time.time() - window_seconds
-            cursor    = conn.execute(
-                "SELECT COUNT(*) as cnt FROM command_timestamps WHERE group_id = ? AND timestamp > ?",
-                (group_id, threshold),
-            )
-            row = cursor.fetchone()
-            return row["cnt"] if row else 0
-        except Exception as exc:
-            _log_database_failure("get_group_recent_command_count", exc)
             return 0
 
     def cleanup_old_timestamps(self, max_age_seconds: int = 3600) -> None:
@@ -600,7 +597,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
             )
             return [dict(row) for row in cursor.fetchall()]
         except Exception as exc:
-            _log_database_failure("get_active_trade_listings", exc)
+            _log_database_failure("get_active_listings", exc)
             return []
 
     def get_listing_by_id(self, listing_id: int, group_id: int | None = None) -> dict | None:
@@ -623,7 +620,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
             row = cursor.fetchone()
             return dict(row) if row else None
         except Exception as exc:
-            _log_database_failure("get_trade_listing", exc)
+            _log_database_failure("get_listing_by_id", exc)
             return None
 
     def cancel_trade_listing(self, listing_id: int, seller_id: str, group_id: int) -> bool:
@@ -657,20 +654,12 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
             if claim.rowcount != 1:
                 conn.rollback()
                 return False
-            inventory_items = self._load_inventory_items(
+            self._add_inventory_item_in_transaction(
                 conn,
                 seller_id,
                 int(listing["group_id"]),
-            )
-            inventory_items[listing["item_id"]] = int(
-                inventory_items.get(listing["item_id"], 0)
-            ) + int(listing["amount"])
-
-            self._save_inventory_items(
-                conn,
-                seller_id,
-                int(listing["group_id"]),
-                inventory_items,
+                str(listing["item_id"]),
+                int(listing["amount"]),
             )
 
             conn.commit()
@@ -771,11 +760,13 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 reference_id = f"trade-purchase:{listing_id}:seller",
             )
 
-            inventory_items = self._load_inventory_items(conn, buyer_id, group_id)
-            inventory_items[listing["item_id"]] = int(
-                inventory_items.get(listing["item_id"], 0)
-            ) + int(listing["amount"])
-            self._save_inventory_items(conn, buyer_id, group_id, inventory_items)
+            self._add_inventory_item_in_transaction(
+                conn,
+                buyer_id,
+                group_id,
+                str(listing["item_id"]),
+                int(listing["amount"]),
+            )
 
             conn.commit()
             listing["tax"] = tax
@@ -914,12 +905,12 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         user_id: str,
         group_id: int,
         task_type: str,
-        daily_coin_limit: int = _DAILY_COIN_LIMIT,
     ) -> int | None:
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.business_date(database_clock.now())
+            now   = database_clock.now()
+            today = database_clock.business_date(now)
             task  = conn.execute(
                 """SELECT reward_coins FROM group_tasks
                    WHERE group_id = ? AND task_type = ? AND created_date = ?
@@ -933,7 +924,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 """INSERT OR IGNORE INTO group_task_claims
                    (group_id, task_type, created_date, user_id, claimed_at)
                    VALUES (?, ?, ?, ?, ?)""",
-                (group_id, task_type, today, user_id, database_clock.now().isoformat()),
+                (group_id, task_type, today, user_id, now.isoformat()),
             )
             if claim.rowcount != 1:
                 conn.rollback()
@@ -945,8 +936,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 int(task["reward_coins"] or 0),
                 reason       = "group_task",
                 reference_id = f"group-task:{today}:{group_id}:{task_type}:{user_id}",
-                daily_limit  = daily_coin_limit,
-                now_iso      = database_clock.now().isoformat(),
+                now_iso      = now.isoformat(),
                 record_zero  = True,
             )
             conn.commit()

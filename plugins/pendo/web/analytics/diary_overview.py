@@ -2,27 +2,16 @@
 
 from __future__ import annotations
 
-from calendar import monthrange
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any, cast
 
 from ...models.item import DiaryItem, ItemType
 from ...services.db import Database
 from ...utils.identifiers import public_id
-from ...utils.time_utils import TimezoneHelper, now_in_timezone
+from ...utils.time_utils import TimezoneHelper, iso_week_key, month_bounds, now_in_timezone
+from ..utils import parse_iso_date
 
 _ALLOWED_CADENCE_GRANULARITIES = frozenset({"day", "week", "month", "year", "auto"})
-
-
-def _parse_day(value: str | None) -> date | None:
-    """解析持久化日期；损坏的历史值由调用方决定忽略或报错。"""
-
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(value[:10])
-    except ValueError:
-        return None
 
 
 def _resolve_period(
@@ -34,8 +23,8 @@ def _resolve_period(
     """把自然月或显式日期范围归一为闭区间。"""
 
     if start_date is not None or end_date is not None:
-        start = _parse_day(start_date)
-        end   = _parse_day(end_date)
+        start = parse_iso_date(start_date)
+        end   = parse_iso_date(end_date)
         if start is None or end is None:
             raise ValueError("start_date and end_date must be valid YYYY-MM-DD strings")
         if start > end:
@@ -48,7 +37,7 @@ def _resolve_period(
         start = date(year, month, 1)
     except ValueError as exc:
         raise ValueError("year and month must form a valid calendar month") from exc
-    return start, date(year, month, monthrange(year, month)[1])
+    return start, month_bounds(start)[1]
 
 
 def _load_diary_days(db: Database, owner_id: str) -> set[date]:
@@ -65,7 +54,7 @@ def _load_diary_days(db: Database, owner_id: str) -> set[date]:
     days: set[date] = set()
     for row in rows:
         value  = row[0]
-        parsed = _parse_day(value if isinstance(value, str) else None)
+        parsed = parse_iso_date(value if isinstance(value, str) else None)
         if parsed is not None:
             days.add(parsed)
     return days
@@ -155,8 +144,7 @@ def _build_cadence(
             bucket_key = current.strftime("%Y-%m")
             label      = bucket_key
         elif resolved == "week":
-            iso        = current.isocalendar()
-            bucket_key = f"{iso.year}-W{iso.week:02d}"
+            bucket_key = iso_week_key(current)
             label      = bucket_key
         else:
             bucket_key = date_key
@@ -197,7 +185,7 @@ def build_diary_overview(
     if today is None:
         today_day = now_in_timezone(owner_id, db).date()
     else:
-        parsed_today = _parse_day(today)
+        parsed_today = parse_iso_date(today)
         if parsed_today is None:
             raise ValueError("today must be a valid YYYY-MM-DD string")
         today_day = parsed_today
@@ -224,7 +212,7 @@ def build_diary_overview(
     total_words                     = 0
 
     for item in window_items:
-        diary_day = _parse_day(item.diary_date)
+        diary_day = parse_iso_date(item.diary_date)
         if diary_day is None:
             continue
         date_key = diary_day.isoformat()

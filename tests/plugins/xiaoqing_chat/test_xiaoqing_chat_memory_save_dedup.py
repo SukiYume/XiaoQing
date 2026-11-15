@@ -23,12 +23,7 @@ from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 def _knowledge_snapshot(db: MemoryDB) -> list[tuple[str, str, dict]]:
     return sorted(
         (item.doc_id, item.text, item.meta)
-        for item in db.query_global(
-            "configured knowledge",
-            top_k       = 2048,
-            min_score   = -1.0,
-            type_filter = "knowledge",
-        )
+        for item in db.query_knowledge("configured knowledge", top_k=2048, min_score=-1.0)
     )
 
 
@@ -149,18 +144,12 @@ def test_memory_db_delete_chat_removes_only_target_scope_and_persists(
 
     reloaded = MemoryDB()
     reloaded.bind(tmp_path)
-    assert reloaded.query("旧话题", chat_id="g-target", min_score=-1.0) == []
-    assert [
-        item.doc_id for item in reloaded.query("旧话题", chat_id="g-other", min_score=-1.0)
-    ] == ["topic-other"]
-    assert [
-        item.doc_id
-        for item in reloaded.query_global(
-            "全局知识",
-            min_score   = -1.0,
-            type_filter = "knowledge",
-        )
-    ] == ["global-knowledge"]
+    assert reloaded.get("topic-target") is None
+    assert reloaded.get("person-target") is None
+    assert reloaded.get("topic-other") is not None
+    assert [item.doc_id for item in reloaded.query_knowledge("全局知识", min_score=-1.0)] == [
+        "global-knowledge"
+    ]
 
 
 def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sources(

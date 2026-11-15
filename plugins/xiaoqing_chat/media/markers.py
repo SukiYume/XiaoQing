@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..constants import GENERIC_MEDIA_LABELS
+from ..constants import GENERIC_MEDIA_LABELS, MEDIA_UNRECOGNIZED_LABEL
 from .loading import looks_like_unusable_source_label, safe_source_name
 from .models import RenderedMedia, ResolvedMedia
-
-if TYPE_CHECKING:
-    pass
 
 _EMOJI_HINT_RE = re.compile(
     r"(表情|emoji|sticker|meme|梗图|mface|贴纸|无语|开心|委屈|猫猫|商城表情|收藏表情)",
@@ -314,7 +311,7 @@ def build_fallback_render(
         emotion_tags = ()
         # 文件名和传输摘要都不是视觉证据。视觉路由失败时明确标记未理解像素，
         # 避免回复模型根据来源标签猜测图片内容。
-        description = "图片内容暂时无法识别"
+        description = MEDIA_UNRECOGNIZED_LABEL
     marker = build_marker(kind, description, emotion_tags)
     return RenderedMedia(
         media_hash   = resolved.media_hash,

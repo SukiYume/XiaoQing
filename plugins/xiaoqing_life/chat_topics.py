@@ -16,12 +16,13 @@ from collections.abc import Iterable
 from typing import Any
 
 from .days import DAY
+from .lifecycle import TOPIC_CHARS
 from .safety import clean_text, is_blocked, normalize_for_match, similar
 
-TOPIC_CHARS         = 12
 KEYWORD_CHARS       = 8
 MAX_KEYWORDS        = 3
 MAX_TOPICS_PER_TURN = 3
+MAX_TOPICS_KNOWN    = 20
 MAX_HEARD           = 40
 HEARD_KEEP_DAYS     = 14
 REVIEW_DAYS         = 3
@@ -34,13 +35,13 @@ QUERY_CHARS         = 20
 WHY_CHARS           = 30
 
 
-def clean_topics(value: Any) -> list[dict[str, Any]]:
+def clean_topics(value: Any, limit: int = MAX_TOPICS_PER_TURN) -> list[dict[str, Any]]:
     """聊天发来的 ``topics``：``[{"topic": str, "keywords": [str]}]``，类型不对的丢掉。"""
 
     if not isinstance(value, list):
         return []
     found: list[dict[str, Any]] = []
-    for row in value[:MAX_TOPICS_PER_TURN]:
+    for row in value[:limit]:
         if not isinstance(row, dict):
             continue
         topic    = clean_text(row.get("topic"), TOPIC_CHARS)
@@ -57,7 +58,9 @@ def clean_topics(value: Any) -> list[dict[str, Any]]:
     return found
 
 
-def _match(heard: list[dict[str, Any]], topic: str) -> dict[str, Any] | None:
+def match(heard: list[dict[str, Any]], topic: str) -> dict[str, Any] | None:
+    """``heard`` 里和 ``topic`` 是同一个话题（写法一样或相近）的那一条。"""
+
     key = normalize_for_match(topic)
     return next(
         (
@@ -81,7 +84,7 @@ def record_heard(
         topic = str(row.get("topic") or "")
         if not topic or is_blocked(" ".join([topic, *row.get("keywords", [])]), blocked):
             continue
-        entry = _match(heard, topic)
+        entry = match(heard, topic)
         if entry is None:
             heard.append(
                 {
@@ -197,7 +200,7 @@ def fresh(state: dict[str, Any], now: float) -> list[dict[str, Any]]:
 def spark(state: dict[str, Any], now: float) -> bool:
     """有在上一次上网之后才挑出来、还没看过的话题：这次不用掷骰子。"""
 
-    since = max(float(state.get("last_session_end", 0.0)), float(state.get("last_session_at", 0.0)))
+    since = float(state.get("last_session_end", 0.0))
     return any(float(p.get("picked_at", 0.0)) > since for p in fresh(state, now))
 
 

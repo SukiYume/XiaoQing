@@ -17,11 +17,9 @@ from .chat_event import event_chat_id
 from .chat_runtime import ai_route_context, chat_lock
 from .handler_context import HandlerContext, handle_errors
 from .logging_utils import redacted_value
-from .memory.fact_extraction_checkpoint import clear_fact_extraction_checkpoint
+from .memory import client as memory_client
 from .memory.person_profile import clear_profiles_and_memory
 from .memory.review_sessions import apply_review_answer, render_session_prompt
-from .memory.thinking_back import clear_records as clear_thinking_back_records
-from .memory.topic_summary_cache import clear_topic_summary_entries
 from .runtime_state import get_state
 
 
@@ -30,8 +28,11 @@ async def _clear_stores(chat_id: str, *stores) -> None:
         await asyncio.to_thread(store.clear, chat_id)
 
 
-async def reset_chat_session(state, chat_id: str, data_dir: Path) -> None:
-    """清除会话私有状态；媒体注册表按 media_key 全局共享，不能按 chat_id 删除。"""
+async def reset_chat_session(state, chat_id: str, data_dir: Path, context: Any = None) -> bool:
+    """清除会话私有状态，返回长期记忆清没清成；媒体注册表按 media_key 全局共享，不能按 chat_id 删除。
+
+    长期记忆没清成时本地状态照样清空，待清的会话由记忆客户端记下并自动重试。
+    """
 
     # clear() 需要等待已经进入 asyncio.to_thread()、无法取消的持久化任务，
     # 因此把这段等待也放到事件循环之外。
@@ -47,35 +48,26 @@ async def reset_chat_session(state, chat_id: str, data_dir: Path) -> None:
         state.bw_jargon_store,
         state.bw_recorder,
         state.bw_tracker_store,
-        state.self_timeline,
-        state.open_loops,
     )
     state.review_store.clear_policy(chat_id)
     state.review_store.clear_sessions_for_chat(chat_id)
-    await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
-    await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
-    await asyncio.to_thread(clear_fact_extraction_checkpoint, data_dir, chat_id)
+    memory_cleared = context is None or await memory_client.forget_chat(context, chat_id)
     state.clear_transient_chat_state(chat_id)
+    return memory_cleared
 
 
-async def reset_transient_conversation_state(state, chat_id: str, data_dir: Path) -> None:
+async def reset_transient_conversation_state(state, chat_id: str) -> None:
     """长空档后清理旧话题状态，保留完整聊天历史及独立计时的召唤标记。"""
 
     await _clear_stores(
         chat_id, state.goal_store, state.heartflow, state.action_history, state.pfc_state_store
     )
-    await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
-    await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
     state.clear_transient_chat_state(chat_id)
 
 
 def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:
-    """统一统计页与黑话页的会话可见范围，避免两个入口口径漂移。"""
-    return [
-        item
-        for item in jargons.values()
-        if item.is_global or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
-    ]
+    """统计页与黑话页列出的词条：和回复时能用上的是同一批（``JargonRecord.visible_to``）。"""
+    return [item for item in jargons.values() if item.visible_to(chat_id)]
 
 
 @handle_errors
@@ -122,7 +114,7 @@ async def handle_internal(
         if pending is not None and not pending.done():
             pending.cancel()
         async with chat_lock(chat_id):
-            await reset_chat_session(state, chat_id, hctx.data_dir)
+            memory_cleared = await reset_chat_session(state, chat_id, hctx.data_dir, context)
         state.inc_stats(chat_id, "resets")
         context.logger.info(
             "XiaoQing Chat reset_audit scope=%s chat_id=%s group_id=%s operator_user_id=%s",
@@ -131,6 +123,10 @@ async def handle_internal(
             redacted_value(event.get("group_id")),
             redacted_value(event.get("user_id")),
         )
+        if not memory_cleared:
+            return segments(
+                "⚠️ 会话记忆已重置，但长期记忆这次没清掉，之后会自动重试；清掉之前新聊的内容不会记进长期记忆。"
+            )
         return segments("✅ 已重置会话记忆")
 
     if command == "深度对话":
@@ -144,7 +140,7 @@ async def handle_internal(
             f"- 更强的思考能力 (think_level={runtime.cfg.brain_chat.brain_think_level})\n"
             f"- 专门的对话人格和风格\n"
             f"- 采样参数沿用聊天路由\n\n"
-            f"提示: 修改 config/xiaoqing_config.json 中的 brain_chat.enable_private_brain_chat 来启用此模式。"
+            f"提示: 把 plugins/xiaoqing_chat/config/xiaoqing_config.json 里的 brain_chat.enable_private_brain_chat 设为 true 来启用此模式。"
         )
         return segments(mode_desc)
 
@@ -172,14 +168,13 @@ async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict
     lines.append(
         f"• 记忆检索: {'✅ 已启用' if cfg.memory.enable_memory_retrieval else '❌ 未启用'}"
     )
-    lines.append(f"• 最大检索数: {cfg.memory.top_k}")
-    lines.append(f"• 最小相似度: {cfg.memory.min_score}")
+    lines.append(f"• /xc 记忆 条数: {cfg.memory.top_k}")
+    lines.append(f"• 知识库最低相关度: {cfg.memory.min_score}")
 
     lines.append("\n表达学习:")
     lines.append(
         f"• 表达学习: {'✅ 已启用' if cfg.expression.enable_expression_learning else '❌ 未启用'}"
     )
-    lines.append(f"• 最大注入数: {cfg.expression.max_injected}")
     lines.append(f"• 最大存储数: {cfg.expression.max_store}")
 
     lines.append("\n深度对话模式:")
@@ -212,21 +207,16 @@ async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[
         store.close_session(session_id)
         return segments("✅ 审查会话已关闭")
     if action == "ok":
-        if session.kind == "bad_reply_pattern" and session.step <= 0:
-            session.step = 1
-            store.update_session(session)
-            return segments(render_session_prompt(session))
         store.close_session(session_id)
         return segments("✅ 已确认当前目标/策略，无需修改")
     if not answer:
-        return segments("❌ answer 操作必须提供规则、目标或策略内容")
+        return segments("❌ answer 操作必须提供目标或策略内容")
     cfg = hctx.runtime.cfg.reflection
     session, applied = apply_review_answer(
-        store              = store,
-        sess               = session,
-        answer             = answer,
-        goal_lock_seconds  = cfg.goal_lock_seconds,
-        max_avoid_patterns = cfg.max_avoid_patterns,
+        store             = store,
+        sess              = session,
+        answer            = answer,
+        goal_lock_seconds = cfg.goal_lock_seconds,
     )
     if applied is None:
         return segments("❌ 当前审查会话不接受该答案")
@@ -241,26 +231,20 @@ async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[
         return segments("🔍 记忆检索\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物")
 
     hctx = HandlerContext.from_event(event, context)
-    runtime, state = hctx.runtime, hctx.state
-    memory_db = state.memory_db
-    if not memory_db:
-        return segments("❌ 记忆数据库未初始化")
-
-    results = await asyncio.to_thread(
-        memory_db.query,
-        query,
-        chat_id   = hctx.chat_id,
-        top_k     = runtime.cfg.memory.top_k,
-        min_score = runtime.cfg.memory.min_score,
+    if memory_client.capability(context) is None:
+        return segments("❌ 统一记忆不可用")
+    # 只查当前会话能看到的内容：这个会话的笔记、页面和原始记录，以及她自己的事。
+    results = await memory_client.search(
+        context,
+        hctx.chat_id,
+        {"query": query, "include_events": True, "limit": max(1, hctx.runtime.cfg.memory.top_k)},
     )
     if not results:
         return segments(f"🔍 记忆检索结果\n\n关键词: {query}\n\n未找到相关记忆")
 
     lines = [f"🔍 记忆检索结果\n\n关键词: {query}\n"]
     for i, item in enumerate(results, 1):
-        score = item.score * 100
-        lines.append(f"{i}. (相关度: {score:.1f}%)")
-        lines.append(f"{item.text}\n")
+        lines.append(f"{i}. {item.get('text')}")
     return segments("\n".join(lines))
 
 

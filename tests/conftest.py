@@ -360,32 +360,26 @@ def sample_router(empty_router):
         return [{"type": "text", "data": {"text": f"{name}: {args}"}}]
 
     specs = [
-        CommandSpec(
-            plugin     = "echo",
-            name       = "echo",
-            triggers   = ["echo", "回显"],
-            help_text  = "回显消息",
-            admin_only = False,
-            handler    = dummy_handler,
-            priority   = 0,
+        CommandSpec.from_manifest(
+            "echo",
+            {"name": "echo", "triggers": ["echo", "回显"], "help": "回显消息", "priority": 0},
+            dummy_handler,
         ),
-        CommandSpec(
-            plugin     = "help",
-            name       = "help",
-            triggers   = ["help", "帮助"],
-            help_text  = "查看帮助",
-            admin_only = False,
-            handler    = dummy_handler,
-            priority   = 0,
+        CommandSpec.from_manifest(
+            "help",
+            {"name": "help", "triggers": ["help", "帮助"], "help": "查看帮助", "priority": 0},
+            dummy_handler,
         ),
-        CommandSpec(
-            plugin     = "admin",
-            name       = "reload",
-            triggers   = ["reload"],
-            help_text  = "重载配置",
-            admin_only = True,
-            handler    = dummy_handler,
-            priority   = 10,
+        CommandSpec.from_manifest(
+            "admin",
+            {
+                "name"      : "reload",
+                "triggers"  : ["reload"],
+                "help"      : "重载配置",
+                "priority"  : 10,
+                "permission": "bot_admin",
+            },
+            dummy_handler,
         ),
     ]
 

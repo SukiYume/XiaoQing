@@ -2,10 +2,11 @@
 
 import random
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..models import Inventory, Pet, User
 from ..utils.constants import (
+    ACTION_BASE_COINS,
     AGE_EVOLUTION_THRESHOLDS,
     COOLDOWN_TIMES,
     DAILY_LIMITS,
@@ -16,6 +17,9 @@ from ..utils.constants import (
     EVOLUTION_EXPERIENCE_THRESHOLDS,
     EXPLORE_LOCATIONS,
     FAVORITE_FOOD_BONUS,
+    PET_ACTION_LABELS,
+    SLEEP_DURATION_SECONDS,
+    SLEEP_ENERGY_PER_MINUTE,
     TRAINING_CONFIG,
     TRAINING_MESSAGES,
     TRAINING_SPECIAL_EVENTS,
@@ -31,13 +35,6 @@ from .database import Database
 from .item_service import ItemService
 from .user_service import UserService
 
-_ACTION_LABELS = {
-    "feed"   : "喂食",
-    "clean"  : "清洁",
-    "play"   : "玩耍",
-    "train"  : "训练",
-    "explore": "探索",
-}
 _PET_PERSONALITIES = tuple(PetPersonality)
 
 
@@ -50,7 +47,17 @@ class PetService:
     @staticmethod
     def _daily_limit_message(action: str, limit: int) -> str:
         """生成统一的每日动作上限提示。"""
-        return f"今日{_ACTION_LABELS.get(action, action)}次数已达上限({limit}次)"
+        return f"今日{PET_ACTION_LABELS.get(action, action)}次数已达上限({limit}次)"
+
+    @staticmethod
+    def _cooldown_message(action: str, remaining: int) -> str:
+        """生成统一的动作冷却提示。"""
+        return f"{PET_ACTION_LABELS.get(action, action)}冷却中，请等待{remaining}秒"
+
+    @staticmethod
+    def _free_feed_limit_message(limit: int) -> str:
+        """生成免费苹果次数用完时的提示。"""
+        return f"今日免费喂食次数已达上限({limit}次)，请购买食物后喂食"
 
     @staticmethod
     def _sync_state(
@@ -59,6 +66,30 @@ class PetService:
     ) -> None:
         """数据库提交成功后，把候选模型的最终版本同步回调用方对象。"""
         target.__dict__.update(source.__dict__)
+
+    @staticmethod
+    def _finish_sleep(pet: Pet, slept_until: datetime) -> None:
+        """让睡觉的宠物醒来：按 ``last_update`` 到 ``slept_until`` 的实际睡眠时长恢复精力。"""
+        sleeping_minutes = max(0.0, (slept_until - pet.last_update).total_seconds() / 60.0)
+        energy_gain      = int(SLEEP_ENERGY_PER_MINUTE * sleeping_minutes)
+        if energy_gain > 0:
+            pet.update_stat("energy", energy_gain)
+        pet.status             = PetStatus.NORMAL
+        pet.status_expire_time = None
+        pet.last_update        = slept_until
+
+    @staticmethod
+    def _finish_travel(pet: Pet, now: datetime, stat_value: float) -> None:
+        """旅行结束：四项状态恢复到 ``stat_value``，健康恢复到固定值，回到可互动状态。"""
+        value                  = int(stat_value)
+        pet.status             = PetStatus.NORMAL
+        pet.status_expire_time = None
+        pet.hunger             = value
+        pet.mood               = value
+        pet.clean              = value
+        pet.energy             = value
+        pet.health             = int(TRAVEL_THRESHOLDS["recovered_health"])
+        pet.last_update        = now
 
     def _persist_pet_candidate(self, target: Pet, candidate: Pet) -> bool:
         """仅在候选宠物写入成功后更新调用方持有的实例。"""
@@ -76,8 +107,6 @@ class PetService:
         limit = DAILY_LIMITS.get(action)
         if limit is None:
             return True, ""
-        if not user.can_do_action(action, 1, limit):
-            return False, self._daily_limit_message(action, limit)
         available, remaining = self.db.check_action_quota(
             user.user_id,
             user.group_id,
@@ -87,21 +116,19 @@ class PetService:
         if available:
             return True, ""
         if remaining > 0:
-            return False, f"{action}冷却中，请等待{remaining}秒"
+            return False, self._cooldown_message(action, remaining)
         return False, self._daily_limit_message(action, limit)
 
     def _commit_failure_message(self, action: str, reason: str, remaining: int) -> str:
-        action_label = _ACTION_LABELS.get(action, action)
         if reason == "cooldown" and remaining > 0:
-            return f"{action_label}冷却中，请等待{remaining}秒"
+            return self._cooldown_message(action, remaining)
         if reason == "free_feed_limit":
-            limit = DAILY_LIMITS.get("free_feed", 5)
-            return f"今日免费喂食次数已达上限({limit}次)，请购买食物后喂食"
+            return self._free_feed_limit_message(DAILY_LIMITS["free_feed"])
         if reason == "inventory":
             return "背包库存已变化，请重试"
         if reason == "daily_limit":
             return self._daily_limit_message(action, DAILY_LIMITS[action])
-        return f"{action_label}失败"
+        return f"{PET_ACTION_LABELS.get(action, action)}失败"
 
     @staticmethod
     def _get_cannot_interact_msg(pet: Pet) -> str:
@@ -111,16 +138,19 @@ class PetService:
         if pet.status == PetStatus.SICK:
             return "宠物生病了，使用 /宠物 治疗 [药品] 治疗"
         if pet.status == PetStatus.TRAVELING:
-            return "宠物正在旅行中，使用 /宠物 召回 召回它\n用法: /宠物 召回"
+            return "宠物正在旅行中，使用 /宠物 召回 召回它"
         if pet.status == PetStatus.DEAD:
             return "宠物已死亡"
         return "宠物现在无法互动"
 
     # ──────────────────── 领养 ────────────────────
 
+    def _validate_name_in_group(self, group_id: int, name: str) -> tuple[bool, str]:
+        """按本群的敏感词配置校验宠物名。"""
+        return validate_pet_name(name, self.db.get_group_config(group_id).sensitive_words)
+
     def adopt_pet(self, user_id: str, group_id: int, name: str) -> tuple[bool, str]:
-        group_config = self.db.get_group_config(group_id)
-        valid, message = validate_pet_name(name, group_config.sensitive_words)
+        valid, message = self._validate_name_in_group(group_id, name)
         if not valid:
             return False, message
 
@@ -175,7 +205,7 @@ class PetService:
 
         cooled, remaining = validate_cooling(pet.last_feed, COOLDOWN_TIMES["feed"])
         if not cooled:
-            return False, f"喂食冷却中，请等待{remaining}秒", 0
+            return False, self._cooldown_message("feed", remaining), 0
 
         identifier    = item_id or "apple"
         resolved_item = ItemService(self.db).resolve_item(identifier)
@@ -184,7 +214,6 @@ class PetService:
         actual_item_id, item = resolved_item
         if item.item_type != ItemType.FOOD:
             return False, f"{item.name}不是食物，不能用于喂食", 0
-        item_data = DEFAULT_ITEMS[actual_item_id]
 
         inventory           = self.db.get_or_create_inventory(user.user_id, user.group_id)
         uses_inventory_item = inventory.has_item(actual_item_id)
@@ -192,11 +221,11 @@ class PetService:
         if uses_free_apple:
             # 免费苹果受每日额度约束，背包道具不消耗这项额度。
             if actual_item_id != "apple":
-                return False, f"背包中没有 {item_data['name']}，请先购买", 0
+                return False, f"背包中没有 {item.name}，请先购买", 0
             # 检查免费喂食次数是否超限
-            free_feed_limit = DAILY_LIMITS.get("free_feed", 5)
+            free_feed_limit = DAILY_LIMITS["free_feed"]
             if not user.can_do_action("free_feed", 1, free_feed_limit):
-                return False, f"今日免费喂食次数已达上限({free_feed_limit}次)，请购买食物后喂食", 0
+                return False, self._free_feed_limit_message(free_feed_limit), 0
         allowed, reason = self._check_daily_action_limit(user, "feed")
         if not allowed:
             return False, reason, 0
@@ -204,10 +233,10 @@ class PetService:
         target_pet, target_user = pet, user
         pet, user = replace(pet), replace(user)
 
-        hunger_gain   = item_data.get("hunger_gain", 0)
-        mood_gain     = item_data.get("mood_gain", 0)
-        exp_gain      = item_data.get("exp_gain", 0)
-        intimacy_gain = item_data.get("intimacy_gain", 0)
+        hunger_gain   = item.hunger_gain
+        mood_gain     = item.mood_gain
+        exp_gain      = item.exp_gain
+        intimacy_gain = item.intimacy_gain
 
         # 喜好加成只由实际食物 ID 触发，不能由展示名称或默认值触发。
         if pet.favorite_food and actual_item_id == pet.favorite_food:
@@ -227,7 +256,9 @@ class PetService:
 
         group_config = self.db.get_group_config(pet.group_id)
         # 经济奖励在提交原子事务前应用本次请求的反脚本衰减。
-        requested_coins = int(5 * group_config.economy_multiplier * spam_decay_factor)
+        requested_coins = int(
+            ACTION_BASE_COINS["feed"] * group_config.economy_multiplier * spam_decay_factor
+        )
 
         result = self.db.commit_pet_action(
             pet,
@@ -238,7 +269,7 @@ class PetService:
             requested_coins     = requested_coins,
             consume_item_id     = actual_item_id if uses_inventory_item else None,
             free_feed_increment = 1 if uses_free_apple else 0,
-            free_feed_limit     = DAILY_LIMITS.get("free_feed", 5),
+            free_feed_limit     = DAILY_LIMITS["free_feed"],
             task_type           = "feed",
             group_task_type     = "group_feed",
         )
@@ -254,7 +285,7 @@ class PetService:
             )
             free_apple_hint = ""
             if uses_free_apple:
-                free_feed_limit = DAILY_LIMITS.get("free_feed", 5)
+                free_feed_limit = DAILY_LIMITS["free_feed"]
                 free_left       = max(0, free_feed_limit - target_user.today_free_feed_count)
                 free_apple_hint = f"\n🍎 今日免费苹果剩余: {free_left}/{free_feed_limit}"
             return (
@@ -274,7 +305,7 @@ class PetService:
 
         cooled, remaining = validate_cooling(pet.last_clean, COOLDOWN_TIMES["clean"])
         if not cooled:
-            return False, f"清洁冷却中，请等待{remaining}秒", 0
+            return False, self._cooldown_message("clean", remaining), 0
 
         allowed, reason = self._check_daily_action_limit(user, "clean")
         if not allowed:
@@ -293,7 +324,9 @@ class PetService:
 
         group_config = self.db.get_group_config(pet.group_id)
         # 经济奖励在提交原子事务前应用本次请求的反脚本衰减。
-        requested_coins = int(3 * group_config.economy_multiplier * spam_decay_factor)
+        requested_coins = int(
+            ACTION_BASE_COINS["clean"] * group_config.economy_multiplier * spam_decay_factor
+        )
 
         result = self.db.commit_pet_action(
             pet,
@@ -327,7 +360,7 @@ class PetService:
 
         cooled, remaining = validate_cooling(pet.last_play, COOLDOWN_TIMES["play"])
         if not cooled:
-            return False, f"玩耍冷却中，请等待{remaining}秒", 0
+            return False, self._cooldown_message("play", remaining), 0
 
         allowed, reason = self._check_daily_action_limit(user, "play")
         if not allowed:
@@ -347,7 +380,9 @@ class PetService:
         pet.last_play = now
 
         group_config    = self.db.get_group_config(pet.group_id)
-        requested_coins = int(5 * group_config.economy_multiplier * spam_decay_factor)
+        requested_coins = int(
+            ACTION_BASE_COINS["play"] * group_config.economy_multiplier * spam_decay_factor
+        )
 
         result = self.db.commit_pet_action(
             pet,
@@ -380,7 +415,7 @@ class PetService:
 
         cooled, remaining = validate_cooling(pet.last_train, COOLDOWN_TIMES["train"])
         if not cooled:
-            return False, f"训练冷却中，请等待{remaining}秒", 0
+            return False, self._cooldown_message("train", remaining), 0
 
         # 未识别的训练类型统一回退，后续概率和展示都使用规范键。
         if training_type not in TRAINING_CONFIG:
@@ -461,7 +496,9 @@ class PetService:
         pet.intimacy += 1
 
         group_config    = self.db.get_group_config(pet.group_id)
-        requested_coins = int(10 * group_config.economy_multiplier * spam_decay_factor)
+        requested_coins = int(
+            ACTION_BASE_COINS["train"] * group_config.economy_multiplier * spam_decay_factor
+        )
 
         result = self.db.commit_pet_action(
             pet,
@@ -494,7 +531,7 @@ class PetService:
 
         cooled, remaining = validate_cooling(pet.last_explore, COOLDOWN_TIMES["explore"])
         if not cooled:
-            return False, f"探索冷却中，请等待{remaining}秒", 0
+            return False, self._cooldown_message("explore", remaining), 0
 
         # 未识别的地点统一回退，前置条件、事件权重和展示使用同一规范键。
         if location not in EXPLORE_LOCATIONS:
@@ -605,17 +642,11 @@ class PetService:
         now = utc_now()
 
         # 与到期自动唤醒共用睡眠结算：按实际有效睡眠时长恢复精力，最多结算到原定醒来时刻。
-        expires_at = pet.status_expire_time or pet.last_update + timedelta(seconds=60)
-        slept_until      = min(now, max(expires_at, pet.last_update))
-        sleeping_minutes = max(0.0, (slept_until - pet.last_update).total_seconds() / 60.0)
-
-        candidate   = replace(pet)
-        energy_gain = int(2 * sleeping_minutes)
-        if energy_gain > 0:
-            candidate.update_stat("energy", energy_gain)
-        candidate.status             = PetStatus.NORMAL
-        candidate.status_expire_time = None
-        candidate.last_update        = slept_until
+        expires_at = pet.status_expire_time or pet.last_update + timedelta(
+            seconds=SLEEP_DURATION_SECONDS
+        )
+        candidate = replace(pet)
+        self._finish_sleep(candidate, min(now, max(expires_at, pet.last_update)))
 
         if self._persist_pet_candidate(pet, candidate):
             return True, f"{pet.name}睡醒了！睡眠期间已按实际时长恢复精力（立即唤醒不恢复）。"
@@ -683,7 +714,7 @@ class PetService:
         if pet.status == PetStatus.SLEEPING:
             # 睡眠是固定一分钟的有限状态。旧数据若缺少 expiry，则从最后更新时间
             # 推导一次并持久化；到期后只结算 expiry 之前的恢复，剩余离线时间继续衰减。
-            latest_valid_expiry = pet.last_update + timedelta(seconds=60)
+            latest_valid_expiry = pet.last_update + timedelta(seconds=SLEEP_DURATION_SECONDS)
             stored_expiry    = pet.status_expire_time
             sleep_expires_at = min(
                 max(stored_expiry or latest_valid_expiry, pet.last_update),
@@ -696,17 +727,8 @@ class PetService:
                     self._persist_pet_candidate(target_pet, pet)
                 return None
 
-            sleeping_minutes = max(
-                0.0,
-                (sleep_expires_at - pet.last_update).total_seconds() / 60.0,
-            )
-            energy_gain = int(2 * sleeping_minutes)
-            if energy_gain > 0:
-                pet.update_stat("energy", energy_gain)
-            pet.status             = PetStatus.NORMAL
-            pet.status_expire_time = None
-            pet.last_update        = sleep_expires_at
-            elapsed_minutes        = max(
+            self._finish_sleep(pet, sleep_expires_at)
+            elapsed_minutes = max(
                 0.0,
                 (now - sleep_expires_at).total_seconds() / 60.0,
             )
@@ -715,14 +737,7 @@ class PetService:
         if pet.status == PetStatus.TRAVELING:
             # 检查旅行是否到期
             if pet.status_expire_time and now >= pet.status_expire_time:
-                pet.status             = PetStatus.NORMAL
-                pet.hunger             = 50
-                pet.mood               = 50
-                pet.clean              = 50
-                pet.energy             = 50
-                pet.health             = 80
-                pet.status_expire_time = None
-                pet.last_update        = now
+                self._finish_travel(pet, now, TRAVEL_THRESHOLDS["return_stat_value"])
                 if self._persist_pet_candidate(target_pet, pet):
                     return f"🎒 {pet.name}旅行回来了！快去照顾它吧！"
             return None
@@ -794,7 +809,7 @@ class PetService:
         if start_sleep and pet.status == PetStatus.NORMAL:
             # 睡前衰减与状态切换一起提交，分钟内的余量同样保留。
             pet.status = PetStatus.SLEEPING
-            pet.status_expire_time = now + timedelta(seconds=60)
+            pet.status_expire_time = now + timedelta(seconds=SLEEP_DURATION_SECONDS)
         pet.last_update = now
         if self._persist_pet_candidate(target_pet, pet):
             return status_message
@@ -803,8 +818,7 @@ class PetService:
     # ──────────────────── 改名 ────────────────────
 
     def rename_pet(self, pet: Pet, new_name: str) -> tuple[bool, str]:
-        group_config = self.db.get_group_config(pet.group_id)
-        valid, message = validate_pet_name(new_name, group_config.sensitive_words)
+        valid, message = self._validate_name_in_group(pet.group_id, new_name)
         if not valid:
             return False, message
 
@@ -878,14 +892,7 @@ class PetService:
         candidate_user = replace(user)
         candidate_user.coins -= recall_coins
 
-        candidate_pet.status             = PetStatus.NORMAL
-        candidate_pet.status_expire_time = None
-        candidate_pet.hunger             = 60
-        candidate_pet.mood               = 60
-        candidate_pet.clean              = 60
-        candidate_pet.energy             = 60
-        candidate_pet.health             = 80
-        candidate_pet.last_update        = utc_now()
+        self._finish_travel(candidate_pet, utc_now(), TRAVEL_THRESHOLDS["recall_stat_value"])
 
         if self.db.atomic_update_pet_and_user(candidate_pet, candidate_user):
             self._sync_state(pet, candidate_pet)

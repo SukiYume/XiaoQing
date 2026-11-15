@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
 from ...models.item import EventItem
+from ...utils.validators import EVENT_COLLECTION_KINDS
 
 JsonObject = dict[str, Any]
 
@@ -58,7 +59,7 @@ def event_kind(event: EventItem) -> str:
     """把持久化集合类型收敛为三个公开展示类型。"""
 
     collection_kind = str(event.event_collection_kind or "")
-    if collection_kind in {"multi_node", "recurring"}:
+    if collection_kind in EVENT_COLLECTION_KINDS:
         return collection_kind
     return "single"
 

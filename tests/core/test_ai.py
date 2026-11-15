@@ -13,6 +13,7 @@ from core.ai import (
     AIRequestError,
     complete_configured_route,
     declare_route_defaults,
+    first_json_object,
     list_configured_models,
     resolve_route_config,
 )
@@ -692,3 +693,35 @@ async def test_ai_route_settings_reach_payload_and_log_without_credentials(caplo
     assert "max_retry=2" in caplog.text
     assert "<PRIMARY_API_KEY>" not in caplog.text
     assert "private message" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"action": "task"}', {"action": "task"}),
+        ('  \n{"a": 1}\n ', {"a": 1}),
+        ('```json\n{"a": 1}\n```', {"a": 1}),
+        ('```JSON {"a": 1} ```', {"a": 1}),
+        ('```\n{"a": 1}\n```', {"a": 1}),
+        ('{"a": 1}\n```', {"a": 1}),
+        ('好的，结果如下：{"a": {"b": 2}} 以上。', {"a": {"b": 2}}),
+        ('先看 {不是 JSON} 再看 {"a": 1}', {"a": 1}),
+        ('{"a": 1} {"b": 2}', {"a": 1}),
+        ('{"s": "含 } 和 { 的字符串"}', {"s": "含 } 和 { 的字符串"}),
+        ('[{"a": 1}]', {"a": 1}),
+        ("{}", {}),
+        # 说明文字里先出现了一个对象，答案在围栏块里：取围栏块里的。
+        ('像 {"example": 0} 这样。\n```json\n{"a": 1}\n```', {"a": 1}),
+        # 围栏块里没有对象时，回到全文里找。
+        ('```\n没有对象\n```\n{"a": 1}', {"a": 1}),
+    ],
+)
+def test_first_json_object_extracts_the_first_object(text: str, expected: dict[str, Any]) -> None:
+    assert first_json_object(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["", "   ", "没有对象", "[1, 2]", '"字符串"', '{"a": 1', "{不是对象"]
+)
+def test_first_json_object_returns_none_without_an_object(text: str) -> None:
+    assert first_json_object(text) is None

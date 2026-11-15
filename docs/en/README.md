@@ -17,8 +17,9 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 | [06 - Configuration](06-configuration.md) | Configuration fields, secrets, AI routing, network security, and live reload | Deployers and administrators |
 | [07 - Advanced topics](07-advanced.md) | Permissions, background tasks, scheduling, service capabilities, performance, and deployment modes | Advanced developers |
 | [08 - Message flow](08-message-flow.md) | The complete path from a OneBot event to a reply | Troubleshooters and framework maintainers |
-| [09 - Plugin manual](09-plugins.md) | Purpose, commands, configuration, and data for 32 built-in plugins. command and scheduled-task indexes | Users and administrators |
+| [09 - Plugin manual](09-plugins.md) | Purpose, commands, configuration, and data for the 34 built-in plugins, plus the command and scheduled-task indexes | Users and administrators |
 | [Pendo Scriptable widget](pendo-scriptable-widget.md) | Authentication, script, and setup for the iPhone widget | Pendo users |
+| [XiaoQing character design book (Chinese)](../character-design/README.md) | Turnaround, expressions, outfit and accessories, pose references, and the Live2D production handoff | Illustrators, modelers, and content creators |
 | [Changelog (Chinese)](../../CHANGELOG.md) | Version changes, affected functions, and verification results | Users and maintainers |
 
 ## 📌 Reading sequences
@@ -51,6 +52,7 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 | `xiaoqing_chat` | [README (Chinese)](../../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | [README (Chinese)](../../plugins/xiaoqing_agent/README.md) | The README includes module structure, runtime boundaries, and data. |
 | `xiaoqing_life` | [README (Chinese)](../../plugins/xiaoqing_life/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) holds the implementation spec. |
+| `xiaoqing_memory` | [README (Chinese)](../../plugins/xiaoqing_memory/README.md) | [ARCHITECTURE (Chinese)](../../plugins/xiaoqing_memory/ARCHITECTURE.md). [DESIGN (Chinese)](../../plugins/xiaoqing_memory/DESIGN.md) explains the design choices. |
 | `pendo` | [README (Chinese)](../../plugins/pendo/README.md) | [ARCHITECTURE (Chinese)](../../plugins/pendo/ARCHITECTURE.md) |
 
 Each other plugin has a `README.md` in its directory. The [plugin manual](09-plugins.md) supplies a common index.

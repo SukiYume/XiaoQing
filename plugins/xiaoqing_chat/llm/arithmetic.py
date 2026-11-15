@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence, Set
 
+from core.args import chinese_number
+
 _MEASURED_VALUE_RE = re.compile(
     r"(?P<number>\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万半]+)\s*"
     r"(?P<unit>块钱|元钱|块|元|小时|分钟|秒钟|秒|公里|千米|厘米|毫米|米|千克|公斤|克)"
@@ -37,22 +39,8 @@ def _measurement_number(text: str) -> float:
         return 0.5
     if text[0].isdigit():
         return float(text)
-    digits = dict(
-        zip("零〇一二两三四五六七八九", (0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9), strict=True)
-    )
-    total = section = digit = 0
-    for char in text:
-        if char in digits:
-            digit = digits[char]
-        elif char == "万":
-            total += (section + digit) * 10000
-            section = digit = 0
-        elif char in "十百千":
-            section += (digit or 1) * {"十": 10, "百": 100, "千": 1000}[char]
-            digit = 0
-        else:
-            return -1
-    return float(total + section + digit)
+    value = chinese_number(text)
+    return -1.0 if value is None else float(value)
 
 
 def _measured_value(match: re.Match[str]) -> tuple[str, float]:

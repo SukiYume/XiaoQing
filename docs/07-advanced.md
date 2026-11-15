@@ -150,7 +150,7 @@ async def scheduled_daily(context):
 Core 在任务到期时解析每个 schedule 的投递模式与目标群。
 `broadcast` 将统一结果发送到全部目标群，`targeted` 校验并发送 `ScheduledDelivery` 目标结果，`silent` 只运行任务。
 `group_ids` 列表按声明顺序生效。
-字段省略或为 `null` 时使用全局 `default_group_ids`。
+部署配置 `config.plugins.<插件名>.schedules.<任务 ID>.group_ids` 写了时优先于条目，两处都没写或为 `null` 时使用全局 `default_group_ids`。
 需要逐目标管理回执的处理器可通过 `context.default_groups()` 读取同一解析结果。
 
 常用 CronTrigger 字段：
@@ -320,9 +320,9 @@ results = await gather_bounded(
 - LRU
 - 条目数上限
 - 总字节上限
-- 原子元数据写入
+- 缓存文件原子写入
 
-缓存键使用规范化输入摘要。
+新旧和过期按文件修改时间算，没有单独的元数据文件。缓存键是调用方给的安全文件名，通常是各插件对规范化输入取的摘要。
 业务数据库与缓存采用各自的目录和恢复策略。
 
 ### 数据库
@@ -378,8 +378,8 @@ python -m mypy plugins/<plugin>
 ### 完整 UAT
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 ---

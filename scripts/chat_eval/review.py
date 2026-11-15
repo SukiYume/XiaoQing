@@ -11,12 +11,23 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .drivers import DEFAULT_CONFIG, DEFAULT_SECRETS, PROJECT_ROOT
+from core.clock import DEFAULT_CONFIG_TIMEZONE, WEEKDAY_NAMES
+
+from .drivers import (
+    DEFAULT_CONFIG,
+    DEFAULT_SECRETS,
+    PROJECT_ROOT,
+    bubble_text,
+    load_config,
+    load_secrets,
+    make_ai_service,
+)
 from .scenarios import (
     BOT_NAME,
     CHECKER_CASES,
     CHECKER_MIN_ACCEPT_RATE,
     MEDIA_TRUTH,
+    MEMORY_SEED,
     ONLINE_LIFE_TITLES,
     ONLINE_LIFE_URLS,
     CheckerCase,
@@ -150,8 +161,9 @@ def online_life_findings(online: str, reply: str) -> list[tuple[str, Any]]:
             found.append(("online_life_leak", leaked))
     if online == "link":
         urls = _URL_RE.findall(reply)
-        if not any(url.rstrip("。，,.)）") in ONLINE_LIFE_URLS for url in urls) or any(
-            url.rstrip("。，,.)）") not in ONLINE_LIFE_URLS for url in urls
+        bare = [url.rstrip("。，,.)）") for url in urls]
+        if not any(url in ONLINE_LIFE_URLS for url in bare) or any(
+            url not in ONLINE_LIFE_URLS for url in bare
         ):
             found.append(("link_mismatch", urls))
     return found
@@ -165,6 +177,8 @@ def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         findings.append({"turn": f"T{row['index']:02d}", "kind": kind, "detail": detail})
 
     for row in rows:
+        if row.get("tag") == "consolidate":
+            continue
         reply = render_bubbles(row)
         if row["expect"] == "reply" and not reply:
             add(row, "missed_reply", row["text"])
@@ -220,15 +234,8 @@ def style_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """语气的几项可数指标：回声问句开场、带表情、问句收尾、平均长度和平均气泡数。"""
 
     replied = [row for row in rows if row.get("reply_segments")]
-    texts   = [
-        "".join(
-            str(segment.get("data", {}).get("text", ""))
-            for segment in row["reply_segments"]
-            if segment.get("type") == "text"
-        ).strip()
-        for row in replied
-    ]
-    count = len(replied)
+    texts   = [bubble_text(row["reply_segments"]) for row in replied]
+    count   = len(replied)
     if not count:
         return {"replies": 0}
     return {
@@ -251,11 +258,37 @@ def transcript(
 ) -> str:
     lines  : list[str]  = []
     episode: int | None = None
+    seeded              = MEMORY_SEED.get(rows[0].get("suite", "")) if rows else None
+    if seeded:
+        lines.append("—— 几天前的聊天（不在小青眼前的聊天窗口里，只在她的记忆里）——")
+        places = {"group": "群里", "group2": "另一个群里", "private": "私聊"}
+        for item in seeded:
+            where = places.get(item["where"], item["where"])
+            who   = "小青" if item["speaker"] == "bot" else item["speaker"]
+            if item.get("kind") == "self.promise":
+                lines.append(
+                    f"  （{item['days']} 天前，{where}，旧系统迁移来的记录）小青答应过{who}：{item['text']}"
+                )
+            elif item.get("kind"):
+                lines.append(
+                    f"  （{item['days']} 天前，{where}，旧系统迁移来的记录）关于{who}：{item['text']}"
+                )
+            else:
+                lines.append(f"  （{item['days']} 天前，{where}）{who}：{item['text']}")
     for row, note in zip(rows, notes, strict=False):
         if row.get("episode", 0) != episode and episode is not None:
             lines.append("—— 换到一个新的群 ——")
         episode = row.get("episode", 0)
-        lines.append(f"T{row['index']:02d} {row['speaker']}：{_user_line(row, media_truth)}")
+        if row.get("tag") == "consolidate":
+            lines.append("—— 过了一夜（她夜里把这几天的事在记忆里整理了一遍）——")
+            continue
+        where = "（私聊）" if row.get("chat") == "private" else ""
+        who   = (
+            f"{row['speaker']}（同一个人，这条的群名片是“{row['nick']}”）"
+            if row.get("nick")
+            else row["speaker"]
+        )
+        lines.append(f"T{row['index']:02d} {where}{who}：{_user_line(row, media_truth)}")
         lines.append(f"      〔预期：{row['expect']}；{note or '无特别要求'}〕")
         reply = render_for_judge(row)
         lines.append(f"      小青：{reply}" if reply else "      小青：（沉默）")
@@ -292,9 +325,9 @@ async def judge_transcript(text: str) -> tuple[dict[str, Any], str]:
 
     from core.ai import complete_configured_route
 
-    config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
-    secrets = json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
-    error = ""
+    config  = load_config()
+    secrets = load_secrets()
+    error   = ""
     async with aiohttp.ClientSession() as session:
         for _ in range(3):
             try:
@@ -318,10 +351,7 @@ async def judge_transcript(text: str) -> tuple[dict[str, Any], str]:
     return {"error": error}, ""
 
 
-_WEEKDAYS = "一二三四五六日"
-
-
-def _chat_time_note(rows: list[dict[str, Any]], timezone: str = "Asia/Shanghai") -> str:
+def _chat_time_note(rows: list[dict[str, Any]], timezone: str = DEFAULT_CONFIG_TIMEZONE) -> str:
     """聊天发生时她那边的钟点：评审据此判断截止日期过没过、她该不该困。"""
 
     try:
@@ -330,7 +360,7 @@ def _chat_time_note(rows: list[dict[str, Any]], timezone: str = "Asia/Shanghai")
     except (KeyError, TypeError, ValueError):
         return ""
     return (
-        f"这段聊天发生在她那边的 {local:%Y-%m-%d %H:%M}（周{_WEEKDAYS[local.weekday()]}）。"
+        f"这段聊天发生在她那边的 {local:%Y-%m-%d %H:%M}（周{WEEKDAY_NAMES[local.weekday()]}）。"
         "日期和截止时间过没过按这个时间判断；深夜时她按作息在睡觉，困一点、短一点属正常。\n"
     )
 
@@ -348,7 +378,7 @@ def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     verdict, model = (
         asyncio.run(
             judge_transcript(
-                _chat_time_note(rows, manifest.get("timezone") or "Asia/Shanghai") + text
+                _chat_time_note(rows, manifest.get("timezone") or DEFAULT_CONFIG_TIMEZONE) + text
             )
         )
         if use_judge
@@ -426,9 +456,8 @@ def write_report(
     )
     if calibration is not None:
         lines.append(
-            f"- 审查器校准：放行 {calibration['acceptable_passed']}/{calibration['acceptable_total']}，"
-            f"拦截 {calibration['rejectable_blocked']}/{calibration['rejectable_total']}，"
-            f"不可用 {calibration['infra_failures']}，{'通过' if calibration['passed'] else '未通过'}"
+            f"- 审查器校准：{calibration_line(calibration)}，"
+            f"{'通过' if calibration['passed'] else '未通过'}"
         )
     lines.append("")
     for record in records:
@@ -473,8 +502,6 @@ async def calibrate_checker(cases: tuple[CheckerCase, ...] = CHECKER_CASES) -> d
 
     import aiohttp
 
-    from core.ai import complete_configured_route, list_configured_models
-    from core.capabilities import AIService
     from core.config import ConfigManager
     from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
     from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt
@@ -492,32 +519,8 @@ async def calibrate_checker(cases: tuple[CheckerCase, ...] = CHECKER_CASES) -> d
     checker_llm                = config.llm_config("checker")
     rows: list[dict[str, Any]] = []
     async with aiohttp.ClientSession() as session:
-
-        async def complete(
-            *, route_name: str, messages: list[dict[str, Any]], **kwargs: Any
-        ) -> Any:
-            return await complete_configured_route(
-                session     = session,
-                config      = snapshot.config,
-                secrets     = snapshot.secrets,
-                plugin_name = "xiaoqing_chat",
-                route_name  = route_name,
-                messages    = messages,
-                **kwargs,
-            )
-
-        def list_models(
-            *, route_name: str, required_modalities: tuple[str, ...] = ("text",)
-        ) -> Any:
-            return list_configured_models(
-                config              = snapshot.config,
-                secrets             = snapshot.secrets,
-                plugin_name         = "xiaoqing_chat",
-                route_name          = route_name,
-                required_modalities = required_modalities,
-            )
-
-        secrets = {"_ai": AIService(complete, list_models)}
+        ai      = make_ai_service(session, snapshot.config, snapshot.secrets, "xiaoqing_chat")
+        secrets = {"_ai": ai}
 
         async def check_case(case: CheckerCase) -> None:
             now     = time.time()
@@ -572,6 +575,16 @@ async def calibrate_checker(cases: tuple[CheckerCase, ...] = CHECKER_CASES) -> d
 
         await asyncio.gather(*(guarded(case) for case in cases))
     return calibration_summary(rows)
+
+
+def calibration_line(calibration: dict[str, Any]) -> str:
+    """校准结果的一句话：放行、拦截、审查器不可用各几条。"""
+
+    return (
+        f"放行 {calibration['acceptable_passed']}/{calibration['acceptable_total']}，"
+        f"拦截 {calibration['rejectable_blocked']}/{calibration['rejectable_total']}，"
+        f"不可用 {calibration['infra_failures']}"
+    )
 
 
 def calibration_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:

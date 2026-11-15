@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, ClassVar
 
+from core.plugin_base import has_control_characters
+
 
 @dataclass(frozen=True, slots=True)
 class PendoRuntimeSettings:
@@ -64,9 +66,9 @@ class PendoConfig:
         "取消",
     )  # 退出会话的命令
 
-    # 确认命令
+    # 确认命令；“取消”属于 SESSION_EXIT_COMMANDS，会话分发前就已结束会话，不会到这里
     CONFIRM_POSITIVE: ClassVar[tuple[str, ...]] = ("yes", "y", "是", "确认")
-    CONFIRM_NEGATIVE: ClassVar[tuple[str, ...]] = ("no", "n", "否", "取消")
+    CONFIRM_NEGATIVE: ClassVar[tuple[str, ...]] = ("no", "n", "否")
 
     # 会话类型常量
     SESSION_TYPE_DIARY_TEMPLATE = "diary_template"
@@ -76,8 +78,8 @@ class PendoConfig:
     SESSION_TYPE_LEDGER_ADD     = "ledger_add"
 
     # Web UI
-    # 认证期限统一使用秒。登录 Code 与浏览器会话均为 7 天，Widget
-    # Bearer Token 为 365 天；认证方式不同，但到期计算共享同一时间单位。
+    # 登录 Code、浏览器会话和 Widget Bearer Token 的期限统一使用秒：登录 Code 与
+    # 浏览器会话均为 7 天，Widget Bearer Token 为 365 天。Demo 空间的有效期以小时计。
     WEB_LOGIN_CODE_EXPIRE_SECONDS                     = 7 * 24 * 60 * 60
     WEB_SESSION_EXPIRE_SECONDS                        = WEB_LOGIN_CODE_EXPIRE_SECONDS
     WEB_WIDGET_TOKEN_EXPIRE_SECONDS                   = 365 * 24 * 60 * 60
@@ -131,7 +133,7 @@ class PendoConfig:
             or not value
             or value != value.strip()
             or len(value) > 255
-            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or has_control_characters(value)
         ):
             raise ValueError("plugins.pendo.web_host must be a non-empty host string")
         return value

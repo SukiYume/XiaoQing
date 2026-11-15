@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -16,9 +17,10 @@ from plugins.xiaoqing_chat import agent_bridge, handlers
 from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.handler_context import HandlerContext
-from plugins.xiaoqing_chat.life.self_timeline import SelfTimelineStore, new_entry
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.smalltalk_models import PreparedSmalltalkTurn
+from plugins.xiaoqing_memory.model import Note
+from tests.plugins.xiaoqing_chat.memory_support import MemoryHarness
 
 mock_context = _fixture_support.mock_context
 
@@ -79,12 +81,12 @@ def _hctx(tmp_path, agent) -> tuple[HandlerContext, SimpleNamespace]:
             append=Mock(),
         ),
         action_history=SimpleNamespace(append=Mock()),
-        set_last_reply_ts = Mock(),
-        self_timeline     = SelfTimelineStore(),
+        set_last_reply_ts=Mock(),
     )
-    state.self_timeline.bind(tmp_path)
     context = SimpleNamespace(
-        capabilities=PluginCapabilities(is_bot_admin=True, agent_turn=agent),
+        capabilities=PluginCapabilities(
+            is_bot_admin=True, agent_turn=agent, memory=MemoryHarness(tmp_path).service("g67890")
+        ),
         logger   = MagicMock(),
         data_dir = tmp_path,
     )
@@ -120,10 +122,23 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
         )
     )
     hctx, context = _hctx(tmp_path, agent)
-    promise = new_entry(
-        chat_id="g67890", kind="promise", text="弄完图告诉你", hours=6, source="chat"
+    now = time.time()
+    MemoryHarness(tmp_path).store.put_notes(
+        "g67890",
+        [
+            Note(
+                id          = "n1",
+                kind        = "self.promise",
+                scope       = "g67890",
+                subject     = "self",
+                text        = "弄完图告诉你",
+                origin      = "self",
+                created_at  = now,
+                observed_at = now,
+                expires_at  = now + 6 * 3600,
+            )
+        ],
     )
-    hctx.state.self_timeline.apply(added=[promise], chat_id="g67890", max_entries=20)
 
     result = await _delegate(_prepared(), _event(), context, hctx)
 

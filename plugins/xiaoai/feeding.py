@@ -18,12 +18,24 @@ def reject_unchecked_forwarding(text: str) -> None:
         raise BridgeError("出粮已拦截：请直接发送“小爱 出一份粮”，通过整份与数量校验后执行。")
 
 
+def is_food_out(cap: dict[str, Any]) -> bool:
+    """出粮动作：MIoT 类型里带 pet-food-out。"""
+
+    return ":pet-food-out:" in cap.get("type", "")
+
+
+def food_out_actions(caps: dict[str, Any]) -> list[dict[str, Any]]:
+    """一台设备能力副本里的全部出粮动作。"""
+
+    return [cap for cap in caps.values() if is_food_out(cap)]
+
+
 def adapt(model: str, caps: dict[str, Any], grams_per_portion: Any) -> None:
     """Adapt the caller-owned capability copy without changing the stored specification."""
     if model not in PORTION_MODELS:
         return
     for cap in caps.values():
-        if ":pet-food-out:" in cap.get("type", ""):
+        if is_food_out(cap):
             if len(cap.get("inputs", [])) != 1:
                 cap["supported"] = False
                 continue
@@ -87,7 +99,7 @@ def check_requested_amount(
 ) -> None:
     """按原话核对出粮量；``text`` 为原话和后续补充时，以最后一次说出数量的那句为准。"""
 
-    feeds = [i for i in items if ":pet-food-out:" in i["cap"].get("type", "")]
+    feeds = [i for i in items if is_food_out(i["cap"])]
     if not feeds:
         return
     if len(feeds) != 1:

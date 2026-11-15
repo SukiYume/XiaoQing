@@ -263,7 +263,7 @@ def test_adnmb_client_registry_expires_idle_entries(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_adnmb_forum_cache_has_ttl_capacity_and_copy_boundary(monkeypatch, tmp_path):
-    client = AdnmbClient(session=object(), cache_dir=tmp_path)
+    client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
     calls = 0
 
     async def fake_get(_endpoint: str, **_params):

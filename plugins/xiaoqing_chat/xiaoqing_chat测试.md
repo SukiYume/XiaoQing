@@ -58,17 +58,17 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 |---|---|---|
 | 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID |
 | 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_chat_group_addressing.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py`、`test_xiaoqing_chat_follow_ups.py` | 消息受众、共指上下文、点名他人、低信息消息、频控、生成配额、收尾与邀请的规划判断、称呼与时区、同一个人连发几条时的让出与带话 |
-| 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_retrieval_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py` | PFC 动作、目标同步、长空档切换、检索评分 |
+| 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py` | PFC 动作、目标同步、长空档切换、Heartflow 打分、规划器提示词与 JSON 解析 |
 | 生成 | `test_xiaoqing_prompt_builder.py`、`test_xiaoqing_chat_reply_generation*.py`、`test_xiaoqing_chat_generation_boundaries.py`、`test_bot_name_injection.py` | 提示词结构、名字注入、上下文超限重建、复核超时降级、网关与公开错误 |
 | 审查 | `test_reply_checker.py`、`test_reply_checker_grounding.py`、`test_reply_checker_risk_mode.py`、`test_reply_checker_social_boundaries.py`、`test_xiaoqing_chat_reply_completion.py` | 本地规则（复读、近似照搬、连续发言、凭空经历）、语义审查各轴、证据契约、`always` / `risk` 模式、人设（坚持真人身份）、缺图话术、定向重写与兜底 |
 | 说话的样子 | `test_xiaoqing_chat_style_rhythm.py`、`test_xiaoqing_chat_requested_length.py`、`test_xiaoqing_chat_persona_card.py` | 装饰与表情的节奏、句尾垃圾词清理、心里的盘算不说出口、长内容分条与整篇成品、明确篇幅要求、采样默认值、人设卡按标记分给聊天 / agent / 规划 / 审查 |
-| 生活连续性 | `test_xiaoqing_chat_life.py`、`test_xiaoqing_chat_daily_life.py`、`test_xiaoqing_chat_proactive_life.py`、`test_xiaoqing_chat_online_life.py`、`test_xiaoqing_chat_life_memes.py`、`test_xiaoqing_chat_life_signals.py` | 作息、收尾沉默、自我陈述、未完话头、自己的一天、主动开口与私聊主动联系、网上生活接入与降级、梗图导入、交给网上生活的话题词 |
+| 生活连续性 | `test_xiaoqing_chat_life.py`、`test_xiaoqing_chat_daily_life.py`、`test_xiaoqing_chat_proactive_life.py`、`test_xiaoqing_chat_online_life.py`、`test_xiaoqing_chat_life_memes.py`、`test_xiaoqing_chat_life_signals.py` | 作息、收尾沉默、自我陈述、未完话头、自己的一天、主动开口与私聊主动联系、网上生活接入与降级、梗图导入、交给网上生活的话题词和已解释的说法、自我页与网上生活同一件事只说一遍（`test_xiaoqing_chat_online_life_dedupe.py`，三个插件都用真的） |
 | Agent 交接 | `test_xiaoqing_chat_agent_bridge.py` | 判断与生成并行、接手与回退、当轮回复的回执与记录、连发消息合成一句请求、已被回答的反问不发 |
 | 投递与生命周期 | `test_xiaoqing_chat_turn_lifecycle.py`、`test_xiaoqing_chat_bubble_delivery.py`、`test_xiaoqing_reply_payload.py`、`test_xiaoqing_chat_shutdown.py`、`test_xiaoqing_chat_background_tasks.py`、`test_xiaoqing_chat_task_*.py` | 投递确认后提交、过期丢弃、回滚、分批、后台任务创建失败与去重、关闭等待 |
 | 媒体 | `test_xiaoqing_chat_media_*.py`、`test_xiaoqing_chat_emoji_library.py` | 消息段解析、来源与 OneBot 补取、大小/像素/帧数上限、视觉重试与降级、摘要缓存、表情库、出站标记 |
-| 记忆与存储 | `test_xiaoqing_chat_memory_*.py`、`test_xiaoqing_chat_vector_store_validation.py`、`test_xiaoqing_chat_atomic_readers.py`、`test_xiaoqing_chat_store_base_helpers.py`、`test_xiaoqing_chat_cache_*.py`、`test_xiaoqing_chat_thinking_back.py`、`test_xiaoqing_chat_review_store.py`、`test_xiaoqing_chat_dedup_json_llm.py` | 原子读写、备份恢复、损坏输入、并发保存、重置竞态、向量索引一致性、缓存过期、模型 JSON 修复 |
+| 记忆与存储 | `test_xiaoqing_chat_memory_*.py`、`test_xiaoqing_chat_vector_store_validation.py`、`test_xiaoqing_chat_atomic_readers.py`、`test_xiaoqing_chat_store_base_helpers.py`、`test_xiaoqing_chat_cache_*.py`、`test_xiaoqing_chat_review_store.py`、`test_xiaoqing_chat_dedup_json_llm.py` | 原子读写、备份恢复、损坏输入、并发保存、重置竞态、向量索引一致性、缓存过期、模型 JSON 修复；推给统一记忆的队列不丢不重、失败重推、重置换代、旧数据只导入一次（`test_xiaoqing_chat_memory_client.py`） |
 | 表达学习 | `test_xiaoqing_chat_expression_store_persistence.py`、`test_xiaoqing_expression_retry_reflection.py`、`test_xiaoqing_chat_meme_learning.py` | 表达与黑话的增量合并、反思重试、本群词义优先、明确更正、学习期间重置 |
-| 隔离与隐私 | `test_xiaoqing_chat_tenant_scope.py`、`test_xiaoqing_log_privacy.py` | 跨会话隔离、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限 |
+| 隔离与隐私 | `test_xiaoqing_chat_knowledge_scope.py`、`test_xiaoqing_log_privacy.py` | 知识库只给管理员批准的内容、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限；记忆的跨会话隔离在 `tests/plugins/xiaoqing_memory/test_scopes.py` |
 | 配置与运行时 | `test_xiaoqing_chat_runtime_hardening.py`、`test_xiaoqing_chat_cache_lifetimes.py` | 配置校验与加载失败回退、热加载、缓存生命周期 |
 | 回复耗时 | `test_xiaoqing_chat_reply_latency.py` | 本轮阅读与生成并行且材料与审查内阅读一致、重写复用、材料变化重读、失败不复用、审查超时保留阅读、`risk` 模式不预读、发送前延迟扣除已用时间 |
 | 评测脚本 | `tests/tooling/test_chat_eval.py` | 聊天评测的剧本、事件构造、规则与门禁、校准阈值和子进程回收 |
@@ -171,7 +171,7 @@ python scripts/run_full_uat.py \
 |---|---|
 | `/xc brain` | 返回深度对话开关和参数 |
 | `/xc config` | 返回频控、记忆、表达和模型摘要 |
-| `/xc memory 关键词` | 返回当前 chat 范围内的排序结果 |
+| `/xc memory 关键词` | 返回统一记忆里当前会话能看到的笔记、页面和聊天记录 |
 | `/xc memory` | 返回用法 |
 | `/xc expression` | 返回当前 chat 的表达记录 |
 | `/xc jargon` | 返回当前 chat 可见的黑话 |
@@ -278,7 +278,7 @@ python -m scripts.chat_eval replay <结果目录>/data/xiaoqing_chat g978321 阿
 python -m scripts.chat_eval calibrate                     # 只校准审查器的误杀与漏放
 ```
 
-评测跑在真实时钟上：上海的凌晨开跑时她按作息在睡觉，插话变少、回复犯困，分数没法和白天的比。`--timezone <时区名>` 让这次评测里的她按另一个时区的钟点过作息（预置数据的日期、Bot 配置和评审看到的时间一起换）；Pendo 等有自己时区设置的插件不跟着换，办事剧本里的日期会和她的“今天”差一天，比较办事结果时不用这个开关。
+评测跑在真实时钟上：上海的凌晨开跑时她按作息在睡觉，插话变少、回复犯困，分数没法和白天的比。`--timezone <时区名>` 让这次评测里的她按另一个时区的钟点过作息（预置数据的日期、Bot 配置和评审看到的时间一起换；`multimodal` 里图书馆海报上的日期例外，它按上海时区算好，上海深夜换时区开跑时海报上的“明天”会差一天）；Pendo 等有自己时区设置的插件不跟着换，办事剧本里的日期会和她的“今天”差一天，比较办事结果时不用这个开关。
 
 两种驱动，模型都是真实调用，线上数据和 QQ 群保持隔离：
 
@@ -289,16 +289,17 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 
 `live` 驱动中，互不相干的剧本并发跑，每个剧本用自己的一段 QQ 号，同名群友在不同剧本里是不同的人（否则同一个“阿禾”同时在十几个群里说话，会撞上单人并发上限）；要改人设或打开主动开口的剧本最后逐个跑，期间临时改写 `xiaoqing_config.json`，结束时逐字节恢复并核对哈希。多个群同时压在一个 Bot 上，单轮超过 40 秒（`slow`）比真实群聊多，只作观察。
 
-剧本分四组（`--set`）：
+剧本分五组（`--set`）：
 
 | 组 | 剧本 | 关注点 |
 |---|---|---|
 | `group` | `otaku` `addressee` `participation` `multimodal` `persona` `banter` `help` `daily` `notice` `regress` | 活人感、聊天对象、参与度、读图与表情、人设边界、接梗、认真求助、日常、文字截图、计算与出站素材 |
 | `quality` | `quality_boundaries` `quality_scenarios` `quality_joining` | 人设与第三方边界、多人归属、话题转移、隔天新话题、读图与历史图、隔天关心面试、自主参与、私事不插话、长空档旧话题 |
-| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_agent_notes` `life_agent_events` `life_bursts` `life_agent_plugins` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话（“记三笔帐”只给一笔时先问、不凑数）、连着办几件小事不多问、作息影响节奏、冷群主动开口；一个人连着发几条时只回一次、一件事分两条说时直接办完（`life_bursts`）；颜色、天文工具、词典、地震、随机选择、GitHub、论文、CHIME、APOD 等查询类插件逐个替人用一遍，会话式和要管理员的说清做不了（`life_agent_plugins`） |
-| `online_life` | `ol_recent_group` `ol_recent_private` `ol_yesterday` `ol_term` `ol_unrelated` `ol_link` `ol_plan` `ol_like` | 拿预置的网上经历接话不编造、昨天和今天分开、听得懂学过的词、无关闲聊不硬扯、要链接时只给刚提到的那条、打算不说成做完、兴趣快照不夸大 |
+| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_agent_notes` `life_agent_events` `life_bursts` `life_name_call` `life_agent_plugins` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话（“记三笔帐”只给一笔时先问、不凑数）、连着办几件小事不多问、作息影响节奏、冷群主动开口；一个人连着发几条时只回一次、一件事分两条说时直接办完（`life_bursts`）；只喊一声马上回一句短应答、接着说的事没再点名也交给 agent 办掉（`life_name_call`）；颜色、天文工具、词典、地震、随机选择、GitHub、论文、CHIME、APOD 等查询类插件逐个替人用一遍，会话式和要管理员的说清做不了（`life_agent_plugins`） |
+| `online_life` | `ol_self_page` `ol_recent_group` `ol_recent_private` `ol_yesterday` `ol_term` `ol_unrelated` `ol_link` `ol_plan` `ol_meme` `ol_like`，其中多数群聊版剧本另有名字带 `_p` 的私聊版 | 拿预置的网上经历接话不编造、昨天和今天分开、听得懂学过的词、无关闲聊不硬扯、要链接时只给刚提到的那条、打算不说成做完、她收的梗图进了表情库并在要表情时用上、兴趣快照不夸大 |
+| `memory` | `mem_recall` `mem_update` `mem_privacy` `mem_public_private` `mem_avoid` `mem_people` `mem_cross_group` `mem_rename` `mem_promise` `mem_legacy` `mem_avoid_private` `mem_group_joke` `mem_quiet` `mem_agent_prefs` | 预置几天前的对话、整理一次后再问（`consolidate()` 步骤）：记得、改口后按新的、私聊托付的事不在群里说、群里本人说的事能带进私聊（`chat="private"` 让单轮切到说话人的私聊）、伤心事不主动提、分得清谁是谁、一个群里说的事不带进另一个群、改了群名片还认得是同一个人（`nick`）、记得几天前答应过的事且不说成刚答应、迁移来的重复旧事实不让她只围着一件事转、私聊里的敏感事私聊不主动提群里更不提、接得住群里的梗、答应过少说话之后不是冲她来的闲话少插嘴、办事偏好下次不再问（`mem_agent_prefs` 只能 `--driver live`，用一次运行专用的测试管理员发 `/mem consolidate`） |
 
-名字以 `life_agent` 开头的剧本、`life_bursts`、`life_routine`、`life_proactive` 需要 agent、真实的入站队列、定时任务或改行为配置，只能 `--driver live`。`online_life` 组始终接上预置的 xiaoqing_life 数据，`--online-life` 让 inproc 驱动的其他剧本也接上。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
+名字以 `life_agent` 开头的剧本、`life_bursts`、`life_name_call`、`life_routine`、`life_proactive` 需要 agent、真实的入站队列、定时任务或改行为配置，只能 `--driver live`。`online_life` 组始终接上预置的 xiaoqing_life 数据（含一张已判定的梗图，第一轮前同步进表情库），`--online-life` 让 inproc 驱动的其他剧本也接上。inproc 驱动的每个剧本都接上一份隔离的统一记忆，并像 Core 一样写入调用方和范围；评审实录里会列出 `memory` 组预置的旧对话。和 Core 一样，只喊名字、只 `@` 她的那一轮由 inproc 驱动交给 `call_bot_name_only`，其余交给 `handle_smalltalk`。预置可以写进剧本第二段的群（`where="group2"`），带 `kind` 的预置条目是上线那天从旧系统导入的记录（人物事实、她答应过的事），走和 xiaoqing_chat 一次性导入相同的格式。一个剧本由若干段组成，每段在一个全新的群（或私聊）里从头发送；消息可以带图片、表情包、QQ 表情、`@`、引用和过去的时间戳（`hours_ago`）。`note` 只给评审看，不进入角色上下文。
 
 每轮先做确定性规则检查：
 
@@ -318,7 +319,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 
 `--calibrate` 在进程内用真实 `checker` 路由核对人工写定的候选（自然接梗应放行、编造事实应拦下），漏放必须为零、误杀率不超过 20%，结果计入门禁。`--gate` 时出现计入门禁的规则问题或校准不过，退出码为 1；项目级 UAT 的 `--include-chat-quality` 就是 `run --driver live --set quality --no-judge --calibrate --gate`。
 
-结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-chat-eval-<驱动>-<commit>/`：每个剧本一个 JSONL（逐轮输入、各个气泡、审查记录、步骤日志），`manifest.json`（剧本与图片真相，复评时使用），汇总的 `summary.json`（含门禁结论）和 `report.md`。`live` 驱动另有 `bot.log`、`config.json`（测试副本）和 `data/`（运行后的全部插件数据）。
+结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-chat-eval-<驱动>-<commit>/`：每个剧本一个 JSONL（逐轮输入、各个气泡、审查记录、步骤日志），`manifest.json`（剧本与图片真相，复评时使用），评审后每个剧本的 `judged-<剧本>-*.json`，汇总的 `summary.json`（含门禁结论）和 `report.md`，以及剧本用到的图片 `fixtures/`。`inproc` 驱动另有每个剧本的 `<剧本>.log` 和隔离的数据目录 `isolated/`；`live` 驱动另有 `bot.log`、`config.json`（测试副本）、`napcat_calls.json`（她发出的每个 OneBot 调用）和 `data/`（运行后的全部插件数据）。
 
 评分偏低时先读对应轮次的 JSONL；兜底或被拒的轮次用 `replay` 在数据副本上重放，看每一稿候选和审查理由。剧本素材本身有歧义时，修正剧本或素材。
 
@@ -363,14 +364,14 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 1. 连续对话写入用户与助手消息。
 2. 投递确认前保持助手状态待提交。
 3. 投递确认后写入助手记忆和行动记录。
-4. 制造长空档并核对连续片段、Goal、PFC、Thinking Back 与摘要刷新。
-5. 用 `/xc memory` 核对向量排序、阈值和 chat scope。
-6. 制造直接检索空结果，并用明确回指触发工具代理。
-7. 重启 Bot，核对已确认状态恢复。
+4. 制造长空档并核对连续片段、Goal 与 PFC。
+5. 用 `/mem status` 核对消息已推进统一记忆，`/mem consolidate` 整理后用 `/xc memory` 和 `/mem page` 核对只看得到当前会话能看到的内容。
+6. 在私聊里说一件事，换到群里同一个人说话，核对群里的回复不提私聊的事。
+7. 重启 Bot，核对已确认状态恢复、推送不重复。
 
-### 人物资料、表达与黑话
+### 表达与黑话
 
-覆盖事实提取断点、重复消息、画像更新、表达计数、黑话可见范围、人工审查和选择器注入。分别测试当前 chat、另一个群聊与私聊。
+覆盖重复消息、表达计数、黑话可见范围、人工审查和选择器注入。分别测试当前 chat、另一个群聊与私聊。关于群友的事实由统一记忆整理，按上面第 5、6 步核对。
 
 ### 存储健壮性
 

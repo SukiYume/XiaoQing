@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..core.exceptions import ItemNotFoundException, ItemVersionConflictException
 from ..models.item import EventItem
@@ -19,6 +20,32 @@ from ..utils.validators import validate_item_data
 
 if TYPE_CHECKING:
     from .db import Database
+
+
+def _update_row_bumping_version(
+    db: Database,
+    cursor: sqlite3.Cursor,
+    table: Literal["items", "event_collections"],
+    data: dict[str, Any],
+    row_id: str,
+    owner_id: str,
+) -> None:
+    """按已准备好的列值更新一行（限定所有者），并把版本号加一。"""
+    assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
+    cursor.execute(
+        f"UPDATE {table} SET {assignments}, version = version + 1 WHERE id = ? AND owner_id = ?",
+        [*data.values(), row_id, owner_id],
+    )
+
+
+def _collection_version(cursor: sqlite3.Cursor, collection_id: str) -> int:
+    """读取集合当前的版本号。"""
+    return int(
+        cursor.execute(
+            "SELECT version FROM event_collections WHERE id = ?",
+            (collection_id,),
+        ).fetchone()[0]
+    )
 
 
 def update_collection(
@@ -113,12 +140,8 @@ def update_collection(
                 "before_version": child.version,
                 "after_version" : child.version + 1,
             }
-            data        = db._prepare_data({**child_changes, "updated_at": now})
-            assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
-            cursor.execute(
-                f"UPDATE items SET {assignments}, version = version + 1 WHERE id = ? AND owner_id = ?",
-                [*data.values(), child_id, owner_id],
-            )
+            data = db._prepare_data({**child_changes, "updated_at": now})
+            _update_row_bumping_version(db, cursor, "items", data, child_id, owner_id)
             if "remind_times" in child_changes:
                 db._sync_reminder_logs(cursor, child_id, child_changes["remind_times"])
             if db._FTS_FIELDS & child_changes.keys():
@@ -147,14 +170,8 @@ def update_collection(
                         "updated_at"           : now,
                     }
                 )
-                validated    = normalize_item_datetimes_for_storage(validated, user_timezone)
-                prepared     = db._prepare_data(validated)
-                columns      = ", ".join(db._quote_col(key) for key in prepared)
-                placeholders = ", ".join("?" for _ in prepared)
-                cursor.execute(
-                    f"INSERT INTO items ({columns}) VALUES ({placeholders})",
-                    list(prepared.values()),
-                )
+                validated = normalize_item_datetimes_for_storage(validated, user_timezone)
+                db._insert_row(cursor, "items", db._prepare_data(validated))
                 db._sync_reminder_logs(cursor, node.id, validated["remind_times"])
                 db._update_fts(node.id, validated, conn)
                 changed_children[node.id] = {"created": True, "after_version": node.version}
@@ -164,18 +181,9 @@ def update_collection(
                 (collection_id, owner_id),
             ).fetchone()
             clean.update(start_time=bounds[0], end_time=bounds[1])
-        data        = db._prepare_event_collection_data({**clean, "updated_at": now})
-        assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
-        cursor.execute(
-            f"UPDATE event_collections SET {assignments}, version = version + 1 WHERE id = ? AND owner_id = ?",
-            [*data.values(), collection_id, owner_id],
-        )
-        after_version = int(
-            cursor.execute(
-                "SELECT version FROM event_collections WHERE id = ?",
-                (collection_id,),
-            ).fetchone()[0]
-        )
+        data = db._prepare_event_collection_data({**clean, "updated_at": now})
+        _update_row_bumping_version(db, cursor, "event_collections", data, collection_id, owner_id)
+        after_version = _collection_version(cursor, collection_id)
         log = dict(operation_log or {"user_id": owner_id, "action": "edit_event_collection"})
         log["details"] = {
             **(log.get("details") or {}),
@@ -240,29 +248,16 @@ def restore_collection_edit(
                 )
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (child_id,))
                 continue
-            data        = db._prepare_data({**snapshot["old_values"], "updated_at": now})
-            assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
-            cursor.execute(
-                f"UPDATE items SET {assignments}, version = version + 1 WHERE id = ? AND owner_id = ?",
-                [*data.values(), child_id, owner_id],
-            )
+            data = db._prepare_data({**snapshot["old_values"], "updated_at": now})
+            _update_row_bumping_version(db, cursor, "items", data, child_id, owner_id)
             if "remind_times" in snapshot["old_values"]:
                 db._sync_reminder_logs(cursor, child_id, snapshot["old_values"]["remind_times"])
             db._refresh_fts(child_id, conn)
         data = db._prepare_event_collection_data(
             {**details.get("old_values", {}), "updated_at": now}
         )
-        assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
-        cursor.execute(
-            f"UPDATE event_collections SET {assignments}, version = version + 1 WHERE id = ? AND owner_id = ?",
-            [*data.values(), collection_id, owner_id],
-        )
-        new_version = int(
-            cursor.execute(
-                "SELECT version FROM event_collections WHERE id = ?",
-                (collection_id,),
-            ).fetchone()[0]
-        )
+        _update_row_bumping_version(db, cursor, "event_collections", data, collection_id, owner_id)
+        new_version = _collection_version(cursor, collection_id)
         # 连续撤销沿已验证的前驱版本衔接；独立写入形成版本断点。
         previous = cursor.execute(
             "SELECT id, details FROM operation_logs WHERE user_id = ? AND item_id = ? "

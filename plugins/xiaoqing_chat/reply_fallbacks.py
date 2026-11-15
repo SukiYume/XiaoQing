@@ -7,7 +7,6 @@ import re
 from .llm.check_result import ReplyRejected
 from .llm.local_checks import (
     OFFLINE_INVITE_RE,
-    heuristic_check,
     requires_configured_profile_boundary,
 )
 from .llm.media_evidence import (
@@ -21,7 +20,7 @@ from .reply_draft import RejectedCandidate, ReplyAttemptState, ReplyDraft, build
 from .reply_plan import (
     QUESTION_FORM_RE,
     ReplyGenerationPlan,
-    allows_low_stakes_persona_fiction,
+    heuristic_check_with_config,
     needs_persona_guard_when_checker_unavailable,
 )
 
@@ -79,6 +78,9 @@ UNSURE_ALTERNATE   = "这个我还是说不准，先不乱讲"
 MEDIA_UNREADABLE_FALLBACKS = ("图我这边没刷出来", "图好像裂了，我这边打不开")
 MEDIA_SEEN_FALLBACKS       = ("看到了", "嗯，看到了")
 MEDIA_UNSURE_FALLBACKS     = ("这个我不敢打包票，先不乱说", "这点我说不准，先不乱讲")
+
+# 生成并发超限时回给被点名的人。不在 ALL_FALLBACK_TEXTS 里：那个集合表示“审查耗尽后才发出”。
+GENERATION_BUSY_REPLY = "消息有点多，我缓一下再回"
 
 # 质量评估据此识别“审查耗尽后才发出”的回复。
 ALL_FALLBACK_TEXTS = frozenset(
@@ -155,6 +157,7 @@ def queue_reply_regeneration(
             plan.text,
             bot_name=plan.bot_name,
         )
+        low_stakes_fiction = plan.runtime.cfg.personality.allow_low_stakes_persona_fiction
         if requires_configured_profile_boundary(
             plan.text,
             plan.effective_identity,
@@ -164,14 +167,14 @@ def queue_reply_regeneration(
                 "这些精确身份资料不在群里透露。像普通网友那样轻松带过即可，不编具体答案，"
                 "也可以接着聊已经确定的身份或兴趣。语气保持普通群友的口吻。"
             )
-        elif allows_low_stakes_persona_fiction(plan.runtime) and persona_question:
+        elif low_stakes_fiction and persona_question:
             correction = (
                 "保留稳定人设和可靠记忆。对方问起你以前的事、小习惯或身边日常的小细节时，答一件不带具体日期、"
                 "不可核验且与人设一致的日常小事；今天和这几天具体发生了什么以生活记录为准。"
                 "删除精确身份、现实关系、重大经历、现实承诺以及拿个人故事给外部事实作证的内容。"
                 "如果用户问的是普通知识、事情本身或当下看法，就直接回答，不要硬塞个人故事。"
             )
-        elif allows_low_stakes_persona_fiction(plan.runtime):
+        elif low_stakes_fiction:
             correction = (
                 "当前用户问的不是你的履历或生活故事。删除第一人称经历、关系、习惯、"
                 "现实日程和自我举例，只针对用户当前说的具体内容直接表态、接梗或回答；"
@@ -325,16 +328,7 @@ def _forced_fallback_texts(
 
 
 def _repeats_recent_reply(plan: ReplyGenerationPlan, text: str) -> bool:
-    reply_check_cfg = plan.runtime.cfg.reply_check
-    return bool(
-        heuristic_check(
-            reply                = text,
-            history              = plan.history,
-            max_repeat_compare   = reply_check_cfg.max_repeat_compare,
-            similarity_threshold = reply_check_cfg.similarity_threshold,
-            max_assistant_in_row = reply_check_cfg.max_assistant_in_row,
-        )
-    )
+    return bool(heuristic_check_with_config(plan.runtime, reply=text, history=plan.history))
 
 
 def finish_rejected_candidate(

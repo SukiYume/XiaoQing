@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -161,9 +161,7 @@ async def test_smalltalk_goal_path_uses_async_goal_store(mock_context, sample_gr
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
         patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="目标")
-        ),
+        patch("plugins.xiaoqing_chat.handlers.derive_goal", new=Mock(return_value="目标")),
         patch(
             "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
@@ -243,7 +241,7 @@ async def test_ordinary_group_turn_refreshes_goal_after_should_reply_blocks(
         call_order.append("reply_gate")
         return False
 
-    async def fake_derive_goal(*_args, **_kwargs):
+    def fake_derive_goal(*_args, **_kwargs):
         call_order.append("derive_goal")
         return "保持当前话题"
 
@@ -273,8 +271,8 @@ async def test_ordinary_group_turn_refreshes_goal_after_should_reply_blocks(
             new=AsyncMock(side_effect=fake_should_reply),
         ),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(side_effect=fake_derive_goal),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(side_effect=fake_derive_goal),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
@@ -285,7 +283,7 @@ async def test_ordinary_group_turn_refreshes_goal_after_should_reply_blocks(
         )
 
     assert result == []
-    mock_derive_goal.assert_awaited_once()
+    mock_derive_goal.assert_called_once()
     state.goal_store.set_async.assert_awaited_once()
     assert call_order == ["reply_gate", "derive_goal", "set_goal"]
 
@@ -301,7 +299,6 @@ async def test_ordinary_group_with_planner_top_goal_skips_heuristic_goal_refresh
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [{"goal": "已有规划目标"}],
@@ -330,8 +327,8 @@ async def test_ordinary_group_with_planner_top_goal_skips_heuristic_goal_refresh
         patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="保持当前话题"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="保持当前话题"),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
@@ -342,7 +339,7 @@ async def test_ordinary_group_with_planner_top_goal_skips_heuristic_goal_refresh
         )
 
     assert result == []
-    mock_derive_goal.assert_not_awaited()
+    mock_derive_goal.assert_not_called()
     state.goal_store.set_async.assert_not_awaited()
 
 
@@ -357,7 +354,6 @@ async def test_ordinary_group_with_empty_planner_goal_list_still_refreshes_goal_
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -386,8 +382,8 @@ async def test_ordinary_group_with_empty_planner_goal_list_still_refreshes_goal_
         patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="保持当前话题"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="保持当前话题"),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
@@ -398,7 +394,7 @@ async def test_ordinary_group_with_empty_planner_goal_list_still_refreshes_goal_
         )
 
     assert result == []
-    mock_derive_goal.assert_awaited_once()
+    mock_derive_goal.assert_called_once()
     state.goal_store.set_async.assert_awaited_once()
 
 
@@ -433,8 +429,8 @@ async def test_ordinary_group_pre_pfc_block_still_updates_no_reply_adaptation(
         patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="保持当前话题"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="保持当前话题"),
         ),
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
@@ -484,8 +480,8 @@ async def test_expression_reflection_does_not_spawn_before_reply_gate_passes(
         patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="保持当前话题"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="保持当前话题"),
         ),
         patch("plugins.xiaoqing_chat.handlers.llm_call_config"),
         patch("plugins.xiaoqing_chat.handlers.spawn_bg_task") as mock_spawn_bg_task,
@@ -551,7 +547,7 @@ async def test_planner_can_wait_on_fresh_group_invitation(monkeypatch):
 
     monkeypatch.setattr(
         pfc_action_planner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         fake_chat,
     )
     plan = await plan_next_action(
@@ -629,7 +625,7 @@ async def test_planner_preserves_wait_for_message_directed_to_someone_else(monke
 
     monkeypatch.setattr(
         pfc_action_planner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         fake_chat,
     )
     plan = await plan_next_action(
@@ -696,7 +692,7 @@ async def test_planner_unavailable_fails_closed_in_group_but_replies_in_private(
 
     monkeypatch.setattr(
         pfc_action_planner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         _raise_timeout,
     )
     timeout_kwargs = {**kwargs, "secrets": {}}
@@ -729,7 +725,7 @@ async def test_planner_unknown_action_uses_scope_safe_fallback(
 
     monkeypatch.setattr(
         pfc_action_planner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         fake_chat,
     )
     plan = await plan_next_action(
@@ -759,23 +755,13 @@ async def test_planner_unknown_action_uses_scope_safe_fallback(
 
 
 def test_low_information_turn_does_not_replace_existing_topic_goal():
-    from plugins.xiaoqing_chat.planning.goal_state import (
-        _derive_goal_from_context,
-        is_low_information_turn,
-    )
+    from plugins.xiaoqing_chat.planning.goal_state import derive_goal, is_low_information_turn
 
     assert is_low_information_turn("乐") is True
     assert is_low_information_turn("噔噔咚") is True
     assert is_low_information_turn("[QQ表情：汪汪大哭]") is True
     assert is_low_information_turn("6 公斤每立方厘米") is False
-    assert (
-        _derive_goal_from_context(
-            current_text      = "乐",
-            planner_reasoning = "",
-            topic             = "提瓦特物理参数",
-        )
-        == '围绕话题"提瓦特物理参数"自然聊天'
-    )
+    assert derive_goal("乐") == ""
 
 
 def test_scientific_numeric_turn_uses_reasoning_route_classifier():
@@ -787,120 +773,11 @@ def test_scientific_numeric_turn_uses_reasoning_route_classifier():
 
 
 def test_long_non_question_turn_does_not_fallback_to_stale_topic_title():
-    from plugins.xiaoqing_chat.planning.goal_state import _derive_goal_from_context
+    from plugins.xiaoqing_chat.planning.goal_state import derive_goal
 
-    goal = _derive_goal_from_context(
-        current_text      = "今天我主要在整理部署流程、补文档、顺便看了下监控曲线，没有新的问题要问",
-        planner_reasoning = "",
-        topic             = "昨晚旧话题",
-    )
+    goal = derive_goal("今天我主要在整理部署流程、补文档、顺便看了下监控曲线，没有新的问题要问")
 
     assert goal == "自然聊天"
-
-
-@pytest.mark.asyncio
-async def test_topic_summarizer_refreshes_from_observed_traffic_not_only_exact_modulo(tmp_path):
-    from plugins.xiaoqing_chat.llm.summarizer import maybe_update_topic_summary
-    from plugins.xiaoqing_chat.memory.memory import StoredMessage
-
-    data_dir   = tmp_path
-    chat_id    = "g-refresh"
-    cache_path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        '[{"topic_id":"1","topic":"旧话题","keywords":["旧"],"summary":"旧摘要","key_points":["旧要点"],"updated_at":1.0}]',
-        encoding="utf-8",
-    )
-
-    history = [
-        StoredMessage(role="user", content="A", name="U", ts=1.0),
-        StoredMessage(role="assistant", content="B", name="小青", ts=2.0),
-        StoredMessage(role="user", content="C", name="U", ts=3.0),
-        StoredMessage(role="assistant", content="D", name="小青", ts=4.0),
-        StoredMessage(role="user", content="E", name="U", ts=5.0),
-    ]
-
-    memory_db = MagicMock()
-    with patch(
-        "plugins.xiaoqing_chat.llm.summarizer.chat_completions",
-        new=AsyncMock(
-            return_value='{"topic":"新话题","keywords":["新"],"summary":"新摘要","key_points":["要点"]}'
-        ),
-    ) as mock_chat:
-        await maybe_update_topic_summary(
-            data_dir                = data_dir,
-            memory_db               = memory_db,
-            secrets                 = {"api_base": "http://test", "api_key": "k", "model": "m"},
-            bot_name                = "小青",
-            chat_id                 = chat_id,
-            history                 = history,
-            min_messages_per_update = 4,
-            max_cache_topics        = 5,
-            llm                     = LLMCallConfig(
-                temperature            = 0.6,
-                top_p                  = 0.9,
-                max_tokens             = 256,
-                timeout_seconds        = 1.0,
-                max_retry              = 0,
-                retry_interval_seconds = 0.1,
-            ),
-        )
-
-    mock_chat.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_topic_summarizer_does_not_repeat_when_capped_length_divides_interval(tmp_path):
-    from plugins.xiaoqing_chat.llm.summarizer import maybe_update_topic_summary
-    from plugins.xiaoqing_chat.memory.memory import StoredMessage
-
-    chat_id    = "g-divisor"
-    cache_path = tmp_path / "hippo_memorizer" / f"{chat_id}.json"
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        '[{"topic_id":"1","topic":"旧话题","keywords":[],"summary":"旧摘要",'
-        '"key_points":[],"updated_at":200.0}]',
-        encoding="utf-8",
-    )
-    complete = AsyncMock(
-        return_value='{"topic":"新话题","keywords":[],"summary":"新摘要","key_points":[]}'
-    )
-    memory_db = MagicMock()
-    common    = {
-        "data_dir"               : tmp_path,
-        "memory_db"              : memory_db,
-        "secrets"                : {"api_base": "http://test", "api_key": "k", "model": "m"},
-        "bot_name"               : "小青",
-        "chat_id"                : chat_id,
-        "min_messages_per_update": 20,
-        "max_cache_topics"       : 5,
-        "llm"                    : LLMCallConfig(
-            temperature            = 0.6,
-            top_p                  = 0.9,
-            max_tokens             = 256,
-            timeout_seconds        = 1.0,
-            max_retry              = 0,
-            retry_interval_seconds = 0.1,
-        ),
-    }
-
-    unchanged = [
-        StoredMessage(role="user", content=str(index), name="U", ts=float(index))
-        for index in range(1, 201)
-    ]
-    twenty_new = [
-        StoredMessage(role="user", content=str(index), name="U", ts=float(index))
-        for index in range(21, 221)
-    ]
-    with patch(
-        "plugins.xiaoqing_chat.llm.summarizer.chat_completions",
-        new=complete,
-    ):
-        await maybe_update_topic_summary(history=unchanged, **common)
-        complete.assert_not_awaited()
-        await maybe_update_topic_summary(history=twenty_new, **common)
-
-    complete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -908,7 +785,6 @@ async def test_spawn_post_reply_bg_tasks_uses_async_goal_and_action_history_read
     from plugins.xiaoqing_chat.post_reply_tasks import spawn_post_reply_tasks
 
     runtime                                           = MagicMock()
-    runtime.cfg.summarizer.enable_topic_summarizer    = False
     runtime.cfg.expression.enable_expression_learning = False
     runtime.cfg.reflection.enable_review_sessions     = True
     runtime.cfg.reflection.session_timeout_seconds    = 60.0
@@ -1000,7 +876,7 @@ async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(mock
 
     completed = await call_reset("确认")
     assert completed == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
-    reset_chat_session.assert_awaited_once_with(state, "g67890", data_dir)
+    reset_chat_session.assert_awaited_once_with(state, "g67890", data_dir, ANY)
     state.inc_stats.assert_called_once_with("g67890", "resets")
     mock_context.logger.info.assert_called_once()
     assert "reset_audit" in mock_context.logger.info.call_args.args[0]
@@ -1024,8 +900,30 @@ async def test_private_reset_remains_limited_to_callers_private_scope(mock_conte
         result = await commands.handle_internal("重置", "", event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
-    reset_chat_session.assert_awaited_once_with(state, "u12345", data_dir)
+    reset_chat_session.assert_awaited_once_with(state, "u12345", data_dir, ANY)
     assert "private" in mock_context.logger.info.call_args.args
+
+
+@pytest.mark.asyncio
+async def test_reset_says_so_when_long_term_memory_was_not_cleared(mock_context):
+    from plugins.xiaoqing_chat import commands
+
+    state                               = MagicMock()
+    state.pop_persist_task.return_value = None
+    hctx                                = SimpleNamespace(
+        chat_id="u12345", runtime=MagicMock(), state=state, data_dir=Path("test-data")
+    )
+    event = {"message_type": "private", "user_id": 12345}
+
+    with (
+        patch.object(commands.HandlerContext, "from_event", return_value=hctx),
+        patch.object(commands, "reset_chat_session", AsyncMock(return_value=False)),
+    ):
+        result = await commands.handle_internal("重置", "", event, mock_context)
+
+    text = result[0]["data"]["text"]
+    assert "长期记忆这次没清掉" in text and "自动重试" in text
+    assert "✅" not in text
 
 
 @pytest.mark.asyncio
@@ -1126,7 +1024,6 @@ async def test_smalltalk_planner_runs_outside_chat_lock_but_commits_inside(
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -1185,15 +1082,11 @@ async def test_smalltalk_planner_runs_outside_chat_lock_but_commits_inside(
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply",
             new=AsyncMock(side_effect=fake_record_bot_reply),
         ),
         patch_turn(
@@ -1240,7 +1133,7 @@ async def test_planner_preserves_optional_wait(monkeypatch, seconds, expected):
     fake = AsyncMock(
         return_value=({"choices": [{"message": {"content": json.dumps(response)}}]}, "test")
     )
-    monkeypatch.setattr(planner, "chat_completions_raw_with_fallback_paths", fake)
+    monkeypatch.setattr(planner, "chat_completions_raw_with_profile", fake)
     plan = await planner.plan_next_action(
         secrets                      = {},
         bot_name                     = "小青",
@@ -1383,7 +1276,7 @@ async def test_planner_prompt_tells_group_planner_how_long_she_has_been_quiet(
             "responses",
         )
 
-    monkeypatch.setattr(pfc_action_planner, "chat_completions_raw_with_fallback_paths", fake_chat)
+    monkeypatch.setattr(pfc_action_planner, "chat_completions_raw_with_profile", fake_chat)
     await pfc_action_planner.plan_next_action(
         secrets                      = {},
         bot_name                     = "小青",
@@ -1479,7 +1372,6 @@ async def test_pfc_requires_a_reply_action_before_generation(tmp_path, actions, 
         is_private          = False,
         chat_id             = "g1",
         current_text        = "待讨论的事情",
-        memory_db           = MagicMock(),
         state               = state,
         generate_reply      = generate,
         history             = [],
@@ -1496,24 +1388,21 @@ async def test_pfc_requires_a_reply_action_before_generation(tmp_path, actions, 
         patch.object(pfc_engine, "_prepare_pfc_session", AsyncMock(return_value=session)),
         patch.object(pfc_engine, "_plan_pfc_action", plans),
         patch.object(pfc_engine, "analyze_goals", AsyncMock(return_value=[])),
-        patch.object(pfc_engine, "build_memory_block", AsyncMock(return_value="")),
+        patch.object(pfc_engine.memory_client, "search", AsyncMock(return_value=[])),
         patch.object(pfc_engine, "log_step"),
     ):
         result = await pfc_engine.run_pfc_once(
-            context         = session.context,
-            runtime_cfg     = cfg,
-            secrets         = {},
-            bot_name        = "小青",
-            is_private      = False,
-            chat_id         = "g1",
-            current_text    = session.current_text,
-            memory_store    = MagicMock(),
-            action_history  = MagicMock(),
-            memory_db       = session.memory_db,
-            pfc_state_store = MagicMock(),
-            generate_reply  = generate,
-            state_override  = state,
-            persist_state   = False,
+            context        = session.context,
+            runtime_cfg    = cfg,
+            secrets        = {},
+            bot_name       = "小青",
+            is_private     = False,
+            chat_id        = "g1",
+            current_text   = session.current_text,
+            memory_store   = MagicMock(),
+            action_history = MagicMock(),
+            state          = state,
+            generate_reply = generate,
         )
     assert result.action == expected
     assert generate.await_count == (1 if expected == "direct_reply" else 0)

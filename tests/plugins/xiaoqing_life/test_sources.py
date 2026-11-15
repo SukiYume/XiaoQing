@@ -100,7 +100,7 @@ async def test_bilibili_comments_cleaned_numbered_and_budgeted() -> None:
     [item] = await bilibili.popular(
         FakeFetcher({"/popular": popular_payload(bili_video(9, "视频"))}), []
     )
-    comments = await bilibili.hot_comments(fetch, item, 2, [], limit=4)
+    comments = bilibili.comments_of(await bilibili.reply_page(fetch, item), 2, [], 4)
     assert [c.ref for c in comments] == ["c2.1", "c2.2"]
     assert comments[0].text == "哈基米 好可爱" and comments[0].pictures == (
         "https://i0.hdslb.com/a.jpg",
@@ -109,7 +109,7 @@ async def test_bilibili_comments_cleaned_numbered_and_budgeted() -> None:
     # 评论与楼中楼合计不超过上限：1+2+1=4，第二条的楼中楼被裁掉。
     assert comments[1].replies == () and sum(1 + len(c.replies) for c in comments) == 4
     assert fetch.calls[0][1]["oid"] == "9"
-    assert await bilibili.hot_comments(fetch, item, 1, [], limit=0) == ()
+    assert bilibili.comments_of(await bilibili.reply_page(fetch, item), 1, [], 0) == ()
 
 
 async def test_zhihu_hot_parses_target_and_heat() -> None:

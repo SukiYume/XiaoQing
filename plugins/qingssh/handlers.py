@@ -9,13 +9,14 @@ from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 from core.sensitive_audit import safe_request_id as audit_request_id
 from core.sensitive_audit import summarize_sensitive
 
-from .config import ADD_SERVER_TIMEOUT, SESSION_TIMEOUT, SessionKeys
+from .config import ADD_SERVER_TIMEOUT, SESSION_TIMEOUT, SessionKeys, SessionState
 from .message_formatter import (
     DIVIDER,
     format_error,
     format_section,
+    format_server_added,
 )
-from .ssh_manager import PARAMIKO_AVAILABLE, SSHManager
+from .ssh_manager import PARAMIKO_AVAILABLE, SSHManager, has_jump_host, ssh_config_path
 from .types import Context, MessageSegments, OneBotEvent, segments
 from .validators import validate_hostname, validate_port, validate_server_name, validate_username
 
@@ -50,15 +51,15 @@ def _show_ssh_help(manager: SSHManager) -> MessageSegments:
             "📝 使用方式:",
             "  /ssh <名称> - 直接连接",
             "  /ssh <用户名>@<名称> - 以指定用户连接",
-            "  /ssh导入 - 从 ~/.ssh/config 导入",
-            "  /ssh列表 - 查看详细列表",
+            "  /ssh import - 从 ~/.ssh/config 导入",
+            "  /ssh list - 查看详细列表",
             "  连接后输入 showimg <路径或通配符> [--page N] - 分页发送图片",
         ]
     )
 
     if not servers and not ssh_config_hosts:
         lines.append("")
-        lines.append("💡 使用 /ssh添加 手动添加服务器")
+        lines.append("💡 使用 /ssh add 手动添加服务器")
 
     return segments(format_section("🖥️ SSH 远程控制", *lines))
 
@@ -70,27 +71,14 @@ async def _connect_to_server(
     username_override: str | None = None,
 ) -> MessageSegments:
     """连接到指定服务器，并在会话创建失败时回收连接。"""
-    server = manager.get_server(server_name)
-
-    # 未持久化的名称仍可直接引用显式声明的 OpenSSH Host。
+    # 未持久化的名称仍可直接引用显式声明的 OpenSSH Host；连接时 manager 会按同一规则再解析。
+    server = manager.resolve_server(server_name, username_override=username_override)
     if server is None:
-        ssh_config = manager.get_ssh_config_for_host(server_name)
-        if ssh_config is not None:
-            server = {
-                "host"    : ssh_config["hostname"],
-                "port"    : ssh_config["port"],
-                "username": ssh_config["user"],
-            }
-        else:
-            return segments(
-                format_error(
-                    f"服务器 '{server_name}' 不存在\n\n使用 /ssh列表 或 /sshconfig 查看可用服务器"
-                )
+        return segments(
+            format_error(
+                f"服务器 '{server_name}' 不存在\n\n使用 /ssh list 或 /ssh config 查看可用服务器"
             )
-
-    if username_override:
-        server             = server.copy()
-        server["username"] = username_override
+        )
 
     user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
@@ -104,11 +92,9 @@ async def _connect_to_server(
     try:
         await context.create_session(
             initial_data={
-                SessionKeys.SERVER_NAME      : server_name,
-                SessionKeys.HOST             : server["host"],
-                SessionKeys.COMMAND_COUNT    : 0,
-                SessionKeys.STATE            : "connected",
-                SessionKeys.USERNAME_OVERRIDE: username_override,
+                SessionKeys.SERVER_NAME  : server_name,
+                SessionKeys.COMMAND_COUNT: 0,
+                SessionKeys.STATE        : SessionState.CONNECTED,
             },
             timeout=SESSION_TIMEOUT,
         )
@@ -249,7 +235,7 @@ async def handle_ssh_list(
 
     if not servers:
         return segments(
-            "📋 SSH 服务器列表\n━━━━━━━━━━━━━━━━━━\n暂无保存的服务器\n\n使用 /ssh添加 来添加服务器"
+            f"📋 SSH 服务器列表\n{DIVIDER}\n暂无保存的服务器\n\n使用 /ssh add 来添加服务器"
         )
 
     lines = ["📋 SSH 服务器列表", DIVIDER]
@@ -263,7 +249,7 @@ async def handle_ssh_list(
         username = config.get("username", "?")
         host     = config.get("host", "?")
         port     = config.get("port", "?")
-        if config.get("proxycommand") or config.get("proxyjump"):
+        if has_jump_host(config):
             lines.append(f"   {username}@{host} (跳板机)")
         else:
             lines.append(f"   {username}@{host}:{port}")
@@ -321,7 +307,7 @@ async def handle_ssh_add(
     if not parts:
         await context.create_session(
             initial_data={
-                SessionKeys.STATE        : "adding",
+                SessionKeys.STATE        : SessionState.ADDING,
                 SessionKeys.STEP         : "name",
                 SessionKeys.SERVER_CONFIG: {},
             },
@@ -332,9 +318,9 @@ async def handle_ssh_add(
         )
 
     if len(parts) < 2:
-        return segments("❌ 参数不足\n用法: /ssh添加 <名称> <主机> [端口] [用户名]")
+        return segments("❌ 参数不足\n用法: /ssh add <名称> <主机> [端口] [用户名]")
     if len(parts) > 4:
-        return segments("❌ 参数过多\n用法: /ssh添加 <名称> <主机> [端口] [用户名]")
+        return segments("❌ 参数过多\n用法: /ssh add <名称> <主机> [端口] [用户名]")
 
     name = parts[0]
     is_valid, error_msg = validate_server_name(name)
@@ -363,14 +349,8 @@ async def handle_ssh_add(
         return segments(f"❌ 服务器 '{name}' 已存在")
 
     return segments(
-        f"✅ 服务器已添加\n"
-        f"{DIVIDER}\n"
-        f"名称: {name}\n"
-        f"主机: {host}:{port}\n"
-        f"用户: {username}\n"
-        f"认证: SSH Agent/本机密钥\n"
-        f"{DIVIDER}\n"
-        f"💡 如需密码认证，请在管理员私聊中使用引导式 /ssh添加"
+        format_server_added(name, host, port, username, "agent")
+        + "\n💡 如需密码认证，请在管理员私聊中使用引导式 /ssh add"
     )
 
 
@@ -381,7 +361,7 @@ async def handle_ssh_remove(
     name = args.strip()
 
     if not name:
-        return segments("❌ 请指定要删除的服务器名称\n\n用法: /ssh删除 <服务器名>")
+        return segments("❌ 请指定要删除的服务器名称\n\n用法: /ssh remove <服务器名>")
     if any(character.isspace() for character in name):
         return segments("❌ 用法: /ssh remove <服务器名>")
 
@@ -395,12 +375,9 @@ async def handle_ssh_import(
 ) -> MessageSegments:
     """从 ``~/.ssh/config`` 导入服务器。"""
 
-    ssh_config_path = Path.home() / ".ssh" / "config"
-    if not ssh_config_path.exists():
+    if not ssh_config_path().exists():
         return segments(
-            "❌ 未找到 ~/.ssh/config 文件\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "请确保文件存在，或使用 /ssh添加 手动添加服务器"
+            f"❌ 未找到 ~/.ssh/config 文件\n{DIVIDER}\n请确保文件存在，或使用 /ssh add 手动添加服务器"
         )
 
     await manager.reload_ssh_config()
@@ -416,7 +393,7 @@ async def handle_ssh_import(
                 hosts = manager.get_ssh_config_hosts()
                 if not hosts:
                     return segments("❌ ~/.ssh/config 中没有找到有效的 Host 配置")
-                return segments("✅ 所有 Host 都已导入过，无需重复导入")
+                return segments("ℹ️ 没有需要导入的新 Host：已全部导入，或其配置无法转换")
 
             lines = [f"✅ 成功导入 {count} 个服务器", DIVIDER]
             for name in imported[:10]:
@@ -435,9 +412,7 @@ async def handle_ssh_import(
     hosts = manager.get_ssh_config_hosts()
     if not hosts:
         return segments(
-            "❌ ~/.ssh/config 中没有找到有效的 Host 配置\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "请检查 ~/.ssh/config 文件格式是否正确"
+            f"❌ ~/.ssh/config 中没有找到有效的 Host 配置\n{DIVIDER}\n请检查 ~/.ssh/config 文件格式是否正确"
         )
 
     servers = manager.list_servers()
@@ -452,7 +427,7 @@ async def handle_ssh_import(
         for host in new_hosts[:15]:
             config = manager.get_ssh_config_for_host(host)
             if config:
-                if config.get("proxycommand") or config.get("proxyjump"):
+                if has_jump_host(config):
                     lines.append(f"  • {host} → {config['user']}@{config['hostname']} (跳板机)")
                 else:
                     lines.append(f"  • {host} → {config['user']}@{config['hostname']}")
@@ -469,8 +444,8 @@ async def handle_ssh_import(
 
     lines.append("")
     lines.append("📝 用法:")
-    lines.append("  /ssh导入 <Host名> - 导入单个")
-    lines.append("  /ssh导入 all - 导入全部")
+    lines.append("  /ssh import <Host名> - 导入单个")
+    lines.append("  /ssh import all - 导入全部")
 
     return segments("\n".join(lines))
 
@@ -488,8 +463,7 @@ async def handle_ssh_config_list(
     hosts = manager.get_ssh_config_hosts()
 
     if not hosts:
-        ssh_config_path = Path.home() / ".ssh" / "config"
-        if not ssh_config_path.exists():
+        if not ssh_config_path().exists():
             return segments("❌ 未找到 ~/.ssh/config 文件")
         return segments("❌ ~/.ssh/config 中没有找到有效的 Host 配置")
 
@@ -507,7 +481,7 @@ async def handle_ssh_config_list(
                 key_file = Path(config["identityfile"][0]).name
                 identity = f" 🔑{key_file}"
             lines.append(f"{imported} {host}")
-            if config.get("proxycommand") or config.get("proxyjump"):
+            if has_jump_host(config):
                 lines.append(f"    {config['user']}@{config['hostname']} 🔀跳板机{identity}")
             else:
                 lines.append(
@@ -523,6 +497,6 @@ async def handle_ssh_config_list(
     lines.append("✓ = 已导入到插件")
     lines.append("")
     lines.append("💡 可直接使用 /ssh <Host名> 连接")
-    lines.append("💡 使用 /ssh导入 <Host名> 保存配置")
+    lines.append("💡 使用 /ssh import <Host名> 保存配置")
 
     return segments("\n".join(lines))

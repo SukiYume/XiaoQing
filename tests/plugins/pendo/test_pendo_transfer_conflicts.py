@@ -296,7 +296,6 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
 ) -> None:
     """内部 ID 全局查重；来源索引忽略隔离、损坏或无来源的上下文。"""
 
-    assert transfer_api._get_item_identity(temp_db, None) is None
     collision_id  = "a" * 32
     task_contexts = {
         collision_id     : {"import": {"source_id": "source-valid", "policy": "skip"}},
@@ -316,13 +315,6 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
             }
         )
 
-    identity = transfer_api._get_item_identity(temp_db, collision_id)
-    assert identity == {
-        "id"      : collision_id,
-        "owner_id": OWNER_ID,
-        "type"    : "task",
-        "deleted" : 0,
-    }
     assert transfer_api._decode_import_context({"key": "value"}) == {"key": "value"}
     assert transfer_api._decode_import_context("{broken") == {}
     assert transfer_api._index_imported_item_sources(temp_db, OWNER_ID, set()) == {}
@@ -332,7 +324,7 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
 
     generated = iter([collision_id, "b" * 32])
     monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
-    assert transfer_api._new_import_item_id(temp_db) == "b" * 32
+    assert transfer_api._new_import_id(temp_db, "items") == "b" * 32
 
 
 def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
@@ -341,7 +333,6 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
 ) -> None:
     """集合 ID 也做全局查重，且只索引可覆盖的非隔离来源。"""
 
-    assert transfer_api._get_event_collection_identity(temp_db, None) is None
     collision_id        = "c" * 32
     collection_contexts = {
         collision_id         : {"import": {"source_id": "collection-source", "policy": "skip"}},
@@ -362,20 +353,13 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
             }
         )
 
-    identity = transfer_api._get_event_collection_identity(temp_db, collision_id)
-    assert identity == {
-        "id"      : collision_id,
-        "owner_id": OWNER_ID,
-        "kind"    : "multi_node",
-        "deleted" : 0,
-    }
     assert transfer_api._index_imported_collection_sources(temp_db, OWNER_ID) == {
         "collection-source": collision_id
     }
 
     generated = iter([collision_id, "d" * 32])
     monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
-    assert transfer_api._new_import_collection_id(temp_db) == "d" * 32
+    assert transfer_api._new_import_id(temp_db, "event_collections") == "d" * 32
 
 
 def test_collection_import_planner_skips_existing_source_and_rejects_duplicates(

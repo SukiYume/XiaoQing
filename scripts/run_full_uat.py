@@ -5,17 +5,20 @@
 逐字节恢复 ``config/config.json``。外部服务和会消耗模型额度的聊天质量测试必须
 显式开启。
 
-推荐从 Git Bash、macOS 或 Linux 的统一 Bash 入口调用：
+相对路径参数（``--output``、``--scenario-fixtures``）按仓库根目录解析，从哪个目录调用都一样：
 
-    bash scripts/run_full_uat.sh
-    bash scripts/run_full_uat.sh --plan-only
-    bash scripts/run_full_uat.sh --include-chat-quality
-    bash scripts/run_full_uat.sh --include-external \
+    python scripts/run_full_uat.py
+    python scripts/run_full_uat.py --plan-only
+    python scripts/run_full_uat.py --include-chat-quality
+    python scripts/run_full_uat.py --include-external \
         --scenario-fixtures tests/command_scenario_fixtures.local.json
 
 中途被强制终止且配置未恢复时，先确认没有 XiaoQing 服务仍在运行，再执行：
 
-    bash scripts/run_full_uat.sh --recover
+    python scripts/run_full_uat.py --recover
+
+本脚本不导入 ``core`` / ``plugins`` 的代码：被测代码出了问题，它仍要能停服务并恢复配置，
+所以原子写文件、链接判断这类小工具在这里各自实现，不和项目里的同类函数合并。
 """
 
 from __future__ import annotations
@@ -60,7 +63,8 @@ DEFAULT_PHASES        = (
     "diff",
 )
 PHASE_CHOICES = frozenset((*DEFAULT_PHASES, "chat-quality"))
-MATRIX_PHASES = frozenset({"ws-matrix", "http-matrix"})
+# 矩阵阶段名 -> 命令矩阵脚本的 --transport 取值
+MATRIX_TRANSPORTS = {"ws-matrix": "websocket", "http-matrix": "http"}
 
 
 class UATError(RuntimeError):
@@ -173,31 +177,19 @@ def _command_text(command: tuple[str, ...] | list[str]) -> str:
     return shlex.join(command)
 
 
-def _derive_ws_endpoint(endpoint: str) -> str:
+def _sibling_endpoint(endpoint: str, name: str) -> str:
+    """由 ``/event`` 入站地址推导同主机的 ``/<name>`` 地址（``/ws``、``/health``）。"""
+
     parsed = urlsplit(endpoint)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise UATError(f"--endpoint 必须是 http(s) URL: {endpoint}")
     path = parsed.path
     if path.endswith("/event"):
-        path = f"{path[: -len('/event')]}/ws"
+        path = f"{path[: -len('/event')]}/{name}"
     elif not path or path == "/":
-        path = "/ws"
+        path = f"/{name}"
     else:
-        raise UATError("无法从 --endpoint 推导 WebSocket 路径；请显式提供 --ws-endpoint")
-    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
-
-
-def _health_endpoint(endpoint: str) -> str:
-    parsed = urlsplit(endpoint)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise UATError(f"--endpoint 必须是 http(s) URL: {endpoint}")
-    path = parsed.path
-    if path.endswith("/event"):
-        path = f"{path[: -len('/event')]}/health"
-    elif not path or path == "/":
-        path = "/health"
-    else:
-        raise UATError("--endpoint 路径必须是 /event")
+        raise UATError(f"无法从 --endpoint 推导 /{name} 地址：路径必须是 /event: {endpoint}")
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
@@ -256,11 +248,12 @@ def _identity_block(output_dir: Path, index: int) -> tuple[int, int, int, int]:
 
 def _matrix_phase(
     *,
-    transport: str,
+    phase: str,
     args: argparse.Namespace,
     output_dir: Path,
     index: int,
 ) -> PhaseSpec:
+    transport = MATRIX_TRANSPORTS[phase]
     user_id, group_id, scenario_user_id, scenario_group_id = _identity_block(output_dir, index)
     report_dir   = output_dir / "reports" / f"{transport}-command-matrix"
     dependencies = "local,external" if args.include_external else "local"
@@ -300,7 +293,7 @@ def _matrix_phase(
         command.extend(("--kinds", args.matrix_kinds))
     label = "WebSocket" if transport == "websocket" else "HTTP"
     return PhaseSpec(
-        name             = f"{transport}-matrix",
+        name             = phase,
         command          = tuple(command),
         requires_service = True,
         description      = f"真实 {label} 命令目录、权限/场景拒绝与动态 CRUD/清理场景",
@@ -312,12 +305,11 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
     specs: list[PhaseSpec] = []
     matrix_index           = 0
     for phase in selected:
-        if phase in MATRIX_PHASES:
+        if phase in MATRIX_TRANSPORTS:
             matrix_index += 1
-            transport = "websocket" if phase == "ws-matrix" else "http"
             specs.append(
                 _matrix_phase(
-                    transport  = transport,
+                    phase      = phase,
                     args       = args,
                     output_dir = output_dir,
                     index      = matrix_index,
@@ -870,7 +862,7 @@ class ServiceController:
     ) -> None:
         self.output_dir                            = output_dir
         self.endpoint                              = endpoint
-        self.health_url                            = _health_endpoint(endpoint)
+        self.health_url                            = _sibling_endpoint(endpoint, "health")
         self.token                                 = token
         self.expected_plugins                      = expected_plugins
         self.start_timeout                         = start_timeout
@@ -1119,7 +1111,7 @@ def _execute_service_phases(
             except Exception as exc:  # noqa: BLE001
                 phases.append(_mark_runner_failure(spec, f"{type(exc).__name__}: {exc}"))
             has_more = index + 1 < len(specs)
-            if spec.name in {"websocket-matrix", "http-matrix"} and has_more:
+            if spec.name in MATRIX_TRANSPORTS and has_more:
                 stopped = controller.stop()
                 lifecycle.append(stopped)
                 if stopped.status != "passed":
@@ -1166,7 +1158,7 @@ def _report_markdown(report: dict[str, Any]) -> str:
             "## 执行上下文",
             "",
             f"- 开始/结束：`{report['started_at']}` / `{report['finished_at']}`",
-            f"- Python：`{report['python']['command']}`（仅记录版本，不按版本卡口）",
+            f"- Python：`{report['python']['command']}`",
             (
                 f"- Git HEAD：`{report['repository']['head']}`；"
                 f"运行前 dirty entries：{report['repository']['dirty_entries']}"
@@ -1203,9 +1195,9 @@ def _report_markdown(report: dict[str, Any]) -> str:
             "## 复跑",
             "",
             "```bash",
-            "bash scripts/run_full_uat.sh",
+            "python scripts/run_full_uat.py",
             "# 只复测失败阶段示例",
-            "bash scripts/run_full_uat.sh --phases ws-matrix,pytest,diff",
+            "python scripts/run_full_uat.py --phases ws-matrix,pytest,diff",
             "```",
             "",
         )
@@ -1229,8 +1221,6 @@ def _plan_only(specs: tuple[PhaseSpec, ...], args: argparse.Namespace, output_di
     plan = {
         "output"              : str(output_dir),
         "python"              : PYTHON_COMMAND,
-        "environment_policy"  : "use-current-python",
-        "python_version_gate" : False,
         "isolated_data_root"  : str(output_dir / "data"),
         "include_external"    : args.include_external,
         "include_chat_quality": any(spec.name == "chat-quality" for spec in specs),
@@ -1273,7 +1263,7 @@ def _execute(args: argparse.Namespace) -> int:
         else (DEFAULT_REPORT_PARENT / f"full-uat-{stamp}-{os.getpid()}").resolve()
     )
     if args.ws_endpoint is None:
-        args.ws_endpoint = _derive_ws_endpoint(args.endpoint)
+        args.ws_endpoint = _sibling_endpoint(args.endpoint, "ws")
     if args.scenario_fixtures is None:
         candidate = PROJECT_ROOT / "tests" / "command_scenario_fixtures.local.json"
         if candidate.is_file():
@@ -1380,16 +1370,12 @@ def _execute(args: argparse.Namespace) -> int:
         and integrity["inbound_port_released"]
     )
     report = {
-        "schema_version": 1,
-        "started_at"    : started_at,
-        "finished_at"   : _now_iso(),
-        "gate_passed"   : gate_passed,
-        "output_dir"    : str(output_dir),
-        "python"        : {
-            "command"     : PYTHON_COMMAND,
-            "version"     : sys.version,
-            "version_gate": False,
-        },
+        "schema_version"   : 1,
+        "started_at"       : started_at,
+        "finished_at"      : _now_iso(),
+        "gate_passed"      : gate_passed,
+        "output_dir"       : str(output_dir),
+        "python"           : {"command": PYTHON_COMMAND, "version": sys.version},
         "repository"       : repository,
         "phases"           : [asdict(row) for row in phase_results],
         "lifecycle"        : [asdict(row) for row in lifecycle_results],
@@ -1454,4 +1440,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    os.chdir(PROJECT_ROOT)
     raise SystemExit(main())

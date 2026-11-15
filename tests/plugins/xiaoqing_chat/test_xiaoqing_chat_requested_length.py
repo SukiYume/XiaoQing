@@ -189,7 +189,7 @@ async def test_the_raised_budget_reaches_the_generation_request(monkeypatch):
     assert foreground.max_tokens >= 1400
 
     completion = AsyncMock(return_value=("检讨书", "chat"))
-    monkeypatch.setattr(reply_generator, "chat_completions_with_fallback_paths", completion)
+    monkeypatch.setattr(reply_generator, "chat_completions_with_profile", completion)
     plan = reply_plan(
         forced     = True,
         text       = "小青，帮我写个800字的检讨书",

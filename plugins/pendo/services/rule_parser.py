@@ -6,7 +6,7 @@ from typing import Any, Final
 
 from ..models.item import ItemType
 from ..utils.formatters import extract_tags
-from ..utils.time_utils import TimezoneHelper
+from ..utils.time_utils import CN_WEEKDAYS, TimezoneHelper
 
 TIME_KEYWORDS: Final[tuple[tuple[str, int], ...]] = (
     # 长词必须在短词前，避免“下下周”先命中“下周”。
@@ -33,36 +33,37 @@ REPEAT_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
     ("每个月", "MONTHLY"),
     ("每月", "MONTHLY"),
 )
-NOTE_KEYWORDS           : Final = ("想法", "灵感", "点子", "记录", "笔记", "idea")
-EVENT_KEYWORDS          : Final = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
-TASK_KEYWORDS           : Final = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
-DEADLINE_HINTS          : Final = ("到", "截止", "之前", "前")
+NOTE_KEYWORDS : Final = ("想法", "灵感", "点子", "记录", "笔记", "idea")
+EVENT_KEYWORDS: Final = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
+TASK_KEYWORDS : Final = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
+DEADLINE_HINTS: Final = ("到", "截止", "之前", "前")
+# “下下周三”“下周三”“本周三”“这周三”“这个星期三”：周前缀 + 可再写一遍的“周/星期/礼拜”+ 星期几。
+_WEEKDAY_EXPRESSION: Final = (
+    r"(下下周|下周|(?:本|这个?)(?:周|星期|礼拜))\s*(?:周|星期|礼拜)?([一二三四五六日天])"
+)
 TIME_EXPRESSION_PATTERNS: Final = (
     r"\d{1,2}[点:：]",
     r"今天|明天|后天",
     r"\d{4}-\d{1,2}-\d{1,2}",
     r"下周|这周",
+    _WEEKDAY_EXPRESSION,
 )
 LOCATION_PATTERNS: Final = (
     r"在([^，,。.！!？?]+?)(开会|见面|会议)",
     r"地点[：:]\s*([^，,。.！!？?]+)",
 )
 REMINDER_UNIT_SECONDS: Final                              = {"分钟": 60, "小时": 3600, "天": 86400}
-WEEKDAY_CODES        : Final[tuple[tuple[str, str], ...]] = (
-    ("周一", "MO"),
-    ("周二", "TU"),
-    ("周三", "WE"),
-    ("周四", "TH"),
-    ("周五", "FR"),
-    ("周六", "SA"),
-    ("周日", "SU"),
+WEEKDAY_CODES        : Final[tuple[tuple[str, str], ...]] = tuple(
+    zip(CN_WEEKDAYS, ("MO", "TU", "WE", "TH", "FR", "SA", "SU"), strict=True)
 )
-# 自然周：这周/下周/下下周后面跟具体星期时，按周一起算的自然周落到那一天。
-_WEEK_OFFSETS   : Final = {"这周": 0, "本周": 0, "下周": 1, "下下周": 2}
-_WEEKDAY_PATTERN: Final = re.compile(
-    r"(下下周|下周|这周|本周)\s*(?:周|星期|礼拜)?([一二三四五六日天])"
-)
-_WEEKDAY_INDEX   : Final = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+# 自然周：本周（这周、这个星期……）、下周、下下周后面跟具体星期时，按周一起算的自然周落到那一天，
+# 本周的那一天即使已经过去也还是本周的那一天。
+_WEEK_OFFSETS   : Final = {"下周": 1, "下下周": 2}
+_WEEKDAY_PATTERN: Final = re.compile(_WEEKDAY_EXPRESSION)
+_WEEKDAY_INDEX  : Final = {
+    **{name.removeprefix("周"): index for index, name in enumerate(CN_WEEKDAYS)},
+    "天": 6,
+}
 _NEGATED_REMINDER: Final = re.compile(r"(?:不|别|取消|无需|不用|不要)\s*$")
 CATEGORY_KEYWORDS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("健康", ("体检", "锻炼", "跑步", "健身", "运动", "医院")),
@@ -179,29 +180,29 @@ class RuleParser:
 
     def _extract_relative_time(self, text: str, now: datetime) -> dict[str, str]:
         """解析今天、明天、下周等相对日期。"""
-        for keyword, days_offset in TIME_KEYWORDS:
-            if keyword not in text:
-                continue
-            target_date = now + timedelta(days=days_offset)
-            if weekday := _WEEKDAY_PATTERN.search(text):
-                monday = now - timedelta(days=now.weekday())
-                target_date = monday + timedelta(
-                    weeks = _WEEK_OFFSETS[weekday.group(1)],
-                    days  = _WEEKDAY_INDEX[weekday.group(2)],
-                )
-            start_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
-            clock       = self._clock_on_date(target_date, start_match)
-            if start_match is not None and clock is None:
-                return {"invalid_time": "1"}
-            start_time = clock or target_date.replace(hour=9, minute=0, second=0, microsecond=0)
-            result    = {"start_time": start_time.isoformat()}
-            end_match = re.search(
-                r"到\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})[点:：](\d{1,2})?", text
+        weekday     = _WEEKDAY_PATTERN.search(text)
+        days_offset = next((days for keyword, days in TIME_KEYWORDS if keyword in text), None)
+        if days_offset is None and weekday is None:
+            return {}
+        target_date = now + timedelta(days=days_offset or 0)
+        if weekday:
+            monday = now - timedelta(days=now.weekday())
+            target_date = monday + timedelta(
+                weeks = _WEEK_OFFSETS.get(weekday.group(1), 0),
+                days  = _WEEKDAY_INDEX[weekday.group(2)],
             )
-            if end_time := self._clock_on_date(target_date, end_match):
-                result["end_time"] = end_time.isoformat()
-            return result
-        return {}
+        start_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
+        clock       = self._clock_on_date(target_date, start_match)
+        if start_match is not None and clock is None:
+            return {"invalid_time": "1"}
+        start_time = clock or target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+        result    = {"start_time": start_time.isoformat()}
+        end_match = re.search(
+            r"到\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})[点:：](\d{1,2})?", text
+        )
+        if end_time := self._clock_on_date(target_date, end_match):
+            result["end_time"] = end_time.isoformat()
+        return result
 
     def _extract_absolute_start(self, text: str, now: datetime) -> str | None:
         """解析 YYYY-MM-DD 及其可选时分。"""

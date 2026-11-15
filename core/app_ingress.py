@@ -13,6 +13,7 @@ from .app_support import (
     InboundReconcileError,
     _AppLifecycleState,
     _ConfigApplyOwner,
+    _inbound_token_from_secrets,
     _run_background_operation,
 )
 from .constants import (
@@ -193,17 +194,8 @@ class AppIngressMixin:
     ) -> None:
         if self._stopping or not self._owns_config_apply(owner):
             return
-        raw_inbound_token = secrets.get("inbound_token", "")
-        if type(raw_inbound_token) is str:
-            inbound_token = raw_inbound_token
-        else:
-            inbound_token = ""
-            logger.error(
-                "Invalid inbound_token type during runtime reconciliation: %s; inbound "
-                "authentication is revoked",
-                type(raw_inbound_token).__name__,
-            )
-        current = self.inbound_manager
+        inbound_token = _inbound_token_from_secrets(secrets)
+        current       = self.inbound_manager
         try:
             with self._inbound_candidates_lock:
                 desired = InboundManager.from_config(

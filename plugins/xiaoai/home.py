@@ -7,7 +7,7 @@ from typing import Any
 
 from . import catalog, login, planner, weather
 from .client import BridgeError, read_json, services, write_json
-from .feeding import MAX_REQUEST_GRAMS, PORTION_MODELS
+from .feeding import MAX_REQUEST_GRAMS, PORTION_MODELS, food_out_actions
 from .operations import execute_plan, validate_value
 
 
@@ -48,10 +48,7 @@ def save_preference(
             feeders = [
                 k
                 for k, d in devices["devices"].items()
-                if any(
-                    ":pet-food-out:" in c.get("type", "")
-                    for c in catalog.capabilities(devices, d).values()
-                )
+                if food_out_actions(catalog.capabilities(devices, d))
             ]
             if len(feeders) != 1:
                 raise BridgeError("请指定喂食器：小爱 份量 <设备名> 10")
@@ -59,12 +56,8 @@ def save_preference(
         if len(parts) != 2 or not parts[1].isdigit():
             raise BridgeError("设置每份 10 克：小爱 份量 10\n有多台喂食器时：小爱 份量 <设备名> 10")
         key, device = catalog.resolve_device(devices, parts[0])
-        actions = [
-            c
-            for c in catalog.capabilities(devices, device).values()
-            if ":pet-food-out:" in c.get("type", "")
-        ]
-        grams = int(parts[1])
+        actions = food_out_actions(catalog.capabilities(devices, device))
+        grams   = int(parts[1])
         if len(actions) != 1 or len(actions[0]["inputs"]) != 1 or grams <= 0:
             raise BridgeError("请指定支持单次按量出粮的喂食器和正整数克数。")
         if device["model"] in PORTION_MODELS:
@@ -103,7 +96,7 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
     token   = await manager.ensure_fresh()
     account = str(token["userId"])
     if profile.get("account_id") and profile["account_id"] != account:
-        raise BridgeError("账号与设备绑定信息需要更新，请发送 /米家 登录。")
+        raise BridgeError("账号与设备绑定信息需要更新，请发送 /小爱 登录。")
     settings = preferences(context, account)
     if text == "天气" or text.startswith("天气 "):
         return await weather.lookup(context, text[2:].strip() or settings.get("weather_city", ""))
@@ -128,8 +121,6 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
         )
     if text in {"设备", "刷新设备", "能力"}:
         return catalog.inventory(devices)
-    if text.startswith("设备 "):
-        raise BridgeError("查看全部设备：小爱 设备")
     if text.startswith(("能力 ", "接口 ")):
         query = text[3:].strip()
         page  = 1

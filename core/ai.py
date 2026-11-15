@@ -12,6 +12,7 @@ provider 凭据，也无法读取其他插件或其他 route 的密钥。
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -94,6 +95,10 @@ _AI_JSON_MIME = MimePolicy(
     allow_missing       = True,
 )
 
+
+# 模型把 JSON 包进代码围栏时，首尾各有一段围栏标记。
+_JSON_FENCE_RE        = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+_JSON_FENCED_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 # 插件名 → route 名 → 该 route 的默认调用参数。插件导入时声明，热重载时整份覆盖。
 _declared_route_defaults: dict[str, dict[str, dict[str, Any]]] = {}
@@ -580,6 +585,37 @@ def list_configured_models(
     )
 
 
+def first_json_object(text: str) -> dict[str, Any] | None:
+    """取模型输出里的 JSON 对象；取不到返回 ``None``。
+
+    模型常在 JSON 前后加解释文字，或把答案包在 ``` 代码围栏里。有完整的围栏块时，围栏里的
+    才是它要给的结果，先在各个围栏块里找；没有（或围栏里没有对象）再去掉首尾的围栏标记，
+    在全文里找。“找”是从每个 ``{`` 起尝试解析，第一个能解析成对象的就是结果。
+    """
+
+    stripped = text.strip()
+    blocks   = [match.group(1) for match in _JSON_FENCED_BLOCK_RE.finditer(stripped)]
+    for candidate in (*blocks, _JSON_FENCE_RE.sub("", stripped)):
+        found = _first_object_in(candidate)
+        if found is not None:
+            return found
+    return None
+
+
+def _first_object_in(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    start   = text.find("{")
+    while start >= 0:
+        try:
+            value, _end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict):
+            return value
+        start = text.find("{", start + 1)
+    return None
+
+
 def _first_choice(data: Mapping[str, Any]) -> Mapping[str, Any]:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
@@ -930,5 +966,6 @@ __all__ = [
     "AIRequestError",
     "complete_configured_route",
     "declare_route_defaults",
+    "first_json_object",
     "list_configured_models",
 ]

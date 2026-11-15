@@ -10,7 +10,6 @@ k-NN 兴趣模型推理后端。
 每篇历史正样本都直接参与相似度计算，稀有话题同样被覆盖。
 """
 
-import importlib
 import json
 import logging
 import math
@@ -20,14 +19,16 @@ from typing import Any, cast
 
 import numpy as np
 import pandas as pd
-import torch
 
 from .shared import (
     InferenceParams,
-    build_paper_texts,
-    resolve_dataframe_column,
+    encode_normalized,
+    knn_scores,
+    load_sentence_encoder,
+    paper_texts_for_mode,
+    positive_int,
     run_cached_embedding_model,
-    topk_mean_similarity,
+    validated_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,15 +66,13 @@ class KNNInferenceModel:
     文件布局（model_dir/）：
       pos_embeddings.npy    — 全部正样本 embedding，(n_pos, D) float32
       neg_embeddings.npy    — 负样本子集 embedding，(n_neg, D) float32（可选）
-      meta.json             — encoder_name / k / neg_k / neg_weight / threshold / columns
-      training_config.json  — 与推理层约定的元数据
+      meta.json             — encoder_name / embed_dim / k / neg_k / neg_weight / columns
+      training_config.json  — 与推理层约定的元数据（推理阈值取自其中的 optimal_threshold）
     """
 
     def __init__(self, model_dir: str, batch_size: int = 256, max_len: int | None = None):
-        self.model_dir = Path(model_dir)
-        if type(batch_size) is not int or batch_size <= 0:
-            raise ValueError("batch_size must be a positive integer")
-        self.batch_size = batch_size
+        self.model_dir  = Path(model_dir)
+        self.batch_size = positive_int(batch_size, "batch_size")
 
         # ── 加载元数据 ──────────────────────────────────────────────────
         meta_path = self.model_dir / "meta.json"
@@ -89,7 +88,6 @@ class KNNInferenceModel:
         k            = meta.get("k", 10)
         neg_k        = meta.get("neg_k", 5)
         neg_weight   = meta.get("neg_weight", 0.5)
-        threshold    = meta.get("threshold", 0.5)
         columns      = meta.get("columns", {})
         if not isinstance(encoder_name, str) or not encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
@@ -106,25 +104,13 @@ class KNNInferenceModel:
             or float(neg_weight) < 0
         ):
             raise ValueError("neg_weight must be a finite non-negative number")
-        if (
-            isinstance(threshold, bool)
-            or not isinstance(threshold, (int, float))
-            or not math.isfinite(float(threshold))
-        ):
-            raise ValueError("threshold must be a finite number")
-        if not isinstance(columns, Mapping) or any(
-            not isinstance(key, str) or (value is not None and not isinstance(value, str))
-            for key, value in columns.items()
-        ):
-            raise ValueError("columns must map strings to strings or null")
 
         self.encoder_name            = encoder_name.strip()
         self.embed_dim               = embed_dim
         self.k                       = k
         self.neg_k                   = neg_k
         self.neg_weight              = float(neg_weight)
-        self.threshold               = float(threshold)
-        self.columns: dict[str, Any] = dict(columns)
+        self.columns: dict[str, Any] = validated_columns(columns)
 
         # ── 加载 embedding 库 ───────────────────────────────────────────
         pos_path = self.model_dir / "pos_embeddings.npy"
@@ -150,12 +136,7 @@ class KNNInferenceModel:
             logger.info("neg_embeddings.npy not found; running without negative penalty.")
 
         # ── 加载编码器 ──────────────────────────────────────────────────
-        self._fp16           = torch.cuda.is_available()
-        sentence_transformer = importlib.import_module("sentence_transformers").SentenceTransformer
-        self.encoder         = sentence_transformer(self.encoder_name)
-        if max_len is not None:
-            # 与训练相同的截断长度；training_config 中的 max_len 才真正控制编码输入。
-            self.encoder.max_seq_length = int(max_len)
+        self.encoder = load_sentence_encoder(self.encoder_name, max_len)
 
     # ------------------------------------------------------------------
     # Encoding
@@ -164,19 +145,8 @@ class KNNInferenceModel:
     def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.embed_dim), dtype=np.float32)
-        kw: dict[str, Any] = {
-            "batch_size"          : self.batch_size,
-            "show_progress_bar"   : False,
-            "convert_to_numpy"    : True,
-            "normalize_embeddings": True,
-        }
-        if self._fp16:
-            with torch.amp.autocast("cuda"):
-                emb = self.encoder.encode(texts, **kw)
-        else:
-            emb = self.encoder.encode(texts, **kw)
-        # sentence-transformers 是动态导入，运行时已要求 convert_to_numpy=True。
-        return cast(np.ndarray, emb.astype(np.float32))
+        embeddings = encode_normalized(self.encoder, texts, self.batch_size)
+        return cast(np.ndarray, embeddings.astype(np.float32))
 
     # ------------------------------------------------------------------
     # 得分计算
@@ -197,18 +167,14 @@ class KNNInferenceModel:
         if len(query) == 0:
             return cast(np.ndarray, np.array([], dtype=np.float32))
 
-        # 正样本相似度（分块计算，避免一次构造完整的查询×样本矩阵）
-        top_k_pos = topk_mean_similarity(query, self.pos_embeddings, self.k)
-
-        # 负样本惩罚（可选）
-        if self.neg_embeddings is not None and self.neg_k > 0 and self.neg_weight > 0:
-            top_k_neg = topk_mean_similarity(query, self.neg_embeddings, self.neg_k)
-            return cast(
-                np.ndarray,
-                (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
-            )
-
-        return cast(np.ndarray, top_k_pos.astype(np.float32))
+        return knn_scores(
+            query,
+            self.pos_embeddings,
+            self.neg_embeddings,
+            k          = self.k,
+            neg_k      = self.neg_k,
+            neg_weight = self.neg_weight,
+        )
 
     # ------------------------------------------------------------------
     # 对外接口
@@ -218,24 +184,7 @@ class KNNInferenceModel:
         """返回每篇论文的推荐得分 (1-d float32 array)。"""
         if len(df) == 0:
             return cast(np.ndarray, np.array([], dtype=np.float32))
-        if input_mode not in {"title_only", "title_abstract"}:
-            raise ValueError("unsupported input_mode")
-
-        # 列名解析：优先用训练时记录的列名，fallback 到通用候选
-        title_col    = resolve_dataframe_column(df, self.columns.get("title"), ("Title", "title"))
-        abstract_col = None
-        if input_mode != "title_only":
-            abstract_col = resolve_dataframe_column(
-                df,
-                self.columns.get("abstract"),
-                ("Abstract", "abstract"),
-            )
-            if abstract_col is None:
-                raise ValueError("title_abstract input requires an abstract column")
-
-        texts = build_paper_texts(df, title_col, abstract_col)
-        emb   = self.encode(texts)
-        return self._score(emb)
+        return self._score(self.encode(paper_texts_for_mode(df, self.columns, input_mode)))
 
 
 # =============================================================================

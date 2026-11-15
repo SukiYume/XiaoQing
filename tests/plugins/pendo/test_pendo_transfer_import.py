@@ -364,7 +364,7 @@ def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Databas
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
     )
-    temp_db.delete_item("task_deleted_global", soft=True, owner_id=OWNER_ID)
+    temp_db.delete_item("task_deleted_global", owner_id=OWNER_ID)
     bundle_bytes = _build_sample_bundle_bytes(
         {
             "task": [

@@ -13,6 +13,7 @@ import pytest
 
 from plugins.minecraft import rcon as rcon_module
 from plugins.minecraft.rcon import (
+    RCON_MAX_PACKET_BODY_BYTES,
     PacketType,
     RconClient,
     RconCommandResult,
@@ -131,7 +132,7 @@ class TestRconPacket:
         with pytest.raises(RconProtocolError, match="embedded NUL"):
             RconPacket(1, PacketType.COMMAND, "a\0b").encode()
         with pytest.raises(RconProtocolError, match="safety limit"):
-            RconPacket(1, PacketType.COMMAND, "x" * RconClient.MAX_PACKET_BYTES).encode()
+            RconPacket(1, PacketType.COMMAND, "x" * RCON_MAX_PACKET_BODY_BYTES).encode()
 
 
 class TestRconConstruction:
@@ -479,7 +480,7 @@ class TestRconResponseFraming:
 
     @pytest.mark.asyncio
     async def test_oversized_packet_is_rejected_before_body_read(self) -> None:
-        encoded_length = (RconClient.MAX_PACKET_BYTES + 1).to_bytes(4, "little", signed=True)
+        encoded_length = (RCON_MAX_PACKET_BODY_BYTES + 1).to_bytes(4, "little", signed=True)
         client         = RconClient("127.0.0.1", 25575, "secret")
         client._reader = cast(asyncio.StreamReader, _Reader(encoded_length))  # noqa: SLF001
         with pytest.raises(RconProtocolError, match="packet length"):

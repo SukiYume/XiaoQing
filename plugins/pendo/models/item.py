@@ -1,11 +1,11 @@
 """数据库读写共享的条目数据模型。"""
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 from ..utils.identifiers import new_internal_id, public_id
+from ..utils.time_utils import utc_now_iso
 
 
 class ItemType(Enum):
@@ -31,22 +31,22 @@ class Item:
     """统一的条目基类"""
 
     # 通用字段
-    id: str = field(default_factory=new_internal_id)
-    type: ItemType = ItemType.NOTE
-    title: str     = ""
-    content: str   = ""
-    tags: list[str] = field(default_factory=list)
-    category: str = "未分类"
-    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
-    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
-    owner_id: str = ""
-    context: dict[str, Any] = field(default_factory=dict)  # 来源上下文(群id、私聊等)
-    visibility: str = "private"  # private/group_scope
+    id         : str = field(default_factory=new_internal_id)
+    type       : ItemType = ItemType.NOTE
+    title      : str      = ""
+    content    : str      = ""
+    tags       : list[str] = field(default_factory=list)
+    category   : str = "未分类"
+    created_at : str = field(default_factory=utc_now_iso)
+    updated_at : str = field(default_factory=utc_now_iso)
+    owner_id   : str = ""
+    context    : dict[str, Any] = field(default_factory=dict)  # 来源上下文(群id、私聊等)
+    visibility : str = "private"  # private/group_scope
     attachments: list[dict[str, str]] = field(default_factory=list)
-    ai_meta: dict[str, Any] = field(default_factory=dict)  # AI生成的摘要、关键词等
-    deleted: bool          = False  # 软删除标记
-    deleted_at: str | None = None  # 软删除时间戳
-    version: int           = 0  # optimistic-concurrency revision
+    ai_meta    : dict[str, Any] = field(default_factory=dict)  # AI生成的摘要、关键词等
+    deleted    : bool       = False  # 软删除标记
+    deleted_at : str | None = None  # 软删除时间戳
+    version    : int        = 0  # optimistic-concurrency revision
 
     @property
     def display_id(self) -> str:
@@ -142,7 +142,7 @@ class LedgerItem(Item):
     type: ItemType = ItemType.LEDGER
 
     # Ledger特有字段
-    amount              : float      = 0.0  # 金额镜像（由 amount_cents 派生，正数）
+    amount              : float      = 0.0  # 金额（元）镜像：写入前由 utils.validators 按 amount_cents 换算
     amount_cents        : int        = 0  # 金额（分，正整数，账本计算主字段）
     currency            : str        = "CNY"  # 币种
     transaction_type    : str        = "expense"  # expense | income | transfer

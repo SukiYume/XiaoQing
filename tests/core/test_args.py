@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.args import parse, parse_int, quote_token, tokenize
+from core.args import chinese_number, parse, parse_int, quote_token, tokenize
 
 
 @pytest.mark.parametrize(
@@ -344,3 +344,31 @@ class TestEdgeCases:
         result = parse("-输出 值")
         assert result.tokens == ["-输出", "值"]
         assert result.options == {}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("零", 0),
+        ("两", 2),
+        ("十", 10),
+        ("十二", 12),
+        ("二十三", 23),
+        ("八百", 800),
+        ("三百五十", 350),
+        ("一百零五", 105),
+        ("一千零五十", 1050),
+        ("十二万", 120000),
+        # 末尾省掉单位的口语读法
+        ("一百二", 120),
+        ("一千五", 1500),
+        ("三万五", 35000),
+    ],
+)
+def test_chinese_number_reads_spoken_numerals(text: str, expected: int) -> None:
+    assert chinese_number(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "半", "12", "一半", "十点", "１２", "²"])
+def test_chinese_number_rejects_anything_else(text: str) -> None:
+    assert chinese_number(text) is None

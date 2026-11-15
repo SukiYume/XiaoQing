@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
-
 if TYPE_CHECKING:
     from ..config.config import MediaConfig
     from ..runtime_state import ChatRuntime
@@ -15,7 +13,7 @@ if TYPE_CHECKING:
 MEDIA_ANALYSIS_PROMPT_VERSION = 8
 
 
-MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
+MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 20.0
 
 
 def media_config(runtime: ChatRuntime) -> MediaConfig:

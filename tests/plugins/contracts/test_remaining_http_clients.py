@@ -165,10 +165,10 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
         )
     )
 
-    tweets, cursor, has_next = await twitter._fetch_timeline(context)
+    tweets, cursor = await twitter._fetch_timeline(context)
 
     assert [item["entryId"] for item in tweets] == ["tweet-1"]
-    assert (cursor, has_next) == ("next", True)
+    assert cursor == "next"
     _assert_transport_guards(session.requests[0])
     kwargs = session.requests[0][2]
     assert kwargs["proxy"] == "http://127.0.0.1:7890"

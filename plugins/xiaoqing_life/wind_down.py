@@ -17,7 +17,7 @@ from . import dossier, knowledge, stats
 from . import methods as methods_mod
 from . import threads as thread_ops
 from . import works as works_mod
-from .config import LifeConfig
+from .config import REASONING_ROUTE, LifeConfig
 from .days import DAY, day_key, episode_day, life_date
 from .digest import extract_json
 from .safety import clean_text, is_blocked
@@ -314,20 +314,15 @@ def settle_verification(
         learning["corrected_at"]                    = now
         learning["confidence"], learning["sources"] = knowledge.assess(mine)
         if parent is not None:
-            parent["takeaway"]                = learning["text"]
-            parent["confidence"]              = learning["confidence"]
-            corrections: list[dict[str, Any]] = parent.setdefault("corrections", [])
-            corrections.append(
-                {
-                    "id"        : new_id("c"),
-                    "before"    : old[:80],
-                    "after"     : learning["text"],
-                    "episode_id": mine[0]["id"] if mine else "",
-                    "at"        : now,
-                }
+            parent["takeaway"]   = learning["text"]
+            parent["confidence"] = learning["confidence"]
+            thread_ops.add_correction(
+                parent,
+                before     = old,
+                after      = learning["text"],
+                episode_id = mine[0]["id"] if mine else "",
+                now        = now,
             )
-            del corrections[: -thread_ops.MAX_CORRECTIONS]
-            thread_ops.on_thread_event(parent, "correction", now=now)
         return
     if verdict == "confirmed":
         learning["confidence"], learning["sources"] = knowledge.assess([*before, *mine])
@@ -362,7 +357,7 @@ def open_verification(
         opened = thread_ops.open_thread(
             store.threads,
             cfg,
-            title      = f"核实：{thread['title']}"[:20],
+            title      = f"核实：{thread['title']}"[: thread_ops.TITLE_CHARS],
             why        = VERIFY_WHY,
             next_query = str(thread.get("next_query") or thread.get("topic") or ""),
             now        = now,
@@ -376,8 +371,8 @@ def open_verification(
             return False
         opened["verifies"] = learning["id"]
         opened["claim"]    = str(learning.get("text", ""))[:80]
-        # 原来那个说法的依据原文：核实时从里面找该查的概念（真实回放里只给说法，模型一直在搜
-        # “锅具 预热”，没想到去查依据里提到的“莱顿弗罗斯特效应”）。
+        # 原来那个说法的依据原文：核实时从里面找该查的概念。只给说法时，模型容易只搜说法的字面
+        # （如“锅具 预热”），想不到去查依据里提到的概念（“莱顿弗罗斯特效应”）。
         opened["claim_basis"] = [
             str(n["quote"])[:60] for n in thread_ops.live_notes(thread) if n.get("quote")
         ][:3]
@@ -441,8 +436,8 @@ def apply_followup(
     if parent is None or parent.get("verifies"):
         return False  # 核实用的小课题不再往下延伸
     depth     = int(parent.get("depth", 0)) + 1
-    title     = clean_text(raw.get("title"), 20)
-    done_when = clean_text(raw.get("done_when"), 30)
+    title     = clean_text(raw.get("title"), thread_ops.TITLE_CHARS)
+    done_when = clean_text(raw.get("done_when"), thread_ops.DONE_WHEN_CHARS)
     kind      = str(raw.get("kind") or "")
     if depth > thread_ops.MAX_DEPTH or not title or not done_when:
         return False
@@ -454,8 +449,8 @@ def apply_followup(
         store.threads,
         cfg,
         title      = title,
-        why        = clean_text(raw.get("why"), 60),
-        next_query = clean_text(raw.get("next_query"), 30),
+        why        = clean_text(raw.get("why"), thread_ops.WHY_CHARS),
+        next_query = clean_text(raw.get("next_query"), thread_ops.QUERY_CHARS),
         now        = now,
         parent_id  = parent["id"],
         depth      = depth,
@@ -501,7 +496,7 @@ async def run_wind_down(
         store, moment, persona, moment_line, episodes, weekly=weekly, cfg=cfg, heard=heard
     )
     try:
-        text = await complete("reasoning", messages)
+        text = await complete(REASONING_ROUTE, messages)
     except Exception as exc:
         logger.info("xiaoqing_life step=wind_down model_failed error_type=%s", type(exc).__name__)
         return WindDownResult("failed", "model_failed")

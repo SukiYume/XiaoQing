@@ -72,7 +72,11 @@ class ColoredFormatter(RequestContextFormatter):
 
 
 class LogManager:
-    """创建时即接管根 logger：控制台（可选颜色）+ 主日志文件 + 错误日志文件。"""
+    """创建时即接管根 logger：控制台（可选颜色）+ 主日志文件 + 错误日志文件。
+
+    直接构造时 ``rotation_type`` 默认按大小轮转；应用经 ``setup_logging`` 启动，
+    ``log_rotation`` 缺省时按日期轮转。
+    """
 
     # 默认格式
     DEFAULT_FORMAT = "%(asctime)s [%(levelname)s] [request_id=%(request_id)s] %(name)s: %(message)s"
@@ -202,7 +206,7 @@ def setup_logging(config: Mapping[str, Any], log_dir: Path | None = None) -> Log
         - log_use_color: 是否使用颜色 (默认 True)
         - log_max_size_mb: 单个日志文件最大大小 MB (默认 10)
         - log_backup_count: 保留的日志文件数量 (默认 5)
-        - log_rotation: 轮转方式 "size" 或 "time" (默认 "time")
+        - log_rotation: 主日志的轮转方式，"size" 按大小或 "time" 每天午夜 (默认 "time")
     log_dir 默认为项目根目录下的 logs 文件夹。
     """
 

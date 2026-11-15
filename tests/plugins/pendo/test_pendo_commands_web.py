@@ -74,13 +74,10 @@ class TestTriggerNormalization:
         router = CommandRouter()
         for item in config["commands"]:
             router.register(
-                CommandSpec(
-                    plugin     = "pendo",
-                    name       = item["name"],
-                    triggers   = item["triggers"],
-                    help_text  = item["help"],
-                    admin_only = False,
-                    handler    = pendo_main.handle,
+                CommandSpec.from_manifest(
+                    "pendo",
+                    {"name": item["name"], "triggers": item["triggers"], "help": item["help"]},
+                    pendo_main.handle,
                 )
             )
 

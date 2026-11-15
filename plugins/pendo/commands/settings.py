@@ -6,17 +6,18 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final, TypeAlias, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.args import parse
 from core.plugin_base import run_sync
 
 from ..services.db import Database
 from ..utils.settings_utils import (
+    PLUGIN_SETTINGS_HELP_LINES,
     format_plugin_settings_message,
     parse_toggle_value,
     save_user_setting,
 )
+from ..utils.time_utils import is_valid_timezone
 
 Validator: TypeAlias = Callable[[str], tuple[bool, Any]]
 Formatter: TypeAlias = Callable[[Any], str]
@@ -51,9 +52,7 @@ def _validate_timezone(value: str) -> tuple[bool, str]:
     timezone_name = value.strip()
     if not timezone_name:
         return False, "请指定时区"
-    try:
-        ZoneInfo(timezone_name)
-    except (ValueError, ZoneInfoNotFoundError):
+    if not is_valid_timezone(timezone_name):
         return (
             False,
             f"❌ 无效的时区: {timezone_name}\n"
@@ -193,13 +192,5 @@ async def handle_settings_result(user_id: str, args: str, db: Database) -> tuple
     if spec is not None:
         return await _update_setting(user_id, value, db, spec)
     return False, (
-        f"❌ 未知的设置项: {action}\n\n"
-        "可用设置:\n"
-        "• reminder - 开关提醒\n"
-        "• timezone - 时区\n"
-        "• quiet_hours - 静默时段\n"
-        "• daily_report - 每日简报时间\n"
-        "• daily_briefing - 开关每日简报\n"
-        "• diary_remind - 日记提醒时间\n"
-        "• ai_consent - 是否允许将日记正文发送到配置的 AI 服务"
+        f"❌ 未知的设置项: {action}\n\n可用设置:\n" + "\n".join(PLUGIN_SETTINGS_HELP_LINES)
     )

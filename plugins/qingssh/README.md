@@ -31,14 +31,14 @@ pip install paramiko
 | 活跃连接状态 | `/ssh状态` | `/sshstatus` `/ssh连接数` `/sshactive` |
 <!-- manifest-command-aliases:end -->
 
-规范入口集中在 `/ssh`：
+表里的入口和 `/ssh` 的同名子命令走同一个处理器；`/ssh` 的子命令如下：
 
 ```text
 /ssh help
 /ssh list
 /ssh add [名称 主机 [端口] [用户名]]
 /ssh remove <服务器名>
-/ssh import [Host名|all]
+/ssh import [Host名|all|全部]
 /ssh config
 /ssh status
 /ssh disconnect [服务器名]
@@ -109,6 +109,9 @@ help
 | 普通文本 | 在当前远端目录执行 POSIX Shell 命令 |
 | `cd <路径>` | 更新会话工作目录 |
 | `help` | 显示会话内命令 |
+| `状态`、`status` | 当前服务器、目录、环境变量数和已执行命令数 |
+| `历史`、`history` | 最近 20 条命令 |
+| `!!` | 重复上一条命令 |
 | `停止` | 终止当前远端命令进程组 |
 | `退出`、`取消`、`exit`、`quit`、`q` | 关闭会话与 SSH 连接 |
 
@@ -149,7 +152,7 @@ data/qingssh/command_outputs/ssh-output-*.txt
 }
 ```
 
-`command_timeout_seconds=0` 表示由管理员主动终止长任务。QQ 预算控制 action 数、累计文字、单条消息、首尾保留、发送频率与等待时间。归档预算控制单文件字节、尾部保留和文件数量。达到归档预算时保存受控首尾。
+交互会话里 `command_timeout_seconds=0` 表示由管理员主动终止长任务（agent 服务按自己传入的超时执行，缺省 30 秒）。QQ 预算控制 action 数、累计文字、单条消息、首尾保留、发送频率与等待时间。归档预算控制单文件字节、尾部保留和文件数量。达到归档预算时保存受控首尾。
 
 任务取消会先收敛远端进程，再清理临时归档。完成的长输出归档向 QQ 展示文件名，内部完成日志记录归档是否创建。归档位置由本机数据目录与归档配置确定。
 
@@ -187,7 +190,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理。发送异常与
 
 ## 🛠 小青 agent 命令
 
-`xiaoqing_agent` 通过 `qingssh.agent_command` 服务列出服务器摘要（名称、主机、端口、用户名，不含认证材料），或在一台服务器上执行一条命令。服务按 `/ssh` 在 plugin.json 里的声明签发给能用 `/ssh` 的发起人（`/ssh` 需要 Bot 管理员权限）。
+`xiaoqing_agent` 通过 `qingssh.agent_command` 服务列出服务器摘要（名称、主机、端口、用户名、是否经跳板机，不含认证材料），或在一台服务器上执行一条命令。服务按 `/ssh` 在 plugin.json 里的声明签发给能用 `/ssh` 的发起人（`/ssh` 需要 Bot 管理员权限）。
 
 - 每次执行新建一条独立连接，执行完立即断开，不占用管理员的 `/ssh` 会话。输出上限 32,000 字符。
 - 超时或任务停止时按普通命令的终止流程收回远端进程。

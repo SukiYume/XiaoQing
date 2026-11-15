@@ -1,8 +1,11 @@
 """Protocol interfaces for decoupling core components.
 
-这些 Protocol 只描述 Core 与插件之间的最小结构契约，不承担运行时适配。Principal
-是 Core 签发的身份快照，Capabilities 是由 Core 按该身份重新计算的窄权限集合；插件
-不得从事件原文自行扩权。两者分开保留是为了同时表达“谁在调用”和“本次允许做什么”。
+Protocol 描述 Core 与插件之间的最小结构契约，不承担运行时适配；文件里的
+``PluginPrincipal``、``DeliveryTarget``、``PluginSettingsSnapshot`` 是这些契约直接引用的
+带校验的值类型，``command_request_texts`` 和事件里的内部键常量也放在这里，让生产方和
+消费方共用同一份名字。Principal 是 Core 签发的身份快照，Capabilities 是由 Core 按该身份
+重新计算的窄权限集合；插件不得从事件原文自行扩权。两者分开保留是为了同时表达“谁在调用”
+和“本次允许做什么”。
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
-    from .config import ConfigSnapshot, PendingSecretsChange
     from .router import CommandCatalogNode, CommandInvocation
     from .session import Session
 
@@ -31,8 +33,6 @@ class ConfigProvider(Protocol):
 class PluginRegistry(Protocol):
     def get(self, name: str) -> Any: ...
 
-    def has_capability(self, plugin_name: str, capability: str) -> bool: ...
-
 
 class MuteControl(Protocol):
     def mute_group(self, group_id: int, duration_minutes: float) -> None: ...
@@ -46,41 +46,6 @@ class MuteControl(Protocol):
         ...
 
 
-class ConfigManagerLike(Protocol):
-    def update_secret(self, path: str, value: Any) -> None: ...
-
-    def get_plugin_secret(self, plugin_name: str, path: str) -> Any: ...
-
-    def set_plugin_secret(self, plugin_name: str, path: str, value: Any) -> None: ...
-
-    def delete_plugin_secret(self, plugin_name: str, path: str) -> bool: ...
-
-    def reload(self, *, notify: bool = False) -> ConfigSnapshot: ...
-
-    def snapshot(self) -> ConfigSnapshot: ...
-
-    def on_reload(
-        self,
-        callback: Callable[[ConfigSnapshot], Any],
-    ) -> Callable[[], None]: ...
-
-    def on_security_update(
-        self,
-        callback: Callable[[ConfigSnapshot], None],
-    ) -> Callable[[], None]: ...
-
-    def on_pending_secrets_change(
-        self,
-        callback: Callable[[PendingSecretsChange], Any],
-    ) -> Callable[[], None]: ...
-
-    @property
-    def config(self) -> Mapping[str, Any]: ...
-
-    @property
-    def secrets(self) -> Mapping[str, Any]: ...
-
-
 SendAction           = Callable[[dict[str, Any]], Awaitable[bool | None]]
 ScheduleDeliveryMode = Literal["broadcast", "targeted", "silent"]
 
@@ -88,6 +53,8 @@ ScheduleDeliveryMode = Literal["broadcast", "targeted", "silent"]
 # Keep the names here so producers and consumers cannot drift on magic keys.
 ACTION_BYPASS_SINK_KEY       = "_bypass_sink"
 ACTION_RESULT_MESSAGE_ID_KEY = "_result_message_id"
+# 入站事件由哪条通道送进来（``upstream_ws`` / ``inbound_http`` / ``inbound_ws``）。
+EVENT_SOURCE_KEY = "_source"
 # Command-runner events carry the calling plugin's name so handlers can tell a
 # tool call from a person typing the same command.
 COMMAND_RUNNER_EVENT_KEY = "_command_runner"
@@ -108,6 +75,16 @@ def command_request_texts(event: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(text for text in texts if isinstance(text, str) and text.strip())
 
 
+def plugin_namespace(source: Mapping[str, Any], plugin_name: str) -> Mapping[str, Any]:
+    """取出 ``source["plugins"][plugin_name]``；任一层不是映射时返回空映射。"""
+
+    plugins = source.get("plugins")
+    if not isinstance(plugins, Mapping):
+        return {}
+    namespace = plugins.get(plugin_name)
+    return namespace if isinstance(namespace, Mapping) else {}
+
+
 @dataclass(frozen=True, slots=True)
 class PluginSettingsSnapshot:
     """One atomic, plugin-scoped view of public config and private settings."""
@@ -118,26 +95,15 @@ class PluginSettingsSnapshot:
     config_status : str = "valid"
     secrets_status: str = "valid"
 
-    @staticmethod
-    def _plugin_namespace(
-        source: Mapping[str, Any],
-        plugin_name: str,
-    ) -> Mapping[str, Any]:
-        plugins = source.get("plugins")
-        if not isinstance(plugins, Mapping):
-            return {}
-        namespace = plugins.get(plugin_name)
-        return namespace if isinstance(namespace, Mapping) else {}
-
     def plugin_config(self, plugin_name: str) -> Mapping[str, Any]:
         """Return this generation's public namespace for one plugin."""
 
-        return self._plugin_namespace(self.config, plugin_name)
+        return plugin_namespace(self.config, plugin_name)
 
     def plugin_secrets(self, plugin_name: str) -> Mapping[str, Any]:
         """Return this generation's private namespace for one plugin."""
 
-        return self._plugin_namespace(self.secrets, plugin_name)
+        return plugin_namespace(self.secrets, plugin_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +270,23 @@ class LifeContextCapability(Protocol):
     async def export_memes(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
 
 
+class MemoryCapability(Protocol):
+    """小青的统一记忆（xiaoqing_memory）。
+
+    载荷里的 ``caller``（调用方插件名）、``principal_kind`` 和 ``principal_scope``（用户主体所在的
+    ``g<群号>`` / ``u<QQ号>``，系统主体为空）由 Core 写入，调用方填的同名字段无效。哪一项没有在
+    ``uses_services`` 里声明，调用它就抛出 ``RuntimeError``。
+    """
+
+    async def record(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    async def recall(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    async def search(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    async def forget(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+
 class CodexAgentTaskCapability(Protocol):
     """xiaoqing_agent 提交一个 Codex 任务并等待其文本与图片结果。"""
 
@@ -355,10 +338,10 @@ class CommandRunnerCapability(Protocol):
 
 
 class LocalToolsCapability(Protocol):
-    """agent 在本机执行代码、读写文件前的授权确认；和 ``/shell`` 一样只给 Bot 管理员。"""
+    """agent 在本机执行代码、读写文件前的授权确认；和 ``/shell`` 一样按该命令的声明判权。"""
 
     def ensure_authorized(self) -> None:
-        """发起人此刻已不是 Bot 管理员时抛出 ``PermissionError``。"""
+        """发起人此刻已无权使用 ``/shell`` 时抛出 ``PermissionError``。"""
 
 
 class AICapability(Protocol):
@@ -402,6 +385,7 @@ class PluginCapabilities:
     chat_reply         : ChatReplyCapability | None         = None
     agent_turn         : AgentTurnCapability | None         = None
     life_context       : LifeContextCapability | None       = None
+    memory             : MemoryCapability | None            = None
     codex_agent        : CodexAgentTaskCapability | None    = None
     ssh_agent          : SSHAgentCommandCapability | None   = None
     command_runner     : CommandRunnerCapability | None     = None

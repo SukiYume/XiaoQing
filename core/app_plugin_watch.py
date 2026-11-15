@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from .app_support import (
     _AppLifecycleState,
-    _coerce_runtime_number,
     _run_background_operation,
+    _runtime_plugin_poll_interval,
 )
+from .constants import DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
 from .plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
@@ -51,20 +52,11 @@ class AppPluginWatchMixin:
         )
 
     def _plugin_watch_poll_interval(self, config: Mapping[str, Any] | None = None) -> float:
-        source       = config if config is not None else self.config
-        raw_interval = source.get("plugin_poll_interval", 3600)
+        source = config if config is not None else self.config
         try:
-            interval = _coerce_runtime_number(
-                raw_interval,
-                key     = "plugin_poll_interval",
-                default = 3600.0,
-                integer = False,
-                minimum = 0.01,
-                maximum = 86400.0,
-            )
+            return _runtime_plugin_poll_interval(source)
         except ValueError:
-            return 3600.0
-        return float(interval)
+            return DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
 
     def _watch_runtime_active(self) -> bool:
         # The plugin watcher is an application-owned control-plane service.

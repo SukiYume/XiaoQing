@@ -18,13 +18,11 @@ readonly REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 readonly LOCAL_CONFIG_FILE="$SCRIPT_DIR/sync_to_remote.local.sh"
 REMOTE_HOST=""
 REMOTE_DIR=""
-PRESERVE_REMOTE_FILES=()
 if [[ -f "$LOCAL_CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$LOCAL_CONFIG_FILE"
 fi
 readonly REMOTE_HOST REMOTE_DIR
-readonly -a PRESERVE_REMOTE_FILES
 
 readonly SSH_BIN="ssh"
 readonly RSYNC_BIN="rsync"
@@ -57,17 +55,14 @@ usage() {
 
 默认只预览。--apply 会同步当前工作树和 arXiv 运行权重，并删除远端过期源码。
 
-config/config.json 随源码同步并校验；密钥、Minecraft 连接配置、日志和运行数据独立保留。
+config/config.json 随源码同步并校验；密钥、日志和运行数据独立保留。
+只属于这一部署的设置（群号、定时任务的目标群、服务器地址）都写在 config/config.json，
+仓库里的其他文件在生产上与仓库一致，不需要逐个保留或手工合并。
 脚本不会停止或启动生产进程。
 
 首次使用时创建 scripts/sync_to_remote.local.sh，并在其中设置：
   REMOTE_HOST="production-host"
   REMOTE_DIR="/absolute/path/to/XiaoQing"
-
-需要由生产环境独立维护、同步时保留的文件也写在该本机文件中：
-  PRESERVE_REMOTE_FILES=(
-    "path/to/remote-only-file"
-  )
 
 此后可直接修改该本机文件切换目标；它不会进入 Git 或 Docker 构建上下文。
 USAGE
@@ -133,17 +128,6 @@ fi
     || die "unsafe remote host"
 [[ "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$REMOTE_DIR" != "/" ]] \
     || die "remote directory must be a safe non-root absolute path"
-for preserved_file in "${PRESERVE_REMOTE_FILES[@]}"; do
-    [[ -n "$preserved_file" \
-        && "$preserved_file" =~ ^[A-Za-z0-9._/-]+$ \
-        && "$preserved_file" != /* \
-        && "$preserved_file" != */ \
-        && "$preserved_file" != ".." \
-        && "$preserved_file" != ../* \
-        && "$preserved_file" != */../* \
-        && "$preserved_file" != */.. ]] \
-        || die "preserved file must be a safe repository-relative file path: $preserved_file"
-done
 [[ "$ARXIV_MODEL_DIR" =~ ^[A-Za-z0-9._/-]+$ \
     && "$ARXIV_MODEL_DIR" != /* \
     && "$ARXIV_MODEL_DIR" != *".."* ]] \
@@ -166,24 +150,16 @@ done
 # ---------- 远端根目录门禁 ----------
 
 remote_root="$($SSH_BIN "$REMOTE_HOST" sh -s -- \
-    "$REMOTE_DIR" "$SENTINEL_NAME" "$SENTINEL_VALUE" \
-    "${PRESERVE_REMOTE_FILES[@]}" <<'REMOTE'
+    "$REMOTE_DIR" "$SENTINEL_NAME" "$SENTINEL_VALUE" <<'REMOTE'
 set -eu
 remote_dir=$1
 sentinel_name=$2
 sentinel_value=$3
-shift 3
 
 target=$(readlink -f -- "$remote_dir")
 test -n "$target" && test "$target" != / && test -d "$target"
 test -f "$target/$sentinel_name" \
     && test "$(cat -- "$target/$sentinel_name")" = "$sentinel_value"
-for preserved_file do
-    if ! test -f "$target/$preserved_file" || test -L "$target/$preserved_file"; then
-        printf 'preserved remote file is missing or unsafe: %s\n' "$preserved_file" >&2
-        exit 1
-    fi
-done
 printf '%s\n' "$target"
 REMOTE
 )"
@@ -206,18 +182,13 @@ rsync_args=(
     --filter='- /.git/***'
     --filter='+ /config/config.json'
     --filter='- /config/secrets.json'
-    --filter='- /plugins/minecraft/config.json'
     --filter='- /logs/***'
     --filter='- /test_reports/runs/***'
     --filter='- /data/***'
-    --filter='- /plugins/*/data/***'
     --filter='- /plugins/*/cache/***'
     --filter='- /plugins/*/backups/***'
     --filter='- /plugins/*/exports/***'
 )
-for preserved_file in "${PRESERVE_REMOTE_FILES[@]}"; do
-    rsync_args+=(--filter="- /$preserved_file")
-done
 rsync_args+=(
     --include='/.env.example'
     --include='/.env.*.example'
@@ -235,9 +206,6 @@ else
     printf 'Applying sync: %s -> %s\n' "$source_dir" "$target"
 fi
 printf 'Required release asset: %s\n' "$ARXIV_MODEL_DIR"
-for preserved_file in "${PRESERVE_REMOTE_FILES[@]}"; do
-    printf 'Preserving remote-only file: %s\n' "$preserved_file"
-done
 "$RSYNC_BIN" "${rsync_args[@]}" "$source_dir" "$target"
 
 if [[ "$mode" == "dry-run" ]]; then

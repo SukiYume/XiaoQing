@@ -66,10 +66,9 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
     if not content.strip():
         return segments("❌ 笔记内容不能为空")
 
-    if await asyncio.to_thread(storage.add_paper_note, paper_id, content, user_id):
-        notes = await asyncio.to_thread(storage.get_paper_notes, paper_id, user_id)
-        return segments(f"✅ 已添加笔记到论文 {paper_id} (#{len(notes)})")
-    return segments("❌ 添加笔记失败")
+    await asyncio.to_thread(storage.add_paper_note, paper_id, content, user_id)
+    notes = await asyncio.to_thread(storage.get_paper_notes, paper_id, user_id)
+    return segments(f"✅ 已添加笔记到论文 {paper_id} (#{len(notes)})")
 
 
 async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segments:
@@ -112,10 +111,9 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
     if not content.strip():
         return segments("❌ 灵感内容不能为空")
 
-    if await asyncio.to_thread(storage.add_writing_idea, section, content, user_id):
-        ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
-        return segments(f"💡 已添加到「{section}」灵感箱 (#{len(ideas)})")
-    return segments("❌ 添加灵感失败")
+    await asyncio.to_thread(storage.add_writing_idea, section, content, user_id)
+    ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
+    return segments(f"💡 已添加到「{section}」灵感箱 (#{len(ideas)})")
 
 
 async def cmd_topics(
@@ -156,9 +154,8 @@ async def cmd_topics(
     if first in {"clear", "清空"}:
         if len(parts) != 1:
             return segments("❌ 用法: /paper topics clear")
-        if await asyncio.to_thread(storage.clear_topics, user_id):
-            return segments("✅ 已清空所有关键词")
-        return segments("❌ 清空失败")
+        await asyncio.to_thread(storage.clear_topics, user_id)
+        return segments("✅ 已清空所有关键词")
 
     return segments("❌ 未知命令\n用法: /paper topics [add/remove/clear] [关键词]")
 
@@ -199,9 +196,8 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
         except ValueError:
             return segments("❌ 日期格式错误，请使用 YYYY-MM-DD 格式（如：2026-03-15）")
 
-        if await asyncio.to_thread(storage.add_deadline, name, date, user_id):
-            return segments(f"✅ 已添加截稿日期: {name} - {date}")
-        return segments("❌ 添加失败")
+        await asyncio.to_thread(storage.add_deadline, name, date, user_id)
+        return segments(f"✅ 已添加截稿日期: {name} - {date}")
 
     if first in _DELETE_WORDS:
         if len(parts) != 2 or len(parts[1].split()) != 1:

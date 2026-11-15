@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from core.ai import declare_route_defaults
+from core.plugin_base import config_bool, config_float, config_int
 
 PLUGIN_NAME = "xiaoqing_agent"
 
@@ -68,28 +68,11 @@ class AgentConfig:
     # 发起人隔多久没说话就开新的办事会话（分钟，0 表示每句话都从头开始），以及会话保留的轮数。
     session_idle_minutes: float = 120.0
     session_max_turns   : int   = 20
+    # 开新办事会话时从统一记忆取发起人的记忆，办完写一条办事经过；统一记忆不在时没有影响。
+    use_memory: bool = True
     # 留空时：Python 用 Bot 自身解释器；Shell 在 Windows 优先 Git Bash，否则 PowerShell。
     python: str = ""
     shell : str = ""
-
-
-def _bool(value: Any, default: bool) -> bool:
-    return value if isinstance(value, bool) else default
-
-
-def _int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return default
-    return min(maximum, max(minimum, value))
-
-
-def _float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    number = float(value)
-    if not math.isfinite(number):
-        return default
-    return min(maximum, max(minimum, number))
 
 
 def _text(value: Any) -> str:
@@ -99,78 +82,79 @@ def _text(value: Any) -> str:
 def parse_agent_config(raw: Any) -> AgentConfig:
     options  = raw if isinstance(raw, Mapping) else {}
     defaults = AgentConfig()
-    tool_max = _float(
+    tool_max = config_float(
         options.get("max_tool_timeout_seconds"),
         defaults.max_tool_timeout_seconds,
         minimum = 5.0,
         maximum = 7200.0,
     )
     return AgentConfig(
-        enabled=_bool(options.get("enabled"), defaults.enabled),
-        max_steps=_int(options.get("max_steps"), defaults.max_steps, minimum=1, maximum=200),
-        task_timeout_seconds=_float(
+        enabled=config_bool(options.get("enabled"), defaults.enabled),
+        max_steps=config_int(options.get("max_steps"), defaults.max_steps, minimum=1, maximum=200),
+        task_timeout_seconds=config_float(
             options.get("task_timeout_seconds"),
             defaults.task_timeout_seconds,
             minimum = 30.0,
             maximum = 86400.0,
         ),
-        tool_timeout_seconds=_float(
+        tool_timeout_seconds=config_float(
             options.get("tool_timeout_seconds"),
             defaults.tool_timeout_seconds,
             minimum = 5.0,
             maximum = tool_max,
         ),
         max_tool_timeout_seconds = tool_max,
-        inline_wait_seconds      = _float(
+        inline_wait_seconds      = config_float(
             options.get("inline_wait_seconds"),
             defaults.inline_wait_seconds,
             minimum = 0.0,
             maximum = 25.0,
         ),
-        max_admin_tasks=_int(
+        max_admin_tasks=config_int(
             options.get("max_admin_tasks"),
             defaults.max_admin_tasks,
             minimum = 1,
             maximum = 20,
         ),
-        max_member_tasks=_int(
+        max_member_tasks=config_int(
             options.get("max_member_tasks"),
             defaults.max_member_tasks,
             minimum = 0,
             maximum = 50,
         ),
-        max_tasks_per_member=_int(
+        max_tasks_per_member=config_int(
             options.get("max_tasks_per_member"),
             defaults.max_tasks_per_member,
             minimum = 1,
             maximum = 20,
         ),
-        max_tool_output_chars=_int(
+        max_tool_output_chars=config_int(
             options.get("max_tool_output_chars"),
             defaults.max_tool_output_chars,
             minimum = 1000,
             maximum = 100000,
         ),
-        history_tasks=_int(
+        history_tasks=config_int(
             options.get("history_tasks"),
             defaults.history_tasks,
             minimum = 0,
             maximum = 20,
         ),
-        session_idle_minutes=_float(
+        session_idle_minutes=config_float(
             options.get("session_idle_minutes"),
             defaults.session_idle_minutes,
             minimum = 0.0,
             maximum = 1440.0,
         ),
-        session_max_turns=_int(
+        session_max_turns=config_int(
             options.get("session_max_turns"),
             defaults.session_max_turns,
             minimum = 1,
             maximum = 50,
         ),
-        python = _text(options.get("python")),
-        shell  = _text(options.get("shell")),
+        use_memory = config_bool(options.get("use_memory"), defaults.use_memory),
+        python     = _text(options.get("python")),
+        shell      = _text(options.get("shell")),
     )
 
 

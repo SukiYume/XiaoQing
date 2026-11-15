@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..config import PendoConfig
+
 
 async def safe_end_session(context: Any) -> bool:
     """上下文支持会话接口时结束当前会话，否则返回 ``False``。"""
@@ -21,7 +23,7 @@ async def safe_end_session(context: Any) -> bool:
 async def safe_create_session(
     context: Any,
     initial_data: dict[str, Any] | None = None,
-    timeout: float                      = 300.0,
+    timeout: float                      = PendoConfig.SESSION_TIMEOUT_SECONDS,
 ) -> bool:
     """上下文支持会话接口时创建会话，否则返回 ``False``。"""
     if context is None:

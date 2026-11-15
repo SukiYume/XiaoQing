@@ -268,8 +268,8 @@ git diff --check
 ### Full UAT
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 UAT uses the current environment's interpreter to start a real `python main.py` process.

@@ -1,6 +1,7 @@
 """持久化按隐私范围隔离的表情库，并修复其派生元数据。
 
-收到的表情只复制到插件数据目录，自动收集项只对来源会话可见。索引路径均视为
+收到的表情只复制到插件数据目录，自动收集项只对来源会话可见；从 xiaoqing_life 导入的
+梗图（``life:<sha256>``）已过安全判定，全局可见。索引路径均视为
 不可信，任何文件系统变更前都要验证其位于允许的表情库根目录内。
 """
 
@@ -71,11 +72,6 @@ class _ScannedEmojiFile:
     file_mtime_ns  : int
 
 
-def _emoji_library_task_key(context) -> str:
-    library_dir = resolve_emoji_library_dir(context)
-    return str(library_dir.resolve())
-
-
 def _to_data_relative_path(context, path: Path) -> str:
     root   = Path(context.data_dir).resolve()
     target = path.resolve()
@@ -103,6 +99,7 @@ def _emoji_index_path(context) -> Path:
 
 
 def _library_cache_key(context) -> str:
+    """库目录的解析后路径：进程内缓存和后台修复任务都以它为键。"""
     library_dir = resolve_emoji_library_dir(context)
     try:
         return str(library_dir.resolve())
@@ -232,9 +229,7 @@ def _entry_from_render(
     rendered: RenderedMedia,
     existing: dict[str, Any] | None = None,
 ) -> EmojiLibraryEntry:
-    existing     = existing or {}
-    usage_count  = int(existing.get("usage_count", 0) or 0)
-    last_used_ts = float(existing.get("last_used_ts", 0.0) or 0.0)
+    usage_count, last_used_ts = _record_usage(existing or {})
     return EmojiLibraryEntry(
         media_hash   = rendered.media_hash,
         file_path    = _to_data_relative_path(context, file_path),
@@ -244,6 +239,16 @@ def _entry_from_render(
         last_used_ts = last_used_ts,
         marker       = rendered.marker,
     )
+
+
+def _record_usage(record: dict[str, Any]) -> tuple[int, float]:
+    """索引行里的（使用次数，上次使用时间）；缺失或为空按 0 算。"""
+    return int(record.get("usage_count", 0) or 0), float(record.get("last_used_ts", 0.0) or 0.0)
+
+
+def _record_chat_ids(record: dict[str, Any]) -> list[str]:
+    """索引行里这条表情对哪些会话可见（``source_chat_ids``）。"""
+    return [str(item).strip() for item in record.get("source_chat_ids", []) if str(item).strip()]
 
 
 def _pending_emoji_library_dir(context) -> Path:
@@ -286,12 +291,7 @@ def _source_from_record(record: dict[str, Any] | None) -> str:
 
 
 def _is_pending_library_file(context, file_path: Path) -> bool:
-    pending_dir = _pending_emoji_library_dir(context)
-    try:
-        file_path.resolve().relative_to(pending_dir.resolve())
-        return True
-    except (OSError, ValueError):
-        return False
+    return _is_path_within_roots(file_path, (_pending_emoji_library_dir(context).resolve(),))
 
 
 def _average_hash(path: Path) -> str:
@@ -462,12 +462,7 @@ def _normalize_entry_record(
     last_collected_ts = float(existing.get("last_collected_ts", 0.0) or 0.0)
     if touch_collection:
         last_collected_ts = float(time.time())
-    source_chat_ids = [
-        str(item).strip() for item in existing.get("source_chat_ids", []) if str(item).strip()
-    ]
-    legacy_chat_id = str(existing.get("source_chat_id", "") or "").strip()
-    if legacy_chat_id and legacy_chat_id not in source_chat_ids:
-        source_chat_ids.append(legacy_chat_id)
+    source_chat_ids           = _record_chat_ids(existing)
     normalized_source_chat_id = str(source_chat_id or "").strip()
     if normalized_source_chat_id and normalized_source_chat_id not in source_chat_ids:
         source_chat_ids.append(normalized_source_chat_id)
@@ -499,7 +494,6 @@ def _normalize_entry_record(
         "first_collected_ts": first_collected_ts,
         "last_collected_ts" : last_collected_ts,
         "seen_count"        : seen_count,
-        "source_chat_id"    : source_chat_ids[0] if source_chat_ids else "",
         "source_chat_ids"   : source_chat_ids,
         "owner_id"          : str(existing.get("owner_id", "") or source_user_id or "").strip(),
         "visibility"        : visibility,
@@ -518,11 +512,8 @@ def _score_record(record: dict[str, Any]) -> tuple[float, float, float]:
 def _remove_library_file(context, record: dict[str, Any]) -> bool:
     """删除库内文件；返回 False 表示文件仍在（被占用或路径不在库内），调用方应保留索引。"""
 
-    file_path     = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
-    allowed_roots = _allowed_emoji_target_dirs(context)
-    if not allowed_roots:
-        return False
-    if not _is_path_within_roots(file_path, allowed_roots):
+    file_path = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
+    if not _is_path_within_roots(file_path, _allowed_emoji_target_dirs(context)):
         return False
     if file_path.exists():
         try:
@@ -575,7 +566,7 @@ def _find_similar_entry(
     """
 
     threshold = max(0, runtime.cfg.media.emoji_auto_collect_similarity_threshold)
-    if not perceptual_hash or threshold < 0:
+    if not perceptual_hash:
         return None
 
     for media_hash, raw_record in entries.items():
@@ -583,13 +574,7 @@ def _find_similar_entry(
             continue
         if _source_from_record(raw_record) != "auto":
             continue
-        visible_chats = {
-            str(item).strip() for item in raw_record.get("source_chat_ids", []) if str(item).strip()
-        }
-        legacy_chat = str(raw_record.get("source_chat_id", "") or "").strip()
-        if legacy_chat:
-            visible_chats.add(legacy_chat)
-        if source_chat_id and source_chat_id not in visible_chats:
+        if source_chat_id and source_chat_id not in _record_chat_ids(raw_record):
             continue
         candidate_path = resolve_emoji_file_path(
             context, str(raw_record.get("file_path", "") or "")
@@ -866,13 +851,14 @@ def import_external_emoji(
             and existing.get("global_approved") is True
         ):
             return False
+        usage_count, last_used_ts = _record_usage(existing or {})
         entry = EmojiLibraryEntry(
             media_hash   = sha,
             file_path    = _to_data_relative_path(context, target),
             description  = description.strip(),
             emotion_tags = tuple(emotion_tags),
-            usage_count  = int((existing or {}).get("usage_count", 0) or 0),
-            last_used_ts = float((existing or {}).get("last_used_ts", 0.0) or 0.0),
+            usage_count  = usage_count,
+            last_used_ts = last_used_ts,
             marker       = marker.strip(),
         )
         record = _normalize_entry_record(
@@ -892,7 +878,9 @@ def import_external_emoji(
         return True
 
 
-def remove_external_emoji(context, media_hash: str, *, source_prefix: str = "life:") -> bool:
+def remove_external_emoji(
+    context, media_hash: str, *, source_prefix: str = _EXTERNAL_SOURCE_PREFIX
+) -> bool:
     """只删来源以 ``source_prefix`` 开头的条目（文件与索引行）；其它来源一律不动。"""
 
     if not _is_sha256(media_hash):
@@ -916,7 +904,7 @@ def remove_external_emoji(context, media_hash: str, *, source_prefix: str = "lif
 def schedule_emoji_library_repair(context, runtime) -> bool:
     """每个表情库根目录最多调度一个非阻塞元数据修复任务。"""
 
-    task_key = _emoji_library_task_key(context)
+    task_key = _library_cache_key(context)
     if not task_key or task_key in _EMOJI_REPAIR_TASKS:
         return False
     try:
@@ -980,20 +968,17 @@ def _entry_from_index_record(
     tags        = _record_tags(record)
     if not _is_usable_library_metadata(description, marker, tags):
         return None
-    legacy_chat     = str(record.get("source_chat_id", "") or "").strip()
-    source_chat_ids = tuple(
-        str(item).strip() for item in record.get("source_chat_ids", []) if str(item).strip()
-    ) or ((legacy_chat,) if legacy_chat else ())
     active = status == "active"
+    usage_count, last_used_ts = _record_usage(record)
     return EmojiLibraryEntry(
         media_hash      = scanned.media_hash,
         file_path       = _to_data_relative_path(context, scanned.file_path),
         description     = description,
         emotion_tags    = tags,
-        usage_count     = int(record.get("usage_count", 0) or 0),
-        last_used_ts    = float(record.get("last_used_ts", 0.0) or 0.0),
+        usage_count     = usage_count,
+        last_used_ts    = last_used_ts,
         marker          = marker,
-        source_chat_ids = source_chat_ids,
+        source_chat_ids = tuple(_record_chat_ids(record)),
         owner_id        = str(record.get("owner_id", "") or "").strip(),
         visibility      = str(record.get("visibility", "") or "chat").strip().lower()
         if active
@@ -1006,13 +991,14 @@ def _bare_entry(context, scanned: _ScannedEmojiFile) -> EmojiLibraryEntry:
     """修复前占位用的条目：只保留索引里已有的文字与计数字段。"""
 
     record = scanned.existing_record or {}
+    usage_count, last_used_ts = _record_usage(record)
     return EmojiLibraryEntry(
         media_hash   = scanned.media_hash,
         file_path    = _to_data_relative_path(context, scanned.file_path),
         description  = str(record.get("description", "") or "").strip(),
         emotion_tags = _record_tags(record),
-        usage_count  = int(record.get("usage_count", 0) or 0),
-        last_used_ts = float(record.get("last_used_ts", 0.0) or 0.0),
+        usage_count  = usage_count,
+        last_used_ts = last_used_ts,
         marker       = str(record.get("marker", "") or "").strip(),
     )
 
@@ -1182,6 +1168,6 @@ def _mark_emoji_used_locked(context, media_hash: str) -> None:
     current = entries.get(normalized_hash)
     if not isinstance(current, dict):
         return
-    current["usage_count"]  = int(current.get("usage_count", 0) or 0) + 1
+    current["usage_count"]  = _record_usage(current)[0] + 1
     current["last_used_ts"] = float(time.time())
     _save_index(context, payload)

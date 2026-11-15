@@ -474,7 +474,7 @@ async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -525,6 +525,24 @@ def test_similar_emoji_metadata_matches_retained_image(tmp_path):
     assert second.media_hash == first.media_hash
     with Image.open(emoji_library.resolve_emoji_file_path(context, second.file_path)) as image:
         assert image.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_index_rows_keep_chat_scope_in_the_list_and_ignore_the_old_single_value(tmp_path):
+    context = SimpleNamespace(data_dir=tmp_path)
+    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    first, _ = _collect(context, runtime, tmp_path / "red.png", "red", "g1")
+    index                                                = emoji_library._load_index(context)
+    index["entries"][first.media_hash]["source_chat_id"] = "g9"  # 旧版本写的单值字段
+    emoji_library._save_index_if_changed(
+        context, original_payload=emoji_library._load_index(context), payload=index
+    )
+
+    second, created = _collect(context, runtime, tmp_path / "blue.png", "blue", "g1")
+
+    row = emoji_library._load_index(context)["entries"][first.media_hash]
+    assert not created and second.media_hash == first.media_hash
+    assert row["source_chat_ids"] == ["g1"]
+    assert "source_chat_id" not in row
 
 
 def test_concurrent_emoji_collect_and_stale_repair_preserve_updates(tmp_path):

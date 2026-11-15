@@ -2,10 +2,10 @@
 红移计算模块
 """
 
-import math
-
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
+
+from .numeric import NonFiniteError, finite_float
 
 
 def handle_redshift(args: str, context: PluginContextProtocol) -> str:
@@ -21,12 +21,11 @@ def handle_redshift(args: str, context: PluginContextProtocol) -> str:
     try:
         # 验证输入
         try:
-            z = float(args)
-        except (ValueError, OverflowError):
-            return f"无效的红移值: {args}\n请提供有效的数字"
-
-        if not math.isfinite(z):
+            z = finite_float(args)
+        except NonFiniteError:
             return "红移值必须是有限数字"
+        except ValueError:
+            return f"无效的红移值: {args}\n请提供有效的数字"
 
         if z < 0:
             return "红移值必须 >= 0\n\n注: z=0 表示当前宇宙，z>0 表示过去的宇宙"

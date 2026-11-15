@@ -53,7 +53,6 @@ def _job() -> SimpleNamespace:
         label            = "lifecycle",
         job_id           = 7,
         process          = None,
-        prompt_started   = False,
         cancel_requested = False,
         cancel_event     = asyncio.Event(),
     )

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from ..core.types import CommandMessage
 from ..models.item import EventItem
@@ -14,7 +14,9 @@ from ..services.event_graph import EventFamily
 from ..utils.formatters import ItemFormatter
 from ..utils.identifiers import public_id
 from ..utils.time_utils import parse_remind_times
-from .event_support import event_display_timezone
+from .event_support import MONTH_DAY_TIME, event_display_timezone
+
+_REMINDER_PREVIEW_LIMIT: Final = 5
 
 
 class EventDetailViewMixin:
@@ -50,16 +52,7 @@ class EventDetailViewMixin:
             lines.append(
                 f"⏰ {cls._format_full_time_range(collection['start_time'], collection.get('end_time'), collection)}"
             )
-        if collection.get("category"):
-            lines.append(f"📂 分类: {collection['category']}")
-        if collection.get("content"):
-            lines.append(f"📄 内容: {collection['content']}")
-        if collection.get("location"):
-            lines.append(f"📍 {collection['location']}")
-        if collection.get("notes"):
-            lines.append(f"📝 {collection['notes']}")
-        if collection.get("tags"):
-            lines.append(f"🏷️ {', '.join(collection['tags'])}")
+        cls._append_event_metadata(lines, collection)
 
         lines.append("")
         for child in children:
@@ -106,18 +99,22 @@ class EventDetailViewMixin:
         return {"status": "success", "message": "\n".join(lines)}
 
     @staticmethod
-    def _append_event_metadata(lines: list[str], event: EventItem) -> None:
-        """追加分类、内容、地点、备注和标签。"""
-        if event.category:
-            lines.append(f"📂 分类: {event.category}")
-        if event.content:
-            lines.append(f"📄 内容: {event.content}")
-        if event.location:
-            lines.append(f"📍 {event.location}")
-        if event.notes:
-            lines.append(f"📝 {event.notes}")
-        if event.tags:
-            lines.append(f"🏷️ {', '.join(event.tags)}")
+    def _append_event_metadata(lines: list[str], source: EventItem | dict[str, Any]) -> None:
+        """追加分类、内容、地点、备注和标签；日程条目和日程集合字典共用。"""
+
+        def field(name: str) -> Any:
+            return source.get(name) if isinstance(source, dict) else getattr(source, name)
+
+        if field("category"):
+            lines.append(f"📂 分类: {field('category')}")
+        if field("content"):
+            lines.append(f"📄 内容: {field('content')}")
+        if field("location"):
+            lines.append(f"📍 {field('location')}")
+        if field("notes"):
+            lines.append(f"📝 {field('notes')}")
+        if field("tags"):
+            lines.append(f"🏷️ {', '.join(field('tags'))}")
 
     @staticmethod
     def _format_full_time_range(
@@ -149,14 +146,14 @@ class EventDetailViewMixin:
 
         lines.append(f"🔔 提醒 ({len(remind_times)}个):")
         display_timezone = event_display_timezone(timezone_source)
-        for remind_time in remind_times[:5]:
+        for remind_time in remind_times[:_REMINDER_PREVIEW_LIMIT]:
             formatted = ItemFormatter.format_datetime(
                 remind_time,
-                "%m月%d日 %H:%M",
+                MONTH_DAY_TIME,
                 tz=display_timezone,
             )
             lines.append(f"  ⏰ {formatted}")
-        if len(remind_times) > 5:
+        if len(remind_times) > _REMINDER_PREVIEW_LIMIT:
             lines.append(f"  … 共{len(remind_times)}个提醒")
 
     @classmethod

@@ -3,35 +3,49 @@
 from __future__ import annotations
 
 import sqlite3
-from calendar import monthrange
 from collections import Counter
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ...config import PendoConfig
 from ...models.item import EventItem
 from ...services.db import Database
 from ...utils.currency import currency_code
-from ...utils.time_utils import CN_WEEKDAYS, TimezoneHelper, now_in_timezone
+from ...utils.time_utils import (
+    CN_WEEKDAYS,
+    TimezoneHelper,
+    iso_week_key,
+    month_bounds,
+    now_in_timezone,
+    parse_strict_day,
+    shift_months,
+)
 from ..analytics.diary_overview import build_diary_overview
-from ..analytics.ledger_insights import build_ledger_insights
+from ..analytics.ledger_insights import (
+    LEDGER_AMOUNT_EXPR,
+    LEDGER_AMOUNT_TOTAL_EXPR,
+    LEDGER_CATEGORY_EXPR,
+    CompareMode,
+    LedgerFilters,
+    TransactionType,
+    build_ledger_insights,
+    build_ledger_where,
+)
 from ..analytics.notes_overview import build_notes_overview
 from ..analytics.task_overview import build_task_overview
 from ..deps import get_current_user, get_db
+from ..utils import clean_optional_text, preset_range
 
 router     = APIRouter()
 JsonObject = dict[str, Any]
 StatsRange = Annotated[str | None, Query(alias="range", max_length=64)]
 DateQuery = Annotated[str | None, Query(max_length=10)]
 TextQuery = Annotated[str | None, Query(max_length=120)]
-LedgerTransactionType = Literal["expense", "income", "transfer"]
-LedgerCompareMode     = Literal["previous_period", "previous_year_to_date", "none"]
-
-LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
-LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
 
 LEDGER_HISTOGRAM_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
     ("0-20", 0, 20),
@@ -43,12 +57,10 @@ LEDGER_HISTOGRAM_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
 )
 
 
-def _today(db: Database | None = None, owner_id: str | None = None) -> date:
-    """集中提供当前日期，保证同次统计使用一致时钟并便于确定性测试。"""
+def _today(db: Database, owner_id: str) -> date:
+    """集中提供用户时区下的当前日期，保证同次统计使用一致时钟并便于确定性测试。"""
 
-    if db is not None and owner_id is not None:
-        return now_in_timezone(owner_id, db).date()
-    return datetime.now().date()
+    return now_in_timezone(owner_id, db).date()
 
 
 def _local_datetime(value: object, user_timezone: ZoneInfo) -> datetime | None:
@@ -64,6 +76,8 @@ def _local_datetime(value: object, user_timezone: ZoneInfo) -> datetime | None:
 
 
 def _day_in_range(value: date | None, start: date, end: date) -> bool:
+    """日期存在且落在闭区间内。"""
+
     return value is not None and start <= value <= end
 
 
@@ -120,52 +134,42 @@ def _ledger_monthly_rows(
 ) -> list[Any]:
     """按月、按收支类型汇总一个币种在闭区间日期内的账目金额。"""
 
+    where, params = build_ledger_where(
+        LedgerFilters(owner_id=owner_id, currency=currency, start_date=start, end_date=end)
+    )
     return conn.execute(
         f"""
         SELECT strftime('%Y-%m', ledger_date) AS month,
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND ledger_date BETWEEN ? AND ?
+        FROM items WHERE {" AND ".join(where)}
         GROUP BY month, ledger_kind ORDER BY month
     """,
-        (owner_id, currency, start, end),
+        params,
     ).fetchall()
 
 
 def _validate_date_bounds(start: str, end: str) -> tuple[str, str]:
     """校验并规范化闭区间日期，拒绝模糊日期和反向区间。"""
 
-    try:
-        start_day = date.fromisoformat(start.strip())
-        end_day   = date.fromisoformat(end.strip())
-    except (AttributeError, ValueError) as exc:
-        raise ValueError("日期范围必须使用 YYYY-MM-DD 格式") from exc
+    start_day = parse_strict_day(start.strip() if isinstance(start, str) else start)
+    end_day   = parse_strict_day(end.strip() if isinstance(end, str) else end)
+    if start_day is None or end_day is None:
+        raise ValueError("日期范围必须使用 YYYY-MM-DD 格式")
     if start_day > end_day:
         raise ValueError("开始日期不能晚于结束日期")
     return start_day.isoformat(), end_day.isoformat()
 
 
-def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[str, str]:
-    """把预设、月份或显式区间解析为规范化的闭区间日期。"""
+def _parse_range(range_str: str | None, *, today: date) -> tuple[str, str]:
+    """把预设、月份或显式区间解析为规范化的闭区间日期。
 
-    current_day   = today or _today()
-    value         = str(range_str or "month").strip() or "month"
-    quarter_month = ((current_day.month - 1) // 3) * 3 + 1
-    preset_bounds = {
-        "month"    : (current_day.replace(day=1), current_day),
-        "week"     : (current_day - timedelta(days=current_day.weekday()), current_day),
-        "quarter"  : (date(current_day.year, quarter_month, 1), current_day),
-        "year"     : (date(current_day.year, 1, 1), current_day),
-        "last_year": (
-            date(current_day.year - 1, 1, 1),
-            date(current_day.year - 1, 12, 31),
-        ),
-        "all": (current_day, current_day),
-    }
-    if value in preset_bounds:
-        start_day, end_day = preset_bounds[value]
+    ``all`` 不在这里解析：它的边界取自条目数据，见 :func:`_resolve_stats_range`。
+    """
+
+    value = str(range_str or "month").strip() or "month"
+    if (bounds := preset_range(value, today)) is not None:
+        start_day, end_day = bounds
     elif ".." in value:
         parts = value.split("..")
         if len(parts) != 2:
@@ -176,7 +180,7 @@ def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[s
             start_day = date.fromisoformat(f"{value}-01")
         except ValueError as exc:
             raise ValueError("月份范围必须使用 YYYY-MM 格式") from exc
-        end_day = start_day.replace(day=monthrange(start_day.year, start_day.month)[1])
+        end_day = month_bounds(start_day)[1]
     else:
         raise ValueError("不支持的统计日期范围")
     return start_day.isoformat(), end_day.isoformat()
@@ -187,22 +191,25 @@ def _resolve_stats_range(
     start_date: str | None = None,
     end_date: str | None   = None,
     *,
-    today: date | None   = None,
-    db: Database | None  = None,
-    owner_id: str        = "",
-    item_type: str       = "",
+    today: date,
+    db: Database,
+    owner_id: str,
+    item_type: str,
     currency: str | None = None,
 ) -> tuple[str, str]:
-    """解析路由日期参数，并统一转换为可读的 422 错误。"""
+    """解析路由日期参数，并统一转换为可读的 422 错误。
+
+    ``all`` 取该类型条目的实际首末日期；没有条目时都是今天。
+    """
 
     try:
         if (start_date is None) != (end_date is None):
             raise ValueError("start_date 与 end_date 必须同时提供")
         if start_date is not None and end_date is not None:
             return _validate_date_bounds(start_date, end_date)
-        if str(range_str or "").strip() == "all" and db is not None and item_type:
+        if str(range_str or "").strip() == "all":
             bounds = db.get_item_date_bounds(owner_id, item_type, currency=currency)
-            fallback = (today or _today(db, owner_id)).isoformat()
+            fallback = today.isoformat()
             return bounds["start"] or fallback, bounds["end"] or fallback
         return _parse_range(range_str, today=today)
     except ValueError as exc:
@@ -222,19 +229,7 @@ def _build_amount_histogram(amounts: Sequence[float]) -> list[JsonObject]:
     return histogram
 
 
-def _month_floor(value: date | datetime) -> date:
-    """返回日期所在月份的第一天。"""
-    return date(value.year, value.month, 1)
-
-
-def _shift_months(value: date, delta: int) -> date:
-    """在月初日期上平移指定月数。"""
-    month_index = (value.year * 12 + value.month - 1) + delta
-    year, month = divmod(month_index, 12)
-    return date(year, month + 1, 1)
-
-
-@router.get("/stats/ledger")  # type: ignore[untyped-decorator]
+@router.get("/stats/ledger")
 def ledger_stats(
     range_str: StatsRange = None,
     start_date: DateQuery = None,
@@ -260,19 +255,19 @@ def ledger_stats(
 
     monthly = _ledger_monthly_rows(conn, owner_id, currency, start, end)
 
+    filters = LedgerFilters(owner_id=owner_id, currency=currency, start_date=start, end_date=end)
+    where, params = build_ledger_where(filters)
     by_category = conn.execute(
         f"""
-        SELECT COALESCE(NULLIF(TRIM(ledger_category), ''), '未分类') AS category,
+        SELECT {LEDGER_CATEGORY_EXPR} AS category,
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total,
                COUNT(*) AS count
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND ledger_date BETWEEN ? AND ?
+        FROM items WHERE {" AND ".join(where)}
         GROUP BY category, ledger_kind
         ORDER BY total DESC, category
     """,
-        (owner_id, currency, start, end),
+        params,
     ).fetchall()
 
     daily = conn.execute(
@@ -280,23 +275,20 @@ def ledger_stats(
         SELECT ledger_date,
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND ledger_date BETWEEN ? AND ?
+        FROM items WHERE {" AND ".join(where)}
         GROUP BY ledger_date, ledger_kind ORDER BY ledger_date
     """,
-        (owner_id, currency, start, end),
+        params,
     ).fetchall()
 
+    expense_where, expense_params = build_ledger_where(replace(filters, transaction_type="expense"))
     expense_amounts = conn.execute(
         f"""
         SELECT ROUND({LEDGER_AMOUNT_EXPR} / 100.0, 2)
-        FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
-        AND transaction_type='expense' AND ledger_date BETWEEN ? AND ?
+        FROM items WHERE {" AND ".join(expense_where)}
         ORDER BY {LEDGER_AMOUNT_EXPR}
     """,
-        (owner_id, currency, start, end),
+        expense_params,
     ).fetchall()
 
     category_totals: dict[str, list[JsonObject]] = {
@@ -336,16 +328,16 @@ def ledger_stats(
     }
 
 
-@router.get("/stats/ledger/insights")  # type: ignore[untyped-decorator]
+@router.get("/stats/ledger/insights")
 def ledger_visual_insights(
-    transaction_type: Annotated[LedgerTransactionType | None, Query()] = None,
-    category: TextQuery                                                = None,
-    account_name: TextQuery                                            = None,
-    start_date: DateQuery                                              = None,
-    end_date: DateQuery                                                = None,
+    transaction_type: Annotated[TransactionType | None, Query()] = None,
+    category: TextQuery                                          = None,
+    account_name: TextQuery                                      = None,
+    start_date: DateQuery                                        = None,
+    end_date: DateQuery                                          = None,
     amount_min: Annotated[float | None, Query(ge=0)] = None,
     amount_max: Annotated[float | None, Query(ge=0)] = None,
-    compare_mode: LedgerCompareMode = "previous_period",
+    compare_mode: CompareMode = "previous_period",
     currency: Annotated[str, Query(pattern="^[A-Za-z]{3}$")] = "CNY",
     owner_id: str = Depends(get_current_user),
     db: Database  = Depends(get_db),
@@ -368,8 +360,8 @@ def ledger_visual_insights(
             db               = db,
             owner_id         = owner_id,
             transaction_type = transaction_type,
-            category         = (category or "").strip() or None,
-            account_name     = (account_name or "").strip() or None,
+            category         = clean_optional_text(category),
+            account_name     = clean_optional_text(account_name),
             start_date       = start_date,
             end_date         = end_date,
             amount_min       = amount_min,
@@ -381,7 +373,7 @@ def ledger_visual_insights(
     }
 
 
-@router.get("/stats/tasks")  # type: ignore[untyped-decorator]
+@router.get("/stats/tasks")
 def task_stats(
     range_str: StatsRange = None,
     owner_id: str         = Depends(get_current_user),
@@ -444,10 +436,11 @@ def task_stats(
             plan_day = date.fromisoformat(str(row["plan_date"] or ""))
         except ValueError:
             plan_day = None
-        # 准入与计划分布一致：没有计划日期时以本地截止日作为计划日。
-        deadline = _local_datetime(row["deadline_at"], user_timezone)
-        if plan_day is None and deadline is not None:
-            plan_day = deadline.date()
+        # 计划日期优先，没有时以本地截止日作为计划日；范围准入与计划分布都用它。
+        if plan_day is None:
+            deadline = _local_datetime(row["deadline_at"], user_timezone)
+            if deadline is not None:
+                plan_day = deadline.date()
         if not any(
             (
                 _day_in_range(created_at.date() if created_at else None, start_day, end_day),
@@ -468,18 +461,14 @@ def task_stats(
             ("cancelled", cancelled_at if status_key == "cancelled" else None),
         ):
             if timestamp is not None and _day_in_range(timestamp.date(), start_day, end_day):
-                weekly_counter[(timestamp.strftime("%Y-W%W"), activity)] += 1
+                weekly_counter[(iso_week_key(timestamp), activity)] += 1
         if status_key != "open":
             continue
 
-        # 日期计划优先；没有计划日期时，截止日仍可反映任务压力。
-        plan_key = str(row["plan_date"] or "").strip() or (
-            deadline.date().isoformat() if deadline else ""
-        )
         category_key = str(row["category"] or "").strip()
-        if plan_key:
-            plan_counter[plan_key] += 1
-        if category_key and category_key != "未分类":
+        if plan_day is not None:
+            plan_counter[plan_day.isoformat()] += 1
+        if category_key and category_key != PendoConfig.DEFAULT_CATEGORY:
             text_category_counter[category_key] += 1
 
     totals = {
@@ -527,13 +516,13 @@ def task_stats(
     }
 
 
-@router.get("/stats/tasks/overview")  # type: ignore[untyped-decorator]
+@router.get("/stats/tasks/overview")
 def task_overview(
     today: DateQuery = None,
     owner_id: str    = Depends(get_current_user),
     db: Database     = Depends(get_db),
 ) -> JsonObject:
-    """返回新版任务页所需的紧凑概览。"""
+    """返回任务页所需的紧凑概览。"""
 
     try:
         data = build_task_overview(db=db, owner_id=owner_id, today=today)
@@ -546,7 +535,7 @@ def task_overview(
     }
 
 
-@router.get("/stats/notes/overview")  # type: ignore[untyped-decorator]
+@router.get("/stats/notes/overview")
 def notes_overview(
     today: DateQuery      = None,
     start_date: DateQuery = None,
@@ -556,7 +545,7 @@ def notes_overview(
     owner_id: str = Depends(get_current_user),
     db: Database  = Depends(get_db),
 ) -> JsonObject:
-    """返回新版笔记页所需的紧凑概览。"""
+    """返回笔记页所需的紧凑概览。"""
 
     try:
         data = build_notes_overview(
@@ -565,8 +554,8 @@ def notes_overview(
             today      = today,
             start_date = start_date,
             end_date   = end_date,
-            category   = (category or "").strip() or None,
-            tags       = (tags or "").strip() or None,
+            category   = clean_optional_text(category),
+            tags       = clean_optional_text(tags),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -577,7 +566,7 @@ def notes_overview(
     }
 
 
-@router.get("/stats/diary/overview")  # type: ignore[untyped-decorator]
+@router.get("/stats/diary/overview")
 def diary_overview(
     year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
     month: Annotated[int | None, Query(ge=1, le=12)] = None,
@@ -588,7 +577,7 @@ def diary_overview(
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> JsonObject:
-    """返回新版日记页和统计范围卡片所需的紧凑概览。"""
+    """返回日记页和统计范围卡片所需的紧凑概览。"""
 
     try:
         data = build_diary_overview(
@@ -606,7 +595,7 @@ def diary_overview(
     return {"ok": True, "data": data, "message": ""}
 
 
-@router.get("/stats/events")  # type: ignore[untyped-decorator]
+@router.get("/stats/events")
 def event_stats(
     range_str: StatsRange = None,
     owner_id: str         = Depends(get_current_user),
@@ -640,17 +629,17 @@ def event_stats(
         start_at = _local_datetime(event.start_time, user_timezone)
         if start_at is None or not _day_in_range(start_at.date(), start_day, end_day):
             continue
-        week = start_at.strftime("%Y-W%W")
+        week = iso_week_key(start_at)
         slot = _event_time_slot(start_at.hour)
         weekly_counter[week] += 1
         slot_counter[slot] += 1
         weekday_slot_counter[(start_at.weekday(), slot)] += 1
 
         category = str(event.category or "").strip()
-        if not category or category == "未分类":
+        if not category or category == PendoConfig.DEFAULT_CATEGORY:
             collection = collections.get(str(event.event_collection_id or ""))
             category   = str((collection or {}).get("category") or "").strip()
-        category_counter[category if category and category != "未分类" else "未分类"] += 1
+        category_counter[category or PendoConfig.DEFAULT_CATEGORY] += 1
 
     weekly = [{"week": week, "count": weekly_counter[week]} for week in sorted(weekly_counter)]
     time_slots = [{"slot": slot, "count": slot_counter[slot]} for slot in sorted(slot_counter)]
@@ -681,7 +670,7 @@ def event_stats(
     }
 
 
-@router.get("/stats/ledger/comparison")  # type: ignore[untyped-decorator]
+@router.get("/stats/ledger/comparison")
 def ledger_comparison(
     months: Annotated[int, Query(ge=3, le=12)] = 6,
     currency: Annotated[str, Query(pattern="^[A-Za-z]{3}$")] = "CNY",
@@ -694,12 +683,12 @@ def ledger_comparison(
     if not 3 <= months <= 12:
         raise HTTPException(status_code=422, detail="months 必须在 3 到 12 之间")
 
-    current_month = _month_floor(_today(db, owner_id))
+    current_month = month_bounds(_today(db, owner_id))[0]
     currency      = currency_code(currency)
     conn          = db.get_connection()
-    month_window  = [_shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
-    query_start   = _shift_months(month_window[0], -12).isoformat()
-    query_end = (_shift_months(current_month, 1) - timedelta(days=1)).isoformat()
+    month_window  = [shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
+    query_start   = shift_months(month_window[0], -12).isoformat()
+    query_end = (shift_months(current_month, 1) - timedelta(days=1)).isoformat()
 
     # 同比窗口已经覆盖当前窗口和环比基线，一次查询即可满足三种比较。
     monthly_rows = _ledger_monthly_rows(conn, owner_id, currency, query_start, query_end)
@@ -717,9 +706,9 @@ def ledger_comparison(
     for month_start in month_window:
         month_key       = month_start.strftime("%Y-%m")
         current_values  = monthly_map.get(month_key, {"expense": 0.0, "income": 0.0})
-        prev_key        = _shift_months(month_start, -1).strftime("%Y-%m")
+        prev_key        = shift_months(month_start, -1).strftime("%Y-%m")
         previous_values = monthly_map.get(prev_key, {"expense": 0.0, "income": 0.0})
-        yoy_key         = _shift_months(month_start, -12).strftime("%Y-%m")
+        yoy_key         = shift_months(month_start, -12).strftime("%Y-%m")
         yoy_values      = monthly_map.get(yoy_key, {"expense": 0.0, "income": 0.0})
         result_months.append(
             {
@@ -740,7 +729,7 @@ def ledger_comparison(
     }
 
 
-@router.get("/stats/activity-heatmap")  # type: ignore[untyped-decorator]
+@router.get("/stats/activity-heatmap")
 def activity_heatmap(
     year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
     owner_id: str = Depends(get_current_user),

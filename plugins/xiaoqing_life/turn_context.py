@@ -1,6 +1,8 @@
 """聊天侧取用：从内存快照里挑出和当前话题相关的一两点，写成文本块。无网络、无模型、不碰磁盘。
 
 聊天侧只拿相关的少量内容，不报清单、不念内部字段；打算和完成分开；她最近说过的不再推给她。
+交出去的经历、查明白的事和日记另外返回它们的键（``shown_keys``，和发布到统一记忆时用的键一样），
+聊天据此不再放她自我页里只引用这几条的行，同一件事不说两遍。
 """
 
 from __future__ import annotations
@@ -18,17 +20,21 @@ from . import works as works_mod
 from .config import LifeConfig
 from .days import DAY, day_key, episode_day, life_date
 from .lifecycle import expression_status, heard_in_chat, term_key
-from .safety import is_blocked, is_profane, normalize_for_match, overlap
-from .stores import MAX_LOOKUP_QUEUE, LifeStore, lookup_missed
+from .safety import is_blocked, is_profane, mentions_topic, normalize_for_match, overlap
+from .stores import LifeStore, queue_for_lookup
+from .threads import DEFAULT_PARK_WHY
 
+RESPONSE_VERSION    = 1
 MAX_TEXT_CHARS      = 500
-MAX_RECENT          = 8
+MAX_USER_RECENT     = 8
 MAX_BOT_RECENT      = 6
 MAX_UNKNOWN_TERMS   = 3
 MAX_UNKNOWN_CHARS   = 12
 MAX_EXCLUDE_IDS     = 20
-SHARE_WINDOW_HOURS  = 24
-MAX_SHARE           = 3
+SHARE_WINDOW_HOURS  = 48
+MAX_SHARE           = 6
+SHARE_LEARNING_DAYS = 3
+GIST_BRIEF_CHARS    = 60
 MAX_PLAN_SLOTS      = 3
 HABIT_PREFER        = 100
 MAX_ASKED_LEARNINGS = 2
@@ -39,6 +45,11 @@ TOPIC_DAYS          = 3
 USE_FRESH_DAYS      = 21
 MAX_UNDERSTOOD      = 3
 _MIN_OVERLAP        = 2
+RECAP_WEEKLY_DAYS   = 7
+RECAP_DIARY_DAYS    = 4
+RECAP_SNAPSHOT_DAYS = 30
+TONE_DAYS           = 14
+GROWTH_DAYS         = 30
 
 _ASK_RE = re.compile(
     r"最近(?:都|在|有)?(?:干|忙|看|玩|刷|做)|刷到|刷了|好玩的|有趣的|有意思的|今天(?:都)?(?:干|做|忙|玩|看)"
@@ -102,20 +113,35 @@ def clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return found[-limit:] if newest else list(dict.fromkeys(found))[:limit]
 
     text = payload.get("text")
+    mode = payload.get("mode") if payload.get("mode") in ("proactive", "probe") else "reply"
     return {
-        "mode": payload.get("mode") if payload.get("mode") in ("proactive", "probe") else "reply",
-        "exclude": texts("exclude_ids", MAX_EXCLUDE_IDS, 40, newest=False),
-        "text": text.strip()[:MAX_TEXT_CHARS] if isinstance(text, str) else "",
-        "recent": texts("recent", MAX_RECENT, 200),
+        "mode"      : mode,
+        "exclude"   : texts("exclude_ids", MAX_EXCLUDE_IDS, 40, newest=False),
+        "text"      : text.strip()[:MAX_TEXT_CHARS] if isinstance(text, str) else "",
+        "recent"    : texts("recent", MAX_USER_RECENT, 200),
         "bot_recent": texts("bot_recent", MAX_BOT_RECENT, 200),
-        "unknown": texts("unknown_terms", MAX_UNKNOWN_TERMS, MAX_UNKNOWN_CHARS, newest=False),
-        # 群里最近的话题词（聊天侧只从群聊、只取能自然提起的给）；私聊一律不收。
+        "unknown"   : texts("unknown_terms", MAX_UNKNOWN_TERMS, MAX_UNKNOWN_CHARS, newest=False),
+        # 本群黑话块这一轮已经解释了的说法：这里不再解释、也不再推荐顺手用。
+        "explained": texts("explained_terms", 6, MAX_UNKNOWN_CHARS, newest=False),
+        # 群里最近的话题词（聊天侧只从群聊、只取能自然提起的给）；私聊一律不收。回复时是这两三天
+        # 的几个，主动开口时是这个群还记着的全部，用来认出哪些经历是这个群聊到才去搜的。
         "topics": (
             []
             if payload.get("is_private") is not False
-            else chat_topics_mod.clean_topics(payload.get("topics"))
+            else chat_topics_mod.clean_topics(
+                payload.get("topics"),
+                chat_topics_mod.MAX_TOPICS_KNOWN
+                if mode == "proactive"
+                else chat_topics_mod.MAX_TOPICS_PER_TURN,
+            )
         ),
     }
+
+
+def _context(req: dict[str, Any]) -> str:
+    """这句话和前两句：挑经历、小课题、作品、词条时拿来对话题的文字。"""
+
+    return " ".join([req["text"], *req["recent"][-2:]])
 
 
 def _day_label(at: datetime, moment: datetime) -> str:
@@ -136,7 +162,12 @@ def echoed(title: str, bot_recent: list[str]) -> bool:
 
 def _episode_relevance(episode: dict[str, Any], context_text: str) -> int:
     body = " ".join(
-        [episode.get("title", ""), episode.get("reaction", ""), *episode.get("topics", [])]
+        [
+            episode.get("title", ""),
+            episode.get("reaction", ""),
+            episode.get("highlight", ""),
+            *episode.get("topics", []),
+        ]
     )
     score  = overlap(context_text, body)
     folded = normalize_for_match(context_text)
@@ -159,12 +190,16 @@ def _named_days(text: str, moment: datetime) -> set[str]:
     return days
 
 
+# 她说起一条经历时可能用到的字段：对方追问时靠它们认出是哪一条。
+_SPOKEN_FIELDS = ("title", "reaction", "gist", "highlight")
+
+
 def followed_up(store: LifeStore, req: dict[str, Any], now: float) -> list[dict[str, Any]]:
     """对方追问“那个视频讲啥的”：取她刚说过的那条（回声抑制在这里不适用，正是要接着说它）。"""
 
     spoken = " ".join(req["bot_recent"])
     ranked = [
-        (overlap(spoken, f"{e.get('title', '')} {e.get('reaction', '')} {e.get('gist', '')}"), e)
+        (overlap(spoken, " ".join(str(e.get(k) or "") for k in _SPOKEN_FIELDS)), e)
         for e in store.episodes
         if float(e["at"]) <= now and now - float(e["at"]) <= PAST_DAYS * DAY
     ]
@@ -187,7 +222,7 @@ def select_episodes(
     asking  = bool(_ASK_RE.search(text))
     past    = bool(_PAST_RE.search(text))
     link    = bool(_LINK_RE.search(text))
-    context = " ".join([text, *req["recent"][-2:]])
+    context = _context(req)
     pool    = [
         e
         for e in store.episodes
@@ -221,10 +256,62 @@ def select_episodes(
     return [e for _, e in ranked[:1]], False
 
 
+_HIGHLIGHT_WHERE = {
+    "comment": "评论区有一句",
+    "danmaku": "弹幕里有一句",
+    "passage": "里面有一句",
+    "item"   : "标题简介里写着",
+}
+_FEELING_WORDS = {"like": "你挺喜欢", "meh": "你觉得一般", "dislike": "你不太喜欢"}
+
+
+def heard_here(episode: dict[str, Any], req: dict[str, Any]) -> bool:
+    """这条经历是不是因为这个会话聊到才去搜的（话题词对得上这个会话最近的话题）。
+
+    话题词不带会话信息；别的群聊出来的话题，在这里只是她自己上网看到的一条内容。
+    """
+
+    topic = str(episode.get("chat_topic") or "")
+    return bool(topic) and chat_topics_mod.match(req.get("topics") or [], topic) is not None
+
+
+def _gist_part(episode: dict[str, Any], limit: int) -> str:
+    # B站很多视频的简介只有一个“-”：没有内容就不说“讲的是”。
+    gist = str(episode.get("gist") or "")
+    if len(normalize_for_match(gist)) < 2:
+        return ""
+    if limit and len(gist) > limit:
+        gist = gist[:limit].rstrip("…") + "…"
+    return f"，讲的是：{gist}"
+
+
+def _stance(episode: dict[str, Any]) -> str:
+    """她对这条内容的态度（不带当时的原话）。"""
+
+    aspects = episode.get("aspects") or {}
+    if episode.get("feeling") == "mixed" and aspects.get("like") and aspects.get("dislike"):
+        return f"，你喜欢{aspects['like']}，不太喜欢{aspects['dislike']}"
+    word = _FEELING_WORDS.get(str(episode.get("feeling") or ""), "")
+    return f"，{word}" if word else ""
+
+
 def episode_line(
-    episode: dict[str, Any], moment: datetime, cfg: LifeConfig, *, link: bool = False
+    episode: dict[str, Any],
+    moment: datetime,
+    cfg: LifeConfig,
+    *,
+    link: bool   = False,
+    detail: bool = False,
+    here: bool   = False,
+    retell: bool = False,
 ) -> str:
-    """说清是什么、谁做的、讲了什么，再说她的感想；链接只在对方要的时候给。"""
+    """说清是什么、谁做的、讲了什么，再说她怎么觉得；链接只在对方要的时候给。
+
+    - ``detail``：给完整简介和她记下的那句原文（只说一条经历时用）。
+    - ``here``：这条是这个会话聊到才去搜的。
+    - ``retell``：她要拿这件事去跟人说。记下了原文时只带她的态度（喜欢、一般……），话怎么说留到
+      开口时对着听的人再想；没记下原文的经历里，当时那句感想是唯一留下的内容，照旧带上。
+    """
 
     at    = datetime.fromtimestamp(float(episode["at"]), moment.tzinfo)
     label = _day_label(at, moment)
@@ -233,16 +320,20 @@ def episode_line(
     tail  = f"（链接 {episode['url']}）" if link and episode.get("url") else ""
     if (moment - at).days >= cfg.episode_detail_days:
         return f"- {label}刷到过「{title}」{who}（细节记不清了）{tail}"
-    why = f"（听群里在聊「{episode['chat_topic']}」才去搜的）" if episode.get("chat_topic") else ""
-    # B站很多视频的简介只有一个“-”：没有内容就不说“讲的是”。
-    gist = (
-        f"，讲的是：{episode['gist']}"
-        if len(normalize_for_match(str(episode.get("gist") or ""))) >= 2
-        else ""
-    )
+    why   = f"（听群里在聊「{episode['chat_topic']}」才去搜的）" if here else ""
+    gist  = _gist_part(episode, 0 if detail else GIST_BRIEF_CHARS)
     dense = f"（{episode['dense_moment']}）" if episode.get("dense_moment") else ""
-    feel  = f"，你当时觉得：{episode['reaction']}" if episode.get("reaction") else ""
-    return f"- {label} {at:%H:%M} {_opening(episode, title, who)}{why}{gist}{dense}{feel}{tail}"
+    quote = ""
+    if detail and episode.get("highlight"):
+        where = _HIGHLIGHT_WHERE.get(str(episode.get("highlight_from") or ""), "里面有一句")
+        quote = f"，{where}：「{episode['highlight']}」"
+    if retell and quote:
+        feel = _stance(episode)
+    else:
+        feel = f"，你当时觉得：{episode['reaction']}" if episode.get("reaction") else ""
+    return (
+        f"- {label} {at:%H:%M} {_opening(episode, title, who)}{why}{gist}{dense}{quote}{feel}{tail}"
+    )
 
 
 def _opening(episode: dict[str, Any], title: str, who: str) -> str:
@@ -267,7 +358,7 @@ def select_thread(
 ) -> tuple[str, dict[str, Any] | None]:
     """话题重合或问近况时给 1 个小课题；在查的写“在查”，查完的写收获。返回（行, 小课题）。"""
 
-    context                                 = " ".join([req["text"], *req["recent"][-2:]])
+    context                                 = _context(req)
     best: tuple[int, dict[str, Any]] | None = None
     for thread in store.threads:
         if thread.get("status") == "dropped":
@@ -284,7 +375,7 @@ def select_thread(
     if thread.get("status") == "parked":
         hint = f"（下次想从{thread['resume_hint']}接着看）" if thread.get("resume_hint") else ""
         return (
-            f"你查过一阵：{title}，查到一半{thread.get('park_reason') or '资料不太够'}，先放着了{hint}",
+            f"你查过一阵：{title}，查到一半{thread.get('park_reason') or DEFAULT_PARK_WHY}，先放着了{hint}",
             thread,
         )
     if thread.get("status") == "open":
@@ -337,16 +428,22 @@ def current_line(store: LifeStore, now: float) -> str:
     return f"你这会儿正在{doing}。"
 
 
-def recap_lines(store: LifeStore, req: dict[str, Any], moment: datetime) -> list[str]:
-    """问这周 / 最近过得怎样给周记或日记，问喜欢什么给巩固快照；都只是“最近的自己”的依据。"""
+def recap_lines(
+    store: LifeStore, req: dict[str, Any], moment: datetime
+) -> tuple[list[str], list[str]]:
+    """问这周 / 最近过得怎样给周记或日记，问喜欢什么给巩固快照；都只是“最近的自己”的依据。
+
+    返回（行, 给出的日记的键）。
+    """
 
     text, now = req["text"], moment.timestamp()
     lines: list[str] = []
+    keys : list[str] = []
     if _WEEK_RE.search(text):
         notes = [
             j
             for j in store.journal
-            if j.get("kind") == "weekly" and now - float(j["at"]) <= 7 * DAY
+            if j.get("kind") == "weekly" and now - float(j["at"]) <= RECAP_WEEKLY_DAYS * DAY
         ]
         if notes:
             lines.append(f"- 这周大概：{notes[-1]['text']}")
@@ -354,34 +451,40 @@ def recap_lines(store: LifeStore, req: dict[str, Any], moment: datetime) -> list
             diaries = [
                 j
                 for j in store.journal
-                if j.get("kind") == "diary" and now - float(j["at"]) <= 4 * DAY
+                if j.get("kind") == "diary" and now - float(j["at"]) <= RECAP_DIARY_DAYS * DAY
             ]
             lines += [f"- {j['day']}：{j['text']}" for j in diaries[-3:]]
+            keys += [diary_key(j) for j in diaries[-3:]]
     if _WEEK_RE.search(text) or _LIKE_RE.search(text):
-        recent = [s for s in store.snapshots if now - float(s["created_at"]) <= 30 * DAY]
+        recent = [
+            s for s in store.snapshots if now - float(s["created_at"]) <= RECAP_SNAPSHOT_DAYS * DAY
+        ]
         recent.sort(key=lambda s: float(s["created_at"]), reverse=True)
         if recent and _LIKE_RE.search(text):
             lines.append("对方在问你最近迷上什么（有记录的才算）：")
         lines += [f"- 最近的你：{s['text']}" for s in recent[:2]]
-    return lines
+    return lines, keys
+
+
+def diary_key(entry: dict[str, Any]) -> str:
+    """一篇日记在统一记忆里的键（``memory_bridge.diary_op`` 用的也是它）。"""
+
+    return f"diary:{entry.get('day') or ''}"
 
 
 def tone_line(store: LifeStore, req: dict[str, Any], now: float) -> str:
     """话题对上且 14 天内有兴趣走向快照：给 1 行。"""
 
-    context = " ".join([req["text"], *req["recent"][-2:]])
+    context = _context(req)
     folded  = normalize_for_match(context)
     found   = [
         s
         for s in store.snapshots
         if s.get("kind") == "tone"
-        and now - float(s.get("created_at", 0.0)) <= 14 * DAY
+        and now - float(s.get("created_at", 0.0)) <= TONE_DAYS * DAY
         and (
             overlap(context, str(s.get("topic", ""))) >= _MIN_OVERLAP
-            or (
-                len(normalize_for_match(str(s.get("topic", "")))) >= 2
-                and normalize_for_match(str(s["topic"])) in folded
-            )
+            or mentions_topic(folded, str(s.get("topic", "")))
         )
     ]
     if not found:
@@ -397,13 +500,18 @@ def _learned(row: dict[str, Any]) -> str:
     return knowledge.hedge(str(row.get("text", "")), str(row.get("confidence") or ""))
 
 
-def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[list[str], bool]:
-    """自己查明白的事：话题对上给 1 条；问“最近学到啥 / 有什么收获”给 ≤2 条加一句确定性的成长概括。"""
+def learning_lines(
+    store: LifeStore, req: dict[str, Any], now: float
+) -> tuple[list[str], bool, list[str]]:
+    """自己查明白的事：话题对上给 1 条；问“最近学到啥 / 有什么收获”给 ≤2 条加一句确定性的成长概括。
+
+    返回（行, 是否改了状态, 给出的那几条的 ID）。
+    """
 
     rows = sorted(store.learnings, key=lambda r: float(r.get("created_at", 0.0)), reverse=True)
     method = methods_mod.chat_line(store.methods) if _METHOD_RE.search(req["text"]) else ""
     if not rows:
-        return ([f"- {method}"] if method else []), False
+        return ([f"- {method}"] if method else []), False, []
     text = req["text"]
     if _LEARN_RE.search(text):
         picked = rows[:MAX_ASKED_LEARNINGS]
@@ -413,24 +521,24 @@ def learning_lines(store: LifeStore, req: dict[str, Any], now: float) -> tuple[l
         if method:
             lines.append(f"- {method}")
     else:
-        context = " ".join([text, *req["recent"][-2:]])
+        context = _context(req)
         scored  = [(overlap(context, f"{r.get('topic', '')} {r['text']}"), r) for r in rows]
         scored  = [pair for pair in scored if pair[0] >= _MIN_OVERLAP]
         if not scored:
-            return ([f"- {method}"] if method else []), False
+            return ([f"- {method}"] if method else []), False, []
         picked = [max(scored, key=lambda pair: pair[0])[1]]
         lines = [f"- {_learned(picked[0])}"]
         if method:
             lines.append(f"- {method}")
     for row in picked:
         row["last_used"] = now
-    return lines, True
+    return lines, True, [str(row["id"]) for row in picked if row.get("id")]
 
 
 def growth_line(rows: list[dict[str, Any]], now: float) -> str:
     """确定性模板：这个月在某话题上查明白了几件事。"""
 
-    recent = [r for r in rows if now - float(r.get("created_at", 0.0)) <= 30 * DAY]
+    recent = [r for r in rows if now - float(r.get("created_at", 0.0)) <= GROWTH_DAYS * DAY]
     if not recent:
         return ""
     counts: dict[str, int] = {}
@@ -478,11 +586,12 @@ def build_life_lines(
     routine_slots: list[str] | None = None,
     learnings: list[str] | None     = None,
     touched: list[bool] | None      = None,
-) -> tuple[str, list[str]]:
+    learning_ids: list[str] | None  = None,
+) -> tuple[str, list[str], list[str]]:
     """组装 ``life_lines``，总长控制在 ``LIFE_BUDGET`` 字内：开头说明和结尾依据必留，其余按优先级放，
 
     放不下的整段丢掉：作品摘录 > 档案召回 > “正在做” > 经历 > 小课题行 > 作品行 > 打算 > 自己查明白的 / 查法
-    > 回顾快照 > 更正行。
+    > 回顾快照 > 更正行。返回（文本, 给出的经历 ID, 给出的经历、查明白的事和日记的键）。
     """
 
     now   = moment.timestamp()
@@ -490,7 +599,7 @@ def build_life_lines(
     plan  = plan_lines(store, routine_slots or []) if wants_plans(req["text"]) else []
     episodes, asking = select_episodes(store, req, moment)
     link      = bool(_LINK_RE.search(req["text"]))
-    context   = " ".join([req["text"], *req["recent"][-2:], *req["bot_recent"][-2:]])
+    context   = " ".join([_context(req), *req["bot_recent"][-2:]])
     recalling = bool(_RECALL_RE.search(req["text"]))
     # 档案召回（追问“后来怎么样了”）或对上话题的更正
     recall_part: list[str] = []
@@ -512,12 +621,16 @@ def build_life_lines(
         )
     ):
         thread_line = ""
-    learn = _not_repeated(learn, [thread_line, *recall_part])
-    recap = []
-    diary = store.state.get("diary") or {}
+    learn                 = _not_repeated(learn, [thread_line, *recall_part])
+    recap     : list[str] = []
+    recap_keys: list[str] = []
+    diary                 = store.state.get("diary") or {}
     if asking and diary.get("day") == day_key(moment) and diary.get("text"):
         recap.append(f"- 今天大概：{diary['text']}")
-    recap += recap_lines(store, req, moment)
+        recap_keys.append(diary_key(diary))
+    more, more_keys = recap_lines(store, req, moment)
+    recap += more
+    recap_keys += more_keys
     if (tone := tone_line(store, req, now)) and tone not in recap:
         recap.append(tone)
     fix_part: list[str]             = []
@@ -525,8 +638,11 @@ def build_life_lines(
     if not recalling:
         fix, fix_row = dossier_mod.correction_line(store.dossiers, context, now)
         fix_part = [fix] if fix else []
-    doing = current_line(store, now)
-    ep_lines = [episode_line(e, moment, cfg, link=link) for e in episodes]
+    doing    = current_line(store, now)
+    ep_lines = [
+        episode_line(e, moment, cfg, link=link, detail=len(episodes) == 1, here=heard_here(e, req))
+        for e in episodes
+    ]
     if ep_lines and (_named_days(req["text"], moment) or asking):
         ep_lines.append(_PART_NOTE)
     # 显示顺序 → (优先级, 内容)；优先级小的先放
@@ -544,8 +660,8 @@ def build_life_lines(
     ]
     if not any(content for prio, content in parts if prio != 7):
         if learn:
-            return "\n".join([_LEARN_HEADER, *learn, _GUIDE]), []
-        return "", []
+            return "\n".join([_LEARN_HEADER, *learn, _GUIDE]), [], list(learning_ids or [])
+        return "", [], []
     used           = len(_LIFE_HEADER) + len(_GUIDE) + 2
     keep: set[int] = set()
     for prio, content in sorted(parts, key=lambda p: p[0]):
@@ -562,45 +678,98 @@ def build_life_lines(
         fix_row["last_suggested"] = now  # 真的给出去了才算
         if touched is not None:
             touched.append(True)
-    ids = [e["id"] for e in episodes] if 3 in keep else []
-    return "\n".join(lines), ids
+    ids   = [e["id"] for e in episodes] if 3 in keep else []
+    shown = [
+        *ids,
+        *(learning_ids or [] if 7 in keep else []),
+        *(recap_keys if 8 in keep else []),
+    ]
+    return "\n".join(lines), ids, list(dict.fromkeys(shown))
 
 
-def share_line(episode: dict[str, Any], moment: datetime, cfg: LifeConfig) -> str:
-    """主动分享用的第一人称材料行：讲清标题、UP 主、讲了什么、她的感想，能给链接就给。"""
+def _tellable(episode: dict[str, Any], here: bool) -> bool:
+    """可以拿出来说的经历：这个会话聊到才去搜的、她标了想分享的、记下了原文的，或者她喜欢的。"""
 
-    return episode_line(episode, moment, cfg, link=True).removeprefix("- ")
+    return bool(
+        here
+        or episode.get("share")
+        or episode.get("highlight")
+        or (episode.get("feeling") in ("like", "mixed") and episode.get("reaction"))
+    )
+
+
+def _share_rank(episode: dict[str, Any], here: bool) -> tuple[int, int, int, int, float]:
+    """这个会话聊到才去搜的 > 她自己标了想分享的 > 记下了原文的 > 喜欢的；同档新的在前。"""
+
+    return (
+        int(here),
+        int(bool(episode.get("share"))),
+        int(bool(episode.get("highlight"))),
+        int(episode.get("feeling") in ("like", "mixed")),
+        float(episode["at"]),
+    )
+
+
+def _learning_candidates(store: LifeStore, req: dict[str, Any], now: float) -> list[dict[str, Any]]:
+    """这几天自己查明白的事：结论本身就是可以讲的内容。"""
+
+    rows = [
+        r
+        for r in store.learnings
+        if r.get("id")
+        and 0 <= now - float(r.get("created_at", 0.0)) <= SHARE_LEARNING_DAYS * DAY
+        and f"learning:{r['id']}" not in req["exclude"]
+    ]
+    rows.sort(key=lambda r: float(r.get("created_at", 0.0)), reverse=True)
+    return [
+        {
+            "episode_id": f"learning:{r['id']}",
+            "line"      : f"你这几天自己查明白了一件事（{r.get('topic', '')}）：{_learned(r)}",
+            "topics"    : [str(r.get("topic") or "")],
+            "heard_here": False,
+        }
+        for r in rows[:1]
+    ]
 
 
 def share_candidates(
     store: LifeStore, req: dict[str, Any], moment: datetime, cfg: LifeConfig
 ) -> list[dict[str, Any]]:
-    """最近 24 小时已经刷到的、想分享的经历（排除调用方给的已分享 ID）。"""
+    """她手里可以拿出来说的事：最近两天的上网经历、刚查明白的事和刚更新的作品。
+
+    每条经历一行第一人称材料：是什么、谁做的、讲了什么、里面那句原文和链接。挑哪件、怎么说由
+    聊天侧对着听的人决定，这里只排除调用方给的已说过的 ID。
+    """
 
     now  = moment.timestamp()
     rows = [
-        e
+        (e, here)
         for e in store.episodes
-        if e.get("share")
-        and now - SHARE_WINDOW_HOURS * 3600 <= float(e["at"]) <= now
+        if now - SHARE_WINDOW_HOURS * 3600 <= float(e["at"]) <= now
         and e["id"] not in req["exclude"]
+        and not e.get("auto")
+        and _tellable(e, here := heard_here(e, req))
     ]
-    rows.sort(key=lambda e: float(e["at"]), reverse=True)
-    # 作品刚更新了就给它留一个位置（经历候选最多 2 条），总数仍 ≤3
-    work = works_mod.share_candidate(store.works, moment)
+    rows.sort(key=lambda pair: _share_rank(*pair), reverse=True)
+    learned = _learning_candidates(store, req, now)
+    work    = works_mod.share_candidate(store.works, moment)
     if work is not None and work["episode_id"] in req["exclude"]:
         work = None
-    room  = MAX_SHARE - (1 if work is not None else 0)
+    room  = MAX_SHARE - len(learned) - (1 if work is not None else 0)
     found = [
         {
             "episode_id": e["id"],
-            "line"      : share_line(e, moment, cfg),
+            "line"      : episode_line(
+                e, moment, cfg, link=True, detail=True, here=here, retell=True
+            ).removeprefix("- "),
             "topics"    : list(e.get("topics", [])),
+            "heard_here": here,
         }
-        for e in rows[:room]
+        for e, here in rows[:room]
     ]
+    found += learned
     if work is not None:
-        found.append(work)
+        found.append({**work, "heard_here": False})
     return found
 
 
@@ -640,7 +809,7 @@ def pick_usable_term(
 
     if rng.random() >= cfg.active_use_probability:
         return None
-    context                                      = " ".join([req["text"], *req["recent"][-2:]])
+    context                                      = _context(req)
     spoken                                       = normalize_for_match(" ".join(req["bot_recent"]))
     best: tuple[int, str, dict[str, Any]] | None = None
     for key, entry in store.terms.items():
@@ -663,7 +832,7 @@ def pick_expression(
 ) -> dict[str, Any] | None:
     if rng.random() >= cfg.active_use_probability:
         return None
-    context                                 = " ".join([req["text"], *req["recent"][-2:]])
+    context                                 = _context(req)
     spoken                                  = normalize_for_match(" ".join(req["bot_recent"]))
     best: tuple[int, dict[str, Any]] | None = None
     for entry in store.expressions:
@@ -688,9 +857,13 @@ def build_slang_notes(
     heard = understood_terms(store, req)
     for _, entry in heard:
         heard_in_chat(entry, now)
-    lines  = [f"- {_term_line(entry)}" for _, entry in heard]
-    keys   = [key for key, _ in heard]
-    usable = pick_usable_term(store, req, now, cfg, rng)
+    explained = {term_key(word) for word in req.get("explained", [])}
+    heard     = [(key, entry) for key, entry in heard if key not in explained]
+    lines     = [f"- {_term_line(entry)}" for _, entry in heard]
+    keys      = [key for key, _ in heard]
+    usable    = pick_usable_term(store, req, now, cfg, rng)
+    if usable is not None and usable[0] in explained:
+        usable = None
     suffix = ""
     if usable is not None:
         key, entry = usable
@@ -735,20 +908,16 @@ MAX_VERIFIED_MEANING = 120
 def enqueue_unknown(store: LifeStore, words: list[str], cfg: LifeConfig, now: float) -> bool:
     """只把词本身放进待查队列（不记来自哪个会话）；已知、脏话、屏蔽词、30 天内查过没查到的不入队。"""
 
-    queue: list[str] = store.state["lookup_queue"]
-    changed          = False
+    changed = False
     for word in words:
-        if not word or len(queue) >= MAX_LOOKUP_QUEUE or word in queue:
-            continue
         if (
-            term_key(word) in store.terms
-            or lookup_missed(store.state, word, now)
+            not word
+            or term_key(word) in store.terms
             or is_profane(word)
             or is_blocked(word, cfg.blocked_keywords)
         ):
             continue
-        queue.append(word)
-        changed = True
+        changed = queue_for_lookup(store.state, word, now) or changed
     return changed
 
 
@@ -764,10 +933,15 @@ def turn_context(
 
     req = clean_payload(payload)
     if req["mode"] == "probe":
-        return {"version": 1, "online_life": True}, False
+        return {"version": RESPONSE_VERSION, "online_life": True}, False
     dirty = False
-    if req["topics"] and chat_topics_mod.record_heard(
-        store.state, req["topics"], moment.timestamp(), cfg.blocked_keywords
+    # 主动开口带来的话题词只用来认出“这个会话聊到才去搜的”经历；回复那几轮已经记过，不重复计数。
+    if (
+        req["topics"]
+        and req["mode"] != "proactive"
+        and chat_topics_mod.record_heard(
+            store.state, req["topics"], moment.timestamp(), cfg.blocked_keywords
+        )
     ):
         dirty = True
     if cfg.source_on("baike_lookup") and enqueue_unknown(
@@ -780,12 +954,13 @@ def turn_context(
             return None, dirty
         return (
             {
-                "version"         : 1,
+                "version"         : RESPONSE_VERSION,
                 "life_lines"      : "",
                 "slang_notes"     : "",
                 "expression_hint" : "",
                 "share_candidates": candidates,
                 "episode_ids"     : [c["episode_id"] for c in candidates],
+                "shown_keys"      : [],
                 "term_keys"       : [],
             },
             dirty,
@@ -797,11 +972,11 @@ def turn_context(
         )
         or dirty
     )
-    learn, learn_dirty = learning_lines(store, req, now)
+    learn, learn_dirty, learn_ids = learning_lines(store, req, now)
     dirty               = dirty or learn_dirty
     touched: list[bool] = []
-    life_lines, episode_ids = build_life_lines(
-        store, req, moment, cfg, routine_slots, learn, touched
+    life_lines, episode_ids, shown_keys = build_life_lines(
+        store, req, moment, cfg, routine_slots, learn, touched, learn_ids
     )
     dirty = dirty or bool(touched)
     slang, term_keys, used = build_slang_notes(store, req, now, cfg, rng)
@@ -825,12 +1000,13 @@ def turn_context(
         return None, dirty
     return (
         {
-            "version"         : 1,
+            "version"         : RESPONSE_VERSION,
             "life_lines"      : life_lines,
             "slang_notes"     : slang,
             "expression_hint" : hint,
             "share_candidates": [],
             "episode_ids"     : episode_ids,
+            "shown_keys"      : shown_keys,
             "term_keys"       : term_keys,
             "verified_terms"  : verified,
         },

@@ -26,7 +26,7 @@ Python 3.11 or later is necessary. Maintainers use a common code formatter and b
 | Area | Plugins | Capabilities |
 |---|---|---|
 | Core management | `bot_core` | Hierarchical help, plugin list, reload, group mute, secret management, runtime metrics |
-| Intelligent chat | `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, `smalltalk`, `chat`, `voice` | Multimodal chat, group participation, task agent, the persona's own online life, basic answers, TTS |
+| Intelligent chat | `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, `xiaoqing_memory`, `smalltalk`, `chat`, `voice` | Multimodal chat, group participation, task agent, the persona's own online life, long-term memory shared by chat and tasks, basic answers, TTS |
 | Personal management | `pendo` | Events, tasks, notes, journals, accounts, reminders, Web, widgets |
 | Astronomy research | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | Astronomy images, paper selection, literature search, calculations, dictionary, FRB data |
 | Execution and operations | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | Background agent, controlled terminal, SSH, Python REPL, RCON |
@@ -34,7 +34,7 @@ Python 3.11 or later is necessary. Maintainers use a common code formatter and b
 | Smart home | `xiaoai` | Xiaomi Home device queries and control, XiaoAi speaker bridge, weather |
 | Tools and entertainment | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | Random selection, colors, calculations, games, pets, echo |
 
-The project has 32 plugins. The [plugin manual](09-plugins.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
+The project has 34 plugins. The [plugin manual](09-plugins.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
 
 ## ✨ Core concepts
 

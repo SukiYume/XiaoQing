@@ -14,12 +14,12 @@ from .brain_chat import (
 )
 from .chat_event import event_chat_id, event_sender_name
 from .chat_runtime import chat_lock
-from .context_builder import retrieve_memory_context
+from .constants import DEFAULT_FALLBACK_IDLE_REPLIES
 from .llm.check_result import ReplyRejected
 from .logging_utils import accumulate_timing, log_step
 from .memory.local_ids import allocate_local_id
 from .memory.memory import active_conversation_suffix
-from .memory.person_profile import get_profile_generation
+from .memory.person_profile import get_profile_generation, session_is_current
 from .message_parts import build_message_parts, build_text_message_parts, normalize_message_parts
 from .planning.pfc_engine import PFCRunResult, run_pfc_once
 from .planning.planned_action import PlannedAction
@@ -29,9 +29,9 @@ from .reply_media import (
     normalize_generated_reply_state,
     sync_message_parts_to_registry,
 )
+from .reply_plan import planner_memory, recall_for_reply
 from .smalltalk_models import GeneratedSmalltalkTurn
 from .task_scheduler import (
-    create_task_safely,
     schedule_memory_persist,
     schedule_pfc_state_flush,
 )
@@ -48,9 +48,7 @@ def _fallback_idle_reply(runtime: ChatRuntime) -> str:
         for item in runtime.cfg.fallback_idle_replies
         if str(item or "").strip()
     ]
-    if not candidates:
-        candidates = ["我在听", "你接着说", "我想一下"]
-    return random.choice(candidates)
+    return random.choice(candidates or DEFAULT_FALLBACK_IDLE_REPLIES)
 
 
 async def commit_planner_snapshot(
@@ -100,7 +98,6 @@ class _TurnGenerator:
         self.recent_history = recent_history
         # 规划器回调里生成回复花掉的时间，从规划总耗时里扣掉才是规划本身。
         self.drafting_s  = 0.0
-        self.max_context = get_brain_chat_max_context(hctx.runtime, prepared.brain_chat_active)
         self.think_level = get_brain_chat_think_level(
             hctx.runtime, prepared.brain_chat_active, history_len=len(recent_history)
         )
@@ -108,27 +105,6 @@ class _TurnGenerator:
     def log(self, step: str, fields: dict[str, Any]) -> None:
         log_step(
             self.context, self.hctx.runtime, chat_id=self.hctx.chat_id, step=step, fields=fields
-        )
-
-    def start_memory_prefetch(self) -> None:
-        """回复生成前先在后台检索记忆，生成阶段直接复用这份结果。"""
-        if self.generated.speculative_memory_task is not None:
-            return
-        hctx = self.hctx
-        history = self.recent_history[-self.max_context :] if self.max_context > 0 else []
-        self.generated.speculative_memory_task = create_task_safely(
-            retrieve_memory_context(
-                context          = self.context,
-                runtime          = hctx.runtime,
-                state            = hctx.state,
-                secrets          = hctx.secrets,
-                data_dir         = hctx.data_dir,
-                chat_id          = hctx.chat_id,
-                history          = history,
-                current_text     = self.prepared.text,
-                planner_question = "",
-                bot_name         = hctx.bot_name,
-            )
         )
 
     async def draft(
@@ -147,21 +123,14 @@ class _TurnGenerator:
             runtime = hctx.runtime,
             state   = hctx.state,
             forced  = forced,
-            action  = PlannedAction(
-                action        = "reply",
-                think_level   = self.think_level,
-                reasoning     = reasoning,
-                question      = "",
-                unknown_words = [],
-            ),
-            plan_reasoning         = plan_reasoning,
-            bot_name               = hctx.bot_name,
-            secrets                = hctx.secrets,
-            turn_note              = turn_note,
-            state_text             = self.prepared.mood_text,
-            is_brain_chat          = self.prepared.brain_chat_active,
-            prefetched_memory_task = self.generated.speculative_memory_task,
-            timings                = self.generated.timings,
+            action=PlannedAction(think_level=self.think_level, reasoning=reasoning),
+            plan_reasoning = plan_reasoning,
+            bot_name       = hctx.bot_name,
+            secrets        = hctx.secrets,
+            turn_note      = turn_note,
+            state_text     = self.prepared.mood_text,
+            is_brain_chat  = self.prepared.brain_chat_active,
+            timings        = self.generated.timings,
         )
 
     async def draft_or_idle(self, *, forced: bool, reasoning: str, plan_reasoning: str) -> None:
@@ -194,30 +163,35 @@ class _TurnGenerator:
         force_reason                = self.prepared.force_reason
         self.generated.reply_source = "forced"
         self.log("smalltalk.forced_direct", {"force_reason": force_reason})
-        self.start_memory_prefetch()
         # 没有经过规划器，就没有“心里的盘算”可交给生成：空着，提示词里不出现这一块。
         await self.draft_or_idle(forced=True, reasoning="", plan_reasoning="")
 
     async def run_planner(self) -> None:
         hctx, generated = self.hctx, self.generated
         generated.reply_source = "pfc"
-        self.start_memory_prefetch()
-        planning_started = time.monotonic()
-        result           = await run_pfc_once(
-            context         = self.context,
-            runtime_cfg     = hctx.runtime.cfg,
-            secrets         = hctx.secrets,
-            bot_name        = hctx.bot_name,
-            is_private      = self.prepared.is_private,
-            chat_id         = hctx.chat_id,
-            current_text    = self.prepared.text,
-            memory_store    = hctx.state.memory_store,
-            action_history  = hctx.state.action_history,
-            memory_db       = hctx.state.memory_db,
-            pfc_state_store = hctx.state.pfc_state_store,
-            generate_reply  = self.planner_reply,
-            state_override  = generated.pfc_state_snapshot,
-            persist_state   = False,
+        planning_started       = time.monotonic()
+        # 要不要开口、从哪接也看她记得的这个人和这个群；生成时复用同一次取用。
+        recalled = await recall_for_reply(
+            self.context,
+            hctx.runtime,
+            chat_id = hctx.chat_id,
+            event   = self.event,
+            text    = self.prepared.text,
+            history = self.recent_history,
+        )
+        result = await run_pfc_once(
+            context        = self.context,
+            runtime_cfg    = hctx.runtime.cfg,
+            secrets        = hctx.secrets,
+            bot_name       = hctx.bot_name,
+            is_private     = self.prepared.is_private,
+            chat_id        = hctx.chat_id,
+            current_text   = self.prepared.text,
+            memory_store   = hctx.state.memory_store,
+            action_history = hctx.state.action_history,
+            state          = generated.pfc_state_snapshot,
+            generate_reply = self.planner_reply,
+            memory_text    = planner_memory(hctx.runtime, recalled),
         )
         accumulate_timing(
             generated.timings, "plan_s", time.monotonic() - planning_started - self.drafting_s
@@ -245,7 +219,6 @@ class _TurnGenerator:
             "smalltalk.planner.disabled",
             {"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
         )
-        self.start_memory_prefetch()
         await self.draft_or_idle(forced=False, reasoning="", plan_reasoning="")
         self.generated.pfc_result = PFCRunResult(
             reply=self.generated.reply, action="reply", reason="planner_disabled", ended=False
@@ -299,16 +272,11 @@ async def generate_smalltalk_turn(
         )
         return generated
     except ReplyRejected:
-        generated.cancel_speculative_memory()
         if not prepared.forced and generated.pfc_state_snapshot is not None:
             committed = False
             async with chat_lock(chat_id):
                 # 生成在锁外进行：会话被重置后，旧轮次的规划快照不能把已清除的目标写回去。
-                current_generation = get_profile_generation(context.data_dir, chat_id)
-                if (
-                    generated.session_generation is None
-                    or generated.session_generation == current_generation
-                ):
+                if session_is_current(context.data_dir, chat_id, generated.session_generation):
                     committed = await commit_planner_snapshot(
                         state,
                         runtime,
@@ -319,12 +287,6 @@ async def generate_smalltalk_turn(
             if committed:
                 schedule_pfc_state_flush(context, runtime, chat_id=chat_id)
         raise
-    finally:
-        task = generated.speculative_memory_task
-        if isinstance(task, asyncio.Task):
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
 
 
 def _event_message_timestamp(event: dict[str, Any]) -> float | None:

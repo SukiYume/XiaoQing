@@ -29,6 +29,18 @@ class DatabaseRepositorySupport:
         delta: int,
         reason: str,
         reference_id: str | None = None,
+        created_at: str | None   = None,
+        allow_zero: bool         = False,
+    ) -> None:
+        raise NotImplementedError
+
+    def _add_inventory_item_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        group_id: int,
+        item_id: str,
+        amount: int,
     ) -> None:
         raise NotImplementedError
 
@@ -58,7 +70,6 @@ class DatabaseRepositorySupport:
         *,
         reason: str,
         reference_id: str,
-        daily_limit: int,
         now_iso: str,
         record_zero: bool = False,
     ) -> int:

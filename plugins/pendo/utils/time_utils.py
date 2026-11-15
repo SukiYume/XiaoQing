@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime, timedelta, tzinfo
+from calendar import monthrange
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any, Final, Protocol, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -84,6 +85,14 @@ class TimezoneHelper:
         return dt.replace(tzinfo=tz or TimezoneHelper.DEFAULT_TZ)
 
     @staticmethod
+    def try_parse(dt_str: str, tz: tzinfo | None = None) -> datetime | None:
+        """同 :meth:`parse`；空值或格式损坏的旧数据返回 ``None``，由调用方决定忽略还是排到最后。"""
+        try:
+            return TimezoneHelper.parse(dt_str, tz)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def format_for_storage(dt: datetime) -> str:
         """Format an explicitly timezone-aware datetime as UTC for storage."""
         if dt.tzinfo is None:
@@ -91,6 +100,48 @@ class TimezoneHelper:
                 "naive datetime is not accepted for storage; supply an explicit timezone"
             )
         return dt.astimezone(UTC).isoformat()
+
+
+def is_valid_timezone(name: object) -> bool:
+    """``name`` 是不是系统时区库里存在的 IANA 时区名；不抛异常。"""
+    try:
+        ZoneInfo(cast(str, name))
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return False
+    return True
+
+
+def parse_strict_day(value: object) -> date | None:
+    """严格的 ``YYYY-MM-DD``；别的写法一律是 ``None``。
+
+    ``date.fromisoformat`` 还接受 ``20260102`` 和 ``2026-W01-1``，这里先卡住形状，
+    这些写法不会混进 SQL 的日期边界。不去首尾空白，调用方自己决定要不要去。
+    """
+
+    if not isinstance(value, str) or len(value) != 10 or value[4] != "-" or value[7] != "-":
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _typed_day(text: str, now: datetime) -> datetime | None:
+    """用户输入的某一天：``YYYY-MM-DD``，或按今年算的 ``MM-DD``；都不是时为 ``None``。"""
+
+    for candidate in (text, f"{now.year}-{text}"):
+        try:
+            return datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def iso_week_key(day: date) -> str:
+    """一周的统一键 ``YYYY-Www``（ISO 周：周一起算，跨年的那一周不拆成两段）。"""
+
+    iso = day.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
 
 
 def now_in_timezone(
@@ -327,30 +378,25 @@ def parse_date_optional(date_str: str, now: datetime | None = None) -> str | Non
     if lowered in relative:
         return (now + timedelta(days=relative[lowered])).strftime("%Y-%m-%d")
 
-    # YYYY-MM-DD
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        pass
+    day = _typed_day(text, now)
+    return day.strftime("%Y-%m-%d") if day is not None else None
 
-    # MM-DD
-    try:
-        return datetime.strptime(f"{now.year}-{text}", "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        pass
 
-    return None
+def month_bounds(day: date) -> tuple[date, date]:
+    """给定日期所在自然月的首日和末日。"""
+    return day.replace(day=1), day.replace(day=monthrange(day.year, day.month)[1])
+
+
+def shift_months(first_of_month: date, delta: int) -> date:
+    """在月初日期上前后平移 ``delta`` 个月，返回目标月的第一天。"""
+    year, month_index = divmod(first_of_month.year * 12 + first_of_month.month - 1 + delta, 12)
+    return date(year, month_index + 1, 1)
 
 
 def _parse_ym_range(ym_str: str) -> tuple[datetime, datetime]:
-    """解析 YYYY-MM 字符串为该月第一天和最后一天的 datetime"""
-    dt = datetime.strptime(ym_str, "%Y-%m")
-    start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if dt.month == 12:
-        end = dt.replace(year=dt.year + 1, month=1, day=1) - timedelta(seconds=1)
-    else:
-        end = dt.replace(month=dt.month + 1, day=1) - timedelta(seconds=1)
-    return start, end
+    """解析 YYYY-MM 字符串为该月第一天 00:00:00 和最后一天 23:59:59 的 datetime"""
+    first, last = month_bounds(datetime.strptime(ym_str, "%Y-%m").date())
+    return datetime.combine(first, time.min), datetime.combine(last, time(23, 59, 59))
 
 
 def _day_range(day: datetime) -> tuple[datetime, datetime]:
@@ -381,6 +427,11 @@ def _calendar_keyword_ranges(now: datetime) -> dict[str, tuple[datetime, datetim
         "year"    : (year_start, year_end),
         "今年"      : (year_start, year_end),
     }
+
+
+# 日历关键字（今天、本周……）的全部写法；只需判断“像不像时间范围”的调用方（如导出命令）共用它，
+# 不再各自抄一份。
+CALENDAR_RANGE_KEYWORDS: Final = frozenset(_calendar_keyword_ranges(datetime(2000, 1, 1)))
 
 
 def _parse_range_boundary(text: str, *, end: bool) -> datetime:
@@ -416,16 +467,15 @@ def _parse_structured_time_range(text: str) -> tuple[datetime, datetime] | None:
 def _parse_time_range_core(
     time_range: str,
     now: datetime | None = None,
-    default: str         = "today",
     strict: bool         = False,
 ) -> tuple[datetime, datetime]:
-    """核心时间范围解析，返回 (start_dt, end_dt)。
+    """核心时间范围解析，返回 (start_dt, end_dt)；空输入按“今天”处理。
 
     支持: today, tomorrow, week, month, year, 今天, 本周, 本月, 今年,
           lastNd, YYYY, YYYY-MM, YYYY-MM-DD..YYYY-MM-DD
     """
     now   = now or datetime.now()
-    tr    = (time_range or default).strip().lower()
+    tr    = (time_range or "today").strip().lower()
     tr    = re.sub(r"\.{3,}", "..", tr)
     today = _day_range(now)
 
@@ -438,12 +488,12 @@ def _parse_time_range_core(
 
     # MM-DD 按今年的这一天
     if re.fullmatch(r"\d{2}-\d{2}", tr):
-        try:
-            return _day_range(datetime.strptime(f"{now.year}-{tr}", "%Y-%m-%d"))
-        except ValueError:
-            if strict:
-                raise ValueError(f"无法解析时间范围: {time_range}") from None
-            return today
+        day = _typed_day(tr, now)
+        if day is not None:
+            return _day_range(day)
+        if strict:
+            raise ValueError(f"无法解析时间范围: {time_range}")
+        return today
 
     keyword_range = _calendar_keyword_ranges(now).get(tr)
     if keyword_range:

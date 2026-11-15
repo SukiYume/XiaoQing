@@ -126,6 +126,7 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。
 | `ai.py` | Provider、模型 profile、插件 route、重试、fallback 和总预算 |
 | `sensitive_audit.py` | 敏感字段审计、摘要和脱敏 |
 | `atomic_store.py` | JSON 与字节数据的原子写入和恢复 |
+| `private_files.py` | 只给本机当前用户看的文件：目录权限收紧、凭据 JSON 以 0600 原子写入 |
 | `process_tree.py`、`windows_job.py` | 插件执行外部命令：独立进程树（Windows Job 对象 / POSIX 进程组）、stdout 与 stderr 共享输出预算、超时与取消时整树回收。`/shell` 和小青 agent 共用 |
 | `bounded_file_cache.py` | TTL、LRU、条目数和字节数受限的磁盘缓存 |
 
@@ -187,6 +188,7 @@ Core 接管的收据由传输层计数，插件发送帮助器保留同一结算
 | Core 签发的能力缺失 | `app_plugin_context.py` | 对应命令的 `plugin.json` |
 | agent 代为执行命令 | `dispatcher.py` 的 `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
 | 聊天取不到网上生活 | `capabilities.py` 的 `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
+| 记忆读写被拒或为空 | `capabilities.py` 的 `MemoryService` | `app_plugin_context.py`, `plugins/xiaoqing_memory/scopes.py`, `plugins/xiaoqing_chat/memory/client.py` |
 | 群聊参与 | `dispatcher.py` | Smalltalk Provider 插件 |
 | 插件加载与重载 | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | 插件超时与过载 | `plugin_execution.py` | `dispatcher.py` |

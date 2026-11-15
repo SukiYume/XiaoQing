@@ -10,7 +10,8 @@ DEFAULT_MAX_REFERENCES = 10
 DEFAULT_DAILY_PAPERS   = 10
 
 # 显示上限
-MAX_TITLE_DISPLAY_LENGTH = 50
+MAX_TITLE_DISPLAY_LENGTH           = 50
+MAX_REFERENCE_TITLE_DISPLAY_LENGTH = 60
 
 # 论文标识符模式
 ARXIV_URL_PATTERN        = re.compile(r"arxiv\.org/abs/([\w\-./]+?)(?:v\d+)?$")

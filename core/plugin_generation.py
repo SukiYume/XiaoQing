@@ -12,10 +12,7 @@ if TYPE_CHECKING:
     from .plugin_watcher import _ManifestRejection
 
 import asyncio
-import importlib
-import importlib.abc
 import importlib.machinery
-import importlib.util
 import logging
 import os
 import sys
@@ -51,7 +48,6 @@ from .plugin_manager_support import (
     _ReloadCandidateGeneration,
     _RetiredPluginGeneration,
     _SourceOnlyPluginFinder,
-    _validate_plugin_name,
     resolve_plugin_entry,
     resolve_plugin_root,
 )
@@ -158,20 +154,14 @@ class PluginGenerationMixin:
         def _ensure_plugin_data_dir(self, plugin_name: str, *, force: bool = False) -> Path:
             raise NotImplementedError
 
-        def _freeze_source_generation(self, plugin_name: str) -> None:
+        @staticmethod
+        def _entry_module_name(plugin_name: str, entry: str) -> str:
             raise NotImplementedError
 
         async def _freeze_source_generation_async(self, plugin_name: str) -> None:
             raise NotImplementedError
 
         def _has_plugin_runtime(self, name: str) -> bool:
-            raise NotImplementedError
-
-        _init_task_plugins: dict[asyncio.Task[Any], str]
-
-        _init_tasks: list[asyncio.Task[Any]]
-
-        def _is_plugin_dir(self, path: Path) -> bool:
             raise NotImplementedError
 
         _lifecycle_lock: Any
@@ -214,10 +204,6 @@ class PluginGenerationMixin:
         def _owns_plugin_namespace(self, plugin_name: str) -> bool:
             raise NotImplementedError
 
-        _pending_plugins: dict[asyncio.Task[Any], tuple[PluginDefinition, ModuleType, float]]
-
-        _pending_transactions: dict[asyncio.Task[Any], _PluginLoadTransaction]
-
         def _plugin_runtime_names(self) -> set[str]:
             raise NotImplementedError
 
@@ -244,16 +230,6 @@ class PluginGenerationMixin:
             raise NotImplementedError
 
         _private_plugin_modules: dict[str, dict[str, ModuleType]]
-
-        def _purge_generation_modules(
-            self,
-            name: str,
-            plugin: LoadedPlugin | None,
-            gate: PluginExecutionGate,
-            *,
-            phase: str,
-        ) -> dict[str, ModuleType]:
-            raise NotImplementedError
 
         async def _purge_generation_modules_async(
             self,
@@ -361,60 +337,49 @@ class PluginGenerationMixin:
         plugins_dir: Any
 
         router: Any
-    _execution_gates   : dict[str, PluginExecutionGate]
-    _init_wait_task    : asyncio.Task[Any] | None
-    _pending_finalizers: dict[str, asyncio.Task[Any]]
-    _plugins_package   : ModuleType
+    _execution_gates: dict[str, PluginExecutionGate]
+    _plugins_package: ModuleType
 
-    def load_all(self) -> None:
-        """Load every plugin without blocking a running event loop on snapshots.
+    async def load_all(self) -> None:
+        """Discover, import, initialize and publish every plugin at startup.
 
-        Synchronous embedding remains synchronous.  During normal async startup,
-        the serialized load joins the existing initialization barrier so callers
-        retain the established ``load_all(). Await wait_inits()`` contract.
+        Startup uses the same serialized reconcile pass as hot reload, so there is one
+        loading path.  It returns when every plugin is published or isolated.
         """
 
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            self._load_all_sync()
-            return
+            async with self._lifecycle_lock.get():
+                await self._reconcile_plugins_once()
+        except PluginLifecycleFatalError:
+            raise
+        except BaseException as exc:
+            if self._is_fatal_base_exception(exc):
+                raise PluginLifecycleFatalError("<initialization>", exc) from None
+            raise
 
-        task = asyncio.create_task(self._capture_lifecycle(self._load_all_async()))
-        self._init_tasks.append(task)
+    def _forget_plugin_generation(
+        self,
+        name: str,
+        *,
+        clear_marks: bool       = False,
+        release_namespace: bool = False,
+    ) -> None:
+        """插件的一代已经停下、模块已清掉之后，把它从路由、服务和各张登记表里摘掉。
 
-    def _load_all_sync(self) -> None:
-        plugin_paths = sorted(self.plugins_dir.iterdir(), key=lambda path: path.name)
-        for plugin_dir in plugin_paths:
-            try:
-                is_plugin_dir = self._is_plugin_dir(plugin_dir)
-            except OSError as exc:
-                logger.error(
-                    "Skipping plugin entry %s because its metadata is unavailable: %s",
-                    plugin_dir.name,
-                    exc,
-                )
-                continue
-            if not is_plugin_dir:
-                continue
-            try:
-                self.load_plugin(plugin_dir)
-            except PluginLifecycleFatalError:
-                raise
-            except Exception as exc:
-                # A plugin-local import or filesystem failure must not suppress
-                # later independent plugins in the deterministic startup order.
-                logger.exception(
-                    "Plugin %s failed during startup and was isolated: %s",
-                    plugin_dir.name,
-                    exc,
-                )
+        只是这一代没了（重载、候选回滚）用默认值：隔离和“需要重启”的标记、名字的归属都留着。
+        插件整个不在了（卸载、从未发布的加载失败）再清标记、交还名字。
+        """
 
-    async def _load_all_async(self) -> None:
-        """Serialize startup discovery through the non-blocking reconcile path."""
-
-        async with self._lifecycle_lock.get():
-            await self._reconcile_plugins_once()
+        self.router.clear_plugin(name)
+        self._unregister_services_owned_by(name)
+        self._plugins.pop(name, None)
+        self._plugin_states.pop(name, None)
+        self._execution_gates.pop(name, None)
+        if clear_marks:
+            self._quarantined_plugins.discard(name)
+            self._restart_required_plugins.discard(name)
+        if release_namespace:
+            self._release_plugin_namespace(name)
 
     async def _rollback_pending_plugin(
         self,
@@ -504,94 +469,10 @@ class PluginGenerationMixin:
             gate,
             phase="failed initialization module purge",
         )
-        self.router.clear_plugin(name)
-        self._unregister_services_owned_by(name)
-        self._plugins.pop(name, None)
-        self._plugin_states.pop(name, None)
-        self._execution_gates.pop(name, None)
-        self._quarantined_plugins.discard(name)
-        self._restart_required_plugins.discard(name)
-        if not had_registered_generation:
-            self._release_plugin_namespace(name)
-        return True
-
-    def _start_pending_rollback(
-        self,
-        pending: tuple[PluginDefinition, ModuleType, float],
-        *,
-        init_task: asyncio.Task[Any] | None = None,
-        retain_quarantine: bool             = False,
-    ) -> asyncio.Task[Any]:
-        """Claim one pending generation and give it exactly one finalizer."""
-
-        definition, module, mtime = pending
-        gate = self._execution_gates.get(definition.name)
-        if gate is not None:
-            # ``load_plugin`` is synchronous even when embedded in an event
-            # loop.  Close admission before scheduling async rollback so a
-            # fatal import/publish path has no one-tick fail-open window.
-            gate.close_admission()
-        existing = self._pending_finalizers.get(definition.name)
-        if existing is not None:
-            return existing
-
-        async def finalize() -> bool:
-            if init_task is not None:
-                if not init_task.done():
-                    init_task.cancel()
-                await asyncio.gather(init_task, return_exceptions=True)
-            return await self._rollback_pending_plugin(
-                definition,
-                module,
-                mtime,
-                retain_quarantine=retain_quarantine,
-            )
-
-        finalizer = asyncio.create_task(self._capture_lifecycle(finalize()))
-        self._pending_finalizers[definition.name] = finalizer
-        return finalizer
-
-    def _run_or_schedule_pending_rollback(
-        self,
-        pending: tuple[PluginDefinition, ModuleType, float],
-        *,
-        retain_quarantine: bool              = False,
-        original_error: BaseException | None = None,
-    ) -> bool:
-        """Bridge the synchronous loader to terminal async rollback.
-
-        Return whether ``wait_inits`` must raise the original fatal error later.
-        An immediate fatal error in an active asyncio Task can stop the event
-        loop before scheduled cleanup finishes.
-        """
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            try:
-                asyncio.run(
-                    self._rollback_pending_plugin(
-                        *pending,
-                        retain_quarantine=retain_quarantine,
-                    )
-                )
-            except BaseException as cleanup_error:
-                if original_error is not None:
-                    self._raise_preferred_lifecycle_error(
-                        original_error,
-                        cleanup_error,
-                    )
-                raise
-            return False
-
-        self._start_pending_rollback(
-            pending,
-            retain_quarantine=retain_quarantine,
+        self._forget_plugin_generation(
+            name, clear_marks=True, release_namespace=not had_registered_generation
         )
-        if original_error is not None and self._is_fatal_base_exception(original_error):
-            self._deferred_lifecycle_errors.setdefault(pending[0].name, []).append(original_error)
-            return True
-        return False
+        return True
 
     @staticmethod
     def _is_fatal_base_exception(exc: BaseException) -> bool:
@@ -731,432 +612,6 @@ class PluginGenerationMixin:
             raise
         return cls._unwrap_lifecycle_outcome(raw_result)
 
-    async def _await_pending_finalizer(self, finalizer: asyncio.Task[Any]) -> bool:
-        """Observe terminal cleanup before releasing its retained result."""
-
-        try:
-            return bool(await self._await_lifecycle_task(finalizer))
-        finally:
-            for name, owned in list(self._pending_finalizers.items()):
-                if owned is finalizer:
-                    self._pending_finalizers.pop(name, None)
-
-    async def _wait_for_pending_finalizers(self) -> None:
-        """Wait until every already-claimed pending generation reaches a terminal state."""
-
-        fatal_error       : BaseException | None = None
-        interruption_error: BaseException | None = None
-        ordinary_error    : BaseException | None = None
-        while self._pending_finalizers:
-            finalizers = tuple(dict.fromkeys(self._pending_finalizers.values()))
-            for finalizer in finalizers:
-                try:
-                    await self._await_pending_finalizer(finalizer)
-                except BaseException as exc:
-                    if self._is_fatal_base_exception(exc):
-                        fatal_error = fatal_error or exc
-                    elif isinstance(exc, asyncio.CancelledError):
-                        interruption_error = interruption_error or exc
-                    else:
-                        ordinary_error = ordinary_error or exc
-        if fatal_error is not None:
-            raise fatal_error
-        if interruption_error is not None:
-            raise interruption_error
-        if ordinary_error is not None:
-            raise ordinary_error
-
-    async def wait_inits(self) -> None:
-        """Task-safe public startup-initialization barrier."""
-
-        try:
-            await self._wait_inits_unsafe()
-        except BaseException as exc:
-            if self._is_fatal_base_exception(exc):
-                raise PluginLifecycleFatalError("<initialization>", exc) from None
-            raise
-
-    async def _wait_inits_unsafe(self) -> None:
-        """Wait for the one shared startup-init batch and its terminal cleanup."""
-
-        waiter     = self._init_wait_task
-        owns_batch = waiter is None or waiter.done()
-        if owns_batch:
-            waiter = asyncio.create_task(self._capture_lifecycle(self._drain_initializations()))
-            self._init_wait_task = waiter
-
-            def release(done: asyncio.Task[None]) -> None:
-                if self._init_wait_task is done:
-                    self._init_wait_task = None
-
-            waiter.add_done_callback(release)
-
-        assert waiter is not None
-
-        interrupted: BaseException | None = None
-        while True:
-            try:
-                self._unwrap_lifecycle_outcome(await asyncio.shield(waiter))
-                break
-            except BaseException as exc:
-                if not waiter.done():
-                    if not owns_batch:
-                        raise
-                    interrupted = interrupted or exc
-                    for init_task in tuple(self._init_tasks):
-                        if not init_task.done():
-                            init_task.cancel()
-                    continue
-                try:
-                    self._unwrap_lifecycle_outcome(waiter.result())
-                except BaseException as wait_exc:
-                    if self._is_fatal_base_exception(wait_exc):
-                        if interrupted is not None:
-                            raise wait_exc from interrupted
-                        raise
-                    if interrupted is not None:
-                        raise interrupted from wait_exc
-                    raise
-                interrupted = interrupted or exc
-                break
-        if interrupted is not None:
-            raise interrupted
-
-    async def _drain_initializations(self) -> None:
-        """Own and finalize every startup init visible to this shared batch."""
-
-        terminal_errors: list[BaseException] = []
-        owned_names                          = set(self._pending_finalizers)
-        while self._init_tasks:
-            tasks = list(dict.fromkeys(self._init_tasks))
-            owned_names.update(
-                name for task in tasks if (name := self._init_task_plugins.get(task)) is not None
-            )
-            owned_names.update(
-                pending[0].name
-                for task in tasks
-                if (pending := self._pending_plugins.get(task)) is not None
-            )
-            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-            results: list[None | BaseException] = []
-            for raw_result in raw_results:
-                try:
-                    self._unwrap_lifecycle_outcome(raw_result)
-                except BaseException as exc:
-                    results.append(exc)
-                else:
-                    results.append(None)
-            try:
-                await self._finalize_init_results(tasks, results)
-            except BaseException as exc:
-                terminal_errors.append(exc)
-        try:
-            owned_names.update(self._pending_finalizers)
-            await self._wait_for_pending_finalizers()
-        except BaseException as exc:
-            terminal_errors.append(exc)
-        terminal_errors.extend(self._take_deferred_lifecycle_errors(owned_names))
-        self._raise_collected_lifecycle_errors(terminal_errors)
-
-    async def _finalize_init_results(
-        self,
-        tasks: list[asyncio.Task[None]],
-        results: list[None | BaseException],
-    ) -> None:
-        """Atomically claim each result without hiding later work from unload."""
-
-        fatal_error       : BaseException | None = None
-        interruption_error: BaseException | None = None
-        for task, result in zip(tasks, results, strict=True):
-            finalizer    : asyncio.Task[bool] | None = None
-            plugin_name  : str | None                = None
-            publish_error: BaseException | None      = None
-            async with self._lifecycle_lock.get():
-                while task in self._init_tasks:
-                    self._init_tasks.remove(task)
-                plugin_name = self._init_task_plugins.pop(task, None)
-                pending     = self._pending_plugins.pop(task, None)
-                transaction = self._pending_transactions.pop(task, None)
-
-                if isinstance(result, BaseException):
-                    if pending is not None:
-                        finalizer = self._start_pending_rollback(pending)
-                    elif plugin_name is not None:
-                        finalizer = self._pending_finalizers.get(plugin_name)
-                        if finalizer is None and plugin_name in self._plugins:
-                            await self._unload_plugin_once(plugin_name)
-                elif pending is not None:
-                    definition, module, mtime = pending
-                    plugin_dir = self.plugins_dir / definition.name
-                    try:
-                        authorization_current = transaction is None or (
-                            await self._definition_is_current_async(
-                                plugin_dir,
-                                definition,
-                                mtime,
-                                module           = module,
-                                authorized_entry = transaction.authorized_entry,
-                                transaction      = transaction,
-                            )
-                        )
-                    except BaseException as exc:
-                        publish_error         = exc
-                        authorization_current = False
-                    if definition.name in self._quarantined_plugins or not authorization_current:
-                        finalizer = self._start_pending_rollback(
-                            pending,
-                            retain_quarantine=(
-                                transaction.uncertain_external_code
-                                if transaction is not None
-                                else False
-                            ),
-                        )
-                    else:
-                        try:
-                            if transaction is None:
-                                await self._register_loaded_plugin_async(
-                                    definition,
-                                    module,
-                                    mtime,
-                                )
-                            else:
-                                await self._register_loaded_plugin_async(
-                                    definition,
-                                    module,
-                                    mtime,
-                                    authorized_entry=transaction.authorized_entry,
-                                )
-                        except BaseException as exc:
-                            if transaction is not None and isinstance(exc, PluginPathError):
-                                transaction.uncertain_external_code = True
-                            publish_error = exc
-                            finalizer     = self._start_pending_rollback(
-                                pending,
-                                retain_quarantine=(
-                                    transaction.uncertain_external_code
-                                    if transaction is not None
-                                    else False
-                                ),
-                            )
-                elif plugin_name is not None:
-                    finalizer = self._pending_finalizers.get(plugin_name)
-
-            if finalizer is not None:
-                try:
-                    await self._await_pending_finalizer(finalizer)
-                except BaseException as cleanup_exc:
-                    if self._is_fatal_base_exception(cleanup_exc):
-                        fatal_error = fatal_error or cleanup_exc
-                    elif isinstance(cleanup_exc, asyncio.CancelledError):
-                        interruption_error = interruption_error or cleanup_exc
-                    else:
-                        logger.error(
-                            "Pending plugin cleanup failed for %s: %s",
-                            plugin_name or "<unknown>",
-                            cleanup_exc,
-                        )
-
-            if isinstance(result, BaseException):
-                if self._is_fatal_base_exception(result):
-                    logger.warning("Plugin init interrupted")
-                    fatal_error = fatal_error or result
-                elif isinstance(result, asyncio.CancelledError):
-                    logger.debug("Plugin init task cancelled")
-                else:
-                    if isinstance(result, asyncio.TimeoutError):
-                        logger.warning(
-                            "Plugin %s init timed out (>%ss)",
-                            plugin_name or "<unknown>",
-                            PLUGIN_INIT_TIMEOUT_SECONDS,
-                        )
-                    else:
-                        logger.warning("Plugin init error: %s", result)
-            if publish_error is not None:
-                if self._is_fatal_base_exception(publish_error):
-                    fatal_error = fatal_error or publish_error
-                elif isinstance(publish_error, asyncio.CancelledError):
-                    interruption_error = interruption_error or publish_error
-                else:
-                    logger.warning(
-                        "Plugin %s publish error: %s",
-                        plugin_name or "<unknown>",
-                        publish_error,
-                    )
-
-        if fatal_error is not None:
-            raise fatal_error
-        if interruption_error is not None:
-            raise interruption_error
-
-    def load_plugin(self, plugin_dir: Path) -> None:
-        # 验证插件目录名是否安全
-        if not _validate_plugin_name(plugin_dir.name):
-            logger.warning(
-                "Skipping plugin with invalid name '%s': must be a lowercase ASCII "
-                "Python identifier",
-                plugin_dir.name,
-            )
-            return
-
-        if plugin_dir.name in self._quarantined_plugins:
-            logger.warning(
-                "Refusing to load quarantined plugin %s; explicit operator cleanup or "
-                "restart is required",
-                plugin_dir.name,
-            )
-            return
-
-        if self._has_plugin_runtime(plugin_dir.name):
-            logger.warning(
-                "Refusing to create a second runtime generation for plugin %s",
-                plugin_dir.name,
-            )
-            return
-
-        definition = self._load_definition(plugin_dir)
-        if not isinstance(definition, PluginDefinition):
-            return
-        # 检查插件是否启用
-        if not definition.enabled:
-            logger.info("Plugin %s is disabled, skipping", definition.name)
-            return
-        try:
-            self._ensure_plugin_data_dir(definition.name, force=True)
-        except (OSError, PluginPathError) as exc:
-            logger.error("Cannot prepare data directory for plugin %s: %s", definition.name, exc)
-            return
-        try:
-            # Build the complete transaction fingerprint before importing code.
-            # An import can start async initialization immediately.
-            # Each subsequent exit path needs a pending transaction to finalize.
-            mtime = self._authorize_plugin_snapshot(plugin_dir, definition)
-        except (OSError, PluginPathError) as exc:
-            logger.error("Cannot fingerprint plugin %s: %s", definition.name, exc)
-            return
-        transaction = _PluginLoadTransaction(
-            definition = definition,
-            gate       = self._execution_gate_for(definition),
-            mtime      = mtime,
-        )
-        try:
-            module, init_task = self._load_module(
-                plugin_dir,
-                definition,
-                transaction=transaction,
-            )
-        except BaseException as exc:
-            fatal_deferred = False
-            if transaction.module is not None:
-                pending           = (definition, transaction.module, mtime)
-                retain_quarantine = transaction.uncertain_external_code or (
-                    transaction.import_attempted and not transaction.import_completed
-                )
-                fatal_deferred = self._run_or_schedule_pending_rollback(
-                    pending,
-                    retain_quarantine = retain_quarantine,
-                    original_error    = exc,
-                )
-            elif transaction.import_attempted or transaction.uncertain_external_code:
-                transaction.gate.close_admission()
-                self._restart_required_plugins.add(definition.name)
-                self._freeze_source_generation(definition.name)
-                self._quarantine_gate_without_module(
-                    definition.name,
-                    transaction.gate,
-                    phase  = "partial initial import",
-                    reason = f"module execution failed without a handle ({type(exc).__name__})",
-                )
-            else:
-                transaction.gate.close_admission()
-                try:
-                    if not transaction.unowned_canonical_namespace:
-                        self._purge_generation_modules(
-                            definition.name,
-                            None,
-                            transaction.gate,
-                            phase="failed pre-import module purge",
-                        )
-                except BaseException as cleanup_error:
-                    self._raise_preferred_lifecycle_error(exc, cleanup_error)
-                self.router.clear_plugin(definition.name)
-                self._unregister_services_owned_by(definition.name)
-                self._plugins.pop(definition.name, None)
-                self._plugin_states.pop(definition.name, None)
-                self._execution_gates.pop(definition.name, None)
-                if transaction.namespace_claim_new:
-                    self._release_plugin_namespace(definition.name)
-            if isinstance(exc, PluginLoadError):
-                logger.error("%s", exc, exc_info=True)
-                return
-            if fatal_deferred:
-                return
-            raise
-        if not module:
-            transaction.gate.close_admission()
-            self._purge_generation_modules(
-                definition.name,
-                None,
-                transaction.gate,
-                phase="empty initial load module purge",
-            )
-            self._plugin_states.pop(definition.name, None)
-            self._execution_gates.pop(definition.name, None)
-            if transaction.namespace_claim_new:
-                self._release_plugin_namespace(definition.name)
-            return
-        if init_task:
-            self._pending_plugins[init_task]      = (definition, module, mtime)
-            self._pending_transactions[init_task] = transaction
-        else:
-            pending = (definition, module, mtime)
-            try:
-                authorization_current = self._definition_is_current(
-                    plugin_dir,
-                    definition,
-                    mtime,
-                    module           = module,
-                    authorized_entry = transaction.authorized_entry,
-                    transaction      = transaction,
-                )
-            except BaseException as exc:
-                fatal_deferred = self._run_or_schedule_pending_rollback(
-                    pending,
-                    original_error=exc,
-                )
-                if fatal_deferred:
-                    return
-                raise
-            if not authorization_current:
-                self._run_or_schedule_pending_rollback(
-                    pending,
-                    retain_quarantine=transaction.uncertain_external_code,
-                )
-                logger.warning(
-                    "Plugin %s changed or lost authorization before publication",
-                    definition.name,
-                )
-                return
-            try:
-                self._register_loaded_plugin(
-                    definition,
-                    module,
-                    mtime,
-                    authorized_entry=transaction.authorized_entry,
-                )
-            except BaseException as exc:
-                if isinstance(exc, PluginPathError):
-                    transaction.uncertain_external_code = True
-                fatal_deferred = self._run_or_schedule_pending_rollback(
-                    pending,
-                    retain_quarantine = transaction.uncertain_external_code,
-                    original_error    = exc,
-                )
-                if fatal_deferred:
-                    return
-                if not isinstance(exc, Exception):
-                    raise
-                logger.warning("Plugin %s publish error: %s", definition.name, exc)
-
     async def unload_plugin(
         self,
         name: str,
@@ -1223,40 +678,6 @@ class PluginGenerationMixin:
             )
             return
 
-        existing_finalizer = self._pending_finalizers.get(name)
-        if existing_finalizer is not None:
-            await self._await_pending_finalizer(existing_finalizer)
-            return
-
-        tasks_to_cancel = {
-            task for task, plugin_name in self._init_task_plugins.items() if plugin_name == name
-        }
-        tasks_to_cancel.update(
-            task
-            for task, (definition, _module, _mtime) in self._pending_plugins.items()
-            if definition.name == name
-        )
-        finalizers  : set[asyncio.Task[Any]]   = set()
-        orphan_tasks: list[asyncio.Task[None]] = []
-        for task in tasks_to_cancel:
-            self._init_task_plugins.pop(task, None)
-            if task in self._init_tasks:
-                self._init_tasks.remove(task)
-            pending = self._pending_plugins.pop(task, None)
-            self._pending_transactions.pop(task, None)
-            if pending is not None:
-                finalizers.add(self._start_pending_rollback(pending, init_task=task))
-            else:
-                if not task.done():
-                    task.cancel()
-                orphan_tasks.append(task)
-        if orphan_tasks:
-            await asyncio.gather(*orphan_tasks, return_exceptions=True)
-        if finalizers:
-            for finalizer in finalizers:
-                await self._await_pending_finalizer(finalizer)
-            return
-
         plugin = self._plugins.get(name)
         gate   = self._execution_gates.get(name) or (
             plugin.execution_gate if plugin is not None else None
@@ -1299,12 +720,7 @@ class PluginGenerationMixin:
                     gate,
                     phase="unowned orphan module purge",
                 )
-            self._unregister_services_owned_by(name)
-            self._plugin_states.pop(name, None)
-            self._execution_gates.pop(name, None)
-            self._quarantined_plugins.discard(name)
-            self._restart_required_plugins.discard(name)
-            self._release_plugin_namespace(name)
+            self._forget_plugin_generation(name, clear_marks=True, release_namespace=True)
             return
         self.router.clear_plugin(name)
 
@@ -1353,14 +769,7 @@ class PluginGenerationMixin:
             gate,
             phase="unload module purge",
         )
-        self._plugins.pop(name, None)
-        # 清理插件状态
-        self._plugin_states.pop(name, None)
-        self._execution_gates.pop(name, None)
-        self._quarantined_plugins.discard(name)
-        self._restart_required_plugins.discard(name)
-        self._unregister_services_owned_by(name)
-        self._release_plugin_namespace(name)
+        self._forget_plugin_generation(name, clear_marks=True, release_namespace=True)
 
         logger.info("Unloaded plugin %s", name)
         self._notify_change(name)
@@ -1430,7 +839,6 @@ class PluginGenerationMixin:
                     return False
 
             await self._reconcile_plugins_once()
-        await self.wait_inits()
         return not self._quarantined_plugins
 
     async def _prepare_reload_authorization(
@@ -1582,11 +990,9 @@ class PluginGenerationMixin:
         )
         old_generation_errors = self._take_deferred_lifecycle_errors({name})
         if old_generation_errors:
-            self._plugins.pop(name, None)
-            self._plugin_states.pop(name, None)
-            self._execution_gates.pop(name, None)
+            # 旧代拆除时出了致命错误：这一代不再登记，名字仍归本管理器；“需要重启”的标记留着。
+            self._forget_plugin_generation(name)
             self._quarantined_plugins.discard(name)
-            self._unregister_services_owned_by(name)
             self._raise_collected_lifecycle_errors(old_generation_errors)
 
         return _RetiredPluginGeneration(
@@ -1610,10 +1016,9 @@ class PluginGenerationMixin:
         self._plugin_states[name]   = {}
         self._execution_gates[name] = candidate_gate
         transaction                 = _PluginLoadTransaction(
-            definition      = authorization.definition,
-            gate            = candidate_gate,
-            mtime           = authorization.mtime,
-            track_init_task = False,
+            definition = authorization.definition,
+            gate       = candidate_gate,
+            mtime      = authorization.mtime,
         )
         return _ReloadCandidateGeneration(gate=candidate_gate, transaction=transaction)
 
@@ -1715,11 +1120,7 @@ class PluginGenerationMixin:
                         candidate.gate,
                         phase="candidate without-module purge",
                     )
-                    self.router.clear_plugin(name)
-                    self._unregister_services_owned_by(name)
-                    self._plugins.pop(name, None)
-                    self._plugin_states.pop(name, None)
-                    self._execution_gates.pop(name, None)
+                    self._forget_plugin_generation(name)
         except BaseException as cleanup_error:
             self._raise_preferred_lifecycle_error(original_error, cleanup_error)
         return rollback_clean
@@ -2115,13 +1516,7 @@ class PluginGenerationMixin:
         if module is None:
             raise PluginLoadError(definition.name, "Canonical entry could not be loaded")
         if init_task is not None:
-            try:
-                await self._await_cancellable_initialization(init_task)
-            finally:
-                if init_task in self._init_tasks:
-                    self._init_tasks.remove(init_task)
-                self._init_task_plugins.pop(init_task, None)
-                self._pending_plugins.pop(init_task, None)
+            await self._await_cancellable_initialization(init_task)
         return LoadedPlugin(
             definition       = definition,
             module           = module,
@@ -2218,6 +1613,7 @@ class PluginGenerationMixin:
                     else:
                         await call_plugin_callback(shutdown, context)
 
+                # shutdown 没有单独的上限，和 init 共用同一个单次回调时限。
                 shutdown_timeout                 = PLUGIN_INIT_TIMEOUT_SECONDS
                 deadline_remaining: float | None = None
                 if shutdown_deadline is not None:
@@ -2326,8 +1722,7 @@ class PluginGenerationMixin:
                     definition.name,
                     "Manifest authorization or source fingerprint changed during final publication",
                 )
-            module_suffix     = definition.entry.removesuffix(".py").replace("/", ".")
-            entry_module_name = f"plugins.{definition.name}.{module_suffix}"
+            entry_module_name = self._entry_module_name(definition.name, definition.entry)
             self._validate_owned_namespace(
                 definition.name,
                 entry_module_name,

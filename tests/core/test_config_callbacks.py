@@ -282,3 +282,26 @@ class TestConfigManagerSecurityUpdates:
         assert len(fatal_revisions) == 2
         assert len(security_revisions) == 1
         assert config_manager.secrets["admin_user_ids"] == (2035,)
+
+    def test_async_security_callback_is_reported_and_does_not_block_the_others(
+        self,
+        config_manager: ConfigManager,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """安全通道只接受同步回调：异步的那个被记为失败（协程关掉，不留着没人等），别的照常收到。"""
+
+        started  : list[int] = []
+        delivered: list[int] = []
+
+        async def asynchronous(snapshot: ConfigSnapshot) -> None:
+            started.append(snapshot.revision)
+
+        config_manager.on_security_update(asynchronous)  # type: ignore[arg-type]
+        config_manager.on_security_update(lambda snapshot: delivered.append(snapshot.revision))
+
+        with caplog.at_level("ERROR", logger="core.config"):
+            config_manager.update_secret("admin_user_ids", [2036])
+
+        assert started == []
+        assert len(delivered) == 1
+        assert "security config callback must be synchronous" in caplog.text

@@ -16,9 +16,7 @@ import argparse
 import importlib
 import logging
 import math
-import os
 import sys
-import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -100,20 +98,12 @@ def _prepare_output(parser: argparse.ArgumentParser, output: Path, *, force: boo
 
 
 def _write_csv_atomic(data: Any, output: Path) -> None:
-    """先在目标目录写临时 CSV，完整成功后再原子发布。"""
+    """完整编码成 CSV 后再原子发布，不会留下写了一半的输出文件。"""
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix = f".{output.name}.",
-        suffix = ".tmp",
-        dir    = output.parent,
-    )
-    os.close(descriptor)
-    temporary = Path(temporary_name)
-    try:
-        data.to_csv(temporary, index=False, encoding="utf-8-sig")
-        os.replace(temporary, output)
-    finally:
-        temporary.unlink(missing_ok=True)
+    # 仓库根已由 ``_load_inference`` 放进 ``sys.path``，``core`` 此时才导入得到。
+    from core.atomic_store import atomic_write_bytes
+
+    atomic_write_bytes(output, data.to_csv(index=False).encode("utf-8-sig"))
 
 
 def main(argv: list[str] | None = None) -> int:

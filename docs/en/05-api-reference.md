@@ -35,6 +35,7 @@ OneBot message-segment structure:
 | `image_url(url)` | `image` | Remote image URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | Local audio |
+| `qr_image(content)` | `image` | Render text as a QR-code PNG, inlined as `base64://` |
 | `segments(payload)` | `Segments` | Normalize a string, list, or empty value |
 
 Example:
@@ -49,6 +50,9 @@ reply = [
 
 plain_reply = segments("完成")
 ```
+
+`qr_image()` imports the QR-code library only when it is called and raises `ImportError` if the library is missing, so the caller can substitute its own message.
+The QR content may be part of a login credential, so do not write it to logs.
 
 ### Action construction
 
@@ -79,7 +83,7 @@ bounded_external_text(
     value: object,
     *,
     max_chars: int,
-    max_bytes: int,
+    max_bytes: int | None = None,
     default: str = "",
     suffix: str = "…",
     strip_ansi: bool = True,
@@ -93,6 +97,7 @@ head_tail_preview(text: str, max_chars: int, *, marker: str) -> str
 ```
 
 These functions apply character, byte, and control-character limits to third-party responses, terminal output, titles, and log summaries.
+When `bounded_external_text()` is called without `max_bytes`, it uses `max_chars * 4`, the UTF-8 worst case. Pass `max_bytes` only for a tighter byte budget.
 
 ```python
 file_uri_to_path(value: str) -> Path | None
@@ -118,6 +123,27 @@ Cleanup also removes background children left after the command exits. These chi
 `ProcessResult` contains `exit_code`, `stdout`, `stderr`, `timed_out`, and `output_limited`.
 
 `exit_code` is `None` when Core terminates the process.
+
+### Command requester
+
+```python
+requester_user_id(context, event: Mapping[str, Any]) -> int | None
+```
+
+This returns the user who issued the command: `context.current_user_id` first, then `user_id` from the event.
+It returns `None` when the result is not a positive integer, and the caller decides how to reject it.
+
+### Configuration values
+
+```python
+config_bool(value, default: bool) -> bool
+config_int(value, default: int, *, minimum: int, maximum: int) -> int
+config_float(value, default: float, *, minimum: float, maximum: float) -> float
+resolve_bot_name(value: object) -> str
+```
+
+`config_bool()` accepts only real booleans. `config_int()` and `config_float()` reject booleans and clamp the result to `[minimum, maximum]`; `config_float()` also rejects NaN and infinity. All three return `default` for a value of the wrong type.
+`resolve_bot_name()` strips leading and trailing whitespace from the configured `bot_name` and returns `DEFAULT_BOT_NAME` (`小青`) when it is empty or unset.
 
 ### Asynchronous utilities
 
@@ -147,6 +173,16 @@ write_json(path: Path, data: Any) -> None
 `atomic_write_text()` uses UTF-8 with the same primitive.
 `load_json()` and `write_json()` use `AtomicJsonStore`.
 Persistent data paths use `context.data_dir` as their root.
+
+```python
+from core.atomic_store import quarantine_corrupt_file
+
+quarantine_corrupt_file(path: Path, *, suffix: str | None = None) -> Path | None
+```
+
+When a state file cannot be parsed, use this to rename the bad file aside and start from empty state, so a later save cannot overwrite the only copy.
+The new name is the original name plus `suffix`, by default `.corrupt-<nanosecond timestamp>`, which never repeats; with a fixed suffix an older file of the same name is overwritten.
+It returns `None` if the file is already gone, and errors from the rename itself propagate unchanged.
 
 ### Long-message splitting
 
@@ -306,6 +342,7 @@ Deployers protect code-call boundaries through plugin source review.
 | `command_runner` | Execute published commands as the initiator with normal permission and scene checks. `run(text, *, sender_name, operation_id, request_texts)` returns original `DeliverySegments`. The caller settles receipts. `request_texts` reaches the command as `context.request_texts`. |
 | `local_tools` | Authorize XiaoQing Agent local code execution and file operations. It follows `/shell` and checks each call. |
 | `life_context` | XiaoQing Chat reads XiaoQing's own online life from XiaoQing Life: `turn_context(payload)` and `export_memes(payload)` return a mapping, or `None` when nothing is available. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them. |
+| `memory` | XiaoQing Chat, Agent, and Life read and write XiaoQing's unified memory (XiaoQing Memory): `record`, `recall`, `search`, and `forget` each take a payload mapping and return a mapping, or `None` when the plugin is disabled or fails. Only methods declared in `uses_services` are issued; calling an undeclared one raises `RuntimeError`. Core writes the caller name, the principal kind, and the user principal's chat into the payload, ignoring caller-supplied fields of the same name. System principals may use it. |
 | `ai` | Common AI routes for the current plugin |
 
 `is_bot_admin` and `is_system` always return booleans.
@@ -370,6 +407,16 @@ context.capabilities.ai.list_models(
 | `content` | `str` | Common Chat Completions text content |
 
 Read `response` for complex responses. Prefer `content` for plain text calls.
+
+### `first_json_object()`
+
+```python
+from core.ai import first_json_object
+
+first_json_object(text: str) -> dict[str, Any] | None
+```
+
+This returns the first JSON object in a model's output. Models often add explanatory text around the JSON or wrap the whole reply in a ``` code fence: the function strips the leading and trailing fence markers, then tries to parse from each `{` in turn, and the first one that parses as an object is the result. It returns `None` when there is none; what to do then is up to the caller.
 
 ## ⌨️ Command catalog types
 
@@ -503,7 +550,7 @@ Make persistent changes in the working copy supplied to `context.update_session(
 ## 📌 Argument parsing
 
 ```python
-from core.args import parse, parse_int, tokenize
+from core.args import chinese_number, parse, parse_int, tokenize
 ```
 
 ### `parse()`
@@ -529,6 +576,15 @@ parse_int(text, *, minimum=None, maximum=None) -> int | None
 ```
 
 This function accepts ASCII decimal integer strings and applies optional range limits.
+
+### `chinese_number()`
+
+```python
+chinese_number(text: str) -> int | None
+```
+
+Reads Chinese numerals such as “八百”, “一百零五”, and “十二万” as an integer. It returns `None` when the text contains anything else.
+A spoken form that drops the final unit counts in the next lower unit: “一百二” is 120, “一千五” is 1500, and “三万五” is 35000.
 
 ## ⌨️ Plugin entry signatures
 

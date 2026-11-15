@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
+from unittest.mock import Mock
+
+from aiohttp import ClientResponse
+from aioresponses import aioresponses
+from yarl import URL
 
 from core.bounded_http import BoundedHttpResponse
 
@@ -129,3 +134,18 @@ class QueuedAiohttpSession:
         if response.url == "https://example.invalid/":
             response.url = url
         return response
+
+
+class _MockedClientResponse(ClientResponse):
+    """aioresponses 按旧签名构造响应；aiohttp 3.14 起多了必填的 ``stream_writer``，这里补上。"""
+
+    def __init__(self, method: str, url: URL, **kwargs: Any) -> None:
+        super().__init__(method, url, stream_writer=Mock(), **kwargs)
+
+
+class mocked_aiohttp(aioresponses):  # noqa: N801 - 和 aioresponses 一样当上下文管理器用
+    """``aioresponses``，登记的响应都能在当前的 aiohttp 上构造出来。"""
+
+    def add(self, url: Any, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("response_class", _MockedClientResponse)
+        super().add(url, *args, **kwargs)

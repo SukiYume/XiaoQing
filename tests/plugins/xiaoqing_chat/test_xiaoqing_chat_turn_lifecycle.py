@@ -23,15 +23,11 @@ sample_group_event = _fixture_support.sample_group_event
 
 
 @pytest.mark.asyncio
-async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_speculative_memory(
-    mock_context, sample_group_event
-):
+async def test_smalltalk_rejection_persists_updated_pfc_state(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
     from plugins.xiaoqing_chat.llm.check_result import ReplyRejected
 
     lock                              = asyncio.Lock()
-    cancel_seen                       = asyncio.Event()
-    blocker                           = asyncio.Event()
     state                             = MagicMock()
     state.get_lock.return_value       = lock
     state.get_mood_state.return_value = ""
@@ -41,7 +37,6 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -70,16 +65,8 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
         )
     )
 
-    async def fake_build_memory_block(**_kwargs):
-        try:
-            await blocker.wait()
-        except asyncio.CancelledError:
-            cancel_seen.set()
-            raise
-        return ""
-
     async def fake_run_pfc_once(**kwargs):
-        snapshot                    = kwargs["state_override"]
+        snapshot                    = kwargs["state"]
         snapshot.goal_list          = [{"goal": "重规划后的目标"}]
         snapshot.planner_skip_until = 30.0
         await asyncio.sleep(0)
@@ -97,10 +84,6 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(side_effect=fake_build_memory_block),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ),
@@ -112,7 +95,6 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
         with pytest.raises(ReplyRejected, match="需要重新规划"):
             await _maybe_reply_smalltalk("你好", sample_group_event, mock_context)
 
-    await asyncio.wait_for(cancel_seen.wait(), timeout=1.0)
     state.pfc_state_store.set_state.assert_called_once()
     persisted = state.pfc_state_store.set_state.call_args.args[1]
     assert persisted.goal_list == [{"goal": "重规划后的目标"}]
@@ -181,7 +163,7 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
             new=AsyncMock(side_effect=fake_generate_reply_draft),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply",
             new=AsyncMock(side_effect=fake_record_bot_reply),
         ) as record_reply,
         patch(
@@ -222,7 +204,6 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -266,10 +247,6 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
                 return_value=PFCRunResult(
@@ -282,7 +259,7 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
             return_value=None,
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply", new=AsyncMock()
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply", new=AsyncMock()
         ) as mock_record_bot_reply,
         patch_turn(
             "schedule_pfc_state_flush",
@@ -324,7 +301,6 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -374,10 +350,6 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
         ),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
         patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
@@ -431,7 +403,6 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -482,10 +453,6 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
                 return_value=PFCRunResult(
@@ -494,7 +461,7 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ),
         patch_turn(
@@ -538,7 +505,6 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -588,10 +554,6 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
         ),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
         patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
@@ -784,13 +746,12 @@ def _fresh_finalization(tmp_path, *, chat_id: str = "g1", event: dict | None = N
     return SimpleNamespace(
         checked_users = None,
         generated     = SimpleNamespace(
-            local_id                  = "m1",
-            session_generation        = None,
-            cancel_speculative_memory = Mock(),
-            reply                     = "对，九十二次改成 901 了",
-            reply_parts               = (),
-            reply_payload             = None,
-            timings                   = {},
+            local_id           = "m1",
+            session_generation = None,
+            reply              = "对，九十二次改成 901 了",
+            reply_parts        = (),
+            reply_payload      = None,
+            timings            = {},
         ),
         hctx=SimpleNamespace(
             chat_id  = chat_id,
@@ -885,7 +846,6 @@ async def test_reply_is_dropped_after_context_review_of_stop_request(tmp_path):
     ):
         assert await turn_delivery._drop_if_context_changed(finalization)
     check.assert_awaited_once()
-    finalization.generated.cancel_speculative_memory.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -991,7 +951,6 @@ async def test_third_party_silence_still_allows_topic_check(tmp_path):
 def _pfc_state(goal: str, *, ended: bool):
     return PFCConversationState(
         chat_id                      = "g1",
-        ignore_until_ts              = 0.0,
         ended                        = ended,
         last_successful_reply_action = "",
         goal_list                    = [{"goal": goal}],
@@ -1128,7 +1087,6 @@ async def test_reply_is_dropped_when_the_group_moved_to_another_topic(tmp_path, 
     assert [message.local_id for message in kwargs["before"]] == ["m0", "m1"]
     assert len(kwargs["after"]) == 6
     assert kwargs["reply"] == "对，九十二次改成 901 了"
-    assert finalization.generated.cancel_speculative_memory.called is changed
     assert (
         any(call.kwargs.get("step") == "smalltalk.stale.drop" for call in log.call_args_list)
         is changed
@@ -1155,7 +1113,6 @@ async def test_single_addressed_topic_opener_reaches_model(tmp_path, text, chang
         assert await turn_delivery._drop_if_context_changed(finalization) is changed
     check.assert_awaited_once()
     assert [message.content for message in check.await_args.kwargs["after"]] == [text]
-    assert finalization.generated.cancel_speculative_memory.called is changed
 
 
 @pytest.mark.asyncio
@@ -1244,7 +1201,6 @@ async def test_finalization_refreshes_topic_snapshot_before_delivery(
     assert "m99" not in snapshots[0]
     if checks == 2:
         assert snapshots[1][-1] == "m99"
-    assert finalization.generated.cancel_speculative_memory.called is not delivered
 
 
 @pytest.mark.asyncio
@@ -1292,7 +1248,6 @@ async def test_finalization_stops_after_two_outdated_topic_snapshots(tmp_path):
         )
     assert result == []
     assert checks == 2
-    finalization.generated.cancel_speculative_memory.assert_called_once()
     assert log.call_args.kwargs["fields"]["reason"] == "topic_snapshot_outdated"
 
 
@@ -1377,7 +1332,7 @@ async def test_reply_should_be_withheld_reads_the_planner_verdict(monkeypatch, c
         captured.update(kwargs)
         return {"choices": [{"message": {"content": content}}]}, "profile"
 
-    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_fallback_paths", fake_chat)
+    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_profile", fake_chat)
     changed = await topic_shift.reply_should_be_withheld(
         secrets  = {},
         bot_name = "小青",
@@ -1404,7 +1359,7 @@ async def test_context_review_withholds_reply_when_model_is_unavailable(monkeypa
     async def failing_chat(**_kwargs):
         raise TimeoutError
 
-    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_fallback_paths", failing_chat)
+    monkeypatch.setattr(topic_shift, "chat_completions_raw_with_profile", failing_chat)
     log    = Mock()
     kwargs = {
         "bot_name": "小青",

@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from core.args import chinese_number
+
 _EXPLICIT_GROUP_DEFINITION_RE = re.compile(
     r"(?:我们|本群|群里|大家)(?:这儿|这里)?(?:管(?:把)?|把|将)"
     r"(?P<meaning>.{1,160}?)[，,]?(?:叫(?:做|作)?|称作|称为)"
@@ -14,7 +16,10 @@ _EXPLICIT_GROUP_DEFINITION_RE = re.compile(
 def extract_local_term_definitions(
     records: dict[str, str], *, latest_only: bool = True
 ) -> list[dict[str, Any]]:
-    """明示命名句保留定义原文，采用当前对话中最后一次明确定义。"""
+    """明示命名句保留定义原文。
+
+    ``latest_only`` 时同一个词只采用当前对话里最后一次明确定义；否则连被后来更正的旧定义一起返回。
+    """
     definitions    : dict[str, dict[str, Any]] = {}
     all_definitions: list[dict[str, Any]]      = []
     for identifier, source in records.items():
@@ -38,6 +43,12 @@ _QUOTED_RE = re.compile(r'[“‘「『"].*?[”’」』"]')
 def _without_quotes(text: str) -> str:
     """去掉引号内的转述，只保留说话人自己的要求。"""
     return _QUOTED_RE.sub("", text)
+
+
+def _clause_before(text: str, end: int) -> str:
+    """``end`` 之前、同一个分句里的文字，用来看数量词前面有没有否定词。"""
+    start = max((text.rfind(separator, 0, end) for separator in "，,。；;！？!?\n"), default=-1)
+    return text[start + 1 : end]
 
 
 def explicit_output_allocation(text: str) -> dict[str, str]:
@@ -104,30 +115,10 @@ def requested_sentence_count(text: str) -> int | None:
         direct[match.end() :],
     ):
         return None
-    clause_start = max(
-        (direct.rfind(separator, 0, match.start()) for separator in "，,。；;！？!?\n"),
-        default=-1,
-    )
-    if re.search(r"(?:不用|不必|不要|无需|别)", direct[clause_start + 1 : match.start()]):
+    if re.search(r"(?:不用|不必|不要|无需|别)", _clause_before(direct, match.start())):
         return None
     number = match.group(1)
-    return (
-        int(number)
-        if number.isdigit()
-        else {
-            "一": 1,
-            "二": 2,
-            "两": 2,
-            "三": 3,
-            "四": 4,
-            "五": 5,
-            "六": 6,
-            "七": 7,
-            "八": 8,
-            "九": 9,
-            "十": 10,
-        }[number]
-    )
+    return int(number) if number.isdigit() else chinese_number(number)
 
 
 # “800字”“八百字左右”“不超过100字”这类篇幅要求。字数由本地数，不交给模型估：模型数中文字数常差上百。
@@ -142,51 +133,12 @@ _AT_MOST_WORDS = frozenset(
     {"不超过", "不多于", "别超过", "最多", "至多", "以内", "之内", "以下", "内"}
 )
 _AT_LEAST_WORDS = frozenset({"至少", "不少于", "起码", "最少", "以上"})
-_CN_DIGITS      = {
-    "零": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-_CN_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
 # 太短的不算篇幅要求（“十字路口”“八字”），太长的群聊里也写不了。
 _MIN_REQUESTED_CHARS = 20
 _MAX_REQUESTED_CHARS = 20000
 _MARKER_RE           = re.compile(
     r"\[(?:想发表情|想发图片|想发语音|表情包|QQ表情|图片|语音|视频|文件)[:：][^\]\n]*\]"
 )
-
-
-def _chinese_number(text: str) -> int | None:
-    """“八百”“一千五”“三百五十”“一百零五” → 数字。
-
-    “一千五”按口语读作 1500；中间有“零”占位时（“一百零五”“一千零五十”）末位按原值计。
-    """
-
-    total, current, last_unit = 0, 0, 0
-    zero_placeholder = False
-    for char in text:
-        if char == "零":
-            zero_placeholder = True
-            current          = 0
-        elif char in _CN_DIGITS:
-            current = _CN_DIGITS[char]
-        elif char in _CN_UNITS:
-            last_unit = _CN_UNITS[char]
-            total += (current or 1) * last_unit
-            current = 0
-        else:
-            return None
-    if current and last_unit >= 100 and text[-1] in _CN_DIGITS and not zero_placeholder:
-        current *= last_unit // 10
-    return total + current
 
 
 @dataclass(frozen=True)
@@ -222,14 +174,10 @@ def requested_char_count(text: str) -> CharTarget | None:
     targets = []
     for match in _CHAR_COUNT_RE.finditer(direct):
         raw    = match["number"]
-        number = int(raw) if raw.isdigit() else _chinese_number(raw)
+        number = int(raw) if raw.isdigit() else chinese_number(raw)
         if number is None or not _MIN_REQUESTED_CHARS <= number <= _MAX_REQUESTED_CHARS:
             continue
-        clause_start = max(
-            (direct.rfind(separator, 0, match.start()) for separator in "，,。；;！？!?\n"),
-            default=-1,
-        )
-        if re.search(r"不用|不必|不要|无需|别(?!超过)", direct[clause_start + 1 : match.start()]):
+        if re.search(r"不用|不必|不要|无需|别(?!超过)", _clause_before(direct, match.start())):
             continue
         words = {match["prefix"] or "", match["suffix"] or ""}
         mode  = (

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,19 +27,13 @@ from ..utils.time_utils import (
     _parse_time_range_core,
     get_user_local_wall_time,
 )
+from ..utils.tokens import shell_tokens
 from ..utils.validators import normalize_note_fields
 
 if TYPE_CHECKING:
     from ..services.db import Database
 
 
-_ITEM_TYPE_LABELS: Final = {
-    "event" : "日程",
-    "task"  : "待办",
-    "note"  : "笔记",
-    "diary" : "日记",
-    "ledger": "账目",
-}
 _QUOTED_OR_TOKEN_PATTERN: Final = r"""(?:"[^"]*"|'[^']*'|“[^”]*”|\S+)"""
 _TITLE_CONTENT_RE       : Final = re.compile(
     r"^([^\n]+?)\s+content(?::\s*|\s+)(.*)$", re.IGNORECASE | re.DOTALL
@@ -184,6 +177,9 @@ class NoteHandler(DbOpsMixin):
         - /pendo note list [cat:xxx] [#tag] [all|page:n]
         - /pendo note view <id>
         - /pendo note edit <id> <新内容> [cat:xxx] [#tag]
+        - /pendo note append <id> <追加内容>
+        - /pendo note tag <id> #标签 / untag <id> #标签
+        - /pendo note link <id> <关联条目ID>
         - /pendo note delete <id|cat:xxx>
         """
         parts = args.split(maxsplit=1)
@@ -292,9 +288,9 @@ class NoteHandler(DbOpsMixin):
 
         return {"status": "success", "message": message, "item_id": item_id}
 
-    @staticmethod
-    def _type_label(item_type: str) -> str:
-        return _ITEM_TYPE_LABELS.get(item_type, "条目")
+    @classmethod
+    def _type_label(cls, item_type: str) -> str:
+        return cls._ITEM_TYPE_LABELS.get(item_type, "条目")
 
     @staticmethod
     def _merge_references(
@@ -650,10 +646,7 @@ class NoteHandler(DbOpsMixin):
 
     @classmethod
     def _parse_list_filters(cls, filter_text: str, user_now: datetime) -> NoteListFilters:
-        try:
-            tokens = shlex.split((filter_text or "").strip(), comments=False, posix=True)
-        except ValueError as exc:
-            raise ValueError("列表参数中的引号未闭合") from exc
+        tokens = shell_tokens((filter_text or "").strip(), "列表参数")
 
         tokens, show_all, page, page_explicit = _split_note_control_tokens(tokens)
         tokens, named = _split_note_named_tokens(tokens)
@@ -726,17 +719,14 @@ class NoteHandler(DbOpsMixin):
 
     @staticmethod
     def _format_note_rows(notes: list[NoteItem], filters: NoteListFilters, total: int) -> str:
-        display_notes = notes
-        has_more      = not filters.show_all and filters.page * PendoConfig.LIST_PAGE_SIZE < total
-        if not display_notes and filters.page > 1:
-            raise ValueError(f"第 {filters.page} 页没有笔记")
+        has_more = not filters.show_all and filters.page * PendoConfig.LIST_PAGE_SIZE < total
 
         lines: list[str] = []
         offset           = (filters.page - 1) * PendoConfig.LIST_PAGE_SIZE
-        for index, note in enumerate(display_notes, offset + 1):
+        for index, note in enumerate(notes, offset + 1):
             title    = ItemFormatter.truncate_content(note.title or "无标题", 40)
             tags     = ItemFormatter.format_tags(note.tags or [])
-            metadata = f"📂 {note.category or '未分类'}"
+            metadata = f"📂 {note.category or PendoConfig.DEFAULT_CATEGORY}"
             if tags:
                 metadata += f" | 🏷️ {tags}"
             lines.extend((f"{index}. {title}", f"   {metadata}", f"   {note.display_id}", ""))
@@ -780,10 +770,9 @@ class NoteHandler(DbOpsMixin):
                 "message": message + self._format_category_overview(categories),
             }
 
-        try:
-            rows = self._format_note_rows(notes, filters, total)
-        except ValueError as exc:
-            return {"status": "error", "message": f"❌ {exc}"}
+        if not notes and filters.page > 1:
+            return {"status": "error", "message": f"❌ 第 {filters.page} 页没有笔记"}
+        rows = self._format_note_rows(notes, filters, total)
         message += f"{rows}\n\n💡 用 /pendo note view <id> 查看详情"
         return {"status": "success", "message": message}
 
@@ -829,7 +818,7 @@ class NoteHandler(DbOpsMixin):
             tz=display_timezone,
         )
         message += f"🗓️ 创建: {created_str}\n"
-        message += f"📂 分类: {note.category or '未分类'}\n"
+        message += f"📂 分类: {note.category or PendoConfig.DEFAULT_CATEGORY}\n"
 
         if note.tags:
             tags_str = ItemFormatter.format_tags(note.tags)
@@ -1132,9 +1121,9 @@ class NoteHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 请指定ID或cat:xxx"}
 
         try:
-            tokens = shlex.split(args.strip(), comments=False, posix=True)
-        except ValueError:
-            return {"status": "error", "message": "❌ 删除参数中的引号未闭合"}
+            tokens = shell_tokens(args.strip(), "删除参数")
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
         if len(tokens) != 1:
             return {
                 "status" : "error",

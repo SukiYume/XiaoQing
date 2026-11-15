@@ -2,7 +2,7 @@
 Step 3: 构建最终训练数据集
 
 1. 读取正样本 ID（来自 step 1，cache/positive_ids.csv）
-2. 从月度缓存读取所有 astro-ph 论文（来自 step 2，cache/YYMM.json）
+2. 从月度缓存读取所有 astro-ph 论文（来自 step 2，cache/monthly/YYMM.json）
 3. 标记正样本和负样本
 4. 补充获取在笔记中但不在批量数据中的正样本论文（跨类别引用等边缘情况）
 5. 输出最终训练数据集
@@ -76,6 +76,8 @@ OUTPUT_CSV       = TRAIN_MODEL_DIR / "arxiv_papers_with_abstract.csv"
 
 ABSTRACT_CACHE_FILE = CACHE_DIR / "abstract_cache.json"  # 用于缓存补充获取的正样本摘要
 
+API_URL          = "https://export.arxiv.org/api/query"
+HEADERS          = {"User-Agent": "arxiv-training-data-builder/2.0"}
 BATCH_SIZE       = 100
 SLEEP_SECONDS    = 3
 API_TIMEOUT      = 120
@@ -191,9 +193,24 @@ def _parse_feed_entries(entries: Iterable[Any]) -> dict[str, dict[str, str]]:
     return results
 
 
+def _request_feed(params: dict[str, Any]) -> Any:
+    """请求 arXiv API 并在解析前校验 XML 边界，返回 feedparser 结果。"""
+
+    response = requests_request_bounded(
+        "GET",
+        API_URL,
+        limits          = ATOM_BODY_LIMITS,
+        mime_policy     = XML_MIME_POLICY,
+        redirect_policy = ARXIV_REDIRECT_POLICY,
+        headers         = HEADERS,
+        request_kwargs  = {"params": params, "timeout": API_TIMEOUT},
+    )
+    xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
+    return feedparser.parse(xml_body)
+
+
 def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
     """通过 arXiv API 批量获取论文标题和摘要"""
-    url    = "https://export.arxiv.org/api/query"
     params = {
         "id_list"    : ",".join(arxiv_ids),
         "max_results": len(arxiv_ids),
@@ -201,17 +218,7 @@ def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = requests_request_bounded(
-                "GET",
-                url,
-                limits          = ATOM_BODY_LIMITS,
-                mime_policy     = XML_MIME_POLICY,
-                redirect_policy = ARXIV_REDIRECT_POLICY,
-                headers         = {"User-Agent": "arxiv-training-data-builder/2.0"},
-                request_kwargs  = {"params": params, "timeout": API_TIMEOUT},
-            )
-            xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
-            feed = feedparser.parse(xml_body)
+            feed = _request_feed(params)
             break
         except HttpStatusError as e:
             if e.status == 400:
@@ -247,20 +254,7 @@ def _fetch_one_by_one(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
 
 def fetch_abstracts_batch_single(arxiv_id: str) -> dict[str, dict[str, str]]:
     """获取单篇论文"""
-    url    = "https://export.arxiv.org/api/query"
-    params = {"id_list": arxiv_id, "max_results": 1}
-
-    response = requests_request_bounded(
-        "GET",
-        url,
-        limits          = ATOM_BODY_LIMITS,
-        mime_policy     = XML_MIME_POLICY,
-        redirect_policy = ARXIV_REDIRECT_POLICY,
-        headers         = {"User-Agent": "arxiv-training-data-builder/2.0"},
-        request_kwargs  = {"params": params, "timeout": API_TIMEOUT},
-    )
-    xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
-    feed = feedparser.parse(xml_body)
+    feed = _request_feed({"id_list": arxiv_id, "max_results": 1})
     return _parse_feed_entries(feed.entries)
 
 

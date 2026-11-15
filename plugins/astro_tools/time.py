@@ -2,12 +2,13 @@
 时间转换模块
 """
 
-import math
 import re
 from typing import Any
 
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
+
+from .numeric import finite_float
 
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
 _JD_MIN_ABS            = 2_400_000
@@ -41,15 +42,6 @@ def _parse_numeric_time(value: float, Time: Any) -> tuple[Any, str]:
     return Time(value, format="mjd"), "MJD"
 
 
-def _finite_float(value: str) -> float:
-    """解析有限浮点数，统一阻断 NaN/Inf。"""
-
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError("time value must be finite")
-    return result
-
-
 def handle_time(args: str, context: PluginContextProtocol) -> str:
     """处理时间转换命令"""
     args = args.strip()
@@ -70,7 +62,7 @@ def handle_time(args: str, context: PluginContextProtocol) -> str:
             if len(parts) < 2:
                 return f"请提供{description}\n示例: /astro time {subcommand} {example}"
             try:
-                value = _finite_float(parts[1])
+                value = finite_float(parts[1])
                 return _build_time_response(f"{label} {value}", Time(value, format=subcommand))
             except (ValueError, OverflowError):
                 return f"无效的{description}"
@@ -78,7 +70,7 @@ def handle_time(args: str, context: PluginContextProtocol) -> str:
         # 处理一般的时间格式（单个数字依次识别 Unix / JD / MJD）
         numeric_match = _NUMERIC_TIME.fullmatch(args)
         if numeric_match:
-            numeric_value = _finite_float(numeric_match.group(0))
+            numeric_value = finite_float(numeric_match.group(0))
             t, time_type = _parse_numeric_time(numeric_value, Time)
             return _build_time_response(f"{time_type} {numeric_value}", t)
 

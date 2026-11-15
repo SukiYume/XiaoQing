@@ -302,6 +302,25 @@ async def test_natural_language_uses_two_phase_plan(env):
 
 
 @pytest.mark.asyncio
+async def test_plan_reads_the_object_out_of_a_fenced_or_wrapped_reply(env):
+    ctx, _, cat, ai, _ = env
+    ai.complete.side_effect = [
+        SimpleNamespace(content="```json\n" + json.dumps({"devices": ["d1"]}) + "\n```"),
+        SimpleNamespace(content="计划如下：" + json.dumps(plan(value=100)) + "。"),
+    ]
+    assert await planner.plan(ctx, "台灯亮度调最高", cat, {}) == plan(value=100)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["没有 JSON", "[1, 2]", ""])
+async def test_plan_reply_without_an_object_is_a_bridge_error(env, content):
+    ctx, _, cat, ai, _ = env
+    ai.complete.side_effect = [SimpleNamespace(content=content)]
+    with pytest.raises(client.BridgeError, match="自然语言解析暂未完成"):
+        await planner.plan(ctx, "台灯亮度调最高", cat, {})
+
+
+@pytest.mark.asyncio
 async def test_unconfigured_portion_rejects_model_guess(env):
     ctx, io, cat, ai, _ = env
     ai.complete.side_effect = [

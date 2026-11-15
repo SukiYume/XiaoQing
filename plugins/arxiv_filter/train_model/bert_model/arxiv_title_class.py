@@ -13,7 +13,7 @@ arXiv 论文标题分类器训练脚本
     - 支持混合精度训练 (AMP) 加速 GPU 训练
     - 动态 padding 优化显存使用
 
-作者：XiaoQing (Refactored)
+作者：XiaoQing
 """
 
 from __future__ import annotations

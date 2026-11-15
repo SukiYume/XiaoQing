@@ -3,8 +3,10 @@ plugin_base 工具函数单元测试
 """
 
 import asyncio
+import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +15,9 @@ import core.plugin_base as plugin_base
 from core.plugin_base import (
     bounded_external_text,
     build_action,
+    config_bool,
+    config_float,
+    config_int,
     emoji,
     ensure_dir,
     face,
@@ -21,6 +26,9 @@ from core.plugin_base import (
     image,
     image_url,
     load_json,
+    qr_image,
+    requester_user_id,
+    resolve_bot_name,
     run_sync,
     segments,
     split_message_segments,
@@ -114,6 +122,15 @@ class TestBoundedExternalText:
         assert result.endswith("…")
         assert len(result) <= 10
         assert len(result.encode("utf-8")) <= 16
+
+    def test_byte_budget_defaults_to_four_bytes_per_character(self):
+        assert bounded_external_text("砖" * 8, max_chars=8) == "砖" * 8
+        assert bounded_external_text("x" * 20, max_chars=8) == "x" * 7 + "…"
+        for max_bytes in (0, -1, True):
+            with pytest.raises(ValueError, match="max_bytes"):
+                bounded_external_text("x", max_chars=8, max_bytes=max_bytes)
+        with pytest.raises(ValueError, match="max_chars"):
+            bounded_external_text("x", max_chars=0)
 
     def test_replaces_unpaired_surrogates_before_measuring_utf8(self):
         assert bounded_external_text("a\ud800b", max_chars=8, max_bytes=8) == "a?b"
@@ -491,3 +508,73 @@ def test_newline_split_preserves_text_and_length(length):
     parts = ["".join(segment["data"]["text"] for segment in chunk) for chunk in chunks]
     assert max(map(len, parts)) <= length
     assert "".join(parts) == text
+
+
+# ============================================================
+# 二维码、发起人、配置取值
+# ============================================================
+
+
+def test_qr_image_returns_inline_png_segment() -> None:
+    segment = qr_image("https://example.invalid/login?key=abc")
+
+    assert segment["type"] == "image"
+    file = segment["data"]["file"]
+    assert file.startswith("base64://")
+    assert base64.b64decode(file.removeprefix("base64://")).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize(
+    ("current", "event", "expected"),
+    [
+        (10001, {"user_id": 20002}, 10001),
+        (None, {"user_id": 20002}, 20002),
+        (0, {"user_id": 20002}, 20002),
+        (None, {}, None),
+        (None, {"user_id": "20002"}, None),
+        (None, {"user_id": True}, None),
+        (-5, {"user_id": 7}, None),
+    ],
+)
+def test_requester_user_id_accepts_only_positive_integers(current, event, expected) -> None:
+    context = SimpleNamespace(current_user_id=current)
+
+    assert requester_user_id(context, event) == expected
+
+
+def test_requester_user_id_without_current_user_attribute() -> None:
+    assert requester_user_id(object(), {"user_id": 7}) == 7
+
+
+def test_config_bool_accepts_only_booleans() -> None:
+    assert config_bool(False, True) is False
+    assert config_bool(1, True) is True
+    assert config_bool("false", True) is True
+    assert config_bool(None, False) is False
+
+
+def test_config_int_clamps_and_rejects_non_integers() -> None:
+    assert config_int(5, 1, minimum=2, maximum=9) == 5
+    assert config_int(1, 4, minimum=2, maximum=9) == 2
+    assert config_int(99, 4, minimum=2, maximum=9) == 9
+    assert config_int(True, 4, minimum=2, maximum=9) == 4
+    assert config_int(3.0, 4, minimum=2, maximum=9) == 4
+    assert config_int("3", 4, minimum=2, maximum=9) == 4
+
+
+def test_config_float_clamps_and_rejects_non_finite_values() -> None:
+    assert config_float(0.5, 1.0, minimum=0.0, maximum=2.0) == 0.5
+    assert config_float(3, 1.0, minimum=0.0, maximum=2.0) == 2.0
+    assert config_float(-1, 1.0, minimum=0.0, maximum=2.0) == 0.0
+    assert config_float(float("nan"), 1.0, minimum=0.0, maximum=2.0) == 1.0
+    assert config_float(float("inf"), 1.0, minimum=0.0, maximum=2.0) == 1.0
+    assert config_float(True, 1.0, minimum=0.0, maximum=2.0) == 1.0
+    assert config_float("0.5", 1.0, minimum=0.0, maximum=2.0) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("阿青", "阿青"), ("  阿青  ", "阿青"), ("", "小青"), ("  ", "小青"), (None, "小青")],
+)
+def test_resolve_bot_name_strips_and_falls_back_to_default(value, expected) -> None:
+    assert resolve_bot_name(value) == expected

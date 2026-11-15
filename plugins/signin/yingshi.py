@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 from core.bounded_http import (
     JSON_MIME_POLICY,
@@ -14,10 +14,10 @@ from core.bounded_http import (
     aiohttp_request_bounded,
     parse_bounded_json,
 )
-from core.plugin_base import bounded_external_text
+from core.plugin_base import Segments, bounded_external_text, segments
 from core.public_errors import public_error_response
 
-from .types import Context, MessageSegments, segments
+from .types import Context
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +56,12 @@ def _safe_text(value: object, default: str = "") -> str:
     return bounded_external_text(
         value,
         max_chars = _FIELD_CHAR_LIMIT,
-        max_bytes = _FIELD_CHAR_LIMIT * 4,
         default   = default,
     )
 
 
 def _credential_text(value: object) -> str | None:
-    """只接受非空字符串或整数凭据字段。"""
+    """只接受非空字符串或整数的凭据、标识字段。"""
 
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         return None
@@ -142,11 +141,8 @@ async def _get_checkin_id(
     data = payload.get("data")
     if not isinstance(data, Mapping):
         return False, "", "获取签到信息失败"
-    checkin_id = data.get("checkInId")
-    if isinstance(checkin_id, bool) or not isinstance(checkin_id, (str, int)):
-        return False, "", "获取签到信息失败"
-    normalized_id = str(checkin_id).strip()
-    if not normalized_id:
+    normalized_id = _credential_text(data.get("checkInId"))
+    if normalized_id is None:
         return False, "", "获取签到信息失败"
     return True, normalized_id, "获取签到信息成功"
 
@@ -202,7 +198,7 @@ async def _do_checkin(
     return True, "\n".join(lines)
 
 
-async def yingshi_sign(context: Context) -> MessageSegments:
+async def yingshi_sign(context: Context) -> Segments:
     """读取部署凭据并完成查询、签到两个远端步骤。"""
 
     config       = _get_config(context)
@@ -245,12 +241,9 @@ async def yingshi_sign(context: Context) -> MessageSegments:
         prefix = "✅" if ok else "❌"
         return segments(f"{prefix} 影视签到\n{message}")
     except Exception as exc:
-        return cast(
-            MessageSegments,
-            public_error_response(
-                context,
-                exc,
-                logger    = logger,
-                component = "signin.yingshi",
-            ),
+        return public_error_response(
+            context,
+            exc,
+            logger    = logger,
+            component = "signin.yingshi",
         )

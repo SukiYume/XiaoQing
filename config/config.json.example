@@ -26,20 +26,7 @@
                 "cooldown_seconds": 60,
                 "drain_timeout_seconds": 5,
                 "global_sync_queue_limit": 256,
-                "overrides": {
-                        "codex": {
-                                "timeout_seconds": 0
-                        },
-                        "qingssh": {
-                                "timeout_seconds": 0
-                        },
-                        "jupyter": {
-                                "timeout_seconds": 0
-                        },
-                        "shell": {
-                                "timeout_seconds": 0
-                        }
-                }
+                "overrides": {}
         },
         "enable_plugin_watcher": false,
         "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
@@ -128,6 +115,16 @@
                                 "routes": {
                                         "reasoning": ["gpt-terra", "deepseek-flash", "glm-5.2"],
                                         "vision":    ["gpt-terra", "glm-4.6v"]
+                                }
+                        }
+                },
+                "xiaoqing_memory": {
+                        "enabled": true,
+                        "event_keep_days": 365,
+                        "max_llm_calls_per_day": 16,
+                        "ai": {
+                                "routes": {
+                                        "reasoning": ["gpt-terra", "deepseek-flash", "glm-5.2"]
                                 }
                         }
                 },

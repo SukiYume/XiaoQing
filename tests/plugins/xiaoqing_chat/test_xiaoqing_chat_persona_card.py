@@ -179,6 +179,33 @@ def test_config_reads_the_named_card_or_the_bundled_one(tmp_path: Path) -> None:
         load_xiaoqing_chat_config(context_config={}, plugin_dir=missing)
 
 
+def test_deployment_config_overrides_the_bundled_behavior_file(tmp_path: Path) -> None:
+    """仓库里的行为文件是默认值；部署配置里写了的字段（逐层）覆盖它，没写的照用文件里的。"""
+
+    plugin_dir = _plugin_dir(
+        tmp_path,
+        {
+            "proactive": {"enabled": False, "max_per_group_per_day": 5},
+            "debug"    : {"log_steps": False},
+        },
+    )
+    deployment = {
+        "plugins": {
+            "xiaoqing_chat": {
+                "proactive": {"enabled": True, "private_user_ids": [12345]},
+                "schedules": {"xiaoqing_chat.proactive": {"group_ids": [678]}},
+            }
+        }
+    }
+    cfg = load_xiaoqing_chat_config(context_config=deployment, plugin_dir=plugin_dir)
+
+    assert cfg.proactive.enabled is True
+    assert cfg.proactive.private_user_ids == [12345]
+    # 部署配置没写的字段照用文件里的（都不是代码默认值）。
+    assert cfg.proactive.max_per_group_per_day == 5
+    assert cfg.debug.log_steps is False
+
+
 def test_old_persona_fields_are_reported_not_silently_used(tmp_path: Path) -> None:
     logger     = MagicMock()
     plugin_dir = _plugin_dir(

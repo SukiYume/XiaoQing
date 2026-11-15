@@ -268,7 +268,7 @@ async def test_generation_starts_reading_before_candidate_and_reuses_it_on_regen
         reply_generator,
         prepare_reply_generation=AsyncMock(return_value=plan),
         _is_turn_stale=Mock(return_value=False),
-        _load_attempt_memory=AsyncMock(return_value=""),
+        _load_attempt_memory=Mock(return_value=""),
         _build_attempt_messages=Mock(return_value=[]),
         _checker_history_text=Mock(return_value="阿夏：小青你呢"),
         event_sender_name=Mock(return_value="阿夏"),

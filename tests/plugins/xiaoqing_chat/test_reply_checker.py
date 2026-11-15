@@ -189,7 +189,7 @@ async def test_check_reply_allows_when_llm_checker_call_fails(monkeypatch: pytes
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         raise_error,
     )
 
@@ -226,7 +226,7 @@ async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
         return {"choices": [{"message": {"content": "我觉得可以"}}]}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
 
@@ -327,7 +327,7 @@ async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: p
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -386,7 +386,7 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -469,7 +469,7 @@ async def test_checker_preserves_route_thinking_during_json_compatibility_fallba
             raise AIRequestError("request", status=400)
         return {"ok": True}, "/v1/chat/completions"
 
-    monkeypatch.setattr(reply_checker, "chat_completions_raw_with_fallback_paths", fake_request)
+    monkeypatch.setattr(reply_checker, "chat_completions_raw_with_profile", fake_request)
     options = {
         "checker_secrets": {"_route": "checker"},
         "prompt"         : "审查规则",
@@ -638,3 +638,44 @@ def test_soft_style_rejection_keeps_a_visible_failure_code():
 
     assert _failure_code({"non_template": False}) == "non_template"
     assert _failure_code({"non_template": False, "persona_grounded": False}) == "persona_grounding"
+
+
+def test_hard_rejection_and_contract_rejections_share_one_shape():
+    from plugins.xiaoqing_chat.llm.check_result import (
+        context_contract_rejection,
+        hard_rejection,
+        persona_contract_rejection,
+    )
+
+    assert hard_rejection("原因", "instruction_following").is_hard
+    for build, code in (
+        (persona_contract_rejection, "persona_grounding"),
+        (context_contract_rejection, "context_grounding"),
+    ):
+        assert build("原因") == hard_rejection("原因", code)
+
+
+def test_ai_disabled_only_for_an_explicit_none():
+    from plugins.xiaoqing_chat.llm.gateway import ai_disabled
+
+    assert ai_disabled({"_ai": None}) is True
+    assert ai_disabled({}) is False
+    assert ai_disabled({"_ai": object()}) is False
+
+
+def test_media_part_is_readable_ignores_generic_labels():
+    from plugins.xiaoqing_chat.llm.media_evidence import media_part_is_readable
+
+    assert media_part_is_readable({"kind": "image", "description": "一只猫；背景是沙发"}) is True
+    assert media_part_is_readable({"kind": "image", "description": "图片；右下角有字"}) is False
+    assert media_part_is_readable({"kind": "emoji", "description": ""}) is False
+    assert media_part_is_readable({"kind": "text", "description": "一只猫"}) is False
+
+
+def test_requested_sentence_count_reads_chinese_and_arabic_numbers():
+    from plugins.xiaoqing_chat.llm.communication_constraints import requested_sentence_count
+
+    assert requested_sentence_count("用十句话说清楚") == 10
+    assert requested_sentence_count("用两句话说清楚") == 2
+    assert requested_sentence_count("用3句话说明") == 3
+    assert requested_sentence_count("不要用三句话") is None

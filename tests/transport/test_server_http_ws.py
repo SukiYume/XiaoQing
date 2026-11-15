@@ -18,7 +18,7 @@ from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.server_test_support import (
     VERSION,
     BroadcastResult,
-    InboundServer,
+    StandaloneInboundServer,
     _make_request_with_auth,
     _make_request_without_auth,
     _onebot_message_payload,
@@ -41,7 +41,7 @@ def test_health_version_matches_project_metadata() -> None:
 @pytest.mark.unit
 def test_server_initialization(mock_handler):
     """Test InboundServer initialization"""
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "test_token",
@@ -59,7 +59,7 @@ def test_server_initialization(mock_handler):
 @pytest.mark.unit
 def test_server_initialization_http_only(mock_handler):
     """Test InboundServer initialization with HTTP only"""
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host        = "127.0.0.1",
         port        = 8765,
         token       = "test_token",
@@ -75,7 +75,7 @@ def test_server_initialization_http_only(mock_handler):
 @pytest.mark.unit
 def test_server_initialization_ws_only(mock_handler):
     """Test InboundServer initialization with WS only"""
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host        = "127.0.0.1",
         port        = 8765,
         token       = "test_token",
@@ -92,7 +92,7 @@ def test_server_initialization_ws_only(mock_handler):
 def test_server_queue_size_validation(mock_handler):
     """Test queue size is validated correctly"""
     # Valid queue size
-    server1 = InboundServer(
+    server1 = StandaloneInboundServer(
         host          = "127.0.0.1",
         port          = 8765,
         token         = "test_token",
@@ -102,8 +102,8 @@ def test_server_queue_size_validation(mock_handler):
     )
     assert server1._ws_event_queue.maxsize == 100
 
-    # Zero/negative backlog remains bounded to the worker count for delivery.
-    server2 = InboundServer(
+    # 零和负数都收成 1：队列长度只有正整数一种含义。
+    server2 = StandaloneInboundServer(
         host          = "127.0.0.1",
         port          = 8765,
         token         = "test_token",
@@ -111,11 +111,11 @@ def test_server_queue_size_validation(mock_handler):
         enable_ws     = True,
         ws_queue_size = -10,
     )
-    assert server2._ws_event_queue.maxsize == server2._ws_max_workers
-    assert server2._event_dispatcher._capacity == server2._ws_max_workers
+    assert server2._ws_event_queue.maxsize == 1
+    assert server2._event_dispatcher._capacity == server2._ws_max_workers + 1
 
     # Invalid queue size becomes default
-    server3 = InboundServer(
+    server3 = StandaloneInboundServer(
         host          = "127.0.0.1",
         port          = 8765,
         token         = "test_token",
@@ -123,14 +123,14 @@ def test_server_queue_size_validation(mock_handler):
         enable_ws     = True,
         ws_queue_size = "invalid",
     )
-    assert server3._ws_event_queue.maxsize == server3._ws_max_workers
-    assert server3._event_dispatcher._capacity == server3._ws_max_workers
+    assert server3._ws_event_queue.maxsize == 200
+    assert server3._event_dispatcher._capacity == server3._ws_max_workers + 200
 
 
 @pytest.mark.unit
 def test_server_max_workers_validation(mock_handler):
     """Test max_workers is validated correctly"""
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host           = "127.0.0.1",
         port           = 8765,
         token          = "test_token",
@@ -141,7 +141,7 @@ def test_server_max_workers_validation(mock_handler):
     assert server._ws_max_workers == 5
 
     # Negative becomes 1
-    server2 = InboundServer(
+    server2 = StandaloneInboundServer(
         host           = "127.0.0.1",
         port           = 8765,
         token          = "test_token",
@@ -176,7 +176,7 @@ async def test_server_authorized_without_token():
     async def handler(event):
         return []
 
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "",
@@ -330,7 +330,7 @@ async def test_server_post_event_unauthorized(sample_server):
 async def test_server_post_event_rejects_requests_when_token_is_unconfigured():
     """An empty configured token must not expose the event handler."""
     handler = AsyncMock(return_value=[])
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host    = "127.0.0.1",
         port    = 8765,
         token   = "",
@@ -547,22 +547,6 @@ async def test_server_reuses_canonical_payload_without_second_pydantic_validatio
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_server_ws_event_normalizes_raw_message_only_payload(sample_server):
-    """WS raw_message-only events use the same normalized payload as HTTP."""
-    received: list[dict[str, Any]] = []
-
-    async def handler(payload: dict[str, Any]) -> list[dict[str, Any]]:
-        received.append(payload)
-        return []
-
-    sample_server.handler = handler
-    await sample_server._handle_ws_event(AsyncMock(), {"user_id": 1, "raw_message": "/help"})
-
-    assert received[0]["message"] == [{"type": "text", "data": {"text": "/help"}}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
 async def test_server_post_event_rejects_non_object_payload(sample_server):
     """Test POST event rejects non-object JSON payloads."""
     request = _make_request_with_auth("POST", "/event", "test_token")
@@ -659,7 +643,7 @@ async def test_server_ws_handler_unauthorized(sample_server):
 @pytest.mark.unit
 async def test_server_ws_handler_rejects_requests_when_token_is_unconfigured():
     """An empty configured token must not expose the WebSocket endpoint."""
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host  = "127.0.0.1",
         port  = 8765,
         token = "",
@@ -680,7 +664,7 @@ async def test_server_ws_handler_disabled():
     async def handler(event):
         return []
 
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host        = "127.0.0.1",
         port        = 8765,
         token       = "test_token",

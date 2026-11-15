@@ -26,9 +26,10 @@
 | --- | --- |
 | `main.py` | 初始化、关闭、命令路由、权限上下文和调度入口 |
 | `commands/basic_commands.py` | 领养与基础照料 |
-| `commands/advanced_commands.py` | 成长、道具和进阶行为 |
-| `commands/new_commands.py` | 社交、玩法、任务、交易和展示会 |
-| `commands/admin_commands.py` | 群配置、用户管理、活动和审计 |
+| `commands/advanced_commands.py` | 训练、探索、治疗、道具与商店、社交（送礼、互访、留言、排行）、任务、活动、小游戏和称号 |
+| `commands/new_commands.py` | 召回、装扮、交易和展示会 |
+| `commands/admin_commands.py` | 群开关与配置、重置与删除宠物、封禁、日志、统计、展示会公告和活动管理 |
+| `commands/parsing.py` | 命令层共用的参数拆分与目标 QQ 解析 |
 | `models/` | 用户、宠物、道具、背包、群配置和日志模型 |
 | `services/database.py` | Repository 组合入口与连接生命周期 |
 | `services/database_*` | Schema、身份、社区、动作、调度和共享存储能力 |
@@ -82,7 +83,7 @@ data/qingpet/qingpet/qingpet.db
 
 ## 💾 资产一致性
 
-`users` 表保存金币和友情点当前余额，`asset_ledger` 保存每次受控变化。资产 service 在同一事务中更新余额和账本。群统计负责计算余额与账本聚合差异，并把差异交给管理员排查流程。
+`users` 表保存金币和友情点当前余额，`asset_ledger` 保存金币和友情点的每次变化（资产类型 `coins`、`friendship_points`），另记录到期挂单退还的道具（`item`）。资产 service 在同一事务中更新余额和账本。群统计负责计算余额与账本聚合差异，并把差异交给管理员排查流程。
 
 新增资产入口时，请定义：
 
@@ -104,7 +105,7 @@ data/qingpet/qingpet/qingpet.db
 | 入口 | Core 投递 | 数据动作 |
 | --- | --- | --- |
 | `scheduled_decay` | `targeted` | 属性衰减、旅行状态、限频清理和阈值提醒 |
-| `scheduled_daily_reset` | `silent` | 每日计数、年龄与日期边界 |
+| `scheduled_daily_reset` | `silent` | 每日计数、年龄与日期边界；漏跑的日子按跨越天数补结算 |
 | `scheduled_trade_expiry` | `silent` | 到期订单与托管库存 |
 | `scheduled_pet_show_settlement` | `targeted` | 展示会截止、奖励和群结算结果 |
 | `scheduled_weekly_activity` | `targeted` | 周排行、奖励、称号和群结算结果 |

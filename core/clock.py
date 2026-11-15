@@ -1,4 +1,4 @@
-# 时钟与随机源接口：生产环境和确定性测试共用调用契约。
+# 时钟与随机源接口（分发器注入，测试可替换）和按配置时区取当前时间的函数。
 """Clock and random interfaces for testability."""
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 T                       = TypeVar("T")
 DEFAULT_CONFIG_TIMEZONE = "Asia/Shanghai"
+# 按 ``datetime.weekday()`` 取：“周” / “星期”后面的那个字。
+WEEKDAY_NAMES = "一二三四五六日"
 
 
 class IClock(Protocol):

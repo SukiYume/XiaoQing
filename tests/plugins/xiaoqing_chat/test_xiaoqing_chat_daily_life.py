@@ -28,12 +28,17 @@ from plugins.xiaoqing_chat.life.daily_life import (
     refers_to_past,
     today_block,
 )
-from plugins.xiaoqing_chat.life.self_timeline import SelfTimelineStore, new_entry
+from plugins.xiaoqing_chat.life.self_timeline import new_entry
 from plugins.xiaoqing_chat.llm.postprocess import process_llm_response
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
-from plugins.xiaoqing_chat.memory.mention_policy import AVOID, MENTION, TONE, classify
 from plugins.xiaoqing_chat.persona import PersonaCard
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from tests.plugins.xiaoqing_chat.memory_support import (
+    MemoryHarness,
+    chat_context,
+    put_history,
+    self_texts,
+)
 
 # 时间都按 Core 配置的时区理解，测试里同样带上时区。
 ZONE = ZoneInfo("Asia/Shanghai")
@@ -44,11 +49,11 @@ MOMENT = datetime(2026, 10, 28, 15, 0, tzinfo=ZONE)
 def _fresh_module_state():
     life_extract._last_state_read.clear()
     daily_life._last_failure.clear()
-    handlers._last_mood_check.clear()
+    handlers._last_mood_check_at = 0.0
     yield
     life_extract._last_state_read.clear()
     daily_life._last_failure.clear()
-    handlers._last_mood_check.clear()
+    handlers._last_mood_check_at = 0.0
 
 
 # ---------------------------------------------------------------- 今天的生活
@@ -68,6 +73,7 @@ def _record(day: str = "2026-10-28") -> DayRecord:
 def test_today_block_only_reveals_what_already_happened() -> None:
     block = today_block(_record(), MOMENT)
     assert "早八差点迟到" in block and "糖醋里脊卖完了" in block
+    assert "（" not in block.split("\n", 1)[1], "没有细节的旧记录照原样列出"
     assert "土星" not in block, "晚上的事下午还没发生"
     assert today_block(_record("2026-10-27"), MOMENT) == "", "昨天的记录不当成今天"
     assert today_block(_record(), datetime(2026, 10, 28, 7, 0, tzinfo=ZONE)) == ""
@@ -146,12 +152,12 @@ def _mood_runtime(card: str) -> SimpleNamespace:
     )
 
 
-def test_mood_is_shared_across_chats_and_turns_sleepy_at_night() -> None:
+def test_mood_is_one_global_state_and_turns_sleepy_at_night() -> None:
     runtime = _mood_runtime("## 心境〔心境〕\n- 现在有点调皮\n- 现在有点困，话比平时少")
     state   = ChatRuntimeState()
-    first   = handlers._refresh_mood_state(runtime, state, "g1")
-    assert handlers._refresh_mood_state(runtime, state, "u7") == first, "同一时刻各会话同一种心情"
-    sleepy = handlers._refresh_mood_state(runtime, state, "g1", availability="asleep")
+    first   = handlers._refresh_mood_state(runtime, state)
+    assert handlers._refresh_mood_state(runtime, state) == first, "同一时刻是同一种心情"
+    sleepy = handlers._refresh_mood_state(runtime, state, availability="asleep")
     assert "困" in sleepy
 
 
@@ -221,26 +227,6 @@ def test_unpaired_lenticular_brackets_copied_from_summaries_are_dropped() -> Non
 # ---------------------------------------------------------------- 摘要标注
 
 
-def test_mention_label_from_summary_overrides_keywords() -> None:
-    now = time.time()
-    assert (
-        classify(
-            "聊了分手后的番剧推荐",
-            {"type": "topic_summary", "mention": "normal", "updated_at": now},
-        )
-        == MENTION
-    )
-    assert (
-        classify("几个人在争论", {"type": "topic_summary", "mention": "avoid", "updated_at": now})
-        == AVOID
-    )
-    assert (
-        classify("阿梨说起奶奶", {"type": "topic_summary", "mention": "tone", "updated_at": now})
-        == TONE
-    )
-    assert classify("阿梨和老王吵了一架", {"type": "topic_summary", "updated_at": now}) == AVOID
-
-
 # ---------------------------------------------------------------- 抽取限频与私聊范围
 
 
@@ -254,24 +240,26 @@ def _bot(text: str, ts: float) -> StoredMessage:
     )
 
 
-def _state(tmp_path) -> ChatRuntimeState:
+def _state(tmp_path):
     state = ChatRuntimeState()
-    state.self_timeline.bind(tmp_path)
-    state.open_loops.bind(tmp_path)
-    return state
+    state.memory_store.bind_data_dir(tmp_path)
+    return state, MemoryHarness(tmp_path), tmp_path
 
 
-async def _extract(state, chat_id: str, reply: str, model) -> bool:
-    now = time.time()
+async def _extract(setup, chat_id: str, reply: str, model) -> bool:
+    state, memory, data_dir = setup
+    now     = time.time()
+    history = put_history(state, chat_id, [_user("在干嘛", now - 5), _bot(reply, now)])
     with patch.object(life_extract, "chat_completions", model):
         return await life_extract.extract_life_records(
+            context  = chat_context(memory, data_dir, chat_id),
             state    = state,
             life_cfg = XiaoQingChatConfig().life,
             secrets  = {"_ai": object()},
             llm      = XiaoQingChatConfig().llm_config("reasoning"),
             chat_id  = chat_id,
             bot_name = "小青",
-            history  = [_user("在干嘛", now - 5), _bot(reply, now)],
+            history  = history,
             source   = "chat",
         )
 
@@ -302,55 +290,9 @@ async def test_private_status_stays_private_unless_shareable(tmp_path) -> None:
     assert await _extract(
         state, "u7", "刚跟你打完电话，现在在宿舍摸鱼", AsyncMock(return_value=output)
     )
-    assert [entry.text for entry in state.self_timeline.visible("u7")] == [
-        "刚跟阿梨打完电话",
-        "在宿舍摸鱼",
-    ]
-    assert [entry.text for entry in state.self_timeline.visible("g1")] == ["在宿舍摸鱼"]
-
-
-def test_self_timeline_keeps_a_week_of_history(tmp_path) -> None:
-    store = SelfTimelineStore()
-    store.bind(tmp_path)
-    now = time.time()
-    old = new_entry(
-        chat_id = "g1",
-        kind    = "state",
-        text    = "三天前在图书馆",
-        hours   = 1,
-        source  = "chat",
-        now     = now - 3 * 86400,
-    )
-    stale = new_entry(
-        chat_id="g1", kind="state", text="十天前的事", hours=1, source="chat", now=now - 10 * 86400
-    )
-    store.apply(added=[old, stale], chat_id="g1", max_entries=50, now=now)
-    store.apply(chat_id="g1", max_entries=50, now=now)
-    assert [entry.text for entry in store.history("g2", since=now - 5 * 86400)] == [
-        "三天前在图书馆"
-    ]
-    assert store.visible("g1", now=now) == [], "过期的不再当作近况"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("min_messages,called", [(8, True), (20, False)])
-async def test_person_facts_threshold_is_configurable(tmp_path, min_messages, called) -> None:
-    from plugins.xiaoqing_chat.memory import knowledge_extract
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-
-    history = [_user(f"第{index}句", float(index + 1)) for index in range(9)]
-    model = AsyncMock(return_value='{"facts": []}')
-    with patch.object(knowledge_extract, "chat_completions", model):
-        await knowledge_extract.maybe_extract_person_facts(
-            data_dir     = tmp_path,
-            secrets      = {"_ai": object()},
-            memory_db    = MemoryDB(),
-            chat_id      = "u7",
-            history      = history,
-            llm          = XiaoQingChatConfig().llm_config("reasoning"),
-            min_messages = min_messages,
-        )
-    assert model.await_count == (1 if called else 0)
+    memory = state[1]
+    assert sorted(self_texts(memory, "u7")) == sorted(["刚跟阿梨打完电话", "在宿舍摸鱼"])
+    assert self_texts(memory, "g1") == ["在宿舍摸鱼"]
 
 
 # ---------------------------------------------------------------- 气泡之间真的停顿
@@ -443,7 +385,7 @@ async def test_near_duplicate_status_is_not_recorded_twice(tmp_path) -> None:
         ensure_ascii=False,
     )
     assert await _extract(state, "g1", "刚摸鱼呢，现在也还在摸鱼", AsyncMock(return_value=output))
-    assert [entry.text for entry in state.self_timeline.visible("g1")] == ["刚摸鱼"]
+    assert self_texts(state[1], "g1") == ["刚摸鱼"]
 
 
 def test_no_image_this_turn_never_falls_back_to_having_seen_it() -> None:
@@ -470,3 +412,50 @@ def test_social_turns_fall_back_to_presence_instead_of_unsure(text: str, expecte
     plan = SimpleNamespace(event={}, text=text, request_id="r1")
     texts, _step = _forced_fallback_texts(plan, "context_grounding")
     assert texts[0] == expected
+
+
+def test_event_detail_is_kept_shown_and_survives_reload(tmp_path) -> None:
+    events = daily_life._parse_events(
+        [
+            {
+                "at"    : "12:10",
+                "text"  : "午饭打了糖醋里脊",
+                "detail": "排到我正好是最后一份  阿姨多给了半勺汁",
+            },
+            {"at": "20:00", "text": "天文社看了土星", "detail": "环看得很清楚"},
+            {"at": "08:05", "text": "早八踩点进教室"},
+        ]
+    )
+    assert [e.detail for e in events] == [
+        "",
+        "排到我正好是最后一份 阿姨多给了半勺汁",
+        "环看得很清楚",
+    ]
+    store = DailyLifeStore()
+    store.bind(tmp_path)
+    store.save(DayRecord(day="2026-10-28", events=events, generated_at=1.0), now=MOMENT)
+    again = DailyLifeStore()
+    again.bind(tmp_path)
+    record = again.get("2026-10-28")
+    assert record is not None and record.events == events
+    block = today_block(record, MOMENT)
+    assert "- 12:10 午饭打了糖醋里脊（排到我正好是最后一份 阿姨多给了半勺汁）" in block
+    assert "- 08:05 早八踩点进教室\n" in block and "土星" not in block
+    assert today_block(record, MOMENT, header="今天的事：").startswith("今天的事：\n- 08:05")
+    assert "detail" in daily_life._SYSTEM
+
+
+def test_generation_sees_the_last_few_days_so_today_is_not_the_same_again() -> None:
+    older = DayRecord(day="2026-10-26", events=(DayEvent(600, "课上抄漏了一个负号"),))
+    messages = daily_life.build_messages(
+        persona = "p",
+        routine = ["08:00-12:00 上课"],
+        moment  = MOMENT,
+        earlier = [_record("2026-10-27"), None, older],
+    )
+    system, user = messages[0]["content"], messages[1]["content"]
+    assert "不同方面" in system and "不和前几天重样" in system
+    assert "前几天发生过的事：\n- 10-27：早八差点迟到；食堂糖醋里脊卖完了；天文社看了土星" in user
+    assert "- 10-26：课上抄漏了一个负号" in user
+    blank = daily_life.build_messages(persona="p", routine=[], moment=MOMENT)[1]["content"]
+    assert "前几天发生过的事：（没有记录）" in blank

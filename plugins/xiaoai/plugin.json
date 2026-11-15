@@ -42,7 +42,7 @@
                     "examples": ["/米家 调用 {\"operations\":[{\"device\":\"d1\",\"capability\":\"p2.1\",\"op\":\"read\"}]}"],
                     "invalid_examples": ["/米家 调用 []"]
                 },
-                {"name": "天气", "help": "查询指定城市当前天气，省略城市使用已保存的默认城市；天气城市命令设置默认值。", "usage": "/米家 天气 [城市]", "effect": "read", "examples": ["/米家 天气 北京", "/米家 天气"], "invalid_examples": ["/米家 天气 \u0000"]},
+                {"name": "天气", "help": "查询指定城市的天气预报，省略城市使用已保存的默认城市；天气城市命令设置默认值。", "usage": "/米家 天气 [城市]", "effect": "read", "examples": ["/米家 天气 北京", "/米家 天气"], "invalid_examples": ["/米家 天气 \u0000"]},
                 {"name": "天气城市", "help": "保存默认天气城市，后续天气查询可省略城市。", "usage": "/米家 天气城市 <城市>", "effect": "write", "examples": ["/米家 天气城市 北京"], "invalid_examples": ["/米家 天气城市"]},
                 {"name": "份量", "help": "设置喂食器每份估算克数，需正整数；省略设备时选择唯一喂食器。有多个喂食器时指定设备。", "usage": "/米家 份量 [设备名或编号] <克数>", "effect": "write", "examples": ["/米家 份量 10", "/米家 份量 d1 10"], "invalid_examples": ["/米家 份量 0"]},
                 {"name": "设置", "help": "查看登录、偏好与高级操作帮助以及已保存偏好。", "usage": "/米家 设置", "examples": ["/米家 设置"], "invalid_examples": ["/米家 设置 多余参数"]},

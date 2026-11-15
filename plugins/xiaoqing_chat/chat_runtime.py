@@ -7,9 +7,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
+from core.plugin_base import resolve_bot_name
+
+from .config.config import XiaoQingChatConfig, behavior_config_path, load_xiaoqing_chat_config
 from .llm.llm_config import LLMCallConfig
-from .persona import persona_card_path, resolve_bot_name
+from .persona import persona_card_path
 from .runtime_state import ChatRuntime
 from .runtime_state import get_state as _state
 from .utils.wall_clock import configure_wall_clock
@@ -28,27 +30,24 @@ def chat_lock(chat_id: str):
     return _state().get_lock(chat_id)
 
 
+def optional_capability(context: Any, name: str) -> Any:
+    """框架提供给插件的某项能力（如 ``agent_turn``、``life_context``）；没有这项能力时是 ``None``。"""
+
+    return getattr(getattr(context, "capabilities", None), name, None)
+
+
 def configured_bot_name(context: Any) -> str:
     """读取并规范化当前机器人名称。"""
     return resolve_bot_name(context.get_settings_snapshot().config.get("bot_name"))
 
 
 def load_runtime(context: Any) -> ChatRuntime:
-    """加载或返回缓存的运行配置，并按实际加载优先级监听配置文件。"""
+    """加载或返回缓存的运行配置；行为配置文件或人设卡改动、部署配置变化时重新加载。"""
     settings = context.get_settings_snapshot()
     configure_wall_clock(settings.config.get("timezone"))
     plugin_dir: Path = context.plugin_dir
     config_key       = str(plugin_dir)
-    # 监听器必须观察加载器实际读取的路径；config/ 子目录优先于插件根目录。
-    config_path_sub  = plugin_dir / "config" / "xiaoqing_config.json"
-    config_path_root = plugin_dir / "xiaoqing_config.json"
-    if config_path_sub.exists():
-        config_path = config_path_sub
-    elif config_path_root.exists():
-        config_path = config_path_root
-    else:
-        config_path = config_path_sub  # 文件尚不存在时仍监听约定路径。
-    config_mtime = _mtime_ns(config_path)
+    config_mtime     = _mtime_ns(behavior_config_path(plugin_dir))
 
     state  = _state()
     cached = state.get_runtime(config_key)
@@ -65,14 +64,8 @@ def load_runtime(context: Any) -> ChatRuntime:
         cfg = load_xiaoqing_chat_config(
             context_config=settings.config, plugin_dir=plugin_dir, logger=context.logger
         )
-        compiled = []
-        for pattern in cfg.ban_regex:
-            try:
-                compiled.append(re.compile(pattern))
-            except re.error:
-                continue
-
-        runtime = ChatRuntime(cfg=cfg, compiled_ban_regex=compiled)
+        # ban_regex 在配置校验时已经确认都能编译。
+        runtime = ChatRuntime(cfg=cfg, compiled_ban_regex=[re.compile(p) for p in cfg.ban_regex])
         from .memory.knowledge_base import ensure_knowledge_index
 
         ensure_knowledge_index(

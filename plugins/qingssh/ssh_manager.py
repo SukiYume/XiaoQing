@@ -11,8 +11,8 @@ import re
 import shlex
 import threading
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
@@ -124,6 +124,30 @@ OutputCallback = Callable[[str], Awaitable[Any]]
 _T             = TypeVar("_T")
 
 
+class _BoundedOutputCollector:
+    """作为输出回调收集命令输出，最多保留 ``limit`` 个字符并记录是否被截断。"""
+
+    def __init__(self, limit: int) -> None:
+        self._limit             = limit
+        self._chunks: list[str] = []
+        self._captured          = 0
+        self.truncated          = False
+
+    async def __call__(self, text: str) -> None:
+        remaining = self._limit - self._captured
+        if remaining <= 0:
+            self.truncated = self.truncated or bool(text)
+            return
+        piece = text[:remaining]
+        self._chunks.append(piece)
+        self._captured += len(piece)
+        self.truncated = self.truncated or len(text) > remaining
+
+    @property
+    def text(self) -> str:
+        return "".join(self._chunks)
+
+
 # SFTP 通道默认 timeout=None：网络半断时 stat/get/listdir 会无限等待，取消也只能干等线程。
 _SFTP_IO_TIMEOUT_SECONDS = 30.0
 
@@ -193,6 +217,18 @@ def _release_keyed_lock(
         locks.pop(key, None)
 
 
+def has_jump_host(config: Mapping[str, Any]) -> bool:
+    """服务器或 ``~/.ssh/config`` 条目是否声明了跳板（ProxyCommand 或 ProxyJump）。"""
+
+    return bool(config.get("proxycommand") or config.get("proxyjump"))
+
+
+def ssh_config_path() -> Path:
+    """当前用户的 OpenSSH 客户端配置文件路径。"""
+
+    return Path.home() / ".ssh" / "config"
+
+
 def _expand_proxycommand(proxycommand: str, server: dict[str, Any]) -> str:
     return (
         proxycommand.replace("%h", server["host"])
@@ -246,16 +282,14 @@ def _parse_proxyjump_command(proxycommand: str) -> dict[str, Any] | None:
         if part == "-p":
             if idx + 1 >= len(parts):
                 return None
-            try:
-                jump_port = int(parts[idx + 1])
-            except ValueError:
+            jump_port = parse_int(parts[idx + 1], minimum=1, maximum=65535)
+            if jump_port is None:
                 return None
             idx += 2
             continue
         if part.startswith("-p") and len(part) > 2:
-            try:
-                jump_port = int(part[2:])
-            except ValueError:
+            jump_port = parse_int(part[2:], minimum=1, maximum=65535)
+            if jump_port is None:
                 return None
             idx += 1
             continue
@@ -277,7 +311,7 @@ def _parse_proxyjump_command(proxycommand: str) -> dict[str, Any] | None:
     if "@" in jump_host and not jump_user:
         jump_user, jump_host = jump_host.split("@", 1)
 
-    if not jump_host or jump_user == "" or (jump_port is not None and not 1 <= jump_port <= 65535):
+    if not jump_host or jump_user == "":
         return None
 
     return {
@@ -339,16 +373,12 @@ def _parse_proxyjump_spec(proxyjump: str) -> dict[str, Any] | None:
     }
 
 
-def _open_command_channel(
-    transport: Any, command: str, use_pty: bool, cancelled: threading.Event
-) -> Any:
+def _open_command_channel(transport: Any, command: str, cancelled: threading.Event) -> Any:
     ch = transport.open_session()
     try:
         if cancelled.is_set():
             ch.close()
             return None
-        if use_pty:
-            ch.get_pty()
         ch.set_combine_stderr(True)
         # setsid 让命令独占进程组，停止时能整组收回；Git Bash 和 macOS 没有 setsid，
         # 退回普通后台进程，停止时只能直接结束该进程。
@@ -605,11 +635,11 @@ class SSHManager:
         self._ssh_config = None
         if not PARAMIKO_AVAILABLE or SSHConfig is None:
             return
-        ssh_config_path = Path.home() / ".ssh" / "config"
-        if not ssh_config_path.is_file():
+        config_path = ssh_config_path()
+        if not config_path.is_file():
             return
         try:
-            text = await asyncio.to_thread(ssh_config_path.read_text, encoding="utf-8")
+            text = await asyncio.to_thread(config_path.read_text, encoding="utf-8")
             config = SSHConfig()
             config.parse(StringIO(text))
             self._ssh_config = config
@@ -694,12 +724,10 @@ class SSHManager:
             key_path = Path(os.path.expanduser(config["identityfile"][0])).as_posix()
 
         server_config: dict[str, Any] = {
-            "host"           : config["hostname"],
-            "port"           : config["port"],
-            "username"       : config["user"],
-            "auth_type"      : "key" if key_path else "agent",
-            "from_ssh_config": True,
-            "ssh_config_host": host_name,
+            "host"     : config["hostname"],
+            "port"     : config["port"],
+            "username" : config["user"],
+            "auth_type": "key" if key_path else "agent",
         }
         if key_path:
             server_config["key_path"] = key_path
@@ -709,16 +737,14 @@ class SSHManager:
             server_config["proxyjump"] = config["proxyjump"]
         return config, server_config
 
-    async def import_from_ssh_config(
-        self, host_name: str, alias: str | None = None
-    ) -> tuple[bool, str]:
-        """从 ~/.ssh/config 导入一个服务器配置。"""
+    async def import_from_ssh_config(self, host_name: str) -> tuple[bool, str]:
+        """从 ~/.ssh/config 导入一个服务器配置，保存名与 Host 名相同。"""
 
         imported_server = self._build_imported_server(host_name)
         if imported_server is None:
             return False, f"在 ~/.ssh/config 中未找到 Host: {host_name}"
         config, server_config = imported_server
-        name = alias or host_name
+        name = host_name
 
         async with self._config_lock:
             if name in self.servers:
@@ -730,7 +756,7 @@ class SSHManager:
             if cancellation_requested:
                 raise asyncio.CancelledError
 
-        if config.get("proxycommand") or config.get("proxyjump"):
+        if has_jump_host(config):
             return True, f"✅ 已导入: {name}（使用跳板机）"
         return True, f"✅ 已导入: {name} ({config['hostname']}:{config['port']})"
 
@@ -758,14 +784,13 @@ class SSHManager:
         self,
         name: str,
         host: str,
-        port: int                = 22,
-        username: str            = "root",
-        auth_type: str           = "password",
-        password: str | None     = None,
-        password_ref: str | None = None,
-        key_path: str | None     = None,
+        port: int            = 22,
+        username: str        = "root",
+        auth_type: str       = "password",
+        password: str | None = None,
+        key_path: str | None = None,
     ) -> bool:
-        """新增服务器；密钥与配置文件以同一逻辑事务提交。"""
+        """新增服务器；密码先写入 Core 密钥存储，再与配置文件以同一逻辑事务提交。"""
 
         if not all(isinstance(item, str) and item for item in (name, host, username)):
             raise ValueError("name, host and username must be non-empty strings")
@@ -773,16 +798,15 @@ class SSHManager:
             raise ValueError("SSH port must be between 1 and 65535")
         if auth_type not in {"password", "key", "agent"}:
             raise ValueError("unsupported SSH authentication type")
-        if password is not None and password_ref is not None:
-            raise ValueError("password and password_ref are mutually exclusive")
-        if auth_type == "password" and password is None and not password_ref:
+        if auth_type == "password" and password is None:
             raise ValueError("password authentication requires a credential")
         if auth_type == "key" and not key_path:
             raise ValueError("key authentication requires key_path")
 
-        created_refs: list[str] = []
-        cancellation_requested  = False
-        committed               = False
+        created_refs: list[str]  = []
+        password_ref: str | None = None
+        cancellation_requested   = False
+        committed                = False
         async with self._config_lock:
             if name in self.servers:
                 return False
@@ -974,47 +998,51 @@ class SSHManager:
         async with self._connection_registry_lock:
             self._pending_connection_keys.discard(key)
 
-    def _resolve_connection_server(
+    def resolve_server(
         self,
         name: str,
         *,
-        username_override: str | None,
-    ) -> tuple[dict[str, Any] | None, str]:
-        """解析已保存配置；找不到时再回退到 OpenSSH 配置。"""
+        username_override: str | None = None,
+    ) -> dict[str, Any] | None:
+        """解析已保存配置；找不到时再回退到显式声明的 OpenSSH Host，并套用用户名覆盖。"""
 
         server = self.get_server(name)
         if server is None:
             ssh_config = self.get_ssh_config_for_host(name)
-            if ssh_config:
-                server = {
-                    "host"     : ssh_config["hostname"],
-                    "port"     : ssh_config["port"],
-                    "username" : ssh_config["user"],
-                    "auth_type": "key" if ssh_config.get("identityfile") else "agent",
-                    "key_path": (
-                        os.path.expanduser(ssh_config["identityfile"][0])
-                        if ssh_config.get("identityfile")
-                        else None
-                    ),
-                }
-                if ssh_config.get("proxycommand"):
-                    server["proxycommand"] = ssh_config["proxycommand"]
-                if ssh_config.get("proxyjump"):
-                    server["proxyjump"] = ssh_config["proxyjump"]
+            if not ssh_config:
+                return None
+            server = {
+                "host"     : ssh_config["hostname"],
+                "port"     : ssh_config["port"],
+                "username" : ssh_config["user"],
+                "auth_type": "key" if ssh_config.get("identityfile") else "agent",
+                "key_path": (
+                    os.path.expanduser(ssh_config["identityfile"][0])
+                    if ssh_config.get("identityfile")
+                    else None
+                ),
+            }
+            if ssh_config.get("proxycommand"):
+                server["proxycommand"] = ssh_config["proxycommand"]
+            if ssh_config.get("proxyjump"):
+                server["proxyjump"] = ssh_config["proxyjump"]
 
         if not server:
-            available_hosts = self.get_ssh_config_hosts()
-            if not available_hosts:
-                return None, f"❌ 服务器 '{name}' 不存在"
-            hint = f"\n💡 ~/.ssh/config 中可用的 Host: {', '.join(available_hosts[:5])}"
-            if len(available_hosts) > 5:
-                hint += f" ... (共 {len(available_hosts)} 个)"
-            return None, f"❌ 服务器 '{name}' 不存在{hint}"
-
+            return None
         if username_override:
-            server             = server.copy()
             server["username"] = username_override
-        return server, ""
+        return server
+
+    def _missing_server_message(self, name: str) -> str:
+        """服务器不存在时的提示；~/.ssh/config 有可用 Host 时一并列出。"""
+
+        available_hosts = self.get_ssh_config_hosts()
+        if not available_hosts:
+            return f"❌ 服务器 '{name}' 不存在"
+        hint = f"\n💡 ~/.ssh/config 中可用的 Host: {', '.join(available_hosts[:5])}"
+        if len(available_hosts) > 5:
+            hint += f" ... (共 {len(available_hosts)} 个)"
+        return f"❌ 服务器 '{name}' 不存在{hint}"
 
     @staticmethod
     def _connection_audit_value(name: str, server: dict[str, Any]) -> str:
@@ -1077,10 +1105,10 @@ class SSHManager:
         *,
         known_hosts_path: Path,
     ) -> None:
+        if not has_jump_host(server):
+            return
         proxycommand = server.get("proxycommand")
         proxyjump    = server.get("proxyjump")
-        if not proxycommand and not proxyjump:
-            return
         if proxyjump:
             jump_target = _parse_proxyjump_spec(proxyjump) if isinstance(proxyjump, str) else None
         else:
@@ -1309,12 +1337,9 @@ class SSHManager:
                 if not reserved:
                     return False, f"❌ SSH 活跃连接已达到配置上限 ({max_connections})"
                 try:
-                    server, error_message = self._resolve_connection_server(
-                        name,
-                        username_override=username_override,
-                    )
+                    server = self.resolve_server(name, username_override=username_override)
                     if server is None:
-                        return False, error_message
+                        return False, self._missing_server_message(name)
                     return await self._connect_resolved_server(
                         key    = key,
                         name   = name,
@@ -1484,7 +1509,6 @@ class SSHManager:
         name: str,
         command: str,
         output_callback: OutputCallback,
-        use_pty: bool = False,
         *,
         timeout: float | None = None,
     ) -> int:
@@ -1502,7 +1526,6 @@ class SSHManager:
             name,
             command,
             output_callback,
-            use_pty=use_pty,
         )
         try:
             if effective_timeout == 0:
@@ -1523,13 +1546,9 @@ class SSHManager:
                 self._terminate_active_command(key),
                 name="qingssh-remote-command-cleanup",
             )
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    continue
             try:
-                cleanup.result()
+                # 重复取消也不能打断远端收尾；下面的 raise 重新抛出原取消。
+                await await_owned_task(cleanup, DeferredCancellation())
             except Exception as exc:
                 self._log_sensitive(
                     "error",
@@ -1547,7 +1566,6 @@ class SSHManager:
         name: str,
         command: str,
         output_callback: OutputCallback,
-        use_pty: bool = False,
     ) -> int:
         """
         execute_command_stream 的实际执行逻辑。
@@ -1574,7 +1592,7 @@ class SSHManager:
 
             # 建通道线程持有资源直至交接；取消标记阻止尚未发出的远端执行。
             opening = asyncio.create_task(
-                asyncio.to_thread(_open_command_channel, transport, command, use_pty, cancelled)
+                asyncio.to_thread(_open_command_channel, transport, command, cancelled)
             )
             try:
                 channel = await asyncio.shield(opening)
@@ -1682,25 +1700,22 @@ class SSHManager:
     async def execute_command(
         self, user_id: str, group_id: str | None, name: str, command: str
     ) -> tuple[bool, str]:
-        """执行命令并返回受长度限制的完整输出。"""
+        """以默认超时执行命令；输出超过 ``MAX_OUTPUT_LENGTH`` 个字符时截断并附提示。"""
         if not self.is_connected(user_id, group_id, name):
             return False, "❌ 未连接到服务器"
 
-        output_buffer: list[str] = []
-
-        async def collector(text: str) -> None:
-            output_buffer.append(text)
+        collector = _BoundedOutputCollector(MAX_OUTPUT_LENGTH)
 
         try:
             exit_code = await self.execute_command_stream(
                 user_id, group_id, name, command, collector
             )
 
-            result = "".join(output_buffer)
             if exit_code == EXIT_CODE_TIMEOUT:
                 return False, f"❌ 命令执行超时 ({COMMAND_TIMEOUT}s)"
-            if len(result) > MAX_OUTPUT_LENGTH:
-                result = result[:MAX_OUTPUT_LENGTH] + "\n\n... (输出被截断)"
+            result = collector.text
+            if collector.truncated:
+                result += "\n\n... (输出被截断)"
             output = result.strip() or "(无输出)"
             if exit_code != 0:
                 return False, output
@@ -1722,7 +1737,7 @@ class SSHManager:
                     "host"    : str(config.get("host", "") or ""),
                     "port"    : config.get("port"),
                     "username": str(config.get("username", "") or ""),
-                    "via_jump": bool(config.get("proxycommand") or config.get("proxyjump")),
+                    "via_jump": has_jump_host(config),
                 }
             )
         return summaries
@@ -1757,20 +1772,7 @@ class SSHManager:
         owner = f"agent-{uuid.uuid4().hex[:12]}"
         key   = self.build_connection_key(owner, None, name)
         self.service_connection_keys.add(key)
-        chunks: list[str] = []
-        captured          = 0
-        truncated         = False
-
-        async def collector(text: str) -> None:
-            nonlocal captured, truncated
-            remaining = max_output_chars - captured
-            if remaining <= 0:
-                truncated = truncated or bool(text)
-                return
-            piece = text[:remaining]
-            chunks.append(piece)
-            captured += len(piece)
-            truncated = truncated or len(text) > remaining
+        collector = _BoundedOutputCollector(max_output_chars)
 
         try:
             connected, message = await self.connect(owner, None, name)
@@ -1787,8 +1789,8 @@ class SSHManager:
             return {
                 "ok"       : exit_code == 0,
                 "exit_code": exit_code,
-                "output"   : "".join(chunks),
-                "truncated": truncated,
+                "output"   : collector.text,
+                "truncated": collector.truncated,
                 "timed_out": exit_code == EXIT_CODE_TIMEOUT,
             }
         finally:
@@ -1796,6 +1798,27 @@ class SSHManager:
             self.service_connection_keys.discard(key)
 
     # ──────────────────── SFTP 文件读取 ────────────────────
+
+    @asynccontextmanager
+    async def _sftp_session(self, client: Any) -> AsyncIterator[Any]:
+        """打开带读写超时的 SFTP 会话；取消和失败路径都会等线程收尾并关闭会话。"""
+
+        sftp, cancelled = await _finish_blocking_call(_open_sftp_bounded, client)
+        try:
+            if cancelled:
+                raise asyncio.CancelledError
+            if sftp is None:
+                raise RuntimeError("SFTP session creation returned no session")
+            yield sftp
+        finally:
+            if sftp is not None:
+                try:
+                    await _owned_blocking_call(sftp.close)
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        f"SFTP close status=failed error_type={audit_error_type(exc)}",
+                    )
 
     async def download_file(
         self,
@@ -1819,25 +1842,20 @@ class SSHManager:
         if client is None:
             return False, f"❌ 服务器 '{name}' 未连接"
 
-        target_path      = Path(local_path)
-        temporary_path   = target_path.with_name(f".{target_path.name}.{uuid.uuid4().hex}.part")
-        sftp: Any | None = None
+        target_path    = Path(local_path)
+        temporary_path = target_path.with_name(f".{target_path.name}.{uuid.uuid4().hex}.part")
         try:
-            sftp, cancelled = await _finish_blocking_call(_open_sftp_bounded, client)
-            if cancelled:
-                raise asyncio.CancelledError
-            if sftp is None:
-                raise RuntimeError("SFTP session creation returned no session")
-            stat_result = await _owned_blocking_call(sftp.stat, remote_path)
-            if int(getattr(stat_result, "st_size", 0)) > max_bytes:
-                return False, f"❌ 文件超过 {max_bytes} 字节安全上限"
-            await _owned_blocking_call(sftp.get, remote_path, str(temporary_path))
-            local_stat = await asyncio.to_thread(temporary_path.stat)
-            local_size = local_stat.st_size
-            if local_size > max_bytes:
-                return False, f"❌ 文件超过 {max_bytes} 字节安全上限"
-            await _owned_blocking_call(os.replace, temporary_path, target_path)
-            return True, f"✅ 文件已下载: {remote_path}"
+            async with self._sftp_session(client) as sftp:
+                stat_result = await _owned_blocking_call(sftp.stat, remote_path)
+                if int(getattr(stat_result, "st_size", 0)) > max_bytes:
+                    return False, f"❌ 文件超过 {max_bytes} 字节安全上限"
+                await _owned_blocking_call(sftp.get, remote_path, str(temporary_path))
+                local_stat = await asyncio.to_thread(temporary_path.stat)
+                local_size = local_stat.st_size
+                if local_size > max_bytes:
+                    return False, f"❌ 文件超过 {max_bytes} 字节安全上限"
+                await _owned_blocking_call(os.replace, temporary_path, target_path)
+                return True, f"✅ 文件已下载: {remote_path}"
         except FileNotFoundError:
             return False, f"❌ 远程文件不存在: {remote_path}"
         except PermissionError:
@@ -1857,14 +1875,6 @@ class SSHManager:
         finally:
             with suppress(OSError):
                 temporary_path.unlink(missing_ok=True)
-            if sftp is not None:
-                try:
-                    await _owned_blocking_call(sftp.close)
-                except Exception as exc:
-                    self._log(
-                        "warning",
-                        f"SFTP close status=failed error_type={audit_error_type(exc)}",
-                    )
 
     async def list_files(
         self,
@@ -1884,23 +1894,18 @@ class SSHManager:
         if client is None:
             return False, []
 
-        sftp: Any | None = None
         try:
-            sftp, cancelled = await _finish_blocking_call(_open_sftp_bounded, client)
-            if cancelled:
-                raise asyncio.CancelledError
-            if sftp is None:
-                raise RuntimeError("SFTP session creation returned no session")
-            all_files = await _owned_blocking_call(sftp.listdir, remote_dir)
-            files     = sorted(
-                filename
-                for filename in all_files
-                if isinstance(filename, str) and fnmatch.fnmatchcase(filename, pattern)
-            )
-            # SFTP ``listdir`` 已经一次性取得完整目录，随后 ``sorted`` 也已
-            # 构造完整匹配列表；在这里截断不会降低读取或峰值内存，只会让
-            # showimg 的后续页永久不可达。下载和 QQ 发送仍由上层按每页五张控制。
-            return True, files
+            async with self._sftp_session(client) as sftp:
+                all_files = await _owned_blocking_call(sftp.listdir, remote_dir)
+                files     = sorted(
+                    filename
+                    for filename in all_files
+                    if isinstance(filename, str) and fnmatch.fnmatchcase(filename, pattern)
+                )
+                # SFTP ``listdir`` 已经一次性取得完整目录，随后 ``sorted`` 也已
+                # 构造完整匹配列表；在这里截断不会降低读取或峰值内存，只会让
+                # showimg 的后续页永久不可达。下载和 QQ 发送仍由上层按每页五张控制。
+                return True, files
         except Exception as exc:
             self._log_sensitive(
                 "error",
@@ -1910,15 +1915,6 @@ class SSHManager:
                 exc       = exc,
             )
             return False, []
-        finally:
-            if sftp is not None:
-                try:
-                    await _owned_blocking_call(sftp.close)
-                except Exception as exc:
-                    self._log(
-                        "warning",
-                        f"SFTP close status=failed error_type={audit_error_type(exc)}",
-                    )
 
     # ──────────────────── 生命周期关闭 ────────────────────
 
@@ -1962,13 +1958,7 @@ async def get_manager(context: Any) -> SSHManager:
     if existing is not None and hasattr(context, "logger"):
         context.logger.warning("Replacing invalid QingSSH manager state")
 
-    configured_data_dir = getattr(context, "data_dir", None)
-    data_dir            = (
-        Path(configured_data_dir)
-        if isinstance(configured_data_dir, (str, os.PathLike))
-        else Path(context.plugin_dir) / "data"
-    )
-    manager = SSHManager(data_dir, context=context)
+    manager = SSHManager(Path(context.data_dir), context=context)
     state["ssh_manager"] = manager
     try:
         await manager.initialize()

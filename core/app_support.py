@@ -10,9 +10,20 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, cast, overload
 
+from .clock import DEFAULT_CONFIG_TIMEZONE
 from .config import ConfigSnapshot, ConfigSourceStatus
+from .constants import (
+    DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS,
+    DEFAULT_SESSION_TIMEOUT_SEC,
+)
 
 logger = logging.getLogger(__name__)
+
+# 运行时数值配置的取值范围：启动、热更新和插件监视共用同一份。
+_PLUGIN_POLL_INTERVAL_RANGE_SECONDS = (0.01, 86400.0)
+_SESSION_TIMEOUT_RANGE_SECONDS      = (0.001, 604800.0)
+_MAX_CONCURRENCY_RANGE              = (1, 1024)
 
 _PLUGIN_WATCH_RESTART_BASE_DELAY_SECONDS    = 0.1
 _PLUGIN_WATCH_RESTART_MAX_DELAY_SECONDS     = 30.0
@@ -81,6 +92,48 @@ def _coerce_runtime_number(
     return parsed
 
 
+def _runtime_session_timeout(config: Mapping[str, Any]) -> float:
+    key = "session_timeout"
+    return _coerce_runtime_number(
+        config.get(key, DEFAULT_SESSION_TIMEOUT_SEC),
+        key     = key,
+        default = DEFAULT_SESSION_TIMEOUT_SEC,
+        integer = False,
+        minimum = _SESSION_TIMEOUT_RANGE_SECONDS[0],
+        maximum = _SESSION_TIMEOUT_RANGE_SECONDS[1],
+    )
+
+
+def _runtime_max_concurrency(config: Mapping[str, Any]) -> int:
+    key = "max_concurrency"
+    return _coerce_runtime_number(
+        config.get(key, DEFAULT_MAX_CONCURRENCY),
+        key     = key,
+        default = DEFAULT_MAX_CONCURRENCY,
+        integer = True,
+        minimum = _MAX_CONCURRENCY_RANGE[0],
+        maximum = _MAX_CONCURRENCY_RANGE[1],
+    )
+
+
+def _runtime_plugin_poll_interval(config: Mapping[str, Any]) -> float:
+    key = "plugin_poll_interval"
+    return _coerce_runtime_number(
+        config.get(key, DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS),
+        key     = key,
+        default = DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS,
+        integer = False,
+        minimum = _PLUGIN_POLL_INTERVAL_RANGE_SECONDS[0],
+        maximum = _PLUGIN_POLL_INTERVAL_RANGE_SECONDS[1],
+    )
+
+
+def _runtime_timezone(config: Mapping[str, Any]) -> str:
+    """配置里的时区名；缺省或为空时用默认时区。"""
+
+    return str(config.get("timezone", DEFAULT_CONFIG_TIMEZONE) or DEFAULT_CONFIG_TIMEZONE)
+
+
 def _trusted_secrets(snapshot: ConfigSnapshot) -> Mapping[str, Any]:
     """Expose secret values only when their source was read successfully."""
 
@@ -111,11 +164,10 @@ def _onebot_credentials(snapshot: ConfigSnapshot) -> tuple[str, bool]:
     return raw_token, True
 
 
-def _inbound_credentials(snapshot: ConfigSnapshot) -> str:
-    """Return an exact string token from a healthy secrets source only."""
+def _inbound_token_from_secrets(secrets: Mapping[str, Any]) -> str:
+    """Return an exact string ``inbound_token``; a malformed value revokes inbound auth."""
 
-    trusted   = _trusted_secrets(snapshot)
-    raw_token = trusted.get("inbound_token", "")
+    raw_token = secrets.get("inbound_token", "")
     if type(raw_token) is not str:
         logger.error(
             "Invalid inbound_token type in a valid secrets snapshot: %s; inbound "
@@ -124,6 +176,12 @@ def _inbound_credentials(snapshot: ConfigSnapshot) -> str:
         )
         return ""
     return raw_token
+
+
+def _inbound_credentials(snapshot: ConfigSnapshot) -> str:
+    """Return an exact string token from a healthy secrets source only."""
+
+    return _inbound_token_from_secrets(_trusted_secrets(snapshot))
 
 
 def _parse_positive_ids(raw_ids: object, *, field_name: str) -> tuple[int, ...]:
@@ -153,7 +211,11 @@ def _require_onebot_holder_credentials(
     expected_token: str,
     expected_trust: bool,
 ) -> None:
-    """Prove that a legacy/mocked holder actually applied an auth update."""
+    """Prove that a holder really applied an auth update.
+
+    A holder whose ``update`` returned without taking the requested endpoint,
+    token and trust flag is treated as failed instead of being assumed correct.
+    """
 
     actual_token    = getattr(holder, "auth_token", None)
     actual_trust    = getattr(holder, "credentials_trusted", None)

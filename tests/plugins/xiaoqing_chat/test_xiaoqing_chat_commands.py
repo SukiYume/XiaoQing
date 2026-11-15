@@ -534,7 +534,7 @@ async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
             state.set_last_reply_ts(cid, float(i))
             done_task = loop.create_future()
             done_task.set_result(None)
-            state.set_persist_task(cid, cast(Any, done_task))
+            state.persist_tasks[cid] = cast(Any, done_task)
 
         state.cleanup_stale_chats()
 

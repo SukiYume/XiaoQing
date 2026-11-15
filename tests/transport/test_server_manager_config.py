@@ -12,7 +12,7 @@ import tests.helpers.server_test_support as _fixture_support
 from tests.helpers.server_test_support import (
     BroadcastResult,
     InboundManager,
-    InboundServer,
+    StandaloneInboundServer,
     _parse_http_base,
 )
 
@@ -224,7 +224,7 @@ def test_inbound_runtime_rejects_non_boolean_proxy_flags(invalid_flag):
             trusted_tls_proxy=invalid_flag,
         )
     with pytest.raises(TypeError, match="must be a boolean"):
-        InboundServer(
+        StandaloneInboundServer(
             "127.0.0.1",
             8080,
             "test_token",
@@ -271,7 +271,7 @@ def test_inbound_manager_rejects_all_non_loopback_plaintext_without_proxy(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_direct_inbound_server_rejects_non_loopback_before_runner_setup():
-    server = InboundServer(
+    server = StandaloneInboundServer(
         "0.0.0.0",
         8080,
         "test_token",
@@ -290,7 +290,7 @@ async def test_direct_inbound_server_rejects_non_loopback_before_runner_setup():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_direct_inbound_server_rejects_empty_token_before_runner_setup():
-    server = InboundServer(
+    server = StandaloneInboundServer(
         "127.0.0.1",
         8080,
         "",
@@ -326,7 +326,7 @@ async def test_inbound_manager_rejects_empty_token_before_starting_servers():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_direct_proxy_server_enters_explicit_plaintext_tcpsite():
-    server = InboundServer(
+    server = StandaloneInboundServer(
         "0.0.0.0",
         8080,
         "test_token",

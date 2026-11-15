@@ -162,9 +162,29 @@ class DbOpsMixin:
         operation_log: dict[str, Any] | None = None,
         touch: bool                          = True,
     ) -> None:
-        """更新条目"""
+        """更新条目；给了 ``owner_id`` 时先把短标识解析成完整主键。"""
         if owner_id:
             item_id = await self._db_resolve_item_id(item_id, owner_id)
+        await self._update_resolved_item(
+            item_id,
+            updates,
+            owner_id,
+            expected_version = expected_version,
+            operation_log    = operation_log,
+            touch            = touch,
+        )
+
+    async def _update_resolved_item(
+        self,
+        item_id: str,
+        updates: dict[str, Any] | Item,
+        owner_id: str | None,
+        *,
+        expected_version: int,
+        operation_log: dict[str, Any] | None,
+        touch: bool = True,
+    ) -> None:
+        """按完整主键更新条目；版本不符或条目已变化时抛出版本冲突。"""
         updated = await run_sync(
             self.db.update_item,
             item_id,
@@ -176,42 +196,6 @@ class DbOpsMixin:
         )
         if not updated:
             raise ItemVersionConflictException(item_id)
-
-    async def _db_insert_item(
-        self,
-        item_data: dict[str, Any] | Item,
-        custom_id: str | None = None,
-        *,
-        operation_log: dict[str, Any] | None = None,
-    ) -> str:
-        """插入条目"""
-        return cast(
-            str,
-            await run_sync(
-                self.db.insert_item,
-                item_data,
-                custom_id,
-                operation_log=operation_log,
-            ),
-        )
-
-    async def _db_delete_item(
-        self,
-        item_id: str,
-        soft: bool = True,
-        *,
-        owner_id: str,
-        operation_log: dict[str, Any] | None = None,
-    ) -> Any:
-        """删除条目"""
-        item_id = await self._db_resolve_item_id(item_id, owner_id)
-        return await run_sync(
-            self.db.delete_item,
-            item_id,
-            soft,
-            owner_id      = owner_id,
-            operation_log = operation_log,
-        )
 
     async def _db_get_and_check(self, item_id: str, owner_id: str) -> Item:
         """获取并检查所有权和状态
@@ -328,7 +312,7 @@ class DbOpsMixin:
             log_details["old_values"] = old_values
 
         item_type = get_item_type_value(log_updates.get("type"), default="unknown")
-        await self._db_update_item(
+        await self._update_resolved_item(
             item_id,
             updates,
             owner_id,
@@ -360,9 +344,9 @@ class DbOpsMixin:
             item_type: 条目类型（用于日志）
         """
         item_id = await self._db_resolve_item_id(item_id, owner_id)
-        await self._db_delete_item(
+        await run_sync(
+            self.db.delete_item,
             item_id,
-            soft          = True,
             owner_id      = owner_id,
             operation_log = {
                 "user_id"  : owner_id,
@@ -425,15 +409,19 @@ class DbOpsMixin:
             log_data = dict(item_data)
 
         item_type = get_item_type_value(log_data.get("type"), default="unknown")
-        item_id = await self._db_insert_item(
-            item_data,
-            custom_id,
-            operation_log={
-                "user_id"  : owner_id,
-                "action"   : action,
-                "item_type": item_type,
-                "details"  : {"item_data": log_data},
-            },
+        item_id = cast(
+            str,
+            await run_sync(
+                self.db.insert_item,
+                item_data,
+                custom_id,
+                operation_log={
+                    "user_id"  : owner_id,
+                    "action"   : action,
+                    "item_type": item_type,
+                    "details"  : {"item_data": log_data},
+                },
+            ),
         )
 
         logger.info(

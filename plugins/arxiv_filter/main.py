@@ -27,7 +27,12 @@ from core.plugin_base import (
 from core.public_errors import public_error_message, public_error_response
 
 from .codex_summary import schedule_codex_summary_from_filter_result
-from .utils import load_plugin_config
+from .utils import (
+    NO_PAPERS_MARKER,
+    NO_POSITIVES_MARKER,
+    POSITIVE_HEADER_PREFIX,
+    load_plugin_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +117,7 @@ async def _cached_model_artifact_fingerprint(model_path: str) -> str:
     """返回按绝对模型路径受控刷新的目录指纹。
 
     模型目录通常在一次插件生命周期内保持不变。热路径在 60 秒窗口内完全复用
-    已计算指纹，不再递归 rglob/stat/hash；窗口到期后重新计算一次，因此在线替换
+    已计算指纹，不重复递归 rglob/stat/hash；窗口到期后重新计算一次，因此在线替换
     模型仍能最终使当日结果缓存和后端对象缓存失效。插件初始化或强制重载会立即清空。
     """
 
@@ -187,12 +192,22 @@ async def _cached_inference(
                     _FILTER_INFLIGHT.pop(key, None)
 
 
+def _classify_inference_text(text: str) -> str:
+    """按推理入口的文本约定归类：papers / no_positive_predictions / no_papers / unknown。"""
+
+    if POSITIVE_HEADER_PREFIX in text:
+        return "papers"
+    if NO_POSITIVES_MARKER in text:
+        return "no_positive_predictions"
+    if NO_PAPERS_MARKER in text:
+        return "no_papers"
+    return "unknown"
+
+
 def _is_successful_inference(text: str) -> bool:
     """推理结果的成功契约：给出了正例列表，或明确确认没有正例。"""
 
-    if text.startswith("Error:") or "No papers found" in text:
-        return False
-    return "----- Positive #" in text or "No positive predictions" in text
+    return _classify_inference_text(text) in {"papers", "no_positive_predictions"}
 
 
 def _check_arxiv_update_date() -> Any:
@@ -249,18 +264,6 @@ def _load_inference(
         _inference_func = get_positive_arxiv_today_as_string
         logger.info("成功加载推理模块")
         return _inference_func
-    except ImportError as exc:
-        if context is not None:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "arxiv_filter.load_inference",
-            )
-        else:
-            logger.error("导入推理模块失败: error_type=ImportError")
-        logger.error("请确保安装了所需依赖: torch, transformers")
-        return None
     except Exception as exc:
         if context is not None:
             public_error_message(
@@ -270,10 +273,9 @@ def _load_inference(
                 component = "arxiv_filter.load_inference",
             )
         else:
-            logger.error(
-                "加载推理模块时发生异常: error_type=%s",
-                type(exc).__name__,
-            )
+            logger.error("加载推理模块失败: error_type=%s", type(exc).__name__)
+        if isinstance(exc, ImportError):
+            logger.error("请确保安装了所需依赖: torch, transformers")
         return None
 
 
@@ -311,7 +313,6 @@ async def handle(
             unknown = bounded_external_text(
                 raw_args,
                 max_chars = 32,
-                max_bytes = 128,
                 suffix    = "…",
             )
             return segments(f"未知命令: {unknown}\n输入 /arxiv help 查看帮助")
@@ -420,17 +421,8 @@ async def _run_filter(
             len(arxiv_text),
         )
 
-        # 检查是否有错误消息
-        if arxiv_text.startswith("Error:"):
-            return _failure(
-                context,
-                RuntimeError("arXiv inference returned an error result"),
-                "arxiv_filter.inference_result",
-                "inference_error",
-            )
-
-        # 检查是否没有结果
-        if "No positive predictions" in arxiv_text:
+        result_kind = _classify_inference_text(arxiv_text)
+        if result_kind == "no_positive_predictions":
             logger.info("今日没有符合条件的论文")
             return _filter_result(
                 f"📚 {_list_description(context, source_date)}，暂时没有发现感兴趣的论文。",
@@ -438,7 +430,7 @@ async def _run_filter(
                 outcome   = "no_positive_predictions",
             )
 
-        if "No papers found" in arxiv_text:
+        if result_kind == "no_papers":
             return _failure(
                 context,
                 RuntimeError("arXiv inference did not produce a usable paper list"),
@@ -446,7 +438,7 @@ async def _run_filter(
                 "inference_error",
             )
 
-        if "----- Positive #" not in arxiv_text:
+        if result_kind == "unknown":
             return _failure(
                 context,
                 RuntimeError("arXiv inference returned an unknown result format"),
@@ -626,7 +618,7 @@ def _track_delivery(
     business_date: str,
 ) -> DeliverySegments:
     # 传输回执会在插件 handler 返回后到达，此时插件执行作用域已经关闭。
-    # 状态落盘只依赖线程安全的文件操作，因此使用独立线程，不再借用插件 bulkhead。
+    # 状态落盘只依赖线程安全的文件操作，因此使用独立线程，不借用插件 bulkhead。
     async def commit() -> None:
         try:
             await asyncio.to_thread(_mark_sent_today, data_dir, business_date)

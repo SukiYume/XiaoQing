@@ -32,6 +32,7 @@ from core.bounded_http import (
     BoundedHttpError,
     read_aiohttp_response,
 )
+from core.plugin_base import has_control_characters
 
 ALLOWED_SCHEMES                = {"http", "https"}
 DEFAULT_PORTS                  = {"http": 80, "https": 443}
@@ -48,6 +49,15 @@ _CROSS_ORIGIN_HEADER_ALLOWLIST = frozenset(
 _TRANSPARENT_PROXY_FAKE_DNS_NETWORKS = (
     ipaddress.ip_network("198.18.0.0/15"),
     ipaddress.ip_network("fdfe:dcba:9876::/48"),
+)
+
+MAX_PROXY_URL_CHARS = 2_048
+# 抓取普通网页时冒充桌面 Chrome 的 User-Agent，供各插件共用；明确要求客户端自报身份的
+# 站点（例如维基）不用它。
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36"
 )
 
 
@@ -86,6 +96,45 @@ def redact_url_for_log(value: str, *, max_length: int = 256) -> str:
     if len(redacted) <= max_length:
         return redacted
     return redacted[: max_length - 1] + "…"
+
+
+def validated_proxy_url(value: object, *, allow_path: bool = False) -> str:
+    """Return ``value`` unchanged when it is a well-formed HTTP(S) proxy URL.
+
+    The value must be a non-empty string of at most ``MAX_PROXY_URL_CHARS`` without
+    surrounding whitespace or C0/DEL controls, with an ``http``/``https`` scheme, a
+    host, no query or fragment, and a port in 1-65535. Credentials are allowed. The
+    path must be empty or ``/`` unless ``allow_path`` is set. The value is never
+    trimmed: callers that tolerate padding ``strip`` it before calling.
+
+    Raises ``ValueError`` with a fixed message. The proxy URL can carry a password,
+    so neither the message nor the exception chain contains any part of it.
+    """
+
+    invalid = ValueError("proxy URL is invalid")
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_PROXY_URL_CHARS
+        or value != value.strip()
+        or has_control_characters(value)
+    ):
+        raise invalid
+    try:
+        parsed = urlsplit(value)
+        port   = parsed.port
+    except ValueError:
+        raise invalid from None
+    if (
+        parsed.scheme.casefold() not in ALLOWED_SCHEMES
+        or not parsed.hostname
+        or (not allow_path and parsed.path not in {"", "/"})
+        or parsed.query
+        or parsed.fragment
+        or (port is not None and not 1 <= port <= 65_535)
+    ):
+        raise invalid
+    return value
 
 
 @dataclass(frozen=True)
@@ -145,6 +194,29 @@ def _looks_like_noncanonical_ipv4(host: str) -> bool:
             return True
         return canonical != host
     return False
+
+
+def split_https_url_on_hosts(url: str, hosts: Collection[str]) -> SplitResult | None:
+    """``url`` 是指向 ``hosts`` 之一的 https 地址时返回拆开的结果，否则返回 ``None``。
+
+    只看地址的写法，不做 DNS：协议是 https、主机（去掉末尾的点、不分大小写）在名单里、
+    不带用户信息、端口是默认端口。``hosts`` 里写小写、不带末尾点的主机名。
+    """
+
+    try:
+        parsed = urlsplit(url)
+        port   = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or _canonical_host(parsed.hostname) not in hosts
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, DEFAULT_PORTS["https"])
+    ):
+        return None
+    return parsed
 
 
 def validate_public_url(url: str) -> SplitResult:
@@ -280,6 +352,19 @@ def _response_charset(response: aiohttp.ClientResponse) -> str | None:
     return charset if isinstance(charset, str) else None
 
 
+def _canonical_host(hostname: str | None) -> str:
+    """去掉末尾的点并按大小写折叠：主机允许名单、同源判断和假 DNS 判断共用的写法。"""
+
+    return (hostname or "").rstrip(".").casefold()
+
+
+def _content_media_type(response: aiohttp.ClientResponse) -> str:
+    """响应 ``Content-Type`` 里不带参数的主类型；缺失时为空串。"""
+
+    header = str(response.headers.get("Content-Type", ""))
+    return header.split(";", 1)[0].strip().casefold()
+
+
 def _url_origin(url: str) -> tuple[str, str, int]:
     try:
         parsed = urlsplit(url)
@@ -287,7 +372,7 @@ def _url_origin(url: str) -> tuple[str, str, int]:
     except (TypeError, ValueError) as exc:
         raise UnsafeUrlError("invalid redirect URL") from exc
     scheme = parsed.scheme.casefold()
-    host   = (parsed.hostname or "").rstrip(".").casefold()
+    host   = _canonical_host(parsed.hostname)
     if scheme not in DEFAULT_PORTS or not host:
         raise UnsafeUrlError("invalid redirect URL")
     return scheme, host, port or DEFAULT_PORTS[scheme]
@@ -390,7 +475,7 @@ async def fetch_public_html(
         response: aiohttp.ClientResponse,
         response_url: str,
     ) -> SafeHttpResponse | None:
-        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+        content_type = _content_media_type(response)
         if not HTML_MIME_POLICY.accepts(content_type or None):
             return None
         body = await _read_limited_body(response)
@@ -439,9 +524,7 @@ async def _fetch_with_pinned_redirects(
     current_headers = _public_request_headers(headers, binary=binary)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_read=min(5, timeout_seconds))
     normalized_hosts = (
-        {host.rstrip(".").casefold() for host in allowed_hosts}
-        if allowed_hosts is not None
-        else None
+        {_canonical_host(host) for host in allowed_hosts} if allowed_hosts is not None else None
     )
     normalized_schemes = (
         {scheme.casefold() for scheme in allowed_schemes} if allowed_schemes is not None else None
@@ -455,7 +538,7 @@ async def _fetch_with_pinned_redirects(
         initial_target = validate_public_url(url)
         if initial_target.scheme.casefold() != "https":
             raise UnsafeUrlError("transparent proxy fake DNS requires HTTPS")
-        fake_dns_hostname = (initial_target.hostname or "").rstrip(".").casefold()
+        fake_dns_hostname = _canonical_host(initial_target.hostname)
 
     for _ in range(MAX_REDIRECTS + 1):
         # 不能复用上一跳的解析结果：每个重定向目标都必须重新解析并固定地址，
@@ -465,7 +548,7 @@ async def _fetch_with_pinned_redirects(
             current_target = validate_public_url(current_url)
             if current_target.scheme.casefold() != "https":
                 raise UnsafeUrlError("transparent proxy fake DNS requires HTTPS")
-            current_hostname = (current_target.hostname or "").rstrip(".").casefold()
+            current_hostname = _canonical_host(current_target.hostname)
         if current_hostname == fake_dns_hostname and fake_dns_hostname is not None:
             parsed, addresses = await validate_public_fetch_target(
                 current_url,
@@ -475,7 +558,7 @@ async def _fetch_with_pinned_redirects(
             parsed, addresses = await validate_public_fetch_target(current_url)
         if normalized_schemes is not None and parsed.scheme.casefold() not in normalized_schemes:
             raise UnsafeUrlError("URL scheme is not allowed")
-        host = (parsed.hostname or "").rstrip(".").casefold()
+        host = _canonical_host(parsed.hostname)
         if normalized_hosts is not None and host not in normalized_hosts:
             raise UnsafeUrlError("URL host is not allowed")
 
@@ -577,7 +660,7 @@ async def fetch_public_bytes(
         response: aiohttp.ClientResponse,
         response_url: str,
     ) -> SafeHttpResponse | None:
-        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+        content_type = _content_media_type(response)
         if normalized_types is not None and content_type not in normalized_types:
             raise SafeHttpError("response content type is not allowed")
         if normalized_prefixes and not any(

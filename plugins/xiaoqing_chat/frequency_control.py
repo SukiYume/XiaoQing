@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .constants import REPLY_RATE_WINDOW_SECONDS
 from .participation import is_low_information_group_turn
 
 if TYPE_CHECKING:
@@ -179,7 +180,7 @@ async def decide_reply(
     now    = time.time()
     last   = state.get_last_reply_ts(chat_id)
     since  = max(0.0, now - last) if last else 9999.0
-    window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
+    window = [t for t in state.get_reply_timestamps(chat_id) if now - t < REPLY_RATE_WINDOW_SECONDS]
     state.set_reply_timestamps(chat_id, window)
     goal_state   = await state.goal_store.get_async(chat_id) if cfg.goal.enable_goal else None
     goal         = goal_state.goal if goal_state else ""

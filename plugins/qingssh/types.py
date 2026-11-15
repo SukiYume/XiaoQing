@@ -19,7 +19,6 @@ class Context(Protocol):
 
     current_user_id : int | None
     current_group_id: int | None
-    plugin_dir      : Path
     data_dir        : Path
     state           : dict[str, Any]
     session_manager : Any | None

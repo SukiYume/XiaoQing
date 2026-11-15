@@ -50,7 +50,12 @@ from core.plugin_base import image as _core_image
 from core.plugin_base import segments as _core_segments
 from core.public_errors import public_error_message
 from core.public_errors import public_error_response as _core_public_error_response
-from core.safe_http import fetch_public_bytes
+from core.safe_http import (
+    BROWSER_USER_AGENT,
+    fetch_public_bytes,
+    split_https_url_on_hosts,
+    validated_proxy_url,
+)
 
 MessageSegment  = dict[str, Any]
 MessageSegments = list[MessageSegment]
@@ -153,12 +158,7 @@ IMAGE_CACHE_LIMITS = FileCacheLimits(
     ttl_seconds = 90 * 24 * 60 * 60,
 )
 
-_TIMELINE_URL       = "https://x.com/i/api/graphql/mF05yo9gtSsl1tFPPHNEgQ/UserTweets"
-_TWITTER_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/136.0.0.0 Safari/537.36"
-)
+_TIMELINE_URL                 = "https://x.com/i/api/graphql/mF05yo9gtSsl1tFPPHNEgQ/UserTweets"
 _ALLOWED_TWITTER_MEDIA_HOSTS  = frozenset({"pbs.twimg.com", "ton.twitter.com", "video.twimg.com"})
 _IMAGE_FORMAT_EXTENSIONS      = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 _ALLOWED_LOCAL_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
@@ -287,6 +287,14 @@ async def shutdown(context: Context | None = None) -> None:
         _POSTED_RESERVATIONS.clear()
 
 
+def _image_dir(context: Context) -> Path:
+    """图片缓存目录；返回前确保它存在。"""
+
+    save_dir = context.data_dir / "images"
+    ensure_dir(save_dir)
+    return save_dir
+
+
 def _get_config(context: Context) -> Mapping[str, object]:
     """读取当前原子设置代中的插件密钥配置。"""
 
@@ -296,7 +304,7 @@ def _get_config(context: Context) -> Mapping[str, object]:
 def _get_headers(context: Context) -> dict[str, str]:
     """构造 API 请求头，并忽略畸形或由传输层管理的自定义字段。"""
 
-    headers        = {"Accept": "application/json", "User-Agent": _TWITTER_USER_AGENT}
+    headers        = {"Accept": "application/json", "User-Agent": BROWSER_USER_AGENT}
     custom_headers = _get_config(context).get("headers", {})
     if not isinstance(custom_headers, Mapping):
         return headers
@@ -332,7 +340,7 @@ def _get_media_headers() -> dict[str, str]:
     return {
         "Accept"         : "image/*",
         "Accept-Encoding": "identity",
-        "User-Agent"     : _TWITTER_USER_AGENT,
+        "User-Agent"     : BROWSER_USER_AGENT,
     }
 
 
@@ -344,23 +352,10 @@ def _get_proxy(context: Context) -> str | None:
         return None
     if _has_control_chars(value):
         return None
-    proxy = value.strip()
-    if not proxy or len(proxy) > 2048:
-        return None
     try:
-        parsed = urlsplit(proxy)
-        port   = parsed.port
+        return validated_proxy_url(value.strip(), allow_path=True)
     except ValueError:
         return None
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.query
-        or parsed.fragment
-        or (port is not None and not 1 <= port <= 65_535)
-    ):
-        return None
-    return proxy
 
 
 def _get_user_id(context: Context) -> str:
@@ -410,21 +405,28 @@ def _get_max_pages(context: Context) -> int:
     return max(1, min(value, MAX_PAGES_TO_CHECK))
 
 
+def _read_state_bytes(path: Path, max_bytes: int) -> bytes | None:
+    """有限读取小型状态文件；符号链接、非普通文件、超限或读取失败都返回 ``None``。"""
+
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > max_bytes:
+            return None
+        with path.open("rb") as file:
+            payload = file.read(max_bytes + 1)
+    except OSError:
+        return None
+    return payload if len(payload) <= max_bytes else None
+
+
 def _backfill_is_complete(path: Path, user_id: str) -> bool:
     """仅接纳当前账号的小型全量回填标记；畸形状态会安全触发重新回填。"""
 
+    payload = _read_state_bytes(path, MAX_BACKFILL_STATE_BYTES)
+    if payload is None:
+        return False
     try:
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size > MAX_BACKFILL_STATE_BYTES
-        ):
-            return False
-        payload = path.read_bytes()
-        if len(payload) > MAX_BACKFILL_STATE_BYTES:
-            return False
         state = json.loads(payload.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (UnicodeError, json.JSONDecodeError):
         return False
     return (
         isinstance(state, Mapping)
@@ -454,19 +456,8 @@ def _is_allowed_media_url(url: str) -> bool:
         return False
     if _has_control_chars(url):
         return False
-    try:
-        parsed = urlsplit(url)
-        port   = parsed.port
-    except ValueError:
-        return False
-    return (
-        parsed.scheme.casefold() == "https"
-        and parsed.hostname in _ALLOWED_TWITTER_MEDIA_HOSTS
-        and parsed.username is None
-        and parsed.password is None
-        and port in {None, 443}
-        and bool(parsed.path)
-    )
+    parsed = split_https_url_on_hosts(url, _ALLOWED_TWITTER_MEDIA_HOSTS)
+    return parsed is not None and bool(parsed.path)
 
 
 def _original_media_url(url: str) -> str:
@@ -486,7 +477,7 @@ def _original_media_url(url: str) -> str:
 async def _fetch_timeline(
     context: Context,
     cursor: str | None = None,
-) -> tuple[list[TimelineEntry], str | None, bool]:
+) -> tuple[list[TimelineEntry], str | None]:
     """获取一页用户时间线，并从不稳定的 GraphQL 结构中提取推文和游标。"""
 
     variables: dict[str, object] = {
@@ -585,7 +576,7 @@ async def _fetch_timeline(
                 ):
                     next_cursor = value
 
-        return tweets, next_cursor, next_cursor is not None
+        return tweets, next_cursor
     except HttpStatusError as exc:
         logger.warning("Twitter API 返回 HTTP %s", exc.status)
         raise TwitterFetchError(status=exc.status) from exc
@@ -620,18 +611,21 @@ def _extract_image_urls(tweet: Mapping[str, Any]) -> list[str]:
     return urls
 
 
-def _detect_image_extension(payload: bytes) -> str:
-    """用 core 的逐帧校验返回由实际内容决定的扩展名。"""
-
-    limits = ImageValidationLimits(
+def _image_limits() -> ImageValidationLimits:
+    return ImageValidationLimits(
         max_bytes  = MAX_IMAGE_BYTES,
         max_pixels = MAX_IMAGE_PIXELS,
         max_frames = MAX_IMAGE_FRAMES,
     )
+
+
+def _detect_image_extension(payload: bytes) -> str:
+    """用 core 的逐帧校验返回由实际内容决定的扩展名。"""
+
     try:
         return validate_image_bytes(
             payload,
-            limits            = limits,
+            limits            = _image_limits(),
             format_extensions = _IMAGE_FORMAT_EXTENSIONS,
         ).extension
     except ImageValidationError as exc:
@@ -647,15 +641,7 @@ def _detect_image_extension(payload: bytes) -> str:
 
 
 def _validate_cached_image(path: Path) -> None:
-    validate_image_path(
-        path,
-        limits=ImageValidationLimits(
-            max_bytes  = MAX_IMAGE_BYTES,
-            max_pixels = MAX_IMAGE_PIXELS,
-            max_frames = MAX_IMAGE_FRAMES,
-        ),
-        format_extensions=_IMAGE_FORMAT_EXTENSIONS,
-    )
+    validate_image_path(path, limits=_image_limits(), format_extensions=_IMAGE_FORMAT_EXTENSIONS)
 
 
 async def _fetch_media_bytes(url: str, context: Context) -> bytes | None:
@@ -735,8 +721,7 @@ async def _fetch_twitter_images(context: Context) -> int:
     """首次完整回填允许分页，之后连续两页无新增即结束增量抓取。"""
 
     async with _FETCH_LOCK:
-        save_dir = context.data_dir / "images"
-        ensure_dir(save_dir)
+        save_dir = _image_dir(context)
         await asyncio.to_thread(BoundedFileCache(save_dir, IMAGE_CACHE_LIMITS).prune)
         user_id        = _get_user_id(context)
         backfill_state = context.data_dir / BACKFILL_STATE_FILENAME
@@ -753,7 +738,7 @@ async def _fetch_twitter_images(context: Context) -> int:
 
         for page_number in range(1, _get_max_pages(context) + 1):
             logger.info("Twitter: 检查第 %s 页", page_number)
-            tweets, next_cursor, has_next = await _fetch_timeline(context, cursor)
+            tweets, next_cursor = await _fetch_timeline(context, cursor)
             if not tweets:
                 break
 
@@ -782,7 +767,7 @@ async def _fetch_twitter_images(context: Context) -> int:
             if incremental and consecutive_empty >= MAX_PAGES_WITHOUT_NEW_IMAGES:
                 logger.info("连续 %s 页没有新图片，停止抓取", consecutive_empty)
                 break
-            if not has_next or not next_cursor or next_cursor in seen_cursors:
+            if not next_cursor or next_cursor in seen_cursors:
                 break
             seen_cursors.add(next_cursor)
             cursor = next_cursor
@@ -837,8 +822,7 @@ async def _run_background_fetch(context: Context) -> _FetchOutcome:
 
     logger.info("Twitter 后台抓取完成: 新下载 %s 张图片", count)
     if count == 0:
-        save_dir = context.data_dir / "images"
-        ensure_dir(save_dir)
+        save_dir     = _image_dir(context)
         cached_names = await asyncio.to_thread(_list_cached_image_names, save_dir)
         if not cached_names:
             return _FetchOutcome(
@@ -942,12 +926,9 @@ def _start_manual_notification(
     fetch_task: asyncio.Task[_FetchOutcome],
     *,
     context: Context,
-    user_id: int | None,
-    group_id: int | None,
 ) -> None:
     global _MANUAL_NOTIFICATION_TASK
-    _MANUAL_SUBSCRIBERS[(user_id, group_id)] = None
-    task                                     = asyncio.create_task(
+    task = asyncio.create_task(
         _notify_manual_fetch(fetch_task, context=context),
         name="twitter-manual-fetch-notification",
     )
@@ -982,17 +963,12 @@ def _list_cached_image_names(save_dir: Path) -> list[str]:
 def _read_posted_names(posted_file: Path, local_names: set[str]) -> set[str]:
     """有限读取发送状态，只保留仍存在于缓存中的安全文件名。"""
 
+    payload = _read_state_bytes(posted_file, MAX_POSTED_STATE_BYTES)
+    if payload is None:
+        return set()
     try:
-        if posted_file.is_symlink() or not posted_file.is_file():
-            return set()
-        if posted_file.stat().st_size > MAX_POSTED_STATE_BYTES:
-            return set()
-        with posted_file.open("rb") as file:
-            payload = file.read(MAX_POSTED_STATE_BYTES + 1)
-        if len(payload) > MAX_POSTED_STATE_BYTES:
-            return set()
         lines = payload.decode("utf-8").splitlines()
-    except (OSError, UnicodeError):
+    except UnicodeError:
         return set()
     return {line.strip() for line in lines if line.strip() in local_names}
 
@@ -1042,10 +1018,9 @@ async def _rollback_posted_image(*, reservation_key: str, selected_name: str) ->
 async def _get_random_image(context: Context) -> DeliverySegments | None:
     """随机预留一张本轮未发送图片，并把状态提交延迟到 delivery ack。"""
 
-    save_dir    = context.data_dir / "images"
+    save_dir    = _image_dir(context)
     posted_file = context.data_dir / "posted.txt"
     reservation_key = str(posted_file.resolve(strict=False))
-    ensure_dir(save_dir)
 
     async with _POSTED_LOCK:
         local_images = await asyncio.to_thread(_list_cached_image_names, save_dir)
@@ -1136,21 +1111,17 @@ async def handle(
             group_id = context.current_group_id
             if user_id is None and group_id is None:
                 return segments("❌ 无法确定抓取结果的通知目标")
+            # 先登记订阅：通知任务已在运行时，其他会话的请求也加入同一次抓取的通知列表，
+            # 不能只回复“会通知你”却不登记。
+            _MANUAL_SUBSCRIBERS[(user_id, group_id)] = None
             if _MANUAL_NOTIFICATION_TASK is not None and not _MANUAL_NOTIFICATION_TASK.done():
-                # 其他会话的请求加入同一次抓取的通知列表，不能只回复“会通知你”却不登记。
-                _MANUAL_SUBSCRIBERS[(user_id, group_id)] = None
                 return DeliverySegments(
                     segments("⏳ Twitter 图片正在后台抓取，完成后会通知你"),
                     outcome=CommandOutcome("accepted"),
                 )
 
             fetch_task, started = _get_or_start_fetch(context)
-            _start_manual_notification(
-                fetch_task,
-                context  = context,
-                user_id  = user_id,
-                group_id = group_id,
-            )
+            _start_manual_notification(fetch_task, context=context)
             if started:
                 return DeliverySegments(
                     segments("🔄 已开始后台抓取 Twitter 图片，完成后会通知你"),

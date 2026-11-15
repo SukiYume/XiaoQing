@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config.config import PersonalityConfig
-from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.gateway import ai_disabled, chat_completions_raw_with_profile, extract_response_content
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage, is_conversation_reply
@@ -51,7 +51,7 @@ def _log_planner_step(fields: dict[str, Any]) -> None:
 
 
 # 两种规划场景共用的上下文与输出格式；差异只在开头的场景说明和决策指导。
-_PLANNER_CONTEXT = """{knowledge_info_str}
+_PLANNER_CONTEXT = """{knowledge_info_str}{memory_info_str}
 【最近行动概要】
 {action_history_summary}
 
@@ -173,8 +173,7 @@ def _goals_to_text(goal_list: Sequence[dict[str, Any]]) -> str:
         if not isinstance(item, dict):
             continue
         g = str(item.get("goal", "") or "").strip()
-        # 目标分析器写入 reasoning；旧持久化记录可能仍是 reason。
-        r = str(item.get("reasoning", "") or item.get("reason", "") or "").strip()
+        r = str(item.get("reasoning", "") or "").strip()
         if not g:
             continue
         if r:
@@ -195,6 +194,22 @@ def _knowledge_to_text(knowledge_list: Sequence[dict[str, Any]]) -> str:
     if not lines:
         return ""
     return "【已知的知识/记忆信息】\n" + "\n".join(lines)
+
+
+# 说话的人的页面和群页加起来的上限（统一记忆按预算给，这里只防意外过长）。
+_MEMORY_CHARS = 900
+
+
+def _memory_to_text(memory_text: str) -> str:
+    """统一记忆里关于说话的人和这个群的那几行：和要不要开口、从哪接有关时才用得上。"""
+
+    text = memory_text.strip()
+    if not text:
+        return ""
+    return (
+        "【你记得的人和群】（你对说话的人和这个群的了解，包括约定和他们对你的要求；"
+        "决定要不要开口、怎么接时一并考虑）\n" + clip_text(text, _MEMORY_CHARS)
+    )
 
 
 def _time_since_last_bot(history: Sequence[StoredMessage]) -> str:
@@ -278,10 +293,11 @@ async def plan_next_action(
     last_successful_reply_action: str | None,
     llm: LLMCallConfig,
     current_text: str = "",
+    memory_text: str  = "",
 ) -> PFCPlan:
     model           = secrets.get("model", "")
     fallback_action = "direct_reply" if is_private else "wait"
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return PFCPlan(action=fallback_action, reason="ai_route_unavailable")
 
     persona_text       = personality.card.facts(bot_name)
@@ -306,19 +322,20 @@ async def plan_next_action(
         knowledge_info_str = (clip_text(knowledge_info_str, 480) + "\n")
         if knowledge_info_str
         else "",
-        action_history_summary           = clip_text(action_history_summary, 360) or "（暂无）",
-        last_action_context              = clip_text(last_action_context, 360) or "（暂无）",
-        time_since_last_bot_message_info = time_info,
-        participation_info               = "" if is_private else _participation_hint(history),
-        timeout_context                  = timeout_context.strip(),
-        chat_history_text                = chat_history_text,
+        memory_info_str=(_memory_to_text(memory_text) + "\n") if memory_text.strip() else "",
+        action_history_summary=clip_text(action_history_summary, 360) or "（暂无）",
+        last_action_context=clip_text(last_action_context, 360) or "（暂无）",
+        time_since_last_bot_message_info=time_info,
+        participation_info="" if is_private else _participation_hint(history),
+        timeout_context=timeout_context.strip(),
+        chat_history_text=chat_history_text,
     )
     if current_text.strip():
         prompt += "\n本轮目标消息：\n" + current_text.strip()
 
     try:
         t0 = time.monotonic()
-        resp, _path = await chat_completions_raw_with_fallback_paths(
+        resp, used_profile = await chat_completions_raw_with_profile(
             route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],
@@ -329,7 +346,7 @@ async def plan_next_action(
                 "step"        : "pfc.planner.ok",
                 "elapsed_s"   : round(time.monotonic() - t0, 3),
                 "model"       : model,
-                "endpoint"    : _path,
+                "endpoint"    : used_profile,
                 "prompt_chars": len(prompt),
             }
         )
@@ -365,7 +382,7 @@ async def decide_say_bye(
     history: Sequence[StoredMessage],
     llm: LLMCallConfig,
 ) -> tuple[bool, str]:
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return False, ""
 
     persona_text      = personality.card.facts(bot_name)
@@ -378,7 +395,7 @@ async def decide_say_bye(
     )
 
     try:
-        resp, _ = await chat_completions_raw_with_fallback_paths(
+        resp, _ = await chat_completions_raw_with_profile(
             route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],

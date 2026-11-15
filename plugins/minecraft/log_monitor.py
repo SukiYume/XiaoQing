@@ -16,7 +16,8 @@ from core.sensitive_audit import audit_error_type, summarize_sensitive
 
 logger = logging.getLogger(__name__)
 
-_PLAYER_PATTERN = r"[A-Za-z0-9_]{1,16}"
+# Minecraft 玩家名：日志事件正则与 /mc tell 校验共用。
+PLAYER_NAME_PATTERN = r"[A-Za-z0-9_]{1,16}"
 
 
 class LogEventType(str, Enum):
@@ -68,17 +69,17 @@ class LogMonitor:
     LOG_PREFIX_PATTERN = re.compile(
         r"^\[\d{1,2}:\d{2}:\d{2}\] \[[^\]\r\n]+/INFO\]: (?P<body>[^\r\n]*)\Z"
     )
-    CHAT_PATTERN     = re.compile(rf"^<(?P<player>{_PLAYER_PATTERN})> (?P<message>.+)\Z")
+    CHAT_PATTERN     = re.compile(rf"^<(?P<player>{PLAYER_NAME_PATTERN})> (?P<message>.+)\Z")
     PRESENCE_PATTERN = re.compile(
-        rf"^(?P<player>{_PLAYER_PATTERN}) (?P<action>joined|left) the game\Z"
+        rf"^(?P<player>{PLAYER_NAME_PATTERN}) (?P<action>joined|left) the game\Z"
     )
     ADVANCEMENT_PATTERN = re.compile(
-        rf"^(?P<player>{_PLAYER_PATTERN}) has "
+        rf"^(?P<player>{PLAYER_NAME_PATTERN}) has "
         r"(?:made the advancement|completed the challenge|reached the goal) "
         r"\[(?P<message>.+)\]\Z"
     )
     DEATH_PATTERN = re.compile(
-        rf"^(?P<player>{_PLAYER_PATTERN}) (?P<message>"
+        rf"^(?P<player>{PLAYER_NAME_PATTERN}) (?P<message>"
         r"(?:was slain|was shot|drowned|burned|fell|hit the ground|was blown up|"
         r"was killed|died|withered away|was squashed|was pricked|walked into a cactus|"
         r"suffocated|starved|was impaled|was fireballed|was pummeled|was stung|froze|"

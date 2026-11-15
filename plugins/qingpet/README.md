@@ -109,7 +109,7 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 /宠物 交易 撤单 <订单号>
 ```
 
-挂单会把道具移入托管状态。购买、撤单和到期退还均在事务中同时处理订单、库存、余额和资产账本。
+挂单会把道具移入托管状态。购买、撤单和到期退还均在一个事务中同时处理订单和库存；购买同时结算买卖双方的金币并写入资产账本，到期退还的道具也记一条账本。
 
 ---
 
@@ -126,14 +126,14 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 
 状态值随时间衰减，托管期间采用减半衰减。健康过低会使宠物进入生病状态。长期照顾偏低可能触发旅行。治疗和召回提供恢复路径。
 
-数据库 schema 6 的 `decay_remainders` 保存各属性尚未达到整数扣减的小数余额，使不同结算间隔和重启后的累计衰减保持一致。每日计数、签到、连续天数和周榜使用 `Asia/Shanghai` 业务日期；定时任务触发时刻使用 Core 的调度时区配置。
+数据库的 `decay_remainders` 保存各属性尚未达到整数扣减的小数余额，使不同结算间隔和重启后的累计衰减保持一致。每日计数、签到、连续天数和周榜使用 `Asia/Shanghai` 业务日期；定时任务触发时刻使用 Core 的调度时区配置。
 
 ---
 
 ## 🔐 经济与风控
 
 - 金币和友情点余额以 `users` 表为准；
-- 全部受控资产变化同步写入 `asset_ledger`；
+- 金币和友情点的每次变化与余额更新在同一事务中写入 `asset_ledger`，到期挂单退还的道具也记一条；
 - 群统计会计算余额与资产账本的差异；
 - 关键行为受冷却、每日次数、群响应限频和重复行为收益衰减约束；
 - 互访、小游戏、治疗、交易、任务与活动奖励采用原子事务或幂等标识；
@@ -173,8 +173,10 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 | `economy_multiplier` | 0.1～10.0 | `1.0` |
 | `decay_multiplier` | 0.1～10.0 | `1.0` |
 | `trade_enabled` | 布尔值 | `false` |
-| `natural_trigger_enabled` | 布尔值 | `false` |
 | `activity_enabled` | 布尔值 | `true` |
+| `sensitive_words` | 字符串列表，最多 100 项，每项不超过 64 字 | 空 |
+
+`/宠物 管理 配置 设置` 只能修改 `economy_multiplier`、`decay_multiplier`、`trade_enabled` 和 `activity_enabled`。`enabled` 通过 `/宠物 管理 开启` 和 `/宠物 管理 关闭` 切换。`sensitive_words` 是本群追加的敏感词，叠加在内置词之上，用于宠物名和留言校验，目前没有命令能修改它，`/宠物 管理 配置 查看` 只显示数量。
 
 ---
 
@@ -201,7 +203,7 @@ QingPet 是宠物养成插件。插件按 QQ 群隔离数据。群成员可以�
 | `qingpet_daily_reset` | 每天 00:00 | `silent` | 重置每日计数并增加宠物年龄 |
 | `qingpet_weekly_activity` | 每周一 10:00 | `targeted` | 结算周排行奖励和“本周之星”称号，并发布群结果 |
 
-目标化任务返回 `ScheduledDelivery`，Core 依据该 schedule 的 `group_ids` 或全局默认群校验每个群目标并执行发送。静默任务只更新业务状态。
+目标化任务返回 `ScheduledDelivery`，Core 依据该 schedule 解析出的目标群（部署配置 `config.plugins.qingpet.schedules.<任务 ID>.group_ids`，没写时为全局默认群）校验每个群目标并执行发送。静默任务只更新业务状态。
 
 ---
 
@@ -225,7 +227,7 @@ data/qingpet/qingpet/qingpet.db
 | `services/database_scheduler.py` | 周期结算、到期清理和经济快照 |
 | 领域 service | 宠物、社交、道具、经济、用户和管理用例 |
 
-运行数据由插件和管理员备份流程管理。迁移前，使用 SQLite 在线备份生成 `.pre-migration.bak` 一致快照。快照包含 WAL 中已提交的数据。管理员的日常备份同样使用 SQLite 备份接口。
+运行数据由插件和管理员备份流程管理。表结构版本记在 SQLite 的 `PRAGMA user_version`（当前为 7）。需要升级表结构时，先用 SQLite 在线备份生成 `qingpet.db.pre-migration-v<旧版本号>.bak` 一致快照（同名备份已在就不重做）。快照包含 WAL 中已提交的数据。管理员的日常备份同样使用 SQLite 备份接口。
 
 ---
 

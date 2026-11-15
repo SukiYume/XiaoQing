@@ -13,12 +13,10 @@ from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
 @pytest.mark.parametrize(
     "task_name",
     [
-        "summarizer:g1",
         "daily_life:today",
         "expression_learn:g1",
         "reflection:g1",
         "review_push:g1",
-        "facts:g1",
     ],
 )
 async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):

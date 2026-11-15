@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from core.bounded_file_cache import FileCacheLimits
-from core.safe_http import SafeHttpError, SafeHttpResponse, UnsafeUrlError
+from core.safe_http import BROWSER_USER_AGENT, SafeHttpError, SafeHttpResponse, UnsafeUrlError
 from plugins.url_parser import main as url_parser
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import image_bytes as _image_bytes
@@ -223,7 +223,7 @@ async def test_text_preview_does_not_depend_on_shared_http_session(
     ]
     network.page.assert_awaited_once_with(
         "https://example.com/page",
-        headers         = {"User-Agent": url_parser._USER_AGENT},
+        headers         = {"User-Agent": BROWSER_USER_AGENT},
         timeout_seconds = url_parser.REQUEST_TIMEOUT,
     )
 

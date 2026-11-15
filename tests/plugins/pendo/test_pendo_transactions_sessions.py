@@ -622,6 +622,43 @@ def test_rule_parser_prefers_longest_week_keyword_and_flags_invalid_clock():
     assert weekday["start_time"] == "2026-05-04T09:00:00+08:00"
 
 
+def test_rule_parser_places_this_week_weekday_in_the_natural_week():
+    from plugins.pendo.services.rule_parser import RuleParser
+
+    parser = RuleParser()
+    friday = datetime(2026, 5, 1, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    saturday = datetime(2026, 5, 2, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    sunday = datetime(2026, 5, 3, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    # 本周X、这周X、这个星期X 写法不同，都落在周一起算的自然周里的那一天。
+    for phrase in ("本周五", "这周五", "这个星期五", "本周周五", "本礼拜五", "这个周五"):
+        parsed = parser.parse(f"{phrase}下午3点开会", "u-rule", now=friday)
+        assert parsed["start_time"] == "2026-05-01T15:00:00+08:00", phrase
+        assert parsed["needs_confirmation"] == [], phrase
+
+    # 那一天已经过去也还是本周的那一天（与“这周五”一贯的处理一致），不顺延到下周。
+    assert (
+        parser.parse("本周五下午3点开会", "u-rule", now=saturday)["start_time"]
+        == parser.parse("这周五下午3点开会", "u-rule", now=saturday)["start_time"]
+        == "2026-05-01T15:00:00+08:00"
+    )
+    assert parser.parse("本周日10点开会", "u-rule", now=sunday)["start_time"] == (
+        "2026-05-03T10:00:00+08:00"
+    )
+    assert parser.parse("本周一开会", "u-rule", now=sunday)["start_time"] == (
+        "2026-04-27T09:00:00+08:00"
+    )
+    # 下周的写法不受影响。
+    assert parser.parse("下周五下午3点开会", "u-rule", now=saturday)["start_time"] == (
+        "2026-05-08T15:00:00+08:00"
+    )
+
+    # 没有星期几的“本周”不是具体时间；有星期几才算时间表达（决定类型）。
+    note = parser.parse("讨论本周排期", "u-rule", now=friday)
+    assert "start_time" not in note
+    assert parser.parse("本周三前把文档发我", "u-rule", now=friday)["type"].value == "task"
+
+
 def test_search_items_applies_date_range_filters():
     temp_dir, db = _make_temp_db("pendo_review_search_range")
     owner_id = "u-search-range"
@@ -724,6 +761,8 @@ def test_ai_parser_builds_semantic_reminder_rules_from_description():
     [
         ("提前一小时", 3600),
         ("提前半小时", 1800),
+        ("提前一百二十分钟", 7200),
+        ("提前一百二分钟", 7200),
         ("1.5h", 5400),
         ("1H", 3600),
         ("提前1小时30分钟", 5400),

@@ -279,8 +279,8 @@ git diff --check
 ### 完整 UAT
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据重定向到本次报告目录，按顺序执行以下阶段，最后优雅停机并逐字节恢复 `config/config.json`。

@@ -41,36 +41,33 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-ROOT         = Path(__file__).resolve().parents[1]
-BILI_SOURCES = ("bili_popular", "bili_ranking", "bili_search", "bili_comments", "bili_subtitles")
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import aiohttp  # noqa: E402
+import aiohttp
 
-from core.ai import complete_configured_route  # noqa: E402
-from core.clock import now_in_configured_timezone  # noqa: E402
-from plugins.xiaoqing_life import digest as digest_mod  # noqa: E402
-from plugins.xiaoqing_life import memes as memes_mod  # noqa: E402
-from plugins.xiaoqing_life import (
-    persona_bridge,  # noqa: E402
-    planner,  # noqa: E402
-    research,  # noqa: E402
-)
-from plugins.xiaoqing_life import threads as thread_ops  # noqa: E402
-from plugins.xiaoqing_life.activity import SessionDeps  # noqa: E402
-from plugins.xiaoqing_life.bili_auth import BiliCredential  # noqa: E402
-from plugins.xiaoqing_life.config import parse_life_config, route_configured  # noqa: E402
-from plugins.xiaoqing_life.fetching import gather, interest_topics, open_items  # noqa: E402
-from plugins.xiaoqing_life.lifecycle import seed_interests  # noqa: E402
-from plugins.xiaoqing_life.safety import is_blocked, is_profane, quote_in_source  # noqa: E402
-from plugins.xiaoqing_life.session import run_session  # noqa: E402
-from plugins.xiaoqing_life.sources.base import BoundedFetcher, SourceItem  # noqa: E402
-from plugins.xiaoqing_life.stores import LifeStore  # noqa: E402
-from plugins.xiaoqing_life.wind_down import run_wind_down  # noqa: E402
+from core.ai import complete_configured_route
+from core.clock import now_in_configured_timezone
+from plugins.xiaoqing_life import digest as digest_mod
+from plugins.xiaoqing_life import memes as memes_mod
+from plugins.xiaoqing_life import persona_bridge, planner, research
+from plugins.xiaoqing_life import threads as thread_ops
+from plugins.xiaoqing_life.activity import SessionDeps
+from plugins.xiaoqing_life.bili_auth import BiliCredential
+from plugins.xiaoqing_life.config import SOURCE_DEFAULTS, parse_life_config, route_configured
+from plugins.xiaoqing_life.fetching import gather, interest_topics, open_items
+from plugins.xiaoqing_life.lifecycle import seed_interests
+from plugins.xiaoqing_life.safety import is_blocked, is_profane, quote_in_source
+from plugins.xiaoqing_life.session import run_session
+from plugins.xiaoqing_life.sources.base import BoundedFetcher, SourceItem
+from plugins.xiaoqing_life.stores import LifeStore
+from plugins.xiaoqing_life.wind_down import run_wind_down
+from plugins.xiaoqing_life.works import MAX_OPS
 
-PLUGIN     = "xiaoqing_life"
-ACTIVITIES = (
+PLUGIN       = "xiaoqing_life"
+BILI_SOURCES = tuple(name for name in SOURCE_DEFAULTS if name.startswith("bili_"))
+ACTIVITIES   = (
     "hot_scroll",
     "interest_dive",
     "thread_continue",
@@ -92,15 +89,10 @@ def _build_config(routes_from: str) -> tuple[dict[str, Any], dict[str, Any]]:
     life            = plugins.setdefault(PLUGIN, {})
     life["enabled"] = True
     if routes_from:
-        source     = plugins.get(routes_from, {}).get("ai", {})
-        routes     = source.get("routes", {})
+        routes     = plugins.get(routes_from, {}).get("ai", {}).get("routes", {})
         life["ai"] = {
-            "model_aliases": copy.deepcopy(source.get("model_aliases", {})),
-            "routes": {k: copy.deepcopy(routes[k]) for k in ("reasoning", "vision") if k in routes},
+            "routes": {k: copy.deepcopy(routes[k]) for k in ("reasoning", "vision") if k in routes}
         }
-        secret_plugins = secrets.setdefault("plugins", {})
-        if routes_from in secret_plugins:
-            secret_plugins[PLUGIN] = copy.deepcopy(secret_plugins[routes_from])
     return config, secrets
 
 
@@ -112,7 +104,11 @@ def _stub_context(config: dict[str, Any]) -> Any:
 def _drops(
     raw: dict[str, Any], items: list[SourceItem], result: digest_mod.DigestResult
 ) -> dict[str, Any]:
-    """把模型候选与通过核对的结果对照，说明每个被丢弃的候选为什么没通过。"""
+    """把模型候选与通过核对的结果对照，给每个被丢弃的候选一个大致的原因。
+
+    只按核对里最常见的几步推断（引用、摘录、屏蔽词）；重复、暴力用语、配置里的屏蔽词、
+    超出条数这些都归到 ``other``。真正的核对以 ``digest.validate`` 为准。
+    """
 
     texts                         = digest_mod.ref_texts(items)
     kept_terms                    = {t.term for t in result.terms}
@@ -130,7 +126,7 @@ def _drops(
         elif is_profane(str(row.get("term", ""))) or is_blocked(str(row.get("term", ""))):
             why = "blocked_or_profane"
         else:
-            why = "other(dup/limit/empty)"
+            why = "other"
         reasons.append({"kind": "term", "value": str(row.get("term"))[:20], "why": why})
     kept_patterns = {e.pattern for e in result.expressions}
     for row in raw.get("expressions") or []:
@@ -142,7 +138,7 @@ def _drops(
         elif not quote_in_source(str(row.get("quote", "")), " ".join(texts[r] for r in refs)):
             why = "quote_not_in_source"
         else:
-            why = "other(blocked/dup/limit)"
+            why = "other"
         reasons.append({"kind": "expression", "value": str(row.get("pattern"))[:30], "why": why})
     counts = {
         key: (len(raw.get(key) or []) if isinstance(raw.get(key), list) else 0)
@@ -365,8 +361,7 @@ async def _main(args: argparse.Namespace) -> int:
                     result["validation"] = _drops(raw_box["raw"], raw_box["items"], verdict)
                     print("核对：", json.dumps(result["validation"], ensure_ascii=False))
                 if args.force_memes and raw_box and deps.download and deps.vision:
-                    fetch_image = deps.download
-                    pics        = [
+                    pics = [
                         f"{c.ref}#{n}"
                         for i in raw_box["items"]
                         for c in i.comments
@@ -385,7 +380,7 @@ async def _main(args: argparse.Namespace) -> int:
                         life_cfg_forced,
                         raw_box["items"],
                         picks,
-                        download = lambda u: fetch_image(u, life_cfg.max_meme_bytes),
+                        download = deps.download,
                         vision   = deps.vision,
                         day      = moment.strftime("%Y-%m-%d"),
                         now      = lambda: clock().timestamp(),
@@ -577,7 +572,7 @@ def _work_report(
     added               = [e["text"] for i, e in now.items() if i not in was]
     changed             = [e["text"] for i, e in now.items() if i in was and e != was[i]]
     removed             = [e["text"] for i, e in was.items() if i not in now]
-    asked               = min(3, len(raw.get("ops") or [])) if isinstance(raw, dict) else 0
+    asked               = min(MAX_OPS, len(raw.get("ops") or [])) if isinstance(raw, dict) else 0
     kept                = len(added) + len(changed) + len(removed)
     return {
         "ops_asked"  : asked,
@@ -595,7 +590,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--activity", choices=ACTIVITIES, default="")
+    parser.add_argument(
+        "--activity",
+        choices = ACTIVITIES,
+        default = "",
+        help    = "强制选择的活动；不给就走真实的门控与打分（视同手动运行）",
+    )
     parser.add_argument("--query", default="")
     parser.add_argument("--source", default="bili_popular")
     parser.add_argument("--terms", default="")

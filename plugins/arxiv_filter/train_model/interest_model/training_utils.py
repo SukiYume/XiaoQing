@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-import importlib
 import math
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import (
+    average_precision_score,
+    classification_report,
+    f1_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import train_test_split
 
+# 文本拼接、编码器和打分都用线上推理的那一份：训练和推理看到的输入、算出的分数才一致。
+from ...inference.shared import build_paper_texts as build_title_abstract_texts
+from ...inference.shared import clean_paper_text
+from ...inference.shared import encode_normalized as encode_normalized
+from ...inference.shared import knn_scores as knn_scores
+from ...inference.shared import load_sentence_encoder as load_sentence_encoder
 from ..training_common import (
+    best_fbeta_threshold,
     coerce_binary_labels,
     read_training_csv,
     seed_python_numpy,
@@ -21,18 +32,25 @@ from ..training_common import (
 )
 
 
-def load_sentence_transformer_class():
-    """Load the optional sentence-transformers dependency only when needed."""
+def require_encoder_name(value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("encoder_name must be a non-empty string")
 
-    return importlib.import_module("sentence_transformers").SentenceTransformer
+
+def require_int(name: str, value: object, minimum: int = 1) -> None:
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}")
 
 
-def apply_max_len(encoder: Any, max_len: int | None) -> Any:
-    """在编码器创建边界统一应用输入截断长度；训练和推理使用同一规则。"""
+def require_finite(name: str, value: object, *, positive: bool = False) -> None:
+    """要求有限数（排除 bool）：``positive`` 为真时必须大于 0，否则只要不小于 0。"""
 
-    if max_len is not None:
-        encoder.max_seq_length = int(max_len)
-    return encoder
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    if value < 0 or (positive and value == 0):
+        raise ValueError(
+            f"{name} must be a finite {'positive' if positive else 'non-negative'} number"
+        )
 
 
 def resolve_columns(
@@ -59,14 +77,6 @@ def resolve_columns(
     return resolved
 
 
-def _clean_text(x: object) -> str:
-    """Collapse whitespace and normalize pandas missing values to empty text."""
-
-    if pd.isna(x):
-        return ""
-    return re.sub(r"\s+", " ", str(x)).strip()
-
-
 def build_paired_texts(
     frame: pd.DataFrame,
     title_column: str,
@@ -78,24 +88,9 @@ def build_paired_texts(
     titles    = frame[title_column].fillna("").astype(str).tolist()
     abstracts = frame[abstract_column].fillna("").astype(str).tolist()
     return [
-        template.format(t=_clean_text(title), a=_clean_text(abstract)).strip()
+        template.format(t=clean_paper_text(title), a=clean_paper_text(abstract)).strip()
         for title, abstract in zip(titles, abstracts, strict=True)
     ]
-
-
-def build_title_abstract_texts(
-    frame: pd.DataFrame,
-    title_column: str,
-    abstract_column: str,
-) -> list[str]:
-    """构建两个兴趣模型共用的标准标题+摘要输入。"""
-
-    return build_paired_texts(
-        frame,
-        title_column,
-        abstract_column,
-        "Title: {t}\nAbstract: {a}",
-    )
 
 
 def validate_embedding_matrix(
@@ -119,42 +114,6 @@ def validate_embedding_matrix(
     return cast(np.ndarray, matrix.astype(np.float32, copy=False))
 
 
-def best_fbeta_threshold(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    beta: float = 1.0,
-) -> tuple[float, float]:
-    """Return the threshold and score at the best finite PR-curve F-beta point."""
-
-    if isinstance(beta, bool) or not isinstance(beta, (int, float)) or not math.isfinite(beta):
-        raise ValueError("beta must be a finite positive number")
-    if beta <= 0:
-        raise ValueError("beta must be a finite positive number")
-    labels       = np.asarray(y_true)
-    scores_input = np.asarray(y_score)
-    if labels.ndim != 1 or scores_input.ndim != 1 or len(labels) != len(scores_input):
-        raise ValueError("y_true and y_score must be one-dimensional arrays of equal length")
-    if not np.isfinite(labels).all() or not np.isfinite(scores_input).all():
-        raise ValueError("y_true and y_score must contain only finite values")
-    if not np.isin(labels, (0, 1)).all():
-        raise ValueError("y_true must contain only 0 and 1")
-    if len(np.unique(labels)) < 2:
-        return 0.5, 0.0
-    precision, recall, thresholds = precision_recall_curve(labels, scores_input)
-    if len(thresholds) == 0:
-        return 0.5, 0.0
-    beta_squared = beta * beta
-    scores       = ((1 + beta_squared) * precision[:-1] * recall[:-1]) / np.clip(
-        (beta_squared * precision[:-1]) + recall[:-1],
-        1e-12,
-        None,
-    )
-    if np.all(np.isnan(scores)):
-        return 0.5, 0.0
-    best_index = int(np.nanargmax(scores))
-    return float(thresholds[best_index]), float(scores[best_index])
-
-
 def fbeta_at_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
@@ -173,26 +132,43 @@ def fbeta_at_threshold(
     return 0.0 if denominator == 0 else (1 + beta_sq) * tp / denominator
 
 
-def topk_mean_similarity(
-    query: np.ndarray,
-    references: np.ndarray,
-    k: int,
+def report_interest_metrics(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    y_pred: np.ndarray,
     *,
-    chunk_rows: int = 1024,
-) -> np.ndarray:
-    """每个查询与参考集最相似 k 项的平均相似度。
+    threshold: float,
+    name: str,
+) -> dict[str, float]:
+    """兴趣模型的评估指标：计算、打印并返回（k-NN 与多兴趣训练共用）。"""
 
-    按查询分块计算，单块矩阵为 chunk_rows×S；用 ``np.partition`` 取 top-k，不对整行排序。
-    结果与整矩阵 ``np.sort(...)[:, -k:].mean(axis=1)`` 一致。
-    """
+    has_both                  = len(np.unique(y_true)) >= 2
+    metrics: dict[str, float] = {
+        "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
+        "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "precision_at_5": precision_at_k(y_true, y_score, 5),
+        "precision_at_10": precision_at_k(y_true, y_score, 10),
+        "precision_at_20": precision_at_k(y_true, y_score, 20),
+        "threshold": float(threshold),
+    }
 
-    k = min(int(k), references.shape[0])
-    output: np.ndarray = np.empty(len(query), dtype=np.float64)
-    for start in range(0, len(query), chunk_rows):
-        sims = query[start : start + chunk_rows] @ references.T
-        top = np.partition(sims, sims.shape[1] - k, axis=1)[:, -k:]
-        output[start : start + chunk_rows] = top.mean(axis=1)
-    return output
+    print(f"\n{'=' * 72}\n[{name}] Metrics\n{'=' * 72}")
+    for key, value in metrics.items():
+        text = "nan" if np.isnan(value) else f"{value:.4f}"
+        print(f"  {key:<22}: {text}")
+    print(f"\n{'=' * 72}\n[{name}] Classification Report\n{'=' * 72}")
+    print(
+        classification_report(
+            y_true,
+            y_pred,
+            labels        = [0, 1],
+            target_names  = ["negative", "positive"],
+            digits        = 4,
+            zero_division = 0,
+        )
+    )
+    return metrics
 
 
 def precision_at_k(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
@@ -290,9 +266,16 @@ __all__ = [
     "build_paired_texts",
     "build_title_abstract_texts",
     "coerce_binary_labels",
-    "load_sentence_transformer_class",
+    "encode_normalized",
+    "fbeta_at_threshold",
+    "knn_scores",
+    "load_sentence_encoder",
     "precision_at_k",
     "read_training_csv",
+    "report_interest_metrics",
+    "require_encoder_name",
+    "require_finite",
+    "require_int",
     "resolve_columns",
     "seed_python_numpy",
     "split_dataframe",

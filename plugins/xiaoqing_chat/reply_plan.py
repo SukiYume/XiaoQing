@@ -6,6 +6,7 @@ import asyncio
 import random
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -15,13 +16,12 @@ from .brain_chat import (
     get_brain_chat_max_context,
     persona_reply_style,
 )
-from .chat_event import event_chat_id, is_private_event
+from .chat_event import event_chat_id, event_sender_name, is_private_event
 from .chat_runtime import ai_route_context, configured_bot_name, llm_call_config
 from .context_builder import (
     expression_context,
-    jargon_context,
+    jargon_block,
     knowledge_context,
-    sender_profile_context,
     tool_status_context,
 )
 from .life.daily_life import day_key, past_block, recent_days, refers_to_past, today_block
@@ -29,14 +29,17 @@ from .life.online import EMPTY_ONLINE_LIFE, OnlineLife, fetch_online_life
 from .life.open_loops import open_loop_block
 from .life.schedule import asks_about_routine, routine_block, routine_day_plan
 from .life.self_timeline import self_timeline_block
+from .llm.check_result import ReplyCheckResult
 from .llm.communication_constraints import requested_char_count
 from .llm.decorations import RECENT_WINDOW, has_decoration
 from .llm.llm_config import LLMCallConfig
+from .llm.local_checks import heuristic_check
 from .logging_utils import log_step
 from .media.marker_resolver import (
     build_media_candidates_block,
 )
-from .memory.memory import active_conversation_suffix, is_conversation_reply
+from .memory import client as memory_client
+from .memory.memory import StoredMessage, active_conversation_suffix, is_conversation_reply
 from .memory.review_sessions import build_policy_block
 from .message_parts import render_stored_message
 from .planning.planned_action import PlannedAction
@@ -100,8 +103,19 @@ def needs_persona_guard_when_checker_unavailable(text: str, *, bot_name: str) ->
     return any(marker in remainder for marker in self_markers)
 
 
-def allows_low_stakes_persona_fiction(runtime: Any) -> bool:
-    return bool(runtime.cfg.personality.allow_low_stakes_persona_fiction)
+def heuristic_check_with_config(
+    runtime: ChatRuntime, *, reply: str, history: Sequence[StoredMessage]
+) -> ReplyCheckResult | None:
+    """按 ``reply_check`` 配置跑本地确定性检查（空回复、复读、连续发言）。"""
+
+    cfg = runtime.cfg.reply_check
+    return heuristic_check(
+        reply                = reply,
+        history              = history,
+        max_repeat_compare   = cfg.max_repeat_compare,
+        similarity_threshold = cfg.similarity_threshold,
+        max_assistant_in_row = cfg.max_assistant_in_row,
+    )
 
 
 def _extract_planner_goal(reasoning: str) -> str:
@@ -164,6 +178,8 @@ class ReplyGenerationPlan:
     life_block: str = ""
     # 当前说话人可以顺口关心的一件到期的事。
     open_loop_block: str = ""
+    # 统一记忆里的群页和与这句话相关的旧事；说话人的页面在 ``profile_block``。
+    memory_block: str = ""
 
 
 def _load_reply_context_blocks(
@@ -172,29 +188,20 @@ def _load_reply_context_blocks(
     state: Any,
     data_dir: Any,
     chat_id: str,
-    event: dict[str, Any],
     text: str,
-    unknown_words: list[str],
-) -> tuple[str, str, str, str, str]:
-    """在事件循环外构建需要同步读取存储的提示词上下文块。"""
+) -> tuple[str, str, str, str, tuple[str, ...]]:
+    """在事件循环外构建需要同步读取存储的提示词上下文块；最后一项是黑话块里解释了的说法。"""
 
-    profile_block = sender_profile_context(state, data_dir, chat_id, event)
     state.review_store.bind(data_dir)
     policy_block = (
         build_policy_block(state.review_store, chat_id)
         if runtime.cfg.reflection.enable_review_sessions
         else ""
     )
-    knowledge_block    = knowledge_context(runtime, state, text)
-    expression_block   = expression_context(runtime, state, data_dir, chat_id, text)
-    jargon_explanation = jargon_context(
-        state,
-        data_dir,
-        chat_id,
-        unknown_words,
-        text,
-    )
-    return profile_block, policy_block, knowledge_block, expression_block, jargon_explanation
+    knowledge_block  = knowledge_context(runtime, state, text)
+    expression_block = expression_context(runtime, state, data_dir, chat_id, text)
+    jargon_explanation, explained = jargon_block(state, data_dir, chat_id, text)
+    return policy_block, knowledge_block, expression_block, jargon_explanation, explained
 
 
 def _select_reaction_rules(
@@ -222,11 +229,18 @@ def _select_reaction_rules(
 
 
 def _load_life_blocks(
-    *, runtime: ChatRuntime, state: Any, chat_id: str, event: dict[str, Any], text: str
+    *,
+    runtime: ChatRuntime,
+    state: Any,
+    event: dict[str, Any],
+    text: str,
+    recalled: memory_client.Recalled,
+    online_shown: Sequence[str] = (),
 ) -> tuple[str, str]:
-    """读取作息底色、今天的生活、自我陈述和当前说话人的未完话头。
+    """作息底色、今天的生活、她自己的页面与近况，以及当前说话人可以顺口接的到期话头。
 
-    对方问到过去的事时再加上前几天的生活。话头会登记到事件上，投递后结算。
+    对方问到过去的事时再加上前几天的生活和那几天说过的近况。话头会登记到事件上，投递后结算。
+    ``online_shown`` 是网上生活这一轮已经给了细节的条目，自我页里只引用它们的行不再放。
     """
 
     life    = runtime.cfg.life
@@ -245,31 +259,79 @@ def _load_life_blocks(
         if block := today_block(state.daily_life.get(day_key(moment)), moment):
             parts.append(block)
     if life.enable_self_timeline:
-        limit = int(life.self_timeline_max_injected)
-        entries = state.self_timeline.visible(chat_id, limit=limit)
-        stories = state.self_timeline.stories(chat_id, limit=limit)
-        if block := self_timeline_block(entries, stories=stories):
+        if page := recalled.self_page(online_shown):
+            parts.append(page)
+        if block := self_timeline_block(recalled.self_entries, stories=recalled.stories):
             parts.append(block)
     if refers_to_past(text):
         days    = recent_days(state.daily_life, moment) if life.enable_daily_life else []
-        earlier = (
-            state.self_timeline.history(chat_id, since=moment.timestamp() - 4 * 86400)
-            if life.enable_self_timeline
-            else []
-        )
+        earlier = list(recalled.self_history) if life.enable_self_timeline else []
         if block := past_block(days, earlier, moment):
             parts.append(block)
     loop_block = ""
-    if life.enable_open_loops:
-        found = state.open_loops.for_speaker(
-            chat_id,
-            event.get("user_id"),
-            followup_seconds=float(life.open_loop_followup_hours) * 3600.0,
-        )
-        if isinstance(found, tuple) and len(found) == 2:
-            event["_xc_open_loop_surfaced"] = found
-            loop_block                      = open_loop_block(*found)
+    if life.enable_open_loops and recalled.due is not None:
+        event["_xc_open_loop_surfaced"] = recalled.due
+        loop_block                      = open_loop_block(*recalled.due)
     return "\n".join(parts), loop_block
+
+
+# 这一轮的记忆取用挂在事件上，规划和生成共用。
+RECALLED_KEY = "_xc_recalled"
+
+
+async def recall_for_reply(
+    context: Any,
+    runtime: ChatRuntime,
+    *,
+    chat_id: str,
+    event: dict[str, Any],
+    text: str,
+    history: Any,
+) -> memory_client.Recalled:
+    """这一轮从统一记忆取用的常驻块：纯内存读取，记忆不可用时是空的。
+
+    同一轮里规划和生成共用一次取用（取用会给用到的笔记记一次“用过”）。
+    """
+
+    cached = event.get(RECALLED_KEY)
+    if isinstance(cached, memory_client.Recalled):
+        return cached
+    life     = runtime.cfg.life
+    started  = time.monotonic()
+    recalled = await memory_client.recall(
+        context,
+        purpose        = "reply",
+        chat_id        = chat_id,
+        speaker_id     = event.get("user_id"),
+        speaker_name   = event_sender_name(event),
+        text           = text,
+        history        = list(history),
+        past_days      = 4.0 if refers_to_past(text) else 0.0,
+        followup_hours = float(life.open_loop_followup_hours),
+        self_limit     = int(life.self_timeline_max_injected),
+    )
+    log_step(
+        context,
+        runtime,
+        chat_id = chat_id,
+        step    = "reply.memory.recall",
+        fields  = {
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "available": recalled.available,
+            "chars"    : {name: len(value) for name, value in recalled.blocks.items() if value},
+            "self"     : len(recalled.self_entries) + len(recalled.stories),
+            "due"      : recalled.due[1] if recalled.due else "",
+        },
+    )
+    event[RECALLED_KEY] = recalled
+    return recalled
+
+
+def planner_memory(runtime: ChatRuntime, recalled: memory_client.Recalled) -> str:
+    """交给规划器的那部分记忆：说话的人和这个群（和生成拿到的是同一份）。"""
+
+    group = recalled.block("group") if runtime.cfg.memory.enable_memory_retrieval else ""
+    return "\n\n".join(part for part in (recalled.block("speaker"), group) if part)
 
 
 async def _load_reply_history(
@@ -309,14 +371,19 @@ def offers_outbound_media(text: str, history: Any, *, roll: float | None = None)
     return (random.random() if roll is None else roll) < _MEDIA_OFFER_PROBABILITY
 
 
-def foreground_call_config(runtime: ChatRuntime, text: str) -> LLMCallConfig:
-    """前台生成的调用参数；对方明确要长文时（“写个800字的检讨”）按字数放宽输出预算和超时。"""
+def with_requested_length_room(config: LLMCallConfig, text: str) -> LLMCallConfig:
+    """对方明确要长文时（“写个800字的检讨”）按字数放宽输出预算和超时，否则原样返回。"""
 
-    foreground = llm_call_config(runtime.cfg, foreground=True)
     length = requested_char_count(text)
     if length is not None and length.mode != "at_most":
-        return foreground.with_room_for(length.count)
-    return foreground
+        return config.with_room_for(length.count)
+    return config
+
+
+def foreground_call_config(runtime: ChatRuntime, text: str) -> LLMCallConfig:
+    """前台生成的调用参数，对方要长文时放宽预算。"""
+
+    return with_requested_length_room(llm_call_config(runtime.cfg, foreground=True), text)
 
 
 def _merge_online_life(
@@ -395,21 +462,33 @@ async def prepare_reply_generation(
     resolved_secrets = dict(secrets or ai_route_context(context, chat_id=chat_id))
     foreground = foreground_call_config(runtime, text)
     request_id = str(context.request_id or "")
+    recalled   = await recall_for_reply(
+        context,
+        runtime,
+        chat_id = chat_id,
+        event   = event,
+        text    = text,
+        history = history,
+    )
+    profile_block = recalled.block("speaker")
+    memory_block  = (
+        "\n\n".join(part for part in (recalled.block("group"), recalled.block("hits")) if part)
+        if runtime.cfg.memory.enable_memory_retrieval
+        else ""
+    )
     (
-        profile_block,
         policy_block,
         knowledge_block,
         expression_block,
         jargon_explanation,
+        explained_terms,
     ) = await asyncio.to_thread(
         _load_reply_context_blocks,
-        runtime       = runtime,
-        state         = state,
-        data_dir      = context.data_dir,
-        chat_id       = chat_id,
-        event         = event,
-        text          = text,
-        unknown_words = action.unknown_words,
+        runtime  = runtime,
+        state    = state,
+        data_dir = context.data_dir,
+        chat_id  = chat_id,
+        text     = text,
     )
     if knowledge_block:
         log_step(
@@ -428,20 +507,25 @@ async def prepare_reply_generation(
             fields  = {"picked": len(expression_block)},
         )
     keyword_rules, regex_rules = _select_reaction_rules(runtime, text)
-    (life_block, loop_block), online = await asyncio.gather(
-        asyncio.to_thread(
-            _load_life_blocks, runtime=runtime, state=state, chat_id=chat_id, event=event, text=text
-        ),
-        fetch_online_life(
-            context,
-            runtime,
-            text          = text,
-            history       = history,
-            is_private    = is_private,
-            unknown_words = action.unknown_words,
-            chat_id       = chat_id,
-            state         = state,
-        ),
+    online = await fetch_online_life(
+        context,
+        runtime,
+        text            = text,
+        history         = history,
+        is_private      = is_private,
+        chat_id         = chat_id,
+        state           = state,
+        topics          = recalled.topics,
+        explained_terms = explained_terms,
+    )
+    life_block, loop_block = await asyncio.to_thread(
+        _load_life_blocks,
+        runtime      = runtime,
+        state        = state,
+        event        = event,
+        text         = text,
+        recalled     = recalled,
+        online_shown = online.shown_keys,
     )
     life_block, jargon_explanation, expression_block = _merge_online_life(
         online, life_block, jargon_explanation, expression_block
@@ -454,7 +538,6 @@ async def prepare_reply_generation(
     effective_goal   = _extract_planner_goal(merged_reasoning) or current_goal
     tool_info_block  = await tool_status_context(
         state    = state,
-        data_dir = context.data_dir,
         bot_name = bot_name,
         chat_id  = chat_id,
         event    = event,
@@ -504,4 +587,5 @@ async def prepare_reply_generation(
         turn_note          = turn_note.strip(),
         life_block         = life_block,
         open_loop_block    = loop_block,
+        memory_block       = memory_block,
     )

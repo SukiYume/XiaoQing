@@ -435,7 +435,7 @@ async def test_work_on_applies_ops_and_rewards_half_per_op(tmp_path: Path) -> No
     assert store.state["preferences"]["activity"]["work_on"] == 1.0
     assert store.state["sessions_today"] == 1 and store.state["last_work_on_at"] == NOW
     assert store.state["activity_log"][-1]["end"] > store.state["activity_log"][-1]["start"]
-    span = store.state["last_session_end"] - store.state["last_session_at"]
+    span = store.state["last_session_end"] - store.state["activity_log"][-1]["start"]
     assert 15 * 60 <= span <= 30 * 60
     assert len(ai.calls) == 1 and fetch.calls == []  # 没有 todo：不查百科
     sent = json.loads(ai.calls[0][1][1]["content"])
@@ -590,6 +590,12 @@ async def test_work_on_score_formula() -> None:
     assert _score(work, fresh, {**default_state(), "last_work_on_at": NOW - 13 * 3600}) == 44
     both = {**streak, "last_work_on_at": NOW - 3600}
     assert _score(todo, fresh, both) == 32 + 12 + 6 - 15 - 20
+
+
+async def test_liked_episode_means_like_or_mixed_and_not_auto() -> None:
+    assert works.liked_episode({"feeling": "like"}) and works.liked_episode({"feeling": "mixed"})
+    assert not works.liked_episode({"feeling": "meh"})
+    assert not works.liked_episode({"feeling": "like", "auto": True})
 
 
 async def test_new_material_counts_only_related_liked_episodes_since_the_last_tidy() -> None:
@@ -766,7 +772,7 @@ async def test_excerpt_block_when_she_is_asked_to_show_it(tmp_path: Path) -> Non
     )
 
 
-async def test_work_share_candidate_comes_after_episodes_and_is_capped_at_three(
+async def test_work_share_candidate_comes_after_episodes_within_the_cap(
     tmp_path: Path,
 ) -> None:
     store = new_store(tmp_path)
@@ -774,11 +780,18 @@ async def test_work_share_candidate_comes_after_episodes_and_is_capped_at_three(
         _work(last_ops=["星露谷物语：种田很治愈"], last_add_at=NOW - 3600, entries=[_entry(1)])
     )
     store.episodes += [
-        _episode(n, share=True, ago=600.0 * n, title=f"分享{n}") for n in range(1, 4)
+        _episode(n, share=True, ago=600.0 * n, title=f"分享{n}") for n in range(1, 8)
     ]
     got = _chat(store, "", mode="proactive")["share_candidates"]
-    # 作品刚更新就留一个位置：经历最多 2 条 + 作品 1 条，总数仍 ≤3
-    assert [c["episode_id"] for c in got] == ["e1", "e2", "work:w1:2026-11-05"]
+    # 作品刚更新就留一个位置：经历最多 5 条 + 作品 1 条，总数仍 ≤6
+    assert [c["episode_id"] for c in got] == [
+        "e1",
+        "e2",
+        "e3",
+        "e4",
+        "e5",
+        "work:w1:2026-11-05",
+    ]
     store.episodes.clear()
     got = _chat(store, "", mode="proactive")["share_candidates"]
     assert got == [
@@ -786,6 +799,7 @@ async def test_work_share_candidate_comes_after_episodes_and_is_capped_at_three(
             "episode_id": "work:w1:2026-11-05",
             "line"      : "你在整理的《独立游戏片单》刚更新了：星露谷物语：种田很治愈",
             "topics"    : ["独立游戏"],
+            "heard_here": False,
         }
     ]
     store.episodes += [_episode(1, share=True, title="分享1")]
@@ -1169,7 +1183,7 @@ async def test_budget_unit_priority_and_episode_ids() -> None:
         "unknown_terms": [],
     }
     req = tc.clean_payload(payload)
-    text, ids = tc.build_life_lines(store, req, MOMENT, make_cfg())
+    text, ids, _ = tc.build_life_lines(store, req, MOMENT, make_cfg())
     assert (
         len(text) <= tc.LIFE_BUDGET
         and text.startswith(tc._LIFE_HEADER)

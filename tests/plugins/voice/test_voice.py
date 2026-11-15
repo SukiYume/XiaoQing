@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from core.bounded_http import BoundedHttpResponse, HttpStatusError
+from core.safe_http import MAX_PROXY_URL_CHARS
 from plugins.voice import main as voice
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -122,7 +123,7 @@ def test_settings_use_safe_defaults_and_validate_proxy(tmp_path: Path) -> None:
         "https://proxy.test/#fragment",
         "https://proxy.test:70000",
         "https://proxy.test\n",
-        "x" * (voice.MAX_PROXY_LENGTH + 1),
+        "x" * (MAX_PROXY_URL_CHARS + 1),
     ],
     ids=[
         "non-string",

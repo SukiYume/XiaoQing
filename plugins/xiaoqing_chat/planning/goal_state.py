@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from ..memory.topic_summary_cache import load_topic_summary_entries
-from ..store_base import AsyncKeyedStore, delete_json_artifacts
+from ..participation import QQ_FACE_TOKEN_RE
+from ..store_base import AsyncKeyedStore, coerce_finite_float, delete_json_artifacts
 
 
 @dataclass
@@ -37,13 +37,7 @@ class GoalStore(AsyncKeyedStore[GoalState]):
             obj = cast(object, self._load_json(path, default=None))
             if isinstance(obj, dict):
                 payload = cast(dict[str, object], obj)
-                ts_raw  = payload.get("ts", 0.0)
-                if isinstance(ts_raw, (int, float)):
-                    st.ts = ts_raw
-                elif isinstance(ts_raw, str):
-                    st.ts = float(ts_raw) if ts_raw else 0.0
-                else:
-                    st.ts = 0.0
+                st.ts = coerce_finite_float(payload.get("ts"), default=0.0)
                 st.goal   = str(payload.get("goal", "") or "").strip()
                 st.source = str(payload.get("source", "") or "").strip()
         self._cache[chat_id] = st
@@ -81,21 +75,8 @@ class GoalStore(AsyncKeyedStore[GoalState]):
             delete_json_artifacts(path)
 
 
-def load_latest_topic_and_summary(data_dir: Path, chat_id: str) -> tuple[str, str]:
-    entries = load_topic_summary_entries(data_dir, chat_id)
-    for item in reversed(entries):
-        if item.topic and item.summary:
-            return item.topic, item.summary
-    return "", ""
-
-
-_RE_GOAL                 = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,80})")
 _LOW_INFORMATION_TURN_RE = re.compile(
     r"^(?:乐+|哈+|哈哈哈*|呵+|嘿+|草+|啊+|哦+|嗯+|噔噔咚|笑死|行|好|qs)$",
-    re.IGNORECASE,
-)
-_QQ_FACE_ONLY_RE = re.compile(
-    r"^(?:\[QQ表情：[^\]\r\n]+\]|\[CQ:face(?:,[^\]\r\n]*)?\])$",
     re.IGNORECASE,
 )
 
@@ -104,45 +85,17 @@ def is_low_information_turn(text: str) -> bool:
     """判断不能独立成为话题目标的纯反应消息。"""
 
     raw = str(text or "").strip()
-    if _QQ_FACE_ONLY_RE.fullmatch(raw):
+    if QQ_FACE_TOKEN_RE.fullmatch(raw):
         return True
     normalized = re.sub(r"[\s~～!！?？。,.，…]+", "", raw).strip()
     return bool(normalized and _LOW_INFORMATION_TURN_RE.fullmatch(normalized))
 
 
-def _derive_goal_from_context(
-    current_text: str,
-    planner_reasoning: str,
-    topic: str,
-) -> str:
-    """根据规划理由、当前消息和最近话题推导本轮目标。"""
-    pr = (planner_reasoning or "").strip()
-    if pr:
-        m = _RE_GOAL.search(pr)
-        if m:
-            g = (m.group(1) or "").strip()
-            if g:
-                return g
-        if len(pr) <= 60:
-            return pr
+def derive_goal(current_text: str) -> str:
+    """根据当前消息推导本轮目标。"""
     t = (current_text or "").strip()
-    if t:
-        if is_low_information_turn(t):
-            return f'围绕话题"{topic}"自然聊天' if topic else ""
-        if len(t) <= 14:
-            return f'围绕"{t}"继续聊'
-        return "自然聊天"
-    if topic:
-        return f'围绕话题"{topic}"自然聊天'
+    if t and is_low_information_turn(t):
+        return ""
+    if t and len(t) <= 14:
+        return f'围绕"{t}"继续聊'
     return "自然聊天"
-
-
-async def derive_goal_async(
-    *,
-    data_dir: Path,
-    chat_id: str,
-    current_text: str,
-    planner_reasoning: str,
-) -> str:
-    topic, _summary = await asyncio.to_thread(load_latest_topic_and_summary, data_dir, chat_id)
-    return _derive_goal_from_context(current_text, planner_reasoning, topic)

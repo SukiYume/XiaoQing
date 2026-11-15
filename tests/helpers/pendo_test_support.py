@@ -39,7 +39,7 @@ def reset_pendo_runtime_config() -> None:
 class _ReminderMessageService:
     """返回一条固定提醒，供调度发送与拒绝分支共同使用。"""
 
-    def check_and_send_reminders(self, context=None):
+    def check_and_send_reminders(self):
         return {
             "messages": [
                 {

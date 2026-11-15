@@ -48,7 +48,6 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
         lambda context, runtime, state: task_scheduler.schedule_memory_persist(
             context, runtime, chat_id="g1"
         ),
-        lambda context, runtime, state: task_scheduler.schedule_memory_db_save(context, runtime),
         lambda context, runtime, state: task_scheduler.schedule_action_history_flush(
             context, runtime, chat_id="g1"
         ),
@@ -58,25 +57,22 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
     ],
     ids=[
         "memory-persist",
-        "memory-db-save",
         "action-history-flush",
         "media-registry-flush",
     ],
 )
 def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule):
-    state                                = MagicMock()
-    state.get_persist_task.return_value  = None
-    state.get_vdb_save_task.return_value = None
-    runtime                              = SimpleNamespace(
+    state               = MagicMock()
+    state.persist_tasks = {}
+    runtime             = SimpleNamespace(
         cfg=SimpleNamespace(
-            io_persist_debounce_seconds     = 0.0,
-            memory_db_save_debounce_seconds = 0.0,
+            io_persist_debounce_seconds=0.0,
         )
     )
     context = SimpleNamespace(logger=MagicMock())
     captured = []
     task_scheduler._action_flush_tasks.clear()
-    task_scheduler._media_registry_flush_task = None
+    task_scheduler._media_registry_flush_tasks.clear()
     try:
         with (
             patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
@@ -92,12 +88,12 @@ def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule)
 
         assert len(captured) == 1
         assert captured[0].cr_frame is None
-        state.set_persist_task.assert_not_called()
+        assert state.persist_tasks == {}
         state.set_vdb_save_task.assert_not_called()
         assert task_scheduler._action_flush_tasks == {}
-        assert task_scheduler._media_registry_flush_task is None
+        assert task_scheduler._media_registry_flush_tasks == {}
     finally:
         for coro in captured:
             coro.close()
         task_scheduler._action_flush_tasks.clear()
-        task_scheduler._media_registry_flush_task = None
+        task_scheduler._media_registry_flush_tasks.clear()

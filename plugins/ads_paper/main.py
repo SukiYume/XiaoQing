@@ -85,17 +85,7 @@ async def handle(
         if local_handler is not None:
             return await local_handler()
 
-        remote_commands = {
-            "search",
-            "author",
-            "cite",
-            "cite-network",
-            "related",
-            "summarize",
-            "daily",
-            "ref_add",
-        }
-        if subcommand not in remote_commands:
+        if subcommand not in _REMOTE_COMMANDS:
             return segments(f"未知命令: {subcommand}\n输入 /paper help 查看帮助")
 
         if subcommand == "daily" and subcommand_args.strip():

@@ -458,8 +458,8 @@ def run_process(
             bufsize       = 0,
             creationflags = creation_flags,
             startupinfo   = startup_info,
-            # POSIX 使用独立会话，清理时才能按进程组终止所有后代；Windows
-            # 保持既有 taskkill /T 语义，不改变生产监控链。
+            # POSIX 使用独立会话，清理时才能按进程组终止所有后代；Windows 靠下面挂上的
+            # 作业对象收回整棵进程树，作业对象不可用时退回 taskkill /T。
             start_new_session=os.name != "nt",
         )
         _attach_windows_job(process)

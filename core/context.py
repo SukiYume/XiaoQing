@@ -13,14 +13,14 @@ from typing import TYPE_CHECKING, Any, Literal
 import aiohttp
 
 from .clock import now_in_configured_timezone
-from .config import _freeze_config_mapping, materialize_snapshot_value
+from .config import freeze_config_mapping, lookup_dotted
 from .interfaces import (
-    ConfigManagerLike,
     MuteControl,
     PluginCapabilities,
     PluginPrincipal,
     PluginSettingsSnapshot,
     SendAction,
+    plugin_namespace,
 )
 
 _PLUGIN_PUBLIC_CONFIG_KEYS = (
@@ -58,25 +58,6 @@ class _ScopedPluginView(Mapping[str, Any]):
         return self.value == other
 
 
-def _plugin_namespace(source: Mapping[str, Any], plugin_name: str) -> Mapping[str, Any]:
-    """取出 ``source["plugins"][plugin_name]``；任一层不是映射时返回空映射。"""
-
-    plugins = source.get("plugins", {})
-    options = plugins.get(plugin_name, {}) if isinstance(plugins, Mapping) else {}
-    return options if isinstance(options, Mapping) else {}
-
-
-def _lookup_dotted(namespace: Any, path: str) -> Any:
-    """按 ``a.b.c`` 逐级读取并返回脱离快照的副本；路径不存在时返回 None。"""
-
-    current = namespace
-    for part in path.split("."):
-        if not isinstance(current, Mapping) or part not in current:
-            return None
-        current = current[part]
-    return materialize_snapshot_value(current)
-
-
 def _scoped_plugin_config(plugin_name: str, source: Mapping[str, Any]) -> Mapping[str, Any]:
     """Build an immutable view of public settings plus one plugin namespace."""
 
@@ -87,9 +68,9 @@ def _scoped_plugin_config(plugin_name: str, source: Mapping[str, Any]) -> Mappin
     ):
         return source
     view            = {key: source[key] for key in _PLUGIN_PUBLIC_CONFIG_KEYS if key in source}
-    view["plugins"] = {plugin_name: _plugin_namespace(source, plugin_name)}
+    view["plugins"] = {plugin_name: plugin_namespace(source, plugin_name)}
     return _ScopedPluginView(
-        value=_freeze_config_mapping(view), plugin_name=plugin_name, kind="config"
+        value=freeze_config_mapping(view), plugin_name=plugin_name, kind="config"
     )
 
 
@@ -103,8 +84,8 @@ def _scoped_plugin_secrets(plugin_name: str, source: Mapping[str, Any]) -> Mappi
     ):
         return source
     return _ScopedPluginView(
-        value=_freeze_config_mapping(
-            {"plugins": {plugin_name: _plugin_namespace(source, plugin_name)}}
+        value=freeze_config_mapping(
+            {"plugins": {plugin_name: plugin_namespace(source, plugin_name)}}
         ),
         plugin_name = plugin_name,
         kind        = "secrets",
@@ -167,9 +148,7 @@ class PluginContext:
     current_user_id : int | None = None
     current_group_id: int | None = None
     # 静音控制接口
-    mute_control: MuteControl | None = None
-    # ConfigManager 引用（用于更新配置）
-    config_manager : ConfigManagerLike | None                    = None
+    mute_control   : MuteControl | None                          = None
     settings_reader: Callable[[], PluginSettingsSnapshot] | None = field(
         default = None,
         repr    = False,
@@ -225,15 +204,15 @@ class PluginContext:
         # 扩展上下文通常没有 secret_reader，但仍可能有可热更新的 settings_reader；
         # 从 self.secrets 读取会把这条兼容路径固定在旧代。
         settings = self.get_settings_snapshot()
-        return _lookup_dotted(settings.secrets.get("plugins", {}).get(self.plugin_name, {}), path)
+        return lookup_dotted(settings.plugin_secrets(self.plugin_name), path)
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot:
         """Return one atomic generation scoped to this plugin."""
         if self.settings_reader is not None:
             return self.settings_reader()
         return PluginSettingsSnapshot(
-            config   = _freeze_config_mapping(self.config),
-            secrets  = _freeze_config_mapping(self.secrets),
+            config   = freeze_config_mapping(self.config),
+            secrets  = freeze_config_mapping(self.secrets),
             revision = 0,
         )
 
@@ -246,7 +225,7 @@ class PluginContext:
         """Read one detached value from the current plugin config namespace."""
 
         settings = self.get_settings_snapshot()
-        return _lookup_dotted(settings.config.get("plugins", {}).get(self.plugin_name, {}), path)
+        return lookup_dotted(settings.plugin_config(self.plugin_name), path)
 
     def set_secret(self, path: str, value: Any) -> None:
         if self.secret_writer is None:

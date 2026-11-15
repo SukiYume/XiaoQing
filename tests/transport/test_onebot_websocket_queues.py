@@ -125,24 +125,3 @@ class TestOneBotWebSocketQueues:
 
         with pytest.raises(RuntimeError, match="handler exploded"):
             await client._drain_queue(key, AsyncMock())
-
-    @pytest.mark.asyncio
-    async def test_drain_queue_drops_raw_event_without_auth_generation(self):
-        client                    = OneBotWsClient("ws://localhost:3000", "")
-        key                       = "user:raw-event"
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        queue.put_nowait({"user_id": 1})
-        client._message_queues[key] = queue
-        handler                     = AsyncMock()
-
-        task = asyncio.create_task(client._drain_queue(key, handler))
-        for _ in range(10):
-            if queue.empty():
-                break
-            await asyncio.sleep(0)
-        assert queue.empty()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        handler.assert_not_awaited()

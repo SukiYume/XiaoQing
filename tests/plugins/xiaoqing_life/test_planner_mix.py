@@ -59,8 +59,8 @@ def test_two_weeks_with_an_open_thread_keep_a_varied_day() -> None:
         if decision.choice not in (planner.REST, planner.WIND_DOWN):
             low, high = cfg.session_minutes.get(decision.choice, (10, 10))
             start, end = moment.timestamp(), moment.timestamp() + rng.randint(low, high) * 60.0
-            state["sessions_today"] = int(state.get("sessions_today", 0)) + 1
-            state["last_session_at"], state["last_session_end"] = start, end
+            state["sessions_today"]   = int(state.get("sessions_today", 0)) + 1
+            state["last_session_end"] = end
             state["activity_log"].append({"start": start, "end": end})
             state["recent"] = [
                 *state["recent"],

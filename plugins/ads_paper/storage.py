@@ -126,18 +126,16 @@ class PaperStorage:
                 )
                 raise
 
-    def _save_json(self, path: Path, data: dict[str, Any]) -> bool:
-        """原子保存 JSON 对象。
+    def _save_json(self, path: Path, data: dict[str, Any]) -> None:
+        """原子保存 JSON 对象；编码或落盘失败时记录错误后原样抛出。
 
-        Returns:
-            成功时返回 ``True``。编码或落盘失败时记录错误后原样抛出：``False`` 只表示
-            业务上没有变化（重复、未找到），不能和磁盘写入失败混在一起。
+        没有返回值：调用方返回的 ``False`` 只表示业务上没有变化（重复、未找到），
+        不会和磁盘写入失败混在一起。
         """
         with self._lock:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
-                return True
             except Exception as exc:
                 logger.error(
                     "Paper storage save failed: error_type=%s",
@@ -145,7 +143,7 @@ class PaperStorage:
                 )
                 raise
 
-    def _add_text_record(self, path: Path, key: str, content: str, user_id: int) -> bool:
+    def _add_text_record(self, path: Path, key: str, content: str, user_id: int) -> None:
         """在同一锁内追加带作者和时间的文本记录。"""
         with self._lock:
             data   = self._load_json(path)
@@ -155,7 +153,7 @@ class PaperStorage:
                 "user"   : user_id,
             }
             data.setdefault(key, []).append(record)
-            return self._save_json(path, data)
+            self._save_json(path, data)
 
     def _delete_text_record(self, path: Path, key: str, index: int, user_id: int) -> bool:
         """按当前用户可见的序号删除一条文本记录。"""
@@ -170,12 +168,13 @@ class PaperStorage:
             records.pop(owned_indices[index])
             if not records:
                 del data[key]
-            return self._save_json(path, data)
+            self._save_json(path, data)
+            return True
 
     # 论文笔记 ---------------------------------------------------------
 
-    def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:
-        return self._add_text_record(self.notes_file, paper_id, content, user_id)
+    def add_paper_note(self, paper_id: str, content: str, user_id: int) -> None:
+        self._add_text_record(self.notes_file, paper_id, content, user_id)
 
     def get_paper_notes(self, paper_id: str, user_id: int) -> list[dict[str, Any]]:
         data  = self._load_json(self.notes_file)
@@ -187,8 +186,8 @@ class PaperStorage:
 
     # 写作灵感 ---------------------------------------------------------
 
-    def add_writing_idea(self, section: str, content: str, user_id: int) -> bool:
-        return self._add_text_record(self.writing_file, section, content, user_id)
+    def add_writing_idea(self, section: str, content: str, user_id: int) -> None:
+        self._add_text_record(self.writing_file, section, content, user_id)
 
     def get_writing_ideas(self, section: str, user_id: int) -> list[dict[str, Any]]:
         data = self._load_json(self.writing_file)
@@ -219,13 +218,11 @@ class PaperStorage:
             keyword = keyword.strip().lower()
             entries = data["keywords"]
             if not any(
-                isinstance(entry, dict)
-                and entry.get("value") == keyword
-                and _owned_by(entry, user_id)
-                for entry in entries
+                entry.get("value") == keyword and _owned_by(entry, user_id) for entry in entries
             ):
                 entries.append({"value": keyword, "user": user_id})
-                return self._save_json(self.topics_file, data)
+                self._save_json(self.topics_file, data)
+                return True
             return False
 
     def get_topics(self, user_id: int) -> list[str]:
@@ -247,25 +244,24 @@ class PaperStorage:
                 (
                     entry
                     for entry in data["keywords"]
-                    if isinstance(entry, dict)
-                    and entry.get("value") == keyword
-                    and _owned_by(entry, user_id)
+                    if entry.get("value") == keyword and _owned_by(entry, user_id)
                 ),
                 None,
             )
             if target is not None:
                 data["keywords"].remove(target)
-                return self._save_json(self.topics_file, data)
+                self._save_json(self.topics_file, data)
+                return True
             return False
 
-    def clear_topics(self, user_id: int) -> bool:
+    def clear_topics(self, user_id: int) -> None:
         """Clear all research topics."""
         with self._lock:
             data             = self._load_json(self.topics_file)
             data["keywords"] = [
                 entry for entry in data.get("keywords", []) if not _owned_by(entry, user_id)
             ]
-            return self._save_json(self.topics_file, data)
+            self._save_json(self.topics_file, data)
 
     # 个人 BibTeX 文献库 ----------------------------------------------
 
@@ -296,7 +292,7 @@ class PaperStorage:
 
     # 截稿日期 ---------------------------------------------------------
 
-    def add_deadline(self, name: str, date: str, user_id: int) -> bool:
+    def add_deadline(self, name: str, date: str, user_id: int) -> None:
         with self._lock:
             data = self._load_json(self.deadlines_file)
             if "deadlines" not in data:
@@ -309,7 +305,7 @@ class PaperStorage:
                 "created": datetime.now().strftime(DATETIME_FORMAT),
             }
             data["deadlines"].append(deadline)
-            return self._save_json(self.deadlines_file, data)
+            self._save_json(self.deadlines_file, data)
 
     def get_deadlines(self, user_id: int) -> list[dict[str, Any]]:
         data      = self._load_json(self.deadlines_file)
@@ -335,4 +331,5 @@ class PaperStorage:
 
             target_index, _ = ordered[index]
             deadlines.pop(target_index)
-            return self._save_json(self.deadlines_file, data)
+            self._save_json(self.deadlines_file, data)
+            return True

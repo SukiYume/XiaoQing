@@ -5,6 +5,9 @@
   "author": "XiaoQing",
   "entry": "main.py",
   "concurrency": "parallel",
+  "uses_services": [
+    "memory.record"
+  ],
   "services": [
     {
       "name": "life.turn_context",
@@ -190,7 +193,7 @@
           "aliases": [
             "运行"
           ],
-          "help": "立刻安排一次上网，跳过概率与间隔，不跳过开关、睡眠和预算",
+          "help": "立刻安排一次上网，跳过概率、间隔和失败退避，不跳过开关、睡眠、预算和滚动时长上限",
           "usage": "/life run",
           "examples": [
             "/life run"

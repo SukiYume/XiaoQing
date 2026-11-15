@@ -69,12 +69,11 @@ flowchart TD
 
 `main.shutdown()` 按以下顺序收敛资源：
 
-1. 取消配置订阅。
-2. 停止 Web 线程。
-3. 清理提醒 singleton。
-4. 摘除数据库 singleton。
-5. 关闭 runtime service 登记的全部 SQLite 连接。
-6. 清空当前插件代 Context 状态。
+1. 停止 Web 线程；停不下来时保留其余资源，留待下次清理。
+2. 取消配置订阅。
+3. 摘除数据库 singleton。
+4. 关闭 runtime service 登记的全部 SQLite 连接。
+5. 清空当前插件代 Context 状态，业务服务集合（含提醒服务）随之释放。
 
 清理步骤会汇总组件级异常，并继续处理其余已拥有资源。
 
@@ -207,7 +206,7 @@ Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在
 
 提醒处理分为发现、声明、发送和确认四个阶段：
 
-1. 查询到期提醒。
+1. 查询到期提醒；每分钟的 `scheduled` 任务与聊天命令共用 Context 状态里的同一个提醒服务实例。
 2. 在 `reminder_logs` 中取得有期限的 claim。
 3. 按条目所有者构造 `send_private_msg`，目标固定为数值 QQ 用户。
 4. 根据 OneBot 回执完成或释放 claim。

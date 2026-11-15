@@ -38,12 +38,12 @@ Core 将两个文件组合成带 revision 的只读设置快照。
 | 字段 | 类型 | 示例值 | 说明 |
 |---|---|---|---|
 | `bot_name` | string | `"小青"` | Bot 的唯一运行时名称，用于名称召唤、群聊门控、聊天人格、历史角色标签和默认上线通知 |
-| `command_prefixes` | string[] | `["/"]` | 命令前缀列表 |
+| `command_prefixes` | 非空 string[]，每项非空 | `["/"]` | 命令前缀列表；不写这一项时是 `["/"]` |
 | `require_bot_name_in_group` | boolean | `true` | 群聊普通文本的 Bot 名称门控 |
 | `default_group_ids` | positive integer[] | `[123456789]` | `broadcast` / `targeted` schedule 未指定 `group_ids` 时的群目标 |
 | `timezone` | IANA timezone | `"Asia/Shanghai"` | Scheduler、`context.now()` 和业务日期时区 |
 
-`command_prefixes` 可配置多个前缀。
+`command_prefixes` 可配置多个前缀；空列表或含空串的列表会被当作无效配置拒绝。
 Manifest `triggers` 保存纯命令词，Router 在消息解析阶段处理前缀。
 这五项通过 `/reload` 发布到新 revision，并触发插件后台重载。
 
@@ -111,7 +111,6 @@ XiaoQing Listener 负责明文 HTTP/WS 协议，TLS 终止由外层代理或网�
 
 `data_root` 可使用项目相对路径或部署主机绝对路径，并保持在 `plugins/` 源码树之外。
 每个插件获得 `data_root/<plugin_name>/`。
-Core 首次发现 `plugins/<name>/data/` 时，将内容原子迁移到新数据根，并把来源目录归档到 `data_root/.legacy-plugin-data/<name>/`。
 修改 `data_root` 后重启主进程。
 
 插件 watcher 在启动时运行解释器能力探针。
@@ -154,8 +153,7 @@ CIM 命令行读取采用三次有界重试。
     "drain_timeout_seconds": 5,
     "global_sync_queue_limit": 256,
     "overrides": {
-      "codex": {"timeout_seconds": 0},
-      "shell": {"timeout_seconds": 0}
+      "arxiv_filter": {"timeout_seconds": 600}
     }
   }
 }
@@ -181,6 +179,7 @@ Manifest `concurrency: sequential` 将该插件入口并发固定为 1。
 `admission_queue_limit` 与 `sync_queue_limit` 表示等待槽数量，值 `0` 对应零等待槽。
 插件入口总接纳容量等于活动槽与等待槽之和。
 `overrides.<plugin_name>` 可提供任意策略子集，省略字段继承全局策略。
+在 `plugin.json` 里声明了 `execution_timeout_exempt` 能力的插件（codex、qingssh、jupyter、shell）入口预算默认就是 `0`，不用在这里再写。
 JSON `null` 会触发配置校验错误。
 失败次数达到 `failure_threshold` 后执行 gate 进入 `cooldown_seconds` 冷却，插件重载使用 `drain_timeout_seconds` 等待当前代收尾。
 
@@ -302,6 +301,7 @@ route 的值可以是一个模型名、一个模型名列表，或一个对象�
 | `xiaoqing_agent.triage` | 分流 | 0.1 / — | — | 15 / 20 | 1 |
 | `xiaoqing_agent.vision` | `read_image` 读本地图片 | 0.2 / — | 800 | 20 / 60 | 1 |
 | `xiaoqing_life.reasoning` | 消化、研究、睡前整理 | 0.6 / 0.9 | 2048 | 30 / 120 | 1 |
+| `xiaoqing_memory.reasoning` | 夜间整理：写笔记、并页面、核对 | 0.3 / 0.9 | 3000 | 60 / 180 | 1 |
 | `xiaoqing_life.vision` | 梗图判定 | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
 | `pendo.parse` | 自然语言解析 | 0.3 / — | 1000 | 30 / 60 | 1 |
 | `xiaoai.plan` | 米家操作规划 | 0 / — | 1600 | 25 / 28 | 0 |
@@ -365,6 +365,21 @@ context.get_secret("path.to.value")
 context.get_settings_snapshot()
 ```
 
+### 只属于这个部署的设置
+
+群号、QQ 号、服务器地址、本机路径这类只属于某个部署的值写在 `config/config.json`，凭据写在 `config/secrets.json`。
+`plugin.json`、插件目录和小青的行为文件随仓库发布，保持通用，部署时与仓库版本一致。
+
+| 路径 | 说明 |
+|---|---|
+| `plugins.<插件名>.schedules.<任务 ID>.group_ids` | 这个定时任务的目标群，优先于 `plugin.json` 条目和 `default_group_ids`，见 [调度字段](03-plugin-development.md#调度字段) |
+| `plugins.minecraft.servers.<配置名>` | Minecraft 服务器的 `host`、`port`、`log_file`，RCON 密码在 `secrets.plugins.minecraft.<配置名>` |
+| `plugins.xiaoqing_chat.<字段>` | 覆盖行为文件 `xiaoqing_config.json` 里的同名字段，逐层合并 |
+
+仓库的 `.githooks/pre-commit` 运行 `scripts/check_private.py`：要提交的文件里出现本机 config 或 secrets 里的群号、账号、凭据、用户目录，或 `config/private_terms.txt` 列出的词（一行一个，比如群友昵称）时拒绝提交，只报文件和字段路径，不打印值。
+文本文件整篇按文字查；图片、PSD 这类二进制文件按字节查元数据里常见的 UTF-8 和 UTF-16 写法，命中处前后紧挨着字母或数字的不算（那是压缩像素数据里碰巧出现的一段）。
+克隆后执行一次 `git config core.hooksPath .githooks` 启用；`python scripts/check_private.py --all` 检查全部文件。
+
 ### Core 插件选择
 
 | 路径 | 示例 | 说明 |
@@ -386,7 +401,7 @@ context.get_settings_snapshot()
 
 Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化会重建插件拥有的 Web Server。
 登录 Code 与浏览器会话有效期为 7 天，Widget Token 有效期为 365 天。
-[Pendo 配置与 Web](../plugins/pendo/README.md#web-控制台) 说明认证、Demo 与数据目录。
+[Pendo 配置与 Web](../plugins/pendo/README.md#-web-控制台) 说明认证、Demo 与数据目录。
 
 ### ADS Paper 与 XiaoQing Chat AI
 
@@ -400,8 +415,8 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_chat.ai.model_aliases` | 可选：`/xc model` 用的短名称到模型名的映射 |
 
 四条 XiaoQing Chat route 各自指定模型顺序；采样、单次超时、总超时和重试由插件声明默认值，见上文“插件 route”的表。
-行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者合并时文件中的值优先。
-[XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#行为配置) 逐组说明这些字段。
+行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者逐层合并，config 中的值优先。
+[XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#️-行为配置) 逐组说明这些字段。
 
 ### XiaoQing Agent
 
@@ -421,7 +436,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_agent.max_tasks_per_member` | `1` | 其他人每人同时运行的任务数 |
 
 agent 使用发起人的命令权限。每条命令分别检查自身权限。Python、Shell 和文件读写跟随 `/shell`。SSH 跟随 `/ssh`。Codex 跟随 `/codex`。`plugin.json` 将这三条命令限定为 Bot 管理员使用。
-全部字段、工具与数据目录见 [XiaoQing Agent](../plugins/xiaoqing_agent/README.md#开启)。
+全部字段、工具与数据目录见 [XiaoQing Agent](../plugins/xiaoqing_agent/README.md#️-开启)。
 
 ### XiaoQing Life
 
@@ -438,7 +453,22 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | `plugins.xiaoqing_life.blocked_keywords` | `[]` | 在内置屏蔽词之外再丢弃的内容 |
 
 聊天一侧的取用开关在 `xiaoqing_chat` 行为配置的 `life.enable_online_life`、`life.online_life_timeout_seconds`、`life.enable_life_memes` 和 `life.enable_life_share`。
-全部字段、命令与数据目录见 [XiaoQing Life](../plugins/xiaoqing_life/README.md#开启)。
+全部字段、命令与数据目录见 [XiaoQing Life](../plugins/xiaoqing_life/README.md#️-开启)。
+
+### XiaoQing Memory
+
+小青的统一记忆，默认开启：
+
+| 路径 | 默认 | 说明 |
+|---|---|---|
+| `plugins.xiaoqing_memory.enabled` | `true` | 总开关。关闭时 `memory.*` 服务返回 `None`，聊天、办事、网上生活照常工作，只是没有长期记忆 |
+| `plugins.xiaoqing_memory.ai.routes.reasoning` | 无 | 夜间整理用的 route；缺失时只记录和取用，不整理 |
+| `plugins.xiaoqing_memory.event_keep_days` | `365` | 原始记录保留天数（按整月删） |
+| `plugins.xiaoqing_memory.night_start` / `night_end` | `"02:00"` / `"05:00"` | 夜间整理窗口（配置时区） |
+| `plugins.xiaoqing_memory.backlog_trigger_events` | `150` | 积压这么多新记录时窗口外也整理 |
+| `plugins.xiaoqing_memory.max_llm_calls_per_day` | `16` | 整理用的模型调用合计，调用前先计数，失败不退还 |
+
+预算、上限和保留期的其余字段见 [XiaoQing Memory](../plugins/xiaoqing_memory/README.md#配置字段)。
 
 ### QingSSH
 
@@ -464,7 +494,7 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | `~/.ssh/config` 中的主机与跳板设置 | 当前系统用户的 `~/.ssh/config` | `/ssh import`、`/sshconfig` 读取 |
 
 `servers.json` 读取失败时插件会阻止后续写入，避免空快照覆盖原文件；修复文件后重新加载插件即可。
-[QingSSH 配置](../plugins/qingssh/README.md#服务器配置) 提供连接 schema。
+[QingSSH 配置](../plugins/qingssh/README.md#️-服务器配置) 提供连接 schema。
 
 ### Codex
 
@@ -482,7 +512,7 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | 审批 | `approval_policy="never"` | `untrusted`、`on-failure`、`on-request`、`never` |
 | 仓库 | `skip_git_repo_check=true` | Codex CLI Git 仓库检查开关 |
 
-工作目录、允许根目录、保留期、紧急磁盘阈值和 arXiv 摘要会话等扩展字段见 [Codex 配置](../plugins/codex/README.md#基础配置)。
+工作目录、允许根目录、保留期、紧急磁盘阈值和 arXiv 摘要会话等扩展字段见 [Codex 配置](../plugins/codex/README.md#️-基础配置)。
 
 ### Shell 与 Smalltalk
 
@@ -493,8 +523,8 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | `plugins.smalltalk.voice_probability` | `0` | 纯文本闲聊转语音概率，范围 `0..1` |
 
 Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`。
-[Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。
-[插件使用手册](09-plugins.md) 说明全部 32 个插件的配置入口与数据位置。
+[Shell 配置](../plugins/shell/README.md#️-终端配置) 说明两种后端。
+[插件使用手册](09-plugins.md) 说明全部 34 个插件的配置入口与数据位置。
 
 ---
 
@@ -561,6 +591,7 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 | `plugin_execution` 与插件 watcher 策略 | `/reload` 或配置 watcher |
 | AI Provider、profile、route 与 API Key | 已确认 revision 发布后由下一次 AI 调用读取 |
 | 插件公开配置与私有凭据 | 已确认 revision 发布后由插件读取 |
+| 定时任务目标群（`plugins.<插件名>.schedules`） | 已确认 revision 发布后由下一次执行读取 |
 | 有效的外部 `secrets.json` 单文件候选 | 管理员核对私聊字段摘要后执行 `/reload` |
 | `data_root`、日志字段、`napcat_account`、`mkl_threading_layer` | 重启主进程或生产启动链 |
 | 插件源码、Manifest 与 `watch_files` | `/reload`、插件 watcher 或 restart-only 环境的进程重启 |
@@ -597,11 +628,12 @@ Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。
 - 反向代理负责 TLS、来源策略和速率限制。
 - `admin_user_ids` 只包含当前管理员。
 - AI Key 与插件凭据位于 secrets。
+- 定时任务目标群、服务器地址等部署设置位于 config，仓库文件与发布版本一致。
 - 有效的 secrets 单文件替换由管理员核对字段摘要并执行 `/reload`；公开配置变更与双来源替换安排在停服窗口内。
 - `data_root`、日志目录和备份目录具有明确所有权。
 - `plugin_execution` 为长任务插件配置合适预算。
 - Pendo Web Cookie Secure 与 HTTPS 部署保持一致。
-- 正式启动前完成 `bash scripts/run_full_uat.sh --plan-only` 和完整 UAT。
+- 正式启动前完成 `python scripts/run_full_uat.py --plan-only` 和完整 UAT。
 
 ---
 

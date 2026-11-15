@@ -22,7 +22,6 @@ import importlib
 import importlib.abc
 import importlib.machinery
 import importlib.util
-import inspect
 import json
 import logging
 import os
@@ -78,7 +77,7 @@ from .plugin_manager_support import (
     resolve_plugin_root,
     validate_plugin_module_origin,
 )
-from .router import CommandSpec, build_command_catalog_node
+from .router import CommandSpec
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +130,6 @@ class PluginWatcherMixin:
 
         _execution_gates: dict[str, PluginExecutionGate]
 
-        _init_task_plugins: dict[asyncio.Task[Any], str]
-
-        _init_tasks: list[asyncio.Task[Any]]
-
         @staticmethod
         def _is_fatal_base_exception(exc: BaseException) -> bool:
             raise NotImplementedError
@@ -147,10 +142,6 @@ class PluginWatcherMixin:
             candidate: _ReloadCandidateGeneration,
         ) -> None:
             raise NotImplementedError
-
-        _pending_finalizers: dict[str, asyncio.Task[Any]]
-
-        _pending_plugins: dict[asyncio.Task[Any], tuple[PluginDefinition, ModuleType, float]]
 
         def _plugin_module_aliases(self, plugin_dir: Path, name: str) -> list[str]:
             raise NotImplementedError
@@ -235,15 +226,14 @@ class PluginWatcherMixin:
             group_id: int | None              = None,
             request_id: str | None            = None,
             principal: PluginPrincipal | None = None,
+            *,
+            definition: PluginDefinition | None = None,
         ) -> PluginContextProtocol:
             raise NotImplementedError
 
         plugins_dir: Any
 
         router: Any
-
-        async def wait_inits(self) -> None:
-            raise NotImplementedError
 
     _next_watch_waiter_id: int
     _poll_interval       : float
@@ -286,20 +276,21 @@ class PluginWatcherMixin:
             set(self._plugins)
             | set(self._execution_gates)
             | set(self._plugin_states)
-            | set(self._init_task_plugins.values())
-            | set(self._pending_finalizers)
             | set(self._quarantined_plugins)
             | set(self._restart_required_plugins)
             | set(self._source_finders)
-        )
-        names.update(
-            definition.name for definition, _module, _mtime in self._pending_plugins.values()
         )
         names.update(service.owner for service in self._services.values())
         return names
 
     def _has_plugin_runtime(self, name: str) -> bool:
         return name in self._plugin_runtime_names()
+
+    @staticmethod
+    def _entry_module_name(plugin_name: str, entry: str) -> str:
+        """插件入口文件在规范命名空间里的模块名，如 ``plugins.demo.main``。"""
+
+        return f"plugins.{plugin_name}.{entry.removesuffix('.py').replace('/', '.')}"
 
     def _definition_is_current(
         self,
@@ -328,10 +319,9 @@ class PluginWatcherMixin:
             if authorized_entry is not None and current_entry != authorized_entry:
                 return False
             if module is not None:
-                entry_parts = current.entry.removesuffix(".py").replace("/", ".")
                 self._validate_entry_module(
                     module,
-                    f"plugins.{definition.name}.{entry_parts}",
+                    self._entry_module_name(definition.name, current.entry),
                     current_entry,
                 )
             current_fingerprint = self._authorize_plugin_snapshot(plugin_dir, current)
@@ -372,7 +362,10 @@ class PluginWatcherMixin:
         current: int | float,
         authorized: int | float,
     ) -> bool:
-        """Compare both the digest and the exact frozen authorization payload."""
+        """Compare both the digest and the exact frozen authorization payload.
+
+        两边不都是 ``_PluginContentFingerprint`` 时（例如测试替身用普通数字）只比较数值。
+        """
 
         if isinstance(current, _PluginContentFingerprint) and isinstance(
             authorized,
@@ -499,7 +492,6 @@ class PluginWatcherMixin:
         try:
             async with self._lifecycle_lock.get():
                 await self._reconcile_plugins_once()
-            await self.wait_inits()
         except PluginLifecycleFatalError:
             raise
         except BaseException as exc:
@@ -624,17 +616,6 @@ class PluginWatcherMixin:
                 )
                 await self._unload_plugin_once(directory_name)
             return
-        if definition is None:
-            # Test doubles and older embedders may still represent a rejected
-            # manifest as None. Retain the fail-closed retirement behavior.
-            if self._has_plugin_runtime(directory_name):
-                logger.warning(
-                    "Unloading plugin %s because its manifest is unavailable or invalid",
-                    directory_name,
-                )
-                await self._unload_plugin_once(directory_name)
-            return
-
         if not definition.enabled:
             if self._has_plugin_runtime(definition.name):
                 logger.info("Detected disabled plugin %s", definition.name)
@@ -1298,18 +1279,13 @@ class PluginWatcherMixin:
         module_name = f"plugins.{definition.name}"
         if transaction is not None:
             with _PLUGIN_IMPORT_LOCK:
-                try:
-                    transaction.namespace_claim_new = self._claim_plugin_namespace(definition.name)
-                except PluginPathError:
-                    transaction.unowned_canonical_namespace = True
-                    raise
-                preexisting_names = [
+                transaction.namespace_claim_new = self._claim_plugin_namespace(definition.name)
+                preexisting_names               = [
                     cached_name
                     for cached_name in list(sys.modules)
                     if cached_name == module_name or cached_name.startswith(f"{module_name}.")
                 ]
                 if preexisting_names:
-                    transaction.unowned_canonical_namespace = True
                     raise PluginPathError(
                         "canonical plugin modules predate this import transaction"
                     )
@@ -1416,9 +1392,8 @@ class PluginWatcherMixin:
         module: ModuleType,
         definition: PluginDefinition,
         gate: PluginExecutionGate,
-        transaction: _PluginLoadTransaction | None,
     ) -> asyncio.Task[Any] | None:
-        """启动插件初始化，并把异步任务纳入生命周期跟踪。"""
+        """把插件的 ``init`` 放进它这一代的执行门里跑（限时）；任务交给调用方等。"""
 
         if not hasattr(module, "init"):
             return None
@@ -1427,24 +1402,14 @@ class PluginWatcherMixin:
 
         async def run_init() -> None:
             if accepts_context:
-                await call_plugin_callback(init_func, self.build_context(definition.name))
+                await call_plugin_callback(
+                    init_func,
+                    self.build_context(definition.name, definition=definition),
+                )
             else:
                 await call_plugin_callback(init_func)
 
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # 同步嵌入仍受支持；异步 init 必须由正在运行的事件循环托管。
-            result = (
-                init_func(self.build_context(definition.name)) if accepts_context else init_func()
-            )
-            if inspect.isawaitable(result):
-                if inspect.iscoroutine(result):
-                    result.close()
-                raise RuntimeError("async plugin init requires a running event loop") from None
-            return None
-
-        init_task = asyncio.create_task(
+        return asyncio.create_task(
             self._capture_lifecycle(
                 asyncio.wait_for(
                     gate.run(run_init),
@@ -1452,10 +1417,6 @@ class PluginWatcherMixin:
                 )
             )
         )
-        if transaction is None or transaction.track_init_task:
-            self._init_tasks.append(init_task)
-            self._init_task_plugins[init_task] = definition.name
-        return init_task
 
     def _load_module(
         self,
@@ -1473,9 +1434,7 @@ class PluginWatcherMixin:
 
         # Import only through the repository's canonical namespace.  The
         # manifest validator makes this path-to-module mapping injective.
-        module_name      = f"plugins.{plugin_dir.name}"
-        entry_stem       = definition.entry.removesuffix(".py").replace("/", ".")
-        full_module_name = f"{module_name}.{entry_stem}"
+        full_module_name = self._entry_module_name(plugin_dir.name, definition.entry)
         self._reject_plugin_module_aliases(plugin_dir, definition, transaction)
 
         gate = transaction.gate if transaction is not None else self._execution_gate_for(definition)
@@ -1505,7 +1464,7 @@ class PluginWatcherMixin:
 
             self._reject_plugin_module_aliases(plugin_dir, definition, transaction)
             self._bind_declared_services(definition, module)
-            return module, self._start_plugin_init(module, definition, gate, transaction)
+            return module, self._start_plugin_init(module, definition, gate)
         except Exception as exc:
             raise PluginLoadError(definition.name, "Failed to load plugin", exc) from exc
 
@@ -1518,32 +1477,18 @@ class PluginWatcherMixin:
         if not hasattr(module, "handle"):
             logger.warning("Plugin %s missing handle()", definition.name)
             return []
-        gate                     = execution_gate or self._execution_gate_for(definition)
-        specs: list[CommandSpec] = []
-        for command in definition.commands:
-            catalog = build_command_catalog_node(definition.name, command, root=True)
-            specs.append(
-                CommandSpec(
-                    plugin         = definition.name,
-                    name           = command.get("name", ""),
-                    triggers       = command.get("triggers", []),
-                    help_text      = command.get("help", ""),
-                    admin_only     = command.get("admin_only", False),
-                    handler        = module.handle,
-                    priority       = command.get("priority", 0),
-                    usage          = command.get("usage"),
-                    catalog        = catalog,
-                    execution_gate = gate,
-                )
-            )
-        return specs
+        gate = execution_gate or self._execution_gate_for(definition)
+        return [
+            CommandSpec.from_manifest(definition.name, command, module.handle, gate)
+            for command in definition.commands
+        ]
 
     def _authorize_plugin_snapshot(
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
     ) -> _PluginContentFingerprint:
-        """生成首次加载授权；导入阶段仍会独立复核同一份内容快照。"""
+        """取得当前插件内容的授权指纹；发布前的复核（``_definition_is_current``）用同一个入口。"""
 
         return self._capture_plugin_snapshot(plugin_dir, definition)
 
@@ -1672,7 +1617,7 @@ class PluginWatcherMixin:
         *,
         previous: int | float | None = None,
     ) -> _PluginContentFingerprint:
-        """在线程中预检元数据，并在需要时捕获完整内容快照。"""
+        """在线程中取得内容指纹；``previous`` 仍新鲜且文件元数据没变时直接复用它，否则完整捕获。"""
 
         return await asyncio.to_thread(
             self._capture_plugin_snapshot_for_watch,

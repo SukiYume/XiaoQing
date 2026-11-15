@@ -1,4 +1,4 @@
-"""命令参数解析：分词、短/长选项与严格整数解析。"""
+"""命令参数解析：分词、短/长选项、严格整数解析与中文数字。"""
 
 import re
 import shlex
@@ -115,6 +115,43 @@ def parse_int(
     return value
 
 
+_CN_DIGITS = dict(
+    zip("零〇一二两三四五六七八九", (0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9), strict=True)
+)
+_CN_UNITS = {"十": 10, "百": 100, "千": 1000}
+
+
+def chinese_number(text: str) -> int | None:
+    """“八百”“三百五十”“一百零五”“十二万”“一千五” → 数字；有别的字符时是 ``None``。
+
+    末尾省掉单位的口语读法按上一级单位的下一位算：“一千五”是 1500，“三万五”是 35000；中间有
+    “零”占位时（“一百零五”“一千零五十”）末位按原值计。
+    """
+
+    if not text:
+        return None
+    total = section = digit = last_unit = 0
+    placeholder = False
+    for char in text:
+        if char in "零〇":
+            placeholder, digit = True, 0
+        elif char in _CN_DIGITS:
+            digit = _CN_DIGITS[char]
+        elif char in _CN_UNITS:
+            last_unit = _CN_UNITS[char]
+            section += (digit or 1) * last_unit
+            digit = 0
+        elif char == "万":
+            total += (section + digit or 1) * 10000
+            section = digit = 0
+            last_unit, placeholder = 10000, False
+        else:
+            return None
+    if digit and last_unit >= 100 and not placeholder:
+        digit *= last_unit // 10
+    return total + section + digit
+
+
 def parse(raw: str) -> ParsedArgs:
     """
     解析命令参数。
@@ -162,4 +199,12 @@ def parse(raw: str) -> ParsedArgs:
     return ParsedArgs(raw=raw, tokens=args, options=options)
 
 
-__all__ = ["FLAG_VALUE", "ParsedArgs", "parse", "parse_int", "quote_token", "tokenize"]
+__all__ = [
+    "FLAG_VALUE",
+    "ParsedArgs",
+    "chinese_number",
+    "parse",
+    "parse_int",
+    "quote_token",
+    "tokenize",
+]

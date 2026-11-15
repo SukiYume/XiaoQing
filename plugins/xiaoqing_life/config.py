@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.ai import declare_route_defaults
+from core.plugin_base import config_bool, config_float, config_int
 
-PLUGIN_NAME = "xiaoqing_life"
+PLUGIN_NAME     = "xiaoqing_life"
+REASONING_ROUTE = "reasoning"
+VISION_ROUTE    = "vision"
 
 # 两条 route 各自的调用参数；主配置里只需要给每条 route 指定模型。
 declare_route_defaults(
     PLUGIN_NAME,
     {
         # 消化、研究、睡前整理：后台任务，不赶时间。
-        "reasoning": {
+        REASONING_ROUTE: {
             "temperature"           : 0.6,
             "top_p"                 : 0.9,
             "max_tokens"            : 2048,
@@ -27,7 +29,7 @@ declare_route_defaults(
             "retry_interval_seconds": 1,
         },
         # 判定评论区的图是不是梗图。
-        "vision": {
+        VISION_ROUTE: {
             "temperature"          : 0.2,
             "top_p"                : 0.9,
             "max_tokens"           : 800,
@@ -153,25 +155,6 @@ class LifeConfig:
         return min(a, 24) * 60 + min(b, 59), min(c, 24) * 60 + min(d, 59)
 
 
-def _bool(value: Any, default: bool) -> bool:
-    return value if isinstance(value, bool) else default
-
-
-def _int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return default
-    return min(maximum, max(minimum, value))
-
-
-def _float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    number = float(value)
-    if not math.isfinite(number):
-        return default
-    return min(maximum, max(minimum, number))
-
-
 def _words(value: Any, default: tuple[str, ...], *, limit: int) -> tuple[str, ...]:
     if not isinstance(value, list):
         return default
@@ -183,7 +166,7 @@ def _sources(value: Any) -> dict[str, bool]:
     merged = _default_sources()
     if isinstance(value, Mapping):
         for name in merged:
-            merged[name] = _bool(value.get(name), merged[name])
+            merged[name] = config_bool(value.get(name), merged[name])
     return merged
 
 
@@ -231,9 +214,9 @@ def _limits(o: Mapping[str, Any], d: LifeConfig) -> dict[str, Any]:
     }
     values: dict[str, Any] = {}
     for name, (low, high) in int_spec.items():
-        values[name] = _int(o.get(name), getattr(d, name), minimum=low, maximum=high)
+        values[name] = config_int(o.get(name), getattr(d, name), minimum=low, maximum=high)
     for name, (flow, fhigh) in float_spec.items():
-        values[name] = _float(o.get(name), getattr(d, name), minimum=flow, maximum=fhigh)
+        values[name] = config_float(o.get(name), getattr(d, name), minimum=flow, maximum=fhigh)
     return values
 
 
@@ -270,15 +253,15 @@ def parse_life_config(raw: Any) -> LifeConfig:
     o = raw if isinstance(raw, Mapping) else {}
     d = LifeConfig()
     return LifeConfig(
-        enabled = _bool(o.get("enabled"), d.enabled),
+        enabled = config_bool(o.get("enabled"), d.enabled),
         sources = _sources(o.get("sources")),
         seed_interests=_words(o.get("seed_interests"), d.seed_interests, limit=60),
         activity_affinity = _affinity(o.get("activity_affinity")),
         session_minutes   = _session_minutes(o.get("session_minutes")),
-        browse_when_busy  = _bool(o.get("browse_when_busy"), d.browse_when_busy),
+        browse_when_busy  = config_bool(o.get("browse_when_busy"), d.browse_when_busy),
         quiet_hours       = _quiet(o.get("quiet_hours"), d.quiet_hours),
-        memes_enabled     = _bool(o.get("memes_enabled"), d.memes_enabled),
-        meme_auto_approve = _bool(o.get("meme_auto_approve"), d.meme_auto_approve),
+        memes_enabled     = config_bool(o.get("memes_enabled"), d.memes_enabled),
+        meme_auto_approve = config_bool(o.get("meme_auto_approve"), d.meme_auto_approve),
         blocked_keywords=_words(o.get("blocked_keywords"), (), limit=200),
         **_limits(o, d),
     )

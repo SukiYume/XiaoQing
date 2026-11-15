@@ -13,13 +13,15 @@ from ..utils.constants import (
 )
 from ..utils.time import utc_now
 
-_STAT_FIELDS       = ("hunger", "mood", "clean", "energy", "health")
-_DRESS_SLOT_FIELDS = (
-    ("帽子", "dress_hat"),
-    ("衣服", "dress_clothes"),
-    ("饰品", "dress_accessory"),
-    ("背景", "dress_background"),
-)
+_STAT_FIELDS = ("hunger", "mood", "clean", "energy", "health")
+
+# 装扮槽位的展示名到宠物字段的映射；展示名与 ``DressSlot`` 的取值一致。
+DRESS_SLOT_FIELDS = {
+    "帽子": "dress_hat",
+    "衣服": "dress_clothes",
+    "饰品": "dress_accessory",
+    "背景": "dress_background",
+}
 
 
 @dataclass
@@ -87,7 +89,7 @@ class Pet:
         "favorite_food",
         "status",
         "status_expire_time",
-        *(field_name for _slot_name, field_name in _DRESS_SLOT_FIELDS),
+        *DRESS_SLOT_FIELDS.values(),
         "last_update",
         "decay_remainders",
         "last_feed",
@@ -157,14 +159,12 @@ class Pet:
         avg_stats = sum(cast(int, getattr(self, name)) for name in _STAT_FIELDS) / len(_STAT_FIELDS)
         return avg_stats / MAX_STAT_VALUE
 
-    def update_stat(
-        self, stat: str, delta: int, max_val: int = MAX_STAT_VALUE, min_val: int = 0
-    ) -> int:
-        """在指定上下界内增减一个合法的宠物属性。"""
+    def update_stat(self, stat: str, delta: int, min_val: int = 0) -> int:
+        """把一个合法的宠物属性增减 ``delta``，夹取在 ``min_val`` 到 ``MAX_STAT_VALUE`` 之间。"""
         if stat not in _STAT_FIELDS:
             raise ValueError(f"未知宠物属性: {stat}")
         current   = cast(int, getattr(self, stat))
-        new_value = min(max_val, max(min_val, current + delta))
+        new_value = min(MAX_STAT_VALUE, max(min_val, current + delta))
         setattr(self, stat, new_value)
         return new_value
 
@@ -176,13 +176,13 @@ class Pet:
         """按展示名称返回全部装扮槽位。"""
         return {
             slot_name: cast(str | None, getattr(self, field_name))
-            for slot_name, field_name in _DRESS_SLOT_FIELDS
+            for slot_name, field_name in DRESS_SLOT_FIELDS.items()
         }
 
     def get_dress_mood_bonus(self) -> int:
         """汇总当前有效装扮带来的心情加成。"""
         bonus = 0
-        for _slot_name, field_name in _DRESS_SLOT_FIELDS:
+        for field_name in DRESS_SLOT_FIELDS.values():
             item_id = getattr(self, field_name)
             item    = DEFAULT_DRESS_ITEMS.get(item_id) if item_id else None
             if item is not None:

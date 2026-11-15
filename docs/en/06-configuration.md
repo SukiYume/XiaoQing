@@ -33,12 +33,12 @@ The matching `ai` and `plugins` objects in `secrets.json` hold credentials.
 | Field | Type | Example | Description |
 |---|---|---|---|
 | `bot_name` | string | `"小青"` | Unique runtime Bot name for invocation, group gates, chat persona, history role labels, and default connection notifications |
-| `command_prefixes` | string[] | `["/"]` | Command prefixes |
+| `command_prefixes` | non-empty string[], each item non-empty | `["/"]` | Command prefixes; `["/"]` when the key is absent |
 | `require_bot_name_in_group` | boolean | `true` | Bot-name gate for ordinary group text |
 | `default_group_ids` | positive integer[] | `[123456789]` | Group targets for `broadcast` / `targeted` schedules with omitted `group_ids` |
 | `timezone` | IANA timezone | `"Asia/Shanghai"` | Timezone for Scheduler, `context.now()`, and business dates |
 
-`command_prefixes` supports multiple prefixes.
+`command_prefixes` supports multiple prefixes; an empty list, or a list containing an empty string, is rejected as invalid configuration.
 Manifest `triggers` stores command words. Router handles prefixes during message parsing.
 `/reload` publishes these five settings in a new revision and triggers background plugin reload.
 
@@ -108,8 +108,6 @@ For a non-loopback host, also set `inbound_trusted_tls_proxy: true` and restrict
 
 `data_root` accepts project-relative paths or absolute host paths. Keep it outside the `plugins/` source tree.
 Each plugin receives `data_root/<plugin_name>/`.
-When Core first finds `plugins/<name>/data/`, it atomically migrates the contents to the new data root.
-It archives the source directory at `data_root/.legacy-plugin-data/<name>/`.
 Restart the main process after a `data_root` change.
 
 The plugin watcher runs an interpreter capability probe at startup.
@@ -155,8 +153,7 @@ After shutdown completes, double-click `scripts/run-bot.vbs` to restart.
     "drain_timeout_seconds": 5,
     "global_sync_queue_limit": 256,
     "overrides": {
-      "codex": {"timeout_seconds": 0},
-      "shell": {"timeout_seconds": 0}
+      "arxiv_filter": {"timeout_seconds": 600}
     }
   }
 }
@@ -181,6 +178,7 @@ Synchronous libraries enter synchronous budgets through `run_sync()`.
 `admission_queue_limit` and `sync_queue_limit` count waiting slots. `0` permits zero waiting slots.
 Total plugin-entry admission capacity equals active slots plus waiting slots.
 `overrides.<plugin_name>` can supply any policy subset.
+Plugins that declare the `execution_timeout_exempt` capability in `plugin.json` (codex, qingssh, jupyter, shell) already default to an entry budget of `0` and need no override here.
 
 Omitted fields inherit global policy.
 JSON `null` causes configuration-validation failure.
@@ -301,6 +299,7 @@ Defaults declared by the bundled plugins (`declare_route_defaults`, in each plug
 | `xiaoqing_agent.triage` | Triage | 0.1 / — | — | 15 / 20 | 1 |
 | `xiaoqing_agent.vision` | `read_image` on local images | 0.2 / — | 800 | 20 / 60 | 1 |
 | `xiaoqing_life.reasoning` | Digest, research, wind-down | 0.6 / 0.9 | 2048 | 30 / 120 | 1 |
+| `xiaoqing_memory.reasoning` | Nightly consolidation: notes, pages, verification | 0.3 / 0.9 | 3000 | 60 / 180 | 1 |
 | `xiaoqing_life.vision` | Meme image check | 0.2 / 0.9 | 800 | 20 / 60 | 1 |
 | `pendo.parse` | Natural-language parsing | 0.3 / — | 1000 | 30 / 60 | 1 |
 | `xiaoai.plan` | Mi Home action planning | 0 / — | 1600 | 25 / 28 | 0 |
@@ -365,6 +364,23 @@ context.get_secret("path.to.value")
 context.get_settings_snapshot()
 ```
 
+### Deployment-specific settings
+
+Group IDs, QQ IDs, server addresses, and local paths that belong to one deployment go in `config/config.json`; credentials go in `config/secrets.json`.
+`plugin.json`, plugin directories, and the XiaoQing behavior file ship with the repository, stay generic, and match the released version on every deployment.
+
+| Path | Description |
+|---|---|
+| `plugins.<plugin>.schedules.<schedule ID>.group_ids` | Target groups for one schedule. Takes precedence over the `plugin.json` entry and `default_group_ids`; see [schedule fields](03-plugin-development.md#schedule-fields) |
+| `plugins.minecraft.servers.<profile>` | Minecraft server `host`, `port`, and `log_file`. The RCON password lives in `secrets.plugins.minecraft.<profile>` |
+| `plugins.xiaoqing_chat.<field>` | Overrides the same field in the behavior file `xiaoqing_config.json`, merged level by level |
+
+The repository's `.githooks/pre-commit` runs `scripts/check_private.py`.
+It rejects a commit when staged files contain group IDs, accounts, credentials, or user directories from the local config or secrets, or terms listed in `config/private_terms.txt` (one per line, such as member nicknames).
+It reports files and field paths only, never values.
+Text files are searched as text. Binary files such as images and PSDs are searched as bytes for the UTF-8 and UTF-16 spellings that metadata uses; a match with a letter or digit directly before or after it does not count, because that is a coincidence inside compressed pixel data.
+Run `git config core.hooksPath .githooks` once after cloning to enable it; `python scripts/check_private.py --all` checks every file.
+
 ### Core plugin selection
 
 | Path | Example | Description |
@@ -402,7 +418,7 @@ See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, dem
 
 Each of the four XiaoQing Chat routes names its own model order. The plugin declares defaults for sampling, request timeout, total timeout and retries; see the table under "Plugin route" above.
 Behavior, participation, memory, and expression parameters are in `plugins/xiaoqing_chat/config/xiaoqing_config.json`.
-They can also appear under `config.plugins.xiaoqing_chat`. File values take priority during merging.
+They can also appear under `config.plugins.xiaoqing_chat`. The two merge level by level, and config values take priority.
 See [XiaoQing Chat configuration (Chinese)](../../plugins/xiaoqing_chat/README.md) for field groups.
 
 ### XiaoQing Agent
@@ -447,6 +463,21 @@ XiaoQing's own online life. The default state is disabled.
 
 Chat-side switches are `life.enable_online_life`, `life.online_life_timeout_seconds`, `life.enable_life_memes`, and `life.enable_life_share` in the `xiaoqing_chat` behavior configuration.
 See [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md) for all fields, commands, and data directories.
+
+### XiaoQing Memory
+
+XiaoQing's unified memory, enabled by default:
+
+| Path | Default | Description |
+|---|---|---|
+| `plugins.xiaoqing_memory.enabled` | `true` | Main switch. When disabled, the `memory.*` services return `None`; chat, the agent, and online life keep working without long-term memory. |
+| `plugins.xiaoqing_memory.ai.routes.reasoning` | none | Route for nightly consolidation. Without it the plugin records and recalls but does not consolidate. |
+| `plugins.xiaoqing_memory.event_keep_days` | `365` | Days to keep raw records (deleted by whole month) |
+| `plugins.xiaoqing_memory.night_start` / `night_end` | `"02:00"` / `"05:00"` | Nightly consolidation window in the configured time zone |
+| `plugins.xiaoqing_memory.backlog_trigger_events` | `150` | Consolidate outside the window once this many new records are waiting |
+| `plugins.xiaoqing_memory.max_llm_calls_per_day` | `16` | Model calls for consolidation, counted before each call and not refunded on failure |
+
+See [XiaoQing Memory (Chinese)](../../plugins/xiaoqing_memory/README.md) for budgets, caps, and retention fields.
 
 ### QingSSH
 
@@ -502,7 +533,7 @@ See [Codex configuration (Chinese)](../../plugins/codex/README.md) for working d
 
 The Shell allowed-command list, working directory, and audit switch are under `secrets.plugins.shell`.
 See [Shell configuration (Chinese)](../../plugins/shell/README.md) for both backends.
-The [plugin manual](09-plugins.md) lists configuration entry points and data locations for all 32 plugins.
+The [plugin manual](09-plugins.md) lists configuration entry points and data locations for all 34 plugins.
 
 ## ⚙️ Secrets
 
@@ -564,6 +595,7 @@ Publication sequence:
 | `plugin_execution` and plugin watcher policies | `/reload` or configuration watcher |
 | AI providers, profiles, routes, API keys | Next AI call after confirmed revision publication |
 | Public plugin configuration and private credentials | Plugin reads after confirmed revision publication |
+| Schedule target groups (`plugins.<plugin>.schedules`) | Next run after confirmed revision publication |
 | Valid external single-file `secrets.json` candidate | Administrator checks private field summary, then sends `/reload` |
 | `data_root`, logging, `napcat_account`, `mkl_threading_layer` | Main-process or production-chain restart |
 | Plugin source, manifest, `watch_files` | `/reload`, plugin watcher, or process restart in restart-only environments |
@@ -606,12 +638,13 @@ Candidate listeners commit the new inbound generation. Only the committed genera
 - The reverse proxy supplies TLS, source policy, and rate limits.
 - `admin_user_ids` contains current administrators only.
 - Secrets contain AI keys and plugin credentials.
+- Config holds deployment settings such as schedule targets and server addresses; repository files match the released version.
 - Administrators check field summaries and send `/reload` for valid single-file secret replacements.
 - Public configuration changes and two-source replacements occur during shutdown windows.
 - `data_root`, log directories, and backup directories have explicit owners.
 - `plugin_execution` gives long-task plugins suitable budgets.
 - Pendo Web Cookie Secure matches the HTTPS deployment.
-- `bash scripts/run_full_uat.sh --plan-only` and full UAT complete before production startup.
+- `python scripts/run_full_uat.py --plan-only` and full UAT complete before production startup.
 
 ## 🧭 Next steps
 

@@ -8,7 +8,7 @@ from core.router import resolve_context_command_invocation
 from core.sensitive_audit import audit_error_type
 
 from . import session_handlers
-from .config import COMMAND_TIMEOUT, SessionKeys
+from .config import COMMAND_TIMEOUT, MAX_HISTORY_LENGTH, SESSION_TIMEOUT, SessionKeys
 from .handlers import (
     handle_ssh_add,
     handle_ssh_config_list,
@@ -89,7 +89,7 @@ async def handle(command: str, args: str, event: OneBotEvent, context: Context) 
 
 def _show_help() -> str:
     """显示适合手机私聊阅读的管理与会话帮助。"""
-    return """
+    return f"""
 🖥️ SSH 远程控制
 
 连接
@@ -102,7 +102,7 @@ def _show_help() -> str:
 • /ssh list
 • /ssh add [名称 主机 [端口] [用户名]]
 • /ssh remove <名称>
-• /ssh import [Host名|all]
+• /ssh import [Host名|all|全部]
 • /ssh config
 
 连接状态
@@ -112,6 +112,9 @@ def _show_help() -> str:
 会话内
 • 直接输入 Shell 命令
 • cd <目录>：切换目录
+• 状态 / status：当前目录与已执行命令数
+• 历史 / history：最近 {MAX_HISTORY_LENGTH} 条命令
+• !!：重复上一条命令
 • showimg <路径或通配符> [--page N]
   支持 ./、相对/绝对目录；每页 5 张
 • help / 帮助：会话帮助
@@ -119,7 +122,7 @@ def _show_help() -> str:
 • 退出 / 取消：结束会话
 
 安全：优先使用密钥；密码只进入插件密钥存储。
-默认命令超时 30 秒，会话空闲超时 10 分钟。
+默认命令超时 {COMMAND_TIMEOUT} 秒，会话空闲超时 {int(SESSION_TIMEOUT // 60)} 分钟。
 """.strip()
 
 
@@ -165,8 +168,8 @@ async def agent_command_service(request: dict[str, Any], context: Context) -> An
     )
 
 
-async def cleanup(context: Context) -> None:
-    """先排空后台任务，再关闭已经创建的管理器。"""
+async def shutdown(context: Context) -> None:
+    """框架关闭或重载插件时：先排空后台任务，再关闭已经创建的管理器。"""
 
     try:
         await session_handlers.shutdown_tasks()
@@ -182,12 +185,6 @@ async def cleanup(context: Context) -> None:
         logger.info("SSH plugin cleaned up successfully")
     except Exception as exc:
         logger.error("SSH plugin cleanup failed error_type=%s", audit_error_type(exc))
-
-
-async def shutdown(context: Context) -> None:
-    """兼容框架 shutdown 生命周期名称。"""
-
-    await cleanup(context)
 
 
 async def cleanup_orphans(context: Context) -> None:

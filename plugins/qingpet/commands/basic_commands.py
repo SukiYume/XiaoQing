@@ -7,6 +7,7 @@ from ..services.database import Database
 from ..services.pet_service import PetService
 from ..services.user_service import UserService
 from ..utils.formatters import format_pet_card, format_status_text
+from .parsing import split_first_word
 
 
 def with_pet_name(pet: Pet, message: str) -> str:
@@ -19,15 +20,11 @@ def with_pet_name(pet: Pet, message: str) -> str:
 
 
 def _split_group_prefix(args: str) -> tuple[int | None, str]:
-    raw = args.strip()
-    if not raw:
-        return None, ""
-    parts = raw.split(maxsplit=1)
-    first = parts[0]
+    first, rest = split_first_word(args)
     group_id = parse_int(first, minimum=1)
     if group_id is None:
-        return None, raw
-    return group_id, parts[1] if len(parts) > 1 else ""
+        return None, args.strip()
+    return group_id, rest
 
 
 def _validate_pet_scope(

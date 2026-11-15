@@ -37,10 +37,9 @@ def get_categories() -> dict[str, object]:
     }
 
 
-@router.get("/diary/templates")
 @router.get("/config/diary/templates")
 def get_diary_templates() -> dict[str, object]:
-    """按配置顺序返回模板及复制后的提示列表，并保留旧路径别名。"""
+    """按配置顺序返回模板及复制后的提示列表。"""
 
     templates = [
         {

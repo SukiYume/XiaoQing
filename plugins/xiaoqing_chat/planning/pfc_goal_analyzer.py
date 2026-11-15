@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..config.config import PersonalityConfig
-from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.gateway import ai_disabled, chat_completions_raw_with_profile, extract_response_content
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
@@ -26,7 +26,7 @@ async def analyze_goals(
 ) -> list[dict[str, Any]]:
     """返回最多五个有当前对话证据的目标；失败时保留原目标。"""
 
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return list(current_goal_list)
 
     persona_text = personality.card.facts(bot_name)
@@ -71,7 +71,7 @@ async def analyze_goals(
     )
 
     try:
-        resp, _path = await chat_completions_raw_with_fallback_paths(
+        resp, _ = await chat_completions_raw_with_profile(
             route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],

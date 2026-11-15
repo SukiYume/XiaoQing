@@ -11,6 +11,7 @@ from core.plugin_base import emoji, face, image, segments, text
 from .llm.postprocess import LONG_BUBBLE_CHARS, split_chat_reply
 from .media_registry import MEDIA_PLACEHOLDER_RE, rebuild_message_content
 from .message_parts import (
+    is_media_part,
     message_parts_to_legacy,
     normalize_message_parts,
     template_with_fallback_placeholders,
@@ -24,8 +25,6 @@ _LONE_FULL_STOP_RE = re.compile(r"(?<![。.…])。$", re.MULTILINE)
 class ReplyPayload:
     display_text    : str
     outbound_batches: list[list[dict[str, Any]]]
-    media_items     : list[dict[str, Any]]
-    parts           : tuple[dict[str, Any], ...] = ()
     batch_parts     : list[list[dict[str, object]]] = field(default_factory=list)
 
 
@@ -85,7 +84,7 @@ def _build_batch_segments(
 
 
 def _media_sequence_from_parts(parts: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
-    return [dict(part) for part in parts if str(part.get("kind", "") or "").strip() != "text"]
+    return [dict(part) for part in parts if is_media_part(part)]
 
 
 def _build_reply_payload_core(
@@ -93,7 +92,6 @@ def _build_reply_payload_core(
     reply_template: str,
     media_sequence: list[dict[str, Any]],
     display_template: str,
-    payload_parts: tuple[dict[str, Any], ...],
 ) -> ReplyPayload:
     template = template_with_fallback_placeholders(reply_template, media_sequence)
     parts = split_chat_reply(template) if template else []
@@ -140,8 +138,6 @@ def _build_reply_payload_core(
     return ReplyPayload(
         display_text     = visible_text,
         outbound_batches = outbound_batches,
-        media_items      = media_sequence,
-        parts            = payload_parts,
         batch_parts      = batch_parts,
     )
 
@@ -157,11 +153,8 @@ def build_reply_payload_from_parts(
         if display_parts is not None
         else normalized_reply_parts
     )
-    reply_template, _legacy_media_items = message_parts_to_legacy(normalized_reply_parts)
-    display_template, _display_media_items = message_parts_to_legacy(normalized_display_parts)
     return _build_reply_payload_core(
-        reply_template   = reply_template,
+        reply_template   = message_parts_to_legacy(normalized_reply_parts)[0],
         media_sequence   = _media_sequence_from_parts(normalized_reply_parts),
-        display_template = display_template,
-        payload_parts    = normalized_display_parts,
+        display_template = message_parts_to_legacy(normalized_display_parts)[0],
     )

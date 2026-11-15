@@ -25,11 +25,9 @@ TOP_LEVEL_REDIRECTS: Final[dict[str, str]] = {
 class CommandInfo:
     """一个已经验证并可直接调用的顶层命令。"""
 
-    name       : str
-    handler    : CommandHandler
-    aliases    : tuple[str, ...]
-    description: str
-    usage      : str
+    name   : str
+    handler: CommandHandler
+    aliases: tuple[str, ...]
 
 
 class CommandRouter:
@@ -39,7 +37,7 @@ class CommandRouter:
         self,
         root: CommandCatalogNode,
         handlers: Mapping[str, CommandHandler],
-        help_provider: Callable[[str], str] | None = None,
+        help_provider: Callable[[str], str],
     ) -> None:
         if root.code != "pendo.pendo":
             raise ValueError(f"unexpected Pendo command root: {root.code}")
@@ -65,13 +63,7 @@ class CommandRouter:
         for name in selected_names:
             node           = catalog_by_name[name]
             handler        = self._handle_help if name == "help" else handlers[name]
-            commands[name] = CommandInfo(
-                name,
-                handler,
-                node.aliases,
-                node.help_text,
-                node.usage,
-            )
+            commands[name] = CommandInfo(name, handler, node.aliases)
 
         return commands
 
@@ -117,33 +109,16 @@ class CommandRouter:
         }
 
     def get_help_message(self, args: str = "") -> str:
-        """优先复用完整帮助源，否则由命令元数据生成简版帮助。"""
+        """复用完整帮助源；别名先解析成规范命令名再查。"""
         target = (args or "").strip()
-        if target:
-            if self.help_provider:
-                provided = self.help_provider(target)
-                if not provided.startswith("❌ 未知命令"):
-                    return provided
-
-            command_name = self.alias_map.get(target.lower())
-            if command_name is None:
-                return f"❌ 未知命令: {target}\n\n使用 /pendo help 查看所有命令"
-            if self.help_provider:
-                return self.help_provider(command_name)
-
-            command = self.commands[command_name]
-            aliases = ", ".join(command.aliases) or "无"
-            return (
-                f"📖 {command.name} - {command.description}\n\n"
-                f"用法:\n{command.usage}\n\n别名: {aliases}"
-            )
-
-        if self.help_provider:
+        if not target:
             return self.help_provider("")
 
-        lines = ["📖 Pendo 帮助", "", "可用命令:", ""]
-        lines.extend(
-            f"• {command.name} - {command.description}" for command in self.commands.values()
-        )
-        lines.extend(["", "使用 /pendo help <命令名> 查看详细用法"])
-        return "\n".join(lines)
+        provided = self.help_provider(target)
+        if not provided.startswith("❌ 未知命令"):
+            return provided
+
+        command_name = self.alias_map.get(target.lower())
+        if command_name is None:
+            return f"❌ 未知命令: {target}\n\n使用 /pendo help 查看所有命令"
+        return self.help_provider(command_name)

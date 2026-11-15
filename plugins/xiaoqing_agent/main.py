@@ -23,19 +23,19 @@ from .config import AgentConfig, load_agent_config
 from .prompts import configured_bot_name, configured_persona
 from .runtime import AgentRuntime
 from .tasks import Actor, AgentTask, ChatRef
-from .triage import TRIAGE_ACTIONS, TriageDecision, service_list, triage_turn
+from .triage import MAX_TASK_ID, TRIAGE_ACTIONS, TriageDecision, service_list, triage_turn
 
 logger = logging.getLogger(__name__)
 
-_RUNTIME_KEY       = "xiaoqing_agent.runtime"
-_ROOT_CODE         = "xiaoqing_agent.agent"
+_RUNTIME_KEY = "xiaoqing_agent.runtime"
+_ROOT_CODE   = "xiaoqing_agent.agent"
+# 聊天侧交来的材料上限：最近聊天保留几条、人设与近况各取多少字、每类图片收几张。
 _MAX_HISTORY       = 20
 _MAX_HANDOFF_CHARS = 12000
+_MAX_IMAGES        = 6
 # 分流看发起人办事会话里最近几轮的请求和回复，判断这句话是不是接着那件事说。
 _TRIAGE_SESSION_TURNS = 2
-_MAX_IMAGES           = 6
-# 续接任务的验收线索：最多保留最近几条，每条的字数上限。
-_DISABLED_TIP = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
+_DISABLED_TIP         = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
 
 HELP_TEXT = """🛠 小青 agent
 
@@ -185,11 +185,11 @@ def _decision_from(raw: Any) -> TriageDecision | None:
     if not isinstance(raw, dict):
         return None
     action = str(raw.get("action") or "")
-    if action not in TRIAGE_ACTIONS or action == "conversation":
+    if action not in TRIAGE_ACTIONS:
         return None
     return TriageDecision(
         action,
-        task_id = str(raw.get("task_id") or "")[:32],
+        task_id = str(raw.get("task_id") or "")[:MAX_TASK_ID],
         plugins = service_list(raw.get("plugins")),
     )
 
@@ -297,9 +297,7 @@ async def _act(
             )
         )
     if decision.action == "update":
-        return _handled(
-            segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
-        )
+        return _handled(segments(runtime.add_note(chat, decision.task_id, text, actor, sender)))
 
     message, task = await _start_and_wait(
         context,

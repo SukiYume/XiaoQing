@@ -11,12 +11,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments, send_with_receipt
-from core.interfaces import ACTION_BYPASS_SINK_KEY
+from core.interfaces import ACTION_BYPASS_SINK_KEY, EVENT_SOURCE_KEY
 from core.plugin_base import build_action, segments
 
 from .brain_chat import (
     maybe_add_mode_indicator,
 )
+from .chat_event import COMMAND_FORCED_EVENT_KEY
 from .chat_runtime import chat_lock
 from .follow_ups import carry_attention, carry_text, sender_has_follow_up
 from .frequency_control import record_reply_frequency
@@ -28,8 +29,8 @@ from .memory.local_ids import (
     split_history_at,
     stale_reason,
 )
-from .memory.person_profile import get_profile_generation
-from .message_parts import normalize_message_parts
+from .memory.person_profile import session_is_current
+from .message_parts import is_media_part, normalize_message_parts
 from .planning.action_history import ActionRecord
 from .post_reply_tasks import spawn_post_reply_tasks
 from .reply_media import (
@@ -53,6 +54,7 @@ from .turn_generation import commit_planner_snapshot
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
     from .memory.memory import StoredMessage
+    from .planning.pfc_engine import PFCRunResult
     from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
 
@@ -136,7 +138,7 @@ class _SmalltalkFinalization:
     checked_users: tuple[StoredMessage, ...] | None = None
 
 
-async def _record_bot_reply(
+async def record_bot_reply(
     context,
     runtime,
     state,
@@ -220,12 +222,11 @@ def _drop_stale_generated_turn(
 ) -> bool:
     """检查会话重置、目标消息丢失和距离上限。"""
 
-    generated          = finalization.generated
-    split              = split_history_at(finalization.hctx.chat_id, generated.local_id)
-    current_generation = get_profile_generation(
-        finalization.context.data_dir, finalization.hctx.chat_id
-    )
-    if generated.session_generation not in (None, current_generation):
+    generated = finalization.generated
+    split     = split_history_at(finalization.hctx.chat_id, generated.local_id)
+    if not session_is_current(
+        finalization.context.data_dir, finalization.hctx.chat_id, generated.session_generation
+    ):
         reason = "session_reset"
     elif split is None:
         reason = "missing"
@@ -233,7 +234,6 @@ def _drop_stale_generated_turn(
         reason = stale_reason(split[1])
     if not reason:
         return False
-    generated.cancel_speculative_memory()
     log_step(
         finalization.context,
         finalization.hctx.runtime,
@@ -292,7 +292,6 @@ async def _drop_if_context_changed(
     )
     finalization.checked_users = users
     if changed:
-        finalization.generated.cancel_speculative_memory()
         log(
             "smalltalk.stale.drop",
             {"phase": "context_changed", "local_id": finalization.generated.local_id},
@@ -304,12 +303,11 @@ def _yield_to_follow_up(finalization: _SmalltalkFinalization, *, phase: str) -> 
     """生成期间对方又发来了消息：这条回复不发，让排在后面的那一轮看着完整的几条一起回。"""
 
     event = finalization.event
-    if event.get("_xc_command_forced") or not sender_has_follow_up(event, finalization.context):
+    if event.get(COMMAND_FORCED_EVENT_KEY) or not sender_has_follow_up(event, finalization.context):
         return False
     if finalization.prepared.forced:
         carry_attention(event)
     carry_text(event, finalization.prepared.text)
-    finalization.generated.cancel_speculative_memory()
     log_step(
         finalization.context,
         finalization.hctx.runtime,
@@ -344,21 +342,19 @@ async def _confirm_delivery_context(finalization: _SmalltalkFinalization, *, pha
             )
             if current_users == checked_users:
                 return True
-    else:
-        # 持续活跃的群聊先结束这轮，避免反复等待和按过期判断投递。
-        finalization.generated.cancel_speculative_memory()
-        log_step(
-            finalization.context,
-            finalization.hctx.runtime,
-            chat_id = finalization.hctx.chat_id,
-            step    = "smalltalk.stale.drop",
-            fields  = {
-                "phase"   : "topic_check",
-                "reason"  : "topic_snapshot_outdated",
-                "local_id": finalization.generated.local_id,
-            },
-        )
-        return False
+    # 两次复核都有新消息：持续活跃的群聊先结束这轮，避免反复等待和按过期判断投递。
+    log_step(
+        finalization.context,
+        finalization.hctx.runtime,
+        chat_id = finalization.hctx.chat_id,
+        step    = "smalltalk.stale.drop",
+        fields  = {
+            "phase"   : "topic_check",
+            "reason"  : "topic_snapshot_outdated",
+            "local_id": finalization.generated.local_id,
+        },
+    )
+    return False
 
 
 def _quote_far_target(finalization: _SmalltalkFinalization, batches: list[Any]) -> None:
@@ -412,6 +408,15 @@ async def _apply_generated_pfc_state(finalization: _SmalltalkFinalization) -> bo
     )
 
 
+def _pfc_reasoning(result: PFCRunResult) -> str:
+    """行动历史里的理由文字：规划动作名，有理由时后面接 ``:理由``。"""
+
+    reasoning = str(result.action or "").strip()
+    if result.reason:
+        reasoning += f":{result.reason}"
+    return reasoning
+
+
 async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[Any]:
     """提交规划器与不回复状态，不创建投递回执。"""
 
@@ -423,7 +428,6 @@ async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[
                 return []
             should_flush_pfc = await _apply_generated_pfc_state(finalization)
             assert generated.pfc_result is not None
-            generated.cancel_speculative_memory()
             await finalization.hctx.state.heartflow.on_no_reply_async(
                 chat_id=finalization.hctx.chat_id
             )
@@ -440,9 +444,7 @@ async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[
                     "source"    : generated.reply_source,
                 },
             )
-            reasoning = str(generated.pfc_result.action or "").strip()
-            if generated.pfc_result.reason:
-                reasoning += f":{generated.pfc_result.reason}"
+            reasoning = _pfc_reasoning(generated.pfc_result)
             finalization.hctx.state.action_history.append(
                 finalization.hctx.chat_id,
                 ActionRecord(
@@ -511,15 +513,13 @@ async def _record_delivered_reply(
         assert generated.pfc_result is not None
         forced     = False
         action_str = str(generated.pfc_result.action or "reply").strip() or "reply"
-        reasoning  = str(generated.pfc_result.action or "").strip()
-        if generated.pfc_result.reason:
-            reasoning += f":{generated.pfc_result.reason}"
-        detail = {
+        reasoning  = _pfc_reasoning(generated.pfc_result)
+        detail     = {
             "source": generated.reply_source,
             **media_action_detail(reply_parts),
         }
 
-    return await _record_bot_reply(
+    return await record_bot_reply(
         *common_args,
         forced      = forced,
         action_str  = action_str,
@@ -541,11 +541,10 @@ async def _commit_smalltalk_delivery(
     history_snapshot: list[Any] = []
     try:
         async with chat_lock(finalization.hctx.chat_id):
-            expected = finalization.generated.session_generation
-            if (
-                expected is not None
-                and get_profile_generation(finalization.context.data_dir, finalization.hctx.chat_id)
-                != expected
+            if not session_is_current(
+                finalization.context.data_dir,
+                finalization.hctx.chat_id,
+                finalization.generated.session_generation,
             ):
                 return
             # 回复已经发出，规划状态（刚回复过、目标）就要记上，后来又有群友插话也一样。
@@ -610,7 +609,6 @@ async def _rollback_smalltalk_delivery(
     *,
     batch_count: int,
 ) -> None:
-    finalization.generated.cancel_speculative_memory()
     log_step(
         finalization.context,
         finalization.hctx.runtime,
@@ -712,12 +710,12 @@ class _ReplyBubbles:
         assert payload is not None
         if len(seen) == len(self._batches):
             emitted_media = [
-                part for batch in payload.batch_parts for part in batch if part["kind"] != "text"
+                part for batch in payload.batch_parts for part in batch if is_media_part(part)
             ]
             parts = tuple(
                 part
                 for part in self._reply_parts
-                if part["kind"] == "text" or part in emitted_media
+                if not is_media_part(part) or part in emitted_media
             )
         else:
             parts = _sent_bubble_parts([payload.batch_parts[index] for index in seen])
@@ -832,7 +830,7 @@ async def _send_smalltalk_intermediate_batches(
 
     user_id  = finalization.event.get("user_id")
     group_id = finalization.event.get("group_id")
-    direct   = finalization.event.get("_source") == "upstream_ws"
+    direct   = finalization.event.get(EVENT_SOURCE_KEY) == "upstream_ws"
     for index, batch in enumerate(outbound_batches[:-1]):
         if not await _confirm_delivery_context(finalization, phase="between_batches"):
             await bubbles.close()
@@ -891,7 +889,6 @@ async def finalize_smalltalk_turn(
 
     outbound_batches = _smalltalk_outbound_batches(finalization)
     if not outbound_batches:
-        generated.cancel_speculative_memory()
         return []
 
     bubbles        = _ReplyBubbles(finalization, reply_parts, outbound_batches)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from plugins.qingpet.services.database import Database, MinigameOutcome
+from plugins.qingpet.services.database import Database
+from plugins.qingpet.services.database_types import MinigameOutcome
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import PetStage
@@ -192,7 +193,6 @@ def test_stale_inventory_writes_and_concurrent_rewards_preserve_all_deltas(tmp_p
                 user.group_id,
                 reference_id,
                 reference_id     = reference_id,
-                daily_coin_limit = 9999,
                 cooldown_seconds = 0,
                 outcome_factory=lambda _pet, _opponent: MinigameOutcome(requested_coins=20),
             )

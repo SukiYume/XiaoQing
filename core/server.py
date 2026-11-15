@@ -1,16 +1,19 @@
 """
 Inbound Server 模块
 
-提供 HTTP/WebSocket 入站服务器，接收来自外部的事件推送。
+提供 HTTP/WebSocket 入站服务器，接收来自外部的事件推送。本文件还包含两个监听器共用的
+事件分发器（有界、按会话串行）、WebSocket 广播，以及按配置创建、启动和停止监听器的
+``InboundManager``。
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Protocol, TypeVar
@@ -25,9 +28,11 @@ from .constants import (
     DEFAULT_INBOUND_WS_QUEUE_SIZE,
     SECONDS_PER_DAY,
     SECONDS_PER_HOUR,
+    SECONDS_PER_MINUTE,
 )
 from .delivery import resolve_action_handoff, strip_receipt
 from .inbound_policy import is_loopback_host, parse_inbound_listener, validate_inbound_listener
+from .interfaces import EVENT_SOURCE_KEY
 from .lifecycle import (
     DeferredCancellation as _DeferredCancellation,
 )
@@ -42,12 +47,15 @@ from .lifecycle import (
 from .lifecycle import (
     run_owned_operation as _run_owned_cleanup,
 )
-from .message import ValidatedInboundEvent, normalize_inbound_message
+from .message import ValidatedInboundEvent
 from .models import OneBotEvent
 from .version import VERSION
 
 logger = logging.getLogger(__name__)
 T      = TypeVar("T")
+
+# 停止时等待已接纳事件、处理器和 worker 自然结束（以及取消后再等一轮）的期限。
+_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 async def _resolve_delivery_actions(
@@ -276,19 +284,16 @@ class _InboundEventDispatcher:
         *,
         max_workers: int,
         queue_size: int,
-        drain_timeout_seconds: float                      = 5.0,
-        allow_lazy_start: bool                            = False,
+        drain_timeout_seconds: float                      = _DRAIN_TIMEOUT_SECONDS,
         on_admit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._handler     = handler
         self._on_admit    = on_admit
         self._max_workers = max(1, int(max_workers))
-        self._queue_size  = max(0, int(queue_size))
-        # queue_size is the waiting backlog. Running workers are additional
-        # bounded slots.  Even queue_size=0 is therefore bounded, not unlimited.
+        self._queue_size  = max(1, int(queue_size))
+        # queue_size 是等待中的积压；正在运行的 worker 另占 max_workers 个有界槽位。
         self._capacity              = self._max_workers + self._queue_size
         self._drain_timeout_seconds = max(0.01, float(drain_timeout_seconds))
-        self._allow_lazy_start      = allow_lazy_start
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready_keys: asyncio.Queue[str] | None  = None
@@ -299,7 +304,6 @@ class _InboundEventDispatcher:
         self._worker_starts                          = 0
         self._inflight                               = 0
         self._accepting                              = False
-        self._started_once                           = False
         self._stopping                               = False
         # 被丢弃的已完成结果仍带着回执；结算任务由调度器持有，关闭时一并等待。
         self._settlements: set[asyncio.Task[Any]] = set()
@@ -321,12 +325,6 @@ class _InboundEventDispatcher:
             and not any(not task.done() for task in self._workers)
         )
 
-    @property
-    def is_quiescent(self) -> bool:
-        """Whether no admitted work or live worker remains."""
-
-        return self._inflight == 0 and not any(not task.done() for task in self._workers)
-
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
         if self._accepting:
@@ -344,11 +342,10 @@ class _InboundEventDispatcher:
         self._workers = {task for task in self._workers if not task.done()}
         self._drained = asyncio.Event()
         self._drained.set()
-        self._sequence     = 0
-        self._inflight     = 0
-        self._accepting    = True
-        self._started_once = True
-        self._stopping     = False
+        self._sequence  = 0
+        self._inflight  = 0
+        self._accepting = True
+        self._stopping  = False
 
     @staticmethod
     def _event_key(payload: dict[str, Any], sequence: int) -> str:
@@ -370,10 +367,7 @@ class _InboundEventDispatcher:
     ) -> _InboundEventTicket:
         loop = asyncio.get_running_loop()
         if not self._accepting:
-            if self._allow_lazy_start and not self._started_once and not self._stopping:
-                self._start_on_loop(loop)
-            else:
-                raise InboundEventUnavailable("inbound dispatcher is not accepting events")
+            raise InboundEventUnavailable("inbound dispatcher is not accepting events")
         if self._loop is not loop:
             raise RuntimeError("inbound dispatcher called from a non-owner event loop")
         if self._inflight >= self._capacity:
@@ -754,14 +748,14 @@ class InboundServer:
         token: str,
         handler: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]],
         *,
-        enable_http: bool = True,
-        enable_ws: bool = True,
-        ws_path: str = "/ws",
-        ws_max_workers: int = 8,
-        ws_queue_size: int = 200,
+        enable_http: bool                   = True,
+        enable_ws: bool                     = True,
+        ws_path: str                        = "/ws",
+        ws_max_workers: int                 = 8,
+        ws_queue_size: int                  = 200,
         ws_broadcast_timeout_seconds: float = DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
-        trusted_tls_proxy: bool = False,
-        event_dispatcher: _InboundEventDispatcher | None = None,
+        trusted_tls_proxy: bool             = False,
+        event_dispatcher: _InboundEventDispatcher,
     ) -> None:
         if type(trusted_tls_proxy) is not bool:
             raise TypeError("trusted_tls_proxy must be a boolean")
@@ -807,7 +801,7 @@ class InboundServer:
                 tuple[
                     web.WebSocketResponse,
                     _InboundAuthState,
-                    dict[str, Any] | _InboundEventTicket,
+                    _InboundEventTicket,
                 ]
             ]
             | None
@@ -819,23 +813,14 @@ class InboundServer:
         # semaphore is global to this server, so overlapping broadcasts cannot
         # multiply active socket writes beyond the same fixed bound.
         self._ws_broadcast_slots = asyncio.Semaphore(self._ws_max_workers)
-        try:
-            max_queue = int(ws_queue_size)
-        except (TypeError, ValueError):
-            max_queue = 0
-        if max_queue < 0:
-            max_queue = 0
-        self._event_queue_size = max_queue
-        # A configured zero means "no waiting handler backlog", not an
-        # unbounded delivery queue.  Keep enough bounded delivery slots for
-        # the workers that may already be running.
-        delivery_queue_size = max_queue or self._ws_max_workers
         if self.enable_ws:
-            self._ws_event_queue = asyncio.Queue(maxsize=delivery_queue_size)
+            self._ws_event_queue = asyncio.Queue(
+                maxsize=_parse_positive_int(ws_queue_size, default=DEFAULT_INBOUND_WS_QUEUE_SIZE)
+            )
 
-        self._handler_drain_timeout_seconds = 5.0
-        self._owns_event_dispatcher         = event_dispatcher is None
-        self._event_dispatcher              = event_dispatcher or self._new_owned_event_dispatcher()
+        self._handler_drain_timeout_seconds = _DRAIN_TIMEOUT_SECONDS
+        # 事件分发器由 InboundManager 建好、启动和停止；HTTP 和 WS 两个入口共用同一个。
+        self._event_dispatcher = event_dispatcher
 
         # 可选：外部注入的状态获取函数
         self._get_plugins_count: Callable[[], int] | None      = None
@@ -850,20 +835,6 @@ class InboundServer:
         # Network admission is still impossible until ``start`` binds a site.
         self._accepting_events                             = True
         self._active_handler_tasks: set[asyncio.Task[Any]] = set()
-
-    async def _call_handler(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        """Resolve the mutable standalone-server handler at execution time."""
-
-        return await self.handler(payload)
-
-    def _new_owned_event_dispatcher(self) -> _InboundEventDispatcher:
-        return _InboundEventDispatcher(
-            self._call_handler,
-            max_workers           = self._ws_max_workers,
-            queue_size            = self._event_queue_size,
-            drain_timeout_seconds = self._handler_drain_timeout_seconds,
-            allow_lazy_start      = True,
-        )
 
     @property
     def token(self) -> str:
@@ -1219,15 +1190,15 @@ class InboundServer:
 
     def _format_uptime(self, seconds: float) -> str:
         """格式化运行时间为人类可读格式"""
-        if seconds < 60:
+        if seconds < SECONDS_PER_MINUTE:
             return f"{int(seconds)}s"
         elif seconds < SECONDS_PER_HOUR:
-            minutes = int(seconds / 60)
-            secs    = int(seconds % 60)
+            minutes = int(seconds / SECONDS_PER_MINUTE)
+            secs    = int(seconds % SECONDS_PER_MINUTE)
             return f"{minutes}m {secs}s"
         elif seconds < SECONDS_PER_DAY:
             hours   = int(seconds / SECONDS_PER_HOUR)
-            minutes = int((seconds % SECONDS_PER_HOUR) / 60)
+            minutes = int((seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE)
             return f"{hours}h {minutes}m"
         else:
             days  = int(seconds / SECONDS_PER_DAY)
@@ -1276,7 +1247,7 @@ class InboundServer:
             return self._unauthorized_response()
         try:
             assert normalized is not None
-            normalized["_source"] = "inbound_http"
+            normalized[EVENT_SOURCE_KEY] = "inbound_http"
             # 只有显式请求 action-envelope 的测试/自定义客户端接收动作列表。
             # 标准 HTTP 上报由应用通过 action API 投递，响应正文仅确认接收。
             normalized["_http_action_delivery"] = (
@@ -1388,7 +1359,7 @@ class InboundServer:
                     if queue is None:
                         continue
                     assert normalized is not None
-                    normalized["_source"] = "inbound_ws"
+                    normalized[EVENT_SOURCE_KEY] = "inbound_ws"
                     # This is immediately adjacent to dispatcher admission.
                     # Stop cannot interleave in the same event-loop turn.
                     if not self._accepting_events:
@@ -1533,29 +1504,16 @@ class InboundServer:
     async def _handle_ws_event(
         self,
         ws: web.WebSocketResponse,
-        payload: dict[str, Any] | _InboundEventTicket,
+        ticket: _InboundEventTicket,
         auth_generation: _InboundAuthState | None = None,
     ) -> None:
-        """处理 WebSocket 事件（非阻塞）。"""
+        """等一个已经登记进分发器的 WebSocket 事件处理完，把结果发回这条连接。"""
 
-        if not self._accepting_events:
-            if isinstance(payload, _InboundEventTicket):
-                self._event_dispatcher.discard(payload)
-            return
-        if not self._auth_is_current(auth_generation):
-            if isinstance(payload, _InboundEventTicket):
-                self._event_dispatcher.discard(payload)
+        if not self._accepting_events or not self._auth_is_current(auth_generation):
+            self._event_dispatcher.discard(ticket)
             return
         try:
-            if isinstance(payload, _InboundEventTicket):
-                actions = await self._await_admitted_event(payload)
-            else:
-                payload            = normalize_inbound_message(payload)
-                payload["_source"] = "inbound_ws"
-                actions            = await self._invoke_handler(
-                    payload,
-                    auth_generation=auth_generation,
-                )
+            actions = await self._await_admitted_event(ticket)
             if not self._auth_is_current(auth_generation):
                 await _resolve_delivery_actions(actions, delivered=False)
                 return
@@ -1612,11 +1570,11 @@ class InboundServer:
                 queue = self._ws_event_queue
                 if queue is None:
                     break
-                ws, auth_generation, payload = await queue.get()
+                ws, auth_generation, ticket = await queue.get()
             except asyncio.CancelledError:
                 break
             try:
-                await self._handle_ws_event(ws, payload, auth_generation)
+                await self._handle_ws_event(ws, ticket, auth_generation)
             finally:
                 queue = self._ws_event_queue
                 if queue:
@@ -1652,13 +1610,7 @@ class InboundServer:
             task for task in self._active_handler_tasks if not task.done()
         }
         self._ws_worker_tasks = [task for task in self._ws_worker_tasks if not task.done()]
-        self._ws_close_tasks  = {task for task in self._ws_close_tasks if not task.done()}
-        if (
-            self._owns_event_dispatcher
-            and self._event_dispatcher.is_stopped
-            and self._event_dispatcher._started_once
-        ):
-            self._event_dispatcher = self._new_owned_event_dispatcher()
+        self._ws_close_tasks = {task for task in self._ws_close_tasks if not task.done()}
         queue_has_work = self._ws_event_queue is not None and not self._ws_event_queue.empty()
         if (
             self._runner is not None
@@ -1668,11 +1620,6 @@ class InboundServer:
             or self._ws_close_tasks
             or self._active_sockets
             or queue_has_work
-            or (
-                self._owns_event_dispatcher
-                and not self._event_dispatcher.is_stopped
-                and not self._event_dispatcher.is_quiescent
-            )
         ):
             raise RuntimeError("inbound server has an incomplete previous start")
         if not self.token.strip():
@@ -1692,8 +1639,6 @@ class InboundServer:
             site = web.TCPSite(runner, self.host, self.port, ssl_context=None)
             self._site = site
             await site.start()
-            if self._owns_event_dispatcher:
-                await self._event_dispatcher.start()
         except BaseException:
 
             async def rollback() -> None:
@@ -1714,14 +1659,6 @@ class InboundServer:
                     logger.exception(
                         "Failed to clean partially started inbound runner", exc_info=cleanup_exc
                     )
-                if self._owns_event_dispatcher:
-                    try:
-                        await self._event_dispatcher.stop()
-                    except BaseException as cleanup_exc:
-                        logger.exception(
-                            "Failed to stop partially started inbound dispatcher",
-                            exc_info=cleanup_exc,
-                        )
                 self._site             = site if site_failed else None
                 self._runner           = runner if runner_failed else None
                 self._running          = False
@@ -1824,13 +1761,8 @@ class InboundServer:
                 _ws, _auth, queued_event = self._ws_event_queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
-            if isinstance(queued_event, _InboundEventTicket):
-                self._event_dispatcher.discard(queued_event)
+            self._event_dispatcher.discard(queued_event)
             self._ws_event_queue.task_done()
-
-    async def _stop_owned_dispatcher(self) -> None:
-        self._event_dispatcher._drain_timeout_seconds = self._handler_drain_timeout_seconds
-        await self._event_dispatcher.stop()
 
     async def _stop_locked(self) -> None:
         """停止入站服务器，并在单个清理步骤失败时继续收敛其余资源。"""
@@ -1871,8 +1803,6 @@ class InboundServer:
 
         await cleanup_step("WebSocket workers", self._stop_ws_workers)
         self._discard_queued_ws_events()
-        if self._owns_event_dispatcher:
-            await cleanup_step("event dispatcher", self._stop_owned_dispatcher)
         if not self._ws_close_tasks and not any(
             not task.done() for task in self._active_handler_tasks
         ):
@@ -1903,27 +1833,28 @@ class InboundServer:
     ) -> list[dict[str, Any]]:
         if not self._accepting_events:
             raise InboundEventUnavailable("inbound server is shutting down")
-        task = asyncio.current_task()
-        if task is not None:
-            self._active_handler_tasks.add(task)
-        try:
+        with self._tracked_handler_task():
             guard = (
                 None if auth_generation is None else partial(self._auth_is_current, auth_generation)
             )
             return await self._event_dispatcher.dispatch(payload, auth_guard=guard)
-        finally:
-            if task is not None:
-                self._active_handler_tasks.discard(task)
 
     async def _await_admitted_event(
         self,
         ticket: _InboundEventTicket,
     ) -> list[dict[str, Any]]:
+        with self._tracked_handler_task():
+            return await self._event_dispatcher.wait(ticket)
+
+    @contextlib.contextmanager
+    def _tracked_handler_task(self) -> Iterator[None]:
+        """把当前任务登记为在途处理器，退出时撤销；停止时按这份登记等它们收尾。"""
+
         task = asyncio.current_task()
         if task is not None:
             self._active_handler_tasks.add(task)
         try:
-            return await self._event_dispatcher.wait(ticket)
+            yield
         finally:
             if task is not None:
                 self._active_handler_tasks.discard(task)
@@ -1948,14 +1879,6 @@ def _parse_ws_uri(value: Any, *, default_path: str = "/ws") -> tuple[str, int, s
         return None
     path = parts.path or default_path
     return parts.hostname, int(parts.port), path
-
-
-def _parse_non_negative_int(value: Any, *, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = int(default)
-    return max(0, parsed)
 
 
 def _parse_positive_int(value: Any, *, default: int, min_value: int = 1) -> int:
@@ -2020,7 +1943,7 @@ def _parse_inbound_manager_spec(
         default   = default_ws_max_workers,
         min_value = 1,
     )
-    ws_queue_size = _parse_non_negative_int(
+    ws_queue_size = _parse_positive_int(
         config.get("ws_queue_size", default_ws_queue_size),
         default=default_ws_queue_size,
     )
@@ -2099,7 +2022,7 @@ class InboundManager:
             default   = DEFAULT_INBOUND_WS_MAX_WORKERS,
             min_value = 1,
         )
-        self._ws_queue_size = _parse_non_negative_int(
+        self._ws_queue_size = _parse_positive_int(
             ws_queue_size,
             default=DEFAULT_INBOUND_WS_QUEUE_SIZE,
         )
@@ -2403,7 +2326,7 @@ class InboundManager:
             self._handler,
             max_workers           = self._ws_max_workers,
             queue_size            = self._ws_queue_size,
-            drain_timeout_seconds = 5.0,
+            drain_timeout_seconds = _DRAIN_TIMEOUT_SECONDS,
             on_admit              = self._on_event_admitted,
         )
         self._event_dispatcher = dispatcher

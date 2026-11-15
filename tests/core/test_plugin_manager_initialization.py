@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
+from core.models import _CAPABILITY_CONTRACTS
 from tests.helpers.plugin_manager_test_support import (
     ConcurrentFuture,
     LoadedPlugin,
@@ -20,54 +20,14 @@ from tests.helpers.plugin_manager_test_support import (
     PluginPathError,
     _build_definition,
     _build_manager,
-    _FatalLifecycleError,
     _write_runtime_manifest,
-    call_plugin_callback,
+    load_plugin_dir,
     textwrap,
 )
 
 _isolate_process_global_plugin_import_state = (
     _fixture_support._isolate_process_global_plugin_import_state
 )
-
-
-def test_load_all_is_sorted_and_isolates_one_bad_directory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = _build_manager(tmp_path)
-    for name in ("zeta", "broken", "unreadable", "alpha"):
-        (manager.plugins_dir / name).mkdir()
-    loaded: list[str]   = []
-    original_classifier = manager._is_plugin_dir
-
-    def classify(path: Path) -> bool:
-        if path.name == "unreadable":
-            raise OSError("metadata unavailable")
-        return original_classifier(path)
-
-    def load(path: Path) -> None:
-        loaded.append(path.name)
-        if path.name == "broken":
-            raise ValueError("plugin-local failure")
-
-    monkeypatch.setattr(manager, "_is_plugin_dir", classify)
-    monkeypatch.setattr(manager, "load_plugin", load)
-
-    manager.load_all()
-
-    assert loaded == ["alpha", "broken", "zeta"]
-
-
-@pytest.mark.asyncio
-async def test_load_all_uses_initialization_barrier_inside_event_loop(tmp_path: Path) -> None:
-    manager                 = _build_manager(tmp_path)
-    manager._load_all_async = AsyncMock()
-
-    manager.load_all()
-    await manager.wait_inits()
-
-    manager._load_all_async.assert_awaited_once()
 
 
 def test_load_module_rejects_same_file_under_noncanonical_alias(tmp_path: Path):
@@ -222,147 +182,6 @@ def test_purge_uses_exact_raw_parent_bindings_without_module_hooks(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("shutdown_fails", [False, True])
-async def test_wait_inits_rolls_back_never_published_plugin_once(
-    tmp_path: Path,
-    shutdown_fails: bool,
-) -> None:
-    manager        = _build_manager(tmp_path)
-    definition     = _build_definition()
-    module         = ModuleType("plugins.demo.main")
-    shutdown_calls = 0
-
-    async def shutdown(context=None) -> None:
-        nonlocal shutdown_calls
-        shutdown_calls += 1
-        if shutdown_fails:
-            raise RuntimeError("cleanup failed")
-
-    module.shutdown = shutdown
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    state = {"resource": object()}
-
-    async def fail_init() -> None:
-        raise RuntimeError("init failed after acquiring resource")
-
-    init_task = asyncio.create_task(fail_init())
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    manager._execution_gates["demo"]      = gate
-    manager._plugin_states["demo"]        = state
-
-    try:
-        await manager.wait_inits()
-
-        assert shutdown_calls == 1
-        assert gate.closed is True
-        assert not manager._init_tasks
-        assert not manager._init_task_plugins
-        assert not manager._pending_plugins
-        assert manager.router.resolve("demo") is None
-        if shutdown_fails:
-            assert manager._plugins["demo"].module is module
-            assert manager._plugin_states["demo"] is state
-            assert manager._execution_gates["demo"] is gate
-            assert "demo" in manager._quarantined_plugins
-            plugin_dir = manager.plugins_dir / "demo"
-            plugin_dir.mkdir(exist_ok=True)
-            manager._load_module = Mock()
-            manager.load_plugin(plugin_dir)
-            await manager.reconcile_plugins()
-            manager._load_module.assert_not_called()
-            assert manager._plugins["demo"].module is module
-            assert manager._plugin_states["demo"] is state
-            assert manager._execution_gates["demo"] is gate
-        else:
-            assert "demo" not in manager._plugins
-            assert "demo" not in manager._plugin_states
-            assert "demo" not in manager._execution_gates
-            assert "demo" not in manager._quarantined_plugins
-    finally:
-        if "demo" in manager._plugins:
-            module.shutdown = AsyncMock()
-            manager._quarantined_plugins.discard("demo")
-            await manager.unload_plugin("demo")
-        else:
-            await gate.close()
-            manager._plugin_states.pop("demo", None)
-            manager._execution_gates.pop("demo", None)
-
-
-@pytest.mark.asyncio
-async def test_failed_init_with_undrained_sync_work_remains_quarantined(
-    tmp_path: Path,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    gate       = PluginExecutionGate(
-        "parallel",
-        plugin_name = "demo",
-        policy      = PluginExecutionPolicy(
-            timeout_seconds       = 0.1,
-            drain_timeout_seconds = 0.1,
-        ),
-    )
-    started        = threading.Event()
-    release        = threading.Event()
-    finished       = threading.Event()
-    shutdown_calls = 0
-
-    def blocking_init_work() -> None:
-        started.set()
-        release.wait(timeout=2)
-        finished.set()
-
-    async def shutdown(context=None) -> None:
-        nonlocal shutdown_calls
-        shutdown_calls += 1
-
-    module.shutdown = shutdown
-
-    async def initialize() -> None:
-        await gate.run(lambda: call_plugin_callback(blocking_init_work))
-
-    init_task = asyncio.create_task(initialize())
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    state                                 = {"resource": object()}
-    manager._plugin_states["demo"]        = state
-    manager._execution_gates["demo"]      = gate
-
-    try:
-        await manager.wait_inits()
-
-        assert started.is_set()
-        assert shutdown_calls == 0
-        assert manager._plugins["demo"].module is module
-        assert manager._plugin_states["demo"] is state
-        assert manager._execution_gates["demo"] is gate
-        assert gate.closed is True
-        assert "demo" in manager._quarantined_plugins
-
-        plugin_dir = manager.plugins_dir / "demo"
-        plugin_dir.mkdir()
-        manager._load_module = Mock()
-        manager.load_plugin(plugin_dir)
-        await manager.reconcile_plugins()
-        manager._load_module.assert_not_called()
-        assert manager._plugins["demo"].module is module
-    finally:
-        release.set()
-        assert await asyncio.to_thread(finished.wait, 1)
-        await asyncio.sleep(0)
-        manager._quarantined_plugins.discard("demo")
-        await manager.unload_plugin("demo")
-
-    assert shutdown_calls == 1
-    assert "demo" not in manager._plugins
-
-
-@pytest.mark.asyncio
 async def test_undrained_partial_import_cannot_downgrade_restart_only_ledger(
     tmp_path: Path,
 ) -> None:
@@ -405,424 +224,8 @@ async def test_undrained_partial_import_cannot_downgrade_restart_only_ledger(
     module.shutdown.assert_awaited_once()
 
 
-def test_load_plugin_never_overwrites_quarantined_generation(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    (plugin_dir / "plugin.json").write_text(
-        '{"name":"demo","entry":"main.py","enabled":true}',
-        encoding="utf-8",
-    )
-    (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-    quarantined = LoadedPlugin(
-        definition = _build_definition(),
-        module     = ModuleType("plugins.demo.main"),
-        mtime      = 0.0,
-        execution_gate=PluginExecutionGate("parallel", plugin_name="demo"),
-    )
-    manager._plugins["demo"]         = quarantined
-    manager._execution_gates["demo"] = quarantined.execution_gate
-    manager._quarantined_plugins.add("demo")
-    manager._load_module = Mock()
-
-    manager.load_plugin(plugin_dir)
-
-    assert manager._plugins["demo"] is quarantined
-    manager._load_module.assert_not_called()
-
-
-def test_load_plugin_fingerprints_before_importing_or_starting_init(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    manager._load_definition = Mock(return_value=definition)
-    manager._authorize_plugin_snapshot = Mock(side_effect=OSError("stat failed"))
-    manager._load_module = Mock(return_value=(ModuleType("plugins.demo.main"), None))
-
-    manager.load_plugin(plugin_dir)
-
-    manager._load_module.assert_not_called()
-    assert not manager._init_tasks
-    assert not manager._init_task_plugins
-    assert not manager._pending_plugins
-    assert "demo" not in manager._plugins
-    assert "demo" not in manager._execution_gates
-    assert "demo" not in manager._plugin_states
-
-
-def test_sync_load_preserves_original_fatal_over_ordinary_cleanup_failure(
-    tmp_path: Path,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    expected   = _FatalLifecycleError("fatal import")
-    manager._load_definition = Mock(return_value=definition)
-    manager._authorize_plugin_snapshot = Mock(return_value=1.0)
-
-    def fail_load(_plugin_dir, _definition, *, transaction):
-        transaction.module = module
-        raise expected
-
-    manager._load_module = Mock(side_effect=fail_load)
-    manager._rollback_pending_plugin = AsyncMock(side_effect=RuntimeError("cleanup failed"))
-
-    with pytest.raises(_FatalLifecycleError) as raised:
-        manager.load_plugin(plugin_dir)
-
-    assert raised.value is expected
-    assert isinstance(raised.value.__cause__, RuntimeError)
-
-
 @pytest.mark.asyncio
-async def test_load_plugin_rolls_back_no_init_publication_failure(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition          = _build_definition()
-    definition.commands = [
-        {"name": "demo", "triggers": ["demo"], "help": "demo"},
-    ]
-    module         = ModuleType("plugins.demo.main")
-    shutdown_calls = 0
-
-    async def handle(command, args, event, context):
-        return []
-
-    async def shutdown(context=None) -> None:
-        nonlocal shutdown_calls
-        shutdown_calls += 1
-
-    module.handle   = handle
-    module.shutdown = shutdown
-    manager._load_definition = Mock(return_value=definition)
-    manager._authorize_plugin_snapshot = Mock(return_value=1.0)
-    manager._load_module = Mock(return_value=(module, None))
-    replace_plugin = manager.router.replace_plugin
-    failed         = False
-
-    def fail_first_publish(name, specs):
-        nonlocal failed
-        previous = replace_plugin(name, specs)
-        if specs and not failed:
-            failed = True
-            raise RuntimeError("router commit failed")
-        return previous
-
-    manager.router.replace_plugin = Mock(side_effect=fail_first_publish)
-
-    manager.load_plugin(plugin_dir)
-    await manager.wait_inits()
-
-    assert shutdown_calls == 1
-    assert manager.router.resolve("demo") is None
-    assert "demo" not in manager._plugins
-    assert "demo" not in manager._execution_gates
-    assert "demo" not in manager._plugin_states
-    assert not manager._pending_finalizers
-
-
-@pytest.mark.asyncio
-async def test_wait_inits_rolls_back_when_publication_fails(tmp_path: Path) -> None:
-    manager        = _build_manager(tmp_path)
-    definition     = _build_definition()
-    module         = ModuleType("plugins.demo.main")
-    shutdown_calls = 0
-
-    async def shutdown(context=None) -> None:
-        nonlocal shutdown_calls
-        shutdown_calls += 1
-
-    module.shutdown = shutdown
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-
-    async def successful_init() -> None:
-        return None
-
-    init_task = asyncio.create_task(successful_init())
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    manager._execution_gates["demo"]      = gate
-    manager._plugin_states["demo"]        = {"resource": object()}
-    manager._register_loaded_plugin = Mock(side_effect=RuntimeError("publish failed"))
-
-    await manager.wait_inits()
-
-    assert shutdown_calls == 1
-    assert gate.closed is True
-    assert "demo" not in manager._plugins
-    assert "demo" not in manager._execution_gates
-    assert "demo" not in manager._plugin_states
-    assert manager.router.resolve("demo") is None
-
-
-@pytest.mark.asyncio
-async def test_one_publication_failure_does_not_block_other_init_commits(
-    tmp_path: Path,
-) -> None:
-    manager            = _build_manager(tmp_path)
-    bad_definition     = _build_definition("bad")
-    good_definition    = _build_definition("good")
-    bad_module         = ModuleType("plugins.bad.main")
-    good_module        = ModuleType("plugins.good.main")
-    bad_shutdown_calls = 0
-
-    async def bad_shutdown(context=None) -> None:
-        nonlocal bad_shutdown_calls
-        bad_shutdown_calls += 1
-
-    async def successful_init() -> None:
-        return None
-
-    bad_module.shutdown = bad_shutdown
-    original_register   = manager._register_loaded_plugin
-
-    def publish(definition, module, mtime, **kwargs) -> None:
-        if definition.name == "bad":
-            raise RuntimeError("publish failed")
-        original_register(definition, module, mtime, **kwargs)
-
-    manager._register_loaded_plugin = Mock(side_effect=publish)
-    for definition, module in (
-        (bad_definition, bad_module),
-        (good_definition, good_module),
-    ):
-        task = asyncio.create_task(successful_init())
-        manager._init_tasks.append(task)
-        manager._init_task_plugins[task]          = definition.name
-        manager._pending_plugins[task]            = (definition, module, 0.0)
-        manager._execution_gates[definition.name] = PluginExecutionGate(
-            "parallel", plugin_name=definition.name
-        )
-        manager._plugin_states[definition.name] = {}
-
-    await manager.wait_inits()
-
-    assert bad_shutdown_calls == 1
-    assert "bad" not in manager._plugins
-    assert manager._plugins["good"].module is good_module
-    assert not manager._init_task_plugins
-    assert not manager._pending_plugins
-    assert not manager._pending_finalizers
-
-    await manager.unload_plugin("good")
-
-
-@pytest.mark.asyncio
-async def test_concurrent_wait_inits_share_the_same_inflight_batch(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    init_started = asyncio.Event()
-    release_init = asyncio.Event()
-
-    async def initialize() -> None:
-        init_started.set()
-        await release_init.wait()
-
-    init_task = asyncio.create_task(initialize())
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    manager._plugin_states["demo"]        = {}
-    manager._execution_gates["demo"]      = gate
-
-    first_waiter = asyncio.create_task(manager.wait_inits())
-    await asyncio.wait_for(init_started.wait(), timeout=1)
-    second_waiter = asyncio.create_task(manager.wait_inits())
-    await asyncio.sleep(0)
-
-    assert second_waiter.done() is False
-    assert "demo" not in manager._plugins
-
-    release_init.set()
-    await asyncio.gather(first_waiter, second_waiter)
-
-    assert manager._plugins["demo"].module is module
-    assert manager._execution_gates["demo"].closed is False
-    await manager.unload_plugin("demo")
-
-
-@pytest.mark.asyncio
-async def test_completed_fatal_finalizer_is_retained_until_wait_inits_observes_it(
-    tmp_path: Path,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    manager._rollback_pending_plugin = AsyncMock(side_effect=_FatalLifecycleError("fatal cleanup"))
-
-    manager._start_pending_rollback((definition, module, 0.0))
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert "demo" in manager._pending_finalizers
-    with pytest.raises(PluginLifecycleFatalError) as raised:
-        await manager.wait_inits()
-    assert isinstance(raised.value.original, _FatalLifecycleError)
-    assert str(raised.value.original) == "fatal cleanup"
-    assert not manager._pending_finalizers
-
-
-@pytest.mark.asyncio
-async def test_wait_inits_waits_all_finalizers_before_raising_fatal(tmp_path: Path) -> None:
-    manager              = _build_manager(tmp_path)
-    release_slow_cleanup = asyncio.Event()
-
-    async def rollback(definition, _module, _mtime, **_kwargs) -> bool:
-        if definition.name == "fatal":
-            raise _FatalLifecycleError("fatal cleanup")
-        await release_slow_cleanup.wait()
-        return True
-
-    manager._rollback_pending_plugin = AsyncMock(side_effect=rollback)
-    manager._start_pending_rollback(
-        (_build_definition("fatal"), ModuleType("plugins.fatal.main"), 0.0)
-    )
-    manager._start_pending_rollback(
-        (_build_definition("slow"), ModuleType("plugins.slow.main"), 0.0)
-    )
-
-    waiter = asyncio.create_task(manager.wait_inits())
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-    assert waiter.done() is False
-
-    release_slow_cleanup.set()
-    with pytest.raises(PluginLifecycleFatalError) as raised:
-        await waiter
-    assert isinstance(raised.value.original, _FatalLifecycleError)
-    assert str(raised.value.original) == "fatal cleanup"
-    assert not manager._pending_finalizers
-
-
-@pytest.mark.asyncio
-async def test_cancelling_wait_inits_observer_does_not_cancel_shared_batch(
-    tmp_path: Path,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    init_started = asyncio.Event()
-    release_init = asyncio.Event()
-
-    async def initialize() -> None:
-        init_started.set()
-        await release_init.wait()
-
-    init_task = asyncio.create_task(initialize())
-    manager._init_tasks.append(init_task)
-    manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task]   = (definition, module, 0.0)
-    manager._plugin_states["demo"]        = {}
-    manager._execution_gates["demo"]      = gate
-
-    owner = asyncio.create_task(manager.wait_inits())
-    await asyncio.wait_for(init_started.wait(), timeout=1)
-    observer = asyncio.create_task(manager.wait_inits())
-    await asyncio.sleep(0)
-    observer.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await observer
-
-    assert init_task.cancelled() is False
-    assert owner.done() is False
-    release_init.set()
-    await asyncio.wait_for(owner, timeout=1)
-
-    assert manager._plugins["demo"].module is module
-    assert manager._execution_gates["demo"].closed is False
-    await manager.unload_plugin("demo")
-
-
-@pytest.mark.asyncio
-async def test_unload_claims_later_init_while_earlier_rollback_is_slow(
-    tmp_path: Path,
-) -> None:
-    manager              = _build_manager(tmp_path)
-    bad_definition       = _build_definition("bad")
-    good_definition      = _build_definition("good")
-    bad_module           = ModuleType("plugins.bad.main")
-    good_module          = ModuleType("plugins.good.main")
-    bad_shutdown_started = asyncio.Event()
-    release_bad_shutdown = asyncio.Event()
-    shutdown_calls       = {"bad": 0, "good": 0}
-
-    async def bad_shutdown(context=None) -> None:
-        shutdown_calls["bad"] += 1
-        bad_shutdown_started.set()
-        await release_bad_shutdown.wait()
-
-    async def good_shutdown(context=None) -> None:
-        shutdown_calls["good"] += 1
-
-    bad_module.shutdown  = bad_shutdown
-    good_module.shutdown = good_shutdown
-    original_register    = manager._register_loaded_plugin
-
-    def publish(definition, module, mtime, **kwargs) -> None:
-        if definition.name == "bad":
-            raise RuntimeError("bad publish failed")
-        original_register(definition, module, mtime, **kwargs)
-
-    manager._register_loaded_plugin = Mock(side_effect=publish)
-    for definition, module in (
-        (bad_definition, bad_module),
-        (good_definition, good_module),
-    ):
-        init_task = asyncio.create_task(asyncio.sleep(0))
-        manager._init_tasks.append(init_task)
-        manager._init_task_plugins[init_task]     = definition.name
-        manager._pending_plugins[init_task]       = (definition, module, 0.0)
-        manager._plugin_states[definition.name]   = {}
-        manager._execution_gates[definition.name] = PluginExecutionGate(
-            "parallel",
-            plugin_name=definition.name,
-        )
-
-    waiter = asyncio.create_task(manager.wait_inits())
-    await asyncio.wait_for(bad_shutdown_started.wait(), timeout=1)
-
-    await manager.unload_plugin("good")
-    assert "good" not in manager.list_runtime_plugins()
-
-    release_bad_shutdown.set()
-    await waiter
-
-    assert shutdown_calls == {"bad": 1, "good": 1}
-    assert "bad" not in manager.list_runtime_plugins()
-    assert "good" not in manager.list_runtime_plugins()
-    assert not manager._init_task_plugins
-    assert not manager._pending_plugins
-    assert not manager._pending_finalizers
-
-
-@pytest.mark.asyncio
-async def test_wait_inits_logs_timeout_from_async_init(tmp_path: Path, caplog):
-    manager = _build_manager(tmp_path)
-
-    async def timeout():
-        raise TimeoutError()
-
-    task = asyncio.create_task(timeout())
-    manager._init_tasks.append(task)
-    manager._init_task_plugins[task] = "demo"
-    manager.unload_plugin            = AsyncMock()
-
-    with caplog.at_level("WARNING"):
-        await manager.wait_inits()
-
-    assert "Plugin demo init timed out" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_load_plugin_registers_after_async_init_completes(tmp_path: Path):
+async def test_plugin_is_published_after_async_init_completes(tmp_path: Path):
     manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
@@ -862,15 +265,47 @@ async def test_load_plugin_registers_after_async_init_completes(tmp_path: Path):
         encoding="utf-8",
     )
 
-    manager.load_plugin(plugin_dir)
-    assert "demo" not in manager._plugins
+    await load_plugin_dir(manager, plugin_dir)
 
-    await manager.wait_inits()
-
-    assert "demo" in manager._plugins
+    assert manager._plugins["demo"].module.READY is True
     resolved = manager.router.resolve("demo")
     assert resolved is not None
     assert resolved[0].execution_gate is manager._plugins["demo"].execution_gate
+
+
+@pytest.mark.asyncio
+async def test_init_context_carries_the_declarations_of_the_generation_being_loaded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """init 拿到的能力来自正在加载的这一代：首次加载时不为空，热重载时不是上一代的。"""
+
+    # 能力按插件名放行：让这个测试插件可以声明一项。
+    monkeypatch.setitem(_CAPABILITY_CONTRACTS, "config_subscription", frozenset({"declares"}))
+    manager                          = _build_manager(tmp_path)
+    issued: list[tuple[object, ...]] = []
+    manager.context_factory          = lambda *args: issued.append(args) or object()
+    plugin_dir                       = manager.plugins_dir / "declares"
+    plugin_dir.mkdir()
+    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
+    (plugin_dir / "main.py").write_text("async def init(context):\n    pass\n", encoding="utf-8")
+
+    def write_manifest(capabilities: str) -> None:
+        (plugin_dir / "plugin.json").write_text(
+            '{"name":"declares","version":"1.0.0","entry":"main.py","commands":[],'
+            f'"schedule":[],"concurrency":"parallel","enabled":true,"capabilities":{capabilities}}}',
+            encoding="utf-8",
+        )
+
+    write_manifest('["config_subscription"]')
+    await load_plugin_dir(manager, plugin_dir)
+
+    assert [args[8] for args in issued] == [frozenset({"config_subscription"})]
+
+    write_manifest("[]")
+    await manager.reload_plugin("declares")
+
+    assert [args[8] for args in issued] == [frozenset({"config_subscription"}), frozenset()]
 
 
 @pytest.mark.asyncio
@@ -892,8 +327,7 @@ async def test_async_init_with_kwargs_does_not_receive_positional_context(tmp_pa
         encoding="utf-8",
     )
 
-    manager.load_plugin(plugin_dir)
-    await manager.wait_inits()
+    await load_plugin_dir(manager, plugin_dir)
 
     assert manager._plugins["kwargs_init"].module.INIT_KWARGS == {}
 
@@ -924,69 +358,15 @@ async def test_async_init_system_exit_rolls_back_before_rethrow(tmp_path: Path) 
     sys.modules[tracker.__name__] = tracker
 
     try:
-        manager.load_plugin(plugin_dir)
         with pytest.raises(PluginLifecycleFatalError) as raised:
-            await manager.wait_inits()
+            await manager.load_all()
         assert isinstance(raised.value.original, SystemExit)
         assert str(raised.value.original) == "fatal init"
 
         assert tracker.shutdowns == 1
         assert "fatal_init" not in manager.list_runtime_plugins()
-        assert not manager._pending_plugins
-        assert not manager._pending_finalizers
     finally:
         manager._purge_plugin_modules("fatal_init")
-        sys.modules.pop(tracker.__name__, None)
-
-
-@pytest.mark.asyncio
-async def test_late_fatal_after_init_timeout_outranks_timeout_after_cleanup(
-    tmp_path: Path,
-) -> None:
-    import sys
-
-    manager = _build_manager(tmp_path)
-    manager.configure_execution(
-        {
-            "timeout_seconds"      : 0.01,
-            "drain_timeout_seconds": 0.2,
-        }
-    )
-    plugin_dir = manager.plugins_dir / "late_fatal"
-    plugin_dir.mkdir()
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    (plugin_dir / "plugin.json").write_text(
-        '{"name":"late_fatal","version":"1.0.0","entry":"main.py",'
-        '"commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
-        encoding="utf-8",
-    )
-    (plugin_dir / "main.py").write_text(
-        "import asyncio\n"
-        "import xiaoqing_late_fatal_tracker as tracker\n"
-        "async def init(context=None):\n"
-        "    try:\n"
-        "        await asyncio.Event().wait()\n"
-        "    except asyncio.CancelledError:\n"
-        "        raise SystemExit('late fatal')\n"
-        "async def shutdown(context=None):\n"
-        "    tracker.shutdowns += 1\n",
-        encoding="utf-8",
-    )
-    tracker                       = ModuleType("xiaoqing_late_fatal_tracker")
-    tracker.shutdowns             = 0
-    sys.modules[tracker.__name__] = tracker
-
-    try:
-        manager.load_plugin(plugin_dir)
-        with pytest.raises(PluginLifecycleFatalError) as raised:
-            await manager.wait_inits()
-        assert isinstance(raised.value.original, SystemExit)
-        assert str(raised.value.original) == "late fatal"
-
-        assert tracker.shutdowns == 1
-        assert "late_fatal" not in manager.list_runtime_plugins()
-    finally:
-        manager._purge_plugin_modules("late_fatal")
         sys.modules.pop(tracker.__name__, None)
 
 
@@ -1017,14 +397,12 @@ async def test_top_level_system_exit_is_deferred_until_rollback_finishes(
     sys.modules[tracker.__name__] = tracker
 
     try:
-        manager.load_plugin(plugin_dir)
-        gate = manager._execution_gates["fatal_import"]
-        assert gate.closed is True
-
         with pytest.raises(PluginLifecycleFatalError) as raised:
-            await manager.wait_inits()
+            await manager.load_all()
         assert isinstance(raised.value.original, SystemExit)
         assert str(raised.value.original) == "fatal import"
+        gate = manager._execution_gates["fatal_import"]
+        assert gate.closed is True
 
         assert tracker.shutdowns == 1
         assert "fatal_import" in manager._restart_required_plugins
@@ -1075,40 +453,3 @@ async def test_shutdown_system_exit_quarantines_before_rethrow(tmp_path: Path) -
     assert plugin.shutdown_attempted is True
     assert plugin.shutdown_completed is False
     assert "demo" in manager._quarantined_plugins
-
-
-@pytest.mark.asyncio
-async def test_wait_inits_cannot_steal_live_unload_deferred_fatal(tmp_path: Path) -> None:
-    manager          = _build_manager(tmp_path)
-    definition       = _build_definition()
-    shutdown_started = asyncio.Event()
-    release_shutdown = asyncio.Event()
-    module           = ModuleType("plugins.demo.main")
-
-    async def shutdown(context=None) -> None:
-        shutdown_started.set()
-        await release_shutdown.wait()
-
-    module.shutdown = shutdown
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    expected = SystemExit("owned by demo unload")
-    gate._deferred_fatal_errors.append(expected)
-    manager._plugins["demo"] = LoadedPlugin(
-        definition     = definition,
-        module         = module,
-        mtime          = 0.0,
-        execution_gate = gate,
-    )
-    manager._execution_gates["demo"] = gate
-
-    unload_task = asyncio.create_task(manager.unload_plugin("demo"))
-    await asyncio.wait_for(shutdown_started.wait(), timeout=1)
-
-    await manager.wait_inits()
-    assert unload_task.done() is False
-
-    release_shutdown.set()
-    with pytest.raises(PluginLifecycleFatalError) as raised:
-        await unload_task
-    assert raised.value.original is expected
-    assert "demo" not in manager.list_runtime_plugins()

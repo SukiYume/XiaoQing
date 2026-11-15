@@ -11,6 +11,7 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import segments
 
 from .arxiv_summary import enqueue_or_replay_arxiv_summary
+from .config import MAX_INT64
 from .manager import CodexQueueManager, get_manager, shutdown_existing_manager
 
 HELP_TEXT = """Codex 会话队列:
@@ -34,7 +35,6 @@ _SUBCOMMANDS = {
     **dict.fromkeys(("delete", "del", "remove", "rm", "删除"), "delete"),
 }
 _POSITIVE_INTEGER_RE = re.compile(r"[1-9][0-9]{0,18}")
-_MAX_JOB_ID          = 2**63 - 1
 
 
 def _message(text: str) -> list[dict[str, Any]]:
@@ -148,7 +148,7 @@ def _parse_job_id(value: str) -> int | None:
     if _POSITIVE_INTEGER_RE.fullmatch(value) is None:
         return None
     job_id = int(value)
-    return job_id if job_id <= _MAX_JOB_ID else None
+    return job_id if job_id <= MAX_INT64 else None
 
 
 async def _handle_create(

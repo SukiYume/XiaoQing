@@ -1,15 +1,11 @@
-"""定义一次回复规划产生的不可变动作数据。"""
+"""定义一次回复规划交给生成的不可变数据。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class PlannedAction:
-    action       : str
-    think_level  : int
-    reasoning    : str
-    question     : str
-    unknown_words: list[str]
-    params       : dict[str, object] = field(default_factory=dict)
+    think_level: int
+    reasoning  : str

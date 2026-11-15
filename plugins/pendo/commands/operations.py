@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime, tzinfo
+from datetime import datetime
 from typing import Any, Final, cast
 
 from core.args import parse, parse_int
@@ -13,6 +12,7 @@ from ..config import PendoConfig
 from ..models.item import EventItem, Item, TaskItem, get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
+from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import error_result, success_result
 from ..utils.formatters import ItemFormatter
 from ..utils.identifiers import public_id
@@ -20,24 +20,12 @@ from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
 
 JsonObject    = dict[str, Any]
 CommandResult = JsonObject
-ResultBuilder = Callable[[str], CommandResult]
-
-# 依赖模块在局部严格 Mypy 中按边界处理；一次标注后避免每个返回点重复 cast。
-_error_result  : Final[ResultBuilder] = cast(ResultBuilder, error_result)
-_success_result: Final[ResultBuilder] = cast(ResultBuilder, success_result)
 
 _CONFIRM_ICONS: Final = {
     "event": "🗓️",
     "task" : "📝",
     "note" : "📒",
     "diary": "📔",
-}
-_ITEM_TYPE_NAMES: Final = {
-    "event" : "日程",
-    "task"  : "待办",
-    "note"  : "笔记",
-    "diary" : "日记",
-    "ledger": "账目",
 }
 _EDIT_ACTION_NAMES: Final = {
     "edit_event" : "日程",
@@ -46,18 +34,6 @@ _EDIT_ACTION_NAMES: Final = {
     "edit_diary" : "日记",
     "edit_ledger": "账目",
 }
-
-
-def _parse_remind_time_for_compare(
-    remind_time: str,
-    timezone: tzinfo,
-) -> datetime | None:
-    """按用户时区解析提醒；损坏的旧值由调用方忽略。"""
-
-    try:
-        return cast(datetime, TimezoneHelper.parse(remind_time, timezone))
-    except (TypeError, ValueError):
-        return None
 
 
 def _confirmed_item_message(item: Item, item_id: str, now: datetime) -> str:
@@ -69,7 +45,7 @@ def _confirmed_item_message(item: Item, item_id: str, now: datetime) -> str:
     timezone     = now.tzinfo or TimezoneHelper.DEFAULT_TZ
     future_count = 0
     for remind_time in remind_times:
-        remind_at = _parse_remind_time_for_compare(remind_time, timezone)
+        remind_at = TimezoneHelper.try_parse(remind_time, timezone)
         if remind_at is not None and remind_at > now:
             future_count += 1
     reminder_note = f"后续还有 {future_count} 个提醒" if future_count else "没有更多提醒了"
@@ -89,12 +65,12 @@ async def handle_confirm(
 
     parsed = parse(args)
     if len(parsed) != 1 or parsed.options:
-        return _error_result("❌ 请指定一个要确认的条目ID\n\n例如: /pendo confirm 3f2a91c4")
+        return error_result("❌ 请指定一个要确认的条目ID\n\n例如: /pendo confirm 3f2a91c4")
     item_id  = parsed.first
     database = db or reminder_service.db
     item     = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
     if item is None:
-        return _error_result(f"❌ 未找到条目: {item_id}")
+        return error_result(f"❌ 未找到条目: {item_id}")
     resolved_id = str(item.id)
 
     target_remind_time = cast(
@@ -105,7 +81,7 @@ async def handle_confirm(
         ),
     )
     if target_remind_time is None:
-        return _error_result("未找到待确认的已发送提醒")
+        return error_result("未找到待确认的已发送提醒")
     result = cast(
         JsonObject,
         await run_sync(
@@ -117,9 +93,9 @@ async def handle_confirm(
         ),
     )
     if result.get("status") != "success":
-        return _error_result(str(result.get("message") or "确认失败"))
+        return error_result(str(result.get("message") or "确认失败"))
 
-    return _success_result(
+    return success_result(
         _confirmed_item_message(
             item,
             resolved_id,
@@ -151,14 +127,12 @@ async def _apply_snooze(
     else:
         other_times = []
         for remind_time in item.remind_times:
-            remind_at = _parse_remind_time_for_compare(remind_time, timezone)
+            remind_at = TimezoneHelper.try_parse(remind_time, timezone)
             if remind_at is not None and remind_at > user_now:
                 other_times.append(remind_time)
     new_remind_times = list(dict.fromkeys([*other_times, new_remind_time]))
     latest = datetime.max.replace(tzinfo=timezone)
-    new_remind_times.sort(
-        key=lambda value: _parse_remind_time_for_compare(value, timezone) or latest
-    )
+    new_remind_times.sort(key=lambda value: TimezoneHelper.try_parse(value, timezone) or latest)
 
     updated = cast(
         bool,
@@ -171,7 +145,7 @@ async def _apply_snooze(
         ),
     )
     if not updated:
-        return _error_result("条目已变化或不存在，请刷新后重试")
+        return error_result("条目已变化或不存在，请刷新后重试")
 
     # 没有已发送日志时不能传 None，否则数据库会确认该条目的全部未确认提醒。
     if snoozed_remind_time:
@@ -186,9 +160,9 @@ async def _apply_snooze(
             ),
         )
         if confirm_result.get("status") != "success":
-            return _error_result("提醒时间已更新，但原提醒状态记录失败")
+            return error_result("提醒时间已更新，但原提醒状态记录失败")
     shown = ItemFormatter.format_datetime(new_remind_time, "%m月%d日 %H:%M", tz=timezone)
-    return _success_result(f"已将提醒延后到: {shown}")
+    return success_result(f"已将提醒延后到: {shown}")
 
 
 async def handle_snooze(
@@ -200,26 +174,26 @@ async def handle_snooze(
 
     parsed = parse(args)
     if not parsed:
-        return _error_result(
+        return error_result(
             "请指定要延后的条目ID和时间，例如: /pendo snooze 3f2a91c4 10m 或 /pendo snooze 3f2a91c4 19:00"
         )
     if len(parsed) != 2 or parsed.options:
-        return _error_result("请指定一个条目ID和延后时间，例如: 3f2a91c4 10m")
+        return error_result("请指定一个条目ID和延后时间，例如: 3f2a91c4 10m")
     item_id  = parsed.first
     time_arg = parsed.second
 
     database = reminder_service.db
     item     = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
     if item is None:
-        return _error_result(f"未找到条目: {item_id}")
+        return error_result(f"未找到条目: {item_id}")
     if not isinstance(item, (EventItem, TaskItem)) or not item.remind_times:
-        return _error_result("该条目没有可延后的提醒")
+        return error_result("该条目没有可延后的提醒")
 
     user_now = cast(datetime, now_in_timezone(user_id, database))
     try:
         new_remind_time = _parse_snooze_time(time_arg, now=user_now)
     except ValueError:
-        return _error_result("无法解析延后时间，请使用 10m、30分钟、1h、1d 或 19:00 等格式")
+        return error_result("无法解析延后时间，请使用 10m、30分钟、1h、1d 或 19:00 等格式")
     return await _apply_snooze(
         reminder_service,
         user_id,
@@ -234,17 +208,14 @@ async def _undo_delete(user_id: str, minutes: int, db: Database) -> CommandResul
 
     result = cast(JsonObject, await run_sync(db.undo_delete, user_id, minutes))
     if result.get("status") != "success":
-        return _error_result(str(result.get("message") or "撤销失败"))
+        return error_result(str(result.get("message") or "撤销失败"))
     item = result.get("item")
     if item is None:
-        return _success_result(str(result.get("message") or "✅ 已恢复条目"))
+        return success_result(str(result.get("message") or "✅ 已恢复条目"))
     if not isinstance(item, Item):
-        return _error_result("撤销结果缺少有效条目")
-    type_name = _ITEM_TYPE_NAMES.get(
-        get_item_type_value(item.type, default=""),
-        "条目",
-    )
-    return _success_result(f"✅ 已恢复{type_name}: {item.title or '无标题'} ({item.display_id})")
+        return error_result("撤销结果缺少有效条目")
+    type_name = DbOpsMixin._item_type_label(get_item_type_value(item.type, default=""))
+    return success_result(f"✅ 已恢复{type_name}: {item.title or '无标题'} ({item.display_id})")
 
 
 async def _undo_edit(user_id: str, minutes: int, db: Database) -> CommandResult:
@@ -252,10 +223,10 @@ async def _undo_edit(user_id: str, minutes: int, db: Database) -> CommandResult:
 
     result = cast(JsonObject, await run_sync(db.undo_edit, user_id, minutes))
     if result.get("status") != "success":
-        return _error_result(str(result.get("message") or "撤销编辑失败"))
+        return error_result(str(result.get("message") or "撤销编辑失败"))
     item_id = str(result.get("item_id") or "")
     if not item_id:
-        return _error_result("撤销结果缺少条目ID")
+        return error_result("撤销结果缺少条目ID")
     item    = cast(Item | None, await run_sync(db.get_item, item_id, user_id))
     message = (
         f"✅ 已撤销{_EDIT_ACTION_NAMES.get(str(result.get('action') or ''), '条目')}编辑: "
@@ -265,7 +236,7 @@ async def _undo_edit(user_id: str, minutes: int, db: Database) -> CommandResult:
     affected       = result.get("affected", 0)
     if isinstance(instance_count, int) and instance_count > 1:
         message += f"\n📊 共恢复 {affected if isinstance(affected, int) else 0} 个实例"
-    return _success_result(message)
+    return success_result(message)
 
 
 async def handle_undo(user_id: str, args: str, db: Database) -> CommandResult:
@@ -273,7 +244,7 @@ async def handle_undo(user_id: str, args: str, db: Database) -> CommandResult:
 
     parsed = parse(args)
     if parsed.options or len(parsed) > 1:
-        return _error_result("正确用法: /pendo undo [分钟]")
+        return error_result("正确用法: /pendo undo [分钟]")
     minutes = PendoConfig.UNDO_WINDOW_MINUTES
     if parsed:
         parsed_minutes = parse_int(
@@ -282,7 +253,7 @@ async def handle_undo(user_id: str, args: str, db: Database) -> CommandResult:
             maximum = PendoConfig.UNDO_WINDOW_MINUTES,
         )
         if parsed_minutes is None:
-            return _error_result(f"分钟数必须是 1～{PendoConfig.UNDO_WINDOW_MINUTES} 的整数")
+            return error_result(f"分钟数必须是 1～{PendoConfig.UNDO_WINDOW_MINUTES} 的整数")
         minutes = parsed_minutes
 
     latest = cast(
@@ -294,7 +265,7 @@ async def handle_undo(user_id: str, args: str, db: Database) -> CommandResult:
         return await _undo_delete(user_id, minutes, db)
     if operation_type == "edit":
         return await _undo_edit(user_id, minutes, db)
-    return _error_result(f"未找到{minutes}分钟内可撤销的操作（删除或编辑）")
+    return error_result(f"未找到{minutes}分钟内可撤销的操作（删除或编辑）")
 
 
 def _parse_snooze_time(

@@ -799,7 +799,6 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
     context = Mock(
         current_user_id  = 10001,
         current_group_id = 20001,
-        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
@@ -810,6 +809,7 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
         }
     )
     manager                           = MagicMock()
+    manager.data_dir                  = tmp_path / "data"
     manager.is_connected.return_value = True
     manager.list_files                = AsyncMock(
         return_value=(
@@ -835,6 +835,7 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
         context,
         session,
         manager,
+        "srv",
     )
 
     expected_filenames = [
@@ -875,7 +876,6 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
     context = Mock(
         current_user_id  = 10001,
         current_group_id = 20001,
-        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
@@ -886,6 +886,7 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
         }
     )
     manager                           = MagicMock()
+    manager.data_dir                  = tmp_path / "data"
     manager.is_connected.return_value = True
     manager.list_files                = AsyncMock(
         return_value=(True, [f"plot-{index}.png" for index in range(1, 7)])
@@ -897,6 +898,7 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
         context,
         session,
         manager,
+        "srv",
     )
 
     assert "页码超出范围：共 2 页、6 张图片" in result[0]["data"]["text"]
@@ -909,7 +911,6 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
     context = Mock(
         current_user_id  = 10001,
         current_group_id = 20001,
-        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock(side_effect=RuntimeError("send failed"))
@@ -920,6 +921,7 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
         }
     )
     manager                           = MagicMock()
+    manager.data_dir                  = tmp_path / "data"
     manager.is_connected.return_value = True
     manager.list_files = AsyncMock(return_value=(True, ["plot.png"]))
 
@@ -935,6 +937,7 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
             context,
             session,
             manager,
+            "srv",
         )
 
     assert list((tmp_path / "data" / "images").iterdir()) == []
@@ -999,18 +1002,18 @@ async def test_qingssh_failed_image_delivery_is_reported(tmp_path):
         return (True, "ok")
 
     manager = SimpleNamespace(
-        is_connected=lambda *args: True,
+        data_dir     = tmp_path,
+        is_connected = lambda *args: True,
         list_files=AsyncMock(return_value=(True, ["one.png"])),
         download_file=download,
     )
     context = SimpleNamespace(
-        data_dir         = tmp_path,
         current_user_id  = 1,
         current_group_id = None,
         send_action=AsyncMock(return_value=False),
     )
     result = await _handle_showimg_command(
-        "showimg *.png", context, {"server_name": "test", "cwd": "/tmp"}, manager
+        "showimg *.png", context, {"server_name": "test", "cwd": "/tmp"}, manager, "test"
     )
     output = "".join(part.get("data", {}).get("text", "") for part in result)
     assert "发送 0 张" in output and "投递失败" in output

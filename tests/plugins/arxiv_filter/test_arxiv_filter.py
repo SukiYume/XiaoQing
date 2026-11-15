@@ -392,16 +392,29 @@ Probability: 0.8000
             result_text = str(result)
             assert "暂时没有发现感兴趣的论文" in result_text or "没有" in result_text
 
+    @pytest.mark.parametrize(
+        ("text", "kind", "successful"),
+        [
+            ("\n----- Positive #1 -----\nTitle      : x", "papers", True),
+            ("No positive predictions found.", "no_positive_predictions", True),
+            ("No papers found.", "no_papers", False),
+            ("Error: Network error", "unknown", False),
+        ],
+    )
+    def test_inference_text_classification(self, text, kind, successful):
+        assert arxiv_filter._classify_inference_text(text) == kind
+        assert arxiv_filter._is_successful_inference(text) is successful
+
     @pytest.mark.asyncio
-    async def test_run_filter_error_response(self, mock_context, mock_event):
-        """测试推理返回错误"""
+    async def test_run_filter_without_paper_list_is_a_failure(self, mock_context, mock_event):
+        """源列表抓不到论文时不是成功结果，不能提交当日投递。"""
         with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "Error: Network error"
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "No papers found."
         ):
             result = await arxiv_filter._run_filter(mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "XQ-PLUGIN-UNEXPECTED" in result_text
+            assert result.succeeded is False
+            assert result.outcome == "inference_error"
+            assert "XQ-PLUGIN-UNEXPECTED" in str(result)
 
     @pytest.mark.asyncio
     async def test_run_filter_file_not_found(self, mock_context, mock_event):

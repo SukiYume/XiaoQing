@@ -6,6 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+# 推理入口返回文本，main.py 按下面这些片段判断结果类型；两边必须用同一份。
+POSITIVE_HEADER_PREFIX = "----- Positive #"
+NO_PAPERS_MARKER       = "No papers found"
+NO_POSITIVES_MARKER    = "No positive predictions"
+
+ARXIV_ABS_URL_PREFIX = "https://arxiv.org/abs/"
+
 
 def load_plugin_config() -> dict[str, Any]:
     """加载插件 config.json，文件不存在时返回空字典"""

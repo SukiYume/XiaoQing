@@ -25,7 +25,7 @@ HELP_TEXT = """🌐 小青的网上生活
 /life works           她在慢慢整理的小作品
 /life dossier [话题]  主题档案（不带话题列出全部）
 /life memes           梗图列表
-/life run             立刻安排一次上网（跳过概率与间隔）
+/life run             立刻安排一次上网（跳过概率、间隔和失败退避）
 /life forget <词>     删除词条
 /life meme on|off <短ID>  开关一张梗图
 /life login           B站扫码登录（二维码只发私聊）；login status / login cancel
@@ -236,6 +236,7 @@ def route(args: str) -> tuple[str, str]:
         "退出登录"   : "logout",
         "help"   : "help",
         "帮助"     : "help",
+        "?"      : "help",
     }
     return aliases.get(head.lower(), "unknown"), rest.strip()
 

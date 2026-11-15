@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import threading
 from collections.abc import Callable, Mapping
 from functools import lru_cache
@@ -15,7 +14,7 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, load_json, run_sync, write_json
 from core.public_errors import public_error_message
 
-from .convert import hex_to_rgb, validate_cmyk, validate_rgb
+from .convert import STORED_HEX_PATTERN, hex_to_rgb, validate_cmyk, validate_rgb
 
 MAX_CUSTOM_COLORS_PER_SCOPE  = 200
 MAX_CUSTOM_COLOR_FILE_BYTES  = 256 * 1024
@@ -24,7 +23,6 @@ MAX_BUILTIN_COLOR_FILE_BYTES = 2 * 1024 * 1024
 MAX_COLOR_NAME_CHARS         = 64
 MAX_PINYIN_CHARS             = 128
 MAX_SCOPE_ID                 = 2**63 - 1
-_HEX_PATTERN                 = re.compile(r"#[0-9a-fA-F]{6}")
 _CUSTOM_COLORS_LOCK          = threading.RLock()
 _MutationResult              = TypeVar("_MutationResult")
 
@@ -45,12 +43,19 @@ def _positive_scope_id(value: Any, *, label: str) -> int | None:
     return value
 
 
+def context_dir(context: PluginContextProtocol, attribute: str) -> Path:
+    """取得上下文里必须是 ``Path`` 的目录属性（``data_dir`` 或 ``plugin_dir``）。"""
+
+    directory = getattr(context, attribute, None)
+    if not isinstance(directory, Path):
+        raise ValueError(f"color {attribute} must be a Path")
+    return directory
+
+
 def _custom_file(context: PluginContextProtocol) -> Path:
     """从核心已认证的当前身份派生独立的会话作用域文件名。"""
 
-    data_dir = getattr(context, "data_dir", None)
-    if not isinstance(data_dir, Path):
-        raise ValueError("color data_dir must be a Path")
+    data_dir = context_dir(context, "data_dir")
     group_id = _positive_scope_id(getattr(context, "current_group_id", None), label="group_id")
     if group_id is not None:
         return data_dir / f"custom_colors_group_{group_id}.json"
@@ -93,7 +98,7 @@ def _normalize_color_record(value: Any) -> ColorRecord:
     if not isinstance(cmyk_value, list) or not validate_cmyk(cmyk_value)[0]:
         raise ValueError("color record has invalid CMYK channels")
     hex_value = value.get("hex")
-    if not isinstance(hex_value, str) or _HEX_PATTERN.fullmatch(hex_value) is None:
+    if not isinstance(hex_value, str) or STORED_HEX_PATTERN.fullmatch(hex_value) is None:
         raise ValueError("color record has invalid HEX value")
     normalized_hex = hex_value.casefold()
     if hex_to_rgb(normalized_hex) != rgb_value:
@@ -129,13 +134,14 @@ def _normalize_color_list(value: Any, *, max_items: int) -> list[ColorRecord]:
     return colors
 
 
-def _encoded_custom_colors(colors: list[ColorRecord]) -> bytes:
+def _check_custom_color_budget(colors: list[ColorRecord]) -> None:
+    """写回前确认条数与序列化后的字节数都在会话作用域预算内。"""
+
     if len(colors) > MAX_CUSTOM_COLORS_PER_SCOPE:
         raise ValueError("custom color count exceeds scope budget")
     payload = json.dumps(colors, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
     if len(payload) > MAX_CUSTOM_COLOR_FILE_BYTES:
         raise ValueError("custom color file exceeds byte budget")
-    return payload
 
 
 @lru_cache(maxsize=4)
@@ -150,10 +156,7 @@ def _load_builtin_colors_cached(
 
 
 def _load_builtin_colors(context: PluginContextProtocol) -> tuple[ColorRecord, ...]:
-    plugin_dir = getattr(context, "plugin_dir", None)
-    if not isinstance(plugin_dir, Path):
-        raise ValueError("color plugin_dir must be a Path")
-    builtin_file = plugin_dir / "color.json"
+    builtin_file = context_dir(context, "plugin_dir") / "color.json"
     info         = builtin_file.stat()
     return _load_builtin_colors_cached(str(builtin_file), info.st_mtime_ns, info.st_size)
 
@@ -204,7 +207,7 @@ def mutate_custom_colors(
         original = copy.deepcopy(colors)
         result   = callback(colors)
         normalized = _normalize_color_list(colors, max_items=MAX_CUSTOM_COLORS_PER_SCOPE)
-        _encoded_custom_colors(normalized)
+        _check_custom_color_budget(normalized)
         if normalized != original:
             write_json(custom_file, normalized)
         return result

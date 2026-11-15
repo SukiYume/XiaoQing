@@ -5,8 +5,8 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
-from core.delivery import SENSITIVE_ACTION_KEY
-from core.plugin_base import build_action, run_sync, segments
+from core.delivery import send_sensitive_private
+from core.plugin_base import run_sync, segments
 
 from ..config import PendoConfig
 from ..core.types import CommandMessage, PendoContext
@@ -366,19 +366,7 @@ class WebHandler:
             return False
         if recipient_id <= 0:
             return False
-
-        action = build_action(segments(message), recipient_id, None)
-        if action is None:
-            return False
-        action[SENSITIVE_ACTION_KEY] = True
-        # 凭据投递错误不能泄露到群聊回复；取消异常继承 BaseException，仍会正常向上传播。
-        try:
-            accepted = await context.send_action(action)
-        except Exception:
-            return False
-        if accepted is True or accepted is False:
-            return accepted
-        return None
+        return await send_sensitive_private(context, recipient_id, segments(message))
 
     @staticmethod
     def _build_token_result(

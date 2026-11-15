@@ -62,12 +62,11 @@ logs
 !.env.example
 config/config.json
 config/secrets.json
-plugins/minecraft/config.json
+config/private_terms.txt
 scripts/sync_to_remote.local.sh
 
 # 运行数据、缓存与本地生成的文档
 data
-plugins/*/data
 plugins/*/cache
 plugins/*/backups
 plugins/*/exports

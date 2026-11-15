@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 from core.clock import now_in_configured_timezone
-from core.constants import DEFAULT_BOT_NAME
+from core.plugin_base import resolve_bot_name
 
 from .config import LifeConfig
 
@@ -42,10 +43,10 @@ def now(context: Any) -> datetime:
 
 def bot_name(context: Any) -> str:
     try:
-        name = str(context.get_settings_snapshot().config.get("bot_name") or "").strip()
+        name = context.get_settings_snapshot().config.get("bot_name")
     except Exception:
-        name = ""
-    return name or DEFAULT_BOT_NAME
+        name = None
+    return resolve_bot_name(name)
 
 
 def persona_card(context: Any) -> Any | None:
@@ -89,14 +90,19 @@ def _quiet_presence(cfg: LifeConfig, moment: datetime) -> Presence:
 
     if asleep_at(moment):
         return Presence("asleep", "睡觉", 0)
-    since = _since_wake(asleep_at, moment)
+    return Presence("free", "", _until_sleep(asleep_at, moment), _since_wake(asleep_at, moment))
+
+
+def _until_sleep(asleep_at: Callable[[datetime], bool], moment: datetime) -> int | None:
+    """往后扫 24 小时，找到下一次睡觉还有多少分钟；没有睡眠时段返回 None。"""
+
     for offset in range(_SCAN_STEP_MIN, _LOOKAHEAD_MIN + 1, _SCAN_STEP_MIN):
         if asleep_at(moment + timedelta(minutes=offset)):
-            return Presence("free", "", offset, since)
-    return Presence("free", "", None, since)
+            return offset
+    return None
 
 
-def _since_wake(asleep_at: Any, moment: datetime) -> int | None:
+def _since_wake(asleep_at: Callable[[datetime], bool], moment: datetime) -> int | None:
     """往回扫 2 小时，找到仍在睡觉的最近时刻，当前已醒时返回醒来后的分钟数。"""
 
     if asleep_at(moment):
@@ -115,17 +121,12 @@ def _routine_presence(card: Any, moment: datetime) -> Presence | None:
     slot = routine_slot_now(card, moment)
     if slot is not None and slot.availability == "asleep":
         return Presence("asleep", slot.activity, 0)
-    until: int | None = None
-    for offset in range(_SCAN_STEP_MIN, _LOOKAHEAD_MIN + 1, _SCAN_STEP_MIN):
-        ahead = routine_slot_now(card, moment + timedelta(minutes=offset))
-        if ahead is not None and ahead.availability == "asleep":
-            until = offset
-            break
 
     def asleep_at(point: datetime) -> bool:
         found = routine_slot_now(card, point)
         return found is not None and found.availability == "asleep"
 
+    until = _until_sleep(asleep_at, moment)
     since = _since_wake(asleep_at, moment)
     if slot is None:
         return Presence("free", "", until, since)

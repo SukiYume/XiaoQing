@@ -294,6 +294,26 @@ xiaoqing_chat ── life.export_memes（每小时 07、37 分）► xiaoqing_li
 
 ---
 
+## 🧠 小青的统一记忆
+
+`xiaoqing_memory` 保存小青的长期记忆，聊天、办事和网上生活经同一套服务读写：
+
+```text
+xiaoqing_chat  ── memory.record（消息落盘后、回复投递后）──┐
+xiaoqing_agent ── memory.record（办事结束时）──────────────┼──► xiaoqing_memory ── 事件 → 笔记 → 页面
+xiaoqing_life  ── memory.record（每次定时检查后）──────────┘          ▲
+xiaoqing_chat  ── memory.recall / search / forget ───────────────────┤（纯内存取用，不调模型）
+xiaoqing_agent ── memory.recall（开新办事会话时）────────────────────┘
+Core scheduler ── xiaoqing_memory.tick（每 30 分钟）──► 夜间或积压时整理
+```
+
+- 记录分三个范围：`global`（她自己）、`g<群号>`、`u<QQ号>`。私聊的事不进群，一个群的事不进另一个群；他在群里说过的自己的事可以带进和他本人的私聊。可见性只在记忆插件里判断一处。
+- Core 签发 `capabilities.memory` 时把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效；用户主体发起的调用只能作用于它所在的会话。各调用方能写的类型由记忆插件固定。
+- 来源链里有网页文字的内容不会交给 `xiaoqing_agent`。记忆插件不在或关闭时，三个插件照常工作，只是没有长期记忆。
+- 每轮的网上生活由 `life.turn_context` 挑，不经过记忆；她的自我页（记忆整理的）也写到网上看过的东西，两边说到同一条经历、查明白的事或日记时，按 life 的条目键只留 life 给的细节。群里这两三天的话题词由记忆整理时记下，聊天转交给 life 当上网的方向。
+
+---
+
 ## 🚀 启动与关闭顺序
 
 ### 启动

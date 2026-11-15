@@ -308,7 +308,7 @@ class MemeEnv:
         self.downloads: list[str] = []
         self.vision_calls         = 0
 
-    async def download(self, url: str) -> tuple[bytes, str] | None:
+    async def download(self, url: str, max_bytes: int) -> tuple[bytes, str] | None:
         self.downloads.append(url)
         data = self.images.get(url)
         return None if data is None else (data, ".png")

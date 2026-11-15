@@ -74,7 +74,12 @@ def _state(history: list[StoredMessage]) -> MagicMock:
 
 
 async def _prepare(
-    context: Any, runtime: Any, *, expression: str = "", history: list[StoredMessage] | None = None
+    context: Any,
+    runtime: Any,
+    *,
+    expression: str                     = "",
+    history: list[StoredMessage] | None = None,
+    explained: tuple[str, ...]          = (),
 ):
     now     = time.time()
     history = (
@@ -85,9 +90,7 @@ async def _prepare(
             StoredMessage(role="assistant", name="小青", ts=now - 10, content="我刚看了个猫猫视频"),
         ]
     )
-    action = PlannedAction(
-        action="reply", think_level=1, reasoning="", question="", unknown_words=["绝绝子", "哈基米"]
-    )
+    action = PlannedAction(think_level=1, reasoning="")
     with ExitStack() as stack:
         for name, value in {
             "configured_bot_name": "小青",
@@ -97,11 +100,10 @@ async def _prepare(
             "llm_call_config"    : LLMCallConfig(
                 timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2
             ),
-            "sender_profile_context": "",
-            "knowledge_context"     : "",
-            "expression_context"    : expression,
-            "jargon_context"        : BASE_JARGON,
-            "_load_life_blocks"     : (BASE_LIFE, ""),
+            "knowledge_context" : "",
+            "expression_context": expression,
+            "jargon_block"      : (BASE_JARGON, explained),
+            "_load_life_blocks" : (BASE_LIFE, ""),
         }.items():
             stack.enter_context(
                 patch(f"plugins.xiaoqing_chat.reply_plan.{name}", return_value=value)
@@ -246,7 +248,7 @@ async def test_expressions_learned_in_the_group_take_precedence_over_the_hint() 
 
 
 @pytest.mark.asyncio
-async def test_request_has_no_ids_and_carries_recent_turns_and_unknown_words() -> None:
+async def test_request_has_no_ids_and_carries_recent_turns() -> None:
     capability = Capability({"life_lines": "x"})
     await _prepare(_context(capability), _runtime())
     request = capability.requests[0]
@@ -262,8 +264,15 @@ async def test_request_has_no_ids_and_carries_recent_turns_and_unknown_words() -
     assert request["version"] == 1 and request["mode"] == "reply" and request["is_private"] is False
     assert request["bot_recent"] == ["我刚看了个猫猫视频"]
     assert request["recent"] == ["最近刷到啥好玩的了吗", "我刚看了个猫猫视频"]
-    assert request["unknown_terms"] == ["绝绝子", "哈基米"]
+    assert request["unknown_terms"] == []  # 没确认意思的说法来自本群黑话库，这里没有
     assert "1" not in str(sorted(request)) and "user_id" not in str(request)
+
+
+@pytest.mark.asyncio
+async def test_words_the_group_block_explained_go_to_life_so_it_does_not_repeat_them() -> None:
+    capability = Capability({"life_lines": "x"})
+    await _prepare(_context(capability), _runtime(), explained=("绝绝子",))
+    assert capability.requests[0]["explained_terms"] == ["绝绝子"]
 
 
 def test_request_and_response_are_bounded() -> None:
@@ -307,10 +316,9 @@ async def test_fetch_online_life_propagates_cancellation() -> None:
         fetch_online_life(
             _context(capability),
             _runtime(),
-            text          = "t",
-            history       = [],
-            is_private    = False,
-            unknown_words = [],
+            text       = "t",
+            history    = [],
+            is_private = False,
         )
     )
     await asyncio.sleep(0.05)

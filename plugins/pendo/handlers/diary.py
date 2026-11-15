@@ -60,11 +60,29 @@ _DIARY_LIST_FILTER_RE: Final = re.compile(
     r"(?<!\S)(?P<key>mood|cat):(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
+
+
+def _metadata_value(match: re.Match[str]) -> str:
+    """取 ``key:value`` 参数的值，去掉成对的英文引号。"""
+
+    value = match.group("value").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
+    return value
+
+
 _TRUE_METADATA_VALUES : Final = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
 _FALSE_METADATA_VALUES: Final = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
 _MOOD_EMOJIS          : Final[dict[str, str]] = cast(
     dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {})
 )
+
+
+def _format_mood_line(mood: str, score: int | None) -> str:
+    """``😊 情绪: happy (7/10)``；表里没有的情绪用通用表情，没有评分就不写。"""
+
+    line = f"{_MOOD_EMOJIS.get(mood, '📝')} 情绪: {mood}"
+    return f"{line} ({score}/10)" if score else line
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,17 +133,15 @@ class DiaryHandler(DbOpsMixin):
     def _entry_time_for_diary_date(user_now: datetime, diary_date: str) -> str:
         return f"{diary_date}T{user_now.strftime('%H:%M:%S')}"
 
-    async def _resolve_diary_id(
-        self, user_id: str, query: str
-    ) -> tuple[DiaryItem | None, CommandMessage | None]:
-        """按 ID 读取日记，并返回准确的跨类型提示。"""
+    async def _resolve_diary_id(self, user_id: str, query: str) -> DiaryItem | CommandMessage:
+        """按 ID 读取日记；找不到或属于其他类型时返回对应的提示消息。"""
         query = (query or "").strip()
         item = await self._db_get_item(query, owner_id=user_id)
         if not item:
-            return None, {"status": "error", "message": f"❌ 找不到日记 {query}"}
+            return {"status": "error", "message": f"❌ 找不到日记 {query}"}
         if not isinstance(item, DiaryItem):
-            return None, self._build_wrong_type_message(query, "日记", item)
-        return item, None
+            return self._build_wrong_type_message(query, "日记", item)
+        return item
 
     @handle_command_errors
     async def handle(
@@ -286,11 +302,7 @@ class DiaryHandler(DbOpsMixin):
         # 格式化返回消息
         message = f"✅ 已记录 {diary_date} {entry_label} 的日记\n\n"
         if diary_item.mood:
-            emoji = _MOOD_EMOJIS.get(diary_item.mood, "📝")
-            message += f"{emoji} 情绪: {diary_item.mood}"
-            if diary_item.mood_score:
-                message += f" ({diary_item.mood_score}/10)"
-            message += "\n"
+            message += f"{_format_mood_line(diary_item.mood, diary_item.mood_score)}\n"
         if diary_item.weather:
             message += f"🌤️ 天气: {diary_item.weather}\n"
         if diary_item.location:
@@ -315,7 +327,7 @@ class DiaryHandler(DbOpsMixin):
 
         query_date = parse_date_optional(query, now=user_now)
         if query_date:
-            entries = await self._get_diaries_by_date(user_id, query_date)
+            entries = await self._fetch_diaries(user_id, query_date, query_date)
             if not entries:
                 return {
                     "status": "success",
@@ -329,12 +341,9 @@ class DiaryHandler(DbOpsMixin):
                     message += "\n---\n\n"
             return {"status": "success", "message": message}
 
-        diary, error = await self._resolve_diary_id(user_id, query)
-        if error:
-            return error
-
-        if not diary:
-            return {"status": "error", "message": f"❌ 找不到日记 {query}"}
+        diary = await self._resolve_diary_id(user_id, query)
+        if not isinstance(diary, DiaryItem):
+            return diary
 
         diary_date = diary.diary_date or query
         message    = f"📔 {diary_date} 的日记条目\n\n"
@@ -393,9 +402,7 @@ class DiaryHandler(DbOpsMixin):
         query                    = (raw_query or "").strip()
         metadata: dict[str, str] = {}
         for match in _DIARY_LIST_FILTER_RE.finditer(query):
-            value = match.group("value").strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                value = value[1:-1].strip()
+            value = _metadata_value(match)
             if value:
                 metadata[match.group("key").lower()] = value
         query = _DIARY_LIST_FILTER_RE.sub(" ", query)
@@ -458,7 +465,7 @@ class DiaryHandler(DbOpsMixin):
         user_now = await get_user_local_wall_time(user_id, self.db)
         query_date = parse_date_optional(query, now=user_now)
         if query_date:
-            entries = await self._get_diaries_by_date(user_id, query_date)
+            entries = await self._fetch_diaries(user_id, query_date, query_date)
             if not entries:
                 return {"status": "error", "message": f"❌ 没有找到 {query_date} 的日记"}
             if len(entries) > 1:
@@ -481,12 +488,9 @@ class DiaryHandler(DbOpsMixin):
                 "message": f"🗑️ 已删除 {query_date} 的日记条目\n\n{PendoConfig.UNDO_HINT}",
             }
 
-        diary, error = await self._resolve_diary_id(user_id, query)
-        if error:
-            return error
-
-        if not diary:
-            return {"status": "error", "message": f"❌ 没有找到日记 {query}"}
+        diary = await self._resolve_diary_id(user_id, query)
+        if not isinstance(diary, DiaryItem):
+            return diary
 
         # 软删除
         await self._db_soft_delete_with_log(diary.id, user_id, item_type=ItemType.DIARY.value)
@@ -752,11 +756,7 @@ class DiaryHandler(DbOpsMixin):
         if entry_time:
             lines.append(f"🕘 时间: {entry_time}")
         if diary.mood:
-            emoji     = _MOOD_EMOJIS.get(diary.mood, "😐")
-            mood_line = f"{emoji} 情绪: {diary.mood}"
-            if diary.mood_score:
-                mood_line += f" ({diary.mood_score}/10)"
-            lines.append(mood_line)
+            lines.append(_format_mood_line(diary.mood, diary.mood_score))
         if diary.weather:
             lines.append(f"🌤️ 天气: {diary.weather}")
         if diary.location:
@@ -769,10 +769,6 @@ class DiaryHandler(DbOpsMixin):
         lines.append("")
         lines.append(diary.content or "")
         return "\n".join(lines)
-
-    async def _get_diaries_by_date(self, user_id: str, diary_date: str) -> list[DiaryItem]:
-        """通过统一仓储查询当天全部日记，避免 Handler 直接依赖 SQL 私有实现。"""
-        return await self._fetch_diaries(user_id, diary_date, diary_date)
 
     def _parse_diary_text(self, text: str) -> dict[str, Any]:
         """解析日记文本（提取天气、地点等元信息）
@@ -798,9 +794,7 @@ class DiaryHandler(DbOpsMixin):
             content_parts.extend((text[previous_end : match.start()], " "))
             previous_end = match.end()
             key          = match.group("key").lower()
-            value        = match.group("value").strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                value = value[1:-1].strip()
+            value        = _metadata_value(match)
             if key == "weather":
                 result["weather"] = value
             elif key == "location":

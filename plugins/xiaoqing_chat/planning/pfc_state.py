@@ -9,15 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..store_base import AsyncKeyedStore, delete_json_artifacts
+from ..store_base import AsyncKeyedStore, coerce_finite_float, delete_json_artifacts
 
 
 @dataclass
 class PFCConversationState:
     chat_id                     : str
-    ignore_until_ts             : float = 0.0
-    ended                       : bool  = False
-    last_successful_reply_action: str   = ""
+    ended                       : bool = False
+    last_successful_reply_action: str  = ""
     goal_list                   : list[dict[str, Any]] = field(default_factory=list)
     knowledge_list              : list[dict[str, Any]] = field(default_factory=list)
     planner_fail_ts             : list[float] = field(default_factory=list)
@@ -60,7 +59,6 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
         if path:
             obj = self._load_json(path, default=None)
             if isinstance(obj, dict):
-                st.ignore_until_ts              = float(obj.get("ignore_until_ts", 0.0) or 0.0)
                 st.ended                        = bool(obj.get("ended", False))
                 st.last_successful_reply_action = str(
                     obj.get("last_successful_reply_action", "") or ""
@@ -74,8 +72,12 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
                 pft = obj.get("planner_fail_ts", [])
                 if isinstance(pft, list):
                     st.planner_fail_ts = [float(x) for x in pft if isinstance(x, (int, float))]
-                st.planner_skip_until = float(obj.get("planner_skip_until", 0.0) or 0.0)
-                st.updated_at         = float(obj.get("updated_at", time.time()) or time.time())
+                st.planner_skip_until = coerce_finite_float(
+                    obj.get("planner_skip_until"), default=0.0
+                )
+                st.updated_at = (
+                    coerce_finite_float(obj.get("updated_at"), default=0.0) or time.time()
+                )
         self._cache[cid] = st
         self._evict_clean_states_unlocked(protected_chat_id=cid)
         return st
@@ -100,7 +102,6 @@ class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
     @staticmethod
     def _payload(st: PFCConversationState) -> dict[str, Any]:
         return {
-            "ignore_until_ts"             : st.ignore_until_ts,
             "ended"                       : st.ended,
             "last_successful_reply_action": st.last_successful_reply_action,
             "goal_list"                   : st.goal_list,

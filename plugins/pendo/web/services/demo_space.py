@@ -19,7 +19,6 @@ from .bundle_import import inspect_bundle_bytes
 _DEMO_PREFIX         : Final = "demo_web_"
 _DEMO_TEMPLATE_PATH  : Final = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
 _DEMO_TEMPLATE_ANCHOR: Final = date(2026, 4, 8)
-_DEMO_SEED_VERSION   : Final = 2
 _DEMO_ITEM_TYPES     : Final = ("event", "task", "ledger", "note", "diary")
 _MAX_CLIENT_KEY_CHARS: Final = 128
 _DATE_FIELDS         : Final = ("ledger_date", "diary_date", "plan_date")
@@ -68,19 +67,25 @@ def _coerce_expiry(value: object) -> datetime | None:
         return None
 
 
-def _is_expired(expires_at: datetime | None, now: datetime) -> bool:
-    """兼容历史本地时间与带时区时间，并对异常时间失败关闭。"""
+def _is_not_after(moment: datetime, reference: datetime) -> bool:
+    """``moment`` 不晚于 ``reference``；两者可以一个不带时区、一个带时区，无法比较时按“不晚于”处理。
 
-    if expires_at is None:
-        return True
+    演示过期时间以不带时区的本地时间写入，``datetime.now()`` 同样不带时区；带时区的值
+    （手工写入或来自别的写入方）则按绝对时刻比较。
+    """
+
     try:
-        expires_offset = expires_at.utcoffset()
-        now_offset     = now.utcoffset()
-        if (expires_offset is None) == (now_offset is None):
-            return expires_at <= now
-        return expires_at.astimezone(UTC) <= now.astimezone(UTC)
+        if (moment.utcoffset() is None) == (reference.utcoffset() is None):
+            return moment <= reference
+        return moment.astimezone(UTC) <= reference.astimezone(UTC)
     except (OSError, OverflowError, TypeError, ValueError):
         return True
+
+
+def _is_expired(expires_at: datetime | None, now: datetime) -> bool:
+    """演示空间是否已过期；没有可用的过期时间时失败关闭，按已过期处理。"""
+
+    return expires_at is None or _is_not_after(expires_at, now)
 
 
 def _demo_settings(expires_at: datetime) -> dict[str, Any]:
@@ -91,7 +96,6 @@ def _demo_settings(expires_at: datetime) -> dict[str, Any]:
         "daily_briefing_enabled": False,
         "demo_mode"             : True,
         "demo_expires_at"       : _iso(expires_at),
-        "demo_seed_version"     : _DEMO_SEED_VERSION,
     }
 
 
@@ -287,7 +291,7 @@ def _recent_demo_requests(
 
     cutoff = now - timedelta(hours=1)
     for key, request_times in tuple(_DEMO_REQUESTS.items()):
-        while request_times and _is_expired(request_times[0], cutoff):
+        while request_times and _is_not_after(request_times[0], cutoff):
             request_times.popleft()
         if not request_times:
             del _DEMO_REQUESTS[key]
@@ -325,7 +329,7 @@ def create_demo_session(
             owner_id,
             {
                 "timezone"        : PendoConfig.DEFAULT_TIMEZONE,
-                "default_category": "未分类",
+                "default_category": PendoConfig.DEFAULT_CATEGORY,
                 "settings_json"   : _demo_settings(expires_at),
             },
         )

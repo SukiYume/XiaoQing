@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -16,6 +17,8 @@ from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.life import daily_life, online, proactive, proactive_private
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import ChatRuntime, ChatRuntimeState
+from plugins.xiaoqing_memory.model import Note
+from tests.plugins.xiaoqing_chat.memory_support import MemoryHarness
 
 NOW   = 1_800_000_000.0
 UID   = 77
@@ -60,17 +63,40 @@ class FakeLife:
         return {"version": 1, "life_lines": "", "share_candidates": kept} if kept else None
 
 
-def _context(life: Any = None) -> SimpleNamespace:
+def _context(life: Any = None, memory: Any = None) -> SimpleNamespace:
     return SimpleNamespace(
-        logger=None, data_dir="/tmp/none", capabilities=SimpleNamespace(life_context=life)
+        logger   = None,
+        data_dir = "/tmp/none",
+        capabilities=SimpleNamespace(life_context=life, memory=memory),
     )
+
+
+def _remember(harness: MemoryHarness, user: int, facts: str) -> None:
+    """她记得的这位朋友的事（私聊范围里的一条人物笔记）。"""
+
+    if facts:
+        now = time.time()
+        harness.store.put_notes(
+            f"u{user}",
+            [
+                Note(
+                    id          = "nfacts",
+                    kind        = "person.fact",
+                    scope       = f"u{user}",
+                    subject     = f"person:{user}",
+                    text        = facts,
+                    data        = {"name": "阿梨"},
+                    created_at  = now,
+                    observed_at = now,
+                )
+            ],
+        )
 
 
 def _state(tmp_path, history: list[StoredMessage]) -> ChatRuntimeState:
     state    = ChatRuntimeState()
     data_dir = tmp_path / f"d{len(list(tmp_path.iterdir()))}"
-    for store in (state.self_timeline, state.open_loops, state.proactive_state):
-        store.bind(data_dir)
+    state.proactive_state.bind(data_dir)
     state.memory_store.get_recent_async = AsyncMock(return_value=history)
     return state
 
@@ -85,15 +111,17 @@ async def _private(
     runtime   = None,
     state     = None,
     user: int = UID,
+    memory    = None,
 ):
     state = state or _state(tmp_path, history)
     model = AsyncMock(side_effect=outputs)
-    context = _context(FakeLife(SHARE) if life is None else life)
+    harness = memory or MemoryHarness(tmp_path / "memory")
+    _remember(harness, user, facts)
+    context = _context(FakeLife(SHARE) if life is None else life, harness.service(f"u{user}"))
     with (
         patch.object(proactive, "chat_completions", model),
         patch.object(proactive_private, "configured_bot_name", return_value="小青"),
         patch.object(proactive_private, "ai_route_context", return_value={"_ai": object()}),
-        patch.object(proactive_private, "profile_text", return_value=facts),
     ):
         delivery = await proactive_private.consider_private(
             context, runtime or _runtime(), state, user, now=NOW, life_text=""
@@ -262,23 +290,33 @@ class _NoLife:
 
 @pytest.mark.asyncio
 async def test_private_due_open_loop_is_a_material_and_is_marked_asked_on_commit(tmp_path) -> None:
-    state = _state(tmp_path, [])
-    state.open_loops.add(
+    state   = _state(tmp_path, [])
+    harness = MemoryHarness(tmp_path / "memory")
+    now     = time.time()
+    harness.store.put_notes(
         f"u{UID}",
-        user_id   = UID,
-        user_name = "阿梨",
-        title     = "数电期末考试",
-        due_at    = NOW - 3600,
-        max_loops = 10,
-        now       = NOW - 86400,
+        [
+            Note(
+                id="nloop",
+                kind="person.loop",
+                scope=f"u{UID}",
+                subject=f"person:{UID}",
+                text="数电期末考试",
+                created_at=now - 86400,
+                observed_at=now - 86400,
+                expires_at=now + 7 * 86400,
+                data={"user_id": UID, "user_name": "阿梨", "due_at": now - 3600, "loop": "open"},
+            )
+        ],
     )
     delivery, model, _s, _c = await _private(
         tmp_path,
         [],
         ['{"decision":"send","text":"考得怎么样呀"}', '{"decision":"send","reason":"x"}'],
-        state = state,
-        life  = _NoLife(),
-        facts = "",
+        state  = state,
+        life   = _NoLife(),
+        facts  = "",
+        memory = harness,
     )
     assert (
         delivery is not None
@@ -290,14 +328,15 @@ async def test_private_due_open_loop_is_a_material_and_is_marked_asked_on_commit
         patch.object(proactive, "spawn_life_extraction"),
     ):
         await delivery.receipt.record(True)
-    assert state.open_loops.get(f"u{UID}")[0].status == "asked"
+    assert harness.store.note(f"u{UID}", "nloop").data["loop"] == "asked"
     assert state.proactive_state.get(f"private:{UID}").shared_life_ids == ()
 
 
 @pytest.mark.asyncio
 async def test_private_judge_or_local_check_can_still_stop_the_message(tmp_path) -> None:
-    out, model, *_ = await _private(tmp_path, [], [SEND[0], '{"decision":"drop","reason":"突兀"}'])
-    assert out is None and model.await_count == 2
+    drop = '{"decision":"drop","reason":"突兀"}'
+    out, model, *_ = await _private(tmp_path, [], [SEND[0], drop, SEND[0], drop])
+    assert out is None and model.await_count == 4  # 拦下后重写一次，第二稿还不过就不发
     out, model, *_ = await _private(
         tmp_path,
         [_bot("刷到个猫视频，想到你了", NOW - 40 * 3600)],
@@ -507,12 +546,10 @@ def test_daily_life_rule_is_added_only_when_online_life_is_on() -> None:
     from datetime import datetime
 
     moment = datetime(2026, 11, 5, 8, 0)
-    plain = daily_life.build_messages(persona="p", routine=[], moment=moment, yesterday=None)[0][
-        "content"
-    ]
-    online_on = daily_life.build_messages(
-        persona="p", routine=[], moment=moment, yesterday=None, online_life=True
-    )[0]["content"]
+    plain = daily_life.build_messages(persona="p", routine=[], moment=moment)[0]["content"]
+    online_on = daily_life.build_messages(persona="p", routine=[], moment=moment, online_life=True)[
+        0
+    ]["content"]
     assert plain == f"p\n\n{daily_life._SYSTEM}"  # 关闭时与之前逐字一致
     assert (
         online_on
@@ -573,3 +610,69 @@ def test_decode_meme_revalidates_bytes_with_the_emoji_library_budget() -> None:
     runtime.cfg.media.max_image_pixels  = 20_000_000
     runtime.cfg.media.max_analyze_bytes = 50
     assert online._decode_meme(_raw(_png()), runtime) is None  # 超过字节预算
+
+
+@pytest.mark.asyncio
+async def test_group_proactive_does_not_repeat_a_shared_episode_from_the_self_page(
+    tmp_path,
+) -> None:
+    """分享候选里已经有这条经历的细节，自我页里只引用它的行不再放；另有依据的行照常放。"""
+
+    from plugins.xiaoqing_memory.model import GLOBAL, Page, PageLine
+    from plugins.xiaoqing_memory.scopes import SELF_SUBJECT
+
+    harness = MemoryHarness(tmp_path / "memory")
+    now     = time.time()
+    harness.store.put_notes(
+        GLOBAL,
+        [
+            Note(
+                id          = "n-cat",
+                kind        = "episode",
+                scope       = GLOBAL,
+                subject     = SELF_SUBJECT,
+                text        = "在B站看了「猫猫的一天」：好可爱",
+                origin      = "web",
+                sources     = ({"type": "external", "key": "e1", "origin": "web"},),
+                created_at  = now,
+                observed_at = now,
+                expires_at  = now + 86400,
+            ),
+            Note(
+                id          = "n-exam",
+                kind        = "self.state",
+                scope       = GLOBAL,
+                subject     = SELF_SUBJECT,
+                text        = "这周在准备期中考试",
+                origin      = "self",
+                sources     = ({"type": "event", "scope": "g42", "seq": 1, "origin": "self"},),
+                created_at  = now,
+                observed_at = now,
+                expires_at  = now + 86400,
+            ),
+        ],
+    )
+    harness.store.put_page(
+        Page(
+            subject  = SELF_SUBJECT,
+            scope    = GLOBAL,
+            sections = {
+                "doing"    : (PageLine(text="这周在准备期中考试", note_ids=("n-exam",)),),
+                "interests": (PageLine(text="最近爱刷猫猫视频", note_ids=("n-cat",)),),
+            },
+            updated_at=now,
+        )
+    )
+    state   = _state(tmp_path, [_user("晚上吃啥", NOW - 3 * 3600)])
+    context = _context(FakeLife(SHARE), harness.service(""))
+    model = AsyncMock(side_effect=['{"decision":"skip"}'])
+    with (
+        patch.object(proactive, "chat_completions", model),
+        patch.object(proactive, "configured_bot_name", return_value="小青"),
+        patch.object(proactive, "ai_route_context", return_value={"_ai": object()}),
+    ):
+        await proactive._consider_group(context, _runtime(), state, 42, now=NOW, life_text="")
+    prompt = model.await_args_list[0].kwargs["messages"][1]["content"]
+    assert "猫猫的一天" in prompt  # 分享候选的细节在
+    assert "最近爱刷猫猫视频" not in prompt
+    assert "这周在准备期中考试" in prompt

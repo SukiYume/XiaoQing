@@ -5,15 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from core.message import (
+    extract_text,
     has_at_mention,
     iter_message_segments,
     sender_display_name,
 )
 
 # 本轮 @ 对象的展示文本，由 handlers 按 QQ 号写入事件，媒体合成与历史记录共用。
-MENTION_LABELS_KEY     = "_xc_mention_labels"
-EVERYONE_MENTION_ID    = "all"
-EVERYONE_MENTION_LABEL = "@全体成员"
+MENTION_LABELS_KEY = "_xc_mention_labels"
+# 这一轮是 ``/xc 内容`` 这样的显式命令：一定回复，也不让出给后面的消息。
+COMMAND_FORCED_EVENT_KEY = "_xc_command_forced"
+EVERYONE_MENTION_ID      = "all"
+EVERYONE_MENTION_LABEL   = "@全体成员"
 
 
 def event_chat_id(event: dict[str, Any]) -> str:
@@ -36,9 +39,17 @@ def event_sender_name(event: dict[str, Any]) -> str:
     return f"用户{user_id}" if user_id else "用户"
 
 
+def event_plain_text(event: dict[str, Any]) -> str:
+    """事件里的纯文本：消息段里的文字，没有时用 ``raw_message``。"""
+    return (
+        extract_text(event.get("message")).strip()
+        or str(event.get("raw_message", "") or "").strip()
+    )
+
+
 def is_private_event(event: dict[str, Any]) -> bool:
-    """判断事件是否来自私聊。"""
-    return event.get("group_id") is None
+    """判断事件是否来自私聊（没有群号；空群号和 ``event_chat_id`` 一样当作没有）。"""
+    return event.get("group_id") in (None, "")
 
 
 def is_bot_mentioned(event: dict[str, Any]) -> bool:

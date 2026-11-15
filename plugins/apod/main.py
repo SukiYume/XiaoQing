@@ -27,12 +27,19 @@ from core.plugin_base import (
     text,
 )
 from core.public_errors import public_error_message, public_error_response
-from core.safe_http import SafeHttpError, UnsafeUrlError, fetch_public_bytes, fetch_public_html
+from core.safe_http import (
+    BROWSER_USER_AGENT,
+    SafeHttpError,
+    UnsafeUrlError,
+    fetch_public_bytes,
+    fetch_public_html,
+    split_https_url_on_hosts,
+)
 
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "user-agent": BROWSER_USER_AGENT,
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
 }
 
@@ -79,21 +86,13 @@ def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
 def _allow_transparent_proxy_fake_dns(url: str) -> bool:
     """仅为 NASA 固定 HTTPS 源启用透明代理 fake-IP 兼容。"""
 
-    parsed = urlsplit(url)
-    return (
-        parsed.scheme.casefold() == "https"
-        and (parsed.hostname or "").rstrip(".").casefold() in NASA_APOD_HOSTS
-    )
+    return split_https_url_on_hosts(url, NASA_APOD_HOSTS) is not None
 
 
 def _require_allowed_url(url: str, allowed_hosts: set[str]) -> str:
     """只允许抓取 HTTPS 且主机在白名单内的地址。"""
 
-    parsed = urlsplit(url)
-    if (
-        parsed.scheme.lower() != "https"
-        or (parsed.hostname or "").rstrip(".").lower() not in allowed_hosts
-    ):
+    if split_https_url_on_hosts(url, allowed_hosts) is None:
         raise UnsafeUrlError("APOD URL host is not allowed")
     return url
 
@@ -365,6 +364,16 @@ def _video_source(element: Tag) -> str | None:
     return _tag_source(element)
 
 
+def _first_video(scope: BeautifulSoup | Tag) -> Tag | None:
+    """在范围内取第一个 iframe，没有再取第一个 video。"""
+
+    for tag_name in ("iframe", "video"):
+        video = scope.find(tag_name)
+        if isinstance(video, Tag):
+            return video
+    return None
+
+
 def _render_video(
     element: Tag, *, base_url: str, page_url: str, title: str, explanation: str
 ) -> Segments:
@@ -399,31 +408,25 @@ async def _render_page(
         return segments(f"{title}\n\n{explanation}\n\nAPOD 媒体暂时无法解析")
     scope = media if media is not None else root
 
-    # 新版媒体区的视频可能包含海报图片，优先返回实际视频链接。
-    for tag_name in ("iframe", "video") if media is not None else ():
-        video = media.find(tag_name)
-        if isinstance(video, Tag):
-            return _render_video(
-                video, base_url=base_url, page_url=page_url, title=title, explanation=explanation
+    # 新版媒体区的视频可能包含海报图片，所以先找视频；旧版页面先找图片，没有图片再找视频。
+    video_first = media is not None
+    video       = _first_video(scope) if video_first else None
+    if video is None:
+        image_url = _find_image_url(soup, base_url, allowed_hosts)
+        if image_url is not None:
+            return await _render_image(
+                image_url,
+                images_dir  = images_dir,
+                title       = title,
+                explanation = explanation,
+                context     = context,
             )
-
-    image_url = _find_image_url(soup, base_url, allowed_hosts)
-    if image_url is not None:
-        return await _render_image(
-            image_url,
-            images_dir  = images_dir,
-            title       = title,
-            explanation = explanation,
-            context     = context,
+        if not video_first:
+            video = _first_video(scope)
+    if video is not None:
+        return _render_video(
+            video, base_url=base_url, page_url=page_url, title=title, explanation=explanation
         )
-
-    # 旧版页面：先找 iframe，再找 video
-    for tag_name in ("iframe", "video"):
-        video = scope.find(tag_name)
-        if isinstance(video, Tag):
-            return _render_video(
-                video, base_url=base_url, page_url=page_url, title=title, explanation=explanation
-            )
 
     return segments(f"今天的 APOD 内容格式不支持，请直接访问: {page_url}")
 
@@ -451,7 +454,6 @@ async def handle(
             visible_command = bounded_external_text(
                 raw_args,
                 max_chars = 32,
-                max_bytes = 128,
                 default   = "未知",
             )
             return segments(f"未知命令: {visible_command}\n输入 /apod help 查看帮助")

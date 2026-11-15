@@ -1,18 +1,18 @@
-"""按会话或全局范围持久化黑话记录，并合并并发增量更新。"""
+"""按会话持久化黑话记录，并合并并发增量更新。
+
+没有 ``scope_chat_id`` 的旧记录对任何会话都不可见；读写时原样带着，不删也不改。
+"""
 
 from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Any, cast
+from dataclasses import dataclass, field
+from typing import Any
 
-from core.atomic_store import AtomicJsonStore, keyed_path_lock
-
-from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
+from ..store_base import coerce_finite_float, coerce_int, coerce_json_bool
+from .baseline_store import BaselineMergeStore
 
 
 def _string_list(value: Any) -> list[str]:
@@ -21,6 +21,10 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [text for item in value if isinstance(item, str) and (text := item.strip())]
+
+
+# 一个词条最多记多少个会话的出现次数（按次数从多到少留）。
+MAX_COUNTED_CHATS = 30
 
 
 def _chat_count_list(value: Any) -> list[list[Any]]:
@@ -48,8 +52,7 @@ class JargonRecord:
     meaning       : str = ""
     raw_content   : list[str] = field(default_factory=list)
     chat_id_counts: list[list[Any]] = field(default_factory=list)
-    is_global     : bool = False
-    count         : int  = 0
+    count         : int = 0
     # 释义有依据（原句解释过，或多处上下文推断出）；否则只是候选，不当作本群共识。
     confirmed           : bool = False
     last_inference_count: int  = 0
@@ -57,6 +60,11 @@ class JargonRecord:
     usage               : str = ""
     tone                : str = ""
     source              : str = ""
+
+    def visible_to(self, chat_id: str) -> bool:
+        """这条词条在这个会话里可用：只有按这个会话记下的词条。"""
+
+        return self.scope_chat_id == chat_id
 
 
 class JargonSnapshot(dict[str, JargonRecord]):
@@ -67,33 +75,10 @@ class JargonSnapshot(dict[str, JargonRecord]):
         self.baseline = deepcopy(records)
 
 
-class JargonStore(StoreBase):
+class JargonStore(BaselineMergeStore[JargonRecord]):
     """在原子 JSON 文件上维护可并发合并的黑话快照。"""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._baseline_context: ContextVar[dict[str, JargonRecord] | None] = ContextVar(
-            "snapshot_baseline", default=None
-        )
-
-    @property
-    def _baseline(self) -> dict[str, JargonRecord]:
-        """每个异步学习流程拥有独立快照，跨会话等待期间保持基线配对。"""
-        value = self._baseline_context.get()
-        return value if value is not None else {}
-
-    @_baseline.setter
-    def _baseline(self, value: dict[str, JargonRecord]) -> None:
-        self._baseline_context.set(value)
-
-    def bind(self, data_dir: Path) -> None:
-        if self._data_dir == data_dir:
-            return
-        super().bind(data_dir)
-        self._baseline = {}
-
-    def _path(self) -> Path | None:
-        return cast(Path | None, self._resolve_path("bw_learner", "jargon.json"))
+    _FILE = "jargon.json"
 
     @staticmethod
     def key_for(content: str, chat_id: str = "") -> str:
@@ -101,76 +86,48 @@ class JargonStore(StoreBase):
         scope = str(chat_id or "").strip()
         return f"{scope}\x1f{term}" if scope else term
 
-    def _read_records(self) -> dict[str, JargonRecord]:
-        raw = self._load_json_from_path_parts("bw_learner", "jargon.json", default=[])
-        if not isinstance(raw, list):
-            return {}
+    @staticmethod
+    def _key(record: JargonRecord) -> str:
+        return JargonStore.key_for(record.content, record.scope_chat_id)
 
-        out: dict[str, JargonRecord] = {}
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content", "") or "").strip()
-            if not content:
-                continue
-            rec = JargonRecord(
-                content        = content,
-                scope_chat_id  = str(item.get("scope_chat_id", "") or "").strip(),
-                meaning        = str(item.get("meaning", "") or "").strip(),
-                usage          = str(item.get("usage", "") or "").strip(),
-                tone           = str(item.get("tone", "") or "").strip(),
-                source         = str(item.get("source", "") or "").strip(),
-                raw_content    = _string_list(item.get("raw_content")),
-                chat_id_counts = _chat_count_list(item.get("chat_id_counts")),
-                is_global=coerce_json_bool(item.get("is_global"), default=False),
-                count=coerce_int(item.get("count"), default=0, minimum=0),
-                confirmed=coerce_json_bool(item.get("confirmed"), default=False),
-                last_inference_count=coerce_int(
-                    item.get("last_inference_count"), default=0, minimum=0
-                ),
-                updated_at=coerce_finite_float(
-                    item.get("updated_at"),
-                    default = time.time(),
-                    minimum = 0.0,
-                ),
-            )
-            out[self.key_for(content, "" if rec.is_global else rec.scope_chat_id)] = rec
-        return out
+    @staticmethod
+    def _parse(item: dict[str, Any]) -> JargonRecord | None:
+        content = str(item.get("content", "") or "").strip()
+        if not content:
+            return None
+        return JargonRecord(
+            content        = content,
+            scope_chat_id  = str(item.get("scope_chat_id", "") or "").strip(),
+            meaning        = str(item.get("meaning", "") or "").strip(),
+            usage          = str(item.get("usage", "") or "").strip(),
+            tone           = str(item.get("tone", "") or "").strip(),
+            source         = str(item.get("source", "") or "").strip(),
+            raw_content    = _string_list(item.get("raw_content")),
+            chat_id_counts = _chat_count_list(item.get("chat_id_counts")),
+            count=coerce_int(item.get("count"), default=0, minimum=0),
+            confirmed=coerce_json_bool(item.get("confirmed"), default=False),
+            last_inference_count=coerce_int(item.get("last_inference_count"), default=0, minimum=0),
+            updated_at=coerce_finite_float(
+                item.get("updated_at"),
+                default = time.time(),
+                minimum = 0.0,
+            ),
+        )
 
     def load(self) -> dict[str, JargonRecord]:
-        path = self._path()
-        if path is None:
-            return {}
-        with keyed_path_lock(path):
-            records        = self._read_records()
-            self._baseline = deepcopy(records)
-            return JargonSnapshot(records)
+        return JargonSnapshot(self._load_records())
 
     def clear(self, chat_id: str) -> None:
-        """删除一个会话的黑话记录及其全局统计，保留全局定义与其它会话。"""
+        """删除一个会话的黑话记录，保留其它会话和没有会话的旧记录。"""
 
         target = str(chat_id or "").strip()
-        path   = self._path()
-        if not target or path is None:
+        if not target:
             return
-        with keyed_path_lock(path):
-            latest                             = self._read_records()
-            remaining: dict[str, JargonRecord] = {}
-            for record in latest.values():
-                if not record.is_global and record.scope_chat_id == target:
-                    continue
-                kept = deepcopy(record)
-                if kept.is_global:
-                    kept.chat_id_counts = [
-                        item
-                        for item in kept.chat_id_counts
-                        if not item or str(item[0] or "").strip() != target
-                    ]
-                remaining[
-                    self.key_for(kept.content, "" if kept.is_global else kept.scope_chat_id)
-                ] = kept
-            AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining.values()])
-            self._baseline = deepcopy(remaining)
+
+        def keep(latest: dict[str, JargonRecord]) -> dict[str, JargonRecord]:
+            return {key: record for key, record in latest.items() if record.scope_chat_id != target}
+
+        self._rewrite(keep)
 
     @staticmethod
     def _count_map(values: Sequence[Sequence[Any]]) -> dict[str, int]:
@@ -187,6 +144,21 @@ class JargonStore(StoreBase):
                 continue
             counts[chat_id] = max(0, count)
         return counts
+
+    @staticmethod
+    def _count_pairs(counts: dict[str, int]) -> list[list[Any]]:
+        """``[chat_id, count]`` 对：次数从多到少、同次数按会话号排，只留 ``MAX_COUNTED_CHATS`` 个。"""
+
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return [[chat_id, count] for chat_id, count in ranked if count > 0][:MAX_COUNTED_CHATS]
+
+    @classmethod
+    def bump_chat_count(cls, chat_counts: Sequence[Sequence[Any]], chat_id: str) -> list[list[Any]]:
+        """这个会话的出现次数加一，返回新的 ``[chat_id, count]`` 对。"""
+
+        counts          = cls._count_map(chat_counts)
+        counts[chat_id] = counts.get(chat_id, 0) + 1
+        return cls._count_pairs(counts)
 
     @classmethod
     def _merge_record(
@@ -217,14 +189,7 @@ class JargonStore(StoreBase):
                 continue
             delta                  = desired_count - baseline_counts.get(chat_id, 0)
             latest_counts[chat_id] = max(0, latest_counts.get(chat_id, 0) + delta)
-        merged.chat_id_counts = [
-            [chat_id, count]
-            for chat_id, count in sorted(
-                latest_counts.items(),
-                key=lambda item: (-item[1], item[0]),
-            )
-            if count > 0
-        ][:30]
+        merged.chat_id_counts = cls._count_pairs(latest_counts)
 
         baseline_meaning = baseline.meaning if baseline is not None else ""
         if desired.meaning != baseline_meaning and latest.meaning == baseline_meaning:
@@ -232,7 +197,6 @@ class JargonStore(StoreBase):
         for field_name in (
             "content",
             "scope_chat_id",
-            "is_global",
             "usage",
             "tone",
             "source",
@@ -253,34 +217,6 @@ class JargonStore(StoreBase):
     def save(self, items: Sequence[JargonRecord] | dict[str, JargonRecord]) -> None:
         baseline      = items.baseline if isinstance(items, JargonSnapshot) else self._baseline
         desired_items = deepcopy(list(items.values()) if isinstance(items, dict) else list(items))
-        path          = self._path()
-        if path is None:
-            return
-        with keyed_path_lock(path):
-            latest  = self._read_records()
-            desired = {
-                self.key_for(item.content, "" if item.is_global else item.scope_chat_id): item
-                for item in desired_items
-            }
-            merged = dict(latest)
-            for key, desired_record in desired.items():
-                if key in baseline and key not in latest:
-                    continue
-                merged[key] = self._merge_record(
-                    latest.get(key),
-                    baseline.get(key),
-                    desired_record,
-                )
-            for key in set(baseline) - set(desired):
-                merged.pop(key, None)
-
-            concurrent_keys = [key for key in latest if key not in baseline and key not in desired]
-            desired_keys    = list(desired)
-            order           = [*concurrent_keys, *desired_keys]
-            merged_items    = [merged[key] for key in order if key in merged]
-            payload         = [asdict(item) for item in merged_items]
-            if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
-                return
-            self._baseline = deepcopy(merged)
-            if isinstance(items, JargonSnapshot):
-                items.baseline = deepcopy(desired)
+        desired       = {self._key(record): record for record in desired_items}
+        if self._merge_and_save(desired, baseline) and isinstance(items, JargonSnapshot):
+            items.baseline = deepcopy(desired)

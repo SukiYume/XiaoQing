@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
-from aioresponses import aioresponses
 
 from plugins.xiaoai import auth, client
+from tests.helpers.http import mocked_aiohttp
 
 LOGIN    = re.compile(r"https://account\.xiaomi\.com/pass/serviceLogin\?.*")
 QR       = re.compile(r"https://account\.xiaomi\.com/longPolling/loginUrl\?.*")
@@ -46,7 +46,7 @@ def login_response(sid="xiaomiio"):
 @pytest.mark.asyncio
 async def test_qr_protocol_isolated_cookies_and_both_services():
     flow = auth.QRFlow()
-    with aioresponses() as mocked:
+    with mocked_aiohttp() as mocked:
         mocked.get(
             LOGIN,
             payload={"code": 70016, "qs": "encoded", "callback": "https://sts.api.io.mi.com/sts"},
@@ -101,7 +101,7 @@ def test_qr_hosts_fail_closed(url):
 @pytest.mark.asyncio
 async def test_callback_redirect_blocks_external_host():
     async with auth.session_factory() as session:
-        with aioresponses() as mocked:
+        with mocked_aiohttp() as mocked:
             mocked.get(STS, status=302, headers={"Location": "https://evil.example/steal"})
             with pytest.raises(client.BridgeError):
                 await auth.exchange(session, login_response(), "xiaomiio")
@@ -230,12 +230,12 @@ async def test_cloud_rate_limit_is_reported_as_such_not_as_a_login_problem(monke
 @pytest.mark.asyncio
 async def test_service_login_requires_user_validation_and_preserves_secrets():
     async with auth.session_factory() as session:
-        with aioresponses() as mocked:
+        with mocked_aiohttp() as mocked:
             mocked.get(LOGIN, payload={"code": 70016, "description": "private-pass"})
             with pytest.raises(client.AuthRequired) as exc:
                 await auth.refresh_service(session, credentials(), "xiaomiio")
             assert "private-pass" not in str(exc.value)
-        with aioresponses() as mocked:
+        with mocked_aiohttp() as mocked:
             mocked.get(LOGIN, payload={**login_response(), "userId": "different-user"})
             with pytest.raises(client.AuthRequired):
                 await auth.refresh_service(session, credentials(), "xiaomiio")
@@ -288,7 +288,7 @@ async def test_qr_body_timeout_continues_polling(monkeypatch):
 @pytest.mark.asyncio
 async def test_callback_accepts_case_insensitive_location_header():
     async with auth.session_factory() as session:
-        with aioresponses() as mocked:
+        with mocked_aiohttp() as mocked:
             mocked.get(STS, status=302, headers={"location": "/sts?ticket=second"})
             mocked.get(STS, headers={"Set-Cookie": "serviceToken=new; Path=/"}, body="ok")
             assert await auth.exchange(session, login_response(), "xiaomiio") == ["a2V5", "new"]

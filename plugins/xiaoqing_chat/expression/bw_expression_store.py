@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Any
 
-from core.atomic_store import AtomicJsonStore, keyed_path_lock
-
-from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
+from ..store_base import coerce_finite_float, coerce_int, coerce_json_bool
+from .baseline_store import BaselineMergeStore
 
 
 @dataclass
@@ -36,100 +34,67 @@ class ExpressionSnapshot(list[ExpressionRecord]):
         self.baseline = deepcopy(list(records))
 
 
-class ExpressionStore(StoreBase):
-    def __init__(self) -> None:
-        super().__init__()
-        self._baseline_context: ContextVar[list[ExpressionRecord] | None] = ContextVar(
-            "snapshot_baseline", default=None
+class ExpressionStore(BaselineMergeStore[ExpressionRecord]):
+    _FILE = "expressions.json"
+
+    @staticmethod
+    def _key(record: ExpressionRecord) -> str:
+        return record.expression_id
+
+    @staticmethod
+    def _parse(item: dict[str, Any]) -> ExpressionRecord | None:
+        eid       = str(item.get("expression_id", "") or "").strip()
+        chat_id   = str(item.get("chat_id", "") or "").strip()
+        situation = str(item.get("situation", "") or "").strip()
+        style     = str(item.get("style", "") or "").strip()
+        if not eid or not chat_id or not situation or not style:
+            return None
+        content_list = item.get("content_list", [])
+        if not isinstance(content_list, list):
+            content_list = []
+        return ExpressionRecord(
+            expression_id = eid,
+            chat_id       = chat_id,
+            situation     = situation,
+            style         = style,
+            content_list  = [
+                str(value).strip()
+                for value in content_list
+                if isinstance(value, str) and value.strip()
+            ],
+            count=coerce_int(item.get("count"), default=1, minimum=0),
+            last_active_time=coerce_finite_float(
+                item.get("last_active_time"), default=0.0, minimum=0.0
+            ),
+            checked=coerce_json_bool(item.get("checked"), default=False),
+            rejected=coerce_json_bool(item.get("rejected"), default=False),
+            modified_by=str(item.get("modified_by", "ai") or "ai"),
         )
 
-    @property
-    def _baseline(self) -> list[ExpressionRecord]:
-        """每个异步学习流程拥有独立快照，跨会话等待期间保持基线配对。"""
-        value = self._baseline_context.get()
-        return value if value is not None else []
-
-    @_baseline.setter
-    def _baseline(self, value: list[ExpressionRecord]) -> None:
-        self._baseline_context.set(value)
-
-    def bind(self, data_dir: Path) -> None:
-        if self._data_dir == data_dir:
-            return
-        super().bind(data_dir)
-        self._baseline = []
-
-    def _path(self) -> Path | None:
-        return self._resolve_path("bw_learner", "expressions.json")
-
-    def _read_records(self) -> list[ExpressionRecord]:
+    def _read_records(self) -> dict[str, ExpressionRecord]:
         try:
-            raw = self._load_json_from_path_parts("bw_learner", "expressions.json", default=[])
+            return super()._read_records()
         except OSError:
-            return []
-        if not isinstance(raw, list):
-            return []
-
-        out: list[ExpressionRecord] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            eid       = str(item.get("expression_id", "") or "").strip()
-            chat_id   = str(item.get("chat_id", "") or "").strip()
-            situation = str(item.get("situation", "") or "").strip()
-            style     = str(item.get("style", "") or "").strip()
-            if not eid or not chat_id or not situation or not style:
-                continue
-            content_list = item.get("content_list", [])
-            if not isinstance(content_list, list):
-                content_list = []
-            out.append(
-                ExpressionRecord(
-                    expression_id = eid,
-                    chat_id       = chat_id,
-                    situation     = situation,
-                    style         = style,
-                    content_list  = [
-                        str(value).strip()
-                        for value in content_list
-                        if isinstance(value, str) and value.strip()
-                    ],
-                    count=coerce_int(item.get("count"), default=1, minimum=0),
-                    last_active_time=coerce_finite_float(
-                        item.get("last_active_time"), default=0.0, minimum=0.0
-                    ),
-                    checked=coerce_json_bool(item.get("checked"), default=False),
-                    rejected=coerce_json_bool(item.get("rejected"), default=False),
-                    modified_by=str(item.get("modified_by", "ai") or "ai"),
-                )
-            )
-        return out
+            return {}
 
     def load(self) -> list[ExpressionRecord]:
-        path = self._path()
-        if path is None:
-            return []
-        # 使用 core 的规范路径锁，模块热重载前后的类实例也共享同一把锁。
-        with keyed_path_lock(path):
-            records        = self._read_records()
-            self._baseline = deepcopy(records)
-            return ExpressionSnapshot(records)
+        return ExpressionSnapshot(list(self._load_records().values()))
 
     def clear(self, chat_id: str) -> None:
         """删除一个会话的表达学习记录，并保留其它会话的记录。"""
 
         target = str(chat_id or "").strip()
-        path   = self._path()
-        if not target or path is None:
+        if not target:
             return
-        with keyed_path_lock(path):
-            latest    = self._read_records()
-            remaining = [item for item in latest if item.chat_id != target]
-            AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining])
-            self._baseline = deepcopy(remaining)
+        self._rewrite(
+            lambda latest: {
+                key: record for key, record in latest.items() if record.chat_id != target
+            }
+        )
 
-    @staticmethod
+    @classmethod
     def _merge_record(
+        cls,
         latest: ExpressionRecord | None,
         baseline: ExpressionRecord | None,
         desired: ExpressionRecord,
@@ -165,40 +130,12 @@ class ExpressionStore(StoreBase):
         return merged
 
     def save(self, items: Sequence[ExpressionRecord]) -> None:
-        baseline      = items.baseline if isinstance(items, ExpressionSnapshot) else self._baseline
         desired_items = deepcopy(list(items))
-        path          = self._path()
-        if path is None:
-            return
-        with keyed_path_lock(path):
-            latest_items   = self._read_records()
-            latest_by_id   = {item.expression_id: item for item in latest_items}
-            baseline_by_id = {item.expression_id: item for item in baseline}
-            desired_by_id  = {item.expression_id: item for item in desired_items}
-            merged_by_id   = dict(latest_by_id)
-            for expression_id, desired in desired_by_id.items():
-                if expression_id in baseline_by_id and expression_id not in latest_by_id:
-                    continue
-                merged_by_id[expression_id] = self._merge_record(
-                    latest_by_id.get(expression_id),
-                    baseline_by_id.get(expression_id),
-                    desired,
-                )
-            for expression_id in set(baseline_by_id) - set(desired_by_id):
-                merged_by_id.pop(expression_id, None)
-
-            desired_order    = [item.expression_id for item in desired_items]
-            concurrent_order = [
-                item.expression_id
-                for item in latest_items
-                if item.expression_id not in baseline_by_id
-                and item.expression_id not in desired_by_id
-            ]
-            order        = [*concurrent_order, *desired_order]
-            merged_items = [merged_by_id[key] for key in order if key in merged_by_id]
-            payload      = [asdict(item) for item in merged_items]
-            if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
-                return
-            self._baseline = deepcopy(merged_items)
-            if isinstance(items, ExpressionSnapshot):
-                items.baseline = deepcopy(desired_items)
+        baseline      = (
+            {record.expression_id: record for record in items.baseline}
+            if isinstance(items, ExpressionSnapshot)
+            else self._baseline
+        )
+        desired = {record.expression_id: record for record in desired_items}
+        if self._merge_and_save(desired, baseline) and isinstance(items, ExpressionSnapshot):
+            items.baseline = deepcopy(desired_items)

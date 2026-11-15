@@ -1,4 +1,4 @@
-"""QingPet 的 SQLite 模式迁移、领域持久化和原子结算实现。"""
+"""QingPet 数据库的组合入口：连接生命周期、迁移前备份和初始化。"""
 
 import logging
 import sqlite3
@@ -12,44 +12,9 @@ from .database_community import CommunityRepositoryMixin
 from .database_identity import IdentityRepositoryMixin
 from .database_scheduler import SchedulerRepositoryMixin
 from .database_schema import CURRENT_SCHEMA_VERSION, initialize_schema
-from .database_support import (
-    _DAILY_COIN_LIMIT,
-)
-from .database_types import (
-    CoinLedgerReconciliation,
-    DailyResetResult,
-    GroupEconomySnapshot,
-    LeaveMessageAtomicResult,
-    MinigameAtomicResult,
-    MinigameOutcome,
-    PetActionAtomicResult,
-    PetShowSettlementResult,
-    PetShowWinner,
-    TreatPetAtomicResult,
-    VisitPetAtomicResult,
-    WeeklyActivitySettlementResult,
-    WeeklyRankingWinner,
-)
+from .database_support import _DAILY_COIN_LIMIT
 
 logger = logging.getLogger(__name__)
-
-# 这些结果类型此前由 database.py 定义；继续从原路径导出，避免破坏服务与测试的公开导入。
-__all__ = [
-    "CoinLedgerReconciliation",
-    "DailyResetResult",
-    "Database",
-    "GroupEconomySnapshot",
-    "LeaveMessageAtomicResult",
-    "MinigameAtomicResult",
-    "MinigameOutcome",
-    "PetActionAtomicResult",
-    "PetShowSettlementResult",
-    "PetShowWinner",
-    "TreatPetAtomicResult",
-    "VisitPetAtomicResult",
-    "WeeklyActivitySettlementResult",
-    "WeeklyRankingWinner",
-]
 
 
 class Database(
@@ -60,8 +25,8 @@ class Database(
 ):
     """QingPet 数据库服务层。
 
-    负责表结构迁移、索引、缓存和领域数据持久化；涉及配额、资产或多张表的状态变更由本类
-    在同一 SQLite 事务中提交，避免服务层分步写入造成部分成功。
+    本类管连接、迁移前备份和初始化；表结构在 ``database_schema``，各领域的读写和原子结算在
+    组合进来的几个 Repository mixin 里，涉及配额、资产或多张表的变更都在同一个 SQLite 事务里提交。
     """
 
     def __init__(self, db_path: str) -> None:

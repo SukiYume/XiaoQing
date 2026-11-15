@@ -1,23 +1,20 @@
 """角色自己说出口的近况、打算、承诺和讲过的往事，让她之后说的话前后一致。
 
 记录只来自已经确认发出的角色发言（聊天回复、agent 回复与后台结果、主动开口），由投递后的
-抽取任务写入。近况和打算属于角色自己，各会话共用；答应某人的事只在原会话可见，避免把
-私聊里的约定带进群里。每条都有过期时间，过期或被标记完成后不再注入。
+抽取任务写进统一记忆（xiaoqing_memory）。近况和打算属于角色自己，只讲她自己时各会话共用；
+答应某人的事和涉及对方的近况只在原会话可见。每条都有过期时间，过期或被标记完成后不再取用。
 
-被问起时讲过的自己以前的事（``story``）留得久、单独取用：讲过一次就是她的经历，
-之后再被问到还是同一个版本。
+这里是记录的数据结构、校验和给回复模型的提示文字。被问起时讲过的自己以前的事（``story``）
+留得久、单独取用：讲过一次就是她的经历，之后再被问到还是同一个版本。
 """
 
 from __future__ import annotations
 
-import threading
 import time
 import uuid
-from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass, replace
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
-
-from ..store_base import StoreBase, coerce_finite_float
 
 SelfKind                         = Literal["state", "plan", "promise", "story"]
 SELF_KINDS: tuple[SelfKind, ...] = ("state", "plan", "promise", "story")
@@ -33,9 +30,6 @@ KIND_HOURS: dict[str, tuple[float, float]] = {
 _MAX_TEXT_CHARS  = 40
 _MAX_STORY_CHARS = 60
 _MAX_NAME_CHARS  = 20
-_MAX_STORIES     = 30
-_FILE            = ("life", "self_timeline.json")
-_HISTORY_SECONDS = 7 * 86400.0
 
 
 def _text_limit(kind: str) -> int:
@@ -55,11 +49,6 @@ class SelfEntry:
     counterpart: str = ""
     # 能否在别的会话里被记得：答应某人的事和私聊里涉及对方的近况只留在原会话。
     shared: bool = True
-
-    def visible_in(self, chat_id: str) -> bool:
-        if self.kind == "promise" or not self.shared:
-            return self.chat_id == chat_id
-        return True
 
     def is_active(self, now: float) -> bool:
         return self.status == "active" and self.expires_at > now
@@ -99,132 +88,6 @@ def new_entry(
         counterpart = " ".join(str(counterpart or "").split())[:_MAX_NAME_CHARS],
         shared      = bool(shared) and kind != "promise",
     )
-
-
-def _entry_from_json(raw: Any) -> SelfEntry | None:
-    if not isinstance(raw, dict):
-        return None
-    kind = str(raw.get("kind") or "")
-    text = str(raw.get("text") or "").strip()
-    if kind not in KIND_HOURS or not text:
-        return None
-    status = str(raw.get("status") or "active")
-    return SelfEntry(
-        entry_id=str(raw.get("entry_id") or uuid.uuid4().hex[:8])[:16],
-        ts=coerce_finite_float(raw.get("ts"), default=0.0, minimum=0.0),
-        chat_id = str(raw.get("chat_id") or ""),
-        kind    = kind,
-        text    = text[: _text_limit(kind)],
-        expires_at=coerce_finite_float(raw.get("expires_at"), default=0.0, minimum=0.0),
-        status      = status if status in {"active", "done", "dropped"} else "active",
-        source      = str(raw.get("source") or "chat")[:16],
-        counterpart = str(raw.get("counterpart") or "")[:_MAX_NAME_CHARS],
-        shared      = raw.get("shared") is not False,
-    )
-
-
-class SelfTimelineStore(StoreBase):
-    """全部记录放在一个文件里；读写都在实例锁内完成。"""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._lock                            = threading.Lock()
-        self._entries: list[SelfEntry] | None = None
-
-    def bind(self, data_dir) -> None:
-        if data_dir != self._data_dir:
-            with self._lock:
-                self._entries = None
-        super().bind(data_dir)
-
-    def _load_locked(self) -> list[SelfEntry]:
-        if self._entries is None:
-            raw = self._load_json_from_path_parts(*_FILE, default=[])
-            entries       = [entry for item in raw or () if (entry := _entry_from_json(item))]
-            self._entries = entries if isinstance(raw, list) else []
-        return self._entries
-
-    def _save_locked(self) -> None:
-        self._save_json_to_path_parts(*_FILE, data=[asdict(entry) for entry in self._entries or ()])
-
-    def entries(self) -> list[SelfEntry]:
-        with self._lock:
-            return list(self._load_locked())
-
-    def _active(self, chat_id: str, now: float | None, *, stories: bool) -> list[SelfEntry]:
-        moment = time.time() if now is None else now
-        with self._lock:
-            return [
-                entry
-                for entry in self._load_locked()
-                if (entry.kind == STORY) == stories
-                and entry.is_active(moment)
-                and entry.visible_in(chat_id)
-            ]
-
-    def visible(self, chat_id: str, *, now: float | None = None, limit: int = 8) -> list[SelfEntry]:
-        """此会话可见、仍然有效的近况、打算和承诺，最新的在后。"""
-
-        active = self._active(chat_id, now, stories=False)
-        return active[-max(0, limit) :] if limit else []
-
-    def stories(self, chat_id: str, *, now: float | None = None, limit: int = 8) -> list[SelfEntry]:
-        """此会话可见的、她讲过的自己以前的事，最新的在后。"""
-
-        active = self._active(chat_id, now, stories=True)
-        return active[-max(0, limit) :] if limit else []
-
-    def history(self, chat_id: str, *, since: float) -> list[SelfEntry]:
-        """``since`` 之后记下的、此会话可见的全部记录（含已过期、已结束的）。"""
-
-        with self._lock:
-            return [
-                entry
-                for entry in self._load_locked()
-                if entry.ts >= since and entry.visible_in(chat_id)
-            ]
-
-    def apply(
-        self,
-        *,
-        added: Iterable[SelfEntry]          = (),
-        resolved: Iterable[tuple[str, str]] = (),
-        chat_id: str,
-        max_entries: int,
-        now: float | None = None,
-    ) -> None:
-        """写入新记录并结束旧记录；只能结束本会话可见的条目。"""
-
-        moment  = time.time() if now is None else now
-        updates = {
-            entry_id: status for entry_id, status in resolved if status in {"done", "dropped"}
-        }
-        with self._lock:
-            kept: list[SelfEntry] = []
-            for entry in self._load_locked():
-                if entry.entry_id in updates and entry.visible_in(chat_id):
-                    entry = replace(entry, status=updates[entry.entry_id])
-                # 过期或结束的记录再留一周，被问到前几天时还记得自己说过什么。
-                if entry.ts > moment - _HISTORY_SECONDS or entry.is_active(moment):
-                    kept.append(entry)
-            kept.extend(added)
-            # 讲过的往事不和近况抢名额：近况来得多，按条数裁会把往事挤掉。
-            told   = [entry for entry in kept if entry.kind == STORY][-_MAX_STORIES:]
-            recent = [entry for entry in kept if entry.kind != STORY]
-            if max_entries > 0:
-                recent = recent[-max_entries:]
-            self._entries = sorted([*told, *recent], key=lambda entry: entry.ts)
-            self._save_locked()
-
-    def clear(self, chat_id: str) -> None:
-        """会话重置时删掉这个会话里产生的记录。"""
-
-        with self._lock:
-            entries   = self._load_locked()
-            remaining = [entry for entry in entries if entry.chat_id != chat_id]
-            if len(remaining) != len(entries):
-                self._entries = remaining
-                self._save_locked()
 
 
 def _ago(seconds: float) -> str:

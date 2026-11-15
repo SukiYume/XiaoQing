@@ -166,7 +166,6 @@ def test_preselect_needs_median_likes_short_text_and_prefers_light_formats() -> 
         SourceComment("c1.5", "纯图", 60, ("https://i0.hdslb.com/e.webp?x=1",)),
         SourceComment("c1.6", "无图", 70),
     )
-    assert memes._median([50, 40, 90, 5, 60, 70]) == 55.0
     picks = [ref for ref, _ in memes.preselect([item])]
     assert picks == ["c1.5#0", "c1.2#0"][:0] or picks[0] == "c1.5#0"
     assert (
@@ -412,7 +411,7 @@ def _proactive(store: LifeStore, **extra: Any) -> dict[str, Any] | None:
     return tc.turn_context(store, make_cfg(), payload, MOMENT, random.Random(0))[0]
 
 
-def test_proactive_mode_offers_recent_reached_share_episodes_minus_excluded(tmp_path: Path) -> None:
+def test_proactive_mode_offers_recent_tellable_episodes_minus_excluded(tmp_path: Path) -> None:
     store = new_store(tmp_path)
     store.episodes += [
         _episode(1, 2 * HOUR),
@@ -420,10 +419,14 @@ def test_proactive_mode_offers_recent_reached_share_episodes_minus_excluded(tmp_
         _episode(3, 30 * HOUR),
         _episode(4, -HOUR),
         _episode(5, HOUR, share=False),
+        _episode(6, 50 * HOUR),
+        _episode(7, HOUR, share=False, feeling="meh"),
+        _episode(8, HOUR, share=False, auto=True),
     ]
     response = _proactive(store)
     ids      = [c["episode_id"] for c in response["share_candidates"]]
-    assert ids == ["e1", "e2"]  # 24 小时内、已刷到、share=true、新的在前
+    # 两天内、已刷到；她标了想分享的在前，喜欢的跟在后面；没感觉的和自动补的不算
+    assert ids == ["e1", "e2", "e3", "e5"]
     first = response["share_candidates"][0]
     assert (
         "「视频1」" in first["line"]
@@ -434,10 +437,13 @@ def test_proactive_mode_offers_recent_reached_share_episodes_minus_excluded(tmp_
         "猫"
     ]
     assert not first["line"].startswith("- ") and response["life_lines"] == ""
+    assert first["heard_here"] is False
     assert [c["episode_id"] for c in _proactive(store, exclude_ids=["e1"])["share_candidates"]] == [
-        "e2"
+        "e2",
+        "e3",
+        "e5",
     ]
-    assert _proactive(store, exclude_ids=["e1", "e2", "zz"]) is None
+    assert _proactive(store, exclude_ids=["e1", "e2", "e3", "e5", "zz"]) is None
     assert _proactive(new_store(tmp_path / "empty")) is None
 
 
@@ -583,3 +589,73 @@ def test_follow_up_about_the_video_she_just_mentioned_brings_its_gist_back(tmp_p
     assert "讲的是：猫咪在阳台第一次看到下雪" in lines and "新手三脚架" not in lines
     quiet = dict(payload, bot_recent=["今天食堂不错"])
     assert tc.turn_context(store, make_cfg(), quiet, MOMENT, random.Random(0))[0] is None
+
+
+def test_share_line_tells_the_quote_and_keeps_only_her_stance(tmp_path: Path) -> None:
+    store = new_store(tmp_path)
+    store.episodes += [
+        _episode(
+            1,
+            HOUR,
+            share          = False,
+            reaction       = "评论区太会接了",
+            highlight      = "建议改名叫电子榨菜大全",
+            highlight_from = "comment",
+        ),
+        _episode(
+            2,
+            2 * HOUR,
+            feeling        = "mixed",
+            aspects        = {"like": "实验细节", "dislike": "标题党"},
+            highlight      = "270度才不粘",
+            highlight_from = "passage",
+        ),
+    ]
+    first, second = _proactive(store)["share_candidates"]
+    # 记下了原文的排在只有感想的前面；有原文时只带态度，当时那句感想不再给
+    assert [first["episode_id"], second["episode_id"]] == ["e2", "e1"]
+    assert "里面有一句：「270度才不粘」" in first["line"]
+    assert "你喜欢实验细节，不太喜欢标题党" in first["line"]
+    assert "评论区有一句：「建议改名叫电子榨菜大全」，你挺喜欢" in second["line"]
+    assert "评论区太会接了" not in second["line"] and "你当时觉得" not in second["line"]
+    assert "（链接 https://www.bilibili.com/video/BV1）" in second["line"]
+
+
+def test_topic_researched_for_this_chat_is_marked_and_ranked_first(tmp_path: Path) -> None:
+    store = new_store(tmp_path)
+    store.episodes += [
+        _episode(1, HOUR),
+        _episode(2, 20 * HOUR, share=False, feeling="meh", chat_topic="新番推荐"),
+    ]
+    here = _proactive(
+        store, is_private=False, topics=[{"topic": "新番推荐", "keywords": ["十月"]}]
+    )["share_candidates"]
+    assert [(c["episode_id"], c["heard_here"]) for c in here] == [("e2", True), ("e1", False)]
+    assert "（听群里在聊「新番推荐」才去搜的）" in here[0]["line"]
+    # 别的会话聊出来的话题：这条只是她没什么感觉的一条内容，不算可说的事，也不提是听群里聊的
+    elsewhere = _proactive(store, is_private=False, topics=[{"topic": "显卡涨价", "keywords": []}])[
+        "share_candidates"
+    ]
+    assert [c["episode_id"] for c in elsewhere] == ["e1"]
+    assert store.state.get("heard_topics", []) == []  # 主动开口带来的话题词不算又听到一次
+
+
+def test_fresh_learning_is_offered_once(tmp_path: Path) -> None:
+    store = new_store(tmp_path)
+    store.learnings.append(
+        {
+            "id"        : "l1",
+            "topic"     : "锅具预热",
+            "text"      : "预热没有通用的固定秒数",
+            "confidence": "verified",
+            "created_at": NOW - 5 * HOUR,
+        }
+    )
+    store.learnings.append(
+        {"id": "l0", "topic": "旧事", "text": "很久以前查的", "created_at": NOW - 200 * HOUR}
+    )
+    got = _proactive(store)["share_candidates"]
+    assert [c["episode_id"] for c in got] == ["learning:l1"]
+    assert "你这几天自己查明白了一件事（锅具预热）" in got[0]["line"]
+    assert "预热没有通用的固定秒数" in got[0]["line"]
+    assert _proactive(store, exclude_ids=["learning:l1"]) is None

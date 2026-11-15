@@ -14,8 +14,16 @@ from typing import Any
 
 from .config import LifeConfig
 from .days import DAY, day_key
-from .lifecycle import interest_stage
-from .safety import clean_text, is_blocked, is_profane, normalize_for_match, overlap, similar
+from .lifecycle import TOPIC_CHARS, interest_stage
+from .safety import (
+    clean_text,
+    is_blocked,
+    is_profane,
+    mentions_topic,
+    normalize_for_match,
+    overlap,
+    similar,
+)
 from .stores import LifeStore, new_id
 
 logger = logging.getLogger(__name__)
@@ -27,7 +35,6 @@ KINDS            = ("item", "point", "thought", "todo")
 MAX_ENTRIES      = 12
 MAX_OPS          = 3
 TITLE_CHARS      = 20
-TOPIC_CHARS      = 12
 WHY_CHARS        = 60
 INTRO_CHARS      = 80
 ENTRY_CHARS      = 80
@@ -37,6 +44,7 @@ MAX_CANDIDATES   = 3
 SHELVE_DAYS      = 21
 KEEP_DAYS        = 180
 DONE_SHOW_DAYS   = 30
+DONE_THREAD_DAYS = 30
 MIN_DONE_ENTRIES = 4
 RECORD_EPISODES  = 8
 RECORD_NOTES     = 4
@@ -76,7 +84,9 @@ def topics_match(a: str, b: str) -> bool:
     return similar(a, b)
 
 
-def _liked(episode: Mapping[str, Any]) -> bool:
+def liked_episode(episode: Mapping[str, Any]) -> bool:
+    """她这次点开并喜欢（或又爱又嫌）的经历；自动补记的不算。"""
+
     return episode.get("feeling") in ("like", "mixed") and not episode.get("auto")
 
 
@@ -123,7 +133,7 @@ def related_episodes(
     rows  = [
         e
         for e in episodes
-        if _liked(e)
+        if liked_episode(e)
         and float(e.get("at", 0.0)) > since
         and e.get("id") not in cited
         and episode_related(e, str(work["topic"]))
@@ -284,7 +294,7 @@ def _grounded_topic(store: LifeStore, topic: str, now: float) -> bool:
             return True
     return any(
         t.get("status") == "done"
-        and now - float(t.get("updated_at", 0.0)) <= 30 * DAY
+        and now - float(t.get("updated_at", 0.0)) <= DONE_THREAD_DAYS * DAY
         and (
             topics_match(str(t.get("topic", "")), topic)
             or topics_match(str(t.get("title", "")), topic)
@@ -305,10 +315,10 @@ def candidate_topics(store: LifeStore, cfg: LifeConfig, now: float) -> list[str]
     for thread in store.threads:
         if (
             thread.get("status") == "done"
-            and now - float(thread.get("updated_at", 0.0)) <= 30 * DAY
+            and now - float(thread.get("updated_at", 0.0)) <= DONE_THREAD_DAYS * DAY
         ):
             pool.append(str(thread.get("topic") or thread.get("title", ""))[:TOPIC_CHARS])
-    liked = [e for e in store.episodes if _liked(e)]
+    liked = [e for e in store.episodes if liked_episode(e)]
     for episode in liked:
         for topic in episode.get("topics", []):
             if _lasting(float(e.get("at", 0.0)) for e in liked if episode_related(e, str(topic))):
@@ -341,7 +351,7 @@ def start_work(store: LifeStore, cfg: LifeConfig, raw: Any, now: float) -> dict[
         [
             e
             for e in store.episodes
-            if e.get("id") in ids and _liked(e) and episode_related(e, topic)
+            if e.get("id") in ids and liked_episode(e) and episode_related(e, topic)
         ]
         if isinstance(ids, list)
         else []
@@ -518,9 +528,6 @@ def housekeep(works: list[dict[str, Any]], now: float) -> None:
     ]
 
 
-# ───────────────────────────── 整理会话 ─────────────────────────────
-
-
 # ───────────────────────────── 聊天侧 ─────────────────────────────
 
 
@@ -550,14 +557,9 @@ def pick_work(
     """话题和作品对上的那件；``any_work`` 时（问近况 / 想看）没对上也取最近动过的。"""
 
     rows   = shown_works(works, now)
+    folded = normalize_for_match(context)
     scored = [(overlap(context, f"{w['title']} {w['topic']}"), w) for w in rows]
-    scored = [
-        p
-        for p in scored
-        if p[0] >= 2
-        or normalize_for_match(str(p[1]["topic"])) in normalize_for_match(context)
-        and len(normalize_for_match(str(p[1]["topic"]))) >= 2
-    ]
+    scored = [p for p in scored if p[0] >= 2 or mentions_topic(folded, str(p[1]["topic"]))]
     if scored:
         return max(scored, key=lambda p: p[0])[1]
     if any_work and rows:

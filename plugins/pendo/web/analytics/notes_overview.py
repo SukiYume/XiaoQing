@@ -5,19 +5,29 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
+from ...config import PendoConfig
 from ...services.db import Database
 from ...utils.identifiers import public_id
-from ...utils.time_utils import TimezoneHelper, now_in_timezone
-from ..utils import parse_iso_date
+from ...utils.time_utils import TimezoneHelper, iso_week_key, shift_months
+from ..utils import clean_optional_text, parse_argument_day, parse_iso_date, resolve_today
 
 JsonObject         = dict[str, Any]
 CadenceGranularity = Literal["day", "week", "month", "year"]
 
-_NOTE_CATEGORY_SQL    = "COALESCE(NULLIF(TRIM(i.category), ''), '未分类')"
+_NOTE_CATEGORY_SQL    = f"COALESCE(NULLIF(TRIM(i.category), ''), '{PendoConfig.DEFAULT_CATEGORY}')"
 _NOTE_CREATED_DAY_SQL = "pendo_local_date(i.created_at, :timezone)"
 _NOTE_TAGS_SQL        = "CASE WHEN json_valid(i.tags) THEN i.tags ELSE '[]' END"
+# “近 7 天新增”含今天，窗口从 :week_start 到 :today，调用方传入这两个参数。
+_NOTE_WEEK_NEW_COUNT_SQL = f"""COALESCE(SUM(CASE WHEN {_NOTE_CREATED_DAY_SQL} BETWEEN :week_start AND :today
+                                 THEN 1 ELSE 0 END), 0) AS week_new_count"""
+# 最近更新在前；没有更新时间时按创建时间，时间相同按 ID 稳定排序。
+_NOTE_RECENT_ORDER_SQL = """ORDER BY pendo_utc_epoch(
+                       COALESCE(NULLIF(i.updated_at, ''), i.created_at), :timezone
+                     ) DESC,
+                     i.id DESC"""
+_WEEK_NEW_WINDOW_DAYS = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,17 +42,6 @@ class _NotePeriod:
     granularity  : CadenceGranularity
 
 
-def _parse_argument_day(value: str | None, field_name: str) -> date | None:
-    """解析可选日期参数；显式非法值不能静默退回默认日期。"""
-
-    if value is None or not value.strip():
-        return None
-    parsed = parse_iso_date(value)
-    if parsed is None:
-        raise ValueError(f"{field_name} must be a valid ISO date")
-    return cast(date, parsed)
-
-
 def _resolve_period(
     db: Database,
     owner_id: str,
@@ -52,9 +51,9 @@ def _resolve_period(
 ) -> _NotePeriod:
     """校验请求范围，并为当前周期裁掉尚未发生的未来日期。"""
 
-    today_day   = _parse_argument_day(today, "today") or now_in_timezone(owner_id, db).date()
-    range_start = _parse_argument_day(start_date, "start_date")
-    range_end   = _parse_argument_day(end_date, "end_date")
+    today_day   = resolve_today(db, owner_id, today)
+    range_start = parse_argument_day(start_date, "start_date")
+    range_end   = parse_argument_day(end_date, "end_date")
     if (range_start is None) != (range_end is None):
         raise ValueError("start_date and end_date must be provided together")
     if range_start is None or range_end is None:
@@ -121,13 +120,12 @@ def _cadence_slots(
         while cursor <= final:
             key = cursor.strftime("%Y-%m")
             slots.append((key, {"date": cursor.isoformat(), "label": key, "month": key}))
-            cursor = date(cursor.year + cursor.month // 12, cursor.month % 12 + 1, 1)
+            cursor = shift_months(cursor, 1)
         return slots
 
     if granularity == "week":
         cursor = start_day - timedelta(days=start_day.weekday())
         while cursor <= end_day:
-            iso = cursor.isocalendar()
             key = cursor.isoformat()
             slots.append(
                 (
@@ -135,7 +133,7 @@ def _cadence_slots(
                     {
                         "date" : key,
                         "label": f"{cursor.month}/{cursor.day}",
-                        "week" : f"{iso.year}-W{iso.week:02d}",
+                        "week" : iso_week_key(cursor),
                     },
                 )
             )
@@ -212,11 +210,11 @@ def build_notes_overview(
     """生成指定范围内的笔记数量、分类、标签、趋势和近期预览。"""
 
     period              = _resolve_period(db, owner_id, today, start_date, end_date)
-    normalized_category = (category or "").strip() or None
+    normalized_category = clean_optional_text(category)
     tag_query           = (tags or "").strip().casefold()
     where, params = _note_where(period, owner_id, normalized_category, tag_query)
     params["timezone"] = TimezoneHelper.get_user_timezone(owner_id, db).key
-    week_start = period.today - timedelta(days=6)
+    week_start = period.today - timedelta(days=_WEEK_NEW_WINDOW_DAYS - 1)
     conn    = db.get_connection()
     summary = conn.execute(
         f"""
@@ -224,8 +222,7 @@ def build_notes_overview(
                COALESCE(SUM(LENGTH(TRIM(COALESCE(i.content, '')))), 0) AS total_length,
                COALESCE(SUM(CASE WHEN json_array_length({_NOTE_TAGS_SQL}) > 0
                                  THEN 1 ELSE 0 END), 0) AS tagged_count,
-               COALESCE(SUM(CASE WHEN {_NOTE_CREATED_DAY_SQL} BETWEEN :week_start AND :today
-                                 THEN 1 ELSE 0 END), 0) AS week_new_count
+               {_NOTE_WEEK_NEW_COUNT_SQL}
         FROM items AS i
         WHERE {where}
         """,
@@ -306,10 +303,7 @@ def build_notes_overview(
                    i.created_at, i.updated_at
             FROM items AS i
             WHERE {where}
-            ORDER BY pendo_utc_epoch(
-                       COALESCE(NULLIF(i.updated_at, ''), i.created_at), :timezone
-                     ) DESC,
-                     i.id DESC
+            {_NOTE_RECENT_ORDER_SQL}
             LIMIT 6
             """,
             params,
@@ -357,21 +351,20 @@ def build_notes_widget_overview(
 
     if limit <= 0:
         raise ValueError("limit must be positive")
-    period = _resolve_period(db, owner_id, today, None, None)
-    week_start = period.today - timedelta(days=6)
+    today_day = resolve_today(db, owner_id, today)
+    week_start = today_day - timedelta(days=_WEEK_NEW_WINDOW_DAYS - 1)
     timezone_name = TimezoneHelper.get_user_timezone(owner_id, db).key
     conn          = db.get_connection()
     summary       = conn.execute(
         f"""
         SELECT COUNT(*) AS total_count,
-               COALESCE(SUM(CASE WHEN {_NOTE_CREATED_DAY_SQL} BETWEEN :week_start AND :today
-                                 THEN 1 ELSE 0 END), 0) AS week_new_count
+               {_NOTE_WEEK_NEW_COUNT_SQL}
         FROM items AS i
         WHERE i.owner_id = :owner_id AND i.type = 'note' AND i.deleted = 0
         """,
         {
             "week_start": week_start.isoformat(),
-            "today"     : period.today.isoformat(),
+            "today"     : today_day.isoformat(),
             "owner_id"  : owner_id,
             "timezone"  : timezone_name,
         },
@@ -383,10 +376,7 @@ def build_notes_widget_overview(
             SELECT i.id, i.title, i.content, {_NOTE_CATEGORY_SQL} AS category
             FROM items AS i
             WHERE i.owner_id = :owner_id AND i.type = 'note' AND i.deleted = 0
-            ORDER BY pendo_utc_epoch(
-                       COALESCE(NULLIF(i.updated_at, ''), i.created_at), :timezone
-                     ) DESC,
-                     i.id DESC
+            {_NOTE_RECENT_ORDER_SQL}
             LIMIT :limit
             """,
             {"owner_id": owner_id, "timezone": timezone_name, "limit": limit},

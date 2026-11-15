@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 import time
-from pathlib import Path
 from typing import Any
 
 from ..config.config import PersonalityConfig
@@ -31,12 +30,8 @@ class MessageRecorder(StoreBase):
         self._state: dict[str, Any]  = {}
         self._active_chats: set[str] = set()
 
-    def bind(self, data_dir: Path) -> None:
-        """切换数据根时丢弃旧根缓存；重复绑定同一路径不触发无谓重读。"""
-
-        if self._data_dir != data_dir:
-            self._state = {}
-        super().bind(data_dir)
+    def _drop_cache(self) -> None:
+        self._state = {}
 
     def _load(self) -> None:
         if self._state:
@@ -147,11 +142,11 @@ async def extract_and_learn(
     jargon_store: JargonStore | None,
     recorder: MessageRecorder,
     personality: PersonalityConfig,
-    min_interval_seconds: float = 60.0,
-    min_messages: int           = 10,
-    self_reflect: bool          = True,
-    max_store: int              = 2000,
+    min_interval_seconds: float,
+    min_messages: int,
+    max_store: int,
     llm: LLMCallConfig,
+    self_reflect: bool = True,
 ) -> int:
     """抽取一个冻结的消息窗口，并把表达、黑话和水位作为同轮结果推进。"""
 

@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .config import materialize_snapshot_value
+from .config import materialize_snapshot_value, secret_path_parts
 from .delivery import DeliverySegments
 from .interfaces import MAX_COMMAND_REQUEST_TEXT_CHARS, MAX_COMMAND_REQUEST_TEXTS
 
@@ -16,27 +16,22 @@ if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
 
 
-def _secret_path_parts(path: str) -> list[str]:
-    parts = str(path or "").split(".")
-    if not parts or any(not re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in parts):
-        raise ValueError("invalid secret path")
-    return parts
-
-
 @dataclass(frozen=True)
 class SecretAdminService:
+    """全局密钥的读写；每次调用前按 ``/set_secret`` 命令的声明复核此人此刻仍有权使用。"""
+
     _authorized: Callable[[], bool]
     _snapshot  : Callable[[], Mapping[str, Any]]
     _writer    : Callable[[str, Any], None]
 
     def _ensure_authorized(self) -> None:
         if not self._authorized():
-            raise PermissionError("global secret administration requires a Bot admin private chat")
+            raise PermissionError("global secret administration is no longer authorized")
 
     def get(self, path: str) -> Any:
         self._ensure_authorized()
         current: Any = self._snapshot()
-        for part in _secret_path_parts(path):
+        for part in secret_path_parts(path):
             if not isinstance(current, Mapping) or part not in current:
                 raise KeyError(f"secret path does not exist: {path}")
             current = current[part]
@@ -44,7 +39,7 @@ class SecretAdminService:
 
     def set(self, path: str, value: Any) -> None:
         self._ensure_authorized()
-        _secret_path_parts(path)
+        secret_path_parts(path)
         self._writer(path, value)
 
 
@@ -271,6 +266,54 @@ class LifeContextService:
         return self._mapping_or_none(result, "life meme export")
 
 
+MEMORY_METHODS = ("record", "recall", "search", "forget")
+
+
+@dataclass(frozen=True)
+class MemoryService:
+    """xiaoqing_chat / xiaoqing_agent / xiaoqing_life → xiaoqing_memory 的固定桥。
+
+    调用方名字和主体所在的范围由 Core 写进载荷，覆盖调用方自己填的同名字段；可见性和
+    各调用方能读写什么由记忆插件按这几个字段判断。
+    """
+
+    _caller         : str
+    _principal_kind : str
+    _principal_scope: str
+    _methods        : Mapping[str, Callable[[dict[str, Any]], Awaitable[Any]]]
+
+    async def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        invoke = self._methods.get(method)
+        if invoke is None:
+            raise RuntimeError(f"memory.{method} is not declared by this plugin")
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"memory {method} payload must be a mapping")
+        request = {
+            **dict(payload),
+            "caller"         : self._caller,
+            "principal_kind" : self._principal_kind,
+            "principal_scope": self._principal_scope,
+        }
+        result = await invoke(request)
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError(f"memory {method} result must be a mapping or None")
+        return result
+
+    async def record(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await self._call("record", payload)
+
+    async def recall(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await self._call("recall", payload)
+
+    async def search(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await self._call("search", payload)
+
+    async def forget(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await self._call("forget", payload)
+
+
 @dataclass(frozen=True)
 class CodexAgentTaskService:
     """xiaoqing_agent → codex：提交一个任务并等到它结束。"""
@@ -341,7 +384,7 @@ class SSHAgentCommandService:
 
 @dataclass(frozen=True)
 class LocalToolsService:
-    """agent 的本机工具（代码执行、文件读写）每次调用前复核发起人仍是 Bot 管理员。"""
+    """agent 的本机工具（代码执行、文件读写）：每次调用前按 ``/shell`` 命令的声明复核发起人此刻仍有权使用。"""
 
     _authorized: Callable[[], bool]
 

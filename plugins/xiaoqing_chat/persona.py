@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from core.constants import DEFAULT_BOT_NAME
+from core.plugin_base import resolve_bot_name
 
 from .life.schedule import parse_routine
 
@@ -34,13 +34,6 @@ _TAG_RE     = re.compile(r"〔([^〕]*)〕")
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _BULLET_RE  = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 _NAME_SLOT  = "{{name}}"
-
-
-def resolve_bot_name(value: object) -> str:
-    """返回清理后的运行时名称；空值沿用项目默认名称。"""
-
-    name = str(value or "").strip()
-    return name or DEFAULT_BOT_NAME
 
 
 @dataclass(frozen=True, slots=True)

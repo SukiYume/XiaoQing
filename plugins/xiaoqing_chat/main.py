@@ -18,6 +18,7 @@ from core.router import (
     resolve_context_command_invocation,
 )
 
+from .chat_event import COMMAND_FORCED_EVENT_KEY
 from .chat_runtime import ai_route_context, configured_bot_name, llm_call_config, load_runtime
 from .commands import (
     handle_config,
@@ -29,14 +30,16 @@ from .commands import (
     handle_review,
 )
 from .handler_context import validate_action_list
-from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
+from .handlers import (
     handle_smalltalk,
-    observe_message,
-    observe_outgoing_action,
+    observe_message,  # noqa: F401 - Core 按名称调用观察入口
+    observe_outgoing_action,  # noqa: F401
 )
 from .life.daily_life import ensure_today
 from .life.online import probe_online_life, sync_life_memes
 from .life.proactive import run_proactive
+from .memory.client import sync_all as sync_memory
+from .name_call import call_bot_name_only  # noqa: F401 - Core 在只喊名字、只 @ 时调用
 from .runtime_state import get_state as _state
 from .store_binding import bound_state
 
@@ -46,7 +49,10 @@ CommandResponse = list[dict[str, Any]]
 CommandHandler  = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse]]
 
 
-# 子命令只在这里绑定业务处理器；名称、别名、权限和帮助仍以 manifest 目录为准。
+_COMMAND_ROOT = "xiaoqing_chat.xc"
+
+# 子命令只在这里绑定业务处理器；名称、别名、权限和帮助以 manifest 目录为准，
+# 目录暂不可用时才按这里的键认子命令。
 _HANDLERS: dict[str, CommandHandler] = {
     "reset"     : lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
     "stats"     : lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
@@ -63,11 +69,11 @@ _HANDLERS: dict[str, CommandHandler] = {
 def _catalog_root(context: Any) -> CommandCatalogNode | None:
     """优先复用 Dispatcher 注入的快照，直接调用时再查同一 Core 目录。"""
 
-    return get_context_command_root(context, "xiaoqing_chat.xc")
+    return get_context_command_root(context, _COMMAND_ROOT)
 
 
 def _resolve_invocation(args: str, context: Any) -> CommandInvocation | None:
-    return resolve_context_command_invocation(context, "xiaoqing_chat.xc", args)
+    return resolve_context_command_invocation(context, _COMMAND_ROOT, args)
 
 
 def _help_text(context: Any) -> str:
@@ -84,9 +90,8 @@ async def init(context=None) -> None:
     state.start_accepting_background_tasks()
     if context is not None:
         from .media.loading import run_media_blocking
-        from .store_binding import bind_all_stores
 
-        bind_all_stores(state, context.data_dir)
+        state = bound_state(context)
         await run_media_blocking(state.media_store.load)
         log = context.logger
         log.info("XiaoQing Chat plugin initialized")
@@ -155,7 +160,7 @@ async def handle(
             # 插件调用命令不是有人在说话：不能写进聊天记忆，也不能再转回 agent 形成循环。
             return segments("/xc 的聊天入口只接受真人消息，不能作为工具调用。")
         # 显式 /xc 命令 → 标记强制回复，跳过概率判断
-        event["_xc_command_forced"] = True
+        event[COMMAND_FORCED_EVENT_KEY] = True
         return await handle_smalltalk(text, event, context)
 
     except Exception as exc:
@@ -256,6 +261,19 @@ async def scheduled_life_memes(context) -> None:
         await sync_life_memes(context, runtime)
     except Exception as exc:
         public_error_message(context, exc, logger=logger, component="xiaoqing_chat.life_memes")
+
+
+async def scheduled_memory_sync(context) -> None:
+    """把各会话近期历史里还没推给统一记忆的消息推过去（首次启动的种子、推送失败后的补推）。"""
+
+    try:
+        pushed = await sync_memory(
+            context, bound_state(context), bot_name=configured_bot_name(context)
+        )
+        if pushed:
+            logger.info("xiaoqing_chat memory.sync chats=%d", pushed)
+    except Exception as exc:
+        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.memory_sync")
 
 
 async def scheduled_proactive(context) -> list[Any]:

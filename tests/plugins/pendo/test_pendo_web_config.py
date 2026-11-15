@@ -19,15 +19,14 @@ from plugins.pendo.web.api.config_routes import (
 )
 
 
-def test_config_router_registers_current_and_legacy_read_paths() -> None:
-    """当前配置路径和仍被旧客户端使用的模板别名都应保持注册。"""
+def test_config_router_registers_the_read_paths() -> None:
+    """配置只读接口都挂在 /config 下。"""
 
     paths = {route.path for route in router.routes}
 
     assert paths == {
         "/config/categories",
         "/config/diary/templates",
-        "/diary/templates",
         "/config/diary/moods",
     }
 

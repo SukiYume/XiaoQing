@@ -18,6 +18,9 @@ import uuid
 from collections.abc import Mapping, Sequence, Set
 from typing import Any
 
+from .delivery import CommandOutcome, DeliverySegments
+from .sensitive_audit import AUDIT_ID_RE
+
 PUBLIC_ERROR_CODE = "XQ-PLUGIN-UNEXPECTED"
 PUBLIC_ERROR_TEXT = "操作失败，请稍后重试"
 
@@ -31,7 +34,6 @@ _MAX_SECRET_VALUES    = 512
 _MAX_EXCEPTION_CHAIN  = 8
 _MAX_TRACEBACK_FRAMES = 48
 
-_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
 _SAFE_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}\Z")
 _AUTHORIZATION = re.compile(r"(?i)\bauthorization\s*[:=]\s*(?:(?:bearer|basic)\s+)?[^\s,;]+")
 _AUTH_SCHEME = re.compile(r"(?i)\b(bearer|basic)\s+[^\s,;]+")
@@ -256,7 +258,7 @@ def _normalize_request_id(value: object, secrets: tuple[str, ...]) -> str:
     candidate = _bounded_string(value, limit=_MAX_REQUEST_ID_CHARS)
     if (
         candidate is not None
-        and _SAFE_REQUEST_ID.fullmatch(candidate)
+        and AUDIT_ID_RE.fullmatch(candidate)
         and not _secret_conflicts_with_request_id(candidate, secrets)
     ):
         return candidate
@@ -456,7 +458,7 @@ def public_error_response(
     *,
     logger: object,
     component: str,
-) -> list[dict[str, Any]]:
+) -> DeliverySegments:
     """Return a OneBot text action containing only the safe public message."""
 
     message = public_error_message(
@@ -465,8 +467,6 @@ def public_error_response(
         logger    = logger,
         component = component,
     )
-    from .delivery import CommandOutcome, DeliverySegments
-
     return DeliverySegments(
         [{"type": "text", "data": {"text": message}}], outcome=CommandOutcome("error")
     )

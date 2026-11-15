@@ -9,6 +9,8 @@ import math
 from decimal import Decimal
 from typing import Any
 
+from core.plugin_base import has_control_characters
+
 from .catalog import capabilities, resolve_device
 from .client import BridgeError, reserve_request
 from .feeding import check_requested_amount, reject_unchecked_forwarding, wire_arguments
@@ -24,7 +26,7 @@ def validate_value(schema: dict[str, Any], value: Any) -> None:
     if fmt == "bool":
         valid = type(value) is bool
     elif fmt == "string":
-        valid = isinstance(value, str) and len(value) <= 2000 and all(ord(c) >= 32 for c in value)
+        valid = isinstance(value, str) and len(value) <= 2000 and not has_control_characters(value)
     elif fmt in {"float", "double"}:
         valid = type(value) in {int, float} and math.isfinite(value)
     elif fmt in {"uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64"}:

@@ -31,8 +31,10 @@ from core.router import (
 
 from .commands.admin_commands import (
     handle_manage_activity,
+    handle_manage_announce,
     handle_manage_ban,
     handle_manage_config,
+    handle_manage_delete,
     handle_manage_disable,
     handle_manage_enable,
     handle_manage_log,
@@ -72,17 +74,17 @@ from .commands.basic_commands import (
 )
 from .commands.new_commands import (
     handle_dress,
-    handle_manage_announce,
-    handle_manage_delete,
     handle_recall,
     handle_show,
     handle_trade,
 )
+from .commands.parsing import split_first_word
 from .models import GroupConfig, GroupConfigReadError
 from .services.database import Database
 from .services.pet_service import PetService
 from .services.social_service import SocialService
-from .utils.constants import ANTI_SPAM_CONFIG, GROUP_RATE_LIMIT
+from .utils.constants import ANTI_SPAM_CONFIG, GROUP_RATE_LIMIT, PET_ACTION_LABELS
+from .utils.formatters import rank_label
 from .utils.router import CommandRouter
 from .utils.time import business_date, business_week
 
@@ -134,9 +136,8 @@ _PRIVATE_AUTO_SCOPE_COMMANDS = frozenset(
 _PRIVATE_ALWAYS_ALLOWED_COMMANDS = frozenset(
     {"help", "basic", "advanced", "item", "social", "gameplay", "management"}
 )
-_SPAM_DECAY_COMMANDS = frozenset({"feed", "clean", "play", "train", "explore"})
+_SPAM_DECAY_COMMANDS = frozenset(PET_ACTION_LABELS)
 _MESSAGE_ID_COMMANDS = frozenset({"visit", "game"})
-_SHOW_MEDALS         = ("🥇", "🥈", "🥉")
 _ADMIN_HANDLERS      = {
     "enable"  : handle_manage_enable,
     "disable" : handle_manage_disable,
@@ -182,15 +183,6 @@ def _get_logger(context):
     if context and hasattr(context, "logger"):
         return context.logger
     return logging.getLogger(__name__)
-
-
-def _split_command(raw: str) -> tuple[str, str] | None:
-    """把原始参数拆成首个命令词和剩余参数。"""
-    text = raw.strip()
-    if not text:
-        return None
-    parts = text.split(maxsplit=1)
-    return parts[0], parts[1] if len(parts) > 1 else ""
 
 
 def _extract_first_at_qq(event: dict[str, Any]) -> str:
@@ -332,12 +324,10 @@ def _get_anti_spam_state(user_id: str, group_id: int) -> tuple[str | None, float
         return None, 1.0
 
     recent_count = _db_instance.get_recent_command_count(
-        user_id, group_id, int(ANTI_SPAM_CONFIG["window_seconds"])
+        group_id, int(ANTI_SPAM_CONFIG["window_seconds"]), user_id=user_id
     )
     max_commands = int(ANTI_SPAM_CONFIG["max_commands"])
-    hard_limit   = max(
-        max_commands + 1, int(ANTI_SPAM_CONFIG.get("hard_block_commands", max_commands * 2))
-    )
+    hard_limit   = max(max_commands + 1, int(ANTI_SPAM_CONFIG["hard_block_commands"]))
     if recent_count >= hard_limit:
         return "⚠️ 操作过于频繁，请稍后再试", 0.0
 
@@ -352,7 +342,7 @@ def _is_group_rate_limited(group_id: int) -> bool:
     if _db_instance is None:
         return False
 
-    recent_count = _db_instance.get_group_recent_command_count(
+    recent_count = _db_instance.get_recent_command_count(
         group_id, GROUP_RATE_LIMIT["window_seconds"]
     )
 
@@ -390,25 +380,11 @@ def _resolve_private_command_group(
     return None, f"你在多个群拥有宠物，请在对应群内使用该命令（可用群号：{groups}）"
 
 
-def _extract_message(result: Any) -> str:
-    """
-    将子命令的 ``(success, message)`` 或字符串结果统一提取为响应文本。
-    """
-    if isinstance(result, tuple):
-        if len(result) > 1:
-            return str(result[1])
-        if len(result) == 1:
-            return str(result[0])
-        return ""
-    return str(result) if result is not None else ""
-
-
-def _normalize_plugin_output(result: Any) -> list[dict[str, Any]]:
+def _normalize_plugin_output(result: str | None) -> list[dict[str, Any]]:
+    """``None`` 表示本次不回复；其余文本包成消息段。"""
     if result is None:
         return []
-    if isinstance(result, list):
-        return cast(list[dict[str, Any]], result)
-    return cast(list[dict[str, Any]], segments(str(result)))
+    return cast(list[dict[str, Any]], segments(result))
 
 
 # ──────────────────── 命令路由 ────────────────────
@@ -482,9 +458,11 @@ def _get_router(context: Any = None) -> CommandRouter:
             category_name = fixed_category
             if not fixed_category and requested:
                 help_node = root.resolve_child("help")
-                parts = requested.split(maxsplit=1)
-                category = help_node.resolve_child(parts[0]) if help_node is not None else None
-                if category is None or len(parts) > 1:
+                requested_name, extra = split_first_word(requested)
+                category = (
+                    help_node.resolve_child(requested_name) if help_node is not None else None
+                )
+                if category is None or extra:
                     return False, "未知帮助类别；请使用 /宠物 help 查看分类"
                 category_name = category.name
             if category_name:
@@ -555,10 +533,9 @@ def _parse_requested_action(
 
     # 不再把重复写的根命令剥掉重新解析：Core 只按它解析到的节点授权，
     # 插件自行解析出的更深节点（例如管理命令）没有经过授权检查。
-    parsed = _split_command(args)
-    if parsed is None:
+    action, rest_args = split_first_word(args)
+    if not action:
         return None
-    action, rest_args = parsed
     return action.casefold(), rest_args, invocation
 
 
@@ -688,7 +665,7 @@ def _execute_qingpet_command(
     user_id: str,
     group_id: int,
     is_private: bool,
-) -> Any:
+) -> str | None:
     """完成一次子命令的作用域解析、限流、授权与分发。"""
 
     parsed = _parse_requested_action(args, context)
@@ -749,7 +726,8 @@ def _execute_qingpet_command(
                 invocation,
             ),
         )
-        return _extract_message(result)
+        # 所有处理器都返回 (是否成功, 回复文本)。
+        return str(result[1])
     except Exception as exc:
         return public_error_message(
             context,
@@ -820,16 +798,15 @@ def _handle_admin_command(
     谁能用由 plugin.json 里 admin 的声明决定（当前群的群主、群管理员或 Bot 管理员），
     Core 在调用插件前就检查过了，这里只负责分派。
     """
-    parsed = _split_command(args)
+    action, rest_args = split_first_word(args)
 
-    if parsed is None:
+    if not action:
         return (
             True,
             "用法: /宠物 管理 <子命令>\n"
             "可用子命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 公告, 活动",
         )
 
-    action, rest_args = parsed
     if (
         command_invocation is not None
         and len(command_invocation.chain) > 2
@@ -844,8 +821,7 @@ def _handle_admin_command(
 
     handler = _ADMIN_HANDLERS.get(action)
     if handler is not None:
-        success, message = handler(user_id, group_id, rest_args, db)
-        return bool(success), str(message)
+        return handler(user_id, group_id, rest_args, db)
 
     return (
         False,
@@ -1001,7 +977,6 @@ async def scheduled_daily_reset(context) -> None:
             logger    = log,
             component = "qingpet.schedule.daily_reset",
         )
-    return
 
 
 async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
@@ -1032,7 +1007,7 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
                 lines = ["🎉 本周活动结算", ""]
                 for index, winner in enumerate(settlement.winners):
                     line = (
-                        f"{_SHOW_MEDALS[index]} {winner.pet_name} "
+                        f"{rank_label(index)} {winner.pet_name} "
                         f"({winner.user_id}) - {winner.score}%"
                     )
                     if winner.coins_granted > 0:

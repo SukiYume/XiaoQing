@@ -286,7 +286,7 @@ function normalizeDashboardData(payload) {
             tasks_pending: nonNegativeInteger(summary.tasks_pending),
             tasks_done_recent: nonNegativeInteger(summary.tasks_done_recent),
             ledger_month_expense: Math.max(0, finiteNumber(summary.ledger_month_expense)),
-            diary_month: nonNegativeInteger(summary.diary_month),
+            diary_recent: nonNegativeInteger(summary.diary_recent),
         },
         eventsAgenda: Array.isArray(data.events_agenda) ? records(data.events_agenda) : eventsMonth,
         tasks: {
@@ -351,7 +351,7 @@ function renderSummaryCards(summary) {
             tone: 'diary',
             icon: '📖',
             badge: '记录',
-            value: String(summary.diary_month),
+            value: String(summary.diary_recent),
             label: '近 30 天日记',
             meta: '保留最近生活轨迹',
         },
@@ -660,13 +660,13 @@ function renderDiaryPanel(summary) {
             <div class="dashboard-diary-panel">
                 <div class="dashboard-diary-copy">
                     <strong>📖 日记记录</strong>
-                    <p>近 30 天共写了 ${summary.diary_month} 篇。</p>
+                    <p>近 30 天共写了 ${summary.diary_recent} 篇。</p>
                     <div class="dashboard-diary-link">
                         <a class="dashboard-link" href="#/diary">去写日记 →</a>
                     </div>
                 </div>
                 <div class="dashboard-diary-stat">
-                    <strong>${summary.diary_month}</strong>
+                    <strong>${summary.diary_recent}</strong>
                     <span>近 30 天记录</span>
                 </div>
             </div>

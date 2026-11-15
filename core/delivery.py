@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -166,6 +166,22 @@ class DeliveryReceipt:
                     self._committed = True
 
 
+def merge_delivery_outcomes(outcomes: Iterable[bool | None]) -> bool | None:
+    """几部分各自的送达结果合成一个：任一部分明确失败为 ``False``，全部明确送达为 ``True``，其余为 ``None``。
+
+    和 ``DeliveryReceipt.record`` 对一条消息的几个物理动作用的是同一条规则：有一部分明确没发
+    出去，整体就按没发出去算，之后可以重来。
+    """
+
+    merged: bool | None = True
+    for outcome in outcomes:
+        if outcome is False:
+            return False
+        if outcome is None:
+            merged = None
+    return merged
+
+
 @dataclass(frozen=True, slots=True)
 class CommandOutcome:
     """执行状态、机器可读结果与下一页命令；后台任务由原插件通知完成。"""
@@ -262,6 +278,27 @@ async def send_with_receipt(
     if not receipt.resolved and not receipt.handoff_pending:
         await receipt.record(outcome)
     return outcome
+
+
+async def send_sensitive_private(
+    context: Any, recipient: int, message: list[dict[str, Any]]
+) -> bool | None:
+    """给一个人私聊发敏感内容（登录二维码、验证提示）：动作带敏感标记，不进日志和聊天上下文。
+
+    返回适配器明确给出的成败；结果不明是 ``None``，发送本身抛错算失败。
+    """
+
+    try:
+        result = await context.send_action(
+            {
+                "action"            : "send_private_msg",
+                "params"            : {"user_id": recipient, "message": message},
+                SENSITIVE_ACTION_KEY: True,
+            }
+        )
+        return result if result is True or result is False else None
+    except Exception:
+        return False
 
 
 def strip_receipt(action: dict[str, Any]) -> dict[str, Any]:

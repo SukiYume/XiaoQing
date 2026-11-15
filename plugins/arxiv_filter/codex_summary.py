@@ -9,6 +9,8 @@ import re
 from core.interfaces import PluginContextProtocol
 from core.public_errors import public_error_message
 
+from .utils import ARXIV_ABS_URL_PREFIX
+
 logger = logging.getLogger(__name__)
 
 _ARXIV_ABS_LINK_RE = re.compile(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?")
@@ -17,7 +19,7 @@ _ARXIV_ABS_LINK_RE = re.compile(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5}
 def extract_arxiv_links(text: str) -> list[str]:
     links: list[str] = []
     for match in _ARXIV_ABS_LINK_RE.finditer(text):
-        links.append(f"https://arxiv.org/abs/{match.group(1)}")
+        links.append(f"{ARXIV_ABS_URL_PREFIX}{match.group(1)}")
     return list(dict.fromkeys(links))
 
 

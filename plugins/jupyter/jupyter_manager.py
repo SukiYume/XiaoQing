@@ -9,11 +9,9 @@ import inspect
 import logging
 import math
 import re
-import shutil
 import threading
 import time
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty as QueueEmpty
@@ -43,10 +41,7 @@ from .jupyter_models import ExecutionResult
 
 logger = logging.getLogger(__name__)
 
-_LEGACY_FIGURE_DIR_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
-_LEGACY_FIGURE_FILE_PATTERN = re.compile(r"output_[0-9]{10}_[0-9]+\.png\Z")
-_MAX_LEGACY_FIGURE_ENTRIES = 4_096
-_ANSI_ESCAPE_PATTERN = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
+_ANSI_ESCAPE_PATTERN   = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
 _PNG_FORMAT_EXTENSIONS = {"PNG": ".png"}
 
 # 可选依赖允许安装后重试，因此失败状态不是永久缓存。
@@ -168,9 +163,7 @@ class JupyterKernelManager:
     _instances_lock                                                   = threading.Lock()
 
     def __init__(self, data_dir: Path):
-        self.data_dir    = Path(data_dir)
-        self.figures_dir = self.data_dir / "figures"
-        self._cleanup_legacy_figures()
+        self.data_dir = Path(data_dir)
 
         self._km: Any | None                                  = None
         self._kc: Any | None                                  = None
@@ -187,48 +180,6 @@ class JupyterKernelManager:
         self._last_activity                            = 0.0
         self._shutdown_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None   = None
-
-    def _cleanup_legacy_figures(self) -> None:
-        """有界删除两代旧输出布局，同时保留链接和无关用户文件。"""
-
-        try:
-            # ``Path.iterdir()`` 延迟到首次迭代才访问目录，异常边界必须包住循环。
-            for index, child in enumerate(self.figures_dir.iterdir()):
-                if index >= _MAX_LEGACY_FIGURE_ENTRIES:
-                    log_sensitive_audit(
-                        logger,
-                        "jupyter.figures.migration",
-                        status     = "bounded",
-                        error_type = "EntryLimit",
-                        level      = logging.WARNING,
-                    )
-                    break
-                self._remove_legacy_figure(child)
-        except (FileNotFoundError, NotADirectoryError, OSError):
-            return
-        with suppress(OSError):
-            self.figures_dir.rmdir()
-
-    @staticmethod
-    def _remove_legacy_figure(child: Path) -> None:
-        """只删除名称和类型都符合旧插件布局的真实文件。"""
-
-        try:
-            if child.is_symlink():
-                return
-            if child.is_dir() and _LEGACY_FIGURE_DIR_PATTERN.fullmatch(child.name):
-                shutil.rmtree(child)
-                return
-            if child.is_file() and _LEGACY_FIGURE_FILE_PATTERN.fullmatch(child.name):
-                child.unlink()
-        except OSError:
-            log_sensitive_audit(
-                logger,
-                "jupyter.figures.migration",
-                status     = "error",
-                error_type = "LegacyCleanupError",
-                level      = logging.WARNING,
-            )
 
     @staticmethod
     def _instance_key(data_dir: Path, owner_key: str) -> str:
@@ -256,19 +207,22 @@ class JupyterKernelManager:
             return instance
 
     @classmethod
+    def _unregister_locked(cls, instance: JupyterKernelManager) -> None:
+        """从活动注册表摘掉实例；调用方必须持有 ``_instances_lock``。"""
+
+        for key in [key for key, value in cls._instances.items() if value is instance]:
+            cls._instances.pop(key, None)
+
+    @classmethod
     def _isolate_instance(cls, instance: JupyterKernelManager) -> None:
         with cls._instances_lock:
-            stale_keys = [key for key, value in cls._instances.items() if value is instance]
-            for key in stale_keys:
-                cls._instances.pop(key, None)
+            cls._unregister_locked(instance)
             cls._quarantined_instances.add(instance)
 
     @classmethod
     def _forget_instance(cls, instance: JupyterKernelManager) -> None:
         with cls._instances_lock:
-            stale_keys = [key for key, value in cls._instances.items() if value is instance]
-            for key in stale_keys:
-                cls._instances.pop(key, None)
+            cls._unregister_locked(instance)
             cls._quarantined_instances.discard(instance)
 
     @classmethod
@@ -323,6 +277,8 @@ class JupyterKernelManager:
 
     @staticmethod
     def _resolve_awaitable(value: Any, *, timeout: float = 5.0) -> Any:
+        """清理回调可能返回协程（如 ``provisioner.kill``）：在辅助线程里限时等完，普通返回值原样交还。"""
+
         if not inspect.isawaitable(value):
             return value
         deadline                    = max(0.1, timeout)
@@ -1171,13 +1127,8 @@ except ImportError:
                     ),
                     name="jupyter-cancel-recovery",
                 )
-                while not cleanup_task.done():
-                    try:
-                        await asyncio.shield(cleanup_task)
-                    except asyncio.CancelledError:
-                        continue
                 try:
-                    cleanup_task.result()
+                    await self._wait_task_despite_cancellation(cleanup_task)
                 except Exception as exc:
                     log_sensitive_audit(
                         logger,

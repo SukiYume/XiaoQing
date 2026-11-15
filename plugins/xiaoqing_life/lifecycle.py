@@ -206,6 +206,7 @@ def _decay(age_seconds: float) -> float:
     return float(0.5 ** (max(0.0, age_seconds) / (INTEREST_HALF_LIFE_DAYS * DAY)))
 
 
+# 话题词的长度上限：兴趣、好奇边界、小课题、作品、档案和群聊话题共用。
 TOPIC_CHARS = 12
 
 
@@ -281,10 +282,6 @@ def _positive_times(entry: dict[str, Any], start: float, end: float) -> dict[Any
     return times
 
 
-def _positive_items(entry: dict[str, Any], start: float, end: float) -> int:
-    return len(_positive_times(entry, start, end))
-
-
 # “常刷到”要是不同的几次上网：同一次刷到两条（或一次研究搜出好几条）只算试探。
 REPEAT_SPREAD_SEC = 12 * 3600
 
@@ -295,7 +292,7 @@ def interest_stage(entry: dict[str, Any], now: float) -> str:
 
     window = 14 * DAY
     recent = _positive_times(entry, now - window, now + 1)
-    before = _positive_items(entry, now - 2 * window, now - window)
+    before = len(_positive_times(entry, now - 2 * window, now - window))
     spread = max(recent.values()) - min(recent.values()) if recent else 0.0
     if len(recent) >= 2 and before >= 2:
         return "consistent"

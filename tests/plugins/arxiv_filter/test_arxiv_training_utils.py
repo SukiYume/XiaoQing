@@ -11,7 +11,11 @@ import pandas as pd
 import pytest
 
 from plugins.arxiv_filter.inference.shared import InferenceParams, build_paper_texts
-from plugins.arxiv_filter.numerics import stable_softmax
+from plugins.arxiv_filter.numerics import (
+    build_interest_features,
+    interest_feature_names,
+    stable_softmax,
+)
 from plugins.arxiv_filter.train_model.interest_model import training_utils as interest_utils
 
 
@@ -266,12 +270,12 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     module     = _load_knn_training_module()
     load_calls = 0
 
-    def load_encoder() -> object:
+    def load_encoder(_name: str, _max_len: int | None) -> object:
         nonlocal load_calls
         load_calls += 1
         raise AssertionError("precomputed training must not load the encoder")
 
-    monkeypatch.setattr(module._training, "load_sentence_transformer_class", load_encoder)
+    monkeypatch.setattr(module._training, "load_sentence_encoder", load_encoder)
     model = module.KNNInterestModel(
         embedding_dim   = 2,
         max_len         = 128,
@@ -348,22 +352,21 @@ def test_knn_backend_rejects_an_empty_interest_library(
         knn_backend.KNNInferenceModel(str(tmp_path), batch_size=1)
 
 
-def test_multi_interest_feature_builder_is_finite_and_preserves_contrast(
-    inference_modules: SimpleNamespace,
-) -> None:
-    multi_interest_backend = inference_modules.multi_interest_backend
-    model                  = object.__new__(multi_interest_backend.MultiInterestInferenceModel)
-    model.artifacts        = SimpleNamespace(
-        interest_centers=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-        pos_centroid=np.array([1.0, 0.0], dtype=np.float32),
-        neg_centroid=np.array([0.0, 1.0], dtype=np.float32),
+def test_multi_interest_feature_builder_is_finite_and_preserves_contrast() -> None:
+    centers = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+
+    features, best_interest, max_sim = build_interest_features(
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        centers,
+        np.array([1.0, 0.0], dtype=np.float32),
+        np.array([0.0, 1.0], dtype=np.float32),
     )
 
-    features = model._build_features(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32))
-
-    assert features.shape == (2, 12)
+    assert features.shape == (2, len(interest_feature_names(2)))
     assert np.isfinite(features).all()
     assert np.allclose(features[:, -1], np.array([1.0, -1.0], dtype=np.float32))
+    assert best_interest.tolist() == [0, 1]
+    assert np.allclose(max_sim, np.ones(2))
 
 
 def test_inference_runner_copies_input_and_publishes_backend_results(

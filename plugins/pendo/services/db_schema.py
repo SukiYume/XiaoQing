@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from ..models.item import ItemType
 from ..utils.time_utils import TimezoneHelper, utc_now_iso
+from ..utils.validators import EVENT_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,9 @@ _ADD_COLUMN_NAME = re.compile(
 
 # SQLite 默认绑定变量上限留有余量；按 ID 批量读写统一用这个分片大小。
 SQLITE_ID_BATCH_SIZE = 500
+
+# 可进入调度（提醒、冲突检测）的日程角色，与 validators.EVENT_ROLES 同源，供 SQL 的 IN 子句使用。
+EVENT_ROLES_SQL = "(" + ", ".join(f"'{role}'" for role in sorted(EVENT_ROLES)) + ")"
 
 
 def _sqlite_casefold(value: Any) -> str:
@@ -72,6 +76,8 @@ def _sqlite_utc_epoch(value: Any, timezone_name: Any) -> float | None:
         return None
 
 
+# 给早期版本建出的旧库补列。新库的 CREATE TABLE 已带齐这些列，执行时会因列已存在被忽略；
+# 迁移按序号记入 schema_migrations，每个库每条只执行一次。
 _ADD_COLUMN_MIGRATIONS = (
     "ALTER TABLE items ADD COLUMN notes TEXT",
     "ALTER TABLE items ADD COLUMN amount REAL",
@@ -298,6 +304,7 @@ def _create_item_indexes(cursor: sqlite3.Cursor) -> None:
 def _create_event_schema(cursor: sqlite3.Cursor) -> None:
     """创建日程集合存储表及查询索引。"""
 
+    # kind 的 CHECK 取值与 validators.EVENT_COLLECTION_KINDS 一致，两处要一起改。
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS event_collections (
             id TEXT PRIMARY KEY,
@@ -536,6 +543,8 @@ def configure_connection(connection: sqlite3.Connection) -> None:
 
 def _create_event_projection_triggers(cursor: sqlite3.Cursor) -> None:
     """叶子写入同步集合日期范围和版本，覆盖编辑、导入、删除与恢复。"""
+    # 库里还没有投影触发器时（旧库第一次升级；新库第一次建表时表是空的）按现有子节点回填一次
+    # 集合起止时间和版本。之后由触发器同步，回填不再执行。
     if (
         cursor.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'event_collection_projection_update'"
@@ -601,7 +610,7 @@ def initialize_schema(cursor: sqlite3.Cursor) -> None:
     """按依赖顺序在调用方事务内创建表、执行迁移并补齐索引。"""
 
     _create_core_schema(cursor)
-    # 审计表必须先存在，后续版本化 ADD COLUMN 才有明确目标。
+    # 加列迁移会改 operation_logs 和 event_collections，这两张表必须先建好。
     _create_audit_schema(cursor)
     _create_event_schema(cursor)
     _apply_schema_migrations(cursor)

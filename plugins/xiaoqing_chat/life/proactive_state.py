@@ -1,6 +1,7 @@
-"""主动开口的节奏记录：每个群上次开口的时间、当天次数和上次尝试的时间。
+"""主动开口的节奏记录：每个会话（群，或白名单里的私聊朋友）上次开口的时间、当天次数、上次尝试的
+时间和最近几次说了什么。
 
-开口时间和次数只在投递确认后写入；尝试时间在调用模型前写入，没发出去也算。
+开口时间、次数和说的话只在投递确认后写入；尝试时间在调用模型前写入，没发出去也算。
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from ..store_base import StoreBase, coerce_finite_float, coerce_int
 
 _FILE               = ("life", "proactive_state.json")
 MAX_SHARED_LIFE_IDS = 20
+MAX_RECENT_LINES    = 5
+RECENT_LINE_CHARS   = 200
 
 
 @dataclass(frozen=True)
@@ -24,9 +27,21 @@ class ProactiveRecord:
     last_attempt_ts: float = 0.0
     # 已经分享过的网上经历 ID（最近 20 个）；下次作为 exclude_ids 交给 xiaoqing_life。
     shared_life_ids: tuple[str, ...] = ()
+    # 最近几次主动说的话（时间, 原话）：下次开口前给她看，连同之后有没有人接。
+    recent: tuple[tuple[float, str], ...] = ()
 
     def count_on(self, day: str) -> int:
         return self.count if self.day == day else 0
+
+
+def _recent(raw: object) -> tuple[tuple[float, str], ...]:
+    rows: list[tuple[float, str]] = []
+    for item in raw if isinstance(raw, list) else ():
+        if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[1], str):
+            ts = coerce_finite_float(item[0], default=0.0, minimum=0.0)
+            if ts > 0 and item[1]:
+                rows.append((ts, item[1][:RECENT_LINE_CHARS]))
+    return tuple(rows[-MAX_RECENT_LINES:])
 
 
 class ProactiveStateStore(StoreBase):
@@ -35,11 +50,9 @@ class ProactiveStateStore(StoreBase):
         self._lock                                       = threading.Lock()
         self._records: dict[str, ProactiveRecord] | None = None
 
-    def bind(self, data_dir) -> None:
-        if data_dir != self._data_dir:
-            with self._lock:
-                self._records = None
-        super().bind(data_dir)
+    def _drop_cache(self) -> None:
+        with self._lock:
+            self._records = None
 
     def _load_locked(self) -> dict[str, ProactiveRecord]:
         if self._records is None:
@@ -59,6 +72,7 @@ class ProactiveStateStore(StoreBase):
                             for v in (item.get("shared_life_ids") or [])
                             if isinstance(v, str)
                         )[-MAX_SHARED_LIFE_IDS:],
+                        recent=_recent(item.get("recent")),
                     )
             self._records = records
         return self._records
@@ -75,7 +89,13 @@ class ProactiveStateStore(StoreBase):
             self._save_locked()
 
     def record(
-        self, chat_id: str, *, ts: float, day: str, shared_life_ids: Sequence[str] = ()
+        self,
+        chat_id: str,
+        *,
+        ts: float,
+        day: str,
+        shared_life_ids: Sequence[str] = (),
+        text: str                      = "",
     ) -> None:
         with self._lock:
             records = self._load_locked()
@@ -89,6 +109,11 @@ class ProactiveStateStore(StoreBase):
                 day             = day,
                 count           = current.count_on(day) + 1,
                 shared_life_ids = shared,
+                recent          = (
+                    (*current.recent, (ts, text[:RECENT_LINE_CHARS]))[-MAX_RECENT_LINES:]
+                    if text
+                    else current.recent
+                ),
             )
             self._save_locked()
 

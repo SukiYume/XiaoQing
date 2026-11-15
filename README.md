@@ -4,6 +4,10 @@
 
 [English](README.en.md)
 
+<img src="docs/assets/xiaoqing-full-body.png" alt="小青的全身立绘：灰紫短发、蓝色开衫，抱着观测笔记挥手的天文专业大二女生" width="300">
+
+**小青 · 二十岁，天文专业大二在读。喜欢星空，也爱和群友聊日常。**
+
 **基于 OneBot v11 和 Python asyncio 的插件化 QQ 助手**
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
@@ -185,7 +189,7 @@ python main.py
 | `/get_secret <路径>` | Bot 管理员，私聊 | 查看脱敏后的值或对象键名 |
 | `/metrics` | Bot 管理员 | 查看运行时间、成功率、错误和慢插件 |
 
-全部插件的命令、别名、权限和定时任务见 [插件使用手册](docs/09-plugins.md#命令入口速查)。
+全部插件的命令、别名、权限和定时任务见 [插件使用手册](docs/09-plugins.md#️-命令入口速查)。
 
 ---
 
@@ -212,6 +216,14 @@ python main.py
 
 - [使用说明](plugins/xiaoqing_life/README.md)
 - [架构说明](plugins/xiaoqing_life/ARCHITECTURE.md)
+
+### xiaoqing_memory
+
+`xiaoqing_memory` 是小青的统一记忆：聊天、办事和网上生活经同一套接口写进原始记录，每晚整理成关于每个人、每个群和她自己的页面，每行都有原话出处；每轮说话前取说话人的页面、群页和相关旧事。私聊的事不进群，一个群的事不进另一个群。插件默认开启，整理需要配置 `ai.routes.reasoning`；关闭时三个插件照常工作，只是没有长期记忆。
+
+- [使用说明](plugins/xiaoqing_memory/README.md)
+- [架构说明](plugins/xiaoqing_memory/ARCHITECTURE.md)
+- [设计说明](plugins/xiaoqing_memory/DESIGN.md)
 
 ### Pendo
 
@@ -309,8 +321,8 @@ git diff --check
 完整上线验收：
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 阶段说明、报告位置和外部场景选项见 [快速开始的完整 UAT](docs/01-getting-started.md#完整-uat)。

@@ -172,3 +172,89 @@ def test_worker_start_failure_reaps_already_started_workers(tmp_path, monkeypatc
     worker.terminate.assert_called_once_with()
     worker.wait.assert_called_once_with(timeout=10)
     assert all(call.kwargs["stdout"].closed for call in start.call_args_list)
+
+
+def test_memory_seed_writes_both_groups_and_legacy_imports(tmp_path) -> None:
+    """预置可以写进剧本的第二个群，带 kind 的条目按上线那天的旧数据导入写进去（时间是原话的时间）。"""
+
+    from plugins.xiaoqing_memory.store import MemoryStore
+    from scripts.chat_eval.scenarios import user_id
+
+    drivers.seed_memory(tmp_path, "mem_cross_group", 3)
+    store = MemoryStore(tmp_path)
+    first, second = f"g{drivers.suite_group(3, 0)}", f"g{drivers.suite_group(3, 1)}"
+    assert "成都" in " ".join(event.text for event in store.events.after(first, 0))
+    assert "成都" not in " ".join(event.text for event in store.events.after(second, 0))
+
+    drivers.seed_memory(tmp_path / "legacy", "mem_legacy", 3)
+    notes = MemoryStore(tmp_path / "legacy").notes(first).values()
+    facts = [note for note in notes if note.kind == "person.fact"]
+    assert len(facts) == 4 and {note.subject for note in facts} == {f"person:{user_id('阿禾')}"}
+    assert all(note.observed_at < note.created_at - 20 * 86400 for note in facts)
+
+    drivers.seed_memory(tmp_path / "promise", "mem_promise", 3)
+    scope    = f"u{user_id('阿梨')}"
+    promises = [
+        note
+        for note in MemoryStore(tmp_path / "promise").notes(scope).values()
+        if note.kind == "self.promise"
+    ]
+    assert [note.data["counterpart"] for note in promises] == ["阿梨"]
+
+
+def test_turn_nick_changes_only_the_shown_name() -> None:
+    item = turn("阿杰", "我是谁", nick="鱼丸")
+    event = drivers.build_event(item, group_id=1, message_id=1, fixtures=None, last_bot_id=None)
+    assert event["sender"]["card"] == "鱼丸"
+    assert (
+        event["user_id"]
+        == drivers.build_event(
+            turn("阿杰", "x"), group_id=1, message_id=2, fixtures=None, last_bot_id=None
+        )["user_id"]
+    )
+
+
+def test_eval_config_drops_deployment_only_overrides(tmp_path, monkeypatch) -> None:
+    """评测测的是仓库里的行为：部署配置里给小青写的行为参数和各插件的定时目标不带进来。"""
+
+    config = {
+        "plugins": {
+            "xiaoqing_chat": {
+                "ai"       : {"routes": {"chat": ["m1"]}},
+                "proactive": {"private_user_ids": [12345]},
+                "schedules": {"xiaoqing_chat.proactive": {"group_ids": [678]}},
+            },
+            "earthquake": {"schedules": {"poll": {"group_ids": [678]}}, "min_magnitude": 4},
+        }
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(drivers, "DEFAULT_CONFIG", path)
+    loaded = drivers._eval_config()
+    assert loaded["plugins"]["xiaoqing_chat"] == {"ai": {"routes": {"chat": ["m1"]}}}
+    assert loaded["plugins"]["earthquake"] == {"min_magnitude": 4}
+
+
+def test_calibration_line_reads_the_same_in_report_and_command(tmp_path) -> None:
+    rows = [
+        _calibration_row(True, True),
+        _calibration_row(False, False),
+        _calibration_row(True, True, "infra"),
+    ]
+    calibration = review.calibration_summary(rows)
+    line        = review.calibration_line(calibration)
+    assert line == "放行 1/1，拦截 1/1，不可用 1"
+    review.write_report(tmp_path, [], calibration=calibration)
+    assert f"- 审查器校准：{line}，未通过" in (tmp_path / "report.md").read_text(encoding="utf-8")
+
+
+def test_turn_records_share_one_progress_line_format(tmp_path, capsys) -> None:
+    output = tmp_path / "run.jsonl"
+    row    = {"text": "在吗" * 20, "reply_segments": [{"type": "text", "data": {"text": "在"}}]}
+    drivers.record_turn(output, row, "demo-1", 3, "在" * 100)
+    drivers.record_consolidate(output, {"text": ""}, "demo-1", 4, "整理完了")
+    progress = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert progress[0] == {"case": "demo-1.03", "in": row["text"][:30], "out": "在" * 80}
+    assert progress[1] == {"case": "demo-1.04", "consolidate": "整理完了"}
+    saved = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert saved[1]["consolidate"] == "整理完了" and saved[1]["reply_segments"] == []

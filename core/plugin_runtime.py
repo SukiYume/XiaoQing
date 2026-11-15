@@ -20,6 +20,9 @@ from typing import Any, cast
 
 from .exceptions import PluginLoadError
 from .plugin_execution import (
+    DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
+    DEFAULT_SYNC_WORKERS,
+    MAX_GLOBAL_SYNC_QUEUE_LIMIT,
     PluginConcurrency,
     PluginExecutionDrainResult,
     PluginExecutionGate,
@@ -28,13 +31,10 @@ from .plugin_execution import (
     PluginSyncBrokerDrainResult,
 )
 from .plugin_manager_support import (
-    _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
     _MIN_PLUGIN_POLL_INTERVAL_SECONDS,
-    _PLUGIN_SYNC_WORKERS,
     LoadedPlugin,
     LoadedPluginService,
     PluginDefinition,
-    _PluginLoadTransaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,14 +91,9 @@ class PluginRuntimeMixin:
         _watch_waiters_lock: Any
 
         router: Any
-    _plugins            : dict[str, LoadedPlugin]
-    _quarantined_plugins: set[str]
-    _services           : dict[str, LoadedPluginService]
-    _pending_plugins    : dict[
-        asyncio.Task[Any],
-        tuple[PluginDefinition, ModuleType, float],
-    ]
-    _pending_transactions: dict[asyncio.Task[Any], _PluginLoadTransaction]
+    _plugins             : dict[str, LoadedPlugin]
+    _quarantined_plugins : set[str]
+    _services            : dict[str, LoadedPluginService]
     _poll_interval       : float
     _poll_revision       : int
     _sync_broker         : PluginSyncBroker
@@ -156,14 +151,14 @@ class PluginRuntimeMixin:
         self._execution_policy = PluginExecutionPolicy.from_mapping(raw_policy)
         raw_queue_limit        = raw_policy.get(
             "global_sync_queue_limit",
-            _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
+            DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
         )
         if (
             not isinstance(raw_queue_limit, int)
             or isinstance(raw_queue_limit, bool)
-            or not 1 <= raw_queue_limit <= 100000
+            or not 1 <= raw_queue_limit <= MAX_GLOBAL_SYNC_QUEUE_LIMIT
         ):
-            self._global_sync_queue_limit = _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT
+            self._global_sync_queue_limit = DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT
         else:
             self._global_sync_queue_limit = raw_queue_limit
         if not self._sync_broker.closed:
@@ -189,7 +184,12 @@ class PluginRuntimeMixin:
 
     @property
     def execution_drain_timeout_seconds(self) -> float:
-        """Return the one application-wide plugin shutdown budget."""
+        """Return the global ``drain_timeout_seconds`` the application budgets for shutdown.
+
+        The application uses it as the one total deadline shared by every plugin unload and
+        the broker close.  A plugin's own ``overrides.<name>.drain_timeout_seconds`` only
+        applies when a gate is closed without an explicit deadline.
+        """
 
         return float(self._execution_policy.drain_timeout_seconds)
 
@@ -208,7 +208,7 @@ class PluginRuntimeMixin:
         if not broker.drained:
             raise RuntimeError("plugin sync broker still owns undrained callbacks")
         broker = PluginSyncBroker(
-            max_workers        = _PLUGIN_SYNC_WORKERS,
+            max_workers        = DEFAULT_SYNC_WORKERS,
             global_queue_limit = self._global_sync_queue_limit,
         )
         self._sync_broker = broker
@@ -263,19 +263,7 @@ class PluginRuntimeMixin:
         loaded = self._plugins.get(plugin_name)
         if loaded is not None:
             return loaded.definition.capabilities
-        for definition, _module, _mtime in self._pending_plugins.values():
-            if definition.name == plugin_name:
-                return definition.capabilities
-        for transaction in self._pending_transactions.values():
-            if transaction.definition.name == plugin_name:
-                return transaction.definition.capabilities
         return frozenset()
-
-    def has_capability(self, plugin_name: str, capability: str) -> bool:
-        """Read one validated manifest capability from the live generation."""
-
-        loaded = self._plugins.get(plugin_name)
-        return loaded is not None and capability in loaded.definition.capabilities
 
     def _execution_policy_for(
         self,
@@ -304,7 +292,11 @@ class PluginRuntimeMixin:
         return sorted(self._plugins.keys())
 
     def list_runtime_plugins(self) -> list[str]:
-        """Return live, pending, finalizing, and quarantined runtime names."""
+        """Return every plugin name that still has managed lifecycle state.
+
+        That covers live and quarantined plugins as well as names that only hold an execution
+        gate, plugin state, service binding or source finder.
+        """
 
         return sorted(self._plugin_runtime_names())
 
@@ -405,30 +397,6 @@ class PluginRuntimeMixin:
                 phase  = phase,
                 reason = reason,
             )
-
-    def _purge_generation_modules(
-        self,
-        name: str,
-        plugin: LoadedPlugin | None,
-        gate: PluginExecutionGate,
-        *,
-        phase: str,
-    ) -> dict[str, ModuleType]:
-        """Purge before dropping lifecycle ownership. Quarantine on any failure."""
-
-        try:
-            return self._purge_plugin_modules(name)
-        except BaseException as exc:
-            self._quarantine_gate_result(
-                name,
-                plugin,
-                gate,
-                None,
-                phase                     = phase,
-                reason                    = f"module purge failed ({type(exc).__name__})",
-                discard_registered_plugin = plugin is None,
-            )
-            raise
 
     async def _purge_generation_modules_async(
         self,
@@ -563,8 +531,8 @@ class PluginRuntimeMixin:
         deferred_fatal = gate.consume_deferred_fatal_error()
         if deferred_fatal is not None:
             # Preserve the fatal outcome, but let the lifecycle owner finish
-            # shutdown/purge first.  Public lifecycle entry points or
-            # ``wait_inits`` replay it only after cleanup is terminal.
+            # shutdown/purge first.  Public lifecycle entry points replay it
+            # only after cleanup is terminal.
             self._deferred_lifecycle_errors.setdefault(name, []).append(deferred_fatal)
         if interrupted is not None:
             if result.drained:

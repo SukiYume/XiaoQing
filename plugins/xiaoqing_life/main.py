@@ -17,13 +17,20 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-from . import bili_auth, commands, persona_bridge, repair, stats
+from . import bili_auth, commands, memory_bridge, persona_bridge, stats
 from . import digest as digest_mod
 from . import memes as memes_mod
 from . import turn_context as turn_context_mod
-from .config import LifeConfig, load_life_config, route_configured
+from .config import (
+    REASONING_ROUTE,
+    VISION_ROUTE,
+    LifeConfig,
+    load_life_config,
+    route_configured,
+)
+from .days import day_key
 from .lifecycle import seed_interests
-from .planner import REST, WIND_DOWN, Decision, day_key, decide
+from .planner import REST, WIND_DOWN, Decision, decide
 from .session import SessionDeps, run_session
 from .sources.base import BoundedFetcher
 from .stores import LifeStore, roll_day
@@ -108,20 +115,20 @@ def _deps(context: Any, runtime: LifeRuntime, cfg: LifeConfig) -> SessionDeps:
 
     async def vision(messages: list[dict[str, Any]]) -> str:
         result = await context.capabilities.ai.complete(
-            "vision", messages, required_modalities=("text", "image")
+            VISION_ROUTE, messages, required_modalities=("text", "image")
         )
         return str(result.content)
 
     moment   = runtime.clock(context)
     presence = persona_bridge.availability(context, cfg, moment)
-    can_see  = cfg.memes_enabled and route_configured(context, "vision")
+    can_see  = cfg.memes_enabled and route_configured(context, VISION_ROUTE)
     return SessionDeps(
         fetch         = BoundedFetcher(context.http_session, runtime.credential),
         complete      = complete,
         rng           = runtime.rng,
         now           = lambda: runtime.clock(context),
         persona       = persona_bridge.persona_facts(context),
-        reasoning_ok  = route_configured(context, "reasoning"),
+        reasoning_ok  = route_configured(context, REASONING_ROUTE),
         activity_text = presence.activity,
         download      = memes_mod.download_image if can_see else None,
         vision        = vision if can_see else None,
@@ -192,7 +199,6 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
     moment   = runtime.clock(context)
     store    = runtime.store
     presence = persona_bridge.availability(context, cfg, moment)
-    repair.run(store, moment.tzinfo, moment.timestamp())  # 一次性；之后随下一次落盘保存
     previous, today = str(store.state.get("day") or ""), day_key(moment)
     if previous and previous != today:
         logger.info(
@@ -243,12 +249,25 @@ async def _tick(context: Any, *, manual: bool) -> Decision:
 
 
 async def scheduled_tick(context: PluginContextProtocol) -> None:
-    """每 15 分钟检查一次：门控与决策同步完成，上网交给后台任务。"""
+    """每 15 分钟检查一次：门控与决策同步完成，上网交给后台任务；新的经历、日记和查明白的事发布到统一记忆。"""
 
     try:
         await _tick(context, manual=False)
     except Exception as exc:
         logger.warning("xiaoqing_life tick failed error_type=%s", type(exc).__name__)
+    try:
+        cfg = load_life_config(context)
+        if cfg.enabled:
+            runtime = get_runtime(context)
+            await memory_bridge.publish(
+                context,
+                runtime.store,
+                cfg,
+                runtime.clock(context).timestamp(),
+                settled=not runtime.running,
+            )
+    except Exception as exc:
+        logger.warning("xiaoqing_life memory publish failed error_type=%s", type(exc).__name__)
 
 
 # ───────────────────────────── 聊天侧服务 ─────────────────────────────

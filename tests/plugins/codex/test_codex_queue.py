@@ -485,7 +485,6 @@ async def test_cancel_while_waiting_for_global_slot_never_spawns(
     assert "已取消" in response
     spawn.assert_not_awaited()
     assert job.status == "cancelled"
-    assert job.prompt_started is False
     assert job.finished_event.is_set()
     assert manager.running == {}
 
@@ -526,7 +525,6 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
     assert "已取消" in response
     assert not any(process.stdin_inputs)
     assert process.prompt_sent.is_set() is False
-    assert job.prompt_started is False
     assert job.status == "cancelled"
     assert job.result is not None and job.result.cancelled is True
     assert job.spawn_handoff.is_set() and job.finished_event.is_set()
@@ -575,7 +573,6 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
     job = manager.running["race"]
     assert job.spawn_handoff.is_set()
     assert job.process is process
-    assert job.prompt_started is False
 
     cancel_task = asyncio.create_task(manager.cancel("race", job.job_id))
     await _wait_until(lambda: job.cancel_requested)
@@ -608,7 +605,6 @@ async def test_cancel_after_prompt_commit_terminates_and_finishes_cancelled(
     await asyncio.wait_for(process.prompt_sent.wait(), timeout=10)
     job = manager.running["race"]
     assert job.status == "running"
-    assert job.prompt_started is True
 
     response = await asyncio.wait_for(manager.cancel("race", job.job_id), timeout=2)
     await _wait_manager_idle(manager)

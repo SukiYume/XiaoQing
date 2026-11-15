@@ -131,27 +131,17 @@ def test_corrupt_image_payload_is_rejected_before_inbox_write(mock_context):
     assert list((mock_context.data_dir / "media" / "inbox").glob("*")) == []
 
 
-def test_image_probe_rejects_decompression_bomb_warning_and_unknown_frames():
+def test_image_probe_rejects_decompression_bomb_warning():
     from PIL import Image
 
     from plugins.xiaoqing_chat.media.loading import inspect_image_payload_details
-    from plugins.xiaoqing_chat.media.sources import validate_image_resource_limits
 
     with patch(
         "PIL.Image.open",
         side_effect=Image.DecompressionBombWarning("decompression bomb"),
     ):
         with pytest.raises(ValueError, match="image"):
-            inspect_image_payload_details(_PNG_BYTES)
-
-    with pytest.raises(ValueError, match="frame count unavailable"):
-        validate_image_resource_limits(
-            width       = 1,
-            height      = 1,
-            max_pixels  = 16_000_000,
-            max_frames  = 120,
-            frame_count = None,
-        )
+            inspect_image_payload_details(_PNG_BYTES, max_pixels=16_000_000, max_frames=120)
 
 
 def test_render_cache_evicts_old_entries_at_fixed_capacity(mock_context):
@@ -974,7 +964,7 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):

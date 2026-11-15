@@ -6,13 +6,12 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ...config import PendoConfig
 from ...core.exceptions import ItemNotFoundException, ItemVersionConflictException
 from ...services.db import Database
 from ...utils.identifiers import new_internal_id, public_id
-from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ...utils.validators import (
+    MAX_LONG_TEXT_CHARS,
     build_remind_times_from_rules,
     normalize_event_fields,
     normalize_reminder_rules,
@@ -26,6 +25,7 @@ from ..analytics.events_overview import (
     list_event_categories,
 )
 from ..deps import get_current_user, get_db
+from ..utils import category_or_default, timezone_name_of
 
 router = APIRouter()
 
@@ -139,9 +139,7 @@ def _normalize_collection_updates(
         raise ValueError("No collection fields to update")
 
     if "category" in updates:
-        category = str(updates["category"] or "").strip()
-        if not category or category == PendoConfig.DEFAULT_CATEGORY:
-            updates["category"] = resolve_default_category(db, owner_id)
+        updates["category"] = category_or_default(db, owner_id, updates["category"])
     if "timezone" in updates and not str(updates["timezone"] or "").strip():
         updates["timezone"] = default_timezone
 
@@ -173,25 +171,18 @@ def create_event_collection(
             status_code=422, detail="Multi-node collections require at least 2 children"
         )
 
-    category_text = str(body.category or "").strip()
-    category      = (
-        resolve_default_category(db, owner_id)
-        if not category_text or category_text == PendoConfig.DEFAULT_CATEGORY
-        else category_text
-    )
+    category = category_or_default(db, owner_id, body.category)
     try:
         rules = normalize_reminder_rules(
             body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}]
         )
         collection_id    = new_internal_id()
         local_now        = now_in_timezone(owner_id, db)
-        default_timezone = str(
-            getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE
-        )
-        timezone_name = str(body.timezone or "").strip() or default_timezone
+        default_timezone = timezone_name_of(local_now)
+        timezone_name    = str(body.timezone or "").strip() or default_timezone
         now = local_now.replace(tzinfo=None).isoformat()
         collection_title = validate_title(body.title)
-        collection_notes = sanitize_text(str(body.notes or ""), 50000)
+        collection_notes = sanitize_text(str(body.notes or ""), MAX_LONG_TEXT_CHARS)
 
         child_rows: list[tuple[str, dict[str, Any]]] = []
         for index, child in enumerate(body.children, 1):
@@ -305,7 +296,7 @@ def update_collection(
     if len(requested_fields) >= 3 and body.version is None:
         raise HTTPException(status_code=422, detail="完整集合编辑需要版本号")
     local_now        = now_in_timezone(owner_id, db)
-    default_timezone = str(getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE)
+    default_timezone = timezone_name_of(local_now)
     try:
         updates = _normalize_collection_updates(
             body,

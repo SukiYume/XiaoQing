@@ -14,16 +14,11 @@ _SENTENCE_TAIL_CHARS = frozenset("。！？!?～~…")
 _CLAUSE_SPLIT_BLOCK_RE = re.compile(
     r"```|https?://|www\.|[\w.+-]+@[\w-]+\.[\w.]+|^\s*(?:[-*•]|\d+[.、)])\s*\S", re.M
 )
-_OPENING_PAIRS = {
-    "“": "”",
-    "‘": "’",
-    "「": "」",
-    "『": "』",
-    "（": "）",
-    "(": ")",
-    "【": "】",
-    "《": "》",
-}
+_QUOTE_PAIRS = {"“": "”", "‘": "’", "「": "」", "『": "』"}
+# 书名号和括号里的感叹号、问号不是句末（《孤独摇滚！》）；只在后文确实有配对时才保护。
+_BRACKET_PAIRS          = {"《": "》", "（": "）", "(": ")", "【": "】"}
+_OPENING_PAIRS          = _QUOTE_PAIRS | _BRACKET_PAIRS
+_CLOSING_MARKS          = frozenset(_OPENING_PAIRS.values())
 _CLAUSE_TRAILING_COMMAS = "，,、"
 _BRACKET_SPAN           = 60
 # 超过这么多字的一条是讲解、文稿这类成品：标点照原样发，不按聊天短句去掉行尾句号。
@@ -139,10 +134,6 @@ def split_sentences(text: str) -> list[str]:
     if "```" in s:
         return split_chat_reply(s)
 
-    quote_pairs = {"“": "”", "‘": "’", "「": "」", "『": "』"}
-    # 书名号和括号里的感叹号、问号不是句末（《孤独摇滚！》）；只在后文确实有配对时才保护。
-    bracket_pairs          = {"《": "》", "（": "）", "(": ")", "【": "】"}
-    closing_quotes         = set(quote_pairs.values()) | set(bracket_pairs.values())
     quote_stack: list[str] = []
     out        : list[str] = []
     start                  = 0
@@ -150,10 +141,10 @@ def split_sentences(text: str) -> list[str]:
     while index < len(s):
         char         = s[index]
         closed_quote = False
-        if char in quote_pairs:
-            quote_stack.append(quote_pairs[char])
-        elif char in bracket_pairs and _pairs_nearby(s, index, bracket_pairs[char]):
-            quote_stack.append(bracket_pairs[char])
+        if char in _QUOTE_PAIRS:
+            quote_stack.append(_QUOTE_PAIRS[char])
+        elif char in _BRACKET_PAIRS and _pairs_nearby(s, index, _BRACKET_PAIRS[char]):
+            quote_stack.append(_BRACKET_PAIRS[char])
         elif quote_stack and char == quote_stack[-1]:
             quote_stack.pop()
             closed_quote = True
@@ -173,7 +164,7 @@ def split_sentences(text: str) -> list[str]:
 
         end = index + 1
         # 连用的句末标点和语气尾巴属于同一句，例如“！！！”“？！”“。～”。
-        while end < len(s) and s[end] in _SENTENCE_TAIL_CHARS | closing_quotes | {'"'}:
+        while end < len(s) and s[end] in _SENTENCE_TAIL_CHARS | _CLOSING_MARKS | {'"'}:
             end += 1
         sentence = s[start:end].strip()
         if sentence:
@@ -303,10 +294,11 @@ def process_llm_response(
 
     对方要的是一篇成品（检讨、文案）时调用方关掉 ``enable_splitter``，整篇作为一条发出。
     """
-    text            = response_text or ""
-    structured_text = (
-        _strip_prefix(text, bot_name=bot_name) if cfg.enable_response_post_process else text.strip()
-    )
+    text = response_text or ""
+    if cfg.enable_response_post_process:
+        text = _strip_prefix(text, bot_name=bot_name)
+    # 整条回复本身是 JSON 时原样发出，不分句也不清洗。
+    structured_text = text.strip()
     if structured_text.startswith(("{", "[")):
         try:
             json.loads(structured_text)
@@ -315,7 +307,6 @@ def process_llm_response(
         else:
             return [structured_text]
     if cfg.enable_response_post_process:
-        text = _strip_prefix(text, bot_name=bot_name)
         text = text.strip().strip('"').strip("'").strip()
         text = _normalize(text)
 

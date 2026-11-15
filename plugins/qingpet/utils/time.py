@@ -9,14 +9,19 @@ def utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def business_date(value: datetime | None = None) -> str:
-    """返回上海业务日期；兼容数据库中保存的无时区 UTC 时间。"""
+def _business_time(value: datetime | None = None) -> datetime:
+    """把时间换算成上海时区；无时区的值（数据库里存的 UTC）按 UTC 解释。"""
     current = value or utc_now()
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
-    return current.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    return current.astimezone(ZoneInfo("Asia/Shanghai"))
+
+
+def business_date(value: datetime | None = None) -> str:
+    """返回上海业务日期；兼容数据库中保存的无时区 UTC 时间。"""
+    return _business_time(value).date().isoformat()
 
 
 def business_week() -> str:
     """返回定时任务使用的 ISO 周键。"""
-    return utc_now().replace(tzinfo=UTC).astimezone(ZoneInfo("Asia/Shanghai")).strftime("%G-W%V")
+    return _business_time().strftime("%G-W%V")

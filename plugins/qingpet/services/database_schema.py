@@ -4,63 +4,13 @@ import logging
 import re
 import sqlite3
 
-from ..utils.time import utc_now
-
 logger = logging.getLogger(__name__)
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-_ALLOWED_SCHEMA_COLUMNS: dict[str, dict[str, str]] = {
-    "users": {
-        "total_feed_count"     : "INTEGER DEFAULT 0",
-        "total_clean_count"    : "INTEGER DEFAULT 0",
-        "total_play_count"     : "INTEGER DEFAULT 0",
-        "total_train_count"    : "INTEGER DEFAULT 0",
-        "total_explore_count"  : "INTEGER DEFAULT 0",
-        "total_visit_count"    : "INTEGER DEFAULT 0",
-        "total_gift_count"     : "INTEGER DEFAULT 0",
-        "titles"               : "TEXT DEFAULT '[]'",
-        "today_free_feed_count": "INTEGER DEFAULT 0",
-        "today_message_count"  : "INTEGER DEFAULT 0",
-        "total_free_feed_count": "INTEGER DEFAULT 0",
-        "total_message_count"  : "INTEGER DEFAULT 0",
-        "version"              : "INTEGER NOT NULL DEFAULT 0",
-    },
-    "pets": {
-        "decay_remainders": "TEXT NOT NULL DEFAULT '{}'",
-        "likes"           : "INTEGER DEFAULT 0",
-        "dress_hat"       : "TEXT",
-        "dress_clothes"   : "TEXT",
-        "dress_accessory" : "TEXT",
-        "dress_background": "TEXT",
-        "version"         : "INTEGER NOT NULL DEFAULT 0",
-    },
-    "group_configs": {
-        "sensitive_words": "TEXT DEFAULT '[]'",
-    },
-    "tasks": {
-        "created_date": "TEXT",
-    },
-    "trade_listings": {
-        "status": "TEXT DEFAULT 'active'",
-    },
-    "pet_shows": {
-        "status"    : "TEXT DEFAULT 'active'",
-        "settled_at": "TEXT",
-    },
-    "inventories": {
-        "version": "INTEGER NOT NULL DEFAULT 0",
-    },
-    "scheduler_runs": {
-        "status"       : "TEXT NOT NULL DEFAULT 'completed'",
-        "lease_until"  : "TEXT",
-        "attempt_count": "INTEGER NOT NULL DEFAULT 1",
-        "completed_at" : "TEXT",
-    },
-}
+CURRENT_SCHEMA_VERSION = 7
 
-_CURRENT_SCHEMA_VERSION   = 6
-CURRENT_SCHEMA_VERSION    = _CURRENT_SCHEMA_VERSION
+# 旧库缺少的列：(表, 列, 列定义)。每次启动都会按列是否存在补齐。
 _LEGACY_COLUMN_MIGRATIONS = (
     ("pets", "decay_remainders", "TEXT NOT NULL DEFAULT '{}'"),
     ("users", "total_feed_count", "INTEGER DEFAULT 0"),
@@ -95,10 +45,11 @@ _LEGACY_COLUMN_MIGRATIONS = (
 )
 
 
-def _create_schema_migration_table(cursor: sqlite3.Cursor) -> None:
-    cursor.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
-    )""")
+def _drop_retired_objects(cursor: sqlite3.Cursor) -> None:
+    """第 7 版起不再有的东西：迁移记录表（版本只记在 ``PRAGMA user_version``）和与主键列完全相同的索引。"""
+
+    cursor.execute("DROP TABLE IF EXISTS schema_migrations")
+    cursor.execute("DROP INDEX IF EXISTS idx_daily_likes")
 
 
 def _create_identity_schema(cursor: sqlite3.Cursor) -> None:
@@ -151,8 +102,8 @@ def _create_identity_schema(cursor: sqlite3.Cursor) -> None:
     cursor.execute("""CREATE TABLE IF NOT EXISTS group_configs (
         group_id INTEGER PRIMARY KEY, enabled BOOLEAN DEFAULT 1,
         economy_multiplier REAL DEFAULT 1.0, decay_multiplier REAL DEFAULT 1.0,
-        trade_enabled BOOLEAN DEFAULT 0, natural_trigger_enabled BOOLEAN DEFAULT 0,
-        activity_enabled BOOLEAN DEFAULT 1, sensitive_words TEXT DEFAULT '[]')""")
+        trade_enabled BOOLEAN DEFAULT 0, activity_enabled BOOLEAN DEFAULT 1,
+        sensitive_words TEXT DEFAULT '[]')""")
 
 
 def _create_interaction_schema(cursor: sqlite3.Cursor) -> None:
@@ -190,11 +141,6 @@ def _create_interaction_schema(cursor: sqlite3.Cursor) -> None:
         pet_user_id TEXT NOT NULL, created_at TEXT)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS command_timestamps (
         user_id TEXT NOT NULL, group_id INTEGER NOT NULL, timestamp REAL NOT NULL)""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS minigame_cooldowns (
-        user_id TEXT NOT NULL, group_id INTEGER NOT NULL, game_type TEXT NOT NULL,
-        available_at REAL NOT NULL,
-        PRIMARY KEY (user_id, group_id, game_type)
-    )""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS action_quotas (
         user_id TEXT NOT NULL, group_id INTEGER NOT NULL, action TEXT NOT NULL,
         period_date TEXT NOT NULL, action_count INTEGER NOT NULL DEFAULT 0,
@@ -325,10 +271,6 @@ def _create_auxiliary_schema(cursor: sqlite3.Cursor) -> None:
         user_id TEXT NOT NULL, group_id INTEGER NOT NULL,
         title TEXT NOT NULL, expires_at TEXT NOT NULL,
         PRIMARY KEY (user_id, group_id, title))""")
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_daily_likes "
-        "ON daily_likes(user_id, target_user_id, group_id, like_date)"
-    )
 
 
 def _repair_pet_show_schema_and_state(cursor: sqlite3.Cursor) -> None:
@@ -361,15 +303,6 @@ def _repair_pet_show_schema_and_state(cursor: sqlite3.Cursor) -> None:
     )
 
 
-def _record_schema_version(cursor: sqlite3.Cursor) -> None:
-    for version in range(1, _CURRENT_SCHEMA_VERSION + 1):
-        cursor.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-            (version, utc_now().isoformat()),
-        )
-    cursor.execute(f"PRAGMA user_version={_CURRENT_SCHEMA_VERSION}")
-
-
 def initialize_schema(
     conn: sqlite3.Connection,
     *,
@@ -381,7 +314,7 @@ def initialize_schema(
     # sqlite3 模块不会为 DDL 隐式开启事务；显式 BEGIN 后建表、触发器与迁移失败时一起回滚。
     cursor.execute("BEGIN IMMEDIATE")
     try:
-        _create_schema_migration_table(cursor)
+        _drop_retired_objects(cursor)
         _create_identity_schema(cursor)
         _create_interaction_schema(cursor)
         _create_settlement_schema(cursor, daily_coin_limit)
@@ -390,7 +323,7 @@ def initialize_schema(
         _create_indexes(cursor)
         _create_auxiliary_schema(cursor)
         _repair_pet_show_schema_and_state(cursor)
-        _record_schema_version(cursor)
+        cursor.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION}")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -516,21 +449,6 @@ def _safe_add_column(
 ) -> None:
     if not _IDENTIFIER_RE.match(table) or not _IDENTIFIER_RE.match(column):
         logger.warning("Skip adding column with invalid identifier: %s.%s", table, column)
-        return
-
-    expected_type = _ALLOWED_SCHEMA_COLUMNS.get(table, {}).get(column)
-    if expected_type is None:
-        logger.warning("Skip adding unsupported schema column: %s.%s", table, column)
-        return
-
-    if col_type != expected_type:
-        logger.warning(
-            "Skip adding column with mismatched type: %s.%s expected=%s actual=%s",
-            table,
-            column,
-            expected_type,
-            col_type,
-        )
         return
 
     existing_columns = {

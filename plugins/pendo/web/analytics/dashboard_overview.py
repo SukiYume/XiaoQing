@@ -3,25 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from ...models.item import EventItem
 from ...services.db import Database
-from ...utils.time_utils import TimezoneHelper
+from ...utils.time_utils import TimezoneHelper, month_bounds
 from ..utils import collection_payload, item_to_dict
 from .event_schedule import build_event_schedule
 
 JsonObject     = dict[str, Any]
 ScheduledEvent = tuple[date, JsonObject]
-
-
-def _month_bounds(day: date) -> tuple[date, date]:
-    """返回给定日期所在自然月的首日和末日。"""
-
-    month_start = day.replace(day=1)
-    next_month = (month_start + timedelta(days=32)).replace(day=1)
-    return month_start, next_month - timedelta(days=1)
 
 
 def _display_fields(row: JsonObject, collection: JsonObject | None) -> JsonObject:
@@ -89,14 +82,9 @@ def _event_entries(
     return entries
 
 
-def _local_datetime(
-    db: Database,
-    owner_id: str,
-    value: datetime | None,
-) -> datetime:
+def _local_datetime(user_timezone: tzinfo, value: datetime | None) -> datetime:
     """把当前时间统一到用户时区下的无时区墙钟。"""
 
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     if value is None:
         return cast(datetime, TimezoneHelper.now(user_timezone)).replace(
             tzinfo      = None,
@@ -122,6 +110,7 @@ def _scheduled_events(
     owner_id: str,
     range_start: date,
     range_end: date,
+    user_timezone: tzinfo,
 ) -> list[ScheduledEvent]:
     """一次读取覆盖区间和集合头，再展开全部日程显示行。"""
 
@@ -138,7 +127,6 @@ def _scheduled_events(
     collections = (
         db.get_event_collections_by_ids(owner_id, collection_ids) if collection_ids else {}
     )
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
 
     entries: list[ScheduledEvent] = []
     for item in raw_events:
@@ -151,15 +139,15 @@ def _scheduled_events(
 def _recent_counts(
     db: Database,
     owner_id: str,
+    user_timezone: ZoneInfo,
     start_date: date,
     start_time: datetime,
     end_time: datetime,
 ) -> tuple[int, int]:
     """用一次聚合查询统计近三十天日记和已完成任务。"""
 
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-    start_epoch   = TimezoneHelper.parse(start_time.isoformat(), user_timezone).timestamp()
-    end_epoch     = TimezoneHelper.parse(end_time.isoformat(), user_timezone).timestamp()
+    start_epoch = TimezoneHelper.parse(start_time.isoformat(), user_timezone).timestamp()
+    end_epoch   = TimezoneHelper.parse(end_time.isoformat(), user_timezone).timestamp()
 
     row = (
         db.get_connection()
@@ -201,9 +189,10 @@ def build_dashboard_overview(
 ) -> JsonObject:
     """构建当前用户的完整看板响应。"""
 
-    current    = _local_datetime(db, owner_id, now)
-    today_date = current.date()
-    month_start_date, month_end_date = _month_bounds(today_date)
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+    current       = _local_datetime(user_timezone, now)
+    today_date    = current.date()
+    month_start_date, month_end_date = month_bounds(today_date)
     agenda_end_date = (current + timedelta(days=21)).date()
     coverage_end_date = max(month_end_date, agenda_end_date)
     today             = today_date.isoformat()
@@ -259,7 +248,9 @@ def build_dashboard_overview(
         day = (month_start_date + timedelta(days=offset)).isoformat()
         spending_trend.append({"date": day, "amount": round(spending_by_day.get(day, 0.0), 2)})
 
-    scheduled_events = _scheduled_events(db, owner_id, month_start_date, coverage_end_date)
+    scheduled_events = _scheduled_events(
+        db, owner_id, month_start_date, coverage_end_date, user_timezone
+    )
 
     # 跨天日程按覆盖的自然日展开成多行；事项列表与计数只保留每次发生的一条，
     # 否则一条三天的日程会算作三场，并在“即将到来”里挤掉其他安排。
@@ -277,12 +268,11 @@ def build_dashboard_overview(
     recent_diary_count, recent_completed_count = _recent_counts(
         db,
         owner_id,
+        user_timezone,
         month_ago_date,
         month_ago_time,
         current,
     )
-
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
 
     def completed_sort_key(item: object) -> float:
         value = getattr(item, "completed_at", "") or getattr(item, "updated_at", "") or ""
@@ -299,7 +289,7 @@ def build_dashboard_overview(
             "tasks_pending"       : active_task_count,
             "tasks_done_recent"   : recent_completed_count,
             "ledger_month_expense": round(month_expense, 2),
-            "diary_month"         : recent_diary_count,
+            "diary_recent"        : recent_diary_count,
         },
         "events_month" : events_month,
         "events_agenda": events_agenda,

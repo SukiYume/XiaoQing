@@ -87,13 +87,6 @@ class _QueuedOneBotEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class _OneBotEventCommit:
-    """Linearization token proving an event was admitted before auth rotation."""
-
-    auth_state: _EndpointAuthState
-
-
-@dataclass(frozen=True, slots=True)
 class _OneBotActionCommit:
     """Linearization token for one action committed to a specific connection."""
 
@@ -507,8 +500,8 @@ class OneBotWsClient(_EndpointAuthHolder):
     ) -> None:
         if type(max_pending_events) is not int or max_pending_events <= 0:
             raise ValueError("max_pending_events must be a positive integer")
-        if type(queue_size) is not int or queue_size < 0:
-            raise ValueError("queue_size must be a non-negative integer")
+        if type(queue_size) is not int or queue_size <= 0:
+            raise ValueError("queue_size must be a positive integer")
         for name, value in (
             ("queue_ttl_seconds", queue_ttl_seconds),
             ("queue_cleanup_interval", queue_cleanup_interval),
@@ -526,18 +519,15 @@ class OneBotWsClient(_EndpointAuthHolder):
             auth_token,
             credentials_trusted=credentials_trusted,
         )
-        self._auth_state_lock                                          = threading.RLock()
-        self._connected_auth_generation: int | None                    = None
-        self._event_loop: asyncio.AbstractEventLoop | None             = None
-        self._ws: Any | None                                           = None
-        self._running                                                  = False
-        self._accepting_events                                         = True
-        self._on_connect: Callable[[], Awaitable[None]] | None         = None
+        self._auth_state_lock = threading.RLock()
+        self._connected_auth_generation: int | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._ws: Any | None = None
+        self._running = False
+        self._accepting_events = True
+        self._on_connect: Callable[[], Awaitable[None]] | None = None
         self._on_event_queued: Callable[[dict[str, Any]], None] | None = None
-        self._message_queues: dict[
-            str,
-            asyncio.Queue[_QueuedOneBotEvent | dict[str, Any]],
-        ] = {}
+        self._message_queues: dict[str, asyncio.Queue[_QueuedOneBotEvent]] = {}
         self._queue_tasks: dict[str, asyncio.Task[None]] = {}
         self._queue_last_activity: dict[str, float] = {}
         self._queue_size = queue_size
@@ -1107,7 +1097,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                 connected_duration = attempt.connected_seconds
                 failure            = attempt.error
             elif isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
-                # 兼容仍返回连接时长的私有测试适配器和第三方子类。
+                # 测试里替换 ``_connect_once`` 的替身只返回连接时长（秒）。
                 connected_duration = max(0.0, float(attempt))
             else:
                 raise TypeError("OneBot connection attempt returned an invalid outcome")
@@ -1234,16 +1224,12 @@ class OneBotWsClient(_EndpointAuthHolder):
         ws,
         handler: Callable[[dict[str, Any]], Awaitable[None]],
         *,
-        auth_generation: int | None           = None,
         auth_state: _EndpointAuthState | None = None,
     ) -> _ConnectionAttemptResult:
         """Listen until disconnection and retain abnormal close information."""
         connected_at = time.monotonic()
         if auth_state is None:
             auth_state = self._endpoint_auth
-            if auth_generation is not None and auth_generation != auth_state.generation:
-                await ws.close()
-                return _ConnectionAttemptResult(0.0)
         with self._auth_state_lock:
             if auth_state is not self._endpoint_auth:
                 stale_auth = True
@@ -1320,18 +1306,16 @@ class OneBotWsClient(_EndpointAuthHolder):
     ) -> None:
         """安全地处理事件（捕获异常，避免影响其他消息）"""
         try:
-            # The frozen token is the admission/rotation linearization point.
-            # The plugin factory is external code and must run after releasing
-            # the threading lock, otherwise an update-thread join can deadlock.
-            commit: _OneBotEventCommit | None = None
+            # The auth-generation check is the admission/rotation linearization
+            # point.  The plugin handler is external code and must run after
+            # releasing the threading lock, otherwise an update-thread join can
+            # deadlock.
             with self._auth_state_lock:
-                if auth_state is self._endpoint_auth:
-                    commit = _OneBotEventCommit(auth_state=auth_state)
-            if commit is None:
+                admitted = auth_state is self._endpoint_auth
+            if not admitted:
                 logger.debug("Dropping OneBot event from a revoked auth generation")
                 return
-            handler_awaitable = handler(event)
-            await handler_awaitable
+            await handler(event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1383,7 +1367,7 @@ class OneBotWsClient(_EndpointAuthHolder):
 
         self._queue_last_activity[key] = time.time()
         # 如果队列已满，丢弃最旧的消息
-        if self._queue_size > 0 and queue.full():
+        if queue.full():
             try:
                 queue.get_nowait()  # 丢弃最旧的消息
                 logger.warning("Queue full for %s, dropped oldest event", key)
@@ -1416,10 +1400,6 @@ class OneBotWsClient(_EndpointAuthHolder):
                 # 在当前任务内计时，避免 Python 3.11 的 wait_for 在取到事件的同轮吞掉取消。
                 async with asyncio.timeout(1.0):
                     queued = await queue.get()
-                if not isinstance(queued, _QueuedOneBotEvent):
-                    logger.warning("Dropping OneBot queue item without an auth generation")
-                    self._queue_last_activity[key] = time.time()
-                    continue
                 event      = queued.event
                 auth_state = queued.auth_state
                 async with self._pending_semaphore:

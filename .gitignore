@@ -91,12 +91,11 @@ logs/
 # Local configuration and secrets
 config/config.json
 config/secrets.json
-plugins/minecraft/config.json
+config/private_terms.txt
 scripts/sync_to_remote.local.sh
 
 # Plugin runtime data, caches and generated reports
 /data/
-plugins/*/data/
 plugins/*/cache/
 /test_reports/
 /test_reports/runs/
@@ -131,3 +130,6 @@ plugins/*deprecated/
 *.bak
 *.orig
 *.rej
+
+# 还在做、这一版先不带的材料（做完后删掉这一行再入库）
+/docs/character-design/

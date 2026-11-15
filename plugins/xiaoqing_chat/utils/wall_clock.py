@@ -6,9 +6,8 @@ import time
 from datetime import datetime, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from core.clock import DEFAULT_CONFIG_TIMEZONE
+from core.clock import DEFAULT_CONFIG_TIMEZONE, WEEKDAY_NAMES
 
-_WEEKDAYS     = "一二三四五六日"
 _zone: tzinfo = ZoneInfo(DEFAULT_CONFIG_TIMEZONE)
 
 
@@ -51,4 +50,6 @@ def describe_now(ts: float | None = None) -> str:
     """给模型的当前时间：日期、星期和时段一起出现，减少对时段的误判。"""
 
     moment = local_datetime(ts)
-    return f"{moment:%Y-%m-%d %H:%M}（周{_WEEKDAYS[moment.weekday()]}{day_period(moment.hour)}）"
+    return (
+        f"{moment:%Y-%m-%d %H:%M}（周{WEEKDAY_NAMES[moment.weekday()]}{day_period(moment.hour)}）"
+    )

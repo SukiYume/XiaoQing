@@ -138,7 +138,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 | `sessions.json` | 会话标签、工作目录、所有者、thread ID 和任务计数 |
 | `quarantine/sessions-*.json` | 校验异常的状态快照 |
 | `session/<name>/conversation.jsonl` | 用户任务、Codex 回复和任务状态事件 |
-| `session/<name>/images/` | 已归档并投递的图片 |
+| `session/<name>/images/` | 已归档的图片（超过单次发图上限的只归档不发） |
 | `session/<name>/jobs/job-<id>/artifacts/` | 单次任务的制品目录 |
 | `deleted_sessions/<name>-<time>/` | 删除会话后的历史归档 |
 | `outputs/` | Codex CLI 临时输出 |
@@ -151,13 +151,13 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 插件会在任务提示末尾附加图片输出约定。Codex 可将图片保存到当前任务的 `artifacts/`，或在最终文本中使用 Markdown 图片语法和 `图片: <path>` 显式引用本地文件。
 
-结果投递过程只处理当前任务制品与最终文本中的显式路径。校验通过的图片复制到会话图片目录，然后作为 OneBot 图片段发送。
+结果投递过程只处理当前任务制品，以及最终文本和 Codex 事件流里出现的图片路径（都必须在工作目录或制品目录内）。校验通过的图片复制到会话图片目录，然后作为 OneBot 图片段发送。
 
 ---
 
 ## ⏰ 生命周期
 
-插件在首次命令或 arXiv 服务调用时创建进程内 manager。配置代次变化会更新并行度和资源预算。卸载、重载或 Bot 关闭时，`shutdown()` 停止接收任务、取消运行进程树、等待 worker 收尾并保存状态。
+插件在首次命令、arXiv 服务或 agent 任务服务调用时创建进程内 manager。配置代次变化会更新并行度和资源预算。卸载、重载或 Bot 关闭时，`shutdown()` 停止接收任务、取消运行进程树、等待 worker 收尾并保存状态。
 
 ---
 

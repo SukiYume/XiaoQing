@@ -17,6 +17,7 @@ from typing import Any, cast
 from core.message import iter_message_segments
 
 from ..chat_event import mention_text_segments
+from ..constants import MEDIA_READ_FAILED_LABEL
 from ..media_registry import resolve_registered_media_items
 from ..message_parts import build_text_message_parts, normalize_message_parts
 from .emoji_library import collect_emoji_candidate
@@ -56,7 +57,7 @@ from .render_cache import (
     write_render_cache_entry,
 )
 from .settings import media_config, media_log
-from .sources import hash_media_bytes, resolve_segment_media, validate_image_resource_limits
+from .sources import hash_media_bytes, resolve_segment_media
 
 _MEDIA_RENDER_LOCKS_BY_LOOP: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
@@ -306,13 +307,6 @@ def _resolved_local_media(
         max_pixels      = max_pixels,
         max_frames      = max_frames,
     )
-    validate_image_resource_limits(
-        width       = info.width,
-        height      = info.height,
-        max_pixels  = max_pixels,
-        max_frames  = max_frames,
-        frame_count = info.frame_count,
-    )
     return ResolvedMedia(
         media_hash   = hash_media_bytes(payload),
         segment_type = "image",
@@ -344,7 +338,7 @@ def _render_summary_only_media(
         description  = cleaned or "一张表情包"
     else:
         emotion_tags = ()
-        description  = cleaned or "图片内容读取失败"
+        description  = cleaned or MEDIA_READ_FAILED_LABEL
     marker      = build_marker(kind, description, emotion_tags)
     summary_key = f"{segment_type}:{kind}:{summary or description}"
     return RenderedMedia(
@@ -487,35 +481,28 @@ def _trim_ordered_text_segments(text_parts: list[str], clean_text: str) -> list[
     return adjusted
 
 
-def _compose_effective_user_text(
+def _ordered_text_and_media(
     *,
     clean_text: str,
     event: dict[str, Any],
     rendered_items: list[RenderedMedia],
-) -> str:
-    """按原始消息顺序交错组合清洗文本与渲染标记。"""
+) -> list[str | RenderedMedia]:
+    """按原始消息顺序交错清洗后的文本与已渲染媒体；消息里没有媒体时返回空列表。"""
 
     segments = mention_text_segments(event)
-    if not segments:
-        return (clean_text or "").strip()
-
-    has_media = any(
-        str(segment.get("type", "") or "") in SUPPORTED_MEDIA_TYPES for segment in segments
-    )
-    if not has_media:
-        return (clean_text or "").strip()
+    if not any(str(segment.get("type", "") or "") in SUPPORTED_MEDIA_TYPES for segment in segments):
+        return []
 
     text_parts = [
         str((segment.get("data", {}) or {}).get("text", ""))
         for segment in segments
         if str(segment.get("type", "") or "") == "text"
     ]
-    trimmed_text_parts = _trim_ordered_text_segments(text_parts, clean_text)
-    text_iter          = iter(trimmed_text_parts)
-    media_iter         = iter(rendered_items)
+    text_iter  = iter(_trim_ordered_text_segments(text_parts, clean_text))
+    media_iter = iter(rendered_items)
 
-    ordered_blocks: list[str] = []
-    text_buffer               = ""
+    ordered: list[str | RenderedMedia] = []
+    text_buffer                        = ""
     for segment in segments:
         segment_type = str(segment.get("type", "") or "")
         if segment_type == "text":
@@ -525,27 +512,40 @@ def _compose_effective_user_text(
             continue
         flushed = text_buffer.strip()
         if flushed:
-            ordered_blocks.append(flushed)
+            ordered.append(flushed)
         text_buffer = ""
         rendered    = next(media_iter, None)
         if rendered is not None:
-            context_marker = build_context_marker(rendered)
-            if context_marker.strip():
-                ordered_blocks.append(context_marker.strip())
+            ordered.append(rendered)
 
     flushed = text_buffer.strip()
     if flushed:
-        ordered_blocks.append(flushed)
+        ordered.append(flushed)
+    return ordered
 
-    if ordered_blocks:
-        return "\n".join(ordered_blocks).strip()
-    return (clean_text or "").strip()
+
+def _compose_effective_user_text(
+    *,
+    clean_text: str,
+    event: dict[str, Any],
+    rendered_items: list[RenderedMedia],
+) -> str:
+    """文本与渲染标记按原始消息顺序逐行排列。"""
+
+    blocks: list[str] = []
+    for item in _ordered_text_and_media(
+        clean_text=clean_text, event=event, rendered_items=rendered_items
+    ):
+        block = item if isinstance(item, str) else build_context_marker(item).strip()
+        if block:
+            blocks.append(block)
+    return "\n".join(blocks).strip() or (clean_text or "").strip()
 
 
 def _rendered_media_to_message_part(rendered: RenderedMedia) -> dict[str, Any]:
     """只序列化模型安全的媒体元数据，排除来源字节和凭据。"""
 
-    # 标记与旧文本渲染一致地带上梗背景：结构化消息、提示词和持久化历史都保留这段分析。
+    # 标记带上梗背景：结构化消息、提示词和持久化历史都保留这段分析。
     payload: dict[str, Any] = {
         "kind"      : str(rendered.kind or "").strip(),
         "media_hash": str(rendered.media_hash or "").strip(),
@@ -578,52 +578,14 @@ def _compose_effective_user_parts(
 ) -> tuple[dict[str, Any], ...]:
     """在保留清洗后片段顺序的同时构造结构化模型输入。"""
 
-    segments = mention_text_segments(event)
-    if not segments:
-        return cast(
-            tuple[dict[str, Any], ...],
-            build_text_message_parts((clean_text or "").strip()),
+    ordered_parts: list[dict[str, Any]] = [
+        {"kind": "text", "text": item}
+        if isinstance(item, str)
+        else _rendered_media_to_message_part(item)
+        for item in _ordered_text_and_media(
+            clean_text=clean_text, event=event, rendered_items=rendered_items
         )
-
-    has_media = any(
-        str(segment.get("type", "") or "") in SUPPORTED_MEDIA_TYPES for segment in segments
-    )
-    if not has_media:
-        return cast(
-            tuple[dict[str, Any], ...],
-            build_text_message_parts((clean_text or "").strip()),
-        )
-
-    text_parts = [
-        str((segment.get("data", {}) or {}).get("text", ""))
-        for segment in segments
-        if str(segment.get("type", "") or "") == "text"
     ]
-    trimmed_text_parts = _trim_ordered_text_segments(text_parts, clean_text)
-    text_iter          = iter(trimmed_text_parts)
-    media_iter         = iter(rendered_items)
-
-    ordered_parts: list[dict[str, Any]] = []
-    text_buffer                         = ""
-    for segment in segments:
-        segment_type = str(segment.get("type", "") or "")
-        if segment_type == "text":
-            text_buffer += next(text_iter, "")
-            continue
-        if segment_type not in SUPPORTED_MEDIA_TYPES:
-            continue
-        flushed = text_buffer.strip()
-        if flushed:
-            ordered_parts.append({"kind": "text", "text": flushed})
-        text_buffer = ""
-        rendered    = next(media_iter, None)
-        if rendered is not None:
-            ordered_parts.append(_rendered_media_to_message_part(rendered))
-
-    flushed = text_buffer.strip()
-    if flushed:
-        ordered_parts.append({"kind": "text", "text": flushed})
-
     if ordered_parts:
         return cast(tuple[dict[str, Any], ...], normalize_message_parts(ordered_parts))
     return cast(

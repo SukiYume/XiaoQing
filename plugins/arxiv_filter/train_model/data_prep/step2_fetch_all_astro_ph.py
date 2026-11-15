@@ -4,7 +4,7 @@ Step 2: 获取日期范围内所有 astro-ph 论文（标题 + 摘要）
 使用 arXiv REST API 按月查询天体物理类论文。通过月度缓存实现增量更新，
 已完成的历史月份不再重新获取，当月数据每次运行时重新拉取。
 
-查询方式参照 GetArXiv.ipynb:
+查询方式:
   search_query = 'astrophysics AND submittedDate:[start TO end]'
   分页 + feedparser 解析
 
@@ -12,7 +12,8 @@ Step 2: 获取日期范围内所有 astro-ph 论文（标题 + 摘要）
   cache/date_range.json — 日期范围（来自 step 1）
 
 输出:
-  cache/monthly/YYMM.json — 每月缓存
+  cache/monthly/YYMM.json — 每月完整缓存，内容为 {papers, query_range, completed}
+  cache/monthly/YYMM.partial.json — 抓取中断时的断点，该月完成后删除
 
 首次运行耗时较长，后续运行仅获取新增月份。
 
@@ -29,6 +30,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 feedparser = importlib.import_module("feedparser")
 
@@ -150,7 +152,7 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
         if month_end > end:
             month_end = end
 
-        yymm      = (current.year - 2000) * 100 + current.month
+        yymm      = _yymm(current.year, current.month)
         api_start = month_start.strftime("%Y%m%d%H%M")
         api_end   = month_end.strftime("%Y%m%d%H%M")
 
@@ -158,6 +160,11 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
         current = next_month
 
     return ranges
+
+
+def _yymm(year: int, month: int) -> int:
+    """月份标识：2020-12 -> 2012。"""
+    return (year - 2000) * 100 + month
 
 
 def yymm_to_label(yymm: int) -> str:
@@ -182,25 +189,27 @@ class FetchResult:
     total_results: int | None
 
 
+def _is_valid_records(records: object) -> bool:
+    """论文记录列表：每条都是含 arxiv_id / title / abstract 字符串的对象。"""
+
+    return isinstance(records, list) and all(
+        isinstance(record, dict)
+        and all(isinstance(record.get(field), str) for field in ("arxiv_id", "title", "abstract"))
+        for record in records
+    )
+
+
 def load_cache(yymm: int) -> list[dict[str, str]] | None:
-    """加载某月的缓存，不存在返回 None"""
+    """加载某月的完整缓存，不存在返回 None"""
     cache_file = MONTHLY_DIR / f"{yymm}.json"
-    if cache_file.exists():
-        with open(cache_file, encoding="utf-8") as f:
-            payload = json.load(f)
-        if isinstance(payload, dict):
-            payload = payload.get("papers")
-        if not isinstance(payload, list) or any(
-            not isinstance(record, dict)
-            or any(
-                not isinstance(record.get(field), str)
-                for field in ("arxiv_id", "title", "abstract")
-            )
-            for record in payload
-        ):
-            raise ValueError(f"invalid monthly cache: {cache_file}")
-        return payload
-    return None
+    if not cache_file.exists():
+        return None
+    with open(cache_file, encoding="utf-8") as f:
+        payload = json.load(f)
+    papers = payload.get("papers") if isinstance(payload, dict) else None
+    if not _is_valid_records(papers):
+        raise ValueError(f"invalid monthly cache: {cache_file}")
+    return cast(list[dict[str, str]], papers)
 
 
 def save_cache(
@@ -240,22 +249,14 @@ def load_checkpoint(yymm: int, *, api_start: str = "", api_end: str = "") -> Fet
     next_offset   = payload.get("next_offset")
     total_results = payload.get("total_results")
     if (
-        not isinstance(papers, list)
-        or any(
-            not isinstance(record, dict)
-            or any(
-                not isinstance(record.get(field), str)
-                for field in ("arxiv_id", "title", "abstract")
-            )
-            for record in papers
-        )
+        not _is_valid_records(papers)
         or type(completed) is not bool
         or type(next_offset) is not int
         or next_offset < 0
         or (total_results is not None and (type(total_results) is not int or total_results < 0))
     ):
         raise ValueError(f"invalid checkpoint: {path}")
-    return FetchResult(papers, completed, next_offset, total_results)
+    return FetchResult(cast(list[dict[str, str]], papers), completed, next_offset, total_results)
 
 
 def save_checkpoint(
@@ -284,7 +285,7 @@ def is_month_finalized(yymm: int, *, api_start: str = "", api_end: str = "") -> 
     条件：缓存存在 且 该月已过去（当月数据可能有新增，需重新获取）。
     """
     today        = datetime.now(UTC)
-    current_yymm = (today.year - 2000) * 100 + today.month
+    current_yymm = _yymm(today.year, today.month)
     identity     = MONTHLY_DIR / f"{yymm}.json"
     if not identity.is_file():
         return False
@@ -298,7 +299,7 @@ def is_month_finalized(yymm: int, *, api_start: str = "", api_end: str = "") -> 
         )
     except (OSError, ValueError):
         return False
-    return matches and (MONTHLY_DIR / f"{yymm}.json").is_file() and yymm < current_yymm
+    return matches and yymm < current_yymm
 
 
 # ============================================================

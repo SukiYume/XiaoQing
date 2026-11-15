@@ -15,6 +15,7 @@ from .ai import (
     list_configured_models,
 )
 from .capabilities import (
+    MEMORY_METHODS,
     AgentTurnService,
     AIService,
     ChatReplyService,
@@ -25,6 +26,7 @@ from .capabilities import (
     InboundBacklogService,
     LifeContextService,
     LocalToolsService,
+    MemoryService,
     OneBotMediaService,
     SecretAdminService,
     SSHAgentCommandService,
@@ -40,6 +42,12 @@ from .plugin_execution import call_plugin_callback, invoke_loaded_plugin
 from .router import command_access
 
 logger = logging.getLogger(__name__)
+
+# Core 发出的能力按这几条命令在 plugin.json 里的声明判权（见 ``_may_use_command``）。
+_SHELL_COMMAND      = "shell.shell"
+_SSH_COMMAND        = "qingssh.ssh"
+_CODEX_COMMAND      = "codex.codex"
+_SET_SECRET_COMMAND = "bot_core.set_secret"
 
 
 def _scheduled_action_allowed(principal: PluginPrincipal, action: Mapping[str, Any]) -> bool:
@@ -225,7 +233,6 @@ class AppPluginContextMixin:
             current_user_id=user_id,
             current_group_id=group_id,
             mute_control=self.dispatcher,
-            config_manager=None,
             settings_reader=lambda: self._plugin_settings_snapshot(plugin_name),
             secret_reader=lambda path: self.config_manager.get_plugin_secret(plugin_name, path),
             secret_writer=lambda path, value: self.config_manager.set_plugin_secret(
@@ -277,7 +284,7 @@ class AppPluginContextMixin:
 
         if principal.is_system:
             return self.identity_service.owns(principal)
-        return self._may_use_command(principal, "codex.codex")
+        return self._may_use_command(principal, _CODEX_COMMAND)
 
     def _agent_user_authorized(self, principal: PluginPrincipal) -> bool:
         """agent 只替真实发消息的用户做事；能做什么由下面各项能力对应的命令权限决定。"""
@@ -339,6 +346,26 @@ class AppPluginContextMixin:
             request_texts    = request_texts,
         )
 
+    def _declared_service_caller(
+        self,
+        plugin_name: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        service_name: str,
+    ) -> Callable[[dict[str, Any]], Awaitable[Any]]:
+        """这个插件、这个主体调用一条已声明服务的函数：载荷进去，服务的返回值出来。"""
+
+        async def invoke(payload: dict[str, Any]) -> Any:
+            return await self._invoke_declared_service(
+                caller_plugin = plugin_name,
+                service_name  = service_name,
+                principal     = principal,
+                request_id    = request_id,
+                args          = (payload,),
+            )
+
+        return invoke
+
     def _build_life_capabilities(
         self,
         plugin_name: str,
@@ -352,20 +379,54 @@ class AppPluginContextMixin:
         if "life.turn_context" not in uses_services:
             return {}
 
-        def declared(service_name: str) -> Callable[[dict[str, Any]], Awaitable[Any]]:
-            async def invoke(payload: dict[str, Any]) -> Any:
-                return await self._invoke_declared_service(
-                    caller_plugin = plugin_name,
-                    service_name  = service_name,
-                    principal     = principal,
-                    request_id    = request_id,
-                    args          = (payload,),
-                )
-
-            return invoke
+        declared = functools.partial(
+            self._declared_service_caller, plugin_name, principal, request_id
+        )
 
         export = declared("life.export_memes") if "life.export_memes" in uses_services else None
         return {"life_context": LifeContextService(declared("life.turn_context"), export)}
+
+    def _build_memory_capabilities(
+        self,
+        plugin_name: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        *,
+        uses_services: frozenset[str],
+    ) -> dict[str, Any]:
+        """统一记忆：声明了哪项才给哪项；系统主体（定时任务）也可用。
+
+        调用方名字和用户主体所在的会话（群聊 ``g<群号>``，私聊 ``u<QQ号>``）由这里写进载荷，
+        调用方不能自己声明；系统主体的范围为空，由记忆插件按调用方的规则判断。
+        """
+
+        methods = {
+            method: f"memory.{method}"
+            for method in MEMORY_METHODS
+            if f"memory.{method}" in uses_services
+        }
+        if not methods:
+            return {}
+
+        declared = functools.partial(
+            self._declared_service_caller, plugin_name, principal, request_id
+        )
+
+        scope = ""
+        if principal.kind == "user" and principal.user_id is not None:
+            scope = (
+                f"g{principal.group_id}"
+                if principal.group_id is not None and not principal.is_private
+                else f"u{principal.user_id}"
+            )
+        return {
+            "memory": MemoryService(
+                plugin_name,
+                "user" if principal.kind == "user" else "system",
+                scope,
+                {method: declared(name) for method, name in methods.items()},
+            )
+        }
 
     def _build_agent_capabilities(
         self,
@@ -386,21 +447,13 @@ class AppPluginContextMixin:
         if not self._agent_user_authorized(principal):
             return {}
         authorized = functools.partial(self._agent_user_authorized, principal)
-        local      = functools.partial(self._may_use_command, principal, "shell.shell")
-        ssh        = functools.partial(self._may_use_command, principal, "qingssh.ssh")
-        codex      = functools.partial(self._may_use_command, principal, "codex.codex")
+        local      = functools.partial(self._may_use_command, principal, _SHELL_COMMAND)
+        ssh        = functools.partial(self._may_use_command, principal, _SSH_COMMAND)
+        codex      = functools.partial(self._may_use_command, principal, _CODEX_COMMAND)
 
-        def declared(service_name: str) -> Callable[[dict[str, Any]], Awaitable[Any]]:
-            async def invoke(payload: dict[str, Any]) -> Any:
-                return await self._invoke_declared_service(
-                    caller_plugin = plugin_name,
-                    service_name  = service_name,
-                    principal     = principal,
-                    request_id    = request_id,
-                    args          = (payload,),
-                )
-
-            return invoke
+        declared = functools.partial(
+            self._declared_service_caller, plugin_name, principal, request_id
+        )
 
         granted: dict[str, Any] = {}
         if "agent.handle_turn" in uses_services:
@@ -471,7 +524,7 @@ class AppPluginContextMixin:
         )
         secret_admin       = None
         may_manage_secrets = functools.partial(
-            self._may_use_command, principal, "bot_core.set_secret"
+            self._may_use_command, principal, _SET_SECRET_COMMAND
         )
         if "secret_admin" in declared_capabilities and may_manage_secrets():
             secret_admin = SecretAdminService(
@@ -556,48 +609,19 @@ class AppPluginContextMixin:
 
             chat_reply = ChatReplyService(reply_via_chat)
 
-        async def complete_ai_route(
-            *,
-            route_name: str,
-            messages: list[dict[str, Any]],
-            required_modalities: tuple[str, ...]    = ("text",),
-            pinned_model: str | None                = None,
-            temperature: float | None               = None,
-            top_p: float | None                     = None,
-            max_tokens: int | None                  = None,
-            timeout_seconds: float | None           = None,
-            total_timeout_seconds: float | None     = None,
-            max_retry: int | None                   = None,
-            retry_interval_seconds: float | None    = None,
-            tools: list[dict[str, Any]] | None      = None,
-            tool_choice: Any                        = None,
-            extra_payload: Mapping[str, Any] | None = None,
-        ) -> AICompletionResult:
-            """用当前原子配置快照执行插件自己的 AI route。"""
+        async def complete_ai_route(**request: Any) -> AICompletionResult:
+            """用当前原子配置快照执行插件自己的 AI route；调用参数原样交给 ``ai.py``。"""
 
             session = self.http_session
             if session is None or session.closed:
                 raise RuntimeError("shared HTTP session is unavailable")
             snapshot = self.config_manager.snapshot()
             return await complete_configured_route(
-                session                = session,
-                config                 = snapshot.config,
-                secrets                = snapshot.secrets,
-                plugin_name            = plugin_name,
-                route_name             = route_name,
-                messages               = messages,
-                required_modalities    = required_modalities,
-                pinned_model           = pinned_model,
-                temperature            = temperature,
-                top_p                  = top_p,
-                max_tokens             = max_tokens,
-                timeout_seconds        = timeout_seconds,
-                total_timeout_seconds  = total_timeout_seconds,
-                max_retry              = max_retry,
-                retry_interval_seconds = retry_interval_seconds,
-                tools                  = tools,
-                tool_choice            = tool_choice,
-                extra_payload          = extra_payload,
+                session     = session,
+                config      = snapshot.config,
+                secrets     = snapshot.secrets,
+                plugin_name = plugin_name,
+                **request,
             )
 
         def list_ai_models(
@@ -640,6 +664,12 @@ class AppPluginContextMixin:
                 request_id,
                 declared_capabilities = declared_capabilities,
                 uses_services         = uses_services,
+            ),
+            **self._build_memory_capabilities(
+                plugin_name,
+                principal,
+                request_id,
+                uses_services=uses_services,
             ),
         )
 

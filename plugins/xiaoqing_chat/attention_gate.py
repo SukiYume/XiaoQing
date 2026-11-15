@@ -51,7 +51,7 @@ async def decide_attention(
 
 
 async def is_reply_to_bot(*, event: dict[str, Any], state: Any, chat_id: str) -> bool:
-    reply_ids = _reply_segment_message_ids(event)
+    reply_ids = reply_message_ids(event)
     if not reply_ids:
         return False
     history = await state.memory_store.get_recent_async(chat_id, max_items=30)
@@ -62,13 +62,15 @@ async def is_reply_to_bot(*, event: dict[str, Any], state: Any, chat_id: str) ->
     )
 
 
-def _reply_segment_message_ids(event: dict[str, Any]) -> set[str]:
-    ids: set[str] = set()
+def reply_message_ids(event: dict[str, Any]) -> tuple[str, ...]:
+    """事件里引用的消息 ID（按出现顺序，去重）；协议端可能写在 ``id`` 或 ``message_id`` 里。"""
+
+    ids: dict[str, None] = {}
     for segment in iter_message_segments(event.get("message")):
         if str(segment.get("type", "") or "") != "reply":
             continue
         data   = segment.get("data", {}) or {}
         msg_id = data.get("id") or data.get("message_id")
         if msg_id not in (None, ""):
-            ids.add(str(msg_id))
-    return ids
+            ids[str(msg_id)] = None
+    return tuple(ids)

@@ -10,7 +10,6 @@ import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
     _complete_test_runtime_config,
     _make_hctx,
@@ -321,9 +320,7 @@ async def test_handle_internal_stats_uses_async_memory_read(mock_context, sample
                 brain_temperature         = 0.7,
             ),
             memory=SimpleNamespace(enable_memory_retrieval=True, top_k=5, min_score=0.1),
-            expression=SimpleNamespace(
-                enable_expression_learning=True, max_injected=5, max_store=200
-            ),
+            expression=SimpleNamespace(enable_expression_learning=True, max_store=200),
             reply_probability_base     = 0.6,
             min_reply_interval_seconds = 12.0,
             max_replies_per_minute     = 6,
@@ -362,9 +359,7 @@ async def test_handle_internal_stats_uses_async_action_history_read(
                 brain_temperature         = 0.7,
             ),
             memory=SimpleNamespace(enable_memory_retrieval=True, top_k=5, min_score=0.1),
-            expression=SimpleNamespace(
-                enable_expression_learning=True, max_injected=5, max_store=200
-            ),
+            expression=SimpleNamespace(enable_expression_learning=True, max_store=200),
             reply_probability_base     = 0.6,
             min_reply_interval_seconds = 12.0,
             max_replies_per_minute     = 6,
@@ -412,6 +407,7 @@ async def test_extract_and_learn_uses_async_memory_read(mock_context):
         personality          = MagicMock(),
         min_interval_seconds = 0.0,
         min_messages         = 10,
+        max_store            = 2000,
         self_reflect         = True,
         llm                  = LLMCallConfig(
             temperature            = 0.7,
@@ -452,6 +448,7 @@ async def test_extract_and_learn_skips_when_same_chat_inflight(mock_context):
             personality          = MagicMock(),
             min_interval_seconds = 0.0,
             min_messages         = 10,
+            max_store            = 2000,
             self_reflect         = True,
             llm                  = LLMCallConfig(
                 temperature            = 0.7,
@@ -498,6 +495,7 @@ async def test_extract_and_learn_resets_future_watermark_after_clock_rollback(
         personality          = MagicMock(),
         min_interval_seconds = 60.0,
         min_messages         = 10,
+        max_store            = 2000,
         self_reflect         = True,
         llm                  = LLMCallConfig(
             temperature            = 0.7,
@@ -556,7 +554,7 @@ async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(
         fake_upsert_learned,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
         raise_empty_response,
     )
 
@@ -573,6 +571,7 @@ async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(
         personality          = MagicMock(),
         min_interval_seconds = 0.0,
         min_messages         = 10,
+        max_store            = 2000,
         self_reflect         = True,
         llm                  = LLMCallConfig(
             temperature            = 0.7,
@@ -677,7 +676,6 @@ async def test_build_tool_info_block_uses_async_action_history_read(mock_context
 
     block = await tool_status_context(
         state    = state,
-        data_dir = mock_context.data_dir,
         bot_name = "小青",
         chat_id  = "g1",
         event    = {"user_id": 1},
@@ -790,6 +788,10 @@ async def test_observe_outgoing_action_records_external_plugin_text_only(mock_co
     assert "[图片" not in content
     assert media_items == []
     state.heartflow.on_bot_reply_async.assert_not_awaited()
+    # 全文和配图另存进推送记录，她主动开口时看得到
+    chat_id, push = state.push_log.append.call_args.args
+    assert chat_id == "g67890" and push.source == "earthquake" and push.local_id == "m-out"
+    assert "5.7级地震" in push.text and push.images == ("/tmp/quake.jpg",)
 
 
 @pytest.mark.asyncio
@@ -843,7 +845,11 @@ async def test_long_agent_results_are_kept_shortened_but_other_long_output_keeps
             "（内容较长，只记下开头）"
         )
         assert len(headline) < 200
+        # 对话里只记开头，推送记录里是全文
+        logged = state.push_log.append.call_args.args[1]
+        assert logged.text.startswith("今日推荐") and len(logged.text) > 1500
         await observe_outgoing_action(long_result(), mock_context, source_plugin="xiaoqing_agent")
+        assert state.push_log.append.call_count == 1  # agent 的结果是她自己说的话，不算推送
 
     append_kwargs = state.memory_store.append.call_args.kwargs
     assert append_kwargs["message_id"] == 4242
@@ -1065,79 +1071,18 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
 
 
 @pytest.mark.asyncio
-async def test_run_pfc_once_uses_async_pfc_state_store(tmp_path):
-    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-    from plugins.xiaoqing_chat.memory.memory import MemoryStore
-    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
-    from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
-    from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
-
-    chat_id              = "pfc-async-state"
-    cfg                  = XiaoQingChatConfig()
-    context              = MagicMock()
-    context.data_dir     = tmp_path
-    context.http_session = AsyncMock()
-
-    memory_store = MemoryStore()
-    memory_store.append(chat_id, role="user", name="Tester", content="你好")
-    action_history            = ActionHistoryStore()
-    memory_db                 = MagicMock()
-    pfc_state_store           = MagicMock()
-    pfc_state_store.get_async = AsyncMock(
-        return_value=PFCConversationState(
-            chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
-            ended                        = False,
-            last_successful_reply_action = "",
-            goal_list                    = [],
-            knowledge_list               = [],
-            planner_fail_ts              = [],
-            planner_skip_until           = 0.0,
-        )
-    )
-    pfc_state_store.get.side_effect  = AssertionError("sync pfc state read should not be used")
-    pfc_state_store.save_async       = AsyncMock()
-    pfc_state_store.save.side_effect = AssertionError("sync pfc state write should not be used")
-    generate_reply = AsyncMock(return_value="ok")
-
-    with patch(
-        "plugins.xiaoqing_chat.planning.pfc_engine.plan_next_action",
-        new=AsyncMock(
-            return_value=PFCPlan(action="wait", reason="先等等", thinking="观察中", wait_seconds=20)
-        ),
-    ):
-        result = await run_pfc_once(
-            context         = context,
-            runtime_cfg     = cfg,
-            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name        = "小青",
-            is_private      = False,
-            chat_id         = chat_id,
-            current_text    = "你好",
-            memory_store    = memory_store,
-            action_history  = action_history,
-            memory_db       = memory_db,
-            pfc_state_store = pfc_state_store,
-            generate_reply  = generate_reply,
-        )
-
-    assert result.action == "wait"
-    assert pfc_state_store.get_async.await_count == 1
-
-
-@pytest.mark.asyncio
 async def test_fetch_pfc_knowledge_preserves_planner_intent(monkeypatch, tmp_path):
     from plugins.xiaoqing_chat.planning import pfc_engine
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
 
     captured: dict = {}
 
-    async def build_memory_block(**kwargs):
-        captured.update(kwargs)
-        return "retrieved memory"
+    async def search(context, chat_id, payload):
+        captured.update(payload, chat_id=chat_id)
+        return [{"type": "note", "text": "retrieved memory"}]
 
     next_plan = PFCPlan(action="direct_reply", reason="memory loaded")
-    monkeypatch.setattr(pfc_engine, "build_memory_block", build_memory_block)
+    monkeypatch.setattr(pfc_engine.memory_client, "search", search)
     monkeypatch.setattr(pfc_engine, "_plan_pfc_action", AsyncMock(return_value=next_plan))
     monkeypatch.setattr(pfc_engine, "log_step", Mock())
     state = SimpleNamespace(knowledge_list=[])
@@ -1146,20 +1091,17 @@ async def test_fetch_pfc_knowledge_preserves_planner_intent(monkeypatch, tmp_pat
         runtime_cfg=SimpleNamespace(memory=SimpleNamespace()),
         planner_llm=LLMCallConfig(temperature=0.2, top_p=0.8, max_tokens=200, timeout_seconds=1.0),
         chat_id      = "chat-1",
-        memory_db    = MagicMock(),
         secrets      = {"_ai": object()},
         bot_name     = "小青",
         history      = [],
         current_text = "把刚才那个偏好找出来",
         state        = state,
-        dirty        = False,
     )
     request = PFCPlan(action="fetch_knowledge", reason="需要核对用户刚才提过的偏好")
 
     result = await pfc_engine._fetch_pfc_knowledge(session, request)
 
     assert result is next_plan
-    assert captured["planner_question"] == request.reason
+    assert request.reason in captured["query"] and captured["chat_id"] == "chat-1"
     assert len(state.knowledge_list) == 1
-    assert state.knowledge_list[0]["text"] == "retrieved memory"
-    assert session.dirty is True
+    assert state.knowledge_list[0]["text"] == "- retrieved memory"

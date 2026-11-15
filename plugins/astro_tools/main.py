@@ -70,9 +70,7 @@ async def handle(
             return segments(_show_help())
 
         if subcommand not in _COMMANDS:
-            safe_subcommand = bounded_external_text(
-                subcommand, max_chars=32, max_bytes=128, suffix="…"
-            )
+            safe_subcommand = bounded_external_text(subcommand, max_chars=32, suffix="…")
             return segments(f"未知命令: {safe_subcommand}\n输入 /astro help 查看帮助")
         subcommand_args = raw_parts[1] if len(raw_parts) > 1 else ""
         if subcommand_args.strip().casefold() in {"help", "帮助"}:
@@ -106,7 +104,7 @@ def _show_help(subcommand: str | None = None) -> str:
 
 **单位转换:**
 • /astro convert <数值> <源单位> <目标单位>
-• 支持单位: Jy, mJy, pc, ly, AU, m, km, Hz, GHz, MHz, K, eV, keV, MeV
+• 支持单位: Jy, mJy, pc, ly, AU, m, km, Hz, GHz, MHz, K, eV, keV, MeV 等，以及 astropy 支持的其他单位（/astro convert 查看完整列表）
 • 示例: /astro convert 3 Jy mJy
 
 **红移计算:**

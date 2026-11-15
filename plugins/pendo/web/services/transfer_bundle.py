@@ -12,9 +12,9 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, BinaryIO, Final, cast
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ...models.item import Item, get_item_type_value
+from ...utils.time_utils import is_valid_timezone
 from ...utils.validators import COMMON_ITEM_FIELDS, SUPPORTED_ITEM_TYPES, TYPE_SPECIFIC_ITEM_FIELDS
 
 TRANSFER_FORMAT              : Final = "pendo-bundle"
@@ -45,10 +45,9 @@ FILE_NAME_TO_TYPE: Final[Mapping[str, str]] = MappingProxyType(
         EVENT_COLLECTION_FILE_NAME: EVENT_COLLECTION_TYPE,
     }
 )
+# 导出范围按哪个字段取日期；日程按起止区间、待办按计划日（回退截止日、创建日）另行处理，不在此表。
 TIME_FIELD_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "event" : "start_time",
-        "task"  : "plan_date",
         "ledger": "ledger_date",
         "note"  : "created_at",
         "diary" : "diary_date",
@@ -109,6 +108,12 @@ class ParsedBundle:
     file_summaries   : list[dict[str, Any]] = field(default_factory=list)
     errors           : list[dict[str, Any]] = field(default_factory=list)
     warnings         : list[str] = field(default_factory=list)
+
+
+def dict_copy_or_empty(value: object) -> dict[str, Any]:
+    """字典的浅拷贝；不是字典的值（缺失、损坏）按空字典处理。"""
+
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def compute_sha256(bytes_: bytes) -> str:
@@ -175,7 +180,7 @@ def serialize_item(item: Item | dict[str, Any]) -> dict[str, Any]:
             record[key] = value
 
     context           = record.get("context")
-    record["context"] = dict(context) if isinstance(context, dict) else {}
+    record["context"] = dict_copy_or_empty(context)
     return record
 
 
@@ -189,7 +194,7 @@ def serialize_event_collection(collection: dict[str, Any]) -> dict[str, Any]:
         if key in EVENT_COLLECTION_FIELDS:
             record[key] = value
     context           = record.get("context")
-    record["context"] = dict(context) if isinstance(context, dict) else {}
+    record["context"] = dict_copy_or_empty(context)
     return record
 
 
@@ -211,7 +216,7 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
             raise BundleValidationError(f"Unsupported field for {item_type}: {key}")
 
     context            = payload.get("context")
-    payload["context"] = dict(context) if isinstance(context, dict) else {}
+    payload["context"] = dict_copy_or_empty(context)
     if "_bundle_line" in record:
         payload["_bundle_line"] = record["_bundle_line"]
     return payload
@@ -230,10 +235,27 @@ def deserialize_event_collection_record(record: dict[str, Any]) -> dict[str, Any
             raise BundleValidationError(f"Unsupported field for event_collection: {key}")
 
     context               = collection.get("context")
-    collection["context"] = dict(context) if isinstance(context, dict) else {}
+    collection["context"] = dict_copy_or_empty(context)
     if "_bundle_line" in record:
         collection["_bundle_line"] = record["_bundle_line"]
     return collection
+
+
+def bundle_file_path(item_type: str) -> str:
+    """类型对应的规范成员路径；不认识的类型抛 ``BundleValidationError``。"""
+
+    if item_type == EVENT_COLLECTION_TYPE:
+        return EVENT_COLLECTION_FILE_NAME
+    if item_type in SUPPORTED_TYPES:
+        return TYPE_FILE_NAMES[item_type]
+    raise BundleValidationError(f"Unsupported type for bundle write: {item_type}")
+
+
+def encode_records(records: list[dict[str, Any]]) -> bytes:
+    """把记录编码为 UTF-8 NDJSON：每行一条，非空时以换行结尾。"""
+
+    lines = [json.dumps(record, ensure_ascii=False) for record in records]
+    return ("\n".join(lines) + "\n" if lines else "").encode("utf-8")
 
 
 def _prepare_bundle_members(
@@ -244,17 +266,11 @@ def _prepare_bundle_members(
     prepared_members: dict[str, bytes] = {}
     record_counts   : dict[str, int]   = {}
     for item_type, records in typed_records.items():
-        if item_type == EVENT_COLLECTION_TYPE:
-            path = EVENT_COLLECTION_FILE_NAME
-        elif item_type in SUPPORTED_TYPES:
-            path = TYPE_FILE_NAMES[item_type]
-        else:
-            raise BundleValidationError(f"Unsupported type for bundle write: {item_type}")
+        path = bundle_file_path(item_type)
         if len(records) > MAX_BUNDLE_RECORDS:
             raise BundleValidationError(f"{path} has too many records")
 
-        lines = [json.dumps(record, ensure_ascii=False) for record in records]
-        payload = ("\n".join(lines) + "\n" if lines else "").encode("utf-8")
+        payload = encode_records(records)
         if len(payload) > MAX_BUNDLE_MEMBER_BYTES:
             raise BundleValidationError(f"{path} exceeds maximum file size")
         prepared_members[path] = payload
@@ -455,12 +471,7 @@ def _entry_path_and_type(entry: dict[str, Any]) -> tuple[str, str]:
     if item_type not in SUPPORTED_TYPES and item_type != EVENT_COLLECTION_TYPE:
         raise BundleValidationError(f"Unsupported file type in manifest: {declared_type}")
 
-    expected_path = (
-        EVENT_COLLECTION_FILE_NAME
-        if item_type == EVENT_COLLECTION_TYPE
-        else TYPE_FILE_NAMES[item_type]
-    )
-    if path != expected_path:
+    if path != bundle_file_path(item_type):
         raise BundleValidationError(f"Unexpected path for {item_type}: {path}")
     return path, item_type
 
@@ -520,10 +531,8 @@ def _validate_manifest_source(source: object) -> None:
     timezone_name = source.get("timezone")
     if not isinstance(timezone_name, str) or not timezone_name.strip():
         raise BundleValidationError("Bundle manifest source timezone is required")
-    try:
-        ZoneInfo(timezone_name)
-    except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
-        raise BundleValidationError(f"Invalid source timezone: {timezone_name}") from exc
+    if not is_valid_timezone(timezone_name):
+        raise BundleValidationError(f"Invalid source timezone: {timezone_name}")
 
 
 def _validate_manifest_files(files: object) -> None:

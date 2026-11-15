@@ -64,7 +64,7 @@ class Decision:
     factors: dict[str, Any] = field(default_factory=dict)
 
     def record(self, at: float) -> dict[str, Any]:
-        """写进 ``state.last_decision`` 的形式；参数里的查询词不进日志，只进状态。"""
+        """写进 ``state.last_decision`` 的形式：不带参数，查询词由会话写进 ``state.current`` 和最近活动。"""
 
         return {
             "at"         : at,
@@ -76,8 +76,8 @@ class Decision:
         }
 
 
-def _rest(reason: str, scores: dict[str, float] | None = None) -> Decision:
-    return Decision(REST, reason, scores or {})
+def _rest(reason: str) -> Decision:
+    return Decision(REST, reason)
 
 
 # ───────────────────────────── 门控 ─────────────────────────────
@@ -158,7 +158,7 @@ def gate(
         return _rest("activity_busy")
     if manual:
         return None
-    ended = max(float(state.get("last_session_end", 0.0)), float(state.get("last_session_at", 0.0)))
+    ended = float(state.get("last_session_end", 0.0))
     if now < ended:
         return _rest("in_session")
     if now - ended < cfg.min_session_gap_minutes * 60.0:
@@ -176,16 +176,20 @@ def gate(
 # ───────────────────────────── 话题 ─────────────────────────────
 
 
-def _weighted_pick(rng: random.Random, weights: dict[str, float]) -> str | None:
-    total = sum(weights.values())
-    if total <= 0:
-        return None
+def _roulette(rng: random.Random, weights: dict[str, float], total: float) -> str:
+    """轮盘抽取：``weights`` 非空且总权 ``total`` 为正，一个键被抽中的概率与它的权重成正比。"""
+
     point = rng.random() * total
     for key, weight in weights.items():
         point -= weight
         if point <= 0:
             return key
     return next(reversed(weights))
+
+
+def _weighted_pick(rng: random.Random, weights: dict[str, float]) -> str | None:
+    total = sum(weights.values())
+    return _roulette(rng, weights, total) if total > 0 else None
 
 
 ANIME_QUERIES             = ("新番", "动画推荐", "番剧", "动漫混剪", "轻小说")
@@ -205,7 +209,7 @@ CHAT_TOPIC_SHARE          = 0.5
 
 
 def _anime_topic(rng: random.Random) -> str:
-    return ANIME_QUERIES[int(rng.random() * len(ANIME_QUERIES)) % len(ANIME_QUERIES)]
+    return ANIME_QUERIES[int(rng.random() * len(ANIME_QUERIES))]
 
 
 def _recent_queries(state: dict[str, Any]) -> list[str]:
@@ -310,13 +314,7 @@ def _softmax_pick(
     top     = max(scores.values())
     weights = {k: math.exp((v - top) / temperature) for k, v in scores.items()}
     total   = sum(weights.values())
-    point   = rng.random() * total
-    chosen  = next(reversed(weights))
-    for key, weight in weights.items():
-        point -= weight
-        if point <= 0:
-            chosen = key
-            break
+    chosen  = _roulette(rng, weights, total)
     return chosen, weights[chosen] / total
 
 

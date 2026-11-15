@@ -88,13 +88,6 @@ def test_malformed_authorization_header_fails_closed(authorization: str) -> None
 @pytest.mark.parametrize(
     ("payload", "method", "path", "expected_status"),
     [
-        ({"owner_id": "owner", "kind": "browser"}, "GET", "/api/widget/summary", 401),
-        (
-            {"owner_id": "owner", "kind": "widget", "scope": "widget:write"},
-            "GET",
-            "/api/widget/summary",
-            403,
-        ),
         (
             {"owner_id": "owner", "kind": "widget", "scope": "widget:read"},
             "POST",
@@ -115,7 +108,7 @@ def test_malformed_authorization_header_fails_closed(authorization: str) -> None
         ),
     ],
 )
-def test_widget_bearer_requires_kind_scope_read_method_and_route(
+def test_widget_bearer_is_limited_to_get_on_widget_routes(
     monkeypatch: pytest.MonkeyPatch,
     pendo_db: Database,
     payload: dict[str, Any],
@@ -138,25 +131,12 @@ def test_widget_bearer_requires_kind_scope_read_method_and_route(
     assert exc_info.value.status_code == expected_status
 
 
-def test_widget_bearer_rejects_invalid_subject_and_auth_errors(
+def test_widget_bearer_maps_token_verification_errors_to_401(
     monkeypatch: pytest.MonkeyPatch,
     pendo_db: Database,
 ) -> None:
     request = _request(path="/api/widget/summary")
     monkeypatch.setattr(deps, "_db_instance", pendo_db)
-
-    monkeypatch.setattr(
-        deps,
-        "verify_token",
-        lambda _token, **_kwargs: {
-            "owner_id": "",
-            "kind"    : "widget",
-            "scope"   : "widget:read",
-        },
-    )
-    with pytest.raises(HTTPException) as invalid_owner:
-        deps.get_current_user(request, "Bearer token")
-    assert invalid_owner.value.status_code == 401
 
     def fail_verify(_token: str, **_kwargs: Any) -> dict[str, Any]:
         raise AuthError("expired test token")

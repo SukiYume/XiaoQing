@@ -5,8 +5,8 @@ from typing import Any
 from core.delivery import CommandOutcome, DeliverySegments
 from core.plugin_base import Segments, segments
 
-from .ads_client import ADSClient, _validate_bibcode, paper_title
-from .constants import MAX_TITLE_DISPLAY_LENGTH
+from .ads_client import ADSClient, paper_title, validate_bibcode
+from .constants import DEFAULT_MAX_RESULTS, MAX_TITLE_DISPLAY_LENGTH
 
 
 def _short_title(paper: dict[str, Any]) -> str:
@@ -40,7 +40,7 @@ async def resolve_paper_id_to_bibcode(client: ADSClient, paper_id: str) -> str |
 
     paper_id = paper_id.strip()
     # 看起来像 arXiv ID 或链接时，先在 ADS 中按 arXiv 编号检索
-    if ADSClient._normalize_arxiv_id(paper_id) != paper_id or ADSClient.extract_arxiv_id(paper_id):
+    if ADSClient.normalize_arxiv_id(paper_id) != paper_id or ADSClient.extract_arxiv_id(paper_id):
         paper   = await client.search_by_arxiv_id(paper_id)
         bibcode = paper.get("bibcode") if paper else None
         if not isinstance(bibcode, str):
@@ -48,7 +48,7 @@ async def resolve_paper_id_to_bibcode(client: ADSClient, paper_id: str) -> str |
         paper_id = bibcode
     # 只有合法 bibcode 才能拼进 ADS 查询语法
     try:
-        return _validate_bibcode(paper_id)
+        return validate_bibcode(paper_id)
     except ValueError:
         return None
 
@@ -98,7 +98,7 @@ def paper_list_text(client: ADSClient, papers: list[dict[str, Any]], heading: st
 async def cmd_search(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments("❌ 请提供搜索关键词\n用法: /paper search <关键词>")
-    papers = await client.search_papers(args, max_results=5)
+    papers = await client.search_papers(args, max_results=DEFAULT_MAX_RESULTS)
     if not papers:
         return DeliverySegments(
             segments(f"🔍 未找到与 '{args}' 相关的论文"), outcome=CommandOutcome("completed")
@@ -110,7 +110,7 @@ async def cmd_search(client: ADSClient, args: str) -> Segments:
 async def cmd_author(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments("❌ 请提供作者姓名\n用法: /paper author <作者姓名>")
-    papers = await client.search_by_author(args, max_results=5)
+    papers = await client.search_by_author(args, max_results=DEFAULT_MAX_RESULTS)
     if not papers:
         return DeliverySegments(
             segments(f"🔍 未找到作者 '{args}' 的论文"), outcome=CommandOutcome("completed")
@@ -158,7 +158,7 @@ async def cmd_related(client: ADSClient, args: str) -> Segments:
     query = " ".join(paper_title(paper, default="").split()[:3])
     related = [
         item
-        for item in await client.search_papers(query, max_results=5)
+        for item in await client.search_papers(query, max_results=DEFAULT_MAX_RESULTS)
         if item.get("bibcode") != bibcode
     ]
     if not related:

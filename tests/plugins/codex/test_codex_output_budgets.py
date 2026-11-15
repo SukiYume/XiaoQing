@@ -63,7 +63,6 @@ def _job() -> SimpleNamespace:
     return SimpleNamespace(
         label            = "budget-test",
         process          = None,
-        prompt_started   = False,
         cancel_requested = False,
         cancel_event     = asyncio.Event(),
     )

@@ -153,7 +153,7 @@ When a task becomes due, Core resolves the schedule delivery mode and target gro
 `broadcast` sends one common result to all target groups.
 `targeted` validates and sends `ScheduledDelivery` results. `silent` runs only the task.
 
-`group_ids` follows declaration order. Omitted or `null` values use global `default_group_ids`.
+`group_ids` follows declaration order. Deployment config `config.plugins.<plugin>.schedules.<schedule ID>.group_ids` takes precedence over the entry. When neither sets targets, or the value is `null`, Core uses global `default_group_ids`.
 Handlers that manage receipts per target can read the same resolved targets with `context.default_groups()`.
 
 Common CronTrigger fields:
@@ -312,9 +312,9 @@ A new generation rebuilds these values on reload.
 - LRU
 - Entry-count limit
 - Total-byte limit
-- Atomic metadata writes
+- Atomic writes of cache files
 
-Cache keys use digests of normalized input.
+Recency and expiry come from file modification times; there is no separate metadata file. The cache key is a safe file name supplied by the caller, usually a digest the plugin takes of its normalized input.
 Business databases and caches have their own directories and recovery policies.
 
 ### Database
@@ -366,8 +366,8 @@ python -m mypy plugins/<plugin>
 ### Full UAT
 
 ```bash
-bash scripts/run_full_uat.sh --plan-only
-bash scripts/run_full_uat.sh
+python scripts/run_full_uat.py --plan-only
+python scripts/run_full_uat.py
 ```
 
 ## 🛡️ Production operation

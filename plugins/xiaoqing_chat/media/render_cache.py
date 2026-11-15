@@ -7,13 +7,10 @@ import math
 import time
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from core.atomic_store import keyed_path_lock
 from core.plugin_base import load_json, write_json
-
-if TYPE_CHECKING:
-    pass
 
 from .markers import build_marker, normalize_emotion_tags
 from .models import RenderedMedia, ResolvedMedia
@@ -154,7 +151,6 @@ def rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedia
     marker       = str(cached.get("marker", "") or "").strip() or build_marker(
         kind, description, emotion_tags
     )
-    face_id       = str(cached.get("face_id", "") or "").strip()
     cultural_hint = str(cached.get("cultural_hint", "") or "").strip()
     return RenderedMedia(
         media_hash    = resolved.media_hash,
@@ -163,6 +159,5 @@ def rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedia
         emotion_tags  = emotion_tags,
         marker        = marker,
         cached_path   = resolved.cached_path,
-        face_id       = face_id,
         cultural_hint = cultural_hint,
     )

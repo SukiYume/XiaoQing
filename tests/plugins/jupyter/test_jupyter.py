@@ -174,7 +174,6 @@ class TestJupyterExecution:
         assert result.success is False
         assert "超时" in result.error
         assert fake_km.interrupted is True
-        assert not manager.figures_dir.exists()
 
     @pytest.mark.asyncio
     async def test_cancel_during_kernel_start_waits_then_shuts_down(self, tmp_path):
@@ -216,7 +215,6 @@ class TestJupyterExecution:
 
         assert shutdown_finished.is_set()
         assert manager._km is None and manager._kc is None
-        assert not manager.figures_dir.exists()
         assert not {
             task.get_name()
             for task in asyncio.all_tasks()
@@ -272,7 +270,6 @@ class TestJupyterExecution:
             await asyncio.wait_for(execution, timeout=2)
 
         assert fake_km.interrupt_calls == 1
-        assert not manager.figures_dir.exists()
         assert not {
             task.get_name()
             for task in asyncio.all_tasks()
@@ -350,7 +347,6 @@ class TestJupyterExecution:
         assert fake_km.interrupt_calls == 1
         assert fake_kc.read_calls == 2
         assert fake_kc.max_active_readers == 1
-        assert not manager.figures_dir.exists()
         assert not {
             task.get_name()
             for task in asyncio.all_tasks()
@@ -401,7 +397,6 @@ class TestJupyterExecution:
         assert result.success is True
         assert result.stdout == "kept"
         assert result.images == []
-        assert not manager.figures_dir.exists()
 
     @pytest.mark.asyncio
     async def test_execute_interrupts_when_text_output_exceeds_memory_limit(self, tmp_path):
@@ -543,7 +538,6 @@ class TestJupyterExecution:
         decoded = manager._decode_image(encoded)
 
         assert decoded == png
-        assert not manager.figures_dir.exists()
 
     @pytest.mark.parametrize("mutation", ("crc", "trailing", "missing_iend"))
     def test_image_decode_rejects_structurally_invalid_png(self, tmp_path, mutation):
@@ -562,28 +556,6 @@ class TestJupyterExecution:
         manager = JupyterKernelManager(tmp_path / "jupyter")
         assert manager._decode_image(base64.b64encode(png).decode("ascii")) is None
         assert manager._decode_image(None) is None
-
-    def test_manager_cleans_only_legacy_execution_directories(self, tmp_path):
-        from plugins.jupyter.jupyter_manager import JupyterKernelManager
-
-        figures        = tmp_path / "jupyter" / "figures"
-        legacy         = figures / ("a" * 32)
-        preserved      = figures / "user-kept"
-        flat_legacy    = figures / "output_1769229059_0.png"
-        unrelated_flat = figures / "output_123_0.png"
-        legacy.mkdir(parents=True)
-        preserved.mkdir()
-        (legacy / "output_0.png").write_bytes(b"old")
-        flat_legacy.write_bytes(b"old")
-        unrelated_flat.write_bytes(b"keep")
-        (preserved / "note.txt").write_text("keep", encoding="utf-8")
-
-        JupyterKernelManager(tmp_path / "jupyter")
-
-        assert not legacy.exists()
-        assert not flat_legacy.exists()
-        assert unrelated_flat.read_bytes() == b"keep"
-        assert (preserved / "note.txt").read_text(encoding="utf-8") == "keep"
 
     @pytest.mark.asyncio
     async def test_execute_handler_returns_validated_png_as_inline_segment(
@@ -622,7 +594,6 @@ class TestJupyterExecution:
                 "data": {"file": "base64://" + base64.b64encode(png).decode("ascii")},
             }
         ]
-        assert not (context.data_dir / "figures").exists()
 
     @pytest.mark.asyncio
     async def test_manual_kernel_start_can_register_idle_monitor(self, tmp_path):

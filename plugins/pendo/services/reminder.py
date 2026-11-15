@@ -35,28 +35,28 @@ class ReminderService:
         self._last_history_prune_day: date | None = None
 
     def _current_user_time(self, user_id: str | None) -> datetime:
-        return cast(
-            datetime,
-            now_in_timezone(user_id, self.db) if user_id else now_in_timezone(),
-        )
+        """用户时区的当前时间；没有用户标识时用默认时区。"""
+        return now_in_timezone(user_id, self.db)
 
     def _parse_user_time(self, dt_str: str, user_id: str | None) -> datetime:
-        return cast(
-            datetime,
-            parse_and_localize(dt_str, user_id, self.db) if user_id else parse_and_localize(dt_str),
-        )
+        """按用户时区解析时间字符串；没有用户标识时用默认时区。"""
+        return parse_and_localize(dt_str, user_id, self.db)
 
-    def check_and_send_reminders(self, _context: Any = None) -> dict[str, Any]:
-        """领取所有到期提醒，并生成首次及未确认重复投递消息。"""
+    def check_and_send_reminders(self) -> dict[str, Any]:
+        """领取所有到期提醒，并生成首次及未确认重复投递消息。
+
+        这里只领取租约并生成待投递消息，真正发送和回执由调度层完成；``sent`` 是本次生成的
+        消息条数，不代表已经送达。
+        """
         self._prune_reminder_history()
         messages = self._collect_initial_reminders()
         messages.extend(self._check_unconfirmed_repeats())
-        sent_count = len(messages)
+        pending_count = len(messages)
         return {
             "status"  : "success",
-            "sent"    : sent_count,
+            "sent"    : pending_count,
             "messages": messages,
-            "message" : f"发送了{sent_count}条提醒",
+            "message" : f"领取了{pending_count}条待投递提醒",
         }
 
     def _collect_initial_reminders(self) -> list[dict[str, Any]]:
@@ -533,7 +533,7 @@ class ReminderService:
 
     def _get_event_collection_for_item(self, item: Any) -> dict[str, Any] | None:
         collection_id = getattr(item, "event_collection_id", None)
-        if not collection_id or not hasattr(self.db, "get_event_collection"):
+        if not collection_id:
             return None
         try:
             return cast(

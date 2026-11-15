@@ -11,7 +11,7 @@ import shutil
 import time
 from collections import deque
 from contextlib import suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, cast
 
@@ -19,9 +19,10 @@ from core.atomic_store import AtomicJsonStore
 from core.clock import now_in_configured_timezone
 from core.dispatcher import AdjustableSemaphore
 from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
-from core.lifecycle import to_thread_owned
+from core.lifecycle import LazyAsyncLock, to_thread_owned
 from core.plugin_base import (
     build_action,
+    has_control_characters,
     image,
     segments,
     split_message_segments,
@@ -34,12 +35,19 @@ from .artifacts import (
 )
 from .config import (
     LABEL_PATTERN,
+    MAX_INT64,
     CodexPluginConfig,
     load_plugin_config,
     load_plugin_config_snapshot,
 )
-from .paths import CwdError, normalize_cwd
-from .runner import CodexRunner, CodexRunResult, terminate_process_tree
+from .paths import MAX_CWD_CHARS, CwdError, normalize_cwd
+from .runner import (
+    MAX_THREAD_ID_CHARS,
+    CodexRunner,
+    CodexRunResult,
+    synthetic_result,
+    terminate_process_tree,
+)
 
 logger                  = logging.getLogger(__name__)
 SESSION_STATE_VERSION   = 1
@@ -47,6 +55,13 @@ MAX_SESSION_STATE_BYTES = 8 * 1024 * 1024
 MAX_PERSISTED_SESSIONS  = 10_000
 # 保留期清理的最长间隔：配置不变的常驻进程也按这个频率执行维护。
 _MAINTENANCE_INTERVAL_SECONDS = 3600.0
+_INVALID_LABEL_MESSAGE        = "会话名只能使用 1-32 位字母、数字、下划线或横线。"
+
+
+def _convergence_timeout_seconds(config: CodexPluginConfig) -> int:
+    """取消或关闭时等待任务/worker 收敛的上限：至少 10 秒，并覆盖进程启动超时。"""
+
+    return max(10, config.spawn_timeout_seconds + 5)
 
 
 def _warn_dangerous_config(config: CodexPluginConfig) -> None:
@@ -62,24 +77,6 @@ def _public_path_name(value: str | Path) -> str:
     return name or "unnamed"
 
 
-MAX_PERSISTED_COUNTER = 2**63 - 1
-_SESSION_FIELDS       = frozenset(
-    {
-        "label",
-        "cwd",
-        "owner_user_id",
-        "target_group_id",
-        "thread_id",
-        "created_at",
-        "updated_at",
-        "total_jobs",
-        "input_tokens",
-        "cached_input_tokens",
-        "output_tokens",
-    }
-)
-
-
 def _persisted_optional_id(raw: dict[str, Any], name: str) -> int | None:
     value = raw[name]
     if value is None:
@@ -91,7 +88,7 @@ def _persisted_optional_id(raw: dict[str, Any], name: str) -> int | None:
 
 def _persisted_counter(raw: dict[str, Any], name: str) -> int:
     value = raw.get(name, 0)
-    if type(value) is not int or not 0 <= value <= MAX_PERSISTED_COUNTER:
+    if type(value) is not int or not 0 <= value <= MAX_INT64:
         raise TypeError(f"Invalid persisted {name}")
     return value
 
@@ -108,15 +105,27 @@ def _persisted_timestamp(raw: dict[str, Any], name: str) -> float:
 
 def _safe_usage_counter(usage: dict[str, Any], name: str) -> int:
     value = usage.get(name, 0)
-    return value if type(value) is int and 0 <= value <= MAX_PERSISTED_COUNTER else 0
+    return value if type(value) is int and 0 <= value <= MAX_INT64 else 0
 
 
-def _optional_positive_id(value: Any, name: str) -> int | None:
+def optional_positive_id(value: Any, name: str) -> int | None:
+    """校验“正整数或 None”的用户/群 id，不合法抛 ValueError。"""
+
     if value is None:
         return None
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} must be a positive integer or None")
     return value
+
+
+def targets_from_ids(user_id: int | None, group_id: int | None) -> tuple[DeliveryTarget, ...]:
+    """按“群优先、其次私聊”选出结果收件目标；两者都没有时为空。"""
+
+    if group_id is not None:
+        return (DeliveryTarget("group", group_id),)
+    if user_id is not None:
+        return (DeliveryTarget("private", user_id),)
+    return ()
 
 
 def _load_config_generation(
@@ -145,6 +154,10 @@ class CodexSession:
     output_tokens      : int = 0
 
 
+# sessions.json 中单个会话允许出现的字段，与 ``CodexSession`` 的字段一一对应。
+_SESSION_FIELDS = frozenset(item.name for item in fields(CodexSession))
+
+
 @dataclass
 class RuntimeJob:
     job_id                 : int
@@ -165,7 +178,6 @@ class RuntimeJob:
     artifact_scan_truncated: bool                              = False
     process                : asyncio.subprocess.Process | None = None
     cancel_requested       : bool                              = False
-    prompt_started         : bool                              = False
     cancel_event           : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     spawn_handoff          : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     finished_event         : asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -176,7 +188,7 @@ class RuntimeJob:
 @dataclass(frozen=True)
 class _JobStart:
     config: CodexPluginConfig
-    runner: Any
+    runner: CodexRunner
     cwd   : Path
 
 
@@ -333,6 +345,7 @@ class CodexQueueManager:
             raise TypeError("Codex state root must be an object")
         if set(data) - {"schema_version", "sessions"}:
             raise ValueError("Codex state root contains unknown fields")
+        # 版本 0 是尚未写入 schema_version 的早期状态文件：照常读取，并由 _load 立即按当前版本重写。
         version = data.get("schema_version", 0)
         if isinstance(version, bool) or not isinstance(version, int) or version not in {0, 1}:
             raise ValueError("Unsupported Codex state schema version")
@@ -361,13 +374,13 @@ class CodexQueueManager:
             raise ValueError("Persisted session identity mismatch")
 
         cwd = raw["cwd"]
-        if not isinstance(cwd, str) or not cwd.strip() or "\x00" in cwd or len(cwd) > 32_768:
+        if not isinstance(cwd, str) or not cwd.strip() or "\x00" in cwd or len(cwd) > MAX_CWD_CHARS:
             raise ValueError("Invalid persisted session cwd")
         normalized_cwd = normalize_cwd(cwd, self.config)
 
         thread_id = raw.get("thread_id")
         if thread_id is not None and (
-            not isinstance(thread_id, str) or not thread_id or len(thread_id) > 512
+            not isinstance(thread_id, str) or not thread_id or len(thread_id) > MAX_THREAD_ID_CHARS
         ):
             raise TypeError("Invalid persisted thread_id")
         return CodexSession(
@@ -636,8 +649,8 @@ class CodexQueueManager:
         group_id: int | None,
         metadata: dict[str, Any] | None = None,
     ) -> CodexSession:
-        user_id       = _optional_positive_id(user_id, "user_id")
-        group_id      = _optional_positive_id(group_id, "group_id")
+        user_id       = optional_positive_id(user_id, "user_id")
+        group_id      = optional_positive_id(group_id, "group_id")
         had_tombstone = label in self.tombstones
         self.tombstones.discard(label)
         session = CodexSession(
@@ -679,8 +692,8 @@ class CodexQueueManager:
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
         disk_usage_bytes: int,
     ) -> tuple[RuntimeJob, int]:
-        user_id  = _optional_positive_id(user_id, "user_id")
-        group_id = _optional_positive_id(group_id, "group_id")
+        user_id  = optional_positive_id(user_id, "user_id")
+        group_id = optional_positive_id(group_id, "group_id")
         if delivery_targets is not None and (
             not isinstance(delivery_targets, tuple)
             or any(not isinstance(target, DeliveryTarget) for target in delivery_targets)
@@ -779,9 +792,6 @@ class CodexQueueManager:
         )
         return job, tasks_ahead
 
-    async def ensure_default_cwd(self) -> None:
-        normalize_cwd(None, self.config)
-
     async def create_session(
         self,
         label: str,
@@ -792,7 +802,7 @@ class CodexQueueManager:
     ) -> str:
         label = label.strip()
         if re.fullmatch(LABEL_PATTERN, label) is None:
-            return "会话名只能使用 1-32 位字母、数字、下划线或横线。"
+            return _INVALID_LABEL_MESSAGE
         try:
             cwd = normalize_cwd(cwd_text, self.config)
         except CwdError as exc:
@@ -883,7 +893,7 @@ class CodexQueueManager:
         label  = label.strip()
         prompt = prompt.strip()
         if re.fullmatch(LABEL_PATTERN, label) is None:
-            return {"status": "error", "error": "会话名只能使用 1-32 位字母、数字、下划线或横线。"}
+            return {"status": "error", "error": _INVALID_LABEL_MESSAGE}
         if not prompt:
             return {"status": "error", "error": "任务内容不能为空。"}
 
@@ -956,11 +966,7 @@ class CodexQueueManager:
             queue = self.queues.get(label)
             if queue is not None and job in queue:
                 queue.remove(job)
-                self._mark_job_cancelled(job)
-                self._append_history(
-                    label,
-                    {"type": "job.cancelled", "job_id": job.job_id, "status": "queued"},
-                )
+                self._cancel_queued_job_locked(job)
                 return
         await self._cancel_runtime_job(job)
 
@@ -1017,35 +1023,22 @@ class CodexQueueManager:
                 and self.running.get(label) is job
                 and job.spawn_handoff.is_set()
             )
-            if may_send:
-                job.prompt_started = True
-                job.status         = "running"
-            else:
-                job.status = "cancelling"
+            job.status = "running" if may_send else "cancelling"
             return may_send
 
     @staticmethod
     def _cancelled_result(session: CodexSession, message: str) -> CodexRunResult:
-        return CodexRunResult(
-            exit_code   = None,
-            thread_id   = session.thread_id,
-            final_text  = message,
-            stdout_tail = "",
-            stderr_tail = "",
-            cancelled   = True,
-        )
+        return synthetic_result(session.thread_id, message, exit_code=None, cancelled=True)
 
     @staticmethod
     def _failed_execution_result(
         session: CodexSession,
         exc: BaseException,
     ) -> CodexRunResult:
-        return CodexRunResult(
-            exit_code   = 1,
-            thread_id   = session.thread_id,
-            final_text  = f"Codex 执行异常（{type(exc).__name__}）。",
-            stdout_tail = "",
-            stderr_tail = "",
+        return synthetic_result(
+            session.thread_id,
+            f"Codex 执行异常（{type(exc).__name__}）。",
+            exit_code=1,
         )
 
     @staticmethod
@@ -1056,6 +1049,15 @@ class CodexQueueManager:
         job.finished_at = time.time()
         job.spawn_handoff.set()
         job.finished_event.set()
+
+    def _cancel_queued_job_locked(self, job: RuntimeJob) -> None:
+        """标记已出队（或即将清空）的排队任务为取消，并记入会话历史。"""
+
+        self._mark_job_cancelled(job)
+        self._append_history(
+            job.label,
+            {"type": "job.cancelled", "job_id": job.job_id, "status": "queued"},
+        )
 
     async def _claim_next_job(
         self,
@@ -1127,12 +1129,10 @@ class CodexQueueManager:
             except CwdError as exc:
                 return (
                     None,
-                    CodexRunResult(
-                        exit_code   = 1,
-                        thread_id   = session.thread_id,
-                        final_text  = f"Codex 工作目录策略已变更: {exc}",
-                        stdout_tail = "",
-                        stderr_tail = "",
+                    synthetic_result(
+                        session.thread_id,
+                        f"Codex 工作目录策略已变更: {exc}",
+                        exit_code=1,
                     ),
                     True,
                 )
@@ -1334,7 +1334,7 @@ class CodexQueueManager:
             )
             if label not in self.tombstones:
                 try:
-                    self._append_job_history(session, job, result)
+                    self._append_job_history(job, result)
                 except Exception as exc:
                     logger.error(
                         "Codex job history write failed: label=%s job_id=%s error_type=%s",
@@ -1385,43 +1385,24 @@ class CodexQueueManager:
         available         = max(0, config.max_qq_text_chars - len(notice))
         result.final_text = f"{result.final_text[:available].rstrip()}{notice}"
 
-    def _append_job_history(
-        self,
-        session: CodexSession,
-        job: RuntimeJob,
-        result: CodexRunResult | None,
-    ) -> None:
-        if result is None:
-            content     = ""
-            exit_code   = None
-            thread_id   = session.thread_id
-            timed_out   = False
-            cancelled   = job.cancel_requested
-            stderr_tail = ""
-        else:
-            content     = result.final_text
-            exit_code   = result.exit_code
-            thread_id   = result.thread_id
-            timed_out   = result.timed_out
-            cancelled   = result.cancelled
-            stderr_tail = result.stderr_tail
+    def _append_job_history(self, job: RuntimeJob, result: CodexRunResult) -> None:
         self._append_history(
             job.label,
             {
                 "type": "message",
                 "role": "assistant",
                 "job_id": job.job_id,
-                "content": content,
-                "status": "cancelled" if cancelled else job.status,
-                "thread_id": thread_id,
-                "exit_code": exit_code,
-                "timed_out": timed_out,
-                "cancelled": cancelled,
+                "content": result.final_text,
+                "status": "cancelled" if result.cancelled else job.status,
+                "thread_id": result.thread_id,
+                "exit_code": result.exit_code,
+                "timed_out": result.timed_out,
+                "cancelled": result.cancelled,
                 "started_at": job.started_at,
                 "finished_at": job.finished_at,
-                "stderr_tail": stderr_tail,
-                "output_limited": bool(result and result.output_limited),
-                "output_path": result.output_path if result else None,
+                "stderr_tail": result.stderr_tail,
+                "output_limited": result.output_limited,
+                "output_path": result.output_path,
                 "images": [artifact.as_record() for artifact in job.image_artifacts],
                 "artifact_dropped_count": job.artifact_dropped_count,
                 "artifact_drop_reasons": job.artifact_drop_reasons,
@@ -1457,7 +1438,7 @@ class CodexQueueManager:
         if not isinstance(raw_title, str):
             return None
         title = raw_title.strip()
-        if not title or len(title) > 200 or any(ord(char) < 32 for char in title):
+        if not title or len(title) > 200 or has_control_characters(title):
             return None
         return f"[codex:{job.label} #{job.job_id}] {title}失败{reason}\n{detail}"
 
@@ -1468,23 +1449,11 @@ class CodexQueueManager:
     ) -> tuple[DeliveryTarget, ...]:
         if job.delivery_targets is not None:
             return job.delivery_targets
-        if job.group_id is not None:
-            return (DeliveryTarget("group", job.group_id),)
-        if job.user_id is not None:
-            return (DeliveryTarget("private", job.user_id),)
-        if session.target_group_id is not None:
-            return (DeliveryTarget("group", session.target_group_id),)
-        if session.owner_user_id is not None:
-            return (DeliveryTarget("private", session.owner_user_id),)
-        return ()
+        return targets_from_ids(job.user_id, job.group_id) or targets_from_ids(
+            session.owner_user_id, session.target_group_id
+        )
 
-    def _job_result_content(
-        self,
-        job: RuntimeJob,
-        result: CodexRunResult | None,
-    ) -> str:
-        if result is None:
-            return f"[codex:{job.label} #{job.job_id}] 无执行结果。"
+    def _job_result_content(self, job: RuntimeJob, result: CodexRunResult) -> str:
         if result.cancelled:
             return f"[codex:{job.label} #{job.job_id}] 已取消。"
         detail = result.final_text.strip()
@@ -1514,14 +1483,14 @@ class CodexQueueManager:
         self,
         session: CodexSession,
         job: RuntimeJob,
-        result: CodexRunResult | None,
+        result: CodexRunResult,
     ) -> None:
         if job.metadata.get("suppress_delivery"):
             return
 
         content = self._job_result_content(job, result)
 
-        if result is not None and result.output_path:
+        if result.output_path:
             output_name = _public_path_name(result.output_path)
             if output_name not in content:
                 content = f"{content}\n\n受控输出文件: {output_name}"
@@ -1673,7 +1642,7 @@ class CodexQueueManager:
         try:
             await asyncio.wait_for(
                 job.finished_event.wait(),
-                timeout=max(10, config.spawn_timeout_seconds + 5),
+                timeout=_convergence_timeout_seconds(config),
             )
         except TimeoutError:
             return False
@@ -1688,15 +1657,7 @@ class CodexQueueManager:
                 for queued in list(queue):
                     if queued.job_id == job_id:
                         queue.remove(queued)
-                        self._mark_job_cancelled(queued)
-                        self._append_history(
-                            label,
-                            {
-                                "type"  : "job.cancelled",
-                                "job_id": job_id,
-                                "status": "queued",
-                            },
-                        )
+                        self._cancel_queued_job_locked(queued)
                         return f"已移除排队任务: {label} #{job_id}"
             job = self.running.get(label)
             if job_id is not None and (job is None or job.job_id != job_id):
@@ -1716,15 +1677,7 @@ class CodexQueueManager:
             queue = self.queues.get(label, deque())
             count = len(queue)
             for queued in list(queue):
-                self._mark_job_cancelled(queued)
-                self._append_history(
-                    label,
-                    {
-                        "type"  : "job.cancelled",
-                        "job_id": queued.job_id,
-                        "status": "queued",
-                    },
-                )
+                self._cancel_queued_job_locked(queued)
             queue.clear()
             return f"已清空 {label} 的排队任务 {count} 个。"
 
@@ -1799,7 +1752,7 @@ class CodexQueueManager:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(*pending, return_exceptions=True),
-                        timeout=max(10, self.config.spawn_timeout_seconds + 5),
+                        timeout=_convergence_timeout_seconds(self.config),
                     )
                 except TimeoutError:
                     logger.error("Codex workers did not converge during shutdown")
@@ -1818,21 +1771,14 @@ class CodexQueueManager:
             self._save()
 
 
-_MANAGER     : CodexQueueManager | None = None
-_MANAGER_LOCK: asyncio.Lock | None      = None
-
-
-def _manager_lock() -> asyncio.Lock:
-    global _MANAGER_LOCK
-    if _MANAGER_LOCK is None:
-        _MANAGER_LOCK = asyncio.Lock()
-    return _MANAGER_LOCK
+_MANAGER: CodexQueueManager | None = None
+_MANAGER_LOCK                      = LazyAsyncLock()
 
 
 async def get_manager(context: PluginContextProtocol) -> CodexQueueManager:
     global _MANAGER
     data_dir = Path(getattr(context, "data_dir", Path("data") / "codex")).resolve()
-    async with _manager_lock():
+    async with _MANAGER_LOCK.get():
         # 在单例发布锁内读取设置；下方版本栅栏拒绝迟到的旧调用，也避免调用者拿着已经过期的
         # 快照排队等待锁，而中间一次重新加载尚未由其他调用发布。
         config, settings_revision = _load_config_generation(context)
@@ -1858,7 +1804,7 @@ async def get_manager(context: PluginContextProtocol) -> CodexQueueManager:
             settings_revision = settings_revision,
         )
         try:
-            await manager.ensure_default_cwd()
+            normalize_cwd(None, manager.config)
             await manager.maintenance()
         except BaseException:
             await manager.shutdown()
@@ -1870,7 +1816,7 @@ async def get_manager(context: PluginContextProtocol) -> CodexQueueManager:
 async def shutdown_existing_manager() -> bool:
     """仅关闭已经存在的单例，不为 shutdown 额外构造 manager。"""
     global _MANAGER
-    async with _manager_lock():
+    async with _MANAGER_LOCK.get():
         manager = _MANAGER
         if manager is None:
             return False

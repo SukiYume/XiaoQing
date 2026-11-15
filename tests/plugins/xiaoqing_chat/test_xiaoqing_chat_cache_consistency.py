@@ -1,55 +1,9 @@
-"""话题摘要与动作历史缓存的一致性测试。"""
+"""动作历史缓存的一致性测试。"""
 
 import asyncio
 from pathlib import Path
 
 import pytest
-
-
-def test_topic_summary_cache_parser_keeps_latest_valid_topic_summary(tmp_path: Path) -> None:
-    from plugins.xiaoqing_chat.memory.topic_summary_cache import load_topic_summary_entries
-
-    chat_id      = "shared-cache-parser"
-    summary_path = tmp_path / "hippo_memorizer" / f"{chat_id}.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    _ = summary_path.write_text(
-        (
-            "["
-            '{"topic_id":"t1","topic":"旧话题","summary":"旧摘要","updated_at":1},'
-            '{"topic":"火锅选择","summary":"先看预算和口味","updated_at":2},'
-            '{"topic":"","summary":""}'
-            "]"
-        ),
-        encoding="utf-8",
-    )
-
-    entries = load_topic_summary_entries(tmp_path, chat_id)
-
-    assert len(entries) == 2
-    assert entries[-1].topic == "火锅选择"
-    assert entries[-1].summary == "先看预算和口味"
-
-
-def test_summarizer_load_cache_accepts_legacy_entries_without_topic_id(tmp_path: Path) -> None:
-    from plugins.xiaoqing_chat.llm.summarizer import _load_cache
-
-    chat_id      = "legacy-summarizer-cache"
-    summary_path = tmp_path / "hippo_memorizer" / f"{chat_id}.json"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    _ = summary_path.write_text(
-        (
-            "["
-            '{"topic_id":"t1","topic":"旧话题","summary":"旧摘要","updated_at":1},'
-            '{"topic":"火锅选择","summary":"先看预算和口味","updated_at":2}'
-            "]"
-        ),
-        encoding="utf-8",
-    )
-
-    topics = _load_cache(tmp_path, chat_id)
-
-    assert len(topics) == 2
-    assert topics[-1].topic == "火锅选择"
 
 
 @pytest.mark.asyncio

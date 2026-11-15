@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 import aiohttp
 
@@ -20,6 +18,7 @@ from core.bounded_http import (
     aiohttp_request_bounded,
     parse_bounded_json,
 )
+from core.private_files import write_private_json as write_json
 
 
 class BridgeError(Exception):
@@ -46,29 +45,35 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = path.with_suffix(".tmp")
-    fd        = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, ensure_ascii=False)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
+def is_plain_https(parsed: SplitResult) -> bool:
+    """https、默认端口且不带用户信息；调用方再核对主机和路径。"""
+
+    return (
+        parsed.scheme == "https"
+        and parsed.port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+    )
 
 
-def protect_directory(directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "nt":
-        identity = subprocess.check_output(["whoami"], text=True).strip()
-        subprocess.run(
-            ["icacls", str(directory), "/inheritance:r", "/grant:r", f"{identity}:(OI)(CI)F"],
-            check  = True,
-            stdout = subprocess.DEVNULL,
-            stderr = subprocess.DEVNULL,
-        )
-    else:
-        directory.chmod(0o700)
+def speaker_profile(
+    speaker: dict[str, Any],
+    device: dict[str, Any],
+    directive: dict[str, Any],
+    region: str,
+    silent: bool,
+) -> dict[str, Any]:
+    """音箱绑定档案（尚未带账号和提醒接收人），交给 ``save_binding`` 落盘。"""
+
+    return {
+        "name"     : device["name"],
+        "model"    : device["model"],
+        "did"      : str(device["did"]),
+        "mina_id"  : speaker["deviceID"],
+        "region"   : region,
+        "silent"   : silent,
+        "directive": directive,
+    }
 
 
 def speaker_candidates(
@@ -181,22 +186,15 @@ class TokenAccount:
     ) -> dict[str, Any]:
         parsed = urlsplit(url)
         host   = parsed.hostname or ""
-        if (
-            parsed.scheme != "https"
-            or parsed.port not in (None, 443)
-            or parsed.username
-            or parsed.password
-            or host
-            not in {
-                "api2.mina.mi.com",
-                "api.io.mi.com",
-                "de.api.io.mi.com",
-                "i2.api.io.mi.com",
-                "ru.api.io.mi.com",
-                "sg.api.io.mi.com",
-                "us.api.io.mi.com",
-            }
-        ):
+        if not is_plain_https(parsed) or host not in {
+            "api2.mina.mi.com",
+            "api.io.mi.com",
+            "de.api.io.mi.com",
+            "i2.api.io.mi.com",
+            "ru.api.io.mi.com",
+            "sg.api.io.mi.com",
+            "us.api.io.mi.com",
+        }:
             raise BridgeError("云端地址校验失败。")
         service = self.token.get(sid)
         if not isinstance(service, (list, tuple)) or len(service) != 2:

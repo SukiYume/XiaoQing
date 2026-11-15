@@ -53,6 +53,7 @@ class TestOneBotWebSocketConfiguration:
         [
             {"max_pending_events": 0},
             {"max_pending_events": True},
+            {"queue_size": 0},
             {"queue_size": -1},
             {"queue_size": 1.5},
             {"queue_ttl_seconds": float("nan")},

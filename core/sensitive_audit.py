@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 _FINGERPRINT_KEY       = secrets.token_bytes(32)
 _FINGERPRINT_HEX_CHARS = 24
-_AUDIT_ID_RE           = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
+AUDIT_ID_RE            = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
 _AUDIT_LABEL_RE        = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
 _ERROR_TYPE_RE         = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
@@ -45,7 +45,7 @@ def audit_error_type(exc: BaseException | None) -> str:
 def safe_audit_id(value: object) -> str:
     """Return a bounded identifier safe to include in audit metadata."""
 
-    return value if type(value) is str and _AUDIT_ID_RE.fullmatch(value) else "-"
+    return value if type(value) is str and AUDIT_ID_RE.fullmatch(value) else "-"
 
 
 def safe_request_id(context: object | None) -> str:
@@ -142,6 +142,7 @@ def _safe_error_type(value: object) -> str:
 
 
 __all__ = [
+    "AUDIT_ID_RE",
     "SensitiveAuditSummary",
     "audit_error_type",
     "log_sensitive_operation",

@@ -35,7 +35,7 @@ from .models import (
     MediaPayloadTooLarge,
     ResolvedMedia,
 )
-from .settings import MEDIA_DOWNLOAD_TIMEOUT, figures_inbox_dir
+from .settings import MEDIA_DOWNLOAD_TIMEOUT_SECONDS, figures_inbox_dir
 
 _QQ_MEDIA_FAKE_DNS_HOSTS = frozenset({"multimedia.nt.qq.com.cn"})
 
@@ -50,7 +50,7 @@ async def _download_url_bytes(url: str, *, max_bytes: int) -> tuple[bytes, str]:
     try:
         response = await fetch_public_bytes(
             url,
-            timeout_seconds                  = float(MEDIA_DOWNLOAD_TIMEOUT.total or 20),
+            timeout_seconds                  = MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
             max_bytes                        = max(1, int(max_bytes)),
             allowed_content_type_prefixes    = ("image/", "application/octet-stream"),
             allowed_hosts                    = _QQ_MEDIA_FAKE_DNS_HOSTS if fake_dns else None,
@@ -212,18 +212,12 @@ async def _recover_media_via_onebot(
     message_id                               = event.get("message_id")
     summary_hint                             = segment_summary_hint(segment)
     candidate_requests: list[dict[str, str]] = []
-    seen_requests     : set[tuple[str, str]] = set()
 
     def _extend_requests(items: list[dict[str, str]]) -> None:
+        # 详情消息和原片段给出的候选可能重复，同一个键值只请求一次。
         for item in items:
-            if len(item) != 1:
-                continue
-            key, value = next(iter(item.items()))
-            token = (key, value)
-            if token in seen_requests:
-                continue
-            seen_requests.add(token)
-            candidate_requests.append(item)
+            if item not in candidate_requests:
+                candidate_requests.append(item)
 
     if message_id is not None:
         try:
@@ -269,25 +263,6 @@ async def _recover_media_via_onebot(
             return resolved
 
     return None
-
-
-async def _recover_media_bytes_if_needed(
-    segment: dict[str, Any],
-    *,
-    event: dict[str, Any] | None,
-    context,
-    max_bytes: int,
-) -> tuple[bytes, str, str] | None:
-    """为缺少可用字节的图片和表情启用适配器恢复。"""
-
-    if segment.get("type") not in SUPPORTED_MEDIA_TYPES:
-        return None
-    return await _recover_media_via_onebot(
-        segment,
-        event     = event,
-        context   = context,
-        max_bytes = max_bytes,
-    )
 
 
 def _is_allowed_local_media_path(path: Path, context: Any | None) -> bool:
@@ -440,7 +415,7 @@ def hash_media_bytes(payload: bytes) -> str:
 
 
 def _cached_media_path(context, media_hash: str, suffix: str) -> Path:
-    suffix = suffix.lower() if suffix else ".bin"
+    suffix = suffix.lower()
     if suffix not in SUPPORTED_IMAGE_SUFFIXES:
         suffix = ".png"
     return figures_inbox_dir(context) / f"{media_hash}{suffix}"
@@ -504,14 +479,15 @@ async def _resolve_media_bytes(
             last_error = exc
             continue
 
-    recovered = await _recover_media_bytes_if_needed(
-        segment,
-        event     = event,
-        context   = context,
-        max_bytes = max_bytes,
-    )
-    if recovered is not None:
-        return recovered
+    if segment.get("type") in SUPPORTED_MEDIA_TYPES:
+        recovered = await _recover_media_via_onebot(
+            segment,
+            event     = event,
+            context   = context,
+            max_bytes = max_bytes,
+        )
+        if recovered is not None:
+            return recovered
     if last_error is not None:
         raise last_error
     raise FileNotFoundError("segment has no supported media source")
@@ -522,10 +498,10 @@ async def resolve_segment_media(
     *,
     context,
     max_bytes: int,
-    max_pixels: int              = 16_000_000,
-    max_frames: int              = 120,
-    disk_quota_bytes: int        = 256 * 1024 * 1024,
-    cache_ttl_seconds: float     = 7 * 86400.0,
+    max_pixels: int,
+    max_frames: int,
+    disk_quota_bytes: int,
+    cache_ttl_seconds: float,
     event: dict[str, Any] | None = None,
 ) -> ResolvedMedia | None:
     """解析单个片段，仅在全部资源限制通过后才落盘。"""
@@ -576,13 +552,6 @@ def _materialize_resolved_media(
         max_pixels      = max_pixels,
         max_frames      = max_frames,
     )
-    validate_image_resource_limits(
-        width       = info.width,
-        height      = info.height,
-        max_pixels  = max_pixels,
-        max_frames  = max_frames,
-        frame_count = info.frame_count,
-    )
     media_hash  = hash_media_bytes(payload)
     cached_path = _cached_media_path(context, media_hash, info.suffix)
     ensure_dir(cached_path.parent)
@@ -607,26 +576,6 @@ def _materialize_resolved_media(
         height       = info.height,
         is_animated  = info.is_animated,
     )
-
-
-def validate_image_resource_limits(
-    *,
-    width: int,
-    height: int,
-    max_pixels: int,
-    max_frames: int,
-    frame_count: int | None = None,
-) -> None:
-    """按解码像素数和动画帧数拒绝解压炸弹。"""
-
-    if width <= 0 or height <= 0:
-        raise ValueError("image dimensions unavailable")
-    if max_pixels > 0 and width * height > max_pixels:
-        raise ValueError("image pixel limit exceeded")
-    if frame_count is None or frame_count <= 0:
-        raise ValueError("image frame count unavailable")
-    if max_frames > 0 and frame_count > max_frames:
-        raise ValueError("image frame limit exceeded")
 
 
 def _prune_media_inbox(

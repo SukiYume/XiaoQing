@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from ..utils.json_parsing import strict_json_bool
@@ -100,6 +100,16 @@ def evidence_modality_is_preserved(claim: str, evidence: str) -> bool:
         if marker.search(evidence) and not marker.search(claim):
             return False
     return True
+
+
+def claim_is_grounded(claim: str, fragments: Sequence[str]) -> bool:
+    """说法在某一段证据原文里有直接依据，且没有抹掉证据里的疑问、条件或不确定性。"""
+
+    return any(
+        evidence_modality_is_preserved(claim, evidence)
+        and direct_evidence_supports_claim(claim, evidence)
+        for evidence in fragments
+    )
 
 
 def dialogue_evidence_fragments(dialogue_text: str) -> tuple[str, ...]:
@@ -250,6 +260,21 @@ def dialogue_source_records(history_text: str, current_text: str) -> dict[str, s
         if line.strip()
     }
     records["current"] = current_text
+    return records
+
+
+def memory_source_records(memory_text: str) -> dict[str, str]:
+    """这一轮从统一记忆取到的、关于人和群的每一行，作为可以引用的证据（``m1``、``m2``……）。
+
+    这些行出自整理过的笔记，每条笔记都有原话出处；她记得的事和眼前的对话一样可以作为依据。
+    """
+
+    records: dict[str, str] = {}
+    for line in str(memory_text or "").splitlines():
+        text = line.strip().lstrip("-").strip()
+        if len(text) < 4 or text.endswith("："):
+            continue
+        records[f"m{len(records) + 1}"] = f"（记得的事）{text}"
     return records
 
 

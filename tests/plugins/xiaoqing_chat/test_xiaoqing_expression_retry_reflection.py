@@ -66,7 +66,7 @@ async def test_expression_learning_filters_bot_lines_and_preserves_route_paramet
             "/v1/chat/completions",
         )
 
-    monkeypatch.setattr(expression_learner, "chat_completions_raw_with_fallback_paths", complete)
+    monkeypatch.setattr(expression_learner, "chat_completions_raw_with_profile", complete)
     messages = [
         StoredMessage(role="assistant", name="bot", content="BOT_ONLY", ts=1),
         StoredMessage(role="user", name="user", content="USER_VISIBLE", ts=2, local_id="m2"),
@@ -496,8 +496,7 @@ async def test_reflection_reply_is_consumed_by_only_one_pending_question(
         )
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.expression.bw_reflect_tracker."
-        "chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.expression.bw_reflect_tracker.chat_completions_raw_with_profile",
         approve,
     )
     request = {
@@ -571,7 +570,7 @@ async def test_expression_review_allows_empty_modifications(monkeypatch, rejecte
     }
     monkeypatch.setattr(
         learner,
-        "chat_completions_raw_with_fallback_paths",
+        "chat_completions_raw_with_profile",
         AsyncMock(
             return_value=({"choices": [{"message": {"content": json.dumps(response)}}]}, "test")
         ),

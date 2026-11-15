@@ -201,11 +201,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     text = json.dumps(calibration, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")
-    print(
-        f"放行 {calibration['acceptable_passed']}/{calibration['acceptable_total']}，"
-        f"拦截 {calibration['rejectable_blocked']}/{calibration['rejectable_total']}，"
-        f"不可用 {calibration['infra_failures']}，passed={calibration['passed']}"
-    )
+    print(f"{review.calibration_line(calibration)}，passed={calibration['passed']}")
     return 0 if calibration["passed"] else 1
 
 

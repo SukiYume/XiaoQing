@@ -170,6 +170,7 @@ git diff --check
 Run affected-module tests first. Then run repository-wide checks.
 Formatting operations check syntax-tree equivalence. Tests cover the behavior contracts of current features; a business fix adds or adjusts cases for the affected feature instead of keeping a test dedicated to one fix.
 Test data uses temporary directories or databases.
+The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.
 
 READMEs describe current use and configuration.
 ARCHITECTURE documents describe module responsibilities, data flow, and ownership.
@@ -364,7 +365,10 @@ When a task becomes due, Core applies its delivery mode:
 - `targeted` accepts `ScheduledDelivery` messages. It checks group targets against the schedule group list and supports controlled private targets.
 - `silent` executes the handler with zero delivery targets. Core ignores its return payload and rejects proactive delivery from that schedule context.
 
-`broadcast` and `targeted` use the entry's `group_ids`. Omitted or `null` values use global `default_group_ids`.
+`broadcast` and `targeted` take target groups from the first source that sets them: deployment config `config.plugins.<plugin>.schedules.<schedule ID>.group_ids`, the entry's `group_ids`, then global `default_group_ids`.
+The schedule ID is the entry's `id`, or its `handler` when `id` is omitted. An empty list in the deployment config sends the schedule to no group.
+Core reads targets on every run, so a config change applies after `/reload`.
+`plugin.json` ships with the repository and holds no real group IDs; deployment-specific targets belong in the deployment config.
 `silent` omits `group_ids`. Plugin reload replaces schedules owned by that plugin.
 
 ## ⌨️ Runtime entry points
@@ -409,7 +413,7 @@ words = tokenize(args, strict=True)
 By default, `tokenize()` splits unclosed quotes on whitespace.
 Use `strict=True` when complete quotes are necessary for the command protocol.
 `parse_int()` accepts ASCII decimal integers. It returns a range-checked `int` or `None`.
-See [argument parsing](05-api-reference.md#argument-parsing) for the complete return structure.
+See [argument parsing](05-api-reference.md#-argument-parsing) for the complete return structure.
 
 ### `handle_session()`
 
@@ -446,7 +450,7 @@ async def call_bot_name_only(context):
     return segments("我在")
 ```
 
-When `smalltalk_provider` is `xiaoqing_chat`, Core passes Bot-name-only messages to its `handle_smalltalk()`.
+A Bot-name-only message (only the Bot name, or only an `@` of the bot without a picture) usually checks whether the bot is online, so it must be fast: Core calls this entry for every smalltalk provider instead of `handle_smalltalk()`. `xiaoqing_chat` picks a random line from `bot_name_only_replies`, records it in the chat history once sent, and treats the same person's next message within a minute as addressed to her.
 The persona answers from the current topic and routine, and this entry is not called.
 
 ### Entry selection order
@@ -598,7 +602,7 @@ Manifest declarations and Core decide command access.
 
 Send proactive OneBot actions with `await context.send_action(action)`.
 Management plugins can call `context.reload_config()` or `context.reload_plugins()` under their command permissions.
-See [PluginContext](05-api-reference.md#plugincontext) for full signatures and capability properties.
+See [PluginContext](05-api-reference.md#-plugincontext) for full signatures and capability properties.
 
 ## 💬 Sessions
 
@@ -753,6 +757,14 @@ response = await fetch_public_html(url, timeout_seconds=10)
 The safe HTTP client checks scheme, DNS, target subnet, and redirects at each hop.
 It pins validated addresses. Compression and decompression budgets constrain response bodies.
 
+The same module holds a few small helpers shared by plugins:
+
+| Name | Purpose |
+|---|---|
+| `BROWSER_USER_AGENT` | The User-Agent to send when a request must look like a browser |
+| `validated_proxy_url(value, *, allow_path=False)` | Validates a configured proxy URL. It returns a valid value unchanged and raises `ValueError` otherwise; the error never contains credentials |
+| `split_https_url_on_hosts(url, hosts)` | Returns the split URL when it is an https URL on one of the listed hosts with no userinfo and the default port, and `None` otherwise. It inspects the spelling only and performs no DNS lookup |
+
 ### External text and images
 
 Validate text and media through shared boundaries before you send third-party, RCON, SSH, or webpage content:
@@ -884,6 +896,15 @@ XiaoQing Life adds two bridges:
 
 - `xiaoqing_life` supplies `life.turn_context` and `life.export_memes` to `xiaoqing_chat`.
   The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
+
+XiaoQing Memory adds four bridges, all supplied by `xiaoqing_memory` and used through `capabilities.memory`:
+
+- `memory.record` is called by `xiaoqing_chat`, `xiaoqing_agent`, and `xiaoqing_life`.
+- `memory.recall` is called by `xiaoqing_chat` and `xiaoqing_agent`.
+- `memory.search` and `memory.forget` are called by `xiaoqing_chat`.
+
+Core writes the caller name, the principal kind, and the user principal's chat into each payload.
+Fields of the same name supplied by the caller are ignored. System principals may use these services.
 
 Core checks fixed owners and callers by service name.
 It issues `agent.handle_turn` and `command_runner` to user-message contexts.

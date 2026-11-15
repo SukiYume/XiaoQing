@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, cast
 from zoneinfo import ZoneInfo
 
 from ...config import PendoConfig
 from ...models.item import EventItem
 from ...services.db import Database
-from ...services.db_schema import SQLITE_ID_BATCH_SIZE
+from ...services.db_reminders import ReminderStatus, reminder_status
 from ...services.event_graph import EventGraphService
 from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper
+from ...utils.validators import EVENT_COLLECTION_KINDS
 from ..utils import collection_payload
 from .event_schedule import build_event_schedule, daterange, ensure_datetime, event_kind
 
 JsonObject          = dict[str, Any]
-ReminderStatus      = Literal["pending", "sent", "confirmed"]
 EventWithCollection = tuple[EventItem, JsonObject | None]
 
-_EVENT_KINDS     : Final = frozenset({"", "all", "single", "multi_node", "recurring"})
+_EVENT_KINDS     : Final = frozenset({"", "all", "single"}) | EVENT_COLLECTION_KINDS
 _REMINDER_FILTERS: Final = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
 
 
@@ -159,29 +160,25 @@ def _select_events(
     return selected
 
 
-def _build_reminder_rows(event: EventItem, reminder_logs: list[JsonObject]) -> list[JsonObject]:
+def _build_reminder_rows(
+    event: EventItem,
+    reminder_logs: Iterable[JsonObject],
+) -> list[JsonObject]:
     """合并计划提醒和发送日志；未写日志的提醒保持待发送状态。"""
 
     log_map = {str(log["remind_time"]): log for log in reminder_logs if log.get("remind_time")}
     rows: list[JsonObject] = []
     for remind_time in sorted(str(value) for value in event.remind_times if value):
-        log                    = log_map.get(remind_time)
-        status: ReminderStatus = "pending"
-        if log is not None and log.get("confirmed_at"):
-            status = "confirmed"
-        elif log is not None and log.get("sent_at"):
-            status = "sent"
+        log = log_map.get(remind_time, {})
         rows.append(
             {
                 "time"        : remind_time,
-                "status"      : status,
-                "sent_at"     : log.get("sent_at") if log else None,
-                "confirmed_at": log.get("confirmed_at") if log else None,
-                "repeat_count": int(log.get("repeat_count") or 0) if log else 0,
+                "status"      : reminder_status(log.get("sent_at"), log.get("confirmed_at")),
+                "sent_at"     : log.get("sent_at"),
+                "confirmed_at": log.get("confirmed_at"),
+                "repeat_count": int(log.get("repeat_count") or 0),
                 # 从未发出就作废的提醒：状态仍归入 confirmed，页面据此显示“已过期”。
-                "missed": bool(
-                    log and log.get("user_action") == "expired" and not log.get("sent_at")
-                ),
+                "missed": log.get("user_action") == "expired" and not log.get("sent_at"),
             }
         )
     return rows
@@ -233,37 +230,9 @@ def _event_matches_reminder(summary: _ReminderSummary, reminder: str) -> bool:
     }.get(reminder, 0) > 0
 
 
-def _fetch_reminder_logs_by_event_ids(
-    db: Database,
-    event_ids: list[str],
-) -> dict[str, list[JsonObject]]:
-    """分批读取多条日程的提醒日志，避免 N+1 查询和 SQLite 变量上限。"""
-
-    unique_ids = [event_id for event_id in dict.fromkeys(event_ids) if event_id]
-    logs_by_event: dict[str, list[JsonObject]] = {event_id: [] for event_id in unique_ids}
-    conn = db.get_connection()
-    for offset in range(0, len(unique_ids), SQLITE_ID_BATCH_SIZE):
-        batch        = unique_ids[offset : offset + SQLITE_ID_BATCH_SIZE]
-        placeholders = ",".join("?" for _ in batch)
-        rows         = conn.execute(
-            f"""
-            SELECT item_id, remind_time, sent_at, confirmed_at, user_action,
-                   repeat_count, last_sent_at
-            FROM reminder_logs
-            WHERE item_id IN ({placeholders})
-            ORDER BY item_id, remind_time
-            """,
-            batch,
-        ).fetchall()
-        for row in rows:
-            log     = dict(row)
-            item_id = str(log.pop("item_id"))
-            logs_by_event[item_id].append(log)
-    return logs_by_event
-
-
 def _prepare_overview_events(
     db: Database,
+    owner_id: str,
     selected: list[EventWithCollection],
     range_start_day: date,
     range_end_day: date,
@@ -272,8 +241,8 @@ def _prepare_overview_events(
 ) -> list[_OverviewEvent]:
     """批量读取日志后，完成提醒筛选和时间轴展开。"""
 
-    logs_by_event = _fetch_reminder_logs_by_event_ids(
-        db,
+    logs_by_event = db.get_reminder_logs_by_item_ids(
+        owner_id,
         [event.id for event, _collection in selected],
     )
     prepared: list[_OverviewEvent] = []
@@ -283,7 +252,7 @@ def _prepare_overview_events(
         if not display_days:
             continue
         reminder_summary = _summarize_reminders_in_range(
-            _build_reminder_rows(event, logs_by_event.get(event.id, [])),
+            _build_reminder_rows(event, logs_by_event.get(event.id, {}).values()),
             range_start_day,
             range_end_day,
             user_timezone,
@@ -390,6 +359,7 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
     selected          = _select_events(range_events, collections_by_id, filters)
     events            = _prepare_overview_events(
         db,
+        owner_id,
         selected,
         range_start.date(),
         range_end.date(),
@@ -427,20 +397,16 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
 
 
 def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject | None:
-    """返回叶子日程详情；传入集合头编号时转交集合详情构造器。"""
+    """返回叶子日程详情；传入集合头编号时返回集合详情。"""
 
     family = EventGraphService(db).load_by_id(owner_id, event_id)
-    if family.collection and family.leaf is None:
-        return build_event_collection_detail(db, owner_id, event_id)
-
-    event = db.get_item(event_id, owner_id=owner_id)
-    if not isinstance(event, EventItem):
+    event  = family.leaf
+    if event is None:
+        if family.collection:
+            return _collection_detail(family.collection, family.children)
         return None
-    collection = (
-        db.get_event_collection(event.event_collection_id, owner_id)
-        if event.event_collection_id
-        else None
-    )
+
+    collection                          = family.collection
     related_instances: list[JsonObject] = []
     if collection is not None:
         related_instances = [
@@ -451,7 +417,7 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
                 "start_time": child.start_time,
                 "end_time"  : child.end_time,
             }
-            for child in db.get_collection_events(str(collection["id"]), owner_id)
+            for child in family.children
             if child.id != event.id
         ][:12]
     return {
@@ -477,17 +443,9 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
     }
 
 
-def build_event_collection_detail(
-    db: Database,
-    owner_id: str,
-    collection_id: str,
-) -> JsonObject | None:
-    """返回集合头及节点列表，不为列表页计算未使用的提醒和时间轴。"""
+def _collection_detail(collection: JsonObject, children: list[EventItem]) -> JsonObject:
+    """集合头及其节点列表的响应体。"""
 
-    collection = db.get_event_collection(collection_id, owner_id)
-    if collection is None:
-        return None
-    children = db.get_collection_events(collection_id, owner_id)
     return {
         "collection": collection_payload(collection),
         "children"  : [
@@ -500,3 +458,17 @@ def build_event_collection_detail(
             for child in children
         ],
     }
+
+
+def build_event_collection_detail(
+    db: Database,
+    owner_id: str,
+    collection_id: str,
+) -> JsonObject | None:
+    """返回集合头及节点列表，不为列表页计算未使用的提醒和时间轴。"""
+
+    collection = db.get_event_collection(collection_id, owner_id)
+    if collection is None:
+        return None
+    children = db.get_collection_events(collection_id, owner_id)
+    return _collection_detail(collection, children)

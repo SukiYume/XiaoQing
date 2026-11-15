@@ -169,14 +169,11 @@ _MAX_PLUGIN_DIRECTORY_ENTRIES                        = 8192
 _MAX_PLUGIN_SCANNED_ENTRIES                          = 65536
 _MAX_PLUGIN_RELATIVE_PATH_BYTES                      = 1024
 _MAX_PLUGIN_RELATIVE_PATH_DEPTH                      = 32
-_PLUGIN_SYNC_WORKERS                                 = 4
-_DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT                     = 256
 _WATCH_ERROR_LOG_INTERVAL_SECONDS                    = 30.0
 _PLUGIN_FINGERPRINT_AUDIT_INTERVAL_SECONDS           = 30.0
 _MAX_MODULE_ORIGIN_CACHE_ENTRIES                     = 16384
 _MAX_RECORDED_SCAN_ERRORS                            = 8
 _MIN_PLUGIN_POLL_INTERVAL_SECONDS                    = 0.01
-_DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS                = 3600.0
 _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS                 = 5.0
 _PLUGIN_IMPORT_LOCK                                  = threading.RLock()
 _PLUGIN_NAMESPACE_OWNERS : dict[str, object]         = {}
@@ -964,15 +961,8 @@ _PLUGIN_IMPORT_BARRIER_COORDINATOR = _ModuleImportBarrierCoordinator()
 
 
 def _validate_plugin_name(name: str) -> bool:
-    """
-    验证插件名称是否安全
+    """插件目录名是否是规范的插件名（规则见 ``models.canonical_plugin_name``）。"""
 
-    Args:
-        name: 插件名称
-
-    Returns:
-        是否安全（只包含字母数字下划线）
-    """
     try:
         canonical_plugin_name(name)
     except ValueError:
@@ -1048,17 +1038,15 @@ class _PluginDataDirectory:
 class _PluginLoadTransaction:
     """Strong references owned by one imported-but-not-yet-live generation."""
 
-    definition                 : PluginDefinition
-    gate                       : PluginExecutionGate
-    mtime                      : float
-    track_init_task            : bool              = True
-    import_attempted           : bool              = False
-    import_completed           : bool              = False
-    uncertain_external_code    : bool              = False
-    unowned_canonical_namespace: bool              = False
-    namespace_claim_new        : bool              = False
-    authorized_entry           : Path | None       = None
-    module                     : ModuleType | None = None
+    definition             : PluginDefinition
+    gate                   : PluginExecutionGate
+    mtime                  : float
+    import_attempted       : bool              = False
+    import_completed       : bool              = False
+    uncertain_external_code: bool              = False
+    namespace_claim_new    : bool              = False
+    authorized_entry       : Path | None       = None
+    module                 : ModuleType | None = None
 
 
 @dataclass(frozen=True, slots=True)

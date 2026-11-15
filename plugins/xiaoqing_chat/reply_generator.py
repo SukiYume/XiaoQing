@@ -13,15 +13,11 @@ if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
 
 from .chat_event import event_sender_name
-from .context_builder import (
-    retrieve_memory_context,
-)
 from .llm.check_result import ReplyCheckResult, ReplyRejected, checker_unavailable
 from .llm.communication_constraints import mentions_length, requested_char_count
 from .llm.decorations import strip_junk_tail, tame_decorations
-from .llm.gateway import LLMError, chat_completions_with_fallback_paths
+from .llm.gateway import LLMError, chat_completions_with_profile
 from .llm.local_checks import (
-    heuristic_check,
     media_meta_reply_check,
     narrated_motive_check,
     ungrounded_link_check,
@@ -67,9 +63,10 @@ from .reply_fallbacks import (
 )
 from .reply_plan import (
     ReplyGenerationPlan,
-    allows_low_stakes_persona_fiction,
+    heuristic_check_with_config,
     needs_persona_guard_when_checker_unavailable,
     prepare_reply_generation,
+    with_requested_length_room,
 )
 
 # 这些软问题仍要重写：没照对方明说的要求做（比如篇幅），或者读图结论有出入。
@@ -84,7 +81,7 @@ _REASONING_TURN_RE = re.compile(
 )
 
 
-# 路由、人物边界与确定性文本修复
+# 分段、篇幅与路由判断
 
 
 def _allows_clause_bubbles(text: str) -> bool:
@@ -104,6 +101,18 @@ def _wants_whole_document(text: str) -> bool:
     return length is not None and length.mode != "at_most" and length.count >= _DOCUMENT_CHARS
 
 
+def _split_reply_text(plan: ReplyGenerationPlan, text: str) -> list[str]:
+    """按这一轮对篇幅和分段的要求，把候选文本整理成出站气泡。"""
+
+    return process_llm_response(
+        text,
+        plan.runtime.cfg.postprocess,
+        bot_name        = plan.bot_name,
+        enable_splitter = not _wants_whole_document(plan.text),
+        clause_split    = _allows_clause_bubbles(plan.text),
+    )
+
+
 def _needs_reasoning_route(text: str) -> bool:
     """数值、单位和科学关系优先交给推理模型，普通闲聊继续使用低延迟 route。"""
 
@@ -119,7 +128,7 @@ def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
     return reply_is_stale(chat_id, local_id)
 
 
-# 草稿规范化、媒体合并与审查输入
+# 提示词审计日志与生成
 
 
 def _log_prompt_audit_metadata(
@@ -180,45 +189,17 @@ def _earlier_context(plan: ReplyGenerationPlan) -> str:
     )
 
 
-async def _load_attempt_memory(
-    plan: ReplyGenerationPlan,
-    attempt: ReplyAttemptState,
-    trimmed_history: Any,
-) -> str:
-    if attempt.cached_memory is not None:
-        memory_block = attempt.cached_memory
-    elif attempt.prefetched_memory is not None:
-        try:
-            memory_block = await attempt.prefetched_memory
-        except Exception:
-            memory_block = ""
-        attempt.prefetched_memory = None
-        attempt.cached_memory     = memory_block
-    else:
-        memory_block = await retrieve_memory_context(
-            context          = plan.context,
-            runtime          = plan.runtime,
-            state            = plan.state,
-            secrets          = plan.secrets,
-            data_dir         = plan.context.data_dir,
-            chat_id          = plan.chat_id,
-            history          = trimmed_history,
-            current_text     = plan.text,
-            planner_question = plan.action.question,
-            bot_name         = plan.bot_name,
-        )
-        attempt.cached_memory = memory_block
+def _load_attempt_memory(plan: ReplyGenerationPlan) -> str:
+    """这一轮交给生成的低信任参考：知识库、复盘策略、说话人页面、群页和相关旧事。"""
 
-    full_memory_block = memory_block
-    if plan.profile_block:
-        full_memory_block = (plan.profile_block + "\n" + (full_memory_block or "")).strip() + "\n"
-    if plan.policy_block.strip():
-        full_memory_block = (
-            plan.policy_block.strip() + "\n\n" + (full_memory_block or "").strip()
-        ).strip() + "\n"
-    if plan.knowledge_block:
-        full_memory_block = (plan.knowledge_block + "\n" + (full_memory_block or "")).strip() + "\n"
-    return full_memory_block
+    parts = (
+        plan.knowledge_block.strip(),
+        plan.policy_block.strip(),
+        plan.profile_block.strip(),
+        plan.memory_block.strip(),
+    )
+    block = "\n\n".join(part for part in parts if part)
+    return block + "\n" if block else ""
 
 
 def _build_attempt_messages(
@@ -281,14 +262,11 @@ async def _request_reply_candidate(
         and not plan.secrets.get("_pinned_model")
         and _needs_reasoning_route(plan.text)
     ):
-        request_secrets                  = dict(plan.secrets)
-        request_secrets["_route"]        = "reasoning"
+        request_secrets = dict(plan.secrets)
+        request_secrets["_route"] = "reasoning"
         request_secrets["_pinned_model"] = None
-        route_name                       = "reasoning"
-        foreground                       = plan.runtime.cfg.llm_config("reasoning")
-        length                           = requested_char_count(plan.text)
-        if length is not None and length.mode != "at_most":
-            foreground = foreground.with_room_for(length.count)
+        route_name = "reasoning"
+        foreground = with_requested_length_room(plan.runtime.cfg.llm_config("reasoning"), plan.text)
         request_max_tokens = foreground.max_tokens
     log_step(
         plan.context,
@@ -305,7 +283,7 @@ async def _request_reply_candidate(
         },
     )
     started_at = time.monotonic()
-    raw, used_profile = await chat_completions_with_fallback_paths(
+    raw, used_profile = await chat_completions_with_profile(
         secrets     = request_secrets,
         messages    = payload_messages,
         temperature = foreground.temperature,
@@ -372,22 +350,12 @@ def _precheck_candidate(
     if not raw or not plan.runtime.cfg.reply_check.enable_reply_checker:
         return None
     precheck_text = text_without_outbound_marker(raw)
-    raw_parts     = process_llm_response(
-        precheck_text,
-        plan.runtime.cfg.postprocess,
-        bot_name        = plan.bot_name,
-        enable_splitter = not _wants_whole_document(plan.text),
-        clause_split    = _allows_clause_bubbles(plan.text),
-    )
+    raw_parts     = _split_reply_text(plan, precheck_text)
     raw_draft = build_reply_draft(raw_parts, raw_text=raw, rewritten_text=raw)
     if raw_draft is None:
         return None
-    result = heuristic_check(
-        reply                = raw_draft.text,
-        history              = trimmed_history,
-        max_repeat_compare   = plan.runtime.cfg.reply_check.max_repeat_compare,
-        similarity_threshold = plan.runtime.cfg.reply_check.similarity_threshold,
-        max_assistant_in_row = plan.runtime.cfg.reply_check.max_assistant_in_row,
+    result = heuristic_check_with_config(
+        plan.runtime, reply=raw_draft.text, history=trimmed_history
     )
     if result is None or result.suitable:
         result = ungrounded_link_check(
@@ -429,6 +397,7 @@ async def _resolve_candidate_draft(
             fields  = {"kind": parsed_marker.kind, "hint": parsed_marker.hint},
         )
         marker_text = strip_outbound_marker_residue(strip_marker(raw, parsed_marker.raw_span))
+        miss_reason = ""
         try:
             resolved_marker = await resolve_marker(
                 parsed_marker,
@@ -439,17 +408,10 @@ async def _resolve_candidate_draft(
                 media_store = plan.state.media_store,
             )
         except Exception as exc:
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.marker.miss",
-                fields  = {
-                    "kind"  : parsed_marker.kind,
-                    "hint"  : parsed_marker.hint,
-                    "reason": type(exc).__name__,
-                },
-            )
+            miss_reason = type(exc).__name__
+        else:
+            if resolved_marker is None:
+                miss_reason = "candidate_not_found"
         if resolved_marker is None:
             log_step(
                 plan.context,
@@ -459,7 +421,7 @@ async def _resolve_candidate_draft(
                 fields  = {
                     "kind"  : parsed_marker.kind,
                     "hint"  : parsed_marker.hint,
-                    "reason": "candidate_not_found",
+                    "reason": miss_reason,
                 },
             )
         else:
@@ -491,13 +453,7 @@ async def _resolve_candidate_draft(
                 fields  = {"kind": "", "hint": "", "reason": "parse_failed"},
             )
 
-    parts = process_llm_response(
-        marker_text,
-        plan.runtime.cfg.postprocess,
-        bot_name        = plan.bot_name,
-        enable_splitter = not _wants_whole_document(plan.text),
-        clause_split    = _allows_clause_bubbles(plan.text),
-    )
+    parts = _split_reply_text(plan, marker_text)
     draft = build_reply_draft(parts, raw_text=raw, rewritten_text=marker_text)
     if draft is None and resolved_marker is not None:
         draft = ReplyDraft(
@@ -554,31 +510,36 @@ async def _run_checker(
     try:
         return await asyncio.wait_for(
             check_reply(
-                secrets=plan.secrets,
-                bot_name=plan.bot_name,
-                reply=check_reply_text,
-                heuristic_reply=heuristic_reply_text,
-                current_text=plan.text,
-                current_sender=event_sender_name(plan.event),
-                jargon_explanation=plan.jargon_explanation,
-                current_image_attached=event_has_current_image(plan.event),
-                goal=plan.effective_goal or plan.merged_reasoning or "自然聊天",
-                policy_text=plan.policy_block,
-                grounding_text=_checker_grounding_text(plan, memory_block),
-                history=trimmed_history,
-                chat_history_text=_checker_history_text(plan, trimmed_history),
-                enable_llm_checker=cfg.enable_llm_checker,
-                verify_turn_semantics=cfg.enable_semantic_checker,
-                max_repeat_compare=cfg.max_repeat_compare,
-                similarity_threshold=cfg.similarity_threshold,
-                max_assistant_in_row=cfg.max_assistant_in_row,
-                max_tokens=checker_llm.max_tokens,
-                timeout_seconds=timeout,
-                max_retry=checker_llm.max_retry,
-                retry_interval_seconds=checker_llm.retry_interval_seconds,
-                llm_checker_mode=cfg.llm_checker_mode,
-                check_omitted_persona_episode=not plan.forced,
-                allow_low_stakes_persona_fiction=allows_low_stakes_persona_fiction(plan.runtime),
+                secrets                = plan.secrets,
+                bot_name               = plan.bot_name,
+                reply                  = check_reply_text,
+                heuristic_reply        = heuristic_reply_text,
+                current_text           = plan.text,
+                current_sender         = event_sender_name(plan.event),
+                jargon_explanation     = plan.jargon_explanation,
+                current_image_attached = event_has_current_image(plan.event),
+                goal                   = plan.effective_goal or plan.merged_reasoning or "自然聊天",
+                policy_text            = plan.policy_block,
+                grounding_text         = _checker_grounding_text(plan, memory_block),
+                memory_text            = "\n".join(
+                    part for part in (plan.profile_block, plan.memory_block) if part
+                ),
+                history                          = trimmed_history,
+                chat_history_text                = _checker_history_text(plan, trimmed_history),
+                enable_llm_checker               = cfg.enable_llm_checker,
+                verify_turn_semantics            = cfg.enable_semantic_checker,
+                max_repeat_compare               = cfg.max_repeat_compare,
+                similarity_threshold             = cfg.similarity_threshold,
+                max_assistant_in_row             = cfg.max_assistant_in_row,
+                max_tokens                       = checker_llm.max_tokens,
+                timeout_seconds                  = timeout,
+                max_retry                        = checker_llm.max_retry,
+                retry_interval_seconds           = checker_llm.retry_interval_seconds,
+                llm_checker_mode                 = cfg.llm_checker_mode,
+                check_omitted_persona_episode    = not plan.forced,
+                allow_low_stakes_persona_fiction = (
+                    plan.runtime.cfg.personality.allow_low_stakes_persona_fiction
+                ),
                 turn_reading=turn_reading,
             ),
             timeout=timeout + 0.25,
@@ -606,7 +567,7 @@ def _apply_unavailable_policy(
 
     if check.severity != "infra":
         return check
-    if plan.runtime.cfg.reply_check.llm_checker_mode.strip().lower() == "always":
+    if plan.runtime.cfg.reply_check.llm_checker_mode == "always":
         return ReplyCheckResult(
             suitable     = False,
             reason       = "回复检查暂不可用",
@@ -614,9 +575,9 @@ def _apply_unavailable_policy(
             severity     = "infra",
             failure_code = "checker_unavailable",
         )
-    if not allows_low_stakes_persona_fiction(
-        plan.runtime
-    ) and needs_persona_guard_when_checker_unavailable(plan.text, bot_name=plan.bot_name):
+    if not plan.runtime.cfg.personality.allow_low_stakes_persona_fiction and (
+        needs_persona_guard_when_checker_unavailable(plan.text, bot_name=plan.bot_name)
+    ):
         return ReplyCheckResult(
             suitable     = False,
             reason       = "人物依据审查暂不可用",
@@ -669,12 +630,8 @@ async def _check_candidate_draft(
     # 与轻微风格问题，不能再把所有 LLM 拒绝一概当成可放行的软门禁。
     check_reply_text, heuristic_reply_text = reply_checker_inputs(draft)
     deterministic_ok = (
-        heuristic_check(
-            reply                = heuristic_reply_text,
-            history              = trimmed_history,
-            max_repeat_compare   = cfg.max_repeat_compare,
-            similarity_threshold = cfg.similarity_threshold,
-            max_assistant_in_row = cfg.max_assistant_in_row,
+        heuristic_check_with_config(
+            plan.runtime, reply=heuristic_reply_text, history=trimmed_history
         )
         is None
         and media_meta_reply_check(reply=heuristic_reply_text, current_text=plan.text) is None
@@ -708,7 +665,7 @@ async def _check_candidate_draft(
 def _shrink_context_after(
     exc: LLMError, plan: ReplyGenerationPlan, attempt: ReplyAttemptState
 ) -> bool:
-    """请求过大时把历史减半并作废已取的记忆，返回是否应当重试。"""
+    """请求过大时把历史减半，返回是否应当重试。"""
     if str(exc) != "request_too_large" or attempt.max_items <= 2:
         return False
     log_step(
@@ -718,9 +675,7 @@ def _shrink_context_after(
         step    = "reply.llm.too_large",
         fields  = {"max_items": attempt.max_items},
     )
-    attempt.max_items         = max(2, attempt.max_items // 2)
-    attempt.cached_memory     = None
-    attempt.prefetched_memory = None
+    attempt.max_items = max(2, attempt.max_items // 2)
     return True
 
 
@@ -737,7 +692,7 @@ def _prefetch_turn_reading(
 ) -> None:
     """always 模式每条候选都要语义审查，阅读与候选无关，可与生成同时进行。"""
     cfg = plan.runtime.cfg.reply_check
-    if attempt.turn_reading is None or cfg.llm_checker_mode.strip().lower() != "always":
+    if attempt.turn_reading is None or cfg.llm_checker_mode != "always":
         return
     checker_llm = plan.runtime.cfg.llm_config("checker")
     attempt.turn_reading.prefetch(
@@ -764,13 +719,12 @@ async def generate_reply_draft(
     forced: bool,
     action: PlannedAction,
     plan_reasoning: str,
-    bot_name: str                                    = "",
-    secrets: dict[str, Any] | None                   = None,
-    turn_note: str                                   = "",
-    state_text: str                                  = "",
-    is_brain_chat: bool                              = False,
-    prefetched_memory_task: asyncio.Task[str] | None = None,
-    timings: dict[str, Any] | None                   = None,
+    bot_name: str                  = "",
+    secrets: dict[str, Any] | None = None,
+    turn_note: str                 = "",
+    state_text: str                = "",
+    is_brain_chat: bool            = False,
+    timings: dict[str, Any] | None = None,
 ) -> ReplyDraft | None:
     plan = await prepare_reply_generation(
         text           = text,
@@ -788,10 +742,9 @@ async def generate_reply_draft(
         is_brain_chat  = is_brain_chat,
     )
     attempt = ReplyAttemptState(
-        max_items         = plan.max_context_size,
-        prefetched_memory = prefetched_memory_task,
-        turn_reading      = _semantic_reading_cache(plan),
-        timings           = {} if timings is None else timings,
+        max_items    = plan.max_context_size,
+        turn_reading = _semantic_reading_cache(plan),
+        timings      = {} if timings is None else timings,
     )
     try:
         return await _generate_checked_draft(plan, attempt)
@@ -810,7 +763,7 @@ async def _generate_checked_draft(
             return None
         trimmed_history = plan.history[-attempt.max_items :] if attempt.max_items > 0 else []
         _prefetch_turn_reading(plan, attempt, trimmed_history)
-        memory_block = await _load_attempt_memory(plan, attempt, trimmed_history)
+        memory_block = _load_attempt_memory(plan)
         if _is_turn_stale(plan.chat_id, plan.event):
             return None
         payload_messages   = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)

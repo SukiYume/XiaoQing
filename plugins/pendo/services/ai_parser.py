@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -13,8 +12,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from dateutil import parser
 
-from core.ai import declare_route_defaults
-from core.args import parse_int
+from core.ai import declare_route_defaults, first_json_object
+from core.args import chinese_number, parse_int
 from core.public_errors import public_error_message
 
 from ..config import MOOD_ANALYSIS_CONFIG
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 把自然语言解析成日程、待办、记账字段；主配置里只需要给 parse 指定模型。
+# 日程解析和日记情绪分析共用 parse 这一条模型路由；主配置里只需要给 parse 指定模型。
 declare_route_defaults(
     "pendo",
     {
@@ -58,19 +57,6 @@ MOOD_WORD_GROUPS: Final = (
     "anxious",
     "grateful",
 )
-CHINESE_DIGITS: Final = {
-    "零": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
 OFFSET_NUMBER_PATTERN: Final = r"[0-9]+(?:\.[0-9]+)?|[零一二两三四五六七八九十百半]+"
 OFFSET_UNIT_PATTERN  : Final = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
 OFFSET_TOKEN_RE      : Final = re.compile(
@@ -181,7 +167,10 @@ class RateLimiter:
 
 
 class AIParser:
-    """AI解析器 - 专注于Event类型解析"""
+    """AI 解析器：用 LLM 解析日程、分析日记情绪，失败时降级到本地规则。
+
+    日记情绪分析只在用户同意（``ai_sensitive_data_consent``）后才会把正文发给模型。
+    """
 
     # 全局速率限制器实例
     _rate_limiter: ClassVar[RateLimiter] = RateLimiter(max_calls=20, time_window=60)
@@ -391,7 +380,7 @@ class AIParser:
             if not response:
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
-            parsed = self._parse_json_object(response)
+            parsed = first_json_object(response)
             if parsed is None:
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
@@ -434,7 +423,7 @@ class AIParser:
             if not response:
                 return analyze_diary_mood_rule(text)
 
-            parsed = self._parse_json_object(response)
+            parsed = first_json_object(response)
             if parsed is None:
                 return analyze_diary_mood_rule(text)
 
@@ -666,31 +655,6 @@ class AIParser:
             else:
                 logger.warning("Pendo reminder offsets invalid: count=%d", len(offsets))
 
-    @staticmethod
-    def _parse_json_object(response: str) -> dict[str, Any] | None:
-        """从纯 JSON、代码块或带说明文字的响应中提取第一个 JSON 对象。"""
-        if not response:
-            return None
-
-        text = response.strip()
-        code_block = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-        if code_block:
-            text = code_block.group(1).strip()
-
-        try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            decoder = json.JSONDecoder()
-            for match in re.finditer(r"\{", text):
-                try:
-                    parsed, _end = decoder.raw_decode(text[match.start() :])
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if isinstance(parsed, dict):
-                    return cast(dict[str, Any], parsed)
-            return None
-        return cast(dict[str, Any], parsed) if isinstance(parsed, dict) else None
-
     def build_remind_times_from_offsets(
         self,
         start_time: str,
@@ -765,7 +729,7 @@ class AIParser:
             return None
         seconds = 0.0
         for match in OFFSET_TOKEN_RE.finditer(text):
-            num = self._parse_chinese_number(match.group(1))
+            num = self._parse_offset_number(match.group(1))
             if num is not None:
                 seconds += num * OFFSET_UNIT_SECONDS[match.group(2)]
         try:
@@ -773,42 +737,15 @@ class AIParser:
         except OverflowError:
             return None
 
-    @classmethod
-    def _parse_chinese_number(cls, text: str) -> float | None:
-        """解析中文数字
+    @staticmethod
+    def _parse_offset_number(text: str) -> float | None:
+        """提醒时长里的数：阿拉伯数字（可带小数）、中文数字，或“半”（0.5）。"""
 
-        支持格式：
-        - 基本数字：一、二、三...九、十
-        - 组合数字：十一、二十、一百、一百二十三等
-        - 特殊数字：半(0.5)、两(2)
-        """
-        if not text:
-            return None
         if text == "半":
             return 0.5
-
         if re.fullmatch(r"[0-9]+\.[0-9]+", text):
             return float(text)
-
-        arabic_number = parse_int(text, minimum=0)
-        if arabic_number is not None:
-            return float(arabic_number)
-
-        if "百" in text:
-            left, remaining = text.split("百", 1)
-            hundreds  = CHINESE_DIGITS.get(left, 1) if left else 1
-            remaining = remaining.lstrip("零")
-            remainder = cls._parse_chinese_number(remaining) if remaining else 0.0
-            return None if remainder is None else hundreds * 100.0 + remainder
-
-        if "十" in text:
-            left, right = text.split("十", 1)
-            tens = CHINESE_DIGITS.get(left, 1) if left else 1
-            if right and right not in CHINESE_DIGITS:
-                return None
-            return float(tens * 10 + CHINESE_DIGITS.get(right, 0))
-
-        if text in CHINESE_DIGITS:
-            return float(CHINESE_DIGITS[text])
-
-        return None
+        number = parse_int(text, minimum=0)
+        if number is None:
+            number = chinese_number(text)
+        return None if number is None else float(number)

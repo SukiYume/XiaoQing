@@ -40,8 +40,7 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
     app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
 
     # Start
-    app.plugin_manager.load_all   = Mock()
-    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.load_all = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     await app.start()
 

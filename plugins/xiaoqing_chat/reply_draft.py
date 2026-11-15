@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +13,7 @@ from .media.marker_resolver import (
 )
 from .message_parts import (
     build_text_message_parts,
+    is_media_part,
     merge_reply_media_parts,
     normalize_message_parts,
 )
@@ -71,9 +71,7 @@ def build_reply_draft(
 
 
 def _draft_has_media(parts: Any) -> bool:
-    return any(
-        str(part.get("kind", "") or "").strip() != "text" for part in normalize_message_parts(parts)
-    )
+    return any(is_media_part(part) for part in normalize_message_parts(parts))
 
 
 def attach_reply_media_marker(
@@ -119,11 +117,9 @@ def reply_checker_inputs(draft: ReplyDraft) -> tuple[str, str]:
 
 @dataclass
 class ReplyAttemptState:
-    max_items        : int
-    prefetched_memory: asyncio.Task[str] | None = None
-    cached_memory    : str | None               = None
-    regen_used       : int                      = 0
-    extra_check_hint : str                      = ""
+    max_items       : int
+    regen_used      : int = 0
+    extra_check_hint: str = ""
     # 本轮对话的独立阅读与候选无关，各次尝试共用。
     turn_reading: TurnReadingCache | None = None
     # 与本轮生成对象共用的耗时记录。

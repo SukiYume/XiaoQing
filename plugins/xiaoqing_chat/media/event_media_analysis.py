@@ -1,8 +1,9 @@
 """聊天媒体的视觉分析流水线。
 
 媒体字节和服务商输出都视为不可信：解码前限制读取量，凭据绝不进入渲染或缓存记录，
-只有通过语义校验的描述才会提交。服务商降级和语义重试均有序且有界，避免单条消息
-无限消耗延迟或 token 预算。
+只有通过语义校验的描述才会提交。主分析逐个视觉模型调用，服务商降级和语义重试均有序
+且有界，避免单条消息无限消耗延迟或 token 预算；表情后台精炼和梗背景这两个辅助调用
+只请求一次视觉 route，传输错误的降级交给 core，没有语义重试。
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from typing import Any
 from ..constants import MEDIA_SUMMARY_MAX_CHARS
 from ..llm.gateway import (
     LLMError,
-    chat_completions_raw_with_fallback_paths,
+    chat_completions_raw_with_profile,
     extract_response_content,
     extract_response_finish_reason,
 )
@@ -28,7 +29,6 @@ from ..task_scheduler import spawn_bg_task
 from ..utils.json_parsing import parse_first_json_object, parse_first_json_object_with_status
 from ..utils.text import clip_text
 from .loading import (
-    inspect_image_payload_details,
     normalize_source_label,
     read_file_bounded,
     render_animation_contact_sheet,
@@ -260,18 +260,7 @@ def _prepare_media_for_llm(
 
     if payload is None:
         payload = resolved.cached_path.read_bytes()
-    source_mime = (
-        str(
-            resolved.mime_type
-            or inspect_image_payload_details(
-                payload, fallback_suffix=resolved.cached_path.suffix or ".png"
-            ).mime_type
-        )
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-        or "image/png"
-    )
+    source_mime = str(resolved.mime_type).split(";", 1)[0].strip().lower() or "image/png"
     if not resolved.is_animated and source_mime in _PASSTHROUGH_IMAGE_MIMES:
         # 静态 JPEG/PNG/WebP 不再一律转 PNG：转码会把小体积 JPEG 放大十几倍。
         # 原样发送前仍用解码器确认结构完整，无法解码的原始字节绝不发出。
@@ -374,11 +363,7 @@ async def _call_media_llm(
 ) -> tuple[str, dict[str, Any]]:
     """调用统一视觉 route；传输错误的有序 fallback 由 core 完成。"""
 
-    candidates = _resolve_media_llm_secret_candidates(context)
-    if not candidates:
-        return "", {}
-
-    route_context                  = dict(candidates[0])
+    route_context                  = dict(_resolve_media_llm_secret_candidates(context)[0])
     route_context["_pinned_model"] = None
     result                         = await _call_media_llm_once(
         runtime    = runtime,
@@ -402,7 +387,7 @@ async def _call_media_llm_once(
     effective_max_tokens                  = max_tokens
     used_secrets                          = dict(secrets)
     used_secrets["_effective_max_tokens"] = effective_max_tokens
-    response_data, used_profile = await chat_completions_raw_with_fallback_paths(
+    response_data, used_profile = await chat_completions_raw_with_profile(
         secrets             = secrets,
         route               = "vision",
         required_modalities = ("text", "image"),
@@ -751,9 +736,7 @@ def schedule_background_emoji_refine(
     cfg = media_config(runtime)
     if rendered.kind != "emoji" or not cfg.enable_emoji_refine_background:
         return
-    timeout = max(0.0, float(cfg.emoji_refine_timeout_seconds))
-    if timeout <= 0:
-        return
+    timeout = float(cfg.emoji_refine_timeout_seconds)
     media_log(
         context,
         runtime,
@@ -779,7 +762,7 @@ def _resolve_media_analysis_candidates(
 
     cfg             = media_config(runtime)
     candidates      = _resolve_media_llm_secret_candidates(context)
-    primary_secrets = candidates[0] if candidates else {}
+    primary_secrets = candidates[0]
     if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
         media_log(
             context,
@@ -1144,7 +1127,6 @@ async def _commit_media_analysis_attempt(
             "description"          : rendered.description,
             "detail_description"   : attempt.detail.description,
             "visible_text"         : attempt.detail.visible_text,
-            "refined_description"  : "",
             "used_summary_fallback": attempt.used_summary_fallback,
             "marker"               : rendered.marker,
             "cultural_hint"        : cultural_hint,

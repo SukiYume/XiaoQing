@@ -370,7 +370,7 @@ class TestAdsPaperAsyncStorage:
 
         class Storage:
             def add_paper_note(self, paper_id, content, user_id):
-                return True
+                return None
 
             def get_paper_notes(self, paper_id, user_id=None):
                 return [{"content": "c"}]
@@ -420,7 +420,7 @@ class TestPaperStorageBehavior:
 
         storage = PaperStorage(tmp_path)
 
-        assert storage.add_paper_note("paper-1", "first note", 10001) is True
+        storage.add_paper_note("paper-1", "first note", 10001)
         assert storage.get_paper_notes("paper-1", 10001)[0]["content"] == "first note"
 
         assert storage.add_topic("FRB", 10001) is True
@@ -428,7 +428,7 @@ class TestPaperStorageBehavior:
         assert storage.remove_topic("FRB", 10001) is True
         assert storage.get_topics(10001) == []
 
-        assert storage.add_deadline("submit", "2026-05-01", 10001) is True
+        storage.add_deadline("submit", "2026-05-01", 10001)
         deadlines = storage.get_deadlines(10001)
         assert len(deadlines) == 1
         assert deadlines[0]["name"] == "submit"
@@ -483,10 +483,10 @@ class TestPaperStorageBehavior:
         from plugins.ads_paper.storage import PaperStorage
 
         def add(index):
-            return PaperStorage(tmp_path).add_paper_note("paper", f"note-{index}", 1)
+            PaperStorage(tmp_path).add_paper_note("paper", f"note-{index}", 1)
 
         with ThreadPoolExecutor(max_workers=8) as pool:
-            assert all(pool.map(add, range(40)))
+            list(pool.map(add, range(40)))
 
         notes = PaperStorage(tmp_path).get_paper_notes("paper", 1)
         assert len(notes) == 40

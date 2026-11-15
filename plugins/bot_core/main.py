@@ -8,7 +8,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Mapping
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, TypeVar, cast
 
 from core.args import parse_int
 from core.delivery import CommandOutcome, DeliverySegments
@@ -21,7 +21,8 @@ from core.plugin_base import build_action, run_sync, segments
 from core.public_errors import public_error_response
 from core.router import CommandCatalogNode, resolve_catalog_invocation
 
-logger = logging.getLogger(__name__)
+logger    = logging.getLogger(__name__)
+_PageItem = TypeVar("_PageItem")
 
 # ============================================================
 # 常量配置
@@ -223,7 +224,7 @@ def _handle_help(
         selected = _select_catalog_nodes(catalog, query)
         if not selected:
             return _help_not_found(query)
-        page_nodes, total_pages = _text_catalog_page(selected, page)
+        page_nodes, total_pages = _page_slice(selected, page, HELP_TEXT_PAGE_SIZE)
         return segments(
             _format_search_results(
                 page_nodes,
@@ -254,7 +255,7 @@ def _help_not_found(query: str) -> list[dict[str, Any]]:
 
 
 def _parse_help_request(raw: str) -> tuple[str, str, int]:
-    """解析帮助查询；保留 `/help <关键词>` 的兼容入口。"""
+    """解析帮助查询：``json`` 前缀选择导出格式，``page N`` 翻页，其余词作为查询。"""
 
     tokens        = raw.strip().split()
     output_format = "text"
@@ -265,7 +266,7 @@ def _parse_help_request(raw: str) -> tuple[str, str, int]:
     page = 1
     if tokens and tokens[0].casefold() in {"page", "list", "all", "页", "全部"}:
         action = tokens.pop(0).casefold()
-        # list/all 是分页目录的兼容别名；其后的单个数字表示页码，而不是搜索词。
+        # list/all 是 page 的别名；其后的单个数字表示页码，而不是搜索词。
         implicit_page = parse_int(tokens[0], minimum=1) if len(tokens) == 1 else None
         if action == "page" or implicit_page is not None:
             if tokens:
@@ -315,16 +316,25 @@ def _group_catalog_by_plugin(
     return tuple((plugin, tuple(grouped[plugin])) for plugin in plugin_names)
 
 
+def _page_slice(
+    items: tuple[_PageItem, ...],
+    page: int,
+    page_size: int,
+) -> tuple[tuple[_PageItem, ...], int]:
+    """返回第 ``page`` 页的条目和总页数（至少 1 页）；页码越界抛 ``ValueError``。"""
+
+    total_pages = max(1, math.ceil(len(items) / page_size))
+    if page > total_pages:
+        raise ValueError(f"页码超出范围，共 {total_pages} 页")
+    start = (page - 1) * page_size
+    return items[start : start + page_size], total_pages
+
+
 def _plugin_overview_page(
     catalog: tuple[CommandCatalogNode, ...],
     page: int,
 ) -> tuple[tuple[tuple[str, tuple[CommandCatalogNode, ...]], ...], int]:
-    groups      = _group_catalog_by_plugin(catalog)
-    total_pages = max(1, math.ceil(len(groups) / HELP_PLUGIN_PAGE_SIZE))
-    if page > total_pages:
-        raise ValueError(f"页码超出范围，共 {total_pages} 页")
-    start = (page - 1) * HELP_PLUGIN_PAGE_SIZE
-    return groups[start : start + HELP_PLUGIN_PAGE_SIZE], total_pages
+    return _page_slice(_group_catalog_by_plugin(catalog), page, HELP_PLUGIN_PAGE_SIZE)
 
 
 def _primary_catalog_root(
@@ -345,8 +355,12 @@ def _overview_usage(root: CommandCatalogNode) -> str:
     return f"/{root.name}"
 
 
+def _char_width(char: str) -> int:
+    return 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+
+
 def _display_width(value: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in value)
+    return sum(_char_width(char) for char in value)
 
 
 def _truncate_display_text(value: str, max_width: int) -> str:
@@ -356,7 +370,7 @@ def _truncate_display_text(value: str, max_width: int) -> str:
     width               = 0
     budget              = max(1, max_width - 1)
     for char in value:
-        char_width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+        char_width = _char_width(char)
         if width + char_width > budget:
             break
         retained.append(char)
@@ -522,24 +536,9 @@ def _catalog_page(
     nodes: tuple[CommandCatalogNode, ...],
     page: int,
 ) -> tuple[tuple[CommandCatalogNode, ...], int]:
-    """保持自动化 JSON 导出的既有分页。"""
+    """保持自动化 JSON 导出的既有分页；文本目录使用更小的 ``HELP_TEXT_PAGE_SIZE``。"""
 
-    total_pages = max(1, math.ceil(len(nodes) / HELP_PAGE_SIZE))
-    if page > total_pages:
-        raise ValueError(f"页码超出范围，共 {total_pages} 页")
-    start = (page - 1) * HELP_PAGE_SIZE
-    return nodes[start : start + HELP_PAGE_SIZE], total_pages
-
-
-def _text_catalog_page(
-    nodes: tuple[CommandCatalogNode, ...],
-    page: int,
-) -> tuple[tuple[CommandCatalogNode, ...], int]:
-    total_pages = max(1, math.ceil(len(nodes) / HELP_TEXT_PAGE_SIZE))
-    if page > total_pages:
-        raise ValueError(f"页码超出范围，共 {total_pages} 页")
-    start = (page - 1) * HELP_TEXT_PAGE_SIZE
-    return nodes[start : start + HELP_TEXT_PAGE_SIZE], total_pages
+    return _page_slice(nodes, page, HELP_PAGE_SIZE)
 
 
 def _compact_help_summary(value: str) -> str:
@@ -651,7 +650,7 @@ def _format_plugin_menu(
             raise ValueError("页码超出范围，共 1 页")
         return _format_command_detail(primary)
 
-    page_nodes, total_pages = _text_catalog_page(menu_nodes, page)
+    page_nodes, total_pages = _page_slice(menu_nodes, page, HELP_TEXT_PAGE_SIZE)
     total_nodes = sum(len(root.walk()) for root in roots)
     lines       = [
         f"📦 {primary.plugin}  {page}/{total_pages}",
@@ -669,7 +668,7 @@ def _format_plugin_menu(
 
 
 def _format_branch_menu(node: CommandCatalogNode, *, page: int) -> str:
-    page_nodes, total_pages = _text_catalog_page(node.children, page)
+    page_nodes, total_pages = _page_slice(node.children, page, HELP_TEXT_PAGE_SIZE)
     query = _help_query_for_node(node)
     lines = [
         f"📂 /{query}  {page}/{total_pages}",
@@ -853,8 +852,8 @@ def _register_reload_completion_notification(
             logger.info("插件重载任务已取消，不发送完成通知")
             return
         try:
-            # Core 当前返回 bool；把旧式 None 视为成功以保持窄兼容边界。
-            succeeded = done_task.result() is not False
+            # Core 的重载任务以 bool 报告最终结果。
+            succeeded = done_task.result() is True
         except BaseException as exc:
             succeeded = False
             logger.error("插件重载任务异常结束: error_type=%s", type(exc).__name__)

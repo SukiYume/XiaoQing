@@ -53,8 +53,11 @@ def mock_admin_check():
 def mock_context_factory():
     """模拟上下文工厂"""
 
-    def _factory(*args, **kwargs):
-        return MagicMock()
+    def _factory(plugin_name, user_id, group_id, request_id, principal):
+        # 和真实的上下文一样带着分发器签发的身份，命令判权看的就是它。
+        context           = MagicMock()
+        context.principal = principal
+        return context
 
     return _factory
 

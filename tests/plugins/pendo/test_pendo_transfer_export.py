@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
 
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
+from plugins.pendo.config import PendoConfig
+from plugins.pendo.utils.time_utils import parse_strict_day
+from plugins.pendo.web.utils import parse_iso_date
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Database,
@@ -107,15 +110,18 @@ def test_resolve_range_rejects_unsupported_or_malformed_ranges(
 def test_timezone_and_date_coercion_cover_blank_offset_and_invalid_values() -> None:
     """空白时区采用默认值，偏移时间先换算时区，坏值不参与范围过滤。"""
 
-    assert transfer_api._resolve_timezone("   ").key == transfer_api.DEFAULT_TIMEZONE
+    assert transfer_api._resolve_timezone("   ").key == PendoConfig.DEFAULT_TIMEZONE
     assert (
-        transfer_api._coerce_date(
-            "2026-03-01T01:00:00Z", ZoneInfo("America/Los_Angeles")
-        ).isoformat()
+        parse_iso_date("2026-03-01T01:00:00Z", ZoneInfo("America/Los_Angeles")).isoformat()
         == "2026-02-28"
     )
-    assert transfer_api._coerce_date("   ") is None
-    assert transfer_api._coerce_date("not-a-date") is None
+    assert parse_iso_date("   ") is None
+    assert parse_iso_date("not-a-date") is None
+    # 严格的日期只认 YYYY-MM-DD：fromisoformat 也接受的紧凑写法和周写法不算。
+    assert parse_strict_day("2026-03-01") == date(2026, 3, 1)
+    assert [
+        parse_strict_day(text) for text in ("20260301", "2026-W09-7", "2026-3-1", " 2026-03-01")
+    ] == [None] * 4
 
     with pytest.raises(transfer_api.HTTPException) as exc_info:
         transfer_api._resolve_timezone("x" * 129)

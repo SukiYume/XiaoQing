@@ -21,7 +21,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.base import STATE_STOPPED
 from apscheduler.triggers.cron import CronTrigger
 
-logger                  = logging.getLogger(__name__)
+from .clock import DEFAULT_CONFIG_TIMEZONE
+
+logger = logging.getLogger(__name__)
+# 真实的 APScheduler 类。测试会把本模块里的 ``AsyncIOScheduler`` 换成替身，而
+# ``isinstance`` 判断（能否走私有排空路径）始终要对真实类做。
 _REAL_ASYNCIO_SCHEDULER = AsyncIOScheduler
 
 
@@ -302,7 +306,7 @@ class _JobSnapshot:
 
 
 class SchedulerManager:
-    def __init__(self, timezone: str = "Asia/Shanghai") -> None:
+    def __init__(self, timezone: str = DEFAULT_CONFIG_TIMEZONE) -> None:
         self.timezone                                                = timezone
         self.scheduler: AsyncIOScheduler | None                      = None
         self._started                                                = False

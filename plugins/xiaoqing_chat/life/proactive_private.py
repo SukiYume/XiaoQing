@@ -6,13 +6,12 @@
 
 联系协调（每条都单独检查）：每天次数上限、两次之间的间隔、对方最近刚说过话就不打扰、她上一条
 主动发的还没被回就不再发、同一件经历只分享给同一个人一次。睡觉、忙碌与活跃时段由调用方检查。
-起草、本地复读检查、人设自检与投递回执复用群聊主动开口的流程；节奏记录放在 ``private:<user_id>``。
+起草、本地复读检查、发送前自检与投递回执复用群聊主动开口的流程；节奏记录放在 ``private:<user_id>``。
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from core.delivery import ScheduledDelivery
@@ -21,16 +20,17 @@ from core.plugin_base import segments
 from ..chat_runtime import ai_route_context, configured_bot_name
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..logging_utils import log_step
-from ..memory.person_profile import load_profile
+from ..memory import client as memory_client
 from ..persona import SCOPE_CHAT
 from ..utils.wall_clock import describe_now, local_datetime
+from .daily_life import day_key
 from .online import fetch_share_candidates
 from .open_loops import open_loop_block
 from .proactive import (
-    _DIALOGUE_ITEMS,
-    _receipt,
-    _skip,
+    DIALOGUE_ITEMS,
+    build_receipt,
     draft_through_judge,
+    log_skip,
     parse_life_ref,
     share_block,
 )
@@ -38,6 +38,7 @@ from .self_timeline import self_timeline_block
 
 _PRIVATE_DRAFT_INSTRUCTION = """这是一次主动找朋友说话的机会，不是对方在跟你说话。你们是私聊。
 材料里是你最近真的刷到、也许对方会感兴趣的事，对方之前提过、时间已经过了的事，或者你们好几天没聊了。像想到对方时随手发的一两句就好，没人回也成立。
+分享刷到的事时说事情本身：是什么、哪一点会让对方想看，记下的原话、数字和细节直接说出来，值得点开的带上链接。
 事实按材料说；你自己的近况可以是模糊的小事，但要和“你最近说过的关于自己的事”对得上。
 没有自然的由头，或者和最近的聊天重复，就选择 skip；拿不准也 skip。
 只输出一个 JSON 对象：{"decision":"send","text":"要发的话","life_ref":材料里分享的那件事的编号（不是分享就省略）} 或 {"decision":"skip","reason":"no_natural_opening"}"""
@@ -46,21 +47,29 @@ _PRIVATE_JUDGE_INSTRUCTION = """现在不是让你写消息，而是替这个角
 下面这句话是她准备主动私聊发给一位朋友的。判断能不能发：它像不像她本人随手发给朋友的话，和最近的聊天接不接得上，说的事是否都在材料里，和她最近说过的关于自己的事是否一致。
 你只能放行或拦下，不能改写。只输出 JSON：{"decision":"send","reason":"一句短理由"} 或 {"decision":"drop","reason":"一句短理由"}"""
 
-_MIN_TOPIC_CHARS = 2
+_MIN_TOPIC_CHARS   = 2
+_MAX_PRIVATE_SHARE = 3
 
 
-def profile_text(context: Any, chat_id: str, user_id: int) -> str:
-    """这位朋友在私聊里的人物资料（事实列表拼成一段）；读不到就是空。"""
+def _mark_asked(
+    context: Any, state: Any, chat_id: str, bot_name: str, loop_id: str, now: float
+) -> Any:
+    """私聊主动问起的话头：发出去以后记为已问。"""
 
-    try:
-        profile = load_profile(Path(context.data_dir), chat_id=chat_id, subject_id=user_id)
-    except Exception:
-        return ""
-    return " ".join(profile.facts) if profile is not None else ""
+    async def commit() -> None:
+        await memory_client.push_pending(
+            context,
+            state,
+            chat_id,
+            bot_name=bot_name,
+            ops=[{"op": "update", "id": loop_id, "data": {"loop": "asked", "asked_at": now}}],
+        )
+
+    return commit
 
 
 def matches_interests(candidate: dict[str, Any], facts: str) -> bool:
-    """候选的话题（或标题里连续两个字）出现在朋友资料里才算对得上兴趣。"""
+    """候选的某个话题词出现在朋友资料里才算对得上兴趣。"""
 
     if not facts:
         return False
@@ -107,42 +116,47 @@ async def consider_private(
     chat_id = f"u{user_id}"
     key     = f"private:{user_id}"
     record  = state.proactive_state.get(key)
-    today   = local_datetime(now).strftime("%Y-%m-%d")
+    today   = day_key(local_datetime(now))
     if record.count_on(today) >= cfg.private_max_per_day:
-        _skip(context, runtime, key, "private_daily_cap")
+        log_skip(context, runtime, key, "private_daily_cap")
         return None
     if now - record.last_ts < cfg.private_min_interval_hours * 3600.0:
-        _skip(context, runtime, key, "private_interval", minutes_since=(now - record.last_ts) / 60)
+        log_skip(
+            context, runtime, key, "private_interval", minutes_since=(now - record.last_ts) / 60
+        )
         return None
     if now - record.last_attempt_ts < cfg.retry_after_skip_minutes * 60.0:
-        _skip(context, runtime, key, "private_recent_attempt")
+        log_skip(context, runtime, key, "private_recent_attempt")
         return None
     history = list(await state.memory_store.get_recent_async(chat_id, max_items=40))
     if friend_spoke_recently(history, now=now, quiet_minutes=cfg.private_quiet_minutes):
-        _skip(context, runtime, key, "private_friend_active")
+        log_skip(context, runtime, key, "private_friend_active")
         return None
     if unanswered(history, record.last_ts):
-        _skip(context, runtime, key, "private_unanswered")
+        log_skip(context, runtime, key, "private_unanswered")
         return None
 
-    life  = runtime.cfg.life
-    facts = profile_text(context, chat_id, user_id)
+    life     = runtime.cfg.life
+    recalled = await memory_client.recall(
+        context,
+        purpose        = "proactive",
+        chat_id        = chat_id,
+        speaker_id     = user_id,
+        history        = history,
+        followup_hours = float(life.open_loop_followup_hours),
+        self_limit     = int(life.self_timeline_max_injected),
+    )
+    # 这位朋友的页面（她记得的关于他的事）用来判断分享候选对不对他的兴趣。
+    facts = recalled.block("speaker")
     offered = await fetch_share_candidates(context, runtime, exclude_ids=record.shared_life_ids)
-    candidates = [c for c in offered if matches_interests(c, facts)]
+    candidates = [c for c in offered if matches_interests(c, facts)][:_MAX_PRIVATE_SHARE]
     loop       = None
-    if life.enable_open_loops:
-        found = state.open_loops.for_speaker(
-            chat_id,
-            user_id,
-            followup_seconds = float(life.open_loop_followup_hours) * 3600.0,
-            now              = now,
-        )
-        if isinstance(found, tuple) and found[1] == "ask":
-            loop = found[0]
+    if life.enable_open_loops and recalled.due is not None and recalled.due[1] == "ask":
+        loop = recalled.due[0]
     quiet_days = days_since_last_chat(history, now=now)
     missing = cfg.private_miss_after_days > 0 and quiet_days >= cfg.private_miss_after_days
     if not candidates and loop is None and not missing:
-        _skip(context, runtime, key, "private_no_material")
+        log_skip(context, runtime, key, "private_no_material")
         return None
 
     bot_name = configured_bot_name(context)
@@ -152,9 +166,13 @@ async def consider_private(
     )
     blocks = [life_text] if life_text else []
     if life.enable_self_timeline:
-        entries = state.self_timeline.visible(chat_id, limit=int(life.self_timeline_max_injected))
-        if block := self_timeline_block(entries, now=now):
+        # 分享候选里已经有这几条经历的细节：自我页里只引用它们的行不再放。
+        if page := recalled.self_page(c["episode_id"] for c in candidates):
+            blocks.append(page)
+        if block := self_timeline_block(recalled.self_entries, now=now):
             blocks.append(block)
+    if facts:
+        blocks.append(facts)
     parts = [f"现在：{describe_now(now)}。", *blocks]
     if candidates:
         parts.append(share_block([c["line"] for c in candidates]))
@@ -162,13 +180,13 @@ async def consider_private(
         parts.append(open_loop_block(loop, "ask"))
     if missing:
         parts.append(miss_block(quiet_days))
-    dialogue = build_dialogue_prompt(history[-_DIALOGUE_ITEMS:], bot_name=bot_name, truncate=True)
+    dialogue = build_dialogue_prompt(history[-DIALOGUE_ITEMS:], bot_name=bot_name, truncate=True)
     parts.append("你们最近的私聊：\n" + (dialogue or "（还没聊过）"))
     material = "\n\n".join(parts)
 
     secrets = ai_route_context(context, chat_id=chat_id)
     if secrets.get("_ai") is None:
-        _skip(context, runtime, key, "ai_unavailable")
+        log_skip(context, runtime, key, "ai_unavailable")
         return None
     await asyncio.to_thread(state.proactive_state.record_attempt, key, ts=now)
     done = await draft_through_judge(
@@ -185,7 +203,7 @@ async def consider_private(
         return None
     draft, raw_draft = done
     log_step(context, runtime, chat_id=key, step="proactive.send", fields={"text": draft})
-    receipt = _receipt(
+    receipt = build_receipt(
         context,
         runtime,
         state,
@@ -196,7 +214,7 @@ async def consider_private(
         state_key       = key,
         shared_life_ids = parse_life_ref(raw_draft, candidates),
         reasoning       = "private_contact",
-        on_commit=(lambda: state.open_loops.mark_asked(chat_id, loop.loop_id, now=now))
+        on_commit       = _mark_asked(context, state, chat_id, bot_name, loop.loop_id, now)
         if loop
         else None,
     )

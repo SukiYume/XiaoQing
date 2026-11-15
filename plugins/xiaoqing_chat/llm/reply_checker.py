@@ -12,9 +12,9 @@ from string import Template
 from typing import Any
 
 from core.ai import AIError as LLMError
+from core.plugin_base import resolve_bot_name
 
 from ..memory.memory import StoredMessage
-from ..persona import resolve_bot_name
 from ..utils.json_parsing import parse_first_json_object, strict_json_bool
 from ..utils.wall_clock import describe_now
 from . import gateway
@@ -22,6 +22,7 @@ from .check_result import (
     ReplyCheckResult,
     checker_unavailable,
     context_contract_rejection,
+    hard_rejection,
     persona_contract_rejection,
 )
 from .communication_constraints import (
@@ -42,10 +43,11 @@ from .evidence import (
     definition_source_instruction,
     dialogue_source_records,
     evidence_is_visible,
+    memory_source_records,
     spliced_evidence_is_visible,
     validate_evidence_contract,
 )
-from .gateway import chat_completions_raw_with_fallback_paths
+from .gateway import chat_completions_raw_with_profile
 from .local_checks import (
     EXPLICIT_COMMUNICATION_CONSTRAINT_RE,
     grounded_context_history_check,
@@ -82,6 +84,8 @@ class _LLMCheckInput:
     historical_image_available      : bool        = False
     current_sender                  : str         = ""
     jargon_explanation              : str         = ""
+    # 这一轮从统一记忆取到的、关于人和群的内容；和对话一样可以作为对话事实的依据。
+    memory_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,7 +213,7 @@ async def _request_checker_completion(
     materials: str = "",
     request_policy: _LLMRequestPolicy,
 ) -> tuple[dict[str, Any], str]:
-    """回退不支持的 JSON 格式参数，思考能力沿用 checker 路由配置。"""
+    """先带 JSON 格式参数请求审查模型；只在 HTTP 400（模型不支持该参数）时去掉它重试一次。"""
 
     timeout_seconds = request_policy.timeout_seconds
 
@@ -219,7 +223,7 @@ async def _request_checker_completion(
     )
     for index, extra_payload in enumerate(optional_payloads):
         try:
-            return await chat_completions_raw_with_fallback_paths(
+            return await chat_completions_raw_with_profile(
                 secrets  = checker_secrets,
                 messages = [
                     {"role": "system", "content": prompt},
@@ -240,15 +244,20 @@ async def _request_checker_completion(
     raise RuntimeError("reply_checker request fallback exhausted")
 
 
-def _visual_quote_is_visible(quote: str, *, current_text: str, history_text: str) -> bool:
-    """一段视觉引用整段出现在对话里，或拆开后各段都出自同一条消息。"""
+def _visual_quote_is_visible(
+    quote: str, *, current_text: str, history_text: str, grounding_text: str = ""
+) -> bool:
+    """一段视觉引用整段出现在对话或她的受控资料里，或拆开后各段都出自同一条消息、同一行资料。
+
+    她说自己看过的视频、图片长什么样，依据在她的生活记录里（受控资料），不在对话里。
+    """
     # 识别文字里的空格和全半角标点常被模型改写，按排版无关的方式核对引用。
-    if evidence_is_visible(quote, f"{history_text}\n{current_text}"):
+    if evidence_is_visible(quote, f"{history_text}\n{current_text}\n{grounding_text}"):
         return True
-    # 拼接引用限于同一条消息，保留各条消息的来源边界。
+    # 拼接引用限于同一条消息、同一行资料，保留各自的来源边界。
     return any(
         spliced_evidence_is_visible(quote, source)
-        for source in (current_text, *history_text.splitlines())
+        for source in (current_text, *history_text.splitlines(), *grounding_text.splitlines())
     )
 
 
@@ -258,6 +267,7 @@ def _validate_visual_inventory(
     reply: str,
     current_text: str,
     history_text: str,
+    grounding_text: str = "",
 ) -> tuple[ReplyCheckResult | None, int]:
     """核验视觉陈述引用，允许模型判断描述与改写之间的语义对应。"""
     # 视觉清单独立于总通过标志；真实原文来源由本地核验，语义对应交给审查模型。
@@ -280,7 +290,12 @@ def _validate_visual_inventory(
             return checker_unavailable("reply_checker invalid visual evidence"), 0
         quotes  = evidence if isinstance(evidence, list) else [evidence]
         visible = bool(quotes) and all(
-            _visual_quote_is_visible(quote, current_text=current_text, history_text=history_text)
+            _visual_quote_is_visible(
+                quote,
+                current_text   = current_text,
+                history_text   = history_text,
+                grounding_text = grounding_text,
+            )
             for quote in quotes
         )
         if not visible:
@@ -345,7 +360,12 @@ _FAILURE_CODE_RULES = (
 
 
 def _visual_gate(
-    obj: dict[str, Any] | None, *, reply: str, current_text: str, history_text: str
+    obj: dict[str, Any] | None,
+    *,
+    reply: str,
+    current_text: str,
+    history_text: str,
+    grounding_text: str = "",
 ) -> tuple[ReplyCheckResult | None, ReplyCheckResult | None, int]:
     """返回 (立即生效的拒绝, 延后生效的协议错误, 视觉陈述条数)。"""
 
@@ -355,11 +375,15 @@ def _visual_gate(
     if image_axis is None and not (obj and "image_evidence_respected" not in obj):
         protocol_error = checker_unavailable("reply_checker invalid image evidence field")
     if image_axis is False:
-        return ReplyCheckResult(False, "视觉陈述缺少依据", True, "hard", "media_grounding"), None, 0
+        return hard_rejection("视觉陈述缺少依据", "media_grounding"), None, 0
     if not obj:
         return None, protocol_error, 0
     visual_error, claim_count = _validate_visual_inventory(
-        obj, reply=reply, current_text=current_text, history_text=history_text
+        obj,
+        reply          = reply,
+        current_text   = current_text,
+        history_text   = history_text,
+        grounding_text = grounding_text,
     )
     if visual_error is not None and visual_error.is_hard:
         return visual_error, None, 0
@@ -426,6 +450,7 @@ def _interpret_checker_response(
     image_evidence_required: bool         = False,
     source_records: dict[str, str] | None = None,
     current_sender: str                   = "",
+    memory_evidence: str                  = "",
 ) -> ReplyCheckResult:
     """把远端 JSON 协议转换为本地结论，且在缺字段时保持 fail-safe 语义。"""
 
@@ -434,7 +459,11 @@ def _interpret_checker_response(
     deferred_visual_error = None
     if image_evidence_required:
         rejection, deferred_visual_error, visual_claim_count = _visual_gate(
-            obj, reply=reply, current_text=current_text, history_text=history_text
+            obj,
+            reply          = reply,
+            current_text   = current_text,
+            history_text   = history_text,
+            grounding_text = grounding_text,
         )
         if rejection is not None and rejection.unsupported_fragments:
             # 只有几处读图说法没依据时，不看读图、只看其余部分能不能全部过审；能过才允许只删这几处。
@@ -449,6 +478,7 @@ def _interpret_checker_response(
                 image_evidence_required          = False,
                 source_records                   = source_records,
                 current_sender                   = current_sender,
+                memory_evidence                  = memory_evidence,
             )
             if rest.severity == "infra" or rest.is_hard:
                 return replace(rejection, unsupported_fragments=())
@@ -469,12 +499,8 @@ def _interpret_checker_response(
         EXPLICIT_COMMUNICATION_CONSTRAINT_RE.search(current_text)
         and "instruction_followed" not in axes
     ):
-        return ReplyCheckResult(
-            suitable     = False,
-            reason       = "reply_checker 未判断最新消息中的明确交流约束",
-            need_replan  = True,
-            severity     = "hard",
-            failure_code = "instruction_following",
+        return hard_rejection(
+            "reply_checker 未判断最新消息中的明确交流约束", "instruction_following"
         )
 
     persona_error, unsupported_persona, persona_claim_count = validate_evidence_contract(
@@ -500,7 +526,7 @@ def _interpret_checker_response(
         scan_key          = "context_scan_complete",
         claims_key        = "context_claims",
         reply             = reply,
-        evidence_source   = f"{history_text}\n{current_text}",
+        evidence_source   = f"{history_text}\n{current_text}\n{memory_evidence}",
         rejection_factory = context_contract_rejection,
         incomplete_reason = "reply_checker 未完成对话事实扫描",
         missing_reason    = "reply_checker 缺少对话事实清单",
@@ -553,13 +579,15 @@ async def _llm_check(
     check_input: _LLMCheckInput,
     request_policy: _LLMRequestPolicy,
 ) -> ReplyCheckResult:
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if gateway.ai_disabled(secrets):
         return checker_unavailable("reply_checker AI route unavailable")
 
     # 调用方已经按生成器预算选取历史；审查保留相同证据和完整当前消息。
     _hist          = check_input.history_text.strip()
     _current       = check_input.current_text.strip()
     source_records = dialogue_source_records(_hist, _current)
+    remembered     = memory_source_records(check_input.memory_text)
+    source_records.update(remembered)
     # 受控人物资料里已经有人设卡的人物事实和身份边界。
     _grounding    = check_input.grounding_text.strip()
     visual_policy = image_evidence_block(
@@ -621,6 +649,7 @@ async def _llm_check(
         image_evidence_required          = check_input.current_image_attached is not None,
         source_records                   = source_records,
         current_sender                   = check_input.current_sender,
+        memory_evidence                  = "\n".join(remembered.values()),
     )
 
 
@@ -791,7 +820,7 @@ class TurnReadingCache:
         retry_interval_seconds: float = 0.5,
     ) -> None:
         """按审查将使用的同一份材料提前发起阅读；材料未变时保留进行中的阅读。"""
-        if "_ai" in secrets and secrets.get("_ai") is None:
+        if gateway.ai_disabled(secrets):
             return
         self._launch(
             checker_secrets = _checker_secrets(secrets),
@@ -897,12 +926,8 @@ def _premise_rejection(checks: list[Any], reply: str) -> ReplyCheckResult | None
             # 带推测词的说法保留了不确定性，不是断言；模型把它标成 fact 时按推测处理。
             kind = "creative"
         if not consistent or (kind != "creative" and not support):
-            return ReplyCheckResult(
-                False,
-                f"{_PREMISE_REASON_PREFIX}{item['fragment']}{_PREMISE_LITERAL_MARK}{item['literal']}",
-                True,
-                "hard",
-                "context_grounding",
+            return context_contract_rejection(
+                f"{_PREMISE_REASON_PREFIX}{item['fragment']}{_PREMISE_LITERAL_MARK}{item['literal']}"
             )
     return None
 
@@ -973,9 +998,7 @@ async def _semantic_turn_check(
     failure_code = (
         "instruction_following" if axes["instruction_followed"] is False else "context_grounding"
     )
-    return ReplyCheckResult(
-        False, str(payload.get("reason") or "候选与本轮语义不一致"), True, "hard", failure_code
-    )
+    return hard_rejection(str(payload.get("reason") or "候选与本轮语义不一致"), failure_code)
 
 
 _UNSET_PROFILE_ANSWER_RE = re.compile(
@@ -1011,11 +1034,8 @@ def _local_rule_rejection(
         return rejection
     sentence_count = requested_sentence_count(current_text)
     if sentence_count is not None and len(split_sentences(reply)) != sentence_count:
-        return ReplyCheckResult(
-            False,
+        return hard_rejection(
             f"本轮明确要求 {sentence_count} 句话，请保留完整内容并调整句号分句。",
-            True,
-            "hard",
             "instruction_following",
         )
     rejection = (
@@ -1030,12 +1050,8 @@ def _local_rule_rejection(
         and requires_configured_profile_boundary(current_text, grounding_text, bot_name=bot_name)
         and not _UNSET_PROFILE_ANSWER_RE.search(reply)
     ):
-        return ReplyCheckResult(
-            suitable     = False,
-            reason       = "用户询问了当前人设明确未设定的精确现实资料，必须使用稳定边界回答",
-            need_replan  = True,
-            severity     = "hard",
-            failure_code = "persona_grounding",
+        return persona_contract_rejection(
+            "用户询问了当前人设明确未设定的精确现实资料，必须使用稳定边界回答"
         )
     if not allow_low_stakes_persona_fiction:
         return grounded_self_history_check(
@@ -1151,6 +1167,7 @@ async def check_reply(
     current_sender: str                    = "",
     jargon_explanation: str                = "",
     turn_reading: TurnReadingCache | None  = None,
+    memory_text: str                       = "",
 ) -> ReplyCheckResult:
     bot_name         = resolve_bot_name(bot_name)
     heuristic_source = str(heuristic_reply or reply or "").strip()
@@ -1193,6 +1210,7 @@ async def check_reply(
         historical_image_available       = history_has_image(history),
         current_sender                   = current_sender,
         jargon_explanation               = jargon_explanation,
+        memory_text                      = memory_text,
     )
     request_policy = _LLMRequestPolicy(
         max_tokens             = max_tokens,

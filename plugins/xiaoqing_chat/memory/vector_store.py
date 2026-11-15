@@ -20,6 +20,7 @@ from core.plugin_base import load_json, write_json
 
 _RE_WS                = re.compile(r"\s+")
 FloatArray: TypeAlias = NDArray[np.float32]
+VECTOR_DIM            = 2048
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ def _validate_cached_matrix(
 class VectorStore:
     """维护唯一文档 ID，并在首次查询时惰性构建归一化矩阵。"""
 
-    def __init__(self, *, dim: int = 2048) -> None:
+    def __init__(self, *, dim: int = VECTOR_DIM) -> None:
         self._dim                       = dim
         self._docs: list[VectorDoc]     = []
         self._matrix: FloatArray | None = None
@@ -157,14 +158,14 @@ class VectorStore:
             out.append((self._docs[int(candidate_idxs[position])], score))
         return out
 
-    def save(self, dir_path: Path, *, name: str) -> None:
+    def snapshot(self) -> tuple[list[VectorDoc], FloatArray]:
+        """构建矩阵并返回文档列表与矩阵的副本；调用方在锁内取快照，再到锁外写盘。"""
+
         self.build()
-        mat: FloatArray = (
+        matrix: FloatArray = (
             self._matrix if self._matrix is not None else np.zeros((0, self._dim), dtype=np.float32)
         )
-        write_vector_store_files(
-            dir_path=dir_path, name=name, docs=self._docs, dim=self._dim, matrix=mat
-        )
+        return list(self._docs), matrix.copy()
 
     def load(self, dir_path: Path, *, name: str) -> None:
         docs_path       = dir_path / f"{name}.docs.json"

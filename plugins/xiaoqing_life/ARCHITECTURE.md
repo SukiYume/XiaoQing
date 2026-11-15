@@ -5,8 +5,8 @@
 ## 数据流
 
 ```text
-Core scheduler ── */15 min ──► main.scheduled_tick
-                                 │ repair.run（一次性修旧数据）→ 跨日时记 daily_summary → roll_day
+Core scheduler ── */15 min ──► main.scheduled_tick（没开启或正在关闭时不碰任何状态）
+                                 │ _decide：跨日时记 daily_summary → roll_day → 播种子兴趣
                                  │ planner.decide（无模型）：开关 / 作息 / 预算 / 间隔 / 骰子 → 打分 → softmax 选活动
                                  ▼
                                rest：只写 last_decision        wind_down：睡前整理（1 次 reasoning）
@@ -20,8 +20,8 @@ Core scheduler ── */15 min ──► main.scheduled_tick
                                  ├─ thread_continue ─► research（每轮：行动 → 1 次 reasoning → 本地核对 → 立即提交）
                                  └─ work_on ─► work_on（读待核实条目 → 1 次 reasoning → 核对改动 → 提交）
 
-xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认的黑话）─► life.turn_context
-                               ◄─ life_lines / slang_notes / expression_hint / verified_terms（回写黑话库）
+xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群没确认 / 已经解释过的黑话 ─► life.turn_context
+                               ◄─ life_lines + shown_keys / slang_notes / expression_hint / verified_terms（回写黑话库）
 ```
 
 定时回调只做同步门控和决策，必须在 Core 60 秒预算内返回；上网本身是 `LifeRuntime.spawn` 登记的后台任务，
@@ -42,7 +42,7 @@ xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认
 | `session.py` | 入口 `run_session`、浏览（取材 → 消化 → 提交）、查词、消化提议的开题门槛 |
 | `fetching.py` | 取材：热榜、B站搜索、点开条目（详情 / 弹幕 / 热评 / 深读）、按兴趣预选、来源成败 |
 | `activity.py` | 一次活动的公共部分：`SessionDeps` / `SessionOutcome`、写经历、学词条 / 表达 / 兴趣、收拾、记时段、记失败、写回强化 |
-| `digest.py` | 浏览消化的提示词（外部文本只在 user 消息的 JSON 里）、编号体系 `i1` / `c1.1` / `c1.1.r1` / `d1.1` / `p1.1`、本地核对；`LEARN_FIELDS` / `LEARN_RULES` 与研究共用 |
+| `digest.py` | 浏览消化的提示词（外部文本只在 user 消息的 JSON 里）、编号体系 `i1` / `c1.1` / `c1.1.r1` / `d1.1` / `p1.1`、本地核对（含每条经历的那句原话：出处必须在这条内容里、逐字对得上）；`LEARN_FIELDS` / `LEARN_RULES` 与研究共用 |
 | `research.py` | 有限步骤的研究：第一轮怎么查（`first_action`）、研究提示词、要点核对（摘录、`is_gap`、`is_rumor`）、每轮提交、空研究与搁置 |
 | `threads.py` | 小课题状态机 open → reviewing → done / parked / dropped；笔记、更正、步数 |
 | `knowledge.py` | 靠不靠得住：`assess`（同一 UP 主算一个来源；百科 / 维基或两个独立来源才算 verified）、`is_rumor`、`hedge` |
@@ -54,9 +54,9 @@ xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认
 | `works.py` / `work_on.py` | 小作品的数据、核对规则、聊天侧作品行 / 整理作品这一种活动 |
 | `dossier.py` | 主题档案：从小课题、作品、经历确定性同步的“来龙去脉”快照；召回与更正行 |
 | `memes.py` | 梗图：固定图床下载、vision 判定、sha256 去重落盘、淘汰与撤销、分页导出 |
-| `turn_context.py` | 聊天侧取用：按问法选经历 / 小课题 / 档案 / 作品 / 打算 / 查明白的事，780 字预算按优先级整段取舍、同一句不说两遍；听懂与可以用的说法；表达提示；分享候选；`verified_terms` |
+| `memory_bridge.py` | 定时检查后把新的经历、日记、查明白的事发布到统一记忆（稳定 ID、游标；全部写成功且没有上网或睡前整理在跑时才前移） |
+| `turn_context.py` | 聊天侧取用：按问法选经历 / 小课题 / 档案 / 作品 / 打算 / 查明白的事，780 字预算按优先级整段取舍、同一句不说两遍，交出去的经历、查明白的事和日记的键记进 `shown_keys`；只给一条经历时带完整简介和那句原话；经历的话题对得上请求里这个会话的话题词才写“听群里在聊才去搜的”；听懂与可以用的说法（本群黑话块已经解释过的不再解释）；表达提示；分享候选（两天内可说的经历按“这个会话聊到才去搜的 > 标了想分享 > 记下了原话 > 喜欢”排序，加上刚查明白的事和刚更新的作品，至多 6 件）；`verified_terms` |
 | `stats.py` | 每天的运行计数（只记数），跨日一行汇总，`/life stats` |
-| `repair.py` | 旧数据升级：日记和睡前整理的日期按“她的一天”重算、各项每日标记收进 `done_on`、清掉研究条目留下的兴趣证据和好奇边界。每项在 `state.repairs` 记一次名字，只执行一次 |
 | `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；预算 `reserve_llm_call`；`done_today` / `mark_done`；查词落空记录 |
 | `safety.py` | 外部文本清洗、注入样句、屏蔽词、脏话、摘录核对用的归一化、相似度 |
 | `bili_auth.py` | B站扫码登录与凭证（只读，Cookie 只发 `api.bilibili.com`，凭证不进日志 / 状态 / 提示词） |
@@ -85,11 +85,13 @@ xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认
 - **预算**：先 `reserve_llm_call`（计数 +1 并落盘）再调用模型；失败不退还。查词（百科）不调模型。
 - **休息**：没有候选或门控不满足时只更新 `last_decision`，不写经历。
 - **失败**：所有来源失败、模型未配置 / 失败 / 输出读不懂，本次不产生经历和学习结果；`last_failure_at` 触发退避。
-- **群聊话题**：聊天只在群聊、只给 `mention_policy` 判为可以自然提起的话题词；life 侧 `is_private` 不是明确的 false 一律
+- **群聊话题**：话题词由统一记忆整理时记下（只认群友自己说的话，标了伤心事、吵架、私事的不给），聊天只在群聊转交；life 侧 `is_private` 不是明确的 false 一律
   不收；搜索词只来自她睡前写的，原话题词不直接发给外部网站。
 - **日志**：`xiaoqing_life step=<步骤>`，只记名称、数量、原因、错误类型；`step=daily_summary` 是前一天的计数。
 
 ## 与 Core 和聊天的桥
+
+`memory_bridge.py` 在每次定时检查后把游标（`state.memory_cursor`）之后的新经历、日记和查明白的事写成 `memory.record` 的笔记操作（`episode` / `self.diary` / `world.learning`，键是经历 ID、`diary:<日期>`、查明白的事的 ID），分批提交，全部成功才把游标移到这一刻。一次上网或睡前整理还在跑时游标不动：它稍后写下的条目带的是它开始时的时间，可能不晚于这一刻；这时已经写下的照发，下一次按同样的键再发一遍，记忆更新同一条。插件清单在 `uses_services` 里声明 `memory.record`。
 
 `life.turn_context`、`life.export_memes` 在 `core/models.py` 的服务契约中声明：只有 `xiaoqing_life` 能导出、只有
 `xiaoqing_chat` 能调用；`core/capabilities.py:LifeContextService` 只校验载荷和返回类型是映射，字段由两边约定：
@@ -97,8 +99,10 @@ xiaoqing_chat.reply_plan ─► life_signals（群聊话题词、本群没确认
 | 方向 | 字段 |
 |---|---|
 | 聊天 → life（`mode=reply`） | `text`、`recent`、`bot_recent`、`is_private`、`unknown_terms`（本群没确认的黑话）、`topics`（仅群聊） |
-| life → 聊天 | `life_lines`、`slang_notes`、`expression_hint`、`episode_ids`、`term_keys`、`verified_terms`（百科查实的说法，聊天回写黑话库） |
-| `mode=proactive` / `probe` | 分享候选 / `{"version":1,"online_life":true}` |
+| life → 聊天 | `life_lines`、`shown_keys`（`life_lines` 里给了细节的经历、查明白的事和日记的键，和发布到统一记忆时的键一致）、`slang_notes`、`expression_hint`、`episode_ids`、`term_keys`、`verified_terms`（百科查实的说法，聊天回写黑话库） |
+| 聊天 → life（`mode=proactive`） | `exclude_ids`（已经说过的）、群聊另带 `is_private=false` 和 `topics`（这个群还记着的话题词，只用来认出哪些经历是这个群聊到才去搜的，不计入“听到”） |
+| life → 聊天（`mode=proactive`） | `share_candidates`：每件有 `episode_id`（经历 ID、`learning:<ID>` 或 `work:<ID>:<日期>`）、`line`、`topics`、`heard_here` |
+| `mode=probe` | `{"version":1,"online_life":true}` |
 
 ## 验证
 

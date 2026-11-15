@@ -25,6 +25,115 @@ def test_redact_url_for_log_removes_credentials_query_and_fragment() -> None:
     assert "private" not in redacted
 
 
+def test_browser_user_agent_looks_like_a_desktop_browser() -> None:
+    assert safe_http.BROWSER_USER_AGENT.startswith("Mozilla/5.0 ")
+    assert "Chrome/" in safe_http.BROWSER_USER_AGENT
+    assert safe_http.BROWSER_USER_AGENT.isprintable()
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    [
+        "http://proxy.example",
+        "HTTPS://proxy.example:8443",
+        "http://proxy.example/",
+        "http://user:pass@127.0.0.1:7890",
+        "http://[::1]:8080",
+        "http://proxy.example:1",
+        "http://proxy.example:65535",
+    ],
+)
+def test_validated_proxy_url_returns_accepted_values_unchanged(proxy: str) -> None:
+    assert safe_http.validated_proxy_url(proxy) == proxy
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    [
+        None,
+        123,
+        b"http://proxy.example",
+        "",
+        " ",
+        "proxy.example:8080",
+        "ftp://proxy.example",
+        "socks5://proxy.example",
+        "http://",
+        "http:///path",
+        "http://proxy.example/path",
+        "http://proxy.example?key=value",
+        "http://proxy.example#fragment",
+        "http://proxy.example:0",
+        "http://proxy.example:65536",
+        "http://proxy.example:bad",
+        "http://[::1",
+        "http://proxy.example\x00",
+        "http://proxy.example\n",
+        "http://proxy.example\x7f",
+        "h" * (safe_http.MAX_PROXY_URL_CHARS + 1),
+    ],
+)
+def test_validated_proxy_url_rejects_malformed_values(proxy: object) -> None:
+    with pytest.raises(ValueError):
+        safe_http.validated_proxy_url(proxy)
+
+
+def test_validated_proxy_url_does_not_trim_whitespace() -> None:
+    for padded in (" http://proxy.example", "http://proxy.example "):
+        with pytest.raises(ValueError):
+            safe_http.validated_proxy_url(padded)
+
+
+def test_validated_proxy_url_allows_a_path_only_when_asked() -> None:
+    proxy = "https://proxy.example:8443/relay/v1"
+
+    assert safe_http.validated_proxy_url(proxy, allow_path=True) == proxy
+    with pytest.raises(ValueError):
+        safe_http.validated_proxy_url(proxy)
+    for rejected in ("http://proxy.example/a?q=1", "http://proxy.example/a#f"):
+        with pytest.raises(ValueError):
+            safe_http.validated_proxy_url(rejected, allow_path=True)
+
+
+def test_split_https_url_on_hosts_accepts_only_plain_https_on_listed_hosts() -> None:
+    hosts = frozenset({"img.example"})
+
+    accepted = safe_http.split_https_url_on_hosts("https://IMG.example.:443/a.jpg?x=1", hosts)
+    assert accepted is not None
+    assert (accepted.path, accepted.query) == ("/a.jpg", "x=1")
+    for rejected in (
+        "http://img.example/a.jpg",
+        "https://img.example.evil.test/a.jpg",
+        "https://user@img.example/a.jpg",
+        "https://user:pw@img.example/a.jpg",
+        "https://img.example:8443/a.jpg",
+        "https://img.example:bad/a.jpg",
+        "//img.example/a.jpg",
+        "",
+    ):
+        assert safe_http.split_https_url_on_hosts(rejected, hosts) is None, rejected
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    [
+        "ftp://user:hunter2@proxy.example",
+        "http://user:hunter2@proxy.example:bad",
+        "http://user:hunter2@proxy.example:70000",
+        "http://user:hunter2@proxy.example/path",
+        "http://user:hunter2@proxy.example\x00",
+    ],
+)
+def test_validated_proxy_url_errors_never_expose_the_credentials(proxy: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        safe_http.validated_proxy_url(proxy)
+
+    error = caught.value
+    assert "hunter2" not in str(error)
+    assert error.__cause__ is None
+    assert error.__suppress_context__ or error.__context__ is None
+
+
 class _FakeLoop:
     def __init__(self, addresses: list[str]) -> None:
         self.addresses = addresses

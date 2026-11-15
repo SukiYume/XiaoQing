@@ -6,7 +6,6 @@ import sys
 import types
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -373,27 +372,16 @@ def test_widget_text_and_meta_helpers_cover_compact_boundaries() -> None:
     assert widget_api._preview_text("  one\n two  ") == "one two"
     assert widget_api._preview_text("abcdef", limit=5) == "abcd…"
     assert widget_api._format_event_meta({"location": "A1"}) == "A1"
-    user_timezone = ZoneInfo("Asia/Shanghai")
+    assert widget_api._format_task_meta({"status": "cancelled"}, "2026-03-25") == "已取消"
     assert (
-        widget_api._format_task_meta({"status": "cancelled"}, "2026-03-25", user_timezone)
-        == "已取消"
-    )
-    assert (
-        widget_api._format_task_meta(
-            {"status": "open", "deadline_at": "2026-03-25T23:00:00+08:00"},
-            "2026-03-25",
-            user_timezone,
-        )
+        widget_api._format_task_meta({"status": "open", "plan_key": "2026-03-25"}, "2026-03-25")
         == "待办 · 今天"
     )
     assert (
-        widget_api._format_task_meta(
-            {"status": "open", "deadline_at": "not-an-iso-time"},
-            "2026-03-25",
-            user_timezone,
-        )
-        == "待办"
+        widget_api._format_task_meta({"status": "open", "plan_key": "2026-03-27"}, "2026-03-25")
+        == "待办 · 03/27"
     )
+    assert widget_api._format_task_meta({"status": "open", "plan_key": ""}, "2026-03-25") == "待办"
 
 
 def test_widget_all_section_includes_every_panel_and_overdue_summary(

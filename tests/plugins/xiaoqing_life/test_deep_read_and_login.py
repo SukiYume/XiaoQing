@@ -15,6 +15,7 @@ import pytest
 from multidict import CIMultiDict
 
 from core.delivery import SENSITIVE_ACTION_KEY
+from core.safe_http import BROWSER_USER_AGENT
 from plugins.xiaoqing_life import bili_auth, commands, digest
 from plugins.xiaoqing_life import main as life_main
 from plugins.xiaoqing_life.activity import SessionDeps
@@ -404,7 +405,7 @@ async def test_wiki_uses_generic_user_agent_and_others_keep_browser_ua() -> None
     await fetcher.get_json("https://zh.wikipedia.org/w/api.php", params={"action": "query"})
     await fetcher.get_json("https://api.bilibili.com/x/y")
     assert _headers(session, 0)["user-agent"] == "XiaoQingLife/0.5 (personal chat bot)"
-    assert "XiaoQingLife" not in _headers(session, 1)["user-agent"]
+    assert _headers(session, 1)["user-agent"] == BROWSER_USER_AGENT
     assert "@" not in _headers(session, 0)["user-agent"]
 
 

@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from core.atomic_store import AtomicJsonStore
+from core.atomic_store import AtomicJsonStore, quarantine_corrupt_file
+
+from .days import DAY
 
 T = TypeVar("T")
 
@@ -55,7 +56,6 @@ def default_state() -> dict[str, Any]:
         "sessions_today"  : 0,
         "llm_calls_today" : 0,
         "activity_log"    : [],
-        "last_session_at" : 0.0,
         "last_failure_at" : 0.0,
         "last_decision"   : {},
         "lookup_queue"    : [],
@@ -71,6 +71,8 @@ def default_state() -> dict[str, Any]:
         "chat_topics"     : [],
         # 一天只做一次的事最近一次是哪天做的：wind_down / followup / method / verify。
         "done_on": {},
+        # 这里只放启动就要有的键；按需出现的键（stats、lookup_misses、last_reward、last_work_on_at、
+        # last_work_start 等）由写它们的函数直接写入，读的一侧都带默认值。
     }
 
 
@@ -78,7 +80,7 @@ def _quarantine(path: Path) -> None:
     """读不懂的旧文件改名留底，让插件从空开始，而不是反复覆盖或崩溃。"""
 
     try:
-        os.replace(path, path.with_name(path.name + ".corrupt"))
+        quarantine_corrupt_file(path, suffix=".corrupt")
     except OSError:
         return
 
@@ -172,7 +174,7 @@ def lookup_missed(state: dict[str, Any], term: str, now: float) -> bool:
     """这个说法 30 天内去百科查过、没查到：先不再排队（聊天侧每次听到没确认的说法都会交过来）。"""
 
     at = state.get("lookup_misses", {}).get(term)
-    return isinstance(at, (int, float)) and now - float(at) < LOOKUP_MISS_DAYS * 86400.0
+    return isinstance(at, (int, float)) and now - float(at) < LOOKUP_MISS_DAYS * DAY
 
 
 def record_lookup_misses(state: dict[str, Any], terms: list[str], now: float) -> None:
@@ -180,14 +182,20 @@ def record_lookup_misses(state: dict[str, Any], terms: list[str], now: float) ->
     for term in terms:
         misses[term] = now
     fresh = sorted(
-        (
-            (t, float(at))
-            for t, at in misses.items()
-            if now - float(at) < LOOKUP_MISS_DAYS * 86400.0
-        ),
+        ((t, float(at)) for t, at in misses.items() if now - float(at) < LOOKUP_MISS_DAYS * DAY),
         key=lambda pair: pair[1],
     )
     state["lookup_misses"] = dict(fresh[-MAX_LOOKUP_MISSES:])
+
+
+def queue_for_lookup(state: dict[str, Any], term: str, now: float) -> bool:
+    """说法进待查队列让百科判断是不是真的流行语：有界、去重，30 天内查过没查到的不排。返回是否排进去了。"""
+
+    queue: list[str] = state.setdefault("lookup_queue", [])
+    if term in queue or len(queue) >= MAX_LOOKUP_QUEUE or lookup_missed(state, term, now):
+        return False
+    queue.append(term)
+    return True
 
 
 def done_today(state: dict[str, Any], name: str, day: str) -> bool:

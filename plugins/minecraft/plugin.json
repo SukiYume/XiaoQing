@@ -24,7 +24,7 @@
                 {
                     "name": "connect",
                     "aliases": ["连接"],
-                    "help": "为本会话连接清单中的服务器配置",
+                    "help": "为本会话连接配置里的一个服务器",
                     "permission": "bot_admin",
                     "usage": "/mc connect <配置名>",
                     "examples": ["/mc connect default"],

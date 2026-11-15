@@ -14,7 +14,6 @@ from .base import (
     REPLY_CHARS,
     Fetcher,
     SourceComment,
-    SourceError,
     SourceItem,
     as_dict,
     as_list,
@@ -198,23 +197,9 @@ def comments_of(
     return tuple(comments)
 
 
-async def hot_comments(
-    fetch: Fetcher,
-    item: SourceItem,
-    item_index: int,
-    blocked: Iterable[str],
-    limit: int,
-) -> tuple[SourceComment, ...]:
-    if limit <= 0:
-        return ()
-    return comments_of(await reply_page(fetch, item), item_index, blocked, limit)
-
-
 __all__ = [
-    "SourceError",
     "aid_of",
     "comments_of",
-    "hot_comments",
     "popular",
     "ranking",
     "reply_page",

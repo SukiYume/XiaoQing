@@ -1,9 +1,12 @@
 """坐标转换：赤道坐标格式互转并换算银道/黄道，或把银道/黄道坐标转为 ICRS。"""
 
 import math
+from typing import Any
 
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
+
+from .numeric import finite_float
 
 # 非赤道输入：标题、astropy 坐标系、(参数名, 符号, 中文名) 的经度与纬度、示例
 _FRAME_INPUTS = {
@@ -24,13 +27,14 @@ _FRAME_INPUTS = {
 }
 
 
-def _finite_degrees(*values: str) -> tuple[float, ...]:
-    """解析一组角度，并在构造坐标前拒绝 NaN/Inf。"""
+def icrs_strings(coord: Any) -> tuple[str, str]:
+    """ICRS 坐标的 RA（时分秒）与 Dec（带符号度分秒）文本。"""
 
-    parsed = tuple(float(value) for value in values)
-    if not all(math.isfinite(value) for value in parsed):
-        raise ValueError("coordinates must be finite")
-    return parsed
+    from astropy import units as u
+
+    ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
+    dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
+    return ra_hms, dec_dms
 
 
 def handle_coord(args: str, context: PluginContextProtocol) -> str:
@@ -58,16 +62,13 @@ def handle_coord(args: str, context: PluginContextProtocol) -> str:
             if len(parts) != 3:
                 return f"请提供{lon_name}和{lat_name}\n示例: {example}"
             try:
-                lon, lat = _finite_degrees(parts[1], parts[2])
+                lon, lat = finite_float(parts[1]), finite_float(parts[2])
             except ValueError:
                 return f"无效的{title}坐标格式\n示例: {example}"
             icrs_coord = SkyCoord(
                 frame=frame_name, **{lon_key: lon * u.deg, lat_key: lat * u.deg}
             ).icrs
-            ra_hms = icrs_coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
-            dec_dms = icrs_coord.dec.to_string(
-                unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True
-            )
+            ra_hms, dec_dms = icrs_strings(icrs_coord)
             return (
                 f"🌐 {title}坐标转赤道坐标\n"
                 f"输入 ({title}): {lon_symbol}={lon}°, {lat_symbol}={lat}°\n\n"
@@ -91,8 +92,7 @@ def handle_coord(args: str, context: PluginContextProtocol) -> str:
 
         galactic_coord = coord.galactic
         ecliptic_coord = coord.geocentrictrueecliptic
-        ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
-        dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
+        ra_hms, dec_dms = icrs_strings(coord)
 
         return (
             f"🌐 坐标转换结果\n"

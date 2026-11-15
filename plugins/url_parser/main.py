@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol, TypeVar, cast
+from typing import Protocol, cast
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
@@ -19,22 +18,17 @@ from core.image_validation import (
     validate_image_bytes,
     validate_image_path,
 )
-from core.plugin_base import image as _core_image
-from core.plugin_base import run_sync as _core_run_sync
-from core.plugin_base import segments as _core_segments
+from core.plugin_base import Event, Segments, run_sync, segments
+from core.plugin_base import image as image_segment
 from core.public_errors import public_error_message
 from core.safe_http import (
+    BROWSER_USER_AGENT,
     SafeHttpError,
     UnsafeUrlError,
     fetch_public_bytes,
     fetch_public_html,
     validate_public_fetch_target,
 )
-
-MessageSegment  = dict[str, Any]
-MessageSegments = list[MessageSegment]
-OneBotEvent     = dict[str, Any]
-T               = TypeVar("T")
 
 
 class Context(Protocol):
@@ -43,23 +37,9 @@ class Context(Protocol):
     data_dir: Path
 
 
-class _RunSync(Protocol):
-    async def __call__(
-        self,
-        function: Callable[..., T],
-        *args: Any,
-        **kwargs: Any,
-    ) -> T: ...
-
-
-# ──────────────────── Core 边界与资源上限 ────────────────────
-
-
-segments      = cast(Callable[[object], MessageSegments], _core_segments)
-image_segment = cast(Callable[[str], MessageSegment], _core_image)
-run_sync      = cast(_RunSync, _core_run_sync)
-
 logger = logging.getLogger(__name__)
+
+# ──────────────────── 资源上限 ────────────────────
 
 MAX_INPUT_URL_LENGTH    = 2048
 MAX_HTML_BYTES          = 2 * 1024 * 1024
@@ -78,14 +58,18 @@ PREVIEW_CACHE_LIMITS = FileCacheLimits(
     ttl_seconds = 7 * 24 * 60 * 60,
 )
 
-_PREVIEW_EXTENSIONS      = (".png", ".webp", ".jpg")
 _IMAGE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
-_USER_AGENT              = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/136.0.0.0 Safari/537.36"
-)
-_PREVIEW_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_PREVIEWS)
+_PREVIEW_SEMAPHORE       = asyncio.Semaphore(MAX_CONCURRENT_PREVIEWS)
+
+
+def _image_limits() -> ImageValidationLimits:
+    """预览图的字节、像素和帧数上限；每次按当前常量构造。"""
+
+    return ImageValidationLimits(
+        max_bytes  = MAX_IMAGE_BYTES,
+        max_pixels = MAX_IMAGE_PIXELS,
+        max_frames = MAX_IMAGE_FRAMES,
+    )
 
 
 def _preview_cache(context: Context) -> BoundedFileCache:
@@ -163,15 +147,10 @@ def _decode_html(body: bytes, charset: str | None) -> str:
 def _detect_image_extension(payload: bytes) -> str:
     """用 core 的逐帧校验返回真实图片格式。"""
 
-    limits = ImageValidationLimits(
-        max_bytes  = MAX_IMAGE_BYTES,
-        max_pixels = MAX_IMAGE_PIXELS,
-        max_frames = MAX_IMAGE_FRAMES,
-    )
     try:
         return validate_image_bytes(
             payload,
-            limits            = limits,
+            limits            = _image_limits(),
             format_extensions = _IMAGE_FORMAT_EXTENSIONS,
         ).extension
     except ImageValidationError as exc:
@@ -202,12 +181,8 @@ def _validated_cached_preview(
         try:
             validate_image_path(
                 path,
-                limits=ImageValidationLimits(
-                    max_bytes  = MAX_IMAGE_BYTES,
-                    max_pixels = MAX_IMAGE_PIXELS,
-                    max_frames = MAX_IMAGE_FRAMES,
-                ),
-                format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+                limits            = _image_limits(),
+                format_extensions = _IMAGE_FORMAT_EXTENSIONS,
             )
             return path
         except (ImageValidationError, OSError, ValueError):
@@ -237,14 +212,14 @@ async def _cache_preview_image(
         cached = await run_sync(
             _validated_cached_preview,
             cache,
-            tuple(f"{digest}{extension}" for extension in _PREVIEW_EXTENSIONS),
+            tuple(f"{digest}{extension}" for extension in _IMAGE_FORMAT_EXTENSIONS.values()),
         )
         if cached is not None:
             return str(cached)
 
         fetched = await fetch_public_bytes(
             image_url,
-            headers                       = {"User-Agent": _USER_AGENT},
+            headers                       = {"User-Agent": BROWSER_USER_AGENT},
             timeout_seconds               = REQUEST_TIMEOUT,
             max_bytes                     = MAX_IMAGE_BYTES,
             allowed_content_type_prefixes = ("image/",),
@@ -269,12 +244,12 @@ async def _cache_preview_image(
         return None
 
 
-async def _build_preview(url: str, context: Context) -> MessageSegments:
+async def _build_preview(url: str, context: Context) -> Segments:
     """获取页面并组装文字与可选图片消息段。"""
 
     fetched = await fetch_public_html(
         url,
-        headers         = {"User-Agent": _USER_AGENT},
+        headers         = {"User-Agent": BROWSER_USER_AGENT},
         timeout_seconds = REQUEST_TIMEOUT,
     )
     if fetched is None or len(fetched.body) > MAX_HTML_BYTES:
@@ -291,13 +266,11 @@ async def _build_preview(url: str, context: Context) -> MessageSegments:
         logger.debug("URL 未提取到预览内容: host=%s", urlsplit(url).hostname or "")
         return []
 
-    response: MessageSegments = []
-    if title or description or image_path is not None:
-        lines = [f"🔗 {title or '网页预览'}"]
-        if description:
-            lines.append(description)
-        lines.extend(("", f"链接: {url}"))
-        response.extend(segments("\n".join(lines)))
+    lines = [f"🔗 {title or '网页预览'}"]
+    if description:
+        lines.append(description)
+    lines.extend(("", f"链接: {url}"))
+    response: Segments = segments("\n".join(lines))
     if image_path is not None:
         response.append(image_segment(image_path))
 
@@ -312,7 +285,7 @@ async def _build_preview(url: str, context: Context) -> MessageSegments:
 # ──────────────────── Dispatcher 与插件入口 ────────────────────
 
 
-async def handle_url(url: str, event: OneBotEvent, context: Context) -> MessageSegments:
+async def handle_url(url: str, event: Event, context: Context) -> Segments:
     """处理 dispatcher 筛选后的完整单 URL 消息。"""
 
     del event  # URL 预览不读取原始 OneBot 事件。
@@ -337,9 +310,9 @@ async def handle_url(url: str, event: OneBotEvent, context: Context) -> MessageS
 async def handle(
     command: str,
     args: str,
-    event: OneBotEvent,
+    event: Event,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """保留 PluginManager 所需入口；本插件没有显式命令。"""
 
     del command, args, event, context

@@ -158,14 +158,8 @@ def _register_test_command(
     async def handler(*_args):
         return []
 
-    spec = CommandSpec(
-        plugin         = "demo",
-        name           = "demo",
-        triggers       = ["/demo"],
-        help_text      = "demo",
-        admin_only     = False,
-        handler        = handler,
-        execution_gate = gate,
+    spec = CommandSpec.from_manifest(
+        "demo", {"name": "demo", "triggers": ["/demo"], "help": "demo"}, handler, gate
     )
     manager.router.register(spec)
     return spec
@@ -208,8 +202,19 @@ def _runtime_symlink_or_skip(target: Path, link: Path, *, directory: bool = Fals
         pytest.skip(f"symbolic links are unavailable: {exc}")
 
 
+async def load_plugin_dir(manager: PluginManager, plugin_dir: Path) -> None:
+    """像生产上的启动和热加载那样加载一个插件目录：持有生命周期锁，走候选代路径。
+
+    普通的加载失败只记日志并把插件隔离在外；致命错误和取消原样抛出。
+    """
+
+    async with manager._lifecycle_lock.get():
+        await manager._reconcile_plugin_path(plugin_dir)
+
+
 __all__ = (
     "AsyncMock",
+    "load_plugin_dir",
     "CommandRouter",
     "CommandSpec",
     "ConcurrentFuture",

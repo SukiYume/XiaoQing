@@ -19,4 +19,5 @@ class Item:
     health_gain  : int = 0
     clean_gain   : int = 0
     exp_gain     : int = 0
+    intimacy_gain: int = 0
     trustee_hours: int = 0

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "5.2.0"
-description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
+version = "5.3.0"
+description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置长期记忆与行为规划"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -30,7 +30,8 @@ classifiers = [
 
 # 核心依赖
 dependencies = [
-    "aiohttp>=3.8.0",
+    # 3.14.4 起包含 HTTP 解析器和 WebSocket 内存耗尽等安全修复。
+    "aiohttp>=3.14.4",
     "websockets>=11.0",
     # 3.x 私有 drain 能力经 core/scheduler.py 中的行为探测隔离。不满足时使用公开关闭路径。
     "apscheduler>=3.11,<4",
@@ -56,7 +57,7 @@ plugins = [
     "python-dateutil>=2.8.2",
 ]
 
-# 机器学习相关插件（如 arxiv_filter, xiaoqing_chat）
+# 机器学习相关插件（arxiv_filter）
 ml = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
@@ -77,8 +78,6 @@ ssh = [
 
 # 开发和测试依赖
 dev = [
-    # aioresponses 0.7.9 uses the pre-3.14 ClientResponse constructor.
-    "aiohttp>=3.8.0,<3.14",
     "build==1.5.1",
     "setuptools==83.0.0",
     "wheel==0.47.0",
@@ -202,6 +201,8 @@ packages = [
     "plugins.xiaoqing_chat.utils",
     "plugins.xiaoqing_life",
     "plugins.xiaoqing_life.sources",
+    "plugins.xiaoqing_memory",
+    "plugins.xiaoqing_memory.consolidate",
 ]
 
 [tool.setuptools.package-data]

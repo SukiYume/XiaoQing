@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import jwt
 
-from core.plugin_base import atomic_write_text
+from core.plugin_base import atomic_write_text, has_control_characters
 
 from ..config import PendoConfig
 
@@ -121,7 +121,7 @@ def _normalize_owner_id(owner_id: str) -> str:
         raise ValueError("owner_id is required")
     if len(normalized) > _MAX_OWNER_ID_CHARS:
         raise ValueError(f"owner_id must not exceed {_MAX_OWNER_ID_CHARS} characters")
-    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+    if has_control_characters(normalized):
         raise ValueError("owner_id contains control characters")
     return normalized
 
@@ -366,12 +366,7 @@ def _encode_widget_token(
         "scope"   : _WIDGET_SCOPE,
         "jti"     : token_id,
     }
-    encoded = jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM)
-    if isinstance(encoded, bytes):
-        return encoded.decode("ascii"), payload
-    if not isinstance(encoded, str):
-        raise RuntimeError("JWT encoder returned an unsupported token type")
-    return encoded, payload
+    return jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM), payload
 
 
 def generate_widget_token(

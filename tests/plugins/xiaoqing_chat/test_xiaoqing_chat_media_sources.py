@@ -306,7 +306,7 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
             new=AsyncMock(return_value=(_animated_gif_bytes(), "application/octet-stream")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):

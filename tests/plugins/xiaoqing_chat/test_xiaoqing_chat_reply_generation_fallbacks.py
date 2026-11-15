@@ -118,11 +118,8 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
 
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "正常回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "正常回复",
     )
 
     with ExitStack() as stack:
@@ -145,19 +142,13 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.retrieve_memory_context", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.tool_status_context", return_value="")
@@ -173,7 +164,7 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=("这条回复需要检查", "")),
             )
         )
@@ -298,7 +289,9 @@ def test_media_rejection_fallback_never_contradicts_the_reading(
             "_xc_effective_user_parts": [
                 {
                     "kind"       : "image",
-                    "description": "国家天文台博士后评聘通知" if readable else "图片内容读取失败",
+                    "description": "示例研究所实验室安全检查通知"
+                    if readable
+                    else "图片内容读取失败",
                 }
             ],
         },

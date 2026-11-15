@@ -6,11 +6,14 @@ import re
 from collections.abc import Sequence
 from typing import cast
 
-RGB_MIN      = 0
-RGB_MAX      = 255
-CMYK_MIN     = 0
-CMYK_MAX     = 100
-_HEX_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})")
+RGB_MIN  = 0
+RGB_MAX  = 255
+CMYK_MIN = 0
+CMYK_MAX = 100
+# 用户输入：可省略 ``#``，也可写三位简写。
+HEX_INPUT_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})")
+# 落盘与数据文件里的 HEX：必须带 ``#`` 的六位。
+STORED_HEX_PATTERN = re.compile(r"#[0-9A-Fa-f]{6}")
 
 
 def _validate_channels(
@@ -99,7 +102,7 @@ def cmyk_to_rgb(cmyk: Sequence[object]) -> list[int]:
 def hex_to_rgb(hex_value: str) -> list[int]:
     """解析一个可带单个 ``#`` 的三位或六位 ASCII HEX 值。"""
 
-    if not isinstance(hex_value, str) or _HEX_PATTERN.fullmatch(hex_value) is None:
+    if not isinstance(hex_value, str) or HEX_INPUT_PATTERN.fullmatch(hex_value) is None:
         raise ValueError("HEX 颜色值必须是 #RGB、RGB、#RRGGBB 或 RRGGBB")
     value = hex_value.removeprefix("#")
     if len(value) == 3:

@@ -13,8 +13,6 @@ from .auth import AuthError, WebSession, configure_auth_database, get_web_sessio
 
 SESSION_COOKIE_NAME   : Final = "pendo_web_session"
 CSRF_HEADER_NAME      : Final = "X-CSRF-Token"
-_WIDGET_KIND          : Final = "widget"
-_WIDGET_SCOPE         : Final = "widget:read"
 _SAFE_METHODS         : Final = frozenset({"GET", "HEAD", "OPTIONS"})
 _REQUEST_SESSION_STATE: Final = "_pendo_web_session"
 
@@ -47,14 +45,8 @@ def get_current_user(
             scheme, _, token = authorization.partition(" ")
             if scheme.casefold() != "bearer" or not token.strip():
                 raise HTTPException(status_code=401, detail="Invalid authorization header")
+            # verify_token 已确认这是登记在册、未吊销的只读 Widget 令牌，且 owner_id 是非空字符串。
             payload = verify_token(token.strip(), db=get_db())
-            if payload.get("kind") != _WIDGET_KIND:
-                raise HTTPException(
-                    status_code=401,
-                    detail="Browser bearer tokens are no longer accepted; use a web login code",
-                )
-            if payload.get("scope") != _WIDGET_SCOPE:
-                raise HTTPException(status_code=403, detail="Widget token has invalid scope")
             path   = request.url.path
             method = request.method
             if method != "GET" or not path.startswith("/api/widget/"):
@@ -62,10 +54,7 @@ def get_current_user(
                     status_code = 403,
                     detail      = "Widget token is limited to /api/widget/* read-only requests",
                 )
-            owner_id = payload.get("owner_id")
-            if not isinstance(owner_id, str) or not owner_id:
-                raise HTTPException(status_code=401, detail="Widget token has invalid owner_id")
-            return owner_id
+            return str(payload["owner_id"])
 
         session = get_current_session(request)
         if request.method not in _SAFE_METHODS:

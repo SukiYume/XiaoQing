@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
 
 from core.public_errors import public_error_message
@@ -10,17 +11,17 @@ from core.public_errors import public_error_message
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
 
+from .chat_runtime import configured_bot_name
+from .memory.client import push_pending
 from .runtime_state import get_state as _state
 
 _SINGLEFLIGHT_BG_TASK_KINDS = frozenset(
     {
         "daily_life",
         "expression_learn",
-        "facts",
         "media_refine",
         "reflection",
         "review_push",
-        "summarizer",
     }
 )
 
@@ -117,132 +118,100 @@ def spawn_bg_task(context: Any, coro, *, name: str) -> None:
     )
 
 
-def schedule_memory_persist(context: Any, runtime: ChatRuntime, *, chat_id: str) -> None:
-    delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old   = _state().get_persist_task(chat_id)
-    _cancel_pending_task(context, old, kind="memory_persist")
-
-    async def _run() -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        await asyncio.to_thread(_state().memory_store.persist, chat_id)
-
-    task = create_task_safely(_run())
-    if task is None:
-        return
-    _state().set_persist_task(chat_id, task)
-
-    def _cleanup_done(t: asyncio.Task[Any]) -> None:
-        current = _state().get_persist_task(chat_id)
-        if current is t:
-            _state().pop_persist_task(chat_id)
-
-    task.add_done_callback(_cleanup_done)
-    _track_bg_task(context, task, name=f"persist:{chat_id}")
+_action_flush_tasks        : dict[str, asyncio.Task[Any]] = {}
+_pfc_state_flush_tasks     : dict[str, asyncio.Task[Any]] = {}
+_media_registry_flush_tasks: dict[str, asyncio.Task[Any]] = {}
+# 媒体注册表不分会话，登记表里只有这一个键。
+_MEDIA_REGISTRY_KEY = "media_registry"
 
 
-def schedule_memory_db_save(context: Any, runtime: ChatRuntime) -> None:
-    delay = max(0.0, runtime.cfg.memory_db_save_debounce_seconds)
-    old   = _state().get_vdb_save_task()
-    _cancel_pending_task(context, old, kind="memory_db_save")
-
-    async def _run() -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        if not _state().memory_db.is_dirty():
-            return
-        await asyncio.to_thread(_state().memory_db.save)
-
-    task = create_task_safely(_run())
-    if task is None:
-        return
-    _state().set_vdb_save_task(task)
-    _track_bg_task(context, task, name="memory_db_save")
-
-
-_action_flush_tasks       : dict[str, asyncio.Task[Any]] = {}
-_pfc_state_flush_tasks    : dict[str, asyncio.Task[Any]] = {}
-_media_registry_flush_task: asyncio.Task[Any] | None     = None
-
-
-def _schedule_debounced_flush(
+def _schedule_debounced(
     context: Any,
     runtime: ChatRuntime,
     *,
-    chat_id: str,
-    task_registry: dict[str, asyncio.Task[Any]],
-    flush_func: Any,
-    name_prefix: str,
+    registry: MutableMapping[str, asyncio.Task[Any]],
+    key: str,
+    kind: str,
+    name: str,
+    work: Callable[[], Awaitable[None]],
 ) -> None:
-    """调度防抖刷盘任务的内部公共实现。"""
+    """防抖执行一件落盘的事：同一个 ``key`` 上还没跑完的旧任务先取消，等过防抖时间再执行。
+
+    任务登记在 ``registry[key]``，结束后自己摘掉；``kind`` 用在取消旧任务的日志里。
+    """
+
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old   = task_registry.get(chat_id)
-    _cancel_pending_task(context, old, kind=name_prefix)
+    _cancel_pending_task(context, registry.get(key), kind=kind)
 
     async def _run() -> None:
         if delay:
             await asyncio.sleep(delay)
-        await asyncio.to_thread(flush_func, chat_id)
+        await work()
 
     task = create_task_safely(_run())
     if task is None:
         return
-    task_registry[chat_id] = task
+    registry[key] = task
 
-    def _cleanup_done(t: asyncio.Task[Any]) -> None:
-        current = task_registry.get(chat_id)
-        if current is t:
-            _ = task_registry.pop(chat_id, None)
+    def _cleanup_done(done: asyncio.Task[Any]) -> None:
+        if registry.get(key) is done:
+            registry.pop(key, None)
 
     task.add_done_callback(_cleanup_done)
-    _track_bg_task(context, task, name=f"{name_prefix}:{chat_id}")
+    _track_bg_task(context, task, name=name)
+
+
+def schedule_memory_persist(context: Any, runtime: ChatRuntime, *, chat_id: str) -> None:
+    """防抖落盘这个会话的聊天记录，落盘后把还没推的消息推给统一记忆。"""
+
+    async def work() -> None:
+        await asyncio.to_thread(_state().memory_store.persist, chat_id)
+        await push_pending(context, _state(), chat_id, bot_name=configured_bot_name(context))
+
+    _schedule_debounced(
+        context,
+        runtime,
+        registry = _state().persist_tasks,
+        key      = chat_id,
+        kind     = "memory_persist",
+        name     = f"persist:{chat_id}",
+        work     = work,
+    )
 
 
 def schedule_action_history_flush(context: Any, runtime: ChatRuntime, *, chat_id: str) -> None:
     """防抖刷盘动作历史，避免每次追加都写磁盘。"""
-    _schedule_debounced_flush(
+    _schedule_debounced(
         context,
         runtime,
-        chat_id       = chat_id,
-        task_registry = _action_flush_tasks,
-        flush_func    = _state().action_history.flush,
-        name_prefix   = "action_flush",
+        registry = _action_flush_tasks,
+        key      = chat_id,
+        kind     = "action_flush",
+        name     = f"action_flush:{chat_id}",
+        work     = lambda: asyncio.to_thread(_state().action_history.flush, chat_id),
     )
 
 
 def schedule_pfc_state_flush(context: Any, runtime: ChatRuntime, *, chat_id: str) -> None:
     _state().pfc_state_store.mark_dirty(chat_id)
-    _schedule_debounced_flush(
+    _schedule_debounced(
         context,
         runtime,
-        chat_id       = chat_id,
-        task_registry = _pfc_state_flush_tasks,
-        flush_func    = _state().pfc_state_store.save,
-        name_prefix   = "pfc_state_flush",
+        registry = _pfc_state_flush_tasks,
+        key      = chat_id,
+        kind     = "pfc_state_flush",
+        name     = f"pfc_state_flush:{chat_id}",
+        work     = lambda: asyncio.to_thread(_state().pfc_state_store.save, chat_id),
     )
 
 
 def schedule_media_registry_flush(context: Any, runtime: ChatRuntime) -> None:
-    global _media_registry_flush_task
-
-    delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old   = _media_registry_flush_task
-    _cancel_pending_task(context, old, kind="media_registry_flush")
-
-    async def _run() -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        await asyncio.to_thread(_state().media_store.flush)
-
-    task = create_task_safely(_run())
-    if task is None:
-        return
-    _media_registry_flush_task = task
-
-    def _cleanup_done(t: asyncio.Task[Any]) -> None:
-        global _media_registry_flush_task
-        if _media_registry_flush_task is t:
-            _media_registry_flush_task = None
-
-    task.add_done_callback(_cleanup_done)
-    _track_bg_task(context, task, name="media_registry_flush")
+    _schedule_debounced(
+        context,
+        runtime,
+        registry = _media_registry_flush_tasks,
+        key      = _MEDIA_REGISTRY_KEY,
+        kind     = "media_registry_flush",
+        name     = "media_registry_flush",
+        work     = lambda: asyncio.to_thread(_state().media_store.flush),
+    )

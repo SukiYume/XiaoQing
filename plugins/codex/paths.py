@@ -6,6 +6,8 @@ import os
 import re
 from pathlib import Path
 
+from core.plugin_base import has_control_characters
+
 from .config import CodexPluginConfig
 
 _WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -17,7 +19,7 @@ class CwdError(ValueError):
 
 
 def _resolve_absolute_path(raw: str, *, description: str) -> Path:
-    if len(raw) > MAX_CWD_CHARS or any(ord(char) < 32 for char in raw):
+    if len(raw) > MAX_CWD_CHARS or has_control_characters(raw):
         raise CwdError(f"{description}包含控制字符或超过长度上限。")
     if os.name != "nt" and _WINDOWS_ABS_RE.match(raw):
         raise CwdError("当前运行系统不是 Windows，不能直接使用 Windows 盘符路径。")

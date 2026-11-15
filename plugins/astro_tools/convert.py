@@ -7,6 +7,8 @@ import math
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
+from .numeric import NonFiniteError, finite_float
+
 
 def handle_convert(args: str, context: PluginContextProtocol) -> str:
     """处理单位转换命令"""
@@ -16,10 +18,11 @@ def handle_convert(args: str, context: PluginContextProtocol) -> str:
             "❌ 请提供转换参数\n示例: /astro convert 3 Jy mJy\n\n"
             "支持的单位:\n"
             "- 流量密度: Jy, mJy, μJy\n"
-            "- 长度: pc, kpc, Mpc, ly, AU, m, km\n"
+            "- 长度: pc, kpc, Mpc, ly, AU, m, km, cm\n"
             "- 频率: Hz, kHz, MHz, GHz, THz\n"
             "- 温度: K, mK\n"
             "- 能量: eV, keV, MeV, GeV, TeV, J, erg\n"
+            "- 质量: Msun, kg, g\n"
             "- 以及所有 astropy 支持的单位 (如 km/s, erg/s)"
         )
 
@@ -34,11 +37,11 @@ def handle_convert(args: str, context: PluginContextProtocol) -> str:
 
         # 在交给 Astropy 前先拒绝非有限值，避免把 nan/inf 当成有效科学结果。
         try:
-            value = float(parts[0])
-        except (ValueError, OverflowError):
-            return f"❌ 无效的数值: {parts[0]}\n请提供有效的数字"
-        if not math.isfinite(value):
+            value = finite_float(parts[0])
+        except NonFiniteError:
             return "❌ 数值必须是有限数字"
+        except ValueError:
+            return f"❌ 无效的数值: {parts[0]}\n请提供有效的数字"
 
         from_unit_str = parts[1]
         to_unit_str   = parts[2]

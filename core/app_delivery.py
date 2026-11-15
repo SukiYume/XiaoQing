@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, cast
 from .app_identity import AppIdentityService
 from .app_support import _parse_positive_ids, current_action_sink
 from .constants import (
-    DEFAULT_BOT_NAME,
     INBOUND_EVENT_DEDUP_TTL_SECONDS,
     MAX_INBOUND_EVENT_DEDUP_KEYS,
     MESSAGE_SPLIT_DELAY,
@@ -26,14 +25,14 @@ from .delivery import (
 )
 from .dispatcher import Dispatcher
 from .inbound_backlog import InboundBacklog
-from .interfaces import ACTION_BYPASS_SINK_KEY, ACTION_RESULT_MESSAGE_ID_KEY
+from .interfaces import ACTION_BYPASS_SINK_KEY, ACTION_RESULT_MESSAGE_ID_KEY, EVENT_SOURCE_KEY
 from .onebot import (
     OneBotActionCancelledAfterCommit,
     OneBotActionOutcomeUnknown,
     OneBotHttpSender,
     OneBotWsClient,
 )
-from .plugin_base import build_action, segments, split_message_segments
+from .plugin_base import build_action, resolve_bot_name, segments, split_message_segments, text
 from .plugin_execution import (
     PluginExecutionClosed,
     PluginExecutionTimeout,
@@ -45,6 +44,9 @@ from .plugin_manager import PluginManager
 from .server import BroadcastResult, InboundManager
 
 logger = logging.getLogger(__name__)
+
+_MESSAGE_ACTIONS   = ("send_group_msg", "send_private_msg")
+_SOURCE_PLUGIN_KEY = "_source_plugin"
 
 
 def _message_length(message: Any) -> int:
@@ -120,10 +122,7 @@ class AppDeliveryMixin:
         # 发送上线通知（可通过 config 配置）
         connect_msg = self.config.get("connect_notification")
         if connect_msg is None:
-            bot_name = (
-                str(self.config.get("bot_name") or DEFAULT_BOT_NAME).strip() or DEFAULT_BOT_NAME
-            )
-            connect_msg = f"🟢 {bot_name}已上线~"
+            connect_msg = f"🟢 {resolve_bot_name(self.config.get('bot_name'))}已上线~"
         if not connect_msg:
             return
         now          = time.monotonic()
@@ -136,7 +135,7 @@ class AppDeliveryMixin:
             logger.info("Connect notification suppressed by min interval")
             return
         self._last_connect_notification_ts = now
-        message                            = [{"type": "text", "data": {"text": connect_msg}}]
+        message                            = [text(connect_msg)]
         for group_id in parsed_groups:
             action = {
                 "action": "send_group_msg",
@@ -179,7 +178,7 @@ class AppDeliveryMixin:
             return self._runtime_onebot_credentials_trusted
 
     def _ws_transport_is_trusted(self, client: Any) -> bool:
-        """Reject stale, quarantined, or legacy holders before any network call."""
+        """Reject stale, quarantined, or untrusted holders before any network call."""
 
         if client is None:
             return False
@@ -333,19 +332,16 @@ class AppDeliveryMixin:
         if not isinstance(action, dict):
             return action
         tagged = dict(action)
-        tagged.setdefault("_source_plugin", str(plugin_name or "").strip())
+        tagged.setdefault(_SOURCE_PLUGIN_KEY, str(plugin_name or "").strip())
         return tagged
 
     async def _notify_outgoing_action_observers(self, action: dict[str, Any]) -> None:
         if action.get(SENSITIVE_ACTION_KEY):
             return
-        source_plugin = str(action.get("_source_plugin", "") or "").strip()
+        source_plugin = str(action.get(_SOURCE_PLUGIN_KEY, "") or "").strip()
         if not source_plugin:
             return
-        if str(action.get("action", "") or "").strip() not in (
-            "send_group_msg",
-            "send_private_msg",
-        ):
+        if str(action.get("action", "") or "").strip() not in _MESSAGE_ACTIONS:
             return
 
         try:
@@ -389,7 +385,7 @@ class AppDeliveryMixin:
     def _maybe_split_action(self, action: dict[str, Any]) -> list[dict[str, Any]]:
         """将包含过长文本的 action 拆分为多个 action"""
         act_name = action.get("action", "")
-        if act_name not in ("send_group_msg", "send_private_msg"):
+        if act_name not in _MESSAGE_ACTIONS:
             return [action]
 
         params = action.get("params")
@@ -429,7 +425,7 @@ class AppDeliveryMixin:
     ) -> bool | None:
         try:
             act = str(action.get("action", "") or "")
-            if act in ("send_group_msg", "send_private_msg"):
+            if act in _MESSAGE_ACTIONS:
                 params = action.get("params") or {}
                 if isinstance(params, dict):
                     logger.info(
@@ -560,7 +556,7 @@ class AppDeliveryMixin:
             return []
         sink  = current_action_sink.get()
         event = dict(event)
-        event.setdefault("_source", default_source)
+        event.setdefault(EVENT_SOURCE_KEY, default_source)
 
         if sink is not None:
             action = await self._process_event(event)
@@ -663,7 +659,7 @@ class AppDeliveryMixin:
     async def _handle_inbound_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         """接收事件；标准 HTTP 模式通过真实 action API 确认每个回复。"""
         actions = await self._collect_actions_for_event(event, default_source="inbound_http")
-        if event.get("_source") == "inbound_http" and event.get("_http_action_delivery"):
+        if event.get(EVENT_SOURCE_KEY) == "inbound_http" and event.get("_http_action_delivery"):
             for index, action in enumerate(actions):
                 try:
                     # 脱离事件暂存器，投递失败由收据明确回滚，未知结果保持未知。

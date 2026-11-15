@@ -12,13 +12,10 @@ import threading
 import weakref
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from core.image_validation import ImageValidationLimits, validate_image_bytes
-
-if TYPE_CHECKING:
-    pass
 
 from .models import ImagePayloadInfo, MediaPayloadTooLarge
 
@@ -191,8 +188,8 @@ def inspect_image_payload_details(
     *,
     fallback_suffix: str  = ".png",
     max_bytes: int | None = None,
-    max_pixels: int       = 16_000_000,
-    max_frames: int       = 120,
+    max_pixels: int,
+    max_frames: int,
 ) -> ImagePayloadInfo:
     try:
         validated = validate_image_bytes(

@@ -10,7 +10,7 @@ import re
 import shlex
 from collections.abc import Mapping
 
-_ENV_NAME_RE          = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
+ENV_NAME_RE           = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
 _CWD_MARKER           = "__XQ_CWD__"
 _SHELL_OPERATOR_CHARS = frozenset("();<>|&")
 
@@ -52,7 +52,7 @@ def build_command(
         prelude.append(f"cd {shlex.quote(cwd)} || exit")
 
     if env_vars:
-        invalid_names = [name for name in env_vars if _ENV_NAME_RE.fullmatch(name) is None]
+        invalid_names = [name for name in env_vars if ENV_NAME_RE.fullmatch(name) is None]
         if invalid_names:
             raise ValueError("environment variable name is invalid")
         env_exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())

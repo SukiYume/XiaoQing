@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict
 
 from core.interfaces import PluginContextProtocol
 
+from ..config import PendoConfig
+
 if TYPE_CHECKING:
     from ..handlers.diary import DiaryHandler
     from ..handlers.event import EventHandler
@@ -20,7 +22,9 @@ if TYPE_CHECKING:
 
 class PendoContextProtocol(PluginContextProtocol, Protocol):
     async def create_session(
-        self, initial_data: dict[str, Any] | None = None, timeout: float | None = 300.0
+        self,
+        initial_data: dict[str, Any] | None = None,
+        timeout: float | None               = PendoConfig.SESSION_TIMEOUT_SECONDS,
     ) -> Any: ...
 
     async def end_session(self) -> bool: ...

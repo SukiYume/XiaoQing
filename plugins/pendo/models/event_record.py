@@ -9,8 +9,12 @@ from typing import Annotated, Any, Literal, Self
 from dateutil.rrule import rrulestr
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from ..utils.validators import MAX_TITLE_CHARS
+
 _WALL_TIME_FORMAT = "%Y-%m-%dT%H:%M"
-_OFFSET_RE        = re.compile(r"提前[1-9]\d*(?:分钟|小时|天|周)")
+# 提前量只接受这四个中文单位（秒数从大到小）；解析和写回“提前N单位”共用这一张表。
+_OFFSET_UNITS = ((7 * 86400, "周"), (86400, "天"), (3600, "小时"), (60, "分钟"))
+_OFFSET_RE    = re.compile(rf"提前[1-9]\d*(?:{'|'.join(unit for _, unit in _OFFSET_UNITS)})")
 
 
 def _wall_time(value: str) -> str:
@@ -22,8 +26,6 @@ def _wall_time(value: str) -> str:
 
 
 WallTime = Annotated[str, AfterValidator(_wall_time)]
-
-_OFFSET_UNITS = ((7 * 86400, "周"), (86400, "天"), (3600, "小时"), (60, "分钟"))
 
 
 def _offset_text(seconds: int) -> str:
@@ -38,7 +40,7 @@ def _offset_text(seconds: int) -> str:
 class EventNode(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
-    name    : str = Field(min_length=1, max_length=200, description="节点名称。")
+    name    : str = Field(min_length=1, max_length=MAX_TITLE_CHARS, description="节点名称。")
     time    : WallTime = Field(description="节点时间，用户当地墙钟时间 YYYY-MM-DDTHH:MM。")
     end_time: WallTime | None = Field(default=None, description="节点结束时间，可省略。")
 
@@ -55,7 +57,7 @@ class EventRecord(BaseModel):
     kind: Literal["single", "multi_node", "recurring"] = Field(
         description="single 单次日程；multi_node 多个独立时间节点；recurring 按 rrule 重复。"
     )
-    title         : str = Field(min_length=1, max_length=200, description="日程标题。")
+    title         : str = Field(min_length=1, max_length=MAX_TITLE_CHARS, description="日程标题。")
     content       : str = Field(default="", description="详细内容，省略时采用标题。")
     location      : str = ""
     notes         : str = ""

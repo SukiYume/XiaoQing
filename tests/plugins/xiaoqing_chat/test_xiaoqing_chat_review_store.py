@@ -135,7 +135,6 @@ def test_review_store_quarantines_malformed_policy_and_can_save_replacement(
             goal_override   = "保持简洁",
             goal_lock_until = 30.0,
             strategy_note   = "避免重复",
-            avoid_patterns  = ["复读"],
         ),
     )
 
@@ -143,7 +142,6 @@ def test_review_store_quarantines_malformed_policy_and_can_save_replacement(
         "goal_override"  : "保持简洁",
         "goal_lock_until": 30.0,
         "strategy_note"  : "避免重复",
-        "avoid_patterns" : ["复读"],
     }
     assert quarantined[0].read_bytes() == original
 

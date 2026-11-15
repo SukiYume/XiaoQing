@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from .app_identity import AppIdentityService
-    from .plugin_manager import PluginManager
-    from .scheduler import SchedulerManager
-
 import asyncio
 import functools
 import logging
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from .app_support import _parse_positive_ids
 from .delivery import (
@@ -37,6 +29,11 @@ from .plugin_execution import (
     invoke_loaded_plugin,
 )
 from .scheduler import ScheduledJobSpec
+
+if TYPE_CHECKING:
+    from .app_identity import AppIdentityService
+    from .plugin_manager import PluginManager
+    from .scheduler import SchedulerManager
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +89,6 @@ class AppSchedulingMixin:
         jobs: list[ScheduledJobSpec] = []
         try:
             for loaded in target_plugins:
-                if not loaded:
-                    continue
                 for raw_entry in loaded.definition.schedule:
                     entry = PluginScheduleManifest.model_validate(raw_entry)
                     if not entry.enabled:
@@ -109,8 +104,9 @@ class AppSchedulingMixin:
                             f"plugin {loaded.definition.name!r} schedule handler "
                             f"{entry.handler!r} is missing or not callable"
                         )
-                    group_ids = tuple(entry.group_ids) if entry.group_ids is not None else None
-                    job_id    = f"plugin.{loaded.definition.name}.{entry.id or entry.handler}"
+                    group_ids   = tuple(entry.group_ids) if entry.group_ids is not None else None
+                    schedule_id = entry.id or entry.handler
+                    job_id      = f"plugin.{loaded.definition.name}.{schedule_id}"
                     jobs.append(
                         ScheduledJobSpec(
                             job_id = job_id,
@@ -121,6 +117,7 @@ class AppSchedulingMixin:
                                 group_ids,
                                 delivery      = entry.delivery,
                                 loaded_plugin = loaded,
+                                schedule_id   = schedule_id,
                             ),
                             cron        = entry.cron,
                             description = entry.description,
@@ -133,6 +130,22 @@ class AppSchedulingMixin:
 
         self.scheduler.replace_prefix(prefix, jobs)
 
+    def _schedule_group_override(self, plugin_name: str, schedule_id: str) -> Any | None:
+        """The deployment's target groups for one schedule, or ``None`` when not configured.
+
+        An explicit empty list is an override too: the schedule runs without group targets.
+        """
+
+        if not schedule_id:
+            return None
+        plugins  = self.config.get("plugins")
+        section  = plugins.get(plugin_name) if isinstance(plugins, Mapping) else None
+        schedule = section.get("schedules") if isinstance(section, Mapping) else None
+        entry    = schedule.get(schedule_id) if isinstance(schedule, Mapping) else None
+        if isinstance(entry, Mapping) and "group_ids" in entry:
+            return entry["group_ids"]
+        return None
+
     async def _run_job(
         self,
         handler,
@@ -141,22 +154,37 @@ class AppSchedulingMixin:
         *,
         delivery: ScheduleDeliveryMode = "broadcast",
         loaded_plugin: Any | None      = None,
+        schedule_id: str               = "",
     ) -> None:
-        """Execute one schedule under the Core-owned delivery contract."""
+        """Execute one schedule under the Core-owned delivery contract.
+
+        Target groups resolve at run time, most specific first: the deployment's
+        ``config.plugins.<plugin>.schedules.<schedule id>.group_ids``, then the
+        manifest's ``group_ids``, then ``default_group_ids``. Real group IDs therefore
+        live only in the private config; manifests in the repository carry none.
+        """
         if self._stopping:
             logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
             return
         parsed_target_groups: tuple[int, ...] = ()
         if delivery != "silent":
+            override   = self._schedule_group_override(plugin_name, schedule_id)
+            field_name = (
+                f"plugins.{plugin_name}.schedules.{schedule_id}.group_ids"
+                if override is not None
+                else f"{plugin_name} plugin.json schedule {schedule_id} group_ids"
+                if group_ids is not None
+                else "default_group_ids"
+            )
             raw_target_groups = (
-                group_ids
+                override
+                if override is not None
+                else group_ids
                 if group_ids is not None
                 else list(self.config.get("default_group_ids", []))
             )
             try:
-                parsed_target_groups = _parse_positive_ids(
-                    raw_target_groups, field_name="default_group_ids"
-                )
+                parsed_target_groups = _parse_positive_ids(raw_target_groups, field_name=field_name)
             except (TypeError, ValueError) as exc:
                 logger.error(
                     "Scheduled job skipped for %s because group IDs are invalid: %s",

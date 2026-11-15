@@ -9,15 +9,25 @@ import re
 import stat
 from collections.abc import Mapping
 from datetime import date as calendar_date
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
-from core.plugin_base import build_action, segments, split_message_segments
+from core.plugin_base import (
+    build_action,
+    has_control_characters,
+    segments,
+    split_message_segments,
+)
 
+from .manager import (
+    CodexQueueManager,
+    CodexSession,
+    RuntimeJob,
+    get_manager,
+    optional_positive_id,
+    targets_from_ids,
+)
 from .paths import normalize_cwd
-
-if TYPE_CHECKING:
-    from .manager import CodexQueueManager, CodexSession, RuntimeJob
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +50,6 @@ def is_arxiv_summary_metadata(metadata: Mapping[str, Any]) -> bool:
         metadata.get("source") == ARXIV_SUMMARY_SOURCE
         and metadata.get("kind") == ARXIV_SUMMARY_KIND
     )
-
-
-def _optional_positive_id(value: Any, *, field_name: str) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int or value <= 0:
-        raise ValueError(f"{field_name} must be a positive integer or None")
-    return value
 
 
 def _normalize_date(value: Any) -> str | None:
@@ -73,7 +75,7 @@ def _normalize_arxiv_links(links: Any) -> tuple[list[str], str | None]:
     seen      : set[str]  = set()
     for link in links:
         value = link.strip()
-        if not value or len(value) > MAX_ARXIV_LINK_CHARS or any(ord(char) < 32 for char in value):
+        if not value or len(value) > MAX_ARXIV_LINK_CHARS or has_control_characters(value):
             return [], "arXiv 链接为空、含控制字符或超过长度上限。"
         match = ARXIV_LINK_RE.fullmatch(value)
         if match is None:
@@ -110,32 +112,23 @@ async def enqueue_or_replay_arxiv_summary(
     user_id: int | None  = None,
     group_id: int | None = None,
 ) -> str:
-    from .manager import get_manager
-
-    effective_user_id = _optional_positive_id(
-        user_id if user_id is not None else getattr(context, "current_user_id", None),
-        field_name="user_id",
-    )
-    effective_group_id = _optional_positive_id(
-        group_id if group_id is not None else getattr(context, "current_group_id", None),
-        field_name="group_id",
-    )
-    # 谁能触发由 Core 按 /codex 的声明决定（系统定时任务除外），能力只在通过时发出；
-    # 这里只决定结果发到哪里。
-    principal         = getattr(context, "principal", None)
-    capabilities      = getattr(context, "capabilities", None)
-    is_system         = bool(capabilities is not None and getattr(capabilities, "is_system", False))
-    principal_targets = tuple(getattr(principal, "delivery_targets", ()))
-    if is_system:
-        delivery_targets = principal_targets
-    elif principal_targets:
-        delivery_targets = principal_targets
-    else:
-        delivery_targets = _targets_from_ids(effective_user_id, effective_group_id)
     if getattr(context, "plugin_name", None) != "codex":
         raise PermissionError("Codex arXiv entrypoint requires a Codex-scoped context")
-    manager = await get_manager(context)
-    addon   = ArxivSummaryAddon(manager)
+    effective_user_id = optional_positive_id(
+        user_id if user_id is not None else getattr(context, "current_user_id", None),
+        "user_id",
+    )
+    effective_group_id = optional_positive_id(
+        group_id if group_id is not None else getattr(context, "current_group_id", None),
+        "group_id",
+    )
+    # 谁能触发由 Core 按 /codex 的声明决定（系统定时任务除外），能力只在通过时发出；
+    # 这里只决定结果发到哪里：调用方带了收件目标就用它，否则按事件身份选群或私聊。
+    principal         = getattr(context, "principal", None)
+    principal_targets = tuple(getattr(principal, "delivery_targets", ()))
+    delivery_targets  = principal_targets or targets_from_ids(effective_user_id, effective_group_id)
+    manager           = await get_manager(context)
+    addon             = ArxivSummaryAddon(manager)
     return await addon.enqueue_or_replay(
         date             = date,
         links            = links,
@@ -144,17 +137,6 @@ async def enqueue_or_replay_arxiv_summary(
         context          = context,
         delivery_targets = delivery_targets,
     )
-
-
-def _targets_from_ids(
-    user_id: int | None,
-    group_id: int | None,
-) -> tuple[DeliveryTarget, ...]:
-    if group_id is not None:
-        return (DeliveryTarget("group", group_id),)
-    if user_id is not None:
-        return (DeliveryTarget("private", user_id),)
-    return ()
 
 
 class ArxivSummaryAddon:
@@ -185,7 +167,7 @@ class ArxivSummaryAddon:
         explicit_targets = (
             delivery_targets
             if delivery_targets is not None
-            else _targets_from_ids(user_id, group_id)
+            else targets_from_ids(user_id, group_id)
         )
         logger.info(
             "arXiv summary request: label=%s date=%s links=%d",
@@ -314,7 +296,7 @@ class ArxivSummaryAddon:
         targets = (
             delivery_targets
             if delivery_targets is not None
-            else _targets_from_ids(user_id, group_id)
+            else targets_from_ids(user_id, group_id)
         )
         outcome: bool | None = True
         for target in targets:

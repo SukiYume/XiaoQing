@@ -18,7 +18,7 @@ from core.bounded_http import (
     ResponseFormatError,
     ResponseLimitError,
 )
-from core.safe_http import SafeHttpResponse
+from core.safe_http import BROWSER_USER_AGENT, SafeHttpResponse
 from plugins.earthquake import main as earthquake
 
 EARTHQUAKE_TEXT = (
@@ -213,8 +213,8 @@ async def test_index_failure_closes_session_and_returns_stable_error(context) ->
 
 
 def test_api_limits_and_mime_policies_are_explicit() -> None:
-    assert earthquake._VISITOR_BODY_LIMITS.max_wire_bytes == 256 * 1024
-    assert earthquake._VISITOR_BODY_LIMITS.max_decoded_bytes == 512 * 1024
+    assert earthquake._BOOTSTRAP_BODY_LIMITS.max_wire_bytes == 256 * 1024
+    assert earthquake._BOOTSTRAP_BODY_LIMITS.max_decoded_bytes == 512 * 1024
     assert earthquake._VISITOR_MIME_POLICY.accepts("text/javascript")
     assert not earthquake._VISITOR_MIME_POLICY.accepts("text/html")
     assert earthquake._INDEX_BODY_LIMITS.max_wire_bytes == 1024 * 1024
@@ -422,7 +422,9 @@ async def test_scheduled_scan_keeps_scanning_after_low_magnitude(context) -> Non
         result = await earthquake._fetch_earthquake_news(context, force=False)
     assert "5.0级地震" in str(result)
     assert "3.5级地震" not in str(result)
-    assert earthquake._load_since(context) == "200"
+    # 有卡片要投递时游标只作为候选，投递确认后才由 scheduled 提交。
+    assert context.state["earthquake_pending_since"] == "200"
+    assert earthquake._load_since(context) == "198"
 
 
 def test_feed_selection_scans_sorts_and_deduplicates_out_of_order_events() -> None:
@@ -448,8 +450,8 @@ async def test_scheduled_pending_cursor_is_committed_only_after_delivery(context
     context.default_groups = lambda: [123]
     context.send_action = AsyncMock(return_value=False)
 
-    async def fake_fetch(ctx, force=False, advance_cursor=True):
-        del force, advance_cursor
+    async def fake_fetch(ctx, force=False):
+        del force
         ctx.state["earthquake_pending_since"] = "200"
         return earthquake.segments("M5 event")
 
@@ -474,8 +476,8 @@ async def test_scheduled_unknown_delivery_advances_cursor_without_retry(context)
     context.default_groups = lambda: [123]
     context.send_action = AsyncMock(return_value=None)
 
-    async def fake_fetch(ctx, force=False, advance_cursor=True):
-        del force, advance_cursor
+    async def fake_fetch(ctx, force=False):
+        del force
         ctx.state["earthquake_pending_since"] = "200"
         return earthquake.segments("M5 event")
 
@@ -687,7 +689,7 @@ async def test_download_uses_pinned_public_fetch_minimal_headers_and_worker(cont
     }
     assert kwargs["allowed_schemes"] == ("https",)
     assert kwargs["headers"] == {
-        "User-Agent"     : earthquake._WEIBO_USER_AGENT,
+        "User-Agent"     : BROWSER_USER_AGENT,
         "Referer"        : "https://m.weibo.cn/",
         "Accept"         : "image/*",
         "Accept-Encoding": "identity",

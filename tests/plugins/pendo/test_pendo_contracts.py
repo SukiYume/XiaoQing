@@ -22,6 +22,61 @@ class TestPendoStructure:
             "tomorrow", now=now
         )
 
+    def test_try_parse_returns_none_for_empty_or_broken_values(self):
+        from datetime import UTC
+
+        from plugins.pendo.utils.time_utils import TimezoneHelper
+
+        parsed = TimezoneHelper.try_parse("2026-07-21T08:00:00Z", UTC)
+
+        assert parsed == datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
+        assert TimezoneHelper.try_parse("2026-07-21T09:00:00", UTC) == datetime(
+            2026, 7, 21, 9, 0, tzinfo=UTC
+        )
+        assert TimezoneHelper.try_parse("", UTC) is None
+        assert TimezoneHelper.try_parse("not a time", UTC) is None
+
+    def test_month_bounds_cover_the_whole_natural_month(self):
+        from datetime import date
+
+        from plugins.pendo.utils.time_utils import month_bounds
+
+        assert month_bounds(date(2026, 2, 17)) == (date(2026, 2, 1), date(2026, 2, 28))
+        assert month_bounds(date(2028, 2, 1)) == (date(2028, 2, 1), date(2028, 2, 29))
+        assert month_bounds(date(2026, 12, 31)) == (date(2026, 12, 1), date(2026, 12, 31))
+
+    def test_shift_months_moves_a_month_start_across_year_boundaries(self):
+        from datetime import date
+
+        from plugins.pendo.utils.time_utils import shift_months
+
+        assert shift_months(date(2026, 1, 1), 1) == date(2026, 2, 1)
+        assert shift_months(date(2026, 12, 1), 1) == date(2027, 1, 1)
+        assert shift_months(date(2026, 1, 1), -1) == date(2025, 12, 1)
+        assert shift_months(date(2026, 3, 1), -12) == date(2025, 3, 1)
+        assert shift_months(date(2026, 3, 1), 0) == date(2026, 3, 1)
+
+    def test_export_range_detection_accepts_every_calendar_keyword(self, tmp_path):
+        from plugins.pendo.services.exporter import ExporterService
+        from plugins.pendo.utils.time_utils import CALENDAR_RANGE_KEYWORDS
+
+        exporter = ExporterService(object(), tmp_path)
+
+        assert {
+            "today",
+            "今天",
+            "tomorrow",
+            "明天",
+            "week",
+            "本周",
+            "month",
+            "本月",
+            "year",
+            "今年",
+        } == (CALENDAR_RANGE_KEYWORDS)
+        assert all(exporter._looks_like_range_spec(word) for word in CALENDAR_RANGE_KEYWORDS)
+        assert not exporter._looks_like_range_spec("ledger")
+
 
 class TestPendoConfig:
     """测试 pendo 配置"""

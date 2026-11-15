@@ -25,6 +25,11 @@ def _service(secrets: Mapping[str, Any]) -> AICapability:
     return cast(AICapability, service)
 
 
+def ai_disabled(secrets: Mapping[str, Any]) -> bool:
+    """调用方显式放了 ``_ai: None`` 表示 AI 能力不可用；没有 ``_ai`` 键时按默认能力处理。"""
+    return "_ai" in secrets and secrets["_ai"] is None
+
+
 def _route(secrets: Mapping[str, Any], default: str) -> str:
     value = str(secrets.get("_route") or default).strip()
     if not value:
@@ -86,7 +91,7 @@ async def chat_completions(
     return result.content
 
 
-async def chat_completions_with_fallback_paths(
+async def chat_completions_with_profile(
     **kwargs: Any,
 ) -> tuple[str, str]:
     """返回文本与实际命中的模型 profile。"""
@@ -95,7 +100,7 @@ async def chat_completions_with_fallback_paths(
     return result.content, result.profile
 
 
-async def chat_completions_raw_with_fallback_paths(
+async def chat_completions_raw_with_profile(
     **kwargs: Any,
 ) -> tuple[dict[str, Any], str]:
     """返回原始响应及实际命中的模型 profile。"""
@@ -107,8 +112,7 @@ async def chat_completions_raw_with_fallback_paths(
 def extract_response_content(data: dict[str, Any]) -> str:
     """提取并规范化第一段助手文本。"""
 
-    content = normalize_response_content(data)
-    return content if isinstance(content, str) else ""
+    return normalize_response_content(data)
 
 
 def extract_response_finish_reason(data: dict[str, Any]) -> str:
@@ -121,9 +125,10 @@ def extract_response_finish_reason(data: dict[str, Any]) -> str:
 
 __all__ = [
     "LLMError",
+    "ai_disabled",
     "chat_completions",
-    "chat_completions_raw_with_fallback_paths",
-    "chat_completions_with_fallback_paths",
+    "chat_completions_raw_with_profile",
+    "chat_completions_with_profile",
     "complete_raw",
     "extract_response_content",
     "extract_response_finish_reason",

@@ -17,6 +17,7 @@ from core.bounded_http import (
     parse_bounded_json,
 )
 from core.plugin_base import PluginContextProtocol, has_control_characters
+from core.safe_http import split_https_url_on_hosts
 
 API_ENDPOINT            = "https://api.flickr.com/services/rest"
 API_TIMEOUT_SECONDS     = 15.0
@@ -59,11 +60,11 @@ API_JSON_LIMITS = JsonLimits(
     max_number_chars = 128,
 )
 
-_SAFE_API_KEY      = re.compile(r"[A-Za-z0-9._-]{8,256}\Z")
-_SAFE_OPAQUE_ID    = re.compile(r"[A-Za-z0-9@_-]{1,128}\Z")
-_FLICKR_HOSTS      = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
-_STATIC_IMAGE_HOST = "live.staticflickr.com"
-_NSID              = re.compile(r"[A-Za-z0-9_-]+@N[A-Za-z0-9_-]+\Z", re.IGNORECASE)
+FLICKR_PAGE_HOSTS = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
+STATIC_IMAGE_HOST = "live.staticflickr.com"
+_SAFE_API_KEY     = re.compile(r"[A-Za-z0-9._-]{8,256}\Z")
+_SAFE_OPAQUE_ID   = re.compile(r"[A-Za-z0-9@_-]{1,128}\Z")
+_NSID             = re.compile(r"[A-Za-z0-9_-]+@N[A-Za-z0-9_-]+\Z", re.IGNORECASE)
 
 
 class FlickrError(RuntimeError):
@@ -127,7 +128,9 @@ def _plugin_api_key(context: PluginContextProtocol) -> str:
     return api_key
 
 
-def _safe_id(value: object) -> str | None:
+def safe_id(value: object) -> str | None:
+    """返回去空白后符合 Flickr 不透明 ID 字符集与长度的文本；不符合返回 ``None``。"""
+
     if not isinstance(value, (str, int)) or isinstance(value, bool):
         return None
     candidate = str(value).strip()
@@ -166,31 +169,39 @@ def _license_id(value: object) -> str:
     return candidate if re.fullmatch(r"[0-9]{1,4}", candidate) else "0"
 
 
+def split_web_url(value: str) -> tuple[str, list[str]] | None:
+    """拆分 http(s) 网页 URL，返回规范化主机名与非空路径段。
+
+    协议不是 http/https、带用户信息或端口不是默认端口时返回 ``None``；URL 本身畸形时
+    抛出 ``ValueError``。主机是否属于 Flickr 由调用方判断。
+    """
+
+    parsed = urlsplit(value)
+    port   = parsed.port
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 80, 443}
+    ):
+        return None
+    host  = (parsed.hostname or "").rstrip(".").casefold()
+    parts = [part for part in parsed.path.split("/") if part]
+    return host, parts
+
+
 def _validated_image_url(value: object) -> str | None:
     if not isinstance(value, str) or len(value) > 2_048:
         return None
-    try:
-        parsed = urlsplit(value.strip())
-        port   = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme.casefold() != "https"
-        or (parsed.hostname or "").rstrip(".").casefold() != _STATIC_IMAGE_HOST
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 443}
-        or parsed.query
-        or parsed.fragment
-        or not parsed.path.startswith("/")
-    ):
+    parsed = split_https_url_on_hosts(value.strip(), (STATIC_IMAGE_HOST,))
+    if parsed is None or parsed.query or parsed.fragment or not parsed.path.startswith("/"):
         return None
     return value.strip()
 
 
 def _constructed_image_url(photo_id: str, server: str, secret: str) -> str:
     return (
-        f"https://{_STATIC_IMAGE_HOST}/"
+        f"https://{STATIC_IMAGE_HOST}/"
         f"{quote(server, safe='')}/{quote(photo_id, safe='')}_{quote(secret, safe='')}_c.jpg"
     )
 
@@ -207,8 +218,8 @@ def _select_media_url(item: Mapping[str, Any], *, photo_id: str) -> str | None:
         candidate = _validated_image_url(item.get(field))
         if candidate is not None:
             return candidate
-    server = _safe_id(item.get("server"))
-    secret = _safe_id(item.get("secret"))
+    server = safe_id(item.get("server"))
+    secret = safe_id(item.get("secret"))
     if server is None or secret is None:
         return None
     return _constructed_image_url(photo_id, server, secret)
@@ -245,8 +256,8 @@ def _photo_from_list_item(
         return None
     if item.get("media") not in {None, "photo"}:
         return None
-    photo_id = _safe_id(item.get("id"))
-    owner_id = _safe_id(item.get("owner")) or _safe_id(default_owner_id)
+    photo_id = safe_id(item.get("id"))
+    owner_id = safe_id(item.get("owner")) or safe_id(default_owner_id)
     if photo_id is None or owner_id is None:
         return None
     media_url = _select_media_url(item, photo_id=photo_id)
@@ -305,7 +316,7 @@ def _parse_photo_page(
 
 def _user_id_from_payload(payload: Mapping[str, Any]) -> str:
     user    = payload.get("user")
-    user_id = _safe_id(user.get("id")) if isinstance(user, Mapping) else None
+    user_id = safe_id(user.get("id")) if isinstance(user, Mapping) else None
     if user_id is None:
         raise FlickrProtocolError("Flickr user response has no valid id")
     return user_id
@@ -318,8 +329,8 @@ def _photo_from_info(payload: Mapping[str, Any]) -> FlickrPhoto:
     owner = photo.get("owner")
     if not isinstance(owner, Mapping):
         raise FlickrProtocolError("Flickr photo owner is missing")
-    photo_id = _safe_id(photo.get("id"))
-    owner_id = _safe_id(owner.get("nsid"))
+    photo_id = safe_id(photo.get("id"))
+    owner_id = safe_id(owner.get("nsid"))
     if photo_id is None or owner_id is None:
         raise FlickrProtocolError("Flickr photo identifiers are invalid")
     media_url = _select_media_url(photo, photo_id=photo_id)
@@ -442,20 +453,12 @@ class FlickrClient:
 
         if "://" in candidate:
             try:
-                parsed = urlsplit(candidate)
-                port   = parsed.port
+                split = split_web_url(candidate)
             except ValueError as exc:
                 raise FlickrProtocolError("Flickr user URL is invalid") from exc
-            host = (parsed.hostname or "").rstrip(".").casefold()
-            if (
-                parsed.scheme.casefold() not in {"http", "https"}
-                or host not in _FLICKR_HOSTS
-                or parsed.username is not None
-                or parsed.password is not None
-                or port not in {None, 80, 443}
-            ):
+            if split is None or split[0] not in FLICKR_PAGE_HOSTS:
                 raise FlickrProtocolError("Flickr user URL is invalid")
-            parts = [part for part in parsed.path.split("/") if part]
+            parts = split[1]
             if len(parts) < 2 or parts[0].casefold() not in {"photos", "people"}:
                 raise FlickrProtocolError("Flickr user URL is invalid")
             slug = parts[1]

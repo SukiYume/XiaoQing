@@ -46,13 +46,18 @@ PRIORITY_ICONS = {
     5: "⚪",  # 最低
 }
 
-# 优先级文本映射
+# 优先级名称
+PRIORITY_NAMES = {
+    1: "紧急",
+    2: "高",
+    3: "中",
+    4: "低",
+    5: "最低",
+}
+
+# 优先级文本映射（图标 + 名称）
 PRIORITY_LABELS = {
-    1: "🔴紧急",
-    2: "🟠高",
-    3: "🟡中",
-    4: "🟢低",
-    5: "⚪最低",
+    level: f"{PRIORITY_ICONS[level]}{name}" for level, name in PRIORITY_NAMES.items()
 }
 
 # 任务状态图标
@@ -68,7 +73,6 @@ TYPE_ICONS = {
     "task"  : "✅",
     "note"  : "📝",
     "diary" : "📔",
-    "idea"  : "💡",
     "ledger": "💰",
 }
 
@@ -77,7 +81,6 @@ TYPE_NAMES = {
     "event" : "🗓️ 日程",
     "task"  : "✅ 待办",
     "note"  : "📝 笔记",
-    "idea"  : "💡 想法",
     "diary" : "📔 日记",
     "ledger": "💰 记账",
 }
@@ -105,7 +108,7 @@ class ItemFormatter:
         """格式化优先级
 
         Args:
-            priority: 优先级值 (1-5)
+            priority: 优先级值 (1-5)；其他值按 3（中）显示
 
         Returns:
             格式化后的优先级字符串（带图标）
@@ -117,7 +120,7 @@ class ItemFormatter:
         """获取优先级图标
 
         Args:
-            priority: 优先级值 (1-5)
+            priority: 优先级值 (1-5)；其他值按 3（中）显示
 
         Returns:
             优先级图标字符串

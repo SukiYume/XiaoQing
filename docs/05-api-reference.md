@@ -39,6 +39,7 @@ OneBot 消息段结构：
 | `image_url(url)` | `image` | 远程图片 URL |
 | `face(face_id)` | `face` | QQ face |
 | `record(file_path)` | `record` | 本地语音 |
+| `qr_image(content)` | `image` | 把文字做成二维码 PNG，以 `base64://` 内联 |
 | `segments(payload)` | `Segments` | 字符串、列表或空值标准化 |
 
 示例：
@@ -53,6 +54,9 @@ reply = [
 
 plain_reply = segments("完成")
 ```
+
+`qr_image()` 在用到时才导入二维码库，库缺失时抛出 `ImportError`，由调用方换成自己的提示。
+二维码内容可能是登录凭据的一部分，不要写进日志。
 
 ### Action 构造
 
@@ -83,7 +87,7 @@ bounded_external_text(
     value: object,
     *,
     max_chars: int,
-    max_bytes: int,
+    max_bytes: int | None = None,
     default: str = "",
     suffix: str = "…",
     strip_ansi: bool = True,
@@ -97,6 +101,7 @@ head_tail_preview(text: str, max_chars: int, *, marker: str) -> str
 ```
 
 这些函数用于第三方响应、终端输出、标题和日志摘要的字符、字节与控制字符边界。
+`bounded_external_text()` 不传 `max_bytes` 时取 `max_chars * 4`，即 UTF-8 的最坏情况；只有需要比它更紧的字节预算时才显式传入。
 
 ```python
 file_uri_to_path(value: str) -> Path | None
@@ -116,6 +121,27 @@ result = await run_process(argv, timeout=30, cwd=workdir, max_capture_bytes=64 *
 命令在独立进程树里执行（Windows 用 Job 对象，POSIX 用进程组）。
 stdout 与 stderr 共用捕获预算，超时、超出预算或调用方取消时整树回收，命令自己退出后留下的后台子进程也会收掉，不会借收尾多跑。
 `ProcessResult` 含 `exit_code`（被终止时为 `None`）、`stdout`、`stderr`、`timed_out`、`output_limited`。
+
+### 命令发起人
+
+```python
+requester_user_id(context, event: Mapping[str, Any]) -> int | None
+```
+
+返回发起命令的用户 ID：优先取 `context.current_user_id`，没有再取事件里的 `user_id`。
+结果不是正整数时返回 `None`，由调用方决定怎么拒绝。
+
+### 配置取值
+
+```python
+config_bool(value, default: bool) -> bool
+config_int(value, default: int, *, minimum: int, maximum: int) -> int
+config_float(value, default: float, *, minimum: float, maximum: float) -> float
+resolve_bot_name(value: object) -> str
+```
+
+`config_bool()` 只认真正的布尔值。`config_int()` 与 `config_float()` 拒绝布尔值，并把结果夹到 `[minimum, maximum]`；`config_float()` 同时拒绝 NaN 和无穷。类型不对时三者都返回 `default`。
+`resolve_bot_name()` 去掉配置里 `bot_name` 的首尾空白，为空或没配时返回 `DEFAULT_BOT_NAME`（`小青`）。
 
 ### 异步工具
 
@@ -145,6 +171,16 @@ write_json(path: Path, data: Any) -> None
 `atomic_write_text()` 使用 UTF-8 编码调用同一原语。
 `load_json()` 与 `write_json()` 使用 `AtomicJsonStore`。
 持久数据路径以 `context.data_dir` 为根。
+
+```python
+from core.atomic_store import quarantine_corrupt_file
+
+quarantine_corrupt_file(path: Path, *, suffix: str | None = None) -> Path | None
+```
+
+读到无法解析的状态文件时，用它把坏文件改名留底，再从空状态开始，避免后续保存覆盖仅存的原件。
+留底名是原文件名加 `suffix`，默认 `.corrupt-<纳秒时间戳>`，每次不重名；传入固定后缀时同名的旧留底会被覆盖。
+文件此时已不存在返回 `None`，改名本身失败的错误原样抛出。
 
 ### 长消息拆分
 
@@ -302,6 +338,7 @@ Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在�
 | `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送。`run(text, *, sender_name, operation_id, request_texts)` 原样返回命令的 `DeliverySegments`，由调用方结算回执；`request_texts` 是发起人原话，命令在 `context.request_texts` 读取 |
 | `local_tools` | XiaoQing Agent 在本机执行代码、读写文件前的授权确认（跟随 `/shell` 的声明，每次调用复核） |
 | `life_context` | XiaoQing Chat 向 XiaoQing Life 取小青自己的网上生活：`turn_context(payload)` 与 `export_memes(payload)`，返回映射或 `None`（没有可用内容）；数据只关于小青自己，不按用户身份门控，系统主体也可用 |
+| `memory` | XiaoQing Chat、Agent、Life 读写小青的统一记忆（XiaoQing Memory）：`record`、`recall`、`search`、`forget`，各接收一个载荷映射，返回映射或 `None`（插件关闭或出错）。只签发 `uses_services` 里声明了的方法，调用没声明的抛出 `RuntimeError`；Core 把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效，系统主体也可用 |
 | `ai` | 当前插件的统一 AI route |
 
 `is_bot_admin` 与 `is_system` 始终提供布尔值。
@@ -364,6 +401,16 @@ context.capabilities.ai.list_models(
 
 复杂响应可读取 `response`。
 纯文本调用优先读取 `content`。
+
+### `first_json_object()`
+
+```python
+from core.ai import first_json_object
+
+first_json_object(text: str) -> dict[str, Any] | None
+```
+
+取模型输出里的第一个 JSON 对象。模型常在 JSON 前后加解释文字，或整段包在 ``` 代码围栏里：函数先去掉首尾的围栏标记，再从每个 `{` 起尝试解析，第一个能解析成对象的就是结果；取不到返回 `None`。取不到时怎么办由调用方决定。
 
 ---
 
@@ -499,7 +546,7 @@ session.is_expired() -> bool
 ## 📌 参数解析
 
 ```python
-from core.args import parse, parse_int, tokenize
+from core.args import chinese_number, parse, parse_int, tokenize
 ```
 
 ### `parse()`
@@ -525,6 +572,15 @@ parse_int(text, *, minimum=None, maximum=None) -> int | None
 ```
 
 函数接受 ASCII 十进制整数字符串，并应用可选范围。
+
+### `chinese_number()`
+
+```python
+chinese_number(text: str) -> int | None
+```
+
+把“八百”“一百零五”“十二万”这类中文数字读成整数；含有别的字符时返回 `None`。
+末尾省掉单位的口语读法按上一级单位的下一位算：“一百二”是 120，“一千五”是 1500，“三万五”是 35000。
 
 ---
 

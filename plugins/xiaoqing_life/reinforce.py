@@ -12,6 +12,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from .days import DAY
+from .lifecycle import TOPIC_CHARS
 from .safety import is_blocked, normalize_for_match, overlap, similar
 
 ALPHA              = 0.3
@@ -39,8 +41,6 @@ GENERIC_TOPICS = frozenset(
         "课程",
         "经验分享",
         "分享",
-        "vlog",
-        "VLOG",
         "知识",
         "搞笑",
         "游戏",
@@ -64,7 +64,6 @@ GENERIC_TOPICS = frozenset(
         "温度",
         "开箱",
         "测评",
-        "4K",
     }
 )
 _SERIAL_RE = re.compile(r"[0-9０-９]|[·・]|第.{1,3}[期集话章]")
@@ -88,7 +87,6 @@ def frontier_ok(topic: str) -> bool:
     )
 
 
-FRONTIER_TOPIC_CHARS = 12
 FEEDBACK_WINDOW_SEC  = 2 * 3600
 MAX_FINGERPRINTS     = 10
 HABIT_COOLDOWN_SCALE = 0.5
@@ -271,7 +269,7 @@ def grow_frontier(
         tags  = [t for t in row.get("tags", []) if frontier_ok(str(t).strip())][:MAX_FRONTIER_TAGS]
         words = [*row.get("topics", []), *tags, *extra_words.get(row["id"], [])]
         for raw in words:
-            topic = str(raw).strip()[:FRONTIER_TOPIC_CHARS]
+            topic = str(raw).strip()[:TOPIC_CHARS]
             if not frontier_ok(topic):
                 continue
             if is_blocked(topic, blocked) or _strong(interests, topic):
@@ -295,7 +293,7 @@ def frontier_weights(frontier: list[dict[str, Any]], now: float) -> dict[str, fl
     """未试过的 frontier 话题，越近期喜欢的越可能。"""
 
     return {
-        f["topic"]: 1.0 / (1.0 + max(0.0, now - float(f.get("added_at", now))) / 86400.0)
+        f["topic"]: 1.0 / (1.0 + max(0.0, now - float(f.get("added_at", now))) / DAY)
         for f in frontier
         if not f.get("tried") and frontier_ok(str(f.get("topic", "")))
     }
@@ -345,7 +343,7 @@ def _record_use(entry: dict[str, Any], verdict: str, now: float) -> None:
     else:
         entry["use_confused"] = int(entry.get("use_confused", 0)) + 1
     if int(entry.get("use_confused", 0)) >= 2 and int(entry.get("use_ok", 0)) == 0:
-        entry["suppressed_until"] = now + SUPPRESS_DAYS * 86400.0
+        entry["suppressed_until"] = now + SUPPRESS_DAYS * DAY
 
 
 def is_habit(entry: dict[str, Any]) -> bool:

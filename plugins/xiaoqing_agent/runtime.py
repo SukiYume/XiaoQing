@@ -16,13 +16,9 @@ from core.delivery import DeliveryReceipt, DeliverySegments
 
 from . import receipts
 from .config import AgentConfig
-from .delivery import (
-    classify_files,
-    deliver_outcome,
-    outcome_message,
-    upload_each,
-)
+from .delivery import deliver_outcome, outcome_message, upload_each
 from .loop import run_agent_loop
+from .memory import recall_for_session, record_task
 from .prompts import (
     build_system_message,
     build_turn_message,
@@ -235,6 +231,11 @@ class AgentRuntime:
         )
         tools = build_tools(env)
         now, zone = current_time(context)
+        session = await self.sessions.load(task.chat, idle_seconds=config.session_idle_minutes * 60)
+        recent: list[dict[str, Any]] = []
+        memory                       = session.memory if session is not None else ""
+        if session is None and config.use_memory:
+            memory = await recall_for_session(context, task)
         system = build_system_message(
             bot_name     = configured_bot_name(context),
             sender       = task.sender,
@@ -249,12 +250,11 @@ class AgentRuntime:
                 context.get_command_catalog(),
                 getattr(context, "principal", None),
             ),
+            memory=memory,
         )
-        session = await self.sessions.load(task.chat, idle_seconds=config.session_idle_minutes * 60)
-        recent: list[dict[str, Any]] = []
         if session is None:
-            session = Session(system)
-            recent  = await self.recent_records(task.chat, config.history_tasks)
+            session = Session(system, memory=memory)
+            recent = await self.recent_records(task.chat, config.history_tasks)
         # 当前身份、人设和工具以本轮配置为准；已经发生的对话继续保留。
         session.system       = system
         task.continues       = session.last_task_id
@@ -308,8 +308,7 @@ class AgentRuntime:
                 outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
             task.status = outcome.status
         except asyncio.CancelledError:
-            task.status = "cancelled" if self.accepting else "interrupted"
-            self._resolve_waiter(task, Outcome("这个任务已经停下了。", status=task.status))
+            self._mark_stopped(task)
             # 停下的任务不会再发附件：命令为发送做的预留（比如取图）现在就释放。
             await asyncio.shield(receipts.release(task.held_receipts))
             raise
@@ -334,6 +333,10 @@ class AgentRuntime:
                 await asyncio.shield(
                     self._remember_turn(config, task, session, env, transcript[start:], outcome)
                 )
+                if config.use_memory:
+                    await asyncio.shield(
+                        record_task(context, task, env.user_updates, transcript[start:], outcome)
+                    )
             logger.info(
                 "xiaoqing_agent task finished task=%s status=%s steps=%d elapsed=%.1fs"
                 " model_calls=%d model_s=%.1f tool_s=%.1f",
@@ -395,9 +398,8 @@ class AgentRuntime:
         self._active.discard(runner)
         self.running.pop(task.task_id, None)
         if task.status == "running":
-            task.status      = "cancelled" if self.accepting else "interrupted"
             task.finished_at = time.time()
-            self._resolve_waiter(task, Outcome("这个任务已经停下了。", status=task.status))
+            self._mark_stopped(task)
 
     async def _persist(self, task: AgentTask, messages: list[dict[str, Any]]) -> None:
         try:
@@ -412,6 +414,12 @@ class AgentRuntime:
             )
 
     # ──────────────────── 交付 ────────────────────
+
+    def _mark_stopped(self, task: AgentTask) -> None:
+        """任务被取消：关闭中记为 interrupted，否则 cancelled；当轮还在等的人拿到“已经停下”。"""
+
+        task.status = "cancelled" if self.accepting else "interrupted"
+        self._resolve_waiter(task, Outcome("这个任务已经停下了。", status=task.status))
 
     @staticmethod
     def _resolve_waiter(task: AgentTask, outcome: Outcome) -> bool:
@@ -513,8 +521,7 @@ class AgentRuntime:
     ) -> list[dict[str, Any]]:
         """当轮回复：文字和图片作为返回段，其他文件随后另外上传。"""
 
-        message, uploads = outcome_message(outcome)
-        images, _, _ = classify_files(outcome.files)
+        message, images, uploads = outcome_message(outcome)
         task.delivery        = "inline"
         task.inline_files    = [str(path) for path in images]
         task.inline_parts    = {}
@@ -711,7 +718,7 @@ class AgentRuntime:
             detail = f"：{error}" if error else ""
             return f"任务 {task_id} 没有结果（{record.get('status')}{detail}）。"
         files = [item for item in record.get("files") or [] if isinstance(item, str)]
-        message, uploads = outcome_message(Outcome(text, files))
+        message, _images, uploads = outcome_message(Outcome(text, files))
         resend = _Resend(self.store, chat.key, task_id)
         if uploads:
             self._track(self._upload_resent(context, chat, uploads, resend))

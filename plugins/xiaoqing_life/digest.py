@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from core.clock import WEEKDAY_NAMES
+
+from .lifecycle import TOPIC_CHARS
 from .safety import clean_text, is_blocked, is_profane, is_violent_term, quote_in_source
 from .sources.base import SourceItem
 
@@ -25,11 +28,12 @@ FEELINGS               = frozenset({"like", "meh", "dislike", "mixed"})
 TONES                  = frozenset({"玩笑", "夸", "损", "自嘲", "中性"})
 
 # 浏览消化和研究共用的字段与规则：她看了哪几条、什么感受，以及从材料里学到的说法和表达。
-LEARN_FIELDS = """  "looked_at": [{"item": "i2", "reaction": "感想，40字内", "feeling": "like|meh|dislike|mixed", "liked_part": "mixed 时喜欢的地方，12字内", "disliked_part": "mixed 时不喜欢的地方，12字内", "share": false, "topics": ["最多3个短话题"]}],
+LEARN_FIELDS = """  "looked_at": [{"item": "i2", "reaction": "感想，40字内", "feeling": "like|meh|dislike|mixed", "liked_part": "mixed 时喜欢的地方，12字内", "disliked_part": "mixed 时不喜欢的地方，12字内", "quote": "这条里你会原样讲给朋友听的那一句原文，逐字照抄", "refs": ["c2.1"], "share": false, "topics": ["最多3个短话题"]}],
   "terms": [{"term": "说法", "meaning": "一句话含义", "usage": "什么场合、表达什么", "tone": "玩笑|夸|损|自嘲|中性", "quote": "原文逐字片段，必须包含该说法", "refs": ["c2.3"]}],
   "expressions": [{"situation": "当……时", "pattern": "抽象句式或接法，用自己的话概括", "kind": "phrase|move", "quote": "最能看出这种说法的那一句网友原话，逐字照抄", "refs": ["c1.2", "c1.2.r1"]}],"""
 LEARN_RULES = """- topics 写这条内容属于哪个领域或对象（短而具体，如“骑行”“独立游戏”“猎户座”），不写情绪词和泛泛的词。
 - 对同一条内容既有喜欢的地方又有看不下去的地方时，feeling 写 mixed，并用 liked_part 和 disliked_part 各写一个短词；只有一面就不要写 mixed。
+- looked_at 的 quote 是这条内容里让你有反应的那一句本身：评论区或弹幕里最逗的一句，标题、简介、字幕里最出乎意料的一个事实或数字。以后跟朋友说起这条时，你讲的就是它。这条里没有这样的句子就留空字符串、refs 给空数组。
 - 词条只收网络流行语、梗、圈内说法和流行句式，写成大家实际在说的那个短说法（通常不超过 8 个字），而且材料里不止一个人在用；只出现一次的玩笑、整句感想、普通词、做菜或物理之类的专业术语、人名、作品名、品牌名都不算。含义要写你从原文里读出来的意思。
 - 表达方式写成换个话题也能用的说法，例如“当想吐槽某事离谱时：用‘X基础，Y不基础’的反差句式”；只适用于这一个视频内容的不算。move 指楼中楼里接梗、抬杠、顺着句式换一个词往前推这类对话方式。
 - 每个 quote 都要是材料里的原文（条目标题简介、评论、楼中楼、弹幕或段落都可以），refs 写它所在的编号（i1、c1.2、c1.2.r1、d1.3、p1.2）。没有合适内容的字段就给空数组。"""
@@ -83,6 +87,10 @@ class LookedAt:
     # feeling 为 mixed（又爱又嫌）时的两个侧面；缺一个就降为 meh，不会走到这里。
     liked_part   : str = ""
     disliked_part: str = ""
+    # 这条内容里让她有反应的那句原文（已和材料逐字核对）和它出自哪里：
+    # comment / danmaku / passage / item（标题简介）。感想只有她的态度，原文才是能讲给别人听的内容。
+    highlight     : str = ""
+    highlight_from: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,15 +144,12 @@ def item_ref(index: int) -> str:
     return f"i{index}"
 
 
-WEEKDAYS = "一二三四五六日"
-
-
 def moment_line(moment: datetime | None, activity: str) -> str:
     """让感想贴合她此刻的状态（比如熄灯后躺在床上刷手机）。"""
 
     if moment is None:
         return ""
-    line = f"现在是{moment:%Y-%m-%d %H:%M}，星期{WEEKDAYS[moment.weekday()]}。"
+    line = f"现在是{moment:%Y-%m-%d %H:%M}，星期{WEEKDAY_NAMES[moment.weekday()]}。"
     return line + (f"按你的作息，这会儿大概在{activity}。" if activity else "")
 
 
@@ -220,7 +225,7 @@ def build_messages(
     }
     line = moment_line(moment, activity)
     if chat_topic:
-        line += CHAT_TOPIC_LINE.format(topic=clean_text(chat_topic, 12))
+        line += CHAT_TOPIC_LINE.format(topic=clean_text(chat_topic, TOPIC_CHARS))
     return [
         {"role": "system", "content": system_prompt(_SYSTEM, persona, line)},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -258,10 +263,20 @@ def valid_refs(value: Any, texts: Mapping[str, str]) -> list[str] | None:
     return refs[:4]
 
 
+# 条目里的某一处（评论 / 楼中楼、弹幕、深读段）的编号前缀；条目本身的编号以 i 开头。
+PART_PREFIXES = ("c", "d", "p")
+
+
 def owner_ref(ref: str) -> str:
     """评论 / 楼中楼 / 弹幕 / 深读段编号 c2.3(.r1)、d2.1、p2.1 对应的条目编号 i2；条目编号原样返回。"""
 
-    return f"i{ref[1:].split('.', 1)[0]}" if ref[:1] in ("c", "d", "p") else ref
+    return f"i{ref[1:].split('.', 1)[0]}" if ref[:1] in PART_PREFIXES else ref
+
+
+def cited_item(ref: str, items: list[SourceItem]) -> SourceItem:
+    """编号所属的条目；``ref`` 必须已经过 ``valid_refs`` 或在 ``texts`` 里核对过。"""
+
+    return items[int(owner_ref(ref)[1:]) - 1]
 
 
 def quote_ok(quote: Any, refs: list[str], texts: Mapping[str, str]) -> str | None:
@@ -270,6 +285,23 @@ def quote_ok(quote: Any, refs: list[str], texts: Mapping[str, str]) -> str | Non
     clean  = clean_text(quote, 120)
     source = " ".join(texts[r] for r in refs)
     return clean if clean and quote_in_source(quote, source) else None
+
+
+HIGHLIGHT_FROM = {"c": "comment", "d": "danmaku", "p": "passage", "i": "item"}
+
+
+def _highlight(
+    row: Mapping[str, Any], item_ref_: str, texts: Mapping[str, str], blocked: Iterable[str]
+) -> tuple[str, str]:
+    """这条内容里她想讲给朋友听的那句原文；出处不在这条内容里、对不上原文或带屏蔽词的不留。"""
+
+    refs = valid_refs(row.get("refs"), texts)
+    if not refs or any(owner_ref(r) != item_ref_ for r in refs):
+        return "", ""
+    quote = quote_ok(row.get("quote"), refs, texts)
+    if not quote or is_blocked(quote, blocked):
+        return "", ""
+    return quote, HIGHLIGHT_FROM[refs[0][:1]]
 
 
 def _validate_looked(
@@ -281,17 +313,14 @@ def _validate_looked(
         ref      = row.get("item")
         reaction = clean_text(row.get("reaction"), 40)
         feeling  = row.get("feeling")
-        if (
-            not isinstance(ref, str)
-            or ref not in texts
-            or ref[:1] in ("c", "d", "p")
-            or ref in seen
-        ):
+        if not isinstance(ref, str) or ref not in texts or ref[:1] in PART_PREFIXES or ref in seen:
             continue
         if not reaction or feeling not in FEELINGS or is_blocked(reaction, blocked):
             continue
         topics = (
-            tuple(t for t in (clean_text(x, 12) for x in (row.get("topics") or [])[:3]) if t)
+            tuple(
+                t for t in (clean_text(x, TOPIC_CHARS) for x in (row.get("topics") or [])[:3]) if t
+            )
             if isinstance(row.get("topics"), list)
             else ()
         )
@@ -303,17 +332,20 @@ def _validate_looked(
                 f"{liked_part} {disliked_part}", blocked
             ):
                 feeling, liked_part, disliked_part = "meh", "", ""
+        highlight, highlight_from = _highlight(row, ref, texts, blocked)
         seen.add(ref)
         result.append(
             LookedAt(
-                item_id       = items[int(ref[1:]) - 1].item_id,
-                ref           = ref,
-                reaction      = reaction,
-                feeling       = str(feeling),
-                share         = row.get("share") is True,
-                topics        = topics,
-                liked_part    = liked_part,
-                disliked_part = disliked_part,
+                item_id        = cited_item(ref, items).item_id,
+                ref            = ref,
+                reaction       = reaction,
+                feeling        = str(feeling),
+                share          = row.get("share") is True,
+                topics         = topics,
+                liked_part     = liked_part,
+                disliked_part  = disliked_part,
+                highlight      = highlight,
+                highlight_from = highlight_from,
             )
         )
         if len(result) >= MAX_LOOKED_AT:
@@ -338,9 +370,9 @@ def _validate_terms(
     result: list[DigestTerm] = []
     keys  : set[str]         = set()
     for row in take_rows(rows, TERMS_PER_DIGEST * 2):
-        term = clean_text(row.get("term"), 12)
         if len(str(row.get("term") or "").strip()) > MAX_TERM_CHARS:
             continue
+        term    = clean_text(row.get("term"), MAX_TERM_CHARS)
         refs    = valid_refs(row.get("refs"), texts)
         quote   = quote_ok(row.get("quote"), refs, texts) if refs else None
         meaning = clean_text(row.get("meaning"), 60)
@@ -361,7 +393,7 @@ def _validate_terms(
                 meaning = meaning,
                 usage   = clean_text(row.get("usage"), 40),
                 tone    = tone if tone in TONES else "中性",
-                item_id = items[int(owner_ref(refs[0])[1:]) - 1].item_id,
+                item_id = cited_item(refs[0], items).item_id,
                 voices  = voices(term, texts, items),
             )
         )
@@ -389,7 +421,7 @@ def _validate_expressions(
                 situation = situation,
                 pattern   = pattern,
                 kind      = "move" if row.get("kind") == "move" else "phrase",
-                item_id   = items[int(owner_ref(refs[0])[1:]) - 1].item_id,
+                item_id   = cited_item(refs[0], items).item_id,
                 example   = "" if is_profane(example) or is_blocked(example, blocked) else example,
             )
         )
@@ -420,13 +452,13 @@ def _validate_thread(
     if not title or is_blocked(f"{title} {done_when}", blocked):
         return None
     refs    = valid_refs(raw.get("refs"), texts)
-    item_id = items[int(owner_ref(refs[0])[1:]) - 1].item_id if refs else ""
+    item_id = cited_item(refs[0], items).item_id if refs else ""
     return DigestThread(
         title      = title,
         why        = clean_text(raw.get("why"), 60),
         next_query = clean_text(raw.get("next_query"), 30),
         item_id    = item_id,
-        topic      = clean_text(raw.get("topic"), 12),
+        topic      = clean_text(raw.get("topic"), TOPIC_CHARS),
         done_when  = done_when,
         kind       = str(raw["kind"]) if raw.get("kind") in ("fact", "practice") else "",
     )

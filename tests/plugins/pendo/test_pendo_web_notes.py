@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web.analytics import notes_overview as notes_overview_module
+from plugins.pendo.web import utils as web_utils
 from plugins.pendo.web.analytics.notes_overview import build_notes_overview
 
 
@@ -198,7 +198,7 @@ def test_build_notes_overview_uses_user_clock_and_excludes_future_week_new(
         assert database is db
         return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
 
-    monkeypatch.setattr(notes_overview_module, "now_in_timezone", user_now)
+    monkeypatch.setattr(web_utils, "now_in_timezone", user_now)
     result = build_notes_overview(db=db, owner_id=owner_id)
 
     assert result["summary"]["total_count"] == 2

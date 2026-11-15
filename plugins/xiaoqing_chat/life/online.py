@@ -7,30 +7,38 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.atomic_store import AtomicJsonStore
+from core.image_validation import (
+    WEB_IMAGE_FORMAT_EXTENSIONS,
+    WEB_IMAGE_MIME_FORMATS,
+    ImageValidationError,
+    validate_image_bytes,
+)
+
+from ..chat_runtime import optional_capability
 from ..logging_utils import log_step
 
 if TYPE_CHECKING:
     from ..runtime_state import ChatRuntime
 
-_MAX_TEXT_CHARS    = 500
-_MAX_RECENT_ITEMS  = 8
-_MAX_BOT_RECENT    = 6
-_MAX_ITEM_CHARS    = 200
-_MAX_UNKNOWN_WORDS = 3
-_MAX_UNKNOWN_CHARS = 12
-_MAX_LIFE_LINES    = 800
-_MAX_SLANG_NOTES   = 600
-_MAX_EXPRESSION    = 200
-_MAX_LIFE_TOPICS   = 3
-_TOPIC_FRESH_SEC   = 3 * 86400.0
-_TOPIC_CHARS       = 12
-_KEYWORD_CHARS     = 8
+_MAX_TEXT_CHARS       = 500
+_MAX_RECENT_ITEMS     = 8
+_MAX_BOT_RECENT       = 6
+_MAX_ITEM_CHARS       = 200
+_MAX_UNKNOWN_WORDS    = 3
+_MAX_UNKNOWN_CHARS    = 12
+_MAX_LIFE_LINES       = 800
+_MAX_SLANG_NOTES      = 600
+_MAX_EXPRESSION       = 200
+_MAX_LIFE_TOPICS      = 3
+_MAX_SHARE_LINE       = 700
+_MAX_KNOWN_TOPICS     = 20
+_MAX_SHARE_CANDIDATES = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +52,8 @@ class OnlineLife:
     term_count     : int = 0
     # 这一轮交过去的没确认的说法里，网上生活已经去百科查实了的：(说法, 意思)
     verified_terms: tuple[tuple[str, str], ...] = ()
+    # life_lines 里给出了细节的经历、查明白的事和日记的键（和统一记忆里的一致）
+    shown_keys: tuple[str, ...] = ()
 
     @property
     def empty(self) -> bool:
@@ -83,8 +93,12 @@ def build_request(
     is_private: bool,
     unknown_words: list[str],
     topics: Sequence[dict[str, Any]] = (),
+    explained_terms: Sequence[str]   = (),
 ) -> dict[str, Any]:
-    """请求体不含任何用户 ID 和群号；``topics`` 只有群聊才带。"""
+    """请求体不含任何用户 ID 和群号；``topics`` 只有群聊才带。
+
+    ``explained_terms`` 是本群黑话块这一轮已经解释了的说法，网上生活不再解释一遍。
+    """
 
     recent, bot_recent = _history_texts(history)
     words = [
@@ -103,36 +117,12 @@ def build_request(
     }
     if topics and not is_private:
         request["topics"] = list(topics)[:_MAX_LIFE_TOPICS]
+    explained = [
+        word.strip()[:_MAX_UNKNOWN_CHARS] for word in explained_terms if isinstance(word, str)
+    ]
+    if any(explained):
+        request["explained_terms"] = list(dict.fromkeys(w for w in explained if w))[:6]
     return request
-
-
-def group_topics(data_dir: Any, chat_id: str, *, now: float | None = None) -> list[dict[str, Any]]:
-    """本群这两三天的话题词，交给小青的网上生活当作上网的方向（她自己挑想看的）。
-
-    只给话题和关键词，不给原话、摘要和任何 ID；只给可以自然提起的（伤心事、吵过的架、
-    标了不主动提的都不给）。调用方只在群聊里调用。
-    """
-
-    from ..memory.mention_policy import MENTION, classify
-    from ..memory.topic_summary_cache import load_topic_summary_entries
-
-    moment                     = time.time() if now is None else now
-    rows: list[dict[str, Any]] = []
-    for entry in reversed(load_topic_summary_entries(Path(data_dir), chat_id)):
-        if not entry.topic or not 0 <= moment - float(entry.updated_at or 0.0) <= _TOPIC_FRESH_SEC:
-            continue
-        meta = {"type": "topic_summary", "mention": entry.mention, "updated_at": entry.updated_at}
-        if classify(f"{entry.topic} {entry.summary}", meta, now=moment) != MENTION:
-            continue
-        rows.append(
-            {
-                "topic"   : entry.topic.strip()[:_TOPIC_CHARS],
-                "keywords": [k.strip()[:_KEYWORD_CHARS] for k in entry.keywords[:3] if k.strip()],
-            }
-        )
-        if len(rows) >= _MAX_LIFE_TOPICS:
-            break
-    return rows
 
 
 def unconfirmed_jargon(state: Any, data_dir: Any, chat_id: str, text: str) -> list[str]:
@@ -143,32 +133,12 @@ def unconfirmed_jargon(state: Any, data_dir: Any, chat_id: str, text: str) -> li
     found = [
         rec.content
         for rec in store.load().values()
-        if (rec.is_global or rec.scope_chat_id == chat_id)
+        if rec.visible_to(chat_id)
         and not rec.confirmed
         and 2 <= len(rec.content) <= _MAX_UNKNOWN_CHARS
         and rec.content in text
     ]
     return list(dict.fromkeys(found))[:_MAX_UNKNOWN_WORDS]
-
-
-def life_signals(
-    state: Any, data_dir: Any, chat_id: str, text: str, *, is_private: bool
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """（群里的话题词, 没确认意思的说法）；读不到就是空，不影响回复。"""
-
-    topics: list[dict[str, Any]] = []
-    words : list[str]            = []
-    try:
-        if not is_private:
-            topics = group_topics(data_dir, chat_id)
-    except Exception:
-        topics = []
-    try:
-        if state is not None:
-            words = unconfirmed_jargon(state, data_dir, chat_id, text)
-    except Exception:
-        words = []
-    return topics, words
 
 
 def parse_response(raw: Any) -> OnlineLife:
@@ -183,6 +153,11 @@ def parse_response(raw: Any) -> OnlineLife:
         episode_count   = _count(raw.get("episode_ids")),
         term_count      = _count(raw.get("term_keys")),
         verified_terms  = _verified_terms(raw.get("verified_terms")),
+        shown_keys      = tuple(
+            key[:80] for key in raw.get("shown_keys") or () if isinstance(key, str) and key
+        )[:20]
+        if isinstance(raw.get("shown_keys"), list)
+        else (),
     )
 
 
@@ -207,13 +182,12 @@ def confirm_jargon(state: Any, data_dir: Any, chat_id: str, rows: Sequence[tuple
     records = store.load()
     changed = 0
     for term, meaning in rows:
-        for key in (store.key_for(term, chat_id), store.key_for(term)):
-            record = records.get(key)
-            if record is not None and not record.confirmed:
-                record.meaning   = meaning
-                record.confirmed = True
-                record.source    = "百科"
-                changed += 1
+        record = records.get(store.key_for(term, chat_id))
+        if record is not None and not record.confirmed:
+            record.meaning   = meaning
+            record.confirmed = True
+            record.source    = "百科"
+            changed += 1
     if changed:
         store.save(records)
     return changed
@@ -223,7 +197,7 @@ async def probe_online_life(context: Any, runtime: ChatRuntime) -> bool:
     """xiaoqing_life 是否在线且开启（``turn_context(mode="probe")``）；任何失败都是 False。"""
 
     life_cfg   = runtime.cfg.life
-    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    capability = optional_capability(context, "life_context")
     if capability is None or not life_cfg.enable_online_life:
         return False
     try:
@@ -239,12 +213,20 @@ async def probe_online_life(context: Any, runtime: ChatRuntime) -> bool:
 
 
 async def fetch_share_candidates(
-    context: Any, runtime: ChatRuntime, *, exclude_ids: Sequence[str]
+    context: Any,
+    runtime: ChatRuntime,
+    *,
+    exclude_ids: Sequence[str],
+    topics: Sequence[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
-    """主动开口的分享候选（``turn_context(mode="proactive")``）；任何失败或关闭都是空。"""
+    """她手里可以拿出来说的事（``turn_context(mode="proactive")``）；任何失败或关闭都是空。
+
+    ``topics`` 是这个群这两三天的话题词（只在群聊里给）：对方据此认出哪些经历是这个群聊到才去搜
+    的，在候选里标成 ``heard_here``。
+    """
 
     life_cfg   = runtime.cfg.life
-    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    capability = optional_capability(context, "life_context")
     if capability is None or not life_cfg.enable_life_share:
         return []
     request = {
@@ -252,6 +234,9 @@ async def fetch_share_candidates(
         "mode"       : "proactive",
         "exclude_ids": [str(i) for i in exclude_ids][-20:],
     }
+    if topics:
+        request["is_private"] = False
+        request["topics"]     = list(topics)[:_MAX_KNOWN_TOPICS]
     try:
         raw = await asyncio.wait_for(
             capability.turn_context(request), timeout=float(life_cfg.online_life_timeout_seconds)
@@ -265,14 +250,21 @@ async def fetch_share_candidates(
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or not isinstance(row.get("episode_id"), str):
             continue
-        line = _clip(row.get("line"), 400)
+        line = _clip(row.get("line"), _MAX_SHARE_LINE)
         if not line or row["episode_id"] in exclude_ids:
             continue
-        topics = [
-            t.strip()[:12] for t in row.get("topics", []) if isinstance(t, str) and t.strip()
-        ][:5]
-        found.append({"episode_id": row["episode_id"][:40], "line": line, "topics": topics})
-    return found[:3]
+        about = [t.strip()[:12] for t in row.get("topics", []) if isinstance(t, str) and t.strip()][
+            :5
+        ]
+        found.append(
+            {
+                "episode_id": row["episode_id"][:40],
+                "line"      : line,
+                "topics"    : about,
+                "heard_here": row.get("heard_here") is True,
+            }
+        )
+    return found[:_MAX_SHARE_CANDIDATES]
 
 
 async def fetch_online_life(
@@ -282,31 +274,36 @@ async def fetch_online_life(
     text: str,
     history: Any,
     is_private: bool,
-    unknown_words: list[str],
-    chat_id: str = "",
-    state: Any   = None,
+    chat_id: str                     = "",
+    state: Any                       = None,
+    topics: Sequence[dict[str, Any]] = (),
+    explained_terms: Sequence[str]   = (),
 ) -> OnlineLife:
     """取这一轮的网上生活；能力缺失、开关关闭、超时或异常都返回空。
 
-    给了 ``state`` 时顺带交过去本群最近的话题词和没确认意思的说法（``life_signals``）。
+    ``topics`` 是记忆里本群这两三天的话题词（只在群聊里交过去）；给了 ``state`` 时顺带交过去
+    这一轮原话里本群还没确认意思的说法。
     """
 
     life_cfg   = runtime.cfg.life
-    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    capability = optional_capability(context, "life_context")
     if capability is None or not life_cfg.enable_online_life:
         return EMPTY_ONLINE_LIFE
-    topics: list[dict[str, Any]] = []
-    jargon: list[str]            = []
+    jargon: list[str] = []
     if state is not None and chat_id:
-        topics, jargon = await asyncio.to_thread(
-            life_signals, state, context.data_dir, chat_id, text, is_private=is_private
-        )
+        try:
+            jargon = await asyncio.to_thread(
+                unconfirmed_jargon, state, context.data_dir, chat_id, text
+            )
+        except Exception:
+            jargon = []
     request = build_request(
-        text          = text,
-        history       = history,
-        is_private    = is_private,
-        unknown_words = [*unknown_words, *jargon],
-        topics        = topics,
+        text            = text,
+        history         = history,
+        is_private      = is_private,
+        unknown_words   = jargon,
+        topics          = topics,
+        explained_terms = explained_terms,
     )
     try:
         raw = await asyncio.wait_for(
@@ -360,20 +357,10 @@ async def _confirm_verified(
 _MEME_PAGE_LIMIT = 10
 _MEME_MAX_PAGES  = 10
 _MEME_MAX_B64    = 3 * 1024 * 1024
-_MEME_SUFFIX     = {
-    "image/png" : ".png",
-    "image/jpeg": ".jpg",
-    "image/gif" : ".gif",
-    "image/webp": ".webp",
-}
-_CURSOR_FILE = "life_memes_cursor.json"
+_CURSOR_FILE     = "life_memes_cursor.json"
 
 
 def _cursor_store(context: Any) -> Any:
-    from pathlib import Path
-
-    from core.atomic_store import AtomicJsonStore
-
     return AtomicJsonStore(Path(context.data_dir) / "life" / _CURSOR_FILE)
 
 
@@ -387,7 +374,7 @@ def _write_cursor(context: Any, since: float) -> None:
 
 
 def _decode_meme(
-    raw: Any, runtime: Any = None
+    raw: Any, runtime: ChatRuntime
 ) -> tuple[bytes, str, str, tuple[str, ...], str] | None:
     """校验一张导出的梗图；返回 (字节, 后缀, 名字, 标签, sha256)，不合格返回 None。"""
 
@@ -398,7 +385,8 @@ def _decode_meme(
     if not isinstance(raw, dict):
         return None
     sha, label = raw.get("sha256"), raw.get("label")
-    suffix   = _MEME_SUFFIX.get(str(raw.get("mime")))
+    mime     = str(raw.get("mime"))
+    suffix   = WEB_IMAGE_FORMAT_EXTENSIONS.get(WEB_IMAGE_MIME_FORMATS.get(mime, ""))
     data_b64 = raw.get("data_b64")
     if not (isinstance(sha, str) and isinstance(label, str) and label.strip() and suffix):
         return None
@@ -410,7 +398,7 @@ def _decode_meme(
         return None
     if hashlib.sha256(image).hexdigest() != sha:
         return None
-    if not _valid_meme_image(image, runtime, str(raw.get("mime"))):
+    if not _valid_meme_image(image, runtime, mime):
         return None
     tags_raw = raw.get("emotion_tags")
     tags     = tuple(
@@ -421,23 +409,16 @@ def _decode_meme(
     return image, suffix, label.strip()[:8], tags, sha
 
 
-def _valid_meme_image(image: bytes, runtime: Any, mime: str = "") -> bool:
+def _valid_meme_image(image: bytes, runtime: ChatRuntime, mime: str) -> bool:
     """导入前再按表情库自己的图片预算校验一遍（xiaoqing_life 一侧的校验不能替代这一道）。"""
-
-    from core.image_validation import (
-        WEB_IMAGE_FORMAT_EXTENSIONS,
-        WEB_IMAGE_MIME_FORMATS,
-        ImageValidationError,
-        validate_image_bytes,
-    )
 
     from ..media.loading import image_validation_limits
 
-    media  = runtime.cfg.media if runtime is not None else None
+    media  = runtime.cfg.media
     limits = image_validation_limits(
-        max_bytes  = int(getattr(media, "max_analyze_bytes", 4 * 1024 * 1024)),
-        max_pixels = int(getattr(media, "max_image_pixels", 20_000_000)),
-        max_frames = int(getattr(media, "max_animation_frames", 120)),
+        max_bytes  = media.max_analyze_bytes,
+        max_pixels = media.max_image_pixels,
+        max_frames = media.max_animation_frames,
     )
     try:
         validate_image_bytes(
@@ -504,7 +485,7 @@ async def sync_life_memes(context: Any, runtime: ChatRuntime) -> int:
     能力缺失、开关关闭或任何请求出错都安静地什么也不做；返回导入 / 删除的条数。
     """
 
-    capability = getattr(getattr(context, "capabilities", None), "life_context", None)
+    capability = optional_capability(context, "life_context")
     if capability is None or not runtime.cfg.life.enable_life_memes:
         return 0
     cursor  = _read_cursor(context)

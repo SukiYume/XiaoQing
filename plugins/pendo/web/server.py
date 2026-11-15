@@ -181,9 +181,10 @@ def _request_thread_stop(
 
 
 def start(db: Database) -> bool:
-    """Start the web server in a background thread.
+    """在后台线程启动 Web 服务。
 
-    Returns True if started, False if already running.
+    成功启动返回 True；已在运行、非 loopback 地址没有启用 Secure Cookie、线程无法启动或
+    启动超时都返回 False，失败原因可由 :func:`get_last_error` 读取。
     """
     global _app, _server, _thread, _last_error
 

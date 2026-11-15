@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.delivery import merge_delivery_outcomes
 from core.interfaces import ACTION_BYPASS_SINK_KEY
 from core.plugin_base import build_action, image, record, text
 
@@ -81,15 +82,15 @@ def classify_files(paths: list[str]) -> tuple[list[Path], list[Path], list[str]]
     return images, uploads, problems
 
 
-def outcome_message(outcome: Outcome) -> tuple[list[dict[str, Any]], list[Path]]:
-    """返回同一条消息里的文字与图片段，以及之后单独发送的语音、视频和文件。"""
+def outcome_message(outcome: Outcome) -> tuple[list[dict[str, Any]], list[Path], list[Path]]:
+    """返回同一条消息里的文字与图片段、其中内嵌的图片，以及之后单独发送的语音、视频和文件。"""
 
     images, uploads, problems = classify_files(outcome.files)
     body = outcome.text.strip() or "做完了，但没有可以说明的结果。"
     if problems:
         body = f"{body}\n（{'；'.join(problems)}）"
     message = [text(body), *(image(str(path)) for path in images)]
-    return message, uploads
+    return message, images, uploads
 
 
 async def _dispatch(context: Any, action: dict[str, Any], what: str) -> bool | None:
@@ -156,12 +157,7 @@ class SendReport:
     def result(self) -> bool | None:
         """全部明确送达为 ``True``，任一部分失败为 ``False``，其余有未知结果时为 ``None``。"""
 
-        parts = [self.message, *(sent for _, sent in self.uploads)]
-        if any(sent is False for sent in parts):
-            return False
-        if all(sent is True for sent in parts):
-            return True
-        return None
+        return merge_delivery_outcomes([self.message, *(sent for _, sent in self.uploads)])
 
 
 async def deliver_outcome(
@@ -177,8 +173,7 @@ async def deliver_outcome(
     ``on_result`` 在每部分发完时立即收到结果，中途取消也不会丢掉已经发出的部分。
     """
 
-    images, _, _ = classify_files(outcome.files)
-    message, uploads = outcome_message(outcome)
+    message, images, uploads = outcome_message(outcome)
     if mention and chat.group_id is not None:
         message = [{"type": "at", "data": {"qq": str(chat.user_id)}}, text(" "), *message]
     sent = await _sent_part(on_result, images, send_message(context, chat, message))

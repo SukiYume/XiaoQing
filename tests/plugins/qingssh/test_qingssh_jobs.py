@@ -615,7 +615,7 @@ async def test_plugin_cleanup_drains_jobs_before_manager_initialization(
         AsyncMock(side_effect=RuntimeError("manager unavailable")),
     )
 
-    await qingssh_main.cleanup(Mock())
+    await qingssh_main.shutdown(Mock())
 
     drain.assert_awaited_once_with()
 
@@ -690,7 +690,7 @@ async def test_qingssh_connect_rolls_back_client_when_session_creation_fails():
         def __init__(self):
             self.disconnected: list[tuple[str, str, str]] = []
 
-        def get_server(self, _name):
+        def resolve_server(self, _name, *, username_override=None):
             return {"host": "host.internal", "port": 22, "username": "root"}
 
         async def connect(self, *_args, **_kwargs):

@@ -9,14 +9,13 @@ from collections.abc import Sequence
 from ..memory.memory import StoredMessage, is_conversation_reply
 from ..message_parts import render_stored_message
 from ..persona import persona_subject_pattern
-from .check_result import ReplyCheckResult, persona_contract_rejection
-from .evidence import (
-    dialogue_evidence_fragments,
-    direct_evidence_supports_claim,
-    evidence_modality_is_preserved,
-    normalize_text,
+from .check_result import (
+    ReplyCheckResult,
+    context_contract_rejection,
+    persona_contract_rejection,
 )
-from .media_evidence import INBOUND_MEDIA_MARKER_RE, marker_visible_speech
+from .evidence import claim_is_grounded, dialogue_evidence_fragments, normalize_text
+from .media_evidence import INBOUND_MEDIA_MARKER_RE, marker_visible_speech, media_summary_label
 
 
 def _last_bot_messages(history: Sequence[StoredMessage], *, limit: int) -> list[str]:
@@ -184,6 +183,17 @@ _FIRST_PERSON_TIME_ANCHORED_STATE_RE = re.compile(
 )
 
 
+# 第一人称的关系、经历、习惯和近期状态说法：本地核对依据，也决定要不要送远程审查。
+_FIRST_PERSON_CLAIM_RES = (
+    _FIRST_PERSON_RELATIONSHIP_RE,
+    _FIRST_PERSON_EXPERIENCE_RE,
+    _FIRST_PERSON_STABLE_HABIT_RE,
+    _FIRST_PERSON_EXPERIENTIAL_BACKING_RE,
+    _FIRST_PERSON_CURRENT_ACTIVITY_RE,
+    _FIRST_PERSON_TIME_ANCHORED_STATE_RE,
+)
+
+
 _OMITTED_PERSONAL_EPISODE_RE = re.compile(
     r"(?:^|[，。！？；;\n])\s*(?:感觉|好像|像是)?\s*(?P<claim>"
     r"(?:今天|昨天|昨晚|最近|这周|上周|周末|刚才|刚刚|刚|"
@@ -221,63 +231,31 @@ def grounded_self_history_check(
 
     normalized         = normalize_text(reply)
     evidence_fragments = dialogue_evidence_fragments(grounding_text)
-    for pattern in (
-        _FIRST_PERSON_HISTORY_RE,
-        _FIRST_PERSON_RELATIONSHIP_RE,
-        _FIRST_PERSON_EXPERIENCE_RE,
-        _FIRST_PERSON_STABLE_HABIT_RE,
-        _FIRST_PERSON_EXPERIENTIAL_BACKING_RE,
-        _FIRST_PERSON_CURRENT_ACTIVITY_RE,
-        _FIRST_PERSON_TIME_ANCHORED_STATE_RE,
-    ):
+    for pattern in (_FIRST_PERSON_HISTORY_RE, *_FIRST_PERSON_CLAIM_RES):
         for match in pattern.finditer(normalized):
             claim = str(match.group("claim") or "").strip()
-            if any(
-                evidence_modality_is_preserved(claim, evidence)
-                and direct_evidence_supports_claim(claim, evidence)
-                for evidence in evidence_fragments
-            ):
+            if claim_is_grounded(claim, evidence_fragments):
                 continue
-            return ReplyCheckResult(
-                suitable     = False,
-                reason       = "回复对受控人物资料没有支持的具体往事或现实关系作了肯定或否定陈述",
-                need_replan  = True,
-                severity     = "hard",
-                failure_code = "persona_grounding",
+            return persona_contract_rejection(
+                "回复对受控人物资料没有支持的具体往事或现实关系作了肯定或否定陈述"
             )
     if check_omitted_episode:
         for match in _OMITTED_PERSONAL_EPISODE_RE.finditer(normalized):
             claim = str(match.group("claim") or "").strip()
-            if any(
-                evidence_modality_is_preserved(claim, evidence)
-                and direct_evidence_supports_claim(claim, evidence)
-                for evidence in evidence_fragments
-            ):
+            if claim_is_grounded(claim, evidence_fragments):
                 continue
-            return ReplyCheckResult(
-                suitable     = False,
-                reason       = "主动参与回复省略主语补写了受控人物资料没有支持的近期生活片段",
-                need_replan  = True,
-                severity     = "hard",
-                failure_code = "persona_grounding",
+            return persona_contract_rejection(
+                "主动参与回复省略主语补写了受控人物资料没有支持的近期生活片段"
             )
         # 同一条回复已经用“我”表明说话人时，另一个省略主语的时间安排或生活
         # 状态通常仍指向角色自己。这里只依据时间和体貌结构，不维护活动词表。
         if "我" in normalized:
             for match in _OMITTED_TIME_ANCHORED_STATE_RE.finditer(normalized):
                 claim = str(match.group("claim") or "").strip()
-                if any(
-                    evidence_modality_is_preserved(claim, evidence)
-                    and direct_evidence_supports_claim(claim, evidence)
-                    for evidence in evidence_fragments
-                ):
+                if claim_is_grounded(claim, evidence_fragments):
                     continue
-                return ReplyCheckResult(
-                    suitable     = False,
-                    reason       = "主动参与回复用省略主语的时间结构补写了无依据现实状态或安排",
-                    need_replan  = True,
-                    severity     = "hard",
-                    failure_code = "persona_grounding",
+                return persona_contract_rejection(
+                    "主动参与回复用省略主语的时间结构补写了无依据现实状态或安排"
                 )
     return None
 
@@ -327,18 +305,10 @@ def grounded_context_history_check(
     for pattern in (_PERSON_HISTORY_REFERENCE_RE, _IMPLICIT_GROUP_STATE_RE):
         for match in pattern.finditer(normalized):
             claim = str(match.group("claim") or "").strip()
-            if any(
-                evidence_modality_is_preserved(claim, evidence)
-                and direct_evidence_supports_claim(claim, evidence)
-                for evidence in fragments
-            ):
+            if claim_is_grounded(claim, fragments):
                 continue
-            return ReplyCheckResult(
-                suitable     = False,
-                reason       = "回复添加了可见对话没有直接支持的人物经历、习惯、状态或打算",
-                need_replan  = True,
-                severity     = "hard",
-                failure_code = "context_grounding",
+            return context_contract_rejection(
+                "回复添加了可见对话没有直接支持的人物经历、习惯、状态或打算"
             )
     return None
 
@@ -356,7 +326,7 @@ def _current_media_only_anchors(current_text: str) -> tuple[str, ...]:
     anchors: list[str] = []
     for match in INBOUND_MEDIA_MARKER_RE.finditer(text):
         label = str(match.group(2) or "").strip()
-        label = re.split(r"[；;]", label, maxsplit=1)[0].strip()
+        label = media_summary_label(label)
         if label:
             anchors.extend(part.strip() for part in re.split(r"[，,、\s]+", label) if part.strip())
         speech = marker_visible_speech(match.group(0))
@@ -592,15 +562,9 @@ def ungrounded_link_check(*, reply: str, sources: Sequence[str]) -> ReplyCheckRe
     for match in _LINK_RE.finditer(text):
         link = match.group(0).rstrip(".:：/").casefold()
         if link and link not in known:
-            return ReplyCheckResult(
-                suitable = False,
-                reason   = (
-                    f"回复里的“{match.group(0)[:60]}”在对话和资料里都没有出现过，"
-                    "她不会凭空给出网址或邮箱；去掉这句，只说眼前有依据的内容"
-                ),
-                need_replan  = True,
-                severity     = "hard",
-                failure_code = "context_grounding",
+            return context_contract_rejection(
+                f"回复里的“{match.group(0)[:60]}”在对话和资料里都没有出现过，"
+                "她不会凭空给出网址或邮箱；去掉这句，只说眼前有依据的内容"
             )
     return None
 
@@ -728,12 +692,7 @@ def requires_llm_semantic_check(
         for pattern in (
             _PERSON_HISTORY_REFERENCE_RE,
             _IMPLICIT_GROUP_STATE_RE,
-            _FIRST_PERSON_RELATIONSHIP_RE,
-            _FIRST_PERSON_EXPERIENCE_RE,
-            _FIRST_PERSON_STABLE_HABIT_RE,
-            _FIRST_PERSON_EXPERIENTIAL_BACKING_RE,
-            _FIRST_PERSON_CURRENT_ACTIVITY_RE,
-            _FIRST_PERSON_TIME_ANCHORED_STATE_RE,
+            *_FIRST_PERSON_CLAIM_RES,
             re.compile(
                 _STABLE_PERSONA_REPLY_PREFIX
                 + persona_subject_pattern(bot_name, include_first_person=True)

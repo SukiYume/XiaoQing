@@ -69,7 +69,7 @@ async def test_render_event_media_text_retries_same_provider_once_on_semantic_fa
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -109,7 +109,7 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -158,7 +158,7 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -222,7 +222,7 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -269,7 +269,7 @@ async def test_text_on_the_image_is_not_mistaken_for_a_vision_refusal(mock_conte
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -318,7 +318,7 @@ async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -356,7 +356,7 @@ async def test_render_event_media_text_falls_back_immediately_on_request_timeout
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -412,7 +412,7 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -463,7 +463,7 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -527,7 +527,7 @@ async def test_render_event_media_background_refine_updates_cache(mock_context, 
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -640,7 +640,7 @@ async def test_render_event_media_text_retries_and_then_falls_back_when_detail_e
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -694,7 +694,7 @@ async def test_render_event_media_text_does_not_leak_download_query_into_fallbac
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -783,7 +783,7 @@ async def test_vision_request_preserves_configured_budget_and_controls(monkeypat
             "vision-test",
         )
     )
-    monkeypatch.setattr(analysis, "chat_completions_raw_with_fallback_paths", complete)
+    monkeypatch.setattr(analysis, "chat_completions_raw_with_profile", complete)
     service = SimpleNamespace(list_models=lambda *args, **kwargs: ())
     result = await analysis._call_media_llm_once(
         runtime    = runtime,

@@ -26,6 +26,7 @@ from .base import (
     to_int,
 )
 from .bilibili import API, REFERER, bvid_of
+from .subtitle import format_at
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +79,7 @@ def _dense_moment(buckets: Counter[int]) -> str:
     interior = Counter({b: c for b, c in buckets.items() if b not in (0, last)})
     pool     = interior or Counter({b: c for b, c in buckets.items() if b != 0})
     dense    = [(b, c) for b, c in pool.most_common(MAX_DENSE_MOMENTS) if c >= MIN_DENSE_COUNT]
-    spots    = []
-    for bucket, _ in sorted(dense):
-        start = bucket * BUCKET_SECONDS
-        spots.append(f"{start // 60}:{start % 60:02d}")
+    spots    = [format_at(bucket * BUCKET_SECONDS) for bucket, _ in sorted(dense)]
     return "、".join(spots) + " 前后弹幕最密" if spots else ""
 
 

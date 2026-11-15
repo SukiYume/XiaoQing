@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .constants import DEFAULT_COMMAND_PREFIX
+
 _MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
 # Pictures carry content of their own; a small QQ face next to a mention is just a nudge.
 _PICTURE_SEGMENT_TYPES = frozenset({"image", "mface"})
@@ -175,6 +177,12 @@ def has_at_mention(
     return scan_message(message, self_id=self_id, raw_message=raw_message).is_at_me
 
 
+def configured_command_prefixes(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """配置里的命令前缀；没配时是 ``/``。配置层保证配了就是非空列表、每项非空。"""
+
+    return tuple(config.get("command_prefixes") or (DEFAULT_COMMAND_PREFIX,))
+
+
 def compile_bot_name_pattern(bot_name: str) -> re.Pattern[str] | None:
     if not bot_name:
         return None
@@ -291,6 +299,8 @@ __all__ = [
     "normalize_inbound_message",
     "compile_bot_name_pattern",
     "scan_message",
+    "sender_display_name",
     "strip_message_prefix",
     "parse_text_command_context",
+    "validate_message_segments",
 ]

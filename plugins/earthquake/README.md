@@ -67,7 +67,7 @@ Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`：
 
 微博访客接口提供尽力而为的消息提醒。应急判断请同时使用中国地震台网官方 App、微信服务号、小程序和所在地权威应急渠道复核。
 
-插件凭据配置为空集。手动查询需要访问微博与新浪图片域名；自动投递需要该 schedule 的 `group_ids` 或全局 `default_group_ids` 解析出至少一个目标群。
+插件凭据配置为空集。手动查询需要访问微博与新浪图片域名；自动投递需要部署配置 `config.plugins.earthquake.schedules.poll.group_ids` 或全局 `default_group_ids` 解析出至少一个目标群。
 
 ---
 

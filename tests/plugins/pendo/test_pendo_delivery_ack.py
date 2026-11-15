@@ -19,7 +19,7 @@ async def test_claimed_reminder_distinguishes_rejection_from_unknown_outcome(
     monkeypatch,
 ) -> None:
     class ReminderService:
-        def check_and_send_reminders(self, context=None):
+        def check_and_send_reminders(self):
             return {
                 "messages": [
                     {
@@ -39,9 +39,7 @@ async def test_claimed_reminder_distinguishes_rejection_from_unknown_outcome(
     async def send_action(_action):
         return delivery_result
 
-    monkeypatch.setattr(scheduled, "get_database", lambda _context: db)
-    monkeypatch.setattr(scheduled, "_reminder_service_singleton", ReminderService())
-    await scheduled.check_reminders(SimpleNamespace(send_action=send_action))
+    await scheduled.check_reminders(SimpleNamespace(send_action=send_action), db, ReminderService())
     assert db.completed == []
     expected = [("evt-1", "2030-01-01T00:00:00+00:00", "lease-1")]
     assert db.released == (expected if expected_release else [])
@@ -52,7 +50,7 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
     """提醒来源即使带群上下文，投递目标也固定为条目所有者私聊。"""
 
     class ReminderService:
-        def check_and_send_reminders(self, context=None):
+        def check_and_send_reminders(self):
             return {
                 "messages": [
                     {
@@ -79,10 +77,8 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
         event       = {"message_type": "group", "group_id": 2002, "user_id": 1001},
         send_action = send_action,
     )
-    monkeypatch.setattr(scheduled, "get_database", lambda _context: db)
-    monkeypatch.setattr(scheduled, "_reminder_service_singleton", ReminderService())
 
-    assert await scheduled.check_reminders(context) == []
+    assert await scheduled.check_reminders(context, db, ReminderService()) == []
     assert len(sent_actions) == 1
     assert sent_actions[0]["action"] == "send_private_msg"
     assert sent_actions[0]["params"] == {
@@ -249,7 +245,7 @@ async def test_invalid_reminder_owner_releases_claim(monkeypatch) -> None:
     """无法构造 QQ 私聊动作时，已领取的提醒不能滞留到租约超时。"""
 
     class ReminderService:
-        def check_and_send_reminders(self, context=None):
+        def check_and_send_reminders(self):
             return {
                 "messages": [
                     {
@@ -266,8 +262,6 @@ async def test_invalid_reminder_owner_releases_claim(monkeypatch) -> None:
     db                    = SimpleNamespace(
         release_reminder_claim=lambda *args, **_kwargs: released.append(args) or True,
     )
-    monkeypatch.setattr(scheduled, "get_database", lambda _context: db)
-    monkeypatch.setattr(scheduled, "_reminder_service_singleton", ReminderService())
 
-    assert await scheduled.check_reminders(SimpleNamespace()) == []
+    assert await scheduled.check_reminders(SimpleNamespace(), db, ReminderService()) == []
     assert released == [("evt-1", "2030-01-01T00:00:00+00:00", "lease-1")]

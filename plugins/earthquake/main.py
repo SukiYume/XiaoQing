@@ -17,11 +17,11 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
-from urllib.parse import urlsplit
 
 import requests
 from bs4 import BeautifulSoup
 
+from core.atomic_store import quarantine_corrupt_file
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.bounded_http import (
     JSON_MIME_POLICY,
@@ -62,7 +62,13 @@ from core.plugin_base import (
     write_json,
 )
 from core.public_errors import public_error_message, public_error_response
-from core.safe_http import SafeHttpError, SafeHttpResponse, fetch_public_bytes
+from core.safe_http import (
+    BROWSER_USER_AGENT,
+    SafeHttpError,
+    SafeHttpResponse,
+    fetch_public_bytes,
+    split_https_url_on_hosts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +76,6 @@ logger = logging.getLogger(__name__)
 MAX_ARGUMENT_CHARS      = 64
 MAX_RAW_TEXT_CHARS      = 64 * 1024
 MAX_CLEAN_TEXT_CHARS    = 16 * 1024
-MAX_CLEAN_TEXT_BYTES    = 64 * 1024
 MAX_FIGURE_URL_CHARS    = 2_048
 MAX_STATE_BYTES         = 4 * 1024
 MAX_IMAGE_BYTES         = 8 * 1024 * 1024
@@ -123,14 +128,8 @@ _VISITOR_MIME_POLICY = MimePolicy(
         }
     )
 )
-_VISITOR_BODY_LIMITS = BodyLimits(
-    max_wire_bytes          = 256 * 1024,
-    max_decoded_bytes       = 512 * 1024,
-    max_decompression_ratio = 20,
-    ratio_grace_bytes       = 16 * 1024,
-    chunk_bytes             = 32 * 1024,
-)
-_CONFIG_BODY_LIMITS = BodyLimits(
+# 访客引导的两个请求（genvisitor2 与 api/config）共用同一组响应上限。
+_BOOTSTRAP_BODY_LIMITS = BodyLimits(
     max_wire_bytes          = 256 * 1024,
     max_decoded_bytes       = 512 * 1024,
     max_decompression_ratio = 20,
@@ -138,7 +137,7 @@ _CONFIG_BODY_LIMITS = BodyLimits(
     chunk_bytes             = 32 * 1024,
 )
 _CONFIG_JSON_LIMITS = JsonLimits(
-    max_bytes        = _CONFIG_BODY_LIMITS.max_decoded_bytes,
+    max_bytes        = _BOOTSTRAP_BODY_LIMITS.max_decoded_bytes,
     max_depth        = 12,
     max_nodes        = 5_000,
     max_string_chars = 128 * 1024,
@@ -158,20 +157,19 @@ _INDEX_JSON_LIMITS = JsonLimits(
     max_string_chars = 512 * 1024,
     max_number_chars = 128,
 )
-_WEIBO_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
 # 这些字段来自当前微博访客端点契约，不接受用户配置覆盖。若端点变更，连续失败会在
 # 达到阈值后升级日志等级，避免长期静默重试。
 _WEIBO_VISITOR_VERSION        = "20250916"
 _WEIBO_VISITOR_RID            = "01Cn_5z8ew6CZHvNiTdPeyK2Qf740"
 _BOOTSTRAP_FAILURE_ESCALATION = 3
 _WEIBO_SESSION_TTL_SECONDS    = 15 * 60
+# 每个微博请求的 (连接, 读取) 超时，以及整个请求（含读取响应体）的总期限。
+_WEIBO_REQUEST_TIMEOUT        = (5.0, 15.0)
+_WEIBO_TOTAL_TIMEOUT_SECONDS  = 20.0
 _WEIBO_SESSION_STATE_KEY      = "earthquake_weibo_session"
+_BOOTSTRAP_FAILURES_STATE_KEY = "earthquake_bootstrap_failures"
 _IMAGE_HEADERS                = {
-    "User-Agent"     : _WEIBO_USER_AGENT,
+    "User-Agent"     : BROWSER_USER_AGENT,
     "Referer"        : "https://m.weibo.cn/",
     "Accept"         : "image/*",
     "Accept-Encoding": "identity",
@@ -279,21 +277,29 @@ def _fanout_path(context: _EarthquakeContext) -> Path:
     return context.data_dir / "earthquake_delivery.json"
 
 
+def _canonical_decimal_id(value: object) -> str | None:
+    """把整数或不超过 32 位的 ASCII 十进制字符串规范成不带前导零的十进制文本；其他值返回 ``None``。"""
+
+    if type(value) is int:
+        candidate = str(value)
+    elif type(value) is str:
+        candidate = value
+    else:
+        return None
+    if _DECIMAL_ID_PATTERN.fullmatch(candidate) is None:
+        return None
+    return str(int(candidate))
+
+
 def _validate_since_payload(data: object) -> str:
     """只接受单字段 JSON 对象及非负 ASCII 十进制游标。"""
 
     if not isinstance(data, dict) or set(data) != {"since_id"}:
         raise ValueError("earthquake state must contain only since_id")
-    raw_since_id = data["since_id"]
-    if type(raw_since_id) is int:
-        candidate = str(raw_since_id)
-    elif type(raw_since_id) is str:
-        candidate = raw_since_id
-    else:
-        raise ValueError("earthquake since_id must be an integer or string")
-    if _DECIMAL_ID_PATTERN.fullmatch(candidate) is None:
-        raise ValueError("earthquake since_id must be an ASCII decimal value")
-    return str(int(candidate))
+    since_id = _canonical_decimal_id(data["since_id"])
+    if since_id is None:
+        raise ValueError("earthquake since_id must be a non-negative ASCII decimal integer")
+    return since_id
 
 
 def _read_since_file(path: Path) -> str:
@@ -307,16 +313,6 @@ def _read_since_file(path: Path) -> str:
         raise ValueError("earthquake state changed while reading")
     decoded: object = json.loads(payload.decode("utf-8"))
     return _validate_since_payload(decoded)
-
-
-def _quarantine_corrupt_state(path: Path) -> Path | None:
-    """原子移走损坏文件，不再为了生成摘要而读取任意大小的内容。"""
-
-    quarantine = path.with_name(f"{path.name}.corrupt-{uuid.uuid4().hex[:16]}")
-    try:
-        return path.replace(quarantine)
-    except FileNotFoundError:
-        return None
 
 
 def _restore_from_checkpoint(
@@ -365,7 +361,8 @@ def _load_since(context: _EarthquakeContext) -> str:
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError, TypeError) as exc:
         public_error_message(context, exc, logger=logger, component="earthquake.load_state")
         write_json(marker, {"reason": "active cursor corrupt"})
-        _quarantine_corrupt_state(path)
+        # 原子改名移走损坏文件；不读它的内容（损坏文件可能任意大），名字用随机后缀。
+        quarantine_corrupt_file(path, suffix=f".corrupt-{uuid.uuid4().hex[:16]}")
         recovered = _restore_from_checkpoint(context, path, initialize_when_absent=False)
         marker.unlink(missing_ok=True)
         return recovered
@@ -450,7 +447,7 @@ def _close_cached_session(context: _EarthquakeContext) -> None:
 
 
 def _weibo_headers(*, referer: str = "https://m.weibo.cn/") -> dict[str, str]:
-    return {"User-Agent": _WEIBO_USER_AGENT, "Referer": referer}
+    return {"User-Agent": BROWSER_USER_AGENT, "Referer": referer}
 
 
 def _validate_api_envelope(payload: object, *, require_cards: bool) -> dict[str, Any]:
@@ -503,20 +500,7 @@ def _iter_mblogs(cards: object) -> list[dict[str, Any]]:
     return mblogs
 
 
-def _report_bootstrap_error(context: _EarthquakeContext | None, exc: Exception) -> None:
-    if context is not None:
-        public_error_message(context, exc, logger=logger, component="earthquake.bootstrap")
-        return
-    logger.warning(
-        "Failed to bootstrap Weibo visitor session: error_type=%s",
-        type(exc).__name__,
-    )
-
-
-def _bootstrap_session(
-    session: requests.Session,
-    context: _EarthquakeContext | None = None,
-) -> bool:
+def _bootstrap_session(session: requests.Session, context: _EarthquakeContext) -> bool:
     """尽力建立访客 Cookie；失败不降低后续索引响应的边界校验。"""
 
     visitor_url  = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
@@ -538,15 +522,15 @@ def _bootstrap_session(
             visitor_url,
             session               = session,
             headers               = headers,
-            limits                = _VISITOR_BODY_LIMITS,
+            limits                = _BOOTSTRAP_BODY_LIMITS,
             mime_policy           = _VISITOR_MIME_POLICY,
             redirect_policy       = NO_REDIRECTS,
-            request_kwargs        = {"data": visitor_data, "timeout": (5.0, 15.0)},
-            total_timeout_seconds = 20.0,
+            request_kwargs        = {"data": visitor_data, "timeout": _WEIBO_REQUEST_TIMEOUT},
+            total_timeout_seconds = _WEIBO_TOTAL_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         succeeded = False
-        _report_bootstrap_error(context, exc)
+        public_error_message(context, exc, logger=logger, component="earthquake.bootstrap")
 
     try:
         response = requests_request_bounded(
@@ -554,11 +538,11 @@ def _bootstrap_session(
             "https://m.weibo.cn/api/config",
             session               = session,
             headers               = headers,
-            limits                = _CONFIG_BODY_LIMITS,
+            limits                = _BOOTSTRAP_BODY_LIMITS,
             mime_policy           = JSON_MIME_POLICY,
             redirect_policy       = NO_REDIRECTS,
-            request_kwargs        = {"timeout": (5.0, 15.0)},
-            total_timeout_seconds = 20.0,
+            request_kwargs        = {"timeout": _WEIBO_REQUEST_TIMEOUT},
+            total_timeout_seconds = _WEIBO_TOTAL_TIMEOUT_SECONDS,
         )
         _validate_api_envelope(
             parse_bounded_json(response, limits=_CONFIG_JSON_LIMITS),
@@ -566,20 +550,19 @@ def _bootstrap_session(
         )
     except Exception as exc:
         succeeded = False
-        _report_bootstrap_error(context, exc)
-    if context is not None and isinstance(getattr(context, "state", None), dict):
-        if succeeded:
-            context.state.pop("earthquake_bootstrap_failures", None)
-        else:
-            failures = context.state.get("earthquake_bootstrap_failures", 0)
-            failures = failures + 1 if type(failures) is int and failures >= 0 else 1
-            context.state["earthquake_bootstrap_failures"] = failures
-            if failures >= _BOOTSTRAP_FAILURE_ESCALATION:
-                logger.error(
-                    "Weibo visitor bootstrap has failed consecutively: failures=%s threshold=%s",
-                    failures,
-                    _BOOTSTRAP_FAILURE_ESCALATION,
-                )
+        public_error_message(context, exc, logger=logger, component="earthquake.bootstrap")
+    if succeeded:
+        context.state.pop(_BOOTSTRAP_FAILURES_STATE_KEY, None)
+    else:
+        failures = context.state.get(_BOOTSTRAP_FAILURES_STATE_KEY, 0)
+        failures = failures + 1 if type(failures) is int and failures >= 0 else 1
+        context.state[_BOOTSTRAP_FAILURES_STATE_KEY] = failures
+        if failures >= _BOOTSTRAP_FAILURE_ESCALATION:
+            logger.error(
+                "Weibo visitor bootstrap has failed consecutively: failures=%s threshold=%s",
+                failures,
+                _BOOTSTRAP_FAILURE_ESCALATION,
+            )
     return succeeded
 
 
@@ -598,9 +581,9 @@ def _fetch_weibo(session: requests.Session) -> list[dict[str, Any]]:
         redirect_policy = NO_REDIRECTS,
         request_kwargs  = {
             "params" : {"type": "uid", "value": WEIBO_UID, "containerid": CONTAINER_ID},
-            "timeout": (5.0, 15.0),
+            "timeout": _WEIBO_REQUEST_TIMEOUT,
         },
-        total_timeout_seconds=20.0,
+        total_timeout_seconds=_WEIBO_TOTAL_TIMEOUT_SECONDS,
     )
     root = _validate_api_envelope(
         parse_bounded_json(response, limits=_INDEX_JSON_LIMITS),
@@ -630,7 +613,6 @@ def _extract_clean_text(raw_text: str) -> str:
     cleaned   = bounded_external_text(
         collapsed,
         max_chars = MAX_CLEAN_TEXT_CHARS,
-        max_bytes = MAX_CLEAN_TEXT_BYTES,
         suffix    = "",
         truncate  = False,
     )
@@ -650,17 +632,12 @@ def _extract_magnitude(clean_text: str) -> float | None:
 
 
 def _normalize_event_id(value: object) -> tuple[str, int] | None:
-    if type(value) is int:
-        candidate = str(value)
-    elif type(value) is str:
-        candidate = value
-    else:
+    """事件 ID 必须是正整数；返回规范化文本与数值。"""
+
+    normalized = _canonical_decimal_id(value)
+    if normalized is None or normalized == "0":
         return None
-    if _DECIMAL_ID_PATTERN.fullmatch(candidate) is None:
-        return None
-    normalized = str(int(candidate))
-    numeric    = int(normalized)
-    return (normalized, numeric) if numeric > 0 else None
+    return normalized, int(normalized)
 
 
 def _normalize_figure_url(value: object) -> str | None:
@@ -668,21 +645,7 @@ def _normalize_figure_url(value: object) -> str | None:
         return None
     if has_control_characters(value, include_c1=True):
         return None
-    try:
-        parsed = urlsplit(value)
-        host   = (parsed.hostname or "").rstrip(".").casefold()
-        port   = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme.casefold() != "https"
-        or host not in _IMAGE_HOSTS
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in {None, 443}
-    ):
-        return None
-    return value
+    return value if split_https_url_on_hosts(value, _IMAGE_HOSTS) is not None else None
 
 
 def _prepare_mblog(mblog: Mapping[str, Any]) -> _PreparedCard | None:
@@ -927,23 +890,19 @@ async def _record_scan_progress(
     *,
     batch: _FetchBatch,
     previous_since_id: str,
-    advance_cursor: bool,
 ) -> None:
+    """没有要投递的卡片就直接推进游标；有卡片时只留下候选游标，等投递确认后再提交。"""
+
     if batch.newest_seen_id == previous_since_id:
         return
-    if advance_cursor or not batch.cards:
+    if not batch.cards:
         await to_thread_owned(_save_since, context, batch.newest_seen_id)
         return
     context.state[_PENDING_CURSOR_KEY]    = batch.newest_seen_id
     context.state[_PENDING_EVENT_IDS_KEY] = list(batch.event_ids)
 
 
-async def _fetch_earthquake_news(
-    context: _EarthquakeContext,
-    force: bool = False,
-    *,
-    advance_cursor: bool = True,
-) -> Segments:
+async def _fetch_earthquake_news(context: _EarthquakeContext, force: bool = False) -> Segments:
     """获取并渲染快讯；定时模式在投递成功前只生成候选游标。"""
 
     try:
@@ -966,7 +925,6 @@ async def _fetch_earthquake_news(
             context,
             batch             = batch,
             previous_since_id = since_id,
-            advance_cursor    = advance_cursor,
         )
     if not batch.cards:
         return segments("未获取到地震快讯数据") if force else []
@@ -1094,12 +1052,10 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
     # 丢弃上一次未形成 outbox 的内存候选；新的扫描会重新生成它。
     context.state.pop(_PENDING_CURSOR_KEY, None)
     context.state.pop(_PENDING_EVENT_IDS_KEY, None)
-    result = await _fetch_earthquake_news(context, force=False, advance_cursor=False)
+    result = await _fetch_earthquake_news(context, force=False)
     pending_since     = context.state.pop(_PENDING_CURSOR_KEY, None)
     pending_event_ids = context.state.pop(_PENDING_EVENT_IDS_KEY, ())
     if not result:
-        if isinstance(pending_since, str):
-            await asyncio.to_thread(_save_since, context, pending_since)
         return []
 
     targets = default_group_targets(context)

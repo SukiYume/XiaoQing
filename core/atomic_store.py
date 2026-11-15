@@ -89,8 +89,30 @@ def atomic_write_text(path: Path, payload: str) -> None:
     atomic_write_bytes(path, payload.encode("utf-8"))
 
 
+def quarantine_corrupt_file(path: Path, *, suffix: str | None = None) -> Path | None:
+    """把读不懂的文件改名留底，返回留底后的路径；文件此时已不存在则返回 ``None``。
+
+    留底名是原文件名加 ``suffix``，默认 ``.corrupt-<纳秒时间戳>``，每次都不重名；传入固定后缀时
+    同名的旧留底文件会被覆盖。改名本身失败（权限等）的错误原样抛出，由调用方决定怎么处理。
+    """
+
+    target = path.with_name(
+        path.name + (f".corrupt-{time.time_ns()}" if suffix is None else suffix)
+    )
+    try:
+        os.replace(path, target)
+    except FileNotFoundError:
+        return None
+    return target
+
+
 class AtomicJsonStore:
-    """带有效备份恢复的原子 JSON 读写器。"""
+    """带有效备份恢复的原子 JSON 读写器。
+
+    备份文件 ``<name>.bak`` 的含义取决于写入方用哪个方法：``write`` 留下的是上一代内容，
+    ``write_with_backup`` 留下的是和主文件同一代的内容。主文件损坏时 ``read`` 一律退回备份，
+    退回到哪一代由写入方选的方法决定。
+    """
 
     def __init__(self, path: Path) -> None:
         self.path        = Path(path)
@@ -116,7 +138,7 @@ class AtomicJsonStore:
             return None
 
     def read(self, default: T, *, raise_on_error: bool = False) -> T | Any:
-        """读取 JSON；主文件损坏时从备份恢复，严格模式下直接抛错。"""
+        """读取 JSON；主文件损坏时用备份恢复（备份是哪一代见类说明），严格模式下直接抛错。"""
 
         with keyed_path_lock(self.path):
             payload = self._read_payload_unlocked()
@@ -138,7 +160,7 @@ class AtomicJsonStore:
                 return recovered
 
     def write(self, value: Any) -> None:
-        """写入新值前，把仍可解析的旧内容保存为备份。"""
+        """写入新值前，把仍可解析的旧内容保存为备份，备份因此是上一代。"""
 
         payload = self._encode(value)
         with keyed_path_lock(self.path):
@@ -153,7 +175,7 @@ class AtomicJsonStore:
             atomic_write_bytes(self.path, payload)
 
     def write_with_backup(self, value: Any) -> None:
-        """Atomically publish a value and make the backup an explicit copy of it."""
+        """原子写入新值，并让备份成为它的同代副本。"""
 
         payload = self._encode(value)
         with keyed_path_lock(self.path):

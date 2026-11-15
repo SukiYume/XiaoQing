@@ -39,7 +39,7 @@ async def test_debounced_flush_replaces_pending_task(monkeypatch, kind, store_na
         flush = getattr(getattr(state, store_name), method)
         flush.assert_called_once_with(*(() if kind == "media_registry" else ("g1",)))
         if kind == "media_registry":
-            assert scheduler._media_registry_flush_task is None
+            assert scheduler._media_registry_flush_tasks == {}
         else:
             registry = getattr(
                 scheduler,

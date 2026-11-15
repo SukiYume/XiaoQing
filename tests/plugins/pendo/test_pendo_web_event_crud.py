@@ -215,7 +215,7 @@ def test_event_reminder_log_sync_preserves_sent_history_but_excludes_removed_rem
         ]
         assert [row["remind_time"] for row in queued] == ["2026-03-26T01:30:00+00:00"]
 
-        assert db.delete_item("ev1", soft=True, owner_id=owner_id) is True
+        assert db.delete_item("ev1", owner_id=owner_id) is True
         assert len(db.get_reminder_logs("ev1")) == 2
         assert db.get_unconfirmed_sent_reminders() == []
     finally:

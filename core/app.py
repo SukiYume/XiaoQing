@@ -1,7 +1,7 @@
 """XiaoQing 主应用：组装配置、插件、调度、会话与 OneBot 收发链路。
 
-具体职责拆在各个 Mixin 中：生命周期、配置热更新、插件上下文、插件热重载、
-消息投递、入站事件和定时任务。"""
+具体职责拆在各个 Mixin 中：生命周期、配置热更新、插件上下文、插件监视、
+消息投递、入站接入重配和定时任务。插件重载的入口 ``_reload_plugins`` 在本文件。"""
 
 import asyncio
 import logging
@@ -27,19 +27,17 @@ from .app_support import (
     ApplicationLifecycleFatalError,
     InboundReconcileError,
     _AppLifecycleState,
-    _coerce_runtime_number,
     _ConfigApplyOwner,
     _inbound_credentials,
     _onebot_credentials,
     _run_background_operation,
+    _runtime_max_concurrency,
+    _runtime_plugin_poll_interval,
+    _runtime_session_timeout,
+    _runtime_timezone,
     _trusted_secrets,
-    current_action_sink,
 )
 from .config import ConfigManager, ConfigSnapshot
-from .constants import (
-    DEFAULT_MAX_CONCURRENCY,
-    DEFAULT_SESSION_TIMEOUT_SEC,
-)
 from .dispatcher import AdjustableSemaphore, Dispatcher
 from .inbound_backlog import InboundBacklog
 from .interfaces import (
@@ -65,8 +63,6 @@ __all__ = [
     "ApplicationLifecycleFatalError",
     "InboundReconcileError",
     "XiaoQingApp",
-    "_onebot_credentials",
-    "current_action_sink",
 ]
 
 
@@ -118,16 +114,9 @@ class XiaoQingApp(
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()
         self.plugins_dir: Path     = root / "plugins"
-        poll_interval              = _coerce_runtime_number(
-            self.config_manager.config.get("plugin_poll_interval", 3600),
-            key     = "plugin_poll_interval",
-            default = 3600.0,
-            integer = False,
-            minimum = 0.01,
-            maximum = 86400.0,
-        )
-        configured_data_root = self.config_manager.config.get("data_root")
-        plugin_data_root     = (
+        poll_interval              = _runtime_plugin_poll_interval(self.config_manager.config)
+        configured_data_root       = self.config_manager.config.get("data_root")
+        plugin_data_root           = (
             root / "data" if configured_data_root is None else Path(str(configured_data_root))
         )
         self.plugin_manager: PluginManager = plugin_manager or PluginManager(
@@ -139,32 +128,18 @@ class XiaoQingApp(
         )
         self._configure_plugin_execution(self.config_manager.config)
         self.scheduler: SchedulerManager = scheduler or SchedulerManager(
-            self.config_manager.config.get("timezone", "Asia/Shanghai")
+            _runtime_timezone(self.config_manager.config)
         )
         self.metrics: MetricsCollector = MetricsCollector()
 
         # 会话管理器（用于多轮对话）
-        session_timeout = _coerce_runtime_number(
-            self.config_manager.config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key     = "session_timeout",
-            default = DEFAULT_SESSION_TIMEOUT_SEC,
-            integer = False,
-            minimum = 0.001,
-            maximum = 604800.0,
-        )
+        session_timeout                      = _runtime_session_timeout(self.config_manager.config)
         self.session_manager: SessionManager = session_manager or SessionManager(
             default_timeout=session_timeout
         )
 
         # 消息分发器
-        concurrency = _coerce_runtime_number(
-            self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key     = "max_concurrency",
-            default = DEFAULT_MAX_CONCURRENCY,
-            integer = True,
-            minimum = 1,
-            maximum = 1024,
-        )
+        concurrency                  = _runtime_max_concurrency(self.config_manager.config)
         self._dispatcher_concurrency = concurrency
         semaphore                    = AdjustableSemaphore(concurrency)
 
@@ -282,7 +257,7 @@ class XiaoQingApp(
         )
 
     # ============================================================
-    # 生命周期
+    # 插件重载
     # ============================================================
 
     def _reload_plugins(self) -> asyncio.Task[bool] | None:
@@ -328,9 +303,3 @@ class XiaoQingApp(
         except Exception as exc:
             logger.exception("Plugin reload failed: %s", exc)
             return False
-
-    # ============================================================
-    # 配置热更新
-    # ============================================================
-
-    # 配置快照发布与运行时热更新由 AppConfigApplyMixin 提供。

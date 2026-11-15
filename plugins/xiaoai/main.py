@@ -7,7 +7,7 @@ import hashlib
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, cast
 
 from core.delivery import DeliveryReceipt, ScheduledDelivery
 from core.plugin_base import has_control_characters, segments
@@ -53,6 +53,12 @@ SETTINGS_HELP = """⚙ 小爱 · 设置
 🔧 高级
   小爱 接口 <设备名>
   小爱 执行 <原话> · 音箱转发"""
+
+
+def _lock(context: Any) -> asyncio.Lock:
+    """同一进程内所有小爱请求和定时体检共用的互斥锁。"""
+
+    return cast(asyncio.Lock, context.state.setdefault("xiaoai_lock", asyncio.Lock()))
 
 
 def normalize(text: str) -> str:
@@ -208,7 +214,7 @@ async def handle(
     explicit = text.startswith("执行 ")
     if explicit:
         text = text[3:].strip()
-    lock = context.state.setdefault("xiaoai_lock", asyncio.Lock())
+    lock = _lock(context)
     if lock.locked():
         return segments("上一条小爱请求正在处理，请稍后再试。")
     try:
@@ -243,7 +249,7 @@ async def scheduled_auth(context: Any) -> list[ScheduledDelivery]:
     """半小时只读检查并续期；明确需要重新授权时向绑定人发送一次提醒。"""
     instance = login.runtime(context)
     manager  = instance.manager
-    lock     = context.state.setdefault("xiaoai_lock", asyncio.Lock())
+    lock     = _lock(context)
     if lock.locked() or instance.pending:
         return []
     try:

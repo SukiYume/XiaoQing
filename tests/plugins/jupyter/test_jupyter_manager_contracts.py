@@ -117,36 +117,6 @@ def test_output_budget_sanitizes_controls_and_reports_exhaustion() -> None:
     assert budget.append(output, "") == (output, False)
 
 
-def test_legacy_cleanup_scan_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    manager               = JupyterKernelManager(tmp_path)
-    removed: list[object] = []
-
-    class FakeDirectory:
-        def iterdir(self):
-            return iter(range(4_097))
-
-        def rmdir(self) -> None:
-            return None
-
-    manager.figures_dir = FakeDirectory()  # type: ignore[assignment]
-    monkeypatch.setattr(manager, "_remove_legacy_figure", removed.append)
-    manager._cleanup_legacy_figures()
-    assert len(removed) == 4_096
-
-
-def test_legacy_cleanup_preserves_links_and_contains_os_errors(tmp_path: Path) -> None:
-    class Link:
-        def is_symlink(self) -> bool:
-            return True
-
-    class Broken:
-        def is_symlink(self) -> bool:
-            raise OSError("private path")
-
-    JupyterKernelManager._remove_legacy_figure(Link())  # type: ignore[arg-type]
-    JupyterKernelManager._remove_legacy_figure(Broken())  # type: ignore[arg-type]
-
-
 @pytest.mark.parametrize("owner", (None, "", "has space", "x" * 129, "换行"))
 def test_instance_key_rejects_unbounded_or_non_ascii_owner(tmp_path: Path, owner) -> None:
     with pytest.raises(ValueError):

@@ -17,8 +17,10 @@ from core.bounded_http import (
     parse_bounded_json,
     requests_request_bounded,
 )
-from core.plugin_base import PluginContextProtocol, run_sync
+from core.plugin_base import PluginContextProtocol, has_control_characters, run_sync
 from core.public_errors import public_error_message
+
+from .coord import icrs_strings
 
 SIMBAD_TAP_SYNC_URL                    = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
 SIMBAD_CONNECT_TIMEOUT_SECONDS         = 3
@@ -69,7 +71,7 @@ def _build_simbad_query(name: str) -> str:
     if (
         not normalized_name
         or len(normalized_name) > SIMBAD_MAX_OBJECT_NAME_CHARS
-        or any(ord(char) < 32 for char in normalized_name)
+        or has_control_characters(normalized_name)
     ):
         raise ValueError("invalid SIMBAD object name")
 
@@ -201,8 +203,7 @@ def _render_simbad_result(name: str, result: SimbadRow) -> str:
     from astropy.coordinates import SkyCoord
 
     coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame="icrs")
-    ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
-    dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
+    ra_hms, dec_dms = icrs_strings(coord)
     result_lines = [
         f"🌟 {name}",
         "",
@@ -427,7 +428,7 @@ async def handle_obj(args: str, context: PluginContextProtocol) -> str:
     # 内置天体和 help 都是目录中的精确子命令；若后接参数，不能降级成
     # SIMBAD 自由文本查询，否则非法命令会触发无关网络请求。
     parts = args.split(maxsplit=1)
-    reserved_names = {"sun", "help", "帮助", *SOLAR_SYSTEM_INFO}
+    reserved_names = {"help", "帮助", *SOLAR_SYSTEM_INFO}
     if len(parts) > 1 and parts[0].casefold() in reserved_names:
         return f"不接受额外参数\n用法: /astro obj {parts[0]}"
 

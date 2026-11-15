@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -17,13 +18,25 @@ from core.delivery import DeliveryReceipt, send_with_receipt
 from core.interfaces import DeliveryTarget, PluginContextProtocol
 from core.lifecycle import to_thread_owned
 from core.message import sender_display_name
-from core.plugin_base import Segments, bounded_external_text, build_action, run_sync, segments
+from core.plugin_base import (
+    Segments,
+    bounded_external_text,
+    build_action,
+    run_sync,
+    segments,
+)
 from core.sensitive_audit import audit_error_type, summarize_sensitive
 from core.sensitive_audit import safe_request_id as audit_request_id
 
 from .connection import ConnectionManager, McConnection
-from .log_monitor import LogBatch, LogEvent, LogEventType, LogMonitor
-from .rcon import RconClient
+from .log_monitor import PLAYER_NAME_PATTERN, LogBatch, LogEvent, LogEventType, LogMonitor
+from .rcon import (
+    RCON_MAX_OUTBOUND_PAYLOAD_BYTES,
+    RconClient,
+    is_valid_rcon_host,
+    is_valid_rcon_password,
+    is_valid_rcon_port,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +49,7 @@ MC_SEND_TIMEOUT_SECONDS           = 3.0
 MC_EVENT_BUCKET_CAPACITY          = 24.0
 MC_EVENT_BUCKET_REFILL_PER_SECOND = 0.5
 
-# 配置、命令响应和单条日志字段边界。
-MC_MAX_CONFIG_BYTES      = 64 * 1024
+# 命令响应和单条日志字段边界。
 MC_MAX_RESPONSE_CHARS    = 4000
 MC_MAX_RESPONSE_BYTES    = 12 * 1024
 MC_MAX_EVENT_FIELD_CHARS = 600
@@ -50,7 +62,7 @@ MC_MAX_SENDER_CHARS = 24
 MC_MAX_SENDER_BYTES = 96
 
 _PROFILE_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
-_PLAYER_PATTERN  = re.compile(r"[A-Za-z0-9_]{1,16}\Z")
+_PLAYER_PATTERN  = re.compile(PLAYER_NAME_PATTERN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +142,8 @@ def _connect_usage() -> str:
     return (
         "用法: /mc connect <配置名>\n"
         "示例: /mc connect default\n\n"
-        "主机、端口和可选日志路径写在 plugins/minecraft/config.json；密码写在"
-        " config/secrets.json 的 plugins.minecraft.<配置名> 中。"
+        "主机、端口和可选日志路径写在 config/config.json 的 plugins.minecraft.servers.<配置名>；"
+        "密码写在 config/secrets.json 的 plugins.minecraft.<配置名> 中。"
     )
 
 
@@ -150,24 +162,19 @@ def _target_from_event(event: dict[str, Any]) -> DeliveryTarget | None:
     return None
 
 
-def _read_config_root(config_path: Path) -> dict[str, Any]:
-    """有界读取配置文件，并把 I/O/JSON 细节收敛为固定公开错误。"""
+def _server_profiles(config: Mapping[str, Any]) -> dict[str, Any]:
+    """服务器 profile：部署配置 ``config.plugins.minecraft.servers``。"""
 
-    try:
-        if not config_path.is_file():
-            raise _MinecraftConfigError("未找到 config.json")
-        if config_path.stat().st_size > MC_MAX_CONFIG_BYTES:
-            raise _MinecraftConfigError("config.json 超过 64 KiB 安全上限")
-        root = json.loads(config_path.read_text(encoding="utf-8"))
-    except _MinecraftConfigError:
-        raise
-    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
-        logger.warning("Minecraft config load failed error_type=%s", audit_error_type(exc))
-        raise _MinecraftConfigError("config.json 无法读取或不是有效 JSON") from None
-
-    if not isinstance(root, dict):
-        raise _MinecraftConfigError("config.json 顶层必须是对象")
-    return root
+    plugins = config.get("plugins")
+    section = plugins.get("minecraft") if isinstance(plugins, Mapping) else None
+    servers = section.get("servers") if isinstance(section, Mapping) else None
+    if servers is None:
+        raise _MinecraftConfigError(
+            "未找到服务器配置：请在 config/config.json 的 plugins.minecraft.servers 下添加"
+        )
+    if not isinstance(servers, Mapping):
+        raise _MinecraftConfigError("config.json 的 plugins.minecraft.servers 必须是对象")
+    return {str(name): value for name, value in servers.items()}
 
 
 def _validate_server_config(server: dict[str, Any]) -> _ServerConfig:
@@ -181,23 +188,14 @@ def _validate_server_config(server: dict[str, Any]) -> _ServerConfig:
         raise _MinecraftConfigError(
             "服务器 password 必须写入 config/secrets.json 的 plugins.minecraft.<配置名>"
         )
-    if (
-        not isinstance(host, str)
-        or not host
-        or host != host.strip()
-        or len(host) > 253
-        or any(char.isspace() or ord(char) < 32 for char in host)
-    ):
+    if not is_valid_rcon_host(host):
         raise _MinecraftConfigError("服务器 host 无效")
-    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+    if not is_valid_rcon_port(port):
         raise _MinecraftConfigError("服务器 port 必须是 1 至 65535 的整数")
-    if (
-        not isinstance(password, str)
-        or not password
-        or "\0" in password
-        or len(password.encode("utf-8")) > 4096
-    ):
-        raise _MinecraftConfigError("服务器 password 为空、含 NUL 或超过 4096 字节")
+    if not is_valid_rcon_password(password):
+        raise _MinecraftConfigError(
+            f"服务器 password 为空、含 NUL 或超过 {RCON_MAX_OUTBOUND_PAYLOAD_BYTES} 字节"
+        )
     if (
         not isinstance(log_file, str)
         or "\0" in log_file
@@ -205,7 +203,8 @@ def _validate_server_config(server: dict[str, Any]) -> _ServerConfig:
         or log_file != log_file.strip()
     ):
         raise _MinecraftConfigError("服务器 log_file 无效")
-    return _ServerConfig(host, port, password, log_file.strip())
+    # 上面三个判定函数已保证类型：host、password 为 str，port 为 int。
+    return _ServerConfig(cast(str, host), cast(int, port), cast(str, password), log_file.strip())
 
 
 def _load_server_config(context: PluginContextProtocol, profile: str) -> _ServerConfig:
@@ -213,11 +212,10 @@ def _load_server_config(context: PluginContextProtocol, profile: str) -> _Server
 
     if _PROFILE_PATTERN.fullmatch(profile) is None:
         raise _MinecraftConfigError("配置名必须为 1 至 64 个字母、数字、下划线、点或连字符")
-    root   = _read_config_root(context.plugin_dir / "config.json")
-    server = root.get(profile)
+    settings = context.get_settings_snapshot()
+    server   = _server_profiles(settings.config).get(profile)
     if not isinstance(server, dict):
         raise _MinecraftConfigError("未找到指定服务器配置")
-    settings = context.get_settings_snapshot()
     if settings.secrets_status != "valid":
         raise _MinecraftConfigError("Minecraft 密钥配置当前不可用，请检查 config/secrets.json")
     password = settings.plugin_secrets("minecraft").get(profile)
@@ -493,16 +491,25 @@ async def _handle_connect(
     elif not server.log_file:
         log_status = "未配置"
     elif forward_blocked:
-        log_status = "⚠️ 本群不在定时推送的目标群（default_group_ids）里，游戏消息不会转发到这里"
+        log_status = "⚠️ 本群不在日志转发的目标群里，游戏消息不会转发到这里"
     else:
         log_status = "⚠️ 配置路径不可用，已仅连接 RCON"
     return segments(f"✅ 已连接到 {server.host}:{server.port}\n📝 日志监控: {log_status}")
 
 
 def _group_receives_logs(context: PluginContextProtocol, group_id: int) -> bool:
-    """日志由 check_log 定时任务转发；它没有声明 group_ids，Core 只允许发往 default_group_ids。"""
+    """日志由 check_log 定时任务转发。清单没有声明 group_ids，Core 只发往部署配置里
+    ``plugins.minecraft.schedules.check_log.group_ids``，没写或为 null 时发往 ``default_group_ids``。"""
 
-    group_ids = context.get_settings_snapshot().config.get("default_group_ids")
+    config    = context.get_settings_snapshot().config
+    plugins   = config.get("plugins")
+    section   = plugins.get("minecraft") if isinstance(plugins, Mapping) else None
+    schedules = section.get("schedules") if isinstance(section, Mapping) else None
+    entry     = schedules.get("check_log") if isinstance(schedules, Mapping) else None
+    if isinstance(entry, Mapping) and entry.get("group_ids") is not None:
+        group_ids = entry["group_ids"]
+    else:
+        group_ids = config.get("default_group_ids")
     return isinstance(group_ids, (list, tuple)) and group_id in group_ids
 
 

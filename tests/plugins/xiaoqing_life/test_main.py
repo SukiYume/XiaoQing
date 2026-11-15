@@ -282,7 +282,7 @@ async def test_life_run_skips_dice_and_gap_but_not_the_switch_or_sleep(
     tmp_path: Path, patched
 ) -> None:
     context, runtime = _context(tmp_path, FakeAI(DIGEST), session_probability=0.0)
-    runtime.store.state["last_session_at"] = MOMENT.timestamp() - 60
+    runtime.store.state["last_session_end"] = MOMENT.timestamp() - 60
     assert "已安排一次上网" in await _life(context, "run")
     await asyncio.wait_for(runtime.task, timeout=2)
     assert "已安排一次上网" in await _life(context, "run")  # 间隔内再来一次也行

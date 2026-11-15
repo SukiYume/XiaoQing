@@ -9,10 +9,11 @@ from ..services.item_service import ItemService
 from ..services.pet_service import PetService
 from ..services.social_service import SocialService
 from ..services.user_service import UserService
-from ..utils.constants import ItemType
-from ..utils.formatters import format_ranking_list, format_status_text
+from ..utils.constants import COOLDOWN_TIMES, DAILY_LIMITS, ItemType
+from ..utils.formatters import RANKING_TYPES, format_ranking_list, format_status_text
 from ..utils.validators import validate_item_amount
 from .basic_commands import resolve_pet_for_self_command, with_pet_name
+from .parsing import parse_target_qq, split_first_word
 
 _TRAINING_TYPES = {
     "体力"       : "strength",
@@ -32,8 +33,8 @@ _EXPLORE_LOCATIONS = {
     "废墟"    : "ruins",
     "ruins" : "ruins",
 }
-_RANKING_TYPES = ("care_score", "intimacy", "experience", "coins")
-_TASK_NAMES    = {
+_CLAIM_WORDS = frozenset({"领取", "claim"})
+_TASK_NAMES  = {
     "feed" : "喂食宠物",
     "clean": "清洁宠物",
     "play" : "玩耍互动",
@@ -42,19 +43,13 @@ _TASK_NAMES    = {
 
 
 def _extract_target_user_id(args: str) -> str:
-    text = args.strip()
-    if not text:
-        return ""
-
-    direct = re.match(r"@?(\d+)$", text)
-    if direct:
-        return direct.group(1)
-
+    """取 ``@QQ号`` 或裸 QQ 号；``/宠物 查看`` 另外接受文本形式的 ``[CQ:at,qq=…]``。"""
+    text   = args.strip()
+    target = parse_target_qq(text)
+    if target is not None:
+        return target
     cq_at = re.search(r"\[CQ:at,qq=(\d+)\]", text)
-    if cq_at:
-        return cq_at.group(1)
-
-    return ""
+    return cq_at.group(1) if cq_at else ""
 
 
 def handle_train(
@@ -162,8 +157,8 @@ def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> tuple[
         item_id,
         health_gain      = item.health_gain,
         clean_gain       = item.clean_gain,
-        daily_limit      = 20,
-        cooldown_seconds = 300,
+        daily_limit      = DAILY_LIMITS["treat"],
+        cooldown_seconds = COOLDOWN_TIMES["treat"],
     )
     if result.success and result.pet is not None:
         pet.__dict__.update(result.pet.__dict__)
@@ -296,6 +291,7 @@ def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
     target_user_id = match.group(1)
     item_id        = match.group(2)
     amount_text    = match.group(3)
+    # 超过三位的数字一定超限，不必把超长数字串转成整数；提示与 validate_item_amount 一致。
     if amount_text is not None and len(amount_text) > 3:
         return False, "单次数量不能超过99"
     amount = int(amount_text) if amount_text is not None else 1
@@ -323,11 +319,9 @@ def handle_visit(
     *,
     message_id: str | None = None,
 ) -> tuple[bool, str]:
-    match = re.fullmatch(r"@?(\d+)", args.strip())
-    if not match:
+    target_user_id = parse_target_qq(args)
+    if target_user_id is None:
         return False, "格式错误\n用法: /宠物 互访 @QQ号"
-
-    target_user_id = match.group(1)
 
     user_service = UserService(db)
     user         = user_service.get_or_create_user(user_id, group_id)
@@ -358,11 +352,9 @@ def handle_view_pet(user_id: str, group_id: int, args: str, db: Database) -> tup
 
 def handle_like(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """点赞或摸摸同群另一用户的宠物。"""
-    match = re.fullmatch(r"@?(\d+)", args.strip())
-    if not match:
+    target_user_id = parse_target_qq(args)
+    if target_user_id is None:
         return False, "格式错误\n用法: /宠物 摸摸 @QQ号"
-
-    target_user_id = match.group(1)
 
     social_service = SocialService(db)
     return social_service.like_pet(user_id, target_user_id, group_id)
@@ -390,8 +382,8 @@ def handle_message(user_id: str, group_id: int, args: str, db: Database) -> tupl
 def handle_ranking(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     ranking_type = args.strip() or "care_score"
 
-    if ranking_type not in _RANKING_TYPES:
-        return False, f"无效的排行类型\n可用类型: {', '.join(_RANKING_TYPES)}"
+    if ranking_type not in RANKING_TYPES:
+        return False, f"无效的排行类型\n可用类型: {', '.join(RANKING_TYPES)}"
 
     social_service = SocialService(db)
     ranking        = social_service.get_ranking(group_id, ranking_type, 10)
@@ -404,7 +396,7 @@ def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tup
     requested = args.strip()
     if requested:
         parts = requested.split()
-        if parts[0] not in {"领取", "claim"}:
+        if parts[0] not in _CLAIM_WORDS:
             return False, "未知活动命令\n用法: /宠物 活动 [领取 <活动ID>]"
         activity_id = parse_int(parts[1], minimum=1) if len(parts) == 2 else None
         if activity_id is None:
@@ -421,15 +413,12 @@ def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tup
     lines = ["🎉 群活动", ""]
     for act in activities:
         title    = act.get("title", act.get("activity_type", "未知活动"))
-        desc     = act.get("description", "")
         current  = act.get("current_value", 0)
         target   = act.get("target_value", 0)
         reward   = act.get("reward_coins", 0)
         progress = min(100, int(current / target * 100)) if target > 0 else 0
 
         lines.append(f"📌 #{act['id']} {title}")
-        if desc:
-            lines.append(f"  {desc}")
         lines.extend(
             (
                 f"  进度: {current}/{target} ({progress}%)",
@@ -453,10 +442,10 @@ def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return False, "你还没有宠物"
 
     requested = resolved_args.strip()
-    if requested not in {"", "领取", "claim"}:
+    if requested and requested not in _CLAIM_WORDS:
         return False, "未知任务命令\n用法: /宠物 任务 [领取]"
 
-    if requested in {"领取", "claim"}:
+    if requested in _CLAIM_WORDS:
         claimed_total            = 0
         claimed_tasks: list[str] = []
         for task_type, task_name in _TASK_NAMES.items():
@@ -504,11 +493,11 @@ def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
 
 def handle_group_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     requested = args.strip()
-    if requested not in {"", "领取", "claim"}:
+    if requested and requested not in _CLAIM_WORDS:
         return False, "未知群任务命令\n用法: /宠物 群任务 [领取]"
 
     tasks = db.get_or_create_group_tasks(group_id)
-    if requested in {"领取", "claim"}:
+    if requested in _CLAIM_WORDS:
         claimed: list[str] = []
         total              = 0
         for task in tasks:
@@ -579,9 +568,7 @@ def handle_minigame(
             "• /宠物 游戏 赛跑 @QQ号 - 宠物赛跑\n"
         )
 
-    parts = args.strip().split(maxsplit=1)
-    game_type      = parts[0]
-    game_args      = parts[1] if len(parts) > 1 else ""
+    game_type, game_args = split_first_word(args)
     social_service = SocialService(db)
 
     if game_type in {"猜拳", "rps"}:
@@ -600,10 +587,9 @@ def handle_minigame(
         return social_service.play_dice(user_id, group_id, message_id=message_id)
 
     if game_type in {"赛跑", "race"}:
-        match = re.fullmatch(r"@?(\d+)", game_args)
-        if not match:
+        target_user_id = parse_target_qq(game_args)
+        if target_user_id is None:
             return False, "请选择对手\n用法: /宠物 游戏 赛跑 @QQ号"
-        target_user_id = match.group(1)
         return social_service.race_pet(
             user_id,
             target_user_id,

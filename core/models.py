@@ -153,6 +153,11 @@ def _default_command_contexts() -> list[CommandContext]:
     return ["private", "group"]
 
 
+_MAX_COMMAND_TOKEN_CHARS   = 64
+_MAX_COMMAND_TEXT_CHARS    = 2_000
+_MAX_COMMAND_EXAMPLE_CHARS = 5_000
+
+
 def _validate_command_token(value: str, *, description: str) -> str:
     """校验用户可见的命令词；允许中文和连字符，但禁止层级分隔符与空白。"""
 
@@ -161,7 +166,7 @@ def _validate_command_token(value: str, *, description: str) -> str:
     normalized = value.strip()
     if (
         not normalized
-        or len(normalized) > 64
+        or len(normalized) > _MAX_COMMAND_TOKEN_CHARS
         or normalized != value
         or "." in normalized
         or any(character.isspace() or ord(character) < 32 for character in normalized)
@@ -172,10 +177,29 @@ def _validate_command_token(value: str, *, description: str) -> str:
     return normalized
 
 
+def _validate_command_text(value: str, message: str) -> str:
+    """命令的 help / usage：必须是非空且不超长的字符串，返回去掉首尾空白的结果。"""
+
+    if type(value) is not str or not value.strip() or len(value) > _MAX_COMMAND_TEXT_CHARS:
+        raise ValueError(message)
+    return value.strip()
+
+
+def _validate_command_contexts(values: list[CommandContext]) -> list[CommandContext]:
+    """命令可用的场景：非空且不重复。"""
+
+    if not values or len(values) != len(set(values)):
+        raise ValueError("command contexts must be non-empty and unique")
+    return values
+
+
 def _validate_command_examples(values: list[str]) -> list[str]:
     """Validate the shared bounded example-list contract for command manifests."""
 
-    if any(type(value) is not str or not value.strip() or len(value) > 5_000 for value in values):
+    if any(
+        type(value) is not str or not value.strip() or len(value) > _MAX_COMMAND_EXAMPLE_CHARS
+        for value in values
+    ):
         raise ValueError("command examples must be non-empty bounded strings")
     if len(values) != len(set(values)):
         raise ValueError("command examples must not contain duplicates")
@@ -236,9 +260,9 @@ class PluginCommandNodeManifest(BaseModel):
     @field_validator("help", "usage")
     @classmethod
     def _validate_required_text(cls, value: str) -> str:
-        if type(value) is not str or not value.strip() or len(value) > 2_000:
-            raise ValueError("command help and usage must be non-empty bounded strings")
-        return value.strip()
+        return _validate_command_text(
+            value, "command help and usage must be non-empty bounded strings"
+        )
 
     @field_validator("contexts")
     @classmethod
@@ -246,11 +270,7 @@ class PluginCommandNodeManifest(BaseModel):
         cls,
         values: list[CommandContext] | None,
     ) -> list[CommandContext] | None:
-        if values is None:
-            return None
-        if not values or len(values) != len(set(values)):
-            raise ValueError("command contexts must be non-empty and unique")
-        return values
+        return None if values is None else _validate_command_contexts(values)
 
     @field_validator("examples", "invalid_examples")
     @classmethod
@@ -307,25 +327,19 @@ class PluginCommandManifest(BaseModel):
     @field_validator("contexts")
     @classmethod
     def _validate_contexts(cls, values: list[CommandContext]) -> list[CommandContext]:
-        if not values or len(values) != len(set(values)):
-            raise ValueError("command contexts must be non-empty and unique")
-        return values
+        return _validate_command_contexts(values)
 
     @field_validator("help")
     @classmethod
     def _validate_help(cls, value: str) -> str:
-        if type(value) is not str or not value.strip() or len(value) > 2_000:
-            raise ValueError("command help must be a non-empty bounded string")
-        return value.strip()
+        return _validate_command_text(value, "command help must be a non-empty bounded string")
 
     @field_validator("usage")
     @classmethod
     def _validate_usage(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if type(value) is not str or not value.strip() or len(value) > 2_000:
-            raise ValueError("command usage must be a non-empty bounded string")
-        return value.strip()
+        return _validate_command_text(value, "command usage must be a non-empty bounded string")
 
     @field_validator("examples", "invalid_examples")
     @classmethod
@@ -404,6 +418,10 @@ PluginServiceName = Literal[
     "qingssh.agent_command",
     "life.turn_context",
     "life.export_memes",
+    "memory.record",
+    "memory.recall",
+    "memory.search",
+    "memory.forget",
 ]
 
 PluginCapabilityName = Literal[
@@ -476,6 +494,15 @@ _SERVICE_CONTRACTS: dict[
     # 小青的网上生活：聊天每轮取用相关经历与用语，并定期导入收集到的梗图。
     "life.turn_context": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),
     "life.export_memes": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),
+    # 小青的统一记忆：三个插件经同一套接口读写；调用方名字和用户主体的范围由 Core 写进载荷。
+    "memory.record": (
+        "xiaoqing_memory",
+        frozenset({"xiaoqing_chat", "xiaoqing_agent", "xiaoqing_life"}),
+        None,
+    ),
+    "memory.recall": ("xiaoqing_memory", frozenset({"xiaoqing_chat", "xiaoqing_agent"}), None),
+    "memory.search": ("xiaoqing_memory", frozenset({"xiaoqing_chat"}), None),
+    "memory.forget": ("xiaoqing_memory", frozenset({"xiaoqing_chat"}), None),
 }
 
 _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {

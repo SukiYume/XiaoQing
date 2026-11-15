@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from core.atomic_store import keyed_path_lock
+from core.atomic_store import keyed_path_lock, quarantine_corrupt_file
+from core.delivery import merge_delivery_outcomes
 from core.lifecycle import to_thread_owned
 from core.plugin_base import atomic_write_text
 
@@ -107,9 +108,11 @@ class AgentTask:
     admin: bool = False
     # 运行中追加的要求，执行循环在下一步前读走。
     notes: list[str] = field(default_factory=list)
-    # 发起人本人在运行中补充过的要求（逐字）：随记录保存，续接时同样算这个任务的要求。
+    # 发起人本人在运行中补充过的要求（逐字）：随任务记录保存，便于排查；
+    # 交给模型和写进办事会话的补充（含 Bot 管理员和群友的）另记在 ``ToolEnv.user_updates``。
     updates: list[str] = field(default_factory=list)
-    # 结果交付：inline 随当轮回复交给聊天，sent 主动发出，failed 发送失败。
+    # 结果交付：空串还没交付；inline 随当轮回复交给聊天、等它回报；sent 已发出；
+    # failed 发送失败；unknown 发出了但没有确认送达。
     delivery: str = ""
     # 调用命令带回的发送回执，随附件实际发出时结算（见 receipts.py）。
     held_receipts: list[HeldReceipt] = field(default_factory=list, repr=False)
@@ -123,14 +126,12 @@ class AgentTask:
     def inline_delivery(self) -> str | None:
         """汇总当轮交付：任一部分失败为 failed；全部确认为 sent；其余全部到齐时为 unknown。"""
 
-        parts = self.inline_parts
-        if any(sent is False for sent in parts.values()):
+        merged = merge_delivery_outcomes(self.inline_parts.values())
+        if merged is False:
             return "failed"
-        if len(parts) < self.inline_expected:
+        if len(self.inline_parts) < self.inline_expected:
             return None
-        if all(sent is True for sent in parts.values()):
-            return "sent"
-        return "unknown"
+        return "sent" if merged else "unknown"
 
     @property
     def elapsed(self) -> float:
@@ -254,10 +255,8 @@ class TaskStore:
 
     @staticmethod
     def _quarantine(path: Path, error: BaseException) -> None:
-        target = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
-        try:
-            path.rename(target)
-        except FileNotFoundError:
+        target = quarantine_corrupt_file(path)
+        if target is None:
             return
         _logger.error(
             "agent 任务记录损坏，已隔离为 %s error_type=%s",
@@ -267,7 +266,6 @@ class TaskStore:
 
     @staticmethod
     def _write(path: Path, records: list[dict[str, Any]]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": 1, "tasks": records[-MAX_RECORDS_PER_CHAT:]}
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
@@ -337,7 +335,6 @@ class TaskStore:
         path    = self.transcript_root / f"{task.task_id}.json"
 
         def write() -> None:
-            self.transcript_root.mkdir(parents=True, exist_ok=True)
             atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=1) + "\n")
             existing = sorted(
                 self.transcript_root.glob("*.json"),

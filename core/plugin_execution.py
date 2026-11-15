@@ -32,6 +32,14 @@ PluginConcurrency = Literal["parallel", "sequential"]
 T                 = TypeVar("T")
 logger            = logging.getLogger(__name__)
 
+# 同步舱壁与执行策略的默认值和上限：broker 构造、manager 配置落地和策略夹取共用。
+# 同步回调 worker 数；单个插件最多占其中 ``DEFAULT_SYNC_WORKERS - 1`` 个，留一个给别的插件。
+DEFAULT_SYNC_WORKERS            = 4
+MAX_SYNC_PARALLEL_LIMIT         = DEFAULT_SYNC_WORKERS - 1
+DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT = 256
+MAX_GLOBAL_SYNC_QUEUE_LIMIT     = 100000
+DEFAULT_DRAIN_TIMEOUT_SECONDS   = 5.0
+
 
 def callback_accepts_positional_context(callback: Callable[..., Any]) -> bool:
     """Return whether a lifecycle callback declares a positional context slot."""
@@ -79,7 +87,7 @@ class PluginExecutionPolicy:
     sync_queue_limit     : int          = 16
     failure_threshold    : int          = 3
     cooldown_seconds     : float        = 60.0
-    drain_timeout_seconds: float        = 5.0
+    drain_timeout_seconds: float        = DEFAULT_DRAIN_TIMEOUT_SECONDS
 
     @classmethod
     def from_mapping(
@@ -88,7 +96,15 @@ class PluginExecutionPolicy:
         *,
         fallback: PluginExecutionPolicy | None = None,
     ) -> PluginExecutionPolicy:
-        """Build a defensive policy for non-schema embedders and test doubles."""
+        """Build the policy applied to a gate from raw config values.
+
+        Config validation (``_PluginExecutionPolicySchema``) already rejects bad input up
+        front.  This is the one place raw values are turned into a policy: it clamps
+        every field into its range, falls back to ``fallback`` (default policy) for a
+        missing or wrongly typed value, and so also serves embedders and test doubles
+        that skip the schema.  A per-plugin override is merged by passing the global
+        policy as ``fallback``.
+        """
 
         base   = fallback or cls()
         values = values if isinstance(values, Mapping) else {}
@@ -136,7 +152,7 @@ class PluginExecutionPolicy:
                 "sync_parallel_limit",
                 base.sync_parallel_limit,
                 minimum = 1,
-                maximum = 3,
+                maximum = MAX_SYNC_PARALLEL_LIMIT,
             ),
             sync_queue_limit=bounded_int(
                 "sync_queue_limit",
@@ -220,8 +236,8 @@ class PluginSyncBroker:
     def __init__(
         self,
         *,
-        max_workers: int        = 4,
-        global_queue_limit: int = 256,
+        max_workers: int        = DEFAULT_SYNC_WORKERS,
+        global_queue_limit: int = DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
         thread_name_prefix: str = "xiaoqing-plugin",
     ) -> None:
         if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
@@ -288,8 +304,10 @@ class PluginSyncBroker:
 
         if isinstance(global_queue_limit, bool) or not isinstance(global_queue_limit, int):
             raise ValueError("global_queue_limit must be an integer")
-        if not 1 <= global_queue_limit <= 100000:
-            raise ValueError("global_queue_limit must be between 1 and 100000")
+        if not 1 <= global_queue_limit <= MAX_GLOBAL_SYNC_QUEUE_LIMIT:
+            raise ValueError(
+                f"global_queue_limit must be between 1 and {MAX_GLOBAL_SYNC_QUEUE_LIMIT}"
+            )
         with self._lock:
             self._global_queue_limit = global_queue_limit
             self._dispatch_locked()
@@ -707,8 +725,12 @@ class PluginSyncBroker:
     ) -> PluginSyncBrokerDrainResult:
         """Reject new jobs and wait a bounded time for real worker callbacks."""
 
-        started  = time.monotonic()
-        timeout  = 5.0 if timeout_seconds is None else max(0.0, float(timeout_seconds))
+        started = time.monotonic()
+        timeout = (
+            DEFAULT_DRAIN_TIMEOUT_SECONDS
+            if timeout_seconds is None
+            else max(0.0, float(timeout_seconds))
+        )
         deadline = started + timeout
         with self._lock:
             self._closed = True
@@ -745,7 +767,7 @@ class PluginSyncBroker:
 
 # 插件内部 ``run_sync`` 也可能由独立嵌入者在 manager gate 外调用；这些真实调用仍必须
 # 共享一个有界 broker。它归进程而非单个 App 所有，关闭一个 App 不能破坏另一个 App。
-_FALLBACK_SYNC_BROKER = PluginSyncBroker(global_queue_limit=256)
+_FALLBACK_SYNC_BROKER = PluginSyncBroker()
 
 
 @dataclass(eq=False)

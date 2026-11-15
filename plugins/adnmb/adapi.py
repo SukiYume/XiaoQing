@@ -5,7 +5,6 @@ import hashlib
 import logging
 import re
 import time
-import uuid as uuidlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -142,15 +141,15 @@ class AdnmbClient:
         self,
         session: aiohttp.ClientSession,
         cache_dir: Path,
-        uuid: str = "",
+        uuid: str,
     ) -> None:
-        self.session = session
-        self.cache_dir = cache_dir
-        self.uuid = uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
+        self.session                             = session
+        self.cache_dir                           = cache_dir
+        self.uuid                                = uuid
         self._forum_cache: dict[str, str] | None = None
-        self._forum_cache_expires_at = 0.0
-        self._image_cache = BoundedFileCache(cache_dir, IMAGE_CACHE_LIMITS)
-        self._closed = False
+        self._forum_cache_expires_at             = 0.0
+        self._image_cache                        = BoundedFileCache(cache_dir, IMAGE_CACHE_LIMITS)
+        self._closed                             = False
 
     @property
     def closed(self) -> bool:
@@ -255,7 +254,6 @@ class AdnmbClient:
         return bounded_external_text(
             result,
             max_chars = MAX_EXTERNAL_RESULT_CHARS,
-            max_bytes = MAX_EXTERNAL_RESULT_CHARS * 4,
             default   = default,
         )
 

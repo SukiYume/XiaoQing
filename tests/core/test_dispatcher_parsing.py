@@ -435,14 +435,10 @@ class TestDispatcherHandleEvent:
         mock_plugin_registry.get = Mock(side_effect=_get_plugin)
 
         cmd_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "command ok"}}])
-        spec = CommandSpec(
-            plugin     = "echo",
-            name       = "echo",
-            triggers   = ["echo"],
-            help_text  = "echo",
-            admin_only = False,
-            handler    = cmd_handler,
-            priority   = 0,
+        spec = CommandSpec.from_manifest(
+            "echo",
+            {"name": "echo", "triggers": ["echo"], "help": "echo", "priority": 0},
+            cmd_handler,
         )
         mock_router.resolve = Mock(return_value=(spec, "hello"))
 
@@ -480,13 +476,10 @@ class TestDispatcherHandleEvent:
             xq_plugin if name == "xiaoqing_chat" else None
         )
         handler = AsyncMock()
-        spec    = CommandSpec(
-            plugin     = "shell",
-            name       = "shell",
-            triggers   = ["shell"],
-            help_text  = "shell",
-            admin_only = True,
-            handler    = handler,
+        spec    = CommandSpec.from_manifest(
+            "shell",
+            {"name": "shell", "triggers": ["shell"], "help": "shell", "permission": "bot_admin"},
+            handler,
         )
         mock_router.resolve.return_value = (spec, "authorization=Bearer-canary")
         event                            = {
@@ -616,14 +609,10 @@ class TestDispatcherHandleEvent:
         cmd_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
         mock_router.resolve = Mock(
             return_value=(
-                CommandSpec(
-                    plugin     = "echo",
-                    name       = "echo",
-                    triggers   = ["echo"],
-                    help_text  = "echo",
-                    admin_only = False,
-                    handler    = cmd_handler,
-                    priority   = 0,
+                CommandSpec.from_manifest(
+                    "echo",
+                    {"name": "echo", "triggers": ["echo"], "help": "echo", "priority": 0},
+                    cmd_handler,
                 ),
                 "hello",
             )

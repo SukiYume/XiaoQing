@@ -129,7 +129,6 @@ def _extract_scalar(data: dict[str, Any], key: str) -> str | None:
     text_value = bounded_external_text(
         value,
         max_chars = _MAX_FIELD_CHARS,
-        max_bytes = _MAX_FIELD_CHARS * 4,
         suffix    = "",
         truncate  = False,
     )

@@ -33,6 +33,15 @@ _RANKING_FORMAT = {
     "experience": ("🎯 经验值排行", ""),
     "coins"     : ("💰 金币排行", "💰"),
 }
+# 可查询的排行类型，顺序即命令提示里的顺序。
+RANKING_TYPES = tuple(_RANKING_FORMAT)
+
+_RANK_MEDALS = ("🥇", "🥈", "🥉")
+
+
+def rank_label(index: int) -> str:
+    """第 ``index + 1`` 名的标记：前三名用奖牌，之后是 ``#名次``。"""
+    return _RANK_MEDALS[index] if index < len(_RANK_MEDALS) else f"#{index + 1}"
 
 
 def _progress_bar(value: int, max_val: int = MAX_STAT_VALUE, length: int = 10) -> str:
@@ -143,9 +152,7 @@ def format_ranking_list(ranking: list[tuple[str, str, float]], ranking_type: str
         return header + "暂无数据"
 
     rows: list[str] = []
-    medal_emoji     = ("🥇", "🥈", "🥉")
     for index, (user_id, pet_name, value) in enumerate(ranking):
-        position      = medal_emoji[index] if index < len(medal_emoji) else f"#{index + 1}"
         display_value = f"{value}{unit}" if unit else str(value)
-        rows.append(f"{position} {pet_name} ({user_id}) - {display_value}")
+        rows.append(f"{rank_label(index)} {pet_name} ({user_id}) - {display_value}")
     return header + "\n".join(rows) + "\n"

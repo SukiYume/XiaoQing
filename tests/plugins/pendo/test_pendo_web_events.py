@@ -583,21 +583,15 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
         db.log_reminder("batch_ev1", db.get_item("batch_ev1", owner_id).remind_times[0], sent=True)
         db.log_reminder("batch_ev2", db.get_item("batch_ev2", owner_id).remind_times[0], sent=True)
 
-        from plugins.pendo.web.analytics import events_overview as events_overview_module
-
-        original_fetch = events_overview_module._fetch_reminder_logs_by_event_ids
+        original_fetch = db.get_reminder_logs_by_item_ids
         call_info      = {"count": 0, "event_ids": []}
 
-        def wrapped_fetch(db_obj, event_ids):
+        def wrapped_fetch(request_owner, event_ids):
             call_info["count"] += 1
             call_info["event_ids"] = list(event_ids)
-            return original_fetch(db_obj, event_ids)
+            return original_fetch(request_owner, event_ids)
 
-        monkeypatch.setattr(
-            events_overview_module,
-            "_fetch_reminder_logs_by_event_ids",
-            wrapped_fetch,
-        )
+        monkeypatch.setattr(db, "get_reminder_logs_by_item_ids", wrapped_fetch)
 
         def fail_get_reminder_logs(*args, **kwargs):
             raise AssertionError("build_events_overview should batch reminder log reads")

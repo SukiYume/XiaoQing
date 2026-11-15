@@ -22,6 +22,7 @@ from core.router import (
 )
 from core.server import InboundServer
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.server_test_support import StandaloneInboundServer
 
 PROJECT_ROOT     = REPOSITORY_ROOT
 PLUGIN_MANIFESTS = tuple(sorted((PROJECT_ROOT / "plugins").glob("*/plugin.json")))
@@ -66,15 +67,12 @@ def _load_catalog() -> _CatalogFixture:
             roots.append(root)
             router.register(
                 CommandSpec(
-                    plugin     = manifest.name,
-                    name       = command.name,
-                    triggers   = command.triggers,
-                    help_text  = command.help,
-                    admin_only = command.admin_only,
-                    handler    = catalog_handler,
-                    priority   = command.priority,
-                    usage      = command.usage,
-                    catalog    = root,
+                    plugin   = manifest.name,
+                    name     = command.name,
+                    triggers = command.triggers,
+                    handler  = catalog_handler,
+                    catalog  = root,
+                    priority = command.priority,
                 )
             )
     return _CatalogFixture(manifests, tuple(roots), router, invocations)
@@ -394,7 +392,7 @@ async def test_every_normal_and_invalid_example_passes_through_event() -> None:
         build_context   = build_context,
         semaphore       = None,
     )
-    server = InboundServer(
+    server = StandaloneInboundServer(
         host           = "127.0.0.1",
         port           = 8765,
         token          = "catalog-test-token",
@@ -402,7 +400,7 @@ async def test_every_normal_and_invalid_example_passes_through_event() -> None:
         enable_http    = True,
         enable_ws      = False,
         ws_max_workers = 1,
-        ws_queue_size  = 0,
+        ws_queue_size  = 1,
     )
 
     case_count = 0
@@ -464,7 +462,7 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
             build_context = build_context,
             semaphore     = None,
         )
-        return InboundServer(
+        return StandaloneInboundServer(
             host           = "127.0.0.1",
             port           = 8765,
             token          = "catalog-test-token",
@@ -472,7 +470,7 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
             enable_http    = True,
             enable_ws      = False,
             ws_max_workers = 1,
-            ws_queue_size  = 0,
+            ws_queue_size  = 1,
         )
 
     admin_server = make_server(is_admin=True)

@@ -17,6 +17,9 @@ from ..utils.validators import (
     with_start_time_reminder_rule,
 )
 
+# 日程与提醒时间在消息里的两种写法：带中文月日的完整写法，和紧凑的列表写法。
+MONTH_DAY_TIME         : Final                 = "%m月%d日 %H:%M"
+SHORT_MONTH_DAY_TIME   : Final                 = "%m-%d %H:%M"
 _REMINDER_STATUS_LABELS: Final[dict[str, str]] = {
     "✅": "✅ 已确认",
     "⌛": "⌛ 已过期（未发送）",
@@ -124,6 +127,18 @@ def format_event_updated(before: Any, after: Any, changed_fields: set[str]) -> s
     return "\n".join(lines)
 
 
+def _align_timezone(value: datetime, reference: datetime) -> datetime:
+    """把 ``value`` 对齐到 ``reference`` 的时区口径，兼容历史无时区数据。
+
+    参照无时区时丢掉 ``value`` 的时区，``value`` 无时区时补上参照的时区，两者都有则换算。
+    """
+    if reference.tzinfo is None:
+        return value.replace(tzinfo=None)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=reference.tzinfo)
+    return value.astimezone(reference.tzinfo)
+
+
 def has_time(remind_times: list[str], target: str) -> bool:
     """将相差不足 60 秒的提醒时间视为同一时刻。"""
     try:
@@ -132,13 +147,7 @@ def has_time(remind_times: list[str], target: str) -> bool:
         return target in remind_times
     for current in remind_times:
         try:
-            current_dt = datetime.fromisoformat(current)
-            if target_dt.tzinfo is None:
-                current_dt = current_dt.replace(tzinfo=None)
-            elif current_dt.tzinfo is None:
-                current_dt = current_dt.replace(tzinfo=target_dt.tzinfo)
-            else:
-                current_dt = current_dt.astimezone(target_dt.tzinfo)
+            current_dt = _align_timezone(datetime.fromisoformat(current), target_dt)
             if abs((target_dt - current_dt).total_seconds()) < 60:
                 return True
         except (ValueError, TypeError):
@@ -158,12 +167,7 @@ def _shift_reminders_for_new_start(
             remind_dt = datetime.fromisoformat(remind_time)
         except (ValueError, TypeError):
             continue
-        if old_start.tzinfo is None:
-            remind_dt = remind_dt.replace(tzinfo=None)
-        elif remind_dt.tzinfo is None:
-            remind_dt = remind_dt.replace(tzinfo=old_start.tzinfo)
-        else:
-            remind_dt = remind_dt.astimezone(old_start.tzinfo)
+        remind_dt = _align_timezone(remind_dt, old_start)
         shifted.append((new_start - (old_start - remind_dt)).isoformat())
     return shifted
 
@@ -276,7 +280,7 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
     node_ids     = raw_node_ids if isinstance(raw_node_ids, list) else []
     for index, milestone in enumerate(milestones):
         milestone_time = ItemFormatter.format_datetime(
-            milestone.get("time", ""), "%m-%d %H:%M", tz=display_timezone
+            milestone.get("time", ""), SHORT_MONTH_DAY_TIME, tz=display_timezone
         )
         node_id = f"  {public_id(node_ids[index])}" if index < len(node_ids) else ""
         lines.append(f"📌 {milestone.get('name', '')}  {milestone_time}{node_id}")
@@ -329,7 +333,7 @@ def format_conflicts(conflicts: list[dict[str, Any]], event: dict[str, Any]) -> 
     for conflict in conflicts[:3]:
         start_str = ItemFormatter.format_datetime(
             conflict.get("start_time", ""),
-            "%m-%d %H:%M",
+            SHORT_MONTH_DAY_TIME,
             tz=event_display_timezone(conflict or event),
         )
         builder.add_item("•", f"{conflict.get('title', '无标题')} ({start_str})")
@@ -367,9 +371,7 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
 
     builder = MessageBuilder()
     builder.add_line(f"🔔 {title} 的提醒列表")
-    event_time_str = ItemFormatter.format_datetime(
-        start_time, "%m月%d日 %H:%M", tz=display_timezone
-    )
+    event_time_str = ItemFormatter.format_datetime(start_time, MONTH_DAY_TIME, tz=display_timezone)
     builder.add_line(f"🗓️ 日程时间: {event_time_str}")
     if notes:
         builder.add_line(f"📝 {notes}")
@@ -377,7 +379,7 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
     builder.add_blank()
 
     for index, remind_time in enumerate(remind_times, 1):
-        time_str = ItemFormatter.format_datetime(remind_time, "%m月%d日 %H:%M", tz=display_timezone)
+        time_str = ItemFormatter.format_datetime(remind_time, MONTH_DAY_TIME, tz=display_timezone)
         status = get_remind_status_label(log_map.get(remind_time))
         builder.add_line(f"⏰ 提醒 {index}: {time_str}  {status}")
 

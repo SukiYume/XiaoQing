@@ -116,7 +116,7 @@ async def test_adnmb_image_download_is_bounded_validated_and_hashed(
         )
     )
     monkeypatch.setattr(adapi, "fetch_public_bytes", fetch)
-    client = adapi.AdnmbClient(MagicMock(), tmp_path)
+    client = adapi.AdnmbClient(MagicMock(), tmp_path, uuid="uuid")
 
     result = await client.download_image("folder/a.png")
 

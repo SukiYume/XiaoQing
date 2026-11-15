@@ -18,7 +18,9 @@ from core.image_validation import (
     stat_identity,
     validate_image_fd,
 )
-from core.plugin_base import file_uri_to_path
+from core.plugin_base import file_uri_to_path, has_control_characters
+
+from .config import MAX_INT64
 
 IMAGE_EXTENSIONS          = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 MARKDOWN_IMAGE_RE         = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
@@ -101,7 +103,7 @@ class _ArtifactRejected(Exception):
 
 
 def _clean_path_text(value: str) -> str:
-    if len(value) > MAX_REFERENCED_PATH_CHARS or any(ord(char) < 32 for char in value):
+    if len(value) > MAX_REFERENCED_PATH_CHARS or has_control_characters(value):
         return ""
     text = value.strip().strip("`").strip()
     if text.startswith("<") and text.endswith(">"):
@@ -585,7 +587,7 @@ def collect_image_artifacts(
 ) -> ArtifactCollectionResult:
     """收集显式引用或本任务目录中的图片，并复制到会话归档。"""
 
-    if type(job_id) is not int or not 1 <= job_id <= 2**63 - 1:
+    if type(job_id) is not int or not 1 <= job_id <= MAX_INT64:
         raise ValueError("job_id must be a positive 64-bit integer")
     effective_limits = limits or ArtifactLimits()
     session_root, archive_dir = _prepare_archive_directory(session_dir, images_dir)

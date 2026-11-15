@@ -289,6 +289,31 @@ xiaoqing_chat ── life.export_memes (minutes 07 and 37) ──► xiaoqing_li
 - Requests carry no user ID or group ID. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
   Core issues `capabilities.life_context` only when the caller declares `uses_services`.
 
+## 🧠 XiaoQing's unified memory
+
+`xiaoqing_memory` holds XiaoQing's long-term memory. Chat, the agent, and online life read and write it through one set of services:
+
+```text
+xiaoqing_chat  ── memory.record (after persisting messages and after delivery) ──┐
+xiaoqing_agent ── memory.record (when a task ends) ───────────────────────────────┼──► xiaoqing_memory ── events → notes → pages
+xiaoqing_life  ── memory.record (after each scheduled check) ─────────────────────┘          ▲
+xiaoqing_chat  ── memory.recall / search / forget ──────────────────────────────────────────┤ (in-memory reads, no model)
+xiaoqing_agent ── memory.recall (when a new task session starts) ───────────────────────────┘
+Core scheduler ── xiaoqing_memory.tick (every 30 min) ──► consolidation at night or on backlog
+```
+
+- Records live in three scopes: `global` (about herself), `g<group>`, and `u<user>`.
+  Private-chat content never reaches a group, and one group's content never reaches another.
+  What a person said about himself in a group can follow him into his own private chat.
+  Visibility is decided in one place inside the memory plugin.
+- When Core issues `capabilities.memory`, it writes the caller name, the principal kind, and the user principal's chat into the payload.
+  Fields of the same name supplied by the caller are ignored. A call from a user principal can only act on that principal's chat.
+  The memory plugin fixes which record types each caller may write.
+- Content whose source chain includes web text never reaches `xiaoqing_agent`.
+  Without the memory plugin, or with it disabled, the three plugins keep working without long-term memory.
+- `life.turn_context` picks each turn's online life without going through memory. Her self page, written by memory consolidation, also covers what she saw online; when both mention the same experience, learning or diary entry, chat keeps only life's details, matched by life's item keys.
+  The group's topic words from the last few days are recorded during memory consolidation, and chat passes them to life as browsing directions.
+
 ## 🚀 Startup and shutdown order
 
 ### Startup

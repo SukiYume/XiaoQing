@@ -1,8 +1,10 @@
-"""为持久化聊天历史维护紧凑、稳定的媒体引用。
+"""为聊天历史维护紧凑、稳定的媒体引用。
 
-消息正文保存位置占位符，注册表则为每个稳定媒体标识保留当前最佳元数据。更新遵循
-质量单调且尽力而为：注册表失败不能阻止提示词构造或消息投递。索引只含元数据，
-绝不包含原始媒体字节或服务商凭据。
+落盘的聊天记录只存 parts；``StoredMessage`` 派生的 ``content`` 视图用 ``[[xc_media_N]]``
+占位符标出媒体位置，本模块负责占位符与 ``[图片：…]`` 这类标记文字的互相转换，注册表则
+为每个稳定媒体标识保留当前最佳元数据，占位符对应的描述由它恢复。更新遵循质量单调且
+尽力而为：注册表失败不能阻止提示词构造或消息投递。索引只含元数据，绝不包含原始媒体
+字节或服务商凭据。
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from core.atomic_store import keyed_path_lock
 from .media.markers import emoji_summary_marker, is_generic_media_label, split_visible_text
 from .store_base import LockedDirtyStateMixin, StoreBase
 
-_MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,1000}\]")
+_MARKER_PREFIX              = r"(?:图片|表情包|QQ表情)："
+_MEDIA_MARKER_RE            = re.compile(rf"\[{_MARKER_PREFIX}[^\]\n]{{0,1000}}\]")
+_MARKER_LABEL_RE            = re.compile(rf"^\[{_MARKER_PREFIX}([^\]]+)\]$")
 MEDIA_PLACEHOLDER_RE        = re.compile(r"\[\[xc_media_(\d+)\]\]")
 _MEDIA_PLACEHOLDER_TEMPLATE = "[[xc_media_{index}]]"
 
@@ -48,7 +52,7 @@ def _extract_marker_label(marker: Any) -> str:
     text = _clean_text(marker)
     if not text:
         return ""
-    match = re.match(r"^\[(?:图片|表情包|QQ表情)：([^\]]+)\]$", text)
+    match = _MARKER_LABEL_RE.match(text)
     if not match:
         return ""
     return _clean_text(match.group(1))
@@ -80,6 +84,7 @@ def _stable_media_key(item: dict[str, Any]) -> str:
 
 
 def _normalize_media_ref(item: dict[str, Any]) -> dict[str, Any]:
+    # 注册表只存媒体本身的元数据；梗背景（cultural_hint）留在消息片段和渲染结果上，不进注册表。
     normalized: dict[str, Any] = {}
     for field in (
         "kind",
@@ -159,7 +164,12 @@ def quality_score(item: dict[str, Any]) -> float:
 
 
 def _render_media_marker(item: dict[str, Any]) -> str:
-    """把单个规范化引用渲染为确定性的提示词可见文本。"""
+    """把单个规范化引用渲染为确定性的提示词可见文本。
+
+    和 ``media.markers.build_marker`` 的分工：``build_marker`` 只给刚分析完的结果生成标记
+    （表情包只带情绪标签）；这里按注册表恢复出的完整元数据渲染，表情包带上画面内容和配字，
+    QQ 表情用名字。
+    """
 
     kind         = _clean_text(item.get("kind"))
     marker       = _clean_text(item.get("marker"))
@@ -243,9 +253,8 @@ def upsert_registered_media_items(
     items: Sequence[dict[str, Any]] | None,
     *,
     store: Any | None = None,
-    compact: bool     = True,
 ) -> list[dict[str, Any]]:
-    """尽力更新注册表，并按需执行持久化压缩。"""
+    """尽力更新注册表，返回带完整元数据的媒体引用；压缩成落盘形式是调用方的事。"""
 
     normalized_items = normalize_media_refs(items)
     if not normalized_items:
@@ -256,7 +265,7 @@ def upsert_registered_media_items(
         except Exception:
             resolved = []
         normalized_items = resolved or normalized_items
-    return compact_media_items(normalized_items) if compact else normalized_items
+    return normalized_items
 
 
 def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] | None) -> str:
@@ -435,7 +444,6 @@ def resolve_message_content(
     if not items:
         return _clean_text(content)
 
-    resolved_items: Sequence[dict[str, Any]] = items
     if store is None:
         from .runtime_state import get_state as _state
 
@@ -565,10 +573,10 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
                     continue
                 existing = entries.get(media_key, {})
                 merged   = _merge_media_record(existing if isinstance(existing, dict) else {}, item)
-                if merged != existing:
-                    entries[media_key] = merged
-                    self._pending_observations.append(item)
-                    changed = True
+                # 合并必然刷新观测时间和次数，所以每条带标识的观测都要记录。
+                entries[media_key] = merged
+                self._pending_observations.append(item)
+                changed = True
                 resolved_items.append(self._resolve_item_locked(item, entries=entries))
 
             if changed:

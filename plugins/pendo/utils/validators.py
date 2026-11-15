@@ -10,9 +10,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Final, TypeAlias
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from ..config import PendoConfig
+from .time_utils import is_valid_timezone
 
 DEFAULT_EVENT_REMINDER_RULES: Final[tuple[dict[str, int], ...]] = ({"offset_seconds": 0},)
 DEFAULT_EVENT_TIMEZONE: Final = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
@@ -39,6 +40,17 @@ LEDGER_DEFAULT_ACCOUNT   = "现金"
 LEDGER_DEFAULT_CURRENCY  = "CNY"
 MAX_NOTE_REFERENCES      = 100
 MAX_NOTE_REFERENCE_BYTES = 64 * 1024
+
+# 各文本字段的字符数上限：校验函数的默认值与账目字段规范化都按这一组执行，
+# 需要在到达校验前给出同样上限提示的调用方也应引用它们。
+MAX_TITLE_CHARS           = 200
+MAX_CATEGORY_CHARS        = 50
+MAX_TAG_CHARS             = 20
+MAX_LOCATION_CHARS        = 200
+MAX_LONG_TEXT_CHARS       = 50_000  # 正文、备注、日记回答
+MAX_LEDGER_CATEGORY_CHARS = 60
+MAX_LEDGER_ACCOUNT_CHARS  = 80
+MAX_LEDGER_MERCHANT_CHARS = 120
 
 COMMON_ITEM_FIELDS = {
     "id",
@@ -172,16 +184,13 @@ def sanitize_text(text: str, max_length: int = 10000) -> str:
     if len(text) > max_length:
         raise ValueError(f"文本最多允许 {max_length} 个字符，当前为 {len(text)} 个字符")
 
-    # 移除控制字符（保留换行和制表符）
+    # 移除控制字符（保留换行、回车和制表符），再去掉首尾空白
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
-    # 规范化Unicode字符
-    text = text.strip()
-
-    return text
+    return text.strip()
 
 
-def validate_category(category: str, max_length: int = 50) -> str:
+def validate_category(category: str, max_length: int = MAX_CATEGORY_CHARS) -> str:
     """验证分类名
 
     Args:
@@ -204,10 +213,10 @@ def validate_category(category: str, max_length: int = 50) -> str:
     if not re.match(r"^[\u4e00-\u9fa5a-zA-Z0-9_\-\s]+$", category):
         raise ValueError("分类名只能包含中文、英文、数字、下划线、短横线和空格")
 
-    return category.strip()
+    return category
 
 
-def validate_tag(tag: str, max_length: int = 20) -> str:
+def validate_tag(tag: str, max_length: int = MAX_TAG_CHARS) -> str:
     """验证标签名
 
     Args:
@@ -240,7 +249,7 @@ def default_task_plan_date(now: datetime | None = None) -> str:
     return target.strftime("%Y-%m-%d")
 
 
-def validate_title(title: str, max_length: int = 200) -> str:
+def validate_title(title: str, max_length: int = MAX_TITLE_CHARS) -> str:
     """验证标题
 
     Args:
@@ -257,9 +266,7 @@ def validate_title(title: str, max_length: int = 200) -> str:
         raise ValueError("标题不能为空")
 
     # 清洗并限制长度
-    title = sanitize_text(title, max_length)
-
-    return title.strip()
+    return sanitize_text(title, max_length)
 
 
 def sanitize_search_keyword(keyword: str) -> str:
@@ -279,20 +286,14 @@ def sanitize_search_keyword(keyword: str) -> str:
 
     # 移除/替换 FTS5 容易触发语法解析的字符，保留中文、字母、数字和空格检索
     keyword = re.sub(r"[\"'`*:(){}\[\]+\-]", " ", keyword)
-    keyword = re.sub(r"\s+", " ", keyword).strip()
-
-    # 限制长度
-    if len(keyword) > 100:
-        keyword = keyword[:100]
-
-    return keyword.strip()
+    return re.sub(r"\s+", " ", keyword).strip()
 
 
 def normalize_diary_mood(value: Any) -> str:
     """Normalize diary mood into the canonical journal vocabulary."""
     if value in (None, ""):
         return ""
-    mood = sanitize_text(str(value), 16).strip().lower()
+    mood = sanitize_text(str(value), 16).lower()
     if not mood:
         return ""
     mood = DIARY_MOOD_ALIASES.get(mood, mood)
@@ -314,7 +315,7 @@ def normalize_template_answers(value: Any) -> list[dict[str, str]]:
         if not isinstance(row, dict):
             raise ValueError("Diary template_answers must contain objects")
         prompt = sanitize_text(str(row.get("prompt") or ""), 300)
-        answer = sanitize_text(str(row.get("answer") or ""), 50000)
+        answer = sanitize_text(str(row.get("answer") or ""), MAX_LONG_TEXT_CHARS)
         if not prompt and not answer:
             continue
         answers.append({"prompt": prompt, "answer": answer})
@@ -330,7 +331,7 @@ def normalize_bool_flag(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "是", "收藏"}
 
 
-def validate_location(location: str, max_length: int = 200) -> str:
+def validate_location(location: str, max_length: int = MAX_LOCATION_CHARS) -> str:
     """验证地点
 
     Args:
@@ -344,9 +345,7 @@ def validate_location(location: str, max_length: int = 200) -> str:
         return ""
 
     # 清洗并限制长度
-    location = sanitize_text(location, max_length)
-
-    return location.strip()
+    return sanitize_text(location, max_length)
 
 
 def validate_priority(priority: Any) -> int:
@@ -402,10 +401,12 @@ def _normalize_common_fields(
     """原地规范所有条目共享的标题、正文、分类与标签。"""
     if "title" in normalized or not partial:
         title               = str(normalized.get("title") or "")
-        normalized["title"] = validate_title(title) if title_required else sanitize_text(title, 200)
+        normalized["title"] = (
+            validate_title(title) if title_required else sanitize_text(title, MAX_TITLE_CHARS)
+        )
 
     if "content" in normalized or not partial:
-        content = sanitize_text(str(normalized.get("content") or ""), 50000)
+        content = sanitize_text(str(normalized.get("content") or ""), MAX_LONG_TEXT_CHARS)
         if content_required and not content:
             raise ValueError("Diary content cannot be empty")
         normalized["content"] = content
@@ -430,9 +431,7 @@ def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
     """
     item_type = str(data.get("type") or "").strip()
     if item_type in SUPPORTED_ITEM_TYPES:
-        unknown = sorted(key for key in data if key not in get_allowed_item_fields(item_type))
-        if unknown:
-            raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
+        _reject_unknown_item_fields(item_type, data)
         if item_type == "ledger":
             return normalize_ledger_fields(dict(data), partial=False)
 
@@ -440,7 +439,7 @@ def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
     if "title" in data:
         validated["title"] = validate_title(data["title"])
     if "content" in data:
-        validated["content"] = sanitize_text(data["content"], 50000)
+        validated["content"] = sanitize_text(data["content"], MAX_LONG_TEXT_CHARS)
     if data.get("category"):
         validated["category"] = validate_category(data["category"])
     if isinstance(data.get("tags"), list):
@@ -498,7 +497,8 @@ def ledger_cents_to_amount(cents: Any) -> float:
     return float((Decimal(value) / Decimal("100")).quantize(Decimal("0.01")))
 
 
-def _clean_ledger_text(value: Any, default: str = "", max_length: int = 80) -> str:
+def _clean_ledger_text(value: Any, default: str, max_length: int) -> str:
+    """清洗账目里的短文本字段；清洗后为空就用 ``default``。"""
     return sanitize_text(str(value or "").strip(), max_length) or default
 
 
@@ -553,7 +553,9 @@ def _normalize_ledger_kind(normalized: dict[str, Any], *, partial: bool) -> str 
         category = "转账" if transaction_type == "transfer" else "其他"
     if category is not None:
         fallback                      = "转账" if transaction_type == "transfer" else "其他"
-        normalized["ledger_category"] = _clean_ledger_text(category, fallback, 60)
+        normalized["ledger_category"] = _clean_ledger_text(
+            category, fallback, MAX_LEDGER_CATEGORY_CHARS
+        )
     return transaction_type
 
 
@@ -562,12 +564,7 @@ def _normalize_ledger_date_and_currency(normalized: dict[str, Any], *, partial: 
     if not ledger_date and not partial:
         ledger_date = datetime.now().strftime("%Y-%m-%d")
     if ledger_date:
-        try:
-            normalized["ledger_date"] = datetime.strptime(str(ledger_date), "%Y-%m-%d").strftime(
-                "%Y-%m-%d"
-            )
-        except ValueError as exc:
-            raise ValueError("Invalid ledger_date, expected YYYY-MM-DD") from exc
+        normalized["ledger_date"] = _normalize_iso_date(ledger_date, "ledger_date")
 
     currency = normalized.get("currency")
     if currency is None and not partial:
@@ -589,18 +586,26 @@ def _normalize_ledger_accounts(
     if account is None and not partial:
         account = LEDGER_DEFAULT_ACCOUNT
     if account is not None:
-        normalized["account_name"] = _clean_ledger_text(account, LEDGER_DEFAULT_ACCOUNT, 80)
+        normalized["account_name"] = _clean_ledger_text(
+            account, LEDGER_DEFAULT_ACCOUNT, MAX_LEDGER_ACCOUNT_CHARS
+        )
 
     counter = normalized.get("counter_account_name")
     if counter is not None:
-        normalized["counter_account_name"] = _clean_ledger_text(counter, "", 80)
+        normalized["counter_account_name"] = _clean_ledger_text(
+            counter, "", MAX_LEDGER_ACCOUNT_CHARS
+        )
     elif not partial:
         normalized["counter_account_name"] = ""
 
     if transaction_type != "transfer":
         return
-    account_name = _clean_ledger_text(normalized.get("account_name"), LEDGER_DEFAULT_ACCOUNT, 80)
-    counter_name = _clean_ledger_text(normalized.get("counter_account_name"), "", 80)
+    account_name = _clean_ledger_text(
+        normalized.get("account_name"), LEDGER_DEFAULT_ACCOUNT, MAX_LEDGER_ACCOUNT_CHARS
+    )
+    counter_name = _clean_ledger_text(
+        normalized.get("counter_account_name"), "", MAX_LEDGER_ACCOUNT_CHARS
+    )
     if not counter_name:
         raise ValueError("Ledger transfer requires counter_account_name")
     if account_name == counter_name:
@@ -608,13 +613,15 @@ def _normalize_ledger_accounts(
     normalized["account_name"]         = account_name
     normalized["counter_account_name"] = counter_name
     normalized["ledger_category"]      = _clean_ledger_text(
-        normalized.get("ledger_category"), "转账", 60
+        normalized.get("ledger_category"), "转账", MAX_LEDGER_CATEGORY_CHARS
     )
 
 
 def _normalize_ledger_details(normalized: dict[str, Any], *, partial: bool) -> None:
     if "merchant" in normalized:
-        normalized["merchant"] = _clean_ledger_text(normalized.get("merchant"), "", 120)
+        normalized["merchant"] = _clean_ledger_text(
+            normalized.get("merchant"), "", MAX_LEDGER_MERCHANT_CHARS
+        )
     elif not partial:
         normalized["merchant"] = ""
 
@@ -815,15 +822,20 @@ def _normalize_optional_iso_date(value: Any, field_name: str) -> str | None:
     return _normalize_iso_date(value, field_name)
 
 
-def _normalize_event_context_fields(normalized: dict[str, Any], *, partial: bool) -> None:
-    """规范事件的地点、备注和时区。"""
+def _normalize_location_field(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范事件和日记共有的地点：给了就校验，完整规范化时缺省为空串。"""
     if "location" in normalized:
         normalized["location"] = validate_location(normalized.get("location") or "")
     elif not partial:
         normalized["location"] = ""
 
+
+def _normalize_event_context_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范事件的地点、备注和时区。"""
+    _normalize_location_field(normalized, partial=partial)
+
     if "notes" in normalized:
-        normalized["notes"] = sanitize_text(normalized.get("notes") or "", 50000)
+        normalized["notes"] = sanitize_text(normalized.get("notes") or "", MAX_LONG_TEXT_CHARS)
     elif not partial:
         normalized["notes"] = ""
 
@@ -832,10 +844,8 @@ def _normalize_event_context_fields(normalized: dict[str, Any], *, partial: bool
         timezone = PendoConfig.DEFAULT_TIMEZONE
     if timezone is not None:
         timezone_name = sanitize_text(str(timezone), 80) or PendoConfig.DEFAULT_TIMEZONE
-        try:
-            ZoneInfo(timezone_name)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError("Invalid event timezone") from exc
+        if not is_valid_timezone(timezone_name):
+            raise ValueError("Invalid event timezone")
         normalized["timezone"] = timezone_name
 
 
@@ -1032,7 +1042,7 @@ def _normalize_note_references(value: Any) -> list[dict[str, str]]:
             "kind": sanitize_text(str(raw_reference.get("kind") or "item"), 40) or "item",
             "id"  : reference_id,
         }
-        for key, limit in (("type", 40), ("title", 200)):
+        for key, limit in (("type", 40), ("title", MAX_TITLE_CHARS)):
             text = sanitize_text(str(raw_reference.get(key) or ""), limit)
             if text:
                 reference[key] = text
@@ -1105,10 +1115,7 @@ def _normalize_diary_context_fields(normalized: dict[str, Any], *, partial: bool
     if not partial or "diary_date" in normalized:
         normalized["diary_date"] = _normalize_iso_date(diary_date, "diary_date")
 
-    if "location" in normalized:
-        normalized["location"] = validate_location(normalized.get("location") or "")
-    elif not partial:
-        normalized["location"] = ""
+    _normalize_location_field(normalized, partial=partial)
 
 
 def _normalize_diary_mood_fields(normalized: dict[str, Any], *, partial: bool) -> None:
@@ -1118,17 +1125,14 @@ def _normalize_diary_mood_fields(normalized: dict[str, Any], *, partial: bool) -
         normalized["mood"] = normalize_diary_mood(mood)
 
     if not partial or "weather" in normalized:
-        weather = normalized.get("weather")
-        if weather in (None, ""):
-            normalized["weather"] = ""
-        elif weather is not None:
-            normalized["weather"] = sanitize_text(str(weather), 32)
+        weather               = normalized.get("weather")
+        normalized["weather"] = "" if weather in (None, "") else sanitize_text(str(weather), 32)
 
     if not partial or "mood_score" in normalized:
         mood_score = normalized.get("mood_score")
         if mood_score in (None, ""):
             normalized["mood_score"] = None
-        elif mood_score is not None:
+        else:
             try:
                 score = int(mood_score)
             except (TypeError, ValueError) as exc:
@@ -1141,11 +1145,10 @@ def _normalize_diary_mood_fields(normalized: dict[str, Any], *, partial: bool) -
 def _normalize_diary_template_fields(normalized: dict[str, Any], *, partial: bool) -> None:
     """规范日记模板、记录时间和收藏状态。"""
     if not partial or "template_id" in normalized:
-        template_id = normalized.get("template_id")
-        if template_id in (None, ""):
-            normalized["template_id"] = None
-        elif template_id is not None:
-            normalized["template_id"] = sanitize_text(str(template_id), 80) or None
+        template_id               = normalized.get("template_id")
+        normalized["template_id"] = (
+            None if template_id in (None, "") else sanitize_text(str(template_id), 80) or None
+        )
 
     entry_time = normalized.get("entry_time")
     if not partial or "entry_time" in normalized:
@@ -1201,6 +1204,14 @@ def get_allowed_item_fields(item_type: str) -> set[str]:
     return set(COMMON_ITEM_FIELDS) | set(TYPE_SPECIFIC_ITEM_FIELDS.get(item_type, set()))
 
 
+def _reject_unknown_item_fields(item_type: str, data: dict[str, Any]) -> None:
+    """拒绝不在该类型字段白名单里的顶层字段。"""
+    allowed = get_allowed_item_fields(item_type)
+    unknown = sorted(key for key in data if key not in allowed)
+    if unknown:
+        raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
+
+
 def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """Normalize a full item payload and reject fields outside the new schema."""
     item_type  = str(data.get("type") or "").strip()
@@ -1208,11 +1219,7 @@ def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     if not normalizer:
         raise ValueError(f"Unsupported record type: {item_type}")
 
-    allowed = get_allowed_item_fields(item_type)
-    unknown = sorted(key for key in data if key not in allowed)
-    if unknown:
-        raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
-
-    payload         = {key: value for key, value in data.items() if key in allowed}
+    _reject_unknown_item_fields(item_type, data)
+    payload         = dict(data)
     payload["type"] = item_type
     return normalizer(payload, partial)

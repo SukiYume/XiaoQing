@@ -17,6 +17,7 @@ from plugins.xiaoqing_life.safety import (
     clean_text,
     is_blocked,
     is_profane,
+    mentions_topic,
     normalize_for_match,
     quote_in_source,
 )
@@ -104,6 +105,12 @@ def test_blocklist_and_profanity() -> None:
     assert is_blocked("反中乱港分子黄之锋再判 10 年，哪些信息值得关注？带来哪些警示？")
     assert not is_blocked("C罗官宣从葡萄牙国家队正式退役，如何评价此事？")
     assert is_profane("nmsl") and is_profane("你个傻逼") and not is_profane("sbc 不是脏话")
+
+
+def test_a_topic_is_mentioned_only_when_it_has_two_characters_in_the_folded_text() -> None:
+    folded = normalize_for_match("最近在看 Ｈｏｌｌｏｗ Knight 的攻略")
+    assert mentions_topic(folded, "hollow knight") and mentions_topic(folded, "攻略")
+    assert not mentions_topic(folded, "猫") and not mentions_topic(folded, "！")
 
 
 def test_quote_must_be_a_normalized_substring() -> None:

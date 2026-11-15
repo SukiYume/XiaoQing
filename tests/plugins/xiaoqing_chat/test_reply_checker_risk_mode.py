@@ -440,7 +440,7 @@ async def test_risk_mode_skips_remote_checker_for_ordinary_knowledge(
 
     remote = AsyncMock()
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         remote,
     )
 
@@ -476,7 +476,7 @@ async def test_risk_mode_checks_questions_about_unseen_group_state(
 
     remote = AsyncMock(return_value=({"ok": True}, "/v1/chat/completions"))
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         remote,
     )
     monkeypatch.setattr(
@@ -522,7 +522,7 @@ async def test_risk_mode_does_not_remote_check_open_group_invitation(
 
     remote = AsyncMock()
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         remote,
     )
 
@@ -602,7 +602,7 @@ async def test_risk_mode_semantically_checks_first_person_proactive_reply(
 
     remote = AsyncMock(return_value=({"ok": True}, "/v1/chat/completions"))
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         remote,
     )
     monkeypatch.setattr(

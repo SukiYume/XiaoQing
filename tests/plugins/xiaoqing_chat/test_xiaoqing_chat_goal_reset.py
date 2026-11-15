@@ -53,7 +53,6 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
     state.pfc_state_store.get_async       = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -67,14 +66,8 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
 
     seen: dict[str, Any] = {}
 
-    async def fake_build_memory_block(**_kwargs):
-        return "prefetched-memory"
-
     async def fake_generate_reply_draft(**kwargs):
-        seen["action"]                 = kwargs["action"]
-        seen["prefetched_memory_task"] = kwargs.get("prefetched_memory_task")
-        if seen["prefetched_memory_task"] is not None:
-            seen["prefetched_memory"] = await seen["prefetched_memory_task"]
+        seen["action"] = kwargs["action"]
         return _reply_draft("直接回复")
 
     runtime = SimpleNamespace(
@@ -111,10 +104,6 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(side_effect=fake_build_memory_block),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(side_effect=fake_generate_reply_draft),
         ),
@@ -143,8 +132,6 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
     assert state.pfc_state_store.get_async.await_count == 0
     state.pfc_state_store.set_state.assert_not_called()
     assert seen["action"].think_level == 2
-    assert seen["prefetched_memory_task"] is not None
-    assert seen["prefetched_memory"] == "prefetched-memory"
 
 
 @pytest.mark.asyncio
@@ -169,7 +156,6 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
     state.pfc_state_store.get_async       = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "u12345",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -218,10 +204,6 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
         ),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=True),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
         patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
@@ -286,13 +268,7 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
     event.pop("group_id", None)
     event["_xc_command_forced"] = True
 
-    async def fake_build_memory_block(**_kwargs):
-        return ""
-
-    async def fake_generate_reply_draft(**kwargs):
-        task = kwargs.get("prefetched_memory_task")
-        if task is not None:
-            await task
+    async def fake_generate_reply_draft(**_kwargs):
         return _reply_draft("后台化测试")
 
     spawned_names: list[str] = []
@@ -311,10 +287,6 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(side_effect=fake_build_memory_block),
-        ),
         patch(
             "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(side_effect=fake_generate_reply_draft),
@@ -425,7 +397,6 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [{"goal": "旧规划目标"}],
@@ -453,7 +424,7 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
     )
 
     async def fake_run_pfc_once(**kwargs):
-        kwargs["state_override"].goal_list = [{"goal": "新规划目标"}]
+        kwargs["state"].goal_list = [{"goal": "新规划目标"}]
         return PFCRunResult(reply="planner-ok", action="reply", reason="ok", ended=False)
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -468,19 +439,15 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="旧门控目标"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="旧门控目标"),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply",
             new=AsyncMock(return_value=[]),
         ),
         patch(
@@ -525,7 +492,6 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = chat_id,
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [{"goal": "旧规划目标"}],
@@ -553,7 +519,7 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
     )
 
     async def fake_run_pfc_once(**kwargs):
-        kwargs["state_override"].goal_list = []
+        kwargs["state"].goal_list = []
         return PFCRunResult(reply="planner-ok", action="reply", reason="ok", ended=False)
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -568,19 +534,15 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(side_effect=fake_run_pfc_once),
         ),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async",
-            new=AsyncMock(return_value="围绕旧目标继续"),
+            "plugins.xiaoqing_chat.handlers.derive_goal",
+            new=Mock(return_value="围绕旧目标继续"),
         ),
         patch(
-            "plugins.xiaoqing_chat.turn_delivery._record_bot_reply",
+            "plugins.xiaoqing_chat.turn_delivery.record_bot_reply",
             new=AsyncMock(return_value=[]),
         ),
         patch(
@@ -622,7 +584,6 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
     state.pfc_state_store.get_async = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = chat_id,
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -655,7 +616,7 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
             "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
-        patch("plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="")),
+        patch("plugins.xiaoqing_chat.handlers.derive_goal", new=Mock(return_value="")),
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
@@ -740,7 +701,6 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
 
     pfc_st                              = await state.pfc_state_store.get_async(chat_id)
     pfc_st.ended                        = True
-    pfc_st.ignore_until_ts              = 123.0
     pfc_st.last_successful_reply_action = "say_goodbye"
     pfc_st.goal_list                    = [{"goal": "old"}]
     pfc_st.knowledge_list               = [{"text": "old"}]
@@ -755,11 +715,7 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
         [
             JargonRecord(content="本群黑话", scope_chat_id=chat_id),
             JargonRecord(content="其它群黑话", scope_chat_id="g-other"),
-            JargonRecord(
-                content        = "全局黑话",
-                is_global      = True,
-                chat_id_counts = [[chat_id, 3], ["g-other", 1]],
-            ),
+            JargonRecord(content="无会话旧词条", chat_id_counts=[["g-other", 1]]),
         ]
     )
     state.bw_recorder.set_last_time(chat_id, 123.0)
@@ -776,19 +732,14 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.memory_store.get(chat_id) == []
-    assert state.memory_db.query("旧话题", chat_id=chat_id, min_score=-1.0) == []
-    assert [
-        item.doc_id for item in state.memory_db.query("话题", chat_id="g-other", min_score=-1.0)
-    ] == ["topic-other-chat"]
+    assert state.memory_db.get("topic-current-chat") is None
+    assert state.memory_db.get("topic-other-chat") is not None
     reloaded_memory_db = type(state.memory_db)()
     reloaded_memory_db.bind(tmp_path)
-    assert reloaded_memory_db.query("旧话题", chat_id=chat_id, min_score=-1.0) == []
-    assert [
-        item.doc_id for item in reloaded_memory_db.query("话题", chat_id="g-other", min_score=-1.0)
-    ] == ["topic-other-chat"]
+    assert reloaded_memory_db.get("topic-current-chat") is None
+    assert reloaded_memory_db.get("topic-other-chat") is not None
     assert state.goal_store.get(chat_id).goal == ""
     heartflow_state = await state.heartflow.get_async(chat_id)
-    assert heartflow_state.reply_streak == 0
     assert heartflow_state.no_reply_streak == 0
     assert state.get_continuous_reply_count(chat_id) == 0
     assert state.get_continuous_cooldown_until(chat_id) == 0.0
@@ -801,7 +752,7 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     jargon = state.bw_jargon_store.load()
     assert JargonStore.key_for("本群黑话", chat_id) not in jargon
     assert JargonStore.key_for("其它群黑话", "g-other") in jargon
-    assert jargon[JargonStore.key_for("全局黑话")].chat_id_counts == [["g-other", 1]]
+    assert jargon[JargonStore.key_for("无会话旧词条")].chat_id_counts == [["g-other", 1]]
     assert state.bw_recorder.get_last_time(chat_id) == 0.0
     assert state.bw_tracker_store.get_trackers(chat_id) == []
     assert [item.expression_id for item in state.bw_tracker_store.get_trackers("g-other")] == [
@@ -841,13 +792,6 @@ async def test_handle_internal_reset_removes_per_chat_files_and_atomic_backups(
         write_json(path, {"new": "conversation"})
         assert path.with_name(f"{path.name}.bak").exists()
 
-    thinking_back_path = tmp_path / "thinking_back" / f"{chat_id}.jsonl"
-    thinking_back_path.parent.mkdir(parents=True, exist_ok=True)
-    thinking_back_path.write_text(
-        '{"question":"旧问题","answer":"旧回答"}\n',
-        encoding="utf-8",
-    )
-
     _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
     with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
@@ -857,7 +801,6 @@ async def test_handle_internal_reset_removes_per_chat_files_and_atomic_backups(
     for path in json_paths:
         assert not path.exists()
         assert not path.with_name(f"{path.name}.bak").exists()
-    assert not thinking_back_path.exists()
 
     pfc_state = await state.pfc_state_store.get_async(chat_id)
     assert pfc_state.goal_list == []
@@ -882,9 +825,8 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
     state.review_store.save_policy(
         chat_id,
         ReviewPolicy(
-            goal_override  = "旧目标覆写",
-            strategy_note  = "旧策略备注",
-            avoid_patterns = ["避免句式A", "避免句式B"],
+            goal_override = "旧目标覆写",
+            strategy_note = "旧策略备注",
         ),
     )
     # 连续写入以生成原子备份，验证重置不会只清理主文件。
@@ -919,7 +861,6 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
     policy_after_reset = state.review_store.get_policy(chat_id)
     assert policy_after_reset.goal_override == ""
     assert policy_after_reset.strategy_note == ""
-    assert policy_after_reset.avoid_patterns == []
 
     sessions_after_reset = [
         x for x in active_review_sessions(state.review_store) if x.chat_id == chat_id
@@ -955,7 +896,6 @@ async def test_smalltalk_action_history_preserves_real_planner_action_name(
     state.pfc_state_store.get_async       = AsyncMock(
         return_value=PFCConversationState(
             chat_id                      = "g67890",
-            ignore_until_ts              = 0.0,
             ended                        = False,
             last_successful_reply_action = "",
             goal_list                    = [],
@@ -994,10 +934,6 @@ async def test_smalltalk_action_history_preserves_real_planner_action_name(
         patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
-            new=AsyncMock(return_value=""),
-        ),
-        patch(
             "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
                 return_value=PFCRunResult(
@@ -1035,7 +971,6 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
-    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
     chat_id              = "pfc-goal-replan"
     cfg                  = XiaoQingChatConfig()
@@ -1045,10 +980,7 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="user", name="Tester", content="今天去哪家火锅店")
-    action_history  = ActionHistoryStore()
-    memory_db       = MagicMock()
-    pfc_state_store = PFCStateStore()
-
+    action_history = ActionHistoryStore()
     generate_reply = AsyncMock(return_value="ok")
 
     with (
@@ -1073,29 +1005,21 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
         ),
         patch(
             "plugins.xiaoqing_chat.planning.pfc_engine.analyze_goals",
-            new=AsyncMock(
-                return_value=[
-                    {
-                        "goal" : "帮用户选一家合适的火锅店",
-                        "focus": "预算与口味偏好",
-                    }
-                ]
-            ),
+            new=AsyncMock(return_value=[{"goal": "帮用户选一家合适的火锅店"}]),
         ),
     ):
         result = await run_pfc_once(
-            context         = context,
-            runtime_cfg     = cfg,
-            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name        = "小青",
-            is_private      = False,
-            chat_id         = chat_id,
-            current_text    = "今天去哪家火锅店",
-            memory_store    = memory_store,
-            action_history  = action_history,
-            memory_db       = memory_db,
-            pfc_state_store = pfc_state_store,
-            generate_reply  = generate_reply,
+            context        = context,
+            runtime_cfg    = cfg,
+            secrets        = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name       = "小青",
+            is_private     = False,
+            chat_id        = chat_id,
+            current_text   = "今天去哪家火锅店",
+            memory_store   = memory_store,
+            action_history = action_history,
+            state          = PFCConversationState(chat_id),
+            generate_reply = generate_reply,
         )
 
     assert result.reply == "ok"
@@ -1104,4 +1028,3 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
     _, planner_reason, extra_reason = generate_reply.await_args.args
     merged_reason = (f"{planner_reason}\n{extra_reason}").strip()
     assert "帮用户选一家合适的火锅店" in merged_reason
-    assert "预算与口味偏好" in merged_reason

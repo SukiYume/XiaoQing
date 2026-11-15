@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Iterable
 from datetime import datetime
@@ -10,6 +11,7 @@ from typing import cast
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import precision_recall_curve
 
 
 def timestamp_log(message: str = "") -> None:
@@ -51,7 +53,44 @@ def read_training_csv(path: str | Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=str)
 
 
+def best_fbeta_threshold(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    beta: float = 1.0,
+) -> tuple[float, float]:
+    """Return the threshold and score at the best finite PR-curve F-beta point."""
+
+    if isinstance(beta, bool) or not isinstance(beta, (int, float)) or not math.isfinite(beta):
+        raise ValueError("beta must be a finite positive number")
+    if beta <= 0:
+        raise ValueError("beta must be a finite positive number")
+    labels       = np.asarray(y_true)
+    scores_input = np.asarray(y_score)
+    if labels.ndim != 1 or scores_input.ndim != 1 or len(labels) != len(scores_input):
+        raise ValueError("y_true and y_score must be one-dimensional arrays of equal length")
+    if not np.isfinite(labels).all() or not np.isfinite(scores_input).all():
+        raise ValueError("y_true and y_score must contain only finite values")
+    if not np.isin(labels, (0, 1)).all():
+        raise ValueError("y_true must contain only 0 and 1")
+    if len(np.unique(labels)) < 2:
+        return 0.5, 0.0
+    precision, recall, thresholds = precision_recall_curve(labels, scores_input)
+    if len(thresholds) == 0:
+        return 0.5, 0.0
+    beta_squared = beta * beta
+    scores       = ((1 + beta_squared) * precision[:-1] * recall[:-1]) / np.clip(
+        (beta_squared * precision[:-1]) + recall[:-1],
+        1e-12,
+        None,
+    )
+    if np.all(np.isnan(scores)):
+        return 0.5, 0.0
+    best_index = int(np.nanargmax(scores))
+    return float(thresholds[best_index]), float(scores[best_index])
+
+
 __all__ = [
+    "best_fbeta_threshold",
     "coerce_binary_labels",
     "read_training_csv",
     "seed_python_numpy",

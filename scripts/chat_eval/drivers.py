@@ -5,8 +5,8 @@
   一个进程，插件的运行时状态互不干扰。
 - 端到端（live）：用测试副本配置启动真实 ``main.py``，本进程扮演 NapCat（OneBot 正向 WS 服务端）
   推送事件、应答 ``send_*_msg`` 并分配消息 ID，走完 Core 的分发、投递回执和定时任务。数据目录、
-  OneBot 地址和默认群都指向测试环境，``secrets.json`` 只读；需要改行为配置的剧本临时改写
-  ``xiaoqing_config.json``，结束后逐字节恢复。
+  OneBot 地址和默认群都指向测试环境；``secrets.json`` 不动，运行用的是多一个测试管理员的副本，
+  收尾时删掉。需要改行为配置的剧本临时改写 ``xiaoqing_config.json``，结束后逐字节恢复。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import copy
 import hashlib
 import json
 import os
@@ -32,6 +33,8 @@ from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from core.clock import DEFAULT_CONFIG_TIMEZONE
+
 from .scenarios import BOT_ID, BOT_NAME, Suite, user_id
 
 PROJECT_ROOT    = Path(__file__).resolve().parents[2]
@@ -39,12 +42,14 @@ DEFAULT_CONFIG  = PROJECT_ROOT / "config" / "config.json"
 DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
 BEHAVIOR_FILE   = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "xiaoqing_config.json"
 PERSONA_FILE    = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "persona.md"
-ZONE            = ZoneInfo("Asia/Shanghai")
+ZONE            = ZoneInfo(DEFAULT_CONFIG_TIMEZONE)
 NAPCAT_PORT     = 11990
 # 评测用的时区；为空时用配置文件里的。小青按这个时区的钟点过作息，见 ``set_timezone``。
 _timezone_override = ""
 # 只有这几种准备需要改行为配置，端到端驱动把这些剧本放到最后逐个跑。
 BEHAVIOR_SETUPS = frozenset({"busy_persona", "proactive"})
+# 端到端驱动里发 /mem consolidate 的测试管理员（只写进这次运行的密钥副本）。
+EVAL_ADMIN_ID = 864099
 
 
 def set_timezone(name: str | None) -> None:
@@ -52,6 +57,7 @@ def set_timezone(name: str | None) -> None:
 
     评测跑在真实时钟上：上海的凌晨开跑，她按作息在睡觉，插话变少、回复犯困，分数没法和白天的
     比。换一个此刻是白天的时区（比如 ``UTC``），预置数据的日期和 Bot 配置一起跟着换。
+    剧本里图书馆闭馆海报的日期例外：它在 ``scenarios`` 导入时就按上海时区定下，不跟着换。
     """
 
     global ZONE, _timezone_override
@@ -60,8 +66,34 @@ def set_timezone(name: str | None) -> None:
         _timezone_override = name
 
 
+def load_config() -> dict[str, Any]:
+    """本机的 ``config.json`` 原样读出。"""
+
+    return json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+
+
+def load_secrets() -> dict[str, Any]:
+    """本机的 ``secrets.json`` 原样读出。"""
+
+    return json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
+
+
 def _eval_config() -> dict[str, Any]:
-    config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    """评测用的配置：沿用本机的模型和路由，去掉只属于部署的覆盖。
+
+    部署配置优先于仓库里的默认值；评测要测的是仓库里的行为，所以小青只留模型路由，各插件的
+    定时目标（``schedules``）也不带进来，剧本需要的行为由驱动自己设置。
+    """
+
+    config  = load_config()
+    plugins = config.get("plugins")
+    if isinstance(plugins, dict):
+        for name, section in list(plugins.items()):
+            if not isinstance(section, dict):
+                continue
+            section.pop("schedules", None)
+            if name == "xiaoqing_chat":
+                plugins[name] = {key: section[key] for key in ("ai",) if key in section}
     if _timezone_override:
         config["timezone"] = _timezone_override
     return config
@@ -82,20 +114,33 @@ def redact_secrets(text: str) -> str:
 
 
 class _NullLogger:
-    """进程内驱动逐轮换上自己的记录器；这里只收下没人接的错误。"""
-
-    def __init__(self, errors: list[str]) -> None:
-        self._errors = errors
+    """进程内驱动逐轮换上自己的记录器；没换的上下文（梗图同步、记忆桥、生活桥）日志直接丢弃。"""
 
     def debug(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 
-    info = warning = debug
+    info = warning = error = exception = debug
 
-    def error(self, *args: Any, **_kwargs: Any) -> None:
-        self._errors.append(str(args[0]) if args else "error")
 
-    exception = error
+def make_ai_service(
+    session: Any, config: dict[str, Any], secrets: dict[str, Any], plugin_name: str
+) -> Any:
+    """按 ``plugin_name`` 的路由配置直连模型的 AI 能力，和 Core 交给插件的是同一种 ``AIService``。"""
+
+    from core.ai import complete_configured_route, list_configured_models
+    from core.capabilities import AIService
+
+    async def complete(**kwargs: Any) -> Any:
+        return await complete_configured_route(
+            session=session, config=config, secrets=secrets, plugin_name=plugin_name, **kwargs
+        )
+
+    def list_models(**kwargs: Any) -> Any:
+        return list_configured_models(
+            config=config, secrets=secrets, plugin_name=plugin_name, **kwargs
+        )
+
+    return AIService(complete, list_models)
 
 
 def make_plugin_context(
@@ -107,61 +152,60 @@ def make_plugin_context(
     user_id: int,
     group_id: int | None,
     request_id: str,
+    plugin_name: str = "xiaoqing_chat",
 ) -> Any:
     """进程内驱动用的插件上下文：模型真实调用，发送一律记为成功。
 
     和生产上下文一样，插件只拿得到 AI 路由能力，读不到统一密钥。
     """
 
-    from core.ai import complete_configured_route, list_configured_models
-    from core.capabilities import AIService
-    from core.delivery import receipt_from_action, strip_receipt
+    from core.delivery import receipt_from_action
     from core.interfaces import PluginCapabilities, PluginSettingsSnapshot
 
-    errors           : list[str]            = []
-    delivered_actions: list[dict[str, Any]] = []
-
     async def send_action(action: dict[str, Any]) -> bool:
-        delivered_actions.append(strip_receipt(action))
         receipt = receipt_from_action(action)
         if receipt is not None:
             await receipt.record(True)
         return True
 
-    async def complete_ai_route(**kwargs: Any) -> Any:
-        return await complete_configured_route(
-            session=session, config=config, secrets=secrets, plugin_name="xiaoqing_chat", **kwargs
-        )
-
-    def list_ai_models(**kwargs: Any) -> Any:
-        return list_configured_models(
-            config=config, secrets=secrets, plugin_name="xiaoqing_chat", **kwargs
-        )
-
     return SimpleNamespace(
         config=config,
         get_settings_snapshot=lambda: PluginSettingsSnapshot(config=config, secrets={}, revision=0),
-        errors            = errors,
-        delivered_actions = delivered_actions,
-        secrets           = {},
-        capabilities=PluginCapabilities(ai=AIService(complete_ai_route, list_ai_models)),
-        plugin_name      = "xiaoqing_chat",
-        plugin_dir       = PROJECT_ROOT / "plugins" / "xiaoqing_chat",
+        secrets={},
+        capabilities=PluginCapabilities(ai=make_ai_service(session, config, secrets, plugin_name)),
+        plugin_name      = plugin_name,
+        plugin_dir       = PROJECT_ROOT / "plugins" / plugin_name,
         data_dir         = data_dir,
         http_session     = session,
         send_action      = send_action,
-        logger           = _NullLogger(errors),
+        logger           = _NullLogger(),
         current_user_id  = user_id,
         current_group_id = group_id,
         request_id       = request_id,
-        admin_ids        = [],
         state            = {},
-        is_admin=lambda _uid, _gid=None: False,
-        check_permission=lambda _uid, _perm: False,
     )
 
 
 # ── 事件与记录 ──────────────────────────────────────────────────────────
+
+
+def is_name_call(event: dict[str, Any]) -> bool:
+    """和 Core 一样判断：只喊名字、只 @ 她（没带图）是在看她在不在。"""
+
+    from core.message import extract_text, parse_text_command_context
+
+    text = extract_text(event.get("message")) or ""
+    return parse_text_command_context(
+        text, event, bot_name=BOT_NAME, self_id=str(BOT_ID)
+    ).is_only_bot_name
+
+
+async def respond(chat: Any, raw: str, event: dict[str, Any], context: Any) -> Any:
+    """按 Core 的分流调用聊天插件：只喊一声走短应答入口，其余走闲聊。"""
+
+    if is_name_call(event):
+        return await chat.call_bot_name_only(context)
+    return await chat.handle_smalltalk(raw, event, context)
 
 
 def build_event(
@@ -176,6 +220,7 @@ def build_event(
     """一条剧本消息对应的 OneBot 消息事件；``group_id`` 为 None 时是私聊。"""
 
     uid                         = user_id(item["speaker"], suite_index)
+    shown_name                  = item.get("nick") or item["speaker"]
     parts: list[dict[str, Any]] = []
     if item["quote"] == "bot" and last_bot_id is not None:
         parts.append({"type": "reply", "data": {"id": str(last_bot_id)}})
@@ -213,7 +258,7 @@ def build_event(
         event.update(
             message_type = "private",
             sub_type     = "friend",
-            sender       = {"user_id": uid, "nickname": item["speaker"]},
+            sender       = {"user_id": uid, "nickname": shown_name},
         )
     else:
         event.update(
@@ -223,8 +268,8 @@ def build_event(
             message_seq  = message_id,
             sender       = {
                 "user_id" : uid,
-                "nickname": item["speaker"],
-                "card"    : item["speaker"],
+                "nickname": shown_name,
+                "card"    : shown_name,
                 "role"    : "member",
             },
         )
@@ -232,13 +277,14 @@ def build_event(
 
 
 def new_row(run: str, suite: str, index: int, episode: int, item: dict[str, Any]) -> dict[str, Any]:
-    keys = ("speaker", "text", "expect", "media", "kind", "face", "at", "quote", "tag")
+    keys = ("speaker", "text", "expect", "media", "kind", "face", "at", "quote", "tag", "chat")
     return {
         "run"    : run,
         "suite"  : suite,
         "index"  : index,
         "episode": episode,
         **{key: item[key] for key in keys},
+        "nick"       : item.get("nick") or "",
         "forbid"     : item.get("forbid") or [],
         "expect_any" : item.get("expect_any") or [],
         "online"     : item.get("online") or "",
@@ -268,6 +314,31 @@ def bubble_text(segments: list[dict[str, Any]]) -> str:
         for segment in segments
         if segment.get("type") == "text"
     ).strip()
+
+
+def _print_case(run_name: str, index: int, **fields: Any) -> None:
+    """每轮结束打一行 JSON 进度，进程内驱动写进 ``<剧本>.log``。"""
+
+    line = {"case": f"{run_name}.{index:02d}", **fields}
+    print(json.dumps(line, ensure_ascii=False), flush=True)
+
+
+def record_consolidate(
+    output: Path, row: dict[str, Any], run_name: str, index: int, summary: str
+) -> None:
+    """整理轮不是消息，没有回复：记下整理结果，写一行记录。"""
+
+    row["consolidate"]    = summary
+    row["reply_segments"] = []
+    append_row(output, row)
+    _print_case(run_name, index, consolidate=summary[:200])
+
+
+def record_turn(output: Path, row: dict[str, Any], run_name: str, index: int, shown: str) -> None:
+    """一轮收尾：写一行记录，进度里带上这句话和她的回复（``shown``）。"""
+
+    append_row(output, row)
+    _print_case(run_name, index, **{"in": row["text"][:30], "out": shown[:80]})
 
 
 def seed_data(
@@ -342,16 +413,60 @@ def _seed_episode(item: dict[str, Any], index: int, *, at: float, day: str) -> d
     }
 
 
+def _seed_meme(life_dir: Path, approved_at: float) -> dict[str, Any]:
+    """一张她在评论区收的、已经通过判定的反应梗图（画的是一只瞪大眼睛的猫）。"""
+
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    image  = Image.new("RGB", (240, 240), (250, 244, 230))
+    canvas = ImageDraw.Draw(image)
+    canvas.ellipse((40, 60, 200, 210), fill=(70, 70, 70))
+    canvas.polygon([(50, 90), (70, 30), (100, 70)], fill=(70, 70, 70))
+    canvas.polygon([(190, 90), (170, 30), (140, 70)], fill=(70, 70, 70))
+    for x in (85, 155):
+        canvas.ellipse((x - 22, 105, x + 22, 150), fill=(255, 255, 255))
+        canvas.ellipse((x - 8, 118, x + 8, 136), fill=(0, 0, 0))
+    canvas.ellipse((108, 165, 132, 190), fill=(200, 80, 90))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    payload = buffer.getvalue()
+    sha     = hashlib.sha256(payload).hexdigest()
+    (life_dir / "memes").mkdir(parents=True, exist_ok=True)
+    (life_dir / "memes" / f"{sha}.png").write_bytes(payload)
+    return {
+        sha: {
+            "sha256"       : sha,
+            "ext"          : ".png",
+            "label"        : "猫猫震惊",
+            "description"  : "一只黑猫瞪圆眼睛张着嘴，一脸震惊",
+            "visible_text" : "",
+            "emotion_tags" : ["震惊", "无语"],
+            "usage"        : "对方说了离谱或难以置信的事时发",
+            "status"       : "ready",
+            "created_at"   : approved_at,
+            "approved_at"  : approved_at,
+            "last_exported": 0.0,
+        }
+    }
+
+
 def seed_online_life(life_dir: Path) -> None:
     """用确定的经历 / 词条 / 小课题 / 快照预置 xiaoqing_life 的隔离数据目录；时间戳相对现在。
 
-    今天的经历均匀落在今天 0 点到现在之间，昨天的落在昨天的整点，所以“今天 / 昨天”的说法总是对得上。
+    今天的经历均匀落在今天换日（她的一天从 ``DAY_ROLLOVER_HOUR`` 点算起）到现在之间，昨天的落在昨天
+    的整点，所以“今天 / 昨天”的说法总是对得上；换日之前开跑时，从 0 点排起。
     """
+
+    from plugins.xiaoqing_life.days import DAY_ROLLOVER_HOUR
 
     from .scenarios import ONLINE_LIFE_SEED as seed
 
     now = datetime.now(ZONE)
     today = now.replace(hour=0, minute=1, second=0, microsecond=0)
+    if now.hour >= DAY_ROLLOVER_HOUR:
+        today = today.replace(hour=DAY_ROLLOVER_HOUR)
     span                           = max(60.0, (now - today).total_seconds())
     episodes: list[dict[str, Any]] = []
     for n, item in enumerate(seed["today"]):
@@ -373,6 +488,7 @@ def seed_online_life(life_dir: Path) -> None:
         )
 
     dump("episodes", episodes)
+    dump("memes", _seed_meme(life_dir, now.timestamp() - 86400))
     dump(
         "terms",
         {
@@ -427,23 +543,23 @@ class LifeBridge:
     """把 xiaoqing_life 的服务回调接成聊天侧的 ``capabilities.life_context``（进程内直调）。"""
 
     def __init__(self, context: Any) -> None:
-        self._context = context
+        self.context = context
 
     async def turn_context(self, payload: dict[str, Any]) -> Any:
         from plugins.xiaoqing_life import main as life_main
 
-        return await life_main.turn_context(dict(payload), self._context)
+        return await life_main.turn_context(dict(payload), self.context)
 
     async def export_memes(self, payload: dict[str, Any]) -> Any:
-        return None
+        from plugins.xiaoqing_life import main as life_main
+
+        return await life_main.export_memes(dict(payload), self.context)
 
 
 def make_life_bridge(config: dict[str, Any], life_dir: Path) -> LifeBridge:
     """隔离配置里启用 xiaoqing_life，路由沿用 xiaoqing_chat 的；数据目录就是预置过的那个。"""
 
-    from types import SimpleNamespace
-
-    cfg                      = json.loads(json.dumps(config))
+    cfg                      = copy.deepcopy(config)
     plugins                  = cfg.setdefault("plugins", {})
     chat_ai                  = plugins.get("xiaoqing_chat", {}).get("ai", {})
     plugins["xiaoqing_life"] = {"enabled": True, "ai": chat_ai}
@@ -452,13 +568,169 @@ def make_life_bridge(config: dict[str, Any], life_dir: Path) -> LifeBridge:
         data_dir              = life_dir,
         state                 = {},
         get_settings_snapshot = lambda: snapshot,
-        logger                = SimpleNamespace(
-            info=lambda *a, **k: None, warning=lambda *a, **k: None, debug=lambda *a, **k: None
-        ),
-        http_session=None,
+        logger                = _NullLogger(),
+        http_session          = None,
         capabilities=SimpleNamespace(ai=None),
     )
     return LifeBridge(context)
+
+
+class MemoryBridge:
+    """统一记忆的进程内桥：和 Core 一样把调用方名字与主体范围写进载荷，回调直接调插件入口。"""
+
+    def __init__(self, context: Any) -> None:
+        self.context = context
+
+    def service(self, caller: str, scope: str) -> Any:
+        from core.capabilities import MEMORY_METHODS, MemoryService
+        from plugins.xiaoqing_memory import main as memory_main
+
+        def method(name: str) -> Any:
+            async def invoke(payload: dict[str, Any]) -> Any:
+                return await getattr(memory_main, name)(dict(payload), self.context)
+
+            return invoke
+
+        return MemoryService(
+            caller,
+            "user" if scope else "system",
+            scope,
+            {name: method(name) for name in MEMORY_METHODS},
+        )
+
+    async def consolidate(self) -> str:
+        from plugins.xiaoqing_memory import main as memory_main
+
+        runtime = memory_main.get_runtime(self.context)
+        cfg     = memory_main.load_memory_config(self.context)
+        return str(await memory_main.consolidate_now(self.context, runtime, cfg, ""))
+
+    async def close(self) -> None:
+        from plugins.xiaoqing_memory import main as memory_main
+
+        await memory_main.shutdown(self.context)
+
+
+def make_memory_bridge(
+    session: Any, config: dict[str, Any], secrets: dict[str, Any], memory_dir: Path
+) -> MemoryBridge:
+    context = make_plugin_context(
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        data_dir    = memory_dir,
+        user_id     = 0,
+        group_id    = None,
+        request_id  = "memory",
+        plugin_name = "xiaoqing_memory",
+    )
+    return MemoryBridge(context)
+
+
+def seed_memory(memory_dir: Path, suite_name: str, group_index: int, user_index: int = 0) -> None:
+    """把剧本预置的旧对话写进统一记忆的事件日志（几天前说的），随后由剧本里的整理步骤处理。
+
+    ``group_index`` 决定剧本的群号，``user_index`` 决定群友的 QQ 号（进程内驱动的群友号码不分剧本）。
+    带 ``kind`` 的条目不是消息，是旧系统迁移来的记录（人物事实、她答应过的事），和上线那天
+    xiaoqing_chat 的一次性导入走同一条路。
+    """
+
+    from plugins.xiaoqing_memory.ops import apply_record
+    from plugins.xiaoqing_memory.scopes import Caller
+    from plugins.xiaoqing_memory.store import MemoryStore
+
+    from .scenarios import MEMORY_SEED
+
+    items = MEMORY_SEED.get(suite_name) or []
+    if not items:
+        return
+    store                                     = MemoryStore(memory_dir)
+    caller                                    = Caller("xiaoqing_chat", "system", "")
+    now                                       = time.time()
+    by_scope: dict[str, list[dict[str, Any]]] = {}
+    imports : dict[str, list[dict[str, Any]]] = {}
+    for offset, item in enumerate(items):
+        speaker = item["speaker"]
+        if item["where"] in ("group", "group2"):
+            # group2 是剧本第二段（换到的那个群）。
+            scope = f"g{suite_group(group_index, 0 if item['where'] == 'group' else 1)}"
+        else:
+            owner = next(
+                (
+                    other["speaker"]
+                    for other in items
+                    if other["where"] == "private" and other["speaker"] != "bot"
+                ),
+                speaker,
+            )
+            scope = f"u{user_id(owner, user_index)}"
+        ts = now - float(item["days"]) * 86400 + offset * 30
+        if item.get("kind"):
+            imports.setdefault(scope, []).append(
+                _seed_import(item, f"seed:{suite_name}:{offset}", scope, ts, user_index)
+            )
+            continue
+        if speaker == "bot":
+            event = {
+                "kind"  : "message",
+                "ts"    : ts,
+                "actor" : {"role": "assistant", "name": BOT_NAME},
+                "origin": "self",
+                "text"  : item["text"],
+                "key"   : f"seed:{suite_name}:{offset}",
+            }
+        else:
+            event = {
+                "kind": "message",
+                "ts": ts,
+                "actor": {"role": "user", "user_id": user_id(speaker, user_index), "name": speaker},
+                "origin": "user",
+                "text": item["text"],
+                "key": f"seed:{suite_name}:{offset}",
+            }
+        by_scope.setdefault(scope, []).append(event)
+    for scope, events in by_scope.items():
+        apply_record(store, {"scope": scope, "events": events}, caller, scope)
+    for scope, ops in imports.items():
+        apply_record(store, {"scope": scope, "ops": ops}, caller, scope)
+
+
+def _seed_import(
+    item: dict[str, Any], key: str, scope: str, ts: float, user_index: int
+) -> dict[str, Any]:
+    """预置里的一条旧记录，按 ``memory.legacy`` 导入时的格式。"""
+
+    if item["kind"] == "self.promise":
+        return {
+            "op"         : "import",
+            "kind"       : "self.promise",
+            "key"        : key,
+            "scope"      : scope,
+            "text"       : item["text"],
+            "data"       : {"counterpart": item["speaker"], "source": "chat"},
+            "observed_at": ts,
+            "expires_at" : ts + float(item.get("expires_days") or 7) * 86400,
+            "status"     : "active",
+        }
+    return {
+        "op"         : "import",
+        "kind"       : item["kind"],
+        "key"        : key,
+        "subject"    : f"person:{user_id(item['speaker'], user_index)}",
+        "text"       : item["text"],
+        "data"       : {"name": item["speaker"]},
+        "observed_at": ts,
+    }
+
+
+def turn_group(suite: Suite, item: dict[str, Any], group: int | None) -> int | None:
+    """这一条在哪儿说：剧本的群，或者（``chat=private``）说话人和她的私聊。"""
+
+    if item.get("chat") == "private":
+        return None
+    if item.get("chat") == "group":
+        return group
+    return None if suite.chat == "private" else group
 
 
 def suite_group(suite_index: int, episode: int) -> int:
@@ -471,9 +743,8 @@ def suite_group(suite_index: int, episode: int) -> int:
 class _RowLogger:
     """把插件的 step 日志和告警记进当前轮次。"""
 
-    def __init__(self, row: dict[str, Any], redact) -> None:
-        self.row    = row
-        self.redact = redact
+    def __init__(self, row: dict[str, Any]) -> None:
+        self.row = row
 
     def _write(self, level: str, message: Any, *args: Any, **_kwargs: Any) -> None:
         rendered = str(message) % args if args else str(message)
@@ -481,7 +752,7 @@ class _RowLogger:
             try:
                 self.row["steps"].append(json.loads(rendered.split("step=", 1)[1]))
             except (ValueError, TypeError):
-                self.row["steps"].append({"log": self.redact(rendered)[:2000]})
+                self.row["steps"].append({"log": redact_secrets(rendered)[:2000]})
         elif " media={" in rendered:
             # 读图结果单独记下，排查回复和图上内容对不上时用。
             try:
@@ -491,7 +762,7 @@ class _RowLogger:
             except (ValueError, TypeError):
                 pass
         elif level in {"warning", "error", "exception"}:
-            self.row["errors"].append({"level": level, "message": self.redact(rendered)[:1000]})
+            self.row["errors"].append({"level": level, "message": redact_secrets(rendered)[:1000]})
 
     def debug(self, *a: Any, **k: Any) -> None:
         self._write("debug", *a, **k)
@@ -532,14 +803,17 @@ async def run_inproc_suite(
     data_dir.mkdir(parents=True, exist_ok=False)
     for episode in range(len(suite.episodes)):
         seed_data(data_dir, suite.setup, group_id=suite_group(suite_index, episode))
-    config = _eval_config()
-    secrets = json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
+    config                         = _eval_config()
+    secrets                        = load_secrets()
     online_life                    = online_life or "online_life" in suite.setup
     life_bridge: LifeBridge | None = None
     if online_life:
         life_dir = out_dir / "isolated" / f"{run_name}-xiaoqing_life"
         seed_online_life(life_dir)
         life_bridge = make_life_bridge(config, life_dir)
+    memory_dir = out_dir / "isolated" / f"{run_name}-xiaoqing_memory"
+    if "memory_seed" in suite.setup:
+        seed_memory(memory_dir, name, suite_index)
     reset_global_state()
     state = get_state()
     bind_all_stores(state, data_dir)
@@ -560,9 +834,10 @@ async def run_inproc_suite(
     contexts: list[Any]         = []
     index                       = 0
     async with aiohttp.ClientSession() as session:
+        memory = make_memory_bridge(session, config, secrets, memory_dir)
         try:
             for episode, turns in enumerate(suite.episodes):
-                group       = None if suite.chat == "private" else suite_group(suite_index, episode)
+                suite_chat  = suite_group(suite_index, episode)
                 last_bot_id = None
                 for item in turns:
                     index += 1
@@ -572,6 +847,59 @@ async def run_inproc_suite(
                         row["reply_segments"] = []
                         append_row(output, row)
                         continue
+                    if index == 1 and life_bridge is not None:
+                        # 和生产上的定时同步一样，先把 xiaoqing_life 收的梗图导进表情库。
+                        from plugins.xiaoqing_chat.chat_runtime import load_runtime
+                        from plugins.xiaoqing_chat.life.online import sync_life_memes
+
+                        sync_context = make_plugin_context(
+                            session    = session,
+                            config     = config,
+                            secrets    = secrets,
+                            data_dir   = data_dir,
+                            user_id    = 0,
+                            group_id   = None,
+                            request_id = f"{run_name}.memes",
+                        )
+                        sync_context.capabilities = SimpleNamespace(
+                            life_context=life_bridge, ai=None
+                        )
+                        row["memes_synced"] = await sync_life_memes(
+                            sync_context, load_runtime(sync_context)
+                        )
+                        # 和生产上 xiaoqing_life 的定时任务一样，把预置的经历发布进统一记忆；
+                        # 剧本开头有整理步骤时，她的自我页就会引用这些经历。
+                        from plugins.xiaoqing_life import main as life_main
+                        from plugins.xiaoqing_life import memory_bridge as life_memory
+
+                        life_context              = life_bridge.context
+                        life_context.capabilities = SimpleNamespace(
+                            ai=None, memory=memory.service("xiaoqing_life", "")
+                        )
+                        row["life_published"] = await life_memory.publish(
+                            life_context,
+                            life_main.get_runtime(life_context).store,
+                            life_main.load_life_config(life_context),
+                            time.time(),
+                        )
+                    if item["tag"] == "consolidate":
+                        # 先等聊天把已有消息推完，再整理一次（相当于过了一夜）。
+                        await asyncio.sleep(2)
+                        from plugins.xiaoqing_chat.memory.client import sync_all
+
+                        await sync_all(
+                            SimpleNamespace(
+                                data_dir     = data_dir,
+                                capabilities = SimpleNamespace(
+                                    memory=memory.service("xiaoqing_chat", "")
+                                ),
+                            ),
+                            state,
+                            bot_name=BOT_NAME,
+                        )
+                        record_consolidate(output, row, run_name, index, await memory.consolidate())
+                        continue
+                    group = turn_group(suite, item, suite_chat)
                     if index > 1 and item["pace"]:
                         await asyncio.sleep(item["pace"])
                     message_id = (group or user_id(item["speaker"])) % 1_000_000 * 1000 + index
@@ -627,9 +955,12 @@ async def run_inproc_suite(
                                 route_name, **kw
                             ),
                         ),
-                        life_context=life_bridge,
+                        life_context = life_bridge,
+                        memory       = memory.service(
+                            "xiaoqing_chat", f"g{group}" if group else f"u{event['user_id']}"
+                        ),
                     )
-                    context.logger = _RowLogger(row, redact_secrets)
+                    context.logger = _RowLogger(row)
                     started        = time.monotonic()
                     original_send  = context.send_action
 
@@ -649,7 +980,7 @@ async def run_inproc_suite(
                     raw = event["raw_message"]
                     try:
                         await chat.observe_message(raw, event, context)
-                        result = await chat.handle_smalltalk(raw, event, context)
+                        result = await respond(chat, raw, event, context)
                         if result:
                             row["emissions"].append(
                                 {
@@ -686,22 +1017,12 @@ async def run_inproc_suite(
                     row["gate"]    = (
                         asdict(gate) if gate is not None and gate is not previous_gate else None
                     )
-                    append_row(output, row)
                     current_row.reset(token)
-                    print(
-                        json.dumps(
-                            {
-                                "case": f"{run_name}.{index:02d}",
-                                "in"  : item["text"][:30],
-                                "out" : bubble_text(row["reply_segments"])[:60],
-                            },
-                            ensure_ascii=False,
-                        ),
-                        flush=True,
-                    )
+                    record_turn(output, row, run_name, index, bubble_text(row["reply_segments"]))
         finally:
             if contexts:
                 await chat.shutdown(contexts[-1])
+            await memory.close()
             reply_generator.check_reply = original_check
     return output
 
@@ -873,6 +1194,7 @@ class LiveBot:
         self.data                              = out_dir / "data"
         self._log: Any                         = None
         self._mid                              = 5_000_000
+        self._secrets: Path | None             = None
 
     def _proactive_groups(self) -> list[int]:
         return [
@@ -904,6 +1226,16 @@ class LiveBot:
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
+    def _write_secrets(self) -> Path:
+        """这次运行的密钥副本：多一个测试管理员，用来发 /mem consolidate；收尾时删掉。"""
+
+        secrets                   = load_secrets()
+        admins                    = [int(item) for item in secrets.get("admin_user_ids") or ()]
+        secrets["admin_user_ids"] = [*admins, EVAL_ADMIN_ID]
+        path                      = self.out_dir / "secrets.eval.json"
+        path.write_text(json.dumps(secrets, ensure_ascii=False), encoding="utf-8")
+        return path
+
     async def __aenter__(self) -> LiveBot:
         chat_data = self.data / "xiaoqing_chat"
         for name, suite in self.suites.items():
@@ -914,15 +1246,20 @@ class LiveBot:
                     group_id    = suite_group(self.indexes[name], episode),
                     suite_index = self.indexes[name],
                 )
+            if "memory_seed" in suite.setup:
+                seed_memory(
+                    self.data / "xiaoqing_memory", name, self.indexes[name], self.indexes[name]
+                )
         config_path   = self._write_config()
         self.behavior = BehaviorOverride(self.out_dir)
         await self.napcat.start(NAPCAT_PORT)
-        self._log = (self.out_dir / "bot.log").open("wb")
+        self._secrets = self._write_secrets()
+        self._log     = (self.out_dir / "bot.log").open("wb")
         # 走 main.py 的同一个入口，只把配置文件换成测试副本。
         launcher = (
             "import sys, core.app as app\n"
             "real = app.ConfigManager\n"
-            f"app.ConfigManager = lambda config, secrets: real({str(config_path)!r}, secrets)\n"
+            f"app.ConfigManager = lambda config, secrets: real({str(config_path)!r}, {str(self._secrets)!r})\n"
             "import main\n"
             "main.cli([])\n"
         )
@@ -961,6 +1298,8 @@ class LiveBot:
             if self._log is not None:
                 self._log.close()
             await self.napcat.stop()
+            if self._secrets is not None:
+                self._secrets.unlink(missing_ok=True)
 
     def _apply_setup(self, suite: Suite) -> None:
         sections: dict[str, dict[str, Any]] = {}
@@ -990,13 +1329,15 @@ class LiveBot:
         index = 0
         try:
             for episode, turns in enumerate(suite.episodes):
-                group = (
-                    None if suite.chat == "private" else suite_group(self.indexes[name], episode)
-                )
+                suite_chat  = suite_group(self.indexes[name], episode)
                 last_bot_id = None
                 for item in turns:
                     index += 1
-                    row    = new_row(run_name, name, index, episode, item)
+                    row = new_row(run_name, name, index, episode, item)
+                    if item["tag"] == "consolidate":
+                        record_consolidate(output, row, run_name, index, await self._consolidate())
+                        continue
+                    group  = turn_group(suite, item, suite_chat)
                     target = (
                         ("group", group)
                         if group is not None
@@ -1005,9 +1346,8 @@ class LiveBot:
                     start   = len(self.napcat.outbound)
                     started = time.monotonic()
                     if item["tag"] == "await_proactive":
-                        target = ("group", group or 0)
-                        got    = await self.napcat.collect(
-                            target, start, wait=item["wait"] or 1500, settle=5
+                        got = await self._await_proactive(
+                            ("group", group or 0), wait=item["wait"] or 1500
                         )
                     else:
                         if index > 1 and item["pace"]:
@@ -1043,26 +1383,66 @@ class LiveBot:
                     ]
                     row["reply_segments"] = [segment for r in got for segment in r["segments"]]
                     row["seconds"]        = round(time.monotonic() - started, 3)
-                    append_row(output, row)
-                    print(
-                        json.dumps(
-                            {
-                                "case": f"{run_name}.{index:02d}",
-                                "in"  : item["text"][:30],
-                                "out" : " / ".join(bubble_text(r["segments"]) for r in got)[:80],
-                            },
-                            ensure_ascii=False,
-                        ),
-                        flush=True,
-                    )
+                    shown                 = " / ".join(bubble_text(r["segments"]) for r in got)
+                    record_turn(output, row, run_name, index, shown)
         finally:
-            if (
-                self.behavior is not None
-                and suite.setup
-                and BEHAVIOR_SETUPS.intersection(suite.setup)
-            ):
+            # 没改过行为配置时 ``restore`` 什么也不做。
+            if self.behavior is not None:
                 self.behavior.restore()
         return output
+
+    def _proactive_sends(self) -> int:
+        log = self.out_dir / "bot.log"
+        return log.read_bytes().count(b'"step": "proactive.send"') if log.is_file() else 0
+
+    async def _await_proactive(
+        self, target: tuple[str, int], *, wait: float
+    ) -> list[dict[str, Any]]:
+        """等她自己在定时检查里开口，返回她说的那条；到时间没开口返回空。
+
+        其他插件的定时推送也会进这个群，不是她说的：以机器人日志里的 ``proactive.send`` 为准，
+        只取这一步之后发出的消息。
+        """
+
+        deadline = time.time() + wait
+        sent     = self._proactive_sends()
+        mark     = len(self.napcat.outbound)
+        while time.time() < deadline:
+            await asyncio.sleep(2)
+            if self._proactive_sends() > sent:
+                return await self.napcat.collect(target, mark, wait=60, settle=5)
+            mark = len(self.napcat.outbound)
+        return []
+
+    async def _consolidate(self) -> str:
+        """测试管理员私聊发 /mem consolidate，等记忆插件整理完回话。"""
+
+        await asyncio.sleep(3)
+        self._mid += 1
+        event = {
+            "post_type"   : "message",
+            "message_type": "private",
+            "sub_type"    : "friend",
+            "time"        : int(time.time()),
+            "self_id"     : BOT_ID,
+            "user_id"     : EVAL_ADMIN_ID,
+            "message_id"  : self._mid,
+            "message"     : [{"type": "text", "data": {"text": "/mem consolidate"}}],
+            "raw_message" : "/mem consolidate",
+            "font"        : 0,
+            "sender"      : {"user_id": EVAL_ADMIN_ID, "nickname": "评测管理员"},
+        }
+        start    = len(self.napcat.outbound)
+        deadline = time.time() + 900
+        await self.napcat.push(event)
+        texts: list[str] = []
+        while time.time() < deadline:
+            got = await self.napcat.collect(("private", EVAL_ADMIN_ID), start, wait=30, settle=2)
+            texts = [bubble_text(r["segments"]) for r in got]
+            # 几个剧本同时请求时，后到的会收到“上一次整理还没做完”：等第一次整理的结果。
+            if any(text.startswith(("整理完了", "整理没做完")) for text in texts):
+                break
+        return " / ".join(texts)
 
 
 async def run_live(
@@ -1124,8 +1504,8 @@ async def replay(chat_data: Path, chat_id: str, speaker: str, text: str, *, at_b
         for backup in data_dir.glob(f"{chat_id}.json.bak"):
             backup.unlink()
 
-        config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
-        secrets = json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
+        config  = _eval_config()
+        secrets = load_secrets()
         reset_global_state()
         bind_all_stores(get_state(), data_dir)
         original = reply_generator.check_reply
@@ -1168,7 +1548,7 @@ async def replay(chat_data: Path, chat_id: str, speaker: str, text: str, *, at_b
                     request_id = "replay",
                 )
                 await chat.observe_message(event["raw_message"], event, context)
-                result = await chat.handle_smalltalk(event["raw_message"], event, context)
+                result = await respond(chat, event["raw_message"], event, context)
                 print(
                     "最终发出：",
                     bubble_text(list(result)) if isinstance(result, DeliverySegments) else result,

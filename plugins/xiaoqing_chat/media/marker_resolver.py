@@ -13,10 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
+from ..llm.media_evidence import media_summary_label
 from ..media_registry import MediaRegistryStore, resolve_registered_media_items
 from ..message_parts import normalize_message_parts
 from .emoji_library import EmojiLibraryEntry, load_emoji_library, resolve_emoji_file_path
-from .markers import split_visible_text
+from .markers import build_marker, split_visible_text
 from .models import SUPPORTED_IMAGE_SUFFIXES
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
 
@@ -82,7 +83,7 @@ def parse_marker(text: str) -> ParsedMarker | None:
     label = str(match.group(1) or "").strip()
     hint  = str(match.group(2) or "").strip()
     if rendered_format:
-        hint = re.split(r"[；;]", hint, maxsplit=1)[0].strip()
+        hint = media_summary_label(hint)
     kind = _MARKER_KIND_BY_LABEL.get(label)
     if kind is None or not hint:
         return None
@@ -234,9 +235,9 @@ def _entry_from_media_ref(media_ref: Mapping[str, Any], *, file_path: Path) -> I
     description = str(media_ref.get("description", "") or "").strip() or file_path.stem.replace(
         "_", " "
     )
-    marker = str(media_ref.get("marker", "") or "").strip()
-    if not marker:
-        marker = f"[图片：{description}]"
+    marker = str(media_ref.get("marker", "") or "").strip() or build_marker(
+        "image", description, ()
+    )
     return ImageLibraryEntry(
         media_key   = str(media_ref.get("media_key", "") or "").strip(),
         media_hash  = str(media_ref.get("media_hash", "") or "").strip(),

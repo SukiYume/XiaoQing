@@ -43,7 +43,7 @@ from .constants import VALID_PLUGIN_NAME_PATTERN
 from .exceptions import ConfigLoadError
 from .inbound_policy import validate_inbound_listener
 
-ConfigCallback         = Callable[["ConfigSnapshot"], None] | Callable[["ConfigSnapshot"], Any]
+ConfigCallback         = Callable[["ConfigSnapshot"], Any]
 SecurityConfigCallback = Callable[["ConfigSnapshot"], None]
 T                      = TypeVar("T")
 _SourceStatKey         = tuple[int, int, int, int]
@@ -118,6 +118,17 @@ class _PluginExecutionConfigSchema(_PluginExecutionPolicySchema):
         return value
 
 
+def _validate_absolute_url(value: str | None, schemes: tuple[str, str]) -> str | None:
+    """空值放行；非空时必须是带主机名、scheme 在 ``schemes`` 内的绝对 URL。"""
+
+    if value is None or value == "":
+        return value
+    parts = urlsplit(value)
+    if parts.scheme not in schemes or not parts.hostname:
+        raise ValueError(f"must be an absolute {schemes[0]}:// or {schemes[1]}:// URL")
+    return value
+
+
 class _RuntimeConfigSchema(BaseModel):
     """Validation for core runtime knobs while allowing plugin-specific keys."""
 
@@ -140,6 +151,15 @@ class _RuntimeConfigSchema(BaseModel):
     inbound_ws_uri                      : str | None                          = None
     inbound_http_base                   : str | None                          = None
     plugin_execution                    : _PluginExecutionConfigSchema | None = None
+    command_prefixes                    : list[StrictStr] | None              = None
+
+    @field_validator("command_prefixes")
+    @classmethod
+    def _validate_command_prefixes(cls, value: list[str] | None) -> list[str]:
+        # 空列表会让所有带前缀的命令失效，空串会让每条消息都算命令：两种都不是能用的配置。
+        if not value or any(not prefix.strip() for prefix in value):
+            raise ValueError("must be a non-empty list of non-empty strings")
+        return value
 
     @field_validator("data_root")
     @classmethod
@@ -172,22 +192,12 @@ class _RuntimeConfigSchema(BaseModel):
     @field_validator("onebot_ws_uri")
     @classmethod
     def _validate_ws_uri(cls, value: str | None) -> str | None:
-        if value in (None, ""):
-            return value
-        parts = urlsplit(value)
-        if parts.scheme not in {"ws", "wss"} or not parts.hostname:
-            raise ValueError("must be an absolute ws:// or wss:// URL")
-        return value
+        return _validate_absolute_url(value, ("ws", "wss"))
 
     @field_validator("onebot_http_base")
     @classmethod
     def _validate_http_uri(cls, value: str | None) -> str | None:
-        if value in (None, ""):
-            return value
-        parts = urlsplit(value)
-        if parts.scheme not in {"http", "https"} or not parts.hostname:
-            raise ValueError("must be an absolute http:// or https:// URL")
-        return value
+        return _validate_absolute_url(value, ("http", "https"))
 
     @model_validator(mode="after")
     def _validate_enabled_ws_client(self) -> "_RuntimeConfigSchema":
@@ -269,7 +279,7 @@ def _freeze_config_value(value: Any) -> Any:
     raise TypeError(f"Unsupported mutable config snapshot value: {type(value).__name__}")
 
 
-def _freeze_config_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+def freeze_config_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     _validate_config_tree(value)
     return cast(Mapping[str, Any], _freeze_config_value(value))
 
@@ -282,6 +292,26 @@ def materialize_snapshot_value(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return [materialize_snapshot_value(child) for child in value]
     return copy.deepcopy(value)
+
+
+def lookup_dotted(namespace: Any, path: str) -> Any:
+    """按 ``a.b.c`` 逐级读取并返回脱离原结构的副本；路径不存在时返回 None。"""
+
+    current = namespace
+    for part in path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return materialize_snapshot_value(current)
+
+
+def secret_path_parts(path: str) -> list[str]:
+    """把点分隔的密钥路径拆成各段；每段只允许字母、数字、下划线和连字符，否则抛 ValueError。"""
+
+    parts = str(path or "").split(".")
+    if not parts or any(not re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in parts):
+        raise ValueError("invalid secret path")
+    return parts
 
 
 def _check_secrets_file_permissions(path: Path) -> None:
@@ -357,8 +387,8 @@ class ConfigSnapshot(tuple[Any, ...]):
         return tuple.__new__(
             cls,
             (
-                _freeze_config_mapping(config),
-                _freeze_config_mapping(secrets),
+                freeze_config_mapping(config),
+                freeze_config_mapping(secrets),
                 revision,
                 ConfigSourceStatus(config_status),
                 ConfigSourceStatus(secrets_status),
@@ -535,8 +565,8 @@ class ConfigManager:
         self.secrets_path = Path(secrets_path)
         self._config: dict[str, Any] = {}
         self._secrets: dict[str, Any] = {}
-        self._config_view: Mapping[str, Any] = _freeze_config_mapping({})
-        self._secrets_view: Mapping[str, Any] = _freeze_config_mapping({})
+        self._config_view: Mapping[str, Any] = freeze_config_mapping({})
+        self._secrets_view: Mapping[str, Any] = freeze_config_mapping({})
         self._config_source = _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
         self._secrets_source = _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
         self._paired_config_signature = self._config_source.signature
@@ -791,8 +821,8 @@ class ConfigManager:
     ) -> None:
         """Install detached internal copies. Callers cannot retain a mutable alias."""
 
-        config_view  = _freeze_config_mapping(config)
-        secrets_view = _freeze_config_mapping(secrets)
+        config_view  = freeze_config_mapping(config)
+        secrets_view = freeze_config_mapping(secrets)
         config_copy  = cast(dict[str, Any], materialize_snapshot_value(config_view))
         secrets_copy = cast(dict[str, Any], materialize_snapshot_value(secrets_view))
         # Commit only after every copy and validation step succeeds.
@@ -911,7 +941,7 @@ class ConfigManager:
                             else current
                         )
                     except BaseException as exc:
-                        # A write can fail after partially changing the primary.
+                        # A write can fail after partially changing the secrets file.
                         # Reconcile it before propagating so live auth never keeps
                         # credentials contradicted by the observed disk state.
                         observed = self._read_source_unlocked(self.secrets_path)
@@ -972,7 +1002,7 @@ class ConfigManager:
             KeyError: 如果路径不存在
             ValueError: 如果路径中的某个键不是字典类型
         """
-        keys = self._secret_path_parts(path)
+        keys = secret_path_parts(path)
 
         def mutate(candidate: dict[str, Any]) -> tuple[bool, None]:
             current = candidate
@@ -992,30 +1022,18 @@ class ConfigManager:
 
         self._commit_secrets_mutation(mutate)
 
-    @staticmethod
-    def _secret_path_parts(path: str) -> list[str]:
-        parts = path.split(".")
-        if not parts or any(not re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in parts):
-            raise ValueError("invalid secret path")
-        return parts
-
     def get_plugin_secret(self, plugin_name: str, path: str) -> Any:
-        parts = self._secret_path_parts(path)
-        self._secret_path_parts(plugin_name)
+        secret_path_parts(path)
+        secret_path_parts(plugin_name)
         with self._lock:
             plugins = self._secrets.get("plugins", {})
             if not isinstance(plugins, dict):
                 return None
-            current: Any = plugins.get(plugin_name, {})
-            for part in parts:
-                if not isinstance(current, dict) or part not in current:
-                    return None
-                current = current[part]
-            return copy.deepcopy(current)
+            return lookup_dotted(plugins.get(plugin_name, {}), path)
 
     def set_plugin_secret(self, plugin_name: str, path: str, value: Any) -> None:
-        parts = self._secret_path_parts(path)
-        self._secret_path_parts(plugin_name)
+        parts = secret_path_parts(path)
+        secret_path_parts(plugin_name)
 
         def mutate(candidate: dict[str, Any]) -> tuple[bool, None]:
             plugins = candidate.setdefault("plugins", {})
@@ -1036,8 +1054,8 @@ class ConfigManager:
         self._commit_secrets_mutation(mutate)
 
     def delete_plugin_secret(self, plugin_name: str, path: str) -> bool:
-        parts = self._secret_path_parts(path)
-        self._secret_path_parts(plugin_name)
+        parts = secret_path_parts(path)
+        secret_path_parts(plugin_name)
 
         def mutate(candidate: dict[str, Any]) -> tuple[bool, bool]:
             plugins = candidate.get("plugins", {})
@@ -1107,8 +1125,8 @@ class ConfigManager:
         def guarded(snapshot: ConfigSnapshot) -> None:
             with self._lock:
                 enabled = active
-            if enabled:
-                callback(snapshot)
+            # 返回值原样交回：_dispatch_security_update 靠它认出异步回调。
+            return callback(snapshot) if enabled else None
 
         with self._lock:
             self._security_callbacks.append(guarded)
@@ -1537,7 +1555,7 @@ class ConfigManager:
         return None
 
     def _read_source_unlocked(self, path: Path) -> _SourceRead:
-        """Read one exact primary file without backup recovery."""
+        """Read and parse one config source file exactly as it is on disk."""
 
         try:
             with path.open("rb") as handle:
@@ -1600,7 +1618,7 @@ class ConfigManager:
             # every nested value is finite and supported before it is VALID.
             value = cast(
                 dict[str, Any],
-                materialize_snapshot_value(_freeze_config_mapping(value)),
+                materialize_snapshot_value(freeze_config_mapping(value)),
             )
         except (
             UnicodeDecodeError,
@@ -1701,7 +1719,7 @@ class ConfigManager:
         *,
         expected_etag: str,
     ) -> _SourceRead:
-        """Write a verified inode without recreating a deleted/replaced primary.
+        """Write a verified inode without recreating a deleted/replaced secrets file.
 
         Managed writers are serialized by the keyed lock.  Pre/post identity and
         content checks make an external replace, delete, or observed same-inode
@@ -1805,5 +1823,9 @@ __all__ = [
     "ConfigManager",
     "ConfigSnapshot",
     "ConfigSourceStatus",
+    "PendingSecretsChange",
+    "freeze_config_mapping",
+    "lookup_dotted",
     "materialize_snapshot_value",
+    "secret_path_parts",
 ]

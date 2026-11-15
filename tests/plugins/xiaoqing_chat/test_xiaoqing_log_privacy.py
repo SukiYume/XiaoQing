@@ -184,8 +184,10 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
     )
     context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.reset-audit"))
 
-    async def reset_chat_session(_state, event_chat_id: str, _data_dir: Path) -> None:
-        return None
+    async def reset_chat_session(
+        _state, event_chat_id: str, _data_dir: Path, _context: object = None
+    ) -> bool:
+        return True
 
     with caplog.at_level(logging.INFO):
         with (

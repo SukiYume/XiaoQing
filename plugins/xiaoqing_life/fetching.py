@@ -12,6 +12,7 @@ from typing import Any
 
 from . import reinforce
 from .config import LifeConfig
+from .days import DAY
 from .lifecycle import interest_weights
 from .planner import HOT_SCROLL, HOT_SOURCE_WEIGHTS, Decision
 from .safety import normalize_for_match, overlap
@@ -105,6 +106,20 @@ async def gather(
     return items, failures
 
 
+def search_usable(cfg: LifeConfig, state: dict[str, Any], now: float) -> bool:
+    """B站搜索开着、近期也稳（来源可靠性没被降权）。"""
+
+    return (
+        cfg.source_on("bili_search") and reinforce.health_factor(state, "bili_search", now) >= 1.0
+    )
+
+
+def lookup_usable(cfg: LifeConfig) -> bool:
+    """百科或维基至少开了一个。"""
+
+    return cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")
+
+
 NOVELTY_BONUS = 1.5
 
 
@@ -145,6 +160,24 @@ def pick_clicks(items: list[SourceItem], topics: list[str], novel_text: str = ""
     return sorted(candidates[:COMMENT_ITEMS])
 
 
+async def with_comments(
+    cfg: LifeConfig, fetch: Fetcher, item: SourceItem, position: int, *, size: int
+) -> tuple[SourceItem, dict[str, Any] | None]:
+    """取一条 B站条目的热评页并写进条目；返回（条目, 评论页）。评论没开或取不到时原样返回、页为 None。"""
+
+    if not (cfg.source_on("bili_comments") and cfg.max_comments_per_item > 0):
+        return item, None
+    try:
+        page = await bilibili.reply_page(fetch, item, size=size)
+        comments = bilibili.comments_of(
+            page, position, cfg.blocked_keywords, cfg.max_comments_per_item
+        )
+    except SourceError as exc:
+        logger.info("xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason)
+        return item, None
+    return replace(item, comments=comments), page
+
+
 async def open_items(
     cfg: LifeConfig,
     fetch: Fetcher,
@@ -174,20 +207,9 @@ async def open_items(
         position = index + 1
         if index in watched:
             item = await watch.watch(fetch, item, position, cfg.blocked_keywords)
-        page: dict[str, Any] | None = None
-        if cfg.source_on("bili_comments") and cfg.max_comments_per_item > 0:
-            try:
-                page = await bilibili.reply_page(fetch, item, size=20 if index in deeper else 10)
-                item = replace(
-                    item,
-                    comments=bilibili.comments_of(
-                        page, position, cfg.blocked_keywords, cfg.max_comments_per_item
-                    ),
-                )
-            except SourceError as exc:
-                logger.info(
-                    "xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason
-                )
+        item, page = await with_comments(
+            cfg, fetch, item, position, size=20 if index in deeper else 10
+        )
         if index in deeper:
             item = await deep.deep_read(
                 fetch,
@@ -215,7 +237,7 @@ async def record_sources(store: LifeStore, outcomes: dict[str, bool], now: float
 
 
 def recent_text(store: LifeStore, now: float) -> str:
-    cutoff = now - 3 * 86400
+    cutoff = now - 3 * DAY
     return " ".join(
         f"{e.get('title', '')} {' '.join(e.get('topics', []))} {' '.join(e.get('tags', []))}"
         for e in store.episodes

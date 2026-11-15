@@ -62,11 +62,8 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "目标: 帮用户选一家合适的火锅店",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "目标: 帮用户选一家合适的火锅店",
     )
 
     with ExitStack() as stack:
@@ -89,22 +86,13 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(return_value=""),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -135,7 +123,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=("好的", "/v1/chat/completions")),
             )
         )
@@ -182,7 +170,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mock_context):
+async def test_generate_reply_halves_history_after_request_too_large(mock_context):
     from contextlib import ExitStack
 
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
@@ -232,17 +220,10 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "继续回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "继续回复",
     )
     history_sizes: list[int] = []
-
-    async def fake_build_memory_block(**kwargs):
-        history_sizes.append(len(kwargs["history"]))
-        return f"memory:{len(kwargs['history'])}"
 
     responses = [
         LLMError("request_too_large"),
@@ -275,22 +256,13 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(side_effect=fake_build_memory_block),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -307,15 +279,18 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
         stack.enter_context(
             patch(
                 "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                side_effect=lambda **kwargs: [
-                    ChatMessage(role="system", content=f"mem={kwargs['memory_block']}"),
-                    ChatMessage(role="user", content="u"),
-                ],
+                side_effect=lambda **kwargs: (
+                    history_sizes.append(len(kwargs["history"]))
+                    or [
+                        ChatMessage(role="system", content=f"mem={kwargs['memory_block']}"),
+                        ChatMessage(role="user", content="u"),
+                    ]
+                ),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(side_effect=fake_chat_completions),
             )
         )
@@ -403,11 +378,8 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "继续回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "继续回复",
     )
 
     with ExitStack() as stack:
@@ -430,22 +402,13 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(return_value=""),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -470,7 +433,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=("好的", "/v1/chat/completions")),
             )
         )
@@ -556,11 +519,8 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
 
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "正常回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "正常回复",
     )
 
     with ExitStack() as stack:
@@ -583,22 +543,13 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(return_value=""),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -623,7 +574,7 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=("第一句。第二句", "/v1/chat/completions")),
             )
         )

@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
-from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -35,7 +34,12 @@ from core.plugin_base import (
     write_json,
 )
 from core.public_errors import public_error_response
-from core.safe_http import fetch_public_html
+from core.safe_http import (
+    BROWSER_USER_AGENT,
+    MAX_PROXY_URL_CHARS,
+    fetch_public_html,
+    validated_proxy_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +61,6 @@ MAX_OUTPUT_REPOSITORIES     = 10
 MAX_DESCRIPTION_CHARS       = 240
 MAX_LANGUAGE_CHARS          = 64
 MAX_HISTORY_FILES_PER_RANGE = 90
-MAX_PROXY_CHARS             = 2_048
 
 _HELP_ALIASES            = frozenset({"help", "h", "帮助"})
 _REPOSITORY_PATH_PATTERN = re.compile(
@@ -74,11 +77,8 @@ _HISTORY_NAME_PATTERN = re.compile(
     r"trending_(daily|weekly|monthly)_[0-9]{4}-[0-9]{2}-[0-9]{2}\.json\Z"
 )
 _REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml",
+    "User-Agent": BROWSER_USER_AGENT,
+    "Accept"    : "text/html,application/xhtml+xml",
 }
 _GITHUB_BODY_LIMITS = BodyLimits(
     max_wire_bytes          = MAX_HTML_BYTES,
@@ -162,26 +162,15 @@ def _get_proxy(context: _GitHubContext) -> str:
     if not proxy:
         return ""
     if (
-        len(proxy) > MAX_PROXY_CHARS
+        len(proxy) > MAX_PROXY_URL_CHARS
         or proxy != proxy.strip()
         or has_control_characters(proxy, include_c1=True)
     ):
         raise GitHubCommandError("GitHub 代理配置格式无效")
     try:
-        parsed = urlsplit(proxy)
-        port   = parsed.port
+        return validated_proxy_url(proxy)
     except ValueError as exc:
         raise GitHubCommandError("GitHub 代理 URL 无效") from exc
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-        or (port is not None and not 0 < port <= 65_535)
-    ):
-        raise GitHubCommandError("GitHub 代理 URL 无效")
-    return proxy
 
 
 async def handle(
@@ -294,7 +283,6 @@ def _clean_element_text(element: Tag | None, *, fallback: str, max_chars: int) -
     visible = bounded_external_text(
         raw,
         max_chars = max_chars,
-        max_bytes = max_chars * 4,
         default   = fallback,
     )
     cleaned = re.sub(r"\s+", " ", visible).strip()

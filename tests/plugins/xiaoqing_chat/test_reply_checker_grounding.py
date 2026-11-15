@@ -287,7 +287,7 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -382,7 +382,7 @@ async def test_checker_allows_preferences_and_requires_evidence_for_identity(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -586,7 +586,7 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -653,7 +653,7 @@ async def test_checker_fails_closed_when_context_scan_is_incomplete(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -698,7 +698,7 @@ async def test_checker_fails_closed_when_persona_scan_is_incomplete(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -1368,24 +1368,24 @@ def test_visual_semantic_paraphrase_keeps_real_description_evidence(source):
 @pytest.mark.parametrize(
     "evidence",
     [
-        "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档……落款“中国科学院国家天文台 2026年10月16日”",
-        "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档...落款“中国科学院国家天文台 2026年10月16日”",
+        "标题为“关于实验室安全检查安排的通知”的文档……落款“示例研究所 2026年10月16日”",
+        "标题为“关于实验室安全检查安排的通知”的文档...落款“示例研究所 2026年10月16日”",
         [
-            "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档",
-            "落款“中国科学院国家天文台 2026年10月16日”",
+            "标题为“关于实验室安全检查安排的通知”的文档",
+            "落款“示例研究所 2026年10月16日”",
         ],
-        "关于全职在站博士后聘用岗位分级评聘的通知 / 中国科学院国家天文台",
-        "“中国科学院国家天文台”",
+        "关于实验室安全检查安排的通知 / 示例研究所",
+        "“示例研究所”",
     ],
 )
 @pytest.mark.parametrize("in_history", [False, True])
 def test_visual_notice_accepts_verified_excerpt_citations(evidence, in_history):
-    reply = "天文台的通知，看着还挺正式的"
+    reply = "研究所的通知，看着还挺正式的"
     # 实测原样：摘要写“底部有“…”落款”，审查模型引成“落款“…””，词序调换但每段都是原文。
     source = (
-        "[图片：页面显示一份标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档，"
-        "发布时间为2026-10-21，文档内容包含评聘工作说明，"
-        "底部有“中国科学院国家天文台 2026年10月16日”落款。]"
+        "[图片：页面显示一份标题为“关于实验室安全检查安排的通知”的文档，"
+        "发布时间为2026-10-21，文档内容包含检查工作说明，"
+        "底部有“示例研究所 2026年10月16日”落款。]"
     )
     result = checker._interpret_checker_response(
         content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
@@ -1404,16 +1404,16 @@ def test_visual_notice_accepts_verified_excerpt_citations(evidence, in_history):
 @pytest.mark.parametrize(
     "evidence,current,history",
     [
-        ("红色标题……落款国家天文台", "[图片：蓝色标题，正文，落款国家天文台]", ""),
-        ("落款“国家天文台”/红色标题", "[图片：蓝色标题，正文，落款国家天文台]", ""),
-        ("蓝色标题……落款国家天文台", "[图片：蓝色标题]", "另一张图片：落款国家天文台"),
-        ("……", "[图片：蓝色标题，落款国家天文台]", ""),
-        (["蓝色标题", "红色落款"], "[图片：蓝色标题，落款国家天文台]", ""),
-        ([], "[图片：蓝色标题，落款国家天文台]", ""),
+        ("红色标题……落款示例研究所", "[图片：蓝色标题，正文，落款示例研究所]", ""),
+        ("落款“示例研究所”/红色标题", "[图片：蓝色标题，正文，落款示例研究所]", ""),
+        ("蓝色标题……落款示例研究所", "[图片：蓝色标题]", "另一张图片：落款示例研究所"),
+        ("……", "[图片：蓝色标题，落款示例研究所]", ""),
+        (["蓝色标题", "红色落款"], "[图片：蓝色标题，落款示例研究所]", ""),
+        ([], "[图片：蓝色标题，落款示例研究所]", ""),
     ],
 )
 def test_visual_excerpt_citations_reject_unverified_fragments(evidence, current, history):
-    reply  = "天文台的通知"
+    reply  = "研究所的通知"
     result = checker._interpret_checker_response(
         content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
         reply                            = reply,
@@ -1426,6 +1426,31 @@ def test_visual_excerpt_citations_reject_unverified_fragments(evidence, current,
     )
     assert result.failure_code == "media_grounding"
     assert result.is_hard
+
+
+@pytest.mark.parametrize("grounded", [True, False])
+def test_visual_claims_about_what_she_watched_can_cite_her_own_records(grounded):
+    """她说自己刷到的视频长什么样，依据在她的上网记录（受控资料）里，不在对话里。"""
+
+    reply  = "刷到一个猫咪第一次见雪的视频，歪着头盯雪花，给我看笑了"
+    record = "今天 05:01 刷B站热门，点开了「猫咪第一次见到雪的反应」：猫咪在阳台第一次看到下雪，歪头盯着雪花"
+    result = checker._interpret_checker_response(
+        content=_response(
+            visual_claims=[
+                {"claim": "歪着头盯雪花", "evidence": "猫咪在阳台第一次看到下雪，歪头盯着雪花"}
+            ]
+        ),
+        reply                            = reply,
+        current_text                     = "小青你最近都在刷啥",
+        history_text                     = "",
+        grounding_text                   = record if grounded else "人设：大二学生",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+        image_evidence_required          = True,
+    )
+    assert result.suitable is grounded
+    if not grounded:
+        assert result.failure_code == "media_grounding"
 
 
 def test_legacy_all_true_payload_without_visual_scan_is_infrastructure_failure():
@@ -1608,7 +1633,7 @@ async def test_agreeing_to_meet_offline_is_rejected_only_for_an_online_only_pers
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(
@@ -1668,3 +1693,35 @@ def test_disagreement_over_a_numeric_premise_stays_hard() -> None:
     assert (wording.suitable, wording.severity) == (False, "soft")
     number = _merge_reviews(passed, premise("27.9元"))
     assert number.is_hard and number.failure_code == "context_grounding"
+
+
+def test_remembered_lines_are_citable_evidence_for_context_claims():
+    from plugins.xiaoqing_chat.llm.evidence import memory_source_records
+
+    remembered = memory_source_records(
+        "你记得的关于阿禾的事：\n- [稳定的事] 上个月从苏州搬到上海了\n- [刚记下] 养了只橘猫叫年糕"
+    )
+    assert list(remembered) == ["m1", "m2"]
+    records = {"h1": "12:01,阿禾：小青你猜我现在住哪", "current": "猜猜", **remembered}
+    kwargs  = {
+        "reply"                           : "上海吧，你上个月刚搬过去",
+        "current_text"                    : "猜猜",
+        "history_text"                    : "[m1] 12:01,阿禾：小青你猜我现在住哪",
+        "grounding_text"                  : "",
+        "bot_name"                        : "小青",
+        "allow_low_stakes_persona_fiction": False,
+        "source_records"                  : records,
+    }
+    claim = [{"claim": "你上个月刚搬过去", "source_ids": ["m1"]}]
+    cited = checker._interpret_checker_response(
+        content=_response(context_claims=claim),
+        memory_evidence="\n".join(remembered.values()),
+        **kwargs,
+    )
+    assert cited.suitable is True
+    # 没有取到这段记忆时，同一句话缺少依据。
+    missing = checker._interpret_checker_response(
+        content=_response(context_claims=[{"claim": "你上个月刚搬过去", "source_ids": []}]),
+        **{**kwargs, "source_records": {"h1": records["h1"], "current": "猜猜"}},
+    )
+    assert missing.suitable is False and missing.failure_code == "context_grounding"

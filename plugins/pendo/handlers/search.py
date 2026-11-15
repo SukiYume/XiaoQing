@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 from collections import defaultdict
 from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -24,7 +23,6 @@ from ..utils.currency import currency_label
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
     PRIORITY_ICONS,
-    STATUS_ICONS,
     TAG_TOKEN_RE,
     TYPE_NAMES,
     UNSAFE_CONTROL_RE,
@@ -40,7 +38,18 @@ from ..utils.time_utils import (
     parse_remind_times,
     parse_search_date_range,
 )
-from ..utils.validators import sanitize_search_keyword, validate_tag
+from ..utils.tokens import shell_tokens
+from ..utils.validators import (
+    LEDGER_TRANSACTION_TYPES,
+    MAX_CATEGORY_CHARS,
+    MAX_LEDGER_ACCOUNT_CHARS,
+    MAX_LEDGER_CATEGORY_CHARS,
+    MAX_LEDGER_MERCHANT_CHARS,
+    MAX_TAG_CHARS,
+    TASK_STATUSES,
+    sanitize_search_keyword,
+    validate_tag,
+)
 
 if TYPE_CHECKING:
     from ..services.db import Database
@@ -48,15 +57,13 @@ if TYPE_CHECKING:
 SearchItem    = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
 SearchFilters = dict[str, Any]
 
-_ALLOWED_SEARCH_TYPES     : Final = frozenset({"event", "task", "note", "diary", "ledger"})
-_ALLOWED_TASK_STATUS      : Final = frozenset({"open", "done", "cancelled"})
-_ALLOWED_TRANSACTION_TYPES: Final = frozenset({"income", "expense", "transfer"})
-_SEARCH_TYPE_ORDER        : Final = ("event", "task", "ledger", "diary", "note")
-_SEARCH_RESULT_LIMIT      : Final = 15
-_SEARCH_INPUT_MAX_CHARS   : Final = 2_000
-_SEARCH_QUERY_MAX_CHARS   : Final = 100
-_SEARCH_TITLE_MAX_CHARS   : Final = 60
-_FILTER_TOKEN_RE          : Final = re.compile(
+_ALLOWED_SEARCH_TYPES  : Final = frozenset({"event", "task", "note", "diary", "ledger"})
+_SEARCH_TYPE_ORDER     : Final = ("event", "task", "ledger", "diary", "note")
+_SEARCH_RESULT_LIMIT   : Final = 15
+_SEARCH_INPUT_MAX_CHARS: Final = 2_000
+_SEARCH_QUERY_MAX_CHARS: Final = 100
+_SEARCH_TITLE_MAX_CHARS: Final = 60
+_FILTER_TOKEN_RE       : Final = re.compile(
     r"^(type|status|category|transaction_type|account|merchant|tag|tags|range)[=:](.*)$",
     re.IGNORECASE,
 )
@@ -92,25 +99,10 @@ class SearchHandler:
 
     @handle_command_errors
     async def search(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
-        """搜索条目，例如 ``/pendo search 会议 type=event range=last7d``。"""
-        if not args or not args.strip():
-            return {
-                "status": "error",
-                "message": (
-                    "❌ 请提供搜索关键词\n\n"
-                    "用法:\n"
-                    "/pendo search <关键词>\n"
-                    "/pendo search <关键词> type=<类型> range=<时间范围>\n\n"
-                    "可用筛选:\n"
-                    "• type=event/task/note/diary/ledger\n"
-                    "• range=today/week/month/year/last7d/last30d/YYYY-MM/start..end\n"
-                    "• #标签 或 tag=<标签>\n"
-                    "• status=open/done/cancelled (待办)\n"
-                    "• category=<分类> (type=ledger 时按账目分类)\n"
-                    "• transaction_type=income/expense/transfer (记账)"
-                ),
-            }
+        """搜索条目，例如 ``/pendo search 会议 type=event range=last7d``。
 
+        空参数由命令入口先回帮助；直接调用时缺关键词同样按解析错误返回。
+        """
         try:
             query, filters = self._parse_search_query(
                 args,
@@ -179,10 +171,7 @@ class SearchHandler:
             raise ValueError(f"搜索参数不能超过 {_SEARCH_INPUT_MAX_CHARS} 字")
         if UNSAFE_CONTROL_RE.search(args):
             raise ValueError("搜索参数包含不允许的控制字符")
-        try:
-            tokens = shlex.split(args, comments=False, posix=True)
-        except ValueError as exc:
-            raise ValueError("搜索参数中的引号未闭合") from exc
+        tokens = shell_tokens(args, "搜索参数")
 
         query_tokens: list[str]      = []
         raw_filters : dict[str, str] = {}
@@ -207,10 +196,10 @@ class SearchHandler:
                 raise ValueError(f"无效类型: {item_type}")
 
         status = raw_filters.get("status")
-        if status and status.casefold() not in _ALLOWED_TASK_STATUS:
+        if status and status.casefold() not in TASK_STATUSES:
             raise ValueError(f"无效待办状态: {status}")
         transaction_type = raw_filters.get("transaction_type")
-        if transaction_type and transaction_type.casefold() not in _ALLOWED_TRANSACTION_TYPES:
+        if transaction_type and transaction_type.casefold() not in LEDGER_TRANSACTION_TYPES:
             raise ValueError(f"无效交易类型: {transaction_type}")
 
         has_ledger_filter = bool(_LEDGER_FILTER_KEYS.intersection(raw_filters))
@@ -261,19 +250,21 @@ class SearchHandler:
         if status := raw_filters.get("status"):
             filters["status"] = status.casefold()
         if category := raw_filters.get("category"):
-            category_key          = "ledger_category" if item_type == "ledger" else "category"
-            category_limit        = 60 if item_type == "ledger" else 50
+            category_key   = "ledger_category" if item_type == "ledger" else "category"
+            category_limit = (
+                MAX_LEDGER_CATEGORY_CHARS if item_type == "ledger" else MAX_CATEGORY_CHARS
+            )
             filters[category_key] = cls._bounded_filter_value(category, "分类筛选", category_limit)
         if transaction_type := raw_filters.get("transaction_type"):
             filters["transaction_type"] = transaction_type.casefold()
         for key, label, limit in (
-            ("account_name", "账户筛选", 80),
-            ("merchant", "商户筛选", 120),
+            ("account_name", "账户筛选", MAX_LEDGER_ACCOUNT_CHARS),
+            ("merchant", "商户筛选", MAX_LEDGER_MERCHANT_CHARS),
         ):
             if value := raw_filters.get(key):
                 filters[key] = cls._bounded_filter_value(value, label, limit)
         if tag := raw_filters.get("tags"):
-            bounded_tag     = cls._bounded_filter_value(tag, "标签筛选", 20)
+            bounded_tag     = cls._bounded_filter_value(tag, "标签筛选", MAX_TAG_CHARS)
             filters["tags"] = validate_tag(bounded_tag)
         if range_value := raw_filters.get("range"):
             cls._apply_date_filter(filters, range_value, user_now)
@@ -334,10 +325,7 @@ class SearchHandler:
         collection_titles: dict[str, str],
         display_timezone: tzinfo,
     ) -> str:
-        """按固定类型顺序展示当前页，并保留数据库返回的精确总数。"""
-        if not results:
-            return f'🔍 搜索 "{query}"\n\n未找到相关内容'
-
+        """按固定类型顺序展示当前页（``results`` 非空），并保留数据库返回的精确总数。"""
         grouped: dict[str, list[SearchItem]] = defaultdict(list)
         for item in results:
             item_type = get_item_type_value(item.type, default=str(item.type))
@@ -411,8 +399,7 @@ class SearchHandler:
             sign = _TRANSACTION_SIGNS.get(item.transaction_type, "-")
             main_line += f"  {sign}{currency_label(item.currency)}{ledger_amount_yuan(item):.2f}"
         elif isinstance(item, TaskItem):
-            status_icon = STATUS_ICONS.get(item.status.value, "⬜")
-            main_line += f" {status_icon}"
+            main_line += f" {ItemFormatter.format_status_icon(item.status.value)}"
             if item.priority <= 2:
                 main_line += f" {PRIORITY_ICONS.get(item.priority, '')}"
         return main_line

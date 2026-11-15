@@ -1,24 +1,25 @@
-"""调度回复成功后的摘要、学习、复盘、事实提取和生活记录任务。"""
+"""调度回复成功后的表达学习、复盘、未完话头结算和生活记录任务。
+
+关于人和群的长期记忆由统一记忆从事件日志里每晚整理，这里不再提取人物事实。
+"""
 
 from __future__ import annotations
 
-import asyncio
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from .chat_event import is_private_event
 from .chat_runtime import llm_call_config
 from .constants import EXPRESSION_LEARN_MIN_INTERVAL, EXPRESSION_LEARN_MIN_MESSAGES
 from .expression.bw_message_recorder import extract_and_learn
 from .life.extract import extract_life_records
 from .life.open_loops import mentions as reply_mentions_loop
-from .llm.summarizer import maybe_update_topic_summary
 from .logging_utils import log_step
-from .memory.knowledge_extract import maybe_extract_person_facts
-from .memory.person_profile import get_profile_generation
+from .memory import client as memory_client
+from .memory.person_profile import session_is_current
 from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
 from .message_parts import render_stored_message
-from .task_scheduler import schedule_memory_db_save, spawn_bg_task
+from .task_scheduler import spawn_bg_task
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
@@ -82,6 +83,7 @@ def spawn_life_extraction(
     spawn_bg_task(
         context,
         extract_life_records(
+            context  = context,
             state    = state,
             life_cfg = life,
             secrets  = secrets,
@@ -104,14 +106,20 @@ async def _settle_surfaced_open_loop(
     if not isinstance(surfaced, tuple) or len(surfaced) != 2 or not history:
         return
     loop, mode = surfaced
-    store = hctx.state.open_loops
     if mode == "review":
-        await asyncio.to_thread(store.close, hctx.chat_id, {loop.loop_id})
+        op = {"op": "close", "id": loop.loop_id, "status": "done"}
     elif reply_mentions_loop(render_stored_message(history[-1]), loop):
-        await asyncio.to_thread(store.mark_asked, hctx.chat_id, loop.loop_id)
+        op = {
+            "op"  : "update",
+            "id"  : loop.loop_id,
+            "data": {"loop": "asked", "asked_at": time.time()},
+        }
     else:
         # 换了说法问的，由随后的生活记录抽取认出并记为已问。
-        await asyncio.to_thread(store.mark_surfaced, hctx.chat_id, loop.loop_id)
+        op = {"op": "update", "id": loop.loop_id, "data": {"surfaced": loop.surfaced + 1}}
+    await memory_client.push_pending(
+        hctx.context, hctx.state, hctx.chat_id, bot_name=hctx.bot_name, ops=[op]
+    )
 
 
 async def spawn_post_reply_tasks(
@@ -119,45 +127,19 @@ async def spawn_post_reply_tasks(
     history_snapshot: list[Any],
     event: dict[str, Any],
 ) -> None:
-    """回复发送后启动主题摘要、表达学习、复盘推送和事实提取任务。"""
-    context    = hctx.context
-    runtime    = hctx.runtime
-    state      = hctx.state
-    chat_id    = hctx.chat_id
-    bot_name   = hctx.bot_name
-    secrets    = hctx.secrets
-    generation = event.get(
-        "_xc_session_generation", get_profile_generation(context.data_dir, chat_id)
-    )
-    if generation != get_profile_generation(context.data_dir, chat_id):
+    """回复发送后启动表达学习、复盘推送、话头结算和生活记录抽取。"""
+    context  = hctx.context
+    runtime  = hctx.runtime
+    state    = hctx.state
+    chat_id  = hctx.chat_id
+    bot_name = hctx.bot_name
+    secrets  = hctx.secrets
+    if not session_is_current(context.data_dir, chat_id, event.get("_xc_session_generation")):
         return
 
     bg = llm_call_config(runtime.cfg, foreground=False)
 
     # 锁外调度后台任务（不阻塞其他请求）
-    summarizer = runtime.cfg.summarizer
-    if summarizer.enable_topic_summarizer and (
-        summarizer.enable_private_summary or not is_private_event(event)
-    ):
-
-        async def _run_summarizer() -> None:
-            await maybe_update_topic_summary(
-                data_dir                = context.data_dir,
-                memory_db               = state.memory_db,
-                secrets                 = secrets,
-                bot_name                = bot_name,
-                chat_id                 = chat_id,
-                history                 = history_snapshot,
-                min_messages_per_update = runtime.cfg.summarizer.min_messages_per_update,
-                max_cache_topics        = runtime.cfg.summarizer.max_cache_topics,
-                expected_generation     = generation,
-                llm                     = bg,
-            )
-            schedule_memory_db_save(context, runtime)
-
-        spawn_bg_task(context, _run_summarizer(), name=f"summarizer:{chat_id}")
-        log_step(context, runtime, chat_id=chat_id, step="smalltalk.summarizer.spawn", fields={})
-
     if runtime.cfg.expression.enable_expression_learning:
         spawn_bg_task(
             context,
@@ -185,23 +167,6 @@ async def spawn_post_reply_tasks(
 
     if runtime.cfg.reflection.enable_review_sessions:
         await _maybe_push_strategy_review(hctx)
-
-    async def _run_fact_extract() -> None:
-        await maybe_extract_person_facts(
-            data_dir            = context.data_dir,
-            secrets             = secrets,
-            memory_db           = state.memory_db,
-            chat_id             = chat_id,
-            history             = history_snapshot,
-            expected_generation = generation,
-            llm                 = bg,
-            # 私聊消息少而集中，攒得少一些就提取一次。
-            min_messages=8 if is_private_event(event) else 20,
-        )
-        schedule_memory_db_save(context, runtime)
-
-    spawn_bg_task(context, _run_fact_extract(), name=f"facts:{chat_id}")
-    log_step(context, runtime, chat_id=chat_id, step="smalltalk.facts.spawn", fields={})
 
     await _settle_surfaced_open_loop(hctx, history_snapshot, event)
     if history_snapshot and history_snapshot[-1].role == "assistant":

@@ -6,11 +6,10 @@ import asyncio
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
-from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 from xml.sax.saxutils import quoteattr
 
@@ -25,15 +24,9 @@ from core.bounded_http import (
     aiohttp_request_bounded,
 )
 from core.interfaces import PluginSettingsSnapshot
-from core.plugin_base import has_control_characters as _has_control_chars
-from core.plugin_base import record as _core_record
-from core.plugin_base import segments as _core_segments
-from core.public_errors import public_error_message
-from core.public_errors import public_error_response as _core_public_error_response
-
-MessageSegment  = dict[str, Any]
-MessageSegments = list[MessageSegment]
-OneBotEvent     = dict[str, Any]
+from core.plugin_base import Event, Segments, has_control_characters, record, segments
+from core.public_errors import public_error_message, public_error_response
+from core.safe_http import validated_proxy_url
 
 
 class Context(Protocol):
@@ -45,10 +38,6 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-segments              = cast(Callable[[object], MessageSegments], _core_segments)
-record                = cast(Callable[[str], MessageSegment], _core_record)
-public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_REGION     = "southeastasia"
@@ -59,7 +48,6 @@ DEFAULT_ROLE       = "Girl"
 MAX_TTS_TEXT_LENGTH = 500
 MAX_AUDIO_BYTES     = 10 * 1024 * 1024
 MAX_CACHE_BYTES     = 256 * 1024 * 1024
-MAX_PROXY_LENGTH    = 2_048
 
 _AZURE_API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
 _REGION_PATTERN       = re.compile(r"[a-z0-9-]{1,32}\Z")
@@ -119,7 +107,7 @@ def _clean_config_text(
 
     if type(value) is not str:
         return default
-    if _has_control_chars(value):
+    if has_control_characters(value):
         return default
     text = value.strip()
     if (
@@ -137,26 +125,12 @@ def _get_proxy(config: Mapping[str, object]) -> str | None:
     value = config.get("proxy")
     if type(value) is not str:
         return None
-    if _has_control_chars(value):
-        return None
-    proxy = value.strip()
-    if not proxy or len(proxy) > MAX_PROXY_LENGTH:
+    if has_control_characters(value):
         return None
     try:
-        parsed = urlsplit(proxy)
-        port   = parsed.port
+        return validated_proxy_url(value.strip())
     except ValueError:
         return None
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-        or (port is not None and not 1 <= port <= 65_535)
-    ):
-        return None
-    return proxy
 
 
 def _get_settings(context: Context) -> _VoiceSettings | None:
@@ -339,9 +313,9 @@ async def text_to_speech(text: str, context: Context) -> str | None:
 async def handle(
     command: str,
     args: str,
-    event: OneBotEvent,
+    event: Event,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """处理 TTS 命令；命令别名已由插件清单统一解析。"""
 
     del event
@@ -366,7 +340,7 @@ async def handle(
         return public_error_response(context, exc, logger=logger, component="voice.handle")
 
 
-async def convert_text_to_voice(text: str, context: Context) -> MessageSegments | None:
+async def convert_text_to_voice(text: str, context: Context) -> Segments | None:
     """把文本转换为语音消息段，作为 ``voice.synthesize_text`` 服务回调。"""
 
     audio_path = await text_to_speech(text, context)

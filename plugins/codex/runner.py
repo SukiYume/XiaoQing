@@ -16,16 +16,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
 
-from core.plugin_base import head_tail_preview
+from core.plugin_base import has_control_characters, head_tail_preview
 
-from .artifacts import IMAGE_EXTENSIONS
-from .config import CodexPluginConfig
+from .artifacts import IMAGE_EXTENSIONS, MAX_REFERENCED_PATH_CHARS
+from .config import MAX_INT64, CodexPluginConfig
 
-logger               = logging.getLogger(__name__)
-_T                   = TypeVar("_T")
-_USAGE_KEYS          = ("input_tokens", "cached_input_tokens", "output_tokens")
-_MAX_THREAD_ID_CHARS = 512
-_MAX_EVENT_COUNTER   = 2**63 - 1
+logger              = logging.getLogger(__name__)
+_T                  = TypeVar("_T")
+_USAGE_KEYS         = ("input_tokens", "cached_input_tokens", "output_tokens")
+MAX_THREAD_ID_CHARS = 512
 
 
 @dataclass
@@ -41,6 +40,25 @@ class CodexRunResult:
     output_path   : str | None = None
     image_paths   : list[str] = field(default_factory=list)
     usage         : dict[str, int] = field(default_factory=dict)
+
+
+def synthetic_result(
+    thread_id: str | None,
+    message: str,
+    *,
+    exit_code: int | None,
+    cancelled: bool = False,
+) -> CodexRunResult:
+    """没有真正跑出结果时（取消、启动失败）合成的结果：只有说明文字，没有输出尾部。"""
+
+    return CodexRunResult(
+        exit_code   = exit_code,
+        thread_id   = thread_id,
+        final_text  = message,
+        stdout_tail = "",
+        stderr_tail = "",
+        cancelled   = cancelled,
+    )
 
 
 @dataclass(frozen=True)
@@ -76,8 +94,8 @@ def _extract_image_paths(
         lowered = cleaned.lower()
         if (
             cleaned
-            and len(cleaned) <= 32_768
-            and not any(ord(char) < 32 for char in cleaned)
+            and len(cleaned) <= MAX_REFERENCED_PATH_CHARS
+            and not has_control_characters(cleaned)
             and any(lowered.endswith(ext) for ext in IMAGE_EXTENSIONS)
         ):
             paths.append(cleaned)
@@ -110,11 +128,7 @@ def _valid_thread_id(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = value.strip()
-    if (
-        not cleaned
-        or len(cleaned) > _MAX_THREAD_ID_CHARS
-        or any(ord(char) < 32 for char in cleaned)
-    ):
+    if not cleaned or len(cleaned) > MAX_THREAD_ID_CHARS or has_control_characters(cleaned):
         return None
     return cleaned
 
@@ -125,7 +139,7 @@ def _valid_usage(value: Any) -> dict[str, int] | None:
     usage = {
         key: item
         for key in _USAGE_KEYS
-        if type(item := value.get(key)) is int and 0 <= item <= _MAX_EVENT_COUNTER
+        if type(item := value.get(key)) is int and 0 <= item <= MAX_INT64
     }
     return usage or None
 
@@ -497,6 +511,14 @@ def _qq_preview(text: str, max_chars: int) -> str:
     return head_tail_preview(text, max_chars, marker=marker)
 
 
+def _archived_output_text(preview_source: str, destination: Path, config: CodexPluginConfig) -> str:
+    """超长输出发到 QQ 的文本：保头尾的预览加归档文件名提示，总长不超过 ``max_qq_text_chars``。"""
+
+    notice         = f"\n\n[完整/受控输出已保存到文件: {destination.name}]"
+    preview_budget = max(1, config.max_qq_text_chars - len(notice))
+    return f"{_qq_preview(preview_source, preview_budget)}{notice}"
+
+
 def _archive_destination(output_dir: Path, job: Any) -> Path:
     label = (
         "".join(
@@ -599,13 +621,9 @@ def _capture_final_output(
                 "final output exceeded the QQ preview limit of "
                 f"{config.max_qq_text_chars} characters"
             )
-        resolved_destination = destination.resolve()
-        preview              = _qq_preview(decoded, config.max_qq_text_chars)
-        notice               = f"\n\n[完整/受控输出已保存到文件: {destination.name}]"
-        preview_budget       = max(1, config.max_qq_text_chars - len(notice))
         return _FinalOutputCapture(
-            text         = f"{_qq_preview(preview, preview_budget)}{notice}",
-            archive_path = str(resolved_destination),
+            text         = _archived_output_text(decoded, destination, config),
+            archive_path = str(destination.resolve()),
             limited      = True,
             reason       = reason,
         )
@@ -631,12 +649,9 @@ def _archive_large_message(
     destination = _archive_destination(output_dir, job)
     try:
         destination.write_bytes(limited_bytes)
-        resolved_destination = destination.resolve()
-        notice               = f"\n\n[受控输出已保存到文件: {destination.name}]"
-        preview_budget       = max(1, config.max_qq_text_chars - len(notice))
         return _FinalOutputCapture(
-            text         = f"{_qq_preview(bounded_text, preview_budget)}{notice}",
-            archive_path = str(resolved_destination),
+            text         = _archived_output_text(bounded_text, destination, config),
+            archive_path = str(destination.resolve()),
             limited      = True,
             reason       = "agent message exceeded a configured output budget",
         )
@@ -1175,8 +1190,7 @@ class CodexRunner:
             "--sandbox",
             self.config.sandbox,
         ]
-        if self.config.approval_policy:
-            args.extend(["-c", f"approval_policy='{self.config.approval_policy}'"])
+        args.extend(["-c", f"approval_policy='{self.config.approval_policy}'"])
         return args
 
     def _prompt_with_artifact_instruction(self, prompt: str, artifact_dir: Path | None) -> str:
@@ -1299,21 +1313,6 @@ class CodexRunner:
             termination.tree_confirmed and termination.parent_reaped
         )
         return False
-
-    @staticmethod
-    def _cancelled_before_execution_result(
-        process: asyncio.subprocess.Process,
-        thread_id: str | None,
-        message: str,
-    ) -> CodexRunResult:
-        return CodexRunResult(
-            exit_code   = process.returncode,
-            thread_id   = thread_id,
-            final_text  = message,
-            stdout_tail = "",
-            stderr_tail = "",
-            cancelled   = True,
-        )
 
     async def _execute_process(
         self,
@@ -1514,33 +1513,28 @@ class CodexRunner:
                 resources        = resources,
             )
             if not may_continue:
-                result = self._cancelled_before_execution_result(
-                    process,
+                result = synthetic_result(
                     thread_id,
                     "任务在 Codex 进程登记后、prompt 发送前已取消。",
+                    exit_code = process.returncode,
+                    cancelled = True,
                 )
                 resources.result_committed = True
                 return result
 
-            may_send_by_default = not bool(getattr(job, "cancel_requested", False))
-            if prompt_handoff is None:
-                prompt_callback = None
-                if may_send_by_default:
-                    job.prompt_started = True
-            else:
-                prompt_callback = prompt_handoff
             may_send_prompt = await self._perform_handoff(
                 process          = process,
-                callback         = prompt_callback,
-                default_decision = may_send_by_default,
+                callback         = prompt_handoff,
+                default_decision = not bool(getattr(job, "cancel_requested", False)),
                 stage            = "prompt",
                 resources        = resources,
             )
             if not may_send_prompt:
-                result = self._cancelled_before_execution_result(
-                    process,
+                result = synthetic_result(
                     thread_id,
                     "任务在 prompt 发送前已取消。",
+                    exit_code = process.returncode,
+                    cancelled = True,
                 )
                 resources.result_committed = True
                 return result

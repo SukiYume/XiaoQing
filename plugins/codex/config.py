@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from core.interfaces import PluginContextProtocol, PluginSettingsSnapshot
+from core.plugin_base import has_control_characters
 
 DEFAULT_ARXIV_SUMMARY_LABEL = "astro-ph"
 DEFAULT_ARXIV_SUMMARY_METHODOLOGY = "arxiv-summary-methodology.md"
 LABEL_PATTERN = r"^[A-Za-z0-9_-]{1,32}$"
 MAX_CONFIG_STRING_CHARS = 32_768
+MAX_INT64 = 2**63 - 1
 MAX_ALLOWED_ROOTS = 64
 SANDBOX_VALUES = frozenset({"read-only", "workspace-write", "danger-full-access"})
 APPROVAL_POLICY_VALUES = frozenset({"untrusted", "on-failure", "on-request", "never"})
@@ -68,21 +70,9 @@ def _clean_string(value: Any, default: str, *, max_chars: int = MAX_CONFIG_STRIN
     if not isinstance(value, str):
         return default
     cleaned = value.strip()
-    if not cleaned or len(cleaned) > max_chars or any(ord(char) < 32 for char in cleaned):
+    if not cleaned or len(cleaned) > max_chars or has_control_characters(cleaned):
         return default
     return cleaned
-
-
-def _first_clean_string(
-    *values: Any,
-    default: str,
-    max_chars: int = MAX_CONFIG_STRING_CHARS,
-) -> str:
-    for value in values:
-        cleaned = _clean_string(value, "", max_chars=max_chars)
-        if cleaned:
-            return cleaned
-    return default
 
 
 def _string_tuple(value: Any, *, max_items: int = MAX_ALLOWED_ROOTS) -> tuple[str, ...]:
@@ -148,24 +138,14 @@ def load_plugin_config_snapshot(
     arxiv_raw   = raw.get("arxiv_summary", {})
     if not isinstance(arxiv_raw, Mapping):
         arxiv_raw = {}
-    arxiv_summary_label = _first_clean_string(
-        arxiv_raw.get("label"),
-        raw.get("arxiv_summary_label"),
-        default   = DEFAULT_ARXIV_SUMMARY_LABEL,
-        max_chars = 32,
+    arxiv_summary_label = _clean_string(
+        arxiv_raw.get("label"), DEFAULT_ARXIV_SUMMARY_LABEL, max_chars=32
     )
     if re.fullmatch(LABEL_PATTERN, arxiv_summary_label) is None:
         arxiv_summary_label = DEFAULT_ARXIV_SUMMARY_LABEL
-    arxiv_summary_cwd = _first_clean_string(
-        arxiv_raw.get("cwd"),
-        raw.get("arxiv_summary_cwd"),
-        default=default_cwd,
-    )
-    arxiv_summary_methodology = _first_clean_string(
-        arxiv_raw.get("methodology"),
-        raw.get("arxiv_summary_methodology"),
-        default   = DEFAULT_ARXIV_SUMMARY_METHODOLOGY,
-        max_chars = 1_024,
+    arxiv_summary_cwd         = _clean_string(arxiv_raw.get("cwd"), default_cwd)
+    arxiv_summary_methodology = _clean_string(
+        arxiv_raw.get("methodology"), DEFAULT_ARXIV_SUMMARY_METHODOLOGY, max_chars=1_024
     )
     allowed_roots      = _string_tuple(raw.get("allowed_cwd_roots")) or (default_cwd,)
     protected_sessions = {

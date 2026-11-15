@@ -3,32 +3,31 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.delivery import SENSITIVE_ACTION_KEY
-from core.plugin_base import bounded_external_text, segments
+from core.delivery import send_sensitive_private
+from core.plugin_base import bounded_external_text, qr_image, requester_user_id, segments
+from core.private_files import protect_directory
 
 from .auth import QRFlow, TokenManager
 from .client import (
     BridgeError,
     directive_spec,
     fetch_spec,
-    protect_directory,
     read_json,
     save_binding,
     services,
     speaker_candidates,
+    speaker_profile,
 )
 
 REGIONS = {"cn", "de", "i2", "ru", "sg", "us"}
 
 
 def label(value: Any) -> str:
-    return bounded_external_text(value, max_chars=80, max_bytes=320)
+    return bounded_external_text(value, max_chars=80)
 
 
 def previous_settings(context: Any) -> dict[str, Any]:
@@ -39,37 +38,10 @@ def previous_settings(context: Any) -> dict[str, Any]:
 
 
 def user_id(context: Any, event: dict[str, Any]) -> int:
-    value = getattr(context, "current_user_id", None) or event.get("user_id")
-    if type(value) is not int or value <= 0:
+    value = requester_user_id(context, event)
+    if value is None:
         raise BridgeError("请通过管理员私聊使用小爱登录功能。")
     return value
-
-
-async def send_private(context: Any, recipient: int, message: list[dict[str, Any]]) -> bool | None:
-    try:
-        result = await context.send_action(
-            {
-                "action"            : "send_private_msg",
-                "params"            : {"user_id": recipient, "message": message},
-                SENSITIVE_ACTION_KEY: True,
-            }
-        )
-        return result if result is True or result is False else None
-    except Exception:
-        return False
-
-
-def qr_image(url: str) -> dict[str, Any]:
-    try:
-        import qrcode
-    except ImportError as exc:
-        raise BridgeError('扫码登录需要依赖，请运行 python -m pip install -e ".[xiaoai]"') from exc
-    output = io.BytesIO()
-    qrcode.make(url, box_size=6, border=4).save(output, format="PNG")
-    return {
-        "type": "image",
-        "data": {"file": "base64://" + base64.b64encode(output.getvalue()).decode()},
-    }
 
 
 @dataclass
@@ -129,8 +101,13 @@ class LoginRuntime:
         try:
             async with asyncio.timeout(35):
                 await flow.start()
-                picture = qr_image(flow.login_url)
-                result  = await send_private(
+                try:
+                    picture = qr_image(flow.login_url)
+                except ImportError as exc:
+                    raise BridgeError(
+                        '扫码登录需要依赖，请运行 python -m pip install -e ".[xiaoai]"'
+                    ) from exc
+                result = await send_sensitive_private(
                     context,
                     owner,
                     [
@@ -175,17 +152,17 @@ class LoginRuntime:
             pending.candidates = candidates
             pending.expires_at = time.monotonic() + 300
             await pending.flow.close()
-            await send_private(context, pending.owner, segments(pending.choices()))
+            await send_sensitive_private(context, pending.owner, segments(pending.choices()))
             try:
                 await asyncio.wait_for(pending.done.wait(), timeout=300)
             except TimeoutError:
-                await send_private(
+                await send_sensitive_private(
                     context, pending.owner, segments("音箱选择已过期，请重新发送 /小爱 登录。")
                 )
         except BridgeError as exc:
-            await send_private(context, pending.owner, segments(str(exc)))
+            await send_sensitive_private(context, pending.owner, segments(str(exc)))
         except Exception:
-            await send_private(
+            await send_sensitive_private(
                 context, pending.owner, segments("本次扫码登录未完成，请稍后重新发送 /小爱 登录。")
             )
         finally:
@@ -217,16 +194,9 @@ class LoginRuntime:
             await asyncio.to_thread(protect_directory, context.data_dir)
             if self.pending is not pending or pending.expires_at <= time.monotonic():
                 return "本次登录流程已过期，请重新发送 /小爱 登录。"
-            profile = {
-                "name"          : device["name"],
-                "model"         : device["model"],
-                "did"           : str(device["did"]),
-                "mina_id"       : speaker["deviceID"],
-                "region"        : pending.region,
-                "silent"        : pending.silent,
-                "directive"     : directive,
-                "notify_user_id": owner,
-            }
+            profile = speaker_profile(
+                speaker, device, directive, pending.region, pending.silent
+            ) | {"notify_user_id": owner}
             save_binding(context.data_dir, token, profile)
             pending.done.set()
             self.pending = None

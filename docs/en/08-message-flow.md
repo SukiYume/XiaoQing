@@ -175,7 +175,9 @@ The initiator's permissions determine available tools.
 
 Chat generation runs concurrently. A chat decision uses that reply. Agent takeover discards it.
 When the agent is disabled, chooses chat, or fails, the original flow continues.
-Before generating a reply, `xiaoqing_chat` asks `xiaoqing_life` through `life.turn_context` for online experiences, slang, and expressions relevant to the topic.
+Before generating a reply, `xiaoqing_chat` recalls this turn's memory from `xiaoqing_memory` through `memory.recall`: the speaker's page, the group page, related past events, her own recent statuses and stories, and any due open thread to ask about. The recall is an in-memory read.
+It also asks `xiaoqing_life` through `life.turn_context` for online experiences, slang, and expressions relevant to the topic.
+After delivery is confirmed and history is persisted, messages are written to the unified memory through `memory.record`.
 The request has a time limit. A missing result counts as empty.
 
 The observation entry receives ordinary-chat candidates.

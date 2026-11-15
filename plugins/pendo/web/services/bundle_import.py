@@ -5,11 +5,12 @@ from __future__ import annotations
 import io
 from datetime import UTC, datetime
 from typing import Any, Final, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from ...config import PendoConfig
-from ...utils.time_utils import normalize_datetime_for_storage
+from ...utils.time_utils import is_valid_timezone, normalize_datetime_for_storage
 from ...utils.validators import (
+    MAX_LONG_TEXT_CHARS,
     normalize_bool_flag,
     normalize_item_fields,
     normalize_reminder_rules,
@@ -23,6 +24,7 @@ from .transfer_bundle import (
     EVENT_COLLECTION_FILE_NAME,
     TYPE_FILE_NAMES,
     ParsedBundle,
+    dict_copy_or_empty,
     read_bundle,
 )
 
@@ -150,12 +152,12 @@ def normalize_import_payload(
     context         = base.get("context")
     attachments     = base.get("attachments")
     ai_meta         = base.get("ai_meta")
-    base["context"] = dict(context) if isinstance(context, dict) else {}
+    base["context"] = dict_copy_or_empty(context)
     if "import" in base["context"] and not isinstance(base["context"]["import"], dict):
         # 来源元数据只接受对象；其他形态是不受支持的历史值，预检阶段就丢弃，执行沿用同一结构。
         base["context"].pop("import")
     base["attachments"] = list(attachments) if isinstance(attachments, list) else []
-    base["ai_meta"]     = dict(ai_meta) if isinstance(ai_meta, dict) else {}
+    base["ai_meta"]     = dict_copy_or_empty(ai_meta)
     base["deleted"]     = normalize_bool_flag(base.get("deleted", False))
     return cast(dict[str, Any], normalize_item_fields(base, partial=False))
 
@@ -177,14 +179,14 @@ def normalize_import_event_collection(
     if not title:
         raise ValueError("event collection title is required")
 
-    normalized["kind"]     = kind
-    normalized["title"]    = validate_title(title)
-    normalized["content"]  = sanitize_text(str(normalized.get("content") or ""), 50_000)
+    normalized["kind"] = kind
+    normalized["title"] = validate_title(title)
+    normalized["content"] = sanitize_text(str(normalized.get("content") or ""), MAX_LONG_TEXT_CHARS)
     normalized["category"] = validate_category(
         str(normalized.get("category") or PendoConfig.DEFAULT_CATEGORY)
     )
     normalized["location"] = validate_location(str(normalized.get("location") or ""))
-    normalized["notes"]    = sanitize_text(str(normalized.get("notes") or ""), 50_000)
+    normalized["notes"]    = sanitize_text(str(normalized.get("notes") or ""), MAX_LONG_TEXT_CHARS)
 
     raw_tags = normalized.get("tags") or []
     if not isinstance(raw_tags, list):
@@ -194,17 +196,15 @@ def normalize_import_event_collection(
     )
 
     context               = normalized.get("context")
-    normalized["context"] = dict(context) if isinstance(context, dict) else {}
+    normalized["context"] = dict_copy_or_empty(context)
     visibility            = sanitize_text(str(normalized.get("visibility") or "private"), 30)
     if visibility not in _COLLECTION_VISIBILITIES:
         raise ValueError("Invalid event collection visibility")
     normalized["visibility"] = visibility
 
     timezone_name = sanitize_text(str(normalized.get("timezone") or zone.key), 80)
-    try:
-        ZoneInfo(timezone_name)
-    except (ValueError, ZoneInfoNotFoundError) as exc:
-        raise ValueError("Invalid event collection timezone") from exc
+    if not is_valid_timezone(timezone_name):
+        raise ValueError("Invalid event collection timezone")
     normalized["timezone"]       = timezone_name
     normalized["reminder_rules"] = normalize_reminder_rules(normalized.get("reminder_rules"))
 
@@ -228,6 +228,7 @@ def normalize_import_event_collection(
     normalized["created_at"] = normalized.get("created_at") or default_timestamp
     normalized["updated_at"] = normalized.get("updated_at") or normalized["created_at"]
     normalized["deleted"]    = normalize_bool_flag(normalized.get("deleted", False))
+    # 覆盖导入按字段更新：来源没有 deleted_at 时显式写 None，把旧值清成 NULL。
     normalized["deleted_at"] = normalized.get("deleted_at")
     normalized.pop("_bundle_line", None)
     return normalized

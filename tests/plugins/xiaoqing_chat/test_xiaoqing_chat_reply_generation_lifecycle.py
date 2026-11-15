@@ -63,11 +63,8 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
 
     fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
-        action        = "reply",
-        think_level   = 1,
-        reasoning     = "正常回复",
-        question      = "",
-        unknown_words = [],
+        think_level = 1,
+        reasoning   = "正常回复",
     )
 
     with ExitStack() as stack:
@@ -90,22 +87,13 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
             patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
-                new=AsyncMock(return_value=""),
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
         )
         stack.enter_context(
             patch(
@@ -133,7 +121,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
                 new=AsyncMock(return_value=("这条回复需要检查", "/v1/chat/completions")),
             )
         )
@@ -200,8 +188,8 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
     async def _pending_persist():
         await asyncio.sleep(30)
 
-    persist_task = asyncio.create_task(_pending_persist())
-    state.set_persist_task(chat_id, persist_task)
+    persist_task                 = asyncio.create_task(_pending_persist())
+    state.persist_tasks[chat_id] = persist_task
 
     _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
@@ -209,7 +197,7 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
         result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
-    assert state.get_persist_task(chat_id) is None
+    assert chat_id not in state.persist_tasks
     assert persist_task.cancelled()
     with suppress(asyncio.CancelledError):
         await persist_task

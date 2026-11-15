@@ -255,13 +255,14 @@ def test_manifest_limits_control_to_private_admin():
 @pytest.mark.asyncio
 async def test_real_library_protocol_uses_cloud_once():
     import aiohttp
-    from aioresponses import aioresponses
+
+    from tests.helpers.http import mocked_aiohttp
 
     token = {"userId": "u", "deviceId": "dev", "xiaomiio": ["a2V5", "token"]}
     url   = "https://api.io.mi.com/app/miotspec/action"
     async with aiohttp.ClientSession() as session:
         io, _ = client.services(session, token, "cn")
-        with aioresponses() as mocked:
+        with mocked_aiohttp() as mocked:
             mocked.post(url, payload={"code": 0, "result": {"code": 0}})
             assert await io.miot_action("123", (5, 5), ["打开台灯", True]) == 0
             calls = [call for entries in mocked.requests.values() for call in entries]
@@ -279,16 +280,22 @@ async def test_real_library_protocol_uses_cloud_once():
 @pytest.mark.asyncio
 async def test_polling_returns_only_current_answer(env, monkeypatch):
     context, io, mina = env
-    mina.get_latest_ask.side_effect = [
-        [],
-        [
+    polls = iter(([], None))
+
+    async def latest_ask(_mina_id: str) -> list[dict[str, object]]:
+        previous = next(polls)
+        if previous is not None:
+            return previous
+        # 回答时间在轮询时才取：总晚于执行开始时记下的时刻，机器忙时也不会被当成旧回答。
+        return [
             {
                 "request_id"  : "fresh",
-                "timestamp_ms": int(time.time() * 1000) + 100,
+                "timestamp_ms": int(time.time() * 1000),
                 "response"    : {"answer": [{"question": "温度多少", "content": "25度"}]},
             }
-        ],
-    ]
+        ]
+
+    mina.get_latest_ask.side_effect = latest_ask
     monkeypatch.setattr(main.asyncio, "sleep", AsyncMock())
     assert "小爱回复：25度" in await main.execute(context, "温度多少", {})
     assert io.miot_action.await_count == 1

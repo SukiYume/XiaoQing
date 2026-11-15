@@ -1,7 +1,7 @@
 """把明确叫小青的一轮先交给 xiaoqing_agent 判断。
 
-agent 能用哪些工具由发起人自己的权限决定。能力缺失、agent 关闭、判断为闲聊或
-调用失败时都返回 ``None``，本轮按原有聊天流程继续，行为与未安装 agent 时完全一致。
+agent 能用哪些工具由发起人自己的权限决定。能力缺失或 agent 关闭时直接走聊天；判断是闲聊时
+用同时在生成的那份聊天回复；判断或执行失败时回到聊天流程，对外表现与未安装 agent 时一致。
 """
 
 from __future__ import annotations
@@ -17,14 +17,16 @@ from core.delivery import DeliveryReceipt, DeliverySegments
 from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 from core.message import extract_text, sender_display_name
 
+from .attention_gate import reply_message_ids
 from .chat_event import event_sender_name
-from .chat_runtime import chat_lock
+from .chat_runtime import chat_lock, optional_capability
 from .follow_ups import burst_text, carry_attention, sender_has_follow_up
 from .handler_context import HandlerContext
 from .life.self_timeline import self_timeline_block
 from .llm.decorations import tame_decorations
 from .logging_utils import log_step
 from .media.marker_resolver import COMMON_QQ_FACE_LABELS
+from .memory import client as memory_client
 from .memory.local_ids import allocate_local_id
 from .message_parts import build_text_message_parts
 from .planning.action_history import ActionRecord
@@ -60,24 +62,15 @@ def _image_urls(message: Any) -> list[str]:
     return urls
 
 
-def _reply_message_id(event: dict[str, Any]) -> str:
-    message = event.get("message")
-    for segment in message if isinstance(message, list) else ():
-        if isinstance(segment, dict) and segment.get("type") == "reply":
-            raw = segment.get("data")
-            return str((raw if isinstance(raw, dict) else {}).get("id") or "").strip()
-    return ""
-
-
 async def _quoted_message(event: dict[str, Any], context: Any) -> tuple[str, list[str]]:
     """取回被引用消息的文字与图片；“把这张图……”这类要求常常指向引用的消息。"""
 
-    message_id = _reply_message_id(event)
-    media      = getattr(getattr(context, "capabilities", None), "onebot_media", None)
-    if not message_id or media is None:
+    reply_ids = reply_message_ids(event)
+    media     = optional_capability(context, "onebot_media")
+    if not reply_ids or media is None:
         return "", []
     try:
-        data = await asyncio.wait_for(media.get_message(message_id), _QUOTE_TIMEOUT_SECONDS)
+        data = await asyncio.wait_for(media.get_message(reply_ids[0]), _QUOTE_TIMEOUT_SECONDS)
     except Exception:
         return "", []
     message = data.get("message")
@@ -192,7 +185,7 @@ async def _record_agent_reply(
 async def _report_delivery(context: Any, task_id: str, delivered: bool | None) -> None:
     """把当轮回复发没发出去告诉 agent，任务记录据此标出没送达的结果。"""
 
-    agent = getattr(getattr(context, "capabilities", None), "agent_turn", None)
+    agent = optional_capability(context, "agent_turn")
     if agent is None or not task_id:
         return
     try:
@@ -233,12 +226,12 @@ def _agent_reply_receipt(
     return receipt
 
 
-def agent_may_take_over(
+def _agent_may_take_over(
     prepared: PreparedSmalltalkTurn, event: dict[str, Any], context: Any
 ) -> bool:
     """这一轮能不能交给 agent：装了 agent、话是对她说的（私聊或群里明确跟她说），且不是 agent 自己发起的命令。"""
 
-    agent = getattr(getattr(context, "capabilities", None), "agent_turn", None)
+    agent = optional_capability(context, "agent_turn")
     # 私聊里每句话都是对角色说的；开启私聊脑内对话时私聊不算强制召唤，但同样要交给 agent。
     return (
         agent is not None
@@ -275,12 +268,13 @@ async def _agent_recent_self(hctx: HandlerContext) -> str:
     life = hctx.runtime.cfg.life
     if not life.enable_self_timeline:
         return ""
-    entries = await asyncio.to_thread(
-        hctx.state.self_timeline.visible,
-        hctx.chat_id,
-        limit=int(life.self_timeline_max_injected),
+    recalled = await memory_client.recall(
+        hctx.context,
+        purpose    = "self",
+        chat_id    = hctx.chat_id,
+        self_limit = int(life.self_timeline_max_injected),
     )
-    block: str = self_timeline_block(entries)
+    block: str = self_timeline_block(recalled.self_entries)
     return block
 
 
@@ -290,10 +284,11 @@ async def _decide(
     context: Any,
     hctx: HandlerContext,
 ) -> _AgentPlan | None:
-    """只让 agent 判断这一轮要不要接手（通常 1–2 秒）；不接手或出错时返回 ``None``。"""
+    """只让 agent 判断这一轮要不要接手（通常 1–2 秒）；不接手或出错时返回 ``None``。
 
-    if not agent_may_take_over(prepared, event, context):
-        return None
+    调用方先确认过 ``_agent_may_take_over``。
+    """
+
     agent   = context.capabilities.agent_turn
     started = time.monotonic()
     try:
@@ -422,11 +417,14 @@ async def answer_with_agent_or_chat(
 ) -> list[dict[str, Any]]:
     """agent 的判断和聊天生成同时开始，闲聊不用先等判断。
 
-    判断为闲聊时直接用已经在生成的回复；agent 接手时立刻放弃这次生成（让出会话的生成
-    名额），聊天回复不会发出。``chat`` 收到判断任务：生成比判断先完成时，要等判断出来
-    再决定发不发。办事时白丢的是一次生成调用，换来每句闲聊少等一次判断。
+    只有私聊和群里明确跟她说的话才请 agent 判断（``_agent_may_take_over``）；没人叫她的群消息
+    只走聊天，由 PFC 决定参与。判断为闲聊时直接用已经在生成的回复；agent 接手时立刻放弃这次
+    生成（让出会话的生成名额），聊天回复不会发出。``chat`` 收到判断任务：生成比判断先完成时，
+    要等判断出来再决定发不发。办事时白丢的是一次生成调用，换来每句闲聊少等一次判断。
     """
 
+    if not _agent_may_take_over(prepared, event, context):
+        return await chat(None)
     deciding = asyncio.create_task(_decide(prepared, event, context, hctx))
     chatting: asyncio.Task[list[dict[str, Any]]] = asyncio.create_task(chat(deciding))
     try:

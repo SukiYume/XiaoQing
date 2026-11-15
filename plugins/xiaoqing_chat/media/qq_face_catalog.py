@@ -21,7 +21,8 @@ from core.plugin_base import ensure_dir, load_json, write_json
 
 from .qq_face import clean_face_text
 
-_LEGACY_QQ_FACE_LABEL_OVERRIDES: dict[str, tuple[str, ...]] = {
+# 这几个 id 的名字排在内置目录给出的名字之前（内置目录里 278 是“汗”、279 没有记录）。
+_PREFERRED_QQ_FACE_LABELS: dict[str, tuple[str, ...]] = {
     "14" : ("微笑",),
     "277": ("狗头",),
     "278": ("点赞", "赞"),
@@ -70,10 +71,7 @@ def _save_payload(context, payload: dict[str, Any]) -> None:
 
 
 def _catalog_cache_key(context) -> str:
-    try:
-        return str(_catalog_path(context).resolve())
-    except OSError:
-        return str(_catalog_path(context))
+    return str(_catalog_path(context))
 
 
 def _catalog_signature(context) -> tuple[int, int, int, int] | None:
@@ -134,8 +132,8 @@ def _load_bundled_qq_face_labels() -> dict[str, tuple[str, ...]]:
             if labels:
                 entries[normalized_id] = labels
 
-    for face_id, override_labels in _LEGACY_QQ_FACE_LABEL_OVERRIDES.items():
-        merged = list(_normalize_labels(override_labels, face_id=face_id, allow_placeholder=False))
+    for face_id, preferred_labels in _PREFERRED_QQ_FACE_LABELS.items():
+        merged = list(_normalize_labels(preferred_labels, face_id=face_id, allow_placeholder=False))
         for label in entries.get(face_id, ()):
             if label not in merged:
                 merged.append(label)
@@ -212,6 +210,32 @@ def _entry_from_payload(face_id: str, data: dict[str, Any]) -> QQFaceEntry | Non
     )
 
 
+def _merge_face_record(
+    entries: dict[str, Any],
+    face_id: str,
+    labels: tuple[str, ...],
+    *,
+    used: bool,
+) -> None:
+    """把名字并进 face_id 的记录；used 为真时使用次数加一、使用时间设为现在。"""
+
+    current = entries.get(face_id)
+    known   = current if isinstance(current, dict) else {}
+    merged  = list(
+        _normalize_labels(known.get("labels", []), face_id=face_id, allow_placeholder=True)
+    )
+    for item in labels:
+        if item not in merged:
+            merged.append(item)
+    usage_count      = _nonnegative_int(known.get("usage_count", 0))
+    last_used_ts     = _nonnegative_float(known.get("last_used_ts", 0.0))
+    entries[face_id] = {
+        "labels"      : merged,
+        "usage_count" : usage_count + 1 if used else usage_count,
+        "last_used_ts": float(time.time()) if used else last_used_ts,
+    }
+
+
 def record_face_observation(context, *, face_id: Any, label: Any) -> None:
     with keyed_path_lock(_catalog_path(context)):
         normalized_id = str(face_id or "").strip()
@@ -221,26 +245,7 @@ def record_face_observation(context, *, face_id: Any, label: Any) -> None:
 
         payload          = _load_payload(context)
         original_payload = deepcopy(payload)
-        entries          = payload.setdefault("entries", {})
-        current          = entries.get(normalized_id)
-        existing_labels  = _normalize_labels(
-            current.get("labels", []) if isinstance(current, dict) else [],
-            face_id           = normalized_id,
-            allow_placeholder = True,
-        )
-        merged: list[str] = list(existing_labels)
-        for item in labels:
-            if item not in merged:
-                merged.append(item)
-        entries[normalized_id] = {
-            "labels"     : merged,
-            "usage_count": _nonnegative_int(current.get("usage_count", 0))
-            if isinstance(current, dict)
-            else 0,
-            "last_used_ts": _nonnegative_float(current.get("last_used_ts", 0.0))
-            if isinstance(current, dict)
-            else 0.0,
-        }
+        _merge_face_record(payload.setdefault("entries", {}), normalized_id, labels, used=False)
         _save_payload_if_changed(context, original_payload=original_payload, payload=payload)
 
 
@@ -331,24 +336,6 @@ def mark_qq_face_used_by_id(context, face_id: Any, *, label: Any = "") -> None:
         if not normalized_id:
             return
         payload = _load_payload(context)
-        entries = payload.setdefault("entries", {})
-        current = entries.get(normalized_id)
-        labels  = list(
-            _normalize_labels(
-                current.get("labels", []) if isinstance(current, dict) else [],
-                face_id           = normalized_id,
-                allow_placeholder = True,
-            )
-        )
-        normalized_labels = _normalize_labels(label, face_id=normalized_id, allow_placeholder=True)
-        for item in normalized_labels:
-            if item not in labels:
-                labels.append(item)
-        entries[normalized_id] = {
-            "labels"     : labels,
-            "usage_count": _nonnegative_int(current.get("usage_count", 0)) + 1
-            if isinstance(current, dict)
-            else 1,
-            "last_used_ts": float(time.time()),
-        }
+        labels = _normalize_labels(label, face_id=normalized_id, allow_placeholder=True)
+        _merge_face_record(payload.setdefault("entries", {}), normalized_id, labels, used=True)
         _save_payload(context, payload)

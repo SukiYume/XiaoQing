@@ -3,17 +3,24 @@
 推理统一入口。
 
 职责：
-- 根据 model_type 自动分发到 transformers / multi_interest 后端
+- 根据 model_type 自动分发到 transformers / multi_interest / knn 后端
 - 统一输入输出格式
 - 提供便捷函数给 main.py / scripts/arxiv_inference_cli.py 直接调用
 """
 
 import logging
 import math
+import re
 from typing import cast
 
 import pandas as pd
 
+from ..utils import (
+    ARXIV_ABS_URL_PREFIX,
+    NO_PAPERS_MARKER,
+    NO_POSITIVES_MARKER,
+    POSITIVE_HEADER_PREFIX,
+)
 from .shared import InferenceParams, resolve_params
 
 logger = logging.getLogger(__name__)
@@ -85,11 +92,11 @@ def select_positives(data: pd.DataFrame) -> pd.DataFrame:
 def format_positives(positives: pd.DataFrame) -> str:
     lines = []
     for i, (_, row) in enumerate(positives.iterrows(), 1):
-        lines.append(f"\n----- Positive #{i} -----")
+        lines.append(f"\n{POSITIVE_HEADER_PREFIX}{i} -----")
         lines.append(f"Title      : {row['Title']}")
         if "arXiv ID" in positives.columns:
-            arxiv_id = str(row["arXiv ID"]).split("v")[0]
-            lines.append(f"Link       : https://arxiv.org/abs/{arxiv_id}")
+            arxiv_id = re.sub(r"v\d+$", "", str(row["arXiv ID"]))
+            lines.append(f"Link       : {ARXIV_ABS_URL_PREFIX}{arxiv_id}")
         lines.append(f"Probability: {row['Probability']:.4f}")
     return "\n".join(lines)
 
@@ -118,7 +125,7 @@ def run_inference_for_dataframe(
     )
 
     if data.empty:
-        return None, "No papers found."
+        return None, f"{NO_PAPERS_MARKER}."
 
     # 这里是没有请求上下文的内部 API。后端异常必须保留原始 traceback，交给
     # 插件公开边界统一生成脱敏且带 request_id 的错误响应。
@@ -196,5 +203,5 @@ def get_positive_arxiv_today_as_string(
         return str(result)
     positives = select_positives(data)
     if len(positives) == 0:
-        return "No positive predictions found."
+        return f"{NO_POSITIVES_MARKER} found."
     return format_positives(positives)

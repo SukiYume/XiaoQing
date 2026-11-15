@@ -186,7 +186,6 @@ def test_a_generated_reply_is_withheld_when_the_sender_kept_typing(mock_context)
 
     mock_context.capabilities = _context(_pending(2, _text("考试挂了"))).capabilities
     assert _yield_to_follow_up(finalization(_event(1), forced=True), phase="after_presend_delay")
-    generated.cancel_speculative_memory.assert_called_once()
     assert take_carried_attention(_event(2)) is True
     assert take_carried_texts(_event(2)) == ["我今天"]
 

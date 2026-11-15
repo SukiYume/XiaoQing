@@ -36,13 +36,6 @@ def test_build_reply_payload_supports_placeholder_hybrid_flow() -> None:
     ]
     assert payload.outbound_batches[0][1]["data"]["summary"] == "[表情包：无语]"
     assert payload.display_text == "先看这个[表情包：无语]再说一句[QQ表情：微笑]收尾"
-    assert [part["kind"] for part in payload.parts] == [
-        "text",
-        "emoji",
-        "text",
-        "qq_face",
-        "text",
-    ]
 
 
 def test_build_reply_payload_from_parts_keeps_append_behavior_without_placeholders() -> None:
@@ -68,7 +61,6 @@ def test_build_reply_payload_from_parts_keeps_append_behavior_without_placeholde
     assert [segment["type"] for segment in payload.outbound_batches[0]] == ["text", "emoji", "face"]
     assert payload.outbound_batches[0][1]["data"]["file"].endswith("/tmp/emoji.png")
     assert payload.display_text == "懂了[表情包：无语]\n[QQ表情：狗头]"
-    assert [part["kind"] for part in payload.parts] == ["text", "emoji", "text", "qq_face"]
 
 
 def test_merge_reply_media_keeps_distinct_anonymous_images() -> None:
@@ -137,13 +129,6 @@ def test_build_reply_payload_from_parts_preserves_interleaved_media_order() -> N
     ]
     assert payload.outbound_batches[0][1]["data"]["file"].endswith("/tmp/emoji.png")
     assert payload.display_text == "第一句[表情包：无语]\n第二句[QQ表情：狗头]\n收尾"
-    assert [part["kind"] for part in payload.parts] == [
-        "text",
-        "emoji",
-        "text",
-        "qq_face",
-        "text",
-    ]
 
 
 def test_build_message_parts_from_template_keeps_lossless_media_fields_without_store() -> None:
@@ -179,4 +164,3 @@ def test_build_reply_payload_from_parts_supports_outbound_image_parts() -> None:
     assert [segment["type"] for segment in payload.outbound_batches[0]] == ["text", "image"]
     assert "sub_type" not in payload.outbound_batches[0][1]["data"]
     assert payload.display_text == "这是原图[图片：原图]"
-    assert [part["kind"] for part in payload.parts] == ["text", "image"]

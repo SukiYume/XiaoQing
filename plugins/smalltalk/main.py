@@ -16,24 +16,18 @@ from typing import Any, Protocol, cast
 from core.args import parse
 from core.interfaces import PluginSettingsSnapshot
 from core.lifecycle import DeferredCancellation, await_owned_task
-from core.plugin_base import load_json as _core_load_json
-from core.plugin_base import run_sync
-from core.plugin_base import segments as _core_segments
-from core.plugin_base import write_json as _core_write_json
-from core.public_errors import public_error_message
-from core.public_errors import public_error_response as _core_public_error_response
-
-MessageSegment  = dict[str, Any]
-MessageSegments = list[MessageSegment]
-OneBotEvent     = dict[str, Any]
+from core.plugin_base import Event, Segments, run_sync, segments
+from core.plugin_base import load_json as _load_json
+from core.plugin_base import write_json as _write_json
+from core.public_errors import public_error_message, public_error_response
 
 
 class _ChatReplyProvider(Protocol):
-    async def reply(self, text: str, event: OneBotEvent) -> MessageSegments: ...
+    async def reply(self, text: str, event: Event) -> Segments: ...
 
 
 class _VoiceSynthesisProvider(Protocol):
-    async def synthesize_text(self, text: str) -> MessageSegments | None: ...
+    async def synthesize_text(self, text: str) -> Segments | None: ...
 
 
 class _Capabilities(Protocol):
@@ -54,11 +48,6 @@ class Context(Protocol):
 
 # ──────────────────── Core 边界与运行常量 ────────────────────
 
-
-segments               = cast(Callable[[object], MessageSegments], _core_segments)
-_load_json             = cast(Callable[[Path, object], object], _core_load_json)
-_write_json            = cast(Callable[[Path, object], None], _core_write_json)
-_public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
@@ -136,24 +125,24 @@ def _audit_snapshot(path_text: str) -> _AuditSnapshot:
 # ──────────────────── 只喊名字的短回复 ────────────────────
 
 
-def _normalize_responses(value: object) -> list[str]:
-    """清洗自定义随机回复，避免畸形 JSON 进入随机选择。"""
+def _clean_strings(value: object, *, max_items: int, max_length: int) -> list[str]:
+    """清洗持久化的字符串列表：去首尾空白，丢弃非字符串、空、超长和重复项，满额即停。"""
 
     if not isinstance(value, list):
         return []
-    responses: list[str] = []
-    seen     : set[str]  = set()
+    cleaned: list[str] = []
+    seen   : set[str]  = set()
     for item in value:
         if not isinstance(item, str):
             continue
         text = item.strip()
-        if not text or len(text) > MAX_RANDOM_RESPONSE_LENGTH or text in seen:
+        if not text or len(text) > max_length or text in seen:
             continue
-        responses.append(text)
+        cleaned.append(text)
         seen.add(text)
-        if len(responses) == MAX_CUSTOM_RESPONSES:
+        if len(cleaned) == max_items:
             break
-    return responses
+    return cleaned
 
 
 def _load_responses(context: Context) -> list[str]:
@@ -163,16 +152,20 @@ def _load_responses(context: Context) -> list[str]:
         path = context.data_dir / filename
         if not path.exists():
             continue
-        payload = _load_json(path, {})
+        payload: object = _load_json(path, {})
         if not isinstance(payload, Mapping):
             continue
-        responses = _normalize_responses(payload.get(key))
+        responses = _clean_strings(
+            payload.get(key),
+            max_items  = MAX_CUSTOM_RESPONSES,
+            max_length = MAX_RANDOM_RESPONSE_LENGTH,
+        )
         if responses:
             return responses
     return list(DEFAULT_RESPONSES)
 
 
-def call_bot_name_only(context: Context) -> MessageSegments:
+def call_bot_name_only(context: Context) -> Segments:
     """只喊机器人名字时，从有效回复中随机返回一条。"""
 
     return segments(random.choice(_load_responses(context)))
@@ -206,24 +199,6 @@ def _qa_file(context: Context) -> Path:
     return context.data_dir / f"QA_{scope}.json"
 
 
-def _normalize_answers(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    answers: list[str] = []
-    seen   : set[str]  = set()
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        answer = item.strip()
-        if not answer or len(answer) > MAX_ANSWER_LENGTH or answer in seen:
-            continue
-        answers.append(answer)
-        seen.add(answer)
-        if len(answers) == MAX_ANSWERS_PER_QUESTION:
-            break
-    return answers
-
-
 def _normalize_qa(value: object) -> dict[str, list[str]]:
     """把持久化内容收窄为有配额、可安全随机选择的问答表。"""
 
@@ -236,7 +211,11 @@ def _normalize_qa(value: object) -> dict[str, list[str]]:
         question = raw_question.strip()
         if not question or len(question) > MAX_QUESTION_LENGTH:
             continue
-        answers = _normalize_answers(raw_answers)
+        answers = _clean_strings(
+            raw_answers,
+            max_items  = MAX_ANSWERS_PER_QUESTION,
+            max_length = MAX_ANSWER_LENGTH,
+        )
         if not answers:
             continue
         existing = normalized.get(question)
@@ -260,8 +239,8 @@ def _read_qa_file(path: Path) -> dict[str, list[str]]:
 
 
 def _read_audit_file(path: Path) -> list[dict[str, Any]]:
-    payload     = _load_json(path, {})
-    raw_entries = payload.get("entries") if isinstance(payload, Mapping) else None
+    payload: object = _load_json(path, {})
+    raw_entries     = payload.get("entries") if isinstance(payload, Mapping) else None
     if not isinstance(raw_entries, list):
         return []
     return [dict(item) for item in raw_entries if isinstance(item, Mapping)]
@@ -358,7 +337,7 @@ def _bounded_lines(header: str, lines: Sequence[str]) -> str:
     return output + suffix
 
 
-async def _add_qa(context: Context, args: str) -> MessageSegments:
+async def _add_qa(context: Context, args: str) -> Segments:
     """校验并原子更新一个问题的回答集合。"""
 
     parts = args.split(None, 1)
@@ -395,7 +374,7 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
     return segments("对话添加成功了！")
 
 
-async def _list_qa(context: Context, args: str) -> MessageSegments:
+async def _list_qa(context: Context, args: str) -> Segments:
     """列出当前会话的问题，或精确查询一个问题。"""
 
     data     = await _load_qa(context)
@@ -410,7 +389,7 @@ async def _list_qa(context: Context, args: str) -> MessageSegments:
     return segments(_bounded_lines("问答列表：", list(data)))
 
 
-async def _remove_qa(context: Context, args: str) -> MessageSegments:
+async def _remove_qa(context: Context, args: str) -> Segments:
     """删除指定回答，或删除问题及其全部回答。"""
 
     parts = args.split(None, 1)
@@ -421,7 +400,7 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
 
     snapshot = _qa_snapshot_for(context)
     operation: str
-    result   : MessageSegments
+    result   : Segments
     async with snapshot.lock:
         current = await _qa_data_locked(snapshot)
         data    = {item: list(answers) for item, answers in current.items()}
@@ -451,9 +430,9 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
 async def handle(
     command: str,
     args: str,
-    event: OneBotEvent,
+    event: Event,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """处理管理员 QA 命令；权限由清单和 core 路由统一执行。"""
 
     try:
@@ -473,7 +452,7 @@ async def handle(
             return await _list_qa(context, args)
         return await _remove_qa(context, args)
     except Exception as exc:
-        return _public_error_response(
+        return public_error_response(
             context,
             exc,
             logger    = logger,
@@ -501,13 +480,13 @@ def _voice_probability(context: Context) -> float:
     return probability
 
 
-def _coerce_segments(value: object) -> MessageSegments | None:
+def _coerce_segments(value: object) -> Segments | None:
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         return None
-    return cast(MessageSegments, value)
+    return cast(Segments, value)
 
 
-def _voice_text(reply: Sequence[MessageSegment]) -> str | None:
+def _voice_text(reply: Sequence[dict[str, Any]]) -> str | None:
     """提取有界纯文本；内容过长时不向语音 provider 提交截断文本。"""
 
     parts: list[str] = []
@@ -528,9 +507,9 @@ def _voice_text(reply: Sequence[MessageSegment]) -> str | None:
 
 
 async def _maybe_convert_to_voice(
-    reply: MessageSegments,
+    reply: Segments,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """按配置尝试语音合成，任何不可用或失败都保留原文字。"""
 
     probability = _voice_probability(context)
@@ -559,7 +538,7 @@ async def _maybe_convert_to_voice(
     return reply
 
 
-async def _call_chat_api(text_content: str, context: Context) -> MessageSegments:
+async def _call_chat_api(text_content: str, context: Context) -> Segments:
     """通过 core 签发的能力调用 chat，并验证 provider 返回消息段。"""
 
     try:
@@ -587,9 +566,9 @@ async def _call_chat_api(text_content: str, context: Context) -> MessageSegments
 
 async def handle_smalltalk(
     text_content: str,
-    event: OneBotEvent,
+    event: Event,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """优先精确匹配 QA，未命中时转交 chat 能力。"""
 
     if not text_content.strip():

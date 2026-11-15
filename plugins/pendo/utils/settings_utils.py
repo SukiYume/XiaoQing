@@ -70,6 +70,7 @@ def _coerce_setting_bool(value: Any, default: bool, *, strict: bool = False) -> 
 def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dict[str, Any]:
     """规范自定义设置，并保留其他插件扩展键。"""
     normalized = dict(settings_json) if isinstance(settings_json, dict) else {}
+    # privacy_mode 是早已移除的设置项，旧数据里残留的值不再保留。
     normalized.pop("privacy_mode", None)
 
     for key in ("reminder_enabled", "ai_sensitive_data_consent"):
@@ -81,6 +82,7 @@ def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dic
                 strict=partial and key in normalized,
             )
 
+    # daily_report_enabled 是每日简报开关的旧键名：新键没有值时沿用它，规范化后只保留新键。
     briefing_present = (
         "daily_briefing_enabled" in normalized or "daily_report_enabled" in normalized
     )

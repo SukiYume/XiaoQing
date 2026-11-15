@@ -8,6 +8,8 @@ import sys
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
+from .numeric import finite_float
+
 # 公式定义常量
 FORMULAS: dict[str, dict[str, str]] = {
     "dm": {
@@ -75,10 +77,10 @@ _CALCULATION_USAGE = {
 
 def _parse_positive_mass(value: str) -> float | None:
     try:
-        mass = float(value)
-    except (ValueError, OverflowError):
+        mass = finite_float(value)
+    except ValueError:
         return None
-    return mass if math.isfinite(mass) and mass > 0 else None
+    return mass if mass > 0 else None
 
 
 def handle_formula(args: str, context: PluginContextProtocol) -> str:

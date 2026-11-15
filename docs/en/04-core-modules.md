@@ -111,6 +111,7 @@ For remote content, `safe_http.py` first resolves the target. Then `bounded_http
 | `ai.py` | Providers, model profiles, plugin routes, retries, fallback, total budgets |
 | `sensitive_audit.py` | Sensitive-field audit, summaries, redaction |
 | `atomic_store.py` | Atomic writes and recovery for JSON and byte data |
+| `private_files.py` | Files only the current OS user may read: tightened directory permissions and atomic 0600 writes for credential JSON |
 | `process_tree.py`, `windows_job.py` | External plugin commands use independent process trees: Windows Job objects or POSIX process groups. Standard output and standard error share one budget. Timeout and cancellation remove the whole tree. `/shell` and XiaoQing Agent share these modules. |
 | `bounded_file_cache.py` | Disk cache with TTL, LRU, entry-count limits, byte limits |
 
@@ -172,6 +173,7 @@ When the connection ends, Core cleans up notification tasks and pending requests
 | Missing Core-issued capability | `app_plugin_context.py` | Corresponding command's `plugin.json` |
 | Agent command execution | `dispatcher.py` function `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
 | Chat receives no online-life context | `capabilities.py` class `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
+| Memory reads or writes refused or empty | `capabilities.py` class `MemoryService` | `app_plugin_context.py`, `plugins/xiaoqing_memory/scopes.py`, `plugins/xiaoqing_chat/memory/client.py` |
 | Group participation | `dispatcher.py` | Smalltalk Provider plugin |
 | Plugin loading and reload | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | Plugin timeout and overload | `plugin_execution.py` | `dispatcher.py` |

@@ -208,6 +208,27 @@ def test_app_apply_config_resizes_dispatcher_limiter_without_replacing_it(
 
 
 @pytest.mark.unit
+def test_apply_dispatcher_concurrency_replaces_a_non_adjustable_limiter(temp_app_root: Path):
+    """启动和热更新共用同一个调容入口：不是可调 limiter 的换成可调的，并记下当前上限。"""
+    from core.dispatcher import AdjustableSemaphore
+
+    app                      = XiaoQingApp(temp_app_root)
+    app.dispatcher.semaphore = asyncio.Semaphore(1)
+    app._apply_dispatcher_concurrency(7)
+
+    assert isinstance(app.dispatcher.semaphore, AdjustableSemaphore)
+    assert app.dispatcher.semaphore.capacity == 7
+    assert app._dispatcher_concurrency == 7
+
+    limiter = app.dispatcher.semaphore
+    app._apply_dispatcher_concurrency(3)
+
+    assert app.dispatcher.semaphore is limiter
+    assert limiter.capacity == 3
+    assert app._dispatcher_concurrency == 3
+
+
+@pytest.mark.unit
 def test_app_apply_config_validates_scalars_before_publishing_side_effects(
     temp_app_root: Path,
 ):

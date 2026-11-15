@@ -138,7 +138,7 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
     assert set(store.seen) == {"bili:1", "bili:2"}
     state = store.state
     assert (state["sessions_today"], state["llm_calls_today"], state["day"]) == (1, 1, "2026-11-05")
-    assert state["last_decision"]["choice"] == HOT_SCROLL and state["last_session_at"] == NOW
+    assert state["last_decision"]["choice"] == HOT_SCROLL and state["current"]["start"] == NOW
     assert state["activity_log"][0]["start"] == NOW and state["recent"][-1]["choice"] == HOT_SCROLL
     assert "interest_dive" not in json.dumps(state["last_decision"])
     # 重启后仍在
@@ -366,6 +366,9 @@ async def test_term_lookup_verifies_slang_and_settles_the_queue(tmp_path: Path) 
     entry = store.terms["哈基米"]
     assert entry["status"] == "known" and entry["verified"] and entry["sources"] == ["baike:哈基米"]
     assert store.state["lookup_queue"] == ["超时词", "第四个"]  # 查不到丢弃，出错的留着
+    assert (
+        store.state["last_reward"] > 0 and "term_lookup" in store.state["preferences"]["activity"]
+    )
     assert store.episodes == []
 
 

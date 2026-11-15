@@ -1,10 +1,12 @@
-"""维护长期记忆文档、人物资料和对应的向量检索索引。"""
+"""管理员知识库的向量检索索引（``kb:`` 文档）。
+
+已有部署的索引里可能还有旧版本写入的会话记忆文档（人物事实、话题摘要）。聊天不读写这些文档：
+统一记忆在每个会话第一次推送时直接读文件导入（``legacy.py``），重置会话时按会话删除。
+"""
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import re
 import threading
 import time
 from collections.abc import Sequence
@@ -12,13 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from ..store_base import LockedDirtyStateMixin
 from .vector_store import VectorDoc, VectorStore, write_vector_store_files
 
 _logger                      = logging.getLogger("plugin.xiaoqing_chat")
-_LEGACY_PERSON_ID_RE         = re.compile(r"^person:\d+:\d+$")
 _CONFIGURED_KNOWLEDGE_PREFIX = "kb:"
 
 
@@ -27,24 +26,6 @@ def normalize_memory_chat_id(chat_id: object) -> str:
     if not scoped_chat_id or len(scoped_chat_id) > 256:
         raise ValueError("invalid memory chat scope")
     return scoped_chat_id
-
-
-def person_fact_doc_id(
-    *,
-    chat_id: object,
-    subject_id: int,
-    subject_name: str,
-    fact: str,
-) -> str:
-    scoped_chat_id  = normalize_memory_chat_id(chat_id)
-    normalized_fact = str(fact or "").strip()
-    if subject_id <= 0 or not normalized_fact:
-        raise ValueError("invalid person fact identity")
-    normalized_name = str(subject_name or "").strip()
-    scope_hash      = hashlib.sha256(scoped_chat_id.encode("utf-8")).hexdigest()[:16]
-    material        = f"{scoped_chat_id}\0{subject_id}\0{normalized_name}\0{normalized_fact}"
-    fact_hash       = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
-    return f"person:v2:{scope_hash}:{subject_id}:{fact_hash}"
 
 
 @dataclass(frozen=True)
@@ -57,7 +38,7 @@ class RetrievedItem:
 
 class MemoryDB(LockedDirtyStateMixin):
     def __init__(self) -> None:
-        self._store = VectorStore(dim=2048)
+        self._store                   = VectorStore()
         self._loaded_dir: Path | None = None
         self._dirty                   = False
         self._dirty_version           = 0
@@ -70,63 +51,10 @@ class MemoryDB(LockedDirtyStateMixin):
                 return
             self._loaded_dir = data_dir
             self._dirty      = False
-            self._store = VectorStore(dim=2048)
-            vdb_dir = data_dir / "vdb"
+            self._store      = VectorStore()
+            vdb_dir          = data_dir / "vdb"
             if vdb_dir.exists():
                 self._store.load(vdb_dir, name="memory")
-            self._migrate_legacy_person_info_locked()
-
-    @staticmethod
-    def _legacy_person_fact_text(text: str) -> str:
-        value = str(text or "").strip()
-        if "：" in value:
-            value = value.split("：", 1)[1]
-        if "\n证据：" in value:
-            value = value.split("\n证据：", 1)[0]
-        return value.strip()
-
-    def _migrate_legacy_person_info_locked(self) -> None:
-        """重建旧范围事实的键，并隔离缺少有效范围的记录。"""
-        changed = False
-        for doc in list(self._store.all_docs()):
-            if not _LEGACY_PERSON_ID_RE.fullmatch(doc.doc_id):
-                continue
-            if str(doc.meta.get("type", "")) != "person_info":
-                continue
-            meta = dict(doc.meta)
-            try:
-                chat_id      = normalize_memory_chat_id(meta.get("chat_id"))
-                subject_id   = int(meta.get("subject_id", 0) or 0)
-                subject_name = str(meta.get("subject_name", "") or "").strip()
-                fact         = self._legacy_person_fact_text(doc.text)
-                new_doc_id   = person_fact_doc_id(
-                    chat_id      = chat_id,
-                    subject_id   = subject_id,
-                    subject_name = subject_name,
-                    fact         = fact,
-                )
-            except (TypeError, ValueError):
-                meta["type"]              = "quarantined_person_info"
-                meta["quarantine_reason"] = "invalid_scope_or_identity"
-                self._store.upsert(VectorDoc(doc_id=doc.doc_id, text=doc.text, meta=meta))
-                changed = True
-                continue
-
-            meta.update(
-                {
-                    "type"          : "person_info",
-                    "chat_id"       : chat_id,
-                    "subject_id"    : subject_id,
-                    "schema_version": 2,
-                }
-            )
-            self._store.upsert(VectorDoc(doc_id=new_doc_id, text=doc.text, meta=meta))
-            if new_doc_id != doc.doc_id:
-                self._store.delete(doc.doc_id)
-            changed = True
-        if changed:
-            self._dirty = True
-            self._dirty_version += 1
 
     def save(self) -> None:
         with self._save_lock:
@@ -134,11 +62,8 @@ class MemoryDB(LockedDirtyStateMixin):
                 loaded_dir = self._loaded_dir
                 if not loaded_dir:
                     return
-                self._store.build()
-                docs = self._store.all_docs()
-                dim  = int(self._store.dim)
-                mat  = self._store._matrix
-                mat = np.zeros((0, dim), dtype=np.float32) if mat is None else mat.copy()
+                docs, mat = self._store.snapshot()
+                dim          = int(self._store.dim)
                 save_version = self._dirty_version
             vdb_dir = loaded_dir / "vdb"
             try:
@@ -159,17 +84,8 @@ class MemoryDB(LockedDirtyStateMixin):
             return None
         return RetrievedItem(doc_id=doc.doc_id, text=doc.text, score=1.0, meta=doc.meta)
 
-    def delete(self, doc_id: str) -> bool:
-        with self._lock:
-            if self._store.get_doc(doc_id) is None:
-                return False
-            self._store.delete(doc_id)
-            self._dirty = True
-            self._dirty_version += 1
-            return True
-
     def delete_chat(self, chat_id: object) -> int:
-        """删除一个会话作用域内的全部向量记忆，不影响其他会话或全局知识。"""
+        """删除一个会话作用域内的全部文档（旧版本写入的会话记忆），不影响其他会话或全局知识。"""
 
         scoped_chat_id = normalize_memory_chat_id(chat_id)
         with self._lock:
@@ -264,57 +180,18 @@ class MemoryDB(LockedDirtyStateMixin):
             self._dirty_version += 1
             return True
 
-    def query(
-        self,
-        question: str,
-        *,
-        chat_id: str,
-        top_k: int                         = 5,
-        min_score: float                   = 0.12,
-        type_filter: str | None            = None,
-        meta_filter: dict[str, Any] | None = None,
-    ) -> list[RetrievedItem]:
-        """查询租户范围内的记忆；会话范围始终必填。"""
-        scoped_chat_id = str(chat_id or "").strip()
-        if not scoped_chat_id:
-            raise ValueError("chat_id is required for memory queries")
-
-        def in_scope(doc: VectorDoc) -> bool:
-            # 隔离状态只供维护读取，所有面向聊天的检索统一排除。
-            if str(doc.meta.get("type", "")).startswith("quarantined_"):
-                return False
-            if str(doc.meta.get("chat_id", "") or "") != scoped_chat_id:
-                return False
-            if type_filter and str(doc.meta.get("type", "")) != type_filter:
-                return False
-            return not meta_filter or all(
-                doc.meta.get(key) == value for key, value in meta_filter.items()
-            )
-
-        with self._lock:
-            results = self._store.query(
-                question, top_k=top_k, min_score=min_score, predicate=in_scope
-            )
-        out: list[RetrievedItem] = []
-        for doc, score in results:
-            out.append(RetrievedItem(doc_id=doc.doc_id, text=doc.text, score=score, meta=doc.meta))
-        return out
-
-    def query_global(
+    def query_knowledge(
         self,
         question: str,
         *,
         top_k: int       = 5,
         min_score: float = 0.12,
-        type_filter: str,
     ) -> list[RetrievedItem]:
-        """只查询显式全局且已经审核的知识类型。"""
-        if type_filter not in {"knowledge", "word_def"}:
-            raise ValueError("global memory queries only allow reviewed knowledge types")
+        """只查询管理员批准的知识文档。"""
 
         def globally_visible(doc: VectorDoc) -> bool:
             return (
-                str(doc.meta.get("type", "")) == type_filter
+                str(doc.meta.get("type", "")) == "knowledge"
                 and doc.meta.get("global_approved") is True
             )
 

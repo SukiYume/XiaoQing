@@ -65,8 +65,8 @@ async def test_receipt_with_several_files_waits_for_all_of_them(tmp_path: Path) 
     await receipts.settle(held, [first], True)
     assert log.calls == (0, 0, 0)
     await receipts.settle(held, [second], False)
-    # 一半送达一半失败：整份回执不能当成功，也不能当作完全没发。
-    assert log.calls == (0, 0, 1)
+    # 一半送达一半失败：和命令由本人直接发送时一样按没发出去算，命令的预留释放，之后可以重来。
+    assert log.calls == (0, 1, 0)
     assert held == []
 
     both = _Receipt()

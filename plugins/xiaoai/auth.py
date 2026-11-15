@@ -22,7 +22,7 @@ from core.bounded_http import (
     read_aiohttp_response,
 )
 
-from .client import AuthRequired, BridgeError, read_json, write_json
+from .client import AuthRequired, BridgeError, is_plain_https, read_json, write_json
 
 ACCOUNT     = "https://account.xiaomi.com"
 USER_AGENT  = "APP/com.xiaomi.mihome APPV/11.3.203"
@@ -33,12 +33,8 @@ RENEW_AFTER = 6 * 60 * 60
 def account_url(url: str) -> str:
     parsed = urlsplit(url)
     host   = parsed.hostname or ""
-    if (
-        parsed.scheme != "https"
-        or parsed.port not in (None, 443)
-        or parsed.username
-        or parsed.password
-        or not (host == "account.xiaomi.com" or host.endswith(".account.xiaomi.com"))
+    if not is_plain_https(parsed) or not (
+        host == "account.xiaomi.com" or host.endswith(".account.xiaomi.com")
     ):
         raise BridgeError("小米登录地址校验失败，请重新发起登录。")
     return url
@@ -47,14 +43,7 @@ def account_url(url: str) -> str:
 def callback_url(url: str, sid: str) -> str:
     parsed   = urlsplit(url)
     expected = "sts.api.io.mi.com" if sid == "xiaomiio" else "api2.mina.mi.com"
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != expected
-        or parsed.port not in (None, 443)
-        or parsed.username
-        or parsed.password
-        or parsed.path != "/sts"
-    ):
+    if parsed.hostname != expected or not is_plain_https(parsed) or parsed.path != "/sts":
         raise BridgeError("小米授权回调地址校验失败。")
     return url
 

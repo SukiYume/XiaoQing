@@ -8,6 +8,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..config import LEDGER_EXPENSE_CATEGORIES, LEDGER_INCOME_CATEGORIES
+from ..utils.validators import MAX_TITLE_CHARS
 
 _CATEGORIES      = {item["name"] for item in LEDGER_EXPENSE_CATEGORIES + LEDGER_INCOME_CATEGORIES}
 _CATEGORY_PHRASE = re.compile(r"(.+?)(?:类(?:收入|支出|消费)?|收入|支出|消费)")
@@ -21,7 +22,7 @@ class LedgerRecord(BaseModel):
     )
     title: str = Field(
         min_length  = 1,
-        max_length  = 200,
+        max_length  = MAX_TITLE_CHARS,
         description = "交易对象或用途，保留原词；分类、账户分别填写独立字段。",
     )
     transaction_type: Literal["expense", "income", "transfer"] = "expense"

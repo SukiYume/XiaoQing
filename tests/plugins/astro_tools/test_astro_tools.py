@@ -266,6 +266,20 @@ class TestAstroToolsConst:
 
         assert alias == canonical
 
+    def test_help_lists_every_alias_and_each_unknown_name_lists_the_same_names(self, mock_context):
+        help_text = astro_const.handle_const("", mock_context)
+        unknown   = astro_const.handle_const("no-such-constant", mock_context)
+
+        help_names = {
+            name
+            for line in help_text.splitlines()
+            if " - " in line
+            for name in line.split(" - ", 1)[0].split(", ")
+        }
+        listed_names = set(unknown.split("可用常数: ", 1)[1].split(", "))
+        assert help_names == listed_names
+        assert set(astro_const._CONST_ALIASES) <= help_names
+
 
 class TestAstroToolsErrorHandling:
     """测试错误处理"""

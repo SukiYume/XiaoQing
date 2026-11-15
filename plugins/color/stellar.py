@@ -7,14 +7,15 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from core.args import quote_token
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import has_control_characters, image, segments, text
+from core.plugin_base import Segments, has_control_characters, image, segments, text
 from core.public_errors import public_error_response
 
-from .convert import hex_to_rgb
+from .convert import STORED_HEX_PATTERN, hex_to_rgb
+from .data_manager import context_dir
 from .image_gen import generate_color_image
 
 MAX_STELLAR_FILE_BYTES = 64 * 1024
@@ -23,8 +24,6 @@ MAX_STELLAR_LINE_CHARS = 256
 MAX_SPECTRAL_TYPES     = 30
 _STELLAR_HEADER        = ("SpT", "Teff", "log(g)", "RGB", "Hex")
 _SPECTRAL_TYPE_PATTERN = re.compile(r"[OBAFGKM][0-9](?:\.5)?V", re.IGNORECASE)
-_HEX_PATTERN           = re.compile(r"#[0-9a-fA-F]{6}")
-Messages               = list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -57,7 +56,7 @@ def _parse_stellar_row(line: str, *, line_number: int) -> StellarColor:
         not math.isfinite(value) or not 0 <= value <= 1 for value in rgb_values
     ):
         raise ValueError(f"invalid linear RGB at line {line_number}")
-    if _HEX_PATTERN.fullmatch(hex_value) is None:
+    if STORED_HEX_PATTERN.fullmatch(hex_value) is None:
         raise ValueError(f"invalid stellar HEX value at line {line_number}")
     # 论文表格的线性 RGB 只保留三位小数，HEX 来自更高精度原值，因此不反推二者相等。
     return StellarColor(
@@ -96,10 +95,7 @@ def _load_stellar_rows_cached(
 
 
 def load_stellar_colors(context: PluginContextProtocol) -> tuple[StellarColor, ...]:
-    plugin_dir = getattr(context, "plugin_dir", None)
-    if not isinstance(plugin_dir, Path):
-        raise ValueError("color plugin_dir must be a Path")
-    path = plugin_dir / "stellar_colors.txt"
+    path = context_dir(context, "plugin_dir") / "stellar_colors.txt"
     info = path.stat()
     rows = _load_stellar_rows_cached(str(path), info.st_mtime_ns, info.st_size)
     context.logger.debug("加载恒星颜色数据: count=%d", len(rows))
@@ -129,7 +125,7 @@ async def query_stellar_color(
     spec_type: str,
     context: PluginContextProtocol,
     image_dir: Path,
-) -> Messages:
+) -> Segments:
     """查询光谱型；重复类型保持论文表顺序并采用第一条温度采样。"""
 
     try:
@@ -137,7 +133,7 @@ async def query_stellar_color(
         matches = [row for row in load_stellar_colors(context) if row.spectral_type == normalized]
         if not matches:
             return cast(
-                Messages,
+                Segments,
                 segments(
                     f"❌ 没有找到光谱型「{normalized}」的恒星颜色\n\n"
                     "提示：使用 /color stars 查看可用的光谱型"
@@ -166,10 +162,10 @@ async def query_stellar_color(
             result.append(image(image_path))
         return result
     except ValueError as exc:
-        return cast(Messages, segments(f"❌ {exc}"))
+        return cast(Segments, segments(f"❌ {exc}"))
     except Exception as exc:
         return cast(
-            Messages,
+            Segments,
             public_error_response(
                 context, exc, logger=context.logger, component="color.stellar.query"
             ),
@@ -177,40 +173,38 @@ async def query_stellar_color(
 
 
 def list_spectral_types(
-    prefix: str,
+    keyword: str,
     context: PluginContextProtocol,
     *,
     page: int = 1,
-) -> Messages:
+) -> Segments:
     """按字面子串筛选并列出不重复的光谱型。"""
 
     try:
         if type(page) is not int or page < 1:
             raise ValueError("光谱型页码必须是正整数")
-        normalized_prefix = _clean_spectral_term(prefix, allow_empty=True)
+        normalized = _clean_spectral_term(keyword, allow_empty=True)
         unique_types = list(
             dict.fromkeys(row.spectral_type for row in load_stellar_colors(context))
         )
-        matches = [
-            spectral_type for spectral_type in unique_types if normalized_prefix in spectral_type
-        ]
+        matches = [spectral_type for spectral_type in unique_types if normalized in spectral_type]
         if not matches:
             return cast(
-                Messages,
-                segments(f"❌ 没有找到包含「{normalized_prefix}」的光谱型"),
+                Segments,
+                segments(f"❌ 没有找到包含「{normalized}」的光谱型"),
             )
 
         title = (
-            f"包含「{normalized_prefix}」的光谱型（共 {len(matches)} 个）："
-            if normalized_prefix
+            f"包含「{normalized}」的光谱型（共 {len(matches)} 个）："
+            if normalized
             else f"所有光谱型（共 {len(matches)} 个）："
         )
         total_pages = (len(matches) + MAX_SPECTRAL_TYPES - 1) // MAX_SPECTRAL_TYPES
         if page > total_pages:
-            return cast(Messages, segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）"))
+            return cast(Segments, segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）"))
         start                 = (page - 1) * MAX_SPECTRAL_TYPES
         displayed             = matches[start : start + MAX_SPECTRAL_TYPES]
-        query_part            = f" {quote_token(normalized_prefix)}" if normalized_prefix else ""
+        query_part            = f" {quote_token(normalized)}" if normalized else ""
         navigation: list[str] = []
         if page > 1:
             navigation.append(f"上一页：/color stars{query_part} --page {page - 1}")
@@ -220,17 +214,17 @@ def list_spectral_types(
         if navigation:
             suffix += "\n" + "\n".join(navigation)
         context.logger.info(
-            "列出光谱型: prefix_chars=%d page=%d count=%d",
-            len(normalized_prefix),
+            "列出光谱型: keyword_chars=%d page=%d count=%d",
+            len(normalized),
             page,
             len(matches),
         )
-        return cast(Messages, segments(f"{title}\n{', '.join(displayed)}{suffix}"))
+        return cast(Segments, segments(f"{title}\n{', '.join(displayed)}{suffix}"))
     except ValueError as exc:
-        return cast(Messages, segments(f"❌ {exc}"))
+        return cast(Segments, segments(f"❌ {exc}"))
     except Exception as exc:
         return cast(
-            Messages,
+            Segments,
             public_error_response(
                 context, exc, logger=context.logger, component="color.stellar.list"
             ),

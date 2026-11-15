@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from core.delivery import DeliveryReceipt, send_with_receipt
-from core.plugin_base import run_sync, segments
+from core.plugin_base import build_action, run_sync, segments
 from core.public_errors import public_error_message
 
 from ..config import PendoConfig
@@ -18,17 +18,16 @@ from ..models.item import EventItem, Item, ItemType, LedgerItem, TaskItem
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.currency import currency_label, group_by_currency
-from ..utils.db_ops import (
-    get_database,
-    get_user_settings_bundle_map,
-)
+from ..utils.db_ops import get_user_settings_bundle_map
 from ..utils.formatters import collection_node_title, ledger_amount_yuan
 from ..utils.settings_utils import save_user_setting
 from ..utils.time_utils import (
     CN_WEEKDAYS,
     TimezoneHelper,
     get_user_now_from_settings,
+    iso_week_key,
     now_in_timezone,
+    parse_hhmm_to_minutes,
 )
 
 logger = logging.getLogger(__name__)
@@ -148,8 +147,9 @@ _MONTHLY_FINANCE: Final = _FinanceSchedule(
     "🧾 月底财务总结",
 )
 
-# 缓存提醒服务；插件卸载时由 cleanup_reminder_singleton 显式清空。
-_reminder_service_singleton: ReminderService | None = None
+# 每日简报里日程、待办各最多列几条，逾期待办最多列几条；超出的只写“还有 N 项”。
+_BRIEFING_LIST_LIMIT   : Final = 5
+_BRIEFING_OVERDUE_LIMIT: Final = 3
 
 
 def _next_reminder_retry_at() -> datetime:
@@ -306,21 +306,15 @@ async def _deliver_reminder(
         )
 
 
-async def check_reminders(context: object) -> ActionList:
+async def check_reminders(
+    context: object,
+    db: Database,
+    reminder_service: ReminderService,
+) -> ActionList:
     """领取到期提醒，并按 OneBot 的明确确认结果结算租约。"""
 
-    global _reminder_service_singleton
-    db                   = cast(Database, get_database(context))
     messages: ActionList = []
-
-    if _reminder_service_singleton is None or (
-        isinstance(_reminder_service_singleton, ReminderService)
-        and _reminder_service_singleton.db is not db
-    ):
-        _reminder_service_singleton = ReminderService(db)
-    reminder_service = _reminder_service_singleton
-
-    result = cast(JsonObject, await run_sync(reminder_service.check_and_send_reminders, context))
+    result = cast(JsonObject, await run_sync(reminder_service.check_and_send_reminders))
     raw_messages = result.get("messages")
     if not isinstance(raw_messages, list):
         return messages
@@ -389,43 +383,19 @@ async def _deliver_daily_briefing(
 ) -> None:
     """使用原始简报日期恢复投递，并保留当前租约时钟。"""
 
-    claim = await _claim_periodic_delivery(
-        run.db,
-        "daily_briefing",
-        user_id,
-        period_key,
-        run.current_utc,
-    )
-    if claim is None:
-        return
-    try:
+    async def compose() -> str:
         briefing = await _generate_briefing_content(user_id, run.db, period_date=period_key)
         if period_key != user_now.date().isoformat():
             briefing = f"📬 补发 {period_key} 每日简报\n{briefing}"
-        delivery_claim = claim
-        claim          = None
-        delivered      = await _send_claimed_private(
-            run.context,
-            run.messages,
-            run.db,
-            delivery_claim,
-            briefing,
-        )
-        if not delivered:
-            logger.warning("Daily briefing was not delivery-confirmed for user %s", user_id)
-            return
-        await run_sync(
-            save_user_setting,
-            user_id,
-            "last_daily_briefing_date",
-            period_key,
-            run.db,
-        )
+        return briefing
+
+    delivered = await _deliver_periodic(
+        run, "daily_briefing", user_id, period_key, "last_daily_briefing_date", period_key, compose
+    )
+    if delivered is True:
         logger.info("Sent daily briefing to user %s", user_id)
-    except Exception:
-        if claim is not None:
-            await _release_periodic_delivery(run.db, claim)
-        raise
+    elif delivered is False:
+        logger.warning("Daily briefing was not delivery-confirmed for user %s", user_id)
 
 
 async def _active_user_bundles(db: Database) -> tuple[list[str], dict[str, SettingsBundle]]:
@@ -442,15 +412,21 @@ async def _run_for_active_users(
     db: Database,
     component: str,
     deliver: Callable[[_ScheduleRun, str, SettingsBundle], Awaitable[None]],
+    *,
+    load_settings: bool = True,
 ) -> ActionList:
     """对每个活跃用户执行一次定时投递。
 
     读不到用户或设置时整轮跳过；单个用户出错只记录，不影响其他用户。
+    ``load_settings`` 为假时不读取设置，``deliver`` 收到的设置包为空字典。
     """
 
     run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
-        user_ids, bundles = await _active_user_bundles(db)
+        if load_settings:
+            user_ids, bundles = await _active_user_bundles(db)
+        else:
+            user_ids, bundles = await _get_active_user_ids(db), {}
     except Exception as exc:
         public_error_message(
             context,
@@ -462,7 +438,7 @@ async def _run_for_active_users(
 
     for user_id in user_ids:
         try:
-            await deliver(run, user_id, bundles[user_id])
+            await deliver(run, user_id, bundles[user_id] if load_settings else {})
         except Exception as exc:
             public_error_message(
                 context,
@@ -512,40 +488,16 @@ async def _deliver_diary_reminder(
     current_date: str,
 ) -> None:
     """按提醒所属日期检查日记，并在补写后完成原周期。"""
-    claim = await _claim_periodic_delivery(
-        run.db,
-        "diary_reminder",
-        user_id,
-        period_key,
-        run.current_utc,
+
+    async def compose() -> str | None:
+        if await run_sync(run.db.has_diary_for_date, user_id, period_key):
+            return None
+        day_label = "今天" if period_key == current_date else period_key
+        return f"📔 {day_label}还没有写日记，记录一下当天的生活吧。\n发送 /pendo diary 开始"
+
+    await _deliver_periodic(
+        run, "diary_reminder", user_id, period_key, "last_diary_remind_date", period_key, compose
     )
-    if claim is None:
-        return
-    try:
-        has_diary = cast(
-            bool,
-            await run_sync(run.db.has_diary_for_date, user_id, period_key),
-        )
-        if has_diary:
-            completed = await _complete_periodic_delivery(run.db, claim)
-            claim     = None
-        else:
-            day_label      = "今天" if period_key == current_date else period_key
-            delivery_claim = claim
-            claim          = None
-            completed      = await _send_claimed_private(
-                run.context,
-                run.messages,
-                run.db,
-                delivery_claim,
-                f"📔 {day_label}还没有写日记，记录一下当天的生活吧。\n发送 /pendo diary 开始",
-            )
-        if completed:
-            await run_sync(save_user_setting, user_id, "last_diary_remind_date", period_key, run.db)
-    except Exception:
-        if claim is not None:
-            await _release_periodic_delivery(run.db, claim)
-        raise
 
 
 async def check_diary_reminders(context: object, db: Database) -> ActionList:
@@ -572,9 +524,8 @@ def _finance_period(user_now: datetime, schedule: _FinanceSchedule) -> _FinanceP
     end_date = user_now.date()
     if schedule.kind == "weekly":
         start_date = end_date - timedelta(days=user_now.weekday())
-        iso_year, iso_week, _weekday = user_now.isocalendar()
         return _FinancePeriod(
-            f"{iso_year}-W{iso_week:02d}",
+            iso_week_key(user_now),
             start_date.isoformat(),
             end_date.isoformat(),
             f"{start_date.strftime('%m/%d')} - {end_date.strftime('%m/%d')}",
@@ -642,43 +593,14 @@ async def _deliver_finance_summary(
     schedule: _FinanceSchedule,
     period: _FinancePeriod,
 ) -> None:
-    claim = await _claim_periodic_delivery(
-        run.db,
-        schedule.task_name,
-        user_id,
-        period.key,
-        run.current_utc,
+    """周期内没有账目时直接完成租约，不发空总结。"""
+
+    async def compose() -> str | None:
+        return await _generate_finance_summary_content(run.db, user_id, period) or None
+
+    await _deliver_periodic(
+        run, schedule.task_name, user_id, period.key, schedule.marker_name, period.end_date, compose
     )
-    if claim is None:
-        return
-    try:
-        summary = await _generate_finance_summary_content(run.db, user_id, period)
-        if summary:
-            delivery_claim = claim
-            claim          = None
-            completed      = await _send_claimed_private(
-                run.context,
-                run.messages,
-                run.db,
-                delivery_claim,
-                summary,
-            )
-        else:
-            completed = await _complete_periodic_delivery(run.db, claim)
-            claim     = None
-        if not completed:
-            return
-        await run_sync(
-            save_user_setting,
-            user_id,
-            schedule.marker_name,
-            period.end_date,
-            run.db,
-        )
-    except Exception:
-        if claim is not None:
-            await _release_periodic_delivery(run.db, claim)
-        raise
 
 
 async def _send_finance_summaries(
@@ -746,11 +668,8 @@ def _build_private_action(
     except (TypeError, ValueError):
         logger.debug("Skipping scheduled private message for non-numeric owner_id=%s", user_id)
         return None
-    action = {
-        "action": "send_private_msg",
-        "params": {"user_id": numeric_user_id, "message": segments(message)},
-    }
-    if delivery_key:
+    action = build_action(segments(message), numeric_user_id, None)
+    if action is not None and delivery_key:
         # 稳定键用于租约恢复后的去重和响应关联，且不暴露所有者或周期明文。
         action["echo"] = delivery_key
     return action
@@ -763,7 +682,7 @@ async def _claim_periodic_delivery(
     period_key: str,
     current_time: datetime,
 ) -> _PeriodicClaim | None:
-    """从真实数据库领取周期投递；测试替身也必须遵守同一契约。"""
+    """领取周期投递租约；数据库返回的领取记录缺少令牌或投递键时视为契约被破坏并抛出。"""
 
     raw = cast(
         JsonObject | None,
@@ -819,6 +738,46 @@ async def _release_periodic_delivery(
             claim.claim_token,
         ),
     )
+
+
+async def _deliver_periodic(
+    run: _ScheduleRun,
+    task_name: str,
+    user_id: str,
+    period_key: str,
+    marker_name: str,
+    marker_value: str,
+    compose: Callable[[], Awaitable[str | None]],
+) -> bool | None:
+    """领取一个周期的投递租约，发送 ``compose`` 生成的文本，确认后写入已发标记。
+
+    ``compose`` 返回 ``None`` 表示这个周期无需发送，直接完成租约。租约已完成时返回
+    ``True``，发送未被确认时返回 ``False``，没领到租约返回 ``None``；任何异常都会先释放
+    还没交出的租约再抛出。
+    """
+
+    claim = await _claim_periodic_delivery(run.db, task_name, user_id, period_key, run.current_utc)
+    if claim is None:
+        return None
+    try:
+        message = await compose()
+        if message is None:
+            completed = await _complete_periodic_delivery(run.db, claim)
+            claim     = None
+        else:
+            # 租约交给发送流程：它自己按确认结果完成或释放。
+            delivery_claim = claim
+            claim          = None
+            completed      = await _send_claimed_private(
+                run.context, run.messages, run.db, delivery_claim, message
+            )
+        if completed:
+            await run_sync(save_user_setting, user_id, marker_name, marker_value, run.db)
+    except Exception:
+        if claim is not None:
+            await _release_periodic_delivery(run.db, claim)
+        raise
+    return completed
 
 
 async def _send_claimed_private(
@@ -899,13 +858,10 @@ def _is_within_schedule_window(current_time: datetime, target_time: str) -> bool
     当天是否已发由调用方的日期标记和投递记录保证只发一次。
     """
 
-    try:
-        target_hour, target_minute = map(int, target_time.split(":"))
-    except ValueError:
+    target_minutes = parse_hhmm_to_minutes(target_time)
+    if target_minutes is None:
         return False
-    if not 0 <= target_hour <= 23 or not 0 <= target_minute <= 59:
-        return False
-    elapsed = (current_time.hour - target_hour) * 60 + current_time.minute - target_minute
+    elapsed = current_time.hour * 60 + current_time.minute - target_minutes
     return 0 <= elapsed < PendoConfig.SCHEDULED_DELIVERY_GRACE_MINUTES
 
 
@@ -1129,7 +1085,7 @@ async def _generate_briefing_content(
 
     if overdue_tasks:
         overdue_lines = ["", f"⚠️ 逾期待办 ({len(overdue_tasks)}项):"]
-        for task in overdue_tasks[:3]:
+        for task in overdue_tasks[:_BRIEFING_OVERDUE_LIMIT]:
             deadline = _normalize_briefing_datetime(task.deadline_at, user_timezone)
             if deadline is not None:
                 overdue_lines.append(
@@ -1198,11 +1154,11 @@ def _format_daily_briefing(
 
     if events:
         lines.append("🗓️ 今日日程")
-        for event in events[:5]:
+        for event in events[:_BRIEFING_LIST_LIMIT]:
             location = f" @{event.location}" if event.location else ""
             lines.append(f"  • {event.time_text} {event.title}{location}")
-        if len(events) > 5:
-            lines.append(f"  ...还有 {len(events) - 5} 项")
+        if len(events) > _BRIEFING_LIST_LIMIT:
+            lines.append(f"  ...还有 {len(events) - _BRIEFING_LIST_LIMIT} 项")
         lines.append("")
     else:
         lines.append("🗓️ 今日暂无日程安排")
@@ -1210,13 +1166,13 @@ def _format_daily_briefing(
 
     if tasks:
         lines.append("✅ 今日待办")
-        for task in tasks[:5]:
+        for task in tasks[:_BRIEFING_LIST_LIMIT]:
             title         = task.title or "无标题"
             priority      = task.priority if isinstance(task.priority, int) else 3
             priority_mark = "🔴" if priority <= 2 else "🟡" if priority == 3 else "⚪"
             lines.append(f"  {priority_mark} {title}")
-        if len(tasks) > 5:
-            lines.append(f"  ...还有 {len(tasks) - 5} 项")
+        if len(tasks) > _BRIEFING_LIST_LIMIT:
+            lines.append(f"  ...还有 {len(tasks) - _BRIEFING_LIST_LIMIT} 项")
         lines.append("")
     else:
         lines.append("✅ 今日暂无待办事项")
@@ -1229,59 +1185,28 @@ def _format_daily_briefing(
 async def migrate_undone_todos(context: object, db: Database) -> ActionList:
     """按用户本地日期，原子迁移昨天仍未完成的待办。"""
 
-    messages: ActionList = []
-    try:
-        user_ids = await _get_active_user_ids(db)
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "pendo.scheduled.todo_migration",
+    async def migrate(run: _ScheduleRun, user_id: str, _bundle: SettingsBundle) -> None:
+        current_time = now_in_timezone(user_id, db)
+        yesterday = (current_time - timedelta(days=1)).date().isoformat()
+        today          = current_time.date().isoformat()
+        migrated_count = cast(
+            int,
+            await run_sync(db.migrate_undone_tasks_to_date, user_id, yesterday, today),
         )
-        return messages
-
-    for user_id in user_ids:
-        try:
-            current_time = now_in_timezone(user_id, db)
-            yesterday = (current_time - timedelta(days=1)).date().isoformat()
-            today          = current_time.date().isoformat()
-            migrated_count = cast(
-                int,
-                await run_sync(
-                    db.migrate_undone_tasks_to_date,
-                    user_id,
-                    yesterday,
-                    today,
-                ),
-            )
-            if migrated_count > 0:
-                await _send_private_or_collect(
-                    context,
-                    messages,
-                    user_id,
-                    f"📋 已将昨天的 {migrated_count} 个未完成待办迁移到今天"
-                    "\n\n💡 使用 /pendo todo list today 查看",
-                )
-            logger.info(
-                "Migrated %s undone todos for user %s from %s to %s",
-                migrated_count,
-                user_id,
-                yesterday,
-                today,
-            )
-        except Exception as exc:
-            public_error_message(
+        if migrated_count > 0:
+            await _send_private_or_collect(
                 context,
-                exc,
-                logger    = logger,
-                component = "pendo.scheduled.todo_migration_user",
+                run.messages,
+                user_id,
+                f"📋 已将昨天的 {migrated_count} 个未完成待办迁移到今天"
+                "\n\n💡 使用 /pendo todo list today 查看",
             )
+        logger.info(
+            "Migrated %s undone todos for user %s from %s to %s",
+            migrated_count,
+            user_id,
+            yesterday,
+            today,
+        )
 
-    return messages
-
-
-def cleanup_reminder_singleton() -> None:
-    """清除提醒服务单例；插件 cleanup 必须调用以释放旧数据库绑定。"""
-    global _reminder_service_singleton
-    _reminder_service_singleton = None
+    return await _run_for_active_users(context, db, "todo_migration", migrate, load_settings=False)

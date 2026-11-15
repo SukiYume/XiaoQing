@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from .shared import InferenceParams, model_artifact_fingerprint
+from .shared import InferenceParams, model_artifact_fingerprint, remember_model
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +113,7 @@ def load_model_and_tokenizer(
 
     model     = AutoModelForSequenceClassification.from_pretrained(model_path).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
-        _MODEL_CACHE.pop(stale_key, None)
-    _MODEL_CACHE[cache_key] = (model, tokenizer)
+    remember_model(_MODEL_CACHE, cache_key, (model, tokenizer))
     return model, tokenizer
 
 

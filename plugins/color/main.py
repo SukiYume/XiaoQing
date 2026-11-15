@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int, quote_token, tokenize
 from core.delivery import CommandOutcome, DeliverySegments
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import has_control_characters, image, run_sync, segments, text
+from core.plugin_base import Segments, has_control_characters, image, run_sync, segments, text
 from core.public_errors import public_error_response
 from core.router import resolve_context_command_invocation
 
@@ -21,7 +21,6 @@ from . import convert, data_manager, image_gen, query, stellar
 from .data_manager import ColorRecord
 
 logger      = logging.getLogger(__name__)
-Messages    = list[dict[str, Any]]
 ColorAction = Literal[
     "help",
     "auto",
@@ -38,13 +37,11 @@ ColorAction = Literal[
     "spectype",
 ]
 
-MAX_ARGS_CHARS               = 2_048
-MAX_QUERY_CHARS              = 64
-MAX_DEFINITION_CHARS         = 512
-LIST_PAGE_SIZE               = 20
-MAX_PAGE                     = 1_000
-MAX_CUSTOM_COLORS_PER_SCOPE  = data_manager.MAX_CUSTOM_COLORS_PER_SCOPE
-MAX_CUSTOM_COLOR_NAME_LENGTH = data_manager.MAX_COLOR_NAME_CHARS
+MAX_ARGS_CHARS       = 2_048
+MAX_QUERY_CHARS      = data_manager.MAX_COLOR_NAME_CHARS  # 查询词与色名同一上限
+MAX_DEFINITION_CHARS = 512
+LIST_PAGE_SIZE       = 20
+MAX_PAGE             = 1_000
 
 _PRIMARY_OPTIONS: dict[ColorAction, tuple[str, ...]] = {
     "help"    : ("h", "help"),
@@ -59,24 +56,23 @@ _PRIMARY_OPTIONS: dict[ColorAction, tuple[str, ...]] = {
     "stellar" : ("s", "stellar"),
     "spectype": ("t", "spectype"),
 }
-_PICTURE_OPTIONS    = ("p", "picture")
-_PAGE_OPTIONS       = ("page",)
-_HELP_WORDS         = frozenset({"help", "h", "帮助"})
-_CATALOG_WORDS      = frozenset({"list", "ls", "colors", "列表", "色表"})
-_SEARCH_WORDS       = frozenset({"search", "find", "搜索", "查找", "搜"})
-_RANDOM_WORDS       = frozenset({"random", "rand", "随机"})
-_STELLAR_WORDS      = frozenset({"star", "stellar", "恒星"})
-_SPECTYPE_WORDS     = frozenset({"stars", "types", "spectypes", "光谱型"})
-_WRITE_WORDS        = frozenset({"add", "write", "添加", "新增"})
-_DELETE_WORDS       = frozenset({"delete", "del", "remove", "删除"})
-_NAME_WORDS         = frozenset({"name", "名称"})
-_RGB_WORDS          = frozenset({"rgb"})
-_HEX_WORDS          = frozenset({"hex"})
-_CMYK_WORDS         = frozenset({"cmyk"})
-_PICTURE_ACTIONS    = frozenset({"auto", "name", "rgb", "hex", "cmyk", "random"})
-_REST_ACTIONS       = frozenset({"rgb", "cmyk", "keyword", "write"})
-_ASCII_INTEGER      = re.compile(r"-?[0-9]+")
-_DIRECT_HEX_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\Z")
+_PICTURE_OPTIONS = ("p", "picture")
+_PAGE_OPTIONS    = ("page",)
+_HELP_WORDS      = frozenset({"help", "h", "帮助"})
+_CATALOG_WORDS   = frozenset({"list", "ls", "colors", "列表", "色表"})
+_SEARCH_WORDS    = frozenset({"search", "find", "搜索", "查找", "搜"})
+_RANDOM_WORDS    = frozenset({"random", "rand", "随机"})
+_STELLAR_WORDS   = frozenset({"star", "stellar", "恒星"})
+_SPECTYPE_WORDS  = frozenset({"stars", "types", "spectypes", "光谱型"})
+_WRITE_WORDS     = frozenset({"add", "write", "添加", "新增"})
+_DELETE_WORDS    = frozenset({"delete", "del", "remove", "删除"})
+_NAME_WORDS      = frozenset({"name", "名称"})
+_RGB_WORDS       = frozenset({"rgb"})
+_HEX_WORDS       = frozenset({"hex"})
+_CMYK_WORDS      = frozenset({"cmyk"})
+_PICTURE_ACTIONS = frozenset({"auto", "name", "rgb", "hex", "cmyk", "random"})
+_REST_ACTIONS    = frozenset({"rgb", "cmyk", "keyword", "write"})
+_ASCII_INTEGER   = re.compile(r"-?[0-9]+")
 
 HELP_TEXT = """🎨 颜色工具｜526 种中国传统色
 
@@ -352,10 +348,14 @@ def _through_mutation_node(context: PluginContextProtocol, args: str) -> bool:
 
 
 def _image_dir(context: PluginContextProtocol) -> Path:
-    data_dir = getattr(context, "data_dir", None)
-    if not isinstance(data_dir, Path):
-        raise ValueError("color data_dir must be a Path")
-    return data_dir / "images"
+    return data_manager.context_dir(context, "data_dir") / "images"
+
+
+def _search_page_command(value: str) -> Callable[[int], str]:
+    """生成“搜索结果第 N 页”的可复制命令。"""
+
+    quoted = quote_token(value)
+    return lambda page: f"/color search {quoted} --page {page}"
 
 
 async def _found_color_response(
@@ -363,7 +363,7 @@ async def _found_color_response(
     *,
     picture: bool,
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     result = [text(data_manager.format_color_info(color))]
     if picture:
         image_path = await image_gen.generate_color_image(
@@ -400,7 +400,7 @@ def _format_color_page(
     title: str,
     page: int,
     page_command: Callable[[int], str],
-) -> Messages:
+) -> Segments:
     total = len(colors)
     if total == 0:
         body = f"{title}：没有结果"
@@ -433,7 +433,7 @@ def _format_color_page(
     )
 
 
-def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Messages:
+def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Segments:
     logger.info("浏览颜色目录: page=%d count=%d", request.page, len(colors))
     return _format_color_page(
         colors,
@@ -443,7 +443,7 @@ def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Mes
     )
 
 
-def _handle_keyword(request: ColorRequest, colors: Sequence[ColorRecord]) -> Messages:
+def _handle_keyword(request: ColorRequest, colors: Sequence[ColorRecord]) -> Segments:
     matches = query.find_by_keyword(colors, request.value)
     logger.info(
         "颜色关键词查询: query_chars=%d page=%d count=%d",
@@ -451,12 +451,11 @@ def _handle_keyword(request: ColorRequest, colors: Sequence[ColorRecord]) -> Mes
         request.page,
         len(matches),
     )
-    quoted = quote_token(request.value)
     return _format_color_page(
         matches,
         title        = f"“{request.value}”的名称/拼音搜索结果",
         page         = request.page,
-        page_command = lambda page: f"/color search {quoted} --page {page}",
+        page_command = _search_page_command(request.value),
     )
 
 
@@ -464,18 +463,17 @@ async def _handle_name(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     color = query.find_by_name(colors, request.value)
     logger.info("颜色名称查询: found=%s", color is not None)
     if color is None:
         matches = query.find_by_keyword(colors, request.value)
         if matches:
-            quoted = quote_token(request.value)
             return _format_color_page(
                 matches,
                 title        = f"没有精确名称“{request.value}”，相近结果",
                 page         = 1,
-                page_command = lambda page: f"/color search {quoted} --page {page}",
+                page_command = _search_page_command(request.value),
             )
         return DeliverySegments(
             segments(f"没有收录名称“{request.value}”"), outcome=CommandOutcome("completed")
@@ -490,7 +488,7 @@ async def _nearest_color_response(
     input_rgb: list[int],
     picture: bool,
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     nearest = query.find_nearest_by_rgb(colors, input_rgb)
     if nearest is None:
         raise RuntimeError("color palette is empty")
@@ -520,7 +518,7 @@ async def _handle_rgb(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     rgb = _parse_channels(request.value, label="RGB", count=3, maximum=convert.RGB_MAX)
     exact = query.find_by_rgb(colors, rgb)
     logger.info("RGB 查询: exact=%s", exact is not None)
@@ -539,7 +537,7 @@ async def _handle_hex(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     try:
         rgb = convert.hex_to_rgb(request.value)
     except ValueError as exc:
@@ -562,7 +560,7 @@ async def _handle_cmyk(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     cmyk = _parse_channels(request.value, label="CMYK", count=4, maximum=convert.CMYK_MAX)
     exact = query.find_by_cmyk(colors, cmyk)
     logger.info("CMYK 查询: exact=%s", exact is not None)
@@ -582,9 +580,9 @@ async def _handle_auto(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     value = request.value
-    if _DIRECT_HEX_PATTERN.fullmatch(value) is not None:
+    if convert.HEX_INPUT_PATTERN.fullmatch(value) is not None:
         return await _handle_hex(
             ColorRequest("hex", value=value, picture=request.picture),
             colors,
@@ -625,12 +623,11 @@ async def _handle_auto(
         return await _found_color_response(matches[0], picture=request.picture, context=context)
     if request.picture:
         raise ColorInputError("找到多个颜色，请先选择具体名称再加 -p 生成色卡")
-    quoted = quote_token(value)
     return _format_color_page(
         matches,
         title        = f"“{value}”的名称/拼音搜索结果",
         page         = request.page,
-        page_command = lambda page: f"/color search {quoted} --page {page}",
+        page_command = _search_page_command(value),
     )
 
 
@@ -648,22 +645,24 @@ def _parse_custom_color(definition: str) -> ColorRecord:
         rgb = _parse_channels(" ".join(parts[-3:]), label="RGB", count=3, maximum=convert.RGB_MAX)
     elif len(parts) >= 3 and numeric[-1] and numeric[-2] and not parts[-1].startswith("#"):
         raise ColorInputError("RGB 需要三个 0–255 的整数，例如 /color add 我的红 255 0 0")
-    elif _DIRECT_HEX_PATTERN.fullmatch(parts[-1]) is not None:
+    elif convert.HEX_INPUT_PATTERN.fullmatch(parts[-1]) is not None:
         name_parts = parts[:-1]
         try:
             rgb = convert.hex_to_rgb(parts[-1])
         except ValueError as exc:
             raise ColorInputError(str(exc)) from exc
     elif len(parts) >= 4:
-        name_parts = parts[:-3]
-        rgb = _parse_channels(" ".join(parts[-3:]), label="RGB", count=3, maximum=convert.RGB_MAX)
+        # 末三项不全是数字，不可能是合法 RGB。
+        raise ColorInputError("RGB 只接受 ASCII 整数")
     else:
         raise ColorInputError(
             "格式错误；请使用“颜色名 R G B”或“颜色名 #HEX”，例如 /color add 我的红 255 0 0"
         )
     name = " ".join(name_parts).strip()
-    if not name or len(name) > MAX_CUSTOM_COLOR_NAME_LENGTH:
-        raise ColorInputError(f"颜色名不能为空且不能超过 {MAX_CUSTOM_COLOR_NAME_LENGTH} 个字符")
+    if not name or len(name) > data_manager.MAX_COLOR_NAME_CHARS:
+        raise ColorInputError(
+            f"颜色名不能为空且不能超过 {data_manager.MAX_COLOR_NAME_CHARS} 个字符"
+        )
     if has_control_characters(name):
         raise ColorInputError("颜色名包含控制字符")
     return {
@@ -679,7 +678,7 @@ async def _add_custom_color(
     definition: str,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     new_color = _parse_custom_color(definition)
     name      = new_color["name"]
     if query.find_by_name(colors, name) is not None:
@@ -688,7 +687,7 @@ async def _add_custom_color(
     def add(current: list[ColorRecord]) -> Literal["added", "duplicate", "full"]:
         if any(color["name"] == name for color in current):
             return "duplicate"
-        if len(current) >= MAX_CUSTOM_COLORS_PER_SCOPE:
+        if len(current) >= data_manager.MAX_CUSTOM_COLORS_PER_SCOPE:
             return "full"
         current.append(new_color)
         return "added"
@@ -712,7 +711,7 @@ async def _add_custom_color(
     return result
 
 
-async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Messages:
+async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Segments:
     def remove(colors: list[ColorRecord]) -> bool:
         original_count = len(colors)
         colors[:]      = [color for color in colors if color["name"] != name]
@@ -728,7 +727,7 @@ async def _handle_palette_request(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     if request.action == "catalog":
         return _handle_catalog(request, colors)
     if request.action == "auto":
@@ -759,7 +758,7 @@ async def handle(
     args: str,
     event: dict[str, Any],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     """解析一次命令，并只加载当前操作真正需要的数据。"""
 
     try:
@@ -791,6 +790,6 @@ async def handle(
         return segments(f"❌ {exc}")
     except Exception as exc:
         return cast(
-            Messages,
+            Segments,
             public_error_response(context, exc, logger=logger, component="color.handle"),
         )

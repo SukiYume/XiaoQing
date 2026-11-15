@@ -1,8 +1,11 @@
-"""在结构化消息片段与旧版 content/media_items 表示之间无损转换。
+"""结构化消息片段（parts）的规范化、合并，以及与 content/media_items 视图的互相转换。
 
-内部顺序以 parts 为唯一事实来源：文本中的媒体占位符只用于持久化兼容，媒体片段仍
-保留哈希、QQ face id、文件路径等结构化字段。规范化会丢弃未知类型和空字段，但不得
-改变合法片段顺序；合并媒体时只有稳定身份相同的片段才能覆盖，匿名同类媒体必须并存。
+parts 是聊天记录的唯一事实来源，也是唯一落盘的形式；媒体片段保留哈希、QQ face id、
+文件路径等结构化字段。``StoredMessage`` 另从 parts 派生出 ``content``（媒体位置换成
+``[[xc_media_N]]`` 占位符的正文）和 ``media_items``（压缩后的媒体引用）供调用方读取，
+这两个视图由 ``message_parts_to_legacy`` 生成，``build_message_parts`` 反向把它们还原成
+parts。规范化会丢弃未知类型和空字段，但不得改变合法片段顺序；合并媒体时只有稳定身份
+相同的片段才能覆盖，匿名同类媒体必须并存。
 """
 
 from __future__ import annotations
@@ -23,12 +26,18 @@ from .media_registry import (
 _MEDIA_KINDS = frozenset({"image", "emoji", "qq_face"})
 
 
-def _clean_text(value: Any) -> str:
+def _as_text(value: Any) -> str:
+    """转成字符串但不去空白：文本片段里的前后换行有意义。"""
     return str(value or "")
 
 
+def is_media_part(part: dict[str, Any]) -> bool:
+    """规范化后的片段是图片、表情这类媒体片段（不是文本）。"""
+    return str(part.get("kind", "") or "").strip() in _MEDIA_KINDS
+
+
 def _normalize_text_part(value: Any) -> dict[str, Any] | None:
-    text = _clean_text(value)
+    text = _as_text(value)
     if not text:
         return None
     return {"kind": "text", "text": text}
@@ -219,7 +228,7 @@ def replace_message_media_parts(
 
 
 def build_text_message_parts(text: Any) -> tuple[dict[str, Any], ...]:
-    raw_text = _clean_text(text).replace("\r\n", "\n").replace("\r", "\n")
+    raw_text = _as_text(text).replace("\r\n", "\n").replace("\r", "\n")
     if not raw_text:
         return ()
 
@@ -289,7 +298,7 @@ def build_message_parts(
     store: Any | None = None,
 ) -> tuple[dict[str, Any], ...]:
     resolved_items = _resolve_media_items(media_items, store=store)
-    raw_text = _clean_text(content)
+    raw_text = _as_text(content)
 
     if not resolved_items:
         return build_text_message_parts(raw_text)
@@ -314,7 +323,7 @@ def message_parts_to_legacy(
 def _message_parts_to_full_legacy(
     parts: Sequence[dict[str, Any]] | None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """转换为旧格式正文，媒体条目保留描述等完整元数据。"""
+    """转换为带占位符的正文，媒体条目保留描述等完整元数据。"""
     normalized_parts = normalize_message_parts(parts)
     if not normalized_parts:
         return "", []
@@ -349,7 +358,7 @@ def _message_parts_to_full_legacy(
         if media_item is None:
             continue
         media_items.append(media_item)
-        # 结构化媒体直接生成有序占位符：不再先拼标记文字再用正则找回，长摘要不会泄露成正文，
+        # 结构化媒体直接生成有序占位符，不经过“拼标记文字再用正则找回”：长摘要不会泄露成正文，
         # 用户文字里形似标记的内容也不会被误当成媒体，媒体位置保持原顺序。
         visible_chunks.append(media_placeholder(len(media_items)))
 

@@ -216,3 +216,22 @@ def test_browsing_can_only_open_a_thread_never_advance_one() -> None:
     }
     thread = digest.validate(opened, items, max_memes=0).thread
     assert thread is not None and (thread.done_when, thread.kind) == ("知道原因", "fact")
+
+
+def test_highlight_is_a_verified_quote_from_the_same_item() -> None:
+    def looked(**kw) -> dict:
+        row = {"item": "i1", "reaction": "好可爱", "feeling": "like", "topics": ["猫"], **kw}
+        return digest.validate(_raw(looked_at=[row]), _items(), max_memes=2).looked_at[0]
+
+    kept = looked(quote="哈基米这也太可爱", refs=["c1.1"])
+    assert (kept.highlight, kept.highlight_from) == ("哈基米这也太可爱", "comment")
+    # 编出来的句子、别的条目里的句子、没给出处的句子都不留；经历本身照常记下
+    for bad in (
+        {"quote": "编造的原文片段", "refs": ["c1.1"]},
+        {"quote": "性能提升明显", "refs": ["i2"]},
+        {"quote": "哈基米这也太可爱", "refs": []},
+        {},
+    ):
+        seen = looked(**bad)
+        assert (seen.highlight, seen.highlight_from, seen.reaction) == ("", "", "好可爱")
+    assert '"quote"' in digest.LEARN_FIELDS.split('"terms"')[0]

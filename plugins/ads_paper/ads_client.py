@@ -59,15 +59,25 @@ _ADS_BIBTEX_MIME_POLICY = MimePolicy(
 # 关系查询只允许 ADS 明确定义的两个操作符，避免调用方把任意文本拼进查询语法。
 _ADSRelation     = Literal["citations", "references"]
 _RELATION_FIELDS = ("bibcode", "title", "author", "year", "citation_count")
+# 论文列表展示所需字段；各查询在此基础上按需追加。
+PAPER_LIST_FIELDS = (
+    "bibcode",
+    "title",
+    "author",
+    "year",
+    "citation_count",
+    "arxiv_class",
+    "identifier",
+)
 
 
-def _escape_ads_term(value: str) -> str:
+def escape_ads_term(value: str) -> str:
     """Escape user text before embedding it in ADS query syntax."""
 
     return str(value).strip().replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _validate_bibcode(value: str) -> str:
+def validate_bibcode(value: str) -> str:
     """Return a valid ADS bibcode or reject query-syntax input."""
 
     bibcode = str(value).strip()
@@ -166,16 +176,7 @@ class ADSClient:
     ) -> list[dict[str, Any]]:
         """按 ADS 查询语法检索论文，fields 为空时取列表展示所需字段。"""
 
-        fields = fields or [
-            "bibcode",
-            "title",
-            "author",
-            "year",
-            "date",
-            "citation_count",
-            "arxiv_class",
-            "identifier",
-        ]
+        fields = fields or [*PAPER_LIST_FIELDS, "date"]
         return await self._search_docs(query, fields=fields, max_results=max_results, sort=sort)
 
     async def get_bibtex(self, bibcode: str) -> str | None:
@@ -211,17 +212,8 @@ class ADSClient:
 
     async def get_paper_by_bibcode(self, bibcode: str) -> dict[str, Any] | None:
         docs = await self._search_docs(
-            f"bibcode:{_escape_ads_term(_validate_bibcode(bibcode))}",
-            fields=[
-                "bibcode",
-                "title",
-                "author",
-                "year",
-                "citation_count",
-                "arxiv_class",
-                "identifier",
-                "abstract",
-            ],
+            f"bibcode:{escape_ads_term(validate_bibcode(bibcode))}",
+            fields      = [*PAPER_LIST_FIELDS, "abstract"],
             max_results = 1,
             sort        = "citation_count desc",
         )
@@ -237,7 +229,7 @@ class ADSClient:
         """查询一篇论文的引用关系，并在拼接 ADS 语法前统一校验 bibcode。"""
 
         return await self._search_docs(
-            f"{relation}(bibcode:{_escape_ads_term(_validate_bibcode(bibcode))})",
+            f"{relation}(bibcode:{escape_ads_term(validate_bibcode(bibcode))})",
             fields      = _RELATION_FIELDS,
             max_results = max_results,
             sort        = "citation_count desc",
@@ -257,17 +249,17 @@ class ADSClient:
         self, author: str, max_results: int = DEFAULT_MAX_RESULTS
     ) -> list[dict[str, Any]]:
         return await self.search_papers(
-            f'author:"{_escape_ads_term(author)}"', max_results, sort="date desc"
+            f'author:"{escape_ads_term(author)}"', max_results, sort="date desc"
         )
 
     async def search_by_arxiv_id(self, arxiv_id: str) -> dict[str, Any] | None:
         papers = await self.search_papers(
-            f"arxiv:{self._normalize_arxiv_id(arxiv_id)}", max_results=1
+            f"arxiv:{self.normalize_arxiv_id(arxiv_id)}", max_results=1
         )
         return papers[0] if papers else None
 
     @staticmethod
-    def _normalize_arxiv_id(arxiv_id: str) -> str:
+    def normalize_arxiv_id(arxiv_id: str) -> str:
         """
         规范化 arXiv 编号并去掉版本号，支持：
         - 链接: https://arxiv.org/abs/2401.12345v1、http://arxiv.org/abs/astro-ph/0701089

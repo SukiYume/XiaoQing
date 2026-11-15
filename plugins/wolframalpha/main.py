@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Mapping
-from typing import Any, Literal, Protocol, cast
+from collections.abc import Mapping
+from typing import Any, Literal, Protocol
 from xml.etree import ElementTree
 
 import aiohttp
@@ -27,15 +27,10 @@ from core.bounded_http import (
     validate_bounded_xml,
 )
 from core.interfaces import PluginSettingsSnapshot
-from core.plugin_base import has_control_characters as _has_control_chars
-from core.plugin_base import segments as _core_segments
-from core.public_errors import public_error_message
-from core.public_errors import public_error_response as _core_public_error_response
+from core.plugin_base import Event, Segments, has_control_characters, segments
+from core.public_errors import public_error_message, public_error_response
 
-MessageSegment  = dict[str, Any]
-MessageSegments = list[MessageSegment]
-OneBotEvent     = dict[str, Any]
-QueryMode       = Literal["simple", "step", "complete"]
+QueryMode = Literal["simple", "step", "complete"]
 
 
 class Context(Protocol):
@@ -45,9 +40,6 @@ class Context(Protocol):
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
-
-segments              = cast(Callable[[object], MessageSegments], _core_segments)
-public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +108,7 @@ def _get_appid(context: Context) -> str:
     """从唯一支持的 secret 层级读取并收窄 App ID。"""
 
     value = context.get_settings_snapshot().plugin_secrets("wolframalpha").get("appid")
-    if type(value) is not str or _has_control_chars(value):
+    if type(value) is not str or has_control_characters(value):
         return ""
     appid = value.strip()
     return appid if _APPID_PATTERN.fullmatch(appid) is not None else ""
@@ -158,7 +150,7 @@ async def _get_answer(
     context: Context,
     *,
     mode: QueryMode = "simple",
-) -> MessageSegments:
+) -> Segments:
     """执行一种查询模式，并把传输错误统一转换为稳定的公开回复。"""
 
     session = getattr(context, "http_session", None)
@@ -317,9 +309,9 @@ async def _request_wolfram(
 async def handle(
     command: str,
     args: str,
-    event: OneBotEvent,
+    event: Event,
     context: Context,
-) -> MessageSegments:
+) -> Segments:
     """解析查询命令并选择显式查询模式。"""
 
     del event
@@ -346,7 +338,7 @@ async def handle(
             return segments("请输入问题\n输入 /alpha help 查看帮助")
         if len(question) > MAX_QUERY_LENGTH:
             return segments(f"❌ 查询过长，最多 {MAX_QUERY_LENGTH} 字符")
-        if _has_control_chars(question):
+        if has_control_characters(question):
             return segments("❌ 查询包含不支持的控制字符")
 
         appid = _get_appid(context)

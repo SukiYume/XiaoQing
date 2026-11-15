@@ -47,7 +47,7 @@ def validate_item_amount(amount: int) -> tuple[bool, str]:
         return False, "数量必须大于0"
 
     if amount > 99:
-        return False, "单次购买数量不能超过99"
+        return False, "单次数量不能超过99"
 
     return True, ""
 

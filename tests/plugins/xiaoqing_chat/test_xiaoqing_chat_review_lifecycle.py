@@ -46,7 +46,7 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
     chat_id = "g880721010"
     store   = ReviewStore()
     store.bind(tmp_path)
-    reflection = SimpleNamespace(goal_lock_seconds=600.0, max_avoid_patterns=5)
+    reflection = SimpleNamespace(goal_lock_seconds=600.0)
     hctx = SimpleNamespace(
         chat_id=chat_id,
         state=SimpleNamespace(review_store=store),
@@ -71,41 +71,17 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
             separator="\n",
         )
 
-    bad_reply = _open_session(
-        store,
-        kind    = "bad_reply_pattern",
-        chat_id = chat_id,
-        payload = {"goal": "自然参与群聊", "reason": "连续追问"},
-    )
-    assert "必须提供" in await call(f"answer {bad_reply.session_id}")
-    unchanged = store.get_session(bad_reply.session_id)
-    assert unchanged is not None and unchanged.step == 0 and unchanged.answers == []
-    assert store.get_policy(chat_id).avoid_patterns == []
-
-    assert "跨话题复用的判断原则" in await call(f"ok {bad_reply.session_id}")
-    advanced = store.get_session(bad_reply.session_id)
-    assert advanced is not None and advanced.step == 1
-
-    rule = "不要连续追问，先接住群友原话"
-    assert "长期规避模式" in await call(f"answer {bad_reply.session_id} {rule}")
-    answered = store.get_session(bad_reply.session_id)
-    assert answered is not None
-    assert answered.session_id == bad_reply.session_id
-    assert answered.step == 2
-    assert answered.answers == [rule]
-    assert store.get_policy(chat_id).avoid_patterns == [rule]
-
-    assert "已关闭" in await call(f"close {bad_reply.session_id}")
-    assert store.get_session(bad_reply.session_id) is None
-    assert "不存在" in await call(f"answer {bad_reply.session_id} 不应写入")
-    assert store.get_policy(chat_id).avoid_patterns == [rule]
-
     goal_session = _open_session(
         store,
         kind    = "goal_strategy",
         chat_id = chat_id,
         payload = {"goal": "自然聊天", "stats": "参与偏少"},
     )
+    assert "必须提供" in await call(f"answer {goal_session.session_id}")
+    unchanged = store.get_session(goal_session.session_id)
+    assert unchanged is not None and unchanged.step == 0 and unchanged.answers == []
+    assert store.get_policy(chat_id).strategy_note == ""
+
     assert "已更新目标" in await call(
         f"answer {goal_session.session_id} goal: 主动参与值得接话的话题"
     )
@@ -123,6 +99,8 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
     ]
     assert "无需修改" in await call(f"ok {goal_session.session_id}")
     assert store.get_session(goal_session.session_id) is None
+    assert "不存在" in await call(f"answer {goal_session.session_id} strategy: 不应写入")
+    assert store.get_policy(chat_id).strategy_note == "先回应具体内容，少说套话"
 
     rejected = _open_session(
         store,

@@ -1,5 +1,5 @@
 """青宠插件包。
 
-插件加载器按照 ``plugin.json`` 直接导入 :mod:`plugins.qingpet.main`；这里不再重复
+插件加载器按照 ``plugin.json`` 直接导入 :mod:`plugins.qingpet.main`；这里不重复
 导出生命周期钩子，避免仅导入模型或服务时提前执行整个插件入口。
 """

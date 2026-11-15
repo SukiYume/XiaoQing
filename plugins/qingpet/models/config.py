@@ -2,6 +2,12 @@
 
 from dataclasses import dataclass, field
 
+# 经济/衰减倍率和群级敏感词的取值范围；管理命令写入和读取校验共用。
+MIN_MULTIPLIER            = 0.1
+MAX_MULTIPLIER            = 10.0
+MAX_SENSITIVE_WORDS       = 100
+MAX_SENSITIVE_WORD_LENGTH = 64
+
 
 class GroupConfigReadError(RuntimeError):
     """已有群配置无法安全读取时抛出的稳定领域异常。"""
@@ -21,9 +27,7 @@ class GroupConfig:
     economy_multiplier: float = 1.0
     decay_multiplier  : float = 1.0
 
-    trade_enabled          : bool = False
-    natural_trigger_enabled: bool = False
-
+    trade_enabled   : bool = False
     activity_enabled: bool = True
 
     # 群级追加词；内置词始终生效，空列表表示仅继承内置词。

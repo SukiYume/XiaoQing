@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
@@ -27,7 +26,11 @@ from ..utils.time_utils import (
     now_in_timezone,
     parse_date_optional,
 )
+from ..utils.tokens import shell_tokens
 from ..utils.validators import (
+    MAX_CATEGORY_CHARS,
+    MAX_TAG_CHARS,
+    MAX_TITLE_CHARS,
     default_task_plan_date,
     normalize_task_fields,
     validate_category,
@@ -84,9 +87,7 @@ class _TaskListOptions:
         )
 
 
-_WORD_APOSTROPHE_RE      : Final = re.compile(r"(?<=\w)'(?=\w)")
-_WORD_APOSTROPHE_SENTINEL: Final = "\ufdd0"
-_TASK_TIME_KEYWORDS      : Final = frozenset(
+_TASK_TIME_KEYWORDS: Final = frozenset(
     {
         "today",
         "tomorrow",
@@ -140,19 +141,13 @@ def _task_category_label(task: TaskItem) -> str:
     return single_line_text(task.category) or "未分类"
 
 
-def _task_status_value(task: TaskItem) -> str:
-    """兼容模型枚举与遗留测试/数据中的纯字符串状态。"""
-    status = task.status
-    return status.value if isinstance(status, TaskStatus) else str(status)
-
-
 def _validate_task_title(value: str) -> str:
     """校验待办标题，并拒绝公共校验器会静默截断的超长输入。"""
     if UNSAFE_CONTROL_RE.search(value):
         raise ValueError("待办标题包含不允许的控制字符")
     title = " ".join(value.split())
-    if len(title) > 200:
-        raise ValueError("待办标题不能超过 200 字")
+    if len(title) > MAX_TITLE_CHARS:
+        raise ValueError(f"待办标题不能超过 {MAX_TITLE_CHARS} 字")
     return validate_title(title)
 
 
@@ -161,8 +156,8 @@ def _validate_task_category(value: str) -> str:
     if UNSAFE_CONTROL_RE.search(value):
         raise ValueError("分类名包含不允许的控制字符")
     category = " ".join(value.split())
-    if len(category) > 50:
-        raise ValueError("分类名不能超过 50 字")
+    if len(category) > MAX_CATEGORY_CHARS:
+        raise ValueError(f"分类名不能超过 {MAX_CATEGORY_CHARS} 字")
     return validate_category(category)
 
 
@@ -171,8 +166,8 @@ def _validate_task_tag(value: str) -> str:
     if UNSAFE_CONTROL_RE.search(value):
         raise ValueError("标签名包含不允许的控制字符")
     tag = value.strip().lstrip("#")
-    if len(tag) > 20:
-        raise ValueError("标签名不能超过 20 字")
+    if len(tag) > MAX_TAG_CHARS:
+        raise ValueError(f"标签名不能超过 {MAX_TAG_CHARS} 字")
     return validate_tag(tag)
 
 
@@ -265,14 +260,14 @@ class TaskHandler(DbOpsMixin):
 
         命令格式：
         - /pendo todo add
-        - /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:xxx] [p:1-5]
+        - /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:时间,时间] [cat:xxx] [p:1-5] [#标签]
         - /pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类] [all|page:n]
         - /pendo todo view <id>
         - /pendo todo done <id>
         - /pendo todo cancel <id>
         - /pendo todo undone <id>
         - /pendo todo delete <id|cat:xxx>
-        - /pendo todo edit <id> <内容>
+        - /pendo todo edit <id> <内容> [plan:/deadline:/remind:/cat:/p:/#标签]
         """
         parts = args.split(maxsplit=1)
         if not parts:
@@ -401,12 +396,12 @@ class TaskHandler(DbOpsMixin):
 
         格式：
         - /pendo todo add 事件  -> 计划到当天（晚上8点后自动计划到第二天）
-        - /pendo todo add 事件 plan:2026-05-01 deadline:2026-05-01T18:00 cat:工作 p:1
+        - /pendo todo add 事件 plan:2026-05-01 deadline:2026-05-01T18:00 remind:2026-05-01T09:00 cat:工作 p:1 #标签
         """
         if not text or not text.strip():
             return {
                 "status": "error",
-                "message": "❌ 请提供待办内容\n\n用法: /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:xxx] [p:1-5]",
+                "message": "❌ 请提供待办内容\n\n用法: /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:时间,时间] [cat:xxx] [p:1-5] [#标签]",
             }
 
         try:
@@ -451,9 +446,9 @@ class TaskHandler(DbOpsMixin):
         tags            = task_item.tags
         remind_times    = task_item.remind_times
         plan_label      = task_item.plan_date or "未安排"
-        if local_now.hour >= 20 and task_item.plan_date == (local_now + timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        ):
+        # 晚间默认计划顺延到明天（default_task_plan_date）；计划日恰为明天时提示一下。
+        tomorrow = (local_now + timedelta(days=1)).strftime("%Y-%m-%d")
+        if task_item.plan_date == tomorrow and default_task_plan_date(local_now) == tomorrow:
             plan_label += " (明天)"
 
         lines = [
@@ -574,17 +569,7 @@ class TaskHandler(DbOpsMixin):
             raise ValueError(f"待办命令不能超过 {_TASK_COMMAND_MAX_CHARS} 字")
         if UNSAFE_CONTROL_RE.search(text):
             raise ValueError("待办参数包含不允许的控制字符")
-        if _WORD_APOSTROPHE_SENTINEL in text:
-            raise ValueError("待办参数包含不支持的字符")
-        try:
-            # shlex 会把单词中的自然撇号当作引号；先用哨兵保护，分词后再原样恢复。
-            shell_text = _WORD_APOSTROPHE_RE.sub(_WORD_APOSTROPHE_SENTINEL, text)
-            return [
-                token.replace(_WORD_APOSTROPHE_SENTINEL, "'")
-                for token in shlex.split(shell_text, comments=False, posix=True)
-            ]
-        except ValueError as exc:
-            raise ValueError("待办参数中的引号未闭合") from exc
+        return shell_tokens(text, "待办参数")
 
     @staticmethod
     def _parse_inline_task_token(token: str) -> tuple[str, str]:
@@ -936,7 +921,7 @@ class TaskHandler(DbOpsMixin):
         include_schedule: bool = True,
     ) -> list[str]:
         """格式化一条列表记录，统一图标、标题、时间和 ID。"""
-        status_icon   = ItemFormatter.format_status_icon(_task_status_value(task))
+        status_icon   = ItemFormatter.format_status_icon(task.status.value)
         priority_icon = ItemFormatter.format_priority_icon(task.priority)
         title         = single_line_text(task.title) or "无标题"
         lines         = [f"{indent}{index}. {status_icon} {priority_icon} {title}"]
@@ -1041,11 +1026,10 @@ class TaskHandler(DbOpsMixin):
     def _format_task_detail(
         cls,
         task: TaskItem,
-        task_id: str,
         display_timezone: tzinfo,
     ) -> str:
         """格式化待办详情，标题保持单行，正文保留原有段落。"""
-        status = _task_status_value(task)
+        status = task.status.value
         lines  = [f"📝 {single_line_text(task.title) or '无标题'}", ""]
         lines.append(f"{ItemFormatter.format_status_icon(status)} 状态: {cls._status_text(status)}")
         lines.append(
@@ -1104,7 +1088,7 @@ class TaskHandler(DbOpsMixin):
         )
         return {
             "status" : "success",
-            "message": self._format_task_detail(task, task_id, display_timezone),
+            "message": self._format_task_detail(task, display_timezone),
         }
 
     async def _transition_task_status(
@@ -1128,7 +1112,7 @@ class TaskHandler(DbOpsMixin):
         if wrong_type:
             return task_id, None, wrong_type
         task = cast(TaskItem, task)
-        if _task_status_value(task) == target_status:
+        if task.status.value == target_status:
             # “已是已完成状态”会叠加两个完成体标记；这里使用状态名本身。
             status_text = self._status_text(target_status).removeprefix("已")
             title       = single_line_text(task.title) or "无标题"

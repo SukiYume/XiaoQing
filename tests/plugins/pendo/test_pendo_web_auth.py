@@ -209,6 +209,7 @@ def _sign_invalid_widget_token(
     expires_at: int,
     scope: str | None    = "widget:read",
     token_id: str | None = "test-widget-token",
+    kind: str            = "widget",
 ) -> str:
     """只为验证拒绝路径签发不进入生产注册表的畸形 Widget JWT。"""
 
@@ -222,7 +223,7 @@ def _sign_invalid_widget_token(
         "iss"     : "pendo-web",
         "exp"     : expires_at,
         "iat"     : issued_at,
-        "kind"    : "widget",
+        "kind"    : kind,
     }
     if scope is not None:
         payload["scope"] = scope
@@ -242,6 +243,20 @@ def test_widget_token_without_read_scope_is_rejected(temp_db) -> None:
     )
 
     with pytest.raises(AuthError, match="invalid scope"):
+        verify_token(token, db=temp_db)
+
+
+def test_token_that_is_not_a_widget_token_is_rejected(temp_db) -> None:
+    """旧的浏览器 Bearer 令牌（kind 不是 widget）不再被接受。"""
+
+    token = _sign_invalid_widget_token(
+        "widget-user",
+        db         = temp_db,
+        expires_at = int(time.time()) + 60,
+        kind       = "browser",
+    )
+
+    with pytest.raises(AuthError, match="invalid kind"):
         verify_token(token, db=temp_db)
 
 

@@ -44,25 +44,25 @@ class ReplyRejected(RuntimeError):
         self.need_replan = need_replan
 
 
-def persona_contract_rejection(reason: str) -> ReplyCheckResult:
-    """人物证据协议不完整时失败关闭，使明确点名场景可安全承接。"""
+def hard_rejection(reason: str, failure_code: str) -> ReplyCheckResult:
+    """这一稿不能发送、需要重新规划：一类确定性的硬拒绝。"""
 
     return ReplyCheckResult(
         suitable     = False,
         reason       = reason,
         need_replan  = True,
         severity     = "hard",
-        failure_code = "persona_grounding",
+        failure_code = failure_code,
     )
+
+
+def persona_contract_rejection(reason: str) -> ReplyCheckResult:
+    """人物证据协议不完整、或说法没有人物资料依据时拒绝，使明确点名场景可安全承接。"""
+
+    return hard_rejection(reason, "persona_grounding")
 
 
 def context_contract_rejection(reason: str) -> ReplyCheckResult:
-    """对话事实来源协议不完整时失败关闭。"""
+    """对话事实来源协议不完整、或说法没有对话依据时拒绝。"""
 
-    return ReplyCheckResult(
-        suitable     = False,
-        reason       = reason,
-        need_replan  = True,
-        severity     = "hard",
-        failure_code = "context_grounding",
-    )
+    return hard_rejection(reason, "context_grounding")

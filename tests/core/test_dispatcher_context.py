@@ -131,13 +131,10 @@ class TestProcessEventLinearFlow:
     async def test_group_command_prefix_executes(
         self, dispatcher, mock_router, event_template, mock_plugin_registry
     ):
-        spec = CommandSpec(
-            plugin    = "echo",
-            name      = "echo",
-            triggers  = ["echo"],
-            help_text = "echo",
-            handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "hi"}}]),
-            admin_only=False,
+        spec = CommandSpec.from_manifest(
+            "echo",
+            {"name": "echo", "triggers": ["echo"], "help": "echo"},
+            AsyncMock(return_value=[{"type": "text", "data": {"text": "hi"}}]),
         )
         mock_router.resolve.return_value = (spec, "")
         result = await dispatcher.handle_event(event_template(message="/echo"))
@@ -254,13 +251,10 @@ class TestProcessEventLinearFlow:
     async def test_group_mute_does_not_block_command(self, dispatcher, mock_router, event_template):
         dispatcher.mute_group(67890, 5.0)
         try:
-            spec = CommandSpec(
-                plugin    = "echo",
-                name      = "echo",
-                triggers  = ["echo"],
-                help_text = "echo",
-                handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]),
-                admin_only=False,
+            spec = CommandSpec.from_manifest(
+                "echo",
+                {"name": "echo", "triggers": ["echo"], "help": "echo"},
+                AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]),
             )
             mock_router.resolve.return_value = (spec, "")
             result = await dispatcher.handle_event(event_template(message="/echo"))
@@ -400,7 +394,7 @@ class TestProcessEventLinearFlow:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("at_only,private", [(False, False), (True, False), (False, True)])
-    async def test_name_call_routes_to_xiaoqing_chat(
+    async def test_name_call_gets_xiaoqing_chat_short_reply(
         self,
         dispatcher,
         mock_config_provider,
@@ -409,10 +403,14 @@ class TestProcessEventLinearFlow:
         at_only,
         private,
     ):
+        """只喊一声是在看她在不在：交给 xiaoqing_chat 的短应答入口，不走完整聊天。"""
+
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
         provider                                                     = MagicMock()
         provider.module.handle_smalltalk = AsyncMock(return_value=[])
-        provider.module.call_bot_name_only = AsyncMock()
+        provider.module.call_bot_name_only = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "在呢"}}]
+        )
         mock_plugin_registry.get.return_value = provider
         message = [{"type": "at", "data": {"qq": "11111"}}] if at_only else "小青"
         if private:
@@ -422,9 +420,9 @@ class TestProcessEventLinearFlow:
             event = event_template(message=message)
         event["raw_message"] = "[CQ:at,qq=11111]" if at_only else "小青"
         result               = await dispatcher.handle_event(event)
-        assert result == []
-        provider.module.handle_smalltalk.assert_awaited_once()
-        provider.module.call_bot_name_only.assert_not_awaited()
+        assert result and result[0]["data"]["text"] == "在呢"
+        provider.module.call_bot_name_only.assert_awaited_once()
+        provider.module.handle_smalltalk.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_private_only_bot_name_calls_bot_name_only(
@@ -509,13 +507,8 @@ class TestProcessEventLinearFlow:
         mock_session_manager.get.return_value = session
         global_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "global"}}])
         mock_router.resolve.return_value = (
-            CommandSpec(
-                plugin     = "echo",
-                name       = "echo",
-                triggers   = ["echo"],
-                help_text  = "echo",
-                handler    = global_handler,
-                admin_only = False,
+            CommandSpec.from_manifest(
+                "echo", {"name": "echo", "triggers": ["echo"], "help": "echo"}, global_handler
             ),
             "from-session",
         )
@@ -609,14 +602,8 @@ class TestProcessEventLinearFlow:
             active -= 1
             return [{"type": "text", "data": {"text": "ok"}}]
 
-        spec = CommandSpec(
-            plugin         = "stateful",
-            name           = "work",
-            triggers       = ["work"],
-            help_text      = "work",
-            handler        = slow_handler,
-            admin_only     = False,
-            execution_gate = gate,
+        spec = CommandSpec.from_manifest(
+            "stateful", {"name": "work", "triggers": ["work"], "help": "work"}, slow_handler, gate
         )
         mock_router.resolve.return_value = (spec, "")
         loaded = SimpleNamespace(execution_gate=gate)

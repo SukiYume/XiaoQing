@@ -17,8 +17,8 @@ from core.inbound_backlog import InboundBacklog
 from core.onebot import OneBotHttpSender
 from core.plugin_execution import PluginExecutionGate
 from core.router import CommandRouter, CommandSpec
-from core.server import InboundServer
 from core.session import SessionManager
+from tests.helpers.server_test_support import StandaloneInboundServer
 
 
 class TestMessageFlow:
@@ -67,14 +67,15 @@ class TestMessageFlow:
 
         # Register echo command
         router.register(
-            CommandSpec(
-                plugin     = "echo",
-                name       = "echo",
-                triggers   = ["echo", "回显"],
-                help_text  = "Echo message",
-                admin_only = False,
-                handler    = echo_handler,
-                priority   = 0,
+            CommandSpec.from_manifest(
+                "echo",
+                {
+                    "name"    : "echo",
+                    "triggers": ["echo", "回显"],
+                    "help"    : "Echo message",
+                    "priority": 0,
+                },
+                echo_handler,
             )
         )
 
@@ -686,7 +687,7 @@ async def test_standard_http_event_reaches_real_action_api(retcode, expected_sta
                 "_delivery_receipt": receipt,
             }
         )
-        inbound = InboundServer("127.0.0.1", 0, "incoming", app._handle_inbound_event)
+        inbound = StandaloneInboundServer("127.0.0.1", 0, "incoming", app._handle_inbound_event)
         try:
             async with TestClient(TestServer(inbound.app)) as client:
                 response = await client.post(

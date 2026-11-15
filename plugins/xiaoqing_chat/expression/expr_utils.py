@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from core.plugin_base import resolve_bot_name
+
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
-from ..persona import resolve_bot_name
 
 
 def render_dialogue(

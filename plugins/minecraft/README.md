@@ -35,22 +35,29 @@
 
 ## ⚙️ 配置
 
-在 `plugins/minecraft/config.json` 中保存连接 profile：
+在 `config/config.json` 的 `plugins.minecraft.servers` 下保存连接 profile：
 
 ```json
 {
-  "default": {
-    "host": "127.0.0.1",
-    "port": 25575,
-    "log_file": "C:/minecraft/logs/latest.log"
-  },
-  "staging": {
-    "host": "mc.internal.example",
-    "port": 25575,
-    "log_file": ""
+  "plugins": {
+    "minecraft": {
+      "servers": {
+        "default": {
+          "host": "127.0.0.1",
+          "port": 25575,
+          "log_file": "C:/minecraft/logs/latest.log"
+        },
+        "staging": {
+          "host": "mc.internal.example",
+          "port": 25575,
+          "log_file": ""
+        }
+      }
+    }
   }
 }
 ```
+
 
 在 `config/secrets.json` 中用同名 profile 保存 RCON 密码：
 
@@ -73,7 +80,7 @@
 | RCON 密码 | 来自 `config/secrets.json` 的同名项，UTF-8 上限 4096 字节 |
 | `log_file` | 空字符串关闭日志转发；相对路径以 `plugins/minecraft/` 为基准 |
 
-profile 文件上限为 64 KiB。日志路径读取异常时，RCON 连接继续用于服务器命令。
+日志路径读取异常时，RCON 连接继续用于服务器命令。
 
 ---
 
@@ -113,7 +120,7 @@ Minecraft 服务端需要启用 RCON，并使用与 profile 一致的端口和�
 - 玩家死亡。
 - 玩家进度。
 
-消息发送到连接所属的私聊或群。群只有在 `default_group_ids`（`check_log` 定时任务的目标群）里才会收到转发：其他群连接时会说明不转发日志、只能用命令。连接后从目标群里移除的群暂停轮询。初次启用从文件末尾建立游标，后续进度保存在：
+消息发送到连接所属的私聊或群。群只有在 `check_log` 定时任务的目标群里才会收到转发（部署配置 `plugins.minecraft.schedules.check_log.group_ids`，没写时为 `default_group_ids`）：其他群连接时会说明不转发日志、只能用命令。连接后从目标群里移除的群暂停轮询。初次启用从文件末尾建立游标，后续进度保存在：
 
 ```text
 data/minecraft/log_cursors/

@@ -40,7 +40,6 @@ from .commands.scheduled import (
     check_diary_reminders,
     check_reminders,
     cleanup_expired_demo_data,
-    cleanup_reminder_singleton,
     migrate_undone_todos,
     prune_operation_logs,
     send_daily_briefings,
@@ -50,14 +49,7 @@ from .commands.scheduled import (
 from .commands.session import handle_session_message
 from .commands.settings import handle_settings_result
 from .config import PendoConfig, PendoRuntimeSettings
-from .core.exceptions import (
-    InvalidDateRangeException,
-    InvalidFieldValueException,
-    InvalidTimeFormatException,
-    MissingRequiredFieldException,
-    NaturalLanguageParseException,
-    PastTimeException,
-)
+from .core.exceptions import MissingRequiredFieldException
 from .core.router import CommandRouter
 from .core.runtime import (
     get_cached_services,
@@ -80,16 +72,8 @@ from .utils.error_handlers import error_result, handle_command_errors, success_r
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
-logger                    = logging.getLogger(__name__)
-_runtime_service          = PendoRuntimeService()
-_SESSION_INPUT_EXCEPTIONS = (
-    InvalidDateRangeException,
-    InvalidFieldValueException,
-    InvalidTimeFormatException,
-    MissingRequiredFieldException,
-    NaturalLanguageParseException,
-    PastTimeException,
-)
+logger                 = logging.getLogger(__name__)
+_runtime_service       = PendoRuntimeService()
 TRIGGER_SUBCOMMAND_MAP = {
     "日程": "event",
     "待办": "todo",
@@ -243,16 +227,7 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         )
 
     try:
-        cleanup_reminder_singleton()  # 插件卸载后不得保留绑定旧数据库的服务单例。
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = getattr(context, "logger", None) or logger,
-            component = "pendo.cleanup.reminders",
-        )
-
-    try:
+        # 服务集合（含提醒服务）随运行态一起丢弃，不保留绑定旧数据库的实例。
         runtime_state = get_plugin_runtime_state(context, create=False)
         runtime_state.clear()
     except Exception as exc:
@@ -389,11 +364,10 @@ async def handle_session(
     every mutation made to its isolated working copy.
     """
 
-    user_id  = str(event.get("user_id", ""))
-    group_id = event.get("group_id")
+    user_id = str(event.get("user_id", ""))
     try:
-        return await _handle_active_session(user_id, text, context, session, group_id)
-    except _SESSION_INPUT_EXCEPTIONS as exc:
+        return await _handle_active_session(user_id, text, context, session)
+    except MissingRequiredFieldException as exc:
         _get_logger(context).warning(
             "Pendo session business error error_code=%s error_type=%s",
             exc.error_code,
@@ -407,18 +381,14 @@ async def _handle_active_session(
     raw_message: str,
     context: PluginContextProtocol,
     session: SessionData,
-    group_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """处理活跃会话的消息
-
-    重构后：使用commands.session模块
+    """处理活跃会话的消息，交给 commands.session 模块分发。
 
     Args:
         user_id: 用户ID
         raw_message: 原始消息
         context: 上下文对象
         session: Dispatcher 事务传入的隔离会话副本
-        group_id: 群组ID（可选）
 
     Returns:
         消息列表
@@ -511,29 +481,18 @@ def _split_subcommand_preserve_rest(args: str) -> tuple[str, str]:
 
 
 async def scheduled(context) -> list[dict[str, Any]]:
-    """定时任务入口 - 每分钟执行一次，只处理提醒
-
-    重构后：直接调用commands.scheduled模块
-    """
+    """定时任务入口 - 每分钟执行一次，只处理提醒"""
     log = _get_logger(context)
 
-    tasks = [
-        ("reminders", lambda: check_reminders(context)),
-    ]
+    async def run() -> list[dict[str, Any]]:
+        services = _get_services(context)
+        return await check_reminders(context, services["db"], services["reminder_service"])
 
-    messages = []
-    for task_name, task_func in tasks:
-        result = await _run_scheduled_task(context, task_name, task_func, log)
-        messages.extend(result)
-
-    return messages
+    return await _run_scheduled_task(context, "reminders", run, log)
 
 
 async def scheduled_daily_briefing(context) -> list[dict[str, Any]]:
-    """每日简报定时任务 - 每分钟检查用户本地时间
-
-    重构后：直接调用commands.scheduled模块
-    """
+    """每日简报定时任务 - 每分钟检查用户本地时间"""
     log = _get_logger(context)
     db  = _get_database(context)
 
@@ -544,10 +503,7 @@ async def scheduled_daily_briefing(context) -> list[dict[str, Any]]:
 
 
 async def scheduled_diary_reminder(context) -> list[dict[str, Any]]:
-    """日记提醒定时任务 - 每分钟检查用户本地时间
-
-    重构后：直接调用commands.scheduled模块
-    """
+    """日记提醒定时任务 - 每分钟检查用户本地时间"""
     log = _get_logger(context)
     db  = _get_database(context)
 
@@ -558,10 +514,7 @@ async def scheduled_diary_reminder(context) -> list[dict[str, Any]]:
 
 
 async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
-    """待办迁移定时任务 - 每天00:05执行
-
-    重构后：直接调用commands.scheduled模块
-    """
+    """待办迁移定时任务 - 每小时 :05 检查，用户本地日期跨天后顺延昨日未完成的待办"""
     log = _get_logger(context)
     db  = _get_database(context)
 
@@ -808,9 +761,9 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                     f"2. 打开 Web UI: http://{runtime.web_host}:{runtime.web_port}/#/transfer",
                     "3. 在“导入”页上传 .pendo.zip，先预检，再执行导入",
                     "",
-                    "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险。",
-                    "支持类型: event、task/todo、note、diary、ledger，以及多节点/重复日程的 event_collection。",
-                    "冲突策略: 隔离导入（默认）、跳过已有（同 ID 或此前同来源导入的记录，原记录不动）、覆盖此前同来源导入的记录、生成副本。重复 bundle 默认阻止二次导入，可在 Web 勾选强制重新导入。",
+                    f"{_IMPORT_NO_PATH_TEXT}。",
+                    f"{_IMPORT_TYPES_TEXT}。",
+                    f"{_IMPORT_STRATEGY_TEXT}。",
                 ]
             )
         )
@@ -868,6 +821,22 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 # ============================================================
 # 帮助信息定义
 # ============================================================
+
+# /pendo import 的说明页和 /pendo help import 共用的三句话。
+_IMPORT_NO_PATH_TEXT = "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险"
+_IMPORT_TYPES_TEXT   = (
+    "支持类型: event、task/todo、note、diary、ledger，以及多节点/重复日程的 event_collection"
+)
+_IMPORT_STRATEGY_TEXT = (
+    "冲突策略: 隔离导入（默认）、跳过已有（同 ID 或此前同来源导入的记录，原记录不动）、"
+    "覆盖此前同来源导入的记录、生成副本；重复 bundle 默认阻止二次导入，可在 Web 勾选强制重新导入"
+)
+# confirm/snooze 共用“提醒操作”一节，undo 的说明在“其他操作”里；其余命令的帮助节与命令同名。
+_HELP_SECTION_BY_COMMAND = {
+    "confirm": "reminder",
+    "snooze" : "reminder",
+    "undo"   : "common",
+}
 
 HELP_MAP = {
     "header": "🗓️ Pendo · 个人时间与信息管理中枢",
@@ -1024,6 +993,8 @@ HELP_MAP = {
         "  - 筛选: type:expense/income/transfer account:账户 to:账户 merchant:商户 cat:分类 amount:N或N..M ex all page:N",
         "  - 例: /pendo ledger list 2026-03 type:expense cat:餐饮 amount:20..100 ex",
         "  - 例: /pendo ledger list month account:微信 page:2",
+        "• /pendo ledger record <JSON> - JSON 结构化记账，一次保存一笔（amount_cents 为金额的分，title 必填）",
+        '  - 例: /pendo ledger record {"amount_cents":1250,"title":"早餐","category":"餐饮","account":"微信"}',
         "• /pendo ledger view <id> - 查看账目详情",
         "• /pendo ledger edit <id> <字段:值> ... - 编辑账目",
         "  - 字段: amount: title: cat/category: type: account/from: to/counter: merchant/payee: date: remark: currency:",
@@ -1067,10 +1038,10 @@ HELP_MAP = {
     "import": [
         "📥 导入 (Import)",
         "• /pendo import - 查看 Web 导入入口和支持格式",
-        "  - 聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险",
+        f"  - {_IMPORT_NO_PATH_TEXT}",
         "  - 请使用 Web 数据迁移页上传 .pendo.zip，页面会先做预检再写入数据库",
-        "  - 支持类型: event、task/todo、note、diary、ledger、event_collection",
-        "  - 支持策略: 隔离导入（默认）、跳过已有（同 ID 或同来源）、覆盖此前同来源导入的记录、生成副本；重复 bundle 默认阻止二次导入",
+        f"  - {_IMPORT_TYPES_TEXT}",
+        f"  - {_IMPORT_STRATEGY_TEXT}",
         "  - 例: /pendo import",
         "  - 例: /pendo web token",
     ],
@@ -1082,6 +1053,7 @@ HELP_MAP = {
         "🌐 Web UI 管理 (Web)",
         "• /pendo web token  - 生成一次性登录 Code（Code 单独发送）",
         "• /pendo web widget-token - 生成 Scriptable 小组件令牌",
+        "• /pendo web widget-revoke - 吊销自己的全部小组件令牌",
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",
         "• /pendo web status - 查看服务状态",
@@ -1134,20 +1106,10 @@ def _show_help(subcommand: str = "") -> str:
         node = invocation.node
         return "\n".join((node.usage, node.help_text, "", "示例：", *node.examples))
 
-    # 别名映射
-    aliases = {
-        "task"    : "todo",
-        "calendar": "event",
-        "idea"    : "note",
-        "journal" : "diary",
-        "config"  : "settings",
-        "bill"    : "ledger",
-        "finance" : "ledger",
-        "confirm" : "reminder",
-        "snooze"  : "reminder",
-        "undo"    : "common",
-    }
-    target_key = aliases.get(subcommand, subcommand)
+    # 命令别名（calendar、task、记账…）先按命令目录换成规范命令名，再找对应的帮助节。
+    is_command = len(invocation.chain) == 2 and not invocation.arguments
+    command    = invocation.chain[1].name if is_command else subcommand
+    target_key = _HELP_SECTION_BY_COMMAND.get(command, command)
 
     # 如果请求特定部分的帮助
     if target_key in HELP_MAP:

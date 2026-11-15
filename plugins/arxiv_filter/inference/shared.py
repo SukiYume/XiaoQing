@@ -3,12 +3,14 @@
 推理模块公共配置与工具。
 
 职责：
-- 解析模型路径（支持自动搜索 best_model* 目录）
+- 解析模型路径（显式参数 > ARXIV_MODEL_PATH > config.json 的 model.path）
 - 加载 training_config.json
 - 根据 model_type / input_mode 构建统一的 InferenceParams
+- 训练和推理共用的文本拼接、句向量编码和 k-NN 打分
 """
 
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -30,6 +32,8 @@ _PLUGIN_DIR                 = os.path.dirname(os.path.dirname(os.path.abspath(__
 _CONTENT_HASH_LIMIT_BYTES   = 1024 * 1024
 _NON_RUNTIME_ARTIFACT_NAMES = {"validation_scored.csv"}
 _NON_RUNTIME_ARTIFACT_DIRS  = {"emb_cache", "__pycache__"}
+_INPUT_MODES                = frozenset({"title_only", "title_abstract"})
+_MODEL_TYPES                = frozenset({"transformers", "multi_interest", "knn"})
 
 
 # =============================================================================
@@ -60,9 +64,9 @@ class InferenceParams:
             value = getattr(self, field_name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{field_name} must be a positive integer")
-        if self.input_mode not in {"title_only", "title_abstract"}:
+        if self.input_mode not in _INPUT_MODES:
             raise ValueError("input_mode must be 'title_only' or 'title_abstract'")
-        if self.model_type not in {"transformers", "multi_interest", "knn"}:
+        if self.model_type not in _MODEL_TYPES:
             raise ValueError("unsupported model_type")
         if self.artifact_fingerprint is not None and (
             not isinstance(self.artifact_fingerprint, str) or not self.artifact_fingerprint.strip()
@@ -90,10 +94,64 @@ def build_paper_texts(
         return [f"Title: {clean_paper_text(title)}" for title in titles]
 
     abstracts = dataframe[abstract_column].fillna("").astype(str).tolist()
+    # 摘要为空时不留行尾空格：训练和推理看到的是同一串字符。
     return [
-        f"Title: {clean_paper_text(title)}\nAbstract: {clean_paper_text(abstract)}"
+        f"Title: {clean_paper_text(title)}\nAbstract: {clean_paper_text(abstract)}".strip()
         for title, abstract in zip(titles, abstracts, strict=True)
     ]
+
+
+def paper_texts_for_mode(
+    dataframe: pd.DataFrame, columns: Mapping[str, Any], input_mode: str
+) -> list[str]:
+    """按模型训练时记下的列名取标题（和摘要），拼成编码器的输入文本。"""
+
+    if input_mode not in _INPUT_MODES:
+        raise ValueError("unsupported input_mode")
+    # 列名解析：优先用训练时记录的列名，fallback 到通用候选。
+    title_col    = resolve_dataframe_column(dataframe, columns.get("title"), ("Title", "title"))
+    abstract_col = None
+    if input_mode != "title_only":
+        abstract_col = resolve_dataframe_column(
+            dataframe, columns.get("abstract"), ("Abstract", "abstract")
+        )
+        if abstract_col is None:
+            raise ValueError("title_abstract input requires an abstract column")
+    return build_paper_texts(dataframe, title_col, abstract_col)
+
+
+def load_sentence_encoder(encoder_name: str, max_len: int | None) -> Any:
+    """创建句向量编码器并设好截断长度。
+
+    sentence-transformers 是可选依赖，用到时才导入。训练和推理都从这里拿编码器，
+    ``max_len`` 才真正控制两边的编码输入。
+    """
+
+    encoder = importlib.import_module("sentence_transformers").SentenceTransformer(encoder_name)
+    if max_len is not None:
+        encoder.max_seq_length = int(max_len)
+    return encoder
+
+
+def encode_normalized(
+    encoder: Any, texts: list[str], batch_size: int, *, show_progress: bool = False
+) -> np.ndarray:
+    """把文本编码成归一化的句向量；有 CUDA 时用半精度。训练和推理共用。"""
+
+    torch              = importlib.import_module("torch")
+    kw: dict[str, Any] = {
+        "batch_size"          : batch_size,
+        "show_progress_bar"   : show_progress,
+        "convert_to_numpy"    : True,
+        "normalize_embeddings": True,
+    }
+    if torch.cuda.is_available():
+        with torch.amp.autocast("cuda"):
+            embeddings = encoder.encode(texts, **kw)
+    else:
+        embeddings = encoder.encode(texts, **kw)
+    result: np.ndarray = np.asarray(embeddings)
+    return result
 
 
 def resolve_dataframe_column(
@@ -190,6 +248,28 @@ def topk_mean_similarity(
     return output
 
 
+def knn_scores(
+    query: np.ndarray,
+    pos_embeddings: np.ndarray,
+    neg_embeddings: np.ndarray | None,
+    *,
+    k: int,
+    neg_k: int,
+    neg_weight: float,
+) -> np.ndarray:
+    """k-NN 兴趣得分：``mean(top-k 正样本相似度) - neg_weight * mean(top-neg_k 负样本相似度)``。
+
+    没有负样本库、``neg_k`` 为 0 或 ``neg_weight`` 为 0 时不扣负样本惩罚。
+    训练端的阈值搜索和线上推理用同一个公式。
+    """
+
+    scores = topk_mean_similarity(query, pos_embeddings, k)
+    if neg_embeddings is not None and neg_k > 0 and neg_weight > 0:
+        scores = scores - neg_weight * topk_mean_similarity(query, neg_embeddings, neg_k)
+    result: np.ndarray = scores.astype(np.float32)
+    return result
+
+
 def resolve_artifact_fingerprint(
     params: InferenceParams,
     runtime_model_path: str | None = None,
@@ -231,10 +311,21 @@ def _finite_float(value: object, field_name: str) -> float:
     return resolved
 
 
-def _positive_int(value: object, field_name: str) -> int:
+def positive_int(value: object, field_name: str) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{field_name} must be a positive integer")
     return value
+
+
+def validated_columns(value: object) -> dict[str, Any]:
+    """模型记录的列名映射：键是字符串，值是字符串或 null。"""
+
+    if not isinstance(value, Mapping) or any(
+        not isinstance(key, str) or (item is not None and not isinstance(item, str))
+        for key, item in value.items()
+    ):
+        raise ValueError("columns must map strings to strings or null")
+    return dict(value)
 
 
 def resolve_model_path(model_path: str | None = None) -> str:
@@ -243,8 +334,7 @@ def resolve_model_path(model_path: str | None = None) -> str:
     优先级：
     1. 显式传入的 model_path
     2. ARXIV_MODEL_PATH 环境变量
-    3. config.json 中显式设置的 model.path
-    4. 未设置 model.path 时按固定兼容顺序搜索 best_model* 目录
+    3. config.json 中的 model.path；未设置时为插件目录下的 best_model
     """
     config           = _mapping(load_plugin_config(), "plugin config")
     model_config     = _mapping(config.get("model", {}), "model config")
@@ -254,32 +344,16 @@ def resolve_model_path(model_path: str | None = None) -> str:
         if configured_value is not None
         else "best_model"
     )
-    environment_path = os.environ.get("ARXIV_MODEL_PATH", "").strip() or None
     if model_path is not None:
         return _join_plugin_path(_non_empty_path(model_path, "model_path"))
+    environment_path = os.environ.get("ARXIV_MODEL_PATH", "").strip()
     if environment_path:
         return _join_plugin_path(environment_path)
 
-    if configured_value is not None:
-        resolved = _join_plugin_path(configured)
-        if not os.path.isdir(resolved):
-            logger.error("Configured model path is unavailable: model.path")
-        return resolved
-
-    candidates = [
-        "best_model",
-        "best_model_interest",
-        "best_model_knn",
-        "best_model_title",
-    ]
-
-    for candidate in candidates:
-        resolved = _join_plugin_path(candidate)
-        if os.path.isdir(resolved):
-            return resolved
-
-    # 万一都找不到，返回 configured（让后续报错更清晰）
-    return _join_plugin_path(configured)
+    resolved = _join_plugin_path(configured)
+    if configured_value is not None and not os.path.isdir(resolved):
+        logger.error("Configured model path is unavailable: model.path")
+    return resolved
 
 
 # =============================================================================
@@ -301,7 +375,7 @@ def load_training_config(model_path: str) -> dict[str, Any]:
 
 
 def detect_model_type(training_config: Mapping[str, Any]) -> str:
-    """从 training_config 判断模型类型: 'multi_interest' | 'transformers'"""
+    """从 training_config 判断模型类型: 'knn' | 'multi_interest' | 'transformers'"""
     mt = str(training_config.get("model_type", "")).strip().lower()
     if mt == "knn" or mt.startswith("knn"):
         return "knn"
@@ -329,6 +403,14 @@ def resolve_multi_interest_model_path(
     return model_path
 
 
+def remember_model(cache: dict[Any, Any], cache_key: tuple[Any, ...], model: Any) -> None:
+    """登记刚加载的模型；缓存键的第一项是模型路径，同一路径的旧版本一并淘汰。"""
+
+    for stale_key in [key for key in cache if key[0] == cache_key[0]]:
+        cache.pop(stale_key, None)
+    cache[cache_key] = model
+
+
 def run_cached_embedding_model(
     params: InferenceParams,
     data: pd.DataFrame,
@@ -353,9 +435,7 @@ def run_cached_embedding_model(
     model = cache.get(cache_key)
     if model is None:
         model = factory(runtime_path, batch_size=params.batch_size, max_len=params.max_len)
-        for stale_key in [key for key in cache if key[0] == resolved_path]:
-            cache.pop(stale_key, None)
-        cache[cache_key] = model
+        remember_model(cache, cache_key, model)
     probs = model.predict_proba(data, input_mode=params.input_mode).astype(float).tolist()
     return probs, [1 if p >= params.threshold else 0 for p in probs]
 
@@ -379,8 +459,10 @@ def resolve_params(
     resolved_path = resolve_model_path(model_path)
     tcfg          = load_training_config(resolved_path)
 
-    model_type      = detect_model_type(tcfg)
-    input_mode      = tcfg.get("input_mode", "title_abstract")
+    model_type = detect_model_type(tcfg)
+    input_mode = tcfg.get("input_mode", "title_abstract")
+    if not isinstance(input_mode, str):
+        raise ValueError("input_mode must be 'title_only' or 'title_abstract'")
     threshold_value = (
         threshold
         if threshold is not None
@@ -394,9 +476,9 @@ def resolve_params(
     return InferenceParams(
         model_path           = resolved_path,
         threshold            = _finite_float(threshold_value, "threshold"),
-        batch_size           = _positive_int(batch_size_value, "batch_size"),
-        max_len              = _positive_int(max_len_value, "max_len"),
-        input_mode           = input_mode if isinstance(input_mode, str) else "",
+        batch_size           = positive_int(batch_size_value, "batch_size"),
+        max_len              = positive_int(max_len_value, "max_len"),
+        input_mode           = input_mode,
         model_type           = model_type,
         artifact_fingerprint = artifact_fingerprint,
     )

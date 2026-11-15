@@ -92,7 +92,9 @@ def test_small_item_helpers_cover_empty_and_legacy_inputs(db: Database) -> None:
     assert items_api._entry_time_for_diary_date("2030-01-01T08:09:10", None) == (
         "2030-01-01T08:09:10"
     )
-    assert items_api._entry_time_for_diary_date("short", "2030-01-02") == ("2030-01-02T00:00:00")
+    assert items_api._entry_time_for_diary_date("2030-01-01T08:09:10", "2030-01-02") == (
+        "2030-01-02T08:09:10"
+    )
     assert items_api._collect_note_reference_ids(
         {
             "references"   : [None, {}, {"id": "same"}, {"id": "same"}],

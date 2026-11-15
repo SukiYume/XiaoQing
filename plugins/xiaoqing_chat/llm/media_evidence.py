@@ -21,6 +21,19 @@ _VISIBLE_SPEECH_RES = tuple(
 )
 
 
+def media_summary_label(summary: str) -> str:
+    """媒体摘要里第一个分号之前的部分，即画面的总体标签。"""
+    return re.split(r"[；;]", summary, maxsplit=1)[0].strip()
+
+
+def media_part_is_readable(part: Any) -> bool:
+    """图片或表情的结构化消息段带有读出的画面内容，而不只是通用占位标签。"""
+    if not isinstance(part, dict) or part.get("kind") not in {"image", "emoji"}:
+        return False
+    description = str(part.get("description", "") or "").strip()
+    return bool(description) and media_summary_label(description) not in GENERIC_MEDIA_LABELS
+
+
 def marker_visible_speech(marker: str) -> str:
     """提取媒体摘要里图上可见的文字（写着/文字是/配文）；没有时返回空串。"""
     text = str(marker or "").strip()
@@ -55,12 +68,7 @@ def event_media_all_unreadable(event: dict[str, Any]) -> bool:
     if not media:
         return False
 
-    def readable(part: dict[str, Any]) -> bool:
-        description = str(part.get("description", "") or "").strip()
-        label = re.split(r"[；;]", description, maxsplit=1)[0].strip()
-        return bool(description) and label not in GENERIC_MEDIA_LABELS
-
-    return not any(readable(part) for part in media)
+    return not any(media_part_is_readable(part) for part in media)
 
 
 def history_has_image(history: Any) -> bool:

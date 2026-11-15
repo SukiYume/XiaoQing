@@ -39,13 +39,13 @@ Astro Tools 通过 `/astro` 提供天文时间、坐标、单位、红移、公�
 /astro const ly
 ```
 
-完整公式名、常数别名、参数边界和错误样例可通过 `/help astro_tools` 查看。
+公式名用 `/astro formula` 查看，常数名与别名用 `/astro const` 查看，支持的单位用 `/astro convert` 查看；参数边界和错误样例可通过 `/help astro_tools` 查看。
 
 ---
 
 ## ⚙️ 配置与数据
 
-插件使用 Core 时区和共享 HTTP Session。运行结果即时计算，持久数据目录仅用于框架统一路径所有权。
+当前时间由 astropy 给出，SIMBAD 查询走 Core 的有界 HTTP 请求。运行结果即时计算，持久数据目录仅用于框架统一路径所有权。
 
 SIMBAD 请求采用客户端 timeout 与总 deadline。输入数值、坐标、单位和红移在计算前完成范围校验。
 

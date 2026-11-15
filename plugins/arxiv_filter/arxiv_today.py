@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 空结果的列定义（避免魔法字面量重复）
 _EMPTY_COLUMNS  = ["arXiv ID", "Title", "Abstract"]
+_ABS_HREF_RE    = re.compile(r"/abs/(\d{4}\.\d{4,5})")
 _ENGLISH_MONTHS = {
     "january"  : 1,
     "february" : 2,
@@ -58,16 +59,14 @@ _ARXIV_REDIRECT_POLICY = RedirectPolicy(
 
 
 def _get_request_params(
-    config: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any],
 ) -> tuple[dict[str, str] | None, bool, float]:
     """
     获取请求参数（代理、SSL验证、超时）
 
     Args:
-        config: 插件配置字典，为 None 时自动加载
+        config: 插件配置字典
     """
-    if config is None:
-        config = load_plugin_config()
     arxiv_config = config.get("arxiv", {})
     if not isinstance(arxiv_config, Mapping):
         raise ValueError("arxiv config must be a JSON object")
@@ -177,11 +176,11 @@ def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
 
     records = []
     for dt in dl_element.find_all("dt"):
-        link = dt.find("a", href=re.compile(r"/abs/\d{4}\.\d{4,5}"))
+        link = dt.find("a", href=_ABS_HREF_RE)
         if not link:
             continue
 
-        match = re.search(r"(\d{4}\.\d{4,5})", link["href"])
+        match = _ABS_HREF_RE.search(link["href"])
         if not match:
             continue
         arxiv_id = match.group(1)

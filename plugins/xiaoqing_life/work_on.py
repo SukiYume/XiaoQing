@@ -11,9 +11,9 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from . import activity, reinforce
+from . import activity, fetching
 from . import digest as digest_mod
-from .config import LifeConfig
+from .config import REASONING_ROUTE, LifeConfig
 from .days import episode_day
 from .lifecycle import mark_seen
 from .safety import clean_text
@@ -147,7 +147,7 @@ async def run(
     now                     = moment.timestamp()
     check                   = todo_check(work, now)
     items: list[SourceItem] = []
-    if check is not None and (cfg.source_on("baike_lookup") or cfg.source_on("wiki_read")):
+    if check is not None and fetching.lookup_usable(cfg):
         found = await reference.read(
             deps.fetch,
             str(check["check"]),
@@ -176,7 +176,7 @@ async def run(
         activity        = deps.activity_text,
     )
     try:
-        text = await deps.complete("reasoning", messages)
+        text = await deps.complete(REASONING_ROUTE, messages)
     except Exception as exc:
         logger.info("xiaoqing_life step=work_on model_failed error_type=%s", type(exc).__name__)
         return await activity.record_failure(store, "model_failed", decision, span, deps)
@@ -191,8 +191,8 @@ async def run(
         if items
         else digest_mod.DigestResult()
     )
-    rows = activity.episode_rows(result, items, decision, start, end, moment.tzinfo)
-    by_item = {r["item_id"]: r["id"] for r in rows}
+    rows                    = activity.episode_rows(result, items, decision, start, end)
+    by_item                 = {r["item_id"]: r["id"] for r in rows}
     grounds: dict[str, str] = {e["id"]: _blob(e) for e in record_eps}
     reading: dict[str, str] = {}
     for index, item in enumerate(items, start=1):
@@ -229,9 +229,9 @@ async def run(
     reward = min(1.5, 0.5 * len(applied))
 
     def reward_apply(s: LifeStore) -> None:
-        reinforce.update_preference(s.state, "activity", decision.choice, reward)
-        reinforce.record_habit(s.state, datetime.fromtimestamp(start, moment.tzinfo), reward)
-        s.state["last_reward"] = round(reward, 3)
+        activity.apply_reward(
+            s.state, decision, datetime.fromtimestamp(start, moment.tzinfo), reward
+        )
 
     await store.mutate(reward_apply)
     outcome = activity.SessionOutcome("ok", "worked", items=len(items), episodes=len(rows))

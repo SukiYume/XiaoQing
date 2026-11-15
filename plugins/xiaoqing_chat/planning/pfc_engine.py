@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -11,19 +10,18 @@ from typing import Any
 from ..config.config import XiaoQingChatConfig
 from ..llm.llm_config import LLMCallConfig
 from ..logging_utils import log_step
+from ..memory import client as memory_client
 from ..memory.memory import (
     MemoryStore,
     StoredMessage,
     active_conversation_suffix,
     is_conversation_reply,
 )
-from ..memory.memory_db import MemoryDB
-from ..memory.memory_retrieval import build_memory_block
 from ..utils.wall_clock import format_local
 from .action_history import ActionHistoryStore
 from .pfc_action_planner import PFCPlan, decide_say_bye, plan_next_action
 from .pfc_goal_analyzer import analyze_goals
-from .pfc_state import PFCConversationState, PFCStateStore
+from .pfc_state import PFCConversationState
 
 
 @dataclass(frozen=True)
@@ -38,20 +36,6 @@ class PFCRunResult:
 
 
 GenerateReplyFn = Callable[[str, str, str], Awaitable[str]]
-
-
-def _build_goal_focus_context(goal_list: Sequence[dict[str, Any]]) -> str:
-    if not goal_list:
-        return ""
-    first            = goal_list[0] if isinstance(goal_list[0], dict) else {}
-    goal             = str(first.get("goal", "") or "").strip()
-    focus            = str(first.get("focus", "") or "").strip()
-    lines: list[str] = []
-    if goal:
-        lines.append(f"目标: {goal}")
-    if focus:
-        lines.append(f"焦点: {focus}")
-    return "\n".join(lines).strip()
 
 
 _PASSIVE_ACTIONS = frozenset({"wait", "listening"})
@@ -142,32 +126,6 @@ def _recent_successful_reply_action(
     return ""
 
 
-_ACTION_ALIASES: dict[str, str] = {
-    "reply"           : "direct_reply",
-    "directreply"     : "direct_reply",
-    "direct_reply"    : "direct_reply",
-    "send_new"        : "send_new_message",
-    "send_newmessage" : "send_new_message",
-    "new_message"     : "send_new_message",
-    "send_new_message": "send_new_message",
-    "end"             : "end_conversation",
-    "end_conversation": "end_conversation",
-    "block"           : "block_and_ignore",
-    "ignore"          : "block_and_ignore",
-    "block_and_ignore": "block_and_ignore",
-    "wait"            : "wait",
-    "listening"       : "listening",
-    "rethink"         : "rethink_goal",
-    "rethink_goal"    : "rethink_goal",
-    "fetch"           : "fetch_knowledge",
-    "fetch_knowledge" : "fetch_knowledge",
-}
-
-
-def _normalize_action(action: str) -> str:
-    return _ACTION_ALIASES.get((action or "").strip().lower(), "wait")
-
-
 def _wait_run_result(plan: PFCPlan, action: str) -> PFCRunResult:
     wait_seconds = float(plan.wait_seconds if plan.wait_seconds > 0 else 0)
     reason       = plan.reason
@@ -191,7 +149,6 @@ class _PFCSession:
     is_private         : bool
     chat_id            : str
     current_text       : str
-    memory_db          : MemoryDB
     state              : PFCConversationState
     generate_reply     : GenerateReplyFn
     history            : Sequence[StoredMessage]
@@ -206,8 +163,9 @@ class _PFCSession:
         """规划调用沿用 reasoning 路由的请求参数。"""
         return self.runtime_cfg.llm_config("reasoning")
 
-    dirty               : bool = False
-    planner_goal_context: str  = ""
+    planner_goal_context: str = ""
+    # 统一记忆里关于说话的人和这个群的那几行（和生成拿到的是同一次取用）。
+    memory_text: str = ""
 
 
 async def _prepare_pfc_session(
@@ -221,11 +179,10 @@ async def _prepare_pfc_session(
     current_text: str,
     memory_store: MemoryStore,
     action_history: ActionHistoryStore,
-    memory_db: MemoryDB,
     state: PFCConversationState,
     generate_reply: GenerateReplyFn,
     now: float,
-    dirty: bool,
+    memory_text: str = "",
 ) -> _PFCSession:
     history = await memory_store.get_recent_async(
         chat_id,
@@ -252,7 +209,6 @@ async def _prepare_pfc_session(
         and not recent_reply_action
     ):
         state.last_successful_reply_action = ""
-        dirty                              = True
     return _PFCSession(
         context             = context,
         runtime_cfg         = runtime_cfg,
@@ -261,7 +217,6 @@ async def _prepare_pfc_session(
         is_private          = is_private,
         chat_id             = chat_id,
         current_text        = current_text,
-        memory_db           = memory_db,
         state               = state,
         generate_reply      = generate_reply,
         history             = history,
@@ -270,7 +225,7 @@ async def _prepare_pfc_session(
         timeout_context     = timeout_context,
         recent_reply_action = recent_reply_action,
         now                 = now,
-        dirty               = dirty,
+        memory_text         = memory_text,
     )
 
 
@@ -286,6 +241,7 @@ def _planner_kwargs(session: _PFCSession) -> dict[str, Any]:
         "timeout_context"             : session.timeout_context,
         "last_successful_reply_action": session.recent_reply_action,
         "current_text"                : session.current_text,
+        "memory_text"                 : session.memory_text,
         "llm"                         : session.planner_llm,
     }
 
@@ -349,11 +305,9 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
                     "backoff_s": backoff_seconds,
                 },
             )
-        session.dirty = True
     elif state.planner_fail_ts or state.planner_skip_until:
         state.planner_fail_ts    = []
         state.planner_skip_until = 0.0
-        session.dirty            = True
 
 
 def _passive_pfc_result(
@@ -414,7 +368,6 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
         action_history_text = session.action_summary,
         llm                 = session.planner_llm,
     )
-    session.dirty = True
     log_step(
         session.context,
         session.runtime_cfg,
@@ -422,7 +375,8 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
         step    = "pfc.rethink_goal.done",
         fields  = {"goals": len(session.state.goal_list or [])},
     )
-    session.planner_goal_context = _build_goal_focus_context(session.state.goal_list or [])
+    top_goal                     = session.state.top_goal
+    session.planner_goal_context = f"目标: {top_goal}" if top_goal else ""
     return await _plan_pfc_action(session)
 
 
@@ -434,24 +388,19 @@ async def _fetch_pfc_knowledge(session: _PFCSession, plan: PFCPlan) -> PFCPlan:
         step    = "pfc.fetch_knowledge.start",
         fields  = {},
     )
-    await asyncio.to_thread(session.memory_db.bind, session.context.data_dir)
-    memory = await build_memory_block(
-        data_dir         = session.context.data_dir,
-        chat_id          = session.chat_id,
-        secrets          = session.secrets,
-        cfg              = session.runtime_cfg.memory,
-        bot_name         = session.bot_name,
-        history          = session.history,
-        current_text     = session.current_text,
-        planner_question = plan.reason or session.current_text,
-        memory_db        = session.memory_db,
-        llm              = session.planner_llm,
+    items = await memory_client.search(
+        session.context,
+        session.chat_id,
+        {
+            "query"         : f"{session.current_text} {plan.reason or ''}".strip(),
+            "include_events": True,
+            "limit"         : 6,
+        },
     )
-    memory = (memory or "").strip()
+    memory = "\n".join(f"- {item.get('text')}" for item in items if item.get("text")).strip()
     if memory:
         session.state.knowledge_list.append({"text": memory, "ts": time.time()})
         session.state.knowledge_list = session.state.knowledge_list[-10:]
-        session.dirty                = True
     log_step(
         session.context,
         session.runtime_cfg,
@@ -480,7 +429,6 @@ async def _finish_pfc_action(
             llm         = session.planner_llm,
         )
         session.state.ended = True
-        session.dirty       = True
         if not say_bye:
             return PFCRunResult(reply="", action=action, reason=plan.reason, ended=True)
         reply = await session.generate_reply("say_goodbye", plan.reason, why)
@@ -503,7 +451,6 @@ async def _finish_pfc_action(
         )
         if reply:
             session.state.last_successful_reply_action = action
-            session.dirty                              = True
         return PFCRunResult(
             reply  = reply,
             action = action,
@@ -537,7 +484,7 @@ def _settle(
     session: _PFCSession, plan: PFCPlan, after: str
 ) -> tuple[PFCPlan, str, PFCRunResult | None]:
     """重新规划或补充知识之后，再判断一次是否应保持被动。"""
-    action = _normalize_action(plan.action)
+    action = plan.action
     return plan, action, _passive_pfc_result(session, plan, action, allow_block=True, after=after)
 
 
@@ -552,70 +499,53 @@ async def run_pfc_once(
     current_text: str,
     memory_store: MemoryStore,
     action_history: ActionHistoryStore,
-    memory_db: MemoryDB,
-    pfc_state_store: PFCStateStore,
+    state: PFCConversationState,
     generate_reply: GenerateReplyFn,
-    state_override: PFCConversationState | None = None,
-    persist_state: bool                         = True,
+    memory_text: str = "",
 ) -> PFCRunResult:
-    """执行一轮基于上下文的规划，并持久化每次状态转换。"""
-    pfc_state_store.bind(context.data_dir)
-    state                       = state_override or await pfc_state_store.get_async(chat_id)
-    now                         = time.time()
-    dirty                       = False
-    session: _PFCSession | None = None
-    if state.ignore_until_ts:
-        # 旧版本允许模型控制整个会话的忽略窗口，存在安全风险，不再沿用。
-        state.ignore_until_ts = 0.0
-        dirty                 = True
-    try:
-        if state.ended:
-            log_step(context, runtime_cfg, chat_id=chat_id, step="pfc.ended", fields={})
-            return PFCRunResult(
-                reply  = "",
-                action = "end_conversation",
-                reason = "ended",
-                ended  = True,
-            )
-        session = await _prepare_pfc_session(
-            context        = context,
-            runtime_cfg    = runtime_cfg,
-            secrets        = secrets,
-            bot_name       = bot_name,
-            is_private     = is_private,
-            chat_id        = chat_id,
-            current_text   = current_text,
-            memory_store   = memory_store,
-            action_history = action_history,
-            memory_db      = memory_db,
-            state          = state,
-            generate_reply = generate_reply,
-            now            = now,
-            dirty          = dirty,
-        )
-        if float(state.planner_skip_until or 0.0) > now:
-            return await _skipped_planner_result(session)
+    """执行一轮基于上下文的规划。
 
-        plan = await _plan_pfc_action(session)
-        _record_planner_health(session, plan)
-        # 规划器已经看过完整群聊上下文；后续简单规则不得推翻它的 wait 决策。
-        action = _normalize_action(plan.action)
-        passive = _passive_pfc_result(session, plan, action, allow_block=True)
-        if passive is None and action == "rethink_goal":
-            plan, action, passive = _settle(
-                session, await _rethink_pfc_goal(session), "rethink_goal"
-            )
-        if passive is None and action == "fetch_knowledge":
-            plan, action, passive = _settle(
-                session, await _fetch_pfc_knowledge(session, plan), "fetch_knowledge"
-            )
-        if passive is not None:
-            return passive
-        return await _finish_pfc_action(session, plan, action)
-    finally:
-        should_save = session.dirty if session is not None else dirty
-        if should_save and persist_state:
-            # 规划器会原地修改 ``get_async`` 返回的对象；保存前重新登记，避免并发缓存
-            # 淘汰让这次写入悄悄变成未命中。
-            pfc_state_store.set_state(chat_id, state)
-            await pfc_state_store.save_async(chat_id)
+    规划只改调用方给的这份 ``state``（这一轮开始时取的快照）；等回复确认送达后，由
+    ``commit_planner_snapshot`` 把它写回存储。
+    """
+    now = time.time()
+    if state.ended:
+        log_step(context, runtime_cfg, chat_id=chat_id, step="pfc.ended", fields={})
+        return PFCRunResult(
+            reply  = "",
+            action = "end_conversation",
+            reason = "ended",
+            ended  = True,
+        )
+    session = await _prepare_pfc_session(
+        context        = context,
+        runtime_cfg    = runtime_cfg,
+        secrets        = secrets,
+        bot_name       = bot_name,
+        is_private     = is_private,
+        chat_id        = chat_id,
+        current_text   = current_text,
+        memory_store   = memory_store,
+        action_history = action_history,
+        state          = state,
+        generate_reply = generate_reply,
+        now            = now,
+        memory_text    = memory_text,
+    )
+    if float(state.planner_skip_until or 0.0) > now:
+        return await _skipped_planner_result(session)
+
+    plan = await _plan_pfc_action(session)
+    _record_planner_health(session, plan)
+    # 规划器已经看过完整群聊上下文；后续简单规则不得推翻它的 wait 决策。
+    action = plan.action
+    passive = _passive_pfc_result(session, plan, action, allow_block=True)
+    if passive is None and action == "rethink_goal":
+        plan, action, passive = _settle(session, await _rethink_pfc_goal(session), "rethink_goal")
+    if passive is None and action == "fetch_knowledge":
+        plan, action, passive = _settle(
+            session, await _fetch_pfc_knowledge(session, plan), "fetch_knowledge"
+        )
+    if passive is not None:
+        return passive
+    return await _finish_pfc_action(session, plan, action)

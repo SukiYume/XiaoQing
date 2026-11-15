@@ -8,8 +8,11 @@ from typing import Any
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web.analytics import task_overview as task_overview_module
-from plugins.pendo.web.analytics.task_overview import build_task_overview
+from plugins.pendo.web import utils as web_utils
+from plugins.pendo.web.analytics.task_overview import (
+    build_task_overview,
+    build_task_widget_overview,
+)
 
 
 def _insert(db: Database, owner_id: str, **values: Any) -> None:
@@ -180,7 +183,7 @@ def test_build_task_overview_uses_user_clock_when_today_is_omitted(
         assert database is db
         return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
 
-    monkeypatch.setattr(task_overview_module, "now_in_timezone", user_now)
+    monkeypatch.setattr(web_utils, "now_in_timezone", user_now)
     result = build_task_overview(db=db, owner_id=owner_id)
 
     assert result["summary"]["focus_count"] == 1
@@ -192,3 +195,30 @@ def test_build_task_overview_rejects_invalid_direct_today(db: Database) -> None:
 
     with pytest.raises(ValueError, match="today must be a valid ISO date"):
         build_task_overview(db=db, owner_id="u-task-invalid", today="not-a-date")
+
+
+def test_widget_overview_agrees_with_the_full_overview(db: Database) -> None:
+    """Widget 的 SQL 聚合与任务页的 Python 分桶必须给出同样的计数、计划日和聚焦顺序。"""
+
+    owner_id = "u-task-parity"
+    for values in (
+        {"id": "p1", "plan_date": "2026-03-20", "priority": 3},
+        {"id": "p2", "plan_date": "2026-03-26", "priority": 1},
+        {"id": "p3", "plan_date": "2026-03-26", "priority": 5},
+        {"id": "p4", "plan_date": "2026-04-01", "priority": 2},
+        {"id": "p5", "plan_date": "2026-05-01", "priority": 2},
+        {"id": "p6", "deadline_at": "2026-03-25T23:30:00+08:00", "priority": 2},
+        {"id": "p7", "priority": 2},
+        {"id": "p8", "plan_date": "2026-03-21", "status": "done"},
+    ):
+        _insert(db, owner_id, title=values["id"], **{"status": "open", **values})
+
+    full = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
+    widget = build_task_widget_overview(db, owner_id, "2026-03-26", limit=20)
+
+    assert widget["summary"] == full["summary"]
+    widget_plan_keys = {row["id"]: row["plan_key"] for row in widget["items"]}
+    assert widget_plan_keys["p6"] == "2026-03-25"
+    assert widget_plan_keys["p7"] == ""
+    focus_ids = [task["id"] for task in full["focus_tasks"]]
+    assert [row["id"] for row in widget["items"]][: len(focus_ids)] == focus_ids

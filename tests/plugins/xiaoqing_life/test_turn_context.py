@@ -308,3 +308,64 @@ def test_terms_she_verified_are_handed_back_for_the_group_jargon(tmp_path: Path)
     reply, _ = tc.turn_context(store, make_cfg(), request, MOMENT, Rng(0.9))
     assert reply is not None
     assert reply["verified_terms"] == [{"term": "city不city", "meaning": "时髦不时髦"}]
+
+
+def test_shown_keys_name_what_life_lines_actually_gave(tmp_path: Path) -> None:
+    from plugins.xiaoqing_life import memory_bridge
+
+    store = new_store(tmp_path)
+    store.episodes.append(_episode(1, "猫猫打太极", 2 * HOUR, share=True))
+    store.learnings.append(
+        {
+            "id"        : "l1",
+            "topic"     : "天文",
+            "text"      : "星云是气体和尘埃",
+            "confidence": "verified",
+            "created_at": NOW - DAY,
+        }
+    )
+    store.journal.append(
+        {
+            "kind"       : "diary",
+            "at"         : NOW - DAY,
+            "day"        : "2026-01-04",
+            "text"       : "昨天刷了好多猫猫",
+            "episode_ids": [],
+        }
+    )
+    asked, _ = _call(store, "最近刷到啥好玩的")
+    assert asked is not None and asked["shown_keys"] == ["e1"]
+    learned, _ = _call(store, "最近学到啥了")
+    assert learned is not None and "l1" in learned["shown_keys"]
+    week, _ = _call(store, "这几天过得怎么样")
+    assert week is not None and "diary:2026-01-04" in week["shown_keys"]
+    # 和发布到统一记忆时用的键一致，聊天才能对上
+    ops  = memory_bridge.pending_ops(store, make_cfg(), 0.0)
+    keys = {op["key"] for op in ops}
+    assert {"e1", "l1", "diary:2026-01-04"} <= keys
+
+
+def test_terms_the_group_block_already_explained_are_not_explained_again(tmp_path: Path) -> None:
+    store = new_store(tmp_path)
+    _term(store, "绝绝子", "非常好", seen_ago=DAY)
+    _term(store, "哈基米", "猫猫", seen_ago=DAY)
+    payload = {
+        "version"        : 1,
+        "mode"           : "reply",
+        "text"           : "这只哈基米真是绝绝子",
+        "recent"         : [],
+        "bot_recent"     : [],
+        "is_private"     : False,
+        "unknown_terms"  : [],
+        "explained_terms": ["绝绝子"],
+    }
+    result, _ = tc.turn_context(store, make_cfg(), payload, MOMENT, Rng(0.0))
+    assert result is not None
+    assert "哈基米" in result["slang_notes"] and "绝绝子" not in result["slang_notes"]
+    # 群友用到了还是记下：词条的“在聊天里听到过”照常更新
+    assert "chat" in store.terms["绝绝子"]["sources"]
+    # 不交 explained_terms 时两个都会解释
+    again, _ = tc.turn_context(
+        store, make_cfg(), {**payload, "explained_terms": []}, MOMENT, Rng(0.0)
+    )
+    assert again is not None and "绝绝子" in again["slang_notes"]

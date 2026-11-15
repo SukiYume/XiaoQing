@@ -17,7 +17,7 @@ from typing import Any
 from core.lifecycle import to_thread_owned
 
 from ..config.config import PersonalityConfig
-from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.gateway import ai_disabled, chat_completions_raw_with_profile, extract_response_content
 from ..llm.llm_config import LLMCallConfig
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
@@ -120,7 +120,7 @@ async def learn_from_messages(
     messages: Sequence[StoredMessage],
     llm: LLMCallConfig,
 ) -> list[LearnedExpression]:
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return []
 
     dialogue, source_ids = _build_dialogue(messages)
@@ -128,7 +128,7 @@ async def learn_from_messages(
         return []
 
     prompt = _LEARN_PROMPT.format(dialogue=dialogue)
-    resp, _ = await chat_completions_raw_with_fallback_paths(
+    resp, _ = await chat_completions_raw_with_profile(
         route    = "reasoning",
         secrets  = secrets,
         messages = [{"role": "user", "content": prompt}],
@@ -160,14 +160,14 @@ async def single_expression_check(
     style: str,
     llm: LLMCallConfig,
 ) -> tuple[bool, bool, str, str, str]:
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return False, False, "", "", ""
 
     persona_text = personality.card.facts(bot_name)
     prompt       = _SINGLE_CHECK_PROMPT.format(
         persona_text=persona_text, situation=situation.strip(), style=style.strip()
     )
-    resp, _ = await chat_completions_raw_with_fallback_paths(
+    resp, _ = await chat_completions_raw_with_profile(
         route    = "reasoning",
         secrets  = secrets,
         messages = [{"role": "user", "content": prompt}],
@@ -294,9 +294,9 @@ async def upsert_learned(
     store: ExpressionStore,
     chat_id: str,
     learned: Sequence[LearnedExpression],
-    similarity_threshold: float = 0.72,
-    max_store: int              = 2000,
+    max_store: int,
     self_reflect: bool,
+    similarity_threshold: float = 0.72,
     secrets: dict[str, Any],
     bot_name: str,
     personality: PersonalityConfig,

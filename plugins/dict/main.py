@@ -13,7 +13,7 @@ from typing import Any, Literal, NamedTuple, cast
 
 from core.args import quote_token, tokenize
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import has_control_characters, run_sync, segments
+from core.plugin_base import Segments, has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
 MAX_ARGUMENT_CHARS        = 512
@@ -37,7 +37,6 @@ _LIMIT_PATTERN   = re.compile(r"[1-9][0-9]{0,2}\Z")
 _PAGE_PATTERN    = re.compile(r"[1-9][0-9]{0,4}\Z")
 _CHINESE_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]")
 
-Messages       = list[dict[str, Any]]
 QueryDirection = Literal["chinese_to_english", "english_to_chinese"]
 
 HELP_TEXT = """📖 天文学词典
@@ -110,22 +109,12 @@ def _clean_query(value: object) -> str:
     return cleaned
 
 
-def _parse_limit(value: str) -> int:
-    if _LIMIT_PATTERN.fullmatch(value) is None:
-        raise ValueError("每页条数必须是 1 到 100 的 ASCII 整数")
-    parsed = int(value)
-    if parsed > MAX_RESULTS:
-        raise ValueError("每页条数必须是 1 到 100 的 ASCII 整数")
-    return parsed
+def _parse_ascii_int(value: str, *, pattern: re.Pattern[str], maximum: int, label: str) -> int:
+    """解析 1 到 ``maximum`` 的 ASCII 整数；``pattern`` 先限制位数，再比较上限。"""
 
-
-def _parse_page(value: str) -> int:
-    if _PAGE_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"页码必须是 1 到 {MAX_PAGE} 的 ASCII 整数")
-    parsed = int(value)
-    if parsed > MAX_PAGE:
-        raise ValueError(f"页码必须是 1 到 {MAX_PAGE} 的 ASCII 整数")
-    return parsed
+    if pattern.fullmatch(value) is None or int(value) > maximum:
+        raise ValueError(f"{label}必须是 1 到 {maximum} 的 ASCII 整数")
+    return int(value)
 
 
 def _tokenize_request(args: object) -> list[str]:
@@ -177,15 +166,25 @@ def _parse_request(args: object) -> DictionaryRequest:
             index += 1
             if index >= len(tokens):
                 raise ValueError("每页条数选项缺少数值")
-            max_results = _parse_limit(tokens[index])
-            limit_seen  = True
+            max_results = _parse_ascii_int(
+                tokens[index],
+                pattern = _LIMIT_PATTERN,
+                maximum = MAX_RESULTS,
+                label   = "每页条数",
+            )
+            limit_seen = True
         elif options_enabled and token in _PAGE_OPTIONS:
             if page_seen:
                 raise ValueError("页码选项不能重复")
             index += 1
             if index >= len(tokens):
                 raise ValueError("页码选项缺少数值")
-            page      = _parse_page(tokens[index])
+            page = _parse_ascii_int(
+                tokens[index],
+                pattern = _PAGE_PATTERN,
+                maximum = MAX_PAGE,
+                label   = "页码",
+            )
             page_seen = True
         elif options_enabled and token.startswith("-") and token != "-":
             raise ValueError(f"未知选项：{token}")
@@ -545,28 +544,22 @@ async def query_astrodict(
         plugin_dir = getattr(context, "plugin_dir", None)
         if not isinstance(plugin_dir, Path):
             raise RuntimeError("dictionary plugin directory is unavailable")
-        return cast(
-            str,
-            await run_sync(
-                _query_astrodict_sync,
-                cleaned_query,
-                plugin_dir,
-                exact_match,
-                max_results,
-                page,
-            ),
+        return await run_sync(
+            _query_astrodict_sync,
+            cleaned_query,
+            plugin_dir,
+            exact_match,
+            max_results,
+            page,
         )
     except ValueError as exc:
         return f"❌ {exc}"
     except Exception as exc:
-        return cast(
-            str,
-            public_error_message(
-                context,
-                exc,
-                logger    = context.logger,
-                component = "dict.search",
-            ),
+        return public_error_message(
+            context,
+            exc,
+            logger    = context.logger,
+            component = "dict.search",
         )
 
 
@@ -575,7 +568,7 @@ async def handle(
     args: str,
     event: dict[str, Any],
     context: PluginContextProtocol,
-) -> Messages:
+) -> Segments:
     """解析一条词典命令，并返回稳定的公开消息。"""
 
     del command, event
@@ -601,12 +594,9 @@ async def handle(
     except ValueError as exc:
         return segments(f"❌ {exc}")
     except Exception as exc:
-        return cast(
-            Messages,
-            public_error_response(
-                context,
-                exc,
-                logger    = context.logger,
-                component = "dict.handle",
-            ),
+        return public_error_response(
+            context,
+            exc,
+            logger    = context.logger,
+            component = "dict.handle",
         )

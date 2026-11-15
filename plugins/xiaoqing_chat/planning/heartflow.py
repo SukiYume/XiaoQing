@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from ..store_base import AsyncKeyedStore, delete_json_artifacts
+from ..store_base import AsyncKeyedStore, coerce_finite_float, coerce_int, delete_json_artifacts
 
 
 @dataclass
@@ -17,7 +17,6 @@ class HeartflowState:
 
     last_user_ts   : float = 0.0
     last_bot_ts    : float = 0.0
-    reply_streak   : int   = 0
     no_reply_streak: int   = 0
 
 
@@ -39,10 +38,9 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         if path:
             obj = self._load_json(path, default=None)
             if isinstance(obj, dict):
-                st.last_user_ts    = float(obj.get("last_user_ts", 0.0) or 0.0)
-                st.last_bot_ts     = float(obj.get("last_bot_ts", 0.0) or 0.0)
-                st.reply_streak    = int(obj.get("reply_streak", 0) or 0)
-                st.no_reply_streak = int(obj.get("no_reply_streak", 0) or 0)
+                st.last_user_ts = coerce_finite_float(obj.get("last_user_ts"), default=0.0)
+                st.last_bot_ts = coerce_finite_float(obj.get("last_bot_ts"), default=0.0)
+                st.no_reply_streak = coerce_int(obj.get("no_reply_streak"), default=0)
         self._cache[chat_id] = st
         return st
 
@@ -56,7 +54,6 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         payload = {
             "last_user_ts"   : st.last_user_ts,
             "last_bot_ts"    : st.last_bot_ts,
-            "reply_streak"   : st.reply_streak,
             "no_reply_streak": st.no_reply_streak,
         }
         self._save_json(path, payload)
@@ -74,9 +71,8 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         return st
 
     async def on_bot_reply_async(self, *, chat_id: str) -> HeartflowState:
-        st             = await self.get_async(chat_id)
-        st.last_bot_ts = time.time()
-        st.reply_streak += 1
+        st                 = await self.get_async(chat_id)
+        st.last_bot_ts     = time.time()
         st.no_reply_streak = 0
         await asyncio.to_thread(self._save, chat_id)
         return st
@@ -84,7 +80,6 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
     async def on_no_reply_async(self, *, chat_id: str) -> HeartflowState:
         st = await self.get_async(chat_id)
         st.no_reply_streak += 1
-        st.reply_streak = 0
         await asyncio.to_thread(self._save, chat_id)
         return st
 
@@ -94,28 +89,6 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         if path:
             delete_json_artifacts(path)
 
-    # 评分只接收当前频率控制仍会提供的参数；删除旧参数后，调用错误会立即暴露。
-    @staticmethod
-    def _calculate_score(
-        st: HeartflowState,
-        *,
-        text: str,
-        seconds_since_last_reply: float,
-        base: float,
-        weight_short_text: float      = -0.08,
-        weight_no_reply_streak: float = 0.05,
-        weight_long_silence: float    = 0.08,
-    ) -> float:
-        s = float(base)
-        t = (text or "").strip()
-        if len(t) <= 2:
-            s += weight_short_text
-        if st.no_reply_streak >= 3:
-            s += weight_no_reply_streak
-        if seconds_since_last_reply > 240:
-            s += weight_long_silence
-        return max(0.0, min(1.0, s))
-
     async def score_async(
         self,
         *,
@@ -123,19 +96,18 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         text: str,
         seconds_since_last_reply: float,
         base: float,
-        weight_short_text: float      = -0.08,
-        weight_no_reply_streak: float = 0.05,
-        weight_long_silence: float    = 0.08,
+        weight_short_text: float,
+        weight_no_reply_streak: float,
+        weight_long_silence: float,
     ) -> float:
-        """读取当前会话状态并计算归一化软评分。"""
+        """读取当前会话状态，按本轮信号调整基础分，返回归一化到 0~1 的软评分。"""
 
-        st = await self.get_async(chat_id)
-        return self._calculate_score(
-            st,
-            text                     = text,
-            seconds_since_last_reply = seconds_since_last_reply,
-            base                     = base,
-            weight_short_text        = weight_short_text,
-            weight_no_reply_streak   = weight_no_reply_streak,
-            weight_long_silence      = weight_long_silence,
-        )
+        st    = await self.get_async(chat_id)
+        score = float(base)
+        if len((text or "").strip()) <= 2:
+            score += weight_short_text
+        if st.no_reply_streak >= 3:
+            score += weight_no_reply_streak
+        if seconds_since_last_reply > 240:
+            score += weight_long_silence
+        return max(0.0, min(1.0, score))

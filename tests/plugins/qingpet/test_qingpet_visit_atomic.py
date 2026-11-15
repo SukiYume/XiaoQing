@@ -31,7 +31,6 @@ def _settle(db: Database, reference_id: str = "visit:test"):
         GROUP,
         coin_reward       = 5,
         daily_visit_limit = 10,
-        daily_coin_limit  = 500,
         cooldown_seconds  = 0,
         reference_id      = reference_id,
     )
@@ -193,7 +192,6 @@ def test_visit_two_connections_cannot_exceed_daily_quota(tmp_path):
             GROUP,
             coin_reward       = 5,
             daily_visit_limit = 1,
-            daily_coin_limit  = 500,
             cooldown_seconds  = 0,
             reference_id      = reference,
         )

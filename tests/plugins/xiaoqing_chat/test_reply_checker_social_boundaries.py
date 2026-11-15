@@ -116,7 +116,7 @@ async def test_risk_mode_enforces_latest_explicit_communication_constraint(
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
         fake_chat,
     )
     monkeypatch.setattr(

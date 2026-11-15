@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import re
 import threading
 import time
@@ -86,13 +85,9 @@ def _message_ids(values: Any) -> tuple[int, ...]:
 
 
 def _valid_message_ts(value: Any) -> float:
-    try:
-        timestamp = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(timestamp) or timestamp <= 0:
-        return 0.0
-    return timestamp
+    """有效的消息时间戳（有限且为正）；其余一律视为未知，返回 0.0。"""
+
+    return coerce_finite_float(value, default=0.0, minimum=0.0)
 
 
 def active_conversation_suffix(
@@ -396,7 +391,7 @@ class MemoryStore:
                 generation = self._generations.get(chat_id, 0)
                 if not data_dir or history is None or chat_id in self._tombstones:
                     return
-                snapshot = list(history[-200:])
+                snapshot = list(history[-MAX_CACHED_MESSAGES_PER_CHAT:])
             data_dir.mkdir(parents=True, exist_ok=True)
             path    = data_dir / f"{chat_id}.json"
             payload = [_serialize_message(message) for message in snapshot]
@@ -442,8 +437,10 @@ class MemoryStore:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            role        = str(item.get("role", ""))
-            name        = str(item.get("name", ""))
+            role = str(item.get("role", ""))
+            name = str(item.get("name", ""))
+            # 旧版本的文件只有 content/media_items、没有 parts；StoredMessage 会补出 parts，
+            # 下一次持久化就按 parts 格式重写。
             content     = str(item.get("content", ""))
             media_items = _normalize_media_items(item.get("media_items", []))
             parts       = normalize_message_parts(item.get("parts", []))

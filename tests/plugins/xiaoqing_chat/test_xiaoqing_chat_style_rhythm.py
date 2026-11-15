@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.life import extract as life_extract
-from plugins.xiaoqing_chat.life.self_timeline import (
-    SelfTimelineStore,
-    new_entry,
-    self_timeline_block,
-)
 from plugins.xiaoqing_chat.llm.decorations import has_decoration, tame_decorations
 from plugins.xiaoqing_chat.llm.prompt_builder import (
     build_dialogue_prompt,
@@ -24,6 +19,12 @@ from plugins.xiaoqing_chat.llm.prompt_builder import (
 from plugins.xiaoqing_chat.media.marker_resolver import COMMON_QQ_FACE_LABELS
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from tests.plugins.xiaoqing_chat.memory_support import (
+    MemoryHarness,
+    chat_context,
+    put_history,
+    self_texts,
+)
 
 NOW = 1_800_000_000.0
 
@@ -122,60 +123,28 @@ def test_dialogue_window_keeps_twenty_recent_messages() -> None:
 # ---------------------------------------------------------------- 讲过的往事
 
 
-def test_stories_outlive_states_and_are_listed_separately(tmp_path) -> None:
-    store = SelfTimelineStore()
-    store.bind(tmp_path)
-    story = new_entry(
-        chat_id = "g1",
-        kind    = "story",
-        text    = "宿舍里找充电线翻了半天，其实压在自己胳膊底下",
-        hours   = 1,
-        source  = "chat",
-        now     = NOW,
-    )
-    assert story is not None and story.expires_at - story.ts >= 90 * 86400
-    states = [
-        new_entry(
-            chat_id="g1", kind="state", text=f"在忙第{index}件事", hours=1, source="chat", now=NOW
-        )
-        for index in range(12)
-    ]
-    store.apply(added=[story, *states], chat_id="g1", max_entries=5, now=NOW)
-    # 近况按条数裁，往事不和它们抢名额；别的群里也记得。
-    assert [entry.kind for entry in store.entries()].count("state") == 5
-    later = NOW + 30 * 86400
-    assert store.visible("g2", now=later) == []
-    assert [entry.text for entry in store.stories("g2", now=later)] == [story.text]
-    assert store.visible("g1", now=NOW) and all(e.kind != "story" for e in store.visible("g1"))
-
-    block = self_timeline_block([], stories=store.stories("g2", now=later), now=later)
-    assert "你以前讲过的自己的事" in block and story.text in block
-    assert self_timeline_block([], stories=[]) == ""
-
-
 @pytest.mark.asyncio
 async def test_a_told_story_is_recorded_and_cannot_be_resolved(tmp_path) -> None:
     life_extract._last_state_read.clear()
     state = ChatRuntimeState()
-    state.self_timeline.bind(tmp_path)
-    state.open_loops.bind(tmp_path)
-    history = [
-        _user("说件你在宿舍干过的笨事", ts=NOW - 30),
-        _bot("有次我找充电线翻了半天，结果压在自己胳膊底下", ts=NOW),
-    ]
+    state.memory_store.bind_data_dir(tmp_path)
+    memory = MemoryHarness(tmp_path)
+    now    = time.time()
     told   = {"kind": "story", "text": "宿舍里找充电线翻了半天，其实压在胳膊底下", "hours": 4000}
-    moment = datetime(2027, 1, 14, 20, 0).timestamp()
 
-    async def run(output: dict) -> None:
-        with (
-            patch.object(
-                life_extract,
-                "chat_completions",
-                AsyncMock(return_value=json.dumps(output, ensure_ascii=False)),
-            ),
-            patch.object(life_extract.time, "time", return_value=moment),
+    async def run(output: dict, reply: str) -> None:
+        history = put_history(
+            state,
+            "g1",
+            [_user("说件你在宿舍干过的笨事", ts=now - 30), _bot(reply, ts=now)],
+        )
+        with patch.object(
+            life_extract,
+            "chat_completions",
+            AsyncMock(return_value=json.dumps(output, ensure_ascii=False)),
         ):
             assert await life_extract.extract_life_records(
+                context  = chat_context(memory, tmp_path, "g1"),
                 state    = state,
                 life_cfg = XiaoQingChatConfig().life,
                 secrets  = {"_ai": object()},
@@ -186,12 +155,15 @@ async def test_a_told_story_is_recorded_and_cannot_be_resolved(tmp_path) -> None
                 source   = "chat",
             )
 
-    await run({"self": [told]})
-    stories = state.self_timeline.stories("g1", now=moment)
-    assert [entry.text for entry in stories] == [told["text"]]
+    await run({"self": [told]}, "有次我找充电线翻了半天，结果压在自己胳膊底下")
+    assert self_texts(memory, "g2", kinds=("story",)) == [told["text"]], "讲过的往事别的群也记得"
+    [story] = memory.notes("global", kinds=("self.story",))
     # 同一件事再讲一遍不重复记；模型把它标成“办完了”也不会让它消失。
-    await run({"self": [told], "resolved_self": [{"id": stories[0].entry_id, "status": "done"}]})
-    assert len(state.self_timeline.stories("g1", now=moment)) == 1
+    await run(
+        {"self": [told], "resolved_self": [{"id": story.id, "status": "done"}]},
+        "我上次就跟你们说过，有次找充电线结果压在自己胳膊底下",
+    )
+    assert self_texts(memory, "g1", kinds=("story",)) == [told["text"]]
     life_extract._last_state_read.clear()
 
 

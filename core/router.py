@@ -306,21 +306,39 @@ def resolve_context_command_invocation(
 
 @dataclass
 class CommandSpec:
-    plugin    : str
-    name      : str
-    triggers  : list[str]
-    help_text : str
-    admin_only: bool
-    handler   : Handler
-    priority  : int        = 0  # 优先级，数字越大越先匹配
-    usage     : str | None = None
-    catalog   : CommandCatalogNode | None = field(default=None, repr=False, compare=False)
+    plugin  : str
+    name    : str
+    triggers: list[str]
+    handler : Handler
+    # 这条命令在 plugin.json 里的声明：帮助、用法、谁能在哪里用、有哪些子命令都只看它。
+    catalog : CommandCatalogNode = field(repr=False, compare=False)
+    priority: int = 0  # 优先级，数字越大越先匹配
     # 执行门既控制并发，也标识插件加载代数；已解析命令不能迁移到新代数的执行门。
     execution_gate: PluginExecutionGate | None = field(
         default = None,
         repr    = False,
         compare = False,
     )
+
+    @classmethod
+    def from_manifest(
+        cls,
+        plugin: str,
+        command: Mapping[str, Any],
+        handler: Handler,
+        execution_gate: PluginExecutionGate | None = None,
+    ) -> CommandSpec:
+        """由 plugin.json 里已校验的一条顶层命令声明建出命令。"""
+
+        return cls(
+            plugin   = plugin,
+            name     = command.get("name", ""),
+            triggers = command.get("triggers", []),
+            handler  = handler,
+            catalog=build_command_catalog_node(plugin, command, root=True),
+            priority       = command.get("priority", 0),
+            execution_gate = execution_gate,
+        )
 
 
 class CommandRouter:
@@ -442,23 +460,9 @@ class CommandRouter:
         with self._lock:
             self._ensure_indexes()
             ordered_commands = tuple(self._ordered_commands)
-        catalog = []
-        for spec in ordered_commands:
-            if spec.catalog is not None:
-                catalog.append(spec.catalog)
-                continue
-            trigger = spec.triggers[0] if spec.triggers else spec.name
-            usage   = spec.usage or (f"/{trigger}" if trigger else "")
-            catalog.append(
-                CommandCatalogNode(
-                    code       = f"{spec.plugin}.{spec.name}",
-                    plugin     = spec.plugin,
-                    path       = (trigger,),
-                    name       = trigger,
-                    aliases    = tuple(spec.triggers[1:]),
-                    help_text  = spec.help_text,
-                    usage      = usage,
-                    permission = "bot_admin" if spec.admin_only else "public",
-                )
+        return tuple(
+            sorted(
+                (spec.catalog for spec in ordered_commands),
+                key=lambda node: (node.plugin, node.code),
             )
-        return tuple(sorted(catalog, key=lambda node: (node.plugin, node.code)))
+        )

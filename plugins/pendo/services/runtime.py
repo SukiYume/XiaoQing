@@ -1,5 +1,4 @@
-# Pendo 运行期服务：数据库、Web 和重载钩子由同一生命周期持有。
-"""State-owning lifecycle boundary for Pendo's database, Web UI and reload hook."""
+"""Pendo 运行期服务：数据库、Web 和重载钩子由同一生命周期持有。"""
 
 from __future__ import annotations
 
@@ -27,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 class _WebBackend(Protocol):
     def is_running(self) -> bool: ...
+
+    def is_managed_running(self) -> bool: ...
 
     def start(self, db: Database) -> bool: ...
 
@@ -170,8 +171,7 @@ class PendoRuntimeService:
             backend = self._web_backend_factory()
             if backend.stop():
                 return True
-            owned_running = getattr(backend, "is_managed_running", backend.is_running)
-            return not bool(owned_running())
+            return not backend.is_managed_running()
         except Exception as exc:
             public_error_message(None, exc, logger=logger, component="pendo.web.stop")
             return False

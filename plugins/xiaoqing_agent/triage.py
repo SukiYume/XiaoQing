@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from core.ai import first_json_object
 
 from .loop import AGENT_ROUTE
 from .prompts import build_triage_messages, capability_summary, current_time
 from .tasks import AgentTask
 
-TRIAGE_ROUTE   = "triage"
-TRIAGE_ACTIONS = frozenset({"conversation", "task", "cancel", "status", "update"})
-_MAX_TASK_ID   = 32
-_FENCE_RE      = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+TRIAGE_ROUTE = "triage"
+# 接手的几种动作；不接手（照常聊天）不在其中，用 ``CONVERSATION`` 表示。
+TRIAGE_ACTIONS = frozenset({"task", "cancel", "status", "update"})
+MAX_TASK_ID    = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,21 +36,6 @@ def service_list(value: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in value if isinstance(item, str)))
 
 
-def _first_json_object(text: str) -> dict[str, Any] | None:
-    cleaned = _FENCE_RE.sub("", text.strip())
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(cleaned):
-        if char != "{":
-            continue
-        try:
-            value, _end = decoder.raw_decode(cleaned[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    return None
-
-
 def parse_decision(
     text: str,
     *,
@@ -58,14 +43,14 @@ def parse_decision(
 ) -> TriageDecision:
     """解析模型输出；任何不确定都回到普通聊天，不让判断失误打断正常对话。"""
 
-    payload = _first_json_object(text or "")
+    payload = first_json_object(text or "")
     if payload is None:
         return CONVERSATION
     action = str(payload.get("action") or "").strip().lower()
-    if action not in TRIAGE_ACTIONS or action == "conversation":
+    if action not in TRIAGE_ACTIONS:
         return CONVERSATION
     # 任务 ID 原样保留：写错或已经结束的 ID 要报“找不到”，不能当成没指定而扩大范围。
-    task_id = str(payload.get("task_id") or "").strip()[:_MAX_TASK_ID]
+    task_id = str(payload.get("task_id") or "").strip()[:MAX_TASK_ID]
     if action in {"cancel", "status"}:
         if not running:
             return CONVERSATION

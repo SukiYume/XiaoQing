@@ -8,13 +8,23 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..models import Inventory, Pet, User
-from ..utils.constants import DEFAULT_ITEMS, PET_SHOW_CONFIG, TITLES, ItemType, PetStatus
+from ..utils.constants import (
+    DEFAULT_ITEMS,
+    MAX_STAT_VALUE,
+    PET_ACTION_LABELS,
+    PET_SHOW_CONFIG,
+    TITLES,
+    ItemType,
+    PetStatus,
+)
+from ..utils.validators import validate_item_amount
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
 from .database_support import (
     _DAILY_COIN_LIMIT,
-    _PET_ACTION_COUNTERS,
+    _adjust_item_count,
     _log_database_failure,
+    _parse_inventory_items,
 )
 from .database_types import (
     MinigameAtomicResult,
@@ -25,6 +35,14 @@ from .database_types import (
     TreatPetAtomicResult,
     VisitPetAtomicResult,
 )
+
+# 治疗后健康值达到这个数就解除生病状态。
+_TREAT_RECOVERY_HEALTH = 50
+
+
+def _coin_grant_within_limit(requested: int, earned_today: int) -> int:
+    """今天还能入账多少金币：请求数额和每日剩余额度里较小的一个，不会为负。"""
+    return min(max(0, int(requested)), max(0, _DAILY_COIN_LIMIT - int(earned_today)))
 
 
 class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
@@ -52,8 +70,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 ).fetchone()
                 conn.rollback()
                 return False, int(row["coins"]) if row else -1
-            items          = self._load_inventory_items(conn, user_id, group_id)
-            items[item_id] = int(items.get(item_id, 0)) + int(amount)
+            items = self._load_inventory_items(conn, user_id, group_id)
+            _adjust_item_count(items, item_id, amount)
             self._save_inventory_items(conn, user_id, group_id, items)
             self._record_asset_delta(
                 conn,
@@ -79,62 +97,73 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
     ) -> tuple[bool, int]:
         """只读检查持久化配额和冷却，不消耗次数。"""
         try:
-            current   = database_clock.now()
-            timestamp = time.time()
-            row       = (
-                self._get_connection()
-                .execute(
-                    """SELECT action_count, available_at FROM action_quotas
-                   WHERE user_id = ? AND group_id = ? AND action = ? AND period_date = ?""",
-                    (user_id, group_id, action, database_clock.business_date(current)),
-                )
-                .fetchone()
+            return self._action_quota_state(
+                self._get_connection(),
+                user_id,
+                group_id,
+                action,
+                daily_limit,
+                database_clock.business_date(database_clock.now()),
+                time.time(),
             )
-            count        = int(row["action_count"] or 0) if row else 0
-            available_at = float(row["available_at"] or 0) if row else 0.0
-            if count >= max(0, int(daily_limit)):
-                return False, -1
-            if available_at > timestamp:
-                return False, max(1, int(available_at - timestamp))
-            return True, 0
         except Exception as exc:
             _log_database_failure("check_action_quota", exc)
             return False, -1
 
     @staticmethod
-    def _claim_action_quota_in_transaction(
+    def _action_quota_state(
         conn: sqlite3.Connection,
         user_id: str,
         group_id: int,
         action: str,
-        daily_limit: int,
-        cooldown_seconds: int = 0,
-        *,
-        now: datetime | None = None,
-        now_ts: float | None = None,
+        daily_limit: int | None,
+        today: str,
+        timestamp: float,
     ) -> tuple[bool, int]:
-        """在调用方已开启的事务中领取一次持久化配额。"""
-        current   = now or database_clock.now()
-        timestamp = time.time() if now_ts is None else now_ts
-        today     = database_clock.business_date(current)
-        row       = conn.execute(
+        """这个动作现在还能不能做：``(能, 0)``、``(不能, -1)`` 是今天次数用完，``(不能, 秒数)`` 是还在冷却。
+
+        每日次数和冷却都只看 ``action_quotas`` 这一张表；``daily_limit`` 为 ``None`` 时不限次数。
+        """
+
+        row = conn.execute(
             """SELECT action_count, available_at FROM action_quotas
                WHERE user_id = ? AND group_id = ? AND action = ? AND period_date = ?""",
             (user_id, group_id, action, today),
         ).fetchone()
         count        = int(row["action_count"] or 0) if row else 0
         available_at = float(row["available_at"] or 0) if row else 0.0
-        if count >= max(0, int(daily_limit)):
+        if daily_limit is not None and count >= max(0, int(daily_limit)):
             return False, -1
         if available_at > timestamp:
             return False, max(1, int(available_at - timestamp))
+        return True, 0
+
+    @classmethod
+    def _claim_action_quota_in_transaction(
+        cls,
+        conn: sqlite3.Connection,
+        user_id: str,
+        group_id: int,
+        action: str,
+        daily_limit: int | None,
+        cooldown_seconds: int = 0,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[bool, int]:
+        """在调用方已开启的事务中领取一次持久化配额。"""
+        timestamp = time.time()
+        today     = database_clock.business_date(now or database_clock.now())
+        state     = cls._action_quota_state(
+            conn, user_id, group_id, action, daily_limit, today, timestamp
+        )
+        if not state[0]:
+            return state
         conn.execute(
             """INSERT INTO action_quotas
                (user_id, group_id, action, period_date, action_count, available_at)
                VALUES (?, ?, ?, ?, 1, ?)
                ON CONFLICT(user_id, group_id, action, period_date)
                DO UPDATE SET action_count = action_count + 1,
-
                              available_at = excluded.available_at""",
             (
                 user_id,
@@ -146,8 +175,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         )
         return True, 0
 
-    @staticmethod
     def _credit_coins_in_transaction(
+        self,
         conn: sqlite3.Connection,
         user_id: str,
         group_id: int,
@@ -155,21 +184,17 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         *,
         reason: str,
         reference_id: str,
-        daily_limit: int,
         now_iso: str,
         record_zero: bool = False,
     ) -> int:
-        """在现有事务中应用每日上限并写入金币账本。"""
+        """在现有事务中应用每日金币上限并写入金币账本；``record_zero`` 为真时入账 0 也记一条。"""
         row = conn.execute(
             "SELECT today_coins_earned FROM users WHERE user_id = ? AND group_id = ?",
             (user_id, group_id),
         ).fetchone()
         if row is None:
             raise LookupError(f"user missing during coin credit: {user_id}")
-        grant = min(
-            max(0, int(amount)),
-            max(0, int(daily_limit) - int(row["today_coins_earned"] or 0)),
-        )
+        grant = _coin_grant_within_limit(amount, row["today_coins_earned"] or 0)
         if grant:
             updated = conn.execute(
                 """UPDATE users SET coins = coins + ?,
@@ -180,13 +205,17 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             )
             if updated.rowcount != 1:
                 raise RuntimeError("coin recipient changed during settlement")
-        if grant or record_zero:
-            conn.execute(
-                """INSERT INTO asset_ledger
-                   (user_id, group_id, asset_type, delta, reason, reference_id, created_at)
-                   VALUES (?, ?, 'coins', ?, ?, ?, ?)""",
-                (user_id, group_id, grant, reason, reference_id, now_iso),
-            )
+        self._record_asset_delta(
+            conn,
+            user_id      = user_id,
+            group_id     = group_id,
+            asset_type   = "coins",
+            delta        = grant,
+            reason       = reason,
+            reference_id = reference_id,
+            created_at   = now_iso,
+            allow_zero   = record_zero,
+        )
         return grant
 
     @staticmethod
@@ -264,7 +293,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         game_type: str,
         *,
         reference_id: str,
-        daily_coin_limit: int,
         cooldown_seconds: int,
         outcome_factory: Callable[[Pet, Pet | None], MinigameOutcome],
         opponent_user_id: str | None = None,
@@ -352,15 +380,17 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return MinigameAtomicResult(False, "你的宠物精力不足")
 
-            now          = database_clock.now()
-            now_ts       = time.time()
-            cooldown_row = conn.execute(
-                """SELECT available_at FROM minigame_cooldowns
-                   WHERE user_id = ? AND group_id = ? AND game_type = ?""",
-                (user_id, group_id, game_type),
-            ).fetchone()
-            if cooldown_row is not None and float(cooldown_row["available_at"]) > now_ts:
-                remaining = max(1, int(float(cooldown_row["available_at"]) - now_ts))
+            now = database_clock.now()
+            claimed, remaining = self._claim_action_quota_in_transaction(
+                conn,
+                user_id,
+                group_id,
+                f"minigame:{game_type}",
+                None,
+                cooldown_seconds,
+                now=now,
+            )
+            if not claimed:
                 conn.rollback()
                 return MinigameAtomicResult(False, f"小游戏冷却中，请等待{remaining}秒")
 
@@ -379,19 +409,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 separators   = (",", ":"),
             )
 
-            conn.execute(
-                """INSERT INTO minigame_cooldowns
-                   (user_id, group_id, game_type, available_at)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(user_id, group_id, game_type)
-                   DO UPDATE SET available_at = excluded.available_at""",
-                (
-                    user_id,
-                    group_id,
-                    game_type,
-                    now_ts + max(0, int(cooldown_seconds)),
-                ),
-            )
             now_iso    = now.isoformat()
             coin_grant = self._credit_coins_in_transaction(
                 conn,
@@ -400,7 +417,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 requested_coins,
                 reason       = f"minigame_{game_type}",
                 reference_id = f"{reference_id}:coins",
-                daily_limit  = daily_coin_limit,
                 now_iso      = now_iso,
                 record_zero  = True,
             )
@@ -461,7 +477,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         *,
         coin_reward: int,
         daily_visit_limit: int,
-        daily_coin_limit: int,
         cooldown_seconds: int,
         reference_id: str,
     ) -> VisitPetAtomicResult:
@@ -522,18 +537,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 return VisitPetAtomicResult(False, "该宠物现在无法互动")
 
             now = database_clock.now()
-            if int(visitor["today_visit_count"] or 0) >= int(daily_visit_limit):
-                conn.rollback()
-                return VisitPetAtomicResult(False, "今日访问次数已达上限")
-            last_visit = visitor["last_visit_time"]
-            if last_visit:
-                elapsed = (now - datetime.fromisoformat(last_visit)).total_seconds()
-                if elapsed < cooldown_seconds:
-                    conn.rollback()
-                    return VisitPetAtomicResult(
-                        False,
-                        f"访问冷却中，请等待{max(1, int(cooldown_seconds - elapsed))}秒",
-                    )
             claimed, remaining = self._claim_action_quota_in_transaction(
                 conn,
                 visitor_user_id,
@@ -574,7 +577,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 coin_reward,
                 reason       = "pet_visit_visitor",
                 reference_id = f"{reference_id}:visitor",
-                daily_limit  = daily_coin_limit,
                 now_iso      = now_iso,
                 record_zero  = True,
             )
@@ -585,7 +587,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 coin_reward,
                 reason       = "pet_visit_target",
                 reference_id = f"{reference_id}:target",
-                daily_limit  = daily_coin_limit,
                 now_iso      = now_iso,
                 record_zero  = True,
             )
@@ -649,22 +650,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                    WHERE id = ? AND user_id = ? AND group_id = ?""",
                 (pet_id, user_id, group_id),
             ).fetchone()
-            inventory_row = conn.execute(
-                "SELECT items FROM inventories WHERE user_id = ? AND group_id = ?",
-                (user_id, group_id),
-            ).fetchone()
-            if pet_row is None or inventory_row is None:
+            items = self._load_inventory_items(conn, user_id, group_id)
+            if pet_row is None or int(items.get("acceleration_card", 0)) <= 0:
                 conn.rollback()
                 return None
-            items     = json.loads(inventory_row["items"] or "{}")
-            available = int(items.get("acceleration_card", 0))
-            if available <= 0:
-                conn.rollback()
-                return None
-            if available == 1:
-                items.pop("acceleration_card", None)
-            else:
-                items["acceleration_card"] = available - 1
+            _adjust_item_count(items, "acceleration_card", -1)
 
             updated_at = database_clock.now().isoformat()
             cursor     = conn.execute(
@@ -685,8 +675,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if cursor.rowcount != 1:
                 conn.rollback()
                 return None
-            # 先写宠物、再写背包是有意安排：背包持久化一旦失败，仍需由同一事务
-            # 回滚前面的经验变化，不能留下“获得经验但未消耗道具”的半完成状态。
+            # 经验和背包扣减在同一事务里提交，任何一步失败都整体回滚，
+            # 不会留下“获得经验但未消耗道具”的状态。
             self._save_inventory_items(conn, user_id, group_id, items)
             updated_row = conn.execute("SELECT * FROM pets WHERE id = ?", (pet_id,)).fetchone()
             conn.commit()
@@ -709,8 +699,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
     ) -> tuple[bool, str]:
         if from_user_id == to_user_id:
             return False, "不能给自己送礼物"
-        if type(amount) is not int or amount <= 0 or amount > 99:
-            return False, "礼物数量必须是1到99的整数"
+        if type(amount) is not int:
+            return False, "礼物数量必须是整数"
+        valid, message = validate_item_amount(amount)
+        if not valid:
+            return False, message
         if item_id not in DEFAULT_ITEMS:
             return False, "道具不存在或不可赠送"
         if friendship_gain < 0 or daily_limit <= 0 or cooldown_seconds < 0:
@@ -730,24 +723,21 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if sender is None or receiver is None:
                 conn.rollback()
                 return False, "用户不存在"
-            if int(sender["today_gift_count"] or 0) >= daily_limit:
-                conn.rollback()
-                return False, "今日送礼次数已达上限"
-            last_gift = sender["last_gift_time"]
-            if last_gift:
-                elapsed = (database_clock.now() - datetime.fromisoformat(last_gift)).total_seconds()
-                if elapsed < cooldown_seconds:
-                    conn.rollback()
-                    return False, f"送礼冷却中，请等待{int(cooldown_seconds - elapsed)}秒"
             sender_items = self._load_inventory_items(conn, from_user_id, group_id)
             if int(sender_items.get(item_id, 0)) < amount:
                 conn.rollback()
                 return False, "背包中没有足够的道具"
-            sender_items[item_id] = int(sender_items[item_id]) - amount
-            if sender_items[item_id] <= 0:
-                sender_items.pop(item_id, None)
-            receiver_items          = self._load_inventory_items(conn, to_user_id, group_id)
-            receiver_items[item_id] = int(receiver_items.get(item_id, 0)) + amount
+            claimed, remaining = self._claim_action_quota_in_transaction(
+                conn, from_user_id, group_id, "gift", daily_limit, cooldown_seconds
+            )
+            if not claimed:
+                conn.rollback()
+                if remaining > 0:
+                    return False, f"送礼冷却中，请等待{remaining}秒"
+                return False, "今日送礼次数已达上限"
+            _adjust_item_count(sender_items, item_id, -amount)
+            receiver_items = self._load_inventory_items(conn, to_user_id, group_id)
+            _adjust_item_count(receiver_items, item_id, amount)
             self._save_inventory_items(conn, from_user_id, group_id, sender_items)
             self._save_inventory_items(conn, to_user_id, group_id, receiver_items)
             now = database_clock.now().isoformat()
@@ -764,6 +754,15 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                    version = version + 1 WHERE user_id = ? AND group_id = ?""",
                 (friendship_gain, to_user_id, group_id),
             )
+            for user_id in (from_user_id, to_user_id):
+                self._record_asset_delta(
+                    conn,
+                    user_id    = user_id,
+                    group_id   = group_id,
+                    asset_type = "friendship_points",
+                    delta      = friendship_gain,
+                    reason     = "gift",
+                )
             conn.commit()
             return True, ""
         except Exception as exc:
@@ -803,9 +802,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if int(items.get(item_id, 0)) < amount:
                 conn.rollback()
                 return False
-            items[item_id] = int(items[item_id]) - amount
-            if items[item_id] <= 0:
-                items.pop(item_id, None)
+            _adjust_item_count(items, item_id, -amount)
             self._save_inventory_items(conn, seller_id, group_id, items)
             conn.execute(
                 """INSERT INTO trade_listings
@@ -988,7 +985,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     rewards[index],
                     reason       = "pet_show",
                     reference_id = f"show:{show['id']}:{index}:{user_id}",
-                    daily_limit  = _DAILY_COIN_LIMIT,
                     now_iso      = now_iso,
                 )
                 if index == 0:
@@ -1116,14 +1112,12 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 reason = "治疗冷却中" if remaining > 0 else "今日治疗次数已达上限"
                 return TreatPetAtomicResult(False, reason, max(0, remaining))
 
-            if available == 1:
-                items.pop(item_id, None)
-            else:
-                items[item_id] = available - 1
-            health             = min(100, int(pet_row["health"]) + int(health_gain))
-            clean              = min(100, int(pet_row["clean"]) + int(clean_gain))
-            status             = PetStatus.NORMAL.value if health >= 50 else str(pet_row["status"])
-            status_expire_time = None if health >= 50 else pet_row["status_expire_time"]
+            _adjust_item_count(items, item_id, -1)
+            health             = min(MAX_STAT_VALUE, int(pet_row["health"]) + int(health_gain))
+            clean              = min(MAX_STAT_VALUE, int(pet_row["clean"]) + int(clean_gain))
+            recovered          = health >= _TREAT_RECOVERY_HEALTH
+            status             = PetStatus.NORMAL.value if recovered else str(pet_row["status"])
+            status_expire_time = None if recovered else pet_row["status_expire_time"]
             updated            = conn.execute(
                 """UPDATE pets SET health = ?, clean = ?, status = ?,
                    status_expire_time = ?, last_update = ?, version = version + 1
@@ -1188,7 +1182,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         group_task_type: str | None             = None,
     ) -> PetActionAtomicResult:
         """统一提交动作配额、资源、状态、计数器和任务进度。"""
-        if action not in _PET_ACTION_COUNTERS:
+        if action not in PET_ACTION_LABELS:
             return PetActionAtomicResult(False, reason="invalid_action")
         return self._commit_pet_and_user(
             pet,
@@ -1254,10 +1248,6 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             merged_inventory_items  : dict[str, int] | None = None
             merged_inventory_version: int | None            = None
             if quota_action is not None:
-                today_counter, _total_counter = _PET_ACTION_COUNTERS[quota_action]
-                if getattr(current_user, today_counter) >= max(0, int(quota_daily_limit)):
-                    conn.rollback()
-                    return PetActionAtomicResult(False, reason="daily_limit")
                 if free_feed_increment and current_user.today_free_feed_count >= max(
                     0, int(free_feed_limit)
                 ):
@@ -1272,21 +1262,15 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     )
                 if consume_item_id:
                     assert inventory_items is not None
-                    available = int(inventory_items.get(consume_item_id, 0))
-                    if available <= 0:
+                    if int(inventory_items.get(consume_item_id, 0)) <= 0:
                         conn.rollback()
                         return PetActionAtomicResult(False, reason="inventory")
-                    if available == 1:
-                        inventory_items.pop(consume_item_id, None)
-                    else:
-                        inventory_items[consume_item_id] = available - 1
+                    _adjust_item_count(inventory_items, consume_item_id, -1)
                 if inventory_grants:
                     assert inventory_items is not None
                     for item_id, amount in inventory_grants.items():
                         if amount > 0:
-                            inventory_items[item_id] = int(inventory_items.get(item_id, 0)) + int(
-                                amount
-                            )
+                            _adjust_item_count(inventory_items, item_id, int(amount))
 
                 claimed, remaining = self._claim_action_quota_in_transaction(
                     conn,
@@ -1304,9 +1288,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                         remaining = max(0, remaining),
                     )
 
-                granted_coins = min(
-                    max(0, int(requested_coins)),
-                    max(0, _DAILY_COIN_LIMIT - current_user.today_coins_earned),
+                granted_coins = _coin_grant_within_limit(
+                    requested_coins, current_user.today_coins_earned
                 )
                 current_user.coins += granted_coins
                 current_user.today_coins_earned += granted_coins
@@ -1321,7 +1304,9 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     "SELECT items, version FROM inventories WHERE user_id = ? AND group_id = ?",
                     (inventory.user_id, inventory.group_id),
                 ).fetchone()
-                latest_items = json.loads(inventory_row["items"] or "{}") if inventory_row else {}
+                latest_items = (
+                    _parse_inventory_items(inventory_row["items"]) if inventory_row else {}
+                )
                 if inventory.shortfall(latest_items):
                     # 并发请求已用掉同一件道具（例如托管券）：库存不足时整次回滚。
                     conn.rollback()

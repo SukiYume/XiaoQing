@@ -552,6 +552,23 @@
       "dynamic_codes": ["xiaoqing_agent.agent.run", "xiaoqing_agent.agent.stop"],
       "regression_codes": ["xiaoqing_agent.agent.run", "xiaoqing_agent.agent.stop"]
     },
+    "xiaoqing_memory": {
+      "state_model": "async_job",
+      "reason": "consolidate 与 rebuild 在后台调用模型改写记忆，forget 删除记忆；只用回归测试覆盖，不在命令矩阵里真实执行",
+      "test_files": [
+        "tests/plugins/xiaoqing_memory/test_main.py"
+      ],
+      "dynamic_codes": [
+        "xiaoqing_memory.mem.consolidate",
+        "xiaoqing_memory.mem.rebuild",
+        "xiaoqing_memory.mem.forget"
+      ],
+      "regression_codes": [
+        "xiaoqing_memory.mem.consolidate",
+        "xiaoqing_memory.mem.rebuild",
+        "xiaoqing_memory.mem.forget"
+      ]
+    },
     "xiaoqing_life": {
       "state_model": "async_job",
       "reason": "run 会启动访问外网并调用模型的后台上网任务，forget 改写词条；只用回归测试覆盖，不在命令矩阵里真实执行",

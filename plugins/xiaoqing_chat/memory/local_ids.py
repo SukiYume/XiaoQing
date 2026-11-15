@@ -6,8 +6,9 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from core.plugin_base import resolve_bot_name
+
 from ..constants import FIND_BY_LOCAL_ID_LIMIT
-from ..persona import resolve_bot_name
 from ..runtime_state import get_state as _state
 from .memory import StoredMessage
 

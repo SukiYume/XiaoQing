@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
+from ..config import PendoConfig
 from ..models.item import EventItem
 from ..utils.time_utils import TimezoneHelper, resolve_source_wall_time
 from ..utils.validators import normalize_event_fields, with_start_time_reminder_rule
@@ -64,10 +65,11 @@ class EventEditingMixin:
     ai_parser: EventEditAIParserProtocol
 
     async def _parse_updates(self, changes: str, current_event: EventItem) -> dict[str, Any]:
-        """解析更新内容
+        """解析编辑指令，返回要写入的字段。
 
-        尝试使用AI解析，失败时降级到规则解析。
-        通过 prompt 指示 AI 不要随意修改标题，避免把编辑指令误设为标题。
+        先做显式规则解析（标题、地点、分类、内容、备注、开始时间），再请 AI 解析；
+        AI 的字段只补显式规则没覆盖的部分，并且要通过字段级语义门禁，避免把编辑指令
+        误当成标题。AI 调用失败时 ``_parse_ai_edit_updates`` 退回规则解析。
         """
         explicit_updates = self._parse_explicit_edit_updates(changes, current_event)
         parsed           = await self._parse_ai_edit_updates(changes, current_event)
@@ -105,10 +107,6 @@ class EventEditingMixin:
             and parsed.get("notes") != getattr(current_event, "notes", None)
         ):
             updates["notes"] = parsed["notes"]
-
-        heuristic_notes = self._extract_notes_update(changes)
-        if heuristic_notes is not None and heuristic_notes != getattr(current_event, "notes", None):
-            updates["notes"] = heuristic_notes
 
         return updates
 
@@ -376,7 +374,7 @@ class EventEditingMixin:
         if not isinstance(candidate, str):
             return False
         category = candidate.strip()
-        if not category or category == "未分类":
+        if not category or category == PendoConfig.DEFAULT_CATEGORY:
             return False
         return cls._CATEGORY_EDIT_RE.search(changes) is not None
 

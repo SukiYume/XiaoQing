@@ -12,17 +12,16 @@ arXiv k-NN 兴趣模型训练脚本
   - 无超参地狱：只有 k（邻居数）和阈值两个关键参数
   - 可解释性强：可以输出"匹配了哪几篇历史论文"
 
-修复 / 新增（v2）：
-  [FIX]  output_dir 指向 plugins/arxiv_filter/best_model_knn/（推理系统期望的路径）
-  [NEW]  embedding 缓存：首次编码后存盘，后续训练直接从磁盘加载，节省数十分钟
-  [NEW]  per-topic recall 分析：训练结束时输出 FRB / Pulsar / WD / Gaia 等子领域通过率
+训练流程：
+  - 产物写入 plugins/arxiv_filter/best_model_knn/，即推理系统加载的目录
+  - embedding 缓存：首次编码后存盘，后续训练直接从磁盘加载，节省数十分钟
+  - per-topic recall 分析：训练结束时输出 FRB / Pulsar / WD / Gaia 等子领域通过率
 """
 
 from __future__ import annotations  # noqa: I001 - torch must load before NumPy on Windows
 
 import hashlib
 import json
-import math
 import re
 import sys
 from dataclasses import dataclass
@@ -33,13 +32,6 @@ import torch
 
 import numpy as np
 import pandas as pd
-
-from sklearn.metrics import (
-    average_precision_score,
-    classification_report,
-    f1_score,
-    roc_auc_score,
-)
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
@@ -64,6 +56,32 @@ _PLUGIN_DIR = _TRAIN_DIR.parent  # …/arxiv_filter/
 # =============================================================================
 # 配置
 # =============================================================================
+
+
+def _validate_hyperparameters(
+    *,
+    encoder_name: object,
+    k: object,
+    neg_k: object,
+    neg_weight: object,
+    neg_sample_size: object,
+    batch_size: object,
+    max_len: object,
+    beta: object,
+) -> None:
+    """配置对象和模型构造函数共用的超参数校验，在耗时编码开始前就拒绝非法值。"""
+
+    _training.require_encoder_name(encoder_name)
+    for name, value, minimum in (
+        ("k", k, 1),
+        ("neg_k", neg_k, 0),
+        ("neg_sample_size", neg_sample_size, 1),
+        ("batch_size", batch_size, 1),
+        ("max_len", max_len, 1),
+    ):
+        _training.require_int(name, value, minimum)
+    _training.require_finite("neg_weight", neg_weight)
+    _training.require_finite("beta", beta, positive=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,27 +127,19 @@ class KNNConfig:
 
         if self.emb_cache_dir is None:
             object.__setattr__(self, "emb_cache_dir", self.output_dir / "emb_cache")
-        if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
-            raise ValueError("encoder_name must be a non-empty string")
-        for name in ("k", "neg_k", "neg_sample_size", "batch_size", "max_len"):
-            value   = getattr(self, name)
-            minimum = 0 if name == "neg_k" else 1
-            if type(value) is not int or value < minimum:
-                raise ValueError(f"{name} must be an integer >= {minimum}")
-        for name, lower_bound in (("neg_weight", 0.0), ("beta", 0.0)):
-            value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or float(value) < lower_bound
-                or (name == "beta" and float(value) == 0)
-            ):
-                raise ValueError(f"{name} has an invalid value")
+        _validate_hyperparameters(
+            encoder_name    = self.encoder_name,
+            k               = self.k,
+            neg_k           = self.neg_k,
+            neg_weight      = self.neg_weight,
+            neg_sample_size = self.neg_sample_size,
+            batch_size      = self.batch_size,
+            max_len         = self.max_len,
+            beta            = self.beta,
+        )
         if not 0 < self.val_size < 1:
             raise ValueError("val_size must be between 0 and 1")
-        if not math.isfinite(self.min_threshold):
-            raise ValueError("min_threshold must be finite")
+        _training.require_finite("min_threshold", self.min_threshold)
         if self.split_mode not in {"random", "time"}:
             raise ValueError("split_mode must be 'random' or 'time'")
 
@@ -224,7 +234,7 @@ def split_dataframe(
 
 
 # =============================================================================
-# ★ 新增：Embedding 缓存
+# Embedding 缓存
 # =============================================================================
 
 
@@ -318,24 +328,12 @@ def load_or_encode(
     _log(f"[encode] 编码 {len(df)} 篇论文（encoder={encoder_name}）…")
     _log("[encode] 预计耗时（CPU ~5-15 min；GPU ~1 min）")
 
-    SentenceTransformer = _training.load_sentence_transformer_class()
-    model               = _training.apply_max_len(SentenceTransformer(encoder_name), max_len)
-    fp16                = torch.cuda.is_available()
-    if fp16:
+    model = _training.load_sentence_encoder(encoder_name, max_len)
+    if torch.cuda.is_available():
         _log("[encode] CUDA 可用，启用 fp16")
 
-    texts              = _training.build_title_abstract_texts(df, title_col, abstract_col)
-    kw: dict[str, Any] = {
-        "batch_size"          : batch_size,
-        "show_progress_bar"   : True,
-        "convert_to_numpy"    : True,
-        "normalize_embeddings": True,
-    }
-    if fp16:
-        with torch.amp.autocast("cuda"):
-            emb = model.encode(texts, **kw)
-    else:
-        emb = model.encode(texts, **kw)
+    texts = _training.build_title_abstract_texts(df, title_col, abstract_col)
+    emb = _training.encode_normalized(model, texts, batch_size, show_progress=True)
     emb = _training.validate_embedding_matrix(
         emb,
         expected_rows = len(df),
@@ -361,7 +359,7 @@ def load_or_encode(
 
 
 # =============================================================================
-# ★ 新增：Per-topic Recall 分析
+# Per-topic Recall 分析
 # =============================================================================
 
 
@@ -494,31 +492,16 @@ class KNNInterestModel:
         max_len: int              = 512,
         embedding_dim: int | None = None,
     ):
-        if not isinstance(encoder_name, str) or not encoder_name.strip():
-            raise ValueError("encoder_name must be a non-empty string")
-        for name, value, minimum in (
-            ("k", k, 1),
-            ("neg_k", neg_k, 0),
-            ("neg_sample_size", neg_sample_size, 1),
-            ("batch_size", batch_size, 1),
-            ("max_len", max_len, 1),
-        ):
-            if type(value) is not int or value < minimum:
-                raise ValueError(f"{name} must be an integer >= {minimum}")
-        if (
-            isinstance(neg_weight, bool)
-            or not isinstance(neg_weight, (int, float))
-            or not math.isfinite(float(neg_weight))
-            or neg_weight < 0
-        ):
-            raise ValueError("neg_weight must be a finite non-negative number")
-        if (
-            isinstance(threshold_beta, bool)
-            or not isinstance(threshold_beta, (int, float))
-            or not math.isfinite(float(threshold_beta))
-            or threshold_beta <= 0
-        ):
-            raise ValueError("threshold_beta must be a finite positive number")
+        _validate_hyperparameters(
+            encoder_name    = encoder_name,
+            k               = k,
+            neg_k           = neg_k,
+            neg_weight      = neg_weight,
+            neg_sample_size = neg_sample_size,
+            batch_size      = batch_size,
+            max_len         = max_len,
+            beta            = threshold_beta,
+        )
         self.encoder_name    = encoder_name
         self.k               = k
         self.neg_k           = neg_k
@@ -533,7 +516,6 @@ class KNNInterestModel:
             raise ValueError("embedding_dim must be a positive integer or None")
         self.encoder: Any | None = None
         self.embed_dim           = embedding_dim
-        self._fp16               = torch.cuda.is_available()
 
         # 普通调用保持原有的立即加载语义；训练主流程已经持有全量 embedding，
         # 只传入维数即可避免把同一个大模型无意义地载入第二遍。
@@ -555,9 +537,8 @@ class KNNInterestModel:
             return self.encoder
 
         _log(f"Loading encoder: {self.encoder_name}")
-        encoder_class = _training.load_sentence_transformer_class()
-        encoder       = _training.apply_max_len(encoder_class(self.encoder_name), self.max_len)
-        actual_dim    = int(encoder.get_sentence_embedding_dimension())
+        encoder    = _training.load_sentence_encoder(self.encoder_name, self.max_len)
+        actual_dim = int(encoder.get_sentence_embedding_dimension())
         if actual_dim <= 0:
             raise ValueError("encoder returned an invalid embedding dimension")
         if self.embed_dim is not None and self.embed_dim != actual_dim:
@@ -566,7 +547,7 @@ class KNNInterestModel:
             )
         self.encoder   = encoder
         self.embed_dim = actual_dim
-        if self._fp16:
+        if torch.cuda.is_available():
             _log("Enabled fp16 encoding (CUDA detected)")
         return encoder
 
@@ -581,18 +562,9 @@ class KNNInterestModel:
         embed_dim = self._embedding_dim()
         if not texts:
             return np.zeros((0, embed_dim), dtype=np.float32)
-        encoder            = self._load_encoder()
-        kw: dict[str, Any] = {
-            "batch_size"          : self.batch_size,
-            "show_progress_bar"   : True,
-            "convert_to_numpy"    : True,
-            "normalize_embeddings": True,
-        }
-        if self._fp16:
-            with torch.amp.autocast("cuda"):
-                emb = encoder.encode(texts, **kw)
-        else:
-            emb = encoder.encode(texts, **kw)
+        emb = _training.encode_normalized(
+            self._load_encoder(), texts, self.batch_size, show_progress=True
+        )
         return _training.validate_embedding_matrix(
             emb,
             expected_rows = len(texts),
@@ -623,16 +595,14 @@ class KNNInterestModel:
             name          = "query embeddings",
         )
 
-        top_k_pos = _training.topk_mean_similarity(query_emb, self.pos_embeddings, self.k)
-
-        if self.neg_embeddings is not None and self.neg_k > 0 and self.neg_weight > 0:
-            top_k_neg = _training.topk_mean_similarity(query_emb, self.neg_embeddings, self.neg_k)
-            return cast(
-                np.ndarray,
-                (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
-            )
-
-        return cast(np.ndarray, top_k_pos.astype(np.float32))
+        return _training.knn_scores(
+            query_emb,
+            self.pos_embeddings,
+            self.neg_embeddings,
+            k          = self.k,
+            neg_k      = self.neg_k,
+            neg_weight = self.neg_weight,
+        )
 
     # ------------------------------------------------------------------
     # 训练
@@ -782,33 +752,9 @@ class KNNInterestModel:
         y_score = self.predict_proba(df, precomputed_embeddings=precomputed_embeddings)
         y_pred = (y_score >= self.threshold).astype(int)
 
-        has_both                  = len(np.unique(y_true)) >= 2
-        metrics: dict[str, float] = {
-            "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
-            "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
-            "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-            "precision_at_5": _training.precision_at_k(y_true, y_score, 5),
-            "precision_at_10": _training.precision_at_k(y_true, y_score, 10),
-            "precision_at_20": _training.precision_at_k(y_true, y_score, 20),
-            "threshold": self.threshold,
-        }
-
-        print(f"\n{'=' * 72}\n[{name}] Metrics\n{'=' * 72}")
-        for key, val in metrics.items():
-            v = "nan" if isinstance(val, float) and np.isnan(val) else f"{val:.4f}"
-            print(f"  {key:<22}: {v}")
-        print(f"\n{'=' * 72}\n[{name}] Classification Report\n{'=' * 72}")
-        print(
-            classification_report(
-                y_true,
-                y_pred,
-                labels        = [0, 1],
-                target_names  = ["negative", "positive"],
-                digits        = 4,
-                zero_division = 0,
-            )
+        return _training.report_interest_metrics(
+            y_true, y_score, y_pred, threshold=self.threshold, name=name
         )
-        return metrics
 
     # ------------------------------------------------------------------
     # 保存
@@ -917,7 +863,7 @@ def main(config: KNNConfig = CONFIG) -> None:
     _log(f"Embedding 缓存目录: {config.resolved_emb_cache_dir}")
     _log("─" * 72)
 
-    # ── ★ 预计算全量 embedding（带缓存）────────────────────────────────────
+    # ── 预计算全量 embedding（带缓存）────────────────────────────────────
     # 对整个 df 一次性编码，之后按 _orig_idx 拆分给训练/验证集，避免重复编码
     all_emb = load_or_encode(
         df,
@@ -967,7 +913,7 @@ def main(config: KNNConfig = CONFIG) -> None:
     model.evaluate(train_df, name="Train", precomputed_embeddings=train_emb)
     model.evaluate(val_df, name="Validation", precomputed_embeddings=val_emb)
 
-    # ── ★ Per-topic recall 分析（核心诊断：WD/Pulsar/Gaia 通过率）──────────
+    # ── Per-topic recall 分析（核心诊断：WD/Pulsar/Gaia 通过率）──────────
     val_scores = model.predict_proba(val_df, precomputed_embeddings=val_emb)
     evaluate_per_topic(
         df        = val_df,

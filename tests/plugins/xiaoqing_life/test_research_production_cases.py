@@ -23,7 +23,6 @@ from plugins.xiaoqing_life import (
     days,
     digest,
     planner,
-    repair,
     research,
     session,
     wind_down,
@@ -489,65 +488,6 @@ def test_sunday_night_after_midnight_still_writes_the_weekly(tmp_path: Path) -> 
     store.journal.append({"kind": "diary", "at": at(23, 0, day=7).timestamp(), "day": "2026-11-07"})
     assert wind_down.weekly_wanted(store, at(0, 40, day=9))  # 周一凌晨：还是周日
     assert not wind_down.weekly_wanted(store, at(23, 0, day=9))
-
-
-# ───────────────────────────── 旧数据修复 ─────────────────────────────
-
-
-def test_old_calendar_day_records_are_migrated_once(tmp_path: Path) -> None:
-    """生产数据：零点半写的日记记成了第二天；一天一次的标记散在四个键里。修一次，之后不再动。"""
-
-    store = new_store(tmp_path)
-    store.state.pop("done_on")
-    store.state.update(
-        wound_down_day = "2026-11-06",
-        followup_day   = "2026-11-04",
-        diary          = {"day": "2026-11-06", "text": "t", "episode_ids": []},
-    )
-    store.journal.append({"kind": "diary", "at": at(0, 30, day=6).timestamp(), "day": "2026-11-06"})
-    assert repair.run(store, MOMENT.tzinfo, NOW)
-    assert store.state["done_on"] == {"wind_down": "2026-11-05", "followup": "2026-11-04"}
-    assert "wound_down_day" not in store.state and "followup_day" not in store.state
-    assert store.state["diary"]["day"] == "2026-11-05" and store.journal[0]["day"] == "2026-11-05"
-    store.state["done_on"]["wind_down"] = "2026-11-06"
-    assert not repair.run(store, MOMENT.tzinfo, NOW)  # 只跑一次
-    assert store.state["done_on"]["wind_down"] == "2026-11-06"
-
-
-def test_repair_drops_research_inflated_interests_snapshots_and_frontier(tmp_path: Path) -> None:
-    store = new_store(tmp_path)
-    store.episodes += [
-        {**_episode("eb", at(21, 0)), "activity": "hot_scroll"},
-        {**_episode("er", at(21, 10)), "activity": "thread_continue"},
-        {**_episode("er2", at(21, 12)), "activity": "thread_continue"},
-    ]
-    store.interests["锅具"] = {
-        "base"    : 0.0,
-        "stage"   : "repeated",
-        "evidence": [
-            {"episode": "er", "item": "bili:2", "at": NOW, "delta": 0.5},
-            {"episode": "er2", "item": "bili:3", "at": NOW, "delta": 0.5},
-        ],
-    }
-    store.interests["烹饪物理"] = {
-        "base"    : 0.0,
-        "stage"   : "tentative",
-        "evidence": [{"episode": "eb", "item": "bili:1", "at": NOW, "delta": 1.0}],
-    }
-    store.snapshots.append(
-        {"topic": "锅具", "tier": 2, "stage": "repeated", "since": NOW, "until": NOW, "text": "x"}
-    )
-    store.snapshots.append({"topic": "猫", "tier": 0, "kind": "tone", "since": NOW, "until": NOW})
-    store.frontier += [
-        {"topic": "九月打卡挑战", "from_episode": "er", "added_at": NOW, "tried": False},
-        {"topic": "豆腐", "from_episode": "eb", "added_at": NOW, "tried": False},
-    ]
-    assert repair.run(store, MOMENT.tzinfo, NOW)
-    assert "锅具" not in store.interests and "烹饪物理" in store.interests
-    assert [s["topic"] for s in store.snapshots] == ["猫"]
-    assert [f["topic"] for f in store.frontier] == ["豆腐"]
-    assert repair.RESEARCH_EVIDENCE in store.state["repairs"]
-    assert not repair.run(store, MOMENT.tzinfo, NOW)  # 修过一次就不再动
 
 
 # ───────────────────────────── 真实回放里发现的查词问题 ─────────────────────────────

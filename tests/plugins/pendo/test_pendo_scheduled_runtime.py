@@ -26,12 +26,9 @@ class TestScheduledTasks:
 
         db.log_reminder = fake_log_reminder
 
-        monkeypatch.setattr(scheduled_module, "get_database", lambda context: db)
-        monkeypatch.setattr(
-            scheduled_module, "_reminder_service_singleton", _ReminderMessageService()
+        result = asyncio.run(
+            scheduled_module.check_reminders(SimpleNamespace(), db, _ReminderMessageService())
         )
-
-        result = asyncio.run(scheduled_module.check_reminders(SimpleNamespace()))
 
         assert len(result) == 1
         assert result[0]["params"]["user_id"] == 1001
@@ -50,12 +47,9 @@ class TestScheduledTasks:
             (item_id, remind_time, sent)
         )
 
-        monkeypatch.setattr(scheduled_module, "get_database", lambda context: db)
-        monkeypatch.setattr(
-            scheduled_module, "_reminder_service_singleton", _ReminderMessageService()
+        result = asyncio.run(
+            scheduled_module.check_reminders(_RejectedContext(), db, _ReminderMessageService())
         )
-
-        result = asyncio.run(scheduled_module.check_reminders(_RejectedContext()))
 
         assert result == []
         assert db.logged == []
@@ -525,3 +519,23 @@ class TestScheduledTasks:
         assert result is None
         assert calls[0][0:3] == ("run", context, "cleanup_demo_data")
         assert calls[1] == ("cleanup", context, database)
+
+    def test_reminder_scheduled_handler_uses_the_shared_services(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+
+        context = SimpleNamespace(logger=pendo_main.logger)
+        services = {"db": SimpleNamespace(), "reminder_service": SimpleNamespace()}
+        calls    = []
+        message  = {"type": "text", "data": {"text": "due"}}
+
+        async def fake_check(received_context, db, reminder_service):
+            calls.append((received_context, db, reminder_service))
+            return [message]
+
+        monkeypatch.setattr(pendo_main, "_get_services", lambda _context: services)
+        monkeypatch.setattr(pendo_main, "check_reminders", fake_check)
+
+        result = asyncio.run(pendo_main.scheduled(context))
+
+        assert result == [message]
+        assert calls == [(context, services["db"], services["reminder_service"])]

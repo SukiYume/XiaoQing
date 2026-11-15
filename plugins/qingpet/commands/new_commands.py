@@ -1,27 +1,19 @@
-"""召回、装扮、交易、展示会及相关管理命令。"""
+"""召回、装扮、交易和展示会命令。"""
 
 import re
 
 from core.args import parse_int
 
+from ..models.pet import DRESS_SLOT_FIELDS
 from ..services.admin_service import log_admin_operation
 from ..services.database import Database
 from ..services.item_service import ItemService
 from ..services.pet_service import PetService
-from ..services.social_service import SocialService
 from ..services.user_service import UserService
-from ..utils.constants import DEFAULT_DRESS_ITEMS, PET_SHOW_CONFIG, TRADE_CONFIG, DressSlot
+from ..utils.constants import DEFAULT_DRESS_ITEMS, PET_SHOW_CONFIG, TRADE_CONFIG
+from ..utils.formatters import rank_label
 from .basic_commands import resolve_pet_for_self_command
-
-_DRESS_SLOT_FIELDS = {
-    DressSlot.HAT       : "dress_hat",
-    DressSlot.CLOTHES   : "dress_clothes",
-    DressSlot.ACCESSORY : "dress_accessory",
-    DressSlot.BACKGROUND: "dress_background",
-}
-_DRESS_SLOT_NAMES = {slot.value: field_name for slot, field_name in _DRESS_SLOT_FIELDS.items()}
-_SHOW_MEDALS      = ("🥇", "🥈", "🥉")
-
+from .parsing import parse_target_qq, split_first_word
 
 # ──────────────────── 召回 ────────────────────
 
@@ -57,9 +49,7 @@ def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[
             "• /宠物 装扮 卸下 <槽位> - 卸下装扮"
         )
 
-    parts = args.strip().split(maxsplit=1)
-    action = parts[0]
-    rest   = parts[1] if len(parts) > 1 else ""
+    action, rest = split_first_word(args)
 
     if action in {"查看", "view", "状态"}:
         if rest.strip():
@@ -168,7 +158,7 @@ def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> tup
 
     item       = DEFAULT_DRESS_ITEMS[item_id]
     slot       = item["slot"]
-    field_name = _DRESS_SLOT_FIELDS.get(slot)
+    field_name = DRESS_SLOT_FIELDS.get(slot.value)
     if field_name is None:
         return False, "装扮槽位无效"
     setattr(pet, field_name, item_id)
@@ -183,10 +173,10 @@ def _dress_unequip(user_id: str, group_id: int, slot_name: str, db: Database) ->
     if pet is None:
         return False, "你还没有宠物"
 
-    if slot_name not in _DRESS_SLOT_NAMES:
-        return False, f"无效槽位，可用: {', '.join(_DRESS_SLOT_NAMES)}"
+    if slot_name not in DRESS_SLOT_FIELDS:
+        return False, f"无效槽位，可用: {', '.join(DRESS_SLOT_FIELDS)}"
 
-    attr = _DRESS_SLOT_NAMES[slot_name]
+    attr = DRESS_SLOT_FIELDS[slot_name]
     if getattr(pet, attr) is None:
         return False, f"{slot_name}槽位没有装扮"
 
@@ -218,9 +208,7 @@ def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> tuple[
             f"  交易税率: {int(TRADE_CONFIG['tax_rate'] * 100)}%"
         )
 
-    parts = args.strip().split(maxsplit=1)
-    action = parts[0]
-    rest   = parts[1] if len(parts) > 1 else ""
+    action, rest = split_first_word(args)
 
     if action in {"列表", "list"}:
         if rest.strip():
@@ -282,8 +270,7 @@ def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
 
 
 def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
-    listing_id_str = args.strip()
-    listing_id = parse_int(listing_id_str, minimum=1)
+    listing_id = parse_int(args.strip(), minimum=1)
     if listing_id is None:
         return False, "请指定订单号\n用法: /宠物 交易 购买 <订单号>"
 
@@ -313,8 +300,7 @@ def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
 
 
 def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
-    listing_id_str = args.strip()
-    listing_id = parse_int(listing_id_str, minimum=1)
+    listing_id = parse_int(args.strip(), minimum=1)
     if listing_id is None:
         return False, "请指定订单号"
 
@@ -347,9 +333,7 @@ def handle_show(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
     if not args.strip():
         return _show_info(group_id, db)
 
-    parts = args.strip().split(maxsplit=1)
-    action = parts[0]
-    rest   = parts[1] if len(parts) > 1 else ""
+    action, rest = split_first_word(args)
 
     if action in {"投票", "vote"}:
         return _show_vote(user_id, group_id, rest, db)
@@ -369,10 +353,9 @@ def _show_info(group_id: int, db: Database) -> tuple[bool, str]:
     if votes:
         lines.append("当前排名:")
         for index, (target_user_id, count) in enumerate(votes.items()):
-            pet   = db.get_pet(target_user_id, group_id)
-            name  = pet.name if pet is not None else target_user_id
-            medal = _SHOW_MEDALS[index] if index < len(_SHOW_MEDALS) else f"#{index + 1}"
-            lines.append(f"{medal} {name} ({target_user_id}) - {count}票")
+            pet  = db.get_pet(target_user_id, group_id)
+            name = pet.name if pet is not None else target_user_id
+            lines.append(f"{rank_label(index)} {name} ({target_user_id}) - {count}票")
     else:
         lines.append("暂无投票")
 
@@ -386,11 +369,9 @@ def _show_info(group_id: int, db: Database) -> tuple[bool, str]:
 
 
 def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
-    match = re.fullmatch(r"@?(\d+)", args.strip())
-    if not match:
+    target_id = parse_target_qq(args)
+    if target_id is None:
         return False, "格式错误\n用法: /宠物 展示 投票 @QQ号"
-
-    target_id = match.group(1)
     if target_id == user_id:
         return False, "不能给自己投票"
 
@@ -407,68 +388,3 @@ def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
     ):
         return False, f"你已投满{PET_SHOW_CONFIG['max_votes_per_user']}票或投票失败"
     return True, f"✅ 成功为 {target_pet.name} 投票！"
-
-
-# ──────────────────── 管理命令: 删除、公告 ────────────────────
-
-
-def handle_manage_delete(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
-    """经管理员授权后删除指定用户的宠物。"""
-
-    match = re.fullmatch(r"@?(\d+)(?:\s+(确认|confirm))?", args.strip(), re.IGNORECASE)
-    if not match:
-        return False, "格式错误\n用法: /宠物 管理 删除 @QQ号"
-
-    target_user_id = match.group(1)
-    if not match.group(2):
-        return False, (
-            f"⚠️ 将永久删除用户 {target_user_id} 的宠物。\n"
-            f"确认执行请发送：/宠物 管理 删除 @{target_user_id} 确认"
-        )
-    if db.admin_delete_pet_atomic(target_user_id, group_id, user_id):
-        return True, f"✅ 用户 {target_user_id} 的宠物已删除"
-    return False, "删除失败"
-
-
-def handle_manage_announce(
-    user_id: str, group_id: int, args: str, db: Database
-) -> tuple[bool, str]:
-    """经管理员授权后开启或结束宠物展示会。"""
-
-    if not args.strip():
-        return True, (
-            "📢 管理公告\n\n"
-            "• /宠物 管理 公告 展示会 [标题] - 开启宠物展示会\n"
-            "• /宠物 管理 公告 结束展示会 - 结束展示会并发放奖励"
-        )
-
-    parts = args.strip().split(maxsplit=1)
-    action = parts[0]
-    rest   = parts[1] if len(parts) > 1 else ""
-
-    if action in {"展示会", "show"}:
-        title    = rest if rest else "宠物展示会"
-        existing = db.get_active_pet_show(group_id)
-        if existing is not None:
-            return False, "已有进行中的展示会"
-
-        show_id = db.create_pet_show(group_id, title, PET_SHOW_CONFIG["duration_hours"])
-        if show_id is not None:
-            return True, (
-                f"🏆 {title} 已开启！\n\n"
-                f"持续时间: {PET_SHOW_CONFIG['duration_hours']}小时\n"
-                f"投票: /宠物 展示 投票 @QQ号\n"
-                f"每人最多{PET_SHOW_CONFIG['max_votes_per_user']}票"
-            )
-        return False, "开启失败"
-
-    if action in {"结束展示会", "end_show"}:
-        show = db.get_active_pet_show(group_id)
-        if show is None:
-            return False, "没有进行中的展示会"
-
-        social_service = SocialService(db)
-        result = social_service.settle_pet_show(group_id, force=True)
-        return True, result if result else "展示会已结束（无投票数据）"
-
-    return False, "未知公告命令"

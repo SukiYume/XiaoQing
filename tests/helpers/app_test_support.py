@@ -19,9 +19,8 @@ from core.app import (
     ApplicationLifecycleFatalError,
     InboundReconcileError,
     XiaoQingApp,
-    _onebot_credentials,
-    current_action_sink,
 )
+from core.app_support import _onebot_credentials, current_action_sink
 from core.delivery import DeliveryReceipt, DeliverySegments
 from core.interfaces import DeliveryTarget, PluginPrincipal
 from core.onebot import OneBotActionOutcomeUnknown
@@ -169,13 +168,11 @@ def _publish_command(
     )
     app.router.register(
         CommandSpec(
-            plugin     = plugin,
-            name       = name,
-            triggers   = [name],
-            help_text  = "测试命令",
-            admin_only = permission == "bot_admin",
-            handler    = unused,
-            catalog    = catalog,
+            plugin   = plugin,
+            name     = name,
+            triggers = [name],
+            handler  = unused,
+            catalog  = catalog,
         )
     )
 

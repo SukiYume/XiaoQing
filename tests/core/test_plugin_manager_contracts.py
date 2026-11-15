@@ -25,6 +25,7 @@ from tests.helpers.plugin_manager_test_support import (
     _FatalLifecycleError,
     _service_definition,
     _write_runtime_manifest,
+    load_plugin_dir,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -99,7 +100,7 @@ async def test_parent_reexport_imports_entry_once_and_purge_removes_parent_handl
     sys.modules[tracker.__name__] = tracker
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
         loaded  = manager._plugins["reexport_demo"]
         package = sys.modules["plugins.reexport_demo"]
@@ -143,7 +144,7 @@ async def test_partial_parent_import_requires_restart_and_cannot_overlap(
     sys.modules[tracker.__name__] = tracker
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
         assert tracker.resources == 1
         assert "partial_parent" in manager._quarantined_plugins
@@ -152,7 +153,7 @@ async def test_partial_parent_import_requires_restart_and_cannot_overlap(
         assert gate.closed is True
 
         await manager.unload_plugin("partial_parent")
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
         assert tracker.resources == 1
         assert "partial_parent" in manager.list_runtime_plugins()
@@ -191,7 +192,7 @@ async def test_moduleless_parent_fatal_preserves_original_and_restart_ledger(
 
     try:
         with pytest.raises(_FatalLifecycleError) as raised:
-            manager.load_plugin(plugin_dir)
+            await load_plugin_dir(manager, plugin_dir)
 
         assert raised.value is expected
         assert "fatal_parent" in manager._restart_required_plugins
@@ -226,7 +227,7 @@ async def test_external_alias_detection_is_restart_only(tmp_path: Path) -> None:
     sys.modules[alias.__name__] = alias
 
     try:
-        manager.load_plugin(plugin_dir)
+        await load_plugin_dir(manager, plugin_dir)
 
         assert "alias_owned_elsewhere" in manager._restart_required_plugins
         assert "alias_owned_elsewhere" in manager._quarantined_plugins

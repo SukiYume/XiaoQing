@@ -12,9 +12,9 @@ from typing import Any
 
 from core.lifecycle import to_thread_owned
 
-from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.gateway import ai_disabled, chat_completions_raw_with_profile, extract_response_content
 from ..memory.memory import MemoryStore
-from ..store_base import StoreBase
+from ..store_base import StoreBase, coerce_finite_float, coerce_int
 from ..utils.json_parsing import parse_first_json_object
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .expr_utils import render_dialogue
@@ -64,15 +64,6 @@ class ReflectTrackerStore(StoreBase):
             super().bind(data_dir)
             self._cache = None
 
-    def _path(self) -> Path | None:
-        return self._resolve_path("bw_learner", "reflect_trackers.json")
-
-    def load(self) -> dict[str, ReflectTrackerState]:
-        with self._lock:
-            self._ensure_loaded()
-            assert self._cache is not None
-            return {chat_id: queue[0] for chat_id, queue in self._cache.items() if queue}
-
     def _ensure_loaded(self) -> None:
         if self._cache is not None:
             return
@@ -82,33 +73,36 @@ class ReflectTrackerStore(StoreBase):
                 self._cache = {}
                 return
             out: dict[str, list[ReflectTrackerState]] = {}
-            for key, value in raw.items():
-                values                           = value if isinstance(value, list) else [value]
+            for key, values in raw.items():
                 queue: list[ReflectTrackerState] = []
-                for item in values:
+                for item in values if isinstance(values, list) else ():
                     if not isinstance(item, dict):
                         continue
                     operator_chat_id = (
                         str(item.get("operator_chat_id", "") or "").strip() or str(key).strip()
                     )
-                    expression_id      = str(item.get("expression_id", "") or "").strip()
-                    created_time       = float(item.get("created_time", 0.0) or 0.0)
-                    last_check_count   = int(item.get("last_check_count", 0) or 0)
-                    last_consumed_time = float(item.get("last_consumed_time", 0.0) or 0.0)
+                    expression_id = str(item.get("expression_id", "") or "").strip()
+                    created_time  = coerce_finite_float(
+                        item.get("created_time"), default=0.0, minimum=0.0
+                    )
                     if operator_chat_id and expression_id and created_time > 0:
                         queue.append(
                             ReflectTrackerState(
-                                operator_chat_id   = operator_chat_id,
-                                expression_id      = expression_id,
-                                created_time       = created_time,
-                                last_check_count   = max(0, last_check_count),
-                                last_consumed_time = max(0.0, last_consumed_time),
+                                operator_chat_id = operator_chat_id,
+                                expression_id    = expression_id,
+                                created_time     = created_time,
+                                last_check_count = coerce_int(
+                                    item.get("last_check_count"), default=0, minimum=0
+                                ),
+                                last_consumed_time=coerce_finite_float(
+                                    item.get("last_consumed_time"), default=0.0, minimum=0.0
+                                ),
                             )
                         )
                 if queue:
                     out[str(key)] = queue
             self._cache = out
-        except (OSError, TypeError, ValueError):
+        except (OSError, ValueError):
             self._cache = {}
 
     def save(self) -> None:
@@ -281,7 +275,7 @@ async def _tick_reflect_tracker_once(
         await to_thread_owned(tracker_store.remove_tracker, operator_chat_id, tracker.expression_id)
         return True
 
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return False
 
     context_block = render_dialogue(since_tracker, bot_name=bot_name)
@@ -291,7 +285,7 @@ async def _tick_reflect_tracker_once(
     prompt = _JUDGE_PROMPT.format(
         situation=expr.situation, style=expr.style, context_block=context_block
     )
-    resp, _path = await chat_completions_raw_with_fallback_paths(
+    resp, _ = await chat_completions_raw_with_profile(
         route                  = "reasoning",
         secrets                = secrets,
         messages               = [{"role": "user", "content": prompt}],

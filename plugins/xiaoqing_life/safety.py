@@ -9,6 +9,7 @@ import unicodedata
 from collections.abc import Iterable
 
 _SIMILAR_RATIO = 0.65
+_BIGRAM_RATIO  = 0.6
 _TAG_RE        = re.compile(r"<[^<>]{0,200}>")
 _URL_RE        = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _AT_RE         = re.compile(r"@[^\s@，,。:：]{1,30}")
@@ -196,6 +197,13 @@ def quote_in_source(quote: str, source: str) -> bool:
     return bool(needle) and needle in normalize_for_match(source)
 
 
+def mentions_topic(folded_text: str, topic: str) -> bool:
+    """话题归一化后（≥2 字）是 ``folded_text``（已经 ``normalize_for_match`` 的文本）的子串。"""
+
+    needle = normalize_for_match(topic)
+    return len(needle) >= 2 and needle in folded_text
+
+
 def similar(a: str, b: str) -> bool:
     """字符二元组重合度 + difflib 判相似；用来合并近义话题、降低（不是封禁）重复话题。"""
 
@@ -205,7 +213,7 @@ def similar(a: str, b: str) -> bool:
         return True
     ga = {a[i : i + 2] for i in range(len(a) - 1)}
     gb = {b[i : i + 2] for i in range(len(b) - 1)}
-    return bool(ga and gb) and 2 * len(ga & gb) / (len(ga) + len(gb)) >= 0.6
+    return bool(ga and gb) and 2 * len(ga & gb) / (len(ga) + len(gb)) >= _BIGRAM_RATIO
 
 
 # 太常见而没有话题意义的二元组：不算内容重合。

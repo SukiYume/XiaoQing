@@ -9,9 +9,9 @@ from core.ai import declare_route_defaults
 from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_message, public_error_response
 
-from .ads_client import ADSClient, _escape_ads_term, paper_title
+from .ads_client import PAPER_LIST_FIELDS, ADSClient, escape_ads_term, paper_title
 from .bibtex import citation_entries
-from .constants import DEFAULT_DAILY_PAPERS
+from .constants import DEFAULT_DAILY_PAPERS, MAX_REFERENCE_TITLE_DISPLAY_LENGTH
 from .paper_commands import paper_list_text, resolve_bibcode_arg, resolve_paper_arg
 from .storage import PaperStorage
 
@@ -50,7 +50,7 @@ def _paper_entry_date(paper: dict[str, Any]) -> date | None:
 def _daily_topic_query(topics: list[str], day: date) -> str:
     """任一关键词命中且当天及以后进入 ADS 的论文。"""
 
-    quoted = [f'"{escaped}"' for topic in topics if (escaped := _escape_ads_term(topic))]
+    quoted = [f'"{escaped}"' for topic in topics if (escaped := escape_ads_term(topic))]
     return f"({' OR '.join(quoted)}) AND entdate:[{day.isoformat()} TO NOW]"
 
 
@@ -137,17 +137,8 @@ async def cmd_daily(
     papers = await client.search_papers(
         query,
         max_results = DEFAULT_DAILY_PAPERS,
-        fields      = [
-            "bibcode",
-            "title",
-            "author",
-            "year",
-            "entdate",
-            "citation_count",
-            "arxiv_class",
-            "identifier",
-        ],
-        sort="entdate desc,bibcode asc",
+        fields      = [*PAPER_LIST_FIELDS, "entdate"],
+        sort        = "entdate desc,bibcode asc",
     )
     papers = [paper for paper in papers if _paper_entry_date(paper) == today]
     # 日期已被上一步严格过滤为同一天，本地稳定排序只需 bibcode。
@@ -211,9 +202,12 @@ async def cmd_refs(
 
         lines = [f"📚 文献库 ({len(entries)} 条引用):\n"]
         for i, entry in enumerate(entries, 1):
-            # 有标题显示标题（最长 60 字），否则显示条目类型与引用键
+            # 有标题显示标题（超长截断），否则显示条目类型与引用键
             if entry.title:
-                lines.append(f"  {i}. {entry.title[:60]}{'...' if len(entry.title) > 60 else ''}")
+                limit = MAX_REFERENCE_TITLE_DISPLAY_LENGTH
+                lines.append(
+                    f"  {i}. {entry.title[:limit]}{'...' if len(entry.title) > limit else ''}"
+                )
             else:
                 lines.append(f"  {i}. @{entry.entry_type}{{{entry.citation_key}}}")
 

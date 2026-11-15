@@ -45,14 +45,16 @@ def make_spec(
     admin_only: bool = False,
 ) -> CommandSpec:
     """创建测试用的 CommandSpec"""
-    return CommandSpec(
-        plugin     = plugin,
-        name       = name,
-        triggers   = triggers,
-        help_text  = f"Help for {name}",
-        admin_only = admin_only,
-        handler    = dummy_handler,
-        priority   = priority,
+    return CommandSpec.from_manifest(
+        plugin,
+        {
+            "name"      : name,
+            "triggers"  : triggers,
+            "help"      : f"Help for {name}",
+            "priority"  : priority,
+            "permission": "bot_admin" if admin_only else "public",
+        },
+        dummy_handler,
     )
 
 
@@ -204,9 +206,8 @@ class TestCommandRouter:
         self,
         router: CommandRouter,
     ):
-        spec       = make_spec("echo", ["echo"])
-        spec.usage = "/echo <text>"
-        child      = CommandCatalogNode(
+        spec  = make_spec("echo", ["echo"])
+        child = CommandCatalogNode(
             code      = "test.echo.raw",
             plugin    = "test",
             path      = ("echo", "raw"),
@@ -236,14 +237,14 @@ class TestCommandRouter:
         )
         assert catalog[0].to_dict()["subcommands"][0]["aliases"] == ["原样"]
 
-    def test_admin_only_flag(self, router: CommandRouter):
-        """测试管理员命令标记"""
+    def test_admin_only_command_keeps_bot_admin_permission(self, router: CommandRouter):
+        """管理员命令解析出来后，目录节点带着 bot_admin 权限。"""
         spec = make_spec("reload", ["reload"], admin_only=True)
         router.register(spec)
 
         result = router.resolve("reload plugins")
         assert result is not None
-        assert result[0].admin_only is True
+        assert result[0].catalog.permission == "bot_admin"
 
     def test_multiple_commands_same_plugin(self, router: CommandRouter):
         """测试同一插件注册多个命令"""
@@ -356,14 +357,8 @@ class TestRouterEdgeCases:
             return [{"type": "text", "data": {"text": "ok"}}]
 
         # 空触发词会被 resolve 跳过（见 router.py:52-53）
-        spec = CommandSpec(
-            plugin     = "test",
-            name       = "test",
-            triggers   = [""],
-            help_text  = "test",
-            admin_only = False,
-            handler    = handler,
-            priority   = 0,
+        spec = CommandSpec.from_manifest(
+            "test", {"name": "test", "triggers": [""], "help": "test", "priority": 0}, handler
         )
         empty_router.register(spec)
 
@@ -387,14 +382,15 @@ class TestRouterEdgeCases:
         special_triggers = [r"test!", "命令.", "d+"]
 
         for trigger in special_triggers:
-            spec = CommandSpec(
-                plugin     = "test",
-                name       = f"test_{len(trigger)}",
-                triggers   = [trigger],
-                admin_only = False,
-                handler    = handler,
-                priority   = 0,
-                help_text  = f"test {trigger}",
+            spec = CommandSpec.from_manifest(
+                "test",
+                {
+                    "name"    : f"test_{len(trigger)}",
+                    "triggers": [trigger],
+                    "help"    : f"test {trigger}",
+                    "priority": 0,
+                },
+                handler,
             )
             empty_router.register(spec)
 
@@ -429,25 +425,17 @@ class TestRouterEdgeCases:
 
         # 注册相同触发词，不同优先级
         empty_router.register(
-            CommandSpec(
-                plugin     = "test",
-                name       = "low",
-                triggers   = ["test"],
-                admin_only = False,
-                handler    = handler_low,
-                priority   = 0,
-                help_text  = "low",
+            CommandSpec.from_manifest(
+                "test",
+                {"name": "low", "triggers": ["test"], "help": "low", "priority": 0},
+                handler_low,
             )
         )
         empty_router.register(
-            CommandSpec(
-                plugin     = "test",
-                name       = "high",
-                triggers   = ["test"],
-                admin_only = False,
-                handler    = handler_high,
-                priority   = 10,
-                help_text  = "high",
+            CommandSpec.from_manifest(
+                "test",
+                {"name": "high", "triggers": ["test"], "help": "high", "priority": 10},
+                handler_high,
             )
         )
 

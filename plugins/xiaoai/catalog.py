@@ -19,6 +19,7 @@ from .presentation import (
     concise_name,
     light_instructions,
     localize_capabilities,
+    type_name,
     usage_examples,
     value_hint,
 )
@@ -27,9 +28,7 @@ MAX_CACHE_BYTES = 4_000_000
 
 
 def label(item: dict[str, Any]) -> str:
-    return str(
-        item.get("comment") or item.get("description") or item.get("type", "").split(":")[3]
-    )[:120]
+    return str(item.get("comment") or item.get("description") or type_name(item))[:120]
 
 
 def normalize_spec(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:

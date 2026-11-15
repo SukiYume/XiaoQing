@@ -14,9 +14,10 @@ from typing import Any
 from .config import LifeConfig
 from .days import DAY
 from .knowledge import HYPOTHESIS, UNVERIFIED_NOTE
+from .lifecycle import TOPIC_CHARS
 from .safety import normalize_for_match, overlap
 from .stores import LifeStore
-from .works import episode_related, topics_match
+from .works import episode_related, liked_episode, topics_match
 
 MAX_QUESTIONS           = 12
 MAX_DOSSIER_CORRECTIONS = 6
@@ -49,7 +50,7 @@ def _find_key(dossiers: Mapping[str, dict[str, Any]], topic: str) -> str | None:
 def _ensure(
     dossiers: dict[str, dict[str, Any]], topic: str, started: float, origin: str
 ) -> dict[str, Any]:
-    key   = _find_key(dossiers, topic) or topic[:12]
+    key   = _find_key(dossiers, topic) or topic[:TOPIC_CHARS]
     entry = dossiers.get(key)
     if entry is None:
         entry = {
@@ -67,6 +68,16 @@ def _ensure(
     if not entry.get("origin") and origin:
         entry["origin"] = origin[:ORIGIN_CHARS]
     return entry
+
+
+def _replace_or_append(rows: list[dict[str, Any]], id_key: str, row: dict[str, Any]) -> None:
+    """``id_key`` 相同的那一行换成新的，没有就追加。"""
+
+    for index, old in enumerate(rows):
+        if old.get(id_key) == row[id_key]:
+            rows[index] = row
+            return
+    rows.append(row)
 
 
 def _touch(entry: dict[str, Any], at: float) -> None:
@@ -91,12 +102,7 @@ def _sync_thread(dossiers: dict[str, dict[str, Any]], thread: Mapping[str, Any])
         "at"        : float(thread.get("updated_at", created)),
     }
     questions: list[dict[str, Any]] = entry["questions"]
-    for index, old in enumerate(questions):
-        if old.get("thread_id") == row["thread_id"]:
-            questions[index] = row
-            break
-    else:
-        questions.append(row)
+    _replace_or_append(questions, "thread_id", row)
     questions.sort(key=lambda q: float(q.get("at", 0.0)))
     del questions[:-MAX_QUESTIONS]
     corrections: list[dict[str, Any]] = entry["corrections"]
@@ -129,12 +135,7 @@ def _sync_work(dossiers: dict[str, dict[str, Any]], work: Mapping[str, Any]) -> 
         "status" : work.get("status", "drafting"),
     }
     works: list[dict[str, Any]] = entry["works"]
-    for index, old in enumerate(works):
-        if old.get("work_id") == row["work_id"]:
-            works[index] = row
-            break
-    else:
-        works.append(row)
+    _replace_or_append(works, "work_id", row)
     del works[:-MAX_WORKS]
     _touch(entry, float(work.get("updated_at", created)))
 
@@ -144,11 +145,7 @@ def _sync_highlights(entry: dict[str, Any], episodes: list[dict[str, Any]]) -> N
 
     rows: dict[str, dict[str, Any]] = {h["episode_id"]: h for h in entry["highlights"]}
     for e in episodes:
-        if (
-            e.get("feeling") in ("like", "mixed")
-            and not e.get("auto")
-            and episode_related(e, entry["topic"])
-        ):
+        if liked_episode(e) and episode_related(e, entry["topic"]):
             rows.setdefault(
                 str(e["id"]),
                 {

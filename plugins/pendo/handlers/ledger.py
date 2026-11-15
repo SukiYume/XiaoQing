@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -35,6 +36,9 @@ from ..utils.time_utils import (
 )
 from ..utils.validators import (
     LEDGER_TRANSACTION_TYPES,
+    MAX_LEDGER_ACCOUNT_CHARS,
+    MAX_LEDGER_MERCHANT_CHARS,
+    MAX_TITLE_CHARS,
     ledger_amount_to_cents,
     ledger_cents_to_amount,
     normalize_ledger_fields,
@@ -59,9 +63,10 @@ _TRANSACTION_TYPE_ICONS: Final = {
     "expense" : "💸",
     "transfer": "🔁",
 }
-_MAX_ACCOUNT_CHARS: Final = 80
-_MAX_TITLE_CHARS: Final = 200
-_MAX_MERCHANT_CHARS: Final = 120
+# 交互记账里表示“用默认值/跳过这一步”的输入。
+_SKIP_WORDS: Final = frozenset({"0", "跳过", "默认"})
+_SKIP_MERCHANT_WORDS: Final = _SKIP_WORDS | {"无", "-"}
+_SKIP_ACCOUNT_WORDS: Final = _SKIP_WORDS | {"现金"}
 _COMMON_LEDGER_ACCOUNTS: Final = ("现金", "微信", "支付宝", "银行卡", "信用卡")
 _FIELD_RE: Final = re.compile(r'(?<!\S)(?P<key>[A-Za-z_]{2,}):(?!//)(?P<value>"[^"]*"|“[^”]*”|\S+)')
 _QUICK_LEDGER_FIELDS: Final = frozenset(
@@ -173,20 +178,42 @@ def _transaction_type_icon(transaction_type: str) -> str:
     return _TRANSACTION_TYPE_ICONS.get(transaction_type, "💸")
 
 
-def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
+def _account_text(item: LedgerItem) -> str:
+    """账户展示：转账显示“转出 → 转入”，其余只显示账户。"""
+
+    account = item.account_name or "现金"
+    counter = item.counter_account_name or ""
+    if item.transaction_type == "transfer" and counter:
+        return f"{account} → {counter}"
+    return account
+
+
+def _collect_fields(
+    text: str, skip: Callable[[int], bool] | None = None
+) -> tuple[dict[str, str], list[tuple[int, int]]]:
+    """找出文本里的 ``key:value`` 字段参数和它们的位置；同一个字段出现两次是错误。
+
+    ``skip`` 判断某个起始位置要不要跳过（引号里的文字不算字段）。
+    """
+
     fields: dict[str, str]        = {}
     spans : list[tuple[int, int]] = []
     for match in _FIELD_RE.finditer(text):
+        if skip is not None and skip(match.start()):
+            continue
         key   = match.group("key").lower()
         value = match.group("value").strip()
         if key in fields:
             raise ValueError(f"字段不能重复: {key}")
-        if (value.startswith('"') and value.endswith('"')) or (
-            value.startswith("“") and value.endswith("”")
-        ):
+        if len(value) >= 2 and (value[0], value[-1]) in {('"', '"'), ("“", "”")}:
             value = value[1:-1]
         fields[key] = value.strip()
         spans.append(match.span())
+    return fields, spans
+
+
+def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
+    fields, spans = _collect_fields(text)
     if not spans:
         return text.strip(), fields
 
@@ -225,19 +252,7 @@ def _tokenize_outside_quotes(text: str) -> tuple[list[tuple[str, bool]], dict[st
     def inside_quote(position: int) -> bool:
         return any(start <= position < end for start, end in quoted)
 
-    fields : dict[str, str]        = {}
-    removed: list[tuple[int, int]] = []
-    for match in _FIELD_RE.finditer(text):
-        if inside_quote(match.start()):
-            continue
-        key   = match.group("key").lower()
-        value = match.group("value").strip()
-        if key in fields:
-            raise ValueError(f"字段不能重复: {key}")
-        if len(value) >= 2 and (value[0], value[-1]) in {('"', '"'), ("“", "”")}:
-            value = value[1:-1]
-        fields[key] = value.strip()
-        removed.append(match.span())
+    fields, removed = _collect_fields(text, skip=inside_quote)
 
     tokens: list[tuple[str, bool]] = []
     cuts                           = sorted(
@@ -453,9 +468,8 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 记账会话状态损坏，请重新开始"}
 
         data: dict[str, Any] = dict(raw_data)
-        # 兼容旧会话时主动丢弃冗余身份和已删除流程留下的内部标记。
+        # 所有者只取入口校验过的 user_id，会话数据里的身份副本一律丢弃。
         data.pop("owner_id", None)
-        data.pop("_compact_entry", None)
         if not _valid_session_state(raw_step, data):
             await safe_end_session(context)
             return {"status": "error", "message": "❌ 记账会话状态损坏，请重新开始"}
@@ -571,7 +585,7 @@ class LedgerHandler(DbOpsMixin):
 
         value                     = text.strip()
         category_name: str | None = None
-        if value in {"0", "默认", "跳过"}:
+        if value in _SKIP_WORDS:
             category_name = "其他"
         elif value.isdecimal() and 1 <= int(value) <= len(categories):
             category_name = categories[int(value) - 1]["name"]
@@ -606,12 +620,12 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """最后一步: 输入商户/对方并保存。"""
         merchant = text.strip()
-        if len(merchant) > _MAX_MERCHANT_CHARS:
+        if len(merchant) > MAX_LEDGER_MERCHANT_CHARS:
             return {
                 "status" : "info",
-                "message": f"❌ 商户不能超过 {_MAX_MERCHANT_CHARS} 个字符，请重新输入：",
+                "message": f"❌ 商户不能超过 {MAX_LEDGER_MERCHANT_CHARS} 个字符，请重新输入：",
             }
-        if merchant and merchant not in {"0", "跳过", "默认", "无", "-"}:
+        if merchant and merchant not in _SKIP_MERCHANT_WORDS:
             data["merchant"] = merchant
         # 先校验并持久化，成功后再结束会话：校验或保存失败时草稿保留，用户只需改有问题的字段。
         result = await self._save_ledger_item(user_id, data, group_id)
@@ -639,10 +653,10 @@ class LedgerHandler(DbOpsMixin):
         if not text:
             return {"status": "info", "message": "❌ 描述不能为空，请输入："}
         # 在这一步就校验长度：留到最后保存才失败，用户改不了已经填过的描述。
-        if len(text) > _MAX_TITLE_CHARS:
+        if len(text) > MAX_TITLE_CHARS:
             return {
                 "status" : "info",
-                "message": f"❌ 描述不能超过 {_MAX_TITLE_CHARS} 个字符，请重新输入：",
+                "message": f"❌ 描述不能超过 {MAX_TITLE_CHARS} 个字符，请重新输入：",
             }
 
         data["title"] = text
@@ -691,17 +705,17 @@ class LedgerHandler(DbOpsMixin):
     @staticmethod
     def _parse_account_choice(text: str, default_allowed: bool) -> tuple[str, str | None]:
         value = text.strip()
-        if default_allowed and (not value or value in {"0", "跳过", "默认", "现金"}):
+        if default_allowed and (not value or value in _SKIP_ACCOUNT_WORDS):
             return "现金", None
-        if not value or value in {"0", "跳过", "默认"}:
+        if not value or value in _SKIP_WORDS:
             return "", "❌ 转账必须填写转入账户，可输入编号或账户名："
 
         try:
             index = int(value)
         except ValueError:
             # 在账户这一步就校验长度：到最后一步才失败会让用户重填全部字段。
-            if len(value) > _MAX_ACCOUNT_CHARS:
-                return "", f"❌ 账户名不能超过 {_MAX_ACCOUNT_CHARS} 个字符，请重新输入："
+            if len(value) > MAX_LEDGER_ACCOUNT_CHARS:
+                return "", f"❌ 账户名不能超过 {MAX_LEDGER_ACCOUNT_CHARS} 个字符，请重新输入："
             return value, None
 
         if 1 <= index <= len(_COMMON_LEDGER_ACCOUNTS):
@@ -785,8 +799,8 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """快速记账
 
-        格式: /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户]
-        默认为支出，加 in 标记为收入，加 transfer 标记为转账
+        格式: /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer] [account:账户] [to:账户]
+        默认为支出；引号外写 in 为收入、out 为支出、transfer 为转账，也可以用 type:xxx 指定
         """
         data, error = self._parse_quick_ledger_data(text)
         if error:
@@ -799,7 +813,7 @@ class LedgerHandler(DbOpsMixin):
         if not text:
             return {}, (
                 "❌ 用法: /pendo ledger quick <金额> <描述> "
-                "[cat:分类] [in|transfer] [account:账户] [to:账户]"
+                "[cat:分类] [in|out|transfer] [account:账户] [to:账户]"
             )
 
         try:
@@ -1013,13 +1027,9 @@ class LedgerHandler(DbOpsMixin):
     @staticmethod
     def _format_list_item(item: LedgerItem) -> str:
         transaction_type = item.transaction_type or "expense"
-        account          = item.account_name or "现金"
-        counter          = item.counter_account_name or ""
-        account_text     = (
-            f"{account} → {counter}" if transaction_type == "transfer" and counter else account
-        )
-        merchant_text = f" | 🏷️ {item.merchant}" if item.merchant else ""
-        title_text    = f" {item.title}" if item.title else ""
+        account_text     = _account_text(item)
+        merchant_text    = f" | 🏷️ {item.merchant}" if item.merchant else ""
+        title_text       = f" {item.title}" if item.title else ""
         return (
             f"• {_transaction_type_icon(transaction_type)} "
             f"{_transaction_sign(transaction_type)}{currency_label(item.currency)}{_format_cents(item.amount_cents)}  "
@@ -1190,9 +1200,7 @@ class LedgerHandler(DbOpsMixin):
         tx_type      = item.transaction_type or "expense"
         icon         = _transaction_type_icon(tx_type)
         cat_icon     = _get_category_icon(item.ledger_category)
-        account      = item.account_name or "现金"
-        counter      = item.counter_account_name or ""
-        account_text = f"{account} → {counter}" if tx_type == "transfer" and counter else account
+        account_text = _account_text(item)
 
         message = (
             f"💰 账目详情\n\n"
@@ -1295,7 +1303,7 @@ class LedgerHandler(DbOpsMixin):
     async def edit_ledger(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
         """编辑账目
 
-        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [type:expense/income/transfer] [account:账户] [to:账户] [date:日期] [remark:备注]
+        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注] [currency:CNY]
         所有字段均通过 key:value 显式指定
         """
         parts = args.split(maxsplit=1)

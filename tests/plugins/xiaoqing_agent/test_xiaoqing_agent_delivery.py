@@ -52,8 +52,8 @@ def test_classify_files_splits_images_uploads_and_problems(tmp_path: Path, monke
 
 
 def test_outcome_message_notes_problems_and_defaults_empty_text(tmp_path: Path) -> None:
-    message, uploads = outcome_message(Outcome("  ", [str(tmp_path / "gone.png")]))
-    assert uploads == []
+    message, images, uploads = outcome_message(Outcome("  ", [str(tmp_path / "gone.png")]))
+    assert images == [] and uploads == []
     assert message == [
         {
             "type": "text",

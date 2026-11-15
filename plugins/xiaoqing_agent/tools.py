@@ -24,8 +24,8 @@ from core.process_tree import ProcessResult, run_process
 from core.router import CommandCatalogNode, command_access, resolve_catalog_invocation
 
 from . import receipts
-from .config import PLUGIN_NAME, AgentConfig
-from .prompts import command_allowed
+from .config import AgentConfig
+from .prompts import HIDDEN_CAPABILITY_PLUGINS, command_allowed
 from .shells import ShellSpec
 from .tasks import AgentTask, Outcome
 
@@ -107,7 +107,8 @@ class ToolEnv:
     command_counter: int = 0
     # 本次命令返回的本地文件；发起人不能读写本机文件时，只能发出这些和产出目录里的文件。
     command_files: set[Path] = field(default_factory=set)
-    user_updates : list[str] = field(default_factory=list)
+    # 执行中交给模型的补充要求（含 Bot 管理员和群友的）：写进办事会话和统一记忆，也交给插件核对字段来源。
+    user_updates: list[str] = field(default_factory=list)
     # 发起人在这个办事会话前几轮说的原话（旧→新）；和本轮原话、补充一起交给插件核对字段来源。
     session_requests: tuple[str, ...] = ()
     # 同一调用（工具、参数和去掉记录 ID 的结果）出现的次数。
@@ -181,7 +182,7 @@ def resolve_path(env: ToolEnv, raw: str) -> Path:
 
 
 def _ensure_local(env: ToolEnv) -> None:
-    """本机工具每次调用前都向 Core 复核，撤掉 Bot 管理员后同一任务里也立即失效。"""
+    """本机工具每次调用前都向 Core 复核，发起人失去 ``/shell`` 的权限后同一任务里也立即失效。"""
 
     service = getattr(env.context.capabilities, "local_tools", None)
     if service is None:
@@ -189,7 +190,7 @@ def _ensure_local(env: ToolEnv) -> None:
     try:
         service.ensure_authorized()
     except PermissionError as exc:
-        raise ToolError("发起人已经不是 Bot 管理员，不能再执行代码或读写本机文件。") from exc
+        raise ToolError("发起人现在没有使用 /shell 的权限，不能再执行代码或读写本机文件。") from exc
 
 
 def _local_allowed(env: ToolEnv) -> bool:
@@ -395,11 +396,9 @@ async def _read_image(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         )
     except AIError as exc:
         raise ToolError("图片识别失败，请说明失败并请用户补充文字。保留当前运行环境。") from exc
-    choices = result.response.get("choices") or []
-    content = choices[0].get("message", {}).get("content") if choices else None
-    if not isinstance(content, str) or not content.strip():
+    if not result.content:
         raise ToolError("图片识别返回空结果，请用户补充文字。")
-    return ToolResult(truncate(content, env.config.max_tool_output_chars))
+    return ToolResult(truncate(result.content, env.config.max_tool_output_chars))
 
 
 def _write_text(path: Path, content: str) -> int:
@@ -504,29 +503,31 @@ def settled_status(env: ToolEnv, claimed: str) -> str:
 # ──────────────────── XiaoQing 命令 ────────────────────
 
 
+def _names(node: CommandCatalogNode) -> set[str]:
+    """命令名和别名（忽略大小写）：用户输入的词按它找命令入口。"""
+
+    return {node.name.casefold(), *(alias.casefold() for alias in node.aliases)}
+
+
 def catalog_lines(context: Any, query: str, *, include_unavailable: bool = False) -> list[str]:
     roots = tuple(
         root
         for root in context.get_command_catalog()
-        if root.plugin not in {PLUGIN_NAME, "xiaoqing_chat"}
+        if root.plugin not in HIDDEN_CAPABILITY_PLUGINS
     )
     principal       = getattr(context, "principal", None)
     needle          = " ".join(query.strip().lstrip("/").casefold().split())
     terms           = needle.split()
     exact: set[str] = set()
     if terms:
-        named_roots = tuple(
-            root
-            for root in roots
-            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}
-        )
+        named_roots = tuple(root for root in roots if terms[0] in _names(root))
+        for root in named_roots:
+            invocation = resolve_catalog_invocation(root, " ".join(terms[1:]))
+            if not invocation.arguments:
+                exact.update(node.code for node in invocation.node.walk())
         if named_roots:
             roots = named_roots
         for root in roots:
-            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
-                invocation = resolve_catalog_invocation(root, " ".join(terms[1:]))
-                if not invocation.arguments:
-                    exact.update(node.code for node in invocation.node.walk())
             for node in root.walk():
                 if needle == node.code.casefold():
                     exact.update(child.code for child in node.walk())
@@ -590,19 +591,13 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         for root in env.context.get_command_catalog():
             if terms[0] in {
                 root.plugin.casefold(),
-                root.name.casefold(),
                 root.code.casefold(),
-                *(alias.casefold() for alias in root.aliases),
+                *_names(root),
             } and not command_allowed(root, env.context.principal):
                 return ToolResult("当前身份没有使用这个插件的权限。", state="blocked")
-            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+            if terms[0] in _names(root):
                 branch     = resolve_catalog_invocation(root, " ".join(terms[1:])).node
-                candidates = [
-                    node
-                    for node in branch.walk()
-                    if terms[-1]
-                    in {node.name.casefold(), *(alias.casefold() for alias in node.aliases)}
-                ]
+                candidates = [node for node in branch.walk() if terms[-1] in _names(node)]
                 for node in candidates or branch.children or (branch,):
                     lines.extend(catalog_lines(env.context, node.code))
                 heading = "完整路径未匹配，以下为该入口的相关命令；按列出的用法选择：\n\n"
@@ -847,7 +842,7 @@ def resolve_command(context: Any, command: str) -> tuple[CommandCatalogNode, Any
         return None
     scope = tokens[0].casefold()
     for root in context.get_command_catalog():
-        if scope in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+        if scope in _names(root):
             return root, resolve_catalog_invocation(root, tokens[1] if len(tokens) > 1 else "")
     return None
 
@@ -1308,7 +1303,7 @@ async def execute_tool(
         result = await tool.handler(env, parse_arguments(raw_arguments))
     except ToolError as exc:
         result = ToolResult(f"错误：{exc}", state="error")
-    except (OSError, ValueError, TypeError, RuntimeError, PermissionError) as exc:
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
         result = ToolResult(f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error")
     finally:
         env.tool_seconds += max(

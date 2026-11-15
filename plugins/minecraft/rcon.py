@@ -8,6 +8,7 @@ import struct
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
+from core.plugin_base import has_control_characters
 from core.sensitive_audit import audit_error_type
 
 logger = logging.getLogger(__name__)
@@ -122,30 +123,48 @@ class RconPacket:
         return cls(request_id, packet_type, payload), data[packet_end:]
 
 
+def is_valid_rcon_host(host: object) -> bool:
+    """主机名或地址：非空、无首尾空白、无空白与控制字符、不超过 253 字符。"""
+
+    return (
+        isinstance(host, str)
+        and bool(host)
+        and host == host.strip()
+        and len(host) <= 253
+        and not any(char.isspace() for char in host)
+        and not has_control_characters(host)
+    )
+
+
+def is_valid_rcon_port(port: object) -> bool:
+    """端口必须是 1 至 65535 的整数（布尔值不算）。"""
+
+    return isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535
+
+
+def is_valid_rcon_password(password: object) -> bool:
+    """密码非空、不含 NUL，且 UTF-8 字节数不超过单个出站载荷上限。"""
+
+    return (
+        isinstance(password, str)
+        and bool(password)
+        and "\0" not in password
+        and len(password.encode("utf-8")) <= RCON_MAX_OUTBOUND_PAYLOAD_BYTES
+    )
+
+
 class RconClient:
     """单连接、串行执行并在失败后自动重建的 Source RCON 客户端。"""
 
-    MAX_PACKET_BYTES       = RCON_MAX_PACKET_BODY_BYTES
     MAX_RESPONSE_BYTES     = 1024 * 1024
     RESPONSE_CHUNK_TIMEOUT = 0.5
 
     def __init__(self, host: str, port: int, password: str, timeout: float = 10.0) -> None:
-        if (
-            not isinstance(host, str)
-            or not host
-            or host != host.strip()
-            or len(host) > 253
-            or any(char.isspace() or ord(char) < 32 for char in host)
-        ):
+        if not is_valid_rcon_host(host):
             raise ValueError("RCON host is invalid")
-        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        if not is_valid_rcon_port(port):
             raise ValueError("RCON port is invalid")
-        if (
-            not isinstance(password, str)
-            or not password
-            or "\0" in password
-            or len(password.encode("utf-8")) > RCON_MAX_OUTBOUND_PAYLOAD_BYTES
-        ):
+        if not is_valid_rcon_password(password):
             raise ValueError("RCON password is invalid")
         if (
             isinstance(timeout, bool)
@@ -300,7 +319,7 @@ class RconClient:
                 raise ConnectionError("RCON peer closed the connection") from exc
             raise RconProtocolError("RCON packet header was truncated") from exc
         packet_length = struct.unpack("<i", header)[0]
-        if packet_length < 10 or packet_length > self.MAX_PACKET_BYTES:
+        if packet_length < 10 or packet_length > RCON_MAX_PACKET_BODY_BYTES:
             raise RconProtocolError(f"invalid RCON packet length: {packet_length}")
         try:
             async with asyncio.timeout(timeout):

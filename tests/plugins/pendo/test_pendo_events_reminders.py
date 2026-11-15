@@ -67,7 +67,7 @@ class TestAIParserMilestones:
 
     @pytest.mark.parametrize("text", ["²", "٣", "１２"])
     def test_unicode_digits_do_not_escape_local_number_parser(self, text: str):
-        assert self._make_parser()._parse_chinese_number(text) is None
+        assert self._make_parser()._parse_offset_number(text) is None
 
     def test_build_remind_times_for_milestones(self):
         """多节点时 remind_times 是所有里程碑各自提醒的并集"""

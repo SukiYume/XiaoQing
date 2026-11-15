@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm.auto import tqdm
 
 from ..training_common import (
+    best_fbeta_threshold,
     coerce_binary_labels,
     read_training_csv,
     seed_python_numpy,
@@ -410,6 +411,7 @@ def prepare_classifier_training(
 
 __all__ = [
     "ClassifierTrainingRuntime",
+    "best_fbeta_threshold",
     "build_classifier_config_log_lines",
     "build_loader_kwargs",
     "build_weighted_sampler",

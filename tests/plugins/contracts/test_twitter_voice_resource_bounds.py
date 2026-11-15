@@ -59,11 +59,7 @@ async def test_twitter_graphql_params_are_real_json_with_exact_strings(monkeypat
         )
     )
 
-    assert await twitter._fetch_timeline(context, cursor='cursor"\\value') == (
-        [],
-        None,
-        False,
-    )
+    assert await twitter._fetch_timeline(context, cursor='cursor"\\value') == ([], None)
 
     variables = json.loads(captured["params"]["variables"])
     features  = json.loads(captured["params"]["features"])
@@ -154,7 +150,7 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
         for index in range(len(payloads))
     ]
     monkeypatch.setattr(twitter, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(twitter, "_fetch_timeline", AsyncMock(return_value=(tweets, None, False)))
+    monkeypatch.setattr(twitter, "_fetch_timeline", AsyncMock(return_value=(tweets, None)))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "MAX_CONCURRENT_IMAGE_DOWNLOADS", 2)
     monkeypatch.setattr(

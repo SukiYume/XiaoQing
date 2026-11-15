@@ -225,7 +225,6 @@ def mock_context(tmp_path: Path):
     context.state            = {}
     context.logger           = MagicMock()
     context.session_manager  = None
-    context.config_manager   = MagicMock()
     return with_settings_reader(context)
 
 
@@ -313,7 +312,7 @@ def reply_plan(**overrides):
         "runtime"           : _complete_test_runtime_config(runtime),
         "state"             : MagicMock(),
         "forced"            : False,
-        "action"            : PlannedAction("reply", 0, "", "", []),
+        "action"            : PlannedAction(think_level=0, reasoning=""),
         "bot_name"          : "小青",
         "chat_id"           : "g1",
         "is_private"        : False,

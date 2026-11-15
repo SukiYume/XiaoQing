@@ -107,9 +107,7 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
     async def fake_get_manager(_context: Any) -> CodexQueueManager:
         return manager
 
-    import plugins.codex.manager as manager_module
-
-    monkeypatch.setattr(manager_module, "get_manager", fake_get_manager)
+    monkeypatch.setattr(codex_arxiv_summary, "get_manager", fake_get_manager)
     result = await codex_arxiv_summary.enqueue_or_replay_arxiv_summary(
         context,
         date     = "2026-05-19",
@@ -462,7 +460,7 @@ async def test_codex_get_manager_reads_settings_inside_publication_lock(tmp_path
         get_settings_snapshot = read_settings,
     )
     manager        = await manager_module.get_manager(context)
-    singleton_lock = manager_module._manager_lock()
+    singleton_lock = manager_module._MANAGER_LOCK.get()
     await singleton_lock.acquire()
     waiting = asyncio.create_task(manager_module.get_manager(context))
     try:
@@ -642,7 +640,6 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
     monkeypatch.setattr("core.app.setup_logging", lambda *_args, **_kwargs: SimpleNamespace())
     app     = XiaoQingApp(root)
     context = app._build_plugin_context("codex", plugin_dir, data_dir, {})
-    assert context.config_manager is None
     assert callable(context.get_settings_snapshot)
     monkeypatch.setattr(manager_module, "CodexRunner", GenerationRunner)
 

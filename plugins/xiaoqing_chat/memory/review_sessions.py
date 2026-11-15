@@ -1,4 +1,9 @@
-"""持久化人工复盘会话，并把审核结论转为后续回复策略。"""
+"""持久化人工复盘会话，并把审核结论转为后续回复策略。
+
+同一套功能在不同位置有不同叫法：命令是 ``/xc 审查``，配置节是 ``reflection``，落盘目录是
+``review_sessions``，日志和推给管理员的提示里叫“反思会话”，注入回复提示的策略块标题是
+“运营/反思策略”。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from core.args import parse_int
-from core.atomic_store import AtomicJsonStore, atomic_write_bytes, keyed_path_lock
+from core.atomic_store import (
+    AtomicJsonStore,
+    atomic_write_bytes,
+    keyed_path_lock,
+    quarantine_corrupt_file,
+)
 from core.delivery import DeliveryReceipt, send_with_receipt
 from core.plugin_base import build_action, segments, text
 
@@ -30,10 +40,8 @@ def _empty_sessions_state() -> dict[str, Any]:
 def _quarantine_corrupt_file(path: Path, *, description: str, error: BaseException) -> None:
     """保留无法恢复的损坏文件，避免后续正常写入直接覆盖原始证据。"""
 
-    target = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
-    try:
-        path.rename(target)
-    except FileNotFoundError:
+    target = quarantine_corrupt_file(path)
+    if target is None:
         # 外部维护进程可能恰好移除了文件；此时按文件缺失处理即可。
         return
     _logger.error(
@@ -51,7 +59,11 @@ def _load_json_document(
     default_factory: Callable[[], dict[str, Any]],
     normalize: Callable[[Any], tuple[dict[str, Any], bool]],
 ) -> dict[str, Any]:
-    """从原子 JSON 存储读取并规范化数据，必要时恢复备份或隔离损坏文件。"""
+    """从原子 JSON 存储读取并规范化数据，必要时恢复备份或隔离损坏文件。
+
+    不直接用 ``AtomicJsonStore.read``：这里要通过 ``normalize`` 校验后才接受主文件或备份，
+    备份有效时按原字节恢复主文件；主文件和备份都不可用时，把损坏的主文件隔离保留而不是覆盖。
+    """
 
     default = default_factory()
     store   = AtomicJsonStore(path)
@@ -113,7 +125,6 @@ class ReviewPolicy:
     goal_override  : str   = ""
     goal_lock_until: float = 0.0
     strategy_note  : str   = ""
-    avoid_patterns : list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -178,17 +189,11 @@ def _normalize_policy_document(raw: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(raw, dict):
         raise TypeError("review policy root must be an object")
 
-    goal_override  = raw.get("goal_override", "")
-    strategy_note  = raw.get("strategy_note", "")
-    avoid_patterns = raw.get("avoid_patterns", [])
+    goal_override = raw.get("goal_override", "")
+    strategy_note = raw.get("strategy_note", "")
     if not isinstance(goal_override, str) or not isinstance(strategy_note, str):
         raise TypeError("review policy text fields must be strings")
-    if not isinstance(avoid_patterns, list):
-        raise TypeError("review policy avoid_patterns must be an array")
 
-    normalized_patterns = [
-        item.strip() for item in avoid_patterns if isinstance(item, str) and item.strip()
-    ]
     goal_lock_until = _finite_float(
         raw.get("goal_lock_until", 0.0),
         field_name="goal_lock_until",
@@ -197,9 +202,16 @@ def _normalize_policy_document(raw: Any) -> tuple[dict[str, Any], bool]:
         "goal_override"  : goal_override.strip(),
         "goal_lock_until": goal_lock_until,
         "strategy_note"  : strategy_note.strip(),
-        "avoid_patterns" : normalized_patterns,
     }
     return normalized, normalized != raw
+
+
+def _policy_from_document(payload: dict[str, Any]) -> ReviewPolicy:
+    return ReviewPolicy(
+        goal_override   = str(payload.get("goal_override", "")),
+        goal_lock_until = float(payload.get("goal_lock_until", 0.0)),
+        strategy_note   = str(payload.get("strategy_note", "")),
+    )
 
 
 class ReviewStore(StoreBase):
@@ -251,9 +263,10 @@ class ReviewStore(StoreBase):
                 self._cache_sessions = normalized
                 return
             store = AtomicJsonStore(path)
-            store.write(normalized)
             if scrub_backup:
-                # 清除会话时再写一次相同状态，使 .bak 也不再含被删除的会话。
+                # 清除会话时让 .bak 也是同一份状态，不再含被删除的会话。
+                store.write_with_backup(normalized)
+            else:
                 store.write(normalized)
             self._cache_sessions = normalized
 
@@ -269,12 +282,7 @@ class ReviewStore(StoreBase):
                     default_factory = dict,
                     normalize       = _normalize_policy_document,
                 )
-                policy = ReviewPolicy(
-                    goal_override   = str(payload.get("goal_override", "")),
-                    goal_lock_until = float(payload.get("goal_lock_until", 0.0)),
-                    strategy_note   = str(payload.get("strategy_note", "")),
-                    avoid_patterns  = list(payload.get("avoid_patterns", [])),
-                )
+                policy = _policy_from_document(payload)
             else:
                 policy = ReviewPolicy()
             self._cache_policies[chat_id] = policy
@@ -287,18 +295,12 @@ class ReviewStore(StoreBase):
                     "goal_override"  : pol.goal_override,
                     "goal_lock_until": pol.goal_lock_until,
                     "strategy_note"  : pol.strategy_note,
-                    "avoid_patterns" : list(pol.avoid_patterns),
                 }
             )
             path = self._policy_path(chat_id)
             if path:
                 AtomicJsonStore(path).write(payload)
-            self._cache_policies[chat_id] = ReviewPolicy(
-                goal_override   = str(payload["goal_override"]),
-                goal_lock_until = float(payload["goal_lock_until"]),
-                strategy_note   = str(payload["strategy_note"]),
-                avoid_patterns  = list(payload["avoid_patterns"]),
-            )
+            self._cache_policies[chat_id] = _policy_from_document(payload)
 
     def clear_policy(self, chat_id: str) -> None:
         with self._lock:
@@ -433,8 +435,7 @@ class ReviewStore(StoreBase):
                 ):
                     return _decode_session(str(sid), obj)
 
-            pending_limit = max(0, int(max_pending))
-            if pending_limit == 0 or len(active) >= pending_limit:
+            if len(active) >= max_pending:
                 return None
 
             key = f"{chat_id}:{kind}"
@@ -518,29 +519,6 @@ def _decode_session(sid: str, obj: dict[str, Any]) -> ReviewSession:
 
 def render_session_prompt(sess: ReviewSession) -> str:
     header = f"反思会话：{sess.session_id}（{sess.kind}，会话 {sess.chat_id}）"
-    if sess.kind == "bad_reply_pattern":
-        reason = str(sess.payload.get("reason", "") or "").strip()
-        goal   = str(sess.payload.get("goal", "") or "").strip()
-        if sess.step <= 0:
-            return (
-                f"{header}\n"
-                f"- 现象：回复被检查拒绝\n"
-                f"- 目标：{goal or '自然聊天'}\n"
-                f"- 原因：{reason or '-'}\n\n"
-                "这属于需要长期规避的“模式”吗？\n"
-                f"- /xc 审查 ok {sess.session_id}\n"
-                f"- /xc 审查 no {sess.session_id}\n"
-            ).strip()
-        if sess.step == 1:
-            return (
-                f"{header}\n"
-                "请把问题概括成可跨话题复用的判断原则：描述失败机制和正确方向，"
-                "不要写具体词、专名、数字或单次事件；如果无法泛化，就直接关闭会话。\n"
-                f"- /xc 审查 answer {sess.session_id} <规则/替代说法>\n"
-                f"- /xc 审查 close {sess.session_id}\n"
-            ).strip()
-        summary = "\n".join(f"- {x}" for x in sess.answers[-3:]) if sess.answers else "-"
-        return (f"{header}\n已记录：\n{summary}\n\n- /xc 审查 close {sess.session_id}\n").strip()
     if sess.kind == "goal_strategy":
         goal  = str(sess.payload.get("goal", "") or "").strip()
         stats = str(sess.payload.get("stats", "") or "").strip()
@@ -613,27 +591,15 @@ def apply_review_answer(
     sess: ReviewSession,
     answer: str,
     goal_lock_seconds: float,
-    max_avoid_patterns: int,
 ) -> tuple[ReviewSession, str | None]:
     a = (answer or "").strip()
     if not a:
         return sess, None
     if sess.expires_at and time.time() >= sess.expires_at:
-        # 审查超时后的答案不再修改目标、策略备注或长期规避模式。
+        # 审查超时后的答案不再修改目标或策略备注。
         return sess, None
     pol     = store.get_policy(sess.chat_id)
     applied = None
-
-    if sess.kind == "bad_reply_pattern":
-        pol.avoid_patterns.append(a)
-        pol.avoid_patterns = [x for x in pol.avoid_patterns if x.strip()]
-        if max_avoid_patterns > 0 and len(pol.avoid_patterns) > int(max_avoid_patterns):
-            pol.avoid_patterns = pol.avoid_patterns[-int(max_avoid_patterns) :]
-        store.save_policy(sess.chat_id, pol)
-        sess.answers.append(a)
-        sess.step = max(sess.step, 2)
-        applied   = "已记录为长期规避模式。"
-        return sess, applied
 
     if sess.kind == "goal_strategy":
         if a.lower().startswith("goal:"):
@@ -666,10 +632,6 @@ def build_policy_block(store: ReviewStore, chat_id: str) -> str:
     lines: list[str] = []
     if pol.strategy_note.strip():
         lines.append(f"- 策略备注：{pol.strategy_note.strip()}")
-    if pol.avoid_patterns:
-        recent = pol.avoid_patterns[-6:]
-        lines.append("- 长期规避：")
-        lines.extend(f"  - {item.strip()}" for item in recent)
     if pol.goal_override.strip() and pol.goal_lock_until > now:
         lines.append(f"- 目标覆写：{pol.goal_override.strip()}")
     if not lines:

@@ -1,7 +1,4 @@
-"""
-拟人智能对话处理器
-包含聊天处理、内部命令等核心功能
-"""
+"""拟人智能对话的消息入口：收消息、决定是否回、交给生成与投递。"""
 
 from __future__ import annotations
 
@@ -21,7 +18,6 @@ from core.public_errors import public_error_message
 from .agent_bridge import (
     AGENT_PLUGIN,
     MAX_AGENT_MEMORY_CHARS,
-    agent_may_take_over,
     answer_with_agent_or_chat,
 )
 from .attention_gate import decide_attention
@@ -29,10 +25,12 @@ from .brain_chat import (
     is_brain_chat_active,
 )
 from .chat_event import (
+    COMMAND_FORCED_EVENT_KEY,
     EVERYONE_MENTION_ID,
     EVERYONE_MENTION_LABEL,
     MENTION_LABELS_KEY,
     event_chat_id,
+    event_plain_text,
     is_bot_mentioned,
     is_called_by_name,
     is_private_event,
@@ -54,6 +52,7 @@ from .follow_ups import (
     BURST_TEXTS_KEY,
     carry_attention,
     carry_text,
+    command_prefixes,
     sender_has_follow_up,
     take_carried_attention,
     take_carried_texts,
@@ -64,6 +63,7 @@ from .handler_context import HandlerContext
 from .life.closing_guard import should_stay_silent
 from .life.daily_life import day_key, ensure_today
 from .life.online import probe_online_life
+from .life.push_log import Push, image_paths
 from .life.schedule import routine_factor, routine_slot_now
 from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
@@ -76,8 +76,9 @@ from .message_parts import (
     build_text_message_parts,
 )
 from .planning.action_history import ActionRecord
-from .planning.goal_state import derive_goal_async, is_low_information_turn
+from .planning.goal_state import derive_goal, is_low_information_turn
 from .post_reply_tasks import spawn_life_extraction
+from .reply_fallbacks import GENERATION_BUSY_REPLY
 from .runtime_state import SELF_MOOD_KEY
 from .smalltalk_models import PreparedSmalltalkTurn
 from .store_binding import bound_state
@@ -93,12 +94,13 @@ from .utils.wall_clock import local_datetime
 # 会话状态、重置与长空档判定
 
 
-_SLEEPY_MOOD_RE                    = re.compile(r"困|睡|迷糊")
-_QUIET_MOOD_RE                     = re.compile(r"听|话少|轻一点|困")
-_last_mood_check: dict[str, float] = {}
+_SLEEPY_MOOD_RE = re.compile(r"困|睡|迷糊")
+_QUIET_MOOD_RE  = re.compile(r"听|话少|轻一点|困")
+# 上一次有任何会话来消息的时间（进程内）：心境全局一份，空档也按全局算。
+_last_mood_check_at = 0.0
 
 
-def _refresh_mood_state(runtime, state, _chat_id: str, *, availability: str = "free") -> str:
+def _refresh_mood_state(runtime, state, *, availability: str = "free") -> str:
     """挑选或复用角色此刻的心境。
 
     规则：
@@ -113,10 +115,11 @@ def _refresh_mood_state(runtime, state, _chat_id: str, *, availability: str = "f
     if not states:
         return ""
 
-    now                             = time.time()
-    last_check                      = _last_mood_check.get(SELF_MOOD_KEY, 0.0)
-    idle_threshold                  = max(0.0, cfg.state_force_refresh_after_idle_seconds)
-    _last_mood_check[SELF_MOOD_KEY] = now
+    global _last_mood_check_at
+    now                 = time.time()
+    last_check          = _last_mood_check_at
+    idle_threshold      = max(0.0, cfg.state_force_refresh_after_idle_seconds)
+    _last_mood_check_at = now
 
     current_value = state.get_mood_state(SELF_MOOD_KEY)
     current       = current_value if isinstance(current_value, str) else ""
@@ -192,11 +195,11 @@ def _reply_after_failure(context, exc: Exception, event: dict[str, Any]) -> list
     return segments(random.choice(_STALLED_REPLIES))
 
 
-def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | None = None) -> bool:
+def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any) -> bool:
     source        = str(source_plugin or "").strip().lower()
     noisy_plugins = {
         str(item or "").strip().lower()
-        for item in (cfg.noisy_external_source_plugins if cfg is not None else ())
+        for item in cfg.noisy_external_source_plugins
         if str(item or "").strip()
     }
     if source in noisy_plugins:
@@ -244,7 +247,7 @@ async def _maybe_reset_idle_conversation(
     if idle_gap <= threshold:
         return 0.0
 
-    await reset_transient_conversation_state(state, chat_id, context.data_dir)
+    await reset_transient_conversation_state(state, chat_id)
     log_step(
         context,
         runtime,
@@ -281,7 +284,7 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     max_replan                  = 1
     try:
         runtime    = load_runtime(context)
-        max_replan = max(0, runtime.cfg.reply_check.max_replan)
+        max_replan = runtime.cfg.reply_check.max_replan
         hctx = HandlerContext.from_event(event, context, runtime=runtime)
     except Exception as exc:
         context.logger.debug(
@@ -342,11 +345,7 @@ def _chat_text_with_addressee(clean_text: str, event: dict[str, Any], bot_name: 
         return f"@{bot_name}"
     if not text or not bot_name or text.startswith(bot_name):
         return text
-    raw_text = (
-        extract_text(event.get("message")).strip()
-        or str(event.get("raw_message", "") or "").strip()
-    )
-    if raw_text.startswith(bot_name) or is_bot_mentioned(event):
+    if event_plain_text(event).startswith(bot_name) or is_bot_mentioned(event):
         return f"{bot_name}，{text}"
     return text
 
@@ -390,20 +389,12 @@ def _is_prefixed_xc_command_observation(clean_text: str, event: dict[str, Any], 
     if _command_token(clean_text) == "xc":
         return True
 
-    raw_text = extract_text(event.get("message")).strip()
-    if not raw_text:
-        raw_text = str(event.get("raw_message", "") or "").strip()
+    raw_text = event_plain_text(event)
     if not raw_text:
         return False
 
-    config   = context.get_settings_snapshot().config
-    prefixes = tuple(config.get("command_prefixes", ["/"]) or ["/"])
-    for prefix in prefixes:
-        prefix_text = str(prefix)
-        if not prefix_text or not raw_text.startswith(prefix_text):
-            continue
-        remainder = raw_text[len(prefix_text) :].lstrip()
-        if _command_token(remainder) == "xc":
+    for prefix in command_prefixes(context):
+        if raw_text.startswith(prefix) and _command_token(raw_text[len(prefix) :]) == "xc":
             return True
     return False
 
@@ -497,7 +488,8 @@ async def observe_outgoing_action(
             # 聊天自己的回复在发送回执提交时已经连同消息 ID 记下；审查提示等其他外发不进对话。
             return []
 
-        text = _outgoing_action_text(action)
+        text      = _outgoing_action_text(action)
+        full_text = text
         if str(source_plugin or "").strip() == AGENT_PLUGIN:
             # 群友常常只引用结果接着说；记不下这条，就认不出那是在跟小青说话。
             text = text[:MAX_AGENT_MEMORY_CHARS]
@@ -525,6 +517,19 @@ async def observe_outgoing_action(
                 source_plugin = str(source_plugin or "").strip() or "external",
             )
             schedule_memory_persist(context, runtime, chat_id=chat_id)
+            if str(source_plugin or "").strip() != AGENT_PLUGIN:
+                # 对话里长推送只记开头；全文和配图另存一份，她想就这条推送说点什么时看得到。
+                await asyncio.to_thread(
+                    state.push_log.append,
+                    chat_id,
+                    Push(
+                        ts       = time.time(),
+                        source   = str(source_plugin or "").strip() or "external",
+                        local_id = local_id,
+                        text     = full_text,
+                        images   = image_paths(_outgoing_action_params(action).get("message")),
+                    ),
+                )
             state.action_history.append(
                 chat_id,
                 ActionRecord(
@@ -582,7 +587,7 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
     brain_chat_enabled = runtime.cfg.brain_chat.enable_private_brain_chat
     direct_mentioned   = is_bot_mentioned(event)
     is_private         = is_private_event(event)
-    command_forced     = bool(event.get("_xc_command_forced"))
+    command_forced     = bool(event.get(COMMAND_FORCED_EVENT_KEY))
     # @ 了别人、没 @ 她时，句子里的名字多半是在跟别人说她。
     called_by_name = (
         not is_private
@@ -643,9 +648,7 @@ async def _update_observed_goal(context, hctx: HandlerContext, text: str, *, for
         if override:
             goal, source = override, "review"
     if not goal and not planner_top_goal and not preserve:
-        goal = await derive_goal_async(
-            data_dir=context.data_dir, chat_id=chat_id, current_text=text, planner_reasoning=""
-        )
+        goal = derive_goal(text)
     if goal:
         await state.goal_store.set_async(chat_id, goal=goal, source=source)
         log_step(
@@ -700,7 +703,7 @@ async def _private_closing_settled(text: str, event: dict[str, Any], hctx: Handl
     """私聊里对方只回了句收尾，而角色已经收过尾：这一轮不接话，避免互道晚安停不下来。"""
 
     life = hctx.runtime.cfg.life
-    if not life.enable_private_closing_guard or event.get("_xc_command_forced"):
+    if not life.enable_private_closing_guard or event.get(COMMAND_FORCED_EVENT_KEY):
         return False
     history = await hctx.state.memory_store.get_recent_async(hctx.chat_id, max_items=8)
     return should_stay_silent(
@@ -842,7 +845,6 @@ async def _prepare_smalltalk_turn(
         mood_text         = _refresh_mood_state(
             runtime,
             state,
-            chat_id,
             availability=str(event.get("_xc_routine_availability") or "free"),
         ),
     )
@@ -856,7 +858,7 @@ async def _yields_to_follow_up(
     显式命令（``/xc 内容``）照常回复。
     """
 
-    if event.get("_xc_command_forced") or not sender_has_follow_up(event, context):
+    if event.get(COMMAND_FORCED_EVENT_KEY) or not sender_has_follow_up(event, context):
         return False
     async with chat_lock(hctx.chat_id):
         await ensure_user_message_recorded(
@@ -908,10 +910,7 @@ async def _maybe_reply_smalltalk(
             prepared, event, context, hctx, started_at=t0, deciding=deciding
         )
 
-    # 私聊和群里明确跟她说的话并行判断工具需求；没人叫她的群消息只走聊天，由 PFC 决定参与。
-    if (prepared.is_private or prepared.forced) and agent_may_take_over(prepared, event, context):
-        return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
-    return await chat(None)
+    return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
 
 
 async def _reply_with_chat(
@@ -931,16 +930,15 @@ async def _reply_with_chat(
         async with hctx.state.generation_limiter.admit(
             chat_id                    = hctx.chat_id,
             user_id                    = user_scope,
-            max_global                 = max(0, runtime.cfg.max_generation_inflight_global),
-            max_per_chat               = max(0, runtime.cfg.max_generation_inflight_per_chat),
-            max_per_user               = max(0, runtime.cfg.max_generation_inflight_per_user),
-            max_calls_per_user_per_day = max(0, runtime.cfg.max_generation_calls_per_user_per_day),
+            max_global                 = runtime.cfg.max_generation_inflight_global,
+            max_per_chat               = runtime.cfg.max_generation_inflight_per_chat,
+            max_per_user               = runtime.cfg.max_generation_inflight_per_user,
+            max_calls_per_user_per_day = runtime.cfg.max_generation_calls_per_user_per_day,
             chat_wait_seconds          = _CHAT_GENERATION_QUEUE_SECONDS,
         ):
             generated = await generate_smalltalk_turn(prepared, event, context, hctx)
             if deciding is not None and await asyncio.shield(deciding) is not None:
                 # 生成比 agent 的判断先完成，而 agent 要接手：这次的聊天回复不发。
-                generated.cancel_speculative_memory()
                 return []
             return await finalize_smalltalk_turn(
                 prepared,
@@ -961,4 +959,4 @@ async def _reply_with_chat(
         # 被同会话更新的消息顶替时由新一轮接手，不再发忙碌提示。
         if not prepared.forced or str(exc) == CHAT_SUPERSEDED:
             return []
-        return segments("消息有点多，我缓一下再回")
+        return segments(GENERATION_BUSY_REPLY)

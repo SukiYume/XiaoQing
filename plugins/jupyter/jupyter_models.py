@@ -10,6 +10,14 @@ from .jupyter_config import MAX_OUTPUT_LENGTH
 _TRUNCATION_SUFFIX = "\n…（输出已截断）"
 
 
+def truncate_with_suffix(text: str, max_chars: int, suffix: str) -> str:
+    """超过 ``max_chars`` 时保留开头并接上 ``suffix``，结果总长不超过 ``max_chars``。"""
+
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - len(suffix)]}{suffix}"
+
+
 @dataclass(slots=True)
 class ExecutionResult:
     """一次内核执行的内存结果；图片必须是已验证 PNG 字节。"""
@@ -38,7 +46,4 @@ class ExecutionResult:
             parts.append(f"\n⏱️ {self.execution_time:.2f}s")
 
         output = "\n".join(parts) if parts else "(无输出)"
-        if len(output) <= MAX_OUTPUT_LENGTH:
-            return output
-        kept_chars = MAX_OUTPUT_LENGTH - len(_TRUNCATION_SUFFIX)
-        return f"{output[:kept_chars]}{_TRUNCATION_SUFFIX}"
+        return truncate_with_suffix(output, MAX_OUTPUT_LENGTH, _TRUNCATION_SUFFIX)

@@ -21,6 +21,7 @@ from core.interfaces import (
     PluginPrincipal,
     PluginSettingsSnapshot,
 )
+from core.lifecycle import LazyAsyncLock
 from plugins.codex import arxiv_summary as codex_arxiv_summary
 from plugins.codex import main as codex_main
 from plugins.codex import manager as codex_manager_module
@@ -218,7 +219,7 @@ def _reset_manager_state() -> None:
     """隔离测试之间的模块级单例和事件循环锁。"""
 
     codex_manager_module._MANAGER      = None
-    codex_manager_module._MANAGER_LOCK = None
+    codex_manager_module._MANAGER_LOCK = LazyAsyncLock()
 
 
 def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueueManager:

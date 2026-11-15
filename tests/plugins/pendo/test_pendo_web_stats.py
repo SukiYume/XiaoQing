@@ -582,10 +582,10 @@ def test_task_stats_separates_created_done_and_cancelled_weeks(db: Database) -> 
     )["data"]
     weekly = {item["week"]: item for item in data["weekly"]}
 
-    assert weekly["2026-W09"]["created"] == 1
-    assert weekly["2026-W10"]["done"] == 1
-    assert weekly["2026-W10"]["cancelled"] == 1
-    assert weekly["2026-W11"]["created"] == 3
+    assert weekly["2026-W10"]["created"] == 1
+    assert weekly["2026-W11"]["done"] == 1
+    assert weekly["2026-W11"]["cancelled"] == 1
+    assert weekly["2026-W12"]["created"] == 3
     assert data["totals"] == {"open": 3, "done": 1, "cancelled": 1, "closed": 2}
     assert data["created_count"] == 4
     assert data["by_plan"] == [
@@ -789,7 +789,6 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges(db: Database) 
         ("quarter", ("2026-04-01", "2026-05-20")),
         ("year", ("2026-01-01", "2026-05-20")),
         ("last_year", ("2025-01-01", "2025-12-31")),
-        ("all", ("2026-05-20", "2026-05-20")),
         ("2024-02", ("2024-02-01", "2024-02-29")),
         ("2026-03-01..2026-03-31", ("2026-03-01", "2026-03-31")),
     ),
@@ -807,6 +806,7 @@ def test_parse_range_supports_presets_months_and_explicit_bounds(
     "range_value",
     (
         "unsupported",
+        "all",
         "2026-13",
         "2026-03-31..2026-03-01",
         "bad..2026-03-01",
@@ -820,12 +820,20 @@ def test_parse_range_rejects_invalid_or_reversed_values(range_value: str) -> Non
         stats_api._parse_range(range_value, today=date(2026, 5, 20))
 
 
-def test_stats_range_requires_paired_explicit_bounds() -> None:
+def test_stats_range_requires_paired_explicit_bounds(db: Database) -> None:
     """显式开始和结束日期不能只给一端。"""
 
     error = _assert_http_error(
         422,
-        lambda: stats_api._resolve_stats_range("all", start_date="2026-01-01"),
+        lambda: stats_api._resolve_stats_range(
+            "all",
+            "2026-01-01",
+            None,
+            today     = date(2026, 5, 20),
+            db        = db,
+            owner_id  = "u",
+            item_type = "ledger",
+        ),
     )
     assert "同时提供" in error.detail
 
@@ -997,3 +1005,14 @@ def test_stats_and_comparison_select_one_currency(currency_db, monkeypatch):
     )["data"]
     assert comparison["currency"] == "USD"
     assert comparison["months"][-1]["expense"] == 200
+
+
+def test_week_keys_follow_iso_weeks_across_new_year() -> None:
+    """跨年的那一周是同一个键，不拆成上一年的最后一周和新年的第 0 周。"""
+
+    from datetime import date
+
+    from plugins.pendo.utils.time_utils import iso_week_key
+
+    assert iso_week_key(date(2026, 12, 31)) == iso_week_key(date(2027, 1, 3)) == "2026-W53"
+    assert iso_week_key(date(2027, 1, 4)) == "2027-W01"

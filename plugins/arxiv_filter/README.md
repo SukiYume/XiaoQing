@@ -53,7 +53,7 @@ Codex 摘要任务使用以下复合身份：
 | 工作日 10:00、10:30、11:00、11:30 | 检查源站列表日期，发现当日列表后筛选并推送 |
 | 工作日 12:00 | 最终检查与源站状态通知 |
 
-`data/arxiv_filter/update_status.json` 记录每日投递状态。五个任务采用 Core `broadcast` 模式，目标来自各 schedule 的 `group_ids`，字段省略时使用 `default_group_ids`。生产推送请配置至少一个目标群。
+`data/arxiv_filter/update_status.json` 记录每日投递状态。五个任务采用 Core `broadcast` 模式，目标群来自部署配置 `config.plugins.arxiv_filter.schedules.<任务 ID>.group_ids`，没写时使用 `default_group_ids`。生产推送请配置至少一个目标群。
 
 定时检查取得发送占用后，日期读取、推理或任务取消均通过统一清理路径释放占用。后续调度可继续检查同一天的列表。
 
@@ -102,6 +102,7 @@ Codex 摘要任务使用以下复合身份：
 1. 推理 CLI 的 `--model-path`
 2. `ARXIV_MODEL_PATH`
 3. `plugins/arxiv_filter/config.json` 的 `model.path`
+4. 以上都没有时为 `plugins/arxiv_filter/best_model/`
 
 生产环境可使用外置绝对路径：
 
@@ -128,11 +129,10 @@ export ARXIV_MODEL_PATH=/srv/xiaoqing-models/arxiv
 ```bash
 python scripts/arxiv_inference_cli.py \
   --model-path /srv/xiaoqing-models/arxiv \
-  --input papers.csv \
   --output predictions.csv
 ```
 
-输出 CSV 使用原子写入。目标文件替换通过 `--force` 显式授权。单篇冒烟可使用 `--test-positive`。
+CLI 拉取当天的 arXiv 列表并推理，没有读本地论文表的入口。输出 CSV 使用原子写入。目标文件替换通过 `--force` 显式授权。单篇冒烟可使用 `--test-positive`。
 
 ---
 
@@ -141,7 +141,7 @@ python scripts/arxiv_inference_cli.py \
 ```text
 data/arxiv_filter/
 ├── update_status.json       # 调度投递状态
-└── ...                      # 源列表与推理缓存
+└── claim-<日期>             # 当天定时推送的占用标记，超过 1 小时视为遗留
 ```
 
 模型资产位于配置路径，运行状态位于插件数据目录，两类文件采用独立备份与部署流程。

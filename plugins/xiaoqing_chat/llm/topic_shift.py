@@ -7,10 +7,15 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+from core.plugin_base import resolve_bot_name
+
 from ..memory.memory import StoredMessage
-from ..persona import resolve_bot_name
 from ..utils.json_parsing import parse_first_json_object, strict_json_bool
-from .gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from .gateway import (
+    ai_disabled,
+    chat_completions_raw_with_profile,
+    extract_response_content,
+)
 from .llm_config import LLMCallConfig
 from .prompt_builder import build_dialogue_prompt
 
@@ -47,9 +52,9 @@ async def reply_should_be_withheld(
     llm: LLMCallConfig,
     log: Any = None,
 ) -> bool:
-    """请规划路由判断是否取消投递；复核不可用时保留旁听。"""
+    """请规划路由判断是否取消投递；返回 True 即取消。复核不可用或调用失败时一律取消，不发出这条回复。"""
 
-    if "_ai" in secrets and secrets.get("_ai") is None:
+    if ai_disabled(secrets):
         return True
     name   = resolve_bot_name(bot_name)
     prompt = _PROMPT.format(
@@ -66,7 +71,7 @@ async def reply_should_be_withheld(
     )
     started = time.monotonic()
     try:
-        response, _profile = await chat_completions_raw_with_fallback_paths(
+        response, _profile = await chat_completions_raw_with_profile(
             route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],

@@ -19,11 +19,9 @@ GROUP_ID = 97531
 def config_db():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
-    database             = Database(db_path)
-    config               = database.get_group_config(GROUP_ID)
-    config.enabled       = False
-    config.trade_enabled = True
-    assert database.update_group_config(config)
+    database = Database(db_path)
+    assert database.update_group_config_field(GROUP_ID, "enabled", False)
+    assert database.update_group_config_field(GROUP_ID, "trade_enabled", True)
     try:
         yield database, db_path
     finally:
@@ -39,7 +37,7 @@ def _row(database: Database) -> tuple:
         database._get_connection()
         .execute(
             """SELECT group_id, enabled, economy_multiplier, decay_multiplier,
-                  trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words
+                  trade_enabled, activity_enabled, sensitive_words
            FROM group_configs WHERE group_id = ?""",
             (GROUP_ID,),
         )
@@ -102,7 +100,7 @@ def test_connection_failure_raises_stable_config_error_without_default(config_db
     try:
         persisted = verification.execute(
             """SELECT group_id, enabled, economy_multiplier, decay_multiplier,
-                      trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words
+                      trade_enabled, activity_enabled, sensitive_words
                FROM group_configs WHERE group_id = ?""",
             (GROUP_ID,),
         ).fetchone()

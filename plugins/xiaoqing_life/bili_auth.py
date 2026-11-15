@@ -1,6 +1,6 @@
 """B站 扫码登录：只登录管理员扫码授权的那一个账号，凭证只用于 ``api.bilibili.com`` 的只读 GET。
 
-边界（见 DESIGN.md 10.11）：
+边界（README「B站登录」一节是对外的说法）：
 
 - 凭证值、二维码链接、``qrcode_key`` 不进日志、状态、命令输出、提示词、异常信息；日志只记步骤与错误类型。
 - 二维码只发给发起人的私聊（动作带 ``SENSITIVE_ACTION_KEY``）。
@@ -12,13 +12,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import json
 import logging
-import os
 import re
-import subprocess
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
@@ -38,8 +34,11 @@ from core.bounded_http import (
     aiohttp_request_bounded,
     parse_bounded_json,
 )
-from core.delivery import SENSITIVE_ACTION_KEY
-from core.plugin_base import segments
+from core.delivery import send_sensitive_private
+from core.plugin_base import has_control_characters, qr_image, requester_user_id, segments
+from core.private_files import protect_directory as protect_directory
+from core.private_files import write_private_json
+from core.safe_http import BROWSER_USER_AGENT
 
 from .safety import clean_text
 
@@ -61,10 +60,6 @@ UNAME_CHARS       = 40
 _COOKIE_URL_HOSTS = frozenset({"passport.biligame.com"})
 _FINGERPRINT_RE   = re.compile(r"[A-Za-z0-9_%.\-+/|]+={0,2}")
 _KEY_RE           = re.compile(r"[A-Za-z0-9_\-]{8,128}")
-USER_AGENT        = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
 _LIMITS = BodyLimits(max_wire_bytes=256 * 1024, max_decoded_bytes=256 * 1024)
 _JSON = JsonLimits(max_bytes=256 * 1024, max_depth=16, max_nodes=20_000, max_string_chars=65_536)
 _MIME = MimePolicy(
@@ -97,7 +92,7 @@ def valid_value(value: Any) -> bool:
         isinstance(value, str)
         and 0 < len(value) <= MAX_VALUE_CHARS
         and ";" not in value
-        and all(ord(ch) >= 32 and ord(ch) != 127 for ch in value)
+        and not has_control_characters(value)
     )
 
 
@@ -109,35 +104,6 @@ def build_cookie_header(cookies: Mapping[str, Any]) -> str:
     return "; ".join(
         f"{name}={cookies[name]}" for name in COOKIE_NAMES if valid_value(cookies.get(name))
     )
-
-
-def protect_directory(directory: Path) -> None:
-    """收紧凭证目录权限：POSIX 0700；Windows 去继承、只给当前用户（同 xiaoai 的做法）。"""
-
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "nt":
-        identity = subprocess.check_output(["whoami"], text=True).strip()  # noqa: S607
-        subprocess.run(  # noqa: S603
-            ["icacls", str(directory), "/inheritance:r", "/grant:r", f"{identity}:(OI)(CI)F"],  # noqa: S607
-            check  = True,
-            stdout = subprocess.DEVNULL,
-            stderr = subprocess.DEVNULL,
-        )
-    else:
-        directory.chmod(0o700)
-
-
-def write_secret(path: Path, value: dict[str, Any]) -> None:
-    """临时文件（0o600）+ fsync + ``os.replace`` 原子写。"""
-
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = path.with_suffix(".tmp")
-    fd        = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, ensure_ascii=False)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
 
 
 class BiliCredential:
@@ -231,7 +197,7 @@ async def _get(
     if host not in REQUEST_HOSTS:
         raise LoginError("host_not_allowed")
     headers = {
-        "User-Agent": USER_AGENT,
+        "User-Agent": BROWSER_USER_AGENT,
         "Accept"    : "application/json, text/plain, */*",
         "Referer"   : "https://www.bilibili.com/",
     }
@@ -356,38 +322,9 @@ async def verify_login(session: Any, cookies: Mapping[str, str]) -> dict[str, An
     return data
 
 
-def qr_image(url: str) -> dict[str, Any]:
-    try:
-        import qrcode
-    except ImportError as exc:
-        raise LoginError("qrcode_missing") from exc
-    output = io.BytesIO()
-    qrcode.make(url, box_size=6, border=4).save(output, format="PNG")
-    return {
-        "type": "image",
-        "data": {"file": "base64://" + base64.b64encode(output.getvalue()).decode()},
-    }
-
-
-async def send_private(context: Any, recipient: int, message: list[dict[str, Any]]) -> bool | None:
-    """私聊发送；动作带 ``SENSITIVE_ACTION_KEY``（不进投递记录与日志）。"""
-
-    try:
-        result = await context.send_action(
-            {
-                "action"            : "send_private_msg",
-                "params"            : {"user_id": recipient, "message": message},
-                SENSITIVE_ACTION_KEY: True,
-            }
-        )
-        return result if result is True or result is False else None
-    except Exception:
-        return False
-
-
 def requester_id(context: Any, event: Mapping[str, Any]) -> int:
-    value = getattr(context, "current_user_id", None) or event.get("user_id")
-    if type(value) is not int or value <= 0:
+    value = requester_user_id(context, event)
+    if value is None:
         raise LoginError("not_private")
     return value
 
@@ -488,8 +425,11 @@ class BiliLogin:
         key = data.get("qrcode_key")
         if not isinstance(key, str) or not _KEY_RE.fullmatch(key):
             raise LoginError("bad_qrcode_key")
-        picture = qr_image(url)
-        sent    = await send_private(
+        try:
+            picture = qr_image(url)
+        except ImportError as exc:
+            raise LoginError("qrcode_missing") from exc
+        sent = await send_sensitive_private(
             context,
             owner,
             [*segments("请用 B站 App 扫描二维码并确认登录，约 3 分钟内有效。"), picture],
@@ -581,7 +521,7 @@ class BiliLogin:
             return
         owner = self.credential.info()["owner"]
         if owner:
-            await send_private(context, owner, segments(MSG_INVALID))
+            await send_sensitive_private(context, owner, segments(MSG_INVALID))
 
     # —— 后台轮询 ——
 
@@ -593,10 +533,10 @@ class BiliLogin:
             raise
         except LoginError as exc:
             logger.info("xiaoqing_life step=bili_login failed reason=%s", exc)
-            await send_private(context, owner, segments(MSG_RETRY))
+            await send_sensitive_private(context, owner, segments(MSG_RETRY))
         except Exception as exc:
             logger.info("xiaoqing_life step=bili_login failed error_type=%s", type(exc).__name__)
-            await send_private(context, owner, segments(MSG_RETRY))
+            await send_sensitive_private(context, owner, segments(MSG_RETRY))
         finally:
             if self.pending is pending:
                 self.pending = None
@@ -651,8 +591,10 @@ class BiliLogin:
             "saved_at"     : self.clock(),
         }
         await asyncio.to_thread(protect_directory, self.credential.path.parent)
-        await asyncio.to_thread(write_secret, self.credential.path, document)
+        await asyncio.to_thread(write_private_json, self.credential.path, document)
         self.credential.mark_valid()
         await self.record(True)
         logger.info("xiaoqing_life step=bili_login saved")
-        await send_private(context, owner, segments(MSG_DONE.format(uname=uname or "已确认")))
+        await send_sensitive_private(
+            context, owner, segments(MSG_DONE.format(uname=uname or "已确认"))
+        )
