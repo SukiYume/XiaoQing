@@ -171,13 +171,19 @@ git diff --check
 先运行受影响模块的测试，再执行全仓库门禁。
 测试覆盖当前功能的行为契约；业务修复补充或调整对应功能的用例，不单独保留针对某次修复的测试。
 测试数据使用临时目录或临时数据库。
+
+测试按当前功能组织：`tests/core` 覆盖核心行为，`tests/transport` 覆盖协议与传输，`tests/plugins/<plugin>` 覆盖插件，`tests/integration` 覆盖组件协作，`tests/tooling` 覆盖测试辅助工具与打包资源。
+用例验证输入、输出、状态变化、错误处理、权限、并发和资源生命周期，相同执行流程使用参数化合并。
+外部服务通过隔离替身提供响应，Web 客户端测试执行实际 JavaScript。
+断言以运行结果和有效数据契约为依据；文档措辞、注释、固定供应商域名、已删除文件清单和源码实现形式交由代码审查维护。
+测试中的样例 URL 用于验证解析、配置传递与访问策略。
+
 重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`），也可以单独运行 `python scripts/check_redundancy.py`：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（函数体不到 8 行的小函数，以及只有 `...`、`pass` 或 `raise NotImplementedError` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在脚本的 `ALLOWED` 里写明原因。
 
 README 描述当前用法和配置。
 ARCHITECTURE 描述模块职责、数据流与所有权。
 项目手册描述公共契约。
 命令、权限和别名与 `plugin.json` 保持一致，跨模块公共约定通过链接引用。
-审查记录分别维护问题处置、修复批次和最终验证，全部完成后再标记关闭。
 
 ---
 

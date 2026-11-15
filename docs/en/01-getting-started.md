@@ -58,6 +58,8 @@ Check these fields in `config/config.json` before the first startup:
 }
 ```
 
+The example file sets `default_group_ids` to the placeholder `123456789`. Schedules without their own groups send to these groups, so change it to your own group IDs or leave it empty (`[]`).
+
 ### Secret configuration
 
 Set at least the inbound authentication token and administrator QQ IDs in `config/secrets.json`:
@@ -154,11 +156,15 @@ Use this XiaoQing configuration:
 HTTP `/event` and WebSocket `/ws` share `inbound_token`, session ordering, and a bounded admission queue.
 Set a nonempty `inbound_token` when you enable an inbound listener.
 
-Enable the OneBot HTTP API and point `onebot_http_base` at it. The reply channel uses `onebot_token` as its token.
+Enable the OneBot HTTP API (the NapCat HTTP server) so that it listens on the port in `onebot_http_base`. The reply channel uses `onebot_token` as its token.
 Standard event reports receive a `{}` acknowledgement. The action API sends the messages.
 
-Configuration with only `secret`/`X-Signature` receives HTTP 401. The Bearer request header is necessary for HTTP event reports.
-The development matrix explicitly requests an action-list response with `X-XiaoQing-Response-Mode: actions`.
+The server uses Bearer authentication, so the reporter must send a custom `Authorization` header.
+OneBot `secret`/`X-Signature` is an HMAC signature; configuration of that field alone receives HTTP 401.
+WebSocket is another connection option.
+
+A development acceptance client can send `X-XiaoQing-Response-Mode: actions`: the response body is `{"actions": [...]}`, and the client must execute those actions.
+The local command matrix uses this mode.
 
 ### Active WebSocket
 
@@ -205,6 +211,7 @@ scripts/run-bot.vbs
 
 The chain calls Python from the current `PATH`.
 It reads the NapCat account and optional MKL threading configuration from `config/config.json`.
+Comments and help output in `scripts/` describe the synchronization script, startup arguments, and deployment directories.
 
 Use this restart procedure for Windows production:
 
@@ -221,7 +228,7 @@ The elevated process repeats all identity checks before it stops the process tre
 
 ## ✅ 5. Initial checks
 
-Send these commands in sequence in administrator private chat:
+In a private chat with XiaoQing, send these commands in sequence from a QQ account listed in `admin_user_ids`:
 
 ```text
 /help
@@ -241,6 +248,7 @@ Then check the core plugins:
 /arxiv
 ```
 
+`/xc` needs an AI model and key configured as described in "AI plugin configuration" above. Without them, it cannot generate replies.
 Command help comes from the manifest. It shows entry points, parameters, permissions, scenes, and examples for the loaded version.
 
 ## ✅ Checks before deployment
@@ -299,8 +307,8 @@ Reports are in `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`
 4. Check `onebot_token` for the reply channel.
 5. Find connection status, error codes, and request IDs in the logs.
 6. When a secret confirmation notification arrives, check its field paths and send `/reload`.
-7. If logs contain both `secrets source is inconsistent` and `WebSocket client stopped`, stop the service.
-8. Confirm that both configuration files are complete, then restart the service.
+7. If logs contain both `secrets source is inconsistent` and `WebSocket client stopped`, check for a missing or damaged secrets source or a simultaneous change to `config.json`, then stop the service.
+8. Save both complete configuration files, then restart the service so that startup confirms the new credential revision.
 
 ### Group command response
 
@@ -328,6 +336,13 @@ Reports are in `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`
 3. Redeem the code on the login page.
 4. Permit the browser to save cookies.
 5. Check session-validation results in the Pendo Web logs.
+
+### AI plugin calls fail
+
+1. Compare `config.ai.providers`, `config.ai.models`, and the plugin route references.
+2. Check `secrets.ai.providers.<provider>.api_key`.
+3. Check the proxy, network, quota, and provider status.
+4. Use the route, profile, and error code in the plugin log to locate the request.
 
 ## 🧭 Next steps
 

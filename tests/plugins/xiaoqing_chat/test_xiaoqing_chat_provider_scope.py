@@ -172,8 +172,7 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
         "plugins": {
             "xiaoqing_chat": {
                 "ai": {
-                    "default_model_alias": "deepseek",
-                    "model_aliases"      : {
+                    "model_aliases": {
                         "deepseek": "deepseek-flash",
                         "glm"     : "glm-5.2",
                     },

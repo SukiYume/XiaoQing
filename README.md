@@ -118,7 +118,7 @@ cp config/secrets.json.example config/secrets.json
 
 ### 4. 连接 OneBot
 
-被动 Inbound 模式由 OneBot 向 XiaoQing 推送事件。在 NapCat 的 HTTP 事件上报端配置以下请求地址与请求头：
+最短路径是被动 Inbound：由 OneBot 向 XiaoQing 推送事件。在 NapCat 的 HTTP 事件上报端配置以下请求地址与请求头：
 
 ```http
 POST /event HTTP/1.1
@@ -127,23 +127,11 @@ Authorization: Bearer your-secret-token
 Content-Type: application/json
 ```
 
-服务端使用 Bearer 认证。OneBot 的 `secret` / `X-Signature` 实现 HMAC 签名。上报端仅配置该字段时，服务端返回 401。HTTP 上报端需要支持自定义 `Authorization` 请求头。WebSocket 提供另一种接入方式。
+上报端用 Bearer 请求头鉴权，token 就是 `inbound_token`；只配置 OneBot 的 `secret` 签名会收到 401。
 
-标准 HTTP 上报通过 `onebot_http_base` 对应的 OneBot action API 发送回复。插件投递状态在成功回执后提交。事件响应为 `{}`。部署者需要开启 NapCat 的 HTTP API，使其监听 `onebot_http_base` 指向的端口（示例为 11001）。NapCat 设置了 access token 时，在 `secrets.json` 顶层配置相同值的 `onebot_token`；未设置则保持空字符串。
+同时开启 NapCat 的 HTTP API，使其监听 `onebot_http_base` 指向的端口（示例为 11001），回复经它发出。NapCat 设置了 access token 时，在 `secrets.json` 顶层配置相同值的 `onebot_token`；未设置则保持空字符串。
 
-开发验收客户端可发送 `X-XiaoQing-Response-Mode: actions`。客户端接收自定义 `{"actions": [...]}` 正文，并负责执行其中的动作。本地命令矩阵使用此模式。
-
-主动 WebSocket 模式由 XiaoQing 连接 OneBot：
-
-```json
-{
-  "enable_ws_client": true,
-  "enable_inbound_server": false,
-  "onebot_ws_uri": "ws://127.0.0.1:11000/ws"
-}
-```
-
-Inbound 默认绑定 loopback。启用 HTTP 或 WebSocket Inbound 时，请设置非空 `inbound_token`。公网入口由 Nginx 或 Caddy 终止 TLS，再转发到 loopback。受控跨容器网络可配合防火墙启用 `inbound_trusted_tls_proxy`。完整边界见 [Inbound 配置](docs/06-configuration.md#inbound-网络边界)。
+主动 WebSocket 接入、鉴权细节和公网部署的网络边界见 [快速开始的配置 OneBot](docs/01-getting-started.md#️-3-配置-onebot)。
 
 ### 5. 启动与验证
 
@@ -199,66 +187,22 @@ python main.py
 
 ## 🧩 主要插件
 
-### xiaoqing_chat
+| 插件 | 作用 | 文档 |
+|---|---|---|
+| `xiaoqing_chat` | 拟人聊天：判断接话时机和对象，读图片和表情包，回复发出前经过审查 | [使用说明](plugins/xiaoqing_chat/README.md)、[架构](plugins/xiaoqing_chat/ARCHITECTURE.md) |
+| `xiaoqing_agent` | 有人叫小青做事时调用命令和工具，权限跟随发起人；默认关闭 | [使用说明](plugins/xiaoqing_agent/README.md) |
+| `xiaoqing_life` | 小青自己的网上生活：按兴趣上网，记下带来源的经历供聊天取用；默认关闭 | [使用说明](plugins/xiaoqing_life/README.md)、[架构](plugins/xiaoqing_life/ARCHITECTURE.md) |
+| `xiaoqing_memory` | 统一记忆：聊天、办事和网上生活写进来，每晚整理成关于每个人、每个群和她自己的页面 | [使用说明](plugins/xiaoqing_memory/README.md)、[架构](plugins/xiaoqing_memory/ARCHITECTURE.md)、[设计](plugins/xiaoqing_memory/DESIGN.md) |
+| `pendo` | 日程、待办、笔记、日记、账本和提醒，带 Web 控制台与 Scriptable 小组件 | [使用说明](plugins/pendo/README.md)、[架构](plugins/pendo/ARCHITECTURE.md)、[Scriptable 小组件](docs/pendo-scriptable-widget.md) |
+| `codex` | 管理本机 Codex CLI 的后台会话和任务队列，结果主动发回 | [使用说明](plugins/codex/README.md) |
+| `arxiv_filter` | 用本地兴趣模型筛选当日 arXiv 论文，可交给 Codex 生成摘要 | [使用说明](plugins/arxiv_filter/README.md) |
+| `flickr` | 通过 Flickr 官方 API 浏览今日精选、搜索、Flickr Commons 和公开相册 | [使用说明](plugins/flickr/README.md) |
 
-`xiaoqing_chat` 作为全局 `smalltalk_provider` 观察群聊与私聊消息，并结合 attention gate、频率控制、行为规划、主模型和 reply checker 决定回复内容与时机。它支持文本、图片、QQ face、NapCat mface、引用消息、本地媒体回复、长期记忆和表达学习。
-
-- [使用说明](plugins/xiaoqing_chat/README.md)
-- [架构说明](plugins/xiaoqing_chat/ARCHITECTURE.md)
-
-### xiaoqing_agent
-
-用户请求小青执行任务时，`xiaoqing_agent` 判断是否需要调用工具。工具执行使用发起人的权限。已有 XiaoQing 命令保留各自权限。Python、Shell、QingSSH 和 Codex 遵循 `/shell`、`/ssh`、`/codex` 的声明。这些命令限定 Bot 管理员使用。
-
-任务完成后，插件以小青的口吻回复。长任务在后台执行，并主动发送结果。插件默认关闭，通过 `config.plugins.xiaoqing_agent.enabled` 开启。插件关闭时，`xiaoqing_chat` 保持原有行为。
-
-- [使用说明](plugins/xiaoqing_agent/README.md)
-
-### xiaoqing_life
-
-`xiaoqing_life` 给小青一份自己的网上生活：作息空闲时按兴趣刷 B 站、知乎、微博热榜和百科，记下带来源的经历，学流行语、表达方式和梗图，留小课题隔天续查，慢慢整理自己的小作品。`xiaoqing_chat` 每轮回复前取和话题相关的一两点，被问“最近刷到啥”时能拿真实经历接话。除管理员扫码授权的 B站 只读登录外不登录账号、不发任何互动。插件默认关闭，通过 `config.plugins.xiaoqing_life.enabled` 开启；关闭时聊天与没装时一致。
-
-- [使用说明](plugins/xiaoqing_life/README.md)
-- [架构说明](plugins/xiaoqing_life/ARCHITECTURE.md)
-
-### xiaoqing_memory
-
-`xiaoqing_memory` 是小青的统一记忆：聊天、办事和网上生活经同一套接口写进原始记录，每晚整理成关于每个人、每个群和她自己的页面，每行都有原话出处；每轮说话前取说话人的页面、群页和相关旧事。私聊的事不进群，一个群的事不进另一个群。插件默认开启，整理需要配置 `ai.routes.reasoning`；关闭时三个插件照常工作，只是没有长期记忆。
-
-- [使用说明](plugins/xiaoqing_memory/README.md)
-- [架构说明](plugins/xiaoqing_memory/ARCHITECTURE.md)
-- [设计说明](plugins/xiaoqing_memory/DESIGN.md)
-
-### Pendo
-
-Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令、Web 控制台与 Scriptable 小组件共享同一份 SQLite 数据。
-
-浏览器登录码的兑换期为 7 天，兑换后建立 7 天 HttpOnly Cookie 会话。Scriptable 小组件使用有效期 365 天的只读 Bearer Token。两类凭据统一采用秒级期限和摘要存储。
-
-- [使用说明](plugins/pendo/README.md)
-- [架构说明](plugins/pendo/ARCHITECTURE.md)
-- [Scriptable 小组件](docs/pendo-scriptable-widget.md)
-
-### Codex 与 arXiv
-
-`codex` 维护独立的后台会话和任务队列。同一标签内任务串行执行，各标签按 `max_parallel_jobs` 并行执行，完成结果通过 OneBot 主动回传。
-
-`arxiv_filter` 发送当日筛选结果；定时推送或能用 `/codex` 的人触发时，将 positive 论文交给 Codex `astro-ph` 会话生成摘要。源列表日期和规范化论文链接集合共同标识一次摘要任务。
-
-- [Codex 插件](plugins/codex/README.md)
-- [arXiv Filter 插件](plugins/arxiv_filter/README.md)
-
-### Flickr
-
-`flickr` 通过 Flickr 官方 REST API 浏览今日精选、关键词与标签搜索、Flickr Commons、用户公开照片和公开相册。搜索可按许可、排序与拍摄日期筛选；回复保留作者、许可条件和 Flickr 照片页，一次查询可用 `/flickr more` 连续浏览。
-
-- [Flickr 插件](plugins/flickr/README.md)
+前四个插件合起来是小青这个角色的运行时，它们之间的分工见 [系统架构的小青运行时](docs/02-architecture.md#-小青运行时)。全部内置插件的开启方式、命令、配置和运行数据见 [插件使用手册](docs/09-plugins.md)。
 
 ---
 
 ## 💾 插件与数据目录
-
-项目主要目录：
 
 ```text
 XiaoQing/
@@ -272,44 +216,30 @@ XiaoQing/
 └── tests/                   # 自动化测试
 ```
 
-插件运行数据默认位于 `data/<plugin_name>/`。`data_root` 可配置项目级数据根目录。源码、配置和运行数据采用独立目录，部署脚本可据此同步代码并保留生产数据。
+插件运行数据默认位于 `data/<plugin_name>/`，源码、配置和运行数据各在独立目录。每个插件目录以 `plugin.json` 描述入口、命令、权限、场景、依赖和定时任务。
 
-每个插件目录以 `plugin.json` 描述入口、命令、权限、场景、依赖、文件监视和定时任务。插件名使用小写 ASCII Python 标识符，入口使用插件目录内的规范 POSIX `.py` 相对路径。
-
-插件开发流程见 [插件开发指南](docs/03-plugin-development.md) 和 [API 参考](docs/05-api-reference.md)。
+目录与概念见 [项目概览](docs/00-overview.md)，插件开发流程见 [插件开发指南](docs/03-plugin-development.md) 和 [API 参考](docs/05-api-reference.md)。
 
 ---
 
 ## ⚙️ 配置与运行维护
 
-配置分为两类：
+配置分为两个文件：
 
 - `config/config.json`：OneBot 地址、命令前缀、日志、AI 模型、插件设置和执行限制。
 - `config/secrets.json`：Inbound token、管理员 QQ、AI provider 密钥和第三方服务凭据。
 
-常用重载命令：
+普通配置出错时继续使用最近一次有效的快照（last-known-good）；敏感配置缺失、损坏或与公开配置对不上时，Core 撤销凭据（fail-closed）。运行中修改配置有三种做法：
 
-```text
-/reload
-```
+- 修改已有密钥：管理员私聊发送 `/set_secret <路径> <值>`。
+- 外部工具改写 `secrets.json`：Core 私聊管理员列出变化的字段路径（不含值），核对后发送 `/reload` 应用。
+- 修改 `config.json` 或两个文件一起替换：安排在停服窗口内；保留独立受保护 Inbound 的部署也可以在文件写好后经它执行 `/reload`。
 
-普通配置使用最近一次有效快照（last-known-good）。敏感配置采用故障关闭策略（fail-closed）。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径。Core 在同一事务中保存文件并发布新 revision。
-
-外部工具可保存完整、有效的 `secrets.json`。此时，`config.json` 需要与当前已确认版本一致。watcher 暂存新的敏感配置候选。当前管理员、网络连接和插件凭据继续使用已确认快照。
-
-Core 私聊管理员，报告文件有效性及新增、删除、修改的字段路径。通知中的配置内容仅包含路径。管理员核对后发送 `/reload`，确认并应用候选。
-
-`config.json` 变更或两个来源一起替换需要安排在停服窗口内。独立受保护的 Inbound 也可用于执行 `/reload`。
-
-Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 会停止同一仓库的监控器、Bot 与 NapCat。进程由提升权限的 SSH、计划任务或管理员终端启动时，停服入口显示一次 UAC 确认。完成提示出现后，双击 `scripts/run-bot.vbs` 可再次启动。`scripts/` 中对应文件的注释与帮助输出说明同步脚本、启动参数和生产目录。
+每类配置的生效方式见 [配置热重载](docs/06-configuration.md#️-配置热重载)。Windows 下的受保护启动链和停服入口见 [快速开始的启动服务](docs/01-getting-started.md#-4-启动服务)。
 
 ---
 
 ## ✅ 开发与测试
-
-测试按当前功能组织：`tests/core` 覆盖核心行为，`tests/transport` 覆盖协议与传输，`tests/plugins/<plugin>` 覆盖插件，`tests/integration` 覆盖组件协作，`tests/tooling` 覆盖测试辅助工具与打包资源。
-
-用例验证输入、输出、状态变化、错误处理、权限、并发和资源生命周期。用例只覆盖当前功能，不保留针对单次修复的测试；相同执行流程使用参数化合并。外部服务通过隔离替身提供响应，Web 客户端测试执行实际 JavaScript。断言以运行结果和有效数据契约为依据；文档措辞、注释、固定供应商域名、已删除文件清单和源码实现形式交由代码审查维护。测试中的样例 URL 用于验证解析、配置传递与访问策略。
 
 常用门禁：
 
@@ -329,7 +259,7 @@ python scripts/run_full_uat.py --plan-only
 python scripts/run_full_uat.py
 ```
 
-阶段说明、报告位置和外部场景选项见 [快速开始的完整 UAT](docs/01-getting-started.md#完整-uat)。
+测试的组织方式和编写约定见 [插件开发指南的验证与文档](docs/03-plugin-development.md#验证与文档)。UAT 的阶段说明、报告位置和外部场景选项见 [快速开始的完整 UAT](docs/01-getting-started.md#完整-uat)。
 
 ---
 
@@ -355,34 +285,14 @@ python scripts/run_full_uat.py
 
 ## 🩺 故障排查
 
-### 启动消息响应排查
+机器人没有回应时先看这几项：
 
-1. 确认 OneBot 进程和 XiaoQing 进程均处于运行状态。
-2. 确认 Inbound URL 或主动 WebSocket URI 与双方配置一致。
-3. 确认上报请求的 Bearer token 与 `inbound_token` 一致，并核对回复通道的 `onebot_token`。
-4. 查看日志中的连接状态、错误码和 request ID。
-5. 收到 `secrets.json` 待确认私聊时，核对字段路径并发送 `/reload` 应用有效候选。
-6. 日志出现 `secrets source is inconsistent` 与 `WebSocket client stopped` 时，检查来源是否缺失、损坏或与 `config.json` 同时变化；随后按停服、保存完整配置来源、重新启动的顺序恢复已确认凭据 revision。
+1. OneBot 进程和 XiaoQing 进程都在运行。
+2. Inbound URL 或主动 WebSocket URI 与双方配置一致。
+3. 上报请求的 Bearer token 与 `inbound_token` 一致，回复通道的 `onebot_token` 正确。
+4. 日志中的连接状态、错误码和 request ID。
 
-### 群聊缺少普通聊天回复
-
-1. 确认 `plugins.smalltalk_provider` 指向目标聊天插件。
-2. 查看当前群的静音状态。
-3. 查看 `xiaoqing_chat` attention、频率控制和行为规划日志。
-
-### Pendo Web 登录页持续出现
-
-1. 执行 `/pendo web status` 确认服务地址。
-2. 执行 `/pendo web token` 获取登录码。
-3. 在登录页兑换登录码并允许浏览器保存 Cookie。
-4. 查看 Pendo Web 日志中的会话校验结果。
-
-### AI 插件调用异常
-
-1. 核对 `config.ai.providers`、`config.ai.models` 与插件 route 的引用。
-2. 核对 `secrets.ai.providers.<provider>.api_key`。
-3. 检查代理、网络、配额和 provider 状态。
-4. 结合插件日志中的 route、profile 和错误码定位请求。
+群聊命令没有响应、普通聊天回复少、端口绑定、Pendo Web 登录、AI 调用异常和 secrets 待确认通知的处理，见 [快速开始的常见问题](docs/01-getting-started.md#-常见问题)。
 
 ---
 

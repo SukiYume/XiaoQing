@@ -2,7 +2,7 @@
 
 中文 | [English](en/02-architecture.md)
 
-本章说明 XiaoQing Core 的运行时组件、所有权、生命周期和主要数据流。
+本章说明 XiaoQing Core 的运行时组件、所有权、生命周期和主要数据流，以及小青四个基础插件之间的分工。
 公开插件接口见 [API 参考](05-api-reference.md)，逐模块索引见 [Core 模块](04-core-modules.md)。
 
 ---
@@ -254,7 +254,22 @@ Pendo 使用该模式管理 FastAPI、SQLite、前端资源、提醒调度和聊
 
 ---
 
-## 🤖 小青 agent 的跨插件协作
+## 🧠 小青运行时
+
+`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 和 `xiaoqing_memory` 都是普通插件，按同一套 Manifest、Context 和代际规则加载。
+四者合起来构成小青这个角色的运行时：其他插件通过命令目录被她使用，Core 为这四个插件之间的协作提供专用的服务桥和 capability。
+
+本节只讲四者之间的分工、服务和数据归属。
+各插件怎么开启、有哪些命令和配置、具体怎么表现，见 [插件使用手册的智能聊天与语音](09-plugins.md#-智能聊天与语音) 和各插件自己的 README、ARCHITECTURE。
+
+| 插件 | 拥有 | 提供的服务 | 关闭或不在时 |
+|---|---|---|---|
+| `xiaoqing_chat` | 聊天记录、回复时机和人设 | `core.observe_outgoing_action`；以 `smalltalk_provider` 的身份接收消息 | 角色不参与聊天 |
+| `xiaoqing_agent` | 任务、工作目录和任务记录 | `agent.handle_turn`、`agent.report_delivery` | 聊天保持原有行为，不办事 |
+| `xiaoqing_life` | 经历、词条、表达、小课题、作品、档案和梗图 | `life.turn_context`、`life.export_memes` | 聊天的提示词与没装时一致 |
+| `xiaoqing_memory` | 原始记录、笔记和页面 | `memory.record`、`memory.recall`、`memory.search`、`memory.forget` | 三个插件照常工作，只是没有长期记忆 |
+
+### 聊天与 agent
 
 `xiaoqing_agent` 通过 Core 服务表和 capability 与其他插件协作：
 
@@ -268,13 +283,11 @@ xiaoqing_chat ──agent.handle_turn（decide / act）──► xiaoqing_agent
                                                          └─ codex.agent_task ─────► codex（跟随 /codex）
 ```
 
-- 聊天插件拥有聊天记录、回复时机和人设：明确召唤时把这一轮连同人设与说话方式交给 agent 判断，判断与聊天生成同时进行；agent 照这份人设写回复，接手后的当轮回复仍由聊天侧随回执发出并记录。
-- agent 拥有任务、工作目录和任务记录；能做的就是发起人自己能做的。`command_runner` 以发起人身份只走命令阶段，在一次性会话空间里执行，命令返回的发送回执原样交回 agent，由它随附件的实际发送结算；每次调用带独立的操作标识。
+- 明确召唤时，聊天把这一轮连同人设与说话方式交给 agent 判断，判断与聊天生成同时进行；agent 照这份人设写回复，接手后的当轮回复仍由聊天侧随回执发出并记录。
+- agent 能做的就是发起人自己能做的。`command_runner` 以发起人身份只走命令阶段，在一次性会话空间里执行，命令返回的发送回执原样交回 agent，由它随附件的实际发送结算；每次调用带独立的操作标识。
 - Codex 与 QingSSH 的长时间执行在各自插件的执行通道之外等待，串行插件不会被一条长命令占住。
 
----
-
-## 🌐 小青网上生活的跨插件协作
+### 聊天与网上生活
 
 `xiaoqing_life` 负责小青自己上网，`xiaoqing_chat` 只取用结果：
 
@@ -284,14 +297,12 @@ xiaoqing_chat ── life.turn_context（每轮回复前）────► xiaoq
 xiaoqing_chat ── life.export_memes（每小时 07、37 分）► xiaoqing_life
 ```
 
-- 网上生活插件拥有经历、词条、表达、小课题、作品、档案和梗图；聊天插件每轮回复前取和话题相关的一两点放进提示词，超时、报错、开关关闭或插件不在时当作没有，提示词与没装时一致。
+- 聊天每轮回复前取和话题相关的一两点放进提示词；超时、报错、开关关闭或插件不在时当作没有。
 - 请求不含用户 ID 与群号。数据只关于小青自己，不按用户身份门控，系统主体也可用。Core 只在调用方声明 `uses_services` 时签发 `capabilities.life_context`。
 
----
+### 统一记忆
 
-## 🧠 小青的统一记忆
-
-`xiaoqing_memory` 保存小青的长期记忆，聊天、办事和网上生活经同一套服务读写：
+聊天、办事和网上生活经同一套服务读写 `xiaoqing_memory`：
 
 ```text
 xiaoqing_chat  ── memory.record（消息落盘后、回复投递后）──┐
@@ -304,7 +315,7 @@ Core scheduler ── xiaoqing_memory.tick（每 30 分钟）──► 夜间或
 
 - 记录分三个范围：`global`（她自己）、`g<群号>`、`u<QQ号>`。私聊的事不进群，一个群的事不进另一个群；他在群里说过的自己的事可以带进和他本人的私聊。可见性只在记忆插件里判断一处。
 - Core 签发 `capabilities.memory` 时把调用方名字、主体类型和用户主体所在的会话写进载荷，调用方填的同名字段无效；用户主体发起的调用只能作用于它所在的会话。各调用方能写的类型由记忆插件固定。
-- 来源链里有网页文字的内容不会交给 `xiaoqing_agent`。记忆插件不在或关闭时，三个插件照常工作，只是没有长期记忆。
+- 来源链里有网页文字的内容不会交给 `xiaoqing_agent`。
 - 每轮的网上生活由 `life.turn_context` 挑，不经过记忆；她的自我页（记忆整理的）也写到网上看过的东西，两边说到同一条经历、查明白的事或日记时，按 life 的条目键只留 life 给的细节。群里这两三天的话题词由记忆整理时记下，聊天转交给 life 当上网的方向。
 
 ---

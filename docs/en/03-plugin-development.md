@@ -169,13 +169,19 @@ git diff --check
 Run affected-module tests first. Then run repository-wide checks.
 Tests cover the behavior contracts of current features; a business fix adds or adjusts cases for the affected feature instead of keeping a test dedicated to one fix.
 Test data uses temporary directories or databases.
+
+Tests are organized by current feature: `tests/core` covers Core behavior, `tests/transport` covers protocols and transport, `tests/plugins/<plugin>` covers plugins, `tests/integration` covers component interaction, and `tests/tooling` covers test tools and package resources.
+Cases examine input, output, state changes, errors, permissions, concurrency, and resource lifecycles, and parameterized cases combine identical execution paths.
+Isolated substitutes supply external-service responses. Web-client tests execute actual JavaScript.
+Assertions use runtime results and valid data contracts. Code review keeps documentation wording, comments, fixed provider domains, removed-file lists, and source implementation form correct.
+Sample URLs in tests examine parsing, configuration transfer, and access policies.
+
 The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...`, `pass`, or `raise NotImplementedError` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.
 
 READMEs describe current use and configuration.
 ARCHITECTURE documents describe module responsibilities, data flow, and ownership.
 The project manual describes public contracts.
 Keep commands, permissions, and aliases consistent with `plugin.json`, and link to shared conventions between modules.
-Review records track issue disposition, repair batches, and final verification separately, and a review is marked closed after all work completes.
 
 ## 💾 Plugin directories and distribution resources
 

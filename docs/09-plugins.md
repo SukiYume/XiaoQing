@@ -189,6 +189,9 @@ Scriptable 主屏摘要最多展示 5 条日程。
 
 ## 🎨 智能聊天与语音
 
+`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 和 `xiaoqing_memory` 四个插件合起来是小青这个角色的运行时。
+本节逐个说明怎么开启、怎么用和各自的边界；四者之间的分工、服务和数据归属见 [系统架构的小青运行时](02-architecture.md#-小青运行时)。
+
 ### `xiaoqing_chat`：拟人聊天运行时
 
 XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和私聊：判断什么时候接话、接谁的话，读得懂图片和表情包，记得群友说过的事，会学本群的说法和黑话，每条回复发出前都经过独立审查。
@@ -251,25 +254,157 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 
 ### `xiaoqing_life`：小青的网上生活
 
-`xiaoqing_life` 让小青在作息空闲时按兴趣自己上网（B 站热门/搜索/热评/弹幕、知乎与微博热榜、百度百科、中文维基），记下带来源的经历，学流行语、表达方式和梗图，留一两个小课题用有限步骤的研究循环隔天续查，慢慢整理自己的小作品（片单、小笔记、观后感），并把一件事的来龙去脉记成主题档案；睡前写日记、收小课题，周日写周记。`xiaoqing_chat` 每轮回复前经 `life.turn_context` 取和当前话题相关的一两点，主动开口时可以带上她最近真的刷到、想分享的事，梗图定时导入表情库。默认关闭，`config.plugins.xiaoqing_life.enabled` 打开后生效，需要配置 `ai.routes.reasoning`（梗图判定另需 `vision`）。除管理员扫码授权的 B站 只读登录（用于读字幕）外不登录任何账号，不发评论、点赞、私信；外部文本只作为低信任数据交给模型，词条和表达必须附原文摘录并经本地核对。`/life` 命令只给 Bot 管理员。详见 [XiaoQing Life](../plugins/xiaoqing_life/README.md)。
+`xiaoqing_life` 让小青在作息空闲时按兴趣自己上网，记下带来源的经历。
+它只负责上网和提供素材，不直接说话；说话仍由 `xiaoqing_chat` 完成。插件默认关闭。
+
+**开启**
+
+```json
+{
+  "plugins": {
+    "xiaoqing_life": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "reasoning": ["gpt-terra", "deepseek-flash", "glm-5.2"],
+          "vision":    ["gpt-terra", "glm-4.6v"]
+        }
+      }
+    }
+  }
+}
+```
+
+`reasoning` 必须配置：缺失时上网只记“模型未配置”并退避，不产生经历。
+`vision` 用于梗图的安全判定，缺失时不收梗图。
+`xiaoqing_chat` 一侧另有开关 `life.enable_online_life`（默认 `true`）；任一侧关闭时，聊天与没装本插件时一致。
+
+**她会做什么**
+
+- 上网：来源是 B 站热门、搜索、热评和弹幕，知乎与微博热榜，百度百科，中文维基。睡觉时不动，上课等忙碌时段默认不动，空闲才可能上网；作息读 `xiaoqing_chat` 人设卡的〔作息〕。
+- 记经历、学说法：记下几点刷到了什么、讲了什么、她怎么觉得，学流行语、表达方式和梗图。词条和表达必须附原文逐字摘录，并经本地核对。
+- 小课题与作品：留小课题，用有限步骤的研究循环隔天续查（同时进行的数量由 `max_open_threads` 决定，默认 1 个）；慢慢整理自己的小作品（片单、小笔记、观后感），并把一件事的来龙去脉记成主题档案。
+- 睡前整理：写日记、收小课题，周日写周记。
+- 交给聊天：`xiaoqing_chat` 每轮回复前经 `life.turn_context` 取和当前话题相关的一两点；主动开口时可以带上她最近真的刷到、想分享的事；梗图定时导入聊天的表情库。
+- 交给统一记忆：每次定时检查后，新的经历、日记和查明白的事发布到 `xiaoqing_memory`，夜间整理进她的自我页。
+
+**边界**
+
+- 除管理员扫码授权的 B站 只读登录（用于读字幕）外不登录任何账号，不发评论、点赞、私信。
+- 只请求固定域名，全部是 GET。外部文本只作为低信任数据交给模型，不执行网页里的任何指令。
+- 聊天侧的请求不含用户 ID 与群号。来自网页的内容不会交给有命令执行能力的 agent。
+
+**命令**
+
+```text
+/life [status]
+/life recent
+/life slang
+/life threads
+/life methods
+/life works
+/life dossier [话题]
+/life stats
+/life memes
+/life meme on|off <短ID>
+/life run
+/life forget <词>
+/life login
+/life login status
+/life login cancel
+/life logout
+/life help
+```
+
+全部子命令只给 Bot 管理员。
+`status` 显示开关、此刻作息、今日次数与模型调用、最近一次决策与理由。
+`run` 立刻安排一次上网：跳过概率、间隔和失败退避，不跳过开关、睡眠、预算和滚动时长上限。
+`login` 是 B站扫码登录，二维码只发到发起人的私聊；`logout` 删除本地凭证。
 
 | 项目 | 内容 |
 |---|---|
-| 命令 | `/life [status\|recent\|slang\|threads\|methods\|stats\|works\|dossier\|memes\|meme\|run\|forget\|login\|logout\|help]` |
+| AI route | `reasoning`（消化、研究、整理和睡前写日记）、`vision`（梗图安全判定，可省略） |
 | 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
 | Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用）；使用 `memory.record`，把经历、日记和查明白的事发布到统一记忆 |
 | 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目与状态；B站 凭证单独存放在 `secrets/`，不进备份 |
 
+[XiaoQing Life](../plugins/xiaoqing_life/README.md) 逐项说明各项能力、全部配置字段和安全边界，[架构文档](../plugins/xiaoqing_life/ARCHITECTURE.md) 说明模块与取用规则，[设计文档](../plugins/xiaoqing_life/DESIGN.md) 说明取舍。
+
 ### `xiaoqing_memory`：小青的统一记忆
 
-`xiaoqing_memory` 是小青的长期记忆。聊天把每条消息、她说出口的近况和承诺、群友的未完话头写进来，agent 写每次办事的经过，网上生活写她的经历和日记；每晚整理成关于每个人、每个群和她自己的页面，每行引用有原话出处的笔记。每轮回复前聊天取一次说话人的页面、群页、相关旧事和她自己的近况，agent 开新办事会话时取发起人的页面。私聊的事不进群，一个群的事不进另一个群，他在群里说过的自己的事可以带进和他本人的私聊；来源链里有网页文字的内容不给 agent。默认开启，整理需要配置 `ai.routes.reasoning`。`/mem` 命令只给 Bot 管理员、只在私聊用。详见 [XiaoQing Memory](../plugins/xiaoqing_memory/README.md)。
+`xiaoqing_memory` 是小青的长期记忆：聊天、办事和网上生活经同一套接口写进来，每晚整理成关于每个人、每个群和她自己的页面，每轮说话前按预算取出相关的几行。
+它不直接说话。插件默认开启；关闭或不在时，另外三个插件照常工作，只是没有长期记忆。
+
+**开启**
+
+```json
+{
+  "plugins": {
+    "xiaoqing_memory": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "reasoning": ["gpt-terra", "deepseek-flash"]
+        }
+      }
+    }
+  }
+}
+```
+
+`reasoning` 缺失时照常记录和取用，只是不整理。
+
+**记什么**
+
+| 层 | 内容 | 谁写 |
+|---|---|---|
+| 事件 | 只追加的原始记录：每条聊天消息、每次办事的经过 | 聊天在消息落盘后推送；agent 在任务结束时写一条 |
+| 笔记 | 一条原子记忆，带范围、来源和原话出处：关于某个人的事、办事偏好、群里的事、她说过的近况和承诺、群友到期的话头、她的网上经历和日记 | 夜间整理；聊天在回复投递后抽取；life 在定时检查后发布 |
+| 页面 | 关于一个人、一个群或她自己的整理结果，每行引用笔记，有字数上限 | 夜间整理 |
+| 常驻块 | 每轮放进提示词的那一小段 | 每轮取用，不调模型 |
+
+**怎么用**
+
+- 取用：每轮回复前聊天取一次，纯内存、不调模型，取说话人的页面、群页、相关旧事和她自己的近况。agent 开新办事会话时取发起人的页面。
+- 整理：每 30 分钟检查一次，在夜间窗口（默认 02:00–05:00）或积压 150 条新事件时在后台整理，依次写笔记、并页面、对照原文核对、清理。每天的模型调用上限默认 16 次。
+
+**范围**
+
+| 范围 | 含义 |
+|---|---|
+| `global` | 关于她自己和她学到的东西，哪里都可见 |
+| `g<群号>` | 这个群里说的事，只在这个群可见 |
+| `u<QQ号>` | 和这个人的私聊，只在这个私聊可见 |
+
+私聊的事不进群，一个群的事不进另一个群；他在群里说过的自己的事可以带进和他本人的私聊。
+来源链里有网页文字的内容不给 agent。
+
+**命令**
+
+```text
+/mem [status]
+/mem stats
+/mem page <范围> [QQ号|group|self]
+/mem search <范围> <关键词>
+/mem why <笔记ID>
+/mem forget <范围> [QQ号|笔记ID]
+/mem consolidate [范围]
+/mem rebuild <范围>
+/mem help
+```
+
+`/mem` 只给 Bot 管理员、只在私聊用。
+`why` 显示一条笔记的来源、可信度、摘录和出处原文；`forget` 清空一个范围，或删一个人、一条笔记；`consolidate` 和 `rebuild` 在后台进行，做完私聊发回结果。
+普通群友用 `/xc memory <关键词>` 查当前会话能看到的记忆；`/xc reset` 同时清空统一记忆里这个会话的内容。
 
 | 项目 | 内容 |
 |---|---|
-| 命令 | `/mem [status\|stats\|page\|search\|why\|forget\|consolidate\|rebuild\|help]` |
+| AI route | `reasoning`（夜间整理与核对，可省略） |
 | 定时 | `xiaoqing_memory.tick` 每 30 分钟检查一次：夜间窗口里或积压够多时在后台整理 |
 | Capability 与服务 | 提供 `memory.record`（`xiaoqing_chat`、`xiaoqing_agent`、`xiaoqing_life` 调用）、`memory.recall`（`xiaoqing_chat`、`xiaoqing_agent` 调用）、`memory.search` 与 `memory.forget`（`xiaoqing_chat` 调用） |
 | 运行数据 | `data/xiaoqing_memory/`：按范围按月的原始记录、笔记、页面和状态 |
+
+[XiaoQing Memory](../plugins/xiaoqing_memory/README.md) 说明取用预算、整理各步和全部配置字段，[架构文档](../plugins/xiaoqing_memory/ARCHITECTURE.md) 说明模块与关键约定，[设计文档](../plugins/xiaoqing_memory/DESIGN.md) 说明取舍。
 
 ### `xiaoqing_agent`：任务代理
 
@@ -556,7 +691,7 @@ Bot 管理员权限（群聊里的输出全群可见）、最小系统权限、�
 
 Codex 插件让 Bot 管理员在私聊或群聊中管理本机 Codex CLI，结果发回发起任务的私聊或群。
 每个标签拥有独立工作目录、Codex thread、队列和对话记录。
-同一标签串行执行，多个标签可并行。
+同一标签串行执行，多个标签可并行，同时运行的任务数上限为 `max_parallel_jobs`（默认 2）。
 
 ```text
 /codex create <name> [cwd:<path>]

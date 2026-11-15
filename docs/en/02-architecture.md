@@ -2,7 +2,7 @@
 
 [中文](../02-architecture.md) | English
 
-This chapter describes XiaoQing Core runtime components, ownership, lifecycle, and main data flows.
+This chapter describes XiaoQing Core runtime components, ownership, lifecycle, and main data flows, and the division of work among the four XiaoQing base plugins.
 See the [API reference](05-api-reference.md) for public plugin interfaces and [Core modules](04-core-modules.md) for the module index.
 
 ## 🏗️ Architecture overview
@@ -244,7 +244,22 @@ Embedded services follow these ownership rules:
 - Core context supplies logs, configuration, secrets, and delivery capabilities.
 - Internal service modules separate the database, authentication, API, tasks, and frontend resources.
 
-## 🤖 XiaoQing Agent collaboration
+## 🧠 The XiaoQing runtime
+
+`xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, and `xiaoqing_memory` are ordinary plugins, loaded under the same manifest, context, and generation rules.
+Together they form the runtime of the XiaoQing persona: she uses the other plugins through the command catalog, and Core supplies dedicated service bridges and capabilities for collaboration among these four.
+
+This section covers only the division of work, the services, and data ownership among the four.
+See [intelligent chat and voice in the plugin manual](09-plugins.md#-intelligent-chat-and-voice) and each plugin's own README and ARCHITECTURE for how to enable each plugin, its commands and settings, and its behavior.
+
+| Plugin | Owns | Services supplied | When disabled or absent |
+|---|---|---|---|
+| `xiaoqing_chat` | Chat history, reply timing, and persona | `core.observe_outgoing_action`; receives messages as the `smalltalk_provider` | The persona takes no part in chat |
+| `xiaoqing_agent` | Tasks, working directories, and task records | `agent.handle_turn`, `agent.report_delivery` | Chat keeps its usual behavior and performs no tasks |
+| `xiaoqing_life` | Experiences, terms, expressions, threads, works, dossiers, and memes | `life.turn_context`, `life.export_memes` | Chat prompts match the prompts without the plugin |
+| `xiaoqing_memory` | Raw records, notes, and pages | `memory.record`, `memory.recall`, `memory.search`, `memory.forget` | The three plugins keep working without long-term memory |
+
+### Chat and the agent
 
 `xiaoqing_agent` uses the Core service catalog and capabilities for all collaboration with other plugins.
 
@@ -258,16 +273,16 @@ xiaoqing_chat ──agent.handle_turn (decide / act)──► xiaoqing_agent
                                                          └─ codex.agent_task ─────► codex (follows /codex)
 ```
 
-- The chat plugin owns chat history, reply timing, and persona. An explicit invocation passes the turn, persona, and speaking style to the agent.
+- An explicit invocation passes the turn, persona, and speaking style from chat to the agent.
   Agent decisions and chat generation run concurrently. The agent writes with that persona.
   After takeover, the chat side still sends and records the current reply with its receipt.
-- The agent owns tasks, working directories, and task records. Its permissions equal the initiating user's permissions.
+- The agent's permissions equal the initiating user's permissions.
   `command_runner` executes only the command stage as that user, in a one-time session namespace.
   It returns command receipts unchanged to the agent. The agent settles them with actual attachment delivery.
   Each call has an independent operation identifier.
 - Long Codex and QingSSH execution waits outside each plugin's execution lane. Serial plugins remain available during long commands.
 
-## 🌐 XiaoQing Life collaboration
+### Chat and online life
 
 `xiaoqing_life` browses on XiaoQing's behalf. `xiaoqing_chat` only consumes the results.
 
@@ -277,15 +292,14 @@ xiaoqing_chat ── life.turn_context (before each reply) ──► xiaoqing_li
 xiaoqing_chat ── life.export_memes (minutes 07 and 37) ──► xiaoqing_life
 ```
 
-- The life plugin owns experiences, terms, expressions, threads, works, dossiers, and memes.
-  Before each reply the chat plugin takes one or two topic-relevant points into the prompt.
-  A timeout, error, disabled switch, or absent plugin counts as empty, and the prompt matches the prompt without the plugin.
+- Before each reply chat takes one or two topic-relevant points into the prompt.
+  A timeout, error, disabled switch, or absent plugin counts as empty.
 - Requests carry no user ID or group ID. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
   Core issues `capabilities.life_context` only when the caller declares `uses_services`.
 
-## 🧠 XiaoQing's unified memory
+### Unified memory
 
-`xiaoqing_memory` holds XiaoQing's long-term memory. Chat, the agent, and online life read and write it through one set of services:
+Chat, the agent, and online life read and write `xiaoqing_memory` through one set of services:
 
 ```text
 xiaoqing_chat  ── memory.record (after persisting messages and after delivery) ──┐
@@ -304,7 +318,6 @@ Core scheduler ── xiaoqing_memory.tick (every 30 min) ──► consolidatio
   Fields of the same name supplied by the caller are ignored. A call from a user principal can only act on that principal's chat.
   The memory plugin fixes which record types each caller may write.
 - Content whose source chain includes web text never reaches `xiaoqing_agent`.
-  Without the memory plugin, or with it disabled, the three plugins keep working without long-term memory.
 - `life.turn_context` picks each turn's online life without going through memory. Her self page, written by memory consolidation, also covers what she saw online; when both mention the same experience, learning or diary entry, chat keeps only life's details, matched by life's item keys.
   The group's topic words from the last few days are recorded during memory consolidation, and chat passes them to life as browsing directions.
 

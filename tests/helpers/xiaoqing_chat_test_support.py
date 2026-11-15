@@ -172,8 +172,7 @@ def _set_context_principal(
         "plugins": {
             "xiaoqing_chat": {
                 "ai": {
-                    "default_model_alias": "deepseek",
-                    "model_aliases"      : {
+                    "model_aliases": {
                         "deepseek": "deepseek-flash",
                         "glm"     : "glm-5.2",
                     },

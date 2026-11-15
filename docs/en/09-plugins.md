@@ -199,6 +199,9 @@ See [Pendo README (Chinese)](../../plugins/pendo/README.md), [architecture (Chin
 
 ## 🎨 Intelligent chat and voice
 
+The four plugins `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`, and `xiaoqing_memory` together form the runtime of the XiaoQing persona.
+This section describes how to enable and use each one and where its boundaries are. See [the XiaoQing runtime in the architecture chapter](02-architecture.md#-the-xiaoqing-runtime) for the division of work, services, and data ownership among the four.
+
 ### `xiaoqing_chat`: Persona chat runtime
 
 XiaoQing Chat lets the `bot_name` persona participate in groups and private chats as a conversational character.
@@ -289,48 +292,159 @@ The [acceptance guide (Chinese)](../../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5
 
 ### `xiaoqing_life`: XiaoQing's online life
 
-`xiaoqing_life` lets XiaoQing browse on her own during free routine slots, following her interests.
-Sources are Bilibili popular videos, search, hot comments, and danmaku; Zhihu and Weibo hot lists; Baidu Baike; and Chinese Wikipedia.
-She keeps sourced experiences and learns slang, expressions, and reaction memes.
-She keeps one or two small research threads and continues them on later days through a bounded research loop.
-She slowly builds small works such as watch lists, notes, and reviews, and keeps topic dossiers that record how a matter developed.
-Before sleep she writes a diary entry and wraps up threads. On Sundays she writes a weekly entry.
+`xiaoqing_life` lets XiaoQing browse on her own during free routine slots and keep sourced experiences.
+It only browses and supplies material. It never speaks; `xiaoqing_chat` does. The plugin is disabled by default.
 
-Before each reply, `xiaoqing_chat` asks `life.turn_context` for one or two points relevant to the current topic.
-Proactive messages can include something she recently came across and wants to share. Collected memes are imported into the emoji library on a schedule.
-The plugin is disabled by default. Set `config.plugins.xiaoqing_life.enabled` and configure `ai.routes.reasoning`. Meme review also needs `vision`.
+**Enable**
 
-She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, used for subtitles.
-She never comments, likes, or sends messages.
-External text reaches the model only as low-trust data. Slang and expressions require verbatim source quotes and pass local checks.
-`/life` is for Bot administrators. See [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md).
+```json
+{
+  "plugins": {
+    "xiaoqing_life": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "reasoning": ["gpt-terra", "deepseek-flash", "glm-5.2"],
+          "vision":    ["gpt-terra", "glm-4.6v"]
+        }
+      }
+    }
+  }
+}
+```
+
+`reasoning` is required: without it, browsing records "model not configured" and backs off, and no experience is produced.
+`vision` reviews memes for safety. Without it, no memes are collected.
+`xiaoqing_chat` has its own switch, `life.enable_online_life` (default `true`). With either side off, chat behaves as without this plugin.
+
+**What she does**
+
+- Browsing: the sources are Bilibili popular videos, search, hot comments, and danmaku; Zhihu and Weibo hot lists; Baidu Baike; and Chinese Wikipedia. She does nothing while asleep, nothing by default during busy slots such as class, and may browse only when free. The routine comes from the routine section of the `xiaoqing_chat` persona card.
+- Experiences and expressions: she records when she saw what, what it said, and what she thought, and learns slang, expressions, and reaction memes. Terms and expressions require verbatim source quotes and pass local checks.
+- Research threads and works: she keeps small research threads and continues them on later days through a bounded research loop (`max_open_threads` sets how many run at once, default 1). She slowly builds small works such as watch lists, notes, and reviews, and keeps topic dossiers that record how a matter developed.
+- Wind-down: before sleep she writes a diary entry and wraps up threads. On Sundays she writes a weekly entry.
+- For chat: before each reply, `xiaoqing_chat` asks `life.turn_context` for one or two points relevant to the current topic. Proactive messages can include something she recently came across and wants to share. Collected memes are imported into the chat emoji library on a schedule.
+- For the unified memory: after each scheduled check, new experiences, diary entries, and verified learnings are published to `xiaoqing_memory`, and the nightly consolidation writes them into her self page.
+
+**Boundaries**
+
+- She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, used for subtitles. She never comments, likes, or sends messages.
+- Requests go only to fixed domains and are all GET. External text reaches the model only as low-trust data, and instructions inside web pages are never executed.
+- Requests from chat carry no user ID or group ID. Web-sourced content never reaches the agent, which can execute commands.
+
+**Commands**
+
+```text
+/life [status]
+/life recent
+/life slang
+/life threads
+/life methods
+/life works
+/life dossier [话题]
+/life stats
+/life memes
+/life meme on|off <短ID>
+/life run
+/life forget <词>
+/life login
+/life login status
+/life login cancel
+/life logout
+/life help
+```
+
+All subcommands are for Bot administrators.
+`status` shows the switch, the current routine slot, today's session and model-call counts, and the latest decision with its reasons.
+`run` schedules one browsing session now: it skips the probability roll, the interval, and failure backoff, but not the switch, sleep, budgets, or the rolling-duration limit.
+`login` is the Bilibili QR login; the QR code goes only to the requester's private chat. `logout` deletes the local credential.
 
 | Item | Content |
 |---|---|
-| Command | `/life [status\|recent\|slang\|threads\|methods\|stats\|works\|dossier\|memes\|meme\|run\|forget\|login\|logout\|help]` |
+| AI routes | `reasoning` for digesting, research, consolidation, and the bedtime journal; `vision` for meme safety review (optional) |
 | Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
 | Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat`. Uses `memory.record` to publish experiences, diary entries, and verified learnings to the unified memory. |
 | Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
 
+[XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md) covers each ability, all settings, and the safety boundaries.
+[Architecture (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md) covers modules and retrieval rules, and [design (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) explains the design choices.
+
 ### `xiaoqing_memory`: XiaoQing's unified memory
 
-`xiaoqing_memory` is XiaoQing's long-term memory.
-Chat writes every message, the statuses and promises she voices, and members' dated open threads.
-The agent writes the course of each task. Online life writes her experiences and diary.
-Each night the plugin consolidates them into pages about each person, each group, and herself; every line cites notes with verbatim sources.
-Before each reply chat recalls the speaker's page, the group page, related past events, and her own recent statuses.
-The agent recalls the initiator's page when a new task session starts.
-Private-chat content never reaches a group, and one group's content never reaches another.
-What a person said about himself in a group can follow him into his own private chat. Content with web text in its source chain never reaches the agent.
-The plugin is enabled by default. Consolidation needs `ai.routes.reasoning`.
-`/mem` is for Bot administrators in private chat. See [XiaoQing Memory (Chinese)](../../plugins/xiaoqing_memory/README.md).
+`xiaoqing_memory` is XiaoQing's long-term memory: chat, the agent, and online life write through one interface, each night the records are consolidated into pages about each person, each group, and herself, and before each turn a few relevant lines are taken out within a budget.
+It never speaks. The plugin is enabled by default; when it is disabled or absent, the other three plugins keep working without long-term memory.
+
+**Enable**
+
+```json
+{
+  "plugins": {
+    "xiaoqing_memory": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "reasoning": ["gpt-terra", "deepseek-flash"]
+        }
+      }
+    }
+  }
+}
+```
+
+Without `reasoning`, the plugin still records and recalls but does not consolidate.
+
+**What it stores**
+
+| Layer | Content | Writer |
+|---|---|---|
+| Events | Append-only raw records: every chat message and the course of each task | Chat pushes after a message is stored; the agent writes one when a task ends |
+| Notes | One atomic memory with scope, source, and a verbatim quote: facts about a person, task preferences, group matters, the statuses and promises she voiced, members' dated open threads, her online experiences and diary | Nightly consolidation; chat extracts after a reply is delivered; life publishes after each scheduled check |
+| Pages | The consolidated view of one person, one group, or herself; every line cites notes and each page has a length limit | Nightly consolidation |
+| Resident block | The short passage placed in each prompt | Each recall, without a model call |
+
+**How it is used**
+
+- Recall: chat recalls once before each reply, in memory and without a model call: the speaker's page, the group page, related past events, and her own recent statuses. The agent recalls the initiator's page when a new task session starts.
+- Consolidation: the plugin checks every 30 minutes and consolidates in the background inside the night window (default 02:00–05:00) or when 150 new events have piled up. It writes notes, merges pages, verifies lines against the original text, and cleans up. The default daily limit is 16 model calls.
+
+**Scopes**
+
+| Scope | Meaning |
+|---|---|
+| `global` | About herself and what she has learned; visible everywhere |
+| `g<group ID>` | What was said in this group; visible only in this group |
+| `u<QQ ID>` | The private chat with this person; visible only in that chat |
+
+Private-chat content never reaches a group, and one group's content never reaches another. What a person said about himself in a group can follow him into his own private chat.
+Content with web text in its source chain never reaches the agent.
+
+**Commands**
+
+```text
+/mem [status]
+/mem stats
+/mem page <范围> [QQ号|group|self]
+/mem search <范围> <关键词>
+/mem why <笔记ID>
+/mem forget <范围> [QQ号|笔记ID]
+/mem consolidate [范围]
+/mem rebuild <范围>
+/mem help
+```
+
+`/mem` is for Bot administrators in private chat.
+`why` shows a note's source, confidence, quote, and original text. `forget` clears a scope, or removes one person or one note. `consolidate` and `rebuild` run in the background and send the result by private message.
+Ordinary members use `/xc memory <关键词>` to search the memory visible in the current conversation; `/xc reset` also clears this conversation's content in the unified memory.
 
 | Item | Content |
 |---|---|
-| Command | `/mem [status\|stats\|page\|search\|why\|forget\|consolidate\|rebuild\|help]` |
+| AI routes | `reasoning` for nightly consolidation and verification (optional) |
 | Schedule | `xiaoqing_memory.tick` checks every 30 minutes and consolidates in the background at night or on backlog. |
 | Capabilities and services | Supplies `memory.record` (called by `xiaoqing_chat`, `xiaoqing_agent`, `xiaoqing_life`), `memory.recall` (called by `xiaoqing_chat`, `xiaoqing_agent`), and `memory.search` and `memory.forget` (called by `xiaoqing_chat`). |
 | Runtime data | `data/xiaoqing_memory/`: raw records per scope and month, notes, pages, and state |
+
+[XiaoQing Memory (Chinese)](../../plugins/xiaoqing_memory/README.md) covers recall budgets, each consolidation step, and all settings.
+[Architecture (Chinese)](../../plugins/xiaoqing_memory/ARCHITECTURE.md) covers modules and key conventions, and [design (Chinese)](../../plugins/xiaoqing_memory/DESIGN.md) explains the design choices.
 
 ### `xiaoqing_agent`: Task agent
 
@@ -651,7 +765,7 @@ Group output is visible to all group members.
 Codex lets Bot administrators manage the local Codex CLI from private or group chat.
 Results return to the initiating conversation.
 Each label has an independent directory, Codex thread, queue, and conversation record.
-One label executes serially. Different labels can execute concurrently.
+One label executes serially. Different labels can execute concurrently, up to `max_parallel_jobs` running tasks (default 2).
 
 ```text
 /codex create <name> [cwd:<path>]

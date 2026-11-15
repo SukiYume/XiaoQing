@@ -862,8 +862,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     config["plugins"] = {
         "xiaoqing_chat": {
             "ai": {
-                "default_model_alias": "deepseek",
-                "model_aliases"      : {
+                "model_aliases": {
                     "deepseek": "deepseek-flash",
                     "glm"     : "glm-5.2",
                 },

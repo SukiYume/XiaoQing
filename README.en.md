@@ -117,7 +117,7 @@ See [Configuration](docs/en/06-configuration.md) for fields, the AI model regist
 
 ### 4. Connect OneBot
 
-In passive Inbound mode, OneBot sends events to XiaoQing.
+The shortest path is passive Inbound mode, in which OneBot sends events to XiaoQing.
 Set this address and these headers in the NapCat HTTP event reporter:
 
 ```http
@@ -127,35 +127,12 @@ Authorization: Bearer your-secret-token
 Content-Type: application/json
 ```
 
-The server uses Bearer authentication.
-OneBot `secret` and `X-Signature` implement HMAC signatures.
-Configuration of that field alone gives HTTP 401.
-The reporter must send a custom `Authorization` header. WebSocket is another connection option.
+The reporter authenticates with the Bearer header, and the token is `inbound_token`. Configuration of the OneBot `secret` signature alone gives HTTP 401.
 
-Standard HTTP reports send replies through the OneBot action API at `onebot_http_base`.
-The plugin delivery state commits after a successful receipt. The event response is `{}`.
-Enable the NapCat HTTP API so that it listens on the port in `onebot_http_base` (11001 in the example).
+Also enable the NapCat HTTP API so that it listens on the port in `onebot_http_base` (11001 in the example); replies go out through it.
 If NapCat sets an access token, set the same value as top-level `onebot_token` in `secrets.json`. Otherwise keep it as an empty string.
 
-A development acceptance client can send `X-XiaoQing-Response-Mode: actions`.
-It receives a custom `{"actions": [...]}` body and must execute those actions.
-The local command matrix uses this mode.
-
-In active WebSocket mode, XiaoQing connects to OneBot:
-
-```json
-{
-  "enable_ws_client": true,
-  "enable_inbound_server": false,
-  "onebot_ws_uri": "ws://127.0.0.1:11000/ws"
-}
-```
-
-Inbound binds to loopback by default.
-For HTTP or WebSocket Inbound, set a nonempty `inbound_token`.
-At a public entry point, Nginx or Caddy terminates TLS and forwards requests to loopback.
-Controlled networks between containers can use `inbound_trusted_tls_proxy` with a firewall.
-See [Configuration](docs/en/06-configuration.md) for the complete Inbound limits.
+See [Configure OneBot in Getting started](docs/en/01-getting-started.md#️-3-configure-onebot) for active WebSocket mode, authentication details, and the network boundary of public deployments.
 
 ### 5. Start and test
 
@@ -207,80 +184,19 @@ The [plugin guide](docs/en/09-plugins.md) lists commands, aliases, permissions, 
 
 ## Principal plugins
 
-### XiaoQing Chat
+| Plugin | Function | Documents |
+| --- | --- | --- |
+| `xiaoqing_chat` | Persona chat: decides when and whom to answer, reads images and memes, and reviews each reply before delivery. | [User guide (Chinese)](plugins/xiaoqing_chat/README.md), [architecture (Chinese)](plugins/xiaoqing_chat/ARCHITECTURE.md) |
+| `xiaoqing_agent` | Calls commands and tools when someone asks XiaoQing to do a task, with the initiating user's permissions. Disabled by default. | [User guide (Chinese)](plugins/xiaoqing_agent/README.md) |
+| `xiaoqing_life` | XiaoQing's own online life: she browses by interest and keeps sourced experiences for chat. Disabled by default. | [User guide (Chinese)](plugins/xiaoqing_life/README.md), [architecture (Chinese)](plugins/xiaoqing_life/ARCHITECTURE.md) |
+| `xiaoqing_memory` | Unified memory: chat, the agent, and online life write to it, and each night it is consolidated into pages about each person, each group, and herself. | [User guide (Chinese)](plugins/xiaoqing_memory/README.md), [architecture (Chinese)](plugins/xiaoqing_memory/ARCHITECTURE.md), [design (Chinese)](plugins/xiaoqing_memory/DESIGN.md) |
+| `pendo` | Events, tasks, notes, diaries, accounts, and reminders, with a Web console and Scriptable widgets. | [User guide (Chinese)](plugins/pendo/README.md), [architecture (Chinese)](plugins/pendo/ARCHITECTURE.md), [Scriptable guide](docs/en/pendo-scriptable-widget.md) |
+| `codex` | Manages background sessions and task queues of the local Codex CLI and returns results proactively. | [User guide (Chinese)](plugins/codex/README.md) |
+| `arxiv_filter` | Selects the day's arXiv papers with a local interest model and can send them to Codex for summaries. | [User guide (Chinese)](plugins/arxiv_filter/README.md) |
+| `flickr` | Browses daily selections, searches, Flickr Commons, and public albums through the official Flickr API. | [User guide (Chinese)](plugins/flickr/README.md) |
 
-As the global `smalltalk_provider`, `xiaoqing_chat` observes group and private messages.
-Attention gates, rate control, action planning, the main model, and the reply checker select reply content and timing.
-The plugin supports text, images, QQ face, NapCat mface, quoted messages, local media, long-term memory, and expression learning.
-
-See the [user guide (Chinese)](plugins/xiaoqing_chat/README.md) and [architecture (Chinese)](plugins/xiaoqing_chat/ARCHITECTURE.md).
-
-### XiaoQing Agent
-
-When a user asks XiaoQing to do a task, `xiaoqing_agent` decides whether tool execution is necessary.
-Execution uses the initiating user's permissions.
-Existing XiaoQing commands keep their own permissions.
-Python, Shell, QingSSH, and Codex follow the declarations for `/shell`, `/ssh`, and `/codex`.
-These commands are restricted to Bot administrators.
-
-The plugin replies in XiaoQing's voice after completion.
-Long tasks run in the background and send results proactively.
-The plugin is disabled by default. `config.plugins.xiaoqing_agent.enabled` enables it.
-When it is disabled, `xiaoqing_chat` keeps its usual behavior.
-See the [user guide (Chinese)](plugins/xiaoqing_agent/README.md).
-
-### XiaoQing Life
-
-`xiaoqing_life` gives XiaoQing her own online life.
-In free routine slots she follows her interests through Bilibili, Zhihu and Weibo hot lists, and encyclopedias.
-She keeps sourced experiences, learns slang, expressions, and memes, continues small research threads on later days, and slowly builds small works.
-Before each reply, `xiaoqing_chat` takes one or two topic-relevant points, so she can answer "seen anything fun lately?" from real experience.
-She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, and she never interacts with posts.
-The plugin is disabled by default. `config.plugins.xiaoqing_life.enabled` enables it.
-When it is disabled, chat behaves as without the plugin.
-See the [user guide (Chinese)](plugins/xiaoqing_life/README.md) and [architecture (Chinese)](plugins/xiaoqing_life/ARCHITECTURE.md).
-
-### XiaoQing Memory
-
-`xiaoqing_memory` is XiaoQing's unified memory.
-Chat, the agent, and online life write raw records through one interface; each night they are consolidated into pages about each person, each group, and herself, and every line cites its source.
-Before each turn she recalls the speaker's page, the group page, and related past events.
-Private-chat content never reaches a group, and one group's content never reaches another.
-The plugin is enabled by default; consolidation needs `ai.routes.reasoning`. Without it, the three plugins keep working without long-term memory.
-See the [user guide (Chinese)](plugins/xiaoqing_memory/README.md), [architecture (Chinese)](plugins/xiaoqing_memory/ARCHITECTURE.md), and [design (Chinese)](plugins/xiaoqing_memory/DESIGN.md).
-
-### Pendo
-
-Pendo uses one data model for events, tasks, notes, diaries, accounts, and reminders.
-Chat commands, the Web console, and Scriptable widgets share one SQLite database.
-Browser login codes have a seven-day redemption period.
-Redemption creates a seven-day HttpOnly Cookie session.
-Scriptable widgets use read-only Bearer tokens with a lifetime of 365 days.
-Both credential types use second-resolution expiry and digest storage.
-
-See the [user guide (Chinese)](plugins/pendo/README.md), [architecture (Chinese)](plugins/pendo/ARCHITECTURE.md),
-and [Scriptable guide](docs/en/pendo-scriptable-widget.md).
-
-### Codex and arXiv
-
-`codex` keeps separate background sessions and task queues.
-Tasks run in sequence within each tag.
-Different tags run concurrently up to `max_parallel_jobs`.
-Completed results return through proactive OneBot messages.
-
-`arxiv_filter` sends the current day's selected papers.
-Scheduled sends and callers with `/codex` permission can send positive papers to the Codex `astro-ph` session for summaries.
-The source-list date and normalized paper-link set identify a summary task.
-
-See [Codex (Chinese)](plugins/codex/README.md) and [arXiv Filter (Chinese)](plugins/arxiv_filter/README.md).
-
-### Flickr
-
-`flickr` uses the official REST API for daily selections, keyword and tag searches, Flickr Commons, public user photos, and public albums.
-Search filters include license, order, and date taken.
-Replies keep the author, license conditions, and Flickr photo page.
-`/flickr more` continues the same query.
-See the [Flickr guide (Chinese)](plugins/flickr/README.md).
+The first four plugins together form the runtime of the XiaoQing persona. See [the XiaoQing runtime in Architecture](docs/en/02-architecture.md#-the-xiaoqing-runtime) for the division of work among them.
+The [plugin manual](docs/en/09-plugins.md) covers how to enable every built-in plugin, with its commands, settings, and runtime data.
 
 ## Plugin and data directories
 
@@ -296,71 +212,27 @@ XiaoQing/
 └── tests/                   # Automated tests
 ```
 
-Plugin data defaults to `data/<plugin_name>/`.
-`data_root` sets the project data root.
-Source, settings, and runtime data use separate directories.
-Deployment scripts can synchronize code and keep production data.
+Plugin data defaults to `data/<plugin_name>/`. Source, settings, and runtime data use separate directories.
+Each `plugin.json` describes entry points, commands, permissions, chat scopes, dependencies, and schedules.
 
-Each `plugin.json` describes entry points, commands, permissions, chat scopes, dependencies, watched files, and schedules.
-Plugin names are lowercase ASCII Python identifiers.
-Entry points are canonical POSIX `.py` paths relative to the plugin directory.
-See [Plugin development](docs/en/03-plugin-development.md) and [API reference](docs/en/05-api-reference.md).
+See [Overview](docs/en/00-overview.md) for directories and concepts, and [Plugin development](docs/en/03-plugin-development.md) and [API reference](docs/en/05-api-reference.md) for writing plugins.
 
 ## Settings and maintenance
 
-`config/config.json` contains OneBot addresses, command prefixes, logging, AI models, plugin settings, and execution limits.
-`config/secrets.json` contains the Inbound token, administrator QQ IDs, AI provider keys, and external credentials.
+Settings use two files:
 
-The reload command is:
+- `config/config.json` contains OneBot addresses, command prefixes, logging, AI models, plugin settings, and execution limits.
+- `config/secrets.json` contains the Inbound token, administrator QQ IDs, AI provider keys, and external credentials.
 
-```text
-/reload
-```
+When ordinary settings are invalid, Core keeps the last known valid snapshot. When secrets are missing, damaged, or inconsistent with the public settings, Core revokes credentials (fail-closed). There are three ways to change settings during operation:
 
-Ordinary settings use the last known valid snapshot.
-Secret snapshots use a fail-closed policy.
-An active administrator can change an existing secret path through `/set_secret`.
-Core saves the file and publishes the new revision in one transaction.
+- Change an existing secret: an administrator sends `/set_secret <path> <value>` in private chat.
+- An external tool rewrites `secrets.json`: Core privately lists the changed field paths (without values) to administrators, who examine them and send `/reload` to apply.
+- Change `config.json` or replace both files: use a service-stop window. A deployment with an independently protected Inbound connection can also send `/reload` through it after the files are written.
 
-An external tool can save a complete, valid `secrets.json` while `config.json` stays equal to the confirmed version.
-The watcher then stages a candidate.
-Current administrators, network connections, and plugin credentials continue to use the confirmed snapshot.
-Core privately reports file validity and added, removed, or changed field paths to administrators.
-The notification contains paths only.
-After examination, an administrator sends `/reload` to confirm and apply the candidate.
-
-A service-stop window is necessary for changes to `config.json` or replacement of both sources together.
-An independently protected Inbound connection can also execute `/reload`.
-
-The Windows production startup chain is:
-
-```text
-scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py
-```
-
-Double-click `scripts/stop-bot.vbs` to stop the monitor, Bot, and NapCat for the same repository.
-Processes started by elevated SSH, scheduled tasks, or administrator terminals cause one UAC confirmation at the stop entry point.
-After the completion message, double-click `scripts/run-bot.vbs` to start again.
-Comments and help in `scripts/` describe synchronization, startup arguments, and production directories.
+See [Configuration live reload](docs/en/06-configuration.md#️-configuration-live-reload) for how each kind of setting takes effect, and [Start the service in Getting started](docs/en/01-getting-started.md#-4-start-the-service) for the protected Windows startup chain and stop entry point.
 
 ## Development and tests
-
-| Directory | Test scope |
-| --- | --- |
-| `tests/core` | Core behavior. |
-| `tests/transport` | Protocols and transport. |
-| `tests/plugins/<plugin>` | Plugin behavior. |
-| `tests/integration` | Component interaction. |
-| `tests/tooling` | Test tools and package resources. |
-
-Tests examine input, output, state changes, errors, permissions, concurrency, and resource lifecycles.
-Cases cover current features only; tests dedicated to a single fix are not kept.
-Parameterized cases combine identical execution paths.
-Isolated substitutes supply external-service responses. Web-client tests execute actual JavaScript.
-
-Assertions use runtime results and valid data contracts.
-Code review keeps documentation wording, comments, fixed provider domains, removed-file lists, and source implementation form correct.
-Tests use URLs to examine parsing, configuration transfer, and access policies.
 
 Common validation commands follow:
 
@@ -380,7 +252,8 @@ python scripts/run_full_uat.py --plan-only
 python scripts/run_full_uat.py
 ```
 
-See [Getting started](docs/en/01-getting-started.md) for UAT stages, report locations, and external-scenario options.
+See [Verification and documentation in Plugin development](docs/en/03-plugin-development.md#verification-and-documentation) for how tests are organized and written.
+See [Full UAT in Getting started](docs/en/01-getting-started.md#full-uat) for UAT stages, report locations, and external-scenario options.
 
 ## Documentation
 
@@ -402,40 +275,14 @@ See [Getting started](docs/en/01-getting-started.md) for UAT stages, report loca
 
 ## Troubleshooting
 
-### Startup and replies
+When the Bot does not respond, examine these items first:
 
-1. Make sure that the OneBot and XiaoQing processes are running.
-2. Compare the Inbound URL or active WebSocket URI with the settings on both sides.
-3. Compare the reporter's Bearer token with `inbound_token`.
-4. Examine `onebot_token` for the reply channel.
-5. Examine connection state, error codes, and request IDs in the logs.
-6. After a secret-candidate notification, examine the field paths.
-7. Send `/reload` to apply a valid candidate.
+1. The OneBot and XiaoQing processes are running.
+2. The Inbound URL or active WebSocket URI matches the settings on both sides.
+3. The reporter's Bearer token equals `inbound_token`, and `onebot_token` is correct for the reply channel.
+4. Connection state, error codes, and request IDs in the logs.
 
-The messages `secrets source is inconsistent` and `WebSocket client stopped` identify a secret-source consistency problem.
-Examine missing files, damaged files, and simultaneous changes to `config.json`.
-For recovery, stop the service. Save complete configuration sources. Then restart to establish a confirmed credential revision.
-
-### Ordinary group replies are absent
-
-1. Make sure that `plugins.smalltalk_provider` names the applicable chat plugin.
-2. Examine the group's mute state.
-3. Examine attention, rate-control, and action-planning logs in `xiaoqing_chat`.
-
-### The Pendo Web login page keeps appearing
-
-1. Send `/pendo web status` to get the service address.
-2. Send `/pendo web token` to get a login code.
-3. Redeem the code on the login page.
-4. Permit the browser to store cookies.
-5. Examine session validation in the Pendo Web log.
-
-### AI plugin calls fail
-
-1. Compare `config.ai.providers`, `config.ai.models`, and the plugin route references.
-2. Examine `secrets.ai.providers.<provider>.api_key`.
-3. Examine the proxy, network, quota, and provider status.
-4. Use the route, profile, and error code in the plugin log to locate the request.
+See [Troubleshooting in Getting started](docs/en/01-getting-started.md#-troubleshooting) for unresponsive group commands, few ordinary chat replies, port binding, Pendo Web login, failed AI calls, and secret-candidate notifications.
 
 ## License
 

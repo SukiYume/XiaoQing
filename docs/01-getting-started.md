@@ -66,6 +66,8 @@ cp config/secrets.json.example config/secrets.json
 }
 ```
 
+示例文件中的 `default_group_ids` 是占位值 `123456789`。定时任务没有指定群时向这些群发送消息，请改成自己的群号或留空 `[]`。
+
 ### 敏感配置
 
 `config/secrets.json` 至少设置 Inbound 鉴权 token 和管理员 QQ：
@@ -164,11 +166,15 @@ XiaoQing 侧配置：
 HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和有界接纳队列。
 启用任一 Inbound Listener 时，请设置非空 `inbound_token`。
 
-同时开启 OneBot HTTP API，并用 `onebot_http_base` 指向它，回复通道的 token 使用 `onebot_token`。
+同时开启 OneBot 的 HTTP API（NapCat 的 HTTP 服务），使其监听 `onebot_http_base` 指向的端口，回复通道的 token 使用 `onebot_token`。
 标准上报收到 `{}` 确认，消息通过 action API 实际发送。
-`secret`/`X-Signature` 单独配置会收到 401。
-此服务的 HTTP 上报使用 Bearer 请求头。
-开发矩阵通过 `X-XiaoQing-Response-Mode: actions` 显式选择动作列表响应。
+
+服务端使用 Bearer 认证，上报端需要支持自定义 `Authorization` 请求头。
+OneBot 的 `secret`/`X-Signature` 是 HMAC 签名，只配置它会收到 401。
+WebSocket 提供另一种接入方式。
+
+开发验收客户端可发送 `X-XiaoQing-Response-Mode: actions`：响应正文是 `{"actions": [...]}`，由客户端负责执行其中的动作。
+本地命令矩阵使用这种模式。
 
 ### 主动 WebSocket
 
@@ -218,6 +224,8 @@ scripts/run-bot.vbs
 
 该启动链从当前 `PATH` 调用 Python，并从 `config/config.json` 读取 NapCat 账号与可选 MKL threading 配置。
 
+同步脚本、启动参数和部署目录的说明见 `scripts/` 中对应文件的注释与帮助输出。
+
 Windows 生产环境重启流程：
 
 1. 双击 `scripts/stop-bot.vbs`。
@@ -233,7 +241,7 @@ Windows 生产环境重启流程：
 
 ## ✅ 5. 首次验证
 
-在管理员私聊中依次发送：
+用 `admin_user_ids` 中的 QQ 私聊小青，依次发送：
 
 ```text
 /help
@@ -253,6 +261,7 @@ Windows 生产环境重启流程：
 /arxiv
 ```
 
+`/xc` 需要先按上文“AI 插件配置”配好模型和密钥，否则无法生成回复。
 命令帮助来自 Manifest，显示当前加载版本的入口、参数、权限、场景和样例。
 
 ---
@@ -313,7 +322,7 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 3. 核对上报的 Authorization Bearer 请求头与 `inbound_token`，并核对回复通道的 `onebot_token`。
 4. 在日志中查找连接状态、错误码和 request ID。
 5. 收到 secret 待确认通知时，核对字段路径并发送 `/reload`。
-6. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，停止服务，确认两个配置文件完整，再重新启动。
+6. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，检查 secrets 来源是否缺失、损坏，或与 `config.json` 同时发生了变化；然后停止服务，保存完整的两个配置文件，再重新启动，由启动读取确认新的凭据 revision。
 
 ### 群聊命令响应排查
 
@@ -340,6 +349,13 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 2. 执行 `/pendo web token` 获取 7 天兑换期登录码。
 3. 在登录页兑换 Code，并允许浏览器保存 Cookie。
 4. 查看 Pendo Web 日志中的 session 校验结果。
+
+### AI 插件调用异常
+
+1. 核对 `config.ai.providers`、`config.ai.models` 与插件 route 的引用。
+2. 核对 `secrets.ai.providers.<provider>.api_key`。
+3. 检查代理、网络、配额和 provider 状态。
+4. 结合插件日志中的 route、profile 和错误码定位请求。
 
 ---
 

@@ -61,9 +61,9 @@ Each other plugin has a `README.md` in its directory. The [plugin manual](09-plu
 
 - `docs/` contains the complete Chinese manual, and `docs/en/` contains the complete English manual. Both use matching plain filenames and language links at the top of each page.
 - Chinese documents are the authoritative maintenance source. Update both versions in the same change when editing capabilities, commands, parameters, defaults, permissions, or deployment steps.
-- The root README is available in both languages and supplies the project entry point and the shortest startup procedure.
+- The root README is available in both languages and supplies the project entry point and the shortest startup procedure. It keeps only the steps, conclusions, and links needed to get started and may repeat the manual; the manual must be complete, with a full description of every item the README mentions.
 - Plugin guides, acceptance guides, maintenance rules, and the changelog are maintained in Chinese; English manual links to these documents are marked "Chinese".
-- Each document in `docs/00-09` owns one topic.
+- Each document in `docs/00-09` owns one topic. Architecture (02) covers Core components and the division of work, services, and data ownership among the four XiaoQing base plugins; how to enable each plugin, its commands and settings, and its behavior belong in the plugin manual (09) and the plugin's own documents.
 - Plugin READMEs address plugin users and deployers.
 - Plugin ARCHITECTURE documents address plugin maintainers.
 - Plugin DESIGN documents explain design choices.
