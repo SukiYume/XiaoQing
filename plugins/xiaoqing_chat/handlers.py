@@ -69,6 +69,7 @@ from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
 from .logging_utils import log_step
 from .media.event_media import build_effective_user_text
+from .memory import client as memory_client
 from .memory.local_ids import allocate_local_id
 from .memory.memory import idle_gap_before_turn, is_conversation_reply
 from .memory.review_sessions import get_goal_override
@@ -580,6 +581,16 @@ async def observe_outgoing_action(
 # 单轮生成、记忆提交与投递编排
 
 
+def _retry_pending_forgets(context) -> None:
+    """有会话的长期记忆还等着清：不管这条消息来自哪个会话，都在后台再试一次，不等结果。
+
+    agent 和别的会话直接向记忆服务读，等着清的内容对它们还看得见，所以服务一恢复就尽快清掉。
+    """
+
+    if memory_client.forget_retry_due(context):
+        spawn_bg_task(context, memory_client.retry_forgets(context), name="memory_forget_retry:all")
+
+
 async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: HandlerContext):
     """判断本轮是否在叫机器人、是否必须回复，并记录接收日志。"""
 
@@ -801,6 +812,8 @@ async def _prepare_smalltalk_turn(
 
     async with chat_lock(chat_id):
         await _maybe_reset_idle_conversation(event, context, runtime, state, chat_id=chat_id)
+
+    _retry_pending_forgets(context)
 
     attention, is_private = await _resolve_attention(text, event, context, hctx)
     event[_FORCED_EVENT_KEY] = attention.forced

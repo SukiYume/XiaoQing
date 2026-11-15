@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from types import SimpleNamespace
@@ -197,6 +198,68 @@ async def test_nothing_is_read_from_a_scope_that_is_waiting_to_be_cleared(tmp_pa
     )
     assert await memory_client.search(context, "u7", {"query": "杭州"}) == []
     assert reads == ["recall", "search"], "待清期间不向记忆服务读这个范围"
+
+
+@pytest.mark.asyncio
+async def test_any_message_retries_a_pending_clear_at_a_limited_rate(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """有会话等着清时，别的会话来消息也会触发重试；服务没恢复时不必每条消息都去试。"""
+
+    state, harness, flaky, context = _setup(tmp_path, "u7")
+    _say(state, "u7", "我叫阿梨", "m1")
+    await memory_client.push_pending(context, state, "u7", bot_name="小青")
+    assert memory_client.forget_retry_due(context) is False, "没有等着清的会话时什么都不做"
+
+    flaky.down = True
+    state.memory_store.clear("u7")
+    assert await memory_client.forget_chat(context, "u7") is False
+
+    clock = [1000.0]
+    monkeypatch.setattr(memory_client.time, "monotonic", lambda: clock[0])
+    assert memory_client.forget_retry_due(context) is True
+    assert await memory_client.retry_forgets(context) == 0, "服务还没恢复"
+    clock[0] += memory_client.FORGET_RETRY_SECONDS - 1
+    assert memory_client.forget_retry_due(context) is False, "离上一次太近"
+
+    flaky.down = False
+    clock[0] += 2
+    assert memory_client.forget_retry_due(context) is True
+    assert await memory_client.retry_forgets(context) == 1
+    assert memory_client.outbox_for(tmp_path).forgetting() == []
+    assert harness.store.events.events("u7") == []
+    assert memory_client.forget_retry_due(context) is False
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_clears_a_waiting_chat_in_the_background(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """处理消息时顺手重试是后台任务：不等它，做完后等着清的会话已经清掉。"""
+
+    from plugins.xiaoqing_chat import handlers, task_scheduler
+
+    state, harness, flaky, context = _setup(tmp_path, "u7")
+    context.logger = SimpleNamespace(debug=lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_scheduler, "_state", lambda: state)
+    monkeypatch.setattr(memory_client, "_forget_retried_at", {})
+    _say(state, "u7", "我叫阿梨", "m1")
+    await memory_client.push_pending(context, state, "u7", bot_name="小青")
+    flaky.down = True
+    state.memory_store.clear("u7")
+    assert await memory_client.forget_chat(context, "u7") is False
+    flaky.down = False
+
+    handlers._retry_pending_forgets(context)
+    assert memory_client.outbox_for(tmp_path).forgetting() == ["u7"], "没有等它做完"
+    tasks = state.background_tasks()
+    assert len(tasks) == 1
+    await asyncio.gather(*tasks)
+
+    assert memory_client.outbox_for(tmp_path).forgetting() == []
+    assert harness.store.events.events("u7") == []
+    handlers._retry_pending_forgets(context)
+    assert state.background_tasks() == set(), "没有等着清的会话时不起任务"
 
 
 @pytest.mark.asyncio

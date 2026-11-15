@@ -20,6 +20,7 @@ _SINGLEFLIGHT_BG_TASK_KINDS = frozenset(
         "daily_life",
         "expression_learn",
         "media_refine",
+        "memory_forget_retry",
         "reflection",
         "review_push",
     }

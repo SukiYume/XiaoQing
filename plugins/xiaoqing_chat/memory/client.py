@@ -5,8 +5,9 @@
   这个会话的旧数据（人物事实、话题摘要、自我陈述、未完话头）一起导入。
 - 读：``memory.recall`` 取这一轮的常驻块，``memory.search`` 查她自己的记录和旧事。
 - 清：重置会话时让记忆插件清空这个范围。没得到它确认（超时、出错，或记忆服务不在）的会话记在
-  ``memory_outbox.json`` 里；清掉之前不往这个范围推新消息，也不从它读（旧记忆不再进回复），下一次
-  推送或定时同步时先重试。
+  ``memory_outbox.json`` 里；清掉之前不往这个范围推新消息，也不从它读（旧记忆不再进回复）。重试
+  有三个时机：这个会话下一次推送、定时同步，以及任何会话来一条消息时在后台顺手试一次（限频）——
+  agent 和别的会话直接向记忆服务读，不经过这里的拦截，所以服务一恢复就要尽快清掉。
 
 能力缺失、插件关闭、超时或出错一律当作没有长期记忆：读取给空结果，写入留在本地队列里。
 """
@@ -42,6 +43,8 @@ _OUTBOX_FILE     = "memory_outbox.json"
 _MAX_PUSHED_KEYS = 600
 _MAX_EVENT_CHARS = 2000
 _IMPORT_CHUNK    = 40
+# 有会话等着清时，来消息顺手重试的最短间隔：服务还没恢复时不必每条消息都去试。
+FORGET_RETRY_SECONDS = 30.0
 # 聊天自己发出的、agent 交回的回复算她自己的话；其他插件以她身份发的消息是工具输出。
 _OWN_SOURCES = frozenset({"", "xiaoqing_chat", "xiaoqing_agent"})
 
@@ -279,11 +282,8 @@ async def sync_all(context: Any, state: Any, *, bot_name: str) -> int:
     if capability(context) is None:
         return 0
     data_dir = Path(context.data_dir)
-    box      = outbox_for(data_dir)
     # 重置后还没有新消息的会话没有历史文件，下面的循环碰不到它：等着清的先各试一次。
-    for chat_id in box.forgetting():
-        async with _push_lock(chat_id):
-            await _forget_scope(context, box, chat_id)
+    await retry_forgets(context)
     pushed = 0
     for path in sorted(data_dir.glob("[gu][0-9]*.json")):
         chat_id = path.stem
@@ -292,6 +292,39 @@ async def sync_all(context: Any, state: Any, *, bot_name: str) -> int:
         if await push_pending(context, state, chat_id, bot_name=bot_name) is not None:
             pushed += 1
     return pushed
+
+
+async def retry_forgets(context: Any) -> int:
+    """等着清的会话各再试一次，返回这次清掉了几个。"""
+
+    box     = outbox_for(Path(context.data_dir))
+    cleared = 0
+    for chat_id in box.forgetting():
+        async with _push_lock(chat_id):
+            # 等锁的时候可能已经被这个会话自己的推送清掉了。
+            if chat_id in box.forgetting() and await _forget_scope(context, box, chat_id):
+                cleared += 1
+    return cleared
+
+
+_forget_retried_at: dict[str, float] = {}
+
+
+def forget_retry_due(context: Any) -> bool:
+    """有会话等着清，而且离上一次顺手重试够久了；返回真时已经记下这一次。"""
+
+    if capability(context) is None:
+        return False
+    data_dir = Path(context.data_dir)
+    if not outbox_for(data_dir).forgetting():
+        return False
+    key  = str(data_dir.resolve())
+    now  = time.monotonic()
+    last = _forget_retried_at.get(key)
+    if last is not None and now - last < FORGET_RETRY_SECONDS:
+        return False
+    _forget_retried_at[key] = now
+    return True
 
 
 async def _forget_scope(context: Any, box: Outbox, chat_id: str) -> bool:
