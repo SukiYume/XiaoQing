@@ -11,6 +11,8 @@
 ### 升级须知
 
 - **装成包以后，`xiaoqing` 命令在运行目录里找配置**：原来入口总把 `main.py` 所在的目录当根目录，wheel 安装后那是 site-packages，配置找不到，数据和日志也会写进安装目录。现在配置读运行目录下的 `config/`，数据和日志写到它下面的 `data/`、`logs/`；运行目录用 `--root` 指定，不指定时源码目录里运行是源码目录（和原来一样），装成包以后是当前目录。插件代码总从 `plugins` 包的安装位置加载。
+- **arXiv 推理命令行改到插件里**：`python scripts/arxiv_inference_cli.py` 改为 `python -m plugins.arxiv_filter.inference`，参数不变。
+- **全量 UAT 不再改写 `config/config.json`，`--recover` 去掉了**：见下面“脚本整理”。
 - **测试依赖 `aioresponses` 的下限提高到 0.7.9**：0.7.8 在 aiohttp 3.14.5、yarl 1.25.1 下会把查询参数重复编码，xiaoai 的 6 条测试失败。已有开发环境里装着旧版本的，重新安装一次依赖。
 - **同步脚本先比对定时任务的推送目标**：部署配置漏写某个定时任务的目标群时，任务不会停，而是改投 manifest 或 `default_group_ids` 里的群；原来同步前只检查文件在不在、摘要对不对，看不出推送范围变了。现在 `scripts/sync_to_remote.sh` 同步前经 ssh 只读取回部署机上的 `config/config.json` 和各插件的 `plugin.json`，和本机要同步过去的同一组文件分别算出每个会运行、会投递的定时任务发往哪些群，逐个比对（`scripts/check_schedule_targets.py`，与调度器用同一个目标群解析函数）。预览时列出变化；`--apply` 遇到变化就拒绝同步，确认是有意改动再加 `--accept-target-changes`。本机要能运行 Python（默认 `python`，可用 `PYTHON_BIN` 指定），部署机只需要 `sh`。
 - **改监听地址的 `/reload` 失败后的行为变了**：新监听器起不来时，旧监听器在原地址继续收消息，只认当前发布的 token（原来入站监听会断）。见下面“修复”。
@@ -29,6 +31,14 @@
 - **入站服务器停止时主动关掉还连着的 WebSocket 客户端**：空闲的连接停在读消息上，不会自己发现服务器在停止，停止要等到 aiohttp 的关闭超时（60 秒）才返回。现在排空在途处理、等 worker 把已经拿到的结果发完之后，逐个以 1001（going away）关闭，每条连接的关闭都有界。
 - **停止时不再执行 WebSocket 队列里还没开始的事件**：WebSocket 事件收到时就登记进分发器，排队的只是等着把结果发回去的那一步；停止时这些事件的结果原本就会被丢掉，可分发器在排空期间仍会把它们执行一遍（有副作用，结果白算）。现在停止一开始就撤掉队列里还没有 worker 接手的事件。HTTP 上报方断开连接时不取消对应的事件，这是有意的：标准 OneBot 上报的回复经 action API 发出，NapCat 等超时断开时这条消息照样要处理。
 - **去掉走不到的分支**：`ReplyRejected` 去掉恒为真的 `need_replan`（被拒就表示要重新规划）；Pendo 改条目时“存储的条目类型不受支持”、改设置时“更新失败”两处返回 500 的分支走不到，去掉，`update_user_settings` 不再返回值。
+
+### 脚本整理
+
+- **全量 UAT 用独立的运行目录**：原来 UAT 为了隔离，临时改写仓库里的 `config/config.json`，为此带着备份、恢复锁、逐字节恢复和 `--recover`。现在按本机配置在报告目录 `runtime/config/` 写一份测试配置和密钥副本，用 `main.py --root <报告目录>/runtime` 启动，仓库里的 `config/` 不动，结束时删掉密钥副本；报告里“config 逐字节恢复”改为“config 未改动”。备份、锁、`--recover` 和原子写文件等配套代码一并删掉（`run_full_uat.py` 1444 → 1155 行）。
+- **去掉 UAT 里隐藏旧插件数据目录的逻辑**：它是为 Core 把 `plugins/<name>/data/` 搬到数据根目录的迁移准备的，这个迁移 5.3.0 已经去掉；留着反而会把插件里真叫 `data` 的源码目录临时挪走。
+- **chat_eval 端到端驱动同样用 `--root` 启动**：不再在子进程里替换 `ConfigManager` 来换配置文件，测试配置和密钥副本放在本次输出目录的 `runtime/config/` 下。
+- **arXiv 推理命令行并进插件**：`scripts/arxiv_inference_cli.py` 移到 `plugins/arxiv_filter/inference/__main__.py`，和插件的训练工具放在一起；在包里不再需要改 `sys.path`。
+- 其余脚本逐个核对过用途和引用，都还在用，保留：Windows 启动的四个文件（双击入口、停服入口、PowerShell 看护、日志轮转泵）各管一层；三个 UAT 脚本可以各自单独对运行中的服务使用；`check_*` 各是一道独立门禁；`run_xiaoqing_life_session.py`、`run_xiaoqing_memory_consolidate.py` 是两个插件文档里写明的真实验证工具。
 
 ### Core 去掉只为测试存在的代码
 

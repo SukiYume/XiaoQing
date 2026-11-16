@@ -1,10 +1,9 @@
-#!/usr/bin/env python
-"""在仓库中直接运行 arXiv 模型推理。
+"""在命令行运行 arXiv 模型推理（在仓库根目录或装好的环境里运行）。
 
 示例：
-  python scripts/arxiv_inference_cli.py
-  python scripts/arxiv_inference_cli.py --test-positive
-  python scripts/arxiv_inference_cli.py --model-path <model-dir>
+  python -m plugins.arxiv_filter.inference
+  python -m plugins.arxiv_filter.inference --test-positive
+  python -m plugins.arxiv_filter.inference --model-path <model-dir>
 
 训练权重是外部运行资产，不随 XiaoQing wheel 或源码发行。模型路径优先级为
 ``--model-path``、``ARXIV_MODEL_PATH``、插件配置。
@@ -13,27 +12,15 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import logging
 import math
-import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
-
-def _load_inference() -> ModuleType:
-    """从仓库根导入插件推理入口，不依赖调用者的当前目录。"""
-
-    repo_root = Path(__file__).resolve().parents[1]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    return importlib.import_module("plugins.arxiv_filter.inference.runner")
+from core.atomic_store import atomic_write_bytes
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构造可被测试复用的命令行参数。"""
-
     parser = argparse.ArgumentParser(
         description     = __doc__,
         formatter_class = argparse.RawDescriptionHelpFormatter,
@@ -100,9 +87,6 @@ def _prepare_output(parser: argparse.ArgumentParser, output: Path, *, force: boo
 def _write_csv_atomic(data: Any, output: Path) -> None:
     """完整编码成 CSV 后再原子发布，不会留下写了一半的输出文件。"""
 
-    # 仓库根已由 ``_load_inference`` 放进 ``sys.path``，``core`` 此时才导入得到。
-    from core.atomic_store import atomic_write_bytes
-
     atomic_write_bytes(output, data.to_csv(index=False).encode("utf-8-sig"))
 
 
@@ -113,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     output = None if args.test_positive else _prepare_output(parser, args.output, force=args.force)
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-    inference = _load_inference()
+    # 推理后端依赖较重，参数和输出路径检查完才导入。
+    from . import runner as inference
+
     if args.test_positive:
         probabilities, predictions, params = inference.run_single_paper_inference(
             title      = args.test_title,

@@ -123,7 +123,7 @@ export ARXIV_MODEL_PATH=/srv/xiaoqing-models/arxiv
 ## 🧠 推理 CLI
 
 ```bash
-python scripts/arxiv_inference_cli.py \
+python -m plugins.arxiv_filter.inference \
   --model-path /srv/xiaoqing-models/arxiv \
   --output predictions.csv
 ```
@@ -191,5 +191,5 @@ plugins/arxiv_filter/
 
 ```bash
 python -m pytest tests/plugins/arxiv_filter/test_arxiv_filter.py tests/plugins/arxiv_filter/test_arxiv_model_path.py -q
-python -m ruff check plugins/arxiv_filter scripts/arxiv_inference_cli.py
+python -m ruff check plugins/arxiv_filter
 ```

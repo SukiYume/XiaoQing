@@ -271,10 +271,10 @@ python scripts/run_full_uat.py --plan-only
 python scripts/run_full_uat.py
 ```
 
-UAT uses the current environment's interpreter to start a real `python main.py` process.
-It redirects plugin data to the current report directory and runs these phases in sequence.
-Finally, it shuts down gracefully and restores `config/config.json` byte for byte.
-The temporary configuration disables plugin schedules (`enable_plugin_schedules=false`), proactive HTTP delivery (empty `onebot_http_base`), and default notification groups, so the test service never calls real accounts or posts to production groups; `--include-external` only controls external scenarios in the command matrix. If startup is interrupted, the runner reaps the whole test-service process tree before restoring the real configuration.
+UAT uses the current environment's interpreter to start a real `python main.py --root <report-dir>/runtime` process.
+The runtime directory holds a test configuration derived from the local one, a copy of the secrets, and the plugin data; `config/` in the checkout is left untouched.
+It runs these phases in sequence, then shuts down gracefully and deletes the secrets copy.
+The temporary configuration disables plugin schedules (`enable_plugin_schedules=false`), proactive HTTP delivery (empty `onebot_http_base`), and default notification groups, so the test service never calls real accounts or posts to production groups; `--include-external` only controls external scenarios in the command matrix. If startup is interrupted, the runner still reaps the whole test-service process tree.
 
 | Phase | Content |
 |---|---|
@@ -295,7 +295,8 @@ Reports are in `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`
 | `--include-external --scenario-fixtures <file>` | Include business scenarios that depend on external services. |
 | `--include-chat-quality` | Include the chat-quality phase, which consumes model quota. |
 | `--output <directory>` | Set the report directory. |
-| `--recover` | Restore configuration after forced UAT termination. First confirm that all services have stopped. |
+
+If UAT is killed, the secrets copy in `runtime/config/secrets.json` under the report directory may remain; delete it by hand.
 
 ## 🩺 Troubleshooting
 

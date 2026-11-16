@@ -1192,9 +1192,11 @@ class LiveBot:
         self.process: subprocess.Popen | None  = None
         self.behavior: BehaviorOverride | None = None
         self.data                              = out_dir / "data"
-        self._log: Any                         = None
-        self._mid                              = 5_000_000
-        self._secrets: Path | None             = None
+        # main.py --root 的运行目录：测试副本配置和密钥在它的 config/ 下。
+        self.root                  = out_dir / "runtime"
+        self._log: Any             = None
+        self._mid                  = 5_000_000
+        self._secrets: Path | None = None
 
     def _proactive_groups(self) -> list[int]:
         return [
@@ -1222,7 +1224,8 @@ class LiveBot:
                 "napcat_account"         : BOT_ID,
             }
         )
-        path = self.out_dir / "config.json"
+        path = self.root / "config" / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
@@ -1232,7 +1235,7 @@ class LiveBot:
         secrets                   = load_secrets()
         admins                    = [int(item) for item in secrets.get("admin_user_ids") or ()]
         secrets["admin_user_ids"] = [*admins, EVAL_ADMIN_ID]
-        path                      = self.out_dir / "secrets.eval.json"
+        path                      = self.root / "config" / "secrets.json"
         path.write_text(json.dumps(secrets, ensure_ascii=False), encoding="utf-8")
         return path
 
@@ -1250,21 +1253,14 @@ class LiveBot:
                 seed_memory(
                     self.data / "xiaoqing_memory", name, self.indexes[name], self.indexes[name]
                 )
-        config_path   = self._write_config()
+        self._write_config()
         self.behavior = BehaviorOverride(self.out_dir)
         await self.napcat.start(NAPCAT_PORT)
         self._secrets = self._write_secrets()
         self._log     = (self.out_dir / "bot.log").open("wb")
-        # 走 main.py 的同一个入口，只把配置文件换成测试副本。
-        launcher = (
-            "import sys, core.app as app\n"
-            "real = app.ConfigManager\n"
-            f"app.ConfigManager = lambda config, secrets: real({str(config_path)!r}, {str(self._secrets)!r})\n"
-            "import main\n"
-            "main.cli([])\n"
-        )
+        # 走 main.py 的同一个入口，运行目录换成放测试副本配置的目录。
         self.process = subprocess.Popen(
-            [sys.executable, "-X", "utf8", "-c", launcher],
+            [sys.executable, "-X", "utf8", str(PROJECT_ROOT / "main.py"), "--root", str(self.root)],
             cwd           = PROJECT_ROOT,
             stdout        = self._log,
             stderr        = subprocess.STDOUT,

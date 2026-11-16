@@ -286,8 +286,8 @@ python scripts/run_full_uat.py --plan-only
 python scripts/run_full_uat.py
 ```
 
-UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据重定向到本次报告目录，按顺序执行以下阶段，最后优雅停机并逐字节恢复 `config/config.json`。
-运行期间的临时配置关闭插件定时任务（`enable_plugin_schedules=false`）、主动 HTTP 投递（`onebot_http_base` 置空）和默认通知群，测试服务不会调用真实账号或向生产群发送消息；`--include-external` 只控制命令矩阵里的外部场景。服务启动等待期间被中断时，runner 先回收整棵测试服务进程树，再恢复真实配置：
+UAT 用当前环境的解释器启动真实 `python main.py --root <报告目录>/runtime`：运行目录里是按本机配置改写的测试配置和一份密钥副本，插件数据也落在那里，仓库里的 `config/` 不改动。按顺序执行以下阶段，最后优雅停机并删掉密钥副本。
+运行期间的临时配置关闭插件定时任务（`enable_plugin_schedules=false`）、主动 HTTP 投递（`onebot_http_base` 置空）和默认通知群，测试服务不会调用真实账号或向生产群发送消息；`--include-external` 只控制命令矩阵里的外部场景。服务启动等待期间被中断时，runner 同样回收整棵测试服务进程树：
 
 | 阶段 | 内容 |
 |---|---|
@@ -309,7 +309,8 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 | `--include-external --scenario-fixtures <文件>` | 加入依赖外部服务的业务场景 |
 | `--include-chat-quality` | 加入消耗模型额度的聊天质量阶段 |
 | `--output <目录>` | 指定报告目录 |
-| `--recover` | 上次 UAT 被强制终止、配置未恢复时，确认没有服务在运行后执行，恢复配置 |
+
+UAT 被强制终止时，报告目录 `runtime/config/secrets.json` 里的密钥副本可能留下，手动删掉即可。
 
 ---
 
