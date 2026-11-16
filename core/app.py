@@ -80,7 +80,10 @@ class XiaoQingApp(
     def __init__(
         self,
         root: Path,
+        plugins_dir: Path | None = None,
     ) -> None:
+        # root 是运行目录（config/、data/、logs/）；插件代码默认在它下面的 plugins/，
+        # 装成 wheel 后由入口传入安装位置。
         self.root: Path = root
 
         # 加载配置
@@ -107,7 +110,7 @@ class XiaoQingApp(
 
         # 核心组件
         self.router: CommandRouter = CommandRouter()
-        self.plugins_dir: Path     = root / "plugins"
+        self.plugins_dir: Path     = plugins_dir or root / "plugins"
         poll_interval              = _runtime_plugin_poll_interval(self.config_manager.config)
         configured_data_root       = self.config_manager.config.get("data_root")
         plugin_data_root           = (

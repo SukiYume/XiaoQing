@@ -31,6 +31,7 @@ from .constants import (
     DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
     MAX_SHORT_TEXT_LENGTH,
 )
+from .delivery import SENSITIVE_ACTION_KEY
 from .interfaces import ACTION_RESULT_MESSAGE_ID_KEY
 from .lifecycle import FatalErrorCarrier as _FatalErrorCarrier
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
@@ -246,7 +247,8 @@ def _normalize_action_for_onebot(action: dict[str, Any]) -> dict[str, Any]:
         params["message"] = [_normalize_segment_for_onebot(segment) for segment in message]
     elif message is not None and not isinstance(message, str):
         raise TypeError("OneBot message must be text or a segment list")
-    normalized           = dict(action)
+    # 敏感标记只给本进程的日志决策用，不上线。
+    normalized = {key: value for key, value in action.items() if key != SENSITIVE_ACTION_KEY}
     normalized["action"] = action_name.strip()
     normalized["params"] = params
     return normalized
@@ -284,7 +286,9 @@ def _finalize_onebot_action(
             transport,
             action_name,
             target,
-            _extract_message_preview(message),
+            "[sensitive]"
+            if action.get(SENSITIVE_ACTION_KEY)
+            else _extract_message_preview(message),
         )
         return True
     if response is not None:

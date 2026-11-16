@@ -449,10 +449,15 @@ class AppDeliveryMixin:
             )
             return True
 
+        # 敏感标记留给 OneBot 传输决定日志里不写正文，由它们在序列化时去掉；
+        # 入站 WebSocket 广播直接序列化整个动作，给它的副本不带标记。
         delivery_action = {
             key: value
             for key, value in action.items()
-            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY, SENSITIVE_ACTION_KEY}
+            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY}
+        }
+        wire_action = {
+            key: value for key, value in delivery_action.items() if key != SENSITIVE_ACTION_KEY
         }
 
         def copy_delivery_result() -> None:
@@ -480,7 +485,7 @@ class AppDeliveryMixin:
         # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
         if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
             try:
-                broadcast_result = await self.inbound_manager.broadcast(delivery_action)
+                broadcast_result = await self.inbound_manager.broadcast(wire_action)
             except Exception as exc:
                 logger.warning("Inbound WebSocket broadcast failed; trying fallback: %s", exc)
             else:

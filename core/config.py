@@ -138,6 +138,7 @@ class _RuntimeConfigSchema(BaseModel):
     session_timeout                     : float | None = Field(default=None, gt=0, le=604800)
     plugin_poll_interval                : float | None = Field(default=None, gt=0, le=86400)
     data_root                           : StrictStr | None = None
+    bot_name                            : StrictStr | None = None
     ws_queue_size                       : int | None = Field(default=None, ge=1, le=10000)
     inbound_ws_max_workers              : int | None = Field(default=None, ge=1, le=128)
     inbound_ws_broadcast_timeout_seconds: float | None = Field(default=None, gt=0, le=300)

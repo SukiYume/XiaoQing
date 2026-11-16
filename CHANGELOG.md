@@ -6,16 +6,21 @@
 - `X.Y.Z — 日期`：正式版本，版本号与 `pyproject.toml` 一致。
 - 仅有日期的条目：4.1.0 之前及版本之间按日期记录的变化。
 
-## 下一版本
+## 5.3.1 — 2026-11-16
 
 ### 升级须知
 
+- **装成包以后，`xiaoqing` 命令在运行目录里找配置**：原来入口总把 `main.py` 所在的目录当根目录，wheel 安装后那是 site-packages，配置找不到，数据和日志也会写进安装目录。现在配置读运行目录下的 `config/`，数据和日志写到它下面的 `data/`、`logs/`；运行目录用 `--root` 指定，不指定时源码目录里运行是源码目录（和原来一样），装成包以后是当前目录。插件代码总从 `plugins` 包的安装位置加载。
+- **测试依赖 `aioresponses` 的下限提高到 0.7.9**：0.7.8 在 aiohttp 3.14.5、yarl 1.25.1 下会把查询参数重复编码，xiaoai 的 6 条测试失败。已有开发环境里装着旧版本的，重新安装一次依赖。
 - **同步脚本先比对定时任务的推送目标**：部署配置漏写某个定时任务的目标群时，任务不会停，而是改投 manifest 或 `default_group_ids` 里的群；原来同步前只检查文件在不在、摘要对不对，看不出推送范围变了。现在 `scripts/sync_to_remote.sh` 同步前经 ssh 只读取回部署机上的 `config/config.json` 和各插件的 `plugin.json`，和本机要同步过去的同一组文件分别算出每个会运行、会投递的定时任务发往哪些群，逐个比对（`scripts/check_schedule_targets.py`，与调度器用同一个目标群解析函数）。预览时列出变化；`--apply` 遇到变化就拒绝同步，确认是有意改动再加 `--accept-target-changes`。本机要能运行 Python（默认 `python`，可用 `PYTHON_BIN` 指定），部署机只需要 `sh`。
 - **改监听地址的 `/reload` 失败后的行为变了**：新监听器起不来时，旧监听器在原地址继续收消息，只认当前发布的 token（原来入站监听会断）。见下面“修复”。
-- **直接使用 Core 类的代码要改**（插件拿到的上下文不受影响）：`XiaoQingApp` 只接受根目录；`Dispatcher` 的 `semaphore` 必须是 `AdjustableSemaphore`，去掉了 `clock`、`random_gen` 参数；`core.clock` 去掉了 `IClock`、`IRandom`、`SystemClock`、`SystemRandom`；直接构造的 `PluginContext` 要传 `settings_reader`、`secret_reader`，否则读设置和凭据时报错；`InboundServer` 在 `start()` 之后才接纳事件；`core.plugin_manager` 只导出 `PluginManager`，其他名字从 `core.plugin_manager_support` 导入。
+- **直接使用 Core 类的代码要改**（插件拿到的上下文不受影响）：`XiaoQingApp` 只接受根目录和可选的插件目录；`Dispatcher` 的 `semaphore` 必须是 `AdjustableSemaphore`，去掉了 `clock`、`random_gen` 参数；`core.clock` 去掉了 `IClock`、`IRandom`、`SystemClock`、`SystemRandom`；直接构造的 `PluginContext` 要传 `settings_reader`、`secret_reader`，否则读设置和凭据时报错；`InboundServer` 在 `start()` 之后才接纳事件；`core.plugin_manager` 只导出 `PluginManager`，其他名字从 `core.plugin_manager_support` 导入。
 
 ### 修复
 
+- **登录 Code、二维码提示不再写进日志**：Pendo 登录 Code、xiaoai 登录提示这类敏感私聊，发送时 Core 先去掉了敏感标记，OneBot 发送成功后的日志照常写消息预览；Code 比预览上限短，会完整落盘，没用过、没过期的 Code 能拿去换登录会话。现在敏感标记一直带到 OneBot 传输，日志里只写 `[sensitive]`，序列化上线时去掉标记；入站 WebSocket 广播收到的副本不带标记。
+- **`bot_name` 填错不再弄坏之后的消息处理**：配置校验原来不管 `bot_name` 的类型，填成数字、数组也能通过；重载后消息解析器先换了缓存、再编译名字匹配规则，编译失败时错误的值已经留在缓存里，下一条消息解析就报错。现在 `bot_name` 必须是字符串，不是就拒绝这次重载、保留原配置；解析器也改为匹配规则编译成功后才换缓存。
+- **`/agent result` 补发时，附件结果不明不再记成已送达**：原来文字一确认发出就记 `sent`，附件只看明确的失败，结果不明的附件被忽略。现在和当轮交付同一条规则：文字和每个附件各有一个结果，任一部分没发出记 `failed`，全部确认才记 `sent`，其余记 `unknown`；上传过程中出错时，各附件按结果不明计。
 - **`/agent new` 之后，之前开始的任务不再把旧会话写回来**：清空原来只是删掉会话文件。清空前就在跑的任务结束时，发现文件不在或会话 ID 不同，就用任务开始时读到的记录写回：旧会话重新出现，或者覆盖清空后新开、已经保存的会话。会话过期、被另一个任务的新会话取代时也一样。现在会话文件带修订号，每次写入加一；清空改为写入修订号更大的“已清空”标记，新开会话时记下当时的修订号。任务结束写回时，还是同一个会话就接在后面；修订号没变（这期间没人写过）就按开始时的记录写；否则这一轮不写回会话，任务记录照常保留。旧的会话文件没有修订号，按 0 读取。
 - **目标都失效时，规划器能清空目标**：目标分析模型答 `[]` 时，JSON 解析返回“解析失败”，“模型明确答空数组就清空目标”的分支永远走不到，失效的目标一直留着。现在字面上是空数组就返回空列表。处理器里“推不出目标就清空目标”的分支同样走不到，一并删掉。
 - **对方只发表情时，她只回一个表情不再被拒**：本地审查把她要发的 `[想发表情:…]` 标记里的“表情”二字当成在谈论媒体形式，拒掉后重新生成，最后落到兜底句“等我一下，脑子突然卡壳了”。现在判断前先去掉她要发的媒体标记；围着图片、表情本身打转的回复照旧拒绝。

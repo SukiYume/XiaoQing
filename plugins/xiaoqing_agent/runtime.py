@@ -7,12 +7,12 @@ import logging
 import sys
 import time
 from collections.abc import Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any
 
-from core.delivery import DeliveryReceipt, DeliverySegments
+from core.delivery import DeliveryReceipt, DeliverySegments, merge_delivery_outcomes
 
 from . import receipts
 from .config import AgentConfig
@@ -55,30 +55,39 @@ _MAX_AWAITING_REPORTS       = 200
 
 @dataclass
 class _Resend:
-    """补发一次结果的交付状态：文字确认发出且附件都没失败才算 ``sent``。"""
+    """补发一次结果的交付状态，和当轮交付同一条规则。
 
-    store        : TaskStore
-    chat_key     : str
-    task_id      : str
-    upload_failed: bool = False
+    文字和每个附件各有一个结果（送达、没发出、未知）。任一部分没发出就记 ``failed``；
+    全部到齐后，全部确认为 ``sent``，其余为 ``unknown``。文字和附件谁先有结果都一样。
+    """
 
-    async def sent(self) -> None:
-        if not self.upload_failed:
-            await self.store.update_delivery(self.chat_key, self.task_id, "sent")
+    store   : TaskStore
+    chat_key: str
+    task_id : str
+    expected: int = 1
+    results : list[bool | None] = field(default_factory=list)
+    settled : bool = False
 
-    async def failed(self) -> None:
-        self.upload_failed = True
-        await self.store.update_delivery(self.chat_key, self.task_id, "failed")
+    async def record(self, outcome: bool | None) -> None:
+        if self.settled:
+            return
+        self.results.append(outcome)
+        merged = merge_delivery_outcomes(self.results)
+        if merged is False:
+            delivery = "failed"
+        elif len(self.results) < self.expected:
+            return
+        else:
+            delivery = "sent" if merged else "unknown"
+        self.settled = True
+        await self.store.update_delivery(self.chat_key, self.task_id, delivery)
 
     def receipt(self) -> DeliveryReceipt:
-        async def unknown() -> None:
-            return None
-
         return DeliveryReceipt(
             expected_actions = 1,
-            commit           = self.sent,
-            rollback         = self.failed,
-            unknown          = unknown,
+            commit           = partial(self.record, True),
+            rollback         = partial(self.record, False),
+            unknown          = partial(self.record, None),
         )
 
 
@@ -719,7 +728,7 @@ class AgentRuntime:
             return f"任务 {task_id} 没有结果（{record.get('status')}{detail}）。"
         files = [item for item in record.get("files") or [] if isinstance(item, str)]
         message, _images, uploads = outcome_message(Outcome(text, files))
-        resend = _Resend(self.store, chat.key, task_id)
+        resend = _Resend(self.store, chat.key, task_id, expected=1 + len(uploads))
         if uploads:
             self._track(self._upload_resent(context, chat, uploads, resend))
         return DeliverySegments(message, resend.receipt())
@@ -732,8 +741,14 @@ class AgentRuntime:
         resend: _Resend,
     ) -> None:
         await asyncio.sleep(_UPLOAD_AFTER_REPLY_SECONDS)
-        if any(sent is False for _, sent in await upload_each(context, chat, uploads)):
-            await resend.failed()
+        try:
+            results = await upload_each(context, chat, uploads)
+        except Exception as exc:
+            # 发到一半出错，哪些附件已经发出去说不准。
+            logger.warning("xiaoqing_agent resend upload failed error_type=%s", type(exc).__name__)
+            results = [(path, None) for path in uploads]
+        for _path, sent in results:
+            await resend.record(sent)
 
     # ──────────────────── 生命周期 ────────────────────
 

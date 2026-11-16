@@ -139,6 +139,8 @@ Content-Type: application/json
 python main.py
 ```
 
+配置读仓库下的 `config/`，数据和日志写到 `data/`、`logs/`。用 wheel 安装时运行 `xiaoqing`，这三个目录在当前目录下，也可以用 `xiaoqing --root <目录>` 指定。
+
 启动日志会列出已加载插件和 OneBot 连接状态。随后用 `admin_user_ids` 中的 QQ 私聊小青，依次发送：
 
 ```text

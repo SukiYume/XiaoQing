@@ -67,6 +67,30 @@ class TestMessageParser:
         assert parser.parse(event).has_command_prefix is False
         assert provider.reads == 2
 
+    def test_failed_refresh_keeps_the_previous_cache(self):
+        """名字编译不出匹配规则时，刷新报错，解析照旧用上一份配置。"""
+
+        provider        = Mock()
+        provider.config = {"bot_name": "小青", "command_prefixes": ["/"], "plugins": {}}
+        parser          = MessageParser(provider)
+        provider.config = {"bot_name": 123, "command_prefixes": ["!"], "plugins": {}}
+
+        with pytest.raises(TypeError):
+            parser.refresh_prefix_cache()
+
+        def event(message: str) -> dict:
+            return {
+                "post_type"   : "message",
+                "message_type": "group",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : message,
+            }
+
+        assert parser.parse(event("小青")).is_only_bot_name is True
+        assert parser.parse(event("/help")).has_command_prefix is True
+
     def test_parse_group_message(self, mock_config_provider: MagicMock):
         """测试解析群消息"""
         parser = MessageParser(mock_config_provider)

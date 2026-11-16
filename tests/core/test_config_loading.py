@@ -217,6 +217,22 @@ class TestConfigManagerReload:
         with pytest.raises(ConfigLoadError, match="data_root"):
             config_manager.reload()
 
+    @pytest.mark.parametrize("value", [123, ["小青"], {"name": "小青"}, True])
+    def test_reload_rejects_a_bot_name_that_is_not_text(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+        value: object,
+    ):
+        before                = config_manager.config["bot_name"]
+        candidate             = config_manager.snapshot().mutable_config()
+        candidate["bot_name"] = value
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        with pytest.raises(ConfigLoadError, match="bot_name"):
+            config_manager.reload()
+        assert config_manager.config["bot_name"] == before
+
     @pytest.mark.parametrize("value", [[], [""], ["/", " "], "/", [1]])
     def test_reload_rejects_command_prefixes_that_cannot_work(
         self,

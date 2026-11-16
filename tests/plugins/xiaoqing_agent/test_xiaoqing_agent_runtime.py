@@ -884,8 +884,22 @@ async def test_resent_results_are_complete_and_record_their_own_delivery(tmp_pat
     with_file            = await runtime.result_message(context, CHAT, table.task_id)
     await with_file.delivery_receipt.record(True)
     await wait_until(lambda: len(context.actions) == 4)
+    await wait_until(lambda: _record(tmp_path, table.task_id)["delivery"] == "failed")
+
+    # 文字发出了、附件结果不明：记为未知，不能算送达。
+    context.send_results = [None]
+    unknown_file         = await runtime.result_message(context, CHAT, table.task_id)
+    await unknown_file.delivery_receipt.record(True)
+    await wait_until(lambda: len(context.actions) == 5)
+    await wait_until(lambda: _record(tmp_path, table.task_id)["delivery"] == "unknown")
+
+    # 附件先确认、文字结果不明：同样是未知。
+    context.send_results = [True]
+    late_text            = await runtime.result_message(context, CHAT, table.task_id)
+    await wait_until(lambda: len(context.actions) == 6)
+    await late_text.delivery_receipt.record(None)
     await runtime.shutdown()
-    assert _record(tmp_path, table.task_id)["delivery"] == "failed"
+    assert _record(tmp_path, table.task_id)["delivery"] == "unknown"
 
 
 class _ReceiptLog:

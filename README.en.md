@@ -140,6 +140,8 @@ See [Configure OneBot in Getting started](docs/en/01-getting-started.md#️-3-co
 python main.py
 ```
 
+Configuration is read from `config/` in the checkout, and data and logs go to `data/` and `logs/`. When installed from a wheel, run `xiaoqing`: these three directories live under the current directory, or under the one given with `xiaoqing --root <dir>`.
+
 Startup logs show loaded plugins and OneBot connection status.
 In a private chat with XiaoQing, send these commands from a QQ account listed in `admin_user_ids`:
 

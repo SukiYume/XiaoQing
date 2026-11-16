@@ -27,6 +27,16 @@ def main() -> None:
         if not origin.is_relative_to(prefix):
             raise RuntimeError(f"Import escaped installation environment: {name}: {origin}")
 
+    # 装好的入口：插件从安装环境加载，配置、数据和日志在当前目录，不往安装目录里写。
+    import main as entrypoint
+
+    if not entrypoint._plugins_dir().is_relative_to(prefix):
+        raise RuntimeError(f"Installed plugins escaped installation: {entrypoint._plugins_dir()}")
+    if entrypoint._default_root() != Path.cwd():
+        raise RuntimeError(
+            f"Installed entry does not run in the working directory: {entrypoint._default_root()}"
+        )
+
     assets = {
         "plugins.xiaoqing_chat"       : ("plugin.json",),
         "plugins.xiaoqing_chat.config": ("xiaoqing_config.json", "persona.md", "agent.md"),

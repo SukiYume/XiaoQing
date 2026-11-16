@@ -280,10 +280,12 @@ class MessageParser:
         if cache_key == self._prefix_cache_key:
             return
 
+        # 先编译匹配规则，成功后才一起换掉缓存：编译失败时上一份可用的缓存原样留着。
+        pattern                = compile_bot_name_pattern(bot_name)
         self._prefix_cache_key = cache_key
         self._cached_bot_name  = bot_name
         self._cached_prefixes  = prefixes
-        self._bot_name_pattern = compile_bot_name_pattern(bot_name)
+        self._bot_name_pattern = pattern
 
     def parse(
         self,

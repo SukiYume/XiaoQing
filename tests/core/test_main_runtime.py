@@ -1,6 +1,7 @@
 # 验证主入口启动、信号处理和运行期资源收口。
 import signal
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -42,7 +43,7 @@ async def test_main_reports_incomplete_shutdown(
     app = SimpleNamespace(
         start=start_then_interrupt, stop=AsyncMock(), shutdown_errors=state.shutdown_errors
     )
-    monkeypatch.setattr(app_module, "XiaoQingApp", lambda _: app)
+    monkeypatch.setattr(app_module, "XiaoQingApp", lambda *_args, **_kwargs: app)
     monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
     if errors:
         with pytest.raises(RuntimeError, match="shutdown incomplete"):
@@ -51,6 +52,52 @@ async def test_main_reports_incomplete_shutdown(
         await entrypoint.main()
     app.stop.assert_awaited_once()
     assert capsys.readouterr().out.strip()
+
+
+@pytest.mark.parametrize("given", [None, "deploy"])
+def test_cli_runs_the_app_in_the_runtime_root_with_the_installed_plugins(
+    monkeypatch, tmp_path, given
+) -> None:
+    """配置、数据和日志在运行目录；插件代码总从 plugins 包所在的目录加载。"""
+    from core import app as app_module
+
+    built: list[tuple[object, object]] = []
+
+    class StoppedApp:
+        shutdown_errors = ()
+
+        def __init__(self, root, plugins_dir=None) -> None:
+            built.append((root, plugins_dir))
+
+        async def start(self) -> None:
+            raise KeyboardInterrupt
+
+        async def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_module, "XiaoQingApp", StoppedApp)
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+    monkeypatch.chdir(tmp_path)
+    argv = [] if given is None else ["--root", given]
+
+    entrypoint.cli(argv)
+
+    checkout = Path(entrypoint.__file__).resolve().parent
+    expected = checkout if given is None else (tmp_path / given).resolve()
+    assert built == [(expected, checkout / "plugins")]
+
+
+def test_default_root_outside_a_checkout_is_the_working_directory(monkeypatch, tmp_path) -> None:
+    """装成包后 main.py 旁边没有 pyproject.toml：运行目录取当前目录，不写进安装目录。"""
+
+    installed = tmp_path / "site-packages"
+    installed.mkdir()
+    workdir = tmp_path / "bot"
+    workdir.mkdir()
+    monkeypatch.setattr(entrypoint, "__file__", str(installed / "main.py"))
+    monkeypatch.chdir(workdir)
+
+    assert entrypoint._default_root() == workdir
 
 
 def test_windows_runtime_handles_ctrl_break_for_graceful_shutdown(monkeypatch) -> None:

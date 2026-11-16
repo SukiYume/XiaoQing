@@ -7,10 +7,35 @@ from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog        = "xiaoqing",
         description = "XiaoQing QQ Bot framework",
     )
+    parser.add_argument(
+        "--root",
+        type    = Path,
+        default = None,
+        help    = (
+            "运行目录：配置读 ROOT/config/，数据和日志写到 ROOT/data/、ROOT/logs/。"
+            "默认在源码目录里运行时是源码目录，装成包以后是当前目录。"
+        ),
+    )
+    return parser
+
+
+def _default_root() -> Path:
+    """源码目录里运行就用源码目录；装成 wheel 后 main.py 在 site-packages 里，改用当前目录。"""
+
+    here = Path(__file__).resolve().parent
+    return here if (here / "pyproject.toml").is_file() else Path.cwd()
+
+
+def _plugins_dir() -> Path:
+    """插件代码所在的目录：源码目录下的 plugins/，或安装环境里的 plugins 包。"""
+
+    import plugins
+
+    return Path(plugins.__file__).resolve().parent
 
 
 def _prepare_runtime() -> None:
@@ -42,11 +67,11 @@ def _install_stop_signal_handlers(
         signal.signal(sigbreak, schedule_stop)
 
 
-async def main() -> None:
+async def main(root: Path | None = None) -> None:
     _prepare_runtime()
     from core.app import XiaoQingApp
 
-    app        = XiaoQingApp(Path(__file__).resolve().parent)
+    app = XiaoQingApp((root or _default_root()).resolve(), plugins_dir=_plugins_dir())
     stop_event = asyncio.Event()
 
     def request_stop() -> None:
@@ -74,9 +99,9 @@ async def main() -> None:
 
 
 def cli(argv: Sequence[str] | None = None) -> None:
-    _build_parser().parse_args(argv)
+    args = _build_parser().parse_args(argv)
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.root))
     except KeyboardInterrupt:
         pass
 
