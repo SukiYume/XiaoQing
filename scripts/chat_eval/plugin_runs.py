@@ -1,18 +1,20 @@
-"""真实验证：用真实端点和真实模型跑一次 xiaoqing_life 的上网（或睡前整理）。
+"""两个插件的真实运行验证，作为 chat_eval 的 ``life`` 和 ``consolidate`` 子命令。
+
+``life``：用真实端点和真实模型跑一次 xiaoqing_life 的上网（或睡前整理）。
 
 在隔离的数据目录（默认 ``work/xiaoqing_life/<时间戳>/``）里运行，不碰线上数据，也不修改
 ``config/config.json`` 与 ``config/secrets.json``（只读）。本地配置里没有 ``plugins.xiaoqing_life`` 时，
 用 ``--routes-from xiaoqing_chat`` 在内存里复用那个插件的 ``reasoning`` / ``vision`` 路由。
 
-    python scripts/run_xiaoqing_life_session.py --activity hot_scroll
-    python scripts/run_xiaoqing_life_session.py --activity interest_dive --query 天文摄影
-    python scripts/run_xiaoqing_life_session.py --data-dir work/xiaoqing_life/x --activity hot_scroll   # 第二次
-    python scripts/run_xiaoqing_life_session.py --no-ai --activity hot_scroll                          # 只看取材
-    python scripts/run_xiaoqing_life_session.py --activity wind_down --advance-minutes 40
-    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "猎户座怎么拍"      # 研究循环
-    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "水珠为什么在热锅上跑" --kind fact --done-when "知道原因" --query "莱顿弗罗斯特效应"
-    python scripts/run_xiaoqing_life_session.py --data-dir work/xiaoqing_life/x --activity work_on    # 整理作品
-    python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "…" --bili-credential 凭证文件.json
+    python -m scripts.chat_eval life --activity hot_scroll
+    python -m scripts.chat_eval life --activity interest_dive --query 天文摄影
+    python -m scripts.chat_eval life --data-dir work/xiaoqing_life/x --activity hot_scroll   # 第二次
+    python -m scripts.chat_eval life --no-ai --activity hot_scroll                          # 只看取材
+    python -m scripts.chat_eval life --activity wind_down --advance-minutes 40
+    python -m scripts.chat_eval life --activity thread_continue --thread "猎户座怎么拍"      # 研究循环
+    python -m scripts.chat_eval life --activity thread_continue --thread "水珠为什么在热锅上跑" --kind fact --done-when "知道原因" --query "莱顿弗罗斯特效应"
+    python -m scripts.chat_eval life --data-dir work/xiaoqing_life/x --activity work_on    # 整理作品
+    python -m scripts.chat_eval life --activity thread_continue --thread "…" --bili-credential 凭证文件.json
 
 ``thread_continue --thread "<标题>"``：隔离目录里找标题匹配的小课题，没有就先开一个，再逐轮打印研究的行动、
 模型原始 JSON 与本地核对结果（要点保留 / 丢弃、更正、下一步）。``work_on`` 要在已有进行中作品的数据目录里跑
@@ -21,11 +23,19 @@
 
 输出取材条目（数量与几个标题）、模型原始 JSON、被本地核对丢弃的条目及原因、最终落盘的内容，
 并写 ``result.json``。不打印任何密钥。
+
+``consolidate``：在一份数据副本上跑统一记忆的迁移和整理，用真实模型，输出每个范围的数字和整理好的页面。
+
+用法::
+
+    python -m scripts.chat_eval consolidate --data-dir <数据根目录的副本>
+
+数据根目录里要有 ``xiaoqing_chat/``（聊天历史和旧数据），结果写进同一目录下的 ``xiaoqing_memory/``，
+页面另存为 ``xiaoqing_memory/pages.txt``。只读聊天的旧文件，不改不删；请只在副本上运行。
 """
 
 from __future__ import annotations
 
-# ruff: noqa: E402  (需要先把仓库根目录放进 sys.path 再导入项目模块)
 import argparse
 import asyncio
 import copy
@@ -34,21 +44,21 @@ import json
 import os
 import random
 import shutil
-import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
 from core.ai import complete_configured_route
 from core.clock import now_in_configured_timezone
+from plugins.xiaoqing_chat.memory.client import event_key, message_event
+from plugins.xiaoqing_chat.memory.legacy import legacy_ops
+from plugins.xiaoqing_chat.memory.memory import MemoryStore as ChatHistory
+from plugins.xiaoqing_chat.memory.person_profile import get_profile_generation
 from plugins.xiaoqing_life import digest as digest_mod
 from plugins.xiaoqing_life import memes as memes_mod
 from plugins.xiaoqing_life import persona_bridge, planner, research
@@ -64,6 +74,26 @@ from plugins.xiaoqing_life.sources.base import BoundedFetcher, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore
 from plugins.xiaoqing_life.wind_down import run_wind_down
 from plugins.xiaoqing_life.works import MAX_OPS
+from plugins.xiaoqing_memory.commands import render_page
+from plugins.xiaoqing_memory.config import parse_memory_config
+from plugins.xiaoqing_memory.consolidate.runner import Deps, consolidate_scope, consolidate_self
+from plugins.xiaoqing_memory.model import GLOBAL
+from plugins.xiaoqing_memory.ops import apply_record
+from plugins.xiaoqing_memory.scopes import CHAT, Caller
+from plugins.xiaoqing_memory.store import MemoryStore
+
+PROJECT_ROOT    = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG  = PROJECT_ROOT / "config" / "config.json"
+DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    """本机配置原样读出（只读）。"""
+
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+# ──────────────────── life：xiaoqing_life 的一次上网 ────────────────────
 
 PLUGIN       = "xiaoqing_life"
 BILI_SOURCES = tuple(name for name in SOURCE_DEFAULTS if name.startswith("bili_"))
@@ -77,14 +107,10 @@ ACTIVITIES   = (
 )
 
 
-def _load(name: str) -> dict[str, Any]:
-    return json.loads((ROOT / "config" / name).read_text(encoding="utf-8"))  # type: ignore[no-any-return]
-
-
 def _build_config(routes_from: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """读取只读配置；需要时把别的插件的路由复制成 xiaoqing_life 的（仅内存）。"""
 
-    config, secrets = _load("config.json"), _load("secrets.json")
+    config, secrets = _read_json(DEFAULT_CONFIG), _read_json(DEFAULT_SECRETS)
     plugins         = config.setdefault("plugins", {})
     life            = plugins.setdefault(PLUGIN, {})
     life["enabled"] = True
@@ -178,7 +204,7 @@ def _snapshot(store: LifeStore) -> dict[str, Any]:
     }
 
 
-async def _main(args: argparse.Namespace) -> int:
+async def _life_main(args: argparse.Namespace) -> int:
     config, secrets = _build_config(args.routes_from)
     options: dict[str, Any] = {**config["plugins"][PLUGIN], "enabled": True}
     if args.no_bili:
@@ -190,7 +216,9 @@ async def _main(args: argparse.Namespace) -> int:
     life_cfg = parse_life_config(options)
     context  = _stub_context(config)
     stamp    = time.strftime("%Y%m%d-%H%M%S")
-    data_dir = Path(args.data_dir) if args.data_dir else ROOT / "work" / "xiaoqing_life" / stamp
+    data_dir = (
+        Path(args.data_dir) if args.data_dir else PROJECT_ROOT / "work" / "xiaoqing_life" / stamp
+    )
     data_dir.mkdir(parents=True, exist_ok=True)
     store = LifeStore(data_dir / "data")
     store.load()
@@ -451,9 +479,9 @@ def _decision(
         return planner.Decision("hot_scroll", "forced", {}, {"source": args.source})
     if args.activity == "interest_dive" and args.chat_topic:
         # 去看睡前挑出来的群聊话题：搜索词取她挑的时候写的（没有就用 --query / 话题本身）。
-        picks = store.state.get("chat_topics", [])
-        pick  = next((p for p in picks if p.get("topic") == args.chat_topic), {})
-        query = args.query or str(pick.get("query") or args.chat_topic)
+        picks                = store.state.get("chat_topics", [])
+        pick: dict[str, Any] = next((p for p in picks if p.get("topic") == args.chat_topic), {})
+        query                = args.query or str(pick.get("query") or args.chat_topic)
         return planner.Decision(
             "interest_dive",
             "forced",
@@ -586,10 +614,7 @@ def _work_report(
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+def add_life_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--activity",
         choices = ACTIVITIES,
@@ -650,8 +675,135 @@ def main() -> int:
         help    = "把脚本时钟向前拨（睡前整理要看到今天的经历）",
     )
     parser.add_argument("--seed", type=int, default=None)
-    return asyncio.run(_main(parser.parse_args()))
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def run_life(args: argparse.Namespace) -> int:
+    return asyncio.run(_life_main(args))
+
+
+# ──────────────────── consolidate：统一记忆的迁移和整理 ────────────────────
+
+
+def migrate(chat_dir: Path, store: MemoryStore, bot_name: str) -> dict[str, dict[str, int]]:
+    """把每个会话的近期历史作为事件、旧数据作为导入操作写进统一记忆。"""
+
+    caller                            = Caller(CHAT, "system", "")
+    history                           = ChatHistory(chat_dir)
+    counts: dict[str, dict[str, int]] = {}
+    for path in sorted(chat_dir.glob("[gu][0-9]*.json")):
+        chat_id = path.stem
+        if not chat_id[1:].isdigit():
+            continue
+        generation = get_profile_generation(chat_dir, chat_id)
+        messages   = history.get(chat_id)
+        events     = [
+            event
+            for message in messages
+            if (event := message_event(message, event_key(generation, message), bot_name))
+        ]
+        ops      = legacy_ops(chat_dir, chat_id)
+        rejected = 0
+        result   = apply_record(store, {"events": events}, caller, chat_id)
+        rejected += len(result["rejected"])
+        for start in range(0, len(ops), 40):
+            result = apply_record(store, {"ops": ops[start : start + 40]}, caller, chat_id)
+            rejected += len(result["rejected"])
+        counts[chat_id] = {"events": len(events), "imports": len(ops), "rejected": rejected}
+    return counts
+
+
+def make_deps(
+    config: dict[str, Any], secrets: dict[str, Any], session: Any, bot_name: str
+) -> tuple[Deps, list[float]]:
+    """整理用的依赖，以及一份随模型调用累加的耗时（秒）列表。"""
+
+    calls: list[float] = []
+
+    async def complete(messages: list[dict[str, str]]) -> str:
+        started = time.monotonic()
+        result  = await complete_configured_route(
+            session     = session,
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_memory",
+            route_name  = "reasoning",
+            messages    = messages,
+        )
+        calls.append(time.monotonic() - started)
+        return str(result.content)
+
+    zone = ZoneInfo(str(config.get("timezone") or "Asia/Shanghai"))
+    return Deps(complete=complete, bot_name=bot_name, zone=zone), calls
+
+
+async def _consolidate_main(args: argparse.Namespace) -> int:
+    data_dir   = Path(args.data_dir).resolve()
+    chat_dir   = data_dir / "xiaoqing_chat"
+    memory_dir = data_dir / "xiaoqing_memory"
+    if not chat_dir.is_dir():
+        print(f"没有 {chat_dir}")
+        return 1
+    config   = _read_json(Path(args.config))
+    secrets  = _read_json(Path(args.secrets))
+    store    = MemoryStore(memory_dir)
+    started  = time.monotonic()
+    bot_name = str(config.get("bot_name") or "小青")
+    counts   = migrate(chat_dir, store, bot_name)
+    print(json.dumps({"migrate": counts}, ensure_ascii=False))
+    cfg = parse_memory_config(
+        {**config.get("plugins", {}).get("xiaoqing_memory", {}), "max_llm_calls_per_day": 10_000}
+    )
+    scopes = [scope for scope in store.known_scopes() if scope != GLOBAL]
+    if args.scope:
+        scopes = [scope for scope in scopes if scope in args.scope]
+    async with aiohttp.ClientSession() as session:
+        deps, calls = make_deps(config, secrets, session, bot_name)
+        for scope in scopes:
+            result = await consolidate_scope(
+                store, cfg, deps, scope, force=True, rewrites=args.rewrites
+            )
+            print(json.dumps({"scope": scope, **result}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"scope": GLOBAL, **await consolidate_self(store, cfg, deps, force=True)},
+                ensure_ascii=False,
+            )
+        )
+    rows   : list[str]      = []
+    summary: dict[str, Any] = {}
+    for scope in [*scopes, GLOBAL]:
+        pages          = store.pages(scope)
+        notes          = store.notes(scope)
+        summary[scope] = {
+            "notes_active": sum(1 for note in notes.values() if note.status == "active"),
+            "pages"       : len(pages),
+            "page_chars"  : {subject: page.char_count() for subject, page in pages.items()},
+        }
+        for page in pages.values():
+            rows.append(render_page(page))
+            rows.append("")
+    (memory_dir / "pages.txt").write_text("\n".join(rows), encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "summary"     : summary,
+                "llm_calls"   : len(calls),
+                "llm_seconds" : round(sum(calls), 1),
+                "wall_seconds": round(time.monotonic() - started, 1),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def add_consolidate_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--data-dir", required=True, help="数据根目录的副本（含 xiaoqing_chat/）")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--secrets", default=str(DEFAULT_SECRETS))
+    parser.add_argument("--scope", action="append", help="只整理这些范围（可重复）")
+    parser.add_argument("--rewrites", type=int, default=12, help="每个范围最多重写几份页面")
+
+
+def run_consolidate(args: argparse.Namespace) -> int:
+    return asyncio.run(_consolidate_main(args))

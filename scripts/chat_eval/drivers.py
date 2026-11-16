@@ -69,13 +69,13 @@ def set_timezone(name: str | None) -> None:
 def load_config() -> dict[str, Any]:
     """本机的 ``config.json`` 原样读出。"""
 
-    return json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    return json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
 def load_secrets() -> dict[str, Any]:
     """本机的 ``secrets.json`` 原样读出。"""
 
-    return json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))
+    return json.loads(DEFAULT_SECRETS.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
 def _eval_config() -> dict[str, Any]:

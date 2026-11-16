@@ -1,4 +1,4 @@
 #!/bin/sh
 # 提交前检查：要提交的文件里不能出现本机私有配置（config/config.json、config/secrets.json、
 # config/private_terms.txt）里的值。启用：git config core.hooksPath .githooks
-exec python scripts/check_private.py
+exec python "$(dirname "$0")/check_private.py"

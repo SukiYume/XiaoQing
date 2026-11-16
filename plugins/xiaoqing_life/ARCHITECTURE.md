@@ -134,16 +134,16 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 
 ### 真实端点回放
 
-`scripts/run_xiaoqing_life_session.py` 在隔离数据目录（默认 `work/xiaoqing_life/<时间戳>/`）里用真实端点和真实模型跑一次活动，打印取材、模型原始 JSON、被本地核对丢弃的条目及原因和落盘结果，并写 `result.json`。它只读 `config/config.json` 与 `secrets.json`；`--routes-from xiaoqing_chat` 在内存里复用该插件的 `reasoning` / `vision` 路由。其余参数有 `--thread`、`--kind`、`--done-when`、`--chat-topic`、`--bili-credential`。
+`python -m scripts.chat_eval life`（代码在 `scripts/chat_eval/plugin_runs.py`）在隔离数据目录（默认 `work/xiaoqing_life/<时间戳>/`）里用真实端点和真实模型跑一次活动，打印取材、模型原始 JSON、被本地核对丢弃的条目及原因和落盘结果，并写 `result.json`。它只读 `config/config.json` 与 `secrets.json`；`--routes-from xiaoqing_chat` 在内存里复用该插件的 `reasoning` / `vision` 路由。其余参数有 `--thread`、`--kind`、`--done-when`、`--chat-topic`、`--bili-credential`。
 
 ```bash
-python scripts/run_xiaoqing_life_session.py --activity hot_scroll --routes-from xiaoqing_chat
-python scripts/run_xiaoqing_life_session.py --activity interest_dive --query 天文摄影 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
-python scripts/run_xiaoqing_life_session.py --activity wind_down --advance-minutes 15 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
-python scripts/run_xiaoqing_life_session.py --no-ai --activity hot_scroll   # 只看取材
-python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "猎户座怎么拍" --routes-from xiaoqing_chat   # 研究循环，逐轮打印行动、原始 JSON 与核对结果
-python scripts/run_xiaoqing_life_session.py --activity work_on --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x   # 整理已有的作品
-python scripts/run_xiaoqing_life_session.py --activity thread_continue --thread "…" --bili-credential 凭证文件.json   # 只读复制凭证到隔离目录验证字幕，不打印内容
+python -m scripts.chat_eval life --activity hot_scroll --routes-from xiaoqing_chat
+python -m scripts.chat_eval life --activity interest_dive --query 天文摄影 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
+python -m scripts.chat_eval life --activity wind_down --advance-minutes 15 --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x
+python -m scripts.chat_eval life --no-ai --activity hot_scroll   # 只看取材
+python -m scripts.chat_eval life --activity thread_continue --thread "猎户座怎么拍" --routes-from xiaoqing_chat   # 研究循环，逐轮打印行动、原始 JSON 与核对结果
+python -m scripts.chat_eval life --activity work_on --routes-from xiaoqing_chat --data-dir work/xiaoqing_life/x   # 整理已有的作品
+python -m scripts.chat_eval life --activity thread_continue --thread "…" --bili-credential 凭证文件.json   # 只读复制凭证到隔离目录验证字幕，不打印内容
 ```
 
 B 站的排行、搜索接口会间歇性触发风控（`-352` / HTTP 412），此时该来源按失败处理并换其它来源，不要高频重试。

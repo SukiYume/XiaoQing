@@ -188,7 +188,7 @@ Assertions use runtime results and valid data contracts.
 Code review keeps the exact wording of prompts, persona, help text, and constants correct, along with documentation wording, comments, fixed provider domains, removed-file lists, and source implementation form.
 Sample URLs in tests examine parsing, configuration transfer, and access policies.
 
-The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...`, `pass`, or `raise NotImplementedError` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.
+The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`; run it alone with `python -m pytest tests/tooling/test_check_redundancy.py`): `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...`, `pass`, or `raise NotImplementedError` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in that test file's `ALLOWED` with its reason.
 
 READMEs describe current use and configuration.
 ARCHITECTURE documents describe module responsibilities, data flow, and ownership.

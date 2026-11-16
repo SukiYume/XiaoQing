@@ -92,4 +92,4 @@ Core 的服务契约（`core/models.py`）固定了四条服务的所有者和�
 
 - 单元与契约测试：`tests/plugins/xiaoqing_memory/`、`tests/core/test_app_memory_capabilities.py`，以及三个调用方各自的 `test_*memory*` 测试。
 - 评测：`scripts/chat_eval` 的 `memory` 组；进程内驱动经 `MemoryBridge` 接上真的记忆插件并按 Core 的方式写入调用方和范围，剧本里的 `consolidate()` 立刻整理一次。
-- 回放：`scripts/run_xiaoqing_memory_consolidate.py` 在数据副本上跑迁移和整理。
+- 回放：`python -m scripts.chat_eval consolidate`（代码在 `scripts/chat_eval/plugin_runs.py`）在数据副本上跑迁移和整理。

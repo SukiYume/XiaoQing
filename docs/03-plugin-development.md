@@ -190,7 +190,7 @@ Web 客户端测试执行实际 JavaScript。
 提示词、人设、帮助文字和常量的原话，以及文档措辞、注释、固定供应商域名、已删除文件清单和源码实现形式，交由代码审查维护。
 测试中的样例 URL 用于验证解析、配置传递与访问策略。
 
-重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`），也可以单独运行 `python scripts/check_redundancy.py`：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（函数体不到 8 行的小函数，以及只有 `...`、`pass` 或 `raise NotImplementedError` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在脚本的 `ALLOWED` 里写明原因。
+重复代码检查随测试一起跑（`tests/tooling/test_check_redundancy.py`，单独运行就是 `python -m pytest tests/tooling/test_check_redundancy.py`）：`core`、`plugins`、`scripts` 和 `main.py` 里不能有两个函数体一模一样的函数（函数体不到 8 行的小函数，以及只有 `...`、`pass` 或 `raise NotImplementedError` 的接口声明不算）。出现时留一份、其余改成调用它；确实要各留一份的，在这个测试文件的 `ALLOWED` 里写明原因。
 
 README 描述当前用法和配置。
 ARCHITECTURE 描述模块职责、数据流与所有权。

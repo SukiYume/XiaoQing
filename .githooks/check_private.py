@@ -14,8 +14,8 @@ UTF-8 和 UTF-16 两种写法都查；命中处前后紧挨着字母或数字的
 
 用法::
 
-    python scripts/check_private.py            # 检查暂存区（pre-commit 钩子用）
-    python scripts/check_private.py --all      # 检查全部已跟踪和未跟踪的文件
+    python .githooks/check_private.py          # 检查暂存区（pre-commit 钩子用）
+    python .githooks/check_private.py --all    # 检查全部已跟踪和未跟踪的文件
 """
 
 from __future__ import annotations

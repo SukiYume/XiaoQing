@@ -171,4 +171,4 @@ python -m pytest tests/plugins/xiaoqing_memory tests/core/test_app_memory_capabi
 ### 真实验证
 
 - 评测：`python -m scripts.chat_eval run --set memory`（`mem_agent_prefs` 要加 `--driver live`）。剧本预置几天前的对话，整理一次后再问：记不记得、改口后按新的、私聊的事不进群、群里本人说的能带进私聊、伤心事不主动提、分得清谁是谁、办事偏好下次不再问。
-- 数据副本回放：`python scripts/run_xiaoqing_memory_consolidate.py --data-dir <数据副本>` 在副本上跑迁移和整理，输出每个范围的笔记数、页面字数和模型调用数，页面另存为 `xiaoqing_memory/pages.txt`。只在副本上运行。
+- 数据副本回放：`python -m scripts.chat_eval consolidate --data-dir <数据副本>` 在副本上跑迁移和整理，输出每个范围的笔记数、页面字数和模型调用数，页面另存为 `xiaoqing_memory/pages.txt`。只在副本上运行。

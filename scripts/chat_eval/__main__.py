@@ -1,4 +1,4 @@
-"""小青聊天评测的唯一入口：剧本 → 送进小青 → 规则检查 → 模型评审 → 报告。
+"""小青真实模型评测与验证的唯一入口：剧本 → 送进小青 → 规则检查 → 模型评审 → 报告。
 
     python -m scripts.chat_eval run                          # 进程内跑群聊回归剧本并评审
     python -m scripts.chat_eval run --set quality --gate     # 质量探针；机器门禁不过时退出码为 1
@@ -8,9 +8,11 @@
     python -m scripts.chat_eval judge <结果目录>             # 对已有结果重新评审
     python -m scripts.chat_eval replay <聊天数据目录> g978321 阿禾 "你怎么不理我" --at
     python -m scripts.chat_eval calibrate                    # 只校准审查器的误杀与漏放
+    python -m scripts.chat_eval life --activity hot_scroll   # 真实跑一次 xiaoqing_life 的上网
+    python -m scripts.chat_eval consolidate --data-dir <副本> # 在数据副本上跑统一记忆的迁移和整理
 
 两种驱动见 drivers.py：inproc 逐轮记下审查候选和步骤日志；live 走真实 Core、投递回执和定时任务。
-剧本见 scenarios.py；规则、评审和报告见 review.py。结果默认写到
+剧本见 scenarios.py；规则、评审和报告见 review.py；``life``、``consolidate`` 见 plugin_runs.py。结果默认写到
 ``test_reports/runs/plugins/xiaoqing_chat/<时间>-chat-eval-<驱动>-<commit>/``。
 """
 
@@ -29,7 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.chat_eval import drivers, review  # noqa: E402
+from scripts.chat_eval import drivers, plugin_runs, review  # noqa: E402
 from scripts.chat_eval.scenarios import (  # noqa: E402
     MEDIA_TRUTH,
     SETS,
@@ -227,7 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class = argparse.RawDescriptionHelpFormatter,
     )
     commands = parser.add_subparsers(
-        dest="command", required=True, metavar="{run,judge,replay,calibrate}"
+        dest="command", required=True, metavar="{run,judge,replay,calibrate,life,consolidate}"
     )
 
     run = commands.add_parser("run", help="跑剧本、做规则检查和评审，生成报告")
@@ -274,6 +276,20 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate = commands.add_parser("calibrate", help="只校准审查器")
     calibrate.add_argument("--output", type=Path)
     calibrate.set_defaults(handler=cmd_calibrate)
+
+    life = commands.add_parser(
+        "life",
+        help            = "用真实端点和模型跑一次 xiaoqing_life 的上网或睡前整理（隔离数据目录）",
+        formatter_class = argparse.RawDescriptionHelpFormatter,
+    )
+    plugin_runs.add_life_arguments(life)
+    life.set_defaults(handler=plugin_runs.run_life)
+
+    consolidate = commands.add_parser(
+        "consolidate", help="在数据副本上用真实模型跑统一记忆的迁移和整理"
+    )
+    plugin_runs.add_consolidate_arguments(consolidate)
+    consolidate.set_defaults(handler=plugin_runs.run_consolidate)
 
     worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("name")

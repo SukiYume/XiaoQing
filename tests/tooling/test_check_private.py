@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
-from scripts.check_private import find_leaks, private_needles
+# 检查脚本是 pre-commit 钩子的实现，放在 .githooks/ 里，不是可导入的包，按路径加载。
+_SPEC = importlib.util.spec_from_file_location(
+    "check_private", Path(__file__).resolve().parents[2] / ".githooks" / "check_private.py"
+)
+assert _SPEC is not None and _SPEC.loader is not None
+_check_private          = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = _check_private
+_SPEC.loader.exec_module(_check_private)
+find_leaks      = _check_private.find_leaks
+private_needles = _check_private.private_needles
 
 
 def _config_dir(tmp_path: Path) -> Path:

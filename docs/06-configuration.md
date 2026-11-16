@@ -375,9 +375,9 @@ context.get_settings_snapshot()
 所以同步前，脚本经 ssh 只读取回部署机的 `config/config.json` 和各插件的 `plugin.json`，用 `scripts/check_schedule_targets.py` 分别算出两边每个会投递的定时任务发往哪些群：有差别时预览会列出来，`--apply` 拒绝同步，确认是有意的改动再加 `--accept-target-changes`。
 本机运行比对用的 Python 默认是 `python`，可用 `PYTHON_BIN` 指定。
 
-仓库的 `.githooks/pre-commit` 运行 `scripts/check_private.py`：要提交的文件里出现本机 config 或 secrets 里的群号、账号、凭据、用户目录，或 `config/private_terms.txt` 列出的词（一行一个，比如群友昵称）时拒绝提交，只报文件和字段路径，不打印值。
+仓库的 `.githooks/pre-commit` 运行 `.githooks/check_private.py`：要提交的文件里出现本机 config 或 secrets 里的群号、账号、凭据、用户目录，或 `config/private_terms.txt` 列出的词（一行一个，比如群友昵称）时拒绝提交，只报文件和字段路径，不打印值。
 文本文件整篇按文字查；图片、PSD 这类二进制文件按字节查元数据里常见的 UTF-8 和 UTF-16 写法，命中处前后紧挨着字母或数字的不算（那是压缩像素数据里碰巧出现的一段）。
-克隆后执行一次 `git config core.hooksPath .githooks` 启用；`python scripts/check_private.py --all` 检查全部文件。
+克隆后执行一次 `git config core.hooksPath .githooks` 启用；`python .githooks/check_private.py --all` 检查全部文件。
 
 ### Core 插件选择
 

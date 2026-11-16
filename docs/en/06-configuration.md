@@ -373,11 +373,11 @@ Group IDs, QQ IDs, server addresses, and local paths that belong to one deployme
 Before syncing, the script therefore reads the deployment's `config/config.json` and every plugin's `plugin.json` over ssh, read-only, and uses `scripts/check_schedule_targets.py` to work out which groups each delivering schedule reaches on each side. A preview lists any difference, and `--apply` refuses to sync until `--accept-target-changes` confirms the change is intended.
 The comparison runs locally with `python` by default; set `PYTHON_BIN` to use another interpreter.
 
-The repository's `.githooks/pre-commit` runs `scripts/check_private.py`.
+The repository's `.githooks/pre-commit` runs `.githooks/check_private.py`.
 It rejects a commit when staged files contain group IDs, accounts, credentials, or user directories from the local config or secrets, or terms listed in `config/private_terms.txt` (one per line, such as member nicknames).
 It reports files and field paths only, never values.
 Text files are searched as text. Binary files such as images and PSDs are searched as bytes for the UTF-8 and UTF-16 spellings that metadata uses; a match with a letter or digit directly before or after it does not count, because that is a coincidence inside compressed pixel data.
-Run `git config core.hooksPath .githooks` once after cloning to enable it; `python scripts/check_private.py --all` checks every file.
+Run `git config core.hooksPath .githooks` once after cloning to enable it; `python .githooks/check_private.py --all` checks every file.
 
 ### Core plugin selection
 
