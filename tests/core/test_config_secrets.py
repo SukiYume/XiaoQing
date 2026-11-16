@@ -10,10 +10,8 @@ from typing import Any
 import pytest
 
 import tests.helpers.config_test_support as _fixture_support
+from core.config import _MAX_CONFIG_SOURCE_BYTES, _MAX_CONFIG_TREE_DEPTH, _MAX_CONFIG_TREE_NODES
 from tests.helpers.config_test_support import (
-    _MAX_CONFIG_SOURCE_BYTES,
-    _MAX_CONFIG_TREE_DEPTH,
-    _MAX_CONFIG_TREE_NODES,
     ConfigLoadError,
     ConfigManager,
     ConfigSnapshot,
@@ -54,11 +52,6 @@ class TestConfigManagerUpdateSecret:
         """测试更新不存在的键抛出 KeyError"""
         with pytest.raises(KeyError, match="路径不存在"):
             config_manager.update_secret("nonexistent.key", "value")
-
-    def test_update_nonexistent_path_raises(self, config_manager: ConfigManager):
-        """测试更新不存在的路径抛出 KeyError"""
-        with pytest.raises(KeyError, match="路径不存在"):
-            config_manager.update_secret("nonexistent.nested.key", "value")
 
     def test_update_non_dict_value_raises(self, config_manager: ConfigManager):
         """测试更新非字典类型的路径抛出 ValueError"""
@@ -132,19 +125,20 @@ class TestConfigManagerUpdateSecret:
         """候选落盘失败时 live state 从未发布。"""
         original = config_manager.secrets
 
-        def _boom(_handle: Any, _payload: bytes) -> None:
+        def _boom(_fd: int) -> None:
             raise OSError("disk full")
 
-        monkeypatch.setattr("core.config._write_secret_payload", _boom)
+        # 在 OS 层让落盘失败：写入已经发生，但持久化刷盘报错。
+        monkeypatch.setattr("core.config.os.fsync", _boom)
 
-        with pytest.raises(OSError, match="disk full"):
+        with pytest.raises(OSError):
             config_manager.update_secret("admin_user_ids", [99999])
 
         assert config_manager.secrets == original
 
 
 class TestConfigManagerSecretTransactions:
-    """Content-CAS, revocation, retry, and canonicalization regressions."""
+    """Content-CAS, revocation, retry, and canonicalization of secret writes."""
 
     def test_deleted_primary_refuses_mutation_and_is_not_resurrected(
         self,

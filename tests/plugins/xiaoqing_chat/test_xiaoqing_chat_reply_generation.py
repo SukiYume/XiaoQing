@@ -2,595 +2,127 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.persona import PersonaCard
+from core.ai import AIError
+from plugins.xiaoqing_chat.chat_event import event_chat_id
 from plugins.xiaoqing_chat.reply_payload import build_reply_payload_from_parts
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
-    _complete_test_runtime_config,
+    ScriptedChatModel,
+    chat_message_event,
+    draft_reply,
+    scripted_chat_context,
+    seed_chat_history,
+    settle_chat_background,
 )
 
 mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
-@pytest.mark.asyncio
-async def test_generate_reply_prefers_planner_goal_over_review_override_goal_store(mock_context):
-    from contextlib import ExitStack
-
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=True),
-            reflection=SimpleNamespace(enable_review_sessions=True),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            top_p           = 0.9,
-            max_tokens      = 256,
-            timeout_seconds = 3.0,
-            reply_check     = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = SimpleNamespace(),
-            rewrite     = SimpleNamespace(),
-        )
-    )
-    _complete_test_runtime_config(runtime)
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal="复盘会话先问感受"))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
-
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "目标: 帮用户选一家合适的火锅店",
-    )
-
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.build_policy_block",
-                return_value="review-policy",
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    ChatMessage(role="system", content="s"),
-                    ChatMessage(role="user", content="u"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=("好的", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
-                return_value="dialogue",
-            )
-        )
-        mock_check_reply = stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(
-                    return_value=ReplyCheckResult(suitable=True, reason="", need_replan=False)
-                ),
-            )
-        )
-
-        result = await generate_reply_draft(
-            text           = "那你推荐哪家？",
-            event          = {},
-            context        = mock_context,
-            runtime        = cast(Any, _complete_test_runtime_config(runtime)),
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "目标: 帮用户选一家合适的火锅店",
-            is_brain_chat  = False,
-        )
-
-    assert result is not None
-    assert result.text == "好的"
-    assert mock_check_reply.await_count == 1
-    assert mock_check_reply.await_args is not None
-    assert "帮用户选一家合适的火锅店" in mock_check_reply.await_args.kwargs["goal"]
+# 每条回复都送审，审查模型的材料里能看到这一轮用的目标。
+_ALWAYS_CHECK = {"reply_check": {"llm_checker_mode": "always", "max_regen": 0}}
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_halves_history_after_request_too_large(mock_context):
-    from contextlib import ExitStack
-
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
-    from plugins.xiaoqing_chat.llm.gateway import LLMError
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.memory.memory import StoredMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            top_p           = 0.9,
-            max_tokens      = 256,
-            timeout_seconds = 3.0,
-            reply_check     = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = SimpleNamespace(),
-            rewrite     = SimpleNamespace(),
-        )
+async def test_generate_reply_prefers_planner_goal_over_review_override_goal_store(
+    mock_context, sample_group_event
+):
+    model = ScriptedChatModel(reply="好的", checker=checker_verdict())
+    scripted_chat_context(mock_context, model, _ALWAYS_CHECK)
+    event = chat_message_event(sample_group_event, "那你推荐哪家？")
+    await bound_state(mock_context).goal_store.set_async(
+        event_chat_id(event), goal="复盘会话先问感受", source="review"
     )
-    _complete_test_runtime_config(runtime)
 
-    state                               = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(
-        return_value=[
-            StoredMessage(role="user", content="u1", name="用户", ts=1.0),
-            StoredMessage(role="assistant", content="a1", name="小青", ts=2.0),
-            StoredMessage(role="user", content="u2", name="用户", ts=3.0),
-            StoredMessage(role="assistant", content="a2", name="小青", ts=4.0),
-        ]
+    draft = await draft_reply(
+        mock_context,
+        event,
+        text           = "那你推荐哪家？",
+        reasoning      = "目标: 帮用户选一家合适的火锅店",
+        plan_reasoning = "目标: 帮用户选一家合适的火锅店",
     )
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
 
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
+    assert draft is not None
+    assert draft.text == "好的"
+    (checker_call,) = model.calls_of("checker")
+    assert "帮用户选一家合适的火锅店" in checker_call.text
+    assert "复盘会话先问感受" not in checker_call.text
+    await settle_chat_background(mock_context, model)
 
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "继续回复",
+
+@pytest.mark.asyncio
+async def test_generate_reply_halves_history_after_request_too_large(
+    mock_context, sample_group_event
+):
+    attempts = 0
+
+    def reply_script(_call) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise AIError("request_too_large")
+        return "好的"
+
+    model = ScriptedChatModel(reply=reply_script)
+    scripted_chat_context(
+        mock_context, model, {"max_context_size": 4, "reply_check": {"enable_reply_checker": False}}
     )
-    history_sizes: list[int] = []
+    event = chat_message_event(sample_group_event, "那你推荐哪家？")
+    seed_chat_history(bound_state(mock_context), event_chat_id(event), 4)
 
-    responses = [
-        LLMError("request_too_large"),
-        ("好的", "/v1/chat/completions"),
-    ]
+    draft = await draft_reply(mock_context, event, text="那你推荐哪家？")
 
-    async def fake_chat_completions(**_kwargs):
-        item = responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=4)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                side_effect=lambda **kwargs: (
-                    history_sizes.append(len(kwargs["history"]))
-                    or [
-                        ChatMessage(role="system", content=f"mem={kwargs['memory_block']}"),
-                        ChatMessage(role="user", content="u"),
-                    ]
-                ),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(side_effect=fake_chat_completions),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
-                return_value="dialogue",
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(
-                    return_value=ReplyCheckResult(suitable=True, reason="", need_replan=False)
-                ),
-            )
-        )
-
-        result = await generate_reply_draft(
-            text           = "那你推荐哪家？",
-            event          = {},
-            context        = mock_context,
-            runtime        = cast(Any, runtime),
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "继续回复",
-            is_brain_chat  = False,
-        )
-
-    assert result is not None
-    assert result.text == "好的"
-    assert history_sizes == [4, 2]
+    assert draft is not None
+    assert draft.text == "好的"
+    first, second = model.calls_of("reply")
+    # 请求过大后第二次只带最近两条历史（第 0、1 句被丢掉）。
+    assert all(f"第{index}句" in first.text for index in range(4))
+    assert all(f"第{index}句" in second.text for index in (2, 3))
+    assert not any(f"第{index}句" in second.text for index in (0, 1))
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
 async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_has_no_goal(
-    mock_context,
+    mock_context, sample_group_event
 ):
-    from contextlib import ExitStack
-
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=True),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            top_p           = 0.9,
-            max_tokens      = 256,
-            timeout_seconds = 3.0,
-            reply_check     = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = SimpleNamespace(),
-            rewrite     = SimpleNamespace(),
-        )
-    )
-    _complete_test_runtime_config(runtime)
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal="旧目标"))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
-
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "继续回复",
+    model = ScriptedChatModel(reply="好的", checker=checker_verdict())
+    scripted_chat_context(mock_context, model, _ALWAYS_CHECK)
+    event = chat_message_event(sample_group_event, "那你推荐哪家？")
+    await bound_state(mock_context).goal_store.set_async(
+        event_chat_id(event), goal="旧目标", source="user"
     )
 
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    ChatMessage(role="system", content="s"),
-                    ChatMessage(role="user", content="u"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=("好的", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
-                return_value="dialogue",
-            )
-        )
-        mock_check_reply = stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(
-                    return_value=ReplyCheckResult(suitable=True, reason="", need_replan=False)
-                ),
-            )
-        )
+    draft = await draft_reply(
+        mock_context,
+        event,
+        text           = "那你推荐哪家？",
+        reasoning      = "继续回复",
+        plan_reasoning = "继续回复\n目标: 帮用户选一家合适的火锅店\n焦点: 预算和口味偏好",
+    )
 
-        result = await generate_reply_draft(
-            text           = "那你推荐哪家？",
-            event          = {},
-            context        = mock_context,
-            runtime        = cast(Any, runtime),
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "继续回复\n目标: 帮用户选一家合适的火锅店\n焦点: 预算和口味偏好",
-            is_brain_chat  = False,
-        )
-
-    assert result is not None
-    assert result.text == "好的"
-    assert mock_check_reply.await_args is not None
-    assert "帮用户选一家合适的火锅店" in mock_check_reply.await_args.kwargs["goal"]
+    assert draft is not None
+    assert draft.text == "好的"
+    (checker_call,) = model.calls_of("checker")
+    assert "帮用户选一家合适的火锅店" in checker_call.text
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
-    from contextlib import ExitStack
+async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context, sample_group_event):
+    model = ScriptedChatModel(reply="第一句。第二句")
+    scripted_chat_context(mock_context, model, {"reply_check": {"enable_reply_checker": False}})
 
-    from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size = 20,
-            top_p            = 0.9,
-            max_tokens       = 256,
-            timeout_seconds  = 3.0,
-            reply_check      = SimpleNamespace(
-                enable_reply_checker = False,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = ResponsePostProcessConfig(),
-            rewrite     = SimpleNamespace(),
-        )
+    draft = await draft_reply(
+        mock_context,
+        chat_message_event(sample_group_event, "你好"),
+        text      = "你好",
+        reasoning = "正常回复",
     )
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
-
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "正常回复",
-    )
-
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    ChatMessage(role="system", content="s"),
-                    ChatMessage(role="user", content="u"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=("第一句。第二句", "/v1/chat/completions")),
-            )
-        )
-
-        draft = await generate_reply_draft(
-            text           = "你好",
-            event          = {"message_id": 1, "user_id": 1},
-            context        = mock_context,
-            runtime        = cast(Any, _complete_test_runtime_config(runtime)),
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "正常回复",
-            bot_name       = "小青",
-            secrets        = None,
-        )
 
     assert draft is not None
     # 分段之间以空行分隔，最终发送按空行拆成与分段结果一致的两个气泡。
@@ -598,3 +130,4 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
     assert draft.text_parts == ("第一句。", "第二句")
     payload = build_reply_payload_from_parts(draft.parts)
     assert len(payload.outbound_batches) == 2
+    await settle_chat_background(mock_context, model)

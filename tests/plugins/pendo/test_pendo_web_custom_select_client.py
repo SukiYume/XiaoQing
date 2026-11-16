@@ -1,4 +1,4 @@
-"""Pendo Web 自定义选择框的渲染、键盘和回调生命周期回归。"""
+"""Pendo Web 自定义选择框的渲染、键盘和回调生命周期。"""
 
 from __future__ import annotations
 

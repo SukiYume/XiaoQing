@@ -1,4 +1,4 @@
-"""Pendo Web 全局提示的安全渲染、类型和生命周期回归。"""
+"""Pendo Web 全局提示的安全渲染、类型和生命周期。"""
 
 from __future__ import annotations
 

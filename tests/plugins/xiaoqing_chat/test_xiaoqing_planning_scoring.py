@@ -5,7 +5,7 @@ import pytest
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
-from plugins.xiaoqing_chat.planning.heartflow import HeartflowEngine, HeartflowState
+from plugins.xiaoqing_chat.planning.heartflow import HeartflowEngine
 from plugins.xiaoqing_chat.planning.pfc_action_planner import plan_next_action
 from plugins.xiaoqing_chat.planning.pfc_utils import get_items_from_json
 from plugins.xiaoqing_chat.utils.json_parsing import (
@@ -17,7 +17,8 @@ from plugins.xiaoqing_chat.utils.json_parsing import (
 @pytest.mark.asyncio
 async def test_heartflow_score_combines_turn_signals_with_the_base() -> None:
     engine = HeartflowEngine()
-    engine._cache["g1"] = HeartflowState(no_reply_streak=3)
+    for _ in range(3):
+        await engine.on_no_reply_async(chat_id="g1")
 
     score = await engine.score_async(
         chat_id                  = "g1",

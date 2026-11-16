@@ -73,6 +73,14 @@ class AppIngressMixin:
         def _latest_safe_inbound_token(self, manager: InboundManager) -> str:
             raise NotImplementedError
 
+        def _inbound_token_for_locked(
+            self,
+            manager: InboundManager,
+            desired_key: tuple[Any, ...] | None,
+            token: str,
+        ) -> str:
+            raise NotImplementedError
+
         _lifecycle_state: Any
 
         async def _on_ws_connected(self) -> None:
@@ -100,6 +108,7 @@ class AppIngressMixin:
     ws_client                  : OneBotWsClient | None
     _inbound_cleanup_pending   : list[InboundManager]
     _inbound_cleanup_quarantine: dict[int, BaseException]
+    _inbound_stand_in          : tuple[InboundManager, tuple[Any, ...]] | None
     _onebot_auth_generation    : int
     _runtime_inbound_key       : tuple[Any, ...] | None
     _runtime_inbound_token     : str
@@ -243,14 +252,17 @@ class AppIngressMixin:
         inbound_token: str,
         desired: InboundManager | None,
     ) -> InboundManager | None:
-        """监听配置未变时当前监听器沿用新 token，否则先吊销，避免旧端口接受新凭据。"""
+        """监听配置未变（或它正顶替这份配置声明的监听器）时当前监听器沿用新 token，否则先吊销。"""
 
         current = self.inbound_manager
         if current is not None:
-            same_listener = desired is not None and self._inbound_manager_key(
-                current
-            ) == self._inbound_manager_key(desired)
-            current.update_token(inbound_token if same_listener else "")
+            current.update_token(
+                self._inbound_token_for_locked(
+                    current,
+                    self._inbound_manager_key(desired),
+                    inbound_token,
+                )
+            )
         return current
 
     async def _discard_inbound_candidate(
@@ -269,14 +281,65 @@ class AppIngressMixin:
         error: BaseException | None,
         deferred_cancellation: _DeferredCancellation,
     ) -> None:
-        """恢复最新可用 token 后重新启动旧监听器；error 为空表示配置所有权已变化。"""
+        """恢复最新可用 token 后重新启动旧监听器；error 为空表示配置所有权已变化。
 
-        current.update_token(self._latest_safe_inbound_token(current))
+        已发布的配置不再声明旧监听器时，它的凭据在发布那一刻就已收回，重新启动必然失败。
+        这时不再尝试：旧监听器转入待清理，入站暂时没有监听器，由调用方抛出真正的失败原因。
+        """
+
+        token = self._latest_safe_inbound_token(current)
+        current.update_token(token)
+        if not token:
+            self.inbound_manager = None
+            if all(current is not pending for pending in self._inbound_cleanup_pending):
+                self._inbound_cleanup_pending.append(current)
+            logger.error(
+                "Previous inbound listener is not restarted: the published configuration "
+                "no longer declares it, so it has no credentials. Fix the inbound settings "
+                "and reload to start a listener again."
+            )
+            return
         await self._restore_inbound_manager(
             current,
             error or RuntimeError("runtime configuration ownership changed"),
             deferred_cancellation,
         )
+
+    async def _stand_in_for_failed_listener(
+        self,
+        current: InboundManager,
+        desired: InboundManager,
+        candidate_error: BaseException,
+        deferred_cancellation: _DeferredCancellation,
+        *,
+        owner: _ConfigApplyOwner | None,
+        running: bool,
+    ) -> None:
+        """新声明的监听器起不来时，让旧监听器在原地址带着当前发布的凭据继续收消息。
+
+        只在这次配置应用仍归自己、且当前发布了可信凭据时生效；旧监听器已经停下（端口重叠）就在原
+        地址重新启动。之后再发布同一份监听配置时它继续顶替，并再试一次切换；监听配置一变就照常收回。
+        """
+
+        with self._runtime_auth_lock:
+            token = ""
+            if not self._stopping and self._owns_config_apply_locked(owner):
+                self._inbound_stand_in = (current, desired.config_key)
+                token                  = self._latest_safe_inbound_token(current)
+                if not token:
+                    self._inbound_stand_in = None
+            if running:
+                current.update_token(token)
+        if not running:
+            await self._rollback_inbound_manager(current, candidate_error, deferred_cancellation)
+        if token and self.inbound_manager is current:
+            logger.error(
+                "New inbound listener could not start (%s: %s); the previous listener keeps "
+                "receiving at its old address with the current credentials. Fix the inbound "
+                "settings and reload to switch.",
+                type(candidate_error).__name__,
+                candidate_error,
+            )
 
     async def _reconcile_inbound_manager_impl(
         self,
@@ -326,6 +389,7 @@ class AppIngressMixin:
                         return
                     if self.inbound_manager is current:
                         self.inbound_manager = None
+                    self._inbound_stand_in = None
                 return
 
             if current is None:
@@ -349,7 +413,8 @@ class AppIngressMixin:
                 with self._runtime_auth_lock:
                     publish_candidate = not self._stopping and self._owns_config_apply_locked(owner)
                     if publish_candidate:
-                        self.inbound_manager = desired
+                        self.inbound_manager   = desired
+                        self._inbound_stand_in = None
                 if not publish_candidate:
                     await self._discard_inbound_candidate(desired, deferred_cancellation)
                     return
@@ -360,6 +425,7 @@ class AppIngressMixin:
                     if not self._owns_config_apply_locked(owner):
                         return
                     current.update_token(inbound_token)
+                    self._inbound_stand_in = None
                 self._bind_inbound_status_providers(current)
                 return
 
@@ -428,6 +494,8 @@ class AppIngressMixin:
         except BaseException as restore_error:
             restore_error        = _unwrap_owned_failure(restore_error)
             self.inbound_manager = None
+            if self._inbound_stand_in is not None and self._inbound_stand_in[0] is manager:
+                self._inbound_stand_in = None
             if all(manager is not pending for pending in self._inbound_cleanup_pending):
                 self._inbound_cleanup_pending.append(manager)
             raise InboundReconcileError(original_error, restore_error) from original_error
@@ -449,8 +517,16 @@ class AppIngressMixin:
             # This preserves preflight bind safety without allowing two
             # generations to execute the same session concurrently.
             await desired.start(accept_events=False)
-        except BaseException:
+        except BaseException as candidate_error:
             await self._cleanup_inbound_candidate(desired, deferred_cancellation)
+            await self._stand_in_for_failed_listener(
+                current,
+                desired,
+                candidate_error,
+                deferred_cancellation,
+                owner   = owner,
+                running = True,
+            )
             raise
         if self._stopping or not self._owns_config_apply(owner):
             await self._discard_inbound_candidate(desired, deferred_cancellation)
@@ -472,16 +548,26 @@ class AppIngressMixin:
                 publish_candidate = not self._stopping and self._owns_config_apply_locked(owner)
                 if publish_candidate:
                     desired.commit_admission()
-                    self.inbound_manager = desired
+                    self.inbound_manager   = desired
+                    self._inbound_stand_in = None
         except BaseException as exc:
             commit_error      = exc
             publish_candidate = False
         if not publish_candidate:
             await self._discard_inbound_candidate(desired, deferred_cancellation)
-            if not self._stopping:
-                await self._rollback_inbound_manager(current, commit_error, deferred_cancellation)
             if commit_error is not None:
+                if not self._stopping:
+                    await self._stand_in_for_failed_listener(
+                        current,
+                        desired,
+                        commit_error,
+                        deferred_cancellation,
+                        owner   = owner,
+                        running = False,
+                    )
                 raise commit_error
+            if not self._stopping:
+                await self._rollback_inbound_manager(current, None, deferred_cancellation)
             return
 
     async def _switch_overlapping_inbound_manager(
@@ -511,12 +597,20 @@ class AppIngressMixin:
             await self._discard_inbound_candidate(desired, deferred_cancellation)
             if self._stopping:
                 raise
-            await self._rollback_inbound_manager(current, candidate_error, deferred_cancellation)
+            await self._stand_in_for_failed_listener(
+                current,
+                desired,
+                candidate_error,
+                deferred_cancellation,
+                owner   = owner,
+                running = False,
+            )
             raise
         with self._runtime_auth_lock:
             publish_candidate = not self._stopping and self._owns_config_apply_locked(owner)
             if publish_candidate:
-                self.inbound_manager = desired
+                self.inbound_manager   = desired
+                self._inbound_stand_in = None
         if not publish_candidate:
             await self._discard_inbound_candidate(desired, deferred_cancellation)
             if not self._stopping:

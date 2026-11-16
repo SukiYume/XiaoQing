@@ -16,14 +16,14 @@ from tests.helpers.pendo_review_test_support import (
     Database,
     NoteHandler,
     TaskHandler,
-    _make_temp_db,
+    make_temp_db,
 )
 
 
 def test_diary_list_supports_cat_tag_and_rejects_invalid_range():
     from plugins.pendo.handlers.diary import DiaryHandler
 
-    temp_dir, db = _make_temp_db("pendo_review_diary_list_filters")
+    temp_dir, db = make_temp_db("pendo_review_diary_list_filters")
     owner_id = "u-diary-list-filters"
 
     try:
@@ -80,7 +80,7 @@ def test_diary_list_supports_cat_tag_and_rejects_invalid_range():
 def test_search_supports_tag_filter_and_ledger_category_filter():
     from plugins.pendo.handlers.search import SearchHandler
 
-    temp_dir, db = _make_temp_db("pendo_review_search_filters")
+    temp_dir, db = make_temp_db("pendo_review_search_filters")
     owner_id = "u-search-filters"
 
     try:
@@ -205,9 +205,7 @@ def test_search_parser_rejects_ambiguous_or_unsafe_input(args: str) -> None:
         SearchHandler._parse_search_query(args, datetime(2032, 1, 15, 12, 0, 0))
 
 
-def test_search_uses_paged_query_and_batches_event_collection_titles(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_search_uses_paged_query_and_batches_event_collection_titles() -> None:
     from plugins.pendo.handlers.search import SearchHandler
     from plugins.pendo.models.item import EventItem
 
@@ -223,6 +221,9 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
     )
 
     class _ItemsRepo:
+        def get_user_settings(self, _user_id):
+            return {}
+
         def search_items_page(self, owner_id, query, filters, *, limit, offset, **_options):
             calls["search"] = (owner_id, query, filters, limit, offset, threading.get_ident())
             return [event], 22
@@ -236,10 +237,6 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
                 }
             }
 
-    monkeypatch.setattr(
-        "plugins.pendo.utils.time_utils.now_in_timezone",
-        lambda _user_id, _db: datetime(2032, 1, 15, 12, 0, 0),
-    )
     result = asyncio.run(
         SearchHandler(_ItemsRepo()).search(
             "search-owner",
@@ -331,7 +328,7 @@ def test_view_commands_reject_extra_arguments():
     from plugins.pendo.handlers.ledger import LedgerHandler
     from plugins.pendo.models.item import TaskStatus
 
-    temp_dir, db = _make_temp_db("pendo_review_view_args")
+    temp_dir, db = make_temp_db("pendo_review_view_args")
     owner_id = "u-view-args"
 
     try:

@@ -6,13 +6,15 @@ import asyncio
 import hashlib
 import io
 import json
+import os
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
+from core.bounded_file_cache import FileCacheLimits
 from core.safe_http import SafeHttpResponse
 from plugins.twitter import main as twitter
 from tests.helpers.http import AiohttpBodyStream, QueuedAiohttpSession
@@ -30,9 +32,10 @@ class _Response:
         *,
         status: int       = 200,
         content_type: str = "application/json",
+        url: str          = twitter._TIMELINE_URL,
     ) -> None:
         self.status         = status
-        self.url            = twitter._TIMELINE_URL
+        self.url            = url
         self.headers        = {"Content-Type": content_type}
         self.content_length = None
         self.content        = AiohttpBodyStream(body)
@@ -55,6 +58,104 @@ class _RaisingSession:
 
 def _json_response(payload: object, *, status: int = 200) -> _Response:
     return _Response(json.dumps(payload).encode("utf-8"), status=status)
+
+
+class _PendingResponse:
+    """``session.request(...)`` 返回的异步上下文；进入时可先等一个测试给的闸门。"""
+
+    def __init__(self, response: _Response, gate: Callable[[], Awaitable[None]] | None) -> None:
+        self._response = response
+        self._gate     = gate
+
+    async def __aenter__(self) -> _Response:
+        if self._gate is not None:
+            await self._gate()
+        return self._response
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _TwitterSession:
+    """按地址应答的 aiohttp 会话替身：时间线按页排队，媒体按请求地址给字节。
+
+    ``pages`` 的每一项是时间线 JSON 载荷（或现成的响应）；``media`` 把规范化后的媒体请求地址
+    映射到图片字节，值为 ``None`` 表示远端返回 404。``gate`` 只在时间线请求上等待，
+    用来在网络这条边界上停住一轮抓取。
+    """
+
+    def __init__(
+        self,
+        *pages: object,
+        media: Mapping[str, bytes | None] | None   = None,
+        gate: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        self.pages                                      = list(pages)
+        self.media                                      = dict(media or {})
+        self.gate                                       = gate
+        self.timeline_requests: list[dict[str, object]] = []
+        self.media_urls: list[str]                      = []
+
+    def request(self, method: str, url: str, **kwargs: object) -> _PendingResponse:
+        assert method == "GET"
+        if url == twitter._TIMELINE_URL:
+            self.timeline_requests.append(kwargs)
+            page     = self.pages.pop(0)
+            response = page if isinstance(page, _Response) else _json_response(page)
+            return _PendingResponse(response, self.gate)
+        self.media_urls.append(url)
+        body = self.media[url]
+        if body is None:
+            return _PendingResponse(_Response(b"", status=404, url=url), None)
+        return _PendingResponse(_Response(body, content_type="image/png", url=url), None)
+
+    def timeline_variables(self, index: int) -> dict[str, object]:
+        params = self.timeline_requests[index]["params"]
+        assert isinstance(params, dict)
+        variables: dict[str, object] = json.loads(params["variables"])
+        return variables
+
+
+def _photo_url(name: str) -> str:
+    """时间线里一张照片的原始地址。"""
+
+    return f"https://pbs.twimg.com/media/{name}.jpg"
+
+
+def _large_photo_url(name: str) -> str:
+    """插件下载这张照片时实际请求的地址（规范化成 large 尺寸）。"""
+
+    return f"https://pbs.twimg.com/media/{name}?format=jpg&name=large"
+
+
+def _cursor_entry(value: str) -> dict:
+    return {"entryId": "cursor-bottom-next", "content": {"value": value}}
+
+
+def _distinct_image(index: int) -> bytes:
+    """第 ``index`` 张内容互不相同的小图。"""
+
+    payload: bytes = _image_bytes("PNG", (index % 256, index // 256, 9))
+    return payload
+
+
+def _seed_cached_image(context: SimpleNamespace, payload: bytes) -> None:
+    """把一张图按内容哈希命名放进缓存，让同样内容的下载被认作“已存在”。"""
+
+    image_dir = context.data_dir / "images"
+    image_dir.mkdir(exist_ok=True)
+    (image_dir / f"{hashlib.sha256(payload).hexdigest()}.png").write_bytes(payload)
+
+
+def _oversized_png() -> bytes:
+    """像素数刚好超过插件上限的 1 位 PNG；压缩后只有几 KB。"""
+
+    from PIL import Image
+
+    width  = 8000
+    output = io.BytesIO()
+    Image.new("1", (width, twitter.MAX_IMAGE_PIXELS // width + 1)).save(output, format="PNG")
+    return output.getvalue()
 
 
 def _tweet(*urls: str) -> dict:
@@ -344,27 +445,20 @@ async def test_timeline_ignores_invalid_cursor_and_rejects_malformed_entries(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload", "is_format_error"),
+    "payload",
     [
-        ([], True),
-        ({"data": []}, True),
-        (
-            {"data": {"user": {"result": {"timeline": {"timeline": {"instructions": {}}}}}}},
-            True,
-        ),
+        [],
+        {"data": []},
+        {"data": {"user": {"result": {"timeline": {"timeline": {"instructions": {}}}}}}},
     ],
 )
 async def test_timeline_malformed_shapes_fail_closed(
     context: SimpleNamespace,
     payload: object,
-    is_format_error: bool,
 ) -> None:
     context.http_session = QueuedAiohttpSession(_json_response(payload))
-    if is_format_error:
-        with pytest.raises(twitter.TwitterFetchError, match="request failed"):
-            await twitter._fetch_timeline(context)
-    else:
-        assert await twitter._fetch_timeline(context) == ([], None)
+    with pytest.raises(twitter.TwitterFetchError, match="request failed"):
+        await twitter._fetch_timeline(context)
 
 
 @pytest.mark.asyncio
@@ -406,17 +500,13 @@ def test_image_validation_uses_actual_content_format(
     assert twitter._detect_image_extension(_image_bytes(image_format)) == extension
 
 
-def test_image_validation_rejects_invalid_unsupported_and_oversized_images(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_image_validation_rejects_invalid_unsupported_and_oversized_images() -> None:
     with pytest.raises(ValueError, match="valid supported image"):
         twitter._detect_image_extension(b"not an image")
     with pytest.raises(ValueError, match="unsupported"):
         twitter._detect_image_extension(_image_bytes("GIF"))
-
-    monkeypatch.setattr(twitter, "MAX_IMAGE_PIXELS", 3)
     with pytest.raises(ValueError, match="dimensions"):
-        twitter._detect_image_extension(_image_bytes())
+        twitter._detect_image_extension(_oversized_png())
 
 
 @pytest.mark.asyncio
@@ -548,10 +638,9 @@ async def test_download_failures_leave_no_committed_image(
     assert not await twitter._download_image(url, save_dir, context)
 
     payload = _image_bytes()
-    install_media_fetch(payload)
-    monkeypatch.setattr(twitter, "MAX_IMAGE_BYTES", len(payload) - 1)
+    install_media_fetch(payload + bytes(twitter.MAX_IMAGE_BYTES))
     assert not await twitter._download_image(url, save_dir, context)
-    monkeypatch.setattr(twitter, "MAX_IMAGE_BYTES", 10 * 1024 * 1024)
+    install_media_fetch(payload)
     monkeypatch.setattr(
         twitter,
         "IMAGE_CACHE_LIMITS",
@@ -566,23 +655,21 @@ async def test_fetch_paginates_and_deduplicates_urls(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first  = "https://pbs.twimg.com/media/a.jpg"
-    second = "https://pbs.twimg.com/media/b.jpg"
-    pages  = {
-        None      : ([_tweet(first, first)], "cursor-1"),
-        "cursor-1": ([_tweet(first, second)], None),
-    }
-
-    async def fetch_page(_context, cursor=None):
-        return pages[cursor]
-
-    download = AsyncMock(side_effect=[True, False])
-    monkeypatch.setattr(twitter, "_fetch_timeline", fetch_page)
-    monkeypatch.setattr(twitter, "_download_image", download)
+    payload = _distinct_image(1)
+    session = _TwitterSession(
+        _timeline_payload([_tweet(_photo_url("a"), _photo_url("a")), _cursor_entry("cursor-1")]),
+        _timeline_payload([_tweet(_photo_url("a"), _photo_url("b"))]),
+        media={_large_photo_url("a"): payload, _large_photo_url("b"): payload},
+    )
+    context.http_session = session
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
+    # 第二张图与第一张内容相同：按内容哈希认作已存在，不算新增。
     assert await twitter._fetch_twitter_images(context) == 1
-    assert [call.args[0] for call in download.await_args_list] == [first, second]
+    assert session.media_urls == [_large_photo_url("a"), _large_photo_url("b")]
+    assert "cursor" not in session.timeline_variables(0)
+    assert session.timeline_variables(1)["cursor"] == "cursor-1"
+    assert len(session.timeline_requests) == 2
 
 
 @pytest.mark.asyncio
@@ -590,23 +677,25 @@ async def test_fetch_stops_after_two_pages_without_new_images(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[str | None] = []
-
-    async def fetch_page(_context, cursor=None):
-        calls.append(cursor)
-        index = len(calls)
-        return ([_tweet(f"https://pbs.twimg.com/media/{index}.jpg")], f"c{index}")
-
-    monkeypatch.setattr(twitter, "_fetch_timeline", fetch_page)
-    monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=False))
+    payload = _distinct_image(1)
+    session = _TwitterSession(
+        *(
+            _timeline_payload([_tweet(_photo_url(str(index))), _cursor_entry(f"c{index}")])
+            for index in (1, 2, 3)
+        ),
+        media={_large_photo_url(str(index)): payload for index in (1, 2, 3)},
+    )
+    context.http_session = session
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
+    _seed_cached_image(context, payload)
     twitter._write_backfill_state(
         context.data_dir / twitter.BACKFILL_STATE_FILENAME,
         twitter._get_user_id(context),
     )
 
     assert await twitter._fetch_twitter_images(context) == 0
-    assert calls == [None, "c1"]
+    assert len(session.timeline_requests) == 2
+    assert session.timeline_variables(1)["cursor"] == "c1"
 
 
 @pytest.mark.asyncio
@@ -614,13 +703,10 @@ async def test_fetch_reports_when_every_media_download_fails(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    urls = ["https://pbs.twimg.com/media/a.jpg", "https://pbs.twimg.com/media/b.jpg"]
-    monkeypatch.setattr(
-        twitter,
-        "_fetch_timeline",
-        AsyncMock(return_value=([_tweet(*urls)], None)),
+    context.http_session = _TwitterSession(
+        _timeline_payload([_tweet(_photo_url("a"), _photo_url("b"))]),
+        media={_large_photo_url("a"): None, _large_photo_url("b"): None},
     )
-    monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=None))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
     with pytest.raises(twitter.TwitterMediaFetchError) as raised:
@@ -634,18 +720,23 @@ async def test_fetch_stops_on_empty_timeline_and_repeated_cursor(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    timeline = AsyncMock(return_value=([], None))
-    monkeypatch.setattr(twitter, "_fetch_timeline", timeline)
+    session = _TwitterSession(
+        _timeline_payload([]),
+        _timeline_payload([_tweet(_photo_url("a")), _cursor_entry("same")]),
+        _timeline_payload([_tweet(_photo_url("b")), _cursor_entry("same")]),
+        media={
+            _large_photo_url("a"): _distinct_image(1),
+            _large_photo_url("b"): _distinct_image(2),
+        },
+    )
+    context.http_session = session
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
-    assert await twitter._fetch_twitter_images(context) == 0
 
-    timeline.side_effect = [
-        ([_tweet("https://pbs.twimg.com/media/a.jpg")], "same"),
-        ([_tweet("https://pbs.twimg.com/media/b.jpg")], "same"),
-    ]
-    monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=True))
+    assert await twitter._fetch_twitter_images(context) == 0
+    assert len(session.timeline_requests) == 1
+
     assert await twitter._fetch_twitter_images(context) == 2
-    assert timeline.await_count == 3
+    assert len(session.timeline_requests) == 3
 
 
 @pytest.mark.asyncio
@@ -653,24 +744,22 @@ async def test_initial_backfill_downloads_all_media_and_records_completion(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    urls = [f"https://pbs.twimg.com/media/{index}.jpg" for index in range(101)]
-    monkeypatch.setattr(
-        twitter,
-        "_fetch_timeline",
-        AsyncMock(
-            side_effect=[
-                ([_tweet("https://pbs.twimg.com/media/old-a.jpg")], "a"),
-                ([_tweet("https://pbs.twimg.com/media/old-b.jpg")], "b"),
-                ([_tweet(*urls)], None),
-            ]
-        ),
+    names  = [str(index) for index in range(101)]
+    cached = _distinct_image(500)
+    media  = {_large_photo_url(name): _distinct_image(int(name)) for name in names}
+    media |= {_large_photo_url("old-a"): cached, _large_photo_url("old-b"): cached}
+    session = _TwitterSession(
+        _timeline_payload([_tweet(_photo_url("old-a")), _cursor_entry("a")]),
+        _timeline_payload([_tweet(_photo_url("old-b")), _cursor_entry("b")]),
+        _timeline_payload([_tweet(*(_photo_url(name) for name in names))]),
+        media=media,
     )
-    download = AsyncMock(side_effect=[False, False, *([True] * len(urls))])
-    monkeypatch.setattr(twitter, "_download_image", download)
+    context.http_session = session
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
+    _seed_cached_image(context, cached)
 
-    assert await twitter._fetch_twitter_images(context) == len(urls)
-    assert download.await_count == len(urls) + 2
+    assert await twitter._fetch_twitter_images(context) == len(names)
+    assert len(session.media_urls) == len(names) + 2
     assert twitter._backfill_is_complete(
         context.data_dir / twitter.BACKFILL_STATE_FILENAME,
         twitter._get_user_id(context),
@@ -683,13 +772,16 @@ async def test_fetch_honors_one_page_limit_without_requiring_end_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context.secrets["plugins"]["twitter"]["max_pages"] = 1
-    timeline = AsyncMock(return_value=([_tweet("https://pbs.twimg.com/media/a.jpg")], "next"))
-    monkeypatch.setattr(twitter, "_fetch_timeline", timeline)
-    monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=True))
+    session                                            = _TwitterSession(
+        _timeline_payload([_tweet(_photo_url("a")), _cursor_entry("next")]),
+        media={_large_photo_url("a"): _distinct_image(1)},
+    )
+    context.http_session = session
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
     assert await twitter._fetch_twitter_images(context) == 1
-    timeline.assert_awaited_once_with(context, None)
+    assert len(session.timeline_requests) == 1
+    assert "cursor" not in session.timeline_variables(0)
 
 
 @pytest.mark.asyncio
@@ -700,15 +792,18 @@ async def test_duplicate_fetch_rounds_are_serialized(
     active = 0
     peak   = 0
 
-    async def slow_empty_page(_context, _cursor=None):
+    async def slow_page() -> None:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
         await asyncio.sleep(0.01)
         active -= 1
-        return [], None
 
-    monkeypatch.setattr(twitter, "_fetch_timeline", slow_empty_page)
+    context.http_session = _TwitterSession(
+        _timeline_payload([]),
+        _timeline_payload([]),
+        gate=slow_page,
+    )
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
     assert await asyncio.gather(
@@ -841,16 +936,15 @@ async def test_random_image_retries_when_selected_file_disappears(
     image_dir.mkdir()
     (image_dir / "a.jpg").write_bytes(_image_bytes("JPEG"))
     (image_dir / "b.jpg").write_bytes(_image_bytes("JPEG"))
-    original_get_any = BoundedFileCache.get_any
 
-    def flaky_get_any(cache: BoundedFileCache, names: tuple[str, ...]):
-        if names == ("a.jpg",):
-            (image_dir / "a.jpg").unlink(missing_ok=True)
-            return None
-        return original_get_any(cache, names)
+    def choose_then_lose_it(values: list[str]) -> str:
+        # 选中之后、取文件之前，被选中的文件被别处删掉。
+        chosen = values[0]
+        if chosen == "a.jpg":
+            (image_dir / chosen).unlink()
+        return chosen
 
-    monkeypatch.setattr(BoundedFileCache, "get_any", flaky_get_any)
-    monkeypatch.setattr(twitter.random, "choice", lambda values: values[0])
+    monkeypatch.setattr(twitter.random, "choice", choose_then_lose_it)
 
     selected = await twitter._get_random_image(context)
     assert selected is not None
@@ -866,8 +960,14 @@ async def test_random_image_returns_none_when_all_candidates_disappear(
 ) -> None:
     image_dir = context.data_dir / "images"
     image_dir.mkdir()
-    (image_dir / "gone.jpg").write_bytes(b"gone")
-    monkeypatch.setattr(BoundedFileCache, "get_any", lambda *_args: None)
+    (image_dir / "gone.jpg").write_bytes(_image_bytes("JPEG"))
+
+    def choose_then_lose_it(values: list[str]) -> str:
+        chosen = values[0]
+        (image_dir / chosen).unlink(missing_ok=True)
+        return chosen
+
+    monkeypatch.setattr(twitter.random, "choice", choose_then_lose_it)
 
     assert await twitter._get_random_image(context) is None
 
@@ -876,21 +976,33 @@ def test_cache_listing_ignores_entries_that_fail_stat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class BrokenEntry:
+    class VanishingEntry:
+        """修剪缓存时还在，随后列目录时已经消失的条目。"""
+
         name   = "broken.jpg"
         suffix = ".jpg"
 
+        def __init__(self) -> None:
+            self.symlink_checks = 0
+
         def is_symlink(self) -> bool:
-            raise OSError("entry disappeared")
+            self.symlink_checks += 1
+            if self.symlink_checks > 1:
+                raise OSError("entry disappeared")
+            return False
 
-    monkeypatch.setattr(BoundedFileCache, "prune", lambda _cache: None)
-    monkeypatch.setattr(Path, "iterdir", lambda _path: iter([BrokenEntry()]))
+        def stat(self) -> os.stat_result:
+            raise FileNotFoundError("entry disappeared")
+
+    entry = VanishingEntry()
+    monkeypatch.setattr(Path, "iterdir", lambda _path: iter([entry]))
     assert twitter._list_cached_image_names(tmp_path) == []
+    assert entry.symlink_checks == 2
 
 
-def test_posted_reader_rejects_file_that_grows_during_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_posted_reader_rejects_file_that_grows_during_read() -> None:
+    grown = b"x" * (twitter.MAX_POSTED_STATE_BYTES + 1)
+
     class GrowingFile:
         def is_symlink(self) -> bool:
             return False
@@ -902,10 +1014,9 @@ def test_posted_reader_rejects_file_that_grows_during_read(
             return SimpleNamespace(st_size=0)
 
         def open(self, _mode: str):
-            return io.BytesIO(b"xx")
+            return io.BytesIO(grown)
 
-    monkeypatch.setattr(twitter, "MAX_POSTED_STATE_BYTES", 1)
-    assert twitter._read_posted_names(GrowingFile(), {"xx"}) == set()
+    assert twitter._read_posted_names(GrowingFile(), {grown.decode()}) == set()
 
 
 @pytest.mark.asyncio
@@ -939,16 +1050,19 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
 ) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
-    calls   = 0
 
-    async def fetch(_context):
-        nonlocal calls
-        calls += 1
+    async def hold_timeline_request() -> None:
         started.set()
         await release.wait()
-        return 5
 
-    monkeypatch.setattr(twitter, "_fetch_twitter_images", fetch)
+    names   = [str(index) for index in range(5)]
+    session = _TwitterSession(
+        _timeline_payload([_tweet(*(_photo_url(name) for name in names))]),
+        media = {_large_photo_url(name): _distinct_image(int(name)) for name in names},
+        gate  = hold_timeline_request,
+    )
+    context.http_session = session
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
 
@@ -964,7 +1078,7 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
     assert "正在后台抓取" in duplicate[0]["data"]["text"]
     assert "完成后会通知" in duplicate[0]["data"]["text"]
     assert duplicate.command_outcome.state == "accepted"
-    assert calls == 1
+    assert len(session.timeline_requests) == 1
 
     release.set()
     await asyncio.wait_for(notification, timeout=1.0)
@@ -978,7 +1092,7 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
     context.send_action.reset_mock()
     no_target = await twitter.handle("tw_fetch", "", {}, context)
     assert "无法确定" in no_target[0]["data"]["text"]
-    assert calls == 1
+    assert len(session.timeline_requests) == 1
     context.send_action.assert_not_awaited()
 
 
@@ -987,8 +1101,8 @@ async def test_manual_fetch_reports_remote_http_failure(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fetch = AsyncMock(side_effect=twitter.TwitterFetchError(status=403))
-    monkeypatch.setattr(twitter, "_fetch_twitter_images", fetch)
+    context.http_session = _TwitterSession(_json_response({"private": "detail"}, status=403))
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
 
@@ -1011,11 +1125,12 @@ async def test_background_fetch_reports_media_transport_failure(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        twitter,
-        "_fetch_twitter_images",
-        AsyncMock(side_effect=twitter.TwitterMediaFetchError(attempted=3)),
+    names                = ["a", "b", "c"]
+    context.http_session = _TwitterSession(
+        _timeline_payload([_tweet(*(_photo_url(name) for name in names))]),
+        media={_large_photo_url(name): None for name in names},
     )
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
     outcome = await twitter._run_background_fetch(context)
 
@@ -1028,21 +1143,16 @@ async def test_background_fetch_reports_media_transport_failure(
 @pytest.mark.asyncio
 async def test_random_and_unknown_commands_have_explicit_routes(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    image_path = tmp_path / "image.png"
-    image_path.write_bytes(b"image")
-    monkeypatch.setattr(
-        twitter,
-        "_get_random_image",
-        AsyncMock(return_value=[twitter.image(str(image_path))]),
-    )
+    image_dir = context.data_dir / "images"
+    image_dir.mkdir()
+    (image_dir / "image.png").write_bytes(_image_bytes("PNG"))
     result = await twitter.handle("twimg", "", {}, context)
     assert result[0]["type"] == "image"
     assert result[0]["data"]["file"].startswith("file:")
 
-    monkeypatch.setattr(twitter, "_get_random_image", AsyncMock(return_value=None))
+    await result.delivery_receipt.record(False)
+    (image_dir / "image.png").unlink()
     result = await twitter.handle("twimg", "", {}, context)
     assert "缓存为空" in result[0]["data"]["text"]
     assert "/tw_fetch" in result[0]["data"]["text"]
@@ -1054,9 +1164,13 @@ async def test_random_and_unknown_commands_have_explicit_routes(
 @pytest.mark.asyncio
 async def test_unexpected_command_error_uses_public_message(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(twitter, "parse", MagicMock(side_effect=RuntimeError("private-secret")))
+    # 数据目录建在一个普通文件下面，建缓存目录时会抛出带完整路径的 OSError。
+    blocker = tmp_path / "private-secret"
+    blocker.write_text("not a directory", encoding="utf-8")
+    context.data_dir = blocker / "data"
+
     result = await twitter.handle("twimg", "", {}, context)
     rendered = json.dumps(result, ensure_ascii=False)
     assert "private-secret" not in rendered
@@ -1067,18 +1181,29 @@ async def test_unexpected_command_error_uses_public_message(
 async def test_scheduled_fetch_is_silent_and_contains_failures(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    fetch = AsyncMock(return_value=2)
-    monkeypatch.setattr(twitter, "_fetch_twitter_images", fetch)
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
+    session = _TwitterSession(
+        _timeline_payload([_tweet(_photo_url("a"), _photo_url("b"))]),
+        media={
+            _large_photo_url("a"): _distinct_image(1),
+            _large_photo_url("b"): _distinct_image(2),
+        },
+    )
+    context.http_session = session
     assert await twitter.scheduled_fetch(context) is None
     first = twitter._FETCH_TASK
     assert first is not None
     assert (await asyncio.wait_for(first, timeout=1.0)).count == 2
-    fetch.assert_awaited_once_with(context)
+    assert len(session.timeline_requests) == 1
 
-    fetch.return_value = 0
+    # 时间线没有新图，而本地缓存也是空的。
+    for cached in (context.data_dir / "images").iterdir():
+        cached.unlink()
+    context.http_session = _TwitterSession(_timeline_payload([]))
     assert await twitter.scheduled_fetch(context) is None
     second = twitter._FETCH_TASK
     assert second is not None
@@ -1087,13 +1212,16 @@ async def test_scheduled_fetch_is_silent_and_contains_failures(
     assert empty_outcome.succeeded is False
     assert "缓存仍为空" in empty_outcome.message
 
-    fetch.side_effect = RuntimeError("private scheduled failure")
+    # 数据目录建在普通文件下面：抓取在建缓存目录时抛出带路径的意外错误。
+    blocker = tmp_path / "private-scheduled-failure"
+    blocker.write_text("not a directory", encoding="utf-8")
+    context.data_dir = blocker / "data"
     assert await twitter.scheduled_fetch(context) is None
     third = twitter._FETCH_TASK
     assert third is not None
     outcome = await asyncio.wait_for(third, timeout=1.0)
     assert outcome.succeeded is False
-    assert "private scheduled failure" not in outcome.message
+    assert "private-scheduled-failure" not in outcome.message
     context.send_action.assert_not_awaited()
 
 
@@ -1104,14 +1232,23 @@ async def test_shutdown_cancels_owned_background_fetch(
 ) -> None:
     started = asyncio.Event()
 
-    async def never_finishes(_context):
+    async def never_finishes() -> None:
         started.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(twitter, "_fetch_twitter_images", never_finishes)
+    context.http_session = _TwitterSession(_timeline_payload([]), gate=never_finishes)
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
-    monkeypatch.setattr(twitter, "_POSTED_RESERVATIONS", {"pending": {"image.jpg"}})
+    monkeypatch.setattr(twitter, "_POSTED_RESERVATIONS", {})
+
+    # 随机发图还没拿到送达回执：这张图被预留着。
+    image_dir = context.data_dir / "images"
+    image_dir.mkdir()
+    (image_dir / "image.jpg").write_bytes(_image_bytes("JPEG"))
+    pending = await twitter.handle("twimg", "", {}, context)
+    assert pending[0]["type"] == "image"
+    assert twitter._POSTED_RESERVATIONS
 
     assert await twitter.scheduled_fetch(context) is None
     await asyncio.wait_for(started.wait(), timeout=1.0)

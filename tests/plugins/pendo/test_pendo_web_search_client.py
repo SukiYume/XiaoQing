@@ -1,4 +1,4 @@
-"""Pendo Web 搜索页的数据边界、交互与异步生命周期回归。"""
+"""Pendo Web 搜索页的数据边界、交互与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ SEARCH_SETUP: Final = r"""
     globalThis.__api = { get: async () => ({ data: {} }) };
     globalThis.__toastCalls = [];
     globalThis.__paginationCalls = [];
-    globalThis.__styleCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
     globalThis.__eventDetailCalls = [];
@@ -124,7 +123,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",

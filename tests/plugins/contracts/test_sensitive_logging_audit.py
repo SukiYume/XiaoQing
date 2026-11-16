@@ -21,12 +21,12 @@ from plugins.qingssh.config import SessionKeys
 from plugins.qingssh.output_relay import SSHOutputPolicy
 from plugins.qingssh.ssh_manager import SSHManager
 
-COMMAND_CANARY       = "printf CR220_COMMAND_SECRET && token=CR220_TOKEN_SECRET"
-OUTPUT_CANARY        = "CR220_REMOTE_RESPONSE_SECRET"
-HOST_CANARY          = "cr220-private-host.internal"
-PATH_CANARY          = "C:/private/CR220_PATH_SECRET/latest.log"
-ERROR_CANARY         = "CR220_EXCEPTION_SECRET"
-MALICIOUS_REQUEST_ID = "safe\nCR220_REQUEST_SECRET"
+COMMAND_CANARY       = "printf COMMAND_SECRET && token=TOKEN_SECRET"
+OUTPUT_CANARY        = "REMOTE_RESPONSE_SECRET"
+HOST_CANARY          = "private-host.internal"
+PATH_CANARY          = "C:/private/PATH_SECRET/latest.log"
+ERROR_CANARY         = "EXCEPTION_SECRET"
+MALICIOUS_REQUEST_ID = "safe\nREQUEST_SECRET"
 _FINGERPRINT_RE      = re.compile(r"hmac-sha256:[0-9a-f]{24}")
 
 
@@ -138,7 +138,7 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
         COMMAND_CANARY,
         OUTPUT_CANARY,
         HOST_CANARY,
-        "CR220_REQUEST_SECRET",
+        "REQUEST_SECRET",
     ):
         assert secret not in logs
     assert summarize_sensitive(COMMAND_CANARY).fingerprint in logs
@@ -154,20 +154,22 @@ async def test_qingssh_path_and_exception_are_fingerprinted_not_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = SimpleNamespace(
-        request_id = "req-cr220-ssh-path",
-        logger     = logging.getLogger("test.cr220.qingssh.manager"),
+        request_id = "req-ssh-path",
+        logger     = logging.getLogger("test.qingssh.manager"),
         secrets    = {"plugins": {"qingssh": {"password": ERROR_CANARY}}},
     )
     manager = SSHManager(tmp_path, context=context)
-    manager.is_connected = lambda *_args: True  # type: ignore[method-assign]
-    key                  = manager.build_connection_key("1", "None", "server")
+    key = manager.build_connection_key("1", "None", "server")
 
     class _Client:
+        def get_transport(self):
+            return SimpleNamespace(is_active=lambda: True)
+
         def open_sftp(self):
             raise RuntimeError(ERROR_CANARY)
 
     manager.connections[key] = _Client()
-    local_path               = str(tmp_path / "CR220_LOCAL_PATH_SECRET.png")
+    local_path               = str(tmp_path / "LOCAL_PATH_SECRET.png")
 
     with caplog.at_level(logging.ERROR):
         success, admin_message = await manager.download_file(
@@ -232,8 +234,8 @@ async def test_minecraft_command_response_and_host_stay_out_of_logs(
         OUTPUT_CANARY,
         HOST_CANARY,
         PATH_CANARY,
-        "CR220_RCON_PASSWORD_SECRET",
-        "CR220_REQUEST_SECRET",
+        "RCON_PASSWORD_SECRET",
+        "REQUEST_SECRET",
     ):
         assert secret not in logs
     assert summarize_sensitive(COMMAND_CANARY).fingerprint in logs
@@ -246,13 +248,13 @@ def test_minecraft_log_path_is_fingerprinted_not_logged(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    missing_path = tmp_path / "CR220_PATH_SECRET" / "latest.log"
+    missing_path = tmp_path / "PATH_SECRET" / "latest.log"
 
     with caplog.at_level(logging.WARNING):
         assert LogMonitor(str(missing_path)).initialize() is False
 
     logs = "\n".join(record.getMessage() for record in caplog.records)
     assert str(missing_path) not in logs
-    assert "CR220_PATH_SECRET" not in logs
+    assert "PATH_SECRET" not in logs
     assert summarize_sensitive(str(missing_path)).fingerprint in logs
     assert all(record.exc_info is None for record in caplog.records)

@@ -1,14 +1,14 @@
-"""Pendo Web 任务概览聚合器的跨模块回归。"""
+"""Pendo Web 任务概览聚合器的跨模块行为。"""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web import utils as web_utils
+from plugins.pendo.utils import time_utils
 from plugins.pendo.web.analytics.task_overview import (
     build_task_overview,
     build_task_widget_overview,
@@ -24,7 +24,7 @@ def _insert(db: Database, owner_id: str, **values: Any) -> None:
 def test_build_task_overview_groups_widget_tasks_and_returns_minimal_payload(
     db: Database,
 ) -> None:
-    """Widget 分组保持完整，页面负载不再夹带重复派生或私有字段。"""
+    """Widget 分组保持完整，页面负载只含约定字段，不夹带重复派生或私有字段。"""
 
     owner_id = "u-task-overview"
     for values in (
@@ -178,12 +178,16 @@ def test_build_task_overview_uses_user_clock_when_today_is_omitted(
         plan_date = "2030-01-02",
     )
 
-    def user_now(user_id: str, database: Database) -> datetime:
-        assert user_id == owner_id
-        assert database is db
-        return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
+    # 用户设在 UTC-12 时区，当前时刻是该时区的 2030-01-02 00:30。
+    db.update_user_settings(owner_id, {"timezone": "Etc/GMT+12"})
 
-    monkeypatch.setattr(web_utils, "now_in_timezone", user_now)
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2030, 1, 2, 12, 30, 0, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
     result = build_task_overview(db=db, owner_id=owner_id)
 
     assert result["summary"]["focus_count"] == 1

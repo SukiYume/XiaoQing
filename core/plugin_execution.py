@@ -101,9 +101,8 @@ class PluginExecutionPolicy:
         Config validation (``_PluginExecutionPolicySchema``) already rejects bad input up
         front.  This is the one place raw values are turned into a policy: it clamps
         every field into its range, falls back to ``fallback`` (default policy) for a
-        missing or wrongly typed value, and so also serves embedders and test doubles
-        that skip the schema.  A per-plugin override is merged by passing the global
-        policy as ``fallback``.
+        missing or wrongly typed value.  A per-plugin override is merged by passing the
+        global policy as ``fallback``.
         """
 
         base   = fallback or cls()
@@ -289,15 +288,6 @@ class PluginSyncBroker:
     def running_callbacks(self) -> int:
         with self._lock:
             return self._running_count
-
-    @property
-    def worker_thread_count(self) -> int:
-        with self._lock:
-            executor = self._executor
-            # 仅用于诊断和关闭测试。ThreadPoolExecutor 没有公开的线程数 API；
-            # 私有字段不可用时返回 0，执行正确性不依赖此数值。
-            threads = getattr(executor, "_threads", ()) if executor is not None else ()
-            return len(threads)
 
     def configure(self, *, global_queue_limit: int) -> None:
         """Apply a queue limit to future admissions without dropping old jobs."""

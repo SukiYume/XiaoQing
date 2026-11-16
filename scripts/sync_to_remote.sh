@@ -26,6 +26,7 @@ readonly REMOTE_HOST REMOTE_DIR
 
 readonly SSH_BIN="ssh"
 readonly RSYNC_BIN="rsync"
+readonly PYTHON_BIN="${PYTHON_BIN:-python}"
 readonly SENTINEL_NAME=".xiaoqing-sync-root"
 readonly SENTINEL_VALUE="xiaoqing-sync-root-v1"
 readonly ARXIV_MODEL_DIR="plugins/arxiv_filter/best_model"
@@ -51,9 +52,12 @@ usage() {
     cat <<'USAGE'
 用法：
   ./scripts/sync_to_remote.sh [--dry-run]
-  ./scripts/sync_to_remote.sh --apply --confirm-delete
+  ./scripts/sync_to_remote.sh --apply --confirm-delete [--accept-target-changes]
 
 默认只预览。--apply 会同步当前工作树和 arXiv 运行权重，并删除远端过期源码。
+
+同步前按生产现在的配置和本机的配置分别算出每个定时任务的推送目标群并比对。
+有变化时列出来；--apply 遇到变化会拒绝同步，确认是有意的再加 --accept-target-changes。
 
 config/config.json 随源码同步并校验；密钥、日志和运行数据独立保留。
 只属于这一部署的设置（群号、定时任务的目标群、服务器地址）都写在 config/config.json，
@@ -101,11 +105,13 @@ sha256_file() {
 
 mode="dry-run"
 confirm_delete="false"
+accept_target_changes="false"
 while (($#)); do
     case "$1" in
         --dry-run) mode="dry-run" ;;
         --apply) mode="apply" ;;
         --confirm-delete) confirm_delete="true" ;;
+        --accept-target-changes) accept_target_changes="true" ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; die "unknown argument: $1" ;;
     esac
@@ -117,6 +123,9 @@ if [[ "$mode" == "apply" && "$confirm_delete" != "true" ]]; then
 fi
 if [[ "$mode" != "apply" && "$confirm_delete" == "true" ]]; then
     die "--confirm-delete is valid only with --apply"
+fi
+if [[ "$mode" != "apply" && "$accept_target_changes" == "true" ]]; then
+    die "--accept-target-changes is valid only with --apply"
 fi
 [[ -f "$REPO_DIR/$SENTINEL_NAME" ]] || die "repository sentinel is missing"
 [[ "$(<"$REPO_DIR/$SENTINEL_NAME")" == "$SENTINEL_VALUE" ]] \
@@ -134,6 +143,7 @@ fi
     || die "arXiv model directory must be a safe repository-relative path"
 command -v "$SSH_BIN" >/dev/null || die "ssh is required"
 command -v "$RSYNC_BIN" >/dev/null || die "rsync is required"
+command -v "$PYTHON_BIN" >/dev/null || die "python is required to compare scheduled push targets"
 
 required_checksums=()
 for required_file in "${REMOTE_REQUIRED_FILES[@]}"; do
@@ -165,6 +175,37 @@ REMOTE
 )"
 [[ "$remote_root" =~ ^/[A-Za-z0-9._/-]+$ && "$remote_root" != "/" ]] \
     || die "remote target validation failed"
+
+# ---------- 定时任务目标群迁移检查 ----------
+
+# 部署配置里漏写一个任务的目标群时，任务不会停，而是改投 manifest 或 default_group_ids
+# 里的群。同步前按生产现在的配置和本机要同步过去的配置分别算出每个任务的目标群，
+# 有变化时列出来；--apply 默认拒绝，确认是有意的再加 --accept-target-changes。
+remote_snapshot="$(mktemp)"
+trap 'rm -f -- "$remote_snapshot"' EXIT
+"$SSH_BIN" "$REMOTE_HOST" sh -s -- "$remote_root" >"$remote_snapshot" <<'REMOTE' \
+    || die "cannot read remote schedule configuration"
+set -eu
+cd -- "$1"
+for file in config/config.json plugins/*/plugin.json; do
+    test -f "$file" || continue
+    printf '%s\000' "$file"
+    cat -- "$file"
+    printf '\000'
+done
+REMOTE
+targets_status=0
+"$PYTHON_BIN" "$REPO_DIR/scripts/check_schedule_targets.py" \
+    --remote-snapshot "$remote_snapshot" --root "$REPO_DIR" || targets_status=$?
+case "$targets_status" in
+    0) ;;
+    1)
+        if [[ "$mode" == "apply" && "$accept_target_changes" != "true" ]]; then
+            die "scheduled push targets would change; fix config/config.json or rerun with --accept-target-changes"
+        fi
+        ;;
+    *) die "cannot compare scheduled push targets" ;;
+esac
 
 # ---------- rsync 规则与执行 ----------
 

@@ -1,29 +1,18 @@
 """配置测试共享 fixture、导入和私有 helper。"""
 
-import asyncio
 import json
-import logging
-import os
 import platform
-import threading
-import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from core.config import (
-    _MAX_CONFIG_SOURCE_BYTES,
-    _MAX_CONFIG_TREE_DEPTH,
-    _MAX_CONFIG_TREE_NODES,
     ConfigLoadError,
     ConfigManager,
     ConfigSnapshot,
     ConfigSourceStatus,
     PendingSecretsChange,
-    _check_secrets_file_permissions,
-    _validate_runtime_config,
     materialize_snapshot_value,
 )
 
@@ -74,7 +63,7 @@ def config_manager(config_file: Path, secrets_file: Path) -> ConfigManager:
     return ConfigManager(config_file, secrets_file)
 
 
-def _last_notified_revision(manager: ConfigManager) -> int:
+def last_notified_revision(manager: ConfigManager) -> int:
     """加锁读取通知进度，避免为测试等待逻辑扩张生产接口。"""
 
     with manager._lock:
@@ -82,7 +71,6 @@ def _last_notified_revision(manager: ConfigManager) -> int:
 
 
 __all__ = (
-    "Any",
     "ConfigLoadError",
     "ConfigManager",
     "ConfigSnapshot",
@@ -90,23 +78,13 @@ __all__ = (
     "PendingSecretsChange",
     "Mapping",
     "Path",
-    "_MAX_CONFIG_SOURCE_BYTES",
-    "_MAX_CONFIG_TREE_DEPTH",
-    "_MAX_CONFIG_TREE_NODES",
-    "_check_secrets_file_permissions",
-    "_last_notified_revision",
-    "_validate_runtime_config",
-    "asyncio",
+    "last_notified_revision",
     "config_file",
     "config_manager",
     "json",
-    "logging",
     "materialize_snapshot_value",
-    "os",
     "platform",
     "pytest",
     "secrets_file",
     "temp_config_dir",
-    "threading",
-    "time",
 )

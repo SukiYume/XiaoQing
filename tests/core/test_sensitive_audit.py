@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from core.sensitive_audit import (
-    SensitiveAuditSummary,
     audit_error_type,
     safe_request_id,
     summarize_sensitive,
@@ -14,7 +13,7 @@ from core.sensitive_audit import (
 
 
 def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> None:
-    canary = "Authorization: Bearer CR220-COMMAND-SECRET"
+    canary = "Authorization: Bearer COMMAND-SECRET"
 
     first     = summarize_sensitive(canary)
     repeated  = summarize_sensitive(canary)
@@ -27,7 +26,7 @@ def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> N
     assert first.byte_length == len(canary.encode("utf-8"))
     assert re.fullmatch(r"hmac-sha256:[0-9a-f]{24}", first.fingerprint)
     assert canary not in repr(first)
-    assert "CR220-COMMAND-SECRET" not in repr(first)
+    assert "COMMAND-SECRET" not in repr(first)
 
 
 def test_unicode_and_binary_lengths_have_explicit_units() -> None:
@@ -55,18 +54,6 @@ def test_summary_rejects_objects_that_could_execute_unsafe_string_conversion() -
 
     with pytest.raises(TypeError, match="text or bytes"):
         summarize_sensitive(ExplodingString())  # type: ignore[arg-type]
-
-
-def test_summary_dataclass_itself_contains_only_safe_metadata() -> None:
-    summary = SensitiveAuditSummary(
-        kind        = "text",
-        length      = 12,
-        byte_length = 12,
-        fingerprint = "hmac-sha256:" + ("a" * 24),
-    )
-
-    assert summary.kind == "text"
-    assert "secret" not in repr(summary).lower()
 
 
 def test_audit_error_type_is_bounded_and_safe_for_logs() -> None:

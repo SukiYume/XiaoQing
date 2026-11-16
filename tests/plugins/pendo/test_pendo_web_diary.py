@@ -1,14 +1,14 @@
-"""Pendo Web 日记统计聚合器的跨模块回归。"""
+"""Pendo Web 日记统计聚合器。"""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web.analytics import diary_overview as diary_overview_module
+from plugins.pendo.utils import time_utils
 from plugins.pendo.web.analytics.diary_overview import build_diary_overview
 
 
@@ -213,12 +213,15 @@ def test_build_diary_overview_uses_user_clock_when_today_is_omitted(
         diary_date = "2030-01-01",
     )
 
-    def user_now(user_id: str, database: Database) -> datetime:
-        assert user_id == owner_id
-        assert database is db
-        return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
+    db.update_user_settings(owner_id, {"timezone": "Etc/GMT+12"})
 
-    monkeypatch.setattr(diary_overview_module, "now_in_timezone", user_now)
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2030, 1, 2, 12, 30, 0, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
     result = build_diary_overview(db=db, owner_id=owner_id, year=2030, month=1)
 
     assert result["summary"]["current_streak"] == 1

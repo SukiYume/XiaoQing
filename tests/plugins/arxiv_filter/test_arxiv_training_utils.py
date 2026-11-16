@@ -17,6 +17,10 @@ from plugins.arxiv_filter.numerics import (
     stable_softmax,
 )
 from plugins.arxiv_filter.train_model.interest_model import training_utils as interest_utils
+from tests.helpers.arxiv_filter_test_support import (
+    install_fake_encoder,
+    write_knn_model,
+)
 
 
 def _load_data_prep_module(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -102,45 +106,21 @@ def test_bert_loader_shuffles_training_but_not_validation() -> None:
 
 def test_bert_training_bootstrap_builds_shared_resources_once(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     torch          = pytest.importorskip("torch")
     training_utils = importlib.import_module(
         "plugins.arxiv_filter.train_model.bert_model.training_utils"
     )
-    frame = pd.DataFrame({"title": ["a", "b", "c", "d"], "label": [0, 1, 0, 1]})
-    train_frame = frame.iloc[:2].copy()
-    validation_frame = frame.iloc[2:].copy()
-    logs        : list[str] = []
+    frame = pd.DataFrame(
+        {
+            "title": [f"paper {index}" for index in range(8)],
+            "label": [0, 1] * 4,
+        }
+    )
+    csv_frame = frame.assign(label=frame["label"].astype(str))
+    csv_frame.to_csv(tmp_path / "training.csv", index=False)
     loader_calls: list[dict[str, object]] = []
-    sampler = object()
-    optimizer = object()
-
-    monkeypatch.setattr(training_utils, "seed_everything", lambda _seed: None)
-    monkeypatch.setattr(training_utils, "timestamp_log", logs.append)
-    monkeypatch.setattr(training_utils, "read_training_csv", lambda _path: frame.copy())
-    monkeypatch.setattr(
-        training_utils,
-        "split_train_validation_frame",
-        lambda *_args, **_kwargs: (train_frame, validation_frame),
-    )
-    monkeypatch.setattr(
-        training_utils,
-        "compute_class_weight",
-        lambda **_kwargs: np.array([1.0, 1.0]),
-    )
-    monkeypatch.setattr(training_utils, "build_weighted_sampler", lambda *_args: sampler)
-    monkeypatch.setattr(
-        training_utils,
-        "get_runtime_settings",
-        lambda _device: {
-            "use_amp"   : False,
-            "pin_memory": False,
-            "use_fused" : False,
-            "amp_dtype" : torch.float32,
-        },
-    )
-    monkeypatch.setattr(training_utils, "create_optimizer", lambda *_args, **_kwargs: optimizer)
 
     class TokenizerFactory:
         @staticmethod
@@ -151,13 +131,13 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
     class Model:
         def __init__(self) -> None:
             self.device = None
+            self.weight = torch.nn.Parameter(torch.zeros(1))
 
         def to(self, device: object) -> None:
             self.device = device
 
-        @staticmethod
-        def parameters() -> list[object]:
-            return []
+        def parameters(self) -> list[object]:
+            return [self.weight]
 
     model = Model()
 
@@ -193,9 +173,11 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
 
     runtime = training_utils.prepare_classifier_training(
         config,
-        device            = torch.device("cpu"),
-        classifier_name   = "test classifier",
-        prepare_frame     = lambda value: value,
+        device          = torch.device("cpu"),
+        classifier_name = "test classifier",
+        prepare_frame   = lambda value: value.assign(
+            label=training_utils.coerce_binary_labels(value["label"])
+        ),
         create_loader     = create_loader,
         tokenizer_factory = TokenizerFactory,
         model_factory     = ModelFactory,
@@ -203,15 +185,18 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
     )
 
     assert runtime.frame.equals(frame)
-    assert runtime.train_frame.equals(train_frame)
-    assert runtime.validation_frame.equals(validation_frame)
-    assert runtime.optimizer is optimizer
+    assert len(runtime.train_frame) == len(runtime.validation_frame) == 4
+    assert sorted(runtime.train_frame.index.tolist() + runtime.validation_frame.index.tolist()) == (
+        list(range(8))
+    )
+    assert runtime.train_frame["label"].sum() == runtime.validation_frame["label"].sum() == 2
+    assert isinstance(runtime.optimizer, torch.optim.AdamW)
     assert model.device == torch.device("cpu")
-    assert loader_calls[0]["sampler"] is sampler
+    assert isinstance(loader_calls[0]["sampler"], torch.utils.data.WeightedRandomSampler)
     assert loader_calls[1]["shuffle"] is False
     assert scheduler_calls == [{"num_warmup_steps": 3, "num_training_steps": 6}]
     assert config.output_dir.is_dir()
-    assert any("test classifier" in line for line in logs)
+    assert "test classifier" in capsys.readouterr().out
 
 
 def test_data_prep_month_ranges_preserve_inclusive_day_bounds(
@@ -267,16 +252,9 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module     = _load_knn_training_module()
-    load_calls = 0
-
-    def load_encoder(_name: str, _max_len: int | None) -> object:
-        nonlocal load_calls
-        load_calls += 1
-        raise AssertionError("precomputed training must not load the encoder")
-
-    monkeypatch.setattr(module._training, "load_sentence_encoder", load_encoder)
-    model = module.KNNInterestModel(
+    module  = _load_knn_training_module()
+    encoder = install_fake_encoder(monkeypatch)
+    model   = module.KNNInterestModel(
         embedding_dim   = 2,
         max_len         = 128,
         neg_sample_size = 2,
@@ -295,7 +273,8 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     model.save(tmp_path)
 
     config = (tmp_path / "training_config.json").read_text(encoding="utf-8")
-    assert load_calls == 0
+    # 已知向量维度、训练用的是预先算好的向量：不应加载编码器。
+    assert encoder.loads == []
     assert '"max_len": 128' in config
 
 
@@ -370,30 +349,46 @@ def test_multi_interest_feature_builder_is_finite_and_preserves_contrast() -> No
 
 
 def test_inference_runner_copies_input_and_publishes_backend_results(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     inference_modules: SimpleNamespace,
 ) -> None:
     runner = inference_modules.runner
-    params = InferenceParams(
-        model_path = "model",
-        threshold  = 0.6,
-        batch_size = 2,
-        max_len    = 32,
-        model_type = "knn",
+    write_knn_model(tmp_path / "model", threshold=0.6, input_mode="title_only")
+    # 与兴趣库向量 [1, 0] 的余弦相似度分别是 0.8 和 0.2。
+    install_fake_encoder(
+        monkeypatch,
+        {"first": (0.8, 0.6), "second": (0.2, float(np.sqrt(1 - 0.2**2)))},
     )
-    monkeypatch.setattr(runner, "resolve_params", lambda *_args, **_kwargs: params)
-    monkeypatch.setattr(runner, "_dispatch_inference", lambda *_args: ([0.8, 0.2], [1, 0]))
     source = pd.DataFrame({"Title": ["first", "second"]})
 
-    output, threshold = runner.run_inference_for_dataframe(source)
+    output, threshold = runner.run_inference_for_dataframe(
+        source, model_path=str(tmp_path / "model")
+    )
 
     assert output is not None
     assert output is not source
     assert "Probability" not in source.columns
-    assert output["Probability"].tolist() == [0.8, 0.2]
+    assert output["Probability"].tolist() == pytest.approx([0.8, 0.2])
     assert output["Prediction"].tolist() == [1, 0]
     assert threshold == 0.6
     assert runner.select_positives(output)["Title"].tolist() == ["first"]
+
+
+def test_inference_runner_rejects_backend_result_count_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inference_modules: SimpleNamespace,
+) -> None:
+    write_knn_model(tmp_path / "model", input_mode="title_only")
+    encoder               = install_fake_encoder(monkeypatch)
+    encoder.drop_last_row = True
+    data                  = pd.DataFrame({"Title": ["first", "second"]})
+
+    with pytest.raises(ValueError, match="inference backend returned"):
+        inference_modules.runner.run_inference_for_dataframe(
+            data, model_path=str(tmp_path / "model")
+        )
 
 
 @pytest.mark.parametrize(
@@ -426,7 +421,6 @@ def test_inference_params_reject_invalid_runtime_values(field: str, value: objec
 @pytest.mark.parametrize(
     "backend_result",
     [
-        ([0.5], [1]),
         ([0.5, float("nan")], [1, 0]),
         ([0.5, 0.4], [1, True]),
     ],

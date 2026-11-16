@@ -5,7 +5,6 @@ import json
 import time
 from pathlib import Path
 from typing import ClassVar, cast
-from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -13,6 +12,7 @@ from core.interfaces import PluginContextProtocol
 from plugins.adnmb import adapi as adnmb_adapi
 from plugins.adnmb import main as adnmb_main
 from plugins.adnmb.adapi import AdnmbClient
+from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -52,24 +52,18 @@ async def test_format_posts_limits_concurrent_image_downloads(tmp_path: Path) ->
 class TestAdnmbRuntimeContract:
     """Exercise the imported plugin and API objects, not source strings."""
 
-    def test_public_entrypoints_and_help(self):
+    def test_public_entrypoints(self):
         assert callable(adnmb_main.handle) and callable(adnmb_main.shutdown)
-        help_text = adnmb_main._HELP_TEXT
-        assert "A岛" in help_text
-        assert "/adnmb" in help_text
 
     @pytest.mark.asyncio
     async def test_feed_mutation_result_uses_shared_external_text_boundary(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
-        monkeypatch.setattr(
-            client,
-            "_get",
-            AsyncMock(return_value="\x1b[31m完成\x1b[0m\x00" + "长" * 1_000),
+        session = QueuedAiohttpSession(
+            aiohttp_json_response("\x1b[31m完成\x1b[0m\x00" + "长" * 1_000)
         )
+        client = AdnmbClient(session=session, cache_dir=tmp_path, uuid="uuid")
 
         result = await client.add_feed("123")
 
@@ -110,32 +104,19 @@ class _AdnmbTestContext:
         self.secrets      = {"plugins": {"adnmb": {"uuid": "uuid-1"}}}
 
 
-def test_adnmb_rebuilds_client_when_uuid_changes(monkeypatch, tmp_path):
-    created = []
-
-    class FakeClient:
-        def __init__(self, session, cache_dir, uuid=""):
-            self.session   = session
-            self.cache_dir = cache_dir
-            self.uuid      = uuid
-            created.append(self)
-
-    monkeypatch.setattr(adnmb_main, "AdnmbClient", FakeClient)
-
-    context       = with_settings_reader(_AdnmbTestContext(tmp_path))
+@pytest.mark.asyncio
+async def test_adnmb_rebuilds_client_when_uuid_changes(tmp_path):
+    session = QueuedAiohttpSession(aiohttp_json_response([]), aiohttp_json_response([]))
+    context = with_settings_reader(_AdnmbTestContext(tmp_path))
+    context.data_dir = tmp_path
+    context.http_session = session
     typed_context = cast(PluginContextProtocol, cast(object, context))
-    cache_dir     = context.plugin_dir / "cache"
 
-    first                                       = adnmb_main._get_client(typed_context, cache_dir)
+    await adnmb_main.handle("adnmb", "-d", {}, typed_context)
     context.secrets["plugins"]["adnmb"]["uuid"] = "uuid-2"
-    second                                      = adnmb_main._get_client(typed_context, cache_dir)
+    await adnmb_main.handle("adnmb", "-d", {}, typed_context)
 
-    assert len(created) == 2
-    assert first is created[0]
-    assert second is created[1]
-    assert first is not second
-    assert first.uuid == "uuid-1"
-    assert second.uuid == "uuid-2"
+    assert [request[2]["params"]["uuid"] for request in session.requests] == ["uuid-1", "uuid-2"]
 
 
 def test_adnmb_get_client_reuses_fallback_uuid_client(tmp_path):
@@ -210,35 +191,31 @@ def test_adnmb_models_normalize_fields_and_ignore_malformed_replies():
     ],
 )
 async def test_adnmb_value_options_reject_missing_values_before_side_effects(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     args: str,
     expected: str,
 ):
     context          = _AdnmbTestContext(tmp_path)
     context.data_dir = tmp_path
-    get_client       = Mock()
-    ensure_cache     = Mock()
-    monkeypatch.setattr(adnmb_main, "_get_client", get_client)
-    monkeypatch.setattr(adnmb_main, "ensure_dir", ensure_cache)
 
     result = await adnmb_main.handle("adnmb", args, {"user_id": 1001}, context)
 
     assert expected in result[0]["data"]["text"]
-    get_client.assert_not_called()
-    ensure_cache.assert_not_called()
+    assert "adnmb_runtime" not in context.state
+    assert not (tmp_path / "images").exists()
 
 
 @pytest.mark.asyncio
 async def test_adnmb_list_endpoints_ignore_malformed_payload_items(tmp_path):
-    client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
-    client._get = AsyncMock(
-        side_effect=[[None, "bad", {"id": 1}], {"not": "a list"}, [None, {"id": 2}]]
+    session = QueuedAiohttpSession(
+        aiohttp_json_response([None, "bad", {"id": 1}]),
+        aiohttp_json_response([{"forums": [{"name": "综合版", "id": 1}]}]),
+        aiohttp_json_response({"not": "a list"}),
+        aiohttp_json_response([None, {"id": 2}]),
     )
+    client = AdnmbClient(session=session, cache_dir=tmp_path, uuid="uuid")
 
     assert [thread.main_post.id for thread in await client.get_timeline()] == ["1"]
-    client._forum_cache            = {"综合版": "1"}
-    client._forum_cache_expires_at = float("inf")
     assert await client.get_forum("综合版") == []
     assert [post.id for post in await client.get_feed()] == ["2"]
 

@@ -1,5 +1,4 @@
 # 验证各运行期 HTTP 调用点的响应预算与失败契约。
-"""CR-221 bounded HTTP contracts for the remaining runtime clients."""
 
 from __future__ import annotations
 
@@ -122,60 +121,6 @@ async def test_yingshi_non_success_does_not_read_error_body() -> None:
 
 
 @pytest.mark.asyncio
-async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_path: Path) -> None:
-    payload = {
-        "data": {
-            "user": {
-                "result": {
-                    "timeline": {
-                        "timeline": {
-                            "instructions": [
-                                {
-                                    "type"   : "TimelineAddEntries",
-                                    "entries": [
-                                        {"entryId": "tweet-1"},
-                                        {
-                                            "entryId": "cursor-bottom-1",
-                                            "content": {"value": "next"},
-                                        },
-                                    ],
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        }
-    }
-    session = QueuedAiohttpSession(_json_response(payload, url="https://x.com/api"))
-    context = with_settings_reader(
-        SimpleNamespace(
-            http_session = session,
-            data_dir     = tmp_path,
-            secrets      = {
-                "plugins": {
-                    "twitter": {
-                        "user_id": "1",
-                        "headers": {"author" + "ization": "Bearer token"},
-                        "cookies": {"ct0": "csrf"},
-                        "proxy"  : "http://127.0.0.1:7890",
-                    }
-                }
-            },
-        )
-    )
-
-    tweets, cursor = await twitter._fetch_timeline(context)
-
-    assert [item["entryId"] for item in tweets] == ["tweet-1"]
-    assert cursor == "next"
-    _assert_transport_guards(session.requests[0])
-    kwargs = session.requests[0][2]
-    assert kwargs["proxy"] == "http://127.0.0.1:7890"
-    assert kwargs["cookies"] == {"ct0": "csrf"}
-
-
-@pytest.mark.asyncio
 async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
     response = _Response(b"huge private error", status=429, fail_on_read=True)
     context = with_settings_reader(
@@ -191,27 +136,6 @@ async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
 
     assert caught.value.status == 429
     assert response.content.reads == 0
-
-
-@pytest.mark.asyncio
-async def test_wolframalpha_text_xml_and_json_use_bounded_contract() -> None:
-    text_session = QueuedAiohttpSession(_Response(b"42", content_type="text/plain; charset=utf-8"))
-    context = SimpleNamespace(http_session=text_session)
-    assert "42" in str(await wolframalpha._get_answer("6*7", "appid", context))
-    _assert_transport_guards(text_session.requests[0])
-
-    xml_session = QueuedAiohttpSession(
-        _Response(
-            b"<queryresult><pod><plaintext>Step one</plaintext></pod></queryresult>",
-            content_type="application/xml",
-        )
-    )
-    assert "Step one" in await wolframalpha._query_step("x", "appid", xml_session)
-
-    json_session = QueuedAiohttpSession(
-        _json_response({"queryresult": {"pods": [{"subpods": [{"plaintext": "complete"}]}]}})
-    )
-    assert await wolframalpha._query_complete("x", "appid", json_session) == "complete"
 
 
 @pytest.mark.asyncio

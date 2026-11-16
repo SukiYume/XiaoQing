@@ -5,18 +5,19 @@ import importlib
 import json
 import sys
 import threading
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
 from core.plugin_execution import PluginExecutionClosed
+from tests.helpers.arxiv_filter_test_support import ArxivWorld, use_plugin_config, write_knn_model
 from tests.helpers.settings_snapshot import with_settings_reader
 
-arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
+arxiv_filter       = importlib.import_module("plugins.arxiv_filter.main")
+arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
 
 
 def _context(tmp_path: Path) -> SimpleNamespace:
@@ -36,40 +37,30 @@ def _context(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _status_aware_run_sync(date_result: str):
-    async def run_sync_for_test(function, *args, **kwargs):
-        if function in (
-            arxiv_filter._claim_send_today,
-            arxiv_filter._release_claim,
-            arxiv_filter._mark_sent_today,
-        ):
-            return function(*args, **kwargs)
-        return date_result
-
-    return run_sync_for_test
+def _today(context: SimpleNamespace) -> str:
+    return arxiv_filter._business_now(context).date().isoformat()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "filter_result",
-    [
-        None,
-        [{"type": "text", "data": {"text": "论文筛选服务暂时不可用"}}],
-        [{"type": "text", "data": {"text": "任意公开错误文本"}}],
-    ],
-)
-async def test_unknown_or_unstructured_filter_results_never_mark_sent(
+@pytest.mark.parametrize("scenario", ["no-paper-list", "missing-dependency", "missing-model-files"])
+async def test_failed_filter_results_never_mark_sent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    filter_result,
+    scenario: str,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
-    monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=filter_result))
+    today   = _today(context)
+    world = ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=["Pulsar timing"])
+    if scenario == "no-paper-list":
+        world.titles = ()
+    elif scenario == "missing-dependency":
+        monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+    else:
+        (world.model_dir / "meta.json").unlink()
 
-    await arxiv_filter._check_arxiv_update(context)
+    result = await arxiv_filter._check_arxiv_update(context)
 
+    assert result.succeeded is False
     assert arxiv_filter._should_send_today(context.data_dir, today) is True
     assert not Path(arxiv_filter._claim_path(context.data_dir, today)).exists()
 
@@ -80,13 +71,10 @@ async def test_filter_exception_releases_claim_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
-    monkeypatch.setattr(
-        arxiv_filter,
-        "_run_filter",
-        AsyncMock(side_effect=RuntimeError("backend failed")),
-    )
+    today   = _today(context)
+    ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=["Pulsar timing"])
+    # 模型配置不是 JSON 对象：筛选在推理之前就抛出异常。
+    use_plugin_config(monkeypatch, tmp_path, {"model": "not-an-object"})
 
     result = await arxiv_filter._check_arxiv_update(context)
 
@@ -101,14 +89,8 @@ async def test_status_commits_only_after_true_delivery_ack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
-    successful = arxiv_filter._filter_result(
-        "papers",
-        succeeded = True,
-        outcome   = "papers",
-    )
-    monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=successful))
+    today   = _today(context)
+    ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=["Pulsar timing"])
 
     first = await arxiv_filter._check_arxiv_update(context)
     assert arxiv_filter._should_send_today(context.data_dir, today) is True
@@ -130,10 +112,8 @@ async def test_unknown_delivery_uses_at_most_once_daily_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
-    successful = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
-    monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=successful))
+    today   = _today(context)
+    ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=["Pulsar timing"])
 
     result = await arxiv_filter._check_arxiv_update(context)
     await result.delivery_receipt.record(None)
@@ -150,8 +130,8 @@ async def test_final_no_update_notice_also_waits_for_delivery_ack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync("2000-01-01"))
+    today   = _today(context)
+    ArxivWorld(monkeypatch, tmp_path, list_date="2000-01-01")
 
     result = await arxiv_filter._check_arxiv_update(context, is_final_check=True)
 
@@ -166,15 +146,17 @@ async def test_status_write_failure_does_not_commit_or_hold_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today   = arxiv_filter._business_now(context).date().isoformat()
-    assert arxiv_filter._claim_send_today(context.data_dir, today) is True
-    result = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
-    tracked = arxiv_filter._track_delivery(result, context.data_dir, today)
+    today   = _today(context)
+    ArxivWorld(monkeypatch, tmp_path, list_date="2000-01-01")
+    tracked = await arxiv_filter._check_arxiv_update(context, is_final_check=True)
+    assert Path(arxiv_filter._claim_path(context.data_dir, today)).exists()
 
-    def fail_write(*_args, **_kwargs) -> None:
+    atomic_store = importlib.import_module("core.atomic_store")
+
+    def fail_replace(*_args) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(arxiv_filter, "atomic_write_text", fail_write)
+    monkeypatch.setattr(atomic_store.os, "replace", fail_replace)
 
     await tracked.delivery_receipt.record(True)
 
@@ -215,31 +197,22 @@ async def test_daily_filter_cache_changes_with_plugin_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context   = _context(tmp_path)
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
-    (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
-    configs = iter(
-        [
-            {"model": {"path": str(model_dir), "threshold": 0.5}},
-            {"model": {"path": str(model_dir), "threshold": 0.7}},
-        ]
+    context = _context(tmp_path)
+    world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-05")
+    config_path = use_plugin_config(
+        monkeypatch,
+        tmp_path,
+        {"model": {"path": str(world.model_dir), "threshold": 0.5}},
     )
-    calls = 0
-
-    def inference(**_kwargs) -> str:
-        nonlocal calls
-        calls += 1
-        return "No positive predictions found."
-
-    arxiv_filter._FILTER_CACHE.clear()
-    monkeypatch.setattr(arxiv_filter, "load_plugin_config", lambda: next(configs))
-    monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
 
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    config_path.write_text(
+        json.dumps({"model": {"path": str(world.model_dir), "threshold": 0.7}}),
+        encoding="utf-8",
+    )
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
-    assert calls == 2
+    assert len(world.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -249,30 +222,14 @@ async def test_filter_cache_changes_when_arxiv_source_listing_date_changes(
 ) -> None:
     """更新前的昨日列表不能污染同一业务日稍后发布的新列表。"""
 
-    context   = _context(tmp_path)
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
-    (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
-    calls = 0
-
-    def inference(**_kwargs) -> str:
-        nonlocal calls
-        calls += 1
-        return "No positive predictions found."
-
-    arxiv_filter._FILTER_CACHE.clear()
-    monkeypatch.setattr(
-        arxiv_filter,
-        "load_plugin_config",
-        lambda: {"model": {"path": str(model_dir)}},
-    )
-    monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
+    context = _context(tmp_path)
+    world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-05")
 
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
     await arxiv_filter._run_filter(context, source_date="2026-08-06")
 
-    assert calls == 2
+    assert len(world.requests) == 2
     assert {key[0] for key in arxiv_filter._FILTER_CACHE} == {"2026-08-06"}
 
 
@@ -281,44 +238,17 @@ async def test_daily_cache_reuses_one_model_tree_fingerprint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """同一模型的缓存命令不能再次递归扫描、stat 或 hash 整棵目录。"""
+    """同一模型的缓存命令不能再次递归扫描整棵目录：刷新窗口内改动模型文件也不会换缓存键。"""
 
-    context   = _context(tmp_path)
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
-    (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
-    shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
-    original_fingerprint = shared.model_artifact_fingerprint
-    fingerprint_calls = 0
-    inference_kwargs: list[dict[str, object]] = []
-
-    def counted_fingerprint(model_path: str) -> str:
-        nonlocal fingerprint_calls
-        fingerprint_calls += 1
-        return original_fingerprint(model_path)
-
-    def inference(**kwargs) -> str:
-        inference_kwargs.append(kwargs)
-        return "No positive predictions found."
-
-    arxiv_filter._FILTER_CACHE.clear()
-    cached_fingerprints = getattr(arxiv_filter, "_MODEL_FINGERPRINT_CACHE", None)
-    if isinstance(cached_fingerprints, dict):
-        cached_fingerprints.clear()
-    monkeypatch.setattr(
-        arxiv_filter,
-        "load_plugin_config",
-        lambda: {"model": {"path": str(model_dir)}},
-    )
-    monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
-    monkeypatch.setattr(shared, "model_artifact_fingerprint", counted_fingerprint)
+    context = _context(tmp_path)
+    world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-05", titles=["Pulsar timing"])
 
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    write_knn_model(world.model_dir, version=2)
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
-    assert fingerprint_calls == 1
-    assert len(inference_kwargs) == 1
-    assert isinstance(inference_kwargs[0].get("artifact_fingerprint"), str)
+    assert len(world.requests) == 1
+    assert len(world.encoder.loads) == 1
 
 
 @pytest.mark.asyncio
@@ -328,27 +258,9 @@ async def test_model_fingerprint_refresh_detects_live_artifact_replacement(
 ) -> None:
     """刷新窗口到期后，模型替换必须生成新缓存键并重新推理。"""
 
-    context   = _context(tmp_path)
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
-    artifact = model_dir / "meta.json"
-    artifact.write_text('{"version": 1}', encoding="utf-8")
+    context = _context(tmp_path)
+    world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-05")
     current_monotonic = {"value": 0.0}
-    inference_calls   = 0
-
-    def inference(**_kwargs) -> str:
-        nonlocal inference_calls
-        inference_calls += 1
-        return "No positive predictions found."
-
-    arxiv_filter._FILTER_CACHE.clear()
-    arxiv_filter._MODEL_FINGERPRINT_CACHE.clear()
-    monkeypatch.setattr(
-        arxiv_filter,
-        "load_plugin_config",
-        lambda: {"model": {"path": str(model_dir)}},
-    )
-    monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
     monkeypatch.setattr(
         arxiv_filter.time,
         "monotonic",
@@ -358,17 +270,15 @@ async def test_model_fingerprint_refresh_detects_live_artifact_replacement(
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
     current_monotonic["value"] = 10.0
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
-    artifact.write_text('{"version": 2}', encoding="utf-8")
+    write_knn_model(world.model_dir, version=2)
     current_monotonic["value"] = 61.0
     await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
-    assert inference_calls == 2
+    assert len(world.requests) == 2
 
 
-def test_precomputed_artifact_fingerprint_avoids_backend_rescan(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """入口传入的稳定指纹应直接成为后端缓存身份。"""
+def test_precomputed_artifact_fingerprint_avoids_backend_rescan() -> None:
+    """入口传入的稳定指纹应直接成为后端缓存身份；模型目录不存在，重新扫描只会得到另一个值。"""
 
     shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
     params = shared.InferenceParams(
@@ -377,11 +287,6 @@ def test_precomputed_artifact_fingerprint_avoids_backend_rescan(
         batch_size           = 2,
         max_len              = 32,
         artifact_fingerprint = "stable-artifact-identity",
-    )
-    monkeypatch.setattr(
-        shared,
-        "model_artifact_fingerprint",
-        lambda _path: pytest.fail("precomputed identity must not rescan the model tree"),
     )
 
     assert (
@@ -451,8 +356,7 @@ async def test_arxiv_cancellation_releases_claim(tmp_path, monkeypatch, stage):
 
     entered, release = (threading.Event(), threading.Event())
     context = SimpleNamespace(data_dir=tmp_path)
-    monkeypatch.setattr(main, "_scheduled_without_delivery_targets", lambda context: False)
-    monkeypatch.setattr(main, "_business_now", lambda context: datetime(2030, 1, 1, tzinfo=UTC))
+    today    = main._business_now(context).date().isoformat()
     original = main._claim_send_today
 
     def delayed_claim(*args):
@@ -479,7 +383,7 @@ async def test_arxiv_cancellation_releases_claim(tmp_path, monkeypatch, stage):
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert not main._claim_path(tmp_path, "2030-01-01").exists()
+        assert not main._claim_path(tmp_path, today).exists()
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

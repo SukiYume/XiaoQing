@@ -5,13 +5,21 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from plugins.xiaoqing_chat.planning.action_history import ActionRecord
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, get_state
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.xiaoqing_chat_test_support import (
-    _build_xiaoqing_catalog,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    build_xiaoqing_catalog,
+    chat_message_event,
+    scripted_chat_context,
+    settle_chat_background,
     xiaoqing_chat,
 )
 
@@ -26,25 +34,6 @@ async def test_xiaoqing_chat_init(mock_context):
     # Should not raise
     await xiaoqing_chat.init(mock_context)
     mock_context.logger.info.assert_called()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_xiaoqing_chat_handle_chat_command(mock_context, sample_group_event):
-    """Test handle with chat command"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
-    ) as mock_smalltalk:
-        await handle(
-            command = "xc",
-            args    = "你好",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        mock_smalltalk.assert_called_once()
 
 
 @pytest.mark.plugin
@@ -67,76 +56,20 @@ async def test_xiaoqing_chat_handle_help_command(mock_context, sample_group_even
 async def test_xiaoqing_chat_help_with_extra_arg_does_not_fall_through_to_chat(
     mock_context, sample_group_event
 ):
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
-    ) as mock_smalltalk:
-        result = await xiaoqing_chat.handle(
-            command = "xc",
-            args    = "help extra",
-            event   = sample_group_event,
-            context = mock_context,
-        )
+    model = ScriptedChatModel(reply="不该有这句")
+    scripted_chat_context(mock_context, model)
+
+    result = await xiaoqing_chat.handle(
+        command = "xc",
+        args    = "help extra",
+        event   = chat_message_event(sample_group_event, "/xc help extra"),
+        context = mock_context,
+    )
 
     assert "不接受额外参数" in result[0]["data"]["text"]
     assert "/xc help" in result[0]["data"]["text"]
-    mock_smalltalk.assert_not_awaited()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_xiaoqing_chat_handle_reset_command(mock_context, sample_group_event):
-    """Test handle with reset subcommand"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        await handle(
-            command = "xc",
-            args    = "reset",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        mock_internal.assert_called_once()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_xiaoqing_chat_handle_stats_command(mock_context, sample_group_event):
-    """Test handle with stats subcommand"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        await handle(
-            command = "xc",
-            args    = "stats",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        mock_internal.assert_called_once()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_xiaoqing_chat_handle_brain_command(mock_context, sample_group_event):
-    """Test handle with brain subcommand"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        await handle(
-            command = "xc",
-            args    = "brain",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        mock_internal.assert_called_once()
+    assert model.calls == []
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.plugin
@@ -145,20 +78,21 @@ async def test_xiaoqing_chat_handle_unknown_command(mock_context, sample_group_e
     """Test handle with unknown subcommand"""
     from plugins.xiaoqing_chat.main import handle
 
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk",
-        new=AsyncMock(return_value=[{"type": "text", "data": {"text": "mock_response"}}]),
-    ) as mock_smalltalk:
-        result = await handle(
-            command = "xc",
-            args    = "unknown_subcommand",
-            event   = sample_group_event,
-            context = mock_context,
-        )
+    model = ScriptedChatModel(reply="mock_response")
+    scripted_chat_context(mock_context, model)
 
-        # Should be treated as smalltalk
-        mock_smalltalk.assert_called_once()
-        assert len(result) > 0
+    result = await handle(
+        command = "xc",
+        args    = "unknown_subcommand",
+        event   = chat_message_event(sample_group_event, "/xc unknown_subcommand"),
+        context = mock_context,
+    )
+
+    # 不认识的子命令当作聊天内容：模型被请求回复一次，回复送回给用户。
+    assert len(model.calls_of("reply")) == 1
+    assert "unknown_subcommand" in model.calls_of("reply")[0].text
+    assert [seg["data"]["text"] for seg in result] == ["mock_response"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.plugin
@@ -185,23 +119,21 @@ async def test_xiaoqing_chat_handle_exception(mock_context, sample_group_event):
     """Test handle handles exceptions gracefully"""
     from plugins.xiaoqing_chat.main import handle
 
-    with patch(
-        "plugins.xiaoqing_chat.main._resolve_invocation",
-        side_effect=Exception("Test error"),
-    ):
-        result = await handle(
-            command = "xc",
-            args    = "test",
-            event   = sample_group_event,
-            context = mock_context,
-        )
+    # Core 的命令目录查询失败。
+    mock_context.get_command_catalog = Mock(side_effect=Exception("Test error"))
+    result = await handle(
+        command = "xc",
+        args    = "test",
+        event   = sample_group_event,
+        context = mock_context,
+    )
 
-        # Should return error message
-        from core.public_errors import PUBLIC_ERROR_CODE
+    # Should return error message
+    from core.public_errors import PUBLIC_ERROR_CODE
 
-        assert result.command_outcome.state == "error"
-        assert PUBLIC_ERROR_CODE in result[0]["data"]["text"]
-        assert "Test error" not in result[0]["data"]["text"]
+    assert result.command_outcome.state == "error"
+    assert PUBLIC_ERROR_CODE in result[0]["data"]["text"]
+    assert "Test error" not in result[0]["data"]["text"]
 
 
 @pytest.mark.plugin
@@ -262,7 +194,7 @@ def test_xiaoqing_chat_show_help():
     """帮助直接由 Core 命令目录生成。"""
     from plugins.xiaoqing_chat.main import _help_text
 
-    root      = _build_xiaoqing_catalog()
+    root      = build_xiaoqing_catalog()
     help_text = _help_text(
         SimpleNamespace(
             command_invocation  = None,
@@ -283,7 +215,7 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
     """帮助包含全部结构化子命令码。"""
     from plugins.xiaoqing_chat.main import _help_text
 
-    root      = _build_xiaoqing_catalog()
+    root      = build_xiaoqing_catalog()
     help_text = _help_text(
         SimpleNamespace(
             command_invocation  = None,
@@ -308,195 +240,109 @@ async def test_shutdown(mock_context):
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_shutdown_flushes_media_store(mock_context):
+async def test_shutdown_flushes_action_history_and_media_store(mock_context):
     from plugins.xiaoqing_chat.main import shutdown
 
-    state = MagicMock()
-    state.background_tasks = Mock(return_value=set())
-    state.action_history.flush = Mock()
-    state.media_store.flush    = Mock()
-    state.memory_db.is_dirty = Mock(return_value=False)
+    state = bound_state(mock_context)
+    state.action_history.append(
+        "g1",
+        ActionRecord(
+            ts=1.0, local_target="", action="reply", reasoning="", detail={}, executed=True
+        ),
+    )
+    state.media_store.upsert_media_items(
+        [{"kind": "image", "media_hash": "shutdown-flush", "marker": "[图片]"}]
+    )
+    history_file = mock_context.data_dir / "action_history" / "g1.json"
+    media_file   = mock_context.data_dir / "media" / "index.json"
+    assert not history_file.exists() and not media_file.exists()
 
-    with patch("plugins.xiaoqing_chat.main._state", return_value=state):
-        await shutdown(mock_context)
+    await shutdown(mock_context)
 
-    state.action_history.flush.assert_called_once_with()
-    state.media_store.flush.assert_called_once_with()
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_handle_with_all_chat_command_variants(mock_context, sample_group_event):
-    """Test handle recognizes chat via /xc <content>"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
-    ) as mock_smalltalk:
-        await handle(
-            command = "xc",
-            args    = "test",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        assert mock_smalltalk.call_count == 1
+    assert history_file.exists()
+    assert "shutdown-flush" in media_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_handle_with_all_reset_command_variants(mock_context, sample_group_event):
-    """Test handle recognizes reset subcommand aliases"""
+@pytest.mark.parametrize(
+    ("alias", "reply_fragment"),
+    [
+        pytest.param("reset", "重置 确认", id="reset"),
+        pytest.param("重置", "重置 确认", id="reset-zh"),
+        pytest.param("清空", "重置 确认", id="reset-clear"),
+        pytest.param("stats", "会话统计", id="stats"),
+        pytest.param("统计", "会话统计", id="stats-zh"),
+        pytest.param("状态", "会话统计", id="stats-status"),
+        pytest.param("brain", "深度对话模式", id="brain"),
+        pytest.param("深度", "深度对话模式", id="brain-zh"),
+    ],
+)
+async def test_handle_routes_every_subcommand_alias_to_internal(
+    mock_context, sample_group_event, alias, reply_fragment
+):
+    """/xc 的每个内部子命令别名都进入同一个内部命令：群里的重置先要求确认，统计和深度对话各出各的页面。"""
     from plugins.xiaoqing_chat.main import handle
 
-    subcommands = ["reset", "重置", "清空"]
+    model = ScriptedChatModel()
+    scripted_chat_context(mock_context, model)
 
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        for sub in subcommands:
-            await handle(
-                command = "xc",
-                args    = sub,
-                event   = sample_group_event,
-                context = mock_context,
-            )
+    result = await handle(
+        command = "xc",
+        args    = alias,
+        event   = chat_message_event(sample_group_event, f"/xc {alias}"),
+        context = mock_context,
+    )
 
-        assert mock_internal.call_count == len(subcommands)
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_handle_with_all_stats_command_variants(mock_context, sample_group_event):
-    """Test handle recognizes stats subcommand aliases"""
-    from plugins.xiaoqing_chat.main import handle
-
-    subcommands = ["stats", "统计", "状态"]
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        for sub in subcommands:
-            await handle(
-                command = "xc",
-                args    = sub,
-                event   = sample_group_event,
-                context = mock_context,
-            )
-
-        assert mock_internal.call_count == len(subcommands)
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_handle_with_all_brain_command_variants(mock_context, sample_group_event):
-    """Test handle recognizes brain subcommand aliases"""
-    from plugins.xiaoqing_chat.main import handle
-
-    subcommands = ["brain", "深度"]
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        for sub in subcommands:
-            await handle(
-                command = "xc",
-                args    = sub,
-                event   = sample_group_event,
-                context = mock_context,
-            )
-
-        assert mock_internal.call_count == len(subcommands)
+    assert reply_fragment in result[0]["data"]["text"]
+    assert model.calls == []
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
 async def test_handle_smalltalk_called_with_correct_params(mock_context, sample_group_event):
-    """Test handle_smalltalk is called with correct parameters"""
+    """/xc 后面的内容原样当作聊天消息（不带 /xc 前缀）进入聊天记录和模型请求，本轮算强制回复。"""
     from plugins.xiaoqing_chat.main import handle
 
-    sample_group_event["raw_message"] = "/xc 测试消息"
+    model = ScriptedChatModel(reply="收到")
+    scripted_chat_context(mock_context, model)
+    event = chat_message_event(sample_group_event, "/xc 测试消息")
 
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
-    ) as mock_smalltalk:
-        await handle(
-            command = "xc",
-            args    = "测试消息",
-            event   = sample_group_event,
-            context = mock_context,
-        )
+    result = await handle(command="xc", args="测试消息", event=event, context=mock_context)
+    await ack_reply_delivery(result)
 
-        # Verify handle_smalltalk was called with args (not raw_message)
-        call_args = mock_smalltalk.call_args
-        assert call_args[0][0] == "测试消息"  # clean_text
-        assert call_args[0][1] == sample_group_event  # event
-        assert call_args[0][2] == mock_context  # context
+    assert [seg["data"]["text"] for seg in result] == ["收到"]
+    assert event["_xc_command_forced"] is True
+    history = bound_state(mock_context).memory_store.get("g67890")
+    assert [(m.role, m.content) for m in history] == [("user", "测试消息"), ("assistant", "收到")]
+    assert "/xc" not in model.calls_of("reply")[0].text
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_handle_internal_called_with_correct_params(mock_context, sample_group_event):
-    """Test handle_internal is called with correct parameters"""
-    from plugins.xiaoqing_chat.main import handle
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
-    ) as mock_internal:
-        await handle(
-            command = "xc",
-            args    = "reset",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        # Verify handle_internal was called
-        call_args = mock_internal.call_args
-        assert call_args[0][0] == "重置"  # command
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_handle_with_no_raw_message(mock_context):
+async def test_handle_with_no_raw_message(mock_context, sample_group_event):
     """Test handle with event missing raw_message routes to smalltalk"""
     from plugins.xiaoqing_chat.main import handle
 
-    event = {"post_type": "message"}  # No raw_message
-
-    with patch(
-        "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
-    ) as mock_st:
-        result = await handle(
-            command = "xc",
-            args    = "test",
-            event   = event,
-            context = mock_context,
-        )
-
-        # Should route to handle_smalltalk with forced flag
-        assert result == []
-        assert mock_st.called
-        assert event.get("_xc_command_forced") is True
-
-
-@pytest.mark.plugin
-@pytest.mark.asyncio
-async def test_handle_with_empty_raw_message(mock_context, sample_group_event):
-    """Test handle with empty raw_message"""
-    from plugins.xiaoqing_chat.main import handle
-
-    sample_group_event["raw_message"] = ""
+    model = ScriptedChatModel(reply="收到")
+    scripted_chat_context(mock_context, model)
+    event = chat_message_event(sample_group_event, "/xc test")
+    del event["raw_message"]
 
     result = await handle(
         command = "xc",
-        args    = "",
-        event   = sample_group_event,
+        args    = "test",
+        event   = event,
         context = mock_context,
     )
 
-    # Should return help text when no args provided
-    assert len(result) > 0
-    assert "智能对话" in result[0]["data"]["text"]
+    # Should route to handle_smalltalk with forced flag
+    assert [seg["data"]["text"] for seg in result] == ["收到"]
+    assert len(model.calls_of("reply")) == 1
+    assert event.get("_xc_command_forced") is True
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.plugin
@@ -505,69 +351,57 @@ async def test_handle_with_whitespace_args(mock_context, sample_group_event):
     """Test handle with whitespace-only args"""
     from plugins.xiaoqing_chat.main import handle
 
-    with patch("core.args.parse") as mock_parse:
-        mock_parse.return_value = MagicMock(first=None, rest=Mock(return_value=""))
+    result = await handle(
+        command = "xc",
+        args    = "   ",
+        event   = sample_group_event,
+        context = mock_context,
+    )
 
-        result = await handle(
-            command = "xc",
-            args    = "   ",
-            event   = sample_group_event,
-            context = mock_context,
-        )
-
-        # Should handle gracefully and return help
-        assert len(result) > 0
+    # Should handle gracefully and return help
+    assert len(result) > 0
 
 
 @pytest.mark.asyncio
 async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+    capacity = ChatRuntimeState._MAX_TRACKED_CHATS
+    state    = ChatRuntimeState()
+    loop     = asyncio.get_running_loop()
+    for i in range(capacity + 100):
+        cid = f"g{i}"
+        state.get_lock(cid)
+        state.set_last_reply_ts(cid, float(i))
+        done_task = loop.create_future()
+        done_task.set_result(None)
+        state.persist_tasks[cid] = cast(Any, done_task)
 
-    old_limit                           = ChatRuntimeState._MAX_TRACKED_CHATS
-    ChatRuntimeState._MAX_TRACKED_CHATS = 2
-    state                               = ChatRuntimeState()
-    try:
-        loop = asyncio.get_running_loop()
-        for i in range(5):
-            cid = f"g{i}"
-            state.get_lock(cid)
-            state.set_last_reply_ts(cid, float(i))
-            done_task = loop.create_future()
-            done_task.set_result(None)
-            state.persist_tasks[cid] = cast(Any, done_task)
+    state.cleanup_stale_chats()
 
-        state.cleanup_stale_chats()
-
-        assert len(state._per_chat.locks) <= 2
-        assert len(state._per_chat.persist_tasks) <= 2
-    finally:
-        ChatRuntimeState._MAX_TRACKED_CHATS = old_limit
+    assert len(state._per_chat.locks) <= capacity
+    assert len(state._per_chat.persist_tasks) <= capacity
 
 
 @pytest.mark.asyncio
 async def test_runtime_cleanup_stale_prefers_recent_observe_activity():
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+    capacity = ChatRuntimeState._MAX_TRACKED_CHATS
+    state    = ChatRuntimeState()
+    state.get_lock("g_observe")
+    state.get_lock("g_reply")
+    state.set_last_reply_ts("g_reply", 100.0)
+    state.set_last_observe_ts("g_reply", 100.0)
+    state.set_last_observe_ts("g_observe", 200.0)
+    # 其余会话都比这两个更近活跃：超出上限的恰好一个，淘汰最久没有动静的那个。
+    for i in range(capacity - 1):
+        state.set_last_observe_ts(f"busy{i}", 1000.0 + i)
 
-    old_limit                           = ChatRuntimeState._MAX_TRACKED_CHATS
-    ChatRuntimeState._MAX_TRACKED_CHATS = 1
-    state                               = ChatRuntimeState()
-    try:
-        state.get_lock("g_observe")
-        state.get_lock("g_reply")
-        state.set_last_reply_ts("g_reply", 100.0)
-        state.set_last_observe_ts("g_reply", 100.0)
-        state.set_last_observe_ts("g_observe", 200.0)
+    state.cleanup_stale_chats()
 
-        state.cleanup_stale_chats()
-
-        assert "g_observe" in state._per_chat.locks
-        assert "g_reply" not in state._per_chat.locks
-    finally:
-        ChatRuntimeState._MAX_TRACKED_CHATS = old_limit
+    assert "g_observe" in state._per_chat.locks
+    assert "g_reply" not in state._per_chat.locks
 
 
 @pytest.mark.asyncio
-async def test_action_history_flush_task_entry_removed_after_task_done():
+async def test_action_history_flush_task_entry_removed_after_task_done(tmp_path):
     from plugins.xiaoqing_chat.task_scheduler import (
         _action_flush_tasks,
         schedule_action_history_flush,
@@ -575,21 +409,22 @@ async def test_action_history_flush_task_entry_removed_after_task_done():
 
     context = MagicMock()
     runtime = cast(Any, SimpleNamespace(cfg=SimpleNamespace(io_persist_debounce_seconds=0.0)))
-    fake_state = MagicMock()
+    state = get_state()
+    state.action_history.bind(tmp_path)
+    state.action_history.append(
+        "g1",
+        ActionRecord(
+            ts=1.0, local_target="", action="reply", reasoning="", detail={}, executed=True
+        ),
+    )
 
     _action_flush_tasks.clear()
     try:
-        with (
-            patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=fake_state),
-            patch(
-                "plugins.xiaoqing_chat.task_scheduler.asyncio.to_thread",
-                new=AsyncMock(return_value=None),
-            ),
-        ):
-            schedule_action_history_flush(context, runtime, chat_id="g1")
-            task = _action_flush_tasks["g1"]
-            await asyncio.wait_for(task, timeout=5)
+        schedule_action_history_flush(context, runtime, chat_id="g1")
+        task = _action_flush_tasks["g1"]
+        await asyncio.wait_for(task, timeout=5)
 
         assert "g1" not in _action_flush_tasks
+        assert (tmp_path / "action_history" / "g1.json").exists()
     finally:
         _action_flush_tasks.clear()

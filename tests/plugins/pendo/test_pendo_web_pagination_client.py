@@ -1,4 +1,4 @@
-"""Pendo Web 分页的数值、结构和异步交互回归。"""
+"""Pendo Web 分页的数值、结构和异步交互。"""
 
 from __future__ import annotations
 

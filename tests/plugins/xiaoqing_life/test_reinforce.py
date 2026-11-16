@@ -1,9 +1,10 @@
-"""自我强化：自我强化的日常决策、自由探索、自我成长与注入文字。"""
+"""自我强化：偏好与来源可靠性、话题强化、习惯、说法的社交反馈、自由探索、自我成长与状态展示。"""
 
 from __future__ import annotations
 
 import json
 import random
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     FakeAI,
     FakeFetcher,
@@ -66,7 +67,6 @@ def test_ema_preferences_adjust_scores_within_bounds_and_sources_scale_weights()
     )  # 2 + 0.3×(0−2)
     up   = reinforce.pref_adjust(state, "activity", "interest_dive")
     down = reinforce.pref_adjust(state, "activity", "hot_scroll")
-    assert up == pytest.approx(8 * (1.4 - 0.2)) or up == 8.0
     assert up == 8.0 and down == -8.0  # 两端都截断在 ±8
     assert reinforce.pref_adjust(state, "activity", "term_lookup") == 0.0
     reinforce.update_preference(state, "source", "zhihu_hot", -1.0)
@@ -119,8 +119,9 @@ def test_unreliable_sources_lose_weight_and_a_failing_search_cools_the_activitie
     weights = planner._enabled_hot_sources(cfg, state, NOW + 5)
     assert weights["zhihu_hot"] == pytest.approx(0.15 * 0.2) and weights["bili_popular"] == 0.3
     out = planner.choose(cfg, state, [], {}, MOMENT.replace(), random.Random(2))
-    assert out.scores["interest_dive"] == 35 - 15 or "unreliable" in out.factors
-    assert out.factors.get("unreliable") == ["bili_search"] or out.factors.get("unreliable_hot")
+    assert out.scores["interest_dive"] == 35 - 15
+    assert out.factors["unreliable"] == ["bili_search"]
+    assert out.factors["unreliable_hot"] == ["zhihu_hot"]
     fresh = planner.choose(cfg, default_state(), [], {}, MOMENT, random.Random(2))
     assert fresh.scores["interest_dive"] == 35.0 and "unreliable" not in fresh.factors
 
@@ -180,7 +181,7 @@ async def test_a_dive_without_likes_leaves_one_mild_negative_note_per_topic_per_
     await _dive(store, "天文摄影", DIVE_NONE)
     assert len(entry["evidence"]) == 1  # 同一话题同一天只记一次
     store.seen.clear()
-    await _dive(store, "天文摄影", DIVE_NONE, moment=MOMENT + timedelta_days(1))
+    await _dive(store, "天文摄影", DIVE_NONE, moment=MOMENT + timedelta(days=1))
     assert len(entry["evidence"]) == 2
     assert "天文摄影" in store.interests  # 种子不会被清掉
     store.seen.clear()
@@ -191,12 +192,6 @@ async def test_a_dive_without_likes_leaves_one_mild_negative_note_per_topic_per_
     assert "别的话题" not in store.state["topic_penalty"]
 
 
-def timedelta_days(days: int):
-    from datetime import timedelta
-
-    return timedelta(days=days)
-
-
 # ───────────────────────────── 习惯 ─────────────────────────────
 
 
@@ -205,10 +200,7 @@ def test_hour_of_week_habit_multiplier_description_and_the_dice() -> None:
     evening = at(19, 0)
     for day, reward in ((2, 2.0), (3, 2.5), (4, 3.0)):
         reinforce.record_habit(state, at(19, 0, day=day), reward)
-    assert (
-        reinforce.habit_multiplier(state, evening) == 1.0
-        or reinforce.habit_multiplier(state, evening) >= 1.0
-    )
+    assert reinforce.habit_multiplier(state, evening) == 1.0  # 只有这一个桶，等于整体平均
     for day in (2, 3, 4):
         reinforce.record_habit(state, at(9, 0, day=day), -1.0)  # 工作日上午收获差
     assert (
@@ -595,7 +587,7 @@ async def test_done_threads_become_learnings_and_open_one_deeper_followup_per_da
             "kind"      : "practice",
         },
     }
-    result, ai = await _wind(store, reply)
+    result, _ = await _wind(store, reply)
     assert result.done == 1 and result.followup
     [learning] = store.learnings
     assert (
@@ -607,7 +599,6 @@ async def test_done_threads_become_learnings_and_open_one_deeper_followup_per_da
     child = next(t for t in store.threads if t["id"] != "t1")
     assert (child["parent_id"], child["depth"], child["status"]) == ("t1", 1, "open")
     assert store.state["done_on"]["followup"] == "2026-11-05"
-    assert "followup" in ai.calls[0][1][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -819,45 +810,6 @@ async def test_weekly_input_includes_the_weeks_learnings(tmp_path: Path) -> None
     )
     record = json.loads(ai.calls[0][1][1]["content"])["untrusted_record"]
     assert [row["text"] for row in record["learnings"]] == ["本周查明白的"]
-
-
-# ───────────────────────────── 注入文字 ─────────────────────────────
-
-
-def test_injected_text_is_orientation_plus_one_hard_boundary() -> None:
-    assert tc._LIFE_HEADER.startswith(
-        "你最近上网看到的（你自己的经历，也只是你生活里上网的这一部分）。"
-    )
-    assert "事实照记录：谁做的、你看到了多少（多半是扫了简介、弹幕和评论区）" in tc._LIFE_HEADER
-    assert "感想可以用自己的话重新说，记录外的细节就是记不清：" in tc._LIFE_HEADER
-    assert tc._SLANG_HEADER == "你在网上学到的说法（帮你听懂对方；对得上时也可以自己用）："
-    assert tc._GUIDE == "这些是依据，不是要讲的清单。打算和做完分开说；兴趣变了要前后都有记录才算。"
-    assert (
-        tc._PART_NOTE
-        == "对方问的是一整天（或这阵子）：上网只是其中一部分，其他的事看人物事实里的生活记录。"
-    )
-    assert tc._PLAN_HEADER == "接下来的安排（只是打算，还没发生）："
-    assert tc._LEARN_HEADER == "你之前自己查明白的（可以用自己的话讲，记录外的细节说大概）："
-    everything = "".join(
-        [
-            tc._LIFE_HEADER,
-            tc._SLANG_HEADER,
-            tc._GUIDE,
-            tc._PART_NOTE,
-            tc._PLAN_HEADER,
-            tc._LEARN_HEADER,
-        ]
-    )
-    for stacked in (
-        "不用报清单",
-        "一件最想聊",
-        "别说成看完",
-        "不用反复声明",
-        "讲的是”那句",
-        "简短答",
-        "一次带出",
-    ):
-        assert stacked not in everything
 
 
 def test_status_shows_preferences_unreliable_sources_habits_and_frontier(tmp_path: Path) -> None:

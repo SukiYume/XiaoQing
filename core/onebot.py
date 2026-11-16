@@ -541,8 +541,6 @@ class OneBotWsClient(_EndpointAuthHolder):
         self._ws_close_tasks: dict[int, tuple[Any, asyncio.Task[Any]]] = {}
         self._stop_lock = _LazyAsyncLock()
         self._shutdown_timeout_seconds = _ONEBOT_WS_SHUTDOWN_TIMEOUT_SECONDS
-        self._reconnect_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-        self._reconnect_random: Callable[[], float] = random.random
         self._reconnect_wakeup: asyncio.Event | None = None
         self._pending_action_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._pending_action_auth_states: dict[str, _EndpointAuthState] = {}
@@ -1000,10 +998,9 @@ class OneBotWsClient(_EndpointAuthHolder):
 
         reconnect_wakeup = self._reconnect_wakeup
         if reconnect_wakeup is None:
-            await self._reconnect_sleep(delay)
+            await asyncio.sleep(delay)
             return False
-        # 重连等待器允许测试注入 Future；ensure_future 同时接收协程和一般 Awaitable。
-        sleep_task: asyncio.Future[None]  = asyncio.ensure_future(self._reconnect_sleep(delay))
+        sleep_task: asyncio.Future[None]  = asyncio.create_task(asyncio.sleep(delay))
         wake_task                         = asyncio.create_task(reconnect_wakeup.wait())
         waiters: set[asyncio.Future[Any]] = {sleep_task, wake_task}
         try:
@@ -1096,9 +1093,6 @@ class OneBotWsClient(_EndpointAuthHolder):
             if isinstance(attempt, _ConnectionAttemptResult):
                 connected_duration = attempt.connected_seconds
                 failure            = attempt.error
-            elif isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
-                # 测试里替换 ``_connect_once`` 的替身只返回连接时长（秒）。
-                connected_duration = max(0.0, float(attempt))
             else:
                 raise TypeError("OneBot connection attempt returned an invalid outcome")
         except _RevokedWebSocketAuthentication:
@@ -1120,7 +1114,7 @@ class OneBotWsClient(_EndpointAuthHolder):
             and connected_duration >= _ONEBOT_WS_RECONNECT_STABLE_SECONDS
         ):
             retry_base = _ONEBOT_WS_RECONNECT_INITIAL_SECONDS
-        delay = _jittered_reconnect_delay(retry_base, self._reconnect_random())
+        delay = _jittered_reconnect_delay(retry_base, random.random())
         if failure is None:
             logger.info(
                 "OneBot WS disconnected after %.3fs; reconnecting in %.2fs",

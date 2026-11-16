@@ -1,12 +1,11 @@
-"""生产（2026-11-07 21:00 → 11-08 14:00）和真实回放里看到的研究问题。
+"""研究的取向与门槛：
 
-- 一条随手刷到的做饭视频开了“锅具预热与不粘”，没有结束条件，问题越问越细；5 次上网里 3 次在查它，
-  8 轮全是 B站视频搜索，原理类的问题没去百科 / 维基查；
-- 要点一半是“材料没有说明……”，每轮都算“有进展”，从没被搁置；
-- 研究搜出来的条目给“锅具 / 厨房安全 / 水滴测试”记了兴趣证据，同一小时里就生成了“这两周常刷到”的快照；
-  好奇边界里是“九月打卡挑战”“判断”“温度”；
-- 零点半的睡前整理按日历日只看到零点后的两条，前一晚的事全没进日记；
-- 一条评论里的“5090Ti”“十成油温”被收成了词条。
+- 同一个小课题一个“她的一天”只查一次；“材料没有说明……”这类缺口不算进展，连着两次就搁置；
+- 原理类问题先去百科 / 维基，做法类才搜 B站视频；查词先用全部关键词，落空再换最具体的那个词；
+- 开题要来自喜欢的条目，并写明结束条件和问题类型；
+- 研究搜出来的条目不刷兴趣和好奇边界，同一次上网里刷到两条也不算“常刷到”；
+- 词条要在多处出现才收，已收的词条继续累计来源；
+- “她的一天”五点换日，零点后的睡前整理要带上前一晚的经历。
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import reference, wiki
 from plugins.xiaoqing_life.sources.base import SourceComment, SourceDanmaku, SourceItem
 from plugins.xiaoqing_life.stores import default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -112,7 +111,7 @@ def _look(item: str = "i1", topics: tuple[str, ...] = ("锅具",)) -> dict[str, 
 
 
 def test_a_thread_is_researched_at_most_once_per_life_day() -> None:
-    """生产里同一个小课题 21:02、次日 11:00、13:15 连查三次；设计本意是“隔天接着查”。"""
+    """同一个小课题一个“她的一天”只查一次，隔天才接着查。"""
 
     cfg   = make_cfg()
     state = default_state()
@@ -147,7 +146,7 @@ async def test_research_marks_the_day_it_was_done(tmp_path: Path) -> None:
 # ───────────────────────────── 真进展 ─────────────────────────────
 
 
-PRODUCTION_NOTES = {
+GAP_NOTES = {
     "材料没有说明锅具厚薄和火力怎样改变预热时间；而且高温滑油会产生油烟": True,
     "材料没有提供不同火力下的升温数据；网友只说小火养铁锅更困难"    : True,
     "这些说法不足以作为精确温控标准"                  : True,
@@ -159,8 +158,8 @@ PRODUCTION_NOTES = {
 }
 
 
-def test_gap_notes_from_production_are_not_findings() -> None:
-    for text, gap in PRODUCTION_NOTES.items():
+def test_gap_notes_are_not_findings() -> None:
+    for text, gap in GAP_NOTES.items():
         assert research.is_gap(text) is gap, text
 
 
@@ -185,7 +184,7 @@ async def test_gap_only_sessions_are_not_progress_and_two_in_a_row_park_the_thre
     thread = store.threads[0]
     assert thread["notes"] == [] and thread["steps"] == 0 and thread["status"] == "open"
     assert thread["actions"][-1]["useful"] is False
-    # 第二天又是只有“没说明”：搁置，不是冷却 3 小时后又被选中
+    # 第二天又是只有“没说明”：搁置，不再被选中
     nextday = at(11, 0, day=6)
     await run_session(
         store,
@@ -227,15 +226,14 @@ def test_a_way_of_looking_that_kept_failing_is_swapped() -> None:
     assert research.first_action(cfg, default_state(), thread, NOW).action == "lookup"
 
 
-def test_the_research_prompt_carries_the_end_condition_and_where_to_look() -> None:
+def test_the_research_prompt_carries_the_end_condition_and_past_action_results() -> None:
     thread = _thread(
         actions=[{"action": "search", "arg": "锅具 预热", "useful": False, "round": 1, "at": NOW}]
     )
     messages = research.build_messages(
         persona="你是小青。", thread=thread, items=[], methods=[], round_no=1, rounds_left=2
     )
-    system, user = messages[0]["content"], messages[1]["content"]
-    assert "去对的地方查" in system and "百科和维基" in system and "done_when" in system
+    user = messages[1]["content"]
     assert "知道怎么判断锅热好了" in user and '"useful": false' in user
 
 
@@ -321,12 +319,6 @@ def test_opened_threads_keep_the_end_condition_and_kind(tmp_path: Path) -> None:
         store, make_cfg(), _proposal(title="锅具预热与不粘", done_when=""), [_row("like")], NOW
     )
     assert len(store.threads) == 1
-
-
-def test_digest_prompt_asks_for_an_answerable_question_worth_sharing() -> None:
-    system = digest.build_messages(persona="", items=[], known_terms=[], thread_titles=[])[0]
-    text = system["content"]
-    assert "done_when" in text and "两三次上网就能查清楚" in text and "值得跟朋友说" in text
 
 
 # ───────────────────────────── 兴趣不被研究刷高 ─────────────────────────────
@@ -455,7 +447,7 @@ def _episode(eid: str, moment: datetime) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_wind_down_after_midnight_covers_the_whole_evening(tmp_path: Path) -> None:
-    """生产里 00:30 的日记只引用了零点后的两条；前一晚的热榜和研究都没进去。"""
+    """零点后的睡前整理按“她的一天”取材：前一晚的经历也进日记。"""
 
     store = new_store(tmp_path)
     store.episodes += [_episode("e1", at(21, 0)), _episode("e2", at(0, 15, day=6))]
@@ -490,11 +482,11 @@ def test_sunday_night_after_midnight_still_writes_the_weekly(tmp_path: Path) -> 
     assert not wind_down.weekly_wanted(store, at(23, 0, day=9))
 
 
-# ───────────────────────────── 真实回放里发现的查词问题 ─────────────────────────────
+# ───────────────────────────── 查词的关键词处理 ─────────────────────────────
 
 
 def test_lookup_keywords_are_cut_at_word_boundaries() -> None:
-    """模型写了“不锈钢锅 水滴 预热 莱顿弗罗斯特效应”，按字数截成了“……莱顿弗罗斯”。"""
+    """查词的关键词按词截断，不会把一个词切成半截。"""
 
     got = research._next({"action": "lookup", "arg": "不锈钢锅 水滴 预热 莱顿弗罗斯特效应"}, []).arg
     assert got == "不锈钢锅 水滴 预热"

@@ -20,7 +20,6 @@ from plugins.minecraft.rcon import (
     RconErrorKind,
     RconPacket,
     RconProtocolError,
-    RconResponseLimitError,
 )
 
 
@@ -50,6 +49,11 @@ class _PayloadThenTimeoutReader(_Reader):
         raise AssertionError("unreachable")
 
 
+class _ExplodingReader:
+    async def readexactly(self, _size: int) -> bytes:
+        raise RuntimeError("unexpected")
+
+
 class _Writer:
     def __init__(self) -> None:
         self.payload     = b""
@@ -71,6 +75,28 @@ class _Writer:
 
     def is_closing(self) -> bool:
         return self.closed
+
+
+class _EchoWriter(_Writer):
+    """收到命令包后稍后才把同 ID 的响应送进 reader，并记录同时在途的命令数。"""
+
+    def __init__(self, reader: asyncio.StreamReader) -> None:
+        super().__init__()
+        self.reader    = reader
+        self.in_flight = 0
+        self.maximum   = 0
+
+    def write(self, payload: bytes) -> None:
+        packet, _remaining = RconPacket.decode(payload)
+        self.in_flight += 1
+        self.maximum = max(self.maximum, self.in_flight)
+        asyncio.get_running_loop().call_later(0.01, self._respond, packet)
+
+    def _respond(self, packet: RconPacket) -> None:
+        self.in_flight -= 1
+        self.reader.feed_data(
+            RconPacket(packet.request_id, PacketType.RESPONSE, packet.payload).encode()
+        )
 
 
 class _BrokenCloseWriter(_Writer):
@@ -343,37 +369,23 @@ class TestRconCommand:
 
     @pytest.mark.asyncio
     async def test_cumulative_response_limit_is_typed_and_disconnects(self) -> None:
-        payload = (
-            RconPacket(1, PacketType.RESPONSE, "a" * 4096).encode()
-            + RconPacket(1, PacketType.RESPONSE, "b" * 512).encode()
-        )
-        client, writer = _connected_client(payload)
-        client.MAX_RESPONSE_BYTES = 4200
-        result                    = await client.command("list")
+        chunk  = RconPacket(1, PacketType.RESPONSE, "a" * 4096).encode()
+        chunks = RconClient.MAX_RESPONSE_BYTES // 4096 + 1
+        client, writer = _connected_client(chunk * chunks)
+        result = await client.command("list")
         assert result.error_kind is RconErrorKind.RESPONSE_LIMIT
         assert writer.closed is True
 
     @pytest.mark.asyncio
-    async def test_commands_are_serialized_on_one_connection(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        client, _writer = _connected_client(b"")
-        active  = 0
-        maximum = 0
+    async def test_commands_are_serialized_on_one_connection(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _EchoWriter(reader)
+        client, _writer = _connected_client(b"", timeout=1.0, reader=reader, writer=writer)
 
-        async def send(command: str) -> Any:
-            nonlocal active, maximum
-            active += 1
-            maximum = max(maximum, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return rcon_module._CollectedResponse(command)  # noqa: SLF001
-
-        monkeypatch.setattr(client, "_send_command", send)
         first, second = await asyncio.gather(client.command("one"), client.command("two"))
+
         assert {first.response, second.response} == {"one", "two"}
-        assert maximum == 1
+        assert writer.maximum == 1
 
     @pytest.mark.asyncio
     async def test_raw_command_and_response_never_enter_logs(
@@ -399,30 +411,17 @@ class TestRconResponseFraming:
         assert response.payload == payload
 
     @pytest.mark.asyncio
-    async def test_ascii_split_response_is_joined(self) -> None:
-        first  = "a" * 4096
-        second = "b" * 512
-        client, _writer = _connected_client(
-            RconPacket(1, PacketType.RESPONSE, first).encode()
-            + RconPacket(1, PacketType.RESPONSE, second).encode()
-        )
-        response = await client._send_command("list")  # noqa: SLF001
-        assert response.payload == first + second
-
-    @pytest.mark.asyncio
-    async def test_utf8_byte_boundary_split_response_is_joined(self) -> None:
-        first  = "é" * 2048  # 4096 UTF-8 字节，但不足 4096 个字符。
-        second = "tail"
-        client, _writer = _connected_client(
-            RconPacket(1, PacketType.RESPONSE, first).encode()
-            + RconPacket(1, PacketType.RESPONSE, second).encode()
-        )
-        response = await client._send_command("list")  # noqa: SLF001
-        assert response.payload == first + second
-
-    @pytest.mark.asyncio
-    async def test_java_utf16_boundary_split_response_is_joined(self) -> None:
-        first  = "🧱" * 2048  # Java 中恰为 4096 个 UTF-16 code units。
+    @pytest.mark.parametrize(
+        "first",
+        [
+            pytest.param("a" * 4096, id="ascii"),
+            # 4096 UTF-8 字节，但不足 4096 个字符。
+            pytest.param("é" * 2048, id="utf8-byte-boundary"),
+            # Java 中恰为 4096 个 UTF-16 code units。
+            pytest.param("🧱" * 2048, id="utf16-unit-boundary"),
+        ],
+    )
+    async def test_split_response_is_joined(self, first: str) -> None:
         second = "tail"
         client, _writer = _connected_client(
             RconPacket(1, PacketType.RESPONSE, first).encode()
@@ -556,10 +555,6 @@ async def test_real_loopback_tcp_auth_and_split_command_round_trip() -> None:
         await asyncio.wait_for(handler_done.wait(), timeout=1.0)
 
 
-def test_internal_response_limit_exception_remains_specific() -> None:
-    assert issubclass(RconResponseLimitError, ValueError)
-
-
 def test_unexpected_exception_uses_internal_error_classification() -> None:
     kind, message = RconClient._classify_error(RuntimeError("boom"))  # noqa: SLF001
     assert kind is RconErrorKind.INTERNAL
@@ -608,30 +603,18 @@ async def test_cancelled_disconnect_clears_references_and_propagates() -> None:
 async def test_command_returns_failed_automatic_reconnect_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    async def refuse(_host: str, _port: int) -> tuple[Any, Any]:
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(rcon_module.asyncio, "open_connection", refuse)
     client = RconClient("127.0.0.1", 25575, "secret")
-
-    async def fail_connect() -> Any:
-        return rcon_module.RconConnectResult(
-            False,
-            error_kind    = RconErrorKind.TRANSPORT,
-            error_message = "RCON 连接不可用或已断开",
-        )
-
-    monkeypatch.setattr(client, "_connect_locked", fail_connect)
     result = await client.command("list")
     assert result.error_kind is RconErrorKind.TRANSPORT
 
 
 @pytest.mark.asyncio
-async def test_unexpected_command_failure_is_internal_and_disconnects(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, writer = _connected_client(b"")
-
-    async def explode(_command: str) -> Any:
-        raise RuntimeError("unexpected")
-
-    monkeypatch.setattr(client, "_send_command", explode)
+async def test_unexpected_command_failure_is_internal_and_disconnects() -> None:
+    client, writer = _connected_client(b"", reader=_ExplodingReader())
     result = await client.command("list")
     assert result.error_kind is RconErrorKind.INTERNAL
     assert writer.closed is True
@@ -679,7 +662,7 @@ async def test_wrong_command_response_type_is_protocol_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_response_chunk_can_exceed_cumulative_limit() -> None:
+async def test_single_chunk_over_cumulative_limit_is_response_limit_failure() -> None:
     client, writer = _connected_client(RconPacket(1, PacketType.RESPONSE, "x" * 100).encode())
     client.MAX_RESPONSE_BYTES = 99
     result                    = await client.command("list")

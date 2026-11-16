@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pytest
 
 from plugins.qingpet.services.database import Database
@@ -13,20 +10,14 @@ from plugins.qingpet.utils.constants import (
     PetStage,
     validate_evolution_state_machine,
 )
+from tests.helpers.qingpet_test_support import fail_updates_to
 
 
 @pytest.fixture
-def pet_service():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
-        db_path = file.name
-    database = Database(db_path)
-    service  = PetService(database)
+def pet_service(qingpet_db: Database):
+    service = PetService(qingpet_db)
     service.adopt_pet("evolution-user", 10001, "岁岁")
-    try:
-        yield service, database
-    finally:
-        database.cleanup()
-        os.unlink(db_path)
+    return service, qingpet_db
 
 
 def _pet(database: Database):
@@ -68,7 +59,7 @@ def test_mature_pet_requires_both_age_and_experience_boundaries(
     assert persisted.experience == experience
 
 
-def test_mature_pet_reaches_old_stage_exactly_once(pet_service, monkeypatch):
+def test_mature_pet_reaches_old_stage_exactly_once(pet_service):
     service, database = pet_service
     pet            = _pet(database)
     pet.stage      = PetStage.MATURE
@@ -76,16 +67,8 @@ def test_mature_pet_reaches_old_stage_exactly_once(pet_service, monkeypatch):
     pet.age        = 60
     pet.experience = 150
     database.update_pet(pet)
+    version_before = _pet(database).version
 
-    update_calls = 0
-    real_update  = database.update_pet
-
-    def count_update(current_pet):
-        nonlocal update_calls
-        update_calls += 1
-        return real_update(current_pet)
-
-    monkeypatch.setattr(database, "update_pet", count_update)
     success, message = service.check_evolution(pet)
 
     assert success
@@ -95,7 +78,7 @@ def test_mature_pet_reaches_old_stage_exactly_once(pet_service, monkeypatch):
     assert pet.experience == 0
     assert _pet(database).stage == PetStage.OLD
     assert service.check_evolution(pet) == (False, "")
-    assert update_calls == 1
+    assert _pet(database).version == version_before + 1
 
 
 @pytest.mark.parametrize(
@@ -106,7 +89,7 @@ def test_mature_pet_reaches_old_stage_exactly_once(pet_service, monkeypatch):
         (PetStage.GROWTH, 21, 100, 20, PetStage.MATURE, "平凡"),
     ],
 )
-def test_young_and_growth_care_branches_remain_unchanged(
+def test_young_and_growth_stats_choose_form_and_next_stage(
     pet_service,
     stage: PetStage,
     age: int,
@@ -130,7 +113,7 @@ def test_young_and_growth_care_branches_remain_unchanged(
     assert pet.form == expected_form
 
 
-def test_failed_evolution_write_restores_in_memory_pet(pet_service, monkeypatch):
+def test_failed_evolution_write_restores_in_memory_pet(pet_service):
     service, database = pet_service
     pet            = _pet(database)
     pet.stage      = PetStage.MATURE
@@ -138,9 +121,12 @@ def test_failed_evolution_write_restores_in_memory_pet(pet_service, monkeypatch)
     pet.age        = 60
     pet.experience = 150
     database.update_pet(pet)
-    monkeypatch.setattr(database, "update_pet", lambda _pet: False)
+    fail_updates_to(database, "pets")
 
     assert service.check_evolution(pet) == (False, "")
     assert pet.stage == PetStage.MATURE
     assert pet.form == "成熟"
     assert pet.experience == 150
+    persisted = _pet(database)
+    assert persisted.stage == PetStage.MATURE
+    assert persisted.experience == 150

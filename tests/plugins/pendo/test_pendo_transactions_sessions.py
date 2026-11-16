@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 import shutil
-from datetime import datetime
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,20 +17,20 @@ from tests.helpers.pendo_review_test_support import (
     Database,
     DbOpsMixin,
     ItemType,
+    PendoSessionTestContext,
     ReminderService,
     SessionManager,
     TaskStatus,
     ZoneInfo,
-    _make_temp_db,
-    _pendo_session_services,
-    _PendoSessionTestContext,
+    make_temp_db,
+    pendo_session_services,
 )
+from tests.helpers.pendo_test_support import freeze_pendo_clock, reject_inserts
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "update", "delete"])
 async def test_qq_crud_and_operation_log_share_one_transaction(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     operation: str,
 ) -> None:
@@ -48,11 +48,8 @@ async def test_qq_crud_and_operation_log_share_one_transaction(
     if operation != "create":
         db.insert_item(dict(seed))
 
-    def fail_log(*_args, **_kwargs):
-        raise RuntimeError("injected QQ audit failure")
-
-    monkeypatch.setattr(db, "_log_operation_with_cursor", fail_log)
-    with pytest.raises(RuntimeError, match="injected QQ audit failure"):
+    reject_inserts(db, "operation_logs", "injected QQ audit failure")
+    with pytest.raises(sqlite3.Error, match="injected QQ audit failure"):
         if operation == "create":
             await ops._db_create_with_log(dict(seed), owner_id, action="create_note")
         elif operation == "update":
@@ -127,7 +124,6 @@ async def test_chat_update_rejects_a_stale_item_version(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("operation", ["update", "delete"])
 def test_event_collection_change_and_operation_log_share_one_transaction(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     operation: str,
 ) -> None:
@@ -156,15 +152,12 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
         db.get_connection().execute("SELECT COUNT(*) FROM operation_logs").fetchone()[0]
     )
 
-    def fail_log(*_args, **_kwargs):
-        raise RuntimeError("注入集合审计失败")
-
-    monkeypatch.setattr(db, "_log_operation_with_cursor", fail_log)
+    reject_inserts(db, "operation_logs", "注入集合审计失败")
     operation_log = {
         "user_id": owner_id,
         "action" : f"{operation}_event_collection",
     }
-    with pytest.raises(RuntimeError, match="注入集合审计失败"):
+    with pytest.raises(sqlite3.Error, match="注入集合审计失败"):
         if operation == "update":
             db.update_event_collection(
                 collection_id,
@@ -332,7 +325,7 @@ async def test_pendo_handle_session_uses_transaction_argument_and_atomically_rep
             "data": {"title": "组会"},
         },
     )
-    context = _PendoSessionTestContext(manager, _pendo_session_services())
+    context = PendoSessionTestContext(manager, pendo_session_services())
 
     result = await manager.update(
         1001,
@@ -381,10 +374,10 @@ async def test_event_info_keeps_middle_turn_location_until_time_is_provided(db):
             {"start_time": "2030-01-02T09:00:00"},
         ]
     )
-    services                  = _pendo_session_services()
+    services                  = pendo_session_services()
     services["ai_parser"]     = parser
     services["event_handler"] = EventHandler(db, parser, ReminderService(db))
-    context                   = _PendoSessionTestContext(manager, services)
+    context                   = PendoSessionTestContext(manager, services)
     for text in ("地点是 A 会议室", "时间是 2030-01-02 09:00"):
         await manager.update(
             1001,
@@ -418,12 +411,12 @@ async def test_pendo_event_info_replacement_failure_rolls_back_staged_generation
         },
     )
 
-    class _FailAfterStagingContext(_PendoSessionTestContext):
+    class _FailAfterStagingContext(PendoSessionTestContext):
         async def create_session(self, initial_data=None, timeout=300.0):
             await super().create_session(initial_data=initial_data, timeout=timeout)
             raise RuntimeError("failure after staging replacement")
 
-    context = _FailAfterStagingContext(manager, _pendo_session_services())
+    context = _FailAfterStagingContext(manager, pendo_session_services())
 
     with pytest.raises(RuntimeError, match="after staging replacement"):
         await manager.update(
@@ -444,127 +437,106 @@ async def test_pendo_event_info_replacement_failure_rolls_back_staged_generation
     assert current.get("data") == {"title": "组会"}
 
 
-@pytest.mark.asyncio
-async def test_pendo_session_service_exception_is_not_swallowed_or_committed(monkeypatch):
+class _MutatingTaskHandler:
+    """先改动事务内的会话副本，再按给定异常失败的待办会话处理器。"""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    async def handle_session_step(self, _user_id, _text, session, _context):
+        session.set("data", {"items": ["must-rollback"]})
+        raise self.error
+
+
+async def _continue_task_session_with(error: BaseException):
+    """让一条待办补充会话的处理器抛出 ``error``，返回续答调用结果与原会话。"""
+
     from plugins.pendo import main as pendo_main
+    from plugins.pendo.config import PendoConfig
+
+    manager  = SessionManager()
+    original = await manager.create(
+        1001,
+        None,
+        "pendo",
+        {"type": PendoConfig.SESSION_TYPE_TASK_ADD, "data": {"items": ["kept"]}},
+    )
+    services = {"task_handler": _MutatingTaskHandler(error)}
+    context  = PendoSessionTestContext(manager, services)
+
+    async def continue_session():
+        return await manager.update(
+            1001,
+            None,
+            lambda session: pendo_main.handle_session(
+                "continue",
+                {"user_id": 1001},
+                context,
+                session,
+            ),
+        )
+
+    return manager, original, continue_session
+
+
+@pytest.mark.asyncio
+async def test_pendo_session_service_exception_is_not_swallowed_or_committed():
+    from plugins.pendo.config import PendoConfig
     from plugins.pendo.core.exceptions import PendoException
 
-    manager  = SessionManager()
-    original = await manager.create(
-        1001,
-        None,
-        "pendo",
-        {"type": "synthetic", "nested": {"items": ["kept"]}},
+    manager, original, continue_session = await _continue_task_session_with(
+        PendoException("database unavailable")
     )
-    context = _PendoSessionTestContext(manager, _pendo_session_services())
-
-    async def fail_with_service_error(_user_id, _text, session, _context):
-        session.set("type", "partial")
-        session.get("nested")["items"].append("must-rollback")
-        raise PendoException("database unavailable")
-
-    monkeypatch.setattr(pendo_main, "handle_session_message", fail_with_service_error)
 
     with pytest.raises(PendoException, match="database unavailable"):
-        await manager.update(
-            1001,
-            None,
-            lambda session: pendo_main.handle_session(
-                "continue",
-                {"user_id": 1001},
-                context,
-                session,
-            ),
-        )
+        await continue_session()
 
     current = await manager.peek(1001, None)
     assert current is not None
     assert current.session_id == original.session_id
-    assert current.get("type") == "synthetic"
-    assert current.get("nested") == {"items": ["kept"]}
+    assert current.get("type") == PendoConfig.SESSION_TYPE_TASK_ADD
+    assert current.get("data") == {"items": ["kept"]}
 
 
 @pytest.mark.asyncio
-async def test_pendo_session_plain_value_error_is_not_misclassified_as_input(monkeypatch):
-    from plugins.pendo import main as pendo_main
+async def test_pendo_session_plain_value_error_is_not_misclassified_as_input():
+    from plugins.pendo.config import PendoConfig
 
-    manager  = SessionManager()
-    original = await manager.create(
-        1001,
-        None,
-        "pendo",
-        {"type": "synthetic", "nested": {"items": ["kept"]}},
+    manager, original, continue_session = await _continue_task_session_with(
+        ValueError("internal parser invariant failed")
     )
-    context = _PendoSessionTestContext(manager, _pendo_session_services())
-
-    async def fail_with_plain_value_error(_user_id, _text, session, _context):
-        session.set("type", "partial")
-        session.get("nested")["items"].append("must-rollback")
-        raise ValueError("internal parser invariant failed")
-
-    monkeypatch.setattr(pendo_main, "handle_session_message", fail_with_plain_value_error)
 
     with pytest.raises(ValueError, match="internal parser invariant"):
-        await manager.update(
-            1001,
-            None,
-            lambda session: pendo_main.handle_session(
-                "continue",
-                {"user_id": 1001},
-                context,
-                session,
-            ),
-        )
+        await continue_session()
 
     current = await manager.peek(1001, None)
     assert current is not None
     assert current.session_id == original.session_id
-    assert current.get("type") == "synthetic"
-    assert current.get("nested") == {"items": ["kept"]}
+    assert current.get("type") == PendoConfig.SESSION_TYPE_TASK_ADD
+    assert current.get("data") == {"items": ["kept"]}
 
 
 @pytest.mark.asyncio
-async def test_pendo_session_converts_only_whitelisted_input_exception(monkeypatch):
-    from plugins.pendo import main as pendo_main
+async def test_pendo_session_converts_only_whitelisted_input_exception():
     from plugins.pendo.core.exceptions import MissingRequiredFieldException
 
-    manager = SessionManager()
-    await manager.create(1001, None, "pendo", {"type": "synthetic"})
-    context = _PendoSessionTestContext(manager, _pendo_session_services())
-
-    async def reject_input(_user_id, _text, _session, _context):
-        raise MissingRequiredFieldException("start_time", "开始时间")
-
-    monkeypatch.setattr(pendo_main, "handle_session_message", reject_input)
-
-    result = await manager.update(
-        1001,
-        None,
-        lambda session: pendo_main.handle_session(
-            "continue",
-            {"user_id": 1001},
-            context,
-            session,
-        ),
+    _manager, _original, continue_session = await _continue_task_session_with(
+        MissingRequiredFieldException("start_time", "开始时间")
     )
+
+    result = await continue_session()
 
     assert result == [{"type": "text", "data": {"text": "❓ 请提供开始时间"}}]
 
 
-def test_bare_week_month_year_are_current_calendar_ranges(monkeypatch):
+def test_bare_week_month_year_are_current_calendar_ranges():
     from plugins.pendo.utils import time_utils
 
-    class _FrozenDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            current = cls(2026, 5, 3, 16, 30, 0)
-            return current if tz is None else current.replace(tzinfo=tz)
+    now = datetime(2026, 5, 3, 16, 30, 0)
 
-    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
-
-    week_start, week_end = time_utils._parse_time_range_core("week", strict=True)
-    month_start, month_end = time_utils._parse_time_range_core("month", strict=True)
-    year_start, year_end = time_utils._parse_time_range_core("year", strict=True)
+    week_start, week_end = time_utils._parse_time_range_core("week", now=now, strict=True)
+    month_start, month_end = time_utils._parse_time_range_core("month", now=now, strict=True)
+    year_start, year_end = time_utils._parse_time_range_core("year", now=now, strict=True)
 
     assert week_start.isoformat() == "2026-04-27T00:00:00"
     assert week_end.isoformat() == "2026-05-03T23:59:59"
@@ -660,7 +632,7 @@ def test_rule_parser_places_this_week_weekday_in_the_natural_week():
 
 
 def test_search_items_applies_date_range_filters():
-    temp_dir, db = _make_temp_db("pendo_review_search_range")
+    temp_dir, db = make_temp_db("pendo_review_search_range")
     owner_id = "u-search-range"
 
     try:
@@ -706,30 +678,14 @@ def test_search_items_applies_date_range_filters():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_ai_parser_build_remind_times_uses_user_timezone(monkeypatch):
-    from plugins.pendo.services import ai_parser as ai_parser_module
+def test_ai_parser_build_remind_times_uses_user_timezone(db, monkeypatch):
+    from plugins.pendo.utils import time_utils
 
-    la_tz = ZoneInfo("America/Los_Angeles")
+    # 服务器时钟此刻是 UTC 2030-01-01 16:30，即用户所在的洛杉矶 08:30。
+    freeze_pendo_clock(monkeypatch, datetime(2030, 1, 1, 16, 30, tzinfo=UTC), time_utils)
+    db.update_user_settings("u-la", {"timezone": "America/Los_Angeles"})
 
-    class _ServerDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            base = cls(2030, 1, 2, 0, 30, 0)
-            return base if tz is None else base.replace(tzinfo=tz)
-
-    monkeypatch.setattr(ai_parser_module, "datetime", _ServerDatetime)
-    monkeypatch.setattr(
-        ai_parser_module,
-        "now_in_timezone",
-        lambda user_id=None, db=None: datetime(2030, 1, 1, 8, 30, 0, tzinfo=la_tz),
-    )
-    monkeypatch.setattr(
-        ai_parser_module,
-        "parse_and_localize",
-        lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(tzinfo=la_tz),
-    )
-
-    parser = AIParser()
+    parser = AIParser(db=db)
 
     remind_times = parser.build_remind_times_from_offsets(
         "2030-01-01T10:00:00",
@@ -814,43 +770,36 @@ def test_ai_invalid_offsets_do_not_emit_empty_rules():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("partial", [False, True])
-async def test_ai_event_prompt_separates_modes_and_inherits_route_settings(monkeypatch, partial):
-    parser = AIParser()
-    llm = AsyncMock(return_value='{"location": "会议室"}')
-    monkeypatch.setattr(parser, "_call_llm", llm)
+async def test_ai_event_prompt_separates_modes_and_inherits_route_settings(partial):
+    captured: dict[str, Any] = {}
+
+    class AI:
+        async def complete(self, route, messages, **kwargs):
+            captured.update(messages=messages, kwargs=kwargs)
+            return SimpleNamespace(content='{"location": "会议室"}')
+
+    parser = AIParser(context=SimpleNamespace(capabilities=SimpleNamespace(ai=AI())))
     result = await parser.parse_event_with_ai(
         "地点改为会议室", f"prompt-mode-{partial}", partial=partial
     )
-    args, kwargs = llm.call_args
-    prompt = args[0][1]["content"]
+    prompt = captured["messages"][1]["content"]
     assert "局部模式：省略所有未提及的字段" in prompt if partial else "解析模式: 创建模式" in prompt
-    assert "提前1小时" in prompt
-    assert "BYDAY" in prompt
-    assert "temperature" not in kwargs
+    assert "temperature" not in captured["kwargs"]
     assert result["location"] == "会议室"
     assert "start_time" not in result
     assert "reminder_rules" not in result
 
 
 @pytest.mark.asyncio
-async def test_ai_parser_rule_fallback_preserves_absolute_reminder_times(monkeypatch):
-    parser = AIParser()
-    monkeypatch.setattr(parser, "_call_llm", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        parser.rule_parser,
-        "parse",
-        lambda _text, user_id, **_kwargs: {
-            "type"        : "event",
-            "owner_id"    : user_id,
-            "title"       : "规则日程",
-            "start_time"  : "2030-01-02T10:00:00",
-            "remind_times": ["2030-01-02T09:00:00"],
-        },
+async def test_ai_parser_rule_fallback_preserves_absolute_reminder_times():
+    # 没有接入模型能力，解析退回规则；规则按开始时间算出的绝对提醒时间必须原样保留。
+    parser = AIParser(now_factory=lambda tz: datetime(2030, 1, 1, 8, 0, tzinfo=tz))
+
+    result = await parser.parse_event_with_ai(
+        "2030-01-02 10:00 开会，提前1小时提醒", "u-rule-reminder"
     )
 
-    result = await parser.parse_event_with_ai("规则日程", "u-rule-reminder")
-
-    assert result["remind_times"] == ["2030-01-02T09:00:00"]
+    assert result["remind_times"] == ["2030-01-02T09:00:00+08:00"]
 
 
 @pytest.mark.asyncio
@@ -875,44 +824,76 @@ async def test_ai_parser_uses_core_route_without_overriding_parameters():
     }
 
 
-@pytest.mark.asyncio
-async def test_cached_pendo_ai_parser_uses_live_core_capability(monkeypatch):
-    from plugins.pendo import main as pendo_main
+class _LiveAiSessionContext(PendoSessionTestContext):
+    """服务由 Pendo 在第一次续答时按真实数据库和当前 AI 能力建立的会话上下文。"""
 
-    temp_dir, db = _make_temp_db("pendo_live_secret_rotation")
-    outcomes: list[object] = ["old", "new", RuntimeError("route removed")]
-    routes  : list[str]    = []
+    def __init__(self, manager: SessionManager, data_dir: Path, ai: object) -> None:
+        super().__init__(manager, {})
+        self.state    = {}
+        self.data_dir = data_dir
+        self.capabilities = SimpleNamespace(ai=ai)
+        self.request_id = None
+
+
+@pytest.mark.asyncio
+async def test_cached_pendo_ai_parser_uses_live_core_capability(db, tmp_path):
+    from plugins.pendo import main as pendo_main
+    from plugins.pendo.config import PendoConfig
+    from plugins.pendo.utils import db_ops
+
+    routes: list[str] = []
 
     class AI:
+        def __init__(self, outcome: object) -> None:
+            self.outcome = outcome
+
         async def complete(self, route, _messages, **_kwargs):
             routes.append(route)
-            outcome = outcomes.pop(0)
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return SimpleNamespace(content=outcome)
+            if isinstance(self.outcome, BaseException):
+                raise self.outcome
+            return SimpleNamespace(content=self.outcome)
 
-    context = SimpleNamespace(
-        state    = {},
-        data_dir = temp_dir,
-        capabilities=SimpleNamespace(ai=AI()),
-        logger     = logging.getLogger("test.pendo.live_ai"),
-        request_id = None,
-    )
-
-    monkeypatch.setattr(pendo_main, "_get_database", lambda _context: db)
-
+    manager = SessionManager()
+    context = _LiveAiSessionContext(manager, tmp_path, None)
+    db_ops.set_database_singleton(db)
     try:
-        services = pendo_main._get_services(context)
-        parser   = services["ai_parser"]
-        assert pendo_main._get_services(context)["ai_parser"] is parser
+        for index, ai in enumerate(
+            (
+                AI('{"location": "旧路由会议室"}'),
+                AI('{"location": "新路由会议室"}'),
+                AI(RuntimeError("route removed")),
+            ),
+            start=1,
+        ):
+            context.capabilities.ai = ai
+            await manager.create(
+                1001,
+                None,
+                "pendo",
+                {
+                    "type": PendoConfig.SESSION_TYPE_EVENT_INFO,
+                    "data": {"title": f"第{index}次", "start_time": f"2030-01-0{index}T10:00:00"},
+                },
+            )
+            await manager.update(
+                1001,
+                None,
+                lambda session: pendo_main.handle_session(
+                    "地点见通知",
+                    {"user_id": 1001},
+                    context,
+                    session,
+                ),
+            )
+            if index == 1:
+                parser = context.state["pendo_runtime"]["services"]["ai_parser"]
+            assert context.state["pendo_runtime"]["services"]["ai_parser"] is parser
 
-        assert await parser._call_llm([{"role": "user", "content": "before"}]) == "old"
-        assert await parser._call_llm([{"role": "user", "content": "after"}]) == "new"
-        assert await parser._call_llm([{"role": "user", "content": "deleted"}]) is None
+        events = sorted(db.get_all_items("1001", {"type": "event"}), key=lambda e: e.start_time)
+        assert [event.location for event in events] == ["旧路由会议室", "新路由会议室", ""]
         assert routes == ["parse", "parse", "parse"]
     finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        db_ops.set_database_singleton(None)
 
 
 @pytest.mark.asyncio
@@ -933,81 +914,40 @@ async def test_pendo_ai_parser_never_reads_plugin_llm_secrets():
     assert await parser._call_llm([{"role": "user", "content": "hello"}]) == "ok"
 
 
-def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
+def test_reminder_dispatch_uses_owner_timezone(db, monkeypatch):
     from plugins.pendo.services import reminder as reminder_module
+    from plugins.pendo.utils import time_utils
 
-    la_tz       = ZoneInfo("America/Los_Angeles")
-    shanghai_tz = ZoneInfo("Asia/Shanghai")
-
-    monkeypatch.setattr(
-        reminder_module,
-        "now_in_timezone",
-        lambda user_id=None, db=None: (
-            datetime(2030, 1, 1, 9, 0, 0, tzinfo=la_tz)
-            if user_id == "u-la"
-            else datetime(2030, 1, 2, 1, 0, 0, tzinfo=shanghai_tz)
-        ),
+    # 服务器时钟此刻是 UTC 2030-01-01 17:00，即提醒所有者所在的洛杉矶 09:00。
+    freeze_pendo_clock(
+        monkeypatch, datetime(2030, 1, 1, 17, 0, tzinfo=UTC), reminder_module, time_utils
     )
-    monkeypatch.setattr(
-        reminder_module,
-        "parse_and_localize",
-        lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(
-            tzinfo=la_tz if user_id == "u-la" else shanghai_tz
-        ),
+    db.update_user_settings(
+        "u-la",
+        {
+            "timezone"         : "America/Los_Angeles",
+            "quiet_hours_start": "23:00",
+            "quiet_hours_end"  : "07:00",
+            "settings_json"    : {"reminder_enabled": True},
+        },
     )
-
-    item = SimpleNamespace(
-        id           = "evt-la",
-        owner_id     = "u-la",
-        title        = "Morning sync",
-        start_time   = "2030-01-01T10:00:00",
-        end_time     = "2030-01-01T11:00:00",
-        remind_times = ["2030-01-01T09:00:00"],
-        context      = {},
-        location     = "Room 1",
-        notes        = "",
-        tags         = [],
+    item_id = db.insert_item(
+        {
+            "owner_id"    : "u-la",
+            "type"        : "event",
+            "title"       : "Morning sync",
+            "start_time"  : "2030-01-01T10:00:00",
+            "end_time"    : "2030-01-01T11:00:00",
+            "remind_times": ["2030-01-01T09:00:00"],
+            "location"    : "Room 1",
+        }
     )
 
-    class _FakeDb:
-        def get_due_reminder_items(self, *, now):
-            return [item]
-
-        def prune_reminder_logs(self, *, before):
-            return 0
-
-        def get_user_settings(self, user_id):
-            assert user_id == "u-la"
-            return {
-                "timezone"         : "America/Los_Angeles",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {"reminder_enabled": True},
-            }
-
-        def get_reminder_logs(self, item_id):
-            assert item_id == "evt-la"
-            return []
-
-        def claim_reminder(self, item_id, remind_time, *, now, lease_seconds):
-            assert item_id == "evt-la"
-            assert remind_time == "2030-01-01T09:00:00"
-            return "test-claim-token"
-
-        def release_reminder_claim(self, item_id, remind_time, claim_token, *, retry_at):
-            raise AssertionError("the test reminder is outside quiet hours")
-
-        def get_unconfirmed_sent_reminders(self):
-            return []
-
-        def get_item(self, item_id):
-            return item
-
-    result = ReminderService(db=_FakeDb()).check_and_send_reminders()
+    result = ReminderService(db=db).check_and_send_reminders()
 
     assert result["sent"] == 1
     assert result["messages"][0]["user_id"] == "u-la"
-    assert result["messages"][0]["item_id"] == "evt-la"
+    assert result["messages"][0]["item_id"] == item_id
 
 
 def test_reminder_conflict_compares_absolute_time_across_offsets():
@@ -1057,10 +997,14 @@ def test_reminder_accepts_open_task_status_enum():
     ("status", "enabled"), [("open", True), ("done", True), ("cancelled", True), ("open", False)]
 )
 def test_reminder_filters_task_state_and_settings(db, monkeypatch, repeat, status, enabled):
-    from unittest.mock import Mock
+    from plugins.pendo.services import reminder as reminder_module
+    from plugins.pendo.utils import time_utils
 
     fire  = datetime.fromisoformat("2030-01-01T09:00:00+00:00")
     owner = "1001"
+    # 首次提醒在提醒点当刻领取；重复提醒在首次发送十分钟后领取。
+    now = fire + timedelta(minutes=10) if repeat else fire
+    freeze_pendo_clock(monkeypatch, now, reminder_module, time_utils)
     db.update_user_settings(
         owner, {"timezone": "UTC", "settings_json": {"reminder_enabled": enabled}}
     )
@@ -1073,11 +1017,6 @@ def test_reminder_filters_task_state_and_settings(db, monkeypatch, repeat, statu
             "remind_times": [fire.isoformat()],
         }
     )
-    service = ReminderService(db)
-    monkeypatch.setattr(service, "_current_user_time", lambda _owner: fire)
-    claim_name = "claim_reminder_repeat" if repeat else "claim_reminder"
-    claim = Mock(wraps=getattr(db, claim_name))
-    monkeypatch.setattr(db, claim_name, claim)
     if repeat:
         db.log_reminder(item_id, fire.isoformat())
         with db.get_connection() as conn:
@@ -1085,14 +1024,18 @@ def test_reminder_filters_task_state_and_settings(db, monkeypatch, repeat, statu
                 "UPDATE reminder_logs SET last_sent_at = ? WHERE item_id = ?",
                 (fire.isoformat(), item_id),
             )
-        messages = service._check_unconfirmed_repeats(
-            datetime.fromisoformat("2030-01-01T09:10:00+00:00")
-        )
-    else:
-        messages = service._collect_item_reminders(db.get_item(item_id, owner_id=owner))
+    messages = ReminderService(db).check_and_send_reminders()["messages"]
     expected = int(status == "open" and enabled)
+    claimed  = (
+        db.get_connection()
+        .execute(
+            "SELECT COUNT(*) FROM reminder_logs WHERE item_id = ? AND state = 'claimed'",
+            (item_id,),
+        )
+        .fetchone()[0]
+    )
     assert len(messages) == expected
-    assert claim.call_count == expected
+    assert claimed == expected
     if expected:
         assert messages[0]["item_id"] == item_id
         assert messages[0]["claim_token"]

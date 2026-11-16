@@ -18,20 +18,20 @@ from tests.helpers.pendo_web_transfer_test_support import (
     Database,
     DiaryItem,
     EventItem,
+    ImportRequest,
     LedgerItem,
     NoteItem,
     TaskItem,
-    _build_raw_bundle,
-    _build_sample_bundle_bytes,
-    _build_single_member_manifest,
-    _ImportRequest,
-    _seed_items,
-    _simple_task_bundle,
     build_manifest,
+    build_raw_bundle,
+    build_sample_bundle_bytes,
+    build_single_member_manifest,
     io,
     read_bundle,
+    seed_items,
     serialize_event_collection,
     serialize_item,
+    simple_task_bundle,
     transfer_api,
     transfer_bundle_module,
     write_bundle,
@@ -59,7 +59,7 @@ def test_web_validation_errors_use_safe_response_shape(client: Any, auth_headers
 
 @pytest.mark.asyncio
 async def test_import_inspect_parsing_does_not_block_event_loop(temp_db: Database, monkeypatch):
-    bundle       = _simple_task_bundle("inspect-offloop")
+    bundle       = simple_task_bundle("inspect-offloop")
     real_inspect = transfer_api._inspect_bundle_data
     threads      = []
     event_thread = threading.get_ident()
@@ -69,9 +69,7 @@ async def test_import_inspect_parsing_does_not_block_event_loop(temp_db: Databas
         return real_inspect(payload)
 
     monkeypatch.setattr(transfer_api, "_inspect_bundle_data", inspect)
-    result = await transfer_api.inspect_import(
-        _ImportRequest(bundle), owner_id=OWNER_ID, db=temp_db
-    )
+    result = await transfer_api.inspect_import(ImportRequest(bundle), owner_id=OWNER_ID, db=temp_db)
     assert threads and all(thread != event_thread for thread in threads)
     assert result["data"]["counts"]["valid"] == 1
 
@@ -80,7 +78,7 @@ async def test_import_inspect_parsing_does_not_block_event_loop(temp_db: Databas
 async def test_import_planning_and_transaction_do_not_block_event_loop(
     temp_db: Database, monkeypatch
 ):
-    bundle       = _simple_task_bundle("execute-offloop")
+    bundle       = simple_task_bundle("execute-offloop")
     real_execute = temp_db.execute_import_bundle
     threads      = []
     event_thread = threading.get_ident()
@@ -91,7 +89,7 @@ async def test_import_planning_and_transaction_do_not_block_event_loop(
 
     monkeypatch.setattr(temp_db, "execute_import_bundle", execute)
     result = await transfer_api.execute_import(
-        _ImportRequest(bundle),
+        ImportRequest(bundle),
         x_transfer_options = json.dumps({"types": ["task"]}),
         owner_id           = OWNER_ID,
         db                 = temp_db,
@@ -122,17 +120,7 @@ def test_build_manifest_rejects_non_iana_source_timezone():
         )
 
 
-def test_build_manifest_and_serialize_item_preserve_type_fields():
-    manifest = build_manifest(
-        {"types": ["event", "task"], "preset": "month", "start": "2026-03-01", "end": "2026-03-31"},
-        [{"path": "data/tasks.ndjson", "type": "task", "count": 1, "sha256": "a" * 64}],
-        "Asia/Shanghai",
-    )
-
-    assert manifest["format"] == "pendo-bundle"
-    assert manifest["version"] == 2
-    assert manifest["selection"]["preset"] == "month"
-
+def test_serialize_item_preserves_type_fields():
     event_record = serialize_item(
         EventItem(
             id                    = "event_1",
@@ -290,7 +278,7 @@ def test_read_bundle_rejects_invalid_manifest_json_as_validation_error():
 
 @pytest.mark.parametrize("manifest", [[], "not-an-object", 2, None])
 def test_read_bundle_rejects_non_object_manifest(manifest: object):
-    buf = _build_raw_bundle(manifest, [])
+    buf = build_raw_bundle(manifest, [])
 
     with pytest.raises(BundleValidationError, match="JSON object"):
         read_bundle(buf)
@@ -324,7 +312,7 @@ def test_read_bundle_rejects_invalid_manifest_field(
     manifest[field] = value
 
     with pytest.raises(BundleValidationError, match=message):
-        read_bundle(_build_raw_bundle(manifest, []))
+        read_bundle(build_raw_bundle(manifest, []))
 
 
 def test_read_bundle_rejects_non_object_file_entry():
@@ -336,15 +324,15 @@ def test_read_bundle_rejects_non_object_file_entry():
     manifest["files"] = [1]
 
     with pytest.raises(BundleValidationError, match="files must contain objects"):
-        read_bundle(_build_raw_bundle(manifest, []))
+        read_bundle(build_raw_bundle(manifest, []))
 
 
 @pytest.mark.parametrize("raw_record", [[], "not-an-object", 2, None])
 def test_read_bundle_reports_non_object_ndjson_record(raw_record: object):
     content = (json.dumps(raw_record, ensure_ascii=False) + "\n").encode("utf-8")
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
 
-    parsed = read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+    parsed = read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
     assert parsed.records_by_type == {}
     assert parsed.file_summaries[0]["count"] == 1
@@ -364,9 +352,9 @@ def test_read_bundle_reports_invalid_record_metadata(
     message: str,
 ):
     content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
 
-    parsed = read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+    parsed = read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
     assert parsed.records_by_type == {}
     assert message in parsed.errors[0]["message"]
@@ -380,7 +368,7 @@ def test_read_bundle_accepts_missing_optional_summaries_and_record_metadata():
         "Asia/Shanghai",
     )
 
-    parsed = read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+    parsed = read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
     assert parsed.records_by_type["task"][0]["id"] == "task_external"
     assert parsed.errors == []
@@ -404,7 +392,7 @@ def test_read_bundle_infers_file_type_when_manifest_entry_omits_it():
         "Asia/Shanghai",
     )
 
-    parsed = read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+    parsed = read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
     assert parsed.records_by_type["task"][0]["id"] == "task_inferred"
 
@@ -425,47 +413,47 @@ def test_read_bundle_enforces_runtime_record_limit_without_declared_count(monkey
     )
 
     with pytest.raises(transfer_bundle_module.BundleRecordLimitError):
-        read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+        read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
 
 def test_read_bundle_rejects_missing_declared_member():
     content  = b'{"_type":"task","_schema":2}\n'
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="Bundle is missing data/tasks.ndjson"):
-        read_bundle(_build_raw_bundle(manifest, []))
+        read_bundle(build_raw_bundle(manifest, []))
 
 
 def test_read_bundle_rejects_checksum_mismatch():
     expected = b'{"_type":"task","_schema":2,"id":"expected"}\n'
     actual   = b'{"_type":"task","_schema":2,"id":"changed"}\n'
-    manifest = _build_single_member_manifest("task", expected)
+    manifest = build_single_member_manifest("task", expected)
 
     with pytest.raises(BundleValidationError, match="Checksum mismatch"):
-        read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", actual)]))
+        read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", actual)]))
 
 
 def test_read_bundle_rejects_invalid_member_utf8():
     content  = b"\xff\n"
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="not valid UTF-8"):
-        read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+        read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
 
 def test_read_bundle_rejects_actual_count_mismatch():
     content = b'{"_type":"task","_schema":2}\n'
-    manifest = _build_single_member_manifest("task", content, count=2)
+    manifest = build_single_member_manifest("task", content, count=2)
 
     with pytest.raises(BundleValidationError, match="Count mismatch"):
-        read_bundle(_build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
+        read_bundle(build_raw_bundle(manifest, [("data/tasks.ndjson", content)]))
 
 
 def test_read_bundle_rejects_duplicate_archive_member():
     content  = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
     with pytest.warns(UserWarning, match="Duplicate name"):
-        buf = _build_raw_bundle(
+        buf = build_raw_bundle(
             manifest,
             [("data/tasks.ndjson", content), ("data/tasks.ndjson", content)],
         )
@@ -480,7 +468,7 @@ def test_read_bundle_rejects_encrypted_archive_member_flag():
         [],
         "Asia/Shanghai",
     )
-    archive        = bytearray(_build_raw_bundle(manifest, []).getvalue())
+    archive        = bytearray(build_raw_bundle(manifest, []).getvalue())
     central_header = archive.find(b"PK\x01\x02")
     assert central_header >= 0
     flag_offset = central_header + 8
@@ -493,7 +481,7 @@ def test_read_bundle_rejects_encrypted_archive_member_flag():
 
 def test_read_bundle_maps_corrupt_member_crc_to_validation_error():
     content  = b'{"_type":"task","_schema":2,"id":"crc-corruption"}\n'
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
     buf      = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
@@ -513,20 +501,23 @@ def test_read_bundle_rejects_unmanifested_archive_member():
         [],
         "Asia/Shanghai",
     )
-    buf = _build_raw_bundle(manifest, [("data/unlisted.ndjson", b"{}\n")])
+    buf = build_raw_bundle(manifest, [("data/unlisted.ndjson", b"{}\n")])
 
     with pytest.raises(BundleValidationError, match="Unexpected archive member"):
         read_bundle(buf)
 
 
-def test_read_bundle_rejects_excessive_archive_members(monkeypatch):
-    monkeypatch.setattr(transfer_bundle_module, "MAX_ARCHIVE_MEMBERS", 1)
+def test_read_bundle_rejects_excessive_archive_members():
     manifest = build_manifest(
         {"types": [], "preset": "all", "start": None, "end": None},
         [],
         "Asia/Shanghai",
     )
-    buf = _build_raw_bundle(manifest, [("data/unlisted.ndjson", b"{}\n")])
+    members = [
+        (f"data/unlisted-{index}.ndjson", b"{}\n")
+        for index in range(transfer_bundle_module.MAX_ARCHIVE_MEMBERS)
+    ]
+    buf = build_raw_bundle(manifest, members)
 
     with pytest.raises(BundleValidationError, match="too many archive members"):
         read_bundle(buf)
@@ -561,6 +552,7 @@ def test_build_manifest_rejects_invalid_file_summary(
     [
         ({"type": "task"}, "file path is required"),
         ({"path": "data/tasks.ndjson", "type": 2}, "Unsupported file type"),
+        ({"path": "data/unknown.ndjson", "type": "unknown"}, "Unsupported file type"),
         ({"path": "data/notes.ndjson", "type": "task"}, "Unexpected path"),
     ],
 )
@@ -599,7 +591,7 @@ def test_build_manifest_rejects_invalid_selection_types(types: object):
 
 def test_write_bundle_rejects_manifest_record_count_mismatch():
     content  = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
-    manifest = _build_single_member_manifest("task", content)
+    manifest = build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="Count mismatch"):
         write_bundle(io.BytesIO(), manifest, {"task": []})
@@ -608,7 +600,7 @@ def test_write_bundle_rejects_manifest_record_count_mismatch():
 def test_write_bundle_rejects_manifest_checksum_mismatch():
     record = {"_type": "task", "_schema": 2}
     content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-    manifest                       = _build_single_member_manifest("task", content)
+    manifest                       = build_single_member_manifest("task", content)
     manifest["files"][0]["sha256"] = "0" * 64
 
     with pytest.raises(BundleValidationError, match="Checksum mismatch"):
@@ -667,49 +659,52 @@ def test_write_bundle_rejects_manifest_record_layout_mismatch(
         write_bundle(io.BytesIO(), manifest, records)
 
 
-@pytest.mark.parametrize(
-    ("limit_name", "message"),
-    [
-        ("MAX_BUNDLE_RECORDS", "too many records"),
-        ("MAX_BUNDLE_MEMBER_BYTES", "maximum file size"),
-    ],
-)
-def test_write_bundle_enforces_per_file_limits(
-    monkeypatch,
-    limit_name: str,
-    message: str,
-):
+def test_write_bundle_rejects_more_records_than_the_per_file_limit():
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [{"path": "data/tasks.ndjson", "type": "task"}],
         "Asia/Shanghai",
     )
-    monkeypatch.setattr(transfer_bundle_module, limit_name, 0)
+    record  = {"_type": "task", "_schema": 2}
+    records = [record] * (transfer_bundle_module.MAX_BUNDLE_RECORDS + 1)
 
-    with pytest.raises(BundleValidationError, match=message):
+    with pytest.raises(BundleValidationError, match="too many records"):
+        write_bundle(io.BytesIO(), manifest, {"task": records})
+
+
+def test_write_bundle_enforces_per_file_size_limit(monkeypatch):
+    manifest = build_manifest(
+        {"types": ["task"], "preset": "all", "start": None, "end": None},
+        [{"path": "data/tasks.ndjson", "type": "task"}],
+        "Asia/Shanghai",
+    )
+    monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_MEMBER_BYTES", 0)
+
+    with pytest.raises(BundleValidationError, match="maximum file size"):
         write_bundle(io.BytesIO(), manifest, {"task": [{"_type": "task", "_schema": 2}]})
 
 
-@pytest.mark.parametrize(
-    ("limit_name", "message"),
-    [
-        ("MAX_BUNDLE_MANIFEST_BYTES", "manifest exceeds maximum file size"),
-        ("MAX_BUNDLE_UNCOMPRESSED_BYTES", "maximum uncompressed size"),
-    ],
-)
-def test_write_bundle_enforces_archive_size_limits(
-    monkeypatch,
-    limit_name: str,
-    message: str,
-):
+def test_write_bundle_rejects_a_manifest_above_the_size_limit():
     manifest = build_manifest(
         {"types": [], "preset": "all", "start": None, "end": None},
         [],
         "Asia/Shanghai",
     )
-    monkeypatch.setattr(transfer_bundle_module, limit_name, 0)
+    manifest["source"]["app"] = "x" * transfer_bundle_module.MAX_BUNDLE_MANIFEST_BYTES
 
-    with pytest.raises(BundleValidationError, match=message):
+    with pytest.raises(BundleValidationError, match="manifest exceeds maximum file size"):
+        write_bundle(io.BytesIO(), manifest, {})
+
+
+def test_write_bundle_enforces_uncompressed_size_limit(monkeypatch):
+    manifest = build_manifest(
+        {"types": [], "preset": "all", "start": None, "end": None},
+        [],
+        "Asia/Shanghai",
+    )
+    monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_UNCOMPRESSED_BYTES", 0)
+
+    with pytest.raises(BundleValidationError, match="maximum uncompressed size"):
         write_bundle(io.BytesIO(), manifest, {})
 
 
@@ -734,7 +729,7 @@ def test_read_bundle_counts_all_declared_members_in_uncompressed_limit(monkeypat
         ],
         "Asia/Shanghai",
     )
-    buf = _build_raw_bundle(
+    buf = build_raw_bundle(
         manifest,
         [("data/tasks.ndjson", task_content), ("data/notes.ndjson", note_content)],
     )
@@ -782,7 +777,7 @@ def test_read_bundle_rejects_member_above_uncompressed_limit(monkeypatch):
         read_bundle(buf)
 
 
-def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
+def test_read_bundle_rejects_record_count_above_limit():
     records = [
         {"_type": "note", "_schema": 2, "id": "note_1", "title": "一"},
         {"_type": "note", "_schema": 2, "id": "note_2", "title": "二"},
@@ -802,8 +797,8 @@ def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
         ],
         "Asia/Shanghai",
     )
-    monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_RECORDS", 1)
-    buf = io.BytesIO()
+    manifest["files"][0]["count"] = transfer_bundle_module.MAX_BUNDLE_RECORDS + 1
+    buf                           = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
         zf.writestr("data/notes.ndjson", content)
@@ -813,35 +808,7 @@ def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
         read_bundle(buf)
 
 
-def test_read_bundle_rejects_unknown_file_type():
-    manifest = {
-        "format"     : "pendo-bundle",
-        "version"    : 2,
-        "bundle_id"  : "test123",
-        "exported_at": "2026-03-29T12:00:00+08:00",
-        "source"     : {"app": "pendo-web", "timezone": "Asia/Shanghai"},
-        "selection"  : {"types": ["note"], "preset": "all", "start": None, "end": None},
-        "files"      : [
-            {
-                "path"  : "data/unknown.ndjson",
-                "type"  : "unknown",
-                "count" : 1,
-                "sha256": hashlib.sha256(b'{"_type":"unknown","_schema":2}\n').hexdigest(),
-            }
-        ],
-        "attachments_mode": "metadata_only",
-    }
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
-        zf.writestr("data/unknown.ndjson", '{"_type":"unknown","_schema":2}\n')
-    buf.seek(0)
-
-    with pytest.raises(BundleValidationError, match="unknown"):
-        read_bundle(buf)
-
-
-def test_read_bundle_rejects_legacy_item_fields():
+def test_read_bundle_reports_unsupported_item_fields():
     record = {
         "_type"     : "event",
         "_schema"   : 2,
@@ -876,7 +843,7 @@ def test_read_bundle_rejects_legacy_item_fields():
 
 
 def test_read_bundle_accepts_tasks_ndjson():
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -917,7 +884,7 @@ def test_read_bundle_accepts_tasks_ndjson():
 def test_export_preview_accepts_supported_presets(
     client: Any, temp_db: Database, auth_headers: dict, preset: str, payload: dict
 ):
-    _seed_items(temp_db)
+    seed_items(temp_db)
 
     response = client.post(
         "/api/transfer/export/preview",

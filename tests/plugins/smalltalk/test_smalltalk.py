@@ -52,6 +52,18 @@ class _Context:
         return settings_snapshot(config=config)
 
 
+class _FailingActorContext(_Context):
+    """读取群号就抛出非预期异常的上下文。"""
+
+    @property
+    def current_group_id(self) -> object:
+        raise RuntimeError("private parser detail")
+
+    @current_group_id.setter
+    def current_group_id(self, _value: object) -> None:
+        pass
+
+
 @pytest.fixture
 def context(tmp_path: Path) -> _Context:
     return _Context(tmp_path)
@@ -134,14 +146,11 @@ def test_malformed_response_json_falls_through(context: _Context) -> None:
     assert smalltalk._load_responses(context) == ["后备回复"]
 
 
-def test_custom_response_count_is_bounded(
-    monkeypatch: pytest.MonkeyPatch,
-    context: _Context,
-) -> None:
-    monkeypatch.setattr(smalltalk, "MAX_CUSTOM_RESPONSES", 2)
-    _write_json(context.data_dir / "responses.json", {"responses": ["一", "二", "三"]})
+def test_custom_response_count_is_bounded(context: _Context) -> None:
+    responses = [f"回复{index}" for index in range(smalltalk.MAX_CUSTOM_RESPONSES + 1)]
+    _write_json(context.data_dir / "responses.json", {"responses": responses})
 
-    assert smalltalk._load_responses(context) == ["一", "二"]
+    assert smalltalk._load_responses(context) == responses[:-1]
 
 
 def test_bot_name_only_uses_clean_response(
@@ -194,16 +203,16 @@ def test_qa_normalization_removes_invalid_duplicates_and_oversized_values() -> N
     assert smalltalk._normalize_qa([]) == {}
 
 
-def test_qa_normalization_enforces_question_and_answer_caps(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(smalltalk, "MAX_QUESTIONS", 2)
-    monkeypatch.setattr(smalltalk, "MAX_ANSWERS_PER_QUESTION", 2)
+def test_qa_normalization_enforces_question_and_answer_caps() -> None:
+    answers = [f"回答{index}" for index in range(smalltalk.MAX_ANSWERS_PER_QUESTION + 1)]
+    raw     = {"问题0": answers}
+    raw.update({f"问题{index}": ["回答"] for index in range(1, smalltalk.MAX_QUESTIONS + 1)})
 
-    assert smalltalk._normalize_qa({"一": ["a", "b", "c"], "二": ["d"], "三": ["e"]}) == {
-        "一": ["a", "b"],
-        "二": ["d"],
-    }
+    normalized = smalltalk._normalize_qa(raw)
+
+    assert len(normalized) == smalltalk.MAX_QUESTIONS
+    assert normalized["问题0"] == answers[:-1]
+    assert f"问题{smalltalk.MAX_QUESTIONS}" not in normalized
 
 
 @pytest.mark.asyncio
@@ -258,17 +267,17 @@ async def test_add_qa_validates_shape_and_lengths(
 
 @pytest.mark.asyncio
 async def test_add_qa_rejects_duplicates_and_caps(
-    monkeypatch: pytest.MonkeyPatch,
     context: _Context,
     event: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(smalltalk, "MAX_ANSWERS_PER_QUESTION", 2)
+    # 预先写好一个只差一条回答就满额、且问题数正好达到上限的问答库。
+    seeded       = {f"其他{index}": ["回答"] for index in range(smalltalk.MAX_QUESTIONS - 1)}
+    seeded["问题"] = [f"旧回答{index}" for index in range(smalltalk.MAX_ANSWERS_PER_QUESTION - 1)]
+    _write_json(smalltalk._qa_file(context), seeded)
+
     assert "成功" in text_segments_text(await smalltalk.handle("qa", "问题 回答一", event, context))
     assert "已经" in text_segments_text(await smalltalk.handle("qa", "问题 回答一", event, context))
-    assert "成功" in text_segments_text(await smalltalk.handle("qa", "问题 回答二", event, context))
-    assert "上限" in text_segments_text(await smalltalk.handle("qa", "问题 回答三", event, context))
-
-    monkeypatch.setattr(smalltalk, "MAX_QUESTIONS", 1)
+    assert "上限" in text_segments_text(await smalltalk.handle("qa", "问题 回答二", event, context))
     assert "上限" in text_segments_text(await smalltalk.handle("qa", "另一个 回答", event, context))
 
 
@@ -306,14 +315,12 @@ async def test_list_qa_exact_query_and_empty_states(
     assert missing == "没有这个问题的回答"
 
 
-def test_qa_list_output_reserves_space_for_omission_marker(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(smalltalk, "MAX_QA_REPLY_LENGTH", 30)
+def test_qa_list_output_reserves_space_for_omission_marker() -> None:
+    lines = ["a" * 1000, "b" * 1000, "c" * 1000]
 
-    result = smalltalk._bounded_lines("列表：", ["a" * 10, "b" * 10, "c" * 10])
+    result = smalltalk._bounded_lines("列表：", lines)
 
-    assert len(result) <= 30
+    assert len(result) <= smalltalk.MAX_QA_REPLY_LENGTH
     assert "未显示" in result
 
 
@@ -410,44 +417,32 @@ async def test_corrupted_audit_entries_are_replaced_with_valid_records(
 
 
 @pytest.mark.asyncio
-async def test_audit_is_bounded(
-    monkeypatch: pytest.MonkeyPatch,
-    context: _Context,
-) -> None:
-    monkeypatch.setattr(smalltalk, "MAX_AUDIT_ENTRIES", 2)
+async def test_audit_is_bounded(context: _Context) -> None:
     _write_json(
         context.data_dir / "QA_audit.json",
-        {"entries": [{"old": 1}, "invalid", {"old": 2}]},
+        {"entries": [{"old": 0}, "invalid", *({"old": index} for index in range(1, 5000))]},
     )
 
     await smalltalk._add_qa(context, "问题 回答")
 
     audit = json.loads((context.data_dir / "QA_audit.json").read_text(encoding="utf-8"))
-    assert audit["entries"] == [
-        {"old": 2},
-        {
-            "at"       : audit["entries"][1]["at"],
-            "operation": "add",
-            "scope"    : "private_123",
-            "owner"    : 123,
-            "question" : "问题",
-        },
-    ]
+    assert len(audit["entries"]) == smalltalk.MAX_AUDIT_ENTRIES
+    assert audit["entries"][0] == {"old": 1}
+    assert audit["entries"][-1] == {
+        "at"       : audit["entries"][-1]["at"],
+        "operation": "add",
+        "scope"    : "private_123",
+        "owner"    : 123,
+        "question" : "问题",
+    }
 
 
 @pytest.mark.asyncio
 async def test_audit_failure_does_not_turn_committed_qa_into_false_failure(
-    monkeypatch: pytest.MonkeyPatch,
     context: _Context,
 ) -> None:
-    original_write = smalltalk._write_json
-
-    def fail_audit(path: Path, value: object) -> None:
-        if path.name == "QA_audit.json":
-            raise OSError("private audit path")
-        original_write(path, value)
-
-    monkeypatch.setattr(smalltalk, "_write_json", fail_audit)
+    # 审计文件的位置上是一个目录，写审计一定失败。
+    (context.data_dir / "QA_audit.json").mkdir()
 
     assert text_segments_text(await smalltalk._add_qa(context, "问题 回答")) == "对话添加成功了！"
     assert await smalltalk.get_qa_answer(context, "问题") == "回答"
@@ -455,21 +450,19 @@ async def test_audit_failure_does_not_turn_committed_qa_into_false_failure(
 
 @pytest.mark.asyncio
 async def test_main_qa_write_failure_uses_public_error_boundary(
-    monkeypatch: pytest.MonkeyPatch,
     context: _Context,
     event: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(
-        smalltalk,
-        "_write_json",
-        lambda *_args: (_ for _ in ()).throw(OSError("private data path")),
-    )
+    # 问答文件的位置上是一个目录，写入一定失败，系统错误文本里带着这个路径。
+    qa_file = smalltalk._qa_file(context)
+    qa_file.mkdir()
 
     result = await smalltalk.handle("qa", "问题 回答", event, context)
 
     text = text_segments_text(result)
     assert "XQ-PLUGIN-UNEXPECTED" in text
-    assert "private data path" not in text
+    assert qa_file.name not in text
+    assert str(context.data_dir) not in text
 
 
 @pytest.mark.asyncio
@@ -488,17 +481,10 @@ async def test_concurrent_qa_additions_are_serialized(context: _Context) -> None
 
 @pytest.mark.asyncio
 async def test_handle_exception_uses_public_error_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-    context: _Context,
+    tmp_path: Path,
     event: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(
-        smalltalk,
-        "parse",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("private parser detail")),
-    )
-
-    result = await smalltalk.handle("qa", "问题 回答", event, context)
+    result = await smalltalk.handle("qa", "问题 回答", event, _FailingActorContext(tmp_path))
 
     text = text_segments_text(result)
     assert "XQ-PLUGIN-UNEXPECTED" in text
@@ -606,7 +592,7 @@ async def test_missing_or_failed_chat_provider_uses_fallback(context: _Context) 
 
 
 @pytest.mark.asyncio
-async def test_unmatched_smalltalk_uses_chat_then_voice_boundary(
+async def test_unmatched_smalltalk_is_answered_by_the_chat_provider(
     context: _Context,
     event: dict[str, object],
 ) -> None:

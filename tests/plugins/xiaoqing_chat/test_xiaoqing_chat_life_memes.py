@@ -9,7 +9,6 @@ import io
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -17,7 +16,6 @@ from PIL import Image
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from plugins.xiaoqing_chat import main as chat_main
 from plugins.xiaoqing_chat.life.online import sync_life_memes
-from plugins.xiaoqing_chat.media import emoji_library
 from plugins.xiaoqing_chat.media.emoji_library import (
     import_external_emoji,
     load_emoji_library,
@@ -29,7 +27,8 @@ from plugins.xiaoqing_chat.media.marker_resolver import (
     resolve_marker,
 )
 from plugins.xiaoqing_chat.media.markers import build_marker
-from tests.helpers.xiaoqing_chat_media_test_support import _make_media_runtime, _write_png
+from tests.helpers.settings_snapshot import settings_snapshot
+from tests.helpers.xiaoqing_chat_media_test_support import make_media_runtime, write_png
 
 mock_context = _fixture_support.mock_context
 
@@ -66,7 +65,7 @@ def _index(context: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_imported_meme_is_global_active_listed_and_resolvable(mock_context) -> None:
-    runtime, image = _make_media_runtime(), _png(1)
+    runtime, image = make_media_runtime(), _png(1)
     sha = hashlib.sha256(image).hexdigest()
     assert _import(mock_context, image) is True
     record = _index(mock_context)[sha]
@@ -110,7 +109,7 @@ def test_import_is_idempotent_and_never_overrides_other_sources(mock_context) ->
     # 内容相同但已有手动条目：不覆盖
     manual_image = _png(3)
     msha         = hashlib.sha256(manual_image).hexdigest()
-    path         = _write_png(mock_context.data_dir / "media" / "library" / "manual.png")
+    path         = write_png(mock_context.data_dir / "media" / "library" / "manual.png")
     path.write_bytes(manual_image)
     index_path = path.parent / "index.json"
     entries = json.loads(index_path.read_text(encoding="utf-8"))["entries"]
@@ -169,7 +168,7 @@ def test_remove_only_deletes_life_sourced_entries(mock_context) -> None:
     assert remove_external_emoji(mock_context, sha) is False  # 幂等
     assert remove_external_emoji(mock_context, "not-a-hash") is False
 
-    keep          = _write_png(mock_context.data_dir / "media" / "library" / "own.png")
+    keep          = write_png(mock_context.data_dir / "media" / "library" / "own.png")
     ksha          = hashlib.sha256(keep.read_bytes()).hexdigest()
     entries       = _index(mock_context)
     entries[ksha] = {
@@ -227,7 +226,7 @@ def _context_with(mock_context: Any, life: Any) -> Any:
 
 @pytest.mark.asyncio
 async def test_sync_imports_pages_deletes_revoked_and_advances_the_cursor(mock_context) -> None:
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     old     = _png(20)
     _import(mock_context, old)
     new = [_png(21), _png(22)]
@@ -248,7 +247,7 @@ async def test_sync_imports_pages_deletes_revoked_and_advances_the_cursor(mock_c
 
 @pytest.mark.asyncio
 async def test_sync_fetches_further_pages_while_full_and_ignores_bad_items(mock_context) -> None:
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     full = _page([_png(30 + n) for n in range(10)], next_since=10.0)
     full["memes"].append({"sha256": "x"})  # 非法条目被忽略，不影响整页
     last = _page([_png(60)], next_since=11.0)
@@ -264,7 +263,7 @@ async def test_sync_fetches_further_pages_while_full_and_ignores_bad_items(mock_
 
 @pytest.mark.asyncio
 async def test_sync_is_silent_when_disabled_missing_or_failing(mock_context) -> None:
-    runtime                            = _make_media_runtime()
+    runtime                            = make_media_runtime()
     runtime.cfg.life.enable_life_memes = False
     life                               = FakeLife(_page([_png(70)]))
     assert (
@@ -281,27 +280,34 @@ async def test_sync_is_silent_when_disabled_missing_or_failing(mock_context) -> 
     assert await sync_life_memes(_context_with(mock_context, FakeLife(None)), runtime) == 0
 
 
+def _configure_life(context: Any, revision: int, **life: Any) -> None:
+    """换一份部署配置并升版本号：运行配置在版本号变化后的下一次读取时重新加载。"""
+
+    context.config                = {"bot_name": "小青", "plugins": {"xiaoqing_chat": {"life": life}}}
+    context.get_settings_snapshot = lambda: settings_snapshot(
+        config=context.config, secrets=context.secrets, revision=revision
+    )
+
+
 @pytest.mark.asyncio
-async def test_scheduled_task_respects_the_switch_and_swallows_errors(
-    mock_context, monkeypatch
-) -> None:
-    runtime          = _make_media_runtime()
-    calls: list[Any] = []
+async def test_scheduled_task_respects_the_switch_and_swallows_errors(mock_context) -> None:
+    image = _png(80)
+    life = FakeLife(_page([image], next_since=1.0))
+    context = _context_with(mock_context, life)
 
-    async def fake_sync(context: Any, rt: Any) -> int:
-        calls.append(rt)
-        return 0
+    # 配置本身读不进来：定时任务把错误吞掉，不去拉取。
+    _configure_life(context, 1, enable_life_memes="not a switch")
+    await asyncio.wait_for(chat_main.scheduled_life_memes(context), timeout=1)
+    assert life.requests == []
 
-    monkeypatch.setattr(chat_main, "sync_life_memes", fake_sync)
-    monkeypatch.setattr(chat_main, "load_runtime", lambda _c: runtime)
-    runtime.cfg.life.enable_life_memes = False
-    await chat_main.scheduled_life_memes(mock_context)
-    assert calls == []
-    runtime.cfg.life.enable_life_memes = True
-    await chat_main.scheduled_life_memes(mock_context)
-    assert calls == [runtime]
-    monkeypatch.setattr(chat_main, "sync_life_memes", AsyncMock(side_effect=RuntimeError("x")))
-    await asyncio.wait_for(chat_main.scheduled_life_memes(mock_context), timeout=1)
+    _configure_life(context, 2, enable_life_memes=False)
+    await chat_main.scheduled_life_memes(context)
+    assert life.requests == [] and _index_entries(context) == {}
+
+    _configure_life(context, 3, enable_life_memes=True)
+    await chat_main.scheduled_life_memes(context)
+    assert life.requests == [{"since": 0.0, "limit": 10}]
+    assert set(_index(context)) == {hashlib.sha256(image).hexdigest()}
 
 
 def test_manifest_schedules_the_meme_sync() -> None:
@@ -320,4 +326,4 @@ def test_manifest_schedules_the_meme_sync() -> None:
         and sync["delivery"] == "silent"
         and sync["cron"] == {"minute": "7,37"}
     )
-    assert callable(chat_main.scheduled_life_memes) and emoji_library.import_external_emoji
+    assert callable(chat_main.scheduled_life_memes)

@@ -104,7 +104,7 @@ async def test_record_inherits_verified_history_and_keeps_owner_boundary(tmp_pat
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verb", ["add", "quick"])
 async def test_agent_commands_are_saved_like_the_users_own(tmp_path, verb):
-    """Agent 代为执行的快捷记账和用户自己发的同一条路：按命令里的字段保存，不再拿原话做字面比对。"""
+    """Agent 代为执行的快捷记账和用户自己发的同一条路：按命令里的字段保存，不拿原话做字面比对。"""
 
     db = Database(str(tmp_path / "ledger.db"))
     try:

@@ -1,18 +1,20 @@
+"""模型输出的 JSON 解析和聊天模型网关：取 JSON 对象、提取回复正文、返回所用的模型配置、错误透传。"""
+
 import pytest
 
 
-def test_json_parsing_helper_rejects_embedded_object() -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param('note {"items": [{"k": 1}], "facts": [{"k": 2}]} done', id="embedded-object"),
+        pytest.param(
+            '<think>先想一下</think>\n```json\n{suitable: true, reason: "ok",}\n```',
+            id="think-prefix",
+        ),
+    ],
+)
+def test_json_parsing_helper_rejects_text_that_is_not_a_bare_object(text: str) -> None:
     from plugins.xiaoqing_chat.utils.json_parsing import parse_first_json_object
-
-    text = 'note {"items": [{"k": 1}], "facts": [{"k": 2}]} done'
-
-    assert parse_first_json_object(text) is None
-
-
-def test_json_parsing_helper_rejects_think_prefix() -> None:
-    from plugins.xiaoqing_chat.utils.json_parsing import parse_first_json_object
-
-    text = '<think>先想一下</think>\n```json\n{suitable: true, reason: "ok",}\n```'
 
     assert parse_first_json_object(text) is None
 
@@ -85,7 +87,7 @@ def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_fallback_wrapper_shared_logic_for_content_mode() -> None:
+async def test_gateway_returns_response_and_the_profile_that_served_it() -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -123,7 +125,7 @@ async def test_gateway_fallback_wrapper_shared_logic_for_content_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_fallback_wrapper_stops_on_non_404() -> None:
+async def test_gateway_propagates_non_404_errors_without_retrying() -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 

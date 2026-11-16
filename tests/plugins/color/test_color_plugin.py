@@ -2,13 +2,15 @@
 Color 插件单元测试
 """
 
+import asyncio
 import json
 import logging
+import os
 import threading
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -42,30 +44,23 @@ COLOR_ROOT = build_command_catalog_node(
 class TestColorConvert:
     """颜色转换测试"""
 
-    def test_rgb_to_hex(self):
+    @pytest.mark.parametrize(
+        ("rgb", "expected"),
+        [
+            pytest.param([255, 128, 0], "#FF8000", id="orange"),
+            pytest.param([255, 255, 255], "#FFFFFF", id="white"),
+        ],
+    )
+    def test_rgb_to_hex(self, rgb, expected):
         """测试 RGB 转 HEX"""
-        result = color_convert.rgb_to_hex([255, 128, 0])
-        assert result.upper() == "#FF8000"
+        assert color_convert.rgb_to_hex(rgb).upper() == expected
 
-    def test_rgb_to_hex_normalized(self):
-        """测试 RGB 转 HEX 规范化"""
-        result = color_convert.rgb_to_hex([255, 255, 255])
-        assert result.upper() == "#FFFFFF"
-
-    def test_hex_to_rgb(self):
-        """测试 HEX 转 RGB"""
-        result = color_convert.hex_to_rgb("#FF8000")
-        assert result == [255, 128, 0]
-
-    def test_hex_to_rgb_without_hash(self):
-        """测试无 # 前缀的 HEX 转 RGB"""
-        result = color_convert.hex_to_rgb("FF8000")
-        assert result == [255, 128, 0]
-
-    def test_hex_to_rgb_lowercase(self):
-        """测试小写 HEX 转 RGB"""
-        result = color_convert.hex_to_rgb("#ff8000")
-        assert result == [255, 128, 0]
+    @pytest.mark.parametrize(
+        "value", ["#FF8000", "FF8000", "#ff8000"], ids=["upper", "no_hash", "lower"]
+    )
+    def test_hex_to_rgb(self, value):
+        """测试 HEX 转 RGB：大小写和有无 # 前缀都接受"""
+        assert color_convert.hex_to_rgb(value) == [255, 128, 0]
 
     def test_rgb_to_cmyk(self):
         """测试 RGB 转 CMYK"""
@@ -239,38 +234,40 @@ class TestColorDataManager:
         assert "胭脂" in result
         assert "#D54547" in result or "213, 69, 71" in result
 
-    def test_load_colors_reuses_cached_builtin_palette(self, tmp_path, monkeypatch):
-        calls      = {"builtin": 0}
+    def test_load_colors_reuses_cached_builtin_palette(self, tmp_path):
         plugin_dir = tmp_path / "plugin"
         plugin_dir.mkdir()
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         builtin_file = plugin_dir / "color.json"
-        builtin_file.write_text(
-            json.dumps([{"name": "胭脂"}], ensure_ascii=False), encoding="utf-8"
+
+        def palette(name: str) -> str:
+            record = {
+                "name"  : name,
+                "pinyin": "yanzhi",
+                "RGB"   : [213, 69, 71],
+                "CMYK"  : [15, 85, 75, 0],
+                "hex"   : "#d54547",
+            }
+            return json.dumps([record], ensure_ascii=False)
+
+        builtin_file.write_text(palette("胭脂"), encoding="utf-8")
+        stamp   = builtin_file.stat()
+        context = SimpleNamespace(
+            plugin_dir      = plugin_dir,
+            data_dir        = data_dir,
+            current_user_id = 42,
+            logger          = MagicMock(),
         )
 
-        def _fake_load_json(path, default, **_kwargs):
-            if Path(path) == builtin_file:
-                calls["builtin"] += 1
-                return [
-                    {
-                        "name"  : "胭脂",
-                        "pinyin": "yanzhi",
-                        "RGB"   : [213, 69, 71],
-                        "CMYK"  : [15, 85, 75, 0],
-                        "hex"   : "#d54547",
-                    }
-                ]
-            return default
+        assert [color["name"] for color in color_data.load_colors(context)] == ["胭脂"]
 
-        monkeypatch.setattr(color_data, "load_json", _fake_load_json)
-        context = MagicMock(plugin_dir=plugin_dir, data_dir=data_dir, logger=MagicMock())
+        # 内容换成同样字节数的另一份，并把修改时间还原：文件身份没变，第二次加载应当复用缓存。
+        builtin_file.write_text(palette("朱砂"), encoding="utf-8")
+        os.utime(builtin_file, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        assert builtin_file.stat().st_size == stamp.st_size
 
-        color_data.load_colors(context)
-        color_data.load_colors(context)
-
-        assert calls["builtin"] == 1
+        assert [color["name"] for color in color_data.load_colors(context)] == ["胭脂"]
 
     def test_bundled_palette_is_complete_and_rgb_hex_consistent(self, tmp_path):
         context = SimpleNamespace(
@@ -287,18 +284,20 @@ class TestColorDataManager:
         assert len({color["name"] for color in colors}) == 526
         assert all(color_convert.hex_to_rgb(color["hex"]) == color["RGB"] for color in colors)
 
-    def test_builtin_load_failure_does_not_masquerade_as_custom_only_palette(
-        self, monkeypatch, tmp_path
-    ):
+    def test_builtin_load_failure_does_not_masquerade_as_custom_only_palette(self, tmp_path):
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "color.json").write_text("{broken builtin", encoding="utf-8")
         context = SimpleNamespace(
-            plugin_dir       = ROOT / "plugins" / "color",
-            data_dir         = tmp_path,
+            plugin_dir       = plugin_dir,
+            data_dir         = tmp_path / "data",
             current_group_id = 1001,
             current_user_id  = 42,
             logger           = MagicMock(),
         )
-        custom = MagicMock(
-            return_value=[
+        color_data.mutate_custom_colors(
+            context,
+            lambda colors: colors.append(
                 {
                     "name"  : "自定义色",
                     "pinyin": "",
@@ -306,17 +305,11 @@ class TestColorDataManager:
                     "hex"   : "#010203",
                     "CMYK"  : [67, 33, 0, 99],
                 }
-            ]
+            ),
         )
-        monkeypatch.setattr(
-            color_data,
-            "_load_builtin_colors",
-            MagicMock(side_effect=ValueError("broken builtin")),
-        )
-        monkeypatch.setattr(color_data, "load_custom_colors", custom)
+        assert [color["name"] for color in color_data.load_custom_colors(context)] == ["自定义色"]
 
         assert color_data.load_colors(context) == []
-        custom.assert_not_called()
 
     def test_custom_scope_fails_closed_without_authenticated_identity(self, tmp_path):
         context = SimpleNamespace(
@@ -327,6 +320,34 @@ class TestColorDataManager:
 
         with pytest.raises(ValueError, match="requires a group or user scope"):
             color_data.load_custom_colors(context)
+
+    @pytest.mark.parametrize("group_id", ["../escape", 0, -5, True, 2**63])
+    def test_invalid_scope_id_never_reaches_a_file_path_and_keeps_the_bundled_palette(
+        self, tmp_path, group_id
+    ):
+        data_dir = tmp_path / "invalid"
+        context  = SimpleNamespace(
+            plugin_dir       = ROOT / "plugins" / "color",
+            data_dir         = data_dir,
+            current_group_id = group_id,
+            current_user_id  = 42,
+            logger           = MagicMock(),
+        )
+        # 同一个插件目录、合格的群号、没有自定义色：得到的就是内置色库。
+        bundled = color_data.load_colors(
+            SimpleNamespace(
+                **{**vars(context), "current_group_id": 123, "data_dir": tmp_path / "ok"}
+            )
+        )
+
+        with pytest.raises(ValueError, match="positive 64-bit integer"):
+            color_data.load_custom_colors(context)
+        colors = color_data.load_colors(context)
+
+        # 身份编号不合格时，自定义色不读不写任何文件，内置色库照常可用，失败记进日志。
+        assert colors and colors == bundled
+        assert not data_dir.exists() or not list(data_dir.iterdir())
+        assert context.logger.method_calls
 
     def test_noop_mutation_does_not_create_or_rewrite_scope_file(self, tmp_path):
         context = SimpleNamespace(
@@ -393,29 +414,15 @@ class TestColorHandle:
         assert "没有结果" in empty.command_outcome.result_text
 
     @pytest.mark.asyncio
-    async def test_color_bare_spectype_flag_lists_all_types(self, monkeypatch):
-        context            = MagicMock()
-        context.plugin_dir = ROOT / "plugins" / "color"
-        context.data_dir   = ROOT / "plugins" / "color" / "data"
-        context.logger     = MagicMock()
+    async def test_color_bare_spectype_flag_lists_all_types(self, tmp_path):
+        result = await color_main.handle("color", "-t", {}, self._context(tmp_path))
 
-        called = {}
-
-        def _fake_list(prefix, _context, *, page=1):
-            called["prefix"] = prefix
-            called["page"]   = page
-            return [{"type": "text", "data": {"text": "ok"}}]
-
-        monkeypatch.setattr(color_main.stellar, "list_spectral_types", _fake_list)
-        result = await color_main.handle("color", "-t", {}, context)
-
-        assert result == [{"type": "text", "data": {"text": "ok"}}]
-        assert called["prefix"] == ""
-        assert called["page"] == 1
+        rendered = text_segments_text(result)
+        assert "共 74 个" in rendered
+        assert "第 1/3 页" in rendered
 
     @staticmethod
-    def _context(tmp_path, *, admin=False):
-        del admin  # 谁能写由 Core 按 plugin.json 检查，插件里不再判断。
+    def _context(tmp_path):
         return SimpleNamespace(
             plugin_dir          = ROOT / "plugins" / "color",
             data_dir            = tmp_path,
@@ -426,30 +433,28 @@ class TestColorHandle:
         )
 
     @pytest.mark.asyncio
-    async def test_help_does_not_load_assets_or_create_cache(self, monkeypatch, tmp_path):
+    async def test_help_does_not_load_assets_or_create_cache(self, tmp_path):
         context = self._context(tmp_path)
-        load_colors = MagicMock(side_effect=AssertionError("help loaded palette"))
-        monkeypatch.setattr(color_main.data_manager, "load_colors", load_colors)
+        # 插件目录里没有颜色库：help 若去加载它，回复会变成“颜色数据加载失败”。
+        context.plugin_dir = tmp_path / "missing-assets"
 
         result = await color_main.handle("color", "", {}, context)
 
         assert "颜色工具｜526 种中国传统色" in text_segments_text(result)
         assert "/color list" in text_segments_text(result)
-        load_colors.assert_not_called()
         assert not (tmp_path / "images").exists()
 
     @pytest.mark.asyncio
-    async def test_rgb_space_form_and_picture_modifier_are_honored(self, monkeypatch, tmp_path):
+    async def test_rgb_space_form_and_picture_modifier_are_honored(self, tmp_path):
         context = self._context(tmp_path)
-        generate = AsyncMock(return_value=None)
-        monkeypatch.setattr(color_main.image_gen, "generate_color_image", generate)
 
         plain    = await color_main.handle("color", "-r 1 2 3", {}, context)
         pictured = await color_main.handle("color", "-r 1 2 3 -p", {}, context)
 
         assert "输入：RGB 1, 2, 3" in text_segments_text(plain)
         assert "最接近的收录色" in text_segments_text(pictured)
-        generate.assert_awaited_once()
+        assert [segment["type"] for segment in plain].count("image") == 0
+        assert [segment["type"] for segment in pictured].count("image") == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -487,13 +492,8 @@ class TestColorHandle:
         assert canary not in caplog.text
 
     @pytest.mark.asyncio
-    async def test_builtin_name_cannot_be_shadowed_by_custom_color(self, monkeypatch, tmp_path):
-        context = self._context(tmp_path, admin=True)
-        monkeypatch.setattr(
-            color_main.image_gen,
-            "generate_color_image",
-            AsyncMock(return_value=None),
-        )
+    async def test_builtin_name_cannot_be_shadowed_by_custom_color(self, tmp_path):
+        context = self._context(tmp_path)
 
         result = await color_main.handle(
             "color",
@@ -578,23 +578,15 @@ class TestColorHandle:
         assert "名称：乳白" in text_segments_text(result)
 
     @pytest.mark.asyncio
-    async def test_direct_spectral_type_routes_to_stellar_query(self, monkeypatch, tmp_path):
-        query_stellar = AsyncMock(return_value=[{"type": "text", "data": {"text": "star-ok"}}])
-        monkeypatch.setattr(color_main.stellar, "query_stellar_color", query_stellar)
-
+    async def test_direct_spectral_type_routes_to_stellar_query(self, tmp_path):
         result = await color_main.handle("color", "G2V", {}, self._context(tmp_path))
 
-        assert text_segments_text(result) == "star-ok"
-        query_stellar.assert_awaited_once()
+        assert "光谱型：G2V" in text_segments_text(result)
+        assert [segment["type"] for segment in result].count("image") == 1
 
     @pytest.mark.asyncio
-    async def test_custom_color_can_be_added_queried_and_deleted(self, monkeypatch, tmp_path):
-        context = self._context(tmp_path, admin=True)
-        monkeypatch.setattr(
-            color_main.image_gen,
-            "generate_color_image",
-            AsyncMock(return_value=None),
-        )
+    async def test_custom_color_can_be_added_queried_and_deleted(self, tmp_path):
+        context = self._context(tmp_path)
 
         added = await color_main.handle(
             "color",
@@ -621,15 +613,8 @@ class TestColorHandle:
         assert color_data.load_custom_colors(context) == []
 
     @pytest.mark.asyncio
-    async def test_readable_admin_commands_support_quoted_multiword_names(
-        self, monkeypatch, tmp_path
-    ):
-        context = self._context(tmp_path, admin=True)
-        monkeypatch.setattr(
-            color_main.image_gen,
-            "generate_color_image",
-            AsyncMock(return_value=None),
-        )
+    async def test_readable_admin_commands_support_quoted_multiword_names(self, tmp_path):
+        context = self._context(tmp_path)
 
         added = await color_main.handle(
             "color",
@@ -651,40 +636,37 @@ class TestColorHandle:
 
     @pytest.mark.asyncio
     async def test_custom_palette_io_runs_off_event_loop(self, monkeypatch, tmp_path):
-        context = self._context(tmp_path, admin=True)
-        monkeypatch.setattr(
-            color_main.image_gen,
-            "generate_color_image",
-            AsyncMock(return_value=None),
-        )
-        event_loop_thread        = threading.get_ident()
-        read_threads : list[int] = []
-        write_threads: list[int] = []
-        original_read            = color_data._read_custom_colors
-        original_write           = color_data.write_json
+        context                    = self._context(tmp_path)
+        custom_file                = color_data._custom_file(context)
+        event_loop_thread          = threading.get_ident()
+        replace_threads: list[int] = []
+        real_replace               = os.replace
 
-        def tracked_read(*args, **kwargs):
-            read_threads.append(threading.get_ident())
-            return original_read(*args, **kwargs)
+        def tracked_replace(source, destination, *args, **kwargs):
+            if Path(destination) == custom_file:
+                replace_threads.append(threading.get_ident())
+            return real_replace(source, destination, *args, **kwargs)
 
-        def tracked_write(*args, **kwargs):
-            write_threads.append(threading.get_ident())
-            return original_write(*args, **kwargs)
+        monkeypatch.setattr(os, "replace", tracked_replace)
 
-        monkeypatch.setattr(color_data, "_read_custom_colors", tracked_read)
-        monkeypatch.setattr(color_data, "write_json", tracked_write)
+        # 读取：测试线程（即事件循环线程）持有自定义色库的进程内锁。锁是可重入的，
+        # 只有当读取真的跑在别的线程上，查询命令才会被它挡住。
+        with color_data._CUSTOM_COLORS_LOCK:
+            query = asyncio.create_task(
+                color_main.handle("color", "-n 乳白", {"user_id": 42}, context)
+            )
+            await asyncio.sleep(0.1)
+            assert not query.done()
 
-        result = await color_main.handle(
-            "color",
-            "-w 线程色 #010203",
-            {"user_id": 42},
-            context,
-        )
+        assert "名称：乳白" in text_segments_text(await asyncio.wait_for(query, timeout=10))
+
+        # 写入：落盘的 os.replace 发生在工作线程里。
+        result = await color_main.handle("color", "-w 线程色 #010203", {"user_id": 42}, context)
 
         assert "添加成功" in text_segments_text(result)
-        assert read_threads
-        assert write_threads
-        assert all(thread_id != event_loop_thread for thread_id in read_threads + write_threads)
+        assert [color["name"] for color in color_data.load_custom_colors(context)] == ["线程色"]
+        assert replace_threads
+        assert all(thread_id != event_loop_thread for thread_id in replace_threads)
 
 
 class TestStellarColorData:
@@ -732,13 +714,12 @@ class TestStellarColorData:
         assert beyond == "❌ 第 2 页超出范围（共 1 页）"
 
     @pytest.mark.asyncio
-    async def test_duplicate_spectral_type_reports_source_grid(self, monkeypatch, tmp_path):
+    async def test_duplicate_spectral_type_reports_source_grid(self, tmp_path):
         context = SimpleNamespace(
             plugin_dir = ROOT / "plugins" / "color",
             data_dir   = tmp_path,
             logger     = MagicMock(),
         )
-        monkeypatch.setattr(color_stellar, "generate_color_image", AsyncMock(return_value=None))
 
         result   = await color_stellar.query_stellar_color("m6v", context, tmp_path / "images")
         rendered = text_segments_text(result)
@@ -784,11 +765,7 @@ def test_color_rgb_three_digit_blue(blue):
     assert result["RGB"] == [51, 102, blue]
 
 
-ROOT = REPOSITORY_ROOT
-
-
-def _color_context(tmp_path: Path, *, admin: bool) -> SimpleNamespace:
-    del admin  # 谁能写由 Core 按 plugin.json 检查，插件里不再判断。
+def _color_context(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         current_group_id    = 1001,
         current_user_id     = 42,
@@ -811,14 +788,9 @@ def test_color_mutations_are_declared_for_bot_admins_in_the_manifest():
 
 
 @pytest.mark.asyncio
-async def test_color_mutations_only_run_through_the_declared_nodes(monkeypatch, tmp_path):
-    context = _color_context(tmp_path, admin=False)
-
-    async def no_image(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(color_main.image_gen, "generate_color_image", no_image)
-    event = {"user_id": 42, "group_id": 1001}
+async def test_color_mutations_only_run_through_the_declared_nodes(tmp_path):
+    context = _color_context(tmp_path)
+    event   = {"user_id": 42, "group_id": 1001}
     # 选项写在后面时 Core 解析到的是根命令（所有人可用），插件不能把它当成写入。
     bypass = await color_main.handle("color", "审核红 -w 1 2 3", event, context)
     assert "/color add" in text_segments_text(bypass)
@@ -832,7 +804,7 @@ async def test_color_mutations_only_run_through_the_declared_nodes(monkeypatch, 
 
 
 def test_color_custom_store_rejects_oversized_manual_scope_file(tmp_path):
-    context = _color_context(tmp_path, admin=True)
+    context     = _color_context(tmp_path)
     custom_file = color_data._custom_file(context)
     custom_file.parent.mkdir(parents=True)
     original = [{"name": str(index)} for index in range(201)]
@@ -850,12 +822,8 @@ async def test_color_image_cache_is_content_addressed_and_lru_bounded(monkeypatc
         calls.append(name)
         return name.encode("utf-8")
 
-    async def inline(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
     monkeypatch.setattr(color_image_gen, "MATPLOTLIB_AVAILABLE", True)
     monkeypatch.setattr(color_image_gen, "_render_color_image", fake_render)
-    monkeypatch.setattr(color_image_gen, "run_sync", inline)
     monkeypatch.setattr(
         color_image_gen,
         "IMAGE_CACHE_LIMITS",

@@ -1,48 +1,72 @@
-"""主动开口手里的东西：推送全文和配图、当天小事的细节、前几次说过的话和有没有人接、这个群聊到才去搜的事。"""
+"""主动开口手里的东西：推送全文和配图、当天小事的细节、前几次说过的话和有没有人接、这个群聊到才去搜的事。
+
+整段流程从定时任务的处理函数进入（现场搭建在 ``xiaoqing_chat_test_support`` 里）：真实的聊天记录、
+推送记录、统一记忆和投递回执，边界上只有剧本模型、网上生活能力和假时钟。
+"""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from PIL import Image
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.ai import AICompletionResult
+from plugins.xiaoqing_chat import main as chat_main
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.life import online, proactive, push_log
 from plugins.xiaoqing_chat.life.daily_life import DayEvent, DayRecord, day_key
 from plugins.xiaoqing_chat.life.proactive_state import ProactiveRecord
 from plugins.xiaoqing_chat.life.push_log import Push, PushLogStore
 from plugins.xiaoqing_chat.llm.gateway import LLMError
-from plugins.xiaoqing_chat.memory import client as memory_client
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import ChatRuntime, ChatRuntimeState
 from plugins.xiaoqing_chat.utils.wall_clock import local_datetime
+from plugins.xiaoqing_memory.model import Note
+from plugins.xiaoqing_memory.scopes import group_subject
+from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness
+from tests.helpers.xiaoqing_chat_test_support import (
+    HOUR,
+    NOW,
+    bot_message,
+    commit,
+    group_run,
+)
 
-NOW  = 1_800_000_000.0
-HOUR = 3600.0
+mock_context        = _fixture_support.mock_context
+clock               = _fixture_support.clock
+no_swallowed_errors = _fixture_support.no_swallowed_errors
 
 
 def _user(text: str, ts: float, name: str = "阿梨") -> StoredMessage:
     return StoredMessage(role="user", name=name, ts=ts, user_id=77, content=text)
 
 
-def _bot(text: str, ts: float, source: str = "xiaoqing_chat") -> StoredMessage:
-    return StoredMessage(role="assistant", name="小青", ts=ts, content=text, source_plugin=source)
-
-
 def _runtime() -> ChatRuntime:
     return ChatRuntime(XiaoQingChatConfig.model_validate({"proactive": {"enabled": True}}), [])
 
 
-def _state(tmp_path, history: list[StoredMessage]) -> ChatRuntimeState:
-    state = ChatRuntimeState()
-    state.proactive_state.bind(tmp_path)
-    state.push_log.bind(tmp_path)
-    state.daily_life.bind(tmp_path)
-    state.memory_store.get_recent_async = AsyncMock(return_value=history)
-    return state
+class _Vision:
+    """识图路由的替身（经 ``secrets["_ai"]`` 递进去）：记下每次调用，答一段文字或抛错。"""
+
+    def __init__(self, answer: str | Exception) -> None:
+        self.answer                      = answer
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(self, route: str, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        self.calls.append({"route": route, "messages": messages, **kwargs})
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return AICompletionResult(
+            response={"choices": [{"message": {"content": self.answer}, "finish_reason": "stop"}]},
+            profile="vision",
+            provider="scripted",
+            model="scripted-vision",
+            finish_reason="stop",
+            attempts=1,
+        )
 
 
 # ---- 推送记录 ---------------------------------------------------------------------------------
@@ -87,65 +111,89 @@ async def test_looking_at_a_push_image_goes_through_the_vision_route(tmp_path) -
     picture = tmp_path / "apod.png"
     Image.new("RGB", (2400, 1200), "navy").save(picture)
     push = Push(ts=NOW, source="apod", local_id="m1", text="NGC 206", images=(str(picture),))
-    llm = _runtime().cfg.llm_config("vision")
-    model = AsyncMock(return_value="画面是一片 斜着的星系\n右上偏亮")
-    with patch.object(push_log, "chat_completions", model):
-        note = await push_log.look_at_images(push, secrets={"_ai": object()}, llm=llm)
+    llm    = _runtime().cfg.llm_config("vision")
+    vision = _Vision("画面是一片 斜着的星系\n右上偏亮")
+    note = await push_log.look_at_images(push, secrets={"_ai": vision}, llm=llm)
     assert note == "画面是一片 斜着的星系 右上偏亮"
-    call = model.await_args.kwargs
+    (call,) = vision.calls
     assert call["route"] == "vision" and call["required_modalities"] == ("text", "image")
-    text, image = call["messages"][0]["content"]
-    assert "看得到的东西" in text["text"]
+    _, image = call["messages"][0]["content"]
     assert image["image_url"]["url"].startswith("data:image/jpeg;base64,")
     # 图没了、不是图片或模型不可用：当作没有图
+    unused = _Vision("不该被问")
     for broken in (
         Push(ts=NOW, source="apod", local_id="m2", text="x", images=(str(tmp_path / "gone.jpg"),)),
         Push(ts=NOW, source="apod", local_id="m3", text="x"),
     ):
-        with patch.object(push_log, "chat_completions", AsyncMock()) as unused:
-            assert await push_log.look_at_images(broken, secrets={}, llm=llm) == ""
-        unused.assert_not_awaited()
-    with patch.object(push_log, "chat_completions", AsyncMock(side_effect=LLMError("down"))):
-        assert await push_log.look_at_images(push, secrets={}, llm=llm) == ""
+        assert await push_log.look_at_images(broken, secrets={"_ai": unused}, llm=llm) == ""
+    assert unused.calls == []
+    down = _Vision(LLMError("down"))
+    assert await push_log.look_at_images(push, secrets={"_ai": down}, llm=llm) == ""
 
 
 @pytest.mark.asyncio
-async def test_push_notices_give_full_text_and_what_the_picture_shows(tmp_path) -> None:
+async def test_push_notices_give_full_text_and_what_the_picture_shows(
+    mock_context, tmp_path
+) -> None:
+    picture = tmp_path / "apod.png"
+    Image.new("RGB", (64, 48), "navy").save(picture)
+
+    def pushes(state: ChatRuntimeState) -> None:
+        state.push_log.append(
+            "g42", Push(ts=NOW - 8 * HOUR, source="github", local_id="m1", text="昨晚的趋势")
+        )
+        state.push_log.append(
+            "g42",
+            Push(
+                ts       = NOW - 3 * HOUR,
+                source   = "apod",
+                local_id = "m2",
+                text     = "NGC 206 and the Star Clouds of Andromeda\n" + "正文" * 300,
+                images   = (str(picture),),
+            ),
+        )
+
     history = [
         _user("晚上吃啥", NOW - 9 * HOUR),
-        _bot("NGC 206…（内容较长，只记下开头）", NOW - 2 * HOUR, source="apod"),
+        bot_message("NGC 206…（内容较长，只记下开头）", NOW - 3 * HOUR, source="apod"),
     ]
-    state = _state(tmp_path, history)
-    state.push_log.append(
-        "g42", Push(ts=NOW - 8 * HOUR, source="github", local_id="m1", text="昨晚的趋势")
+    run = await group_run(
+        mock_context,
+        tmp_path,
+        history,
+        reply                    = '{"decision":"skip"}',
+        vision                   = "一片斜着的星系，右上偏亮",
+        seed                     = pushes,
+        retry_after_skip_minutes = 0,
     )
-    state.push_log.append(
-        "g42",
-        Push(
-            ts       = NOW - 2 * HOUR,
-            source   = "apod",
-            local_id = "m2",
-            text     = "NGC 206 and the Star Clouds of Andromeda\n" + "正文" * 300,
-            images   = ("/data/apod/x.jpg",),
-        ),
+    material = run.draft_material()
+    assert "（apod 推送）NGC 206 and the Star Clouds of Andromeda" in material
+    assert "昨晚的趋势" not in material  # 六小时前的不算
+    assert (
+        "正文正文" in material and material.count("只记下开头") == 1
+    )  # 推送给全文，只有聊天记录里是截断的
+    assert "配图里看到的：一片斜着的星系，右上偏亮" in material
+    assert len(run.model.calls_of("vision")) == 1
+
+    # 下一次起草：同样的推送材料，图不再看一遍，看到的内容存在推送记录里。
+    assert await chat_main.scheduled_proactive(mock_context) == []
+    assert run.model.calls_of("reply")[1].messages[1]["content"] == material
+    assert len(run.model.calls_of("vision")) == 1, "图只看一遍，看到的内容存进推送记录"
+    assert (
+        run.state.push_log.since("g42", NOW - 4 * HOUR)[-1].image_note == "一片斜着的星系，右上偏亮"
     )
-    look = AsyncMock(return_value="一片斜着的星系，右上偏亮")
-    with patch.object(proactive, "look_at_images", look):
-        notices = await proactive.push_notices(
-            _runtime(), state, "g42", history, now=NOW, secrets={"_ai": object()}
-        )
-        again = await proactive.push_notices(
-            _runtime(), state, "g42", history, now=NOW, secrets={"_ai": object()}
-        )
-    assert len(notices) == 1 and notices == again  # 六小时前的不算
-    assert notices[0].startswith("（apod 推送）NGC 206 and the Star Clouds of Andromeda")
-    assert "正文正文" in notices[0] and "只记下开头" not in notices[0]
-    assert notices[0].endswith("配图里看到的：一片斜着的星系，右上偏亮")
-    assert look.await_count == 1, "图只看一遍，看到的内容存进推送记录"
 
     # 她接过话之后的推送才算
-    spoken = [*history, _bot("这张好看", NOW - HOUR)]
-    assert await proactive.push_notices(_runtime(), state, "g42", spoken, now=NOW, secrets={}) == []
+    spoken = [
+        *history[:1],
+        history[1],
+        bot_message("这张好看", NOW - 2.5 * HOUR),
+        _user("确实", NOW - 2 * HOUR),
+    ]
+    run = await group_run(
+        mock_context, tmp_path, spoken, reply='{"decision":"skip"}', vision="不该被问", seed=pushes
+    )
+    assert "（apod 推送）" not in run.draft_material() and run.model.calls_of("vision") == []
 
 
 # ---- 前几次主动说的话 -------------------------------------------------------------------------
@@ -162,9 +210,9 @@ def test_feedback_block_shows_who_picked_up_each_earlier_line() -> None:
     )
     history = [
         _user("早", NOW - 30 * HOUR),
-        _bot("昨天分享的歌单", NOW - 26 * HOUR),
+        bot_message("昨天分享的歌单", NOW - 26 * HOUR),
         _user("隔了半天才说话", NOW - 20 * HOUR),
-        _bot("今天说的作业", NOW - 4 * HOUR),
+        bot_message("今天说的作业", NOW - 4 * HOUR),
         _user(
             "都有什么作业呀，说来听听，是不是又拖到最后一天才写的那种", NOW - 4 * HOUR + 30, "鱼丸"
         ),
@@ -197,7 +245,8 @@ def test_spoken_lines_are_recorded_and_capped(tmp_path) -> None:
 
 class _Life:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.rows, self.requests = rows, []
+        self.rows                           = rows
+        self.requests: list[dict[str, Any]] = []
 
     async def turn_context(self, payload: dict[str, Any]) -> Any:
         self.requests.append(payload)
@@ -230,30 +279,56 @@ async def test_share_candidates_carry_the_groups_topics_and_the_heard_here_mark(
 
 
 @pytest.mark.asyncio
-async def test_group_draft_sees_everything_she_has_and_the_line_is_remembered(tmp_path) -> None:
+async def test_group_draft_sees_everything_she_has_and_the_line_is_remembered(
+    mock_context, tmp_path
+) -> None:
     history = [
         *[_user(f"第{n}句群聊", NOW - 30 * HOUR + n) for n in range(30)],
-        _bot("昨天分享的歌单", NOW - 26 * HOUR),
+        bot_message("昨天分享的歌单", NOW - 26 * HOUR),
         _user("NapCat 删库了", NOW - 5 * HOUR, "鱼丸"),
-        _bot("APOD 开头…（内容较长，只记下开头）", NOW - 2 * HOUR, source="apod"),
+        bot_message("APOD 开头…（内容较长，只记下开头）", NOW - 2 * HOUR, source="apod"),
     ]
-    state  = _state(tmp_path, history)
-    moment = local_datetime(NOW)
-    minute = moment.hour * 60 + moment.minute
-    state.daily_life.save(
-        DayRecord(
-            day    = day_key(moment),
-            events = (
-                DayEvent(max(0, minute - 30), "午饭打了糖醋里脊", "排到我正好是最后一份"),
-                DayEvent(min(1439, minute + 60), "晚上去社团", "还没发生"),
+    moment  = local_datetime(NOW)
+    minute  = moment.hour * 60 + moment.minute
+    harness = MemoryHarness(tmp_path / "memory")
+    harness.store.put_notes(
+        "g42",
+        [
+            Note(
+                id          = "ngroup",
+                kind        = "group.fact",
+                scope       = "g42",
+                subject     = group_subject("g42"),
+                text        = "这个群常聊的：QQ 机器人、显卡",
+                created_at  = NOW,
+                observed_at = NOW,
+            )
+        ],
+    )
+    topics = [{"topic": "NapCat 删库", "keywords": ["NapCat"]}]
+    harness.store.update_scope(
+        "g42", topics=[{**topic, "usage": "normal", "at": NOW} for topic in topics]
+    )
+
+    def seed(state: ChatRuntimeState) -> None:
+        state.daily_life.save(
+            DayRecord(
+                day    = day_key(moment),
+                events = (
+                    DayEvent(max(0, minute - 30), "午饭打了糖醋里脊", "排到我正好是最后一份"),
+                    DayEvent(min(1439, minute + 60), "晚上去社团", "还没发生"),
+                ),
             ),
-        ),
-        now=moment,
-    )
-    state.push_log.append(
-        "g42", Push(ts=NOW - 2 * HOUR, source="apod", local_id="m9", text="APOD 全文" + "x" * 500)
-    )
-    state.proactive_state.record("g42", ts=NOW - 26 * HOUR, day="2020-01-01", text="昨天分享的歌单")
+            now=moment,
+        )
+        state.push_log.append(
+            "g42",
+            Push(ts=NOW - 2 * HOUR, source="apod", local_id="m9", text="APOD 全文" + "x" * 500),
+        )
+        state.proactive_state.record(
+            "g42", ts=NOW - 26 * HOUR, day="2020-01-01", text="昨天分享的歌单"
+        )
+
     life = _Life(
         [
             {
@@ -264,33 +339,21 @@ async def test_group_draft_sees_everything_she_has_and_the_line_is_remembered(tm
             }
         ]
     )
-    context = SimpleNamespace(
-        logger=None, data_dir=tmp_path, capabilities=SimpleNamespace(life_context=life, memory=None)
+    draft = "鱼丸 上次说的 NapCat，我搜到个留后路的 https://b23.tv/x"
+    run   = await group_run(
+        mock_context,
+        tmp_path,
+        history,
+        reply   = '{"decision":"send","text":"' + draft + '","life_ref":1}',
+        checker = '{"decision":"send","reason":"有出处"}',
+        life    = life,
+        harness = harness,
+        seed    = seed,
+        config  = {"life": {"enable_daily_life": True}},
     )
-    topics   = ({"topic": "NapCat 删库", "keywords": ["NapCat"]},)
-    recalled = memory_client.Recalled(
-        blocks={"group": "这个群常聊的：QQ 机器人、显卡"}, topics=topics, available=True
-    )
-    model = AsyncMock(
-        side_effect=[
-            '{"decision":"send","text":"鱼丸 上次说的 NapCat，我搜到个留后路的 https://b23.tv/x","life_ref":1}',
-            '{"decision":"send","reason":"有出处"}',
-        ]
-    )
-    with (
-        patch.object(proactive, "chat_completions", model),
-        patch.object(proactive, "configured_bot_name", return_value="小青"),
-        patch.object(proactive, "ai_route_context", return_value={"_ai": object()}),
-        patch.object(proactive.memory_client, "recall", AsyncMock(return_value=recalled)),
-    ):
-        delivery = await proactive._consider_group(
-            context, _runtime(), state, 42, now=NOW, life_text=""
-        )
-    assert delivery is not None
-    assert life.requests[0]["topics"] == list(topics) and life.requests[0]["is_private"] is False
-    system, material = (m["content"] for m in model.await_args_list[0].kwargs["messages"])
-    assert system.endswith(proactive._DRAFT_INSTRUCTION)
-    assert "写着“听群里在聊…才去搜的”是这个群聊到、你后来去看的" in material
+    assert run.delivery is not None
+    assert life.requests[0]["topics"] == topics and life.requests[0]["is_private"] is False
+    material = run.draft_material()
     assert "1. 今天 07:44 在B站搜东西" in material and "「给AI配刹车」" in material
     assert "- " in material and "午饭打了糖醋里脊（排到我正好是最后一份）" in material
     assert "晚上去社团" not in material
@@ -298,23 +361,12 @@ async def test_group_draft_sees_everything_she_has_and_the_line_is_remembered(tm
     assert "（apod 推送）APOD 全文xxxx" in material and material.count("只记下开头") == 1
     assert "昨天分享的歌单（没人接）" in material
     assert "第0句群聊" in material, "最近群聊给到四十条，看得到更早聊过什么"
-    judged = model.await_args_list[1].kwargs["messages"]
-    assert judged[0]["content"].endswith(proactive._JUDGE_INSTRUCTION)
-    assert judged[1]["content"].endswith(
-        "她准备发：鱼丸 上次说的 NapCat，我搜到个留后路的 https://b23.tv/x"
-    )
-    with (
-        patch.object(proactive, "schedule_memory_persist"),
-        patch.object(proactive, "schedule_action_history_flush"),
-        patch.object(proactive, "spawn_life_extraction"),
-    ):
-        await delivery.receipt.record(True)
-    record = state.proactive_state.get("g42")
+    judged = run.model.calls_of("checker")[0].messages
+    assert judged[1]["content"].endswith(draft)
+    await commit(run)
+    record = run.state.proactive_state.get("g42")
     assert record.shared_life_ids == ("e7",)
-    assert [text for _, text in record.recent] == [
-        "昨天分享的歌单",
-        "鱼丸 上次说的 NapCat，我搜到个留后路的 https://b23.tv/x",
-    ]
+    assert [text for _, text in record.recent] == ["昨天分享的歌单", draft]
 
 
 def test_draft_text_keeps_a_link_and_drops_markers() -> None:

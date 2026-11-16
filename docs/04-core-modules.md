@@ -142,7 +142,7 @@ AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据�
 |---|---|
 | `logging_config.py` | 控制台、文件、颜色、轮转和日志格式 |
 | `metrics.py` | 消息、插件、错误、延迟和队列指标 |
-| `clock.py` | 时区感知时间和可测试时钟 |
+| `clock.py` | 按配置时区取当前时间 |
 | `constants.py` | Core 共享边界常量 |
 | `exceptions.py` | 领域异常类型 |
 | `version.py` | 从项目元数据或 wheel 元数据解析运行时版本 |

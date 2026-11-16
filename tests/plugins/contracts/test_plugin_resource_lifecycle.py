@@ -1,35 +1,45 @@
-"""Quotas and bounded plugin-owned resources."""
+"""插件自有资源的额度与上限：每日额度、有界文件缓存、客户端注册表、论坛缓存。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
+from core.bounded_http import BoundedHttpResponse
+from plugins.adnmb import adapi
 from plugins.adnmb import main as adnmb_main
-from plugins.adnmb.adapi import AdnmbClient
+from plugins.adnmb.adapi import MAX_FORUM_CACHE_ENTRIES, AdnmbClient
 from plugins.chat import main as chat_main
-from plugins.url_parser import main as url_parser_main
 from tests.helpers.assertions import text_segments_text
 from tests.helpers.settings_snapshot import with_settings_reader
+
+
+def _business_day(day: int) -> datetime:
+    return datetime(2026, 7, day, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
 def _chat_context(
     *,
     data_dir: Path,
-    user_limit: int   = 1,
-    global_limit: int = 10,
+    user_limit: int             = 1,
+    global_limit: int           = 10,
+    now: Callable[[], datetime] = lambda: _business_day(14),
 ) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            config={
+            now    = now,
+            config = {
                 "timezone": "Asia/Shanghai",
                 "plugins" : {
                     "chat": {
@@ -56,22 +66,21 @@ def _chat_context(
 
 @pytest.mark.asyncio
 async def test_chat_quota_resets_at_business_date_boundary(monkeypatch, tmp_path):
-    context = _chat_context(data_dir=tmp_path)
-    current_date = ["2026-07-14"]
-    calls        = 0
+    current_day = [14]
+    context = _chat_context(data_dir=tmp_path, now=lambda: _business_day(current_day[0]))
+    calls = 0
 
     async def fake_call(*_args, **_kwargs):
         nonlocal calls
         calls += 1
         return {"messages": [{"type": "answer", "content": "ok"}]}
 
-    monkeypatch.setattr(chat_main, "_business_date", lambda _context: current_date[0])
     monkeypatch.setattr(chat_main, "call_coze_api", fake_call)
 
-    first           = await chat_main.handle("chat", "first", {"user_id": 7}, context)
-    denied          = await chat_main.handle("chat", "second", {"user_id": 7}, context)
-    current_date[0] = "2026-07-15"
-    next_day        = await chat_main.handle("chat", "third", {"user_id": 7}, context)
+    first          = await chat_main.handle("chat", "first", {"user_id": 7}, context)
+    denied         = await chat_main.handle("chat", "second", {"user_id": 7}, context)
+    current_day[0] = 15
+    next_day       = await chat_main.handle("chat", "third", {"user_id": 7}, context)
 
     assert text_segments_text(first) == "ok"
     assert "额度已用完" in text_segments_text(denied)
@@ -92,7 +101,6 @@ async def test_chat_failed_remote_call_rolls_back_reserved_quota(monkeypatch, tm
     async def fake_call(*_args, **_kwargs):
         return responses.pop(0)
 
-    monkeypatch.setattr(chat_main, "_business_date", lambda _context: "2026-07-14")
     monkeypatch.setattr(chat_main, "call_coze_api", fake_call)
 
     failed = await chat_main.handle("chat", "first", {"user_id": 8}, context)
@@ -122,7 +130,6 @@ async def test_chat_concurrent_reservations_cannot_oversubscribe(monkeypatch, tm
         await release.wait()
         return {"messages": [{"type": "answer", "content": "ok"}]}
 
-    monkeypatch.setattr(chat_main, "_business_date", lambda _context: "2026-07-14")
     monkeypatch.setattr(chat_main, "call_coze_api", fake_call)
 
     first_task = asyncio.create_task(chat_main.handle("chat", "first", {"user_id": 9}, context))
@@ -173,36 +180,12 @@ def test_bounded_file_cache_enforces_lru_ttl_entry_and_byte_limits(tmp_path):
     assert byte_cache.put("oversized.webp", b"123456") is None
 
 
-def test_url_preview_cache_is_scoped_to_stable_data_directory(tmp_path):
-    context = SimpleNamespace(data_dir=tmp_path / "plugin-data")
-    cache = url_parser_main._preview_cache(context)
-
-    assert cache.directory == tmp_path / "plugin-data" / "url_previews"
-    assert cache.limits == url_parser_main.PREVIEW_CACHE_LIMITS
-
-
 class _SharedSession:
     def __init__(self) -> None:
         self.close_calls = 0
 
     def close(self) -> None:
         self.close_calls += 1
-
-
-class _FakeAdnmbClient:
-    created: ClassVar[list[_FakeAdnmbClient]] = []
-
-    def __init__(self, session, cache_dir: Path, uuid: str = "") -> None:
-        self.session     = session
-        self.cache_dir   = cache_dir
-        self.uuid        = uuid
-        self.closed      = False
-        self.close_calls = 0
-        self.created.append(self)
-
-    def close(self) -> None:
-        self.close_calls += 1
-        self.closed = True
 
 
 def _adnmb_context(tmp_path: Path) -> SimpleNamespace:
@@ -218,42 +201,35 @@ def _adnmb_context(tmp_path: Path) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_adnmb_client_registry_evicts_lru_and_shutdown_closes_wrappers_only(
-    monkeypatch, tmp_path
-):
-    _FakeAdnmbClient.created = []
-    monkeypatch.setattr(adnmb_main, "AdnmbClient", _FakeAdnmbClient)
-    monkeypatch.setattr(adnmb_main, "MAX_CACHED_CLIENTS", 2)
+async def test_adnmb_client_registry_evicts_lru_and_shutdown_closes_wrappers_only(tmp_path):
     context   = _adnmb_context(tmp_path)
     cache_dir = context.data_dir / "images"
+    limit     = adnmb_main.MAX_CACHED_CLIENTS
 
-    first = adnmb_main._get_client(context, cache_dir, user_id="1")
-    second = adnmb_main._get_client(context, cache_dir, user_id="2")
-    third = adnmb_main._get_client(context, cache_dir, user_id="3")
+    clients = [
+        adnmb_main._get_client(context, cache_dir, user_id=str(index)) for index in range(limit + 1)
+    ]
 
-    assert first.closed is True
-    assert second.closed is False
-    assert third.closed is False
-    assert len(context.state["adnmb_runtime"]["clients"]) == 2
+    assert clients[0].closed is True
+    assert all(not client.closed for client in clients[1:])
+    assert len(context.state["adnmb_runtime"]["clients"]) == limit
 
     await adnmb_main.shutdown(context)
 
-    assert second.closed is True
-    assert third.closed is True
+    assert all(client.closed for client in clients)
     assert context.http_session.close_calls == 0
     assert "adnmb_runtime" not in context.state
 
 
 def test_adnmb_client_registry_expires_idle_entries(monkeypatch, tmp_path):
-    _FakeAdnmbClient.created = []
-    monkeypatch.setattr(adnmb_main, "AdnmbClient", _FakeAdnmbClient)
-    monkeypatch.setattr(adnmb_main, "CLIENT_IDLE_TTL_SECONDS", 1)
+    clock = [1000.0]
+    monkeypatch.setattr(adnmb_main, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     context   = _adnmb_context(tmp_path)
     cache_dir = context.data_dir / "images"
 
     first = adnmb_main._get_client(context, cache_dir, user_id="1")
     registry = context.state["adnmb_runtime"]["clients"]
-    registry["client:1"].last_used = 0.0
+    clock[0] += adnmb_main.CLIENT_IDLE_TTL_SECONDS
     second = adnmb_main._get_client(context, cache_dir, user_id="2")
 
     assert first.closed is True
@@ -264,27 +240,41 @@ def test_adnmb_client_registry_expires_idle_entries(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_adnmb_forum_cache_has_ttl_capacity_and_copy_boundary(monkeypatch, tmp_path):
     client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
-    calls = 0
+    calls  = 0
+    clock  = [5000.0]
+    forums = [
+        {"name": f"forum-{index}", "id": index} for index in range(MAX_FORUM_CACHE_ENTRIES + 5)
+    ]
+    body = json.dumps([{"forums": forums}]).encode()
 
-    async def fake_get(_endpoint: str, **_params):
+    async def fake_request(_session, _method, url, **_kwargs):
         nonlocal calls
         calls += 1
-        forums = [
-            {"name": f"forum-{index}", "id": index} for index in range(client_module_limit + 5)
-        ]
-        return [{"forums": forums}]
+        return BoundedHttpResponse(
+            url           = url,
+            status        = 200,
+            body          = body,
+            media_type    = "application/json",
+            charset       = "utf-8",
+            headers       = {"Content-Type": "application/json"},
+            wire_bytes    = len(body),
+            decoded_bytes = len(body),
+        )
 
-    client_module_limit = 3
-    monkeypatch.setattr("plugins.adnmb.adapi.MAX_FORUM_CACHE_ENTRIES", client_module_limit)
-    monkeypatch.setattr(client, "_get", fake_get)
+    monkeypatch.setattr(adapi, "aiohttp_request_bounded", fake_request)
+    monkeypatch.setattr(
+        adapi,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], time=time.time),
+    )
 
     first            = await client.get_forum_list()
     first["mutated"] = "outside"
     cached           = await client.get_forum_list()
     assert calls == 1
-    assert len(cached) == client_module_limit
+    assert len(cached) == MAX_FORUM_CACHE_ENTRIES
     assert "mutated" not in cached
 
-    client._forum_cache_expires_at = 0.0
+    clock[0] += adapi.FORUM_CACHE_TTL_SECONDS
     await client.get_forum_list()
     assert calls == 2

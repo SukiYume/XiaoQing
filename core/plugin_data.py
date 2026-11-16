@@ -8,7 +8,6 @@ import stat
 from pathlib import Path
 
 from .models import canonical_plugin_name
-from .plugin_base import ensure_dir
 from .plugin_manager_support import (
     LoadedPlugin,
     PluginPathError,
@@ -95,10 +94,4 @@ class PluginDataMixin:
                 return self._verify_data_directory_record(record)
             except PluginPathError:
                 return None
-        if plugin.authorized_entry is not None:
-            return None
-        # Compatibility for synthetic/in-memory generations that never crossed
-        # the filesystem authorization path used by production plugins.
-        data_dir = self.data_root / canonical_plugin_name(name)
-        ensure_dir(data_dir)
-        return data_dir
+        return None

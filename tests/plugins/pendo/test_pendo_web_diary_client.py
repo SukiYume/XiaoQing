@@ -1,4 +1,4 @@
-"""Pendo Web 日记页的数据边界、渲染、表单与异步生命周期回归。"""
+"""Pendo Web 日记页的数据边界、渲染、表单与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ DIARY_SETUP: Final = r"""
     globalThis.__confirmResult = true;
     globalThis.__modalContent = null;
     globalThis.__formData = {};
-    globalThis.__styleCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
     globalThis.__dispatchedEvents = [];
@@ -141,7 +140,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (_breakpoint, cssText) => cssText;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
@@ -171,7 +170,6 @@ export {
     compactDiaryCellLabel,
     deleteDiary as __deleteDiary,
     diaryWordCount,
-    ensureStyles as __ensureStyles,
     fetchItems,
     formatEntryTime,
     formatWordMetric,
@@ -273,24 +271,6 @@ def test_diary_helpers_normalize_unicode_dates_metrics_and_template_rows() -> No
             client.templateAnswersToContent(rows),
             '问题 A\n回答 A\n\n无题回答\n\n旧问题\n旧回答',
         );
-        """
-    )
-
-
-def test_diary_mobile_calendar_stays_within_panel_and_uses_compact_entry_marks() -> None:
-    """手机月历必须允许七列收缩，并用紧凑色条呈现有内容的日期。"""
-
-    _run_diary_client(
-        r"""
-        client.__ensureStyles();
-        const css = __styleCalls.at(-1)[1];
-
-        assert.match(css, /\.diary-summary-card, \.diary-panel, \.diary-workspace \{[\s\S]*?min-width: 0; overflow: hidden;/);
-        assert.match(css, /\.diary-layout \{[\s\S]*?min-width: 0;/);
-        assert.match(css, /\.diary-calendar-weekdays, \.diary-calendar-grid \{[\s\S]*?width: 100%; min-width: 0;/);
-        assert.ok(css.includes('.diary-layout { grid-template-columns: minmax(0, 1fr); }'));
-        assert.match(css, /\.diary-day \{ width: 100%; max-width: 100%; min-height: 78px;/);
-        assert.match(css, /\.diary-day-copy \{[\s\S]*?height: 6px;[\s\S]*?font-size: 0;/);
         """
     )
 

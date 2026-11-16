@@ -1,5 +1,5 @@
 # 验证插件导入代不可变；每例完整恢复进程级模块和导入器状态。
-"""Regression tests for immutable plugin import generations.
+"""Immutable plugin import generations: what a loaded generation can import and unload.
 
 These tests deliberately exercise process-global import state.  Every case uses
 unique module names and the autouse fixture restores the canonical namespace,
@@ -22,9 +22,10 @@ from types import ModuleType
 
 import pytest
 
-import core.plugin_manager as plugin_manager_module
+import core.plugin_manager_support as manager_support
 from core.models import PluginManifest
-from core.plugin_manager import PluginManager, PluginPathError
+from core.plugin_manager import PluginManager
+from core.plugin_manager_support import PluginPathError
 from core.router import CommandRouter
 from tests.helpers.plugin_manager_test_support import load_plugin_dir
 
@@ -57,14 +58,14 @@ def _restore_process_import_state():
     meta_path        = list(sys.meta_path)
     sys_path         = list(sys.path)
     plugins_path     = list(plugins_package.__path__)
-    namespace_owners = dict(plugin_manager_module._PLUGIN_NAMESPACE_OWNERS)
+    namespace_owners = dict(manager_support._PLUGIN_NAMESPACE_OWNERS)
     path_leases      = {
         key: type(lease)(
             container = lease.container,
             owners    = lease.owners,
             inserted  = lease.inserted,
         )
-        for key, lease in plugin_manager_module._PROCESS_IMPORT_PATH_LEASES.items()
+        for key, lease in manager_support._PROCESS_IMPORT_PATH_LEASES.items()
     }
 
     yield
@@ -73,10 +74,10 @@ def _restore_process_import_state():
     sys.meta_path[:]            = meta_path
     sys.path[:]                 = sys_path
     plugins_package.__path__[:] = plugins_path
-    plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.clear()
-    plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.update(namespace_owners)
-    plugin_manager_module._PROCESS_IMPORT_PATH_LEASES.clear()
-    plugin_manager_module._PROCESS_IMPORT_PATH_LEASES.update(path_leases)
+    manager_support._PLUGIN_NAMESPACE_OWNERS.clear()
+    manager_support._PLUGIN_NAMESPACE_OWNERS.update(namespace_owners)
+    manager_support._PROCESS_IMPORT_PATH_LEASES.clear()
+    manager_support._PROCESS_IMPORT_PATH_LEASES.update(path_leases)
 
 
 def _build_manager(root: Path) -> PluginManager:
@@ -94,23 +95,18 @@ def test_plugin_manager_degrades_to_restart_only_when_import_barrier_is_unavaila
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    setup_calls: list[PluginManager] = []
+    coordinator = manager_support._PLUGIN_IMPORT_BARRIER_COORDINATOR
+    # 解释器没有 importlib 的私有模块锁接口：重新探测，且探测结果随用例结束还原。
+    monkeypatch.setattr(coordinator, "_capability", None)
+    real_bootstrap = importlib._bootstrap  # type: ignore[attr-defined]
 
-    def record_setup(manager: PluginManager) -> None:
-        setup_calls.append(manager)
+    class BootstrapWithoutModuleLocks:
+        def __getattr__(self, name: str) -> object:
+            if name == "_get_module_lock":
+                raise AttributeError(name)
+            return getattr(real_bootstrap, name)
 
-    monkeypatch.setattr(PluginManager, "_setup_sys_path", record_setup)
-
-    unavailable = plugin_manager_module._ModuleImportBarrierCapability(
-        False,
-        "unsupported interpreter",
-    )
-
-    monkeypatch.setattr(
-        plugin_manager_module._ModuleImportBarrierCoordinator,
-        "capability",
-        lambda _self: unavailable,
-    )
+    monkeypatch.setattr(importlib, "_bootstrap", BootstrapWithoutModuleLocks())
 
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
@@ -121,9 +117,10 @@ def test_plugin_manager_degrades_to_restart_only_when_import_barrier_is_unavaila
         context_factory = lambda *args, **kwargs: object(),
     )
 
-    assert setup_calls == [manager]
+    assert os.path.abspath(tmp_path) in sys.path
     assert manager.hot_reload_supported is False
-    assert manager.hot_reload_unavailable_reason == "unsupported interpreter"
+    assert manager.hot_reload_unavailable_reason == coordinator.capability().reason
+    assert manager.hot_reload_unavailable_reason
 
     with pytest.raises(PluginPathError, match="restart the process"):
         asyncio.run(manager.reload_all_plugins())
@@ -132,7 +129,9 @@ def test_plugin_manager_degrades_to_restart_only_when_import_barrier_is_unavaila
 def test_import_barrier_probe_checks_behavior_and_leaves_no_synthetic_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator = plugin_manager_module._ModuleImportBarrierCoordinator()
+    coordinator = manager_support._ModuleImportBarrierCoordinator()
+    bootstrap   = importlib._bootstrap  # type: ignore[attr-defined]
+    real_getter = bootstrap._get_module_lock
 
     class NonBlockingFakeModuleLock:
         def acquire(self) -> None:
@@ -141,11 +140,13 @@ def test_import_barrier_probe_checks_behavior_and_leaves_no_synthetic_module(
         def release(self) -> None:
             return None
 
-    monkeypatch.setattr(
-        plugin_manager_module._ModuleImportBarrierCoordinator,
-        "_lock_getter",
-        staticmethod(lambda: lambda _name: NonBlockingFakeModuleLock()),
-    )
+    def getter(name: str):  # type: ignore[no-untyped-def]
+        if name.startswith("__xiaoqing_plugin_import_barrier_probe_"):
+            return NonBlockingFakeModuleLock()
+        return real_getter(name)
+
+    # 解释器的模块锁不再挡住导入：只替换探测用的那一个模块名，其余导入照常。
+    monkeypatch.setattr(bootstrap, "_get_module_lock", getter)
 
     capability = coordinator.capability()
 
@@ -159,13 +160,13 @@ def test_import_barrier_probe_checks_behavior_and_leaves_no_synthetic_module(
 def test_import_barrier_probe_treats_private_api_failure_as_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator = plugin_manager_module._ModuleImportBarrierCoordinator()
+    coordinator = manager_support._ModuleImportBarrierCoordinator()
 
     def unavailable_lock_getter() -> object:
         raise RuntimeError("private API layout changed")
 
     monkeypatch.setattr(
-        plugin_manager_module._ModuleImportBarrierCoordinator,
+        manager_support._ModuleImportBarrierCoordinator,
         "_lock_getter",
         staticmethod(unavailable_lock_getter),
     )
@@ -176,51 +177,40 @@ def test_import_barrier_probe_treats_private_api_failure_as_unavailable(
     assert capability.reason == "module-lock capability is unavailable: RuntimeError"
 
 
-def test_import_barrier_coordinator_keeps_one_worker_across_timeouts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    coordinator             = plugin_manager_module._ModuleImportBarrierCoordinator()
-    coordinator._capability = plugin_manager_module._ModuleImportBarrierCapability(True)
-    held_lock_entered       = threading.Event()
-    release_held_lock       = threading.Event()
-
-    class FakeModuleLock:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
-        def acquire(self) -> None:
-            if self.name == "held":
-                held_lock_entered.set()
-                release_held_lock.wait()
-
-        def release(self) -> None:
-            return None
-
-    def fake_getter(name: str) -> FakeModuleLock:
-        return FakeModuleLock(name)
-
-    monkeypatch.setattr(
-        plugin_manager_module._ModuleImportBarrierCoordinator,
-        "_lock_getter",
-        staticmethod(lambda: fake_getter),
+def test_import_barrier_coordinator_keeps_one_worker_across_timeouts() -> None:
+    coordinator = manager_support._ModuleImportBarrierCoordinator()
+    held_lock   = importlib._bootstrap._get_module_lock(  # type: ignore[attr-defined]
+        "xiaoqing_integrity_held_module"
     )
+    held_lock.acquire()
+    lock_released = False
 
-    with pytest.raises(PluginPathError, match="timed out waiting for plugin import module locks"):
-        coordinator.cross(("held",), timeout=0.05)
-    assert held_lock_entered.is_set()
-    worker = coordinator._worker
-    assert worker is not None and worker.is_alive()
+    try:
+        with pytest.raises(
+            PluginPathError,
+            match="timed out waiting for plugin import module locks",
+        ):
+            coordinator.cross(("xiaoqing_integrity_held_module",), timeout=0.05)
+        worker = coordinator._worker
+        assert worker is not None and worker.is_alive()
 
-    with pytest.raises(PluginPathError, match="timed out waiting for the plugin import barrier"):
-        coordinator.cross(("queued",), timeout=0.05)
-    assert coordinator._worker is worker
+        with pytest.raises(
+            PluginPathError,
+            match="timed out waiting for the plugin import barrier",
+        ):
+            coordinator.cross(("xiaoqing_integrity_queued_module",), timeout=0.05)
+        assert coordinator._worker is worker
 
-    release_held_lock.set()
-    deadline = time.monotonic() + 1
-    while coordinator._busy and time.monotonic() < deadline:
-        time.sleep(0.01)
-    coordinator.cross(("after-timeout",), timeout=0.5)
-    assert coordinator._worker is worker
+        held_lock.release()
+        lock_released = True
+        deadline      = time.monotonic() + 1
+        while coordinator._busy and time.monotonic() < deadline:
+            time.sleep(0.01)
+        coordinator.cross(("xiaoqing_integrity_after_timeout_module",), timeout=0.5)
+        assert coordinator._worker is worker
+    finally:
+        if not lock_released:
+            held_lock.release()
 
 
 def _write_manifest(plugin_dir: Path, name: str, *, entry: str = "main.py") -> None:
@@ -748,7 +738,7 @@ async def test_spec_created_before_unload_is_revoked_before_source_execution(
         assert helper_name not in sys.modules
         assert name not in manager._source_finders
         assert name not in manager._owned_plugin_modules
-        assert name not in plugin_manager_module._PLUGIN_NAMESPACE_OWNERS
+        assert name not in manager_support._PLUGIN_NAMESPACE_OWNERS
     finally:
         release_spec.set()
         import_thread.join(2)
@@ -784,7 +774,7 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
     assert loaded is not None
     finder                              = manager._source_finders[name]
     original_deactivate                 = finder.deactivate_and_wait
-    original_exec                       = plugin_manager_module._SourceOnlyPluginLoader.exec_module
+    original_exec                       = manager_support._SourceOnlyPluginLoader.exec_module
     exec_returned                       = threading.Event()
     release_exec                        = threading.Event()
     import_results: list[ModuleType]    = []
@@ -803,7 +793,7 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
         return module_names
 
     monkeypatch.setattr(
-        plugin_manager_module._SourceOnlyPluginLoader,
+        manager_support._SourceOnlyPluginLoader,
         "exec_module",
         delayed_exec,
     )

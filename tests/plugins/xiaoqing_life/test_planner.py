@@ -10,7 +10,7 @@ import pytest
 from plugins.xiaoqing_life import planner
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.stores import default_state
-from tests.plugins.xiaoqing_life.support import FREE, at, make_cfg
+from tests.helpers.xiaoqing_life_test_support import FREE, at, make_cfg
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
@@ -84,7 +84,7 @@ def test_daily_budgets_and_rolling_activity_window() -> None:
 
 
 def test_overlapping_activity_spans_count_once() -> None:
-    """手动浏览和还没走完的名义时段重叠：生产里 13+37 分钟的两段实际只占 40 分钟。"""
+    """时段重叠、嵌套的部分只算一次：滚动窗口里 13+37 分钟的两段重叠 10 分钟，实际占 40 分钟。"""
 
     start   = NOW - 50 * 60
     overlap = default_state() | {
@@ -235,7 +235,7 @@ def test_topic_choice_mixes_interests_and_exploration_and_demotes_repeats() -> N
     assert "猫" in demoted
 
 
-def test_similarity_uses_bigrams_and_difflib() -> None:
+def test_similar_topics_are_recognised_and_unrelated_ones_are_not() -> None:
     assert planner.similar("猎户座大星云", "猎户座大星云怎么拍")
     assert planner.similar("独立游戏开发", "独立游戏开发幕后")
     assert not planner.similar("天文摄影", "地方美食")

@@ -70,11 +70,7 @@ def persona_facts(context: Any) -> str:
 
     name = bot_name(context)
     card = persona_card(context)
-    try:
-        facts = str(card.facts(name)).strip() if card is not None else ""
-    except Exception:
-        facts = ""
-    return facts or f"你是{name}。"
+    return card.facts(name) if card is not None else f"你是{name}。"
 
 
 def _quiet_presence(cfg: LifeConfig, moment: datetime) -> Presence:

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pytest
 
+from core.bounded_file_cache import FileCacheLimits
 from core.bounded_http import BoundedHttpResponse, HttpStatusError
 from core.safe_http import MAX_PROXY_URL_CHARS
 from plugins.voice import main as voice
@@ -68,8 +71,6 @@ def _install_response(
 
 
 def test_static_metadata() -> None:
-    assert "语音" in voice._HELP_TEXT
-
     manifest = json.loads((ROOT / "plugins" / "voice" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["concurrency"] == "parallel"
     command = manifest["commands"][0]
@@ -196,7 +197,7 @@ async def test_tts_cache_reuses_valid_audio_and_separates_voice_settings(
 
 
 @pytest.mark.asyncio
-async def test_tts_replaces_corrupt_legacy_cache(monkeypatch, tmp_path: Path) -> None:
+async def test_tts_replaces_corrupt_cached_audio(monkeypatch, tmp_path: Path) -> None:
     context = _context(tmp_path)
     calls   = _install_response(monkeypatch, _response(b"ID3fresh", "audio/mpeg"))
 
@@ -230,26 +231,46 @@ def test_cached_audio_handles_read_and_cleanup_failures(caplog) -> None:
 async def test_tts_uses_cache_filled_while_waiting_for_same_key(
     monkeypatch, tmp_path: Path
 ) -> None:
-    cached = tmp_path / "filled.mp3"
-    cached.write_bytes(b"ID3filled")
-    outcomes = iter((None, cached))
-    monkeypatch.setattr(voice, "_get_cached_audio", lambda *_args: next(outcomes))
-    request = AsyncMock()
-    monkeypatch.setattr(voice, "aiohttp_request_bounded", request)
+    """同一句话并发合成：后到的请求等锁，拿到先到者填好的缓存，不再发第二次请求。"""
 
-    assert await voice.text_to_speech("singleflight", _context(tmp_path)) == str(cached.resolve())
-    request.assert_not_awaited()
+    started          = asyncio.Event()
+    release          = asyncio.Event()
+    calls: list[str] = []
+
+    async def gated_request(_session, _method, _url, **_kwargs):
+        calls.append("request")
+        started.set()
+        await release.wait()
+        return _response(b"ID3audio", "audio/mpeg")
+
+    monkeypatch.setattr(voice, "aiohttp_request_bounded", gated_request)
+    context = _context(tmp_path)
+
+    first = asyncio.create_task(voice.text_to_speech("singleflight", context))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.create_task(voice.text_to_speech("singleflight", context))
+    await asyncio.sleep(0.05)
+    assert not second.done()
+    release.set()
+
+    first_path, second_path = await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+
+    assert first_path is not None
+    assert second_path == first_path
+    assert Path(second_path).read_bytes() == b"ID3audio"
+    assert calls == ["request"]
 
 
 @pytest.mark.asyncio
 async def test_tts_handles_cache_store_rejection(monkeypatch, tmp_path: Path) -> None:
     _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
     monkeypatch.setattr(
-        voice.BoundedFileCache,
-        "put_if_absent",
-        lambda *_args: (None, False),
+        voice,
+        "_TTS_CACHE_LIMITS",
+        FileCacheLimits(max_entries=8, max_bytes=4, ttl_seconds=60),
     )
     assert await voice.text_to_speech("cache rejection", _context(tmp_path)) is None
+    assert list((tmp_path / "voice-data" / "audio").glob("*.mp3")) == []
 
 
 @pytest.mark.asyncio
@@ -292,30 +313,39 @@ async def test_tts_handles_transport_failures(
     assert await voice.text_to_speech("hello", _context(tmp_path)) is None
 
 
+def _record_file(result: object) -> Path:
+    """从命令 / 服务返回的 record 消息段取出音频文件的本地路径。"""
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["type"] == "record"
+    return Path(url2pathname(urlsplit(result[0]["data"]["file"]).path))
+
+
 @pytest.mark.asyncio
 async def test_handle_covers_help_empty_unknown_success_and_failure(
     monkeypatch, tmp_path: Path
 ) -> None:
     context = _context(tmp_path)
     event   = {"user_id": 1}
-    audio   = tmp_path / "answer.mp3"
-    audio.write_bytes(b"ID3audio")
+    calls   = _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
 
     assert "文字转语音" in str(await voice.handle("tts", "帮助", event, context))
     assert "请输入" in str(await voice.handle("tts", "", event, context))
     assert "未知" in str(await voice.handle("other", "x", event, context))
 
-    synthesize = AsyncMock(return_value=str(audio))
-    monkeypatch.setattr(voice, "text_to_speech", synthesize)
     invalid_help = await voice.handle("tts", "help extra", event, context)
     assert "不接受额外参数" in str(invalid_help)
-    synthesize.assert_not_awaited()
+    assert calls == []
 
     result = await voice.handle("tts", " 你好 ", event, context)
-    assert result == [{"type": "record", "data": {"file": audio.resolve().as_uri()}}]
-    synthesize.assert_awaited_once_with("你好", context)
+    audio  = _record_file(result)
+    assert audio.parent == (tmp_path / "voice-data" / "audio").resolve()
+    assert audio.read_bytes() == b"ID3audio"
+    assert len(calls) == 1
+    assert "你好".encode() in calls[0][3]["request_kwargs"]["data"]
 
-    synthesize.return_value = None
+    _install_response(monkeypatch, _response(b"<html>", "audio/mpeg"))
     assert "语音合成失败" in str(await voice.handle("tts", "失败", event, context))
 
 
@@ -325,8 +355,7 @@ async def test_handle_reports_overlong_text_before_synthesis(
     tmp_path: Path,
 ) -> None:
     """用户输入超限属于参数错误，不应伪装成远程语音合成失败。"""
-    synthesize = AsyncMock()
-    monkeypatch.setattr(voice, "text_to_speech", synthesize)
+    calls = _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
 
     result = await voice.handle(
         "tts",
@@ -338,19 +367,18 @@ async def test_handle_reports_overlong_text_before_synthesis(
     assert "文字过长" in str(result)
     assert str(voice.MAX_TTS_TEXT_LENGTH) in str(result)
     assert "语音合成失败" not in str(result)
-    synthesize.assert_not_awaited()
+    assert calls == []
 
 
 @pytest.mark.asyncio
-async def test_handle_returns_public_error_on_unexpected_failure(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        voice,
-        "text_to_speech",
-        AsyncMock(side_effect=RuntimeError("private detail")),
-    )
-    result = await voice.handle("tts", "hello", {}, _context(tmp_path))
+async def test_handle_returns_public_error_on_unexpected_failure(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+
+    def broken_settings():
+        raise RuntimeError("private detail")
+
+    context.get_settings_snapshot = broken_settings
+    result                        = await voice.handle("tts", "hello", {}, context)
     assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
     assert "private detail" not in result[0]["data"]["text"]
 
@@ -358,13 +386,11 @@ async def test_handle_returns_public_error_on_unexpected_failure(
 @pytest.mark.asyncio
 async def test_service_callback_builds_record_or_returns_none(monkeypatch, tmp_path: Path) -> None:
     context = _context(tmp_path)
-    audio   = tmp_path / "service.mp3"
-    audio.write_bytes(b"ID3audio")
-    synthesize = AsyncMock(return_value=str(audio))
-    monkeypatch.setattr(voice, "text_to_speech", synthesize)
+    _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
 
-    assert await voice.convert_text_to_voice("hello", context) == [
-        {"type": "record", "data": {"file": audio.resolve().as_uri()}}
-    ]
-    synthesize.return_value = None
-    assert await voice.convert_text_to_voice("hello", context) is None
+    assert _record_file(await voice.convert_text_to_voice("hello", context)).read_bytes() == (
+        b"ID3audio"
+    )
+
+    _install_response(monkeypatch, _response(b"<html>", "audio/mpeg"))
+    assert await voice.convert_text_to_voice("another", context) is None

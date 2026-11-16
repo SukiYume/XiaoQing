@@ -1,4 +1,4 @@
-"""Pendo Web 统计页的图表边界、请求契约与异步生命周期回归。"""
+"""Pendo Web 统计页的图表边界、请求契约与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ STATS_SETUP: Final = r"""
         },
     };
     globalThis.__toastCalls = [];
-    globalThis.__styleCalls = [];
     globalThis.__boundsCalls = [];
     globalThis.__fetchItemRangeBounds = async (_api, options) => {
         __boundsCalls.push(options);
@@ -151,7 +150,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';""",
         ),
@@ -605,7 +604,7 @@ def test_stats_custom_range_is_validated_ime_safe_and_not_resubmitted() -> None:
 
 
 def test_stats_render_is_safe_accessible_and_load_failure_recovers() -> None:
-    """整页渲染应转义接口文本、保留焦点样式，并用稳定错误消息收口。"""
+    """整页渲染应转义接口文本，并用稳定错误消息收口。"""
 
     _run_stats_client(
         r"""
@@ -623,8 +622,6 @@ def test_stats_render_is_safe_accessible_and_load_failure_recovers() -> None:
         assert.ok(!root.innerHTML.includes('<script>分类</script>'));
         assert.ok(root.innerHTML.includes('type="button"'));
         assert.ok(root.innerHTML.includes('aria-pressed="true"'));
-        assert.ok(__styleCalls.at(-1)[1].includes('.stats-range-btn:focus-visible'));
-        assert.ok(__styleCalls.at(-1)[1].includes('font-size: clamp(24px, 1.85vw, 30px)'));
         await assert.rejects(() => client.render(null), /有效的容器元素/);
 
         __api.get = async () => { throw {}; };

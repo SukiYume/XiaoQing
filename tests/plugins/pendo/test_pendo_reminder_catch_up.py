@@ -1,10 +1,9 @@
-"""停机补发、错过状态、定时窗口、延后写法和会话草稿的回归测试。"""
+"""停机补发、错过状态、定时窗口、延后写法、会话草稿和导出文件名。"""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,11 +13,11 @@ from plugins.pendo.commands.operations import handle_snooze
 from plugins.pendo.commands.scheduled import _is_within_schedule_window
 from plugins.pendo.config import PendoConfig
 from plugins.pendo.handlers.event_support import get_remind_status, get_remind_status_label
-from plugins.pendo.handlers.ledger import LedgerHandler
 from plugins.pendo.services.exporter import _sanitize_export_filename
 from plugins.pendo.services.reminder import ReminderService
 from plugins.pendo.utils.time_utils import parse_delay_time, parse_event_time_range
 from plugins.pendo.web.analytics.events_overview import _build_reminder_rows
+from tests.helpers.pendo_test_support import pendo_service_context
 
 USER     = "10001"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -233,52 +232,56 @@ def _ledger_session(step: str) -> _Session:
     )
 
 
-def _run_ledger_step(db, monkeypatch, session: _Session, text: str) -> tuple[str, list[bool]]:
-    ledger            = LedgerHandler(db)
+@pytest.fixture
+def session_context(db, tmp_path):
+    """真实的 Pendo 服务集合（共用测试数据库），会话结束请求记录在 ``ended``。"""
+
     ended: list[bool] = []
 
     async def end_session() -> None:
         ended.append(True)
 
-    context = SimpleNamespace(state={}, end_session=end_session, logger=None)
-    monkeypatch.setattr(pendo_main, "_get_services", lambda _context: {"ledger_handler": ledger})
-    monkeypatch.setattr(
-        "plugins.pendo.commands.session.get_cached_services",
-        lambda _context: {"ledger_handler": ledger},
-    )
-    reply = asyncio.run(pendo_main._handle_active_session(USER, text, context, session))
-    return reply[0]["data"]["text"], ended
+    with pendo_service_context(
+        db, tmp_path, "test.pendo.catch_up", end_session=end_session, ended=ended
+    ) as context:
+        yield context
 
 
-def test_ledger_session_keeps_draft_when_merchant_is_too_long(db, monkeypatch):
+def _run_ledger_step(context, session: _Session, text: str) -> tuple[str, list[bool]]:
+    context.ended.clear()
+    reply = asyncio.run(pendo_main.handle_session(text, {"user_id": USER}, context, session))
+    return reply[0]["data"]["text"], list(context.ended)
+
+
+def test_ledger_session_keeps_draft_when_merchant_is_too_long(session_context):
     session = _ledger_session("merchant")
 
-    text, ended = _run_ledger_step(db, monkeypatch, session, "商" * 200)
+    text, ended = _run_ledger_step(session_context, session, "商" * 200)
 
     assert "不能超过 120 个字符" in text
     assert ended == []
 
-    text, ended = _run_ledger_step(db, monkeypatch, session, "食堂")
+    text, ended = _run_ledger_step(session_context, session, "食堂")
     assert "记账成功" in text
     assert ended == [True]
 
 
-def test_ledger_session_keeps_draft_when_saving_is_rejected(db, monkeypatch):
+def test_ledger_session_keeps_draft_when_saving_is_rejected(session_context):
     session                          = _ledger_session("merchant")
     session.data["data"]["currency"] = "人民币"
 
-    text, ended = _run_ledger_step(db, monkeypatch, session, "食堂")
+    text, ended = _run_ledger_step(session_context, session, "食堂")
 
     assert "草稿已保留" in text
     assert ended == []
 
 
-def test_ledger_session_rejects_overlong_description_at_that_step(db, monkeypatch):
+def test_ledger_session_rejects_overlong_description_at_that_step(session_context):
     session = _Session(
         {"type": "ledger_add", "step": "description", "data": {"amount": 1.0, "amount_cents": 100}}
     )
 
-    text, ended = _run_ledger_step(db, monkeypatch, session, "饭" * 201)
+    text, ended = _run_ledger_step(session_context, session, "饭" * 201)
 
     assert "描述不能超过 200 个字符" in text
     assert ended == []

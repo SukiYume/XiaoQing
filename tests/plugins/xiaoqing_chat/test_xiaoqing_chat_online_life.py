@@ -1,28 +1,34 @@
-"""网上生活接入：能力缺失、关闭、超时或报错时回复上下文与未接入前逐字一致；有内容时并入各块。"""
+"""网上生活接入：能力缺失、关闭、超时或报错时回复上下文与没有网上生活时逐字一致；有内容时并入各块。"""
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import time
-from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
 
-from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+from plugins.xiaoqing_chat import reply_plan
+from plugins.xiaoqing_chat.chat_runtime import load_runtime
+from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
+from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonRecord
 from plugins.xiaoqing_chat.life.online import (
     EMPTY_ONLINE_LIFE,
     build_request,
     fetch_online_life,
     parse_response,
 )
-from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
 from plugins.xiaoqing_chat.reply_plan import prepare_reply_generation
+from plugins.xiaoqing_chat.store_binding import bound_state
+from plugins.xiaoqing_chat.utils import wall_clock
+from tests.helpers.settings_snapshot import settings_snapshot
 
 COMPARED_FIELDS = (
     "life_block",
@@ -44,91 +50,106 @@ COMPARED_FIELDS = (
     "bot_name",
     "chat_id",
 )
-BASE_LIFE   = "作息底色：现在大概在看番"
-BASE_JARGON = "群里的黑话：绝绝子=很棒"
+CHAT_ID   = "g1"
+ROUTINE   = "现在大概在看番"
+JARGON    = "绝绝子"
+USER_TEXT = "最近刷到啥好玩的了吗"
+# 只有作息底色一项来自生活块：其余生活来源在配置里关掉。
+LIFE_OFF = {
+    "enable_schedule_state": False,
+    "enable_daily_life"    : False,
+    "enable_self_timeline" : False,
+}
 
 
-def _context(capability: Any = None, *, with_attribute: bool = True) -> SimpleNamespace:
+_REVISIONS = itertools.count(1)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_clock_and_dice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """提示词里的“当前时间”精确到分钟，可发素材平常按概率给：固定墙钟和骰子，前后两次准备的结果才能逐字段比较。"""
+
+    monkeypatch.setattr(wall_clock, "time", SimpleNamespace(time=lambda: 1_800_000_000.0))
+    monkeypatch.setattr(reply_plan, "random", SimpleNamespace(random=lambda: 0.0))
+
+
+def _context(
+    tmp_path: Path,
+    capability: Any = None,
+    *,
+    with_attribute: bool = True,
+    **life: Any,
+) -> SimpleNamespace:
     capabilities = SimpleNamespace(life_context=capability) if with_attribute else SimpleNamespace()
+    config     = {"bot_name": "小青", "plugins": {"xiaoqing_chat": {"life": {**LIFE_OFF, **life}}}}
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir(exist_ok=True)
+    # 运行配置按修订号缓存：每个上下文用新的修订号，部署配置的差异才会生效。
+    revision = next(_REVISIONS)
     return SimpleNamespace(
         capabilities = capabilities,
-        data_dir     = "/tmp/xc",
+        plugin_dir   = plugin_dir,
+        data_dir     = tmp_path / "data",
         request_id   = "req-1",
         logger       = MagicMock(),
+        get_settings_snapshot=lambda: settings_snapshot(config=config, revision=revision),
     )
-
-
-def _runtime(**life: Any) -> SimpleNamespace:
-    cfg = XiaoQingChatConfig()
-    for name, value in life.items():
-        setattr(cfg.life, name, value)
-    return SimpleNamespace(cfg=cfg)
-
-
-def _state(history: list[StoredMessage]) -> MagicMock:
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=history)
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    return state
 
 
 async def _prepare(
     context: Any,
-    runtime: Any,
     *,
     expression: str                     = "",
     history: list[StoredMessage] | None = None,
-    explained: tuple[str, ...]          = (),
+    jargon: bool                        = True,
 ):
+    """走真实的回复准备：历史、黑话、表达习惯都放进真实的存储里，由真实代码读出来。"""
+
+    runtime = load_runtime(context)
+    state   = bound_state(context)
     now     = time.time()
-    history = (
-        history
-        if history is not None
-        else [
-            StoredMessage(role="user", name="甲", ts=now - 20, content="最近刷到啥好玩的了吗"),
-            StoredMessage(role="assistant", name="小青", ts=now - 10, content="我刚看了个猫猫视频"),
-        ]
+    if not state.memory_store.get(CHAT_ID):
+        for message in (
+            history
+            if history is not None
+            else [
+                StoredMessage(role="user", name="甲", ts=now - 20, content=USER_TEXT),
+                StoredMessage(
+                    role="assistant", name="小青", ts=now - 10, content="我刚看了个猫猫视频"
+                ),
+            ]
+        ):
+            state.memory_store.append(
+                CHAT_ID,
+                role    = message.role,
+                name    = message.name,
+                user_id = None if message.role == "assistant" else 2,
+                content = message.content,
+                ts      = message.ts,
+            )
+    if jargon:
+        state.bw_jargon_store.save(
+            [JargonRecord(content=JARGON, scope_chat_id=CHAT_ID, meaning="很棒", confirmed=True)]
+        )
+    if expression:
+        state.bw_expr_store.save(
+            [ExpressionRecord("expr-1", CHAT_ID, "刷到好玩的", expression, checked=True)]
+        )
+    return await prepare_reply_generation(
+        text    = USER_TEXT,
+        event   = {"group_id": 1, "user_id": 2, "_xc_routine_text": ROUTINE},
+        context = context,
+        runtime = runtime,
+        state   = state,
+        forced  = False,
+        action=PlannedAction(think_level=1, reasoning=""),
+        plan_reasoning = "",
+        bot_name       = "小青",
+        secrets        = {"model": "m"},
+        turn_note      = "",
+        state_text     = "",
+        is_brain_chat  = False,
     )
-    action = PlannedAction(think_level=1, reasoning="")
-    with ExitStack() as stack:
-        for name, value in {
-            "configured_bot_name": "小青",
-            "event_chat_id"      : "g1",
-            "is_private_event"   : False,
-            "ai_route_context"   : {"model": "m"},
-            "llm_call_config"    : LLMCallConfig(
-                timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2
-            ),
-            "knowledge_context" : "",
-            "expression_context": expression,
-            "jargon_block"      : (BASE_JARGON, explained),
-            "_load_life_blocks" : (BASE_LIFE, ""),
-        }.items():
-            stack.enter_context(
-                patch(f"plugins.xiaoqing_chat.reply_plan.{name}", return_value=value)
-            )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        return await prepare_reply_generation(
-            text           = "最近刷到啥好玩的了吗",
-            event          = {"group_id": 1, "user_id": 2},
-            context        = context,
-            runtime        = runtime,
-            state          = _state(history),
-            forced         = False,
-            action         = action,
-            plan_reasoning = "",
-            bot_name       = "小青",
-            secrets        = None,
-            turn_note      = "",
-            state_text     = "",
-            is_brain_chat  = False,
-        )
 
 
 def _fields(plan: Any) -> dict[str, Any]:
@@ -151,44 +172,37 @@ class Capability:
         return self.result
 
 
-@pytest.fixture(autouse=True)
-def _always_offer_media(monkeypatch) -> None:
-    """可发素材平常按概率给；这里固定给，前后两次准备的结果才能逐字段比较。"""
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.reply_plan.offers_outbound_media", lambda *_args, **_kwargs: True
-    )
-
-
 @pytest_asyncio.fixture
-async def baseline() -> dict[str, Any]:
-    plan = await _prepare(_context(None), _runtime())
-    assert plan.life_block == BASE_LIFE and plan.jargon_explanation == BASE_JARGON
+async def baseline(tmp_path: Path) -> dict[str, Any]:
+    plan = await _prepare(_context(tmp_path, None))
+    assert ROUTINE in plan.life_block and JARGON in plan.jargon_explanation
     assert plan.expression_block == ""
     return _fields(plan)
 
 
 @pytest.mark.asyncio
-async def test_missing_capability_is_identical_to_before(baseline) -> None:
-    assert _fields(await _prepare(_context(with_attribute=False), _runtime())) == baseline
-    context = _context(None)
-    await _prepare(context, _runtime())
+async def test_missing_capability_leaves_the_reply_context_unchanged(baseline, tmp_path) -> None:
+    assert _fields(await _prepare(_context(tmp_path, with_attribute=False))) == baseline
+    context = _context(tmp_path, None)
+    await _prepare(context)
     assert not any("online_life" in str(call) for call in context.logger.info.call_args_list)
 
 
 @pytest.mark.asyncio
-async def test_disabled_switch_never_calls_the_capability(baseline) -> None:
+async def test_disabled_switch_never_calls_the_capability(baseline, tmp_path) -> None:
     capability = Capability({"life_lines": "不该出现", "slang_notes": "不该出现"})
-    plan = await _prepare(_context(capability), _runtime(enable_online_life=False))
+    plan = await _prepare(_context(tmp_path, capability, enable_online_life=False))
     assert _fields(plan) == baseline and capability.requests == []
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_identical_to_before_and_logs_only_the_error_type(baseline) -> None:
+async def test_timeout_leaves_the_reply_context_unchanged_and_logs_only_the_error_type(
+    baseline, tmp_path
+) -> None:
     capability = Capability({"life_lines": "迟到的内容"}, delay=2.0)
-    context = _context(capability)
+    context = _context(tmp_path, capability, online_life_timeout_seconds=0.05)
     started = time.monotonic()
-    plan = await _prepare(context, _runtime(online_life_timeout_seconds=0.05))
+    plan    = await _prepare(context)
     assert time.monotonic() - started < 1.0
     assert _fields(plan) == baseline
     logged = [str(call.args) for call in context.logger.info.call_args_list]
@@ -209,14 +223,16 @@ async def test_timeout_is_identical_to_before_and_logs_only_the_error_type(basel
         Capability({}),
     ],
 )
-async def test_errors_and_malformed_results_are_identical_to_before(baseline, capability) -> None:
-    context = _context(capability)
-    assert _fields(await _prepare(context, _runtime())) == baseline
+async def test_errors_and_malformed_results_leave_the_reply_context_unchanged(
+    baseline, capability, tmp_path
+) -> None:
+    context = _context(tmp_path, capability)
+    assert _fields(await _prepare(context)) == baseline
     assert not any("SECRET_ERROR_TEXT" in str(call) for call in context.logger.info.call_args_list)
 
 
 @pytest.mark.asyncio
-async def test_content_is_merged_into_life_jargon_and_expression_blocks() -> None:
+async def test_content_is_merged_into_life_jargon_and_expression_blocks(baseline, tmp_path) -> None:
     capability = Capability(
         {
             "version"        : 1,
@@ -227,10 +243,13 @@ async def test_content_is_merged_into_life_jargon_and_expression_blocks() -> Non
             "term_keys"      : ["哈基米"],
         }
     )
-    context = _context(capability)
-    plan    = await _prepare(context, _runtime())
-    assert plan.life_block == BASE_LIFE + "\n" + capability.result["life_lines"]
-    assert plan.jargon_explanation == BASE_JARGON + "\n" + capability.result["slang_notes"]
+    context = _context(tmp_path, capability)
+    plan    = await _prepare(context)
+    assert plan.life_block == baseline["life_block"] + "\n" + capability.result["life_lines"]
+    assert (
+        plan.jargon_explanation
+        == baseline["jargon_explanation"] + "\n" + capability.result["slang_notes"]
+    )
     assert plan.expression_block == "当想夸可爱时：X基础，Y不基础"
     logged = [str(call.args) for call in context.logger.info.call_args_list]
     assert any('"step": "reply.online_life"' in line and '"episodes": 1' in line for line in logged)
@@ -238,19 +257,24 @@ async def test_content_is_merged_into_life_jargon_and_expression_blocks() -> Non
 
 
 @pytest.mark.asyncio
-async def test_expressions_learned_in_the_group_take_precedence_over_the_hint() -> None:
+async def test_expressions_learned_in_the_group_take_precedence_over_the_hint(tmp_path) -> None:
+    group_only = await _prepare(_context(tmp_path, None), expression="群里学到的表达")
+    assert "群里学到的表达" in group_only.expression_block
+
     capability = Capability(
         {"life_lines": "", "slang_notes": "", "expression_hint": "网上学来的表达"}
     )
-    plan = await _prepare(_context(capability), _runtime(), expression="群里学到的表达")
-    assert plan.expression_block == "群里学到的表达"
-    assert plan.life_block == BASE_LIFE and plan.jargon_explanation == BASE_JARGON
+    plan = await _prepare(_context(tmp_path, capability), expression="群里学到的表达")
+    assert plan.expression_block == group_only.expression_block
+    assert "网上学来的表达" not in plan.expression_block
+    assert plan.life_block == group_only.life_block
+    assert plan.jargon_explanation == group_only.jargon_explanation
 
 
 @pytest.mark.asyncio
-async def test_request_has_no_ids_and_carries_recent_turns() -> None:
+async def test_request_has_no_ids_and_carries_recent_turns(tmp_path) -> None:
     capability = Capability({"life_lines": "x"})
-    await _prepare(_context(capability), _runtime())
+    await _prepare(_context(tmp_path, capability), jargon=False)
     request = capability.requests[0]
     assert set(request) == {
         "version",
@@ -269,10 +293,12 @@ async def test_request_has_no_ids_and_carries_recent_turns() -> None:
 
 
 @pytest.mark.asyncio
-async def test_words_the_group_block_explained_go_to_life_so_it_does_not_repeat_them() -> None:
+async def test_words_the_group_block_explained_go_to_life_so_it_does_not_repeat_them(
+    tmp_path,
+) -> None:
     capability = Capability({"life_lines": "x"})
-    await _prepare(_context(capability), _runtime(), explained=("绝绝子",))
-    assert capability.requests[0]["explained_terms"] == ["绝绝子"]
+    await _prepare(_context(tmp_path, capability))
+    assert capability.requests[0]["explained_terms"] == [JARGON]
 
 
 def test_request_and_response_are_bounded() -> None:
@@ -310,12 +336,13 @@ def test_request_and_response_are_bounded() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_online_life_propagates_cancellation() -> None:
+async def test_fetch_online_life_propagates_cancellation(tmp_path) -> None:
     capability = Capability({"life_lines": "x"}, delay=5.0)
-    task = asyncio.create_task(
+    context = _context(tmp_path, capability)
+    task    = asyncio.create_task(
         fetch_online_life(
-            _context(capability),
-            _runtime(),
+            context,
+            load_runtime(context),
             text       = "t",
             history    = [],
             is_private = False,
@@ -325,3 +352,30 @@ async def test_fetch_online_life_propagates_cancellation() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_proactive_share_request_carries_the_topics_the_group_still_remembers(tmp_path):
+    """主动开口时把记忆里这个群还记着的话题词交给网上生活（最多 20 个），不只交最新三个。"""
+
+    from plugins.xiaoqing_chat.life.online import fetch_share_candidates
+    from plugins.xiaoqing_chat.memory.client import parse_recall
+
+    requests: list[dict[str, Any]] = []
+
+    class Life:
+        async def turn_context(self, request: dict[str, Any]) -> dict[str, Any]:
+            requests.append(request)
+            return {"version": 1, "candidates": []}
+
+    context  = _context(tmp_path, Life())
+    recalled = parse_recall(
+        {"topics": [{"topic": f"话题{i}", "keywords": [f"词{i}"]} for i in range(25)]}
+    )
+
+    await fetch_share_candidates(
+        context, load_runtime(context), exclude_ids=[], topics=recalled.topics
+    )
+
+    assert len(recalled.topics) == 25
+    assert [topic["topic"] for topic in requests[0]["topics"]] == [f"话题{i}" for i in range(20)]

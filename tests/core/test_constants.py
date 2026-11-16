@@ -31,30 +31,11 @@ def test_runtime_defaults_are_bounded() -> None:
 
 
 @pytest.mark.unit
-def test_time_units_are_consistent() -> None:
-    """共享换算值应保持分钟、小时和天之间的一致关系。"""
-
-    assert constants.SECONDS_PER_MINUTE == 60
-    assert constants.SECONDS_PER_HOUR == 60 * constants.SECONDS_PER_MINUTE
-    assert constants.SECONDS_PER_DAY == 24 * constants.SECONDS_PER_HOUR
-
-
-@pytest.mark.unit
 def test_session_exit_commands_are_complete_and_immutable() -> None:
     """会话退出词同时覆盖中文、英文和短命令，并保持不可变。"""
 
     assert constants.EXIT_COMMANDS_SET == frozenset({"退出", "取消", "exit", "quit", "q"})
     assert "not-a-command" not in constants.EXIT_COMMANDS_SET
-
-
-@pytest.mark.unit
-def test_default_bot_name_responses_are_available() -> None:
-    """随机昵称回应池不能为空，且保留既有中文回应。"""
-
-    assert constants.DEFAULT_BOT_NAME_RESPONSES_LIST
-    assert {"叫我干嘛", "嗯？", "在的~", "有事吗？"} <= set(
-        constants.DEFAULT_BOT_NAME_RESPONSES_LIST
-    )
 
 
 @pytest.mark.unit

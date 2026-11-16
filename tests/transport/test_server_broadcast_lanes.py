@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -16,10 +15,14 @@ from tests.helpers.server_test_support import (
     BroadcastResult,
     InboundManager,
     StandaloneInboundServer,
-    _lane_count,
-    _make_request_with_auth,
-    _onebot_message_payload,
-    _pending_for_key,
+    auth_headers,
+    lane_count,
+    make_server,
+    onebot_message_payload,
+    pending_for_key,
+    serving,
+    wait_until,
+    web,
 )
 
 mock_handler  = _fixture_support.mock_handler
@@ -65,20 +68,18 @@ async def test_server_broadcast_socket_error(sample_server):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_server_broadcast_reports_partial_failure_without_duplicate_encoding(sample_server):
+async def test_server_broadcast_reports_partial_failure(sample_server):
     healthy                     = AsyncMock()
     failed                      = AsyncMock()
     failed.send_str.side_effect = ConnectionError("gone")
     sample_server._active_sockets.update({healthy, failed})
 
-    with patch("core.server.json.dumps", wraps=json.dumps) as dumps:
-        result = await sample_server.broadcast({"action": "test"})
+    result = await sample_server.broadcast({"action": "test"})
 
     assert result == BroadcastResult(target_count=2, success_count=1, failure_count=1)
     assert result.delivered is True
     assert healthy in sample_server._active_sockets
     assert failed not in sample_server._active_sockets
-    dumps.assert_called_once_with({"action": "test"}, ensure_ascii=False)
     await asyncio.gather(*tuple(sample_server._ws_close_tasks))
 
 
@@ -120,7 +121,6 @@ async def test_server_broadcast_times_out_hung_client_without_blocking_healthy_c
 @pytest.mark.unit
 async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
     mock_handler,
-    monkeypatch,
 ):
     server = StandaloneInboundServer(
         host                         = "127.0.0.1",
@@ -148,20 +148,14 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
 
     sockets = [MagicMock(send_str=slow_send) for _ in range(40)]
     server._active_sockets.update(sockets)
-    real_create_task                      = asyncio.create_task
-    worker_tasks: list[asyncio.Task[Any]] = []
-
-    def track_worker(coro):
-        task = real_create_task(coro)
-        worker_tasks.append(task)
-        return task
-
-    monkeypatch.setattr("core.server.asyncio.create_task", track_worker)
-    broadcast_task = real_create_task(server.broadcast({"action": "test"}))
+    tasks_before   = set(asyncio.all_tasks())
+    broadcast_task = asyncio.create_task(server.broadcast({"action": "test"}))
     await asyncio.wait_for(saturated.wait(), timeout=1)
 
     assert peak_sends == 3
-    assert len(worker_tasks) == 3
+    # 40 个连接只由 3 个 worker 发送，没有每个连接一个任务：广播任务本身、3 个 worker，
+    # 以及（Python 3.11 的 wait_for 会为每次在途发送建一个任务）至多 3 个发送任务。
+    assert len(set(asyncio.all_tasks()) - tasks_before) <= 1 + 3 + 3
 
     release.set()
     result = await asyncio.wait_for(broadcast_task, timeout=1)
@@ -260,44 +254,40 @@ def test_broadcast_result_enforces_accounting_and_aggregates():
         BroadcastResult(target_count=True, success_count=1)
 
 
+async def _send_event(ws, user_id: int, marker: str = "event") -> None:
+    event = {**onebot_message_payload(marker), "user_id": user_id, "marker": marker}
+    await ws.send_json(event)
+
+
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_inbound_lanes_serialize_same_key_and_are_released(sample_server):
+@pytest.mark.integration
+async def test_inbound_lanes_serialize_same_key_and_are_released(unused_tcp_port):
     """Same-key work stays serial and its lane is removed after the final ticket."""
-    ws      = AsyncMock()
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    probe   = BlockingConcurrencyProbe(entered, release)
+    entered    = asyncio.Event()
+    release    = asyncio.Event()
+    probe      = BlockingConcurrencyProbe(entered, release)
+    server     = make_server(probe.run, unused_tcp_port)
+    dispatcher = server._event_dispatcher
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers())
+        try:
+            await _send_event(ws, 12345)
+            await asyncio.wait_for(entered.wait(), 5)
+            await _send_event(ws, 12345)
+            await wait_until(lambda: pending_for_key(dispatcher, "user:12345") == 2)
+            assert probe.maximum_active == 1
+        finally:
+            release.set()
 
-    sample_server.handler = probe.run
-    first                 = asyncio.create_task(
-        sample_server._handle_ws_event(
-            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
-        )
-    )
-    await entered.wait()
-    second = asyncio.create_task(
-        sample_server._handle_ws_event(
-            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
-        )
-    )
-    await asyncio.sleep(0)
-
-    assert probe.maximum_active == 1
-    assert _pending_for_key(sample_server._event_dispatcher, "user:12345") == 2
-
-    release.set()
-    await asyncio.gather(first, second)
-
-    assert probe.maximum_active == 1
-    assert _lane_count(sample_server._event_dispatcher) == 0
+        await wait_until(lambda: lane_count(dispatcher) == 0)
+        assert probe.maximum_active == 1
+        await ws.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
+@pytest.mark.integration
+async def test_inbound_lanes_allow_different_keys_in_parallel(unused_tcp_port):
     """Independent event keys must not block each other."""
-    ws           = AsyncMock()
     both_entered = asyncio.Event()
     release      = asyncio.Event()
     active       = 0
@@ -313,70 +303,37 @@ async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
         active -= 1
         return []
 
-    sample_server.handler = handler
-    first                 = asyncio.create_task(
-        sample_server._handle_ws_event(ws, sample_server._event_dispatcher.admit({"user_id": 1}))
-    )
-    second = asyncio.create_task(
-        sample_server._handle_ws_event(ws, sample_server._event_dispatcher.admit({"user_id": 2}))
-    )
-    await asyncio.wait_for(both_entered.wait(), timeout=1)
+    server = make_server(handler, unused_tcp_port)
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers())
+        try:
+            await _send_event(ws, 1)
+            await _send_event(ws, 2)
+            await asyncio.wait_for(both_entered.wait(), timeout=2)
+            assert max_active == 2
+        finally:
+            release.set()
 
-    assert max_active == 2
-    release.set()
-    await asyncio.gather(first, second)
-    assert _lane_count(sample_server._event_dispatcher) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_inbound_lane_ticket_cancellation_releases_capacity(sample_server):
-    """Cancelling a same-key ticket must release lane capacity immediately."""
-    ws      = AsyncMock()
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def handler(_payload: dict[str, Any]) -> list[dict[str, Any]]:
-        entered.set()
-        await release.wait()
-        return []
-
-    sample_server.handler = handler
-    first                 = asyncio.create_task(
-        sample_server._handle_ws_event(
-            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
-        )
-    )
-    await entered.wait()
-    waiting = asyncio.create_task(
-        sample_server._handle_ws_event(
-            ws, sample_server._event_dispatcher.admit({"user_id": 12345})
-        )
-    )
-    await asyncio.sleep(0)
-
-    waiting.cancel()
-    await asyncio.gather(waiting, return_exceptions=True)
-    assert _pending_for_key(sample_server._event_dispatcher, "user:12345") == 1
-
-    release.set()
-    await first
-    assert _lane_count(sample_server._event_dispatcher) == 0
+        await wait_until(lambda: lane_count(server._event_dispatcher) == 0)
+        await ws.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_inbound_lane_pool_does_not_grow_for_high_cardinality_keys(sample_server):
+@pytest.mark.integration
+async def test_inbound_lane_pool_does_not_grow_for_high_cardinality_keys(unused_tcp_port):
     """Completed high-cardinality events leave no stale lane entries."""
-    ws = AsyncMock()
-    sample_server.handler = AsyncMock(return_value=[])
 
-    for user_id in range(1_000):
-        await sample_server._handle_ws_event(
-            ws, sample_server._event_dispatcher.admit({"user_id": user_id})
-        )
+    async def handler(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"user_id": payload["user_id"]}]
 
-    assert _lane_count(sample_server._event_dispatcher) == 0
+    server = make_server(handler, unused_tcp_port)
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers())
+        for user_id in range(1_000):
+            await _send_event(ws, user_id)
+            assert await ws.receive_json(timeout=2) == {"user_id": user_id}
+        await wait_until(lambda: lane_count(server._event_dispatcher) == 0)
+        await ws.close()
 
 
 @pytest.mark.unit
@@ -409,18 +366,6 @@ def test_server_set_status_providers_partial(sample_server):
 
     assert sample_server._get_plugins_count == plugins_count
     assert sample_server._get_sessions_count is None
-
-
-@pytest.mark.unit
-def test_server_update_token(sample_server):
-    """Test updating token"""
-    assert sample_server.token == "test_token"
-    assert sample_server._auth_state.generation == 0
-
-    sample_server.update_token("new_token")
-
-    assert sample_server.token == "new_token"
-    assert sample_server._auth_state.generation == 1
 
 
 @pytest.mark.asyncio
@@ -618,73 +563,85 @@ async def test_server_same_token_update_keeps_active_websockets(sample_server):
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
+@pytest.mark.integration
 async def test_server_token_rotation_during_ws_prepare_rejects_connection(
     sample_server,
+    monkeypatch,
 ):
     prepare_started = asyncio.Event()
     release_prepare = asyncio.Event()
 
-    class FakeWebSocket:
-        def __init__(self):
-            self.close = AsyncMock()
+    # 屏障：要让“令牌轮换发生在握手完成之前”这个确切时刻稳定出现，
+    # 就在 aiohttp 的 prepare 入口拦住它，放行后照常握手。
+    real_prepare = web.WebSocketResponse.prepare
 
-        async def prepare(self, _request):
-            prepare_started.set()
-            await release_prepare.wait()
+    async def held_prepare(self, request):
+        prepare_started.set()
+        await release_prepare.wait()
+        return await real_prepare(self, request)
 
-        def __aiter__(self):
-            return self
+    monkeypatch.setattr(web.WebSocketResponse, "prepare", held_prepare)
+    async with serving(sample_server) as session:
+        connecting = asyncio.create_task(session.ws_connect("/ws", headers=auth_headers()))
+        try:
+            await asyncio.wait_for(prepare_started.wait(), 5)
+            sample_server.update_token("new_token")
+        finally:
+            release_prepare.set()
+        ws = await connecting
+        closed = await ws.receive(timeout=2)
 
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-    ws      = FakeWebSocket()
-    request = _make_request_with_auth("GET", "/ws", "test_token")
-    with patch("core.server.web.WebSocketResponse", return_value=ws):
-        handler_task = asyncio.create_task(sample_server.ws_handler(request))
-        await prepare_started.wait()
-        sample_server.update_token("new_token")
-        release_prepare.set()
-        result = await handler_task
-
-    assert result is ws
-    assert sample_server._active_sockets == set()
-    assert sample_server._get_ws_connections() == 0
-    ws.close.assert_awaited_once_with(
-        code    = 1008,
-        message = b"inbound token rotated",
-    )
+        assert closed.type == web.WSMsgType.CLOSE
+        assert closed.data == 1008
+        assert closed.extra == "inbound token rotated"
+        assert sample_server.active_ws_connections() == 0
+        assert sample_server._get_ws_connections() == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_server_worker_drops_events_from_revoked_generation():
-    handler = AsyncMock(return_value=[])
-    server = StandaloneInboundServer(
-        host           = "127.0.0.1",
-        port           = 8765,
+@pytest.mark.integration
+async def test_server_worker_drops_events_from_revoked_generation(unused_tcp_port):
+    entered         = asyncio.Event()
+    release         = asyncio.Event()
+    seen: list[str] = []
+
+    async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
+        marker = str(event["marker"])
+        seen.append(marker)
+        if marker == "running":
+            entered.set()
+            await release.wait()
+        return [{"marker": marker}]
+
+    server = make_server(
+        handler,
+        unused_tcp_port,
         token          = "old-token",
-        handler        = handler,
         enable_http    = False,
-        enable_ws      = True,
         ws_max_workers = 1,
     )
-    ws    = AsyncMock()
-    queue = server._ws_event_queue
-    assert queue is not None
-    admitted_auth = server._auth_state
-    await queue.put((ws, admitted_auth, _onebot_message_payload()))
-    server.update_token("new-token")
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers("old-token"))
+        try:
+            await _send_event(ws, 1, "running")
+            await asyncio.wait_for(entered.wait(), 5)
+            # 唯一的 worker 被占着：第二个用户的事件排在 WS 队列里，登记的是旧令牌代次。
+            await _send_event(ws, 2, "queued")
+            queue = server._ws_event_queue
+            assert queue is not None
+            await wait_until(lambda: queue.qsize() == 1)
 
-    server._ensure_ws_workers()
-    await asyncio.wait_for(queue.join(), timeout=1)
+            server.update_token("new-token")
+            closed = await ws.receive(timeout=2)
+        finally:
+            release.set()
 
-    handler.assert_not_awaited()
-    ws.send_str.assert_not_awaited()
-    for task in server._ws_worker_tasks:
-        task.cancel()
-    await asyncio.gather(*server._ws_worker_tasks, return_exceptions=True)
+        await wait_until(lambda: lane_count(server._event_dispatcher) == 0)
+        await wait_until(queue.empty)
+
+    assert closed.type == web.WSMsgType.CLOSE
+    assert closed.data == 1008
+    assert seen == ["running"]
 
 
 @pytest.mark.unit

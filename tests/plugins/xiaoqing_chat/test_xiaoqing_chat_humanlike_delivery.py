@@ -1,6 +1,5 @@
 """群聊活人感相关的确定性行为：时区、称呼、分句、复读、旧会话回忆与兜底口吻。"""
 
-import json
 import time
 
 import pytest
@@ -25,6 +24,7 @@ from plugins.xiaoqing_chat.reply_fallbacks import (
 from plugins.xiaoqing_chat.reply_generator import _strip_sender_vocative
 from plugins.xiaoqing_chat.reply_payload import build_reply_payload_from_parts
 from plugins.xiaoqing_chat.utils import wall_clock
+from tests.helpers.reply_checker_test_support import checker_verdict
 
 
 def _text_batches(text: str) -> list[str]:
@@ -155,34 +155,13 @@ def test_single_latest_history_message_is_not_marked_as_forgotten():
     assert "记不清" not in dialogue
 
 
-def _response(**changes):
-    payload = {
-        "suitable"             : True,
-        "reason"               : "",
-        "need_replan"          : False,
-        "severity"             : "soft",
-        "context_coherent"     : True,
-        "speaker_correct"      : True,
-        "instruction_followed" : True,
-        "persona_grounded"     : True,
-        "factually_plausible"  : True,
-        "non_template"         : True,
-        "persona_scan_complete": True,
-        "persona_claims"       : [],
-        "context_scan_complete": True,
-        "context_claims"       : [],
-    }
-    payload.update(changes)
-    return json.dumps(payload, ensure_ascii=False)
-
-
 @pytest.mark.parametrize("kind,expected", [("creative", True), ("fact", False), (None, False)])
 def test_context_claim_kind_separates_playful_proposals_from_asserted_facts(kind, expected):
     claim = {"claim": "奶茶的事你自己看着办吧", "source_ids": []}
     if kind:
         claim["kind"] = kind
     result = checker._interpret_checker_response(
-        content=_response(context_claims=[claim]),
+        content=checker_verdict(context_claims=[claim]),
         reply                            = "牛啊！奶茶的事你自己看着办吧",
         current_text                     = "小青快夸我",
         history_text                     = "阿杰：我四级过了！！！",
@@ -197,7 +176,7 @@ def test_context_claim_kind_separates_playful_proposals_from_asserted_facts(kind
 @pytest.mark.parametrize("allow_fiction,expected", [(True, True), (False, False)])
 def test_malformed_persona_evidence_is_not_stricter_than_omitted_evidence(allow_fiction, expected):
     result = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             persona_claims=[
                 {"claim": "有次半夜泡面忘了吃", "evidence": "住校的大二女生；可以即兴补充小片段"}
             ]
@@ -254,7 +233,7 @@ def test_omitted_image_summary_flag_defers_to_the_verified_visual_inventory(
 ):
     payload = {"visual_claims": [], "visual_scan_complete": True, **changes}
     result  = checker._interpret_checker_response(
-        content                          = _response(**payload),
+        content                          = checker_verdict(**payload),
         reply                            = "刚放下手柄，中午打了两把",
         current_text                     = "有没有人刚打完游戏，来聊两句",
         history_text                     = "",
@@ -265,20 +244,6 @@ def test_omitted_image_summary_flag_defers_to_the_verified_visual_inventory(
         source_records                   = {"current": "有没有人刚打完游戏，来聊两句"},
     )
     assert (result.suitable, result.severity) == (suitable, severity)
-
-
-@pytest.mark.parametrize(
-    "claim,expected",
-    [
-        ("一共是9加4.5，13块5", True),
-        ("两杯热可可18块", True),
-        ("两杯柠檬茶14块", False),
-        ("一共20元", False),
-    ],
-)
-def test_prices_computed_from_the_poster_are_supported(claim, expected):
-    evidence = "热可可 12元 柠檬茶 9元 第二杯半价·仅同款参与"
-    assert arithmetic_mod.measured_values_are_supported(claim, evidence) is expected
 
 
 _MEME_PART = {
@@ -432,7 +397,7 @@ def test_resending_the_same_sticker_on_request_is_not_a_verbatim_repeat():
 def test_visual_evidence_quote_tolerates_ocr_spacing():
     current = "[图片：通知，文字内容是“自习室调整通知\n10月18日（周日）\n09:00—12:00 暂停开放”]"
     result  = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             visual_claims=[
                 {
                     "claim"   : "周日九点到十二点暂停",
@@ -460,7 +425,7 @@ def test_computed_price_may_rest_on_a_price_outside_the_cited_message():
         "h2": "小青(你): 柠檬茶挺划算",
     }
     result = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             context_claims=[{"claim": "两杯柠檬茶原价18块", "source_ids": ["h2"], "kind": "fact"}]
         ),
         reply                            = "两杯柠檬茶原价18块，半价后13块5",
@@ -486,9 +451,16 @@ def test_meme_summary_keeps_scene_and_caption_together():
     assert "画面：橙色卡通猫趴着" in meme_only and "我只是坐一下" in meme_only
 
 
+_POSTER = "热可可 12元 柠檬茶 9元 第二杯半价·仅同款参与"
+
+
 @pytest.mark.parametrize(
     "evidence,claim,expected",
     [
+        (_POSTER, "一共是9加4.5，13块5", True),
+        (_POSTER, "两杯热可可18块", True),
+        (_POSTER, "两杯柠檬茶14块", False),
+        (_POSTER, "一共20元", False),
         ("柠檬茶每杯9元，第二杯七折\n两杯一共多少钱", "两杯一共15.3元", True),
         ("柠檬茶每杯9元，第二杯七折\n两杯一共多少钱", "两杯一共16元", False),
         ("一杯柠檬茶9元\n十一杯一共多少钱", "十一杯一共99元", True),
@@ -515,7 +487,9 @@ def test_prices_follow_counts_and_discounts_stated_in_the_chat(evidence, claim, 
 )
 def test_unsourced_claim_only_counts_as_dialogue_fact_when_it_concerns_people(claim, expected):
     result = checker._interpret_checker_response(
-        content=_response(context_claims=[{"claim": claim, "source_ids": [], "kind": "fact"}]),
+        content=checker_verdict(
+            context_claims=[{"claim": claim, "source_ids": [], "kind": "fact"}]
+        ),
         reply                            = f"哈哈，{claim}",
         current_text                     = "小青你觉得呢",
         history_text                     = "17:37, 阿杰: 我在补孤独摇滚",

@@ -26,6 +26,21 @@ secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
+def _record_full_reads(monkeypatch: pytest.MonkeyPatch, *sources: Path) -> list[Path]:
+    """在 OS 边界记录对配置源文件的整文件读取（以 "rb" 打开）。"""
+
+    real_open              = Path.open
+    full_reads: list[Path] = []
+
+    def recording_open(self: Path, mode: str = "r", *args: Any, **kwargs: Any):
+        if mode == "rb" and self in sources:
+            full_reads.append(self)
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", recording_open)
+    return full_reads
+
+
 class TestConfigManagerWatch:
     """ConfigManager.watch 测试"""
 
@@ -198,21 +213,15 @@ class TestConfigManagerWatch:
     ) -> None:
         import core.config as config_module
 
-        full_reads: list[Path] = []
-        validation_calls       = 0
-        original_read          = config_manager._read_source_unlocked
-        original_validate      = config_module._validate_runtime_config
-
-        def record_read(path: Path):
-            full_reads.append(path)
-            return original_read(path)
+        validation_calls  = 0
+        original_validate = config_module._validate_runtime_config
 
         def record_validation(value):
             nonlocal validation_calls
             validation_calls += 1
             return original_validate(value)
 
-        monkeypatch.setattr(config_manager, "_read_source_unlocked", record_read)
+        full_reads = _record_full_reads(monkeypatch, config_file, secrets_file)
         monkeypatch.setattr(config_module, "_validate_runtime_config", record_validation)
 
         await config_manager._watch_reconcile_once()
@@ -229,21 +238,15 @@ class TestConfigManagerWatch:
     ) -> None:
         import core.config as config_module
 
-        full_reads: list[Path] = []
-        validation_calls       = 0
-        original_read          = config_manager._read_source_unlocked
-        original_validate      = config_module._validate_runtime_config
-
-        def record_read(path: Path):
-            full_reads.append(path)
-            return original_read(path)
+        validation_calls  = 0
+        original_validate = config_module._validate_runtime_config
 
         def record_validation(value):
             nonlocal validation_calls
             validation_calls += 1
             return original_validate(value)
 
-        monkeypatch.setattr(config_manager, "_read_source_unlocked", record_read)
+        full_reads = _record_full_reads(monkeypatch, config_file, secrets_file)
         monkeypatch.setattr(config_module, "_validate_runtime_config", record_validation)
 
         config_manager.reload()
@@ -368,20 +371,21 @@ class TestConfigManagerWatch:
     async def test_watch_unexpected_read_failure_failcloses_and_continues(
         self,
         config_manager: ConfigManager,
+        config_file: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        original_read_sources                    = config_manager._read_sources
-        calls                                    = 0
+        real_open                                = Path.open
+        failed_once                              = False
         snapshots: asyncio.Queue[ConfigSnapshot] = asyncio.Queue()
 
-        def flaky_read_sources(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
+        def flaky_open(self: Path, mode: str = "r", *args: Any, **kwargs: Any):
+            nonlocal failed_once
+            if mode == "rb" and self == config_file and not failed_once:
+                failed_once = True
                 raise RuntimeError("unexpected reader failure")
-            return original_read_sources(*args, **kwargs)
+            return real_open(self, mode, *args, **kwargs)
 
-        monkeypatch.setattr(config_manager, "_read_sources", flaky_read_sources)
+        monkeypatch.setattr(Path, "open", flaky_open)
         config_manager.on_reload(snapshots.put_nowait)
         watch_task = asyncio.create_task(config_manager.watch(interval=0.01))
         try:

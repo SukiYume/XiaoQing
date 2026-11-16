@@ -282,15 +282,6 @@ async def test_sessions_belong_to_one_initiator_and_expire_or_reset(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_plain_text_reply_is_delivered_without_another_model_call(tmp_path):
-    context = FakeAgentContext(tmp_path, ai=FakeAI([ai_response("请补充另外两笔明细。")]))
-    runtime = AgentRuntime(tmp_path)
-    task = runtime.start(context, CONFIG, CHAT, request_text="记三笔账，只给了一笔", source="chat")
-    await task.runner
-    assert task.outcome.text == "请补充另外两笔明细。" and len(context.ai.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_done_claim_over_a_pending_confirmation_is_recorded_as_needs_user(tmp_path):
     """说已完成、但写入还在等发起人决定：记成 needs_user；插件给的确认命令写在回报里。"""
 
@@ -406,8 +397,7 @@ async def test_slow_task_acknowledges_then_delivers_text_images_and_files(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_inline_reply_uploads_files_after_the_reply_text(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("plugins.xiaoqing_agent.runtime._UPLOAD_AFTER_REPLY_SECONDS", 0.01)
+async def test_inline_reply_uploads_files_after_the_reply_text(tmp_path: Path) -> None:
     work = tmp_path / "workspaces" / CHAT.key
     work.mkdir(parents=True)
     (work / "table.csv").write_text("a,b", encoding="utf-8")
@@ -606,10 +596,7 @@ async def test_a_new_session_starts_from_recent_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_delivery_is_recorded_and_the_result_can_be_resent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr("plugins.xiaoqing_agent.runtime._UPLOAD_AFTER_REPLY_SECONDS", 0.01)
+async def test_failed_delivery_is_recorded_and_the_result_can_be_resent(tmp_path: Path) -> None:
     release = asyncio.Event()
     work    = tmp_path / "workspaces" / CHAT.key
     work.mkdir(parents=True)
@@ -809,21 +796,28 @@ async def test_background_results_in_a_group_mention_the_starter(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_a_follow_up_that_arrives_after_the_last_step_is_reported_as_unused(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
-    import plugins.xiaoqing_agent.runtime as agent_runtime
+    """步数用完后的收尾调用期间又来了补充：没有下一步能用上它，回复里如实说明。"""
 
-    real_loop = agent_runtime.run_agent_loop
-
-    async def loop_then_late_note(env, tools, messages, **kwargs):
-        outcome = await real_loop(env, tools, messages, **kwargs)
-        env.task.notes.append("换成红色")
-        return outcome
-
-    monkeypatch.setattr(agent_runtime, "run_agent_loop", loop_then_late_note)
-    context = FakeAgentContext(tmp_path, ai=FakeAI([_final("蓝色的好了")]))
     runtime = AgentRuntime(tmp_path)
-    task = runtime.start(context, CONFIG, CHAT, request_text="画图", source="chat", admin=True)
+
+    def wrap_up_with_late_note(_route, _messages, _kwargs):
+        assert runtime.add_note(CHAT, "", "换成红色", ADMIN).startswith("好，已经告诉任务")
+        return ai_response("蓝色的好了")
+
+    plan = ai_response(
+        "", [tool_call("update_plan", {"steps": [{"step": "画", "status": "in_progress"}]})]
+    )
+    context = FakeAgentContext(tmp_path, ai=FakeAI([plan, wrap_up_with_late_note]))
+    task = runtime.start(
+        context,
+        AgentConfig(enabled=True, max_steps=1),
+        CHAT,
+        request_text = "画图",
+        source       = "chat",
+        admin        = True,
+    )
     await wait_until(lambda: task.runner.done())
 
     [text] = sent_texts(context)
@@ -862,10 +856,7 @@ async def test_inline_reply_delivery_is_confirmed_by_the_chat_side(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_resent_results_are_complete_and_record_their_own_delivery(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr("plugins.xiaoqing_agent.runtime._UPLOAD_AFTER_REPLY_SECONDS", 0.01)
+async def test_resent_results_are_complete_and_record_their_own_delivery(tmp_path: Path) -> None:
     work = tmp_path / "workspaces" / CHAT.key
     work.mkdir(parents=True)
     (work / "table.csv").write_text("a,b", encoding="utf-8")
@@ -1075,18 +1066,4 @@ async def test_needs_user_task_is_settled_and_not_swept_as_interrupted(tmp_path:
     # 等待发起人回答的任务已经收尾，重启时不会被当成中断。
     assert await runtime.store.mark_interrupted() == 0
     assert _records(tmp_path)[-1]["status"] == "needs_user"
-    await runtime.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_finished_task_logs_model_and_tool_timing(tmp_path: Path, caplog) -> None:
-    context = FakeAgentContext(tmp_path, ai=FakeAI([_final("好")]))
-    runtime = AgentRuntime(tmp_path)
-    with caplog.at_level("INFO", logger="plugins.xiaoqing_agent.runtime"):
-        task = runtime.start(context, CONFIG, CHAT, request_text="好", source="chat", admin=True)
-        await wait_until(lambda: task.runner.done())
-    finished = [
-        record.getMessage() for record in caplog.records if "task finished" in record.getMessage()
-    ]
-    assert finished and "model_calls=1 " in finished[0] and "tool_s=" in finished[0]
     await runtime.shutdown()

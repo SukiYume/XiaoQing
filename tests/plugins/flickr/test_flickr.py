@@ -5,22 +5,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from plugins.flickr import main as flickr
-from plugins.flickr.client import FlickrApiError, FlickrPage, FlickrPhoto
+from plugins.flickr.client import FlickrPhoto
+from tests.helpers.http import aiohttp_json_response
 from tests.helpers.payloads import image_bytes
 from tests.helpers.settings_snapshot import with_settings_reader
 
-_REAL_DOWNLOAD_PHOTO = flickr._download_photo
+_OWNER_ID = "98765432@N01"
 
 
 def _photo(number: int, *, license_id: str = "0") -> FlickrPhoto:
     return FlickrPhoto(
         photo_id    = str(number),
-        owner_id    = "98765432@N01",
+        owner_id    = _OWNER_ID,
         owner_name  = "Astro Photographer",
         title       = f"Night Sky {number}",
         description = f"Description {number}",
@@ -28,17 +30,80 @@ def _photo(number: int, *, license_id: str = "0") -> FlickrPhoto:
         taken_at    = "2026-08-18 03:04:05",
         tags        = ("night", "sky"),
         media_url   = f"https://live.staticflickr.com/66/{number}_abc_c.jpg",
-        page_url    = f"https://www.flickr.com/photos/98765432@N01/{number}/",
+        page_url    = f"https://www.flickr.com/photos/{_OWNER_ID}/{number}/",
     )
 
 
-def _page(count: int = 3) -> FlickrPage:
-    return FlickrPage(
-        photos = tuple(_photo(number) for number in range(1, count + 1)),
-        page   = 1,
-        pages  = 1,
-        total  = count,
-    )
+def _photo_item(number: int) -> dict[str, Any]:
+    """Flickr 列表接口里的一张照片。"""
+
+    return {
+        "id"         : str(number),
+        "owner"      : _OWNER_ID,
+        "ownername"  : "Astro Photographer",
+        "title"      : f"Night Sky {number}",
+        "description": {"_content": f"Description {number}"},
+        "license"    : "0",
+        "datetaken"  : "2026-08-18 03:04:05",
+        "tags"       : "night sky",
+        "media"      : "photo",
+        "url_c"      : f"https://live.staticflickr.com/66/{number}_abc_c.jpg",
+    }
+
+
+def _list_payload(count: int = 3, *, container: str = "photos") -> dict[str, Any]:
+    return {
+        "stat"   : "ok",
+        container: {
+            "page" : 1,
+            "pages": 1,
+            "total": count,
+            "photo": [_photo_item(number) for number in range(1, count + 1)],
+        },
+    }
+
+
+def _info_payload(number: int, *, license_id: str) -> dict[str, Any]:
+    return {
+        "stat" : "ok",
+        "photo": {
+            "id"         : str(number),
+            "owner"      : {"nsid": _OWNER_ID, "realname": "Astro Photographer"},
+            "title"      : {"_content": f"Night Sky {number}"},
+            "description": {"_content": f"Description {number}"},
+            "license"    : license_id,
+            "dates"      : {"taken": "2026-08-18 03:04:05"},
+            "tags"       : {"tag": [{"raw": "night"}, {"raw": "sky"}]},
+            "url_c"      : f"https://live.staticflickr.com/66/{number}_abc_c.jpg",
+        },
+    }
+
+
+class _ApiSession:
+    """Flickr REST 的 HTTP 会话替身：按请求参数里的 ``method`` 返回预置的 JSON。"""
+
+    def __init__(self) -> None:
+        self.routes: dict[str, Any] = {
+            "flickr.interestingness.getList": _list_payload(),
+            "flickr.photos.search"          : _list_payload(),
+            "flickr.people.findByUsername"  : {"stat": "ok", "user": {"id": _OWNER_ID}},
+            "flickr.urls.lookupUser"        : {"stat": "ok", "user": {"id": _OWNER_ID}},
+            "flickr.people.getPublicPhotos" : _list_payload(),
+            "flickr.photosets.getPhotos"    : _list_payload(container="photoset"),
+            "flickr.photos.getInfo"         : _info_payload(9, license_id="4"),
+        }
+        self.calls: list[dict[str, Any]] = []
+
+    def request(self, _method: str, url: str, **kwargs: Any):
+        params = dict(kwargs["params"])
+        self.calls.append(params)
+        payload = self.routes[params["method"]]
+        if isinstance(payload, Exception):
+            raise payload
+        return aiohttp_json_response(payload, url=url)
+
+    def calls_to(self, method: str) -> list[dict[str, Any]]:
+        return [params for params in self.calls if params["method"] == method]
 
 
 @pytest.fixture
@@ -58,27 +123,22 @@ def context(tmp_path: Path) -> SimpleNamespace:
     )
 
 
+@pytest.fixture
+def api(context: SimpleNamespace) -> _ApiSession:
+    session              = _ApiSession()
+    context.http_session = session
+    return session
+
+
 @pytest.fixture(autouse=True)
-def local_image(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    target = tmp_path / "flickr.jpg"
-    target.write_bytes(image_bytes())
-    monkeypatch.setattr(flickr, "_download_photo", AsyncMock(return_value=target))
-    return target
+def image_download(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """图片下载边界：``fetch_public_bytes`` 返回一张有效的小 PNG；真实的校验与缓存照常运行。"""
 
-
-def _client(monkeypatch: pytest.MonkeyPatch, **methods: object) -> SimpleNamespace:
-    values = {
-        "interesting"  : AsyncMock(return_value=_page()),
-        "search"       : AsyncMock(return_value=_page()),
-        "resolve_user" : AsyncMock(return_value="98765432@N01"),
-        "public_photos": AsyncMock(return_value=_page()),
-        "album_photos" : AsyncMock(return_value=_page()),
-        "photo_info"   : AsyncMock(return_value=_photo(9, license_id="4")),
-    }
-    values.update(methods)
-    client = SimpleNamespace(**values)
-    monkeypatch.setattr(flickr, "FlickrClient", lambda _context: client)
-    return client
+    fetch = AsyncMock(
+        return_value=SimpleNamespace(body=image_bytes("PNG"), url="https://live.staticflickr.com/")
+    )
+    monkeypatch.setattr(flickr, "fetch_public_bytes", fetch)
+    return fetch
 
 
 def _reply_text(result: list[dict]) -> str:
@@ -104,10 +164,8 @@ async def test_help_is_compact_and_does_not_require_api_key(context: SimpleNames
 @pytest.mark.asyncio
 async def test_default_command_opens_interesting_session(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    client = _client(monkeypatch)
-
     result = await flickr.handle("flickr", "", {"user_id": 123, "group_id": 456}, context)
 
     assert [segment["type"] for segment in result] == ["image", "text"]
@@ -115,16 +173,14 @@ async def test_default_command_opens_interesting_session(
     assert "Night Sky 1" in message
     assert "All Rights Reserved" in message
     assert "第 1/3 张" in message
-    client.interesting.assert_awaited_once_with()
+    assert [params["page"] for params in api.calls_to("flickr.interestingness.getList")] == [1]
 
 
 @pytest.mark.asyncio
 async def test_search_defaults_to_all_licenses_and_parses_filters(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    client = _client(monkeypatch)
-
     await flickr.handle(
         "flickr",
         "search Milky Way --tags night,sky --sort interesting --date 2026-08",
@@ -132,28 +188,26 @@ async def test_search_defaults_to_all_licenses_and_parses_filters(
         context,
     )
 
-    options = client.search.await_args.kwargs
-    assert options["query"] == "Milky Way"
+    (options,) = api.calls_to("flickr.photos.search")
+    assert options["text"] == "Milky Way"
     assert options["tags"] == "night,sky"
     assert options["sort"] == "interestingness-desc"
-    assert options["license_ids"] is None
+    assert "license" not in options
     assert options["min_taken_date"] == "2026-08-01 00:00:00"
     assert options["max_taken_date"] == "2026-08-31 23:59:59"
-    assert options["commons_only"] is False
+    assert "is_commons" not in options
 
 
 @pytest.mark.asyncio
 async def test_cc_and_commons_filters_are_explicit(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    client = _client(monkeypatch)
-
     await flickr.handle("flickr", "典藏 moon --license cc", {}, context)
 
-    options = client.search.await_args.kwargs
-    assert options["license_ids"] == "1,2,3,4,5,6,9,10"
-    assert options["commons_only"] is True
+    (options,) = api.calls_to("flickr.photos.search")
+    assert options["license"] == "1,2,3,4,5,6,9,10"
+    assert options["is_commons"] == 1
 
 
 @pytest.mark.asyncio
@@ -173,48 +227,45 @@ async def test_cc_and_commons_filters_are_explicit(
 )
 async def test_invalid_inputs_return_actionable_errors(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
     args: str,
     expected: str,
 ) -> None:
-    _client(monkeypatch)
-
     result = await flickr.handle("flickr", args, {}, context)
 
     assert expected in _reply_text(result)
+    assert api.calls == []
 
 
 @pytest.mark.asyncio
 async def test_user_and_album_commands_resolve_owner(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    client = _client(monkeypatch)
-
     await flickr.handle("flickr", "user Display Name", {}, context)
-    client.resolve_user.assert_awaited_with("Display Name")
-    client.public_photos.assert_awaited_once_with("98765432@N01")
+    assert [p["username"] for p in api.calls_to("flickr.people.findByUsername")] == ["Display Name"]
+    assert [p["user_id"] for p in api.calls_to("flickr.people.getPublicPhotos")] == [_OWNER_ID]
 
-    client.resolve_user.reset_mock()
     await flickr.handle(
         "flickr",
         "album https://www.flickr.com/photos/example/albums/72100000000000000",
         {},
         context,
     )
-    client.resolve_user.assert_awaited_with("example")
-    client.album_photos.assert_awaited_once_with(
-        user_id  = "98765432@N01",
-        album_id = "72100000000000000",
-    )
+    assert [p["username"] for p in api.calls_to("flickr.people.findByUsername")] == [
+        "Display Name",
+        "example",
+    ]
+    (album_request,) = api.calls_to("flickr.photosets.getPhotos")
+    assert album_request["user_id"] == _OWNER_ID
+    assert album_request["photoset_id"] == "72100000000000000"
 
 
 @pytest.mark.asyncio
 async def test_more_advances_without_repeats_and_stops_at_end(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
 
     result  = await flickr.handle("flickr", "more 2", {}, context)
@@ -230,9 +281,8 @@ async def test_more_advances_without_repeats_and_stops_at_end(
 @pytest.mark.asyncio
 async def test_session_isolated_by_group_and_user(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
 
     context.current_group_id = 999
@@ -248,9 +298,8 @@ async def test_session_isolated_by_group_and_user(
 @pytest.mark.asyncio
 async def test_expired_session_is_removed(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
     runtime            = context.state["flickr_runtime"]
     session            = next(iter(runtime["sessions"].values()))
@@ -265,18 +314,17 @@ async def test_expired_session_is_removed(
 @pytest.mark.asyncio
 async def test_info_uses_current_or_explicit_photo(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
-    client = _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
 
     current = await flickr.handle("flickr", "info", {}, context)
     assert "Description 1" in _reply_text(current)
-    client.photo_info.assert_not_awaited()
+    assert api.calls_to("flickr.photos.getInfo") == []
 
     explicit = await flickr.handle("flickr", "info 123456789", {}, context)
     assert "CC BY 2.0" in _reply_text(explicit)
-    client.photo_info.assert_awaited_once_with("123456789")
+    assert [p["photo_id"] for p in api.calls_to("flickr.photos.getInfo")] == ["123456789"]
 
 
 def test_photo_and_album_reference_parsers_cover_supported_urls() -> None:
@@ -291,44 +339,33 @@ def test_photo_and_album_reference_parsers_cover_supported_urls() -> None:
 @pytest.mark.asyncio
 async def test_configuration_and_api_errors_have_stable_messages(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
     context.secrets = {}
     missing         = await flickr.handle("flickr", "", {}, context)
     assert "Flickr API Key 未配置" in _reply_text(missing)
 
-    _client(monkeypatch, interesting=AsyncMock(side_effect=FlickrApiError("100")))
+    context.secrets = {"plugins": {"flickr": {"api_key": "test-api-key"}}}
+    api.routes["flickr.interestingness.getList"] = {"stat": "fail", "code": 100}
     invalid = await flickr.handle("flickr", "", {}, context)
     assert "API Key 无效" in _reply_text(invalid)
 
-    _client(monkeypatch, interesting=AsyncMock(side_effect=FlickrApiError("105")))
-    unavailable = await flickr.handle("flickr", "", {}, context)
+    api.routes["flickr.interestingness.getList"] = {"stat": "fail", "code": 105}
+    unavailable                                  = await flickr.handle("flickr", "", {}, context)
     assert "暂时不可用" in _reply_text(unavailable)
 
 
 @pytest.mark.asyncio
 async def test_image_download_is_validated_cached_and_host_pinned(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    image_download: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    payload = image_bytes("PNG")
-    fetch   = AsyncMock(
-        return_value=SimpleNamespace(
-            body = payload,
-            url  = "https://live.staticflickr.com/66/1_abc_c.jpg",
-        )
-    )
-    monkeypatch.setattr(flickr, "fetch_public_bytes", fetch)
-
-    async def direct(function, *args, **kwargs):
-        return function(*args, **kwargs)
-
-    monkeypatch.setattr(flickr, "run_sync", direct)
+    fetch = image_download
     photo = _photo(1)
 
-    first  = await _REAL_DOWNLOAD_PHOTO(photo, context)
-    second = await _REAL_DOWNLOAD_PHOTO(photo, context)
+    first  = await flickr._download_photo(photo, context)
+    second = await flickr._download_photo(photo, context)
 
     assert first == second
     assert first.parent == tmp_path / "images"
@@ -344,13 +381,9 @@ async def test_image_download_is_validated_cached_and_host_pinned(
 @pytest.mark.asyncio
 async def test_image_failure_degrades_to_attributed_text(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    image_download: AsyncMock,
 ) -> None:
-    monkeypatch.setattr(
-        flickr,
-        "_download_photo",
-        AsyncMock(side_effect=ValueError("private image detail")),
-    )
+    image_download.side_effect = ValueError("private image detail")
 
     result = await flickr._render_photo(_photo(1), context, index=0, total=1)
 
@@ -364,16 +397,15 @@ async def test_image_failure_degrades_to_attributed_text(
 @pytest.mark.asyncio
 async def test_unexpected_error_uses_public_redacted_response(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    api: _ApiSession,
 ) -> None:
     context.secrets = {"plugins": {"flickr": {"api_key": "secret-canary-key"}}}
-    monkeypatch.setattr(
-        flickr,
-        "parse",
-        Mock(side_effect=RuntimeError("Bearer secret-canary-key C:\\private\\file")),
+    # 网络层出了插件没有预料到的异常（不是传输 / 协议类错误）。
+    api.routes["flickr.interestingness.getList"] = LookupError(
+        "Bearer secret-canary-key C:\\private\\file"
     )
 
-    result = await flickr.handle("flickr", "ordinary", {}, context)
+    result = await flickr.handle("flickr", "", {}, context)
 
     serialized = json.dumps(result, ensure_ascii=False)
     assert "XQ-PLUGIN-UNEXPECTED" in serialized

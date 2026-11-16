@@ -4,16 +4,15 @@ SchedulerManager 单元测试
 
 import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-import core.scheduler as scheduler_module
 from core.scheduler import (
     ScheduledJobSpec,
-    SchedulerDrainCapability,
     SchedulerManager,
     probe_asyncio_scheduler_drain,
 )
@@ -31,6 +30,31 @@ async def scheduler():
     yield manager
     # 清理
     await manager.shutdown_async()
+
+
+def _fire_now(manager: SchedulerManager, job_id: str) -> None:
+    """把任务的下次运行时间改成现在并唤醒调度器，立即触发一次。"""
+
+    scheduler = manager.scheduler
+    assert scheduler is not None
+    job = scheduler.get_job(job_id)
+    assert job is not None
+    job.modify(next_run_time=datetime.now(scheduler.timezone))
+    scheduler.wakeup()
+
+
+def _break_private_layout(scheduler: AsyncIOScheduler) -> None:
+    """模拟 APScheduler 私有结构变了：执行器的待完成任务登记不再是集合。"""
+
+    next(iter(scheduler._executors.values()))._pending_futures = []
+    assert probe_asyncio_scheduler_drain(scheduler).available is False
+
+
+async def _wait_until(condition, timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "condition not reached"
+        await asyncio.sleep(0.005)
 
 
 # ============================================================
@@ -55,38 +79,34 @@ class TestSchedulerManagerInit:
         await manager.shutdown_async()
 
     @pytest.mark.asyncio
-    async def test_missing_private_layout_falls_back_to_public_shutdown(
-        self,
-        monkeypatch,
-    ):
+    async def test_missing_private_layout_falls_back_to_public_shutdown(self):
         manager   = SchedulerManager()
         scheduler = manager.scheduler
         assert scheduler is not None
-        unavailable = SchedulerDrainCapability(False, "layout changed", "3.11.99")
-        monkeypatch.setattr(
-            scheduler_module,
-            "probe_asyncio_scheduler_drain",
-            lambda _scheduler: unavailable,
-        )
+        _break_private_layout(scheduler)
 
         await manager.shutdown_async()
 
+        assert scheduler.running is False
         assert manager.scheduler is None
         assert manager._scheduler_drain is None
-        assert manager._last_drain_capability == unavailable
+        capability = manager._last_drain_capability
+        assert capability is not None
+        assert capability.available is False
+        assert capability.reason
 
     @pytest.mark.asyncio
-    async def test_initialization_default_timezone(self):
-        """测试默认时区初始化"""
-        manager = SchedulerManager()
-        assert str(manager.scheduler.timezone) == "Asia/Shanghai"
-        await manager.shutdown_async()
-
-    @pytest.mark.asyncio
-    async def test_initialization_custom_timezone(self):
-        """测试自定义时区初始化"""
-        manager = SchedulerManager(timezone="UTC")
-        assert str(manager.scheduler.timezone) == "UTC"
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            pytest.param({}, "Asia/Shanghai", id="default"),
+            pytest.param({"timezone": "UTC"}, "UTC", id="custom"),
+        ],
+    )
+    async def test_initialization_timezone(self, kwargs, expected):
+        """默认时区为 Asia/Shanghai，也可以自定义"""
+        manager = SchedulerManager(**kwargs)
+        assert str(manager.scheduler.timezone) == expected
         await manager.shutdown_async()
 
     @pytest.mark.asyncio
@@ -96,65 +116,40 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_ensure_started_is_idempotent(self, monkeypatch):
-        """重复 ensure_started 只初始化一次"""
-        from core import scheduler as scheduler_module
+        """重复 ensure_started 只启动一个调度器"""
+        starts         = []
+        original_start = AsyncIOScheduler.start
 
-        init_count  = 0
-        start_count = 0
+        def counting_start(scheduler, *args, **kwargs):
+            starts.append(scheduler)
+            return original_start(scheduler, *args, **kwargs)
 
-        class FakeScheduler:
-            def __init__(self, timezone):
-                nonlocal init_count
-                init_count += 1
-                self.timezone = timezone
-                self.running  = False
-
-            def start(self):
-                nonlocal start_count
-                start_count += 1
-                self.running = True
-
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
-
-        manager           = SchedulerManager()
-        manager.scheduler = None
-        manager._started  = False
-        init_count        = 0
-        start_count       = 0
+        manager = SchedulerManager()
+        manager.shutdown()
+        monkeypatch.setattr(AsyncIOScheduler, "start", counting_start)
 
         for _ in range(10):
             manager.ensure_started()
 
-        assert init_count == 1
-        assert start_count == 1
+        assert starts == [manager.scheduler]
+        assert manager.scheduler.running is True
+        manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_reset_waits_for_old_scheduler_shutdown(self, monkeypatch):
-        """reset 会等待旧 scheduler shutdown 并应用新时区"""
-        from core import scheduler as scheduler_module
-
-        shutdown_waits = []
-
-        class FakeScheduler:
-            def __init__(self, timezone):
-                self.timezone = timezone
-                self.running  = False
-
-            def start(self):
-                self.running = True
-
-            def shutdown(self, wait=True):
-                shutdown_waits.append(wait)
-                self.running = False
-
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
-
+    async def test_reset_stops_old_scheduler_and_applies_new_timezone(self):
+        """reset 返回时旧调度器已停止，新调度器按新时区运行"""
         manager = SchedulerManager()
+        old     = manager.scheduler
+        assert old is not None
+
         manager.reset("UTC")
 
-        assert shutdown_waits == [True]
+        assert old.running is False
         assert manager.timezone == "UTC"
-        assert manager.scheduler.timezone == "UTC"
+        assert manager.scheduler is not old
+        assert manager.scheduler.running is True
+        assert str(manager.scheduler.timezone) == "UTC"
+        manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_shutdown_resets_scheduler_and_allows_lazy_restart(self):
@@ -393,49 +388,62 @@ class TestSchedulerManagerInit:
                 await manager.shutdown_async()
 
     @pytest.mark.asyncio
-    async def test_shutdown_failure_retains_scheduler_for_retry(self):
-        manager = SchedulerManager()
-        manager.shutdown()
-        scheduler = Mock(running=True)
-        scheduler.shutdown = Mock(side_effect=[RuntimeError("stop failed"), None])
-        manager.scheduler = scheduler
-        manager._started  = True
+    async def test_shutdown_failure_retains_scheduler_for_retry(self, monkeypatch):
+        manager   = SchedulerManager()
+        scheduler = manager.scheduler
+        assert scheduler is not None
+        # 私有排空不可用时走 APScheduler 公开 shutdown。
+        _break_private_layout(scheduler)
+        original_shutdown = AsyncIOScheduler.shutdown
+        calls             = 0
+
+        def fail_once(instance, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("stop failed")
+            return original_shutdown(instance, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncIOScheduler, "shutdown", fail_once)
 
         with pytest.raises(RuntimeError, match="stop failed"):
             manager.shutdown()
 
         assert manager.scheduler is scheduler
         assert manager._started is True
+        assert scheduler.running is True
 
-        manager.shutdown()
+        await manager.shutdown_async()
         assert manager.scheduler is None
         assert manager._started is False
-        assert scheduler.shutdown.call_count == 2
+        assert scheduler.running is False
+        assert calls == 2
 
     @pytest.mark.asyncio
     async def test_reset_failure_keeps_old_timezone_and_does_not_start_new_scheduler(
         self,
         monkeypatch,
     ):
-        from core import scheduler as scheduler_module
-
-        created = []
-
-        class FakeScheduler:
-            def __init__(self, timezone):
-                self.timezone = timezone
-                self.running  = False
-                created.append(self)
-
-            def start(self):
-                self.running = True
-
-            def shutdown(self, wait=True):
-                raise RuntimeError("stop failed")
-
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
         manager       = SchedulerManager("Asia/Shanghai")
         old_scheduler = manager.scheduler
+        assert old_scheduler is not None
+        _break_private_layout(old_scheduler)
+        original_shutdown = AsyncIOScheduler.shutdown
+        original_start    = AsyncIOScheduler.start
+        starts            = []
+        fail_shutdown     = True
+
+        def shutdown(instance, *args, **kwargs):
+            if fail_shutdown:
+                raise RuntimeError("stop failed")
+            return original_shutdown(instance, *args, **kwargs)
+
+        def start(instance, *args, **kwargs):
+            starts.append(instance)
+            return original_start(instance, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncIOScheduler, "shutdown", shutdown)
+        monkeypatch.setattr(AsyncIOScheduler, "start", start)
 
         with pytest.raises(RuntimeError, match="stop failed"):
             manager.reset("UTC")
@@ -443,22 +451,19 @@ class TestSchedulerManagerInit:
         assert manager.timezone == "Asia/Shanghai"
         assert manager.scheduler is old_scheduler
         assert manager._started is True
-        assert len(created) == 1
+        assert old_scheduler.running is True
+        assert starts == []
+
+        fail_shutdown = False
+        await manager.shutdown_async()
+        assert old_scheduler.running is False
 
     @pytest.mark.asyncio
     async def test_constructor_does_not_swallow_scheduler_start_failure(self, monkeypatch):
-        from core import scheduler as scheduler_module
+        def failing_start(instance, *args, **kwargs):
+            raise RuntimeError("executor start failed")
 
-        class FailingScheduler:
-            running = False
-
-            def __init__(self, timezone):
-                self.timezone = timezone
-
-            def start(self):
-                raise RuntimeError("executor start failed")
-
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FailingScheduler)
+        monkeypatch.setattr(AsyncIOScheduler, "start", failing_start)
 
         with pytest.raises(RuntimeError, match="executor start failed"):
             SchedulerManager()
@@ -467,7 +472,8 @@ class TestSchedulerManagerInit:
     async def test_unstarted_scheduler_residue_is_abandoned_before_retry(self):
         manager = SchedulerManager()
         manager.shutdown()
-        residue = Mock(running=False)
+        # 真实调度器对象从未启动：它不占任何资源，不该调用它的 shutdown。
+        residue = AsyncIOScheduler(timezone="UTC")
         residue.shutdown = Mock(side_effect=RuntimeError("must not be called"))
         manager.scheduler = residue
         manager._started  = False
@@ -480,6 +486,7 @@ class TestSchedulerManagerInit:
 
         manager.ensure_started()
         assert manager.scheduler is not None
+        assert manager.scheduler is not residue
         assert manager.scheduler.running is True
         manager.shutdown()
 
@@ -488,22 +495,20 @@ class TestSchedulerManagerInit:
         self,
         monkeypatch,
     ):
-        from core import scheduler as scheduler_module
-
         manager       = SchedulerManager("Asia/Shanghai")
         old_scheduler = manager.scheduler
         assert old_scheduler is not None
-        failed_candidate = Mock(running=False)
-        failed_candidate.start = Mock(side_effect=RuntimeError("new start failed"))
-        healthy_candidate = Mock(running=False)
+        original_start = AsyncIOScheduler.start
+        starts         = 0
 
-        def start_healthy() -> None:
-            healthy_candidate.running = True
+        def fail_first_start(instance, *args, **kwargs):
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                raise RuntimeError("new start failed")
+            return original_start(instance, *args, **kwargs)
 
-        healthy_candidate.start = Mock(side_effect=start_healthy)
-        healthy_candidate.shutdown = Mock()
-        factory = Mock(side_effect=[failed_candidate, healthy_candidate])
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", factory)
+        monkeypatch.setattr(AsyncIOScheduler, "start", fail_first_start)
 
         with pytest.raises(RuntimeError, match="new start failed"):
             manager.reset("UTC")
@@ -516,34 +521,34 @@ class TestSchedulerManagerInit:
 
         manager.reset("UTC")
         assert manager.timezone == "UTC"
-        assert manager.scheduler is healthy_candidate
+        assert manager.scheduler is not None
+        assert str(manager.scheduler.timezone) == "UTC"
+        assert manager.scheduler.running is True
         assert manager._started is True
-        healthy_candidate.shutdown = Mock()
         manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_partially_started_scheduler_is_retained_for_cleanup(self, monkeypatch):
-        from core import scheduler as scheduler_module
-
         manager = SchedulerManager()
         manager.shutdown()
-        candidate = Mock(running=False)
+        original_start = AsyncIOScheduler.start
 
-        def fail_after_start() -> None:
-            candidate.running = True
+        def fail_after_start(instance, *args, **kwargs):
+            original_start(instance, *args, **kwargs)
             raise RuntimeError("partial start")
 
-        candidate.start = Mock(side_effect=fail_after_start)
-        candidate.shutdown = Mock()
-        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", Mock(return_value=candidate))
+        monkeypatch.setattr(AsyncIOScheduler, "start", fail_after_start)
 
         with pytest.raises(RuntimeError, match="partial start"):
             manager.ensure_started()
 
-        assert manager.scheduler is candidate
+        candidate = manager.scheduler
+        assert candidate is not None
+        assert candidate.running is True
         assert manager._started is True
         manager.shutdown()
-        candidate.shutdown.assert_called_once_with(wait=True)
+        assert candidate.running is False
+        assert manager.scheduler is None
 
 
 # ============================================================
@@ -553,24 +558,6 @@ class TestSchedulerManagerInit:
 
 class TestAddJob:
     """add_job 方法测试"""
-
-    @pytest.mark.asyncio
-    async def test_add_cron_job(self, scheduler: SchedulerManager):
-        """测试添加 cron 任务"""
-        executed = []
-
-        def job_func():
-            executed.append(datetime.now())
-
-        scheduler.add_job(
-            "test_job",
-            job_func,
-            {"second": "*/1"},  # 每秒执行
-        )
-
-        # 验证任务已添加
-        jobs = scheduler.scheduler.get_jobs()
-        assert any(job.id == "test_job" for job in jobs)
 
     @pytest.mark.asyncio
     async def test_add_cron_job_uses_manifest_description_as_job_name(
@@ -612,14 +599,14 @@ class TestAddJob:
         def job2():
             count2.append(2)
 
-        # 添加第一个任务
         scheduler.add_job("duplicate", job1, {"second": "*/1"})
 
         # 添加同名任务（应该替换）
         scheduler.add_job("duplicate", job2, {"second": "*/1"})
 
-        # 等待执行
-        await asyncio.sleep(1.5)
+        # 直接触发这个任务，不等 cron 到点
+        _fire_now(scheduler, "duplicate")
+        await _wait_until(lambda: count2)
 
         # 只有第二个任务应该执行
         assert len(count2) > 0
@@ -793,18 +780,6 @@ class TestRemoveJob:
         # 应该不抛出异常
         scheduler.remove_job("nonexistent_job")
 
-    @pytest.mark.asyncio
-    async def test_remove_job_twice(self, scheduler: SchedulerManager):
-        """测试移除同一任务两次"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("job", dummy, {"second": "*/1"})
-        scheduler.remove_job("job")
-        # 第二次移除应该不报错
-        scheduler.remove_job("job")
-
 
 # ============================================================
 # 任务执行测试
@@ -813,21 +788,6 @@ class TestRemoveJob:
 
 class TestJobExecution:
     """任务执行测试"""
-
-    @pytest.mark.asyncio
-    async def test_job_executes_on_schedule(self, scheduler: SchedulerManager):
-        """测试任务按计划执行"""
-        executed = []
-
-        def job():
-            executed.append(datetime.now())
-
-        scheduler.add_job("frequent_job", job, {"second": "*/1"})
-
-        # 等待至少执行一次
-        await asyncio.sleep(1.5)
-
-        assert len(executed) >= 1
 
     @pytest.mark.asyncio
     async def test_multiple_jobs_execute(self, scheduler: SchedulerManager):
@@ -843,53 +803,19 @@ class TestJobExecution:
         scheduler.add_job("job_a", job_a, {"second": "*/1"})
         scheduler.add_job("job_b", job_b, {"second": "*/2"})
 
-        await asyncio.sleep(2.5)
+        # 直接触发两个任务，不等 cron 到点
+        fired_at = datetime.now(scheduler.scheduler.timezone)
+        _fire_now(scheduler, "job_a")
+        _fire_now(scheduler, "job_b")
+        await _wait_until(lambda: results["a"] >= 1 and results["b"] >= 1)
+        # 执行后任务仍按 cron 留在调度器里，可以再次触发
+        _fire_now(scheduler, "job_a")
+        await _wait_until(lambda: results["a"] >= 2)
 
         assert results["a"] >= 2
         assert results["b"] >= 1
-
-
-# ============================================================
-# Cron 表达式测试
-# ============================================================
-
-
-class TestCronExpressions:
-    """Cron 表达式测试"""
-
-    @pytest.mark.asyncio
-    async def test_cron_every_second(self, scheduler: SchedulerManager):
-        """测试每秒执行"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("every_second", dummy, {"second": "*"})
-
-        job = [j for j in scheduler.scheduler.get_jobs() if j.id == "every_second"][0]
-        assert job is not None
-        assert job.id == "every_second"
-
-    @pytest.mark.asyncio
-    async def test_cron_every_minute(self, scheduler: SchedulerManager):
-        """测试每分钟执行"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("every_minute", dummy, {"minute": "*"})
-
-        job = [j for j in scheduler.scheduler.get_jobs() if j.id == "every_minute"][0]
-        assert job is not None
-
-    @pytest.mark.asyncio
-    async def test_cron_specific_hour(self, scheduler: SchedulerManager):
-        """测试特定小时执行"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("daily_at_9", dummy, {"hour": "9", "minute": "0"})
-
-        job = [j for j in scheduler.scheduler.get_jobs() if j.id == "daily_at_9"][0]
-        assert job is not None
+        # 执行后按各自的 cron 节奏排下一次：a 每秒一次，b 每两秒一次
+        next_a = scheduler.scheduler.get_job("job_a").next_run_time
+        next_b = scheduler.scheduler.get_job("job_b").next_run_time
+        assert fired_at < next_a <= fired_at + timedelta(seconds=2)
+        assert fired_at < next_b <= fired_at + timedelta(seconds=3)

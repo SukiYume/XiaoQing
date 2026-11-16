@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from aiohttp import WSCloseCode, WSMsgType
 
 import tests.helpers.server_test_support as _fixture_support
+from core.server import _InboundEventDispatcher
 from tests.helpers.server_test_support import (
+    ClientSession,
     InboundManager,
-    StandaloneInboundServer,
-    _InboundEventDispatcher,
-    _inflight_count,
-    _lane_count,
-    _make_request_with_auth,
-    _MockRequest,
-    _onebot_message_payload,
-    _pending_for_key,
+    auth_headers,
+    inflight_count,
+    lane_count,
+    make_server,
+    onebot_message_payload,
+    pending_for_key,
+    post_event,
+    serving,
+    wait_until,
     web,
 )
 
@@ -28,9 +30,17 @@ mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
+async def _post_marker(session: ClientSession, marker: str, *, token: str = "token"):
+    """向真实服务器 POST 一条带 ``marker`` 的私聊事件（用户 10001）。"""
+
+    event           = onebot_message_payload(marker)
+    event["marker"] = marker
+    return await post_event(session, event, token=token)
+
+
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_http_admission_capacity_and_queued_cancellation_are_bounded():
+@pytest.mark.integration
+async def test_http_admission_capacity_is_bounded_and_released(unused_tcp_port):
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -40,46 +50,32 @@ async def test_http_admission_capacity_and_queued_cancellation_are_bounded():
             await release.wait()
         return []
 
-    server = StandaloneInboundServer(
-        "127.0.0.1",
-        8765,
-        "token",
+    server = make_server(
         handler,
+        unused_tcp_port,
+        token          = "token",
         ws_max_workers = 1,
         ws_queue_size  = 1,
     )
+    dispatcher = server._event_dispatcher
+    async with serving(server) as session:
+        try:
+            first = asyncio.create_task(_post_marker(session, "first"))
+            await asyncio.wait_for(entered.wait(), 5)
+            queued = asyncio.create_task(_post_marker(session, "queued"))
+            await wait_until(lambda: pending_for_key(dispatcher, "user:10001") == 2)
 
-    def request(marker: str) -> _MockRequest:
-        event           = _onebot_message_payload(marker)
-        event["marker"] = marker
-        result          = _make_request_with_auth("POST", "/event", "token")
-        result.json = AsyncMock(return_value=event)
-        return result
+            overloaded = await _post_marker(session, "N+1")
+            assert overloaded.status == 503
+            assert "overloaded" in overloaded.text
+            assert inflight_count(dispatcher) == 2
+        finally:
+            release.set()
 
-    first = asyncio.create_task(server.post_event(request("first")))
-    await asyncio.wait_for(entered.wait(), 5)
-    queued = asyncio.create_task(server.post_event(request("queued")))
-    for _ in range(20):
-        if _pending_for_key(server._event_dispatcher, "user:10001") == 2:
-            break
-        await asyncio.sleep(0)
-
-    overloaded = await server.post_event(request("N+1"))
-    assert overloaded.status == 503
-    assert "overloaded" in overloaded.text
-    assert _inflight_count(server._event_dispatcher) == 2
-
-    queued.cancel()
-    await asyncio.gather(queued, return_exceptions=True)
-    await asyncio.sleep(0)
-    assert _pending_for_key(server._event_dispatcher, "user:10001") == 1
-    assert _inflight_count(server._event_dispatcher) == 1
-
-    release.set()
-    assert (await first).status == 200
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
-    await server.stop()
+        assert (await first).status == 200
+        assert (await queued).status == 200
+        await wait_until(lambda: inflight_count(dispatcher) == 0)
+        assert lane_count(dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -103,29 +99,31 @@ async def test_queued_cancellation_storm_returns_dispatcher_to_exact_baseline():
         for index in range(50)
     ]
     for _ in range(20):
-        if _inflight_count(dispatcher) == 51:
+        if inflight_count(dispatcher) == 51:
             break
         await asyncio.sleep(0)
-    assert _inflight_count(dispatcher) == 51
+    assert inflight_count(dispatcher) == 51
 
     for task in queued:
         task.cancel()
     await asyncio.gather(*queued, return_exceptions=True)
     await asyncio.sleep(0)
-    assert _inflight_count(dispatcher) == 1
-    assert _pending_for_key(dispatcher, "user:1") == 1
+    assert inflight_count(dispatcher) == 1
+    assert pending_for_key(dispatcher, "user:1") == 1
 
     release.set()
     await running
-    assert _inflight_count(dispatcher) == 0
-    assert _lane_count(dispatcher) == 0
+    assert inflight_count(dispatcher) == 0
+    assert lane_count(dispatcher) == 0
     assert all(task.done() for task in queued)
     await dispatcher.stop()
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_lane():
+@pytest.mark.integration
+async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_lane(
+    unused_tcp_port,
+):
     entered         = asyncio.Event()
     release         = asyncio.Event()
     seen: list[str] = []
@@ -138,39 +136,34 @@ async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_
             await release.wait()
         return [{"marker": marker}]
 
-    server = StandaloneInboundServer("127.0.0.1", 8765, "old", handler, ws_max_workers=1)
+    server = make_server(handler, unused_tcp_port, token="old", ws_max_workers=1)
+    dispatcher = server._event_dispatcher
+    async with serving(server) as session:
+        try:
+            running = asyncio.create_task(_post_marker(session, "running", token="old"))
+            await asyncio.wait_for(entered.wait(), 5)
+            queued = asyncio.create_task(_post_marker(session, "queued", token="old"))
+            await wait_until(lambda: inflight_count(dispatcher) == 2)
 
-    def request(marker: str) -> _MockRequest:
-        event           = _onebot_message_payload(marker)
-        event["marker"] = marker
-        result          = _make_request_with_auth("POST", "/event", "old")
-        result.json = AsyncMock(return_value=event)
-        return result
-
-    running = asyncio.create_task(server.post_event(request("running")))
-    await asyncio.wait_for(entered.wait(), 5)
-    queued = asyncio.create_task(server.post_event(request("queued")))
-    for _ in range(20):
-        if _inflight_count(server._event_dispatcher) == 2:
-            break
-        await asyncio.sleep(0)
-
-    server.update_token("new")
-    release.set()
-    running_response, queued_response = await asyncio.gather(running, queued)
+            server.update_token("new")
+        finally:
+            release.set()
+        running_response, queued_response = await asyncio.gather(running, queued)
+        await wait_until(lambda: inflight_count(dispatcher) == 0)
 
     assert running_response.status == 401
     assert queued_response.status == 401
     assert seen == ["running"]
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
-    await server.stop()
+    assert lane_count(dispatcher) == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.parametrize("failure_kind", ["fatal", "sync", "invalid"])
-async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kind: str):
+async def test_handler_failures_are_task_safe_and_next_same_key_runs(
+    unused_tcp_port,
+    failure_kind: str,
+):
     async def fatal_handler(_event: dict[str, Any]) -> list[dict[str, Any]]:
         raise SystemExit("fatal")
 
@@ -180,30 +173,31 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
     async def invalid_handler(_event: dict[str, Any]):
         return {"not": "a list"}
 
-    handlers = {
-        "fatal"  : fatal_handler,
-        "sync"   : sync_handler,
-        "invalid": invalid_handler,
-    }
-    server  = StandaloneInboundServer("127.0.0.1", 8765, "token", handlers[failure_kind])
-    event   = _onebot_message_payload("bad")
-    request = _make_request_with_auth("POST", "/event", "token")
-    request.json = AsyncMock(return_value=event)
-
-    failed = await server.post_event(request)
-    assert failed.status == 500
-
     async def healthy(_event: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"ok": True}]
 
-    server.handler  = healthy
-    healthy_request = _make_request_with_auth("POST", "/event", "token")
-    healthy_request.json = AsyncMock(return_value=_onebot_message_payload("good"))
-    succeeded = await asyncio.wait_for(server.post_event(healthy_request), timeout=1)
-    assert succeeded.status == 200
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
-    await server.stop()
+    current = {
+        "fatal"  : fatal_handler,
+        "sync"   : sync_handler,
+        "invalid": invalid_handler,
+    }[failure_kind]
+
+    def handler(event: dict[str, Any]):
+        return current(event)
+
+    server = make_server(handler, unused_tcp_port, token="token")
+    async with serving(server) as session:
+        failed = await post_event(session, onebot_message_payload("bad"), token="token")
+        assert failed.status == 500
+
+        current   = healthy
+        succeeded = await asyncio.wait_for(
+            post_event(session, onebot_message_payload("good"), token="token"),
+            timeout=1,
+        )
+        assert succeeded.status == 200
+        assert inflight_count(server._event_dispatcher) == 0
+        assert lane_count(server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -239,8 +233,8 @@ async def test_hot_lane_yields_to_cold_lane_without_breaking_same_key_fifo():
     release.set()
     await asyncio.gather(*waiters)
     assert calls == ["hot-0", "cold", "hot-1", "hot-2", "hot-3", "hot-4"]
-    assert _inflight_count(dispatcher) == 0
-    assert _lane_count(dispatcher) == 0
+    assert inflight_count(dispatcher) == 0
+    assert lane_count(dispatcher) == 0
     await dispatcher.stop()
 
 
@@ -261,117 +255,153 @@ async def test_long_same_key_lane_does_not_spawn_worker_per_event():
 
     assert calls == 1_000
     assert dispatcher._worker_starts == 1
-    assert _inflight_count(dispatcher) == 0
-    assert _lane_count(dispatcher) == 0
+    assert inflight_count(dispatcher) == 0
+    assert lane_count(dispatcher) == 0
     await dispatcher.stop()
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.parametrize("send_failure", ["timeout", "fatal"])
-async def test_ws_send_failure_is_bounded_and_does_not_poison_same_key(send_failure: str):
+async def test_ws_send_failure_is_bounded_and_does_not_poison_same_key(
+    unused_tcp_port,
+    monkeypatch,
+    send_failure: str,
+):
     calls: list[int] = []
 
     async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
         calls.append(int(event["user_id"]))
         return [{"ok": True}]
 
-    server = StandaloneInboundServer("127.0.0.1", 8765, "token", handler)
-    server._ws_broadcast_timeout_seconds = 0.01
-    never = asyncio.Event()
+    never         = asyncio.Event()
+    real_send_str = web.WebSocketResponse.send_str
+    failed_once   = False
 
-    async def hung_send(_text: str) -> None:
-        await never.wait()
+    # aiohttp 的写边界：第一次回复发送失败（卡住直到超时，或抛出致命异常），之后照常发送。
+    async def failing_first_send_str(self, data, compress=None):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            if send_failure == "timeout":
+                await never.wait()
+            raise SystemExit("send fatal")
+        return await real_send_str(self, data, compress)
 
-    if send_failure == "timeout":
-        failed_ws = MagicMock(send_str=AsyncMock(side_effect=hung_send), close=AsyncMock())
-    else:
-        failed_ws = MagicMock(
-            send_str=AsyncMock(side_effect=SystemExit("send fatal")),
-            close=AsyncMock(),
-        )
-    await asyncio.wait_for(
-        server._handle_ws_event(failed_ws, server._event_dispatcher.admit({"user_id": 7})),
-        timeout=1,
-    )
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
+    monkeypatch.setattr(web.WebSocketResponse, "send_str", failing_first_send_str)
+    event            = onebot_message_payload()
+    event["user_id"] = 7
+    server = make_server(handler, unused_tcp_port, ws_broadcast_timeout_seconds=0.01)
+    dispatcher = server._event_dispatcher
+    async with serving(server) as session:
+        failed_ws = await session.ws_connect("/ws", headers=auth_headers())
+        await failed_ws.send_json(event)
+        await wait_until(lambda: failed_once and inflight_count(dispatcher) == 0)
+        assert lane_count(dispatcher) == 0
+        closed = await failed_ws.receive(timeout=2)
+        assert closed.type in {web.WSMsgType.CLOSE, web.WSMsgType.CLOSED}
 
-    healthy_ws = MagicMock(send_str=AsyncMock(), close=AsyncMock())
-    await asyncio.wait_for(
-        server._handle_ws_event(healthy_ws, server._event_dispatcher.admit({"user_id": 7})),
-        timeout=1,
-    )
-    healthy_ws.send_str.assert_awaited_once()
+        healthy_ws = await session.ws_connect("/ws", headers=auth_headers())
+        await healthy_ws.send_json(event)
+        assert await healthy_ws.receive_json(timeout=2) == {"ok": True}
+
     assert calls == [7, 7]
-    if server._ws_close_tasks:
-        await asyncio.gather(*tuple(server._ws_close_tasks), return_exceptions=True)
-    await server.stop()
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_ws_frame_after_stop_gate_never_reaches_dispatcher():
-    frame_ready = asyncio.Event()
-    prepared    = asyncio.Event()
+@pytest.mark.integration
+async def test_ws_frame_after_stop_gate_never_reaches_dispatcher(unused_tcp_port, monkeypatch):
+    frame_read = asyncio.Event()
+    frame_gate = asyncio.Event()
     handler = AsyncMock(return_value=[])
+    server = make_server(handler, unused_tcp_port)
 
-    class DelayedWebSocket:
-        def __init__(self) -> None:
-            self.sent = False
+    # 屏障：要让“帧已经读到、但 stop 的关闸先发生”这个确切时刻稳定出现，
+    # 就在 aiohttp 读到文本帧之后拦住它，放行后照常返回这一帧。
+    real_receive = web.WebSocketResponse.receive
 
-        async def prepare(self, _request) -> None:
-            prepared.set()
+    async def gated_receive(self, timeout=None):
+        msg = await real_receive(self, timeout)
+        if msg.type == web.WSMsgType.TEXT:
+            frame_read.set()
+            await frame_gate.wait()
+        return msg
 
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self.sent:
-                raise StopAsyncIteration
-            await frame_ready.wait()
-            self.sent = True
-            return SimpleNamespace(
-                type = web.WSMsgType.TEXT,
-                data = json.dumps(_onebot_message_payload("late")),
-            )
-
-        async def close(self, **_kwargs) -> None:
-            return None
-
-    server  = StandaloneInboundServer("127.0.0.1", 8765, "token", handler)
-    ws      = DelayedWebSocket()
-    request = _make_request_with_auth("GET", "/ws", "token")
-    with patch("core.server.web.WebSocketResponse", return_value=ws):
-        task = asyncio.create_task(server.ws_handler(request))
-        await prepared.wait()
-        server._accepting_events = False
-        frame_ready.set()
-        assert await task is ws
+    monkeypatch.setattr(web.WebSocketResponse, "receive", gated_receive)
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers())
+        try:
+            await ws.send_json(onebot_message_payload("late"))
+            await asyncio.wait_for(frame_read.wait(), 5)
+            stopping = asyncio.create_task(server.stop())
+            await wait_until(lambda: not server._accepting_events)
+        finally:
+            frame_gate.set()
+        # 服务器收到停止后关闭这条连接：客户端读到关闭帧并应答，stop 才会立即收尾。
+        closed = await ws.receive(timeout=2)
+        await stopping
+        assert closed.type in {web.WSMsgType.CLOSE, web.WSMsgType.CLOSED, web.WSMsgType.CLOSING}
 
     handler.assert_not_awaited()
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
-    await server.stop()
+    assert inflight_count(server._event_dispatcher) == 0
+    assert lane_count(server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_stop_discards_ws_queue_ticket_without_orphan_handler():
-    handler = AsyncMock(return_value=[])
-    server = StandaloneInboundServer("127.0.0.1", 8765, "token", handler, ws_max_workers=1)
-    queue = server._ws_event_queue
-    assert queue is not None
-    ticket = server._event_dispatcher.admit({"user_id": 42})
-    queue.put_nowait((MagicMock(), server._auth_state, ticket))
+@pytest.mark.integration
+async def test_stop_leaves_no_queued_ws_work_behind(unused_tcp_port):
+    entered         = asyncio.Event()
+    release         = asyncio.Event()
+    seen: list[str] = []
 
-    await server.stop()
+    async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
+        marker = str(event["marker"])
+        seen.append(marker)
+        if marker == "running":
+            entered.set()
+            await release.wait()
+        return []
 
-    handler.assert_not_awaited()
-    assert ticket.result.cancelled()
-    assert _inflight_count(server._event_dispatcher) == 0
-    assert _lane_count(server._event_dispatcher) == 0
+    server = make_server(handler, unused_tcp_port, ws_max_workers=1)
+    server._handler_drain_timeout_seconds = 0.05
+    async with serving(server) as session:
+        try:
+            ws = await session.ws_connect("/ws", headers=auth_headers())
+            await ws.send_json({**onebot_message_payload(), "user_id": 42, "marker": "running"})
+            await asyncio.wait_for(entered.wait(), 5)
+            # 只有一个 worker 且它在忙：第二个用户的事件停在 WS 队列里。
+            await ws.send_json({**onebot_message_payload(), "user_id": 43, "marker": "queued"})
+            queue = server._ws_event_queue
+            assert queue is not None
+            await wait_until(lambda: queue.qsize() == 1)
+
+            # 客户端还连着就停服务器：在途的那件按排空期限收尾，排队的那件不再开始。
+            await asyncio.wait_for(server.stop(), 5)
+            closing = await asyncio.wait_for(ws.receive(), 5)
+        finally:
+            release.set()
+
+    assert seen == ["running"]
+    assert closing.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING}
+    assert inflight_count(server._event_dispatcher) == 0
+    assert lane_count(server._event_dispatcher) == 0
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_stop_closes_idle_websocket_clients_promptly(unused_tcp_port):
+    server = make_server(AsyncMock(return_value=[]), unused_tcp_port)
+    async with serving(server) as session:
+        ws = await session.ws_connect("/ws", headers=auth_headers())
+
+        # 空闲的客户端不发消息：停止要主动关掉它，而不是等 aiohttp 的关闭超时。
+        await asyncio.wait_for(server.stop(), 5)
+        closing = await asyncio.wait_for(ws.receive(), 5)
+
+    assert closing.type == WSMsgType.CLOSE
+    assert closing.data == WSCloseCode.GOING_AWAY
+    assert server.active_ws_connections() == 0
 
 
 @pytest.mark.asyncio
@@ -412,7 +442,7 @@ async def test_dispatcher_stop_timeout_and_retry_leave_no_event_wait_tasks():
         release.set()
         await asyncio.gather(waiter, return_exceptions=True)
         for _ in range(20):
-            if _inflight_count(dispatcher) == 0:
+            if inflight_count(dispatcher) == 0:
                 break
             await asyncio.sleep(0)
         await dispatcher.stop()

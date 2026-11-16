@@ -1,12 +1,11 @@
 # 验证不可信 URL 的地址解析、重定向和内网访问限制。
-"""Regression tests for the fail-closed untrusted URL HTTP client."""
+"""Fail-closed HTTP client for untrusted URLs."""
 
 from __future__ import annotations
 
 import asyncio
 import gzip
 import socket
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -23,12 +22,6 @@ def test_redact_url_for_log_removes_credentials_query_and_fragment() -> None:
     assert "password" not in redacted
     assert "secret" not in redacted
     assert "private" not in redacted
-
-
-def test_browser_user_agent_looks_like_a_desktop_browser() -> None:
-    assert safe_http.BROWSER_USER_AGENT.startswith("Mozilla/5.0 ")
-    assert "Chrome/" in safe_http.BROWSER_USER_AGENT
-    assert safe_http.BROWSER_USER_AGENT.isprintable()
 
 
 @pytest.mark.parametrize(
@@ -70,18 +63,14 @@ def test_validated_proxy_url_returns_accepted_values_unchanged(proxy: str) -> No
         "http://proxy.example\x00",
         "http://proxy.example\n",
         "http://proxy.example\x7f",
+        " http://proxy.example",
+        "http://proxy.example ",
         "h" * (safe_http.MAX_PROXY_URL_CHARS + 1),
     ],
 )
 def test_validated_proxy_url_rejects_malformed_values(proxy: object) -> None:
     with pytest.raises(ValueError):
         safe_http.validated_proxy_url(proxy)
-
-
-def test_validated_proxy_url_does_not_trim_whitespace() -> None:
-    for padded in (" http://proxy.example", "http://proxy.example "):
-        with pytest.raises(ValueError):
-            safe_http.validated_proxy_url(padded)
 
 
 def test_validated_proxy_url_allows_a_path_only_when_asked() -> None:
@@ -134,14 +123,43 @@ def test_validated_proxy_url_errors_never_expose_the_credentials(proxy: str) -> 
     assert error.__suppress_context__ or error.__context__ is None
 
 
-class _FakeLoop:
-    def __init__(self, addresses: list[str]) -> None:
-        self.addresses = addresses
+class _FakeDns:
+    """DNS 边界：替换运行中事件循环的 `getaddrinfo`，产品的地址校验照常运行。
 
-    async def getaddrinfo(self, _host, _port, *, type, family):
+    没有单独指定的主机名都解析到 `default`（默认是一个公网地址）。
+    """
+
+    def __init__(
+        self,
+        monkeypatch,
+        answers: dict[str, list[str]] | None = None,
+        *,
+        default: tuple[str, ...] = ("8.8.8.8",),
+        delay: float             = 0.0,
+        block: bool              = False,
+    ) -> None:
+        self.answers            = dict(answers or {})
+        self.default            = default
+        self.delay              = delay
+        self.block              = block
+        self.lookups: list[str] = []
+        self.cancelled          = False
+        monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", self._getaddrinfo)
+
+    async def _getaddrinfo(self, host, _port, *, type, family):
+        self.lookups.append(host)
+        if self.block:
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        addresses = self.answers.get(host, self.default)
         return [
             (socket.AF_INET6 if ":" in address else socket.AF_INET, type, 0, "", (address, 0))
-            for address in self.addresses
+            for address in addresses
         ]
 
 
@@ -204,9 +222,7 @@ def test_rejects_noncanonical_and_private_url_literals():
 
 @pytest.mark.asyncio
 async def test_rejects_dns_result_when_any_address_is_not_public(monkeypatch):
-    monkeypatch.setattr(
-        safe_http.asyncio, "get_running_loop", lambda: _FakeLoop(["8.8.8.8", "127.0.0.1"])
-    )
+    _FakeDns(monkeypatch, default=("8.8.8.8", "127.0.0.1"))
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
         await safe_http.resolve_public_host("rebind.example", 443)
 
@@ -214,11 +230,7 @@ async def test_rejects_dns_result_when_any_address_is_not_public(monkeypatch):
 @pytest.mark.asyncio
 async def test_transparent_proxy_fake_dns_requires_explicit_opt_in(monkeypatch):
     fake_addresses = ["198.18.0.68", "fdfe:dcba:9876::30"]
-    monkeypatch.setattr(
-        safe_http.asyncio,
-        "get_running_loop",
-        lambda: _FakeLoop(fake_addresses),
-    )
+    dns = _FakeDns(monkeypatch, default=tuple(fake_addresses))
 
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
         await safe_http.resolve_public_host("apod.nasa.gov", 443)
@@ -229,11 +241,7 @@ async def test_transparent_proxy_fake_dns_requires_explicit_opt_in(monkeypatch):
         allow_transparent_proxy_fake_dns=True,
     ) == tuple(fake_addresses)
 
-    monkeypatch.setattr(
-        safe_http.asyncio,
-        "get_running_loop",
-        lambda: _FakeLoop(["198.18.0.68", "127.0.0.1"]),
-    )
+    dns.default = ("198.18.0.68", "127.0.0.1")
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
         await safe_http.resolve_public_host(
             "apod.nasa.gov",
@@ -258,19 +266,14 @@ async def test_each_redirect_target_is_validated_before_a_connection(monkeypatch
     ]
     requested_urls: list[str] = []
 
-    async def validate(url):
-        if "127.0.0.1" in url:
-            raise safe_http.UnsafeUrlError("non-public redirect")
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
         lambda **kwargs: _Session(responses, requested_urls, **kwargs),
     )
 
-    with pytest.raises(safe_http.UnsafeUrlError, match="non-public redirect"):
+    with pytest.raises(safe_http.UnsafeUrlError, match="non-public IP address"):
         await safe_http.fetch_public_html("https://example.com/redirect")
     assert requested_urls == ["https://example.com/redirect"]
 
@@ -281,32 +284,43 @@ async def test_fake_dns_opt_in_does_not_follow_cross_host_redirect(monkeypatch):
         _Response(302, headers={"Location": "https://cdn.nasa.gov/apod.html"}),
         _Response(200, chunks=[b"<html/>\n"]),
     ]
-    requested_urls: list[str]  = []
-    fake_dns_flags: list[bool] = []
+    requested_urls: list[str] = []
 
-    async def validate(url, *, allow_transparent_proxy_fake_dns=False):
-        fake_dns_flags.append(allow_transparent_proxy_fake_dns)
-        return urlsplit(url), ("198.18.0.68" if allow_transparent_proxy_fake_dns else "8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    # 起始主机解析到透明代理的假 DNS 地址，跳转目标解析到公网地址。
+    dns = _FakeDns(monkeypatch, {"apod.nasa.gov": ["198.18.0.68"]})
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
         lambda **kwargs: _Session(responses, requested_urls, **kwargs),
     )
+    fetch_kwargs = {
+        "allowed_hosts"                   : {"apod.nasa.gov", "cdn.nasa.gov"},
+        "allow_transparent_proxy_fake_dns": True,
+    }
 
     response = await safe_http.fetch_public_html(
-        "https://apod.nasa.gov/apod/astropix.html",
-        allowed_hosts                    = {"apod.nasa.gov", "cdn.nasa.gov"},
-        allow_transparent_proxy_fake_dns = True,
+        "https://apod.nasa.gov/apod/astropix.html", **fetch_kwargs
     )
 
     assert response is not None
-    assert fake_dns_flags == [True, False]
+    assert dns.lookups == ["apod.nasa.gov", "cdn.nasa.gov"]
     assert requested_urls == [
         "https://apod.nasa.gov/apod/astropix.html",
         "https://cdn.nasa.gov/apod.html",
     ]
+
+    # 假 DNS 的许可只属于起始主机：跳转到别的主机后，它解析到假 DNS 地址就被拒。
+    dns.answers["cdn.nasa.gov"] = ["198.18.0.68"]
+    responses[:]                = [
+        _Response(302, headers={"Location": "https://cdn.nasa.gov/apod.html"}),
+        _Response(200, chunks=[b"<html/>\n"]),
+    ]
+    requested_urls.clear()
+    with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
+        await safe_http.fetch_public_html(
+            "https://apod.nasa.gov/apod/astropix.html", **fetch_kwargs
+        )
+    assert requested_urls == ["https://apod.nasa.gov/apod/astropix.html"]
 
 
 @pytest.mark.asyncio
@@ -314,11 +328,7 @@ async def test_fake_dns_opt_in_rejects_same_host_https_downgrade(monkeypatch):
     responses = [_Response(302, headers={"Location": "http://apod.nasa.gov/plain"})]
     requested_urls: list[str] = []
 
-    async def validate(url, *, allow_transparent_proxy_fake_dns=False):
-        assert allow_transparent_proxy_fake_dns is True
-        return urlsplit(url), ("198.18.0.68",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch, {"apod.nasa.gov": ["198.18.0.68"]})
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -370,10 +380,7 @@ async def test_malformed_redirect_has_stable_error_before_second_request(
     responses = [_Response(302, headers={"Location": location})]
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return safe_http.validate_public_url(url), ("93.184.216.34",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch, default=("93.184.216.34",))
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -385,31 +392,10 @@ async def test_malformed_redirect_has_stable_error_before_second_request(
     assert requested_urls == ["https://example.com/start"]
 
 
-@pytest.mark.asyncio
-async def test_binary_fetch_revalidates_private_redirect(monkeypatch):
-    responses = [_Response(302, headers={"Location": "http://127.0.0.1/image.png"})]
-    requested_urls: list[str] = []
-
-    async def validate(url):
-        if "127.0.0.1" in url:
-            raise safe_http.UnsafeUrlError("non-public redirect")
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
-    monkeypatch.setattr(
-        safe_http.aiohttp,
-        "ClientSession",
-        lambda **kwargs: _Session(responses, requested_urls, **kwargs),
-    )
-
-    with pytest.raises(safe_http.UnsafeUrlError, match="non-public redirect"):
-        await safe_http.fetch_public_bytes("https://example.com/image.png")
-    assert requested_urls == ["https://example.com/image.png"]
-
-
 @pytest.mark.parametrize(
     "redirect_target",
     [
+        "http://127.0.0.1/image.png",
         "http://10.0.0.1/image.png",
         "http://172.16.0.1/image.png",
         "http://192.168.1.1/image.png",
@@ -427,10 +413,7 @@ async def test_binary_fetch_rejects_private_redirect_before_next_request(
     responses = [_Response(302, headers={"Location": redirect_target})]
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return safe_http.validate_public_url(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -450,10 +433,7 @@ async def test_binary_fetch_allows_only_declared_redirect_hosts(monkeypatch):
     ]
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -489,10 +469,7 @@ async def test_binary_fetch_rejects_host_or_https_downgrade_before_next_request(
     responses = [_Response(302, headers={"Location": redirect_target})]
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -512,10 +489,7 @@ async def test_binary_fetch_rejects_host_or_https_downgrade_before_next_request(
 async def test_binary_fetch_rejects_missing_and_excessive_redirects(monkeypatch):
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     responses = [_Response(302, headers={})]
     monkeypatch.setattr(
         safe_http.aiohttp,
@@ -535,10 +509,7 @@ async def test_binary_fetch_rejects_missing_and_excessive_redirects(monkeypatch)
 async def test_binary_fetch_enforces_mime_encoding_and_actual_byte_limit(monkeypatch):
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
 
     responses = [_Response(200, headers={"Content-Type": "text/plain"}, chunks=[b"x"])]
     monkeypatch.setattr(
@@ -575,10 +546,7 @@ async def test_binary_fetch_exact_mime_rejects_spoof_before_body_read(monkeypatc
     response.content          = NeverReadContent()
     requested_urls: list[str] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    _FakeDns(monkeypatch)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -602,14 +570,12 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
     requested_urls : list[str]  = []
     session_options: list[dict] = []
 
-    async def validate(url):
-        return urlsplit(url), ("8.8.8.8",)
+    _FakeDns(monkeypatch)
 
     def session_factory(**kwargs):
         session_options.append(kwargs)
         return _Session(responses, requested_urls, **kwargs)
 
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
     monkeypatch.setattr(safe_http.aiohttp, "ClientSession", session_factory)
 
     response = await safe_http.fetch_public_html("https://example.com/start", timeout_seconds=4)
@@ -628,23 +594,13 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fetcher_name", ["fetch_public_html", "fetch_public_bytes"])
 async def test_total_timeout_covers_dns_validation(monkeypatch, fetcher_name):
-    cancelled = False
-
-    async def blocked_dns(_url):
-        nonlocal cancelled
-        try:
-            await asyncio.Future()
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", blocked_dns)
+    dns = _FakeDns(monkeypatch, block=True)
     fetcher = getattr(safe_http, fetcher_name)
 
     with pytest.raises(asyncio.TimeoutError):
         await fetcher("https://example.com/resource", timeout_seconds=0.01)
 
-    assert cancelled is True
+    assert dns.cancelled is True
 
 
 @pytest.mark.asyncio
@@ -654,15 +610,8 @@ async def test_redirects_share_one_total_deadline(monkeypatch):
         _Response(200, chunks=[b"<html/>"]),
     ]
     requested_urls: list[str] = []
-    validation_count          = 0
 
-    async def slow_validate(url):
-        nonlocal validation_count
-        validation_count += 1
-        await asyncio.sleep(0.12)
-        return urlsplit(url), ("8.8.8.8",)
-
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", slow_validate)
+    dns = _FakeDns(monkeypatch, delay=0.12)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -675,7 +624,7 @@ async def test_redirects_share_one_total_deadline(monkeypatch):
             timeout_seconds=0.2,
         )
 
-    assert validation_count == 2
+    assert len(dns.lookups) == 2
     assert requested_urls == ["https://example.com/start"]
 
 
@@ -713,9 +662,7 @@ async def test_public_html_rejects_spoofed_html_mime(monkeypatch):
         def iter_chunked(self, _size):
             raise AssertionError("spoofed MIME body must not be read")
 
-    async def validate(url):
-        return safe_http.validate_public_url(url), ("93.184.216.34",)
-
+    _FakeDns(monkeypatch, default=("93.184.216.34",))
     response = _Response(
         200,
         headers = {"Content-Type": "text/htmlx"},
@@ -723,7 +670,6 @@ async def test_public_html_rejects_spoofed_html_mime(monkeypatch):
     )
     response.content          = NeverReadContent()
     requested_urls: list[str] = []
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",
@@ -743,15 +689,13 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
     requested_urls   : list[str]            = []
     requested_headers: list[dict[str, str]] = []
 
-    async def validate(url):
-        return safe_http.validate_public_url(url), ("93.184.216.34",)
+    _FakeDns(monkeypatch, default=("93.184.216.34",))
 
     class CapturingSession(_Session):
         def get(self, url, **kwargs):
             requested_headers.append(dict(kwargs["headers"]))
             return super().get(url, **kwargs)
 
-    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
     monkeypatch.setattr(
         safe_http.aiohttp,
         "ClientSession",

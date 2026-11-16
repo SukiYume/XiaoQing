@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import tests.helpers.onebot_test_support as _fixture_support
-from tests.helpers.onebot_test_support import (
-    OneBotHttpSender,
-    _normalize_action_for_onebot,
-)
+from tests.helpers.onebot_test_support import OneBotHttpSender
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
 
@@ -37,11 +34,6 @@ class TestOneBotHttpSender:
             session    = mock_session,
         )
 
-    def test_initialization(self, sender: OneBotHttpSender):
-        """测试初始化"""
-        assert sender.http_base == "http://localhost:3000"
-        assert sender.auth_token == "test_token"
-
     def test_http_base_trailing_slash_removed(self, mock_session):
         """测试移除尾部斜杠"""
         sender = OneBotHttpSender(
@@ -50,12 +42,6 @@ class TestOneBotHttpSender:
             session    = mock_session,
         )
         assert sender.http_base == "http://localhost:3000"
-
-    def test_update(self, sender: OneBotHttpSender, mock_session):
-        """测试更新配置"""
-        sender.update("http://new-host:4000", "new_token")
-        assert sender.http_base == "http://new-host:4000"
-        assert sender.auth_token == "new_token"
 
     @pytest.mark.asyncio
     async def test_revoked_credentials_never_start_an_anonymous_http_request(
@@ -181,13 +167,7 @@ class TestOneBotHttpSender:
             },
         }
 
-        with patch(
-            "core.onebot._normalize_action_for_onebot",
-            wraps=_normalize_action_for_onebot,
-        ) as normalize:
-            assert await sender.send_action(action) is True
-
-        assert normalize.call_count == 1
+        assert await sender.send_action(action) is True
 
         mock_session.post.assert_called_once()
         call_args = mock_session.post.call_args

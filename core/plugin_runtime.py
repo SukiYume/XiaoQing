@@ -600,7 +600,6 @@ class PluginRuntimeMixin:
         if (
             not loaded.definition.enabled
             or binding.owner in self._quarantined_plugins
-            or gate is None
             or gate.closed
         ):
             raise RuntimeError(f"plugin service is not accepting calls: {service_name}")

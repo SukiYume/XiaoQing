@@ -38,63 +38,6 @@ class TestDiaryViewAndDelete:
         finally:
             db.cleanup()
 
-    def test_view_event_with_diary_id_returns_hint_instead_of_crashing(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.event import EventHandler
-        from plugins.pendo.models.item import DiaryItem
-        from plugins.pendo.services.db import Database
-
-        db = Database(str(tmp_path / "pendo_event_wrong_type.db"))
-
-        try:
-            diary = DiaryItem(
-                owner_id   = "u1",
-                title      = "2026-03-28 日记",
-                content    = "今天周六，十点多醒来，去华贸天地吃饭。",
-                diary_date = "2026-03-28",
-                created_at = "2026-03-28T21:41:10",
-                updated_at = "2026-03-28T21:41:10",
-            )
-            db.insert_item(diary, "82d34407")
-
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-            result = asyncio.run(handler.handle("u1", "view 82d34407", SimpleNamespace()))
-
-            assert result["status"] == "success"
-            assert "不是日程ID" in result["message"]
-            assert "/pendo diary view 82d34407" in result["message"]
-            assert "2026-03-28" in result["message"]
-        finally:
-            db.cleanup()
-
-    def test_view_diary_with_event_id_returns_hint(self, tmp_path):
-
-        from plugins.pendo.handlers.diary import DiaryHandler
-        from plugins.pendo.models.item import EventItem
-        from plugins.pendo.services.db import Database
-
-        db = Database(str(tmp_path / "pendo_diary_wrong_type.db"))
-
-        try:
-            event = EventItem(
-                owner_id   = "u1",
-                title      = "晨会",
-                start_time = "2026-03-29T09:00:00",
-                created_at = "2026-03-28T21:41:10",
-                updated_at = "2026-03-28T21:41:10",
-            )
-            db.insert_item(event, "evt12345")
-
-            handler = DiaryHandler(db=db)
-            result = asyncio.run(handler.view_diary("u1", "evt12345", SimpleNamespace()))
-
-            assert result["status"] == "success"
-            assert "不是日记ID" in result["message"]
-            assert "/pendo event view evt12345" in result["message"]
-        finally:
-            db.cleanup()
-
     def test_delete_diary_by_id_deletes_entry(self, tmp_path):
 
         from plugins.pendo.handlers.diary import DiaryHandler
@@ -120,33 +63,6 @@ class TestDiaryViewAndDelete:
             assert result["status"] == "success"
             assert "已删除 2026-03-28 的日记" in result["message"]
             assert db.get_item("82d34407", "u1") is None
-        finally:
-            db.cleanup()
-
-    def test_delete_diary_with_event_id_returns_hint(self, tmp_path):
-
-        from plugins.pendo.handlers.diary import DiaryHandler
-        from plugins.pendo.models.item import EventItem
-        from plugins.pendo.services.db import Database
-
-        db = Database(str(tmp_path / "pendo_diary_delete_wrong_type.db"))
-
-        try:
-            event = EventItem(
-                owner_id   = "u1",
-                title      = "晨会",
-                start_time = "2026-03-29T09:00:00",
-                created_at = "2026-03-28T21:41:10",
-                updated_at = "2026-03-28T21:41:10",
-            )
-            db.insert_item(event, "evt12345")
-
-            handler = DiaryHandler(db=db)
-            result = asyncio.run(handler.delete_diary("u1", "evt12345", SimpleNamespace()))
-
-            assert result["status"] == "success"
-            assert "不是日记ID" in result["message"]
-            assert "/pendo event view evt12345" in result["message"]
         finally:
             db.cleanup()
 
@@ -311,7 +227,9 @@ class TestDiaryMoodAnalysis:
         finally:
             db.cleanup()
 
-    def test_create_diary_rejects_invalid_new_structure_fields(self, tmp_path):
+    def test_create_diary_rejects_out_of_range_score_and_unsupported_template_answers(
+        self, tmp_path
+    ):
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.services.db import Database

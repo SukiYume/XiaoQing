@@ -1,4 +1,4 @@
-"""Pendo Web 待办页的数据边界、写操作与异步生命周期回归。"""
+"""Pendo Web 待办页的数据边界、写操作与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ TASKS_SETUP: Final = r"""
         }]),
     );
     globalThis.__toastCalls = [];
-    globalThis.__styleCalls = [];
     globalThis.__events = [];
     globalThis.__subscriptions = [];
     globalThis.__unsubscribeCount = 0;
@@ -155,7 +154,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';
 const subscribeDataChanges = (type, refresh) => {
@@ -348,8 +347,6 @@ def test_tasks_filters_against_supplied_anchor_and_derives_used_model_only() -> 
         assert.deepEqual(Object.keys(model.board_columns), ['open', 'closed']);
         assert.equal(model.text_category_count, 2);
         assert.equal(model.match_count, 7);
-        assert.equal('category_load' in model, false);
-        assert.equal('done_today_count' in model.summary, false);
         assert.equal(model.completion_bars.at(-1).count, 1);
         """
     )

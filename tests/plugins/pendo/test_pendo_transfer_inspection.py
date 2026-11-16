@@ -12,8 +12,8 @@ import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from plugins.pendo.web.api.transfer import ExportSelection, _build_bundle_bytes
 from tests.helpers.pendo_web_transfer_test_support import (
     Database,
-    _build_sample_bundle_bytes,
     build_manifest,
+    build_sample_bundle_bytes,
     io,
     transfer_api,
     zipfile,
@@ -132,7 +132,7 @@ def test_import_inspect_returns_summary_and_row_errors(client: Any, auth_headers
 def test_import_inspect_detects_already_imported_bundle(
     client: Any, temp_db: Database, auth_headers: dict
 ):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {

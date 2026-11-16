@@ -168,8 +168,7 @@ class PluginContext:
     logger       : Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # Enforce the least-privilege view even for extension/test factories that
-        # construct PluginContext directly instead of going through XiaoQingApp.
+        # Enforce the least-privilege view for every construction path.
         self.config  = _scoped_plugin_config(self.plugin_name, self.config)
         self.secrets = _scoped_plugin_secrets(self.plugin_name, self.secrets)
         self.logger  = _RequestLogger(
@@ -198,23 +197,15 @@ class PluginContext:
         return list(groups)
 
     def get_secret(self, path: str) -> Any:
-        if self.secret_reader is not None:
-            return self.secret_reader(path)
-        # 与 get_config() 一样只消费一份原子 settings 快照。直接构造的测试/
-        # 扩展上下文通常没有 secret_reader，但仍可能有可热更新的 settings_reader；
-        # 从 self.secrets 读取会把这条兼容路径固定在旧代。
-        settings = self.get_settings_snapshot()
-        return lookup_dotted(settings.plugin_secrets(self.plugin_name), path)
+        if self.secret_reader is None:
+            raise RuntimeError("plugin secret reader unavailable")
+        return self.secret_reader(path)
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot:
         """Return one atomic generation scoped to this plugin."""
-        if self.settings_reader is not None:
-            return self.settings_reader()
-        return PluginSettingsSnapshot(
-            config   = freeze_config_mapping(self.config),
-            secrets  = freeze_config_mapping(self.secrets),
-            revision = 0,
-        )
+        if self.settings_reader is None:
+            raise RuntimeError("plugin settings reader unavailable")
+        return self.settings_reader()
 
     def now(self):
         """Return the current time in the application's configured timezone."""

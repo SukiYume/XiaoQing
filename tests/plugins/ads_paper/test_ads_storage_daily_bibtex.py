@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from plugins.ads_paper.ads_client import ADSClient
 from plugins.ads_paper.bibtex import BibTeXParseError, citation_entries, parse_bibtex_entries
 from plugins.ads_paper.storage import PaperStorage, PaperStorageCorruptionError
+from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
 
 
 @pytest.mark.parametrize(
@@ -62,46 +64,40 @@ def test_corrupt_storage_is_quarantined_and_never_overwritten(
 
 
 @pytest.mark.asyncio
-async def test_daily_uses_utc_entry_date_window_and_deterministic_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_daily_uses_utc_entry_date_window_and_deterministic_order(tmp_path: Path) -> None:
     from plugins.ads_paper import ai_commands
 
     storage = PaperStorage(tmp_path)
     assert storage.add_topic("fast radio burst", 1)
-    captured = {}
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+    session = QueuedAiohttpSession(
+        aiohttp_json_response(
+            {
+                "response": {
+                    "docs": [
+                        {"bibcode": "B", "title": ["Today B"], "entdate": today.isoformat()},
+                        {"bibcode": "OLD", "title": ["Old"], "entdate": yesterday.isoformat()},
+                        {
+                            "bibcode": "A",
+                            "title"  : ["Today A"],
+                            "entdate": today.isoformat(),
+                            "date"   : "2021-01-01T00:00:00.000Z",
+                        },
+                        {"bibcode": "UNKNOWN", "title": ["Missing date"]},
+                    ]
+                }
+            }
+        )
+    )
 
-    class Client:
-        async def search_papers(self, query, max_results, *, fields, sort):
-            captured.update(
-                query       = query,
-                max_results = max_results,
-                fields      = fields,
-                sort        = sort,
-            )
-            return [
-                {"bibcode": "B", "title": ["Today B"], "entdate": "2026-07-13"},
-                {"bibcode": "OLD", "title": ["Old"], "entdate": "2026-07-12"},
-                {
-                    "bibcode": "A",
-                    "title"  : ["Today A"],
-                    "entdate": "2026-07-13",
-                    "date"   : "2021-01-01T00:00:00.000Z",
-                },
-                {"bibcode": "UNKNOWN", "title": ["Missing date"]},
-            ]
-
-        @staticmethod
-        def format_paper_info(paper):
-            return paper["title"][0]
-
-    monkeypatch.setattr(ai_commands, "_utc_today", lambda: date(2026, 7, 13))
-    result = await ai_commands.cmd_daily(Client(), storage, 1)
+    result = await ai_commands.cmd_daily(ADSClient("token", session), storage, 1)
     text   = result[0]["data"]["text"]
 
-    assert captured["query"] == ('("fast radio burst") AND entdate:[2026-07-13 TO NOW]')
-    assert captured["sort"] == "entdate desc,bibcode asc"
-    assert "entdate" in captured["fields"]
+    params = session.requests[0][2]["params"]
+    assert params["q"] == f'("fast radio burst") AND entdate:[{today.isoformat()} TO NOW]'
+    assert params["sort"] == "entdate desc,bibcode asc"
+    assert "entdate" in params["fl"].split(",")
     assert "Today A" in text and "Today B" in text
     assert text.index("Today A") < text.index("Today B")
     assert "Old" not in text and "Missing date" not in text

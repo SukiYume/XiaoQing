@@ -34,7 +34,7 @@ from plugins.xiaoqing_life.sources.base import (
 from plugins.xiaoqing_life.stores import LifeStore
 from plugins.xiaoqing_life.turn_context import episode_line
 from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -188,10 +188,16 @@ async def test_wbi_mixin_key_and_signature_known_values() -> None:
     assert again == signed  # 与参数顺序无关、结果稳定
 
 
-async def test_wbi_sign_strips_special_chars_and_encodes_spaces() -> None:
-    signed = subtitle.sign({"q": "a b!'()*c"}, WBI_KEY, 1)
-    query  = "q=a%20bc&wts=1"
-    assert signed["w_rid"] == hashlib.md5((query + WBI_KEY).encode()).hexdigest()
+@pytest.mark.parametrize(
+    ("params", "query"),
+    [
+        pytest.param({"q": "a b!'()*c"}, "q=a%20bc&wts=1", id="strips_special_chars"),
+        pytest.param({"a": "x/y z"}, "a=x%2Fy%20z&wts=1", id="encodes_like_encode_uri_component"),
+    ],
+)
+async def test_wbi_sign_query_encoding(params: dict[str, str], query: str) -> None:
+    signed = subtitle.sign(params, WBI_KEY, 1)
+    assert signed["w_rid"] == hashlib.md5((query + WBI_KEY).encode()).hexdigest()  # noqa: S324
 
 
 async def test_wbi_key_is_cached_for_an_hour() -> None:
@@ -509,13 +515,7 @@ async def test_wiki_read_blocklist_empty_extracts_and_bad_payloads() -> None:
         await wiki.read(FakeFetcher({"wikipedia": {}}), "x", [])
 
 
-async def test_wiki_host_is_allowed_and_sources_switches_default_on() -> None:
-    from plugins.xiaoqing_life.sources.base import ALLOWED_HOSTS
-
-    assert "zh.wikipedia.org" in ALLOWED_HOSTS
-    cfg = make_cfg()
-    assert cfg.source_on("wiki_read") and cfg.source_on("bili_subtitles")
-    assert cfg.max_deep_reads_per_session == 1 and cfg.max_llm_calls_per_day == 30
+async def test_source_switch_and_deep_read_limit_are_clamped() -> None:
     off = parse_life_config({"sources": {"wiki_read": False}, "max_deep_reads_per_session": 9})
     assert not off.source_on("wiki_read") and off.max_deep_reads_per_session == 2
     assert parse_life_config({"max_deep_reads_per_session": -3}).max_deep_reads_per_session == 0
@@ -1382,7 +1382,7 @@ async def test_manifest_lists_the_login_subcommands() -> None:
     assert all(s["permission"] == "bot_admin" for s in subs.values())
 
 
-# ───────────────────────────── 复查补充 ─────────────────────────────
+# ───────────────────────────── 登录凭证的编码、来源主机与 WBI 编码 ─────────────────────────────
 
 ENCODED_SESS = "ab12%2C1762345678%2Ccd34%2Ab1"
 
@@ -1443,19 +1443,3 @@ async def test_cookie_url_host_must_be_bilibili_or_the_biligame_passport() -> No
         else:
             with pytest.raises(bili_auth.LoginError):
                 bili_auth.extract_cookies({"url": url}, {})
-    duplicated = "https://passport.bilibili.com/x?DedeUserID=1&SESSDATA=a&SESSDATA=b&bili_jct=j"
-    with pytest.raises(bili_auth.LoginError):
-        bili_auth.extract_cookies({"url": duplicated}, {})
-
-
-async def test_wiki_page_with_a_blocked_sentence_is_dropped_whole() -> None:
-    payload = _wiki_payload(
-        {"pageid": 7, "index": 1, "title": "某条目", "extract": "第一句正常。第二句有违禁词。"},
-    )
-    assert await wiki.read(FakeFetcher({"wikipedia": payload}), "某条目", ["违禁词"]) == []
-
-
-async def test_wbi_query_encodes_like_encode_uri_component() -> None:
-    signed = subtitle.sign({"a": "x/y z"}, "k" * 32, 1)
-    query  = "a=x%2Fy%20z&wts=1"
-    assert signed["w_rid"] == hashlib.md5((query + "k" * 32).encode()).hexdigest()  # noqa: S324

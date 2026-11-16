@@ -1,14 +1,28 @@
 """聊天生成、记忆组装、模型网关与公开错误边界。"""
 
+import logging
+import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    settle_chat_background,
+)
+
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
 
 
-def test_is_brain_chat_active_keeps_private_brain_mode_when_forced() -> None:
+def test_brain_chat_is_active_in_private_chat_when_enabled() -> None:
     from plugins.xiaoqing_chat.brain_chat import is_brain_chat_active
     from plugins.xiaoqing_chat.config.config import BrainChatConfig, XiaoQingChatConfig
     from plugins.xiaoqing_chat.runtime_state import ChatRuntime
@@ -23,26 +37,36 @@ def test_is_brain_chat_active_keeps_private_brain_mode_when_forced() -> None:
     assert is_brain_chat_active(runtime, is_private=True) is True
 
 
-def _failing_smalltalk(mp: pytest.MonkeyPatch) -> None:
-    mp.setattr(
-        "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
-        AsyncMock(side_effect=RuntimeError("internal /tmp/secrets/token.txt leak")),
-    )
-    mp.setattr("plugins.xiaoqing_chat.handlers._last_stalled_notice", {})
+@pytest.fixture(autouse=True)
+def _fresh_stalled_notice():
+    """“卡了”提示的十分钟限频记在进程内：每个用例前后清空，不漏给别的用例。"""
+
+    from plugins.xiaoqing_chat import handlers
+
+    handlers._last_stalled_notice.clear()
+    yield
+    handlers._last_stalled_notice.clear()
+
+
+def _failing_model_script(call) -> str:
+    raise RuntimeError("internal /tmp/secrets/token.txt leak")
 
 
 @pytest.mark.asyncio
-async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_code() -> None:
+async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_code(
+    mock_context, sample_private_event
+) -> None:
     from plugins.xiaoqing_chat.handlers import _STALLED_REPLIES, handle_smalltalk
 
-    context        = MagicMock()
-    context.logger = MagicMock()
-    event          = {"message_type": "private", "user_id": 123, "message_id": 456}
+    model = ScriptedChatModel(reply=_failing_model_script)
+    scripted_chat_context(mock_context, model)
 
-    with pytest.MonkeyPatch.context() as mp:
-        _failing_smalltalk(mp)
-        first  = await handle_smalltalk("你好", event, context)
-        second = await handle_smalltalk("在吗", {**event, "message_id": 457}, context)
+    first = await handle_smalltalk(
+        "你好", chat_message_event(sample_private_event, "你好"), mock_context
+    )
+    second = await handle_smalltalk(
+        "在吗", chat_message_event(sample_private_event, "在吗", message_id=457), mock_context
+    )
 
     assert [segment["data"]["text"] for segment in first] == [first[0]["data"]["text"]]
     assert first[0]["data"]["text"] in _STALLED_REPLIES
@@ -50,24 +74,50 @@ async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_cod
     assert second == []
     assert "XQ-PLUGIN" not in str(first) and "internal" not in str(first)
     # 诊断信息照常记进日志，供排查。
-    assert context.logger.error.called
+    assert mock_context.logger.error.called
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_a_failed_group_interjection_is_silent() -> None:
+async def test_a_failed_group_interjection_is_silent(mock_context, sample_group_event) -> None:
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    context        = MagicMock()
-    context.logger = MagicMock()
-    event          = {"message_type": "group", "group_id": 9, "user_id": 123, "message_id": 456}
+    # 概率放行了这句插话，规划器决定接话，生成时模型出了故障。
+    model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply=_failing_model_script)
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
 
-    with pytest.MonkeyPatch.context() as mp:
-        _failing_smalltalk(mp)
-        assert await handle_smalltalk("今天好冷", event, context) == []
-        # 被点名时才说一句“卡了”。
-        addressed = await handle_smalltalk("小青在吗", {**event, "_xc_forced": True}, context)
+    interjection = chat_message_event(sample_group_event, "今天好冷")
+    assert await handle_smalltalk("今天好冷", interjection, mock_context) == []
+    assert mock_context.logger.error.called
+    # 被点名时才说一句“卡了”。
+    mock_context.logger.error.reset_mock()
+    addressed = await handle_smalltalk(
+        "小青在吗", chat_message_event(sample_group_event, "小青在吗", message_id=2), mock_context
+    )
     assert len(addressed) == 1 and "XQ-PLUGIN" not in str(addressed)
-    assert context.logger.error.called
+    assert mock_context.logger.error.called
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_deployment_config_ends_a_private_turn_in_the_stalled_line(
+    mock_context, sample_private_event
+) -> None:
+    from plugins.xiaoqing_chat.handlers import _STALLED_REPLIES, handle_smalltalk
+
+    # 部署配置里的值不合格：这个插件目录第一次加载就失败，没有可退回的旧配置。
+    model = ScriptedChatModel()
+    scripted_chat_context(mock_context, model, {"reply_check": {"max_replan": "many"}})
+
+    reply = await handle_smalltalk(
+        "你好", chat_message_event(sample_private_event, "你好"), mock_context
+    )
+
+    assert [segment["data"]["text"] for segment in reply] == [reply[0]["data"]["text"]]
+    assert reply[0]["data"]["text"] in _STALLED_REPLIES
+    assert "max_replan" not in str(reply) and "XQ-PLUGIN" not in str(reply)
+    assert mock_context.logger.error.called
+    assert not model.calls
 
 
 def test_llm_call_config_contains_only_runtime_controls() -> None:
@@ -82,31 +132,22 @@ def test_llm_call_config_contains_only_runtime_controls() -> None:
     }
 
 
-def test_memory_db_save_logs_write_failures(tmp_path) -> None:
-    from plugins.xiaoqing_chat.memory import memory_db as memory_db_module
+def test_memory_db_save_logs_write_failures(tmp_path, monkeypatch, caplog) -> None:
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(doc_id="doc-1", text="hello", meta={"type": "knowledge"})
 
-    logger = MagicMock()
-
-    def fail_write_vector_store_files(*args, **kwargs):
+    def disk_full(*_args, **_kwargs):
         raise OSError("disk full")
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(memory_db_module, "_logger", logger, raising=False)
-        mp.setattr(
-            memory_db_module,
-            "write_vector_store_files",
-            fail_write_vector_store_files,
-            raising=True,
-        )
+    monkeypatch.setattr(os, "replace", disk_full)
+    with caplog.at_level(logging.WARNING, logger="plugin.xiaoqing_chat"):
         db.save()
 
     assert db.is_dirty() is True
-    logger.warning.assert_called_once()
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
 
 @pytest.mark.asyncio

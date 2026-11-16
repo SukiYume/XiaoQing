@@ -4,15 +4,17 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
 from plugins.xiaoqing_chat.logging_utils import log_step, sanitize_log_fields
 from plugins.xiaoqing_chat.reply_generator import _log_prompt_audit_metadata
 
-CANARY = "CR220_XIAOQING_PRIVATE_PROMPT_CANARY"
+mock_context = _fixture_support.mock_context
+
+CANARY = "XIAOQING_PRIVATE_PROMPT_CANARY"
 
 
 @pytest.mark.parametrize(
@@ -77,7 +79,7 @@ def test_model_reason_that_looks_like_a_status_token_is_still_fingerprinted() ->
 def test_log_step_keeps_stage_and_correlation_but_never_payload(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.step"))
+    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.step"))
     runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=True)))
 
     with caplog.at_level(logging.INFO):
@@ -88,8 +90,8 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
             step    = "reply.debug",
             fields  = {
                 "status"    : "prepared",
-                "request_id": "req-cr220",
-                "task_id"   : "task-cr220",
+                "request_id": "req-step",
+                "task_id"   : "task-step",
                 "role"      : "system",
                 "prompt"    : CANARY,
                 "history"   : CANARY,
@@ -100,8 +102,8 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "reply.debug" in logged
     assert "prepared" in logged
-    assert "req-cr220" in logged
-    assert "task-cr220" in logged
+    assert "req-step" in logged
+    assert "task-step" in logged
     assert "system" in logged
     assert CANARY not in logged
     assert logged.count("fingerprint=hmac-sha256:") >= 4
@@ -110,20 +112,20 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
 def test_prompt_debug_metadata_preserves_roles_and_correlation_without_content(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.prompt"))
+    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.prompt"))
     messages = [
         ChatMessage(role="system", content=f"system {CANARY}"),
         ChatMessage(role="user", content=f"user {CANARY}"),
     ]
 
     with caplog.at_level(logging.INFO):
-        _log_prompt_audit_metadata(context, messages, request_id="req-cr220-prompt")
+        _log_prompt_audit_metadata(context, messages, request_id="req-prompt")
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert CANARY not in logged
     assert "operation=reply_prompt" in logged
     assert "status=prepared" in logged
-    assert "request_id=req-cr220-prompt" in logged
+    assert "request_id=req-prompt" in logged
     assert "role=system" in logged
     assert "role=user" in logged
     assert logged.count("fingerprint=hmac-sha256:") == 2
@@ -133,7 +135,7 @@ def test_prompt_debug_rejects_malicious_request_id(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     malicious_request_id = f"req\nAuthorization: Bearer {CANARY}"
-    context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.bad-request"))
+    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.bad-request"))
 
     with caplog.at_level(logging.INFO):
         _log_prompt_audit_metadata(
@@ -162,39 +164,22 @@ def test_log_step_rejects_malicious_correlation_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_reset_audit_fingerprints_all_actor_identifiers(
+    mock_context,
+    tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from plugins.xiaoqing_chat import commands
 
-    chat_id = f"chat-{CANARY}"
-    event   = {
+    event = {
         "message_type": "group",
         "group_id"    : f"group-{CANARY}",
         "user_id"     : f"operator-{CANARY}",
     }
-    state = SimpleNamespace(
-        pop_persist_task = lambda event_chat_id: None,
-        inc_stats        = lambda *_args: None,
-    )
-    hctx = SimpleNamespace(
-        chat_id  = chat_id,
-        runtime  = SimpleNamespace(),
-        state    = state,
-        data_dir = Path("test-data"),
-    )
-    context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.reset-audit"))
-
-    async def reset_chat_session(
-        _state, event_chat_id: str, _data_dir: Path, _context: object = None
-    ) -> bool:
-        return True
+    mock_context.data_dir = tmp_path
+    mock_context.logger   = logging.getLogger("test.xiaoqing.reset-audit")
 
     with caplog.at_level(logging.INFO):
-        with (
-            patch.object(commands.HandlerContext, "from_event", return_value=hctx),
-            patch.object(commands, "reset_chat_session", reset_chat_session),
-        ):
-            result = await commands.handle_internal("重置", "确认", event, context)
+        result = await commands.handle_internal("重置", "确认", event, mock_context)
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]

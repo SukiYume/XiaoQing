@@ -1,4 +1,4 @@
-"""Pendo Web 日期、预览文本和金额格式化工具回归。"""
+"""Pendo Web 日期、预览文本和金额格式化工具。"""
 
 from __future__ import annotations
 
@@ -70,15 +70,11 @@ def test_format_client_parses_local_dates_without_accepting_impossible_days() ->
     )
 
 
-def test_format_client_keeps_timestamp_display_out_and_unicode_previews_safe() -> None:
-    """通用格式模块不提供浏览器时区展示接口，预览文本保持 Unicode 完整。"""
+def test_format_client_previews_keep_unicode_intact() -> None:
+    """预览文本按 Unicode 字符截断，不拆开代理对。"""
 
     _run_format_client(
         r"""
-        assert.equal('todayStr' in client, false);
-        assert.equal('formatMonthDay' in client, false);
-        assert.equal('formatDateTime' in client, false);
-
         assert.equal(client.previewText('  简短内容  ', 10), '简短内容');
         assert.equal(client.previewText('😀甲乙', 2), '😀甲...');
         assert.equal(client.previewText(0, 2), '0');

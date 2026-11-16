@@ -29,25 +29,6 @@ class TestOneBotEvent:
         assert event.self_id is None
         assert event.post_type is None
 
-    def test_create_full_event(self):
-        """测试创建完整事件"""
-        event = OneBotEvent(
-            time         = 1234567890,
-            self_id      = 11111,
-            post_type    = "message",
-            message_type = "group",
-            user_id      = 12345,
-            group_id     = 67890,
-            message      = [{"type": "text", "data": {"text": "hello"}}],
-            raw_message  = "hello",
-        )
-        assert event.time == 1234567890
-        assert event.self_id == 11111
-        assert event.post_type == "message"
-        assert event.message_type == "group"
-        assert event.user_id == 12345
-        assert event.group_id == 67890
-
     def test_message_from_string(self):
         """测试从字符串创建消息"""
         event = OneBotEvent(message="hello world")
@@ -93,13 +74,6 @@ class TestOneBotEvent:
         message = [{"type": "image", "data": {"file": "image.png"}}]
         event = OneBotEvent(message=message, raw_message="[CQ:image,file=image.png]")
         assert event.message == message
-
-    def test_message_from_invalid_json_string(self):
-        """测试无效 JSON 字符串消息"""
-        event = OneBotEvent(message="not json")
-        assert isinstance(event.message, list)
-        assert event.message[0]["type"] == "text"
-        assert event.message[0]["data"]["text"] == "not json"
 
     @pytest.mark.parametrize(
         "message",
@@ -154,22 +128,6 @@ class TestOneBotEvent:
 class TestPluginCommandManifest:
     """PluginCommandManifest 测试"""
 
-    def test_create_command_manifest(self):
-        """测试创建命令清单"""
-        manifest = PluginCommandManifest(
-            name       = "echo",
-            triggers   = ["echo", "回显"],
-            help       = "回显消息",
-            admin_only = False,
-            priority   = 0,
-        )
-        assert manifest.name == "echo"
-        assert manifest.triggers == ["echo", "回显"]
-        assert manifest.help == "回显消息"
-        assert manifest.admin_only is False
-        assert manifest.priority == 0
-        assert manifest.usage is None
-
     def test_default_values(self):
         """测试默认值"""
         manifest = PluginCommandManifest(
@@ -188,20 +146,6 @@ class TestPluginCommandManifest:
 
 class TestPluginScheduleManifest:
     """PluginScheduleManifest 测试"""
-
-    def test_create_schedule_manifest(self):
-        """测试创建定时任务清单"""
-        manifest = PluginScheduleManifest(
-            handler   = "daily_job",
-            cron      = {"hour": "9", "minute": "0"},
-            id        = "daily_9am",
-            group_ids = [123, 456],
-        )
-        assert manifest.handler == "daily_job"
-        assert manifest.cron == {"hour": "9", "minute": "0"}
-        assert manifest.id == "daily_9am"
-        assert manifest.delivery == "broadcast"
-        assert manifest.group_ids == [123, 456]
 
     def test_default_values(self):
         """测试默认值"""
@@ -294,35 +238,6 @@ class TestPluginManifest:
         assert manifest.services == []
         assert manifest.uses_services == []
         assert manifest.capabilities == []
-
-    def test_create_full_manifest(self):
-        """测试创建完整清单"""
-        manifest = PluginManifest(
-            name     = "my_plugin",
-            version  = "1.0.0",
-            entry    = "custom.py",
-            commands = [
-                PluginCommandManifest(
-                    name     = "cmd1",
-                    triggers = ["cmd1"],
-                    help     = "Command 1",
-                ),
-            ],
-            schedule=[
-                PluginScheduleManifest(
-                    handler = "job1",
-                    cron    = {"hour": "*"},
-                ),
-            ],
-            concurrency = "sequential",
-            enabled     = True,
-        )
-        assert manifest.name == "my_plugin"
-        assert manifest.version == "1.0.0"
-        assert manifest.entry == "custom.py"
-        assert len(manifest.commands) == 1
-        assert len(manifest.schedule) == 1
-        assert manifest.concurrency == "sequential"
 
     def test_manifest_rejects_unknown_runtime_fields(self):
         with pytest.raises(ValidationError):

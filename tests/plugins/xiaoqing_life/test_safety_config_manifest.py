@@ -22,7 +22,7 @@ from plugins.xiaoqing_life.safety import (
     quote_in_source,
 )
 from tests.helpers.paths import REPOSITORY_ROOT
-from tests.plugins.xiaoqing_life.support import make_context
+from tests.helpers.xiaoqing_life_test_support import make_context
 
 PLUGIN_DIR = REPOSITORY_ROOT / "plugins" / "xiaoqing_life"
 

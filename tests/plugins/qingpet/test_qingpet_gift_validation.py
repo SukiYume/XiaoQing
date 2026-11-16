@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 
 import pytest
 
@@ -17,19 +15,13 @@ RECEIVER_ID = "10002"
 
 
 @pytest.fixture
-def gift_context():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
-        db_path = file.name
-    database = Database(db_path)
+def gift_context(qingpet_db: Database):
+    database = qingpet_db
     users    = UserService(database)
     users.get_or_create_user(SENDER_ID, GROUP_ID)
     users.get_or_create_user(RECEIVER_ID, GROUP_ID)
     assert database.purchase_item_atomic(SENDER_ID, GROUP_ID, "cake", 10, 0)[0]
-    try:
-        yield database
-    finally:
-        database.cleanup()
-        os.unlink(db_path)
+    return database
 
 
 def _state(database: Database) -> str:

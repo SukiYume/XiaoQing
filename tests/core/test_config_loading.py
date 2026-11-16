@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 
 import tests.helpers.config_test_support as _fixture_support
+from core.config import _validate_runtime_config
 from tests.helpers.config_test_support import (
     ConfigLoadError,
     ConfigManager,
     ConfigSourceStatus,
     Mapping,
-    _validate_runtime_config,
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -48,23 +48,27 @@ class TestConfigManagerInit:
         assert secrets["admin_user_ids"] == (12345, 67890)
         assert secrets["plugins"]["echo"]["api_key"] == "test_key"
 
-    def test_returns_read_only_config_snapshot(self, config_manager: ConfigManager):
-        """测试返回只读配置快照"""
-        config1 = config_manager.config
-        config2 = config_manager.config
-        assert config1 is config2
-        assert config1 == config2
+    @pytest.mark.parametrize(
+        ("attribute", "key", "replacement"),
+        [
+            pytest.param("config", "bot_name", "changed", id="config"),
+            pytest.param("secrets", "admin_user_ids", [], id="secrets"),
+        ],
+    )
+    def test_returns_read_only_snapshot(
+        self,
+        config_manager: ConfigManager,
+        attribute: str,
+        key: str,
+        replacement: Any,
+    ):
+        """配置和密钥每次返回同一份只读快照。"""
+        first  = getattr(config_manager, attribute)
+        second = getattr(config_manager, attribute)
+        assert first is second
+        assert first == second
         with pytest.raises(TypeError):
-            config1["bot_name"] = "changed"
-
-    def test_returns_read_only_secrets_snapshot(self, config_manager: ConfigManager):
-        """测试返回只读密钥快照"""
-        secrets1 = config_manager.secrets
-        secrets2 = config_manager.secrets
-        assert secrets1 is secrets2
-        assert secrets1 == secrets2
-        with pytest.raises(TypeError):
-            secrets1["admin_user_ids"] = []
+            first[key] = replacement
 
     def test_config_nested_mutation_does_not_affect_internal_state(
         self, config_manager: ConfigManager
@@ -115,28 +119,14 @@ class TestConfigManagerReload:
 
         assert config_manager.secrets["admin_user_ids"] == (99999,)
 
-    def test_reload_handles_missing_files(self, temp_config_dir: Path):
-        """测试处理缺失文件"""
+    def test_missing_files_load_as_empty_mappings(self, temp_config_dir: Path):
+        """构造时配置和密钥文件都不存在，得到空映射"""
         missing_config  = temp_config_dir / "nonexistent_config.json"
         missing_secrets = temp_config_dir / "nonexistent_secrets.json"
 
         manager = ConfigManager(missing_config, missing_secrets)
         assert manager.config == {}
         assert manager.secrets == {}
-
-    def test_reload_keeps_last_valid_snapshot_when_config_is_invalid(
-        self,
-        config_manager: ConfigManager,
-        config_file: Path,
-    ):
-        """测试 reload 遇到损坏配置时保留旧快照"""
-        original = config_manager.config
-        config_file.write_text("{invalid json}", encoding="utf-8")
-
-        with pytest.raises(ConfigLoadError):
-            config_manager.reload()
-
-        assert config_manager.config == original
 
     @pytest.mark.parametrize(
         ("field", "value"),

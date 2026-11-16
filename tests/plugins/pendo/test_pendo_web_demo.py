@@ -1,4 +1,4 @@
-"""Pendo Web 演示空间、Cookie 会话和公开入口的直接回归。"""
+"""Pendo Web 演示空间、Cookie 会话和公开入口。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import re
 from collections import deque
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -17,6 +17,8 @@ from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
+from tests.helpers.pendo_test_support import reject_inserts
+from tests.helpers.pendo_web_transfer_test_support import build_sample_bundle_bytes
 
 try:
     from plugins.pendo.web.auth import AuthError, create_web_session, issue_login_code
@@ -205,14 +207,6 @@ def test_demo_auth_endpoint_creates_seeded_demo_space(
     assert settings["settings_json"]["daily_briefing_enabled"] is False
 
 
-def test_global_config_can_enable_demo_endpoint() -> None:
-    """插件全局配置应能显式打开演示入口。"""
-
-    PendoConfig.configure({"web_demo_enabled": True})
-
-    assert PendoConfig.runtime().web_demo_enabled is True
-
-
 def test_environment_variable_is_not_a_second_demo_config_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -259,37 +253,38 @@ def test_create_demo_session_seeds_items_without_fastapi(temp_db: Database) -> N
     assert {"2025-12-31", "2026-01-01"} <= diary_days
 
 
-def test_demo_creation_enforces_per_client_rate_limit(
-    temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_demo_creation_enforces_per_client_rate_limit(temp_db: Database) -> None:
     """同一客户端在滚动一小时窗口内不得超过配置的创建次数。"""
 
-    monkeypatch.setattr(PendoConfig, "WEB_DEMO_REQUESTS_PER_HOUR", 1)
     now = datetime(2030, 1, 1, 12, 0, 0)
-
-    demo_space_module.create_demo_session(temp_db, now=now, client_key="test-client")
+    for minute in range(PendoConfig.WEB_DEMO_REQUESTS_PER_HOUR):
+        demo_space_module.create_demo_session(
+            temp_db, now=now + timedelta(minutes=minute), client_key="test-client"
+        )
 
     with pytest.raises(demo_space_module.DemoCapacityError, match="rate limit"):
         demo_space_module.create_demo_session(
-            temp_db, now=now + timedelta(minutes=1), client_key="test-client"
+            temp_db, now=now + timedelta(minutes=10), client_key="test-client"
         )
 
 
-def test_demo_capacity_failure_does_not_retain_empty_client_bucket(
-    temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_demo_capacity_failure_does_not_retain_empty_client_bucket(temp_db: Database) -> None:
     """容量已满时不应为任意客户端留下永不回收的空限流桶。"""
 
-    monkeypatch.setattr(PendoConfig, "WEB_DEMO_MAX_ACTIVE_SESSIONS", 0)
+    now = datetime(2030, 1, 1, 12, 0)
+    for index in range(PendoConfig.WEB_DEMO_MAX_ACTIVE_SESSIONS):
+        temp_db.update_user_settings(
+            f"{demo_space_module._DEMO_PREFIX}full{index:02d}",
+            {
+                "settings_json": {
+                    "demo_mode"      : True,
+                    "demo_expires_at": (now + timedelta(hours=1)).isoformat(),
+                }
+            },
+        )
 
     with pytest.raises(demo_space_module.DemoCapacityError, match="capacity"):
-        demo_space_module.create_demo_session(
-            temp_db,
-            now        = datetime(2030, 1, 1, 12, 0),
-            client_key = "capacity-client",
-        )
+        demo_space_module.create_demo_session(temp_db, now=now, client_key="capacity-client")
 
     assert demo_space_module._DEMO_REQUESTS == {}
 
@@ -319,37 +314,27 @@ def test_recent_demo_requests_prunes_stale_buckets_and_normalizes_client_key() -
 
 def test_demo_seed_failure_removes_partial_owner_and_does_not_consume_rate_limit(
     temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """模板写入失败时应回滚演示所有者，且失败请求不计入限流。"""
 
-    def seed_then_fail(db, owner_id, now):
-        db.insert_item(
-            {"owner_id": owner_id, "type": "note", "title": "partial demo", "content": "temporary"}
-        )
-        raise RuntimeError("seed failed")
+    # 让数据库在写入第一条样例条目时报错，模拟模板写入中途失败。
+    reject_inserts(temp_db, "items", "seed failed")
 
-    monkeypatch.setattr(demo_space_module, "_seed_demo_items", seed_then_fail)
-
-    with pytest.raises(RuntimeError, match="seed failed"):
+    with pytest.raises(RuntimeError, match="导入记录"):
         demo_space_module.create_demo_session(
             temp_db,
             now        = datetime(2030, 1, 1, 12, 0),
             client_key = "failed-client",
         )
 
-    remaining = temp_db.get_connection().execute(
+    conn      = temp_db.get_connection()
+    remaining = conn.execute(
         "SELECT COUNT(*) FROM user_settings WHERE user_id LIKE ?",
         (f"{demo_space_module._DEMO_PREFIX}%",),
     )
     assert remaining.fetchone()[0] == 0
     assert demo_space_module._DEMO_REQUESTS == {}
-    assert (
-        temp_db.get_connection()
-        .execute("SELECT COUNT(*) FROM items WHERE title = ?", ("partial demo",))
-        .fetchone()[0]
-        == 0
-    )
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
 
 
 def test_demo_record_transform_shifts_dates_and_rewrites_only_string_references() -> None:
@@ -437,71 +422,105 @@ def test_demo_template_loader_rejects_missing_asset(
         demo_space_module._load_demo_template_records()
 
 
+def _demo_template_records() -> dict[str, list[dict[str, Any]]]:
+    """每种条目类型各一条最小有效记录，组成符合演示模板布局的内容。"""
+
+    return {
+        "event": [
+            {
+                "_type"     : "event",
+                "_schema"   : 2,
+                "id"        : "e1",
+                "title"     : "会议",
+                "start_time": "2026-04-08T09:00:00",
+            }
+        ],
+        "task"  : [{"_type": "task", "_schema": 2, "id": "t1", "title": "待办", "status": "open"}],
+        "note"  : [{"_type": "note", "_schema": 2, "id": "n1", "title": "笔记", "content": "正文"}],
+        "ledger": [
+            {
+                "_type"           : "ledger",
+                "_schema"         : 2,
+                "id"              : "l1",
+                "title"           : "午饭",
+                "amount"          : 1,
+                "transaction_type": "expense",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-04-08",
+            }
+        ],
+        "diary": [
+            {
+                "_type"     : "diary",
+                "_schema"   : 2,
+                "id"        : "d1",
+                "title"     : "日记",
+                "content"   : "正文",
+                "diary_date": "2026-04-08",
+            }
+        ],
+    }
+
+
+def _template_with(**changes: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    return {**_demo_template_records(), **changes}
+
+
 @pytest.mark.parametrize(
-    ("parsed", "records", "errors", "message"),
+    ("records_by_type", "message"),
     [
-        (
-            ParsedBundle(manifest={}),
-            [],
-            [{"message": "bad row"}],
+        pytest.param(
+            {"task": [{"_type": "task", "_schema": 2, "id": "bad"}]},
             "Invalid demo template bundle",
+            id="row-errors",
         ),
-        (
-            ParsedBundle(manifest={}, event_collections=[{"id": "collection"}]),
-            [],
-            [],
+        pytest.param(
+            _template_with(
+                event_collection=[{"_schema": 2, "id": "c1", "kind": "multi_node", "title": "集合"}]
+            ),
             "must not contain event collections",
+            id="event-collections",
         ),
-        (
-            ParsedBundle(manifest={}, file_summaries=[{"type": "task"}]),
-            [],
-            [],
+        pytest.param(
+            {"task": _demo_template_records()["task"]},
             "each demo item type once",
+            id="missing-types",
         ),
-        (
-            ParsedBundle(
-                manifest       = {},
-                file_summaries = [
-                    {"type": item_type} for item_type in demo_space_module._DEMO_ITEM_TYPES
-                ],
-            ),
-            [{"type": "unsupported"}],
-            [],
-            "Unsupported demo template item type",
-        ),
-        (
-            ParsedBundle(
-                manifest       = {},
-                file_summaries = [
-                    {"type": item_type} for item_type in demo_space_module._DEMO_ITEM_TYPES
-                ],
-            ),
-            [
-                {"type": item_type}
-                for item_type in demo_space_module._DEMO_ITEM_TYPES
-                if item_type != "diary"
-            ],
-            [],
-            "contains an empty item type",
-        ),
+        pytest.param(_template_with(diary=[]), "contains an empty item type", id="empty-type"),
     ],
 )
 def test_demo_template_loader_rejects_invalid_runtime_contracts(
-    parsed: ParsedBundle,
-    records: list[dict[str, Any]],
-    errors: list[dict[str, Any]],
+    records_by_type: dict[str, list[dict[str, Any]]],
     message: str,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """模板解析错误、集合、类型布局和空类型都不得被静默忽略。"""
 
+    template = tmp_path / "demo.pendo.zip"
+    template.write_bytes(build_sample_bundle_bytes(records_by_type))
+    monkeypatch.setattr(demo_space_module, "_DEMO_TEMPLATE_PATH", template)
+
+    with pytest.raises(RuntimeError, match=message):
+        demo_space_module._load_demo_template_records()
+
+
+def test_demo_template_loader_rejects_unsupported_record_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """模板里出现演示布局之外的条目类型时拒绝装载。"""
+
+    parsed = ParsedBundle(
+        manifest       = {},
+        file_summaries = [{"type": item_type} for item_type in demo_space_module._DEMO_ITEM_TYPES],
+    )
     monkeypatch.setattr(
         demo_space_module,
         "inspect_bundle_bytes",
-        Mock(return_value=(parsed, records, errors)),
+        Mock(return_value=(parsed, [{"type": "unsupported"}], [])),
     )
 
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(RuntimeError, match="Unsupported demo template item type"):
         demo_space_module._load_demo_template_records()
 
 
@@ -712,20 +731,9 @@ def test_expired_demo_token_is_rejected_and_demo_data_is_purged(
     client: Any,
     temp_db: Database,
     expired_demo_owner: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """带过期演示主体的浏览器会话也必须被依赖层拒绝并清理。"""
 
-    class _FrozenDemoDateTime(datetime):
-        """让依赖层使用确定性墙钟，不引入真实等待。"""
-
-        @classmethod
-        def now(cls, tz: tzinfo | None = None) -> _FrozenDemoDateTime:
-            """返回刚好晚于演示过期时间的固定墙钟。"""
-
-            return cls(2026, 4, 8, 10, 0, 0, tzinfo=tz)
-
-    monkeypatch.setattr(demo_space_module, "datetime", _FrozenDemoDateTime)
     session = create_web_session(expired_demo_owner, demo=True)
     client.cookies.set(SESSION_COOKIE_NAME, session.session_id)
 

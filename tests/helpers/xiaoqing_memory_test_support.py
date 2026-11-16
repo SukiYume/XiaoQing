@@ -25,10 +25,6 @@ def chat_user(scope: str) -> Caller:
     return Caller(CHAT, "user", scope)
 
 
-def chat_system() -> Caller:
-    return Caller(CHAT, "system", "")
-
-
 def agent_user(scope: str) -> Caller:
     return Caller(AGENT, "user", scope)
 

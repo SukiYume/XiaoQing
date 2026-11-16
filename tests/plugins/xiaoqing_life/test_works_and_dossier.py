@@ -17,7 +17,7 @@ from plugins.xiaoqing_life.config import parse_life_config
 from plugins.xiaoqing_life.planner import WORK_ON, Decision
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import FakeAI, FakeFetcher, at, make_cfg, new_store
+from tests.helpers.xiaoqing_life_test_support import FakeAI, FakeFetcher, at, make_cfg, new_store
 
 pytestmark = pytest.mark.asyncio
 
@@ -130,8 +130,6 @@ async def test_start_respects_slots_gap_blocklist_and_shape(tmp_path: Path) -> N
     roomy = make_cfg(max_active_works=2)
     assert works.start_work(store, roomy, _start_raw(title="第二件"), NOW + 3 * DAY) is None
     assert works.start_work(store, roomy, _start_raw(title="第二件"), NOW + 8 * DAY) is not None
-    assert make_cfg().max_active_works == 1 and make_cfg().work_start_gap_days == 7
-    assert make_cfg().dossier_keep_days == 365 and make_cfg().session_minutes["work_on"] == (15, 30)
     assert parse_life_config({"max_active_works": 9}).max_active_works == 3
     assert parse_life_config({"dossier_keep_days": 1}).dossier_keep_days == 30
 
@@ -549,13 +547,6 @@ async def test_work_text_never_feeds_terms_expressions_or_interests(tmp_path: Pa
     after = (store.terms, store.expressions, store.interests)
     assert all(v["evidence"] == [] for v in after[2].values())  # 没有任何兴趣证据
     assert after[0] == before[0] and after[1] == before[1]
-
-
-async def test_work_text_is_not_a_source_for_episodes_or_reading_refs() -> None:
-    # 作品条目不会出现在 ref_texts：模型不能拿作品文字当摘录来源
-    from plugins.xiaoqing_life import digest
-
-    assert digest.ref_texts([]) == {}
 
 
 # ───────────────────────────── 规划器 ─────────────────────────────
@@ -1194,10 +1185,9 @@ async def test_budget_unit_priority_and_episode_ids() -> None:
     assert ids == (
         [e["id"] for e in sorted(store.episodes, key=lambda e: -e["at"])[:3]] if kept else []
     )
-    assert tc.LIFE_BUDGET == 780
 
 
-# ───────────────────────────── 复查补充 ─────────────────────────────
+# ───────────────────────────── 整理的材料、待核实条目 ─────────────────────────────
 
 
 async def test_first_tidy_can_use_the_episodes_the_work_was_started_from() -> None:

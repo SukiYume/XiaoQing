@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -13,18 +15,15 @@ from tests.helpers.app_test_support import (
     XiaoQingApp,
 )
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root = _fixture_support.temp_app_root
 
 
 @pytest.mark.unit
 def test_app_init_with_minimal_args(temp_app_root: Path):
     """Test app initialization with minimal arguments"""
-    with patch("core.app.setup_logging") as mock_setup:
-        mock_setup.return_value = MagicMock()
-        app                     = XiaoQingApp(temp_app_root)
+    app = XiaoQingApp(temp_app_root)
 
-        assert app.root == temp_app_root
+    assert app.root == temp_app_root
     assert app.config_manager is not None
     assert app.http_session is None
     assert app.http_sender is None
@@ -39,25 +38,6 @@ def test_app_init_with_minimal_args(temp_app_root: Path):
 
 
 @pytest.mark.unit
-def test_app_init_with_dependencies(temp_app_root: Path, mock_dependencies):
-    """Test app initialization with injected dependencies"""
-    app = XiaoQingApp(
-        temp_app_root,
-        router          = mock_dependencies["router"],
-        plugin_manager  = mock_dependencies["plugin_manager"],
-        dispatcher      = mock_dependencies["dispatcher"],
-        scheduler       = mock_dependencies["scheduler"],
-        session_manager = mock_dependencies["session_manager"],
-    )
-
-    assert app.router is mock_dependencies["router"]
-    assert app.plugin_manager is mock_dependencies["plugin_manager"]
-    assert app.dispatcher is mock_dependencies["dispatcher"]
-    assert app.scheduler is mock_dependencies["scheduler"]
-    assert app.session_manager is mock_dependencies["session_manager"]
-
-
-@pytest.mark.unit
 def test_app_plugins_dir_path(temp_app_root: Path):
     """Test that plugins_dir is set correctly"""
     app = XiaoQingApp(temp_app_root)
@@ -67,8 +47,6 @@ def test_app_plugins_dir_path(temp_app_root: Path):
 
 @pytest.mark.unit
 def test_app_resolves_relative_plugin_data_root_from_project(temp_app_root: Path):
-    import json
-
     config_path = temp_app_root / "config" / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["data_root"] = "runtime/plugin-data"
@@ -100,30 +78,23 @@ def test_app_secrets_property(temp_app_root: Path):
 
 
 @pytest.mark.unit
-def test_app_is_admin_valid_user(temp_app_root: Path):
-    """Test is_admin with valid admin user"""
+@pytest.mark.parametrize(
+    ("user_id", "expected"),
+    [
+        pytest.param(12345, True, id="admin"),
+        pytest.param(67890, True, id="second_admin"),
+        pytest.param(99999, False, id="not_admin"),
+        pytest.param(1, False, id="small_not_admin"),
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+    ],
+)
+def test_app_is_admin_follows_configured_admin_ids(
+    temp_app_root: Path, user_id: int | None, expected: bool
+):
     app = XiaoQingApp(temp_app_root)
 
-    assert app.is_admin(12345) is True
-    assert app.is_admin(67890) is True
-
-
-@pytest.mark.unit
-def test_app_is_admin_invalid_user(temp_app_root: Path):
-    """Test is_admin with non-admin user"""
-    app = XiaoQingApp(temp_app_root)
-
-    assert app.is_admin(99999) is False
-    assert app.is_admin(1) is False
-
-
-@pytest.mark.unit
-def test_app_is_admin_none_user(temp_app_root: Path):
-    """Test is_admin with None user_id"""
-    app = XiaoQingApp(temp_app_root)
-
-    assert app.is_admin(None) is False
-    assert app.is_admin(0) is False
+    assert app.is_admin(user_id) is expected
 
 
 @pytest.mark.parametrize("user_id", [True, False, -1, "12345", 12345.0])
@@ -139,8 +110,6 @@ def test_app_is_admin_rejects_non_integer_runtime_values(
 @pytest.mark.unit
 def test_app_load_admins_from_config(temp_app_root: Path):
     """Test admin loading from secrets config"""
-    import json
-
     # Modify secrets to have different admin IDs
     secrets_file = temp_app_root / "config" / "secrets.json"
     with open(secrets_file, "w") as f:
@@ -155,8 +124,6 @@ def test_app_load_admins_from_config(temp_app_root: Path):
 @pytest.mark.unit
 def test_app_load_admins_invalid_config(temp_app_root: Path):
     """Test admin loading with invalid config"""
-    import json
-
     # Write invalid admin_user_ids
     secrets_file = temp_app_root / "config" / "secrets.json"
     with open(secrets_file, "w") as f:
@@ -243,11 +210,17 @@ async def test_app_context_send_action(temp_app_root: Path):
         state       = {},
     )
 
-    # Mock _send_action to track calls
-    with patch.object(app, "_send_action", new=AsyncMock()) as mock_send:
-        await context.send_action({"action": "test"})
-        mock_send.assert_called_once()
-        assert mock_send.await_args.args[0]["_source_plugin"] == "test"
+    # OneBot 发送器是边界：动作经真实的 Core 投递链路到达发送器，并带上来源插件。
+    app.http_sender = SimpleNamespace(
+        http_base           = "http://onebot",
+        credentials_trusted = True,
+        send_action=AsyncMock(return_value=True),
+    )
+
+    assert await context.send_action({"action": "test"}) is True
+
+    app.http_sender.send_action.assert_awaited_once()
+    assert app.http_sender.send_action.await_args.args[0]["_source_plugin"] == "test"
 
 
 @pytest.mark.unit
@@ -302,24 +275,22 @@ def test_app_plugin_context_rejects_non_mapping_plugin_namespaces(
     temp_app_root: Path,
     malformed_namespace: str,
 ):
-    from core.config import ConfigSnapshot
-
-    app                    = XiaoQingApp(temp_app_root)
     config_plugins: object = [] if malformed_namespace == "config" else {"alpha": {"enabled": True}}
     secret_plugins: object = [] if malformed_namespace == "secrets" else {"alpha": {"token": "a"}}
-    snapshot               = ConfigSnapshot(
-        config   = {"plugins": config_plugins},
-        secrets  = {"plugins": secret_plugins},
-        revision = 7,
-    )
+    config_path            = temp_app_root / "config" / "config.json"
+    secrets_path           = temp_app_root / "config" / "secrets.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["plugins"] = config_plugins
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    secrets_path.write_text(json.dumps({"plugins": secret_plugins}), encoding="utf-8")
+    app = XiaoQingApp(temp_app_root)
 
-    with patch.object(app.config_manager, "snapshot", return_value=snapshot):
-        context = app._build_plugin_context(
-            "alpha",
-            Path("/alpha"),
-            Path("/alpha/data"),
-            {},
-        )
+    context = app._build_plugin_context(
+        "alpha",
+        Path("/alpha"),
+        Path("/alpha/data"),
+        {},
+    )
 
     expected_config  = {} if malformed_namespace == "config" else {"enabled": True}
     expected_secrets = {} if malformed_namespace == "secrets" else {"token": "a"}

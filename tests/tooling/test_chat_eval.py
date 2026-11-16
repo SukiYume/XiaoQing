@@ -143,22 +143,21 @@ def test_checker_calibration_requires_zero_leaks_and_bounded_false_rejections(ro
     assert review.calibration_summary(rows)["passed"] is passed
 
 
-def test_rejudge_uses_saved_expectations_and_media_truth(tmp_path, monkeypatch) -> None:
-    row  = {"suite": "historical", "expect": "reply", "reply_segments": []}
+def test_rejudge_uses_saved_expectations_and_media_truth(tmp_path) -> None:
+    row = _row(1, "小青，看这个", "好看", suite="historical", media="picture")
     path = tmp_path / "historical.jsonl"
-    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest = {
         "scenarios"  : {"historical": [{"note": "saved expectation"}]},
         "media_truth": {"picture": "saved truth"},
     }
     (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    render = Mock(return_value="saved transcript")
-    monkeypatch.setattr(review, "transcript", render)
-    monkeypatch.setattr(review, "style_metrics", lambda _rows: {})
-    monkeypatch.setattr(review, "rule_findings", lambda _rows: [])
+
     result = review.judge_run(path, use_judge=False)
-    render.assert_called_once_with([row], ["saved expectation"], {"picture": "saved truth"})
-    assert result["transcript"] == "saved transcript"
+
+    assert "saved expectation" in result["transcript"]
+    assert "saved truth" in result["transcript"]
+    assert result["turns"] == 1 and result["bot_replies"] == 1
 
 
 def test_worker_start_failure_reaps_already_started_workers(tmp_path, monkeypatch) -> None:

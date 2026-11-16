@@ -9,14 +9,8 @@ from typing import Any
 import pytest
 
 import tests.helpers.config_test_support as _fixture_support
-from tests.helpers.config_test_support import (
-    _MAX_CONFIG_SOURCE_BYTES,
-    _MAX_CONFIG_TREE_DEPTH,
-    _MAX_CONFIG_TREE_NODES,
-    ConfigLoadError,
-    ConfigManager,
-    ConfigSourceStatus,
-)
+from core.config import _MAX_CONFIG_SOURCE_BYTES, _MAX_CONFIG_TREE_DEPTH, _MAX_CONFIG_TREE_NODES
+from tests.helpers.config_test_support import ConfigLoadError, ConfigManager, ConfigSourceStatus
 
 config_file     = _fixture_support.config_file
 config_manager  = _fixture_support.config_manager
@@ -25,7 +19,7 @@ temp_config_dir = _fixture_support.temp_config_dir
 
 
 class TestConfigSourceStateModel:
-    """Regression matrix for independent config and secrets source policies."""
+    """Independent config and secrets source policies."""
 
     def test_snapshot_reports_valid_initial_sources(self, config_manager: ConfigManager):
         snapshot = config_manager.snapshot()
@@ -235,40 +229,23 @@ class TestConfigSourceStateModel:
         assert json.loads(config_backup.read_text(encoding="utf-8"))["bot_name"] == "backup-config"
         assert json.loads(secrets_backup.read_text(encoding="utf-8"))["token"] == "revoked-backup"
 
-    def test_oversize_source_is_invalid_and_secrets_fail_closed(
+    @pytest.mark.parametrize("limit_kind", ["bytes", "depth", "nodes"])
+    def test_source_over_a_limit_is_invalid_and_secrets_fail_closed(
         self,
         config_manager: ConfigManager,
         secrets_file: Path,
+        limit_kind: str,
     ):
-        secrets_file.write_bytes(b" " * (_MAX_CONFIG_SOURCE_BYTES + 1))
-
-        snapshot = config_manager.reload()
-
-        assert snapshot.secrets_status is ConfigSourceStatus.INVALID
-        assert snapshot.secrets == {}
-
-    def test_tree_over_depth_limit_is_invalid_and_secrets_fail_closed(
-        self,
-        config_manager: ConfigManager,
-        secrets_file: Path,
-    ):
-        nested: Any = "leaf"
-        for _ in range(_MAX_CONFIG_TREE_DEPTH + 1):
-            nested = {"child": nested}
-        secrets_file.write_text(json.dumps({"nested": nested}), encoding="utf-8")
-
-        snapshot = config_manager.reload()
-
-        assert snapshot.secrets_status is ConfigSourceStatus.INVALID
-        assert snapshot.secrets == {}
-
-    def test_tree_over_node_limit_is_invalid_and_secrets_fail_closed(
-        self,
-        config_manager: ConfigManager,
-        secrets_file: Path,
-    ):
-        payload = {"values": [0] * _MAX_CONFIG_TREE_NODES}
-        secrets_file.write_text(json.dumps(payload), encoding="utf-8")
+        if limit_kind == "bytes":
+            payload = b" " * (_MAX_CONFIG_SOURCE_BYTES + 1)
+        elif limit_kind == "depth":
+            nested: Any = "leaf"
+            for _ in range(_MAX_CONFIG_TREE_DEPTH + 1):
+                nested = {"child": nested}
+            payload = json.dumps({"nested": nested}).encode("utf-8")
+        else:
+            payload = json.dumps({"values": [0] * _MAX_CONFIG_TREE_NODES}).encode("utf-8")
+        secrets_file.write_bytes(payload)
 
         snapshot = config_manager.reload()
 

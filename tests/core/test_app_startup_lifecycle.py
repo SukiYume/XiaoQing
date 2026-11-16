@@ -9,15 +9,54 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from aiohttp import ClientConnectorError
 
 import tests.helpers.app_test_support as _fixture_support
 from tests.helpers.app_test_support import (
     ApplicationLifecycleFatalError,
+    ClientSession,
     XiaoQingApp,
 )
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root = _fixture_support.temp_app_root
+
+_INBOUND_TOKEN = "token"
+
+
+def _enable_inbound_listener(root: Path, port: int) -> None:
+    """把入站监听写进真实的配置文件：HTTP 在 127.0.0.1 的 ``port``，令牌写进密钥文件。"""
+
+    config_path = root / "config" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.update(
+        {
+            "enable_inbound_server": True,
+            "inbound_http_base"    : f"http://127.0.0.1:{port}",
+            "inbound_ws_uri"       : "",
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    secrets_path = root / "config" / "secrets.json"
+    secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
+    secrets["inbound_token"] = _INBOUND_TOKEN
+    secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
+
+
+async def _health(port: int) -> tuple[int, dict[str, Any]]:
+    async with (
+        ClientSession() as session,
+        session.get(
+            f"http://127.0.0.1:{port}/health",
+            headers={"Authorization": f"Bearer {_INBOUND_TOKEN}"},
+        ) as response,
+    ):
+        return response.status, await response.json()
+
+
+async def _occupy_port(port: int) -> asyncio.AbstractServer:
+    """在 127.0.0.1 上先占住端口（OS 边界），让入站监听绑定失败。"""
+
+    return await asyncio.start_server(lambda *_: None, "127.0.0.1", port)
 
 
 @pytest.mark.asyncio
@@ -26,17 +65,13 @@ async def test_app_start(temp_app_root: Path):
     """Test app start initializes components"""
     app = XiaoQingApp(temp_app_root)
 
-    # Mock plugin manager methods
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-
     await app.start()
 
     # Verify HTTP session is created
     assert app.http_session is not None
 
-    # Verify plugins are loaded
-    app.plugin_manager.load_all.assert_awaited_once()
+    # 启动走完真实的插件加载（插件目录为空），应用进入运行态
+    assert app._lifecycle_state.value == "running"
 
     # Verify session cleanup task is created
     assert app._session_cleanup_task is not None
@@ -182,112 +217,101 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
 @pytest.mark.unit
 async def test_app_start_failure_rolls_back_every_resource_and_allows_retry(
     temp_app_root: Path,
+    unused_tcp_port_factory,
 ):
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
+    port = unused_tcp_port_factory()
+    _enable_inbound_listener(temp_app_root, port)
+    app = XiaoQingApp(temp_app_root)
     first_session = MagicMock(close=AsyncMock())
     second_session = MagicMock(close=AsyncMock())
-    failed_manager = MagicMock()
-    failed_manager.start = AsyncMock(side_effect=OSError("inbound bind failed"))
-    failed_manager.stop   = AsyncMock()
-    healthy_manager       = MagicMock()
-    healthy_manager.start = AsyncMock()
-    healthy_manager.stop  = AsyncMock()
+    blocker = await _occupy_port(port)
 
-    with (
-        patch(
+    try:
+        with patch(
             "core.app_lifecycle.aiohttp.ClientSession", side_effect=[first_session, second_session]
-        ),
-        patch(
-            "core.app_ingress.InboundManager.from_config",
-            side_effect=[failed_manager, healthy_manager],
-        ),
-    ):
-        with pytest.raises(OSError, match="inbound bind failed"):
+        ):
+            # 入站端口已被占用：启动失败，所有已经建好的资源回滚
+            with pytest.raises(OSError):
+                await app.start()
+
+            first_session.close.assert_awaited_once()
+            assert app.http_session is None
+            assert app.inbound_manager is None
+            assert app._session_cleanup_task is None
+            assert app._config_watch_task is None
+            assert app._plugin_watch_task is None
+            assert app.scheduler.scheduler is None
+            assert app._lifecycle_state.value == "new"
+            assert app._stopping is False
+
+            blocker.close()
+            await blocker.wait_closed()
             await app.start()
+            assert app._lifecycle_state.value == "running"
+            assert app.http_session is second_session
+            assert app.inbound_manager is not None
+            assert (await _health(port))[0] == 200
+            await app.stop()
+    finally:
+        blocker.close()
 
-        first_session.close.assert_awaited_once()
-        failed_manager.stop.assert_awaited_once()
-        assert app.http_session is None
-        assert app.inbound_manager is None
-        assert app._session_cleanup_task is None
-        assert app._config_watch_task is None
-        assert app._plugin_watch_task is None
-        assert app.scheduler.scheduler is None
-        assert app._lifecycle_state.value == "new"
-        assert app._stopping is False
-
-        await app.start()
-        assert app._lifecycle_state.value == "running"
-        assert app.http_session is second_session
-        assert app.inbound_manager is healthy_manager
-        await app.stop()
-
-    healthy_manager.start.assert_awaited_once()
-    healthy_manager.stop.assert_awaited_once()
     second_session.close.assert_awaited_once()
+    # 停机后入站端口已释放
+    with pytest.raises(ClientConnectorError):
+        await _health(port)
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
     temp_app_root: Path,
+    unused_tcp_port_factory,
 ):
     from core.config import ConfigSnapshot
 
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
+    port = unused_tcp_port_factory()
+    _enable_inbound_listener(temp_app_root, port)
+    app = XiaoQingApp(temp_app_root)
     first_session = MagicMock(close=AsyncMock())
     second_session = MagicMock(close=AsyncMock())
-    failed_manager = MagicMock(
-        start=AsyncMock(side_effect=OSError("inbound bind failed")),
-        stop=AsyncMock(),
-    )
-    healthy_manager = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    blocker = await _occupy_port(port)
 
-    with (
-        patch(
+    try:
+        with patch(
             "core.app_lifecycle.aiohttp.ClientSession", side_effect=[first_session, second_session]
-        ),
-        patch(
-            "core.app_ingress.InboundManager.from_config",
-            side_effect=[failed_manager, healthy_manager],
-        ),
-    ):
-        with pytest.raises(OSError, match="inbound bind failed"):
-            await app.start()
+        ):
+            with pytest.raises(OSError):
+                await app.start()
 
-        assert app._lifecycle_state.value == "new"
-        assert app.http_session is None
-        assert app.scheduler.scheduler is None
+            assert app._lifecycle_state.value == "new"
+            assert app.http_session is None
+            assert app.scheduler.scheduler is None
 
-        app._apply_config(
-            ConfigSnapshot(
-                config   = {**app.config, "timezone": "UTC"},
-                secrets  = app.secrets,
-                revision = app.config_manager.revision + 1,
+            app._apply_config(
+                ConfigSnapshot(
+                    config   = {**app.config, "timezone": "UTC"},
+                    secrets  = app.secrets,
+                    revision = app.config_manager.revision + 1,
+                )
             )
-        )
-        config_task = app._config_apply_task
-        assert config_task is not None
-        await config_task
-        await asyncio.sleep(0)
+            config_task = app._config_apply_task
+            assert config_task is not None
+            await config_task
+            await asyncio.sleep(0)
 
-        assert app.scheduler.timezone == "UTC"
-        assert app.scheduler.scheduler is not None
-        assert str(app.scheduler.scheduler.timezone) == "UTC"
+            assert app.scheduler.timezone == "UTC"
+            assert app.scheduler.scheduler is not None
+            assert str(app.scheduler.scheduler.timezone) == "UTC"
 
-        await app.start()
-        assert app._lifecycle_state.value == "running"
-        assert str(app.scheduler.scheduler.timezone) == "UTC"
-        await app.stop()
-
-    healthy_manager.start.assert_awaited_once()
-    healthy_manager.stop.assert_awaited_once()
+            blocker.close()
+            await blocker.wait_closed()
+            await app.start()
+            assert app._lifecycle_state.value == "running"
+            assert str(app.scheduler.scheduler.timezone) == "UTC"
+            assert (await _health(port))[0] == 200
+            await app.stop()
+    finally:
+        blocker.close()
 
 
 @pytest.mark.asyncio
@@ -496,24 +520,17 @@ async def test_runtime_config_ws_fatal_is_task_safe(temp_app_root: Path):
 async def test_start_after_terminal_stop_is_rejected_and_stop_is_idempotent(
     temp_app_root: Path,
 ):
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
-    session = MagicMock(close=AsyncMock())
+    app = XiaoQingApp(temp_app_root)
 
-    with (
-        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
-        patch("core.app_ingress.InboundManager.from_config", return_value=None),
-    ):
+    await app.start()
+    session = app.http_session
+    assert session is not None
+    await asyncio.gather(app.stop(), app.stop())
+
+    assert app._lifecycle_state.value == "stopped"
+    assert session.closed is True
+    with pytest.raises(RuntimeError, match="stopped"):
         await app.start()
-        await asyncio.gather(app.stop(), app.stop())
-
-        assert app._lifecycle_state.value == "stopped"
-        with pytest.raises(RuntimeError, match="stopped"):
-            await app.start()
-
-    session.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -647,9 +664,7 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_start_creates_shared_http_session_with_default_timeout(temp_app_root: Path):
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+    app = XiaoQingApp(temp_app_root)
 
     mock_session             = MagicMock()
     mock_session.close       = AsyncMock()
@@ -682,50 +697,40 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+    app = XiaoQingApp(temp_app_root)
 
-    task_cancelled: dict[str, bool] = {"config": False, "plugin": False, "ws": False}
+    ws_cancelled = asyncio.Event()
 
-    async def _block_until_cancelled(marker: str):
+    async def ws_connect_and_listen(handler):
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            task_cancelled[marker] = True
+            ws_cancelled.set()
             raise
-
-    async def config_watch(interval: float = 2.0):
-        await _block_until_cancelled("config")
-
-    async def plugin_watch():
-        await _block_until_cancelled("plugin")
-
-    app.config_manager.watch = config_watch
-    app.plugin_manager.watch = plugin_watch
 
     mock_ws_client                = MagicMock()
     mock_ws_client.set_on_connect = Mock()
     mock_ws_client.stop           = AsyncMock()
-
-    async def ws_connect_and_listen(handler):
-        await _block_until_cancelled("ws")
-
     mock_ws_client.connect_and_listen = AsyncMock(side_effect=ws_connect_and_listen)
 
+    # OneBot WebSocket 连接是边界；配置监听和插件监听用真实的后台任务
     with patch("core.app_ingress.OneBotWsClient", return_value=mock_ws_client):
         await app.start()
         await asyncio.sleep(0)
 
-        assert getattr(app, "_config_watch_task", None) is not None
-        assert getattr(app, "_plugin_watch_task", None) is not None
-        assert getattr(app, "_ws_client_task", None) is not None
+        config_watch = app._config_watch_task
+        plugin_watch = app._plugin_watch_task
+        ws_listener  = app._ws_client_task
+        assert config_watch is not None
+        assert plugin_watch is not None
+        assert ws_listener is not None
 
         await app.stop()
 
-    assert task_cancelled["config"] is True
-    assert task_cancelled["plugin"] is True
-    assert task_cancelled["ws"] is True
+    assert config_watch.done()
+    assert plugin_watch.done()
+    assert ws_listener.done()
+    assert ws_cancelled.is_set()
     mock_ws_client.stop.assert_awaited_once()
 
 
@@ -735,18 +740,8 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
     """Test _apply_config can enable/disable plugin watcher at runtime."""
     from core.config import ConfigSnapshot
 
-    app                  = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
-    task_cancelled       = {"plugin": False}
-
-    async def plugin_watch():
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            task_cancelled["plugin"] = True
-            raise
-
-    app.plugin_manager.watch                 = plugin_watch
+    app                                      = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                     = type(app._lifecycle_state).RUNNING
     app._config_watch_task                   = MagicMock()
     app._config_watch_task.done.return_value = False
 
@@ -760,7 +755,8 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert app._plugin_watch_task is not None
+    watch_task = app._plugin_watch_task
+    assert watch_task is not None
 
     app._apply_config(
         ConfigSnapshot(
@@ -772,29 +768,29 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert task_cancelled["plugin"] is True
+    assert watch_task.cancelled()
     assert app._plugin_watch_task is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_app_start_binds_inbound_status_providers(temp_app_root: Path):
-    """Test inbound manager gets status providers before startup."""
-    app                         = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+async def test_app_start_binds_inbound_status_providers(
+    temp_app_root: Path,
+    unused_tcp_port_factory,
+):
+    """入站管理器在启动前绑定了状态提供者：健康检查返回插件数、会话数和待执行任务数。"""
+    port = unused_tcp_port_factory()
+    _enable_inbound_listener(temp_app_root, port)
+    app = XiaoQingApp(temp_app_root)
 
-    mock_manager       = MagicMock()
-    mock_manager.start = AsyncMock()
-    mock_manager.stop  = AsyncMock()
-
-    with patch("core.app_ingress.InboundManager.from_config", return_value=mock_manager):
-        await app.start()
+    await app.start()
+    try:
+        status, body = await _health(port)
+    finally:
         await app.stop()
 
-    mock_manager.set_status_providers.assert_called_once()
-    mock_manager.start.assert_awaited_once()
-    mock_manager.stop.assert_awaited_once()
+    assert status == 200
+    assert {"plugins_loaded", "active_sessions", "pending_jobs"} <= body.keys()
 
 
 @pytest.mark.asyncio
@@ -812,10 +808,6 @@ async def test_app_start_with_http_configured(temp_app_root: Path):
         json.dump(config, f)
 
     app = XiaoQingApp(temp_app_root)
-
-    # Mock plugin manager
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
     await app.start()
 
@@ -841,35 +833,9 @@ async def test_app_start_with_ws_disabled(temp_app_root: Path):
 
     app = XiaoQingApp(temp_app_root)
 
-    # Mock plugin manager
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-
     await app.start()
 
     # WS client should not be created
     assert app.ws_client is None
 
     await app.stop()
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_app_stop(temp_app_root: Path):
-    """Test app stop cleans up resources"""
-    app = XiaoQingApp(temp_app_root)
-
-    # Mock plugin manager
-    app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
-    app.plugin_manager.unload_plugin = AsyncMock()
-
-    # Start the app first
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
-    await app.start()
-
-    # Now stop it
-    await app.stop()
-
-    # Verify cleanup
-    assert app.http_session is None or app.http_session.closed

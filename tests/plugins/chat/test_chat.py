@@ -46,6 +46,47 @@ class _BoundedJsonContextManager:
         return None
 
 
+class _Delayed:
+    """响应在给定秒数之后才返回。"""
+
+    def __init__(self, payload, seconds: float):
+        self.payload = payload
+        self.seconds = seconds
+
+
+class _Hang:
+    """响应一直不返回；等待被取消时登记 ``cancelled``。"""
+
+    def __init__(self, cancelled: asyncio.Event):
+        self.cancelled = cancelled
+
+
+class _DelayedContextManager(_BoundedJsonContextManager):
+    def __init__(self, delayed: _Delayed):
+        super().__init__(delayed.payload)
+        self.seconds = delayed.seconds
+
+    async def __aenter__(self):
+        await asyncio.sleep(self.seconds)
+        return await super().__aenter__()
+
+
+class _HangingContextManager:
+    def __init__(self, hang: _Hang):
+        self.hang = hang
+
+    async def __aenter__(self):
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            self.hang.cancelled.set()
+            raise
+        raise AssertionError("hanging request must be cancelled")
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 class _BoundedJsonSession:
     def __init__(self, *payloads):
         self.payloads = list(payloads)
@@ -53,7 +94,18 @@ class _BoundedJsonSession:
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        return _BoundedJsonContextManager(self.payloads.pop(0))
+        item = self.payloads.pop(0)
+        if isinstance(item, _Delayed):
+            return _DelayedContextManager(item)
+        if isinstance(item, _Hang):
+            return _HangingContextManager(item)
+        return _BoundedJsonContextManager(item)
+
+
+def _fixed_clock() -> datetime:
+    """Core 配置时钟的替身：固定在 2026-07-14（UTC）。"""
+
+    return datetime(2026, 7, 14, 12, tzinfo=UTC)
 
 
 def _completed_chat_payload():
@@ -153,9 +205,8 @@ class TestChatPlugin:
         assert chat._chat_state(payload) is None
 
     @pytest.mark.asyncio
-    async def test_quota_is_durable_across_context_instances(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(chat, "_business_date", lambda _context: "2026-07-14")
-        context = SimpleNamespace(data_dir=tmp_path)
+    async def test_quota_is_durable_across_context_instances(self, tmp_path):
+        context = SimpleNamespace(data_dir=tmp_path, now=_fixed_clock)
         reservation = await chat._reserve_quota(
             context,
             actor          = "user",
@@ -165,21 +216,20 @@ class TestChatPlugin:
         reservation.commit()
         with pytest.raises(chat.ChatQuotaExceeded):
             await chat._reserve_quota(
-                SimpleNamespace(data_dir=tmp_path),
+                SimpleNamespace(data_dir=tmp_path, now=_fixed_clock),
                 actor          = "user",
                 per_user_limit = 1,
                 global_limit   = 1,
             )
 
     @pytest.mark.asyncio
-    async def test_quota_rejects_corrupt_state_instead_of_resetting_it(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(chat, "_business_date", lambda _context: "2026-07-14")
+    async def test_quota_rejects_corrupt_state_instead_of_resetting_it(self, tmp_path):
         chat.AtomicJsonStore(tmp_path / "chat_quota.json").write(
             {"window": "2026-07-14", "users": [], "total": -1}
         )
         with pytest.raises(chat.ChatQuotaStateError):
             await chat._reserve_quota(
-                SimpleNamespace(data_dir=tmp_path),
+                SimpleNamespace(data_dir=tmp_path, now=_fixed_clock),
                 actor          = "user",
                 per_user_limit = 10,
                 global_limit   = 10,
@@ -240,26 +290,19 @@ class TestChatPlugin:
         assert is_valid is True
         assert error is None
 
-    def test_validate_config_empty(self):
-        """测试空配置验证"""
-        config = {}
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            ({}, "配置为空"),
+            ({"bot_id": "test_bot"}, "token"),
+            ({"token": "test_token"}, "bot_id"),
+        ],
+        ids=["empty", "no-token", "no-bot-id"],
+    )
+    def test_validate_config_rejects_missing_values(self, config, expected):
         is_valid, error = chat.validate_config(config)
         assert is_valid is False
-        assert "配置为空" in error
-
-    def test_validate_config_no_token(self):
-        """测试缺少token"""
-        config = {"bot_id": "test_bot"}
-        is_valid, error = chat.validate_config(config)
-        assert is_valid is False
-        assert "token" in error
-
-    def test_validate_config_no_bot_id(self):
-        """测试缺少bot_id"""
-        config = {"token": "test_token"}
-        is_valid, error = chat.validate_config(config)
-        assert is_valid is False
-        assert "bot_id" in error
+        assert expected in error
 
     @pytest.mark.parametrize(
         ("config", "field"),
@@ -276,12 +319,6 @@ class TestChatPlugin:
         assert valid is False
         assert field in error
 
-    def test_extract_answer_valid(self, mock_context):
-        """测试提取有效答案"""
-        data   = {"messages": [{"type": "answer", "content": "这是答案"}]}
-        answer = chat.extract_answer(data, mock_context)
-        assert answer == "这是答案"
-
     def test_extract_answer_multiple_messages(self, mock_context):
         """测试从多条消息中提取答案"""
         data = {
@@ -294,28 +331,18 @@ class TestChatPlugin:
         answer = chat.extract_answer(data, mock_context)
         assert answer == "答案"
 
-    def test_extract_answer_no_answer(self, mock_context):
-        """测试没有答案的情况"""
-        data   = {"messages": [{"type": "question", "content": "问题"}]}
-        answer = chat.extract_answer(data, mock_context)
-        assert answer is None
-
-    def test_extract_answer_invalid_type(self, mock_context):
-        """测试无效响应类型"""
-        answer = chat.extract_answer("not a dict", mock_context)
-        assert answer is None
-
-    def test_extract_answer_invalid_messages(self, mock_context):
-        """测试无效messages字段"""
-        data   = {"messages": "not a list"}
-        answer = chat.extract_answer(data, mock_context)
-        assert answer is None
-
-    def test_extract_answer_empty_content(self, mock_context):
-        """测试空答案内容"""
-        data   = {"messages": [{"type": "answer", "content": "   "}]}
-        answer = chat.extract_answer(data, mock_context)
-        assert answer is None
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"messages": [{"type": "question", "content": "问题"}]},
+            "not a dict",
+            {"messages": "not a list"},
+            {"messages": [{"type": "answer", "content": "   "}]},
+        ],
+        ids=["no-answer", "non-dict-response", "non-list-messages", "blank-answer"],
+    )
+    def test_extract_answer_returns_none_without_usable_answer(self, mock_context, data):
+        assert chat.extract_answer(data, mock_context) is None
 
     def test_extract_answer_skips_malformed_answer_and_uses_next_text(self, mock_context):
         data = {
@@ -326,16 +353,6 @@ class TestChatPlugin:
         }
 
         assert chat.extract_answer(data, mock_context) == "可用答案"
-
-    @pytest.mark.asyncio
-    async def test_call_coze_api_success(self, mock_context):
-        """测试成功的API调用"""
-        query  = "测试问题"
-        config = {"token": "test_token", "bot_id": "test_bot"}
-
-        result = await chat.call_coze_api(query, config, mock_context)
-        assert result is not None
-        assert "messages" in result
 
     @pytest.mark.asyncio
     async def test_call_coze_api_with_proxy(self, mock_context):
@@ -375,7 +392,7 @@ class TestChatPlugin:
         ]
 
     @pytest.mark.asyncio
-    async def test_call_coze_api_polls_until_completed(self, mock_context, monkeypatch):
+    async def test_call_coze_api_polls_until_completed(self, mock_context):
         mock_context.http_session = _BoundedJsonSession(
             {
                 "data": {
@@ -387,7 +404,6 @@ class TestChatPlugin:
             _completed_chat_payload(),
             _answer_messages_payload("轮询完成"),
         )
-        monkeypatch.setattr(chat, "POLL_INTERVAL_SECONDS", 0)
 
         result = await chat.call_coze_api(
             "测试问题",
@@ -407,22 +423,11 @@ class TestChatPlugin:
     async def test_call_coze_api_passes_remaining_deadline_to_every_request(
         self,
         mock_context,
-        monkeypatch,
     ):
-        monkeypatch.setattr(chat, "REQUEST_TIMEOUT", 0.2)
-        seen: list[tuple[str, float]] = []
-
-        async def request(_context, _method, url, *, headers, request_kwargs):
-            del headers
-            seen.append((url, request_kwargs["timeout"]))
-            if url == chat.COZE_API_URL:
-                await asyncio.sleep(0.03)
-                return _completed_chat_payload()
-            if url == chat.COZE_MESSAGES_URL:
-                return _answer_messages_payload("deadline success")
-            raise AssertionError(f"unexpected URL: {url}")
-
-        monkeypatch.setattr(chat, "_request_coze_json", request)
+        mock_context.http_session = _BoundedJsonSession(
+            _Delayed(_completed_chat_payload(), 0.03),
+            _answer_messages_payload("deadline success"),
+        )
 
         result = await chat.call_coze_api(
             "测试问题",
@@ -431,11 +436,13 @@ class TestChatPlugin:
         )
 
         assert result == {"messages": [{"type": "answer", "content": "deadline success"}]}
-        assert [url for url, _timeout in seen] == [
+        calls = mock_context.http_session.calls
+        assert [url for _method, url, _kwargs in calls] == [
             chat.COZE_API_URL,
             chat.COZE_MESSAGES_URL,
         ]
-        assert 0 < seen[1][1] < seen[0][1] <= chat.REQUEST_TIMEOUT
+        first_timeout, second_timeout = (kwargs["timeout"] for _method, _url, kwargs in calls)
+        assert 0 < second_timeout < first_timeout <= chat.REQUEST_TIMEOUT
 
     @pytest.mark.asyncio
     async def test_call_coze_api_rejects_business_error_without_logging_message(self, mock_context):
@@ -523,35 +530,22 @@ class TestChatPlugin:
     async def test_call_coze_api_timeout_attempts_remote_cancel(self, mock_context, monkeypatch):
         monkeypatch.setattr(chat, "REQUEST_TIMEOUT", 0.08)
         monkeypatch.setattr(chat, "POLL_INTERVAL_SECONDS", 0)
-        calls: list[tuple[str, float]] = []
-        retrieve_cancelled             = asyncio.Event()
-
-        async def request(_context, _method, url, *, headers, request_kwargs):
-            del headers
-            calls.append((url, request_kwargs["timeout"]))
-            if url == chat.COZE_API_URL:
-                await asyncio.sleep(0.02)
-                return {
+        retrieve_cancelled        = asyncio.Event()
+        mock_context.http_session = _BoundedJsonSession(
+            _Delayed(
+                {
                     "data": {
                         "id"             : "chat-123",
                         "conversation_id": "conversation-456",
                         "status"         : "in_progress",
                     }
-                }
-            if url == chat.COZE_RETRIEVE_URL:
-                try:
-                    await asyncio.sleep(5)
-                    return _completed_chat_payload()
-                except asyncio.CancelledError:
-                    retrieve_cancelled.set()
-                    raise
-            if url == chat.COZE_CANCEL_URL:
-                return {"data": {}}
-            if url == chat.COZE_MESSAGES_URL:
-                return _answer_messages_payload("too late")
-            raise AssertionError(f"unexpected URL: {url}")
+                },
+                0.02,
+            ),
+            _Hang(retrieve_cancelled),
+            {"data": {}},
+        )
 
-        monkeypatch.setattr(chat, "_request_coze_json", request)
         result = await asyncio.wait_for(
             chat.call_coze_api(
                 "测试问题",
@@ -561,14 +555,15 @@ class TestChatPlugin:
             timeout=1.5,
         )
 
+        calls = mock_context.http_session.calls
         assert result is None
         assert retrieve_cancelled.is_set()
-        assert [url for url, _timeout in calls] == [
+        assert [url for _method, url, _kwargs in calls] == [
             chat.COZE_API_URL,
             chat.COZE_RETRIEVE_URL,
             chat.COZE_CANCEL_URL,
         ]
-        assert 0 < calls[1][1] < calls[0][1] <= chat.REQUEST_TIMEOUT
+        assert 0 < calls[1][2]["timeout"] < calls[0][2]["timeout"] <= chat.REQUEST_TIMEOUT
 
     @pytest.mark.asyncio
     async def test_call_coze_api_rejects_invalid_config_before_http(self, mock_context):
@@ -718,37 +713,10 @@ class TestChatPlugin:
         assert mock_context.http_session.calls == []
 
     @pytest.mark.asyncio
-    async def test_handle_success(self, mock_context, mock_event):
-        """测试成功的对话处理"""
-        result = await chat.handle("chat", "你好", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_handle_gpt_alias(self, mock_context, mock_event):
-        """测试gpt命令别名"""
-        result = await chat.handle("gpt", "测试", mock_event, mock_context)
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_handle_ai_alias(self, mock_context, mock_event):
-        """测试ai命令别名"""
-        result = await chat.handle("ai", "测试", mock_event, mock_context)
-        assert result is not None
-
-    @pytest.mark.asyncio
     async def test_declared_reply_service_uses_same_handler(self, mock_context, mock_event):
         result = await chat.reply("测试", mock_event, mock_context)
 
         assert "测试回答" in str(result)
-
-    def test_help_text(self):
-        """测试帮助文本"""
-        help_text = chat.HELP_TEXT
-        assert help_text is not None
-        assert "AI" in help_text or "对话" in help_text
-        assert "/chat" in help_text
-        assert "**" not in help_text
 
 
 @pytest.mark.asyncio

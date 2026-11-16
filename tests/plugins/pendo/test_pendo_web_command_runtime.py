@@ -3,38 +3,28 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from types import SimpleNamespace
+
+import pytest
+
+
+@pytest.fixture
+def web_auth_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让认证模块从未绑定数据库和密钥的状态开始，结束时复位（模块级状态隔离）。"""
+
+    auth_module = pytest.importorskip("plugins.pendo.web.auth")
+    monkeypatch.delenv("PENDO_WEB_TOKEN_SECRET", raising=False)
+    monkeypatch.setattr(auth_module, "_AUTH_DATABASE", None)
+    monkeypatch.setattr(auth_module, "_SECRET_FILE", None)
+    monkeypatch.setattr(auth_module, "_SECRET_CACHE", None)
 
 
 class TestPendoWebHandler:
     """测试 pendo web 命令格式化与发送行为"""
 
-    def test_web_token_sends_raw_code_as_separate_private_message(self, monkeypatch):
-        import types
-
+    def test_web_token_sends_raw_code_as_separate_private_message(self, db, web_auth_state):
         from plugins.pendo.handlers import web as web_module
-
-        monkeypatch.setattr(
-            web_module,
-            "web_server",
-            types.SimpleNamespace(
-                get_url    = lambda: "http://127.0.0.1:8765",
-                is_running = lambda: True,
-                start      = lambda _db: True,
-                stop       = lambda: True,
-            ),
-        )
-
-        issuance = {}
-
-        def issue_code(owner_id, *, expires_seconds, db):
-            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
-            return "mock-code"
-
-        monkeypatch.setattr(web_module, "issue_login_code", issue_code)
-        monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
-        monkeypatch.setattr(web_module.web_server, "is_running", lambda: True)
+        from plugins.pendo.web.auth import consume_login_code
 
         actions = []
 
@@ -43,7 +33,7 @@ class TestPendoWebHandler:
             return True
 
         context = SimpleNamespace(send_action=send_action)
-        handler = web_module.WebHandler(db=None)
+        handler = web_module.WebHandler(db=db)
 
         result = asyncio.run(handler.handle("1001", "token", context=context))
 
@@ -51,41 +41,31 @@ class TestPendoWebHandler:
         assert "登录 Code 已单独私聊发送" in result["message"]
         assert "Code 7 天内可兑换一次" in result["message"]
         assert "浏览器会话保持 7 天" in result["message"]
-        assert "mock-code" not in result["message"]
-        assert issuance == {
-            "owner_id"       : "1001",
-            "expires_seconds": 7 * 24 * 60 * 60,
-            "db"             : None,
-        }
         assert len(actions) == 1
         assert actions[0]["action"] == "send_private_msg"
         assert actions[0]["params"]["user_id"] == 1001
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
-        assert token_text == "mock-code"
+        assert token_text not in result["message"]
         assert "http://" not in token_text
         assert "https://" not in token_text
+        lifetime = (
+            db.get_connection()
+            .execute("SELECT expires_at - issued_at FROM login_code_registry")
+            .fetchone()[0]
+        )
+        assert lifetime == 7 * 24 * 60 * 60
+        assert consume_login_code(token_text, db=db) == "1001"
 
-    def test_web_token_fails_closed_when_private_delivery_is_unavailable(self, monkeypatch):
-        import types
+    def test_web_token_fails_closed_when_private_delivery_is_unavailable(
+        self, db, web_auth_state, monkeypatch
+    ):
+        import secrets
 
         from plugins.pendo.handlers import web as web_module
 
-        monkeypatch.setattr(
-            web_module,
-            "web_server",
-            types.SimpleNamespace(
-                get_url    = lambda: "http://127.0.0.1:8765",
-                is_running = lambda: False,
-                start      = lambda _db: True,
-                stop       = lambda: True,
-            ),
-        )
+        monkeypatch.setattr(secrets, "token_urlsafe", lambda _size: "mock-code")
 
-        monkeypatch.setattr(web_module, "issue_login_code", lambda *_args, **_kwargs: "mock-code")
-        monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
-        monkeypatch.setattr(web_module.web_server, "is_running", lambda: False)
-
-        handler = web_module.WebHandler(db=None)
+        handler = web_module.WebHandler(db=db)
         result = asyncio.run(handler.handle("1001", "token", context=None))
 
         assert result["status"] == "error"
@@ -120,77 +100,63 @@ class TestPendoWebHandler:
         assert "未收到最终投递回执" in result["message"]
         assert "secret-token" not in result["message"]
 
-    def test_web_start_surfaces_last_start_error(self, monkeypatch):
-        import types
-
+    def test_web_start_surfaces_last_start_error(self, monkeypatch, unused_tcp_port_factory):
+        from plugins.pendo.config import PendoConfig
         from plugins.pendo.handlers import web as web_module
+        from plugins.pendo.web import server as server_module
 
-        monkeypatch.setattr(
-            web_module,
-            "web_server",
-            types.SimpleNamespace(
-                get_url        = lambda: "http://127.0.0.1:8765",
-                is_running     = lambda: False,
-                start          = lambda _db: False,
-                stop           = lambda: True,
-                get_last_error = lambda: "无法绑定到 127.0.0.1:8765，端口可能已被占用。",
-            ),
-        )
+        # 真实的服务模块拒绝把 Web 绑到非 loopback 地址而不启用 Secure Cookie：
+        # 启动在绑定端口之前就失败，不会真的监听。
+        monkeypatch.setattr(server_module, "_last_error", None)
+        PendoConfig.configure({"web_host": "0.0.0.0", "web_port": unused_tcp_port_factory()})
 
         handler = web_module.WebHandler(db=None)
-        result = asyncio.run(handler.handle("1001", "start", context=types.SimpleNamespace()))
+        result = asyncio.run(handler.handle("1001", "start", context=SimpleNamespace()))
 
         assert result["status"] == "error"
         assert "服务启动失败" in result["message"]
-        assert "端口可能已被占用" in result["message"]
+        assert "非 loopback 地址" in result["message"]
         assert "plugins.pendo.web_port" in result["message"]
+        assert not server_module.is_managed_running()
 
-    def test_web_stop_reports_external_running_server_without_failing(self, monkeypatch):
-        import types
+    def test_web_stop_reports_external_running_server_without_failing(
+        self, unused_tcp_port_factory
+    ):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
 
+        from plugins.pendo.config import PendoConfig
         from plugins.pendo.handlers import web as web_module
 
-        monkeypatch.setattr(
-            web_module,
-            "web_server",
-            types.SimpleNamespace(
-                get_url            = lambda: "http://127.0.0.1:8765",
-                is_running         = lambda: True,
-                is_managed_running = lambda: False,
-                start              = lambda _db: False,
-                stop               = lambda: False,
-            ),
-        )
+        class _ExternalPage(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
-        handler = web_module.WebHandler(db=None)
-        result = asyncio.run(handler.handle("1001", "stop", context=types.SimpleNamespace()))
+            def log_message(self, *_args):
+                return
+
+        # 同一个端口上另有一个不是本插件线程启动的 HTTP 服务。
+        port = unused_tcp_port_factory()
+        PendoConfig.configure({"web_port": port})
+        external = HTTPServer(("127.0.0.1", port), _ExternalPage)
+        thread = threading.Thread(target=external.serve_forever, daemon=True)
+        thread.start()
+        try:
+            handler = web_module.WebHandler(db=None)
+            result = asyncio.run(handler.handle("1001", "stop", context=SimpleNamespace()))
+        finally:
+            external.shutdown()
+            external.server_close()
+            thread.join(timeout=5)
 
         assert result["status"] == "success"
         assert "外部服务" in result["message"]
 
-    def test_web_widget_token_sends_token_as_separate_private_message(self, monkeypatch):
-        import types
-
+    def test_web_widget_token_sends_token_as_separate_private_message(self, db, web_auth_state):
         from plugins.pendo.handlers import web as web_module
-
-        monkeypatch.setattr(
-            web_module,
-            "web_server",
-            types.SimpleNamespace(
-                get_url    = lambda: "http://127.0.0.1:8765",
-                is_running = lambda: True,
-                start      = lambda _db: True,
-                stop       = lambda: True,
-            ),
-        )
-
-        issuance = {}
-
-        def issue_widget(owner_id, *, expires_seconds, db):
-            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
-            return "widget-token"
-
-        monkeypatch.setattr(web_module, "generate_widget_token", issue_widget)
+        from plugins.pendo.web.auth import verify_token
 
         actions = []
 
@@ -199,31 +165,28 @@ class TestPendoWebHandler:
             return True
 
         context = SimpleNamespace(send_action=send_action)
-        handler = web_module.WebHandler(db=None)
+        handler = web_module.WebHandler(db=db)
 
         result = asyncio.run(handler.handle("1001", "widget-token", context=context))
 
         assert result["status"] == "success"
         assert "Widget Token 已单独私聊发送" in result["message"]
         assert "365 天" in result["message"]
-        assert "widget-token" not in result["message"]
-        assert issuance == {
-            "owner_id"       : "1001",
-            "expires_seconds": 365 * 24 * 60 * 60,
-            "db"             : None,
-        }
         assert len(actions) == 1
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
         assert "Pendo Web Widget Token" in token_text
-        assert "widget-token" in token_text
+        token = token_text.splitlines()[1]
+        assert token not in result["message"]
+        payload = verify_token(token, db=db)
+        assert payload["owner_id"] == "1001"
+        assert payload["exp"] - payload["iat"] == 365 * 24 * 60 * 60
 
-    def test_web_widget_revoke_revokes_only_callers_registered_tokens(self, monkeypatch):
+    def test_web_widget_revoke_revokes_only_callers_registered_tokens(self, db, web_auth_state):
         from plugins.pendo.handlers import web as web_module
+        from plugins.pendo.web.auth import AuthError, generate_widget_token, verify_token
 
-        calls = []
-        db    = SimpleNamespace(
-            revoke_widget_tokens=lambda owner_id: calls.append(owner_id) or 2,
-        )
+        caller_tokens = [generate_widget_token("1001", db=db) for _ in range(2)]
+        other_token = generate_widget_token("1002", db=db)
         handler = web_module.WebHandler(db=db)
 
         result = asyncio.run(handler.handle("1001", "widget-revoke", context=None))
@@ -232,18 +195,15 @@ class TestPendoWebHandler:
             "status" : "success",
             "message": "✅ 已吊销 2 个 Widget Token；请重新生成并录入 Keychain",
         }
-        assert calls == ["1001"]
+        for token in caller_tokens:
+            with pytest.raises(AuthError, match="revoked"):
+                verify_token(token, db=db)
+        assert verify_token(other_token, db=db)["owner_id"] == "1002"
 
 
 class TestSearchAndImport:
-    def test_search_handler_applies_date_field_for_range_filters(self, monkeypatch):
-
+    def test_search_handler_applies_date_field_for_range_filters(self):
         from plugins.pendo.handlers.search import SearchHandler
-
-        monkeypatch.setattr(
-            "plugins.pendo.utils.time_utils.now_in_timezone",
-            lambda _user_id, _db: datetime(2026, 5, 3, 16, 30, 0),
-        )
 
         calls = []
 

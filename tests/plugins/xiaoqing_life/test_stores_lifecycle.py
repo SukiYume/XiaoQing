@@ -12,7 +12,7 @@ from plugins.xiaoqing_life import lifecycle as lc
 from plugins.xiaoqing_life import threads as th
 from plugins.xiaoqing_life.config import LifeConfig
 from plugins.xiaoqing_life.stores import reserve_llm_call, roll_day
-from tests.plugins.xiaoqing_life.support import make_cfg, new_store
+from tests.helpers.xiaoqing_life_test_support import make_cfg, new_store
 
 DAY = lc.DAY
 NOW = 1_800_000_000.0

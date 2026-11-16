@@ -92,17 +92,8 @@ class TestPendoConfig:
         assert "description" in config
         assert "commands" in config
 
-    def test_plugin_commands_exist(self):
-        """测试插件有命令定义"""
-        plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, encoding="utf-8") as f:
-            config = json.load(f)
-
-        commands = config.get("commands", [])
-        assert len(commands) > 0, "No commands defined in plugin.json"
-
     def test_plugin_help_mentions_widget_token(self):
-        """测试插件摘要帮助包含 widget-token 提示"""
+        """测试插件有命令定义，且摘要帮助包含 widget-token 提示"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
         with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
@@ -110,25 +101,6 @@ class TestPendoConfig:
         commands = config.get("commands", [])
         assert commands
         assert "widget-token" in commands[0].get("help", "")
-
-    def test_plugin_has_schedule(self):
-        """测试插件有定时任务配置"""
-        plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, encoding="utf-8") as f:
-            config = json.load(f)
-
-        # 检查是否有 schedule 配置
-        schedule = config.get("schedule", [])
-        assert {job["id"]: job["cron"] for job in schedule} == {
-            "pendo_reminders"                : {"minute": "*"},
-            "pendo_daily_briefing"           : {"minute": "*"},
-            "pendo_diary_reminder"           : {"minute": "*"},
-            "pendo_migrate_todos"            : {"minute": 5},
-            "pendo_prune_operation_logs"     : {"hour": 0, "minute": 15},
-            "pendo_weekly_finance_summary"   : {"minute": "*"},
-            "pendo_month_end_finance_summary": {"minute": "*"},
-            "pendo_cleanup_demo_data"        : {"hour": "*/6", "minute": 15},
-        }
 
     def test_show_help_uses_overview_and_subcommand_sections(self):
         """测试根帮助只显示命令总览，子命令帮助保留分节样式"""

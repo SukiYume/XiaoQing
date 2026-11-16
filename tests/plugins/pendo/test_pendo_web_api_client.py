@@ -1,4 +1,4 @@
-"""Pendo Web 浏览器 API 客户端的会话、错误和下载契约回归。"""
+"""Pendo Web 浏览器 API 客户端的会话、错误和下载契约。"""
 
 from __future__ import annotations
 

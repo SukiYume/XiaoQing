@@ -1,4 +1,4 @@
-"""XiaoQing Chat 反思会话存储的损坏恢复与结构校验回归测试。"""
+"""XiaoQing Chat 反思会话存储的损坏恢复、隔离与结构校验。"""
 
 from __future__ import annotations
 

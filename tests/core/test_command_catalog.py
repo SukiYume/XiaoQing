@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
+from aiohttp import ClientSession
 
-from core.dispatcher import Dispatcher
+from core.dispatcher import AdjustableSemaphore, Dispatcher
 from core.interfaces import PluginPrincipal
 from core.models import PluginManifest
 from core.router import (
@@ -20,62 +20,12 @@ from core.router import (
     build_command_catalog_node,
     resolve_catalog_invocation,
 )
-from core.server import InboundServer
-from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.command_catalog_test_support import (
+    PLUGIN_MANIFESTS,
+    CatalogFixture,
+    load_production_catalog,
+)
 from tests.helpers.server_test_support import StandaloneInboundServer
-
-PROJECT_ROOT     = REPOSITORY_ROOT
-PLUGIN_MANIFESTS = tuple(sorted((PROJECT_ROOT / "plugins").glob("*/plugin.json")))
-
-
-@dataclass(frozen=True, slots=True)
-class _CatalogFixture:
-    manifests  : tuple[PluginManifest, ...]
-    roots      : tuple[CommandCatalogNode, ...]
-    router     : CommandRouter
-    invocations: list[CommandInvocation]
-
-
-def _load_catalog() -> _CatalogFixture:
-    """从生产 manifest 构建与 PluginManager 相同的不可变目录。"""
-
-    manifests = tuple(
-        PluginManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
-        for path in PLUGIN_MANIFESTS
-    )
-    roots: list[CommandCatalogNode]      = []
-    router                               = CommandRouter()
-    invocations: list[CommandInvocation] = []
-
-    async def catalog_handler(
-        _command: str,
-        _args: str,
-        _event: dict[str, Any],
-        context: Any,
-    ) -> list[dict[str, Any]]:
-        invocation = context.command_invocation
-        invocations.append(invocation)
-        return [{"type": "text", "data": {"text": invocation.node.code}}]
-
-    for manifest in manifests:
-        for command in manifest.commands:
-            root = build_command_catalog_node(
-                manifest.name,
-                command.model_dump(),
-                root=True,
-            )
-            roots.append(root)
-            router.register(
-                CommandSpec(
-                    plugin   = manifest.name,
-                    name     = command.name,
-                    triggers = command.triggers,
-                    handler  = catalog_handler,
-                    catalog  = root,
-                    priority = command.priority,
-                )
-            )
-    return _CatalogFixture(manifests, tuple(roots), router, invocations)
 
 
 def _resolve_example(
@@ -92,7 +42,7 @@ def _resolve_example(
 def test_every_plugin_exposes_a_complete_recursive_command_contract() -> None:
     """每个用户命令都必须有稳定码、用法以及正常/错误样例。"""
 
-    fixture = _load_catalog()
+    fixture = load_production_catalog()
     assert len(fixture.manifests) == len(PLUGIN_MANIFESTS)
     assert fixture.manifests
 
@@ -127,7 +77,7 @@ def test_every_plugin_exposes_a_complete_recursive_command_contract() -> None:
 def test_sensitive_command_surfaces_declare_their_boundaries() -> None:
     """个人数据入口由发布目录声明私聊边界；本机与服务器执行入口群里也能用，但只给 Bot 管理员。"""
 
-    fixture = _load_catalog()
+    fixture = load_production_catalog()
     for root in fixture.roots:
         if root.plugin == "pendo":
             assert root.contexts == ("private",), root.code
@@ -181,7 +131,7 @@ def test_help_plugin_and_stable_code_queries_cover_the_same_catalog() -> None:
 
     from plugins.bot_core.main import _catalog_page, _select_catalog_nodes
 
-    fixture = _load_catalog()
+    fixture = load_production_catalog()
     for manifest in fixture.manifests:
         expected = tuple(
             node for root in fixture.roots if root.plugin == manifest.name for node in root.walk()
@@ -218,14 +168,14 @@ def test_help_plugin_and_stable_code_queries_cover_the_same_catalog() -> None:
 def test_help_resolves_aliases_at_every_level(query: str, code: str) -> None:
     from plugins.bot_core.main import _find_exact_catalog_nodes
 
-    nodes = _find_exact_catalog_nodes(_load_catalog().roots, query)
+    nodes = _find_exact_catalog_nodes(load_production_catalog().roots, query)
     assert [node.code for node in nodes] == [code]
 
 
 def test_agent_exact_help_preserves_every_published_parameter_and_example() -> None:
     from plugins.xiaoqing_agent.tools import catalog_lines
 
-    fixture = _load_catalog()
+    fixture = load_production_catalog()
     context = SimpleNamespace(get_command_catalog=lambda: fixture.roots, principal=None)
     for root in fixture.roots:
         if root.plugin in {"xiaoqing_agent", "xiaoqing_chat"}:
@@ -253,7 +203,7 @@ def test_mobile_help_progressively_discloses_real_pendo_catalog() -> None:
         _format_plugin_menu,
     )
 
-    fixture     = _load_catalog()
+    fixture     = load_production_catalog()
     pendo_roots = _find_plugin_roots(fixture.roots, "pendo")
     plugin_page = _format_plugin_menu(pendo_roots, page=1)
     todo = _find_exact_catalog_nodes(fixture.roots, "pendo todo")[0]
@@ -324,19 +274,62 @@ class _AdminCheck:
         )
 
 
-class _Request:
-    """足够调用生产 ``InboundServer.post_event`` 的 HTTP 请求替身。"""
+_EVENT_HEADERS = {
+    "Authorization"           : "Bearer catalog-test-token",
+    "X-XiaoQing-Response-Mode": "actions",
+}
 
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.headers = {
-            "Authorization"           : "Bearer catalog-test-token",
-            "Content-Type"            : "application/json",
-            "X-XiaoQing-Response-Mode": "actions",
-        }
-        self._payload = payload
 
-    async def json(self) -> dict[str, Any]:
-        return self._payload
+async def _start_event_server(
+    fixture: CatalogFixture,
+    *,
+    port: int,
+    is_admin: bool = True,
+) -> StandaloneInboundServer:
+    """用生产分发器在空闲端口上真实启动入站服务器。"""
+
+    def build_context(
+        _plugin_name: str,
+        _user_id: int | None,
+        _group_id: int | None,
+        _request_id: str,
+        principal: PluginPrincipal,
+    ) -> Any:
+        return SimpleNamespace(principal=principal, command_invocation=None)
+
+    dispatcher = Dispatcher(
+        router          = fixture.router,
+        config_provider = _ConfigProvider(),
+        plugin_registry = _PluginRegistry(),
+        admin_check=_AdminCheck(is_admin=is_admin),
+        build_context = build_context,
+        semaphore     = AdjustableSemaphore(10),
+    )
+    server = StandaloneInboundServer(
+        host           = "127.0.0.1",
+        port           = port,
+        token          = "catalog-test-token",
+        handler        = dispatcher.handle_event,
+        enable_http    = True,
+        enable_ws      = False,
+        ws_max_workers = 1,
+        ws_queue_size  = 1,
+    )
+    await server.start()
+    return server
+
+
+async def _post_event(
+    session: ClientSession,
+    port: int,
+    payload: dict[str, Any],
+) -> tuple[int, str]:
+    async with session.post(
+        f"http://127.0.0.1:{port}/event",
+        json    = payload,
+        headers = _EVENT_HEADERS,
+    ) as response:
+        return response.status, await response.text()
 
 
 def _onebot_payload(
@@ -369,155 +362,105 @@ def _onebot_payload(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_every_normal_and_invalid_example_passes_through_event() -> None:
+async def test_every_normal_and_invalid_example_passes_through_event(
+    unused_tcp_port: int,
+) -> None:
     """所有目录样例必须经过生产 ``/event`` 校验、归一化和 Core 分发链。"""
 
-    fixture = _load_catalog()
-
-    def build_context(
-        _plugin_name: str,
-        _user_id: int | None,
-        _group_id: int | None,
-        _request_id: str,
-        principal: PluginPrincipal,
-    ) -> Any:
-        context = SimpleNamespace(principal=principal, command_invocation=None)
-        return context
-
-    dispatcher = Dispatcher(
-        router          = fixture.router,
-        config_provider = _ConfigProvider(),
-        plugin_registry = _PluginRegistry(),
-        admin_check     = _AdminCheck(),
-        build_context   = build_context,
-        semaphore       = None,
-    )
-    server = StandaloneInboundServer(
-        host           = "127.0.0.1",
-        port           = 8765,
-        token          = "catalog-test-token",
-        handler        = dispatcher.handle_event,
-        enable_http    = True,
-        enable_ws      = False,
-        ws_max_workers = 1,
-        ws_queue_size  = 1,
-    )
+    fixture = load_production_catalog()
+    server = await _start_event_server(fixture, port=unused_tcp_port)
 
     case_count = 0
     try:
-        for root in fixture.roots:
-            for declared_node in root.walk():
-                cases = (
-                    *(("normal", example) for example in declared_node.examples),
-                    *(("invalid", example) for example in declared_node.invalid_examples),
-                )
-                for kind, example in cases:
-                    _spec, expected = _resolve_example(fixture.router, example)
-                    before   = len(fixture.invocations)
-                    response = await server.post_event(
-                        _Request(_onebot_payload(example, expected.node.contexts))
+        async with ClientSession() as session:
+            for root in fixture.roots:
+                for declared_node in root.walk():
+                    cases = (
+                        *(("normal", example) for example in declared_node.examples),
+                        *(("invalid", example) for example in declared_node.invalid_examples),
                     )
+                    for kind, example in cases:
+                        _spec, expected = _resolve_example(fixture.router, example)
+                        before = len(fixture.invocations)
+                        status, text = await _post_event(
+                            session,
+                            unused_tcp_port,
+                            _onebot_payload(example, expected.node.contexts),
+                        )
 
-                    assert response.status == 200, (
-                        f"/event 拒绝 {declared_node.code} 的 {kind} 样例: {example}; "
-                        f"body={response.text}"
-                    )
-                    assert len(fixture.invocations) == before + 1, (
-                        f"{declared_node.code} 的 {kind} 样例没有进入插件命令处理器: {example}"
-                    )
-                    actual = fixture.invocations[-1]
-                    assert actual.root.code == root.code
-                    assert actual.node.code in response.text
-                    if kind == "normal":
-                        assert declared_node.code in {node.code for node in actual.chain}
-                    case_count += 1
+                        assert status == 200, (
+                            f"/event 拒绝 {declared_node.code} 的 {kind} 样例: {example}; "
+                            f"body={text}"
+                        )
+                        assert len(fixture.invocations) == before + 1, (
+                            f"{declared_node.code} 的 {kind} 样例没有进入插件命令处理器: {example}"
+                        )
+                        actual = fixture.invocations[-1]
+                        assert actual.root.code == root.code
+                        assert actual.node.code in text
+                        if kind == "normal":
+                            assert declared_node.code in {node.code for node in actual.chain}
+                        case_count += 1
     finally:
-        await server._event_dispatcher.stop()
+        await server.stop()
 
     assert case_count >= sum(len(root.walk()) * 2 for root in fixture.roots)
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() -> None:
+async def test_catalog_permissions_and_contexts_fail_closed_before_handlers(
+    unused_tcp_port_factory,
+) -> None:
     """目录声明的权限和场景必须由 Core 统一拦截，不能依赖各插件自觉检查。"""
 
-    fixture = _load_catalog()
-
-    def build_context(
-        _plugin_name: str,
-        _user_id: int | None,
-        _group_id: int | None,
-        _request_id: str,
-        principal: PluginPrincipal,
-    ) -> Any:
-        return SimpleNamespace(principal=principal, command_invocation=None)
-
-    def make_server(*, is_admin: bool) -> InboundServer:
-        dispatcher = Dispatcher(
-            router          = fixture.router,
-            config_provider = _ConfigProvider(),
-            plugin_registry = _PluginRegistry(),
-            admin_check=_AdminCheck(is_admin=is_admin),
-            build_context = build_context,
-            semaphore     = None,
-        )
-        return StandaloneInboundServer(
-            host           = "127.0.0.1",
-            port           = 8765,
-            token          = "catalog-test-token",
-            handler        = dispatcher.handle_event,
-            enable_http    = True,
-            enable_ws      = False,
-            ws_max_workers = 1,
-            ws_queue_size  = 1,
-        )
-
-    admin_server = make_server(is_admin=True)
-    user_server = make_server(is_admin=False)
+    fixture    = load_production_catalog()
+    admin_port = unused_tcp_port_factory()
+    user_port  = unused_tcp_port_factory()
+    admin_server = await _start_event_server(fixture, port=admin_port, is_admin=True)
+    user_server = None
     try:
-        for root in fixture.roots:
-            for node in root.walk():
-                example = node.examples[0]
-                if node.permission != "public":
-                    before   = len(fixture.invocations)
-                    scope    = "private" if "private" in node.contexts else "group"
-                    response = await user_server.post_event(
-                        _Request(
+        user_server = await _start_event_server(fixture, port=user_port, is_admin=False)
+        async with ClientSession() as session:
+            for root in fixture.roots:
+                for node in root.walk():
+                    example = node.examples[0]
+                    if node.permission != "public":
+                        before = len(fixture.invocations)
+                        scope  = "private" if "private" in node.contexts else "group"
+                        status, text = await _post_event(
+                            session,
+                            user_port,
                             _onebot_payload(
                                 example,
                                 node.contexts,
                                 scope      = scope,
                                 group_role = "member",
-                            )
+                            ),
                         )
-                    )
-                    body = json.dumps(json.loads(response.text), ensure_ascii=False)
-                    expected = "管理员" if node.permission == "group_admin" else "权限不足"
-                    assert response.status == 200
-                    assert expected in body, f"{node.code} 未按目录权限拒绝: {body}"
-                    assert len(fixture.invocations) == before
+                        body = json.dumps(json.loads(text), ensure_ascii=False)
+                        expected = "管理员" if node.permission == "group_admin" else "权限不足"
+                        assert status == 200
+                        assert expected in body, f"{node.code} 未按目录权限拒绝: {body}"
+                        assert len(fixture.invocations) == before
 
-                for denied_scope in {"private", "group"} - set(node.contexts):
-                    before   = len(fixture.invocations)
-                    response = await admin_server.post_event(
-                        _Request(
-                            _onebot_payload(
-                                example,
-                                node.contexts,
-                                scope=denied_scope,
-                            )
+                    for denied_scope in {"private", "group"} - set(node.contexts):
+                        before = len(fixture.invocations)
+                        status, text = await _post_event(
+                            session,
+                            admin_port,
+                            _onebot_payload(example, node.contexts, scope=denied_scope),
                         )
-                    )
-                    body = json.dumps(json.loads(response.text), ensure_ascii=False)
-                    assert response.status == 200
-                    assert "当前会话类型不支持此命令" in body, (
-                        f"{node.code} 未按目录场景拒绝: {body}"
-                    )
-                    assert len(fixture.invocations) == before
+                        body = json.dumps(json.loads(text), ensure_ascii=False)
+                        assert status == 200
+                        assert "当前会话类型不支持此命令" in body, (
+                            f"{node.code} 未按目录场景拒绝: {body}"
+                        )
+                        assert len(fixture.invocations) == before
     finally:
-        await admin_server._event_dispatcher.stop()
-        await user_server._event_dispatcher.stop()
+        await admin_server.stop()
+        if user_server is not None:
+            await user_server.stop()
 
 
 # ──────────────────── 读写性质声明 ────────────────────
@@ -552,7 +495,7 @@ def test_effect_reaches_the_published_catalog():
     "node",
     [
         {"effect": "delete"},
-        # 只靠命令声明使用插件：不再接受专用工具的结构化参数声明。
+        # 命令声明里没有定义的字段（例如专用工具的结构化参数）会被拒绝。
         {"structured_input": {"name": "demo_record", "parameters": {"type": "object"}}},
     ],
 )

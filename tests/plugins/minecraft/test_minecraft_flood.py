@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -55,9 +56,15 @@ class _StaticMonitor:
         self.commit_result                      = True
         self.poll_error: BaseException | None   = None
         self.commit_error: BaseException | None = None
+        # 轮询在工作线程里阻塞：进入时置位 polling，等 poll_gate 放行。
+        self.poll_gate: threading.Event | None = None
+        self.polling                           = threading.Event()
 
     def check_updates(self) -> LogBatch:
         self.calls += 1
+        if self.poll_gate is not None:
+            self.polling.set()
+            self.poll_gate.wait(timeout=10)
         if self.poll_error is not None:
             raise self.poll_error
         if self.index >= len(self.batches):
@@ -430,7 +437,6 @@ async def test_rejected_cursor_commit_is_contained(
 @pytest.mark.asyncio
 async def test_send_and_poll_cancellation_propagate(
     reset_minecraft_runtime: ConnectionManager,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monitor = _StaticMonitor([_batch([_event(1)])])
     await reset_minecraft_runtime.replace_connection(_connection(1, monitor))
@@ -441,14 +447,18 @@ async def test_send_and_poll_cancellation_propagate(
     with pytest.raises(asyncio.CancelledError):
         await mc_main.scheduled(cast(Any, SimpleNamespace(send_action=cancel_send)))
 
-    async def cancel_poll(*_args: Any, **_kwargs: Any) -> Any:
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(mc_main, "run_sync", cancel_poll)
+    # 轮询阻塞在工作线程里时取消整个定时任务：取消向外传播，不会继续投递。
+    gate              = threading.Event()
+    monitor.poll_gate = gate
+    context = SimpleNamespace(send_action=AsyncMock(return_value=True))
+    task = asyncio.create_task(mc_main.scheduled(cast(Any, context)))
+    assert await asyncio.to_thread(monitor.polling.wait, 10)
+    task.cancel()
+    gate.set()
     with pytest.raises(asyncio.CancelledError):
-        await mc_main.scheduled(
-            cast(Any, SimpleNamespace(send_action=AsyncMock(return_value=True)))
-        )
+        await task
+    context.send_action.assert_not_awaited()
+    assert not mc_main._schedule_lock.locked()  # noqa: SLF001
 
 
 def test_token_bucket_refill_take_and_refund_are_bounded() -> None:

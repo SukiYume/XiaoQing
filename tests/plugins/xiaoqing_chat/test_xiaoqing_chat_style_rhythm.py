@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -19,12 +19,13 @@ from plugins.xiaoqing_chat.llm.prompt_builder import (
 from plugins.xiaoqing_chat.media.marker_resolver import COMMON_QQ_FACE_LABELS
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-from tests.plugins.xiaoqing_chat.memory_support import (
+from tests.helpers.xiaoqing_chat_memory_test_support import (
     MemoryHarness,
     chat_context,
     put_history,
     self_texts,
 )
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel
 
 NOW = 1_800_000_000.0
 
@@ -138,22 +139,19 @@ async def test_a_told_story_is_recorded_and_cannot_be_resolved(tmp_path) -> None
             "g1",
             [_user("说件你在宿舍干过的笨事", ts=now - 30), _bot(reply, ts=now)],
         )
-        with patch.object(
-            life_extract,
-            "chat_completions",
-            AsyncMock(return_value=json.dumps(output, ensure_ascii=False)),
-        ):
-            assert await life_extract.extract_life_records(
-                context  = chat_context(memory, tmp_path, "g1"),
-                state    = state,
-                life_cfg = XiaoQingChatConfig().life,
-                secrets  = {"_ai": object()},
-                llm      = XiaoQingChatConfig().llm_config("reasoning"),
-                chat_id  = "g1",
-                bot_name = "小青",
-                history  = history,
-                source   = "chat",
-            )
+        model = ScriptedChatModel(reasoning=json.dumps(output, ensure_ascii=False))
+        assert await life_extract.extract_life_records(
+            context  = chat_context(memory, tmp_path, "g1"),
+            state    = state,
+            life_cfg = XiaoQingChatConfig().life,
+            secrets  = {"_ai": model},
+            llm      = XiaoQingChatConfig().llm_config("reasoning"),
+            chat_id  = "g1",
+            bot_name = "小青",
+            history  = history,
+            source   = "chat",
+        )
+        assert len(model.calls_of("reasoning")) == 1 and not model.unscripted
 
     await run({"self": [told]}, "有次我找充电线翻了半天，结果压在自己胳膊底下")
     assert self_texts(memory, "g2", kinds=("story",)) == [told["text"]], "讲过的往事别的群也记得"
@@ -222,42 +220,38 @@ def test_day_plan_lists_todays_routine_in_time_order() -> None:
     assert asks_about_routine("你明天有课吗") and not asks_about_routine("今天吃了啥")
 
 
-# ---------------------------------------------------------------- 接她的话 / 放宽后的审查
+# ---------------------------------------------------------------- 接她的话 / 本地审查
 
 
 @pytest.mark.asyncio
 async def test_message_right_after_her_reply_skips_the_dice() -> None:
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock, Mock
-
     from plugins.xiaoqing_chat.frequency_control import decide_reply
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntime, get_state
 
-    runtime                                          = MagicMock()
-    runtime.cfg.reply_probability_base               = 0.1
-    runtime.cfg.min_reply_interval_seconds           = 0.0
-    runtime.cfg.max_replies_per_minute               = 100
-    runtime.cfg.heartflow.enable_heartflow           = False
-    runtime.cfg.goal.enable_goal                     = False
-    runtime.cfg.active_topic_min_reply_interval      = 0.0
-    state                                            = MagicMock()
-    state.get_last_reply_ts.return_value             = 0.0
-    state.get_reply_timestamps.return_value          = []
-    state.get_continuous_cooldown_until.return_value = 0.0
-    state.goal_store.get_async = AsyncMock(return_value=None)
-    state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
-    state.set_reply_gate_decision = Mock()
+    runtime = ChatRuntime(
+        XiaoQingChatConfig(
+            reply_probability_base          = 0.1,
+            min_reply_interval_seconds      = 0.0,
+            max_replies_per_minute          = 100,
+            heartflow                       = {"enable_heartflow": False},
+            goal                            = {"enable_goal": False},
+            active_topic_min_reply_interval = 0.0,
+        ),
+        [],
+    )
+    state = get_state()
 
     with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.99):
         assert not await decide_reply(runtime, state, "g1", "以后就叫你小肥青了", False, False)
         assert await decide_reply(
             runtime, state, "g1", "以后就叫你小肥青了", False, False, follows_own_reply=True
         )
-    assert state.set_reply_gate_decision.call_args.args[1].reason == "follows_own_reply"
+    assert state.get_reply_gate_decision("g1").reason == "follows_own_reply"
     # 接她话的那句不算每分钟上限（她刚问完，对方答了，不能不理）；连续冷却照旧。
-    runtime.cfg.max_replies_per_minute      = 1
-    state.get_reply_timestamps.return_value = [__import__("time").time()]
+    runtime.cfg.max_replies_per_minute = 1
+    state.set_reply_timestamps("g1", [time.time()])
     assert await decide_reply(runtime, state, "g1", "番", False, False, follows_own_reply=True)
-    state.get_continuous_cooldown_until.return_value = __import__("time").time() + 30
+    state.set_continuous_cooldown_until("g1", time.time() + 30)
     assert not await decide_reply(runtime, state, "g1", "番", False, False, follows_own_reply=True)
 
 
@@ -342,7 +336,7 @@ def test_explaining_why_she_speaks_is_rewritten() -> None:
     assert narrated_motive_check(reply="才六点就深夜放毒啦", current_text="深夜放毒") is None
 
 
-def test_planner_thought_is_not_posed_as_a_question_and_forced_turns_carry_none() -> None:
+def test_planner_thought_reaches_the_prompt_only_when_there_is_one() -> None:
     from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
 
     def prompt(reasoning: str) -> str:
@@ -363,7 +357,6 @@ def test_planner_thought_is_not_posed_as_a_question_and_forced_turns_carry_none(
 
     with_thought = prompt("可以接时间和价格的梗")
     assert "你刚才心里的盘算" in with_thought and "可以接时间和价格的梗" in with_thought
-    assert "你为什么要回复这条消息" not in with_thought
     assert "心里的盘算" not in prompt("")
 
 

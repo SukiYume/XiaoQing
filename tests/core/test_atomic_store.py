@@ -8,6 +8,7 @@ import pytest
 
 from core import atomic_store
 from core.atomic_store import AtomicJsonStore
+from tests.helpers.filesystem_faults import fail_replace_onto
 
 
 def test_atomic_json_store_recovers_last_valid_backup(tmp_path: Path) -> None:
@@ -46,7 +47,7 @@ def test_atomic_json_store_concurrent_writes_remain_complete(tmp_path: Path) -> 
         list(pool.map(write_value, range(200)))
 
     assert store.read({})["count"] in range(200)
-    # 锁池是实现细节；回归测试直接检查私有状态，不为测试扩张生产 API。
+    # 锁池是实现细节；这里直接检查私有状态来确认锁已回收，不为测试扩张生产 API。
     with atomic_store._POOL_GUARD:
         assert atomic_store._PATH_LOCKS == {}
 
@@ -66,14 +67,7 @@ def test_atomic_write_failure_preserves_previous_complete_file(
 ) -> None:
     path = tmp_path / "state.bin"
     atomic_store.atomic_write_bytes(path, b"old")
-    real_replace = atomic_store.os.replace
-
-    def fail_replace(source, destination):
-        if Path(destination) == path:
-            raise OSError("injected replace failure")
-        return real_replace(source, destination)
-
-    monkeypatch.setattr(atomic_store.os, "replace", fail_replace)
+    fail_replace_onto(monkeypatch, "state.bin", "injected replace failure")
     with pytest.raises(OSError, match="injected"):
         atomic_store.atomic_write_bytes(path, b"new")
 

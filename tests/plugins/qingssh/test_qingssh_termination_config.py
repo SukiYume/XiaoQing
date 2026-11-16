@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from tests.helpers.filesystem_faults import fail_replace_onto
 from tests.helpers.qingssh_test_support import (
+    FakeChannel,
+    FakeClient,
     SessionKeys,
-    _FakeChannel,
-    _FakeClient,
-    _SessionStub,
+    SessionStub,
+    StreamChannel,
+    StreamClient,
     qingssh_main,
     ssh_manager_module,
     ssh_session_handlers,
@@ -51,7 +56,7 @@ async def test_remote_stop_uses_control_channel_and_process_group(tmp_path):
     manager.connections[key]     = cast(Any, client)
     manager.active_channels[key] = {"channel": channel, "remote_pid": 321}
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.remote_confirmed is True
     assert termination.local_cleaned is True
@@ -61,34 +66,39 @@ async def test_remote_stop_uses_control_channel_and_process_group(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_closes_connections_off_event_loop(monkeypatch, tmp_path):
-    manager          = ssh_manager_module.SSHManager(tmp_path)
-    observed_threads = []
+async def test_shutdown_closes_connections_off_event_loop(tmp_path):
+    class Client:
+        def __init__(self):
+            self.close_threads = []
 
-    def close_all():
-        observed_threads.append(threading.current_thread())
+        def close(self):
+            self.close_threads.append(threading.current_thread())
 
-    monkeypatch.setattr(manager, "close_all", close_all)
+    manager                        = ssh_manager_module.SSHManager(tmp_path)
+    client                         = Client()
+    manager.connections["1:2:srv"] = cast(Any, client)
+
     await manager.shutdown()
 
-    assert len(observed_threads) == 1
-    assert observed_threads[0] is not threading.current_thread()
+    assert len(client.close_threads) == 1
+    assert client.close_threads[0] is not threading.current_thread()
+    assert manager.connections == {}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("active", ["legacy", "missing_pid"])
+@pytest.mark.parametrize("active", ["bare_channel", "missing_pid"])
 async def test_remote_stop_without_pid_always_closes_and_unregisters(
     tmp_path,
     active,
 ):
     manager                      = ssh_manager_module.SSHManager(tmp_path)
     key                          = manager.build_connection_key("1", "2", "srv")
-    channel                      = _FakeChannel()
+    channel                      = FakeChannel()
     manager.active_channels[key] = (
-        channel if active == "legacy" else {"channel": channel, "remote_pid": None}
+        channel if active == "bare_channel" else {"channel": channel, "remote_pid": None}
     )
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.found is True
     assert termination.local_cleaned is True
@@ -102,10 +112,10 @@ async def test_remote_stop_without_pid_always_closes_and_unregisters(
 async def test_remote_stop_without_client_reports_unknown_but_cleans_local_state(tmp_path):
     manager                      = ssh_manager_module.SSHManager(tmp_path)
     key                          = manager.build_connection_key("1", "2", "srv")
-    channel                      = _FakeChannel()
+    channel                      = FakeChannel()
     manager.active_channels[key] = {"channel": channel, "remote_pid": 321}
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.local_cleaned is True
     assert termination.remote_unknown is True
@@ -127,7 +137,7 @@ async def test_channel_close_failure_is_reported_but_registry_is_still_cleared(t
         "remote_pid": None,
     }
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.local_cleaned is False
     assert termination.remote_unknown is True
@@ -146,12 +156,12 @@ async def test_remote_stop_signal_failures_still_close_and_unregister(tmp_path):
 
     manager                      = ssh_manager_module.SSHManager(tmp_path)
     key                          = manager.build_connection_key("1", "2", "srv")
-    channel                      = _FakeChannel()
+    channel                      = FakeChannel()
     client                       = Client()
     manager.connections[key]     = cast(Any, client)
     manager.active_channels[key] = {"channel": channel, "remote_pid": 321}
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.remote_unknown is True
     assert termination.signal_attempted is True
@@ -165,7 +175,7 @@ async def test_remote_stop_signal_failures_still_close_and_unregister(tmp_path):
 
 @pytest.mark.asyncio
 async def test_old_termination_cannot_remove_replacement_command_record(tmp_path):
-    class ReadyChannel(_FakeChannel):
+    class ReadyChannel(FakeChannel):
         active = True
 
         def exit_status_ready(self):
@@ -186,7 +196,7 @@ async def test_old_termination_cannot_remove_replacement_command_record(tmp_path
     manager.connections[key]     = cast(Any, Client())
     manager.active_channels[key] = old_record
 
-    termination = await manager._terminate_active_command(key)
+    termination = await manager.stop_command("1", "2", "srv")
 
     assert termination.remote_confirmed is True
     assert old_channel.closed is True
@@ -198,7 +208,7 @@ async def test_old_termination_cannot_remove_replacement_command_record(tmp_path
 async def test_stop_command_is_idempotent_after_unknown_remote_cleanup(tmp_path):
     manager                      = ssh_manager_module.SSHManager(tmp_path)
     key                          = manager.build_connection_key("1", "2", "srv")
-    channel                      = _FakeChannel()
+    channel                      = FakeChannel()
     manager.active_channels[key] = {"channel": channel, "remote_pid": None}
 
     first  = await manager.stop_command("1", "2", "srv")
@@ -271,25 +281,18 @@ async def test_concurrent_termination_keeps_one_lock_until_all_waiters_finish(
 
 
 @pytest.mark.asyncio
-async def test_stream_task_cancellation_before_pid_marker_leaves_no_active_channel(
-    monkeypatch,
-    tmp_path,
-):
-    manager    = ssh_manager_module.SSHManager(tmp_path)
-    key        = manager.build_connection_key("1", "2", "srv")
-    channel    = _FakeChannel()
-    registered = asyncio.Event()
-
-    async def fake_impl(*_args, **_kwargs):
-        manager.active_channels[key] = {"channel": channel, "remote_pid": None}
-        registered.set()
-        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
-
-    monkeypatch.setattr(manager, "_execute_command_stream_impl", fake_impl)
-    task = asyncio.create_task(
+async def test_stream_task_cancellation_before_pid_marker_leaves_no_active_channel(tmp_path):
+    manager                  = ssh_manager_module.SSHManager(tmp_path)
+    key                      = manager.build_connection_key("1", "2", "srv")
+    channel                  = StreamChannel()
+    manager.connections[key] = cast(Any, StreamClient(channel))
+    task                     = asyncio.create_task(
         manager.execute_command_stream("1", "2", "srv", "sleep 1", AsyncMock())
     )
-    await asyncio.wait_for(registered.wait(), timeout=10)
+    async with asyncio.timeout(10):
+        while key not in manager.active_channels:
+            await asyncio.sleep(0.01)
+    assert manager.active_channels[key]["remote_pid"] is None
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -306,8 +309,8 @@ async def test_remove_server_disconnects_every_actor_and_deletes_secret(tmp_path
     context.delete_secret = lambda ref: deleted.append(ref) or True
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["srv"]          = {"password_ref": "passwords.ref"}
-    first                           = _FakeClient()
-    second                          = _FakeClient()
+    first                           = FakeClient()
+    second                          = FakeClient()
     manager.connections["1:10:srv"] = first
     manager.connections["2:20:srv"] = second
 
@@ -345,11 +348,7 @@ async def test_add_server_rolls_back_secret_when_config_write_fails(monkeypatch,
 
     context.delete_secret = delete_secret
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
-    monkeypatch.setattr(
-        ssh_manager_module,
-        "atomic_write_text",
-        Mock(side_effect=OSError("disk full")),
-    )
+    fail_replace_onto(monkeypatch, "servers.json", "disk full")
 
     with pytest.raises(OSError, match="disk full"):
         await manager.add_server("srv", "example.com", password="top-secret")
@@ -372,13 +371,9 @@ async def test_remove_server_preserves_state_when_config_write_fails(monkeypatch
         "port"        : 22,
         "password_ref": "passwords.ref",
     }
-    client                         = _FakeClient()
+    client                         = FakeClient()
     manager.connections["1:2:srv"] = client
-    monkeypatch.setattr(
-        ssh_manager_module,
-        "atomic_write_text",
-        Mock(side_effect=OSError("disk full")),
-    )
+    fail_replace_onto(monkeypatch, "servers.json", "disk full")
 
     with pytest.raises(OSError, match="disk full"):
         await manager.remove_server("srv")
@@ -414,11 +409,7 @@ async def test_legacy_password_migration_rolls_back_secret_on_save_failure(
     context.set_secret     = lambda key, value: stored.__setitem__(key, value)
     context.delete_secret  = lambda key: stored.pop(key, None) is not None
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
-    monkeypatch.setattr(
-        ssh_manager_module,
-        "atomic_write_text",
-        Mock(side_effect=OSError("disk full")),
-    )
+    fail_replace_onto(monkeypatch, "servers.json", "disk full")
 
     await manager._load_servers()
 
@@ -483,27 +474,33 @@ async def test_download_file_removes_partial_temporary_file_on_failure(tmp_path)
 
         def get(self, _remote, local):
             Path(local).write_bytes(b"part")
-            raise OSError(r"CR_P02_DOWNLOAD_SECRET C:\private\download.part")
+            raise OSError(r"DOWNLOAD_PRIVATE_CANARY C:\private\download.part")
 
         def close(self):
             self.closed = True
 
+    class Transport:
+        def is_active(self):
+            return True
+
     class Client:
         def __init__(self, sftp):
             self.sftp = sftp
+
+        def get_transport(self):
+            return Transport()
 
         def open_sftp(self):
             return self.sftp
 
     context            = MagicMock()
     context.request_id = "req-qingssh-download"
-    context.secrets    = {"private_exception_canary": "CR_P02_DOWNLOAD_SECRET"}
+    context.secrets    = {"private_exception_canary": "DOWNLOAD_PRIVATE_CANARY"}
     manager = ssh_manager_module.SSHManager(tmp_path / "data", context=context)
     sftp                     = SFTP()
     key                      = manager.build_connection_key("1", "2", "srv")
     manager.connections[key] = cast(Any, Client(sftp))
-    manager.is_connected = Mock(return_value=True)
-    target = tmp_path / "image.png"
+    target                   = tmp_path / "image.png"
 
     success, message = await manager.download_file(
         "1",
@@ -516,7 +513,7 @@ async def test_download_file_removes_partial_temporary_file_on_failure(tmp_path)
     assert success is False
     assert "XQ-PLUGIN-UNEXPECTED" in message
     assert "req-qingssh-download" in message
-    assert "CR_P02_DOWNLOAD_SECRET" not in message
+    assert "DOWNLOAD_PRIVATE_CANARY" not in message
     assert "download.part" not in message
     assert target.exists() is False
     assert list(tmp_path.glob("*.part")) == []
@@ -527,16 +524,18 @@ async def test_download_file_removes_partial_temporary_file_on_failure(tmp_path)
 async def test_cancelled_config_write_publishes_the_committed_snapshot(monkeypatch, tmp_path):
     """原子写入已经开始后，取消只能延迟交付，不能制造磁盘与内存分叉。"""
 
-    started           = threading.Event()
-    release           = threading.Event()
-    real_atomic_write = ssh_manager_module.atomic_write_text
+    started      = threading.Event()
+    release      = threading.Event()
+    real_replace = os.replace
 
-    def delayed_write(path, payload):
-        started.set()
-        assert release.wait(timeout=2)
-        real_atomic_write(path, payload)
+    def delayed_replace(source, destination):
+        # 临时文件已写好、尚未替换到目标：写入正在进行中。
+        if Path(destination).name == "servers.json":
+            started.set()
+            assert release.wait(timeout=2)
+        real_replace(source, destination)
 
-    monkeypatch.setattr(ssh_manager_module, "atomic_write_text", delayed_write)
+    monkeypatch.setattr(os, "replace", delayed_replace)
     manager = ssh_manager_module.SSHManager(tmp_path)
     task = asyncio.create_task(manager.add_server("srv", "example.com", auth_type="agent"))
     assert await asyncio.to_thread(started.wait, 2)
@@ -552,17 +551,14 @@ async def test_cancelled_config_write_publishes_the_committed_snapshot(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_execute_command_reports_nonzero_exit_as_failure(monkeypatch, tmp_path):
+async def test_execute_command_reports_nonzero_exit_as_failure(tmp_path):
     """完整输出接口不能把远端非零退出码误报成成功。"""
 
     manager = ssh_manager_module.SSHManager(tmp_path)
-    monkeypatch.setattr(manager, "is_connected", Mock(return_value=True))
-
-    async def failed_command(*_args, **kwargs):
-        await kwargs.get("output_callback", _args[4])("remote error")
-        return 7
-
-    monkeypatch.setattr(manager, "execute_command_stream", failed_command)
+    channel = StreamChannel((b"__XQ_PID__7\nremote error",), exit_status=7)
+    manager.connections[manager.build_connection_key("1", "2", "srv")] = cast(
+        Any, StreamClient(channel)
+    )
 
     success, output = await manager.execute_command("1", "2", "srv", "false")
 
@@ -576,7 +572,7 @@ async def test_guided_add_rejects_unsafe_username_without_advancing():
 
     context = Mock(current_user_id=10001, current_group_id=None)
     context.end_session = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.STEP         : "username",
             SessionKeys.SERVER_CONFIG: {
@@ -600,20 +596,21 @@ async def test_guided_add_rejects_unsafe_username_without_advancing():
 
 
 @pytest.mark.asyncio
-async def test_unknown_session_state_ends_without_initializing_manager(monkeypatch):
+async def test_unknown_session_state_ends_without_initializing_manager(tmp_path):
     """损坏状态应直接关闭，不能为了报错反向创建 SSH 管理器。"""
 
-    context             = Mock()
-    context.end_session = AsyncMock()
-    manager_factory     = AsyncMock()
-    monkeypatch.setattr(ssh_session_handlers, "get_manager", manager_factory)
-    session = _SessionStub({SessionKeys.STATE: "corrupt"})
+    context = SimpleNamespace(
+        state       = {},
+        data_dir    = tmp_path,
+        end_session = AsyncMock(),
+    )
+    session = SessionStub({SessionKeys.STATE: "corrupt"})
 
     result = await ssh_session_handlers.handle_session("pwd", {}, context, session)
 
     assert "状态无效" in result[0]["data"]["text"]
     context.end_session.assert_awaited_once_with()
-    manager_factory.assert_not_awaited()
+    assert "ssh_manager" not in context.state
 
 
 @pytest.mark.asyncio
@@ -633,27 +630,31 @@ async def test_status_omits_group_label_for_private_connections():
 
 @pytest.mark.asyncio
 async def test_import_all_uses_one_atomic_snapshot(monkeypatch, tmp_path):
-    manager = ssh_manager_module.SSHManager(tmp_path)
-    monkeypatch.setattr(manager, "get_ssh_config_hosts", lambda: ["first", "second"])
-    monkeypatch.setattr(
-        manager,
-        "_build_imported_server",
-        lambda host: (
-            {"hostname": f"{host}.example", "port": 22},
-            {
-                "host"     : f"{host}.example",
-                "port"     : 22,
-                "username" : "root",
-                "auth_type": "agent",
-            },
-        ),
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "config").write_text(
+        "Host first\n  HostName first.example\n  User root\n"
+        "Host second\n  HostName second.example\n  User root\n",
+        encoding="utf-8",
     )
-    save = AsyncMock(return_value=False)
-    monkeypatch.setattr(manager, "_save_server_snapshot", save)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    real_replace  = os.replace
+    config_writes = []
+
+    def counting_replace(source, destination):
+        if Path(destination).name == "servers.json":
+            config_writes.append(Path(destination))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", counting_replace)
+    manager = ssh_manager_module.SSHManager(tmp_path / "data")
+    await manager.reload_ssh_config()
 
     count, imported = await manager.import_all_from_ssh_config()
 
     assert count == 2
     assert imported == ["first", "second"]
-    save.assert_awaited_once()
     assert set(manager.servers) == {"first", "second"}
+    assert len(config_writes) == 1
+    assert json.loads(config_writes[0].read_text(encoding="utf-8")) == manager.servers

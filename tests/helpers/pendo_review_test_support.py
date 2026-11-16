@@ -1,21 +1,12 @@
-"""Pendo 深层回归测试共享导入和私有 helper。"""
+"""Pendo 处理器与数据库测试的共享导入和辅助：临时数据库、会话上下文、处理器替身、批量日程数据。"""
 
-import asyncio
-import json
 import logging
-import shutil
 import sqlite3
-import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
-
-import pytest
 
 from core.session import SessionManager
 from plugins.pendo.handlers.event import EventHandler
@@ -31,7 +22,7 @@ from tests.helpers.paths import REPOSITORY_ROOT
 ROOT = REPOSITORY_ROOT
 
 
-class _PendoSessionTestContext:
+class PendoSessionTestContext:
     plugin_name      = "pendo"
     current_user_id  = 1001
     current_group_id = None
@@ -76,20 +67,20 @@ class _SessionAiParser:
         return {"start_time": "2030-01-01T10:00:00"}
 
 
-def _pendo_session_services() -> dict[str, object]:
+def pendo_session_services() -> dict[str, object]:
     return {
         "event_handler": _SessionEventHandler(),
         "ai_parser"    : _SessionAiParser(),
     }
 
 
-def _make_temp_db(prefix: str) -> tuple[Path, Database]:
+def make_temp_db(prefix: str) -> tuple[Path, Database]:
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"{prefix}_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir, Database(str(temp_dir / "pendo.db"))
 
 
-def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> list[str]:
+def seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> list[str]:
     collection_specs = (
         ("aaaabbbb", "项目甲"),
         ("ccccdddd", "项目乙"),
@@ -139,8 +130,6 @@ def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> 
 
 __all__ = (
     "AIParser",
-    "Any",
-    "AsyncMock",
     "Database",
     "DbOpsMixin",
     "EventHandler",
@@ -150,24 +139,18 @@ __all__ = (
     "ROOT",
     "ReminderService",
     "SessionManager",
-    "SimpleNamespace",
     "TaskHandler",
     "TaskStatus",
     "ThreadPoolExecutor",
     "ZoneInfo",
-    "_PendoSessionTestContext",
+    "PendoSessionTestContext",
     "_SessionAiParser",
     "_SessionEventHandler",
-    "_make_temp_db",
-    "_pendo_session_services",
-    "_seed_event_batch_fixture",
-    "asyncio",
+    "make_temp_db",
+    "pendo_session_services",
+    "seed_event_batch_fixture",
     "datetime",
-    "json",
     "logging",
-    "pytest",
-    "shutil",
     "sqlite3",
-    "threading",
     "uuid",
 )

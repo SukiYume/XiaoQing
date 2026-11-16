@@ -8,7 +8,7 @@ from typing import Any
 
 from plugins.xiaoqing_life import turn_context as tc
 from plugins.xiaoqing_life.stores import LifeStore
-from tests.plugins.xiaoqing_life.support import at, make_cfg, new_store
+from tests.helpers.xiaoqing_life_test_support import at, make_cfg, new_store
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()
@@ -277,7 +277,7 @@ def _payload(text: str, **kw: Any) -> dict[str, Any]:
 
 
 def test_a_learning_already_said_in_the_thread_line_is_not_repeated(tmp_path: Path) -> None:
-    """真实回放：同一句改正后的说法在给聊天的生活块里出现了三次（小课题行、自己查明白的、更正行）。"""
+    """同一句收获在给聊天的生活块里只出现一次（小课题行、自己查明白的、更正行不重复）。"""
 
     store    = new_store(tmp_path)
     takeaway = "不粘锅涂层建议低于250℃使用，约260℃以上才分解"

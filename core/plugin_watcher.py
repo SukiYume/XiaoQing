@@ -68,7 +68,6 @@ from .plugin_manager_support import (
     _PluginDirectoryScan,
     _PluginLoadTransaction,
     _ReloadAuthorization,
-    _remove_meta_path_identity,
     _SourceOnlyPluginFinder,
     _validate_plugin_name,
     is_link_like,
@@ -157,14 +156,6 @@ class PluginWatcherMixin:
             cls,
             primary: BaseException,
             cleanup: BaseException,
-        ) -> None:
-            raise NotImplementedError
-
-        def _record_private_module(
-            self,
-            plugin_name: str,
-            module_name: str,
-            module: ModuleType,
         ) -> None:
             raise NotImplementedError
 
@@ -296,7 +287,7 @@ class PluginWatcherMixin:
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
-        mtime: int | float,
+        mtime: _PluginContentFingerprint,
         *,
         module: ModuleType | None                  = None,
         authorized_entry: Path | None              = None,
@@ -339,7 +330,7 @@ class PluginWatcherMixin:
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
-        mtime: int | float,
+        mtime: _PluginContentFingerprint,
         *,
         module: ModuleType | None                  = None,
         authorized_entry: Path | None              = None,
@@ -359,24 +350,16 @@ class PluginWatcherMixin:
 
     @staticmethod
     def _content_fingerprints_equal(
-        current: int | float,
-        authorized: int | float,
+        current: _PluginContentFingerprint,
+        authorized: _PluginContentFingerprint,
     ) -> bool:
-        """Compare both the digest and the exact frozen authorization payload.
+        """Compare both the digest and the exact frozen authorization payload."""
 
-        两边不都是 ``_PluginContentFingerprint`` 时（例如测试替身用普通数字）只比较数值。
-        """
-
-        if isinstance(current, _PluginContentFingerprint) and isinstance(
-            authorized,
-            _PluginContentFingerprint,
-        ):
-            return (
-                int(current) == int(authorized)
-                and current.sources == authorized.sources
-                and current.manifest_payload == authorized.manifest_payload
-            )
-        return current == authorized
+        return (
+            int(current) == int(authorized)
+            and current.sources == authorized.sources
+            and current.manifest_payload == authorized.manifest_payload
+        )
 
     def _log_watch_error(
         self,
@@ -1181,9 +1164,9 @@ class PluginWatcherMixin:
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
-        transaction: _PluginLoadTransaction | None,
+        transaction: _PluginLoadTransaction,
         *,
-        fingerprint: _PluginContentFingerprint | None = None,
+        fingerprint: _PluginContentFingerprint,
     ) -> tuple[Path, Path, Mapping[str, bytes]]:
         """解析并冻结本次导入允许读取的插件源码。"""
 
@@ -1200,29 +1183,15 @@ class PluginWatcherMixin:
                 f"Unsafe or unavailable plugin entry: {definition.entry}",
                 exc,
             ) from exc
-        if fingerprint is None:
-            try:
-                fingerprint = self._capture_plugin_snapshot(plugin_dir, definition)
-            except (OSError, PluginPathError) as exc:
-                raise PluginLoadError(
-                    definition.name,
-                    "Plugin source snapshot could not be revalidated before import",
-                    exc,
-                ) from exc
-        if transaction is not None and isinstance(
-            transaction.mtime,
-            _PluginContentFingerprint,
-        ):
-            authorized_fingerprint = transaction.mtime
-            if not self._content_fingerprints_equal(fingerprint, authorized_fingerprint):
-                error = PluginPathError(
-                    "plugin source snapshot changed before any plugin code executed"
-                )
-                raise PluginLoadError(
-                    definition.name,
-                    "Plugin source changed before import",
-                    error,
-                ) from error
+        if not self._content_fingerprints_equal(fingerprint, transaction.mtime):
+            error = PluginPathError(
+                "plugin source snapshot changed before any plugin code executed"
+            )
+            raise PluginLoadError(
+                definition.name,
+                "Plugin source changed before import",
+                error,
+            ) from error
         sources = fingerprint.sources
         if definition.entry not in sources:
             raise PluginLoadError(
@@ -1243,23 +1212,21 @@ class PluginWatcherMixin:
                 "Plugin source could not be compiled",
                 exc,
             ) from exc
-        if transaction is not None:
-            transaction.authorized_entry = authorized_entry
+        transaction.authorized_entry = authorized_entry
         return plugin_root, authorized_entry, sources
 
     def _reject_plugin_module_aliases(
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
-        transaction: _PluginLoadTransaction | None,
+        transaction: _PluginLoadTransaction,
     ) -> None:
         """拒绝同一插件源码被挂到非规范模块名下。"""
 
         aliases = self._plugin_module_aliases(plugin_dir, definition.name)
         if not aliases:
             return
-        if transaction is not None:
-            transaction.uncertain_external_code = True
+        transaction.uncertain_external_code = True
         raise PluginLoadError(
             definition.name,
             f"Non-canonical plugin module aliases detected: {', '.join(aliases)}",
@@ -1269,55 +1236,26 @@ class PluginWatcherMixin:
         self,
         plugin_root: Path,
         definition: PluginDefinition,
-        full_module_name: str,
-        authorized_entry: Path,
         sources: Mapping[str, bytes],
-        transaction: _PluginLoadTransaction | None,
-    ) -> tuple[_SourceOnlyPluginFinder, bool]:
-        """安装本次导入使用的源码查找器，并返回其是否需要长期保留。"""
+        transaction: _PluginLoadTransaction,
+    ) -> _SourceOnlyPluginFinder:
+        """为这次加载事务认领插件命名空间，并装上只认冻结源码的查找器。"""
 
         module_name = f"plugins.{definition.name}"
-        if transaction is not None:
-            with _PLUGIN_IMPORT_LOCK:
-                transaction.namespace_claim_new = self._claim_plugin_namespace(definition.name)
-                preexisting_names               = [
-                    cached_name
-                    for cached_name in list(sys.modules)
-                    if cached_name == module_name or cached_name.startswith(f"{module_name}.")
-                ]
-                if preexisting_names:
-                    raise PluginPathError(
-                        "canonical plugin modules predate this import transaction"
-                    )
-                return (
-                    self._activate_source_finder(
-                        definition.name,
-                        plugin_root,
-                        sources,
-                    ),
-                    True,
-                )
-
-        # 私有测试入口可以复用缓存，但必须先证明缓存仍属于当前插件根目录。
-        self._validate_cached_plugin_namespace(
-            plugin_root,
-            definition.name,
-            full_module_name,
-            authorized_entry,
-        )
         with _PLUGIN_IMPORT_LOCK:
-            source_finder = _SourceOnlyPluginFinder(
-                plugin_root,
+            transaction.namespace_claim_new = self._claim_plugin_namespace(definition.name)
+            preexisting_names               = [
+                cached_name
+                for cached_name in list(sys.modules)
+                if cached_name == module_name or cached_name.startswith(f"{module_name}.")
+            ]
+            if preexisting_names:
+                raise PluginPathError("canonical plugin modules predate this import transaction")
+            return self._activate_source_finder(
                 definition.name,
+                plugin_root,
                 sources,
-                lambda imported_name, imported_module: self._record_private_module(
-                    definition.name,
-                    imported_name,
-                    imported_module,
-                ),
             )
-            sys.meta_path.insert(0, source_finder)
-        return source_finder, False
 
     def _import_plugin_entry(
         self,
@@ -1327,30 +1265,25 @@ class PluginWatcherMixin:
         definition: PluginDefinition,
         full_module_name: str,
         authorized_entry: Path,
-        transaction: _PluginLoadTransaction | None,
+        transaction: _PluginLoadTransaction,
     ) -> ModuleType:
         """在查找器事务保护下导入入口，并复核导入后的文件身份。"""
 
-        if transaction is not None:
+        def mark_execution_started(
+            imported_name: str,
+            imported_module: ModuleType,
+        ) -> None:
+            transaction.import_attempted = True
+            if imported_name == full_module_name:
+                transaction.module = imported_module
 
-            def mark_execution_started(
-                imported_name: str,
-                imported_module: ModuleType,
-            ) -> None:
-                transaction.import_attempted = True
-                if imported_name == full_module_name:
-                    transaction.module = imported_module
-
-            source_finder._on_execution_started = mark_execution_started
-        else:
-            source_finder._on_execution_started = None
+        source_finder._on_execution_started = mark_execution_started
 
         with source_finder.transaction_guard():
             module = importlib.import_module(full_module_name)
             if not isinstance(module, ModuleType):
                 raise PluginPathError("plugin entry import returned a non-module object")
-            if transaction is not None:
-                transaction.module = module
+            transaction.module = module
             if sys.modules.get(full_module_name) is not module:
                 raise PluginPathError("plugin entry lost its canonical cache binding after import")
             try:
@@ -1369,23 +1302,10 @@ class PluginWatcherMixin:
                     authorized_entry,
                 )
             except PluginPathError:
-                if transaction is not None:
-                    transaction.uncertain_external_code = True
+                transaction.uncertain_external_code = True
                 raise
-            if transaction is not None:
-                transaction.import_completed = True
+            transaction.import_completed = True
             return module
-
-    def _retire_private_source_finder(
-        self,
-        source_finder: _SourceOnlyPluginFinder,
-    ) -> None:
-        """等待临时查找器中的导入结束，再从全局导入链移除它。"""
-
-        module_names = source_finder.deactivate_and_wait()
-        self._wait_for_module_import_barriers(module_names)
-        with _PLUGIN_IMPORT_LOCK:
-            _remove_meta_path_identity(source_finder)
 
     def _start_plugin_init(
         self,
@@ -1423,27 +1343,21 @@ class PluginWatcherMixin:
         plugin_dir: Path,
         definition: PluginDefinition,
         *,
-        transaction: _PluginLoadTransaction | None              = None,
-        prepared: tuple[Path, Path, Mapping[str, bytes]] | None = None,
+        transaction: _PluginLoadTransaction,
+        prepared: tuple[Path, Path, Mapping[str, bytes]],
     ) -> tuple[ModuleType | None, asyncio.Task[Any] | None]:
-        plugin_root, authorized_entry, sources = prepared or self._prepare_module_load(
-            plugin_dir, definition, transaction
-        )
-        if transaction is not None:
-            transaction.authorized_entry = authorized_entry
+        plugin_root, authorized_entry, sources = prepared
+        transaction.authorized_entry = authorized_entry
 
         # Import only through the repository's canonical namespace.  The
         # manifest validator makes this path-to-module mapping injective.
         full_module_name = self._entry_module_name(plugin_dir.name, definition.entry)
         self._reject_plugin_module_aliases(plugin_dir, definition, transaction)
 
-        gate = transaction.gate if transaction is not None else self._execution_gate_for(definition)
         try:
-            source_finder, persistent_source_finder = self._prepare_module_source_finder(
+            source_finder = self._prepare_module_source_finder(
                 plugin_root,
                 definition,
-                full_module_name,
-                authorized_entry,
                 sources,
                 transaction,
             )
@@ -1459,12 +1373,10 @@ class PluginWatcherMixin:
                 )
             finally:
                 source_finder._on_execution_started = None
-                if not persistent_source_finder:
-                    self._retire_private_source_finder(source_finder)
 
             self._reject_plugin_module_aliases(plugin_dir, definition, transaction)
             self._bind_declared_services(definition, module)
-            return module, self._start_plugin_init(module, definition, gate)
+            return module, self._start_plugin_init(module, definition, transaction.gate)
         except Exception as exc:
             raise PluginLoadError(definition.name, "Failed to load plugin", exc) from exc
 
@@ -1615,7 +1527,7 @@ class PluginWatcherMixin:
         plugin_dir: Path,
         definition: PluginDefinition,
         *,
-        previous: int | float | None = None,
+        previous: _PluginContentFingerprint | None = None,
     ) -> _PluginContentFingerprint:
         """在线程中取得内容指纹；``previous`` 仍新鲜且文件元数据没变时直接复用它，否则完整捕获。"""
 
@@ -1630,11 +1542,11 @@ class PluginWatcherMixin:
         self,
         plugin_dir: Path,
         definition: PluginDefinition,
-        previous: int | float | None,
+        previous: _PluginContentFingerprint | None,
     ) -> _PluginContentFingerprint:
         """Reuse a recent snapshot only while every watched file identity is stable."""
 
-        if isinstance(previous, _PluginContentFingerprint) and (
+        if previous is not None and (
             time.monotonic() - previous.captured_at < _PLUGIN_FINGERPRINT_AUDIT_INTERVAL_SECONDS
         ):
             identities = self._capture_plugin_watch_identities(plugin_dir, definition)

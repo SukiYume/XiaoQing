@@ -1,6 +1,6 @@
 """活动比例：14 天、每 15 分钟一次决策、一直有一个能续做的小课题时，一天的上网不会被它包下。
 
-生产里 5 次上网有 3 次在续做同一个小课题；现在同一个小课题一天只查一次。这里不跑真的上网，
+同一个小课题一天只查一次，其余时间照常刷热门、按兴趣搜。这里不跑真的上网，
 按会话开始和结束时的状态写法（``session._start`` / ``activity.remember_activity``）推进时钟。
 """
 
@@ -15,7 +15,7 @@ from plugins.xiaoqing_life import planner
 from plugins.xiaoqing_life.days import day_key
 from plugins.xiaoqing_life.persona_bridge import Presence
 from plugins.xiaoqing_life.stores import default_state, roll_day
-from tests.plugins.xiaoqing_life.support import SHANGHAI, make_cfg
+from tests.helpers.xiaoqing_life_test_support import SHANGHAI, make_cfg
 
 START = datetime(2026, 11, 2, 10, 30, tzinfo=SHANGHAI)
 DAYS = 14

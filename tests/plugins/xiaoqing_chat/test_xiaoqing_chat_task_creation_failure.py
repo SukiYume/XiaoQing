@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from plugins.xiaoqing_chat import task_scheduler
-from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from plugins.xiaoqing_chat.runtime_state import get_state
 
 
 async def _never_started() -> None:
@@ -21,17 +21,14 @@ def _reject_task_creation(captured):
 
 
 def test_spawn_background_task_closes_coroutine_when_create_task_fails():
-    state = ChatRuntimeState()
+    state = get_state()
     context = SimpleNamespace(logger=MagicMock())
     captured = []
     coro     = _never_started()
     try:
-        with (
-            patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
-            patch(
-                "plugins.xiaoqing_chat.task_scheduler.asyncio.create_task",
-                side_effect=_reject_task_creation(captured),
-            ),
+        with patch(
+            "plugins.xiaoqing_chat.task_scheduler.asyncio.create_task",
+            side_effect=_reject_task_creation(captured),
         ):
             task_scheduler.spawn_bg_task(context, coro, name="facts:g1")
 
@@ -62,9 +59,8 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
     ],
 )
 def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule):
-    state               = MagicMock()
-    state.persist_tasks = {}
-    runtime             = SimpleNamespace(
+    state   = get_state()
+    runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             io_persist_debounce_seconds=0.0,
         )
@@ -74,12 +70,9 @@ def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule)
     task_scheduler._action_flush_tasks.clear()
     task_scheduler._media_registry_flush_tasks.clear()
     try:
-        with (
-            patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
-            patch(
-                "plugins.xiaoqing_chat.task_scheduler.asyncio.create_task",
-                side_effect=_reject_task_creation(captured),
-            ),
+        with patch(
+            "plugins.xiaoqing_chat.task_scheduler.asyncio.create_task",
+            side_effect=_reject_task_creation(captured),
         ):
             try:
                 schedule(context, runtime, state)
@@ -89,7 +82,7 @@ def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule)
         assert len(captured) == 1
         assert captured[0].cr_frame is None
         assert state.persist_tasks == {}
-        state.set_vdb_save_task.assert_not_called()
+        assert state.background_tasks() == set()
         assert task_scheduler._action_flush_tasks == {}
         assert task_scheduler._media_registry_flush_tasks == {}
     finally:

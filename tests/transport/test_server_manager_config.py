@@ -9,11 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 import tests.helpers.server_test_support as _fixture_support
+from core.server import _parse_http_base
 from tests.helpers.server_test_support import (
     BroadcastResult,
+    ClientSession,
     InboundManager,
     StandaloneInboundServer,
-    _parse_http_base,
+    onebot_message_payload,
 )
 
 mock_handler  = _fixture_support.mock_handler
@@ -21,31 +23,21 @@ sample_server = _fixture_support.sample_server
 
 
 @pytest.mark.unit
-def test_inbound_manager_from_config_disabled():
-    """Test InboundManager.from_config when disabled"""
-    config = {"enable_inbound_server": False}
-
-    async def handler(event):
-        return []
-
-    manager = InboundManager.from_config(
-        config  = config,
-        token   = "test_token",
-        handler = handler,
-    )
-
-    assert manager is None
-
-
-@pytest.mark.unit
-def test_inbound_manager_from_config_no_urls():
-    """Test InboundManager.from_config with no URLs configured"""
-    config = {
-        "enable_inbound_server": True,
-        "inbound_http_base"    : "",
-        "inbound_ws_uri"       : "",
-    }
-
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param({"enable_inbound_server": False}, id="disabled"),
+        pytest.param(
+            {
+                "enable_inbound_server": True,
+                "inbound_http_base"    : "",
+                "inbound_ws_uri"       : "",
+            },
+            id="no-urls",
+        ),
+    ],
+)
+def test_inbound_manager_from_config_returns_none_without_listener(config):
     async def handler(event):
         return []
 
@@ -80,15 +72,33 @@ def test_configured_loopback_listener_requires_non_empty_token(http_base, ws_uri
 
 
 @pytest.mark.unit
-def test_inbound_manager_from_config_http_only():
-    """Test InboundManager.from_config with HTTP only"""
+@pytest.mark.parametrize(
+    ("http_base", "ws_uri", "attribute", "expected"),
+    [
+        pytest.param(
+            "http://localhost:8080",
+            "",
+            "_inbound_http_base",
+            "http://localhost:8080",
+            id="http-only",
+        ),
+        pytest.param(
+            "",
+            "ws://localhost:8080/ws",
+            "_inbound_ws_uri",
+            "ws://localhost:8080/ws",
+            id="ws-only",
+        ),
+    ],
+)
+def test_inbound_manager_from_config_single_listener(http_base, ws_uri, attribute, expected):
     from core.config import ConfigSnapshot
 
     config = ConfigSnapshot(
         config={
             "enable_inbound_server": True,
-            "inbound_http_base"    : "http://localhost:8080",
-            "inbound_ws_uri"       : "",
+            "inbound_http_base"    : http_base,
+            "inbound_ws_uri"       : ws_uri,
         },
         secrets={},
     ).config
@@ -103,29 +113,7 @@ def test_inbound_manager_from_config_http_only():
     )
 
     assert manager is not None
-    assert manager._inbound_http_base == "http://localhost:8080"
-
-
-@pytest.mark.unit
-def test_inbound_manager_from_config_ws_only():
-    """Test InboundManager.from_config with WS only"""
-    config = {
-        "enable_inbound_server": True,
-        "inbound_http_base"    : "",
-        "inbound_ws_uri"       : "ws://localhost:8080/ws",
-    }
-
-    async def handler(event):
-        return []
-
-    manager = InboundManager.from_config(
-        config  = config,
-        token   = "test_token",
-        handler = handler,
-    )
-
-    assert manager is not None
-    assert manager._inbound_ws_uri == "ws://localhost:8080/ws"
+    assert getattr(manager, attribute) == expected
 
 
 @pytest.mark.unit
@@ -167,17 +155,6 @@ def test_inbound_manager_rejects_tls_schemes_it_does_not_terminate(config):
         InboundManager.from_config(
             config = config,
             token  = "test_token",
-            handler=AsyncMock(return_value=[]),
-        )
-
-
-@pytest.mark.unit
-def test_inbound_manager_rejects_plaintext_non_loopback_without_proxy_acknowledgement():
-    with pytest.raises(ValueError, match="non-loopback.*plaintext"):
-        InboundManager(
-            inbound_http_base = "http://0.0.0.0:8080",
-            inbound_ws_uri    = "",
-            token             = "test_token",
             handler=AsyncMock(return_value=[]),
         )
 
@@ -278,11 +255,9 @@ async def test_direct_inbound_server_rejects_non_loopback_before_runner_setup():
         AsyncMock(return_value=[]),
     )
 
-    with patch("core.server.web.AppRunner") as app_runner:
-        with pytest.raises(ValueError, match="non-loopback.*plaintext"):
-            await server.start()
+    with pytest.raises(ValueError, match="non-loopback.*plaintext"):
+        await server.start()
 
-    app_runner.assert_not_called()
     assert server._runner is None
     assert server._site is None
 
@@ -297,30 +272,35 @@ async def test_direct_inbound_server_rejects_empty_token_before_runner_setup():
         AsyncMock(return_value=[]),
     )
 
-    with patch("core.server.web.AppRunner") as app_runner:
-        with pytest.raises(ValueError, match="non-empty inbound token"):
-            await server.start()
+    with pytest.raises(ValueError, match="non-empty inbound token"):
+        await server.start()
 
-    app_runner.assert_not_called()
     assert server._runner is None
     assert server._site is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_inbound_manager_rejects_empty_token_before_starting_servers():
+async def test_inbound_manager_rejects_empty_token_before_starting_servers(unused_tcp_port):
     manager = InboundManager(
-        inbound_http_base = "http://127.0.0.1:8080",
+        inbound_http_base = f"http://127.0.0.1:{unused_tcp_port}",
         inbound_ws_uri    = "",
         token             = "",
         handler=AsyncMock(return_value=[]),
     )
-    manager._start_servers = AsyncMock()
 
     with pytest.raises(ValueError, match="non-empty inbound token"):
         await manager.start()
 
-    manager._start_servers.assert_not_awaited()
+    # 没有建任何监听器和分发器，端口也没有被绑定。
+    assert manager.http_server is None
+    assert manager.ws_server is None
+    assert manager._event_dispatcher is None
+    listener = await asyncio.start_server(
+        lambda _reader, writer: writer.close(), "127.0.0.1", unused_tcp_port
+    )
+    listener.close()
+    await listener.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -373,23 +353,22 @@ async def test_inbound_manager_propagates_proxy_acknowledgement_to_every_server(
         ws_broadcast_timeout_seconds = 2.5,
         trusted_tls_proxy            = True,
     )
-    created = []
-
-    def build_server(*args, **kwargs):
-        server       = MagicMock()
-        server.start = AsyncMock()
-        created.append(server)
-        return server
-
-    with patch("core.server.InboundServer", side_effect=build_server) as server_cls:
+    # 不真的在所有网卡上监听：aiohttp 的 runner / site 是边界，换成不绑定端口的替身，
+    # 管理器建出来的 InboundServer 是真实对象。
+    runner = MagicMock(setup=AsyncMock(), cleanup=AsyncMock())
+    site = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with (
+        patch("core.server.web.AppRunner", return_value=runner),
+        patch("core.server.web.TCPSite", return_value=site),
+    ):
         await manager.start()
+        servers = (manager.http_server, manager.ws_server)
+        created = {id(server): server for server in servers if server is not None}
+        await manager.stop()
 
     assert len(created) == expected_servers
-    assert server_cls.call_count == expected_servers
-    assert all(call.kwargs["trusted_tls_proxy"] is True for call in server_cls.call_args_list)
-    assert all(
-        call.kwargs["ws_broadcast_timeout_seconds"] == 2.5 for call in server_cls.call_args_list
-    )
+    assert all(server.trusted_tls_proxy is True for server in created.values())
+    assert all(server._ws_broadcast_timeout_seconds == 2.5 for server in created.values())
 
 
 @pytest.mark.asyncio
@@ -640,93 +619,96 @@ async def test_inbound_manager_factory_reentrant_rotation_cannot_publish_old_tok
     server.start.assert_awaited_once()
 
 
-@pytest.mark.unit
-def test_inbound_manager_set_status_providers_updates_existing_servers():
+async def _get_json(session: ClientSession, url: str, token: str) -> dict[str, Any]:
+    async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as response:
+        assert response.status == 200
+        return await response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_inbound_manager_set_status_providers_updates_existing_servers(
+    unused_tcp_port_factory,
+):
     """Test InboundManager forwards status providers to active servers."""
 
     async def handler(event):
         return []
 
-    manager = InboundManager(
-        inbound_http_base = "",
-        inbound_ws_uri    = "",
+    http_port = unused_tcp_port_factory()
+    manager   = InboundManager(
+        inbound_http_base = f"http://127.0.0.1:{http_port}",
+        inbound_ws_uri    = f"ws://127.0.0.1:{unused_tcp_port_factory()}/ws",
         token             = "test_token",
         handler           = handler,
     )
-    manager.http_server = MagicMock()
-    manager.ws_server   = MagicMock()
     plugins_count = Mock(return_value=5)
-    sessions_count = Mock(return_value=2)
-    pending_jobs = Mock(return_value=1)
-    metrics = Mock(return_value={"ok": True})
+    await manager.start()
+    http_server, ws_server = manager.http_server, manager.ws_server
+    try:
+        manager.set_status_providers(
+            plugins_count=plugins_count,
+            sessions_count=Mock(return_value=2),
+            pending_jobs=Mock(return_value=1),
+            metrics=Mock(return_value={"ok": True}),
+        )
 
-    manager.set_status_providers(
-        plugins_count  = plugins_count,
-        sessions_count = sessions_count,
-        pending_jobs   = pending_jobs,
-        metrics        = metrics,
-    )
+        async with ClientSession() as session:
+            base    = f"http://127.0.0.1:{http_port}"
+            health  = await _get_json(session, f"{base}/health", "test_token")
+            metrics = await _get_json(session, f"{base}/metrics", "test_token")
+    finally:
+        await manager.stop()
 
-    manager.http_server.set_status_providers.assert_called_once_with(
-        plugins_count  = plugins_count,
-        sessions_count = sessions_count,
-        pending_jobs   = pending_jobs,
-        metrics        = metrics,
-    )
-    manager.ws_server.set_status_providers.assert_called_once_with(
-        plugins_count  = plugins_count,
-        sessions_count = sessions_count,
-        pending_jobs   = pending_jobs,
-        metrics        = metrics,
-    )
+    assert health["plugins_loaded"] == 5
+    assert health["active_sessions"] == 2
+    assert health["pending_jobs"] == 1
+    assert metrics == {"ok": True}
+    # WebSocket 监听器没有 HTTP 页面，看不到状态：只确认它也收到了同一份提供函数。
+    assert ws_server is not http_server
+    assert ws_server._get_plugins_count is plugins_count
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
-async def test_inbound_manager_applies_status_providers_when_servers_start():
+@pytest.mark.integration
+async def test_inbound_manager_applies_status_providers_when_servers_start(unused_tcp_port):
     """Test providers bound before start are applied to created servers."""
 
     async def handler(event):
-        return []
-
-    created = []
-
-    class FakeInboundServer:
-        def __init__(self, *args, **kwargs):
-            self.set_status_providers = Mock()
-            self.commit_admission     = Mock()
-            self.kwargs               = kwargs
-            created.append(self)
-
-        async def start(self, *, accept_events: bool = True):
-            assert accept_events is False
-            return None
-
-        async def stop(self):
-            return None
+        return [{"action": "ack"}]
 
     manager = InboundManager(
-        inbound_http_base = "http://localhost:8080",
+        inbound_http_base = f"http://127.0.0.1:{unused_tcp_port}",
         inbound_ws_uri    = "",
         token             = "test_token",
         handler           = handler,
     )
-    plugins_count = Mock(return_value=5)
+    manager.set_status_providers(plugins_count=Mock(return_value=5))
 
-    manager.set_status_providers(plugins_count=plugins_count)
+    await manager.start()
+    try:
+        async with ClientSession() as session:
+            base   = f"http://127.0.0.1:{unused_tcp_port}"
+            health = await _get_json(session, f"{base}/health", "test_token")
+            # 启动完成后事件准入已经开放：事件被接收并交给处理器。
+            async with session.post(
+                f"{base}/event",
+                headers={
+                    "Authorization"           : "Bearer test_token",
+                    "X-XiaoQing-Response-Mode": "actions",
+                },
+                json=onebot_message_payload("hello"),
+            ) as response:
+                posted_status = response.status
+                posted_body   = await response.json()
+    finally:
+        await manager.stop()
 
-    with patch("core.server.InboundServer", FakeInboundServer):
-        await manager.start()
-
-    assert len(created) == 1
-    created[0].set_status_providers.assert_called_once_with(
-        plugins_count  = plugins_count,
-        sessions_count = None,
-        pending_jobs   = None,
-        metrics        = None,
-    )
-    created[0].commit_admission.assert_called_once_with()
-    await manager.stop()
+    assert health["plugins_loaded"] == 5
+    assert "active_sessions" not in health
+    assert "pending_jobs" not in health
+    assert posted_status == 200
+    assert posted_body["actions"] == [{"action": "ack"}]
 
 
 @pytest.mark.unit

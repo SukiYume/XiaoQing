@@ -1,9 +1,8 @@
 """回复检查器的历史陈述、群状态与风险模式。"""
 
 import importlib.util
-import json
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,41 +10,12 @@ import pytest
 if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
     sys.modules["aiohttp"] = MagicMock()
 
+from tests.helpers.reply_checker_test_support import (
+    checker_verdict,
+    semantic_checker_model,
+)
 from tests.helpers.reply_checker_test_support import stored_message as _msg
-
-
-def _semantic_outputs(monkeypatch, claims):
-    """提供语义模型识别的确定事实，实际证据校验仍由生产检查器执行。"""
-    outputs = []
-    for claim in claims:
-        outputs.append(
-            json.dumps(
-                {
-                    "suitable"             : True,
-                    "reason"               : "",
-                    "need_replan"          : False,
-                    "severity"             : "soft",
-                    "context_coherent"     : True,
-                    "speaker_correct"      : True,
-                    "instruction_followed" : True,
-                    "persona_grounded"     : True,
-                    "factually_plausible"  : True,
-                    "non_template"         : True,
-                    "persona_scan_complete": True,
-                    "persona_claims"       : [],
-                    "context_scan_complete": True,
-                    "context_claims"       : claim,
-                },
-                ensure_ascii=False,
-            )
-        )
-    remote = AsyncMock(
-        side_effect=[({"choices": [{"message": {"content": value}}]}, "test") for value in outputs]
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker._request_checker_completion", remote
-    )
-    return remote
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel
 
 
 @pytest.mark.asyncio
@@ -221,16 +191,12 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
 
 
 @pytest.mark.asyncio
-async def test_check_reply_uses_general_person_and_time_structure_for_context_history(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_check_reply_uses_general_person_and_time_structure_for_context_history():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = _semantic_outputs(
-        monkeypatch, [[{"claim": "他之前还一直说不想动", "evidence": ""}], [], []]
-    )
+    model  = semantic_checker_model([[{"claim": "他之前还一直说不想动", "evidence": ""}], [], []])
     common = {
-        "secrets"               : {"_ai": object()},
+        "secrets"               : {"_ai": model},
         "bot_name"              : "小青",
         "goal"                  : "自然聊天",
         "policy_text"           : "",
@@ -269,7 +235,7 @@ async def test_check_reply_uses_general_person_and_time_structure_for_context_hi
     assert supported.suitable is True
     assert general_fact.suitable is True
 
-    assert remote.await_count == 3
+    assert len(model.calls_of("checker")) == 3
 
 
 @pytest.mark.asyncio
@@ -369,22 +335,19 @@ async def test_check_reply_rejects_unsupported_relationships_and_experiences() -
 
 
 @pytest.mark.asyncio
-async def test_check_reply_rejects_unsupported_third_party_and_group_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_check_reply_rejects_unsupported_third_party_and_group_state() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = _semantic_outputs(
-        monkeypatch,
+    model = semantic_checker_model(
         [
             [{"claim": "小何平时挺稳的", "evidence": ""}],
             [{"claim": "他没在群里说", "evidence": ""}],
             [],
             [],
-        ],
+        ]
     )
     common = {
-        "secrets"               : {"_ai": object()},
+        "secrets"               : {"_ai": model},
         "bot_name"              : "小青",
         "goal"                  : "自然聊天",
         "policy_text"           : "",
@@ -429,23 +392,17 @@ async def test_check_reply_rejects_unsupported_third_party_and_group_state(
     assert collective.suitable is True
     assert grounded.suitable is True
 
-    assert remote.await_count == 4
+    assert len(model.calls_of("checker")) == 4
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_skips_remote_checker_for_ordinary_knowledge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_risk_mode_skips_remote_checker_for_ordinary_knowledge() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = AsyncMock()
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        remote,
-    )
+    model = ScriptedChatModel(checker=checker_verdict())
 
     result = await check_reply(
-        secrets                = {"_ai": object()},
+        secrets                = {"_ai": model},
         bot_name               = "小青",
         reply                  = "水开后下锅，轻轻推开，浮起来后再煮一会儿。",
         goal                   = "自然聊天",
@@ -465,33 +422,17 @@ async def test_risk_mode_skips_remote_checker_for_ordinary_knowledge(
     )
 
     assert result.suitable is True
-    remote.assert_not_awaited()
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_checks_questions_about_unseen_group_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_risk_mode_checks_questions_about_unseen_group_state() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = AsyncMock(return_value=({"ok": True}, "/v1/chat/completions"))
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        remote,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
-            '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,"context_claims":[]}'
-        ),
-    )
+    model = ScriptedChatModel(checker=checker_verdict())
 
     result = await check_reply(
-        secrets                = {"_ai": object()},
+        secrets                = {"_ai": model},
         bot_name               = "小青",
         reply                  = "光看现在这一下判断不了。",
         goal                   = "自然聊天",
@@ -511,23 +452,17 @@ async def test_risk_mode_checks_questions_about_unseen_group_state(
     )
 
     assert result.suitable is True
-    remote.assert_awaited_once()
+    assert len(model.calls_of("checker")) == 1
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_does_not_remote_check_open_group_invitation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_risk_mode_does_not_remote_check_open_group_invitation() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = AsyncMock()
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        remote,
-    )
+    model = ScriptedChatModel(checker=checker_verdict())
 
     result = await check_reply(
-        secrets                       = {"_ai": object()},
+        secrets                       = {"_ai": model},
         bot_name                      = "小青",
         reply                         = "早起更难吧，被窝这关就过不了。",
         goal                          = "自然聊天",
@@ -548,20 +483,16 @@ async def test_risk_mode_does_not_remote_check_open_group_invitation(
     )
 
     assert result.suitable is True
-    remote.assert_not_awaited()
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
-async def test_open_group_invitation_cannot_invent_a_current_group_consensus(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_open_group_invitation_cannot_invent_a_current_group_consensus() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = _semantic_outputs(
-        monkeypatch, [[{"claim": "群里所有人都喜欢热闹", "evidence": ""}], []]
-    )
+    model  = semantic_checker_model([[{"claim": "群里所有人都喜欢热闹", "evidence": ""}], []])
     common = {
-        "secrets"                      : {"_ai": object()},
+        "secrets"                      : {"_ai": model},
         "bot_name"                     : "小青",
         "goal"                         : "自然聊天",
         "current_text"                 : "各位更喜欢安静还是热闹？",
@@ -591,33 +522,17 @@ async def test_open_group_invitation_cannot_invent_a_current_group_consensus(
     assert invented_consensus.failure_code == "context_grounding"
     assert own_view.suitable is True
 
-    assert remote.await_count == 2
+    assert len(model.calls_of("checker")) == 2
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_semantically_checks_first_person_proactive_reply(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_risk_mode_semantically_checks_first_person_proactive_reply() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = AsyncMock(return_value=({"ok": True}, "/v1/chat/completions"))
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        remote,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
-            '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,"context_claims":[]}'
-        ),
-    )
+    model = ScriptedChatModel(checker=checker_verdict())
 
     result = await check_reply(
-        secrets                       = {"_ai": object()},
+        secrets                       = {"_ai": model},
         bot_name                      = "小青",
         reply                         = "我偏安静一点，热闹久了脑袋嗡嗡的。",
         goal                          = "自然聊天",
@@ -638,4 +553,4 @@ async def test_risk_mode_semantically_checks_first_person_proactive_reply(
     )
 
     assert result.suitable is True
-    remote.assert_awaited_once()
+    assert len(model.calls_of("checker")) == 1

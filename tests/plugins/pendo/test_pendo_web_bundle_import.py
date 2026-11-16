@@ -1,7 +1,10 @@
-"""Pendo Web 传输包入库规范化的边界回归。"""
+"""Pendo Web 传输包入库规范化的边界。"""
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,7 +17,7 @@ from plugins.pendo.web.services.bundle_import import (
     normalize_import_event_collection,
     normalize_import_payload,
 )
-from plugins.pendo.web.services.transfer_bundle import ParsedBundle
+from plugins.pendo.web.services.transfer_bundle import build_manifest
 
 FIXED_NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -232,41 +235,36 @@ def test_normalize_import_event_collection_rejects_invalid_fields(
         normalize_import_event_collection(payload, now=FIXED_NOW)
 
 
-def test_inspect_bundle_bytes_merges_row_errors_and_keeps_only_valid_records(monkeypatch):
+def test_inspect_bundle_bytes_merges_row_errors_and_keeps_only_valid_records():
     """检查入口应保留原解析错误，并只输出规范化成功的记录。"""
 
-    parsed = ParsedBundle(
-        manifest        = {"source": {"timezone": "UTC"}},
-        records_by_type = {
-            "task": [
-                {"type": "task", "title": "valid", "_bundle_line": 3},
-                {"type": "task", "title": "", "_bundle_line": 7},
-            ]
-        },
-        event_collections=[
-            {"kind": "multi_node", "title": "valid collection", "_bundle_line": 4},
-            {"kind": "single", "title": "invalid collection", "_bundle_line": 9},
-        ],
-        errors=[
-            {
-                "path"   : "data/tasks.ndjson",
-                "line"   : 1,
-                "type"   : "task",
-                "message": "bad json",
-            }
-        ],
+    tasks       = b'{bad json\n{"title": "valid"}\n{"title": ""}\n'
+    collections = (
+        b'{"kind": "multi_node", "title": "valid collection"}\n'
+        b'{"kind": "single", "title": "invalid collection"}\n'
     )
-    monkeypatch.setattr(bundle_import, "read_bundle", lambda _file: parsed)
+    manifest = build_manifest(
+        {"types": ["task"], "preset": "all", "start": None, "end": None},
+        [
+            {"path": "data/tasks.ndjson", "type": "task"},
+            {"path": "data/event_collections.ndjson", "type": "event_collection"},
+        ],
+        "UTC",
+    )
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("data/tasks.ndjson", tasks)
+        archive.writestr("data/event_collections.ndjson", collections)
 
-    inspected, records, errors = bundle_import.inspect_bundle_bytes(b"bundle")
+    inspected, records, errors = bundle_import.inspect_bundle_bytes(bundle.getvalue())
 
-    assert inspected is parsed
     assert [record["title"] for record in records] == ["valid"]
     assert [collection["title"] for collection in inspected.event_collections] == [
         "valid collection"
     ]
     assert [(error["line"], error["type"]) for error in errors] == [
         (1, "task"),
-        (9, "event_collection"),
-        (7, "task"),
+        (2, "event_collection"),
+        (3, "task"),
     ]

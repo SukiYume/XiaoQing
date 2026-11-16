@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -17,7 +16,7 @@ import pytest
 from tests.helpers.pendo_review_test_support import (
     Database,
     EventHandler,
-    _seed_event_batch_fixture,
+    seed_event_batch_fixture,
 )
 
 
@@ -91,11 +90,11 @@ def test_recurrence_reports_dst_gap_and_fold(start):
         )
 
 
-def test_recurrence_limit_is_visible_in_created_message(db, monkeypatch):
+def test_recurrence_limit_is_visible_in_created_message(db):
     from plugins.pendo.config import PendoConfig
     from plugins.pendo.services.ai_parser import AIParser
 
-    monkeypatch.setattr(PendoConfig, "EVENT_MAX_RRULE_COUNT", 2)
+    limit = PendoConfig.EVENT_MAX_RRULE_COUNT
     handler = EventHandler(db, AIParser(db=db), SimpleNamespace())
     result = asyncio.run(
         handler.create_event(
@@ -103,15 +102,16 @@ def test_recurrence_limit_is_visible_in_created_message(db, monkeypatch):
             {
                 "title"     : "每日会议",
                 "start_time": "2030-01-01T09:00:00",
-                "rrule"     : "FREQ=DAILY;COUNT=4",
+                "rrule"     : f"FREQ=DAILY;COUNT={limit + 35}",
             },
             {},
             allow_conflict=True,
         )
     )
     assert result["status"] == "success"
-    assert "2030-01-01 至 2030-01-02" in result["message"]
-    assert "单次最多生成 2 条" in result["message"]
+    assert len(db.get_all_items("1001", {"type": "event"})) == limit
+    assert f"单次最多生成 {limit} 条" in result["message"]
+    assert "2030-01-01 至 2030-12-31" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,7 @@ async def test_event_collection_reminders_batch_all_child_logs(
 ) -> None:
     db                           = Database(str(tmp_path / "pendo-event-batch-family.db"))
     owner_id                     = "u-event-batch"
-    event_ids                    = _seed_event_batch_fixture(db, owner_id)
+    event_ids                    = seed_event_batch_fixture(db, owner_id)
     handler                      = EventHandler(db, SimpleNamespace(), SimpleNamespace())
     original_logs                = db.get_reminder_logs_by_item_ids
     batched_ids: list[list[str]] = []
@@ -152,7 +152,7 @@ async def test_event_list_batch_query_does_not_block_event_loop(
 ) -> None:
     db       = Database(str(tmp_path / "pendo-event-batch-responsive.db"))
     owner_id = "u-event-batch"
-    _seed_event_batch_fixture(db, owner_id)
+    seed_event_batch_fixture(db, owner_id)
     handler              = EventHandler(db, SimpleNamespace(), SimpleNamespace())
     original_collections = db.get_event_collections_by_ids
     started              = threading.Event()
@@ -470,12 +470,16 @@ async def test_diary_relative_dates_and_today_range_use_user_clock(
     tmp_path: Path,
 ) -> None:
     from plugins.pendo.handlers.diary import DiaryHandler
+    from plugins.pendo.utils import time_utils
 
-    fixed_user_now = datetime.fromisoformat("2030-01-01T00:30:00-12:00")
-    monkeypatch.setattr(
-        "plugins.pendo.utils.time_utils.now_in_timezone",
-        lambda _user_id, _db: fixed_user_now,
-    )
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # 2030-01-01T00:30 在 UTC-12 的墙钟，此刻服务器所在的 UTC 已是 12:30。
+            instant = datetime(2030, 1, 1, 12, 30, tzinfo=ZoneInfo("UTC"))
+            return instant if tz is None else instant.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
     db = Database(str(tmp_path / "pendo-diary-user-clock.db"))
     try:
         db.update_user_settings("u-diary-clock", {"timezone": "Etc/GMT+12"})
@@ -577,16 +581,14 @@ async def test_diary_template_session_rejects_corrupt_progress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_diary_template_session_uses_scoped_user_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_diary_template_session_uses_scoped_user_identity(db) -> None:
     from plugins.pendo.handlers.diary import DiaryHandler
 
     class _Session:
         def __init__(self) -> None:
             self.data = {
                 "owner_id"   : "u-spoofed",
-                "template_id": "review",
+                "template_id": "summary",
                 "diary_date" : "2030-01-01",
                 "group_id"   : None,
                 "prompts"    : ["今天做了什么？"],
@@ -604,31 +606,19 @@ async def test_diary_template_session_uses_scoped_user_identity(
         async def end_session(self):
             return True
 
-    handler           = DiaryHandler(SimpleNamespace())
-    handler.templates = {
-        "review": {"name": "复盘", "prompts": ["今天做了什么？"]},
-    }
-    submit_result = AsyncMock(return_value={"status": "success", "message": "已保存"})
-    monkeypatch.setattr(handler, "_submit_template_result", submit_result)
-    context = _Context()
-
-    result = await handler.handle_session_message(
+    result = await DiaryHandler(db).handle_session_message(
         "u-scoped",
         "完成代码整理",
-        context,
+        _Context(),
         _Session(),
     )
 
-    assert result == {"status": "success", "message": "已保存"}
-    submit_result.assert_awaited_once_with(
-        "u-scoped",
-        "2030-01-01",
-        "review",
-        ["今天做了什么？"],
-        ["完成代码整理"],
-        None,
-        context,
-    )
+    assert result["status"] == "success"
+    saved = db.get_items("u-scoped", filters={"type": "diary"})
+    assert len(saved) == 1
+    assert saved[0].diary_date == "2030-01-01"
+    assert "完成代码整理" in saved[0].content
+    assert db.get_items("u-spoofed", filters={"type": "diary"}) == []
 
 
 @pytest.mark.asyncio
@@ -674,6 +664,7 @@ async def test_diary_entries_on_same_day_have_deterministic_latest_first_order(
     ["token extra", "widget token extra", "start now", "stop now", "status now"],
 )
 async def test_web_handler_rejects_trailing_subcommand_arguments(
+    db: Database,
     monkeypatch: pytest.MonkeyPatch,
     args: str,
 ) -> None:
@@ -690,14 +681,15 @@ async def test_web_handler_rejects_trailing_subcommand_arguments(
         stop       = unexpected_call,
     )
     monkeypatch.setattr(web_module, "web_server", server)
-    monkeypatch.setattr(web_module, "issue_login_code", unexpected_call)
-    monkeypatch.setattr(web_module, "generate_widget_token", unexpected_call)
 
-    result = await web_module.WebHandler(db=None).handle("1001", args, context=None)
+    result = await web_module.WebHandler(db=db).handle("1001", args, context=None)
 
     assert result["status"] == "error"
     assert "未知 Web 子命令" in result["message"]
     assert "可用命令" in result["message"]
+    issued_codes = db.get_connection().execute("SELECT COUNT(*) FROM login_code_registry")
+    assert issued_codes.fetchone()[0] == 0
+    assert db.revoke_widget_tokens("1001") == 0
 
 
 @pytest.mark.asyncio
@@ -717,37 +709,21 @@ async def test_web_handler_fails_closed_when_runtime_is_incomplete(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delivery_mode", ["rejected", "exception"])
 async def test_web_private_delivery_failure_never_echoes_login_code(
-    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
     delivery_mode: str,
 ) -> None:
     """私聊 API 拒收或抛错时，公开回复均不得包含一次性登录码。"""
     from plugins.pendo.handlers import web as web_module
 
-    server = SimpleNamespace(
-        get_url    = lambda: "http://127.0.0.1:12001",
-        is_running = lambda: True,
-        start      = lambda _db: True,
-        stop       = lambda: True,
-    )
+    private_messages: list[str] = []
 
-    async def fail_send(_action: dict[str, Any]) -> bool:
+    async def fail_send(action: dict[str, Any]) -> bool:
+        private_messages.append(json.dumps(action, ensure_ascii=False))
         if delivery_mode == "exception":
             raise RuntimeError("私聊发送失败")
         return False
 
-    monkeypatch.setattr(web_module, "web_server", server)
-    monkeypatch.setattr(
-        web_module,
-        "issue_login_code",
-        lambda *_args, **_kwargs: "never-echo-this-code",
-    )
-    monkeypatch.setattr(
-        web_module,
-        "generate_widget_token",
-        lambda *_args, **_kwargs: "unused-widget-token",
-    )
-
-    result = await web_module.WebHandler(db=None).handle(
+    result = await web_module.WebHandler(db).handle(
         "1001",
         "token",
         context=SimpleNamespace(send_action=fail_send),
@@ -755,7 +731,12 @@ async def test_web_private_delivery_failure_never_echoes_login_code(
 
     assert result["status"] == "error"
     assert "无法通过私聊安全发送凭据" in result["message"]
-    assert "never-echo-this-code" not in result["message"]
+    assert len(private_messages) == 1
+    issued = db.get_connection().execute("SELECT COUNT(*) FROM login_code_registry")
+    assert issued.fetchone()[0] == 1
+    login_code = json.loads(private_messages[0])["params"]["message"][0]["data"]["text"]
+    assert login_code
+    assert login_code not in result["message"]
 
 
 def test_web_component_loader_only_downgrades_known_optional_dependencies(

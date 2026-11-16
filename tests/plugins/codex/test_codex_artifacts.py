@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -248,10 +249,23 @@ def test_copy_failure_and_source_identity_failure_clean_random_temp_files(
     _, _, identity_artifacts, identity_images = _paths(identity_base)
     _save_png(identity_artifacts / "image.png")
 
-    def fail_identity(*_args, **_kwargs) -> None:
-        raise artifact_module._ArtifactRejected("source_changed")  # noqa: SLF001
+    # 复制过程中源文件从路径上消失（在 OS 层让复制开始后对它的 lstat 失败）。
+    real_lstat   = os.lstat
+    real_mkstemp = tempfile.mkstemp
+    copying      = False
 
-    monkeypatch.setattr(artifact_module, "_verify_source_unchanged", fail_identity)
+    def start_copy(*args, **kwargs):
+        nonlocal copying
+        copying = True
+        return real_mkstemp(*args, **kwargs)
+
+    def vanished_source(path, *args, **kwargs):
+        if copying and Path(path).name == "image.png":
+            raise FileNotFoundError(path)
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", start_copy)
+    monkeypatch.setattr(os, "lstat", vanished_source)
     identity_result = _collect(identity_base)
 
     assert len(identity_result.artifacts) == 0
@@ -279,7 +293,7 @@ def test_non_string_explicit_reference_is_rejected_without_stringifying(
 ) -> None:
     result = _collect(
         tmp_path,
-        referenced_paths=[123],  # type: ignore[list-item] - runtime boundary regression.
+        referenced_paths=[123],  # type: ignore[list-item] - runtime boundary.
     )
 
     assert result.artifacts == []

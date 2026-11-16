@@ -1,4 +1,4 @@
-"""Pendo 内部 UUID、公开短标识和唯一解析的回归测试。"""
+"""Pendo 内部 UUID、公开短标识和唯一解析。"""
 
 from __future__ import annotations
 

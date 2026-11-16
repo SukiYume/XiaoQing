@@ -1,15 +1,10 @@
 """xiaoqing_chat 媒体测试共享 fixture、导入和私有 helper。"""
 
-import asyncio
 import base64
-import hashlib
-import json
-import threading
-from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,12 +21,6 @@ from plugins.xiaoqing_chat.media.event_media import (
     render_event_media,
     render_local_media_file,
 )
-from plugins.xiaoqing_chat.media.event_media_analysis import (
-    _load_and_prepare_media_for_llm,
-    _prepare_media_for_llm,
-    _resolve_media_llm_secret_candidates,
-    _semantic_retry_reason,
-)
 from plugins.xiaoqing_chat.media.loading import read_file_bounded, run_media_blocking
 from plugins.xiaoqing_chat.media.marker_resolver import (
     find_candidate_by_hint,
@@ -44,14 +33,17 @@ from plugins.xiaoqing_chat.media.marker_resolver import (
 from plugins.xiaoqing_chat.media.markers import looks_like_structured_media_text
 from plugins.xiaoqing_chat.media.models import MediaAnalysisDraft, MediaPayloadTooLarge
 from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
-from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 from plugins.xiaoqing_chat.media_registry import compact_message_content, resolve_message_content
 from plugins.xiaoqing_chat.message_parts import message_parts_to_legacy
 from plugins.xiaoqing_chat.runtime_state import get_state
-from tests.helpers.payloads import text_reply_draft as _reply_draft
 from tests.helpers.settings_snapshot import with_settings_reader
 
-_PNG_BYTES = base64.b64decode(
+# 视觉模型调用的边界：识图请求都经这个网关函数发出，测试在这里替换它。
+VISION_GATEWAY = (
+    "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile"
+)
+
+PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
 )
 
@@ -63,26 +55,13 @@ async def render_event_media_text(event, *, context, runtime) -> str:
     return "\n".join(item.marker for item in rendered if item.marker.strip()).strip()
 
 
-def _write_png(path: Path) -> Path:
+def write_png(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(_PNG_BYTES)
+    path.write_bytes(PNG_BYTES)
     return path
 
 
-def _reply_draft_with_parts(
-    text: str,
-    parts,
-    *,
-    media_marker=None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        text         = text,
-        parts        = tuple(parts),
-        media_marker = media_marker,
-    )
-
-
-def _animated_gif_bytes() -> bytes:
+def animated_gif_bytes() -> bytes:
     from PIL import Image
 
     frames = [
@@ -103,7 +82,7 @@ def _animated_gif_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _raw_media_response(
+def raw_media_response(
     content: str,
     *,
     used_path: str     = "/chat/completions",
@@ -122,7 +101,7 @@ def _raw_media_response(
     )
 
 
-def _make_media_runtime(**media_overrides):
+def make_media_runtime(**media_overrides):
     cfg                                      = XiaoQingChatConfig()
     media_cfg                                = cfg.media
     media_cfg.max_media_per_message          = 3
@@ -209,53 +188,32 @@ def mock_context(tmp_path: Path):
 
 __all__ = (
     "AIModelInfo",
-    "AsyncMock",
-    "BytesIO",
     "LLMError",
-    "MagicMock",
     "MediaAnalysisDraft",
     "MediaPayloadTooLarge",
-    "Mock",
-    "Path",
     "PluginCapabilities",
     "RenderedMedia",
     "ResolvedMedia",
-    "SimpleNamespace",
-    "XiaoQingChatConfig",
-    "_PNG_BYTES",
-    "_animated_gif_bytes",
-    "_download_url_bytes",
-    "_load_and_prepare_media_for_llm",
+    "VISION_GATEWAY",
+    "PNG_BYTES",
+    "animated_gif_bytes",
     "looks_like_structured_media_text",
-    "_make_media_runtime",
-    "_prepare_media_for_llm",
-    "_raw_media_response",
+    "make_media_runtime",
+    "raw_media_response",
     "read_file_bounded",
-    "_reply_draft",
-    "_reply_draft_with_parts",
-    "_resolve_media_llm_secret_candidates",
     "run_media_blocking",
-    "_semantic_retry_reason",
-    "_vision_ai_service",
-    "_write_png",
-    "asyncio",
-    "base64",
+    "write_png",
     "build_effective_user_text",
     "collect_emoji_candidate",
     "compact_message_content",
     "find_candidate_by_hint",
     "get_state",
-    "hashlib",
-    "json",
     "load_emoji_library",
     "load_qq_face_catalog",
     "marker_media_part",
     "message_parts_to_legacy",
     "mock_context",
-    "nullcontext",
     "parse_marker",
-    "patch",
-    "pytest",
     "render_event_media",
     "render_event_media_text",
     "render_local_media_file",
@@ -263,5 +221,4 @@ __all__ = (
     "resolve_message_content",
     "strip_outbound_marker_residue",
     "text_without_outbound_marker",
-    "threading",
 )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -297,23 +296,18 @@ def test_service_retry_replays_identical_random_presentation(tmp_path, monkeypat
     db.cleanup()
 
 
-def test_main_forwards_message_id_for_idempotent_minigame_replay(tmp_path, monkeypatch):
-    db = Database(str(tmp_path / "main.db"))
+@pytest.mark.asyncio
+async def test_main_forwards_message_id_for_idempotent_minigame_replay(
+    qingpet_runtime, monkeypatch
+):
+    context, db = qingpet_runtime
     _seed(db)
     rolls = iter((6, 1, 1, 6))
     monkeypatch.setattr(social_module.random, "randint", lambda _a, _b: next(rolls))
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = db
-    qingpet_main._router      = None
-    event                     = {"user_id": "player", "group_id": GROUP, "message_id": 7654321}
-    try:
-        first  = asyncio.run(qingpet_main.handle("pet", "游戏 骰子", event, None))
-        second = asyncio.run(qingpet_main.handle("pet", "游戏 骰子", event, None))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
+    event = {"user_id": "player", "group_id": GROUP, "message_id": 7654321}
+
+    first  = await qingpet_main.handle("pet", "游戏 骰子", event, context)
+    second = await qingpet_main.handle("pet", "游戏 骰子", event, context)
 
     assert first == second
     assert _state(db) == ((120, 20), (8, 100), 1, 1, 1)
-    db.cleanup()

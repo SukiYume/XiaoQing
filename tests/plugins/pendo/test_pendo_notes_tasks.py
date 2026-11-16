@@ -1,23 +1,37 @@
-"""笔记和任务命令回归。"""
+"""笔记和任务命令。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from plugins.pendo.utils import time_utils
 from tests.helpers.pendo_review_test_support import (
+    AIParser,
     Database,
     EventHandler,
     NoteHandler,
     ReminderService,
     TaskHandler,
-    _make_temp_db,
+    make_temp_db,
 )
+from tests.helpers.pendo_test_support import freeze_pendo_clock
+
+
+class _ScriptedAi:
+    """模型边界替身：`complete` 返回预先设定的 JSON 文本。"""
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def complete(self, route, messages, **_kwargs):
+        return SimpleNamespace(content=json.dumps(self.payload, ensure_ascii=False))
 
 
 def test_note_list_accepts_bare_time_range_before_category_inference(monkeypatch):
@@ -31,7 +45,7 @@ def test_note_list_accepts_bare_time_range_before_category_inference(monkeypatch
 
     monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
 
-    temp_dir, db = _make_temp_db("pendo_review_note_bare_range")
+    temp_dir, db = make_temp_db("pendo_review_note_bare_range")
     owner_id = "u-note-bare-range"
 
     try:
@@ -85,7 +99,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
         def build_reminder_rules_from_description(self, _description):
             return []
 
-    temp_dir, db = _make_temp_db("pendo_review_event_explicit_edit")
+    temp_dir, db = make_temp_db("pendo_review_event_explicit_edit")
     owner_id = "u-event-explicit-edit"
 
     def insert_event(item_id: str):
@@ -163,7 +177,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
 
 
 def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
-    temp_dir, db = _make_temp_db("pendo_event_edit_result_summary")
+    temp_dir, db = make_temp_db("pendo_event_edit_result_summary")
     owner_id = "u-event-edit-result-summary"
     event_id = "1353ab2115ca41ed8d5c00934bcac3c8"
 
@@ -191,13 +205,14 @@ def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
                 "updated_at": "2026-09-01T08:00:00",
             }
         )
-        handler = EventHandler(db, SimpleNamespace(), ReminderService(db))
-
-        async def parse_updates(_changes, _event):
-            return {"start_time": "2026-09-09T20:00:00"}
-
-        handler._parse_updates = parse_updates
-        result                 = asyncio.run(
+        ai_parser = AIParser(
+            context=SimpleNamespace(
+                capabilities=SimpleNamespace(ai=_ScriptedAi({"start_time": "2026-09-09T20:00:00"}))
+            ),
+            db=db,
+        )
+        handler = EventHandler(db, ai_parser, ReminderService(db))
+        result  = asyncio.run(
             handler.edit_event(
                 owner_id,
                 f"{event_id[:8]} 改到下周三晚上8点",
@@ -226,7 +241,7 @@ def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
 
 
 def test_note_edit_only_updates_explicit_metadata_when_no_body():
-    temp_dir, db = _make_temp_db("pendo_review_note_edit_partial")
+    temp_dir, db = make_temp_db("pendo_review_note_edit_partial")
     owner_id = "u-note-edit"
 
     try:
@@ -287,11 +302,8 @@ def test_note_list_control_tokens_are_exact_and_conflicts_are_rejected():
 def test_note_list_uses_user_clock_and_counts_all_rows(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    fixed_now = datetime(2026, 1, 15, 12, 0, 0)
-    monkeypatch.setattr(
-        "plugins.pendo.utils.time_utils.now_in_timezone",
-        lambda _user_id, _db: fixed_now,
-    )
+    # 用户（默认 Asia/Shanghai）此刻是 2026-01-15 12:00。
+    freeze_pendo_clock(monkeypatch, datetime(2026, 1, 15, 4, 0, tzinfo=UTC), time_utils)
     db       = Database(str(tmp_path / "pendo-note-list-clock.db"))
     owner_id = "note-list-clock"
 
@@ -335,11 +347,8 @@ def test_note_list_uses_user_clock_and_counts_all_rows(
 def test_note_create_and_view_timestamps_use_user_clock(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    fixed_now = datetime(2031, 2, 3, 4, 5, 6)
-    monkeypatch.setattr(
-        "plugins.pendo.utils.time_utils.now_in_timezone",
-        lambda _user_id, _db: fixed_now,
-    )
+    # 用户（默认 Asia/Shanghai）此刻是 2031-02-03 04:05:06，即 UTC 2031-02-02 20:05:06。
+    freeze_pendo_clock(monkeypatch, datetime(2031, 2, 2, 20, 5, 6, tzinfo=UTC), time_utils)
     db       = Database(str(tmp_path / "pendo-note-write-clock.db"))
     owner_id = "note-write-clock"
 
@@ -643,7 +652,7 @@ def test_note_backlinks_are_newest_first_and_limited(
 def test_task_list_supports_cat_tag_and_date_filters():
     from plugins.pendo.models.item import TaskStatus
 
-    temp_dir, db = _make_temp_db("pendo_review_task_list_filters")
+    temp_dir, db = make_temp_db("pendo_review_task_list_filters")
     owner_id = "u-task-list-filters"
 
     try:
@@ -865,7 +874,7 @@ def test_task_list_uses_exact_total_and_rejects_out_of_range_page(tmp_path: Path
         db.cleanup()
 
 
-def test_task_time_shortcuts_accept_offset_aware_legacy_deadline(
+def test_task_time_shortcuts_accept_offset_aware_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -887,7 +896,8 @@ def test_task_time_shortcuts_accept_offset_aware_legacy_deadline(
             }
         )
         handler = TaskHandler(db)
-        monkeypatch.setattr(handler, "_user_local_now", lambda _user_id: datetime(2032, 1, 1, 8))
+        # 用户（默认 Asia/Shanghai）此刻是 2032-01-01 08:00。
+        freeze_pendo_clock(monkeypatch, datetime(2032, 1, 1, 0, 0, tzinfo=UTC), time_utils)
 
         result = asyncio.run(handler.list_tasks(owner_id, "upcoming", SimpleNamespace()))
 
@@ -1078,7 +1088,7 @@ def test_command_list_decodes_only_requested_page(db, monkeypatch, kind):
 
 
 def test_long_note_without_title_keeps_full_body_and_derives_a_short_title(tmp_path: Path) -> None:
-    """没写 title: 的长笔记（生产里 622 字的提示词）一次存下：标题取首行开头，正文完整保留。"""
+    """没写 title: 的长笔记一次存下：标题取首行开头，正文完整保留。"""
     db       = Database(str(tmp_path / "long-note.db"))
     owner_id = "long-note"
     body     = (

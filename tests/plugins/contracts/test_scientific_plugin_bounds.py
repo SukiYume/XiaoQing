@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -184,11 +186,6 @@ async def test_apod_image_cache_prunes_old_entries(
         )
 
     monkeypatch.setattr(apod, "fetch_public_bytes", fetch)
-    monkeypatch.setattr(
-        apod,
-        "IMAGE_CACHE_LIMITS",
-        apod.FileCacheLimits(max_entries=1, max_bytes=1024 * 1024, ttl_seconds=3600),
-    )
     context = with_settings_reader(
         SimpleNamespace(
             config={"plugins": {"apod": {}}},
@@ -196,19 +193,22 @@ async def test_apod_image_cache_prunes_old_entries(
         )
     )
 
-    first = await apod._safe_download_image(
-        "https://apod.nasa.gov/apod/image/first.png",
-        tmp_path,
-        context,
-    )
-    second = await apod._safe_download_image(
-        "https://apod.nasa.gov/apod/image/second.png",
-        tmp_path,
-        context,
-    )
+    downloaded = []
+    started    = time.time() - 1000
+    for index in range(apod.IMAGE_CACHE_LIMITS.max_entries + 1):
+        path = await apod._safe_download_image(
+            f"https://apod.nasa.gov/apod/image/image-{index}.png",
+            tmp_path,
+            context,
+        )
+        assert path is not None
+        # 下载之间的文件时间可能相同；明确排好先后，淘汰顺序才确定。
+        os.utime(path, (started + index, started + index))
+        downloaded.append(path)
 
-    assert first is not None
-    assert second is not None
-    assert not first.exists()
-    assert second.exists()
-    assert len([path for path in tmp_path.iterdir() if not path.name.startswith(".")]) == 1
+    assert not downloaded[0].exists()
+    assert downloaded[-1].exists()
+    assert (
+        len([path for path in tmp_path.iterdir() if not path.name.startswith(".")])
+        == apod.IMAGE_CACHE_LIMITS.max_entries
+    )

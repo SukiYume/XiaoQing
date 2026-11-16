@@ -15,7 +15,6 @@ import importlib
 import json
 import sys
 import threading
-import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -23,10 +22,15 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from core.interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
-from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.arxiv_filter_test_support import (
+    ArxivWorld,
+    install_fake_encoder,
+    use_plugin_config,
+    write_knn_model,
+)
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT = REPOSITORY_ROOT
+_RUNNER = "plugins.arxiv_filter.inference.runner"
 
 arxiv_filter        = importlib.import_module("plugins.arxiv_filter.main")
 arxiv_codex_summary = importlib.import_module("plugins.arxiv_filter.codex_summary")
@@ -71,6 +75,7 @@ def mock_context(temp_plugin_dir):
             self.logger = MagicMock()
             self.principal = PluginPrincipal(kind="lifecycle")
             self.capabilities = PluginCapabilities()
+            self.state: dict  = {}
 
     return with_settings_reader(MockContext(temp_plugin_dir))
 
@@ -79,6 +84,16 @@ def mock_context(temp_plugin_dir):
 def mock_event():
     """模拟事件"""
     return {"user_id": 12345, "group_id": 123456789, "message_type": "group"}
+
+
+def _today(context) -> str:
+    return arxiv_filter._business_now(context).date().isoformat()
+
+
+async def _drain_codex_sidecar(context) -> None:
+    """等待筛选结果派生出的 Codex 摘要后台任务结束。"""
+
+    await asyncio.gather(*list(context.state.get("arxiv_background_tasks", ())))
 
 
 # ============================================================
@@ -211,17 +226,10 @@ class TestHandle:
     """测试命令处理"""
 
     @pytest.mark.asyncio
-    async def test_handle_help(self, mock_context, mock_event):
-        """测试 help 命令"""
-        result = await arxiv_filter.handle("arxiv", "help", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "arXiv" in result_text or "论文" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_help_chinese(self, mock_context, mock_event):
-        """测试中文帮助命令"""
-        result = await arxiv_filter.handle("arxiv", "帮助", mock_event, mock_context)
+    @pytest.mark.parametrize("args", ["help", "帮助"], ids=["english", "chinese"])
+    async def test_handle_help(self, mock_context, mock_event, args):
+        """help 与 帮助 两种写法都返回帮助信息"""
+        result = await arxiv_filter.handle("arxiv", args, mock_event, mock_context)
         assert result is not None
         result_text = str(result)
         assert "arXiv" in result_text or "论文" in result_text
@@ -237,93 +245,63 @@ class TestHandle:
         assert "未知命令" in result_text
 
     @pytest.mark.asyncio
-    async def test_handle_default_calls_run_filter(self, mock_context, mock_event):
-        """测试默认命令调用 _run_filter"""
-        with (
-            patch.object(
-                arxiv_filter,
-                "_latest_arxiv_source_date",
-                new=AsyncMock(return_value="2026-08-06"),
-            ),
-            patch.object(
-                arxiv_filter,
-                "_run_filter",
-                new=AsyncMock(return_value=arxiv_filter.segments("test")),
-            ) as mock_run,
-        ):
-            result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
-            assert result is not None
-            mock_run.assert_awaited_once_with(
-                mock_context,
-                allow_codex_sidecar = False,
-                source_date         = "2026-08-06",
-            )
+    async def test_handle_default_returns_papers_for_the_listing_date(
+        self, mock_context, mock_event, tmp_path, monkeypatch
+    ):
+        """默认命令按 arXiv 页面上的列表日期筛选并回复论文"""
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06", titles=["Pulsar timing"])
+
+        result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+
+        assert result is not None
+        result_text = str(result)
+        assert "Pulsar timing" in result_text
+        assert "2026-08-06" in result_text
 
     @pytest.mark.asyncio
     async def test_handle_enables_codex_sidecar_only_when_core_grants_it(
         self,
         mock_context,
         mock_event,
+        tmp_path,
+        monkeypatch,
     ):
         # 能不能附带 Codex 摘要由 Core 按 /codex 的声明决定，插件只看能力是否发出。
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06", titles=["Pulsar timing"])
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(return_value="queued")
         mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=123456789)
         mock_context.capabilities = PluginCapabilities(
             is_bot_admin        = True,
-            codex_arxiv_summary = object(),
+            codex_arxiv_summary = service,
         )
-        with (
-            patch.object(
-                arxiv_filter,
-                "_latest_arxiv_source_date",
-                new=AsyncMock(return_value="2026-08-06"),
-            ),
-            patch.object(
-                arxiv_filter,
-                "_run_filter",
-                new=AsyncMock(return_value=arxiv_filter.segments("test")),
-            ) as mock_run,
-        ):
-            await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
-        assert mock_run.await_args.kwargs == {
-            "allow_codex_sidecar": True,
-            "source_date"        : "2026-08-06",
-        }
+        await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+        await _drain_codex_sidecar(mock_context)
 
+        service.enqueue_or_replay.assert_awaited_once_with(
+            date  = "2026-08-06",
+            links = ["https://arxiv.org/abs/2607.00001"],
+        )
+
+        mock_context.state = {}
         mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
-        with (
-            patch.object(
-                arxiv_filter,
-                "_latest_arxiv_source_date",
-                new=AsyncMock(return_value="2026-08-06"),
-            ),
-            patch.object(
-                arxiv_filter,
-                "_run_filter",
-                new=AsyncMock(return_value=arxiv_filter.segments("test")),
-            ) as mock_run,
-        ):
-            await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+        await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
-        assert mock_run.await_args.kwargs["allow_codex_sidecar"] is False
+        assert not mock_context.state.get("arxiv_background_tasks")
+        service.enqueue_or_replay.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_handle_exception(self, mock_context, mock_event):
-        """测试处理异常"""
-        with (
-            patch.object(
-                arxiv_filter,
-                "_latest_arxiv_source_date",
-                new=AsyncMock(return_value="2026-08-06"),
-            ),
-            patch.object(
-                arxiv_filter, "_run_filter", new=AsyncMock(side_effect=Exception("Test error"))
-            ),
-        ):
-            result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "XQ-PLUGIN-UNEXPECTED" in result_text
+    async def test_handle_exception(self, mock_context, mock_event, tmp_path, monkeypatch):
+        """筛选抛出异常时只回复公开错误提示"""
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06")
+        use_plugin_config(monkeypatch, tmp_path, {"model": "not-an-object"})
+
+        result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+
+        assert result is not None
+        result_text = str(result)
+        assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
 
 # ============================================================
@@ -335,14 +313,19 @@ class TestRunFilter:
     """测试论文筛选功能"""
 
     @pytest.mark.asyncio
-    async def test_run_filter_model_not_loaded(self, mock_context, mock_event):
-        """测试模型未加载"""
-        # 模拟模型加载失败
-        with patch.object(arxiv_filter, "_load_inference", return_value=None):
-            result = await arxiv_filter._run_filter(mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "无法加载AI模型" in result_text or "模型" in result_text
+    async def test_run_filter_model_not_loaded(
+        self, mock_context, mock_event, tmp_path, monkeypatch
+    ):
+        """推理模块的可选依赖缺失时提示无法加载模型"""
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06")
+        monkeypatch.setitem(sys.modules, "pandas", None)
+        monkeypatch.delitem(sys.modules, _RUNNER, raising=False)
+
+        result = await arxiv_filter._run_filter(mock_context)
+
+        assert result is not None
+        result_text = str(result)
+        assert "无法加载AI模型" in result_text or "模型" in result_text
 
     @pytest.mark.asyncio
     async def test_run_filter_rejects_unknown_inference_result(self, mock_context, mock_event):
@@ -363,34 +346,15 @@ class TestRunFilter:
             assert result.outcome == "unknown_result"
 
     @pytest.mark.asyncio
-    async def test_run_filter_success_with_papers(self, mock_context, mock_event):
-        """测试成功获取论文"""
-        # 模拟推理结果
-        mock_inference_result = """
------ Positive #1 -----
-Title      : Test Paper Title
-Link       : https://arxiv.org/abs/1234.5678
-Probability: 0.8000
-"""
-
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_inference_result
-        ):
-            result = await arxiv_filter._run_filter(mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "Test Paper Title" in result_text or "论文" in result_text
-
-    @pytest.mark.asyncio
-    async def test_run_filter_no_papers(self, mock_context, mock_event):
+    async def test_run_filter_no_papers(self, mock_context, mock_event, tmp_path, monkeypatch):
         """测试没有符合条件的论文"""
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "No positive predictions"
-        ):
-            result = await arxiv_filter._run_filter(mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "暂时没有发现感兴趣的论文" in result_text or "没有" in result_text
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06")
+
+        result = await arxiv_filter._run_filter(mock_context)
+
+        assert result is not None
+        result_text = str(result)
+        assert "暂时没有发现感兴趣的论文" in result_text or "没有" in result_text
 
     @pytest.mark.parametrize(
         ("text", "kind", "successful"),
@@ -406,67 +370,45 @@ Probability: 0.8000
         assert arxiv_filter._is_successful_inference(text) is successful
 
     @pytest.mark.asyncio
-    async def test_run_filter_without_paper_list_is_a_failure(self, mock_context, mock_event):
+    async def test_run_filter_without_paper_list_is_a_failure(
+        self, mock_context, mock_event, tmp_path, monkeypatch
+    ):
         """源列表抓不到论文时不是成功结果，不能提交当日投递。"""
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "No papers found."
-        ):
-            result = await arxiv_filter._run_filter(mock_context)
-            assert result.succeeded is False
-            assert result.outcome == "inference_error"
-            assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06", titles=())
+
+        result = await arxiv_filter._run_filter(mock_context)
+
+        assert result.succeeded is False
+        assert result.outcome == "inference_error"
+        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
 
     @pytest.mark.asyncio
-    async def test_run_filter_file_not_found(self, mock_context, mock_event):
-        """测试 FileNotFoundError"""
+    @pytest.mark.parametrize(
+        ("scenario", "outcome"),
+        [
+            ("file-not-found", "model_file_error"),
+            ("import-error", "dependency_error"),
+            ("runtime-error", "runtime_error"),
+        ],
+    )
+    async def test_run_filter_backend_exception_returns_unexpected_error(
+        self, mock_context, mock_event, tmp_path, monkeypatch, scenario, outcome
+    ):
+        """模型文件缺失、依赖缺失和其他运行异常都返回统一的意外错误提示"""
+        world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06")
+        if scenario == "file-not-found":
+            (world.model_dir / "meta.json").unlink()
+        elif scenario == "import-error":
+            monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+        else:
+            world.encoder.encode_error = RuntimeError("Unexpected error")
 
-        async def raise_file_not_found(*args, **kwargs):
-            raise FileNotFoundError("Model file not found")
+        result = await arxiv_filter._run_filter(mock_context)
 
-        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: None):
-            with patch.object(
-                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_file_not_found)
-            ):
-                result = await arxiv_filter._run_filter(mock_context)
-                assert result is not None
-                result_text = str(result)
-                assert "XQ-PLUGIN-UNEXPECTED" in result_text
-
-    @pytest.mark.asyncio
-    async def test_run_filter_import_error(self, mock_context, mock_event):
-        """测试 ImportError（缺少依赖）"""
-
-        async def raise_import_error(*args, **kwargs):
-            raise ImportError("No module named 'tensorflow'")
-
-        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
-            with patch.object(
-                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_import_error)
-            ):
-                result = await arxiv_filter._run_filter(mock_context)
-                assert result is not None
-                result_text = str(result)
-                assert "XQ-PLUGIN-UNEXPECTED" in result_text
-
-    @pytest.mark.asyncio
-    async def test_run_filter_generic_exception(self, mock_context, mock_event):
-        """测试通用异常"""
-
-        raised = []
-
-        async def raise_generic_error(*args, **kwargs):
-            raised.append(True)
-            raise RuntimeError("Unexpected error")
-
-        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
-            with patch.object(
-                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_generic_error)
-            ):
-                result = await arxiv_filter._run_filter(mock_context)
-                assert result is not None
-                result_text = str(result)
-                assert "XQ-PLUGIN-UNEXPECTED" in result_text
-                assert raised == [True]
+        assert result is not None
+        assert result.outcome == outcome
+        result_text = str(result)
+        assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
 
 # ============================================================
@@ -477,42 +419,30 @@ Probability: 0.8000
 class TestInferenceLoading:
     """测试推理模块加载"""
 
-    def test_load_inference_caches_result(self, temp_plugin_dir):
-        """测试推理函数缓存"""
-        fake_module = types.ModuleType("plugins.arxiv_filter.inference.runner")
-        fake_func = lambda **kwargs: "ok"  # noqa: E731
-        fake_module.get_positive_arxiv_today_as_string = fake_func
+    def test_load_inference_caches_result(self, monkeypatch):
+        """测试推理函数缓存：第二次加载不再重新导入推理模块"""
+        monkeypatch.setattr(arxiv_filter, "_inference_func", None)
 
-        arxiv_filter._inference_func = None
-        with patch.dict(sys.modules, {"plugins.arxiv_filter.inference.runner": fake_module}):
-            # 第一次加载
-            func1 = arxiv_filter._load_inference()
-            # 第二次加载应该返回缓存的函数
-            func2 = arxiv_filter._load_inference()
+        func1 = arxiv_filter._load_inference()
+        # 缓存失效时会重新执行推理模块，得到另一个函数对象。
+        monkeypatch.delitem(sys.modules, _RUNNER)
+        func2 = arxiv_filter._load_inference()
 
-        assert func1 is fake_func
-        assert func2 is fake_func
         assert func1 is func2
+        assert func1.__name__ == "get_positive_arxiv_today_as_string"
 
-    def test_plugin_init_clears_inference_cache(self, temp_plugin_dir):
+    def test_plugin_init_clears_inference_cache(self, monkeypatch):
         """插件代加载清除函数缓存，由 core 负责模块代际重载。"""
-        fake_module = types.ModuleType("plugins.arxiv_filter.inference.runner")
-        fake_func1 = lambda **kwargs: "ok1"  # noqa: E731
-        fake_func2 = lambda **kwargs: "ok2"  # noqa: E731
-        fake_module.get_positive_arxiv_today_as_string = fake_func1
+        monkeypatch.setattr(arxiv_filter, "_inference_func", None)
 
-        arxiv_filter._inference_func = None
-        with patch.dict(sys.modules, {"plugins.arxiv_filter.inference.runner": fake_module}):
-            func1 = arxiv_filter._load_inference()
-            assert func1 is fake_func1
+        func1 = arxiv_filter._load_inference()
+        # 模拟模块内容变更，然后由插件 init 清除函数缓存。
+        monkeypatch.delitem(sys.modules, _RUNNER)
+        arxiv_filter.init()
+        func2 = arxiv_filter._load_inference()
 
-            # 模拟模块内容变更，然后由插件 init 清除函数缓存。
-            fake_module.get_positive_arxiv_today_as_string = fake_func2
-            arxiv_filter.init()
-            func2 = arxiv_filter._load_inference()
-
-        assert func2 is fake_func2
         assert func2 is not func1
+        assert func2 is sys.modules[_RUNNER].get_positive_arxiv_today_as_string
 
 
 # ============================================================
@@ -536,26 +466,16 @@ class TestCheckArxivUpdate:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_check_arxiv_update_updated_today(self, mock_context):
+    async def test_check_arxiv_update_updated_today(self, mock_context, tmp_path, monkeypatch):
         """测试 arXiv 已更新到今天"""
         # 确保今天未发送
-        today = arxiv_filter._business_now(mock_context).date().isoformat()
+        today = _today(mock_context)
+        ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=["Pulsar timing"])
 
-        with patch.object(
-            arxiv_filter,
-            "_run_filter",
-            new=AsyncMock(
-                return_value=arxiv_filter._filter_result(
-                    "Papers found",
-                    succeeded = True,
-                    outcome   = "papers",
-                )
-            ),
-        ):
-            with patch.object(arxiv_filter, "run_sync", return_value=today):
-                result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
-                # 应该调用 _run_filter
-                assert result is not None
+        result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
+
+        assert result is not None
+        assert "Pulsar timing" in str(result)
         assert (
             arxiv_filter._should_send_today(
                 mock_context.data_dir,
@@ -573,20 +493,15 @@ class TestCheckArxivUpdate:
         )
 
     @pytest.mark.asyncio
-    async def test_check_arxiv_update_failure_does_not_mark_sent(self, mock_context):
-        today = arxiv_filter._business_now(mock_context).date().isoformat()
+    async def test_check_arxiv_update_failure_does_not_mark_sent(
+        self, mock_context, tmp_path, monkeypatch
+    ):
+        today = _today(mock_context)
+        ArxivWorld(monkeypatch, tmp_path, list_date=today, titles=())
 
-        with patch.object(
-            arxiv_filter,
-            "_run_filter",
-            new=AsyncMock(
-                return_value=arxiv_filter.segments("❌ 论文筛选服务暂时不可用，请稍后再试。")
-            ),
-        ):
-            with patch.object(arxiv_filter, "run_sync", return_value=today):
-                result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
+        result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
 
-        assert "暂时不可用" in str(result)
+        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
         assert (
             arxiv_filter._should_send_today(
                 mock_context.data_dir,
@@ -596,41 +511,37 @@ class TestCheckArxivUpdate:
         )
 
     @pytest.mark.asyncio
-    async def test_check_arxiv_update_not_updated_yet(self, mock_context):
+    async def test_check_arxiv_update_not_updated_yet(self, mock_context, tmp_path, monkeypatch):
         """测试 arXiv 尚未更新"""
-        # 返回昨天的日期
-        yesterday = "2026-01-01"
+        # 页面上还是旧日期
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-01-01")
 
-        with patch.object(arxiv_filter, "run_sync", return_value=yesterday):
-            result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
-            # 应该返回空列表
-            assert result == []
+        result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
+
+        # 应该返回空列表
+        assert result == []
 
     @pytest.mark.asyncio
-    async def test_check_arxiv_final_check_no_update(self, mock_context):
+    async def test_check_arxiv_final_check_no_update(self, mock_context, tmp_path, monkeypatch):
         """测试最后检查仍未更新"""
-        # 返回旧日期
-        old_date = "2026-01-01"
-        with patch.object(arxiv_filter, "run_sync", return_value=old_date):
-            result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=True)
-            assert result is not None
-            result_text = str(result)
-            assert "暂未更新" in result_text or "停更" in result_text
+        # 页面上还是旧日期
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-01-01")
+
+        result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=True)
+
+        assert result is not None
+        result_text = str(result)
+        assert "暂未更新" in result_text or "停更" in result_text
 
     @pytest.mark.asyncio
-    async def test_check_arxiv_update_error(self, mock_context):
+    async def test_check_arxiv_update_error(self, mock_context, tmp_path, monkeypatch):
         """测试检查更新时出错"""
+        world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-01-01")
+        world.request_error = RuntimeError("Network error")
 
-        async def run_sync_for_test(function, *args, **kwargs):
-            if function is arxiv_filter._claim_send_today:
-                return function(*args, **kwargs)
-            if function is arxiv_filter._release_claim:
-                return function(*args, **kwargs)
-            raise Exception("Network error")
+        result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
 
-        with patch.object(arxiv_filter, "run_sync", side_effect=run_sync_for_test):
-            result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
-            assert result == []
+        assert result == []
 
 
 # ============================================================
@@ -642,56 +553,22 @@ class TestScheduledTasks:
     """测试定时任务"""
 
     @pytest.mark.asyncio
-    async def test_scheduled_check(self, mock_context):
-        """测试定时检查任务"""
-        with patch.object(
-            arxiv_filter, "_check_arxiv_update", new=AsyncMock(return_value=[])
-        ) as mock_check:
-            await arxiv_filter.scheduled_check(mock_context)
-            mock_check.assert_called_once_with(mock_context, is_final_check=False)
+    @pytest.mark.parametrize(
+        ("entry", "sends_stop_notice"),
+        [("scheduled_check", False), ("scheduled_final_check", True)],
+    )
+    async def test_scheduled_entries_run_update_check(
+        self, mock_context, tmp_path, monkeypatch, entry, sends_stop_notice
+    ):
+        """页面仍是旧日期：定时检查继续等待，仅最后一次检查发停更通知"""
+        ArxivWorld(monkeypatch, tmp_path, list_date="2026-01-01")
 
-    @pytest.mark.asyncio
-    async def test_scheduled_final_check(self, mock_context):
-        """测试最后检查任务"""
-        with patch.object(
-            arxiv_filter, "_check_arxiv_update", new=AsyncMock(return_value=[])
-        ) as mock_check:
-            await arxiv_filter.scheduled_final_check(mock_context)
-            mock_check.assert_called_once_with(mock_context, is_final_check=True)
+        result = await getattr(arxiv_filter, entry)(mock_context)
 
-
-# ============================================================
-# Test Help
-# ============================================================
-
-
-class TestHelp:
-    """测试帮助信息"""
-
-    def test_show_help(self):
-        """测试显示帮助信息"""
-        help_text = arxiv_filter._HELP_TEXT
-        assert help_text is not None
-        assert "arXiv" in help_text
-        assert "论文" in help_text
-        assert "/arxiv" in help_text
-
-
-# ============================================================
-# Test Init
-# ============================================================
-
-
-class TestInit:
-    """测试插件初始化"""
-
-    def test_init_clears_cache(self):
-        """测试初始化清除缓存"""
-        # 设置缓存
-        arxiv_filter._inference_func = lambda: "cached"
-        arxiv_filter.init()
-        # 缓存应该被清除
-        assert arxiv_filter._inference_func is None
+        if sends_stop_notice:
+            assert "暂未更新" in str(result)
+        else:
+            assert result == []
 
 
 # ============================================================
@@ -703,27 +580,21 @@ class TestMultiplePapers:
     """测试多论文场景"""
 
     @pytest.mark.asyncio
-    async def test_multiple_papers_output(self, mock_context, mock_event):
+    async def test_multiple_papers_output(self, mock_context, mock_event, tmp_path, monkeypatch):
         """测试多论文输出格式"""
-        mock_result = """
------ Positive #1 -----
-Title      : First Paper Title
-Link       : https://arxiv.org/abs/1111.1111
-Probability: 0.9000
+        ArxivWorld(
+            monkeypatch,
+            tmp_path,
+            list_date = "2026-08-06",
+            titles    = ["First Pulsar Paper Title", "Second Pulsar Paper Title"],
+        )
 
------ Positive #2 -----
-Title      : Second Paper Title
-Link       : https://arxiv.org/abs/2222.2222
-Probability: 0.7500
-"""
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
-        ):
-            result = await arxiv_filter._run_filter(mock_context)
-            assert result is not None
-            result_text = str(result)
-            assert "First Paper Title" in result_text
-            assert "Second Paper Title" in result_text
+        result = await arxiv_filter._run_filter(mock_context)
+
+        assert result is not None
+        result_text = str(result)
+        assert "First Pulsar Paper Title" in result_text
+        assert "Second Pulsar Paper Title" in result_text
 
     def test_extract_arxiv_links_normalizes_and_dedupes(self):
         text = """
@@ -737,96 +608,80 @@ Link       : https://arxiv.org/abs/2605.18050
         ]
 
     @pytest.mark.asyncio
-    async def test_run_filter_schedules_codex_summary_with_positive_links(self, mock_context):
-        mock_result = """
------ Positive #1 -----
-Title      : First Paper Title
-Link       : https://arxiv.org/abs/2605.16917
-Probability: 0.9000
+    async def test_run_filter_schedules_codex_summary_with_positive_links(
+        self, mock_context, tmp_path, monkeypatch
+    ):
+        ArxivWorld(
+            monkeypatch,
+            tmp_path,
+            list_date = "2026-05-19",
+            titles    = ["First Pulsar Paper Title", "Second Pulsar Paper Title"],
+        )
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(return_value="queued")
+        mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
 
------ Positive #2 -----
-Title      : Second Paper Title
-Link       : https://arxiv.org/abs/2605.18050
-Probability: 0.7500
-"""
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
-        ):
-            with patch.object(
-                arxiv_filter, "schedule_codex_summary_from_filter_result"
-            ) as schedule_mock:
-                result = await arxiv_filter._run_filter(
-                    mock_context,
-                    allow_codex_sidecar = True,
-                    source_date         = "2026-05-19",
-                )
-
-        assert "First Paper Title" in str(result)
-        schedule_mock.assert_called_once_with(
+        result = await arxiv_filter._run_filter(
             mock_context,
-            date        = "2026-05-19",
-            filter_text = mock_result,
+            allow_codex_sidecar = True,
+            source_date         = "2026-05-19",
+        )
+        await _drain_codex_sidecar(mock_context)
+
+        assert "First Pulsar Paper Title" in str(result)
+        service.enqueue_or_replay.assert_awaited_once_with(
+            date  = "2026-05-19",
+            links = ["https://arxiv.org/abs/2607.00001", "https://arxiv.org/abs/2607.00002"],
         )
 
     @pytest.mark.asyncio
-    async def test_run_filter_keeps_paper_list_when_codex_schedule_fails(self, mock_context):
-        mock_result = """
------ Positive #1 -----
-Title      : First Paper Title
-Link       : https://arxiv.org/abs/2605.16917
-Probability: 0.9000
-"""
-        with patch.object(
-            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
-        ):
-            with patch.object(
-                arxiv_filter,
-                "schedule_codex_summary_from_filter_result",
-                side_effect=RuntimeError("queue unavailable"),
-            ):
-                result = await arxiv_filter._run_filter(
-                    mock_context,
-                    allow_codex_sidecar = True,
-                    source_date         = "2026-05-19",
-                )
+    async def test_run_filter_keeps_paper_list_when_codex_schedule_fails(
+        self, mock_context, tmp_path, monkeypatch
+    ):
+        ArxivWorld(
+            monkeypatch, tmp_path, list_date="2026-05-19", titles=["First Pulsar Paper Title"]
+        )
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+        mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
 
-        assert "First Paper Title" in str(result)
+        result = await arxiv_filter._run_filter(
+            mock_context,
+            allow_codex_sidecar = True,
+            source_date         = "2026-05-19",
+        )
+        await _drain_codex_sidecar(mock_context)
+
+        assert "First Pulsar Paper Title" in str(result)
+        service.enqueue_or_replay.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_run_filter_does_not_guess_codex_date_when_source_date_is_unknown(
         self,
         mock_context,
+        tmp_path,
+        monkeypatch,
     ):
-        mock_result = """
------ Positive #1 -----
-Title      : First Paper Title
-Link       : https://arxiv.org/abs/2605.16917
-Probability: 0.9000
-"""
-        with (
-            patch.object(
-                arxiv_filter,
-                "_load_inference",
-                return_value=lambda **kwargs: mock_result,
-            ),
-            patch.object(
-                arxiv_filter,
-                "schedule_codex_summary_from_filter_result",
-            ) as schedule_mock,
-        ):
-            result = await arxiv_filter._run_filter(
-                mock_context,
-                allow_codex_sidecar = True,
-                source_date         = None,
-            )
+        ArxivWorld(
+            monkeypatch, tmp_path, list_date="2026-05-19", titles=["First Pulsar Paper Title"]
+        )
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(return_value="queued")
+        mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
+
+        result = await arxiv_filter._run_filter(
+            mock_context,
+            allow_codex_sidecar = True,
+            source_date         = None,
+        )
+        await _drain_codex_sidecar(mock_context)
 
         assert "日期未能确认" in str(result)
-        schedule_mock.assert_not_called()
+        service.enqueue_or_replay.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_codex_summary_missing_codex_does_not_raise(self, mock_context):
-        mock_context.send_action = AsyncMock()
-        service                  = Mock()
+        service = Mock()
         service.enqueue_or_replay = AsyncMock(side_effect=RuntimeError("codex unavailable"))
         mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
         task = arxiv_codex_summary.schedule_codex_summary(
@@ -881,8 +736,7 @@ Probability: 0.9000
         principal,
         is_system,
     ):
-        mock_context.send_action = AsyncMock()
-        service                  = Mock()
+        service = Mock()
         service.enqueue_or_replay = AsyncMock(return_value="queued")
         mock_context.principal    = principal
         mock_context.capabilities = PluginCapabilities(
@@ -906,43 +760,40 @@ Probability: 0.9000
     async def test_scheduled_zero_targets_skip_before_claim_or_inference(
         self,
         mock_context,
+        tmp_path,
+        monkeypatch,
     ):
+        world = ArxivWorld(monkeypatch, tmp_path, list_date=_today(mock_context))
         mock_context.principal = PluginPrincipal(kind="scheduled_system", delivery_targets=())
         mock_context.capabilities = PluginCapabilities(is_system=True)
 
-        with patch.object(
-            arxiv_filter,
-            "_claim_send_today",
-            side_effect=AssertionError("zero-target schedule must not claim"),
-        ):
-            assert await arxiv_filter.scheduled_check(mock_context) == []
-            assert await arxiv_filter.scheduled_final_check(mock_context) == []
+        assert await arxiv_filter.scheduled_check(mock_context) == []
+        assert await arxiv_filter.scheduled_final_check(mock_context) == []
+
+        assert world.requests == []
+        assert list(mock_context.data_dir.glob("claim-*")) == []
 
     @pytest.mark.asyncio
-    async def test_filter_inference_is_singleflight_and_cached_per_source_date(self, mock_context):
-        calls = 0
-        gate  = threading.Event()
+    async def test_filter_inference_is_singleflight_and_cached_per_source_date(
+        self, mock_context, tmp_path, monkeypatch
+    ):
+        world = ArxivWorld(monkeypatch, tmp_path, list_date="2026-08-06")
+        gate = threading.Event()
+        # 推理在抓取 arXiv 页面时被挡住，期间并发的两次筛选必须共用同一次推理。
+        world.request_barrier = lambda: gate.wait(1)
 
-        def inference(**_kwargs):
-            nonlocal calls
-            calls += 1
-            gate.wait(1)
-            return "No positive predictions"
+        first = asyncio.create_task(
+            arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
+        )
+        second = asyncio.create_task(
+            arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
+        )
+        await asyncio.sleep(0.05)
+        gate.set()
+        await asyncio.gather(first, second)
+        await arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
 
-        arxiv_filter._FILTER_CACHE.clear()
-        with patch.object(arxiv_filter, "_load_inference", return_value=inference):
-            first = asyncio.create_task(
-                arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
-            )
-            second = asyncio.create_task(
-                arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
-            )
-            await asyncio.sleep(0.05)
-            gate.set()
-            await asyncio.gather(first, second)
-            await arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
-
-        assert calls == 1
+        assert len(world.requests) == 1
 
 
 def test_arxiv_daily_claim_is_atomic_and_releasable(temp_data_dir):
@@ -994,28 +845,6 @@ def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
     assert captured["cwd"] == str(module.SCRIPT_DIR)
 
 
-# ============================================================
-# Test Date Handling
-# ============================================================
-
-
-class TestDateHandling:
-    """测试日期处理"""
-
-    def test_date_format_in_status(self, temp_data_dir):
-        """测试状态中的日期格式"""
-        arxiv_filter._mark_sent_today(
-            temp_data_dir,
-            arxiv_filter._business_now().date().isoformat(),
-        )
-        status = arxiv_filter._load_update_status(temp_data_dir)
-
-        # 检查日期格式
-        assert "last_sent_date" in status
-        # 应该是 ISO 格式
-        assert "-" in status["last_sent_date"]
-
-
 class TestInferenceBackendCaching:
     def test_transformers_backend_caches_model_objects(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
@@ -1062,15 +891,10 @@ class TestInferenceBackendCaching:
         backend = importlib.import_module("plugins.arxiv_filter.inference.knn_backend")
         shared  = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
+        write_knn_model(tmp_path)
         artifact = tmp_path / "artifact.json"
         artifact.write_text('{"version": 1}', encoding="utf-8")
-
-        class DummyModel:
-            def predict_proba(self, _data, input_mode="title_abstract"):
-                return backend.np.array([0.9], dtype=backend.np.float32)
-
-        constructor = Mock(return_value=DummyModel())
-        monkeypatch.setattr(backend, "KNNInferenceModel", constructor)
+        encoder = install_fake_encoder(monkeypatch)
 
         params = shared.InferenceParams(
             model_path = str(tmp_path),
@@ -1087,23 +911,47 @@ class TestInferenceBackendCaching:
         artifact.write_text('{"version": 2}', encoding="utf-8")
         backend.run_knn_inference(params, data)
 
-        assert constructor.call_count == 2
+        # 每构造一次模型就加载一次编码器：模型文件变化后才重新构造。
+        assert len(encoder.loads) == 2
 
     def test_multi_interest_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
-        pd      = pytest.importorskip("pandas")
-        backend = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
-        shared  = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        pd       = pytest.importorskip("pandas")
+        np       = pytest.importorskip("numpy")
+        joblib   = pytest.importorskip("joblib")
+        backend  = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
+        shared   = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        numerics = importlib.import_module("plugins.arxiv_filter.numerics")
         backend._MODEL_CACHE.clear()
+
+        # 一个只有一个兴趣中心的真实多兴趣模型：分类器在两条样本上拟合。
+        centers = np.array([[1.0, 0.0]], dtype=np.float32)
+        centroid = np.array([1.0, 0.0], dtype=np.float32)
+        features, _, _ = numerics.build_interest_features(
+            np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32), centers, centroid, None
+        )
+        joblib.dump(
+            {
+                "encoder_name"    : "fake-encoder",
+                "n_interests"     : 1,
+                "embedding_dim"   : 2,
+                "interest_centers": centers,
+                "pos_centroid"    : centroid,
+                "neg_centroid"    : None,
+                "classifier"      : backend.LogisticRegression().fit(features, [1, 0]),
+                "threshold"       : 0.5,
+                "threshold_beta"  : 1.0,
+                "cluster_keywords": ["pulsar"],
+                "cluster_sizes"   : [1],
+                "cluster_examples": [["Pulsar"]],
+                "feature_names"   : numerics.interest_feature_names(1),
+                "columns"         : {},
+            },
+            tmp_path / "artifacts.joblib",
+        )
         artifact = tmp_path / "artifact.json"
         artifact.write_text('{"version": 1}', encoding="utf-8")
-
-        class DummyModel:
-            def predict_proba(self, _data, input_mode="title_abstract"):
-                return backend.np.array([0.9], dtype=backend.np.float32)
-
-        constructor = Mock(return_value=DummyModel())
-        monkeypatch.setattr(backend, "MultiInterestInferenceModel", constructor)
+        encoder = install_fake_encoder(monkeypatch)
 
         params = shared.InferenceParams(
             model_path = str(tmp_path),
@@ -1120,4 +968,5 @@ class TestInferenceBackendCaching:
         artifact.write_text('{"version": 2}', encoding="utf-8")
         backend.run_multi_interest_inference(params, data)
 
-        assert constructor.call_count == 2
+        # 每构造一次模型就加载一次编码器：模型文件变化后才重新构造。
+        assert len(encoder.loads) == 2

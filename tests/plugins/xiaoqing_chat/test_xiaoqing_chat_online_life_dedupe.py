@@ -23,10 +23,10 @@ from plugins.xiaoqing_memory.model import GLOBAL, Note, Page, PageLine
 from plugins.xiaoqing_memory.ops import apply_record
 from plugins.xiaoqing_memory.recall import recall
 from plugins.xiaoqing_memory.scopes import SELF_SUBJECT
-from tests.plugins.xiaoqing_life.support import at, make_cfg
-from tests.plugins.xiaoqing_life.support import new_store as new_life_store
-from tests.plugins.xiaoqing_memory.support import CFG, life_system
-from tests.plugins.xiaoqing_memory.support import new_store as new_memory_store
+from tests.helpers.xiaoqing_life_test_support import at, make_cfg
+from tests.helpers.xiaoqing_life_test_support import new_store as new_life_store
+from tests.helpers.xiaoqing_memory_test_support import CFG, life_system
+from tests.helpers.xiaoqing_memory_test_support import new_store as new_memory_store
 
 MOMENT = at(14, 0)
 NOW    = MOMENT.timestamp()

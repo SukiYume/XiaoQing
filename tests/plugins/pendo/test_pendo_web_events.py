@@ -1,16 +1,15 @@
-"""Regression tests for the redesigned Pendo web events page."""
+"""Overview, detail and collection API behaviour of the Pendo web events page."""
 
 import shutil
 import uuid
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.identifiers import is_canonical_internal_id
-from plugins.pendo.web.analytics.event_schedule import ensure_datetime
 from plugins.pendo.web.analytics.events_overview import build_event_detail, build_events_overview
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 ROOT = REPOSITORY_ROOT
 
@@ -179,13 +178,6 @@ def test_build_events_overview_includes_each_day_for_multi_day_events():
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def test_event_schedule_converts_offset_aware_datetimes_to_default_local_time():
-    parsed = ensure_datetime("2026-04-29T00:30:00+00:00", ZoneInfo("Asia/Shanghai"))
-
-    assert parsed is not None
-    assert parsed.isoformat(timespec="seconds") == "2026-04-29T08:30:00"
 
 
 def test_build_event_detail_includes_reminder_logs_and_related_instances():
@@ -554,7 +546,7 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
+def test_build_events_overview_batches_reminder_log_reads():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_batch_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db       = Database(str(temp_dir / "pendo.db"))
@@ -583,30 +575,17 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
         db.log_reminder("batch_ev1", db.get_item("batch_ev1", owner_id).remind_times[0], sent=True)
         db.log_reminder("batch_ev2", db.get_item("batch_ev2", owner_id).remind_times[0], sent=True)
 
-        original_fetch = db.get_reminder_logs_by_item_ids
-        call_info      = {"count": 0, "event_ids": []}
+        with trace_sql_statements(db.get_connection()) as statements:
+            result = build_events_overview(
+                db         = db,
+                owner_id   = owner_id,
+                start_date = "2026-03-01",
+                end_date   = "2026-03-31",
+            )
 
-        def wrapped_fetch(request_owner, event_ids):
-            call_info["count"] += 1
-            call_info["event_ids"] = list(event_ids)
-            return original_fetch(request_owner, event_ids)
-
-        monkeypatch.setattr(db, "get_reminder_logs_by_item_ids", wrapped_fetch)
-
-        def fail_get_reminder_logs(*args, **kwargs):
-            raise AssertionError("build_events_overview should batch reminder log reads")
-
-        monkeypatch.setattr(Database, "get_reminder_logs", fail_get_reminder_logs)
-
-        result = build_events_overview(
-            db         = db,
-            owner_id   = owner_id,
-            start_date = "2026-03-01",
-            end_date   = "2026-03-31",
-        )
-
-        assert call_info["count"] == 1
-        assert sorted(call_info["event_ids"]) == ["batch_ev1", "batch_ev2", "batch_ev3"]
+        log_reads = [sql for sql in statements if "FROM reminder_logs" in sql]
+        assert len(log_reads) == 1
+        assert all(event_id in log_reads[0] for event_id in ("batch_ev1", "batch_ev2", "batch_ev3"))
         assert result["summary"]["event_count"] == 3
         assert result["summary"]["reminder_count"] == 3
     finally:

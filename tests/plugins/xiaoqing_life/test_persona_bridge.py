@@ -4,26 +4,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-
-import pytest
 
 from plugins.xiaoqing_life import persona_bridge as pb
-from tests.plugins.xiaoqing_life.support import at, make_cfg, make_context
+from tests.helpers.xiaoqing_life_test_support import (
+    at,
+    make_cfg,
+    make_context,
+    write_persona_card,
+)
 
 ROUTINE = ("每天 00:30-08:00 睡觉（睡）", "工作日 09:00-11:50 上课（忙）")
 
 
-def _card(monkeypatch: pytest.MonkeyPatch, routine=ROUTINE) -> None:
-    card = SimpleNamespace(routine=tuple(routine), facts=lambda name: f"{name}的人设")
-    monkeypatch.setattr(pb, "persona_card", lambda _context: card)
-
-
-def test_routine_slots_drive_availability_and_minutes_until_sleep(
-    monkeypatch, tmp_path: Path
-) -> None:
-    _card(monkeypatch)
+def test_routine_slots_drive_availability_and_minutes_until_sleep(tmp_path: Path) -> None:
     context, cfg = make_context(tmp_path), make_cfg()
+    write_persona_card(context, tmp_path, ROUTINE)
     free = pb.availability(context, cfg, at(14, 0))
     assert (free.availability, free.minutes_until_sleep) == ("free", 630)
     late = pb.availability(context, cfg, at(23, 40))
@@ -40,15 +35,15 @@ def test_routine_slots_drive_availability_and_minutes_until_sleep(
     assert weekend.availability == "free"
 
 
-def test_missing_or_broken_routine_falls_back_to_quiet_hours(monkeypatch, tmp_path: Path) -> None:
+def test_missing_or_broken_routine_falls_back_to_quiet_hours(tmp_path: Path) -> None:
     context, cfg = make_context(tmp_path), make_cfg(quiet_hours="01:00-09:00")
-    monkeypatch.setattr(pb, "persona_card", lambda _context: None)
+    write_persona_card(context, tmp_path, None)
     assert pb.availability(context, cfg, at(3, 0)).availability == "asleep"
     day = pb.availability(context, cfg, at(23, 0))
     assert (day.availability, day.minutes_until_sleep) == ("free", 120)
-    _card(monkeypatch, routine=())
+    write_persona_card(context, tmp_path, ())
     assert pb.availability(context, cfg, at(3, 0)).availability == "asleep"
-    _card(monkeypatch, routine=("这不是作息",))
+    write_persona_card(context, tmp_path, ("这不是作息",))
     assert pb.availability(context, cfg, at(3, 0)).availability == "asleep"
     assert pb.availability(context, cfg, at(12, 0)).availability == "free"
 
@@ -64,13 +59,11 @@ def test_quiet_hours_may_cross_midnight_or_not(tmp_path: Path) -> None:
         assert (presence.availability == "asleep") is asleep
 
 
-def test_card_loader_failures_do_not_raise(monkeypatch, tmp_path: Path) -> None:
-    context        = make_context(tmp_path)
-    context.config = {"plugins": {"xiaoqing_chat": "not a mapping"}}
-    assert isinstance(pb.persona_facts(context), str)  # 配置读不懂也不抛异常
-    broken = SimpleNamespace(routine=ROUTINE, facts=lambda _n: 1 / 0)
-    monkeypatch.setattr(pb, "persona_card", lambda _c: broken)
-    assert pb.persona_facts(context) == f"你是{pb.bot_name(context)}。"  # 读不到人设时只交代名字
+def test_a_persona_card_that_cannot_be_read_falls_back_to_the_name(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    write_persona_card(context, tmp_path, None)
+
+    assert pb.persona_facts(context) == f"你是{pb.bot_name(context)}。"
 
 
 def test_real_persona_card_loads_with_default_chat_config(tmp_path: Path) -> None:

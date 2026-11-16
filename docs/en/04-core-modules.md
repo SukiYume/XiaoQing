@@ -124,7 +124,7 @@ AI Service resolves providers, models, plugin routes, and credentials from the s
 |---|---|
 | `logging_config.py` | Console, file, color, rotation, log format |
 | `metrics.py` | Message, plugin, error, latency, queue metrics |
-| `clock.py` | Timezone-aware time and a testable clock |
+| `clock.py` | Current time in the configured timezone |
 | `constants.py` | Shared Core boundary constants |
 | `exceptions.py` | Domain exception types |
 | `version.py` | Runtime version from project metadata or wheel metadata |

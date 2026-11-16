@@ -1,5 +1,4 @@
-# 验证重置与正在进行的记忆落盘之间的代际隔离。
-"""Regression tests for reset versus in-flight memory persistence."""
+"""重置与正在进行的记忆落盘之间的代际隔离：重置等旧快照提交完再清掉，重置后的新消息不带旧历史。"""
 
 from __future__ import annotations
 

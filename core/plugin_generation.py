@@ -104,7 +104,7 @@ class PluginGenerationMixin:
             plugin_dir: Path,
             definition: PluginDefinition,
             *,
-            previous: int | float | None = None,
+            previous: _PluginContentFingerprint | None = None,
         ) -> _PluginContentFingerprint:
             raise NotImplementedError
 
@@ -131,7 +131,7 @@ class PluginGenerationMixin:
             self,
             plugin_dir: Path,
             definition: PluginDefinition,
-            mtime: int | float,
+            mtime: _PluginContentFingerprint,
             *,
             module: ModuleType | None                  = None,
             authorized_entry: Path | None              = None,
@@ -143,7 +143,7 @@ class PluginGenerationMixin:
             self,
             plugin_dir: Path,
             definition: PluginDefinition,
-            mtime: int | float,
+            mtime: _PluginContentFingerprint,
             *,
             module: ModuleType | None                  = None,
             authorized_entry: Path | None              = None,
@@ -385,7 +385,7 @@ class PluginGenerationMixin:
         self,
         definition: PluginDefinition,
         module: ModuleType,
-        mtime: float,
+        mtime: _PluginContentFingerprint,
         *,
         retain_quarantine: bool = False,
     ) -> bool:
@@ -682,14 +682,6 @@ class PluginGenerationMixin:
         gate   = self._execution_gates.get(name) or (
             plugin.execution_gate if plugin is not None else None
         )
-        if plugin is not None and gate is None:
-            gate = self._new_execution_gate(
-                plugin.definition.concurrency,
-                name,
-                plugin.definition.capabilities,
-            )
-            plugin.execution_gate       = gate
-            self._execution_gates[name] = gate
         if gate is not None:
             drain = await self._close_generation_gate(
                 name,
@@ -931,16 +923,9 @@ class PluginGenerationMixin:
     ) -> _RetiredPluginGeneration | None:
         """Drain, stop, and detach the old generation while retaining rollback data."""
 
-        old_state          = self._plugin_states.setdefault(name, {})
-        old_state_snapshot = dict(old_state)
-        old_gate           = old_plugin.execution_gate or self._execution_gates.get(name)
-        if old_gate is None:
-            old_gate = self._new_execution_gate(
-                old_plugin.definition.concurrency,
-                name,
-                old_plugin.definition.capabilities,
-            )
-        old_plugin.execution_gate   = old_gate
+        old_state                   = self._plugin_states.setdefault(name, {})
+        old_state_snapshot          = dict(old_state)
+        old_gate                    = old_plugin.execution_gate
         self._execution_gates[name] = old_gate
 
         old_drain = await self._close_generation_gate(
@@ -1292,29 +1277,18 @@ class PluginGenerationMixin:
         modules: Mapping[str, ModuleType],
         plugin_dir: Path,
         authorization_definition: PluginDefinition,
-        authorization_mtime: int | float,
+        authorization_mtime: _PluginContentFingerprint,
         original_error: BaseException,
     ) -> bool:
         """Restore a cleanly retired generation after candidate rollback."""
 
-        old_sources = (
-            plugin.mtime.sources if isinstance(plugin.mtime, _PluginContentFingerprint) else None
-        )
+        old_sources = plugin.mtime.sources
         try:
-            plugin_root = (
-                resolve_plugin_root(self.plugins_dir, plugin_dir)
-                if old_sources is not None
-                else None
-            )
+            plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
         except PluginPathError as restore_collision:
             self._restart_required_plugins.add(name)
             state.clear()
             state.update(state_snapshot)
-            plugin.execution_gate = plugin.execution_gate or self._new_execution_gate(
-                plugin.definition.concurrency,
-                name,
-                plugin.definition.capabilities,
-            )
             plugin.execution_gate.close_admission()
             self._plugin_states[name] = state
             self._quarantine_closed_plugin(
@@ -1358,7 +1332,7 @@ class PluginGenerationMixin:
                     self._restore_generation_modules,
                     name,
                     modules,
-                    plugin_root = plugin_root if old_sources is not None else None,
+                    plugin_root = plugin_root,
                     sources     = old_sources,
                 )
             except PluginPathError as restore_collision:
@@ -1673,14 +1647,14 @@ class PluginGenerationMixin:
         self,
         definition: PluginDefinition,
         module: ModuleType,
-        mtime: float,
+        mtime: _PluginContentFingerprint,
         *,
-        loaded_plugin: LoadedPlugin | None                                 = None,
-        authorized_entry: Path | None                                      = None,
-        current_authorization: tuple[PluginDefinition, int | float] | None = None,
-        _publication_finder: _SourceOnlyPluginFinder | None                = None,
-        _generation_quiesced: bool                                         = False,
-        _authorization_verified: bool                                      = False,
+        loaded_plugin: LoadedPlugin,
+        authorized_entry: Path | None                                                    = None,
+        current_authorization: tuple[PluginDefinition, _PluginContentFingerprint] | None = None,
+        _publication_finder: _SourceOnlyPluginFinder | None                              = None,
+        _generation_quiesced: bool                                                       = False,
+        _authorization_verified: bool                                                    = False,
     ) -> LoadedPlugin:
         effective_entry = authorized_entry or (
             loaded_plugin.authorized_entry if loaded_plugin is not None else None
@@ -1755,19 +1729,7 @@ class PluginGenerationMixin:
             previous_commands = self.router.replace_plugin(definition.name, command_specs)
             self._unregister_services_owned_by(definition.name)
             self._services.update(services)
-            loaded = loaded_plugin or LoadedPlugin(
-                definition       = definition,
-                module           = module,
-                mtime            = mtime,
-                execution_gate   = execution_gate,
-                services         = services,
-                authorized_entry = effective_entry,
-                data_dir         = (
-                    self._data_directories[definition.name].path
-                    if definition.name in self._data_directories
-                    else None
-                ),
-            )
+            loaded                    = loaded_plugin
             loaded.definition         = definition
             loaded.module             = module
             loaded.mtime              = mtime
@@ -1820,27 +1782,19 @@ class PluginGenerationMixin:
         self,
         definition: PluginDefinition,
         module: ModuleType,
-        mtime: float,
+        mtime: _PluginContentFingerprint,
         *,
-        loaded_plugin: LoadedPlugin | None                                 = None,
-        authorized_entry: Path | None                                      = None,
-        current_authorization: tuple[PluginDefinition, int | float] | None = None,
+        loaded_plugin: LoadedPlugin,
+        authorized_entry: Path | None                                                    = None,
+        current_authorization: tuple[PluginDefinition, _PluginContentFingerprint] | None = None,
     ) -> LoadedPlugin:
         """Quiesce import threads without blocking the asyncio event loop."""
 
         effective_entry = authorized_entry or (
             loaded_plugin.authorized_entry if loaded_plugin is not None else None
         )
-        # 没有入口授权记录（内存中合成的插件）时无需在线程中静默导入
         if effective_entry is None:
-            return self._register_loaded_plugin(
-                definition,
-                module,
-                mtime,
-                loaded_plugin         = loaded_plugin,
-                authorized_entry      = authorized_entry,
-                current_authorization = current_authorization,
-            )
+            raise PluginLoadError(definition.name, "Plugin has no authorized entry to publish")
         finder = await self._await_uncancellable_thread_transaction(
             self._quiesce_source_generation_for_publication,
             definition.name,
@@ -1849,7 +1803,7 @@ class PluginGenerationMixin:
             definition,
             mtime,
         )
-        if isinstance(authorization_mtime, _PluginContentFingerprint) and not (
+        if not (
             await self._definition_is_current_async(
                 self.plugins_dir / definition.name,
                 authorization_definition,
@@ -2117,16 +2071,13 @@ class PluginGenerationMixin:
         modules: Mapping[str, ModuleType],
         canonical: str,
         prefix: str,
-        prepared_finder: _SourceOnlyPluginFinder | None,
+        prepared_finder: _SourceOnlyPluginFinder,
     ) -> None:
         """在持有全局导入锁时复核恢复事务的所有权与空闲槽位。"""
 
         if _PLUGIN_NAMESPACE_OWNERS.get(plugin_name) is not self._namespace_owner_token:
             raise PluginPathError("restore namespace ownership changed before commit")
-        if (
-            prepared_finder is not None
-            and self._source_finders.get(plugin_name) is not prepared_finder
-        ):
+        if self._source_finders.get(plugin_name) is not prepared_finder:
             raise PluginPathError("restore source finder changed before commit")
         foreign_modules = [
             module_name
@@ -2144,18 +2095,17 @@ class PluginGenerationMixin:
         self,
         ordered: list[tuple[str, ModuleType]],
         modules: Mapping[str, ModuleType],
-        prepared_finder: _SourceOnlyPluginFinder | None,
         missing: object,
     ) -> tuple[
-        dict[str, tuple[dict[str, Any], str] | None],
+        dict[str, tuple[dict[str, Any], str]],
         set[str],
         set[str],
     ]:
         """验证待恢复模块的父链，并记录真正需要写入的空槽位。"""
 
-        parent_bindings     : dict[str, tuple[dict[str, Any], str] | None] = {}
-        missing_module_slots: set[str]                                     = set()
-        missing_parent_slots: set[str]                                     = set()
+        parent_bindings     : dict[str, tuple[dict[str, Any], str]] = {}
+        missing_module_slots: set[str]                              = set()
+        missing_parent_slots: set[str]                              = set()
         for module_name, module in ordered:
             current = sys.modules.get(module_name, missing)
             if current is not missing and current is not module:
@@ -2167,15 +2117,6 @@ class PluginGenerationMixin:
             parent_name, _, child_name = module_name.rpartition(".")
             parent = self._plugins_package if parent_name == "plugins" else modules.get(parent_name)
             if not isinstance(parent, ModuleType):
-                # 无源码快照的旧测试夹具可能只保留入口模块；仅允许父槽仍为空的
-                # 这种狭窄形态，真实源码代际必须恢复完整且精确的父链。
-                if (
-                    prepared_finder is None
-                    and parent_name != "plugins"
-                    and sys.modules.get(parent_name, missing) is missing
-                ):
-                    parent_bindings[module_name] = None
-                    continue
                 raise PluginPathError(f"restore mapping has no exact parent for: {module_name}")
             cached_parent = sys.modules.get(parent_name, missing)
             if parent_name == "plugins":
@@ -2256,10 +2197,10 @@ class PluginGenerationMixin:
         plugin_name: str,
         modules: Mapping[str, ModuleType],
         ordered: list[tuple[str, ModuleType]],
-        parent_bindings: Mapping[str, tuple[dict[str, Any], str] | None],
+        parent_bindings: Mapping[str, tuple[dict[str, Any], str]],
         missing_module_slots: set[str],
         missing_parent_slots: set[str],
-        prepared_finder: _SourceOnlyPluginFinder | None,
+        prepared_finder: _SourceOnlyPluginFinder,
         missing: object,
     ) -> None:
         """写入完整代际；发布中途失败时只撤销本事务插入的精确对象。"""
@@ -2276,10 +2217,7 @@ class PluginGenerationMixin:
                     )
                 if module_name in missing_module_slots:
                     inserted_modules.append((module_name, module))
-                parent_binding = parent_bindings[module_name]
-                if parent_binding is None:
-                    continue
-                namespace, child_name = parent_binding
+                namespace, child_name = parent_bindings[module_name]
                 current_parent = namespace.setdefault(child_name, module)
                 if current_parent is not module:
                     raise PluginPathError(
@@ -2288,11 +2226,9 @@ class PluginGenerationMixin:
                 if module_name in missing_parent_slots:
                     inserted_parents.append((namespace, child_name, module))
             self._owned_plugin_modules[plugin_name] = dict(modules)
-            if prepared_finder is not None:
-                prepared_finder._active = True
+            prepared_finder._active                 = True
         except BaseException:
-            if prepared_finder is not None:
-                prepared_finder._active = False
+            prepared_finder._active                 = False
             self._owned_plugin_modules[plugin_name] = {}
             for namespace, child_name, module in reversed(inserted_parents):
                 if namespace.get(child_name, missing) is module:
@@ -2309,13 +2245,11 @@ class PluginGenerationMixin:
         plugin_name: str,
         modules: Mapping[str, ModuleType],
         *,
-        plugin_root: Path | None            = None,
-        sources: Mapping[str, bytes] | None = None,
+        plugin_root: Path,
+        sources: Mapping[str, bytes],
     ) -> None:
         """Atomically restore exact objects while CPython import locks hide staging."""
 
-        if (plugin_root is None) != (sources is None):
-            raise PluginPathError("restored source finder requires both root and sources")
         canonical = f"plugins.{plugin_name}"
         prefix    = f"{canonical}."
         missing   = object()
@@ -2326,19 +2260,16 @@ class PluginGenerationMixin:
         ):
             raise PluginPathError("restore mapping contains non-canonical module names")
 
-        prepared_finder: _SourceOnlyPluginFinder | None = None
         with _PLUGIN_IMPORT_LOCK:
             self._claim_plugin_namespace(plugin_name)
-            if plugin_root is not None and sources is not None:
-                prepared_finder = self._prepare_inactive_source_finder(
-                    plugin_name,
-                    plugin_root,
-                    sources,
-                )
+            prepared_finder = self._prepare_inactive_source_finder(
+                plugin_name,
+                plugin_root,
+                sources,
+            )
 
         lock_names = set(modules) | {canonical}
-        if prepared_finder is not None:
-            lock_names.update(prepared_finder.possible_module_names())
+        lock_names.update(prepared_finder.possible_module_names())
 
         def commit() -> None:
             with _PLUGIN_IMPORT_LOCK:
@@ -2356,7 +2287,6 @@ class PluginGenerationMixin:
                 ) = self._prepare_restore_bindings(
                     ordered,
                     modules,
-                    prepared_finder,
                     missing,
                 )
                 self._publish_restored_modules(

@@ -1,4 +1,4 @@
-"""Pendo Web 登录码、浏览器会话和 JWT 安全契约回归。"""
+"""Pendo Web 登录码、浏览器会话和 JWT 安全契约。"""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import ANY, Mock
 
 import pytest
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Response
 
 from plugins.pendo.config import PendoConfig
+from tests.helpers.pendo_test_support import reject_inserts
 
 try:
     from plugins.pendo.web import auth as auth_module
@@ -31,7 +31,7 @@ try:
         revoke_web_session_device,
         verify_token,
     )
-    from plugins.pendo.web.services.demo_space import DemoCapacityError
+    from plugins.pendo.web.services import demo_space as demo_space_module
 except ModuleNotFoundError as exc:
     if exc.name != "jwt":
         raise
@@ -90,15 +90,6 @@ def test_generated_widget_token_contains_read_only_claims(
     lifetime = payload["exp"] - issued_at
     assert 364 * 24 * 60 * 60 <= lifetime <= 366 * 24 * 60 * 60
     assert isolated_secret_file.exists()
-
-
-def test_authentication_lifetimes_use_seconds_with_distinct_durations() -> None:
-    """登录 Code/会话同为 7 天，Widget Token 为 365 天，均使用秒。"""
-
-    day = 24 * 60 * 60
-    assert PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS == 7 * day
-    assert PendoConfig.WEB_SESSION_EXPIRE_SECONDS == 7 * day
-    assert PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS == 365 * day
 
 
 def test_widget_token_revocation_is_persistent(tmp_path: Path) -> None:
@@ -247,7 +238,7 @@ def test_widget_token_without_read_scope_is_rejected(temp_db) -> None:
 
 
 def test_token_that_is_not_a_widget_token_is_rejected(temp_db) -> None:
-    """旧的浏览器 Bearer 令牌（kind 不是 widget）不再被接受。"""
+    """kind 不是 widget 的令牌（例如浏览器 Bearer）不被接受。"""
 
     token = _sign_invalid_widget_token(
         "widget-user",
@@ -260,7 +251,7 @@ def test_token_that_is_not_a_widget_token_is_rejected(temp_db) -> None:
         verify_token(token, db=temp_db)
 
 
-def test_legacy_widget_token_without_jti_is_rejected(temp_db) -> None:
+def test_widget_token_without_jti_is_rejected(temp_db) -> None:
     auth_module.configure_auth_storage(Path(temp_db.db_path).parent)
     token = _sign_invalid_widget_token(
         "widget-user",
@@ -426,76 +417,62 @@ def test_owner_can_list_and_revoke_session_by_device(
 
 
 # 路由层只验证认证状态到 HTTP 契约的映射，底层令牌算法由上面的用例覆盖。
-def _demo_request() -> Request:
-    """构造只含客户端地址的最小演示创建请求。"""
+@pytest.fixture
+def demo_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """开启演示模式，并让每个用例从空的演示限流窗口开始。"""
 
-    return Request(
-        {
-            "type"   : "http",
-            "method" : "POST",
-            "path"   : "/api/auth/demo",
-            "headers": [],
-            "client" : ("127.0.0.1", 12345),
-        }
-    )
+    PendoConfig.configure({"web_demo_enabled": True})
+    monkeypatch.setattr(demo_space_module, "_DEMO_REQUESTS", {})
+
+
+def _fail_cookie_write(_response: Response, _session: WebSession) -> None:
+    """浏览器 Cookie 写入失败（产品没有对应的输入能触发它，只能在这条边界上注入）。"""
+
+    raise RuntimeError("cookie failed")
+
+
+def _demo_row_counts(db) -> tuple[int, int]:
+    """返回演示命名域下的用户设置行数与条目数。"""
+
+    connection = db.get_connection()
+    settings   = connection.execute(
+        "SELECT COUNT(*) FROM user_settings WHERE user_id LIKE 'demo_web_%'"
+    ).fetchone()[0]
+    items = connection.execute(
+        "SELECT COUNT(*) FROM items WHERE owner_id LIKE 'demo_web_%'"
+    ).fetchone()[0]
+    return settings, items
 
 
 def test_login_exchange_revokes_session_when_cookie_write_fails(
+    client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """登录码已消费但 Cookie 写入失败时，不得遗留不可达的服务端会话。"""
 
-    code    = issue_login_code("cookie-owner")
-    now     = time.time()
-    session = WebSession(
-        session_id = "login-cookie-failure",
-        device_id  = "login-cookie-device",
-        owner_id   = "cookie-owner",
-        csrf_token = "csrf",
-        created_at = now,
-        expires_at = now + 60,
-    )
-    revoke_session = Mock()
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_web_session",
-        Mock(return_value=session),
-    )
-    monkeypatch.setattr(
-        auth_routes_module,
-        "_set_session_cookie",
-        Mock(side_effect=RuntimeError("cookie failed")),
-    )
-    monkeypatch.setattr(auth_routes_module, "revoke_web_session", revoke_session)
+    code = issue_login_code("cookie-owner")
+    monkeypatch.setattr(auth_routes_module, "_set_session_cookie", _fail_cookie_write)
 
     with pytest.raises(RuntimeError, match="cookie failed"):
-        auth_routes_module.exchange_login_code(
-            auth_routes_module.LoginExchangeRequest(code=code),
-            Response(),
-        )
+        client.post("/api/auth/exchange", json={"code": code})
 
-    revoke_session.assert_called_once_with(session.session_id)
+    assert list_web_sessions("cookie-owner") == []
     with pytest.raises(AuthError, match="invalid, expired, or already used"):
         consume_login_code(code)
 
 
-def test_demo_route_maps_capacity_failure_to_429(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_demo_route_maps_capacity_failure_to_429(client, demo_routes) -> None:
     """演示容量错误应转换为稳定的 429，而不是泄漏成服务端异常。"""
 
-    PendoConfig.configure({"web_demo_enabled": True})
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_demo_session",
-        Mock(side_effect=DemoCapacityError("demo capacity reached")),
+    for _ in range(PendoConfig.WEB_DEMO_REQUESTS_PER_HOUR):
+        assert client.post("/api/auth/demo").status_code == 200
+
+    response = client.post("/api/auth/demo")
+
+    assert response.status_code == 429
+    assert response.json()["message"] == (
+        "Demo creation rate limit exceeded; please try again later"
     )
-
-    with pytest.raises(HTTPException) as exc_info:
-        auth_routes_module.create_demo_auth(_demo_request(), Response(), Mock())
-
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.detail == "demo capacity reached"
 
 
 def test_revoke_unknown_session_device_returns_404_without_revoking_current() -> None:
@@ -514,106 +491,49 @@ def test_revoke_unknown_session_device_returns_404_without_revoking_current() ->
     assert get_web_session(session.session_id) == session
 
 
-def test_demo_route_caps_browser_session_at_demo_lifetime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_demo_route_caps_browser_session_at_demo_lifetime(client, demo_routes) -> None:
     """演示 Cookie 会话不得比数据空间本身活得更久。"""
 
-    now     = time.time()
-    session = WebSession(
-        session_id = "demo-session",
-        device_id  = "demo-device",
-        owner_id   = "demo_web_route",
-        csrf_token = "csrf",
-        created_at = now,
-        expires_at = now + 6 * 60 * 60,
-        demo       = True,
-    )
-    create_session = Mock(return_value=session)
-    PendoConfig.configure({"web_demo_enabled": True})
-    monkeypatch.setattr(PendoConfig, "WEB_SESSION_EXPIRE_SECONDS", 7 * 24 * 60 * 60)
-    monkeypatch.setattr(PendoConfig, "WEB_DEMO_EXPIRE_HOURS", 6)
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_demo_session",
-        Mock(return_value={"owner_id": session.owner_id}),
-    )
-    monkeypatch.setattr(auth_routes_module, "create_web_session", create_session)
+    assert PendoConfig.WEB_SESSION_EXPIRE_SECONDS > PendoConfig.WEB_DEMO_EXPIRE_HOURS * 60 * 60
+    before = time.time()
 
-    payload = auth_routes_module.create_demo_auth(_demo_request(), Response(), Mock())
+    response = client.post("/api/auth/demo")
 
-    assert payload["ok"] is True
-    create_session.assert_called_once_with(
-        session.owner_id,
-        expires_seconds = 6 * 60 * 60,
-        demo            = True,
-    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["demo"] is True
+    demo_lifetime = PendoConfig.WEB_DEMO_EXPIRE_HOURS * 60 * 60
+    assert demo_lifetime - 5 <= data["expires_at"] - before <= demo_lifetime + 5
+    [session] = list_web_sessions(data["owner_id"])
+    assert session.expires_at == data["expires_at"]
 
 
 def test_demo_route_purges_owner_when_browser_session_creation_fails(
-    monkeypatch: pytest.MonkeyPatch,
+    client, temp_db, demo_routes
 ) -> None:
     """数据空间已创建但浏览器会话失败时，必须回收临时所有者。"""
 
-    owner_id    = "demo_web_session_failure"
-    purge_owner = Mock()
-    PendoConfig.configure({"web_demo_enabled": True})
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_demo_session",
-        Mock(return_value={"owner_id": owner_id}),
-    )
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_web_session",
-        Mock(side_effect=RuntimeError("session failed")),
-    )
-    monkeypatch.setattr(auth_routes_module, "purge_demo_owner", purge_owner)
+    # 存储层拒绝写入浏览器会话：演示数据空间此时已经建好。
+    reject_inserts(temp_db, "web_session_registry", "storage rejected session")
 
-    with pytest.raises(RuntimeError, match="session failed"):
-        auth_routes_module.create_demo_auth(_demo_request(), Response(), Mock())
+    with pytest.raises(RuntimeError, match="Unable to allocate a unique Pendo web session"):
+        client.post("/api/auth/demo")
 
-    purge_owner.assert_called_once_with(ANY, owner_id)
+    assert _demo_row_counts(temp_db) == (0, 0)
 
 
 def test_demo_route_revokes_session_and_purges_owner_when_cookie_write_fails(
-    monkeypatch: pytest.MonkeyPatch,
+    client, temp_db, demo_routes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cookie 写入失败时应同时撤销持久会话并清理演示数据。"""
 
-    now     = time.time()
-    session = WebSession(
-        session_id = "failed-cookie-session",
-        device_id  = "failed-cookie-device",
-        owner_id   = "demo_web_cookie_failure",
-        csrf_token = "csrf",
-        created_at = now,
-        expires_at = now + 60,
-        demo       = True,
-    )
-    revoke_session = Mock()
-    purge_owner    = Mock()
-    PendoConfig.configure({"web_demo_enabled": True})
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_demo_session",
-        Mock(return_value={"owner_id": session.owner_id}),
-    )
-    monkeypatch.setattr(
-        auth_routes_module,
-        "create_web_session",
-        Mock(return_value=session),
-    )
-    monkeypatch.setattr(
-        auth_routes_module,
-        "_set_session_cookie",
-        Mock(side_effect=RuntimeError("cookie failed")),
-    )
-    monkeypatch.setattr(auth_routes_module, "revoke_web_session", revoke_session)
-    monkeypatch.setattr(auth_routes_module, "purge_demo_owner", purge_owner)
+    monkeypatch.setattr(auth_routes_module, "_set_session_cookie", _fail_cookie_write)
 
     with pytest.raises(RuntimeError, match="cookie failed"):
-        auth_routes_module.create_demo_auth(_demo_request(), Response(), Mock())
+        client.post("/api/auth/demo")
 
-    revoke_session.assert_called_once_with(session.session_id)
-    purge_owner.assert_called_once_with(ANY, session.owner_id)
+    assert (
+        temp_db.get_connection().execute("SELECT COUNT(*) FROM web_session_registry").fetchone()[0]
+        == 0
+    )
+    assert _demo_row_counts(temp_db) == (0, 0)

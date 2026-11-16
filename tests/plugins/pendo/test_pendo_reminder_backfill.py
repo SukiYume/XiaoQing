@@ -1,18 +1,43 @@
-"""提醒回填、默认值和失效数据恢复。"""
+"""提醒确认、预确认、自动确认，以及日程列表的日期差。"""
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
+
+import pytest
+
+from plugins.pendo import main as pendo_main
+from tests.helpers.pendo_test_support import (
+    attach_action_recorder,
+    freeze_pendo_reminder_clock,
+    pendo_service_context,
+)
+
+
+@pytest.fixture
+def reminder_context(db, tmp_path):
+    """真实服务集合（共用测试数据库）；发出的私聊动作记录在 ``sent``，一律回执成功。"""
+
+    with pendo_service_context(db, tmp_path, "test.pendo.reminders") as context:
+        context.sent = attach_action_recorder(context)
+        yield context
+
+
+def _run_reminders(context) -> list[str]:
+    """跑一轮提醒定时任务，返回这一轮发出的消息文本。"""
+
+    context.sent.clear()
+    asyncio.run(pendo_main.scheduled(context))
+    return [action["params"]["message"][0]["data"]["text"] for action in context.sent]
 
 
 class TestReminderConfirmation:
     def test_event_list_includes_day_delta_for_each_event(self, monkeypatch, tmp_path):
-        from datetime import datetime
         from typing import Any, cast
         from unittest.mock import MagicMock
 
-        from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
@@ -41,10 +66,8 @@ class TestReminderConfirmation:
             db.insert_item(future_event, "evt_future")
             db.insert_item(past_event, "evt_past")
 
-            monkeypatch.setattr(
-                event_module,
-                "now_in_timezone",
-                lambda user_id=None, db=None: datetime.fromisoformat("2030-01-01T08:00:00+08:00"),
+            freeze_pendo_reminder_clock(
+                monkeypatch, datetime.fromisoformat("2030-01-01T08:00:00+08:00")
             )
 
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
@@ -214,17 +237,14 @@ class TestReminderConfirmation:
     def test_event_reminders_confirm_today_preconfirms_all_matching_reminders(
         self, tmp_path, monkeypatch
     ):
-        from datetime import datetime
         from unittest.mock import MagicMock
 
-        from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
-        fixed_now = datetime.fromisoformat("2030-01-02T08:00:00+08:00")
-        monkeypatch.setattr(
-            event_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
+        freeze_pendo_reminder_clock(
+            monkeypatch, datetime.fromisoformat("2030-01-02T08:00:00+08:00")
         )
 
         db = Database(str(tmp_path / "pendo_reminders_confirm_today.db"))
@@ -263,230 +283,116 @@ class TestReminderConfirmation:
         finally:
             db.cleanup()
 
-    def test_reminder_disabled_user_does_not_receive_scheduled_reminder(self, monkeypatch):
-        from datetime import datetime
-
-        from plugins.pendo.services import reminder as reminder_module
-        from plugins.pendo.services.reminder import ReminderService
-
-        fixed_now = datetime.fromisoformat("2030-01-01T09:00:00+08:00")
-
-        monkeypatch.setattr(
-            reminder_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
-        )
-        monkeypatch.setattr(
-            reminder_module,
-            "parse_and_localize",
-            lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(
-                tzinfo=fixed_now.tzinfo
-            ),
-        )
-
-        item = SimpleNamespace(
-            id           = "evt123",
-            owner_id     = "u1",
-            title        = "晨会",
-            start_time   = "2030-01-01T10:00:00",
-            end_time     = "2030-01-01T11:00:00",
-            remind_times = ["2030-01-01T09:00:00"],
-            context      = {},
-            location     = "会议室A",
-            notes        = "",
-            tags         = [],
-        )
-
-        class _FakeDb:
-            def __init__(self):
-                self.logged = []
-
-            def get_due_reminder_items(self, *, now):
-                return [item]
-
-            def prune_reminder_logs(self, *, before):
-                return 0
-
-            def log_reminder(self, item_id, remind_time, sent=True):
-                self.logged.append((item_id, remind_time, sent))
-
-            def get_user_settings(self, user_id):
-                return {
-                    "quiet_hours_start": "23:00",
-                    "quiet_hours_end"  : "07:00",
-                    "settings_json"    : {"reminder_enabled": False},
-                }
-
-            def get_unconfirmed_sent_reminders(self):
-                return []
-
-            def get_item(self, item_id):
-                return item
-
-        service = ReminderService(db=_FakeDb())
-
-        result = service.check_and_send_reminders()
-
-        assert result["sent"] == 0
-        assert result["messages"] == []
-        assert service.db.logged == []
-
-    def test_preconfirmed_future_reminder_is_not_sent_by_scheduler(self, monkeypatch):
-        from datetime import datetime
-
-        from plugins.pendo.services import reminder as reminder_module
-        from plugins.pendo.services.reminder import ReminderService
-
-        fixed_now = datetime.fromisoformat("2030-01-01T09:00:00+08:00")
-
-        monkeypatch.setattr(
-            reminder_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
-        )
-        monkeypatch.setattr(
-            reminder_module,
-            "parse_and_localize",
-            lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(
-                tzinfo=fixed_now.tzinfo
-            ),
-        )
-
-        item = SimpleNamespace(
-            id           = "evt123",
-            owner_id     = "u1",
-            title        = "晨会",
-            start_time   = "2030-01-01T10:00:00",
-            end_time     = "2030-01-01T11:00:00",
-            remind_times = ["2030-01-01T09:00:00"],
-            context      = {},
-            location     = "会议室A",
-            notes        = "",
-            tags         = [],
-        )
-
-        class _FakeDb:
-            def __init__(self):
-                self.logged = []
-
-            def get_due_reminder_items(self, *, now):
-                return []
-
-            def prune_reminder_logs(self, *, before):
-                return 0
-
-            def get_reminder_logs(self, item_id):
-                assert item_id == "evt123"
-                return [
-                    {
-                        "remind_time" : "2030-01-01T09:00:00",
-                        "sent_at"     : None,
-                        "confirmed_at": "2030-01-01T08:00:00",
-                        "user_action" : "preconfirmed",
-                        "repeat_count": 0,
-                        "last_sent_at": None,
-                    }
-                ]
-
-            def log_reminder(self, item_id, remind_time, sent=True):
-                self.logged.append((item_id, remind_time, sent))
-
-            def get_user_settings(self, user_id):
-                return {
-                    "quiet_hours_start": "23:00",
-                    "quiet_hours_end"  : "07:00",
-                    "settings_json"    : {"reminder_enabled": True},
-                }
-
-            def get_unconfirmed_sent_reminders(self):
-                return []
-
-            def get_item(self, item_id):
-                return item
-
-        service = ReminderService(db=_FakeDb())
-
-        result = service.check_and_send_reminders()
-
-        assert result["sent"] == 0
-        assert result["messages"] == []
-        assert service.db.logged == []
-
-    def test_stale_unconfirmed_send_auto_confirms_after_one_day(self, monkeypatch):
-        from datetime import datetime
-
-        from plugins.pendo.services import reminder as reminder_module
-        from plugins.pendo.services.reminder import ReminderService
-
-        fixed_now   = datetime.fromisoformat("2030-01-01T09:10:00+08:00")
-        remind_time = "2030-01-01T08:00:00"
-
-        monkeypatch.setattr(
-            reminder_module,
-            "parse_and_localize",
-            lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(
-                tzinfo=fixed_now.tzinfo
-            ),
-        )
-
-        item = SimpleNamespace(
-            id           = "evt123",
-            owner_id     = "u1",
-            title        = "晨会",
-            start_time   = "2030-01-01T10:00:00",
-            end_time     = "2030-01-01T11:00:00",
-            remind_times = [remind_time],
-            context      = {},
-            location     = "会议室A",
-            notes        = "",
-            tags         = [],
-        )
-
-        class _FakeDb:
-            def __init__(self):
-                self.confirm_calls = []
-
-            def get_unconfirmed_sent_reminders(self):
-                return [
-                    {
-                        "id"          : 4,
-                        "item_id"     : "evt123",
-                        "remind_time" : remind_time,
-                        "repeat_count": 1,
-                        "last_sent_at": "2029-12-31T09:00:00",
-                    }
-                ]
-
-            def get_item(self, item_id):
-                assert item_id == "evt123"
-                return item
-
-            def get_user_settings(self, user_id):
-                return {
-                    "quiet_hours_start": "23:00",
-                    "quiet_hours_end"  : "07:00",
-                    "settings_json"    : {"reminder_enabled": True},
-                }
-
-            def confirm_reminder(
-                self, item_id, user_action="confirmed", owner_id=None, remind_time=None
-            ):
-                self.confirm_calls.append(
-                    {
-                        "item_id"    : item_id,
-                        "user_action": user_action,
-                        "owner_id"   : owner_id,
-                        "remind_time": remind_time,
-                    }
-                )
-                return {"status": "success", "message": "ok"}
-
-        service = ReminderService(db=_FakeDb())
-
-        result = service._check_unconfirmed_repeats(fixed_now)
-
-        assert result == []
-        assert service.db.confirm_calls == [
+    def test_reminder_disabled_user_does_not_receive_scheduled_reminder(
+        self, db, reminder_context, monkeypatch
+    ):
+        # 2030-01-01 09:00（默认时区上海）到点的提醒。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 1, 0, tzinfo=UTC))
+        item_id = db.insert_item(
             {
-                "item_id"    : "evt123",
-                "user_action": "auto_confirmed",
-                "owner_id"   : None,
-                "remind_time": remind_time,
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "晨会",
+                "start_time"  : "2030-01-01T10:00:00",
+                "end_time"    : "2030-01-01T11:00:00",
+                "remind_times": ["2030-01-01T09:00:00"],
+                "location"    : "会议室A",
             }
-        ]
+        )
+        db.update_user_settings("1001", {"settings_json": {"reminder_enabled": False}})
+
+        assert _run_reminders(reminder_context) == []
+
+        log = db.get_reminder_logs(item_id)[0]
+        assert log["sent_at"] is None
+        assert log["state"] == "pending"
+
+        # 同一时刻重新打开提醒后这条提醒确实到期：上面没发出，原因就是用户关了提醒。
+        db.update_user_settings("1001", {"settings_json": {"reminder_enabled": True}})
+        assert len(_run_reminders(reminder_context)) == 1
+
+    def test_preconfirmed_future_reminder_is_not_sent_by_scheduler(
+        self, db, reminder_context, monkeypatch
+    ):
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 0, 0, tzinfo=UTC))
+        preconfirmed_id = db.insert_item(
+            {
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "已预确认",
+                "start_time"  : "2030-01-01T10:00:00",
+                "remind_times": ["2030-01-01T09:00:00"],
+            }
+        )
+        db.insert_item(
+            {
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "待发送",
+                "start_time"  : "2030-01-01T10:00:00",
+                "remind_times": ["2030-01-01T09:00:00"],
+            }
+        )
+        result = db.confirm_reminder(
+            preconfirmed_id,
+            "preconfirmed",
+            owner_id     = "1001",
+            remind_time  = "2030-01-01T01:00:00+00:00",
+            allow_future = True,
+        )
+        assert result["status"] == "success"
+
+        # 到点（上海 09:00）：只有没预确认的那条发出。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 1, 0, tzinfo=UTC))
+        texts = _run_reminders(reminder_context)
+
+        assert len(texts) == 1
+        assert "待发送" in texts[0]
+        assert "已预确认" not in texts[0]
+        log = db.get_reminder_logs(preconfirmed_id)[0]
+        assert log["sent_at"] is None
+        assert log["user_action"] == "preconfirmed"
+
+    def test_stale_unconfirmed_send_auto_confirms_after_one_day(
+        self, db, reminder_context, monkeypatch
+    ):
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 1, 10, tzinfo=UTC))
+        stale_id = db.insert_item(
+            {
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "过期未确认",
+                "start_time"  : "2030-01-01T10:00:00",
+                "remind_times": ["2030-01-01T08:00:00"],
+            }
+        )
+        recent_id = db.insert_item(
+            {
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "刚发过未确认",
+                "start_time"  : "2030-01-01T10:00:00",
+                "remind_times": ["2030-01-01T08:00:00"],
+            }
+        )
+        connection = db.get_connection()
+        with connection:
+            for item_id, sent_at in (
+                (stale_id, "2029-12-31T01:00:00+00:00"),
+                (recent_id, "2030-01-01T01:00:00+00:00"),
+            ):
+                connection.execute(
+                    "UPDATE reminder_logs SET sent_at = ?, last_sent_at = ?, "
+                    "repeat_count = 1, state = 'sent' WHERE item_id = ?",
+                    (sent_at, sent_at, item_id),
+                )
+
+        texts = _run_reminders(reminder_context)
+
+        # 发出一天多以前的那条被自动确认，不再重复发送；十分钟前发出的那条照常重复提醒。
+        assert len(texts) == 1
+        assert "刚发过未确认" in texts[0]
+        stale_log = db.get_reminder_logs(stale_id)[0]
+        assert stale_log["confirmed_at"]
+        assert stale_log["user_action"] == "auto_confirmed"
+        assert db.get_reminder_logs(recent_id)[0]["confirmed_at"] is None

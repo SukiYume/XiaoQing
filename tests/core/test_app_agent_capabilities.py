@@ -10,98 +10,228 @@ import pytest
 
 import tests.helpers.app_test_support as _fixture_support
 from core.models import PluginManifest
-from core.router import CommandSpec, build_command_catalog_node
 from core.session import Session
 from tests.helpers.app_test_support import (
-    ModuleType,
-    PluginDefinition,
-    PluginServiceDefinition,
+    PROBE,
+    UNUSED_COMMAND_SOURCE,
     XiaoQingApp,
-    _plugin_context_for,
-    _register_test_loaded_plugin,
+    command_declaration,
+    load_test_plugin,
+    plugin_context_for,
+    service_declaration,
+    user_principal,
 )
 
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root                               = _fixture_support.temp_app_root
+_isolate_process_global_plugin_import_state = (
+    _fixture_support._isolate_process_global_plugin_import_state
+)
 
 ADMIN = 12345
 OTHER = 55555
 
+AGENT_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
 
-def _principal(
+async def handle_turn(turn, context):
+    PROBE.log("handle_turn").append((turn, context))
+    return PROBE.next_result("handle_turn")
+
+async def report_delivery(report, context):
+    PROBE.log("report_delivery").append((report, context.plugin_name))
+"""
+
+CODEX_SOURCE = (
+    UNUSED_COMMAND_SOURCE
+    + """
+from tests.helpers.plugin_probe import PROBE
+
+async def agent_task_service(request, context):
+    PROBE.log("codex").append((request, context.plugin_name))
+    return {"status": "done", "final_text": "ok", "images": []}
+"""
+)
+
+SSH_SOURCE = (
+    UNUSED_COMMAND_SOURCE
+    + """
+from tests.helpers.plugin_probe import PROBE
+
+async def agent_command_service(request, context):
+    PROBE.log("ssh").append((request, context.plugin_name))
+    if request["op"] == "list":
+        return [{"name": "lab"}]
+    return {"ok": True, "exit_code": 0, "output": "hi"}
+"""
+)
+
+# 长命令的服务把远端工作的 Future 交回给 Core：Future 由测试创建，经记录器共享。
+SSH_REMOTE_SOURCE = (
+    UNUSED_COMMAND_SOURCE
+    + """
+from tests.helpers.plugin_probe import PROBE
+
+async def agent_command_service(request, context):
+    PROBE.log("ssh").append(request["op"])
+    if request["op"] == "list":
+        return [{"name": "lab"}]
+    return PROBE.slots["remote"]
+"""
+)
+
+# agent 工具对应的三个插件和它们的命令触发词。
+TOOL_TRIGGERS = {"shell": "shell", "qingssh": "ssh", "codex": "codex"}
+
+
+async def _load_tool_plugin(
     app: XiaoQingApp,
-    user_id: int,
-    group_id: int | None = None,
-    role: str            = "",
-):
-    sender = {"user_id": user_id, **({"role": role} if role else {})}
-    return app.issue_user_principal(
-        {"sender": sender},
-        user_id    = user_id,
-        group_id   = group_id,
-        is_private = group_id is None,
-    )
+    plugin: str,
+    source: str = UNUSED_COMMAND_SOURCE,
+    *,
+    permission: str            = "bot_admin",
+    services: tuple[dict, ...] = (),
+    concurrency: str           = "parallel",
+) -> None:
+    """装入 agent 工具对应的插件：它的 ``/shell``、``/ssh``、``/codex`` 声明决定工具给谁。"""
 
-
-def _install_service(
-    app: XiaoQingApp,
-    owner: str,
-    service: str,
-    caller: str,
-    callback,
-    concurrency: str = "parallel",
-):
-    module = ModuleType(f"plugins.{owner}.main")
-    setattr(module, callback.__name__, callback)
-    definition = PluginDefinition(
-        name        = owner,
-        version     = "1.0.0",
-        entry       = "main.py",
-        commands    = [],
-        schedule    = [],
+    await load_test_plugin(
+        app,
+        plugin,
+        source,
+        commands=[command_declaration(TOOL_TRIGGERS[plugin], permission=permission)],
+        services    = list(services),
         concurrency = concurrency,
-        services    = (
-            PluginServiceDefinition(
-                name     = service,
-                callback = callback.__name__,
-                callers  = frozenset({caller}),
-            ),
-        ),
     )
-    _register_test_loaded_plugin(app, definition, module)
 
 
-def _publish_tool_commands(app: XiaoQingApp, **permissions: str) -> None:
-    """发布 agent 工具对应的命令；默认与生产 manifest 一致，都只给 Bot 管理员。"""
+async def _publish_tool_commands(app: XiaoQingApp, **permissions: str) -> None:
+    """装入只声明命令的工具插件；默认与生产 manifest 一致，都只给 Bot 管理员。"""
 
-    async def unused(_command, _args, _event, _context):
-        raise AssertionError("tool command handlers are not called here")
-
-    for plugin, trigger in (("shell", "shell"), ("qingssh", "ssh"), ("codex", "codex")):
-        app.router.clear_plugin(plugin)
-        _register_command(
-            app, plugin, trigger, unused, permission=permissions.get(plugin, "bot_admin")
-        )
+    for plugin in TOOL_TRIGGERS:
+        await _load_tool_plugin(app, plugin, permission=permissions.get(plugin, "bot_admin"))
 
 
+ECHO_ARGS_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("echo").append((command, args, event, context))
+    return [{"type": "text", "data": {"text": f"echo:{args}"}}]
+"""
+
+RECORD_COMMAND_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("ran").append(command)
+    return [{"type": "text", "data": {"text": f"ran:{command}"}}]
+"""
+
+GIFT_EVENT_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("gift").append((args, event))
+    return [{"type": "text", "data": {"text": "ok"}}]
+"""
+
+GIFT_REQUEST_TEXTS_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("request_texts").append(context.request_texts)
+    return [{"type": "text", "data": {"text": "ok"}}]
+"""
+
+LEDGER_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("ledger").append(args)
+    return [{"type": "text", "data": {"text": "账本"}}]
+"""
+
+# /guess 开一个交互会话并停在等待回复；/guess2 先看一眼当前能看到的会话再开。
+GUESS_SOURCE = """
+from core.delivery import CommandOutcome, DeliverySegments
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    if command == "guess2":
+        PROBE.log("guess2_session").append(await context.get_session())
+        await context.create_session({"step": 1})
+        return [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}]
+    await context.create_session({"step": 1})
+    return DeliverySegments(
+        [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}],
+        outcome=CommandOutcome("incomplete", confirmation_command="/guess accept game-123"),
+    )
+"""
+
+# /connect 占用一份资源并开会话；会话被收回时由 close_session 释放资源。
+RESOURCE_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("resources").append("connection")
+    await context.create_session({"server": "lab"})
+    return [{"type": "text", "data": {"text": "已连接 lab"}}]
+
+async def close_session(event, context, session):
+    closed = (session.plugin_name, session.get("server"), context.current_user_id)
+    PROBE.log("closed").append(closed)
+    PROBE.log("resources").remove("connection")
+"""
+
+RECEIPT_SOURCE = """
+from core.delivery import CommandOutcome, DeliverySegments
+from tests.helpers.plugin_probe import PROBE
+
+async def handle(command, args, event, context):
+    PROBE.log("request_id").append(context.request_id)
+    return DeliverySegments(
+        [{"type": "text", "data": {"text": "图"}}],
+        PROBE.slots["receipt"],
+        outcome=CommandOutcome("accepted"),
+    )
+"""
+
+
+async def _install_agent(app: XiaoQingApp, *services: str) -> None:
+    """装入 xiaoqing_agent；``services`` 是它导出给 xiaoqing_chat 的服务名。"""
+
+    await load_test_plugin(
+        app,
+        "xiaoqing_agent",
+        AGENT_SOURCE,
+        services=[
+            service_declaration(name, name.split(".")[1], ("xiaoqing_chat",)) for name in services
+        ],
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.unit
-def test_agent_capabilities_follow_the_matching_command_permissions(temp_app_root: Path) -> None:
+async def test_agent_capabilities_follow_the_matching_command_permissions(
+    temp_app_root: Path,
+) -> None:
     """对话和命令执行给每个用户（命令自己再查权限）；Codex、SSH 按 /codex、/ssh 的声明授权。"""
 
     app = XiaoQingApp(temp_app_root)
-    _publish_tool_commands(app)
+    await _publish_tool_commands(app)
     for user_id, admin in ((ADMIN, True), (OTHER, False)):
-        chat = _plugin_context_for(
+        chat = plugin_context_for(
             app,
             "xiaoqing_chat",
             user_id       = user_id,
-            principal     = _principal(app, user_id),
+            principal     = user_principal(app, user_id),
             uses_services = frozenset({"agent.handle_turn"}),
         )
-        agent = _plugin_context_for(
+        agent = plugin_context_for(
             app,
             "xiaoqing_agent",
             user_id               = user_id,
-            principal             = _principal(app, user_id),
+            principal             = user_principal(app, user_id),
             manifest_capabilities = frozenset({"command_runner"}),
             uses_services         = frozenset({"codex.agent_task", "qingssh.agent_command"}),
         )
@@ -110,11 +240,11 @@ def test_agent_capabilities_follow_the_matching_command_permissions(temp_app_roo
         assert (agent.capabilities.codex_agent is not None) is admin
         assert (agent.capabilities.ssh_agent is not None) is admin
 
-    undeclared = _plugin_context_for(
+    undeclared = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id   = ADMIN,
-        principal = _principal(app, ADMIN),
+        principal = user_principal(app, ADMIN),
     )
     assert undeclared.capabilities.agent_turn is None
     assert undeclared.capabilities.command_runner is None
@@ -126,15 +256,14 @@ async def test_agent_turn_reaches_agent_with_the_speakers_principal(
     temp_app_root: Path,
 ) -> None:
     app = XiaoQingApp(temp_app_root)
-    principal = _principal(app, ADMIN, group_id=777)
-    seen: list = []
-
-    async def handle_turn(turn, context):
-        seen.append((turn, context))
-        return {"handled": True, "segments": [{"type": "text", "data": {"text": "ok"}}]}
-
-    _install_service(app, "xiaoqing_agent", "agent.handle_turn", "xiaoqing_chat", handle_turn)
-    chat = _plugin_context_for(
+    principal = user_principal(app, ADMIN, group_id=777)
+    seen = PROBE.log("handle_turn")
+    PROBE.script(
+        "handle_turn",
+        {"handled": True, "segments": [{"type": "text", "data": {"text": "ok"}}]},
+    )
+    await _install_agent(app, "agent.handle_turn")
+    chat = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id       = ADMIN,
@@ -165,18 +294,14 @@ async def test_agent_turn_reaches_agent_with_the_speakers_principal(
 async def test_agent_turn_none_means_ordinary_chat_and_bad_results_are_rejected(
     temp_app_root: Path,
 ) -> None:
-    app     = XiaoQingApp(temp_app_root)
-    results = [None, "not a mapping"]
-
-    async def handle_turn(_turn, _context):
-        return results.pop(0)
-
-    _install_service(app, "xiaoqing_agent", "agent.handle_turn", "xiaoqing_chat", handle_turn)
-    capability = _plugin_context_for(
+    app = XiaoQingApp(temp_app_root)
+    PROBE.script("handle_turn", None, "not a mapping")
+    await _install_agent(app, "agent.handle_turn")
+    capability = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id       = ADMIN,
-        principal     = _principal(app, ADMIN),
+        principal     = user_principal(app, ADMIN),
         uses_services = frozenset({"agent.handle_turn"}),
     ).capabilities.agent_turn
     assert await capability.handle_turn({"text": "在吗"}) is None
@@ -188,11 +313,11 @@ async def test_agent_turn_none_means_ordinary_chat_and_bad_results_are_rejected(
 @pytest.mark.unit
 async def test_agent_turn_reports_missing_agent_plugin_as_unavailable(temp_app_root: Path) -> None:
     app        = XiaoQingApp(temp_app_root)
-    capability = _plugin_context_for(
+    capability = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id       = ADMIN,
-        principal     = _principal(app, ADMIN),
+        principal     = user_principal(app, ADMIN),
         uses_services = frozenset({"agent.handle_turn"}),
     ).capabilities.agent_turn
     with pytest.raises(RuntimeError, match="unavailable"):
@@ -205,30 +330,31 @@ async def test_codex_and_ssh_agent_services_validate_and_forward_requests(
     temp_app_root: Path,
 ) -> None:
     app   = XiaoQingApp(temp_app_root)
-    codex = []
-    ssh   = []
-
-    async def agent_task_service(request, context):
-        codex.append((request, context.plugin_name))
-        return {"status": "done", "final_text": "ok", "images": []}
-
-    async def agent_command_service(request, context):
-        ssh.append((request, context.plugin_name))
-        if request["op"] == "list":
-            return [{"name": "lab"}]
-        return {"ok": True, "exit_code": 0, "output": "hi"}
-
-    _install_service(app, "codex", "codex.agent_task", "xiaoqing_agent", agent_task_service)
-    _install_service(
-        app, "qingssh", "qingssh.agent_command", "xiaoqing_agent", agent_command_service
+    codex = PROBE.log("codex")
+    ssh   = PROBE.log("ssh")
+    await _load_tool_plugin(
+        app,
+        "codex",
+        CODEX_SOURCE,
+        services=(
+            service_declaration("codex.agent_task", "agent_task_service", ("xiaoqing_agent",)),
+        ),
     )
-    # 装服务会按插件重建命令表，工具对应的命令在之后发布。
-    _publish_tool_commands(app)
-    agent = _plugin_context_for(
+    await _load_tool_plugin(
+        app,
+        "qingssh",
+        SSH_SOURCE,
+        services=(
+            service_declaration(
+                "qingssh.agent_command", "agent_command_service", ("xiaoqing_agent",)
+            ),
+        ),
+    )
+    agent = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id       = ADMIN,
-        principal     = _principal(app, ADMIN),
+        principal     = user_principal(app, ADMIN),
         uses_services = frozenset({"codex.agent_task", "qingssh.agent_command"}),
     )
 
@@ -270,63 +396,27 @@ async def test_codex_and_ssh_agent_services_validate_and_forward_requests(
     assert len(codex) == 1
 
 
-def _register_command(
-    app: XiaoQingApp,
-    plugin: str,
-    trigger: str,
-    handler,
-    contexts: tuple[str, ...] = ("private", "group"),
-    permission: str           = "public",
-) -> None:
-    (app.plugins_dir / plugin).mkdir(parents=True, exist_ok=True)
-    root = build_command_catalog_node(
-        plugin,
-        {
-            "name"            : trigger,
-            "triggers"        : [trigger],
-            "help"            : "测试命令",
-            "usage"           : f"/{trigger} [参数]",
-            "contexts"        : list(contexts),
-            "permission"      : permission,
-            "examples"        : [f"/{trigger}"],
-            "invalid_examples": [f"/{trigger} bad"],
-        },
-        root=True,
-    )
-    app.router.register(
-        CommandSpec(
-            plugin   = plugin,
-            name     = trigger,
-            triggers = [trigger],
-            handler  = handler,
-            catalog  = root,
-        )
-    )
-
-
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_command_runner_executes_published_commands_as_the_speaker(
     temp_app_root: Path,
 ) -> None:
     app   = XiaoQingApp(temp_app_root)
-    calls = []
-
-    async def echo(command, args, event, context):
-        calls.append((command, args, event, context))
-        return [{"type": "text", "data": {"text": f"echo:{args}"}}]
-
-    async def agent_cmd(_command, _args, _event, _context):
-        raise AssertionError("agent must not call its own commands")
-
-    _register_command(app, "echo", "echo", echo)
-    _register_command(app, "xiaoqing_agent", "agent", agent_cmd)
-    runner = _plugin_context_for(
+    calls = PROBE.log("echo")
+    await load_test_plugin(app, "echo", ECHO_ARGS_SOURCE, commands=[command_declaration("echo")])
+    # agent 自己的命令不能经执行器调用：Core 在到达处理函数之前就拒绝。
+    await load_test_plugin(
+        app,
+        "xiaoqing_agent",
+        UNUSED_COMMAND_SOURCE,
+        commands=[command_declaration("agent")],
+    )
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id  = ADMIN,
         group_id = 888,
-        principal=_principal(app, ADMIN, group_id=888),
+        principal=user_principal(app, ADMIN, group_id=888),
         manifest_capabilities=frozenset({"command_runner"}),
     ).capabilities.command_runner
 
@@ -360,24 +450,27 @@ async def test_command_runner_executes_published_commands_as_the_speaker(
 async def test_command_runner_applies_each_commands_own_permission(temp_app_root: Path) -> None:
     """agent 替谁执行命令，就按谁的权限：和本人直接发送同一处检查。"""
 
-    app            = XiaoQingApp(temp_app_root)
-    ran: list[str] = []
-
-    async def record(command, args, event, context):
-        ran.append(command)
-        return [{"type": "text", "data": {"text": f"ran:{command}"}}]
-
-    _register_command(app, "shell", "shell", record, permission="bot_admin")
-    _register_command(app, "qingpet", "petadmin", record, permission="group_admin")
-    _register_command(app, "echo", "echo", record)
+    app = XiaoQingApp(temp_app_root)
+    ran = PROBE.log("ran")
+    for plugin, trigger, permission in (
+        ("shell", "shell", "bot_admin"),
+        ("qingpet", "petadmin", "group_admin"),
+        ("echo", "echo", "public"),
+    ):
+        await load_test_plugin(
+            app,
+            plugin,
+            RECORD_COMMAND_SOURCE,
+            commands=[command_declaration(trigger, permission=permission)],
+        )
 
     def runner(user_id: int, role: str = ""):
-        return _plugin_context_for(
+        return plugin_context_for(
             app,
             "xiaoqing_agent",
             user_id  = user_id,
             group_id = 888,
-            principal=_principal(app, user_id, group_id=888, role=role),
+            principal=user_principal(app, user_id, group_id=888, role=role),
             manifest_capabilities=frozenset({"command_runner"}),
         ).capabilities.command_runner
 
@@ -401,18 +494,15 @@ async def test_command_runner_events_look_like_real_messages(temp_app_root: Path
     from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 
     app    = XiaoQingApp(temp_app_root)
-    events = []
-
-    async def gift(_command, args, event, _context):
-        events.append((args, event))
-        return [{"type": "text", "data": {"text": "ok"}}]
-
-    _register_command(app, "qingpet", "gift", gift)
-    runner = _plugin_context_for(
+    events = PROBE.log("gift")
+    await load_test_plugin(
+        app, "qingpet", GIFT_EVENT_SOURCE, commands=[command_declaration("gift")]
+    )
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
 
@@ -445,18 +535,15 @@ async def test_command_runner_hands_initiator_words_to_the_command_context(
     )
 
     app      = XiaoQingApp(temp_app_root)
-    received = []
-
-    async def gift(_command, _args, _event, context):
-        received.append(context.request_texts)
-        return [{"type": "text", "data": {"text": "ok"}}]
-
-    _register_command(app, "qingpet", "gift", gift)
-    runner = _plugin_context_for(
+    received = PROBE.log("request_texts")
+    await load_test_plugin(
+        app, "qingpet", GIFT_REQUEST_TEXTS_SOURCE, commands=[command_declaration("gift")]
+    )
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
 
@@ -478,19 +565,19 @@ async def test_command_runner_hands_initiator_words_to_the_command_context(
 @pytest.mark.unit
 async def test_command_runner_explains_context_restricted_commands(temp_app_root: Path) -> None:
     app   = XiaoQingApp(temp_app_root)
-    calls = []
-
-    async def ledger(_command, args, _event, _context):
-        calls.append(args)
-        return [{"type": "text", "data": {"text": "账本"}}]
-
-    _register_command(app, "pendo", "ledger", ledger, contexts=("private",))
-    group_runner = _plugin_context_for(
+    calls = PROBE.log("ledger")
+    await load_test_plugin(
+        app,
+        "pendo",
+        LEDGER_SOURCE,
+        commands=[command_declaration("ledger", contexts=("private",))],
+    )
+    group_runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id  = ADMIN,
         group_id = 888,
-        principal=_principal(app, ADMIN, group_id=888),
+        principal=user_principal(app, ADMIN, group_id=888),
         manifest_capabilities=frozenset({"command_runner"}),
     ).capabilities.command_runner
     reply = await group_runner.run("/ledger list 2026-09")
@@ -499,11 +586,11 @@ async def test_command_runner_explains_context_restricted_commands(temp_app_root
     ]
     assert calls == []
 
-    private_runner = _plugin_context_for(
+    private_runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
     assert (await private_runner.run("/ledger list 2026-09"))[0]["data"]["text"] == "账本"
@@ -514,22 +601,17 @@ async def test_command_runner_explains_context_restricted_commands(temp_app_root
 @pytest.mark.unit
 async def test_command_runner_closes_sessions_opened_by_the_command(temp_app_root: Path) -> None:
     app = XiaoQingApp(temp_app_root)
-
-    async def game(_command, _args, _event, context):
-        from core.delivery import CommandOutcome, DeliverySegments
-
-        await context.create_session({"step": 1})
-        return DeliverySegments(
-            [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}],
-            outcome=CommandOutcome("incomplete", confirmation_command="/guess accept game-123"),
-        )
-
-    _register_command(app, "guess_number", "guess", game)
-    runner = _plugin_context_for(
+    await load_test_plugin(
+        app,
+        "guess_number",
+        GUESS_SOURCE,
+        commands=[command_declaration("guess"), command_declaration("guess2")],
+    )
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
 
@@ -544,14 +626,6 @@ async def test_command_runner_closes_sessions_opened_by_the_command(temp_app_roo
 
     existing = await app.session_manager.create(ADMIN, None, "qingssh", initial_data={"k": 1})
     assert isinstance(existing, Session)
-    seen_by_plugin: list = []
-
-    async def peek_then_game(_command, _args, _event, context):
-        seen_by_plugin.append(await context.get_session())
-        await context.create_session({"step": 1})
-        return [{"type": "text", "data": {"text": "游戏开始，请输入数字"}}]
-
-    _register_command(app, "guess_number", "guess2", peek_then_game)
     await runner.run("/guess2")
 
     kept = await app.session_manager.peek(ADMIN, None)
@@ -562,7 +636,7 @@ async def test_command_runner_closes_sessions_opened_by_the_command(temp_app_roo
         {"k": 1},
     )
     # 命令看不到用户正在进行的交互，也不会把它当成自己的会话继续。
-    assert seen_by_plugin == [None]
+    assert PROBE.log("guess2_session") == [None]
 
 
 @pytest.mark.asyncio
@@ -573,39 +647,21 @@ async def test_command_runner_lets_the_plugin_release_a_discarded_sessions_resou
     """命令开了交互会话就被收回时，和用户发“退出”一样交给插件的 close_session 收尾。"""
 
     app       = XiaoQingApp(temp_app_root)
-    resources = []
-    closed    = []
-
-    async def connect(_command, _args, _event, context):
-        resources.append("connection")
-        await context.create_session({"server": "lab"})
-        return [{"type": "text", "data": {"text": "已连接 lab"}}]
-
-    async def close_session(_event, context, session):
-        closed.append((session.plugin_name, session.get("server"), context.current_user_id))
-        resources.remove("connection")
-
-    module               = ModuleType("plugins.resource_plugin.main")
-    module.close_session = close_session  # type: ignore[attr-defined]
-    _register_test_loaded_plugin(
+    resources = PROBE.log("resources")
+    closed    = PROBE.log("closed")
+    await load_test_plugin(
         app,
-        PluginDefinition(
-            name        = "resource_plugin",
-            version     = "1.0.0",
-            entry       = "main.py",
-            commands    = [],
-            schedule    = [],
-            concurrency = "sequential",
-        ),
-        module,
+        "resource_plugin",
+        RESOURCE_SOURCE,
+        commands    = [command_declaration("connect")],
+        concurrency = "sequential",
     )
-    _register_command(app, "resource_plugin", "connect", connect)
     own = await app.session_manager.create(ADMIN, None, "qingssh", initial_data={"k": 1})
-    runner = _plugin_context_for(
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
 
@@ -623,31 +679,26 @@ async def test_command_runner_lets_the_plugin_release_a_discarded_sessions_resou
 async def test_long_ssh_command_waits_outside_the_sequential_plugin_gate(
     temp_app_root: Path,
 ) -> None:
-    app      = XiaoQingApp(temp_app_root)
-    loop     = asyncio.get_running_loop()
-    remote   = loop.create_future()
-    requests = []
-
-    async def agent_command_service(request, context):
-        requests.append(request["op"])
-        if request["op"] == "list":
-            return [{"name": "lab"}]
-        return remote
-
-    _install_service(
+    app  = XiaoQingApp(temp_app_root)
+    loop = asyncio.get_running_loop()
+    remote = PROBE.slots["remote"] = loop.create_future()
+    requests = PROBE.log("ssh")
+    await _load_tool_plugin(
         app,
         "qingssh",
-        "qingssh.agent_command",
-        "xiaoqing_agent",
-        agent_command_service,
+        SSH_REMOTE_SOURCE,
+        services=(
+            service_declaration(
+                "qingssh.agent_command", "agent_command_service", ("xiaoqing_agent",)
+            ),
+        ),
         concurrency="sequential",
     )
-    _publish_tool_commands(app)
-    ssh = _plugin_context_for(
+    ssh = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id       = ADMIN,
-        principal     = _principal(app, ADMIN),
+        principal     = user_principal(app, ADMIN),
         uses_services = frozenset({"qingssh.agent_command"}),
     ).capabilities.ssh_agent
 
@@ -661,7 +712,7 @@ async def test_long_ssh_command_waits_outside_the_sequential_plugin_gate(
 
     # 调用方取消时，交回的工作一并取消；取消落在通道内（服务刚启动）也一样。
     for settle_rounds in (0, 20):
-        remote  = loop.create_future()
+        remote = PROBE.slots["remote"] = loop.create_future()
         before  = requests.count("run")
         waiting = asyncio.create_task(
             ssh.run(server="lab", command="sleep 600", timeout_seconds=600)
@@ -771,14 +822,14 @@ async def test_local_tools_follow_the_shell_permission_and_are_rechecked(
     """本机代码执行与文件读写跟随 /shell 的声明：现在只给 Bot 管理员，撤权后下一次调用即拒绝。"""
 
     app = XiaoQingApp(temp_app_root)
-    _publish_tool_commands(app)
+    await _publish_tool_commands(app)
 
     def agent(user_id: int, capabilities: frozenset[str]):
-        return _plugin_context_for(
+        return plugin_context_for(
             app,
             "xiaoqing_agent",
             user_id               = user_id,
-            principal             = _principal(app, user_id),
+            principal             = user_principal(app, user_id),
             manifest_capabilities = capabilities,
         ).capabilities
 
@@ -794,18 +845,19 @@ async def test_local_tools_follow_the_shell_permission_and_are_rechecked(
         tools.ensure_authorized()
 
 
+@pytest.mark.asyncio
 @pytest.mark.unit
-def test_agent_tools_change_with_the_command_declarations(temp_app_root: Path) -> None:
+async def test_agent_tools_change_with_the_command_declarations(temp_app_root: Path) -> None:
     """只有一处规则：改了 /shell、/ssh、/codex 的声明，agent 的工具跟着变。"""
 
     app = XiaoQingApp(temp_app_root)
 
     def agent():
-        return _plugin_context_for(
+        return plugin_context_for(
             app,
             "xiaoqing_agent",
             user_id               = OTHER,
-            principal             = _principal(app, OTHER),
+            principal             = user_principal(app, OTHER),
             manifest_capabilities = frozenset({"command_runner", "local_tools"}),
             uses_services         = frozenset({"codex.agent_task", "qingssh.agent_command"}),
         ).capabilities
@@ -813,13 +865,13 @@ def test_agent_tools_change_with_the_command_declarations(temp_app_root: Path) -
     # 命令没有发布（插件没加载）时谁都拿不到对应工具。
     assert agent().local_tools is None and agent().ssh_agent is None
 
-    _publish_tool_commands(app, shell="public")
+    await _publish_tool_commands(app, shell="public")
     tools = agent()
     assert tools.local_tools is not None
     assert tools.ssh_agent is None and tools.codex_agent is None
 
     # 声明改回只给 Bot 管理员后，已经发出的能力下一次调用就被拒绝。
-    _publish_tool_commands(app)
+    await _publish_tool_commands(app)
     with pytest.raises(PermissionError):
         tools.local_tools.ensure_authorized()
 
@@ -828,21 +880,15 @@ def test_agent_tools_change_with_the_command_declarations(temp_app_root: Path) -
 @pytest.mark.unit
 async def test_chat_reports_whether_the_inline_reply_was_delivered(temp_app_root: Path) -> None:
     app     = XiaoQingApp(temp_app_root)
-    reports = []
-
-    async def report_delivery(report, context):
-        reports.append((report, context.plugin_name))
-
-    _install_service(
-        app, "xiaoqing_agent", "agent.report_delivery", "xiaoqing_chat", report_delivery
-    )
+    reports = PROBE.log("report_delivery")
+    await _install_agent(app, "agent.report_delivery")
 
     def chat(services: frozenset[str]):
-        return _plugin_context_for(
+        return plugin_context_for(
             app,
             "xiaoqing_chat",
             user_id       = OTHER,
-            principal     = _principal(app, OTHER),
+            principal     = user_principal(app, OTHER),
             uses_services = services,
         ).capabilities.agent_turn
 
@@ -873,28 +919,19 @@ async def test_command_runner_keeps_the_receipt_and_separates_each_call(
     from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 
     app      = XiaoQingApp(temp_app_root)
-    requests = []
-    receipt  = DeliveryReceipt(
+    requests = PROBE.log("request_id")
+    receipt = PROBE.slots["receipt"] = DeliveryReceipt(
         expected_actions = 1,
         commit           = lambda: None,
         rollback         = lambda: None,
         unknown          = lambda: None,
     )
-
-    async def pick(_command, _args, _event, context):
-        requests.append(context.request_id)
-        return DeliverySegments(
-            [{"type": "text", "data": {"text": "图"}}],
-            receipt,
-            outcome=CommandOutcome("accepted"),
-        )
-
-    _register_command(app, "twitter", "twimg", pick)
-    runner = _plugin_context_for(
+    await load_test_plugin(app, "twitter", RECEIPT_SOURCE, commands=[command_declaration("twimg")])
+    runner = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id               = ADMIN,
-        principal             = _principal(app, ADMIN),
+        principal             = user_principal(app, ADMIN),
         manifest_capabilities = frozenset({"command_runner"}),
     ).capabilities.command_runner
 

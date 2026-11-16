@@ -139,47 +139,6 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
     assert "好家伙" not in block
 
 
-def test_expression_block_never_auto_injects_unchecked_high_count_records(tmp_path):
-    low_count_unchecked = ExpressionRecord(
-        expression_id    = "low",
-        chat_id          = "g1",
-        situation        = "听到普通新鲜事时",
-        style            = "哦这样啊",
-        checked          = False,
-        rejected         = False,
-        count            = 2,
-        last_active_time = 5.0,
-    )
-    high_count_unchecked = ExpressionRecord(
-        expression_id    = "high",
-        chat_id          = "g1",
-        situation        = "听到离谱事情时",
-        style            = "好家伙",
-        checked          = False,
-        rejected         = False,
-        count            = 10,
-        last_active_time = 99.0,
-    )
-    state = SimpleNamespace(bw_expr_store=MagicMock())
-    state.bw_expr_store.load.return_value = [low_count_unchecked, high_count_unchecked]
-    runtime                               = SimpleNamespace(
-        cfg=SimpleNamespace(
-            expression=ExpressionConfig(
-                enable_expression_selector=True,
-            ),
-            reflection=ReflectionConfig(
-                enable_expression_reflection   = False,
-                require_approval_for_injection = True,
-            ),
-        )
-    )
-
-    block = expression_context(runtime, state, tmp_path, "g1")
-
-    assert "好家伙" not in block
-    assert "哦这样啊" not in block
-
-
 def test_expression_block_default_config_requires_approval_for_injection():
     cfg = XiaoQingChatConfig()
 

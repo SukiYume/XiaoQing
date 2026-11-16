@@ -41,7 +41,7 @@ class CommandConflictError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class CommandCatalogNode:
-    """Core 持有的不可变命令目录节点；帮助、导出和测试共享该快照。"""
+    """Core 持有的不可变命令目录节点；帮助和导出共享该快照。"""
 
     code            : str
     plugin          : str

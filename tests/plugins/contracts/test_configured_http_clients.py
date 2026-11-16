@@ -16,7 +16,7 @@ from plugins.chat import main as chat
 from plugins.voice import main as voice
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ERROR_CANARY = b"CR221_HUGE_PRIVATE_ERROR_BODY_CANARY"
+ERROR_CANARY = b"HUGE_PRIVATE_ERROR_BODY_CANARY"
 
 
 def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -185,89 +185,74 @@ def _voice_context(tmp_path: Path, session: _Session) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_ads_llm_accepts_private_base_and_chunked_gzip() -> None:
+@pytest.mark.parametrize(
+    ("plugin_name", "route_name", "api_base", "proxy", "timeout", "content"),
+    [
+        pytest.param(
+            "ads_paper",
+            "summary",
+            "http://127.0.0.1:18080/v1",
+            None,
+            60,
+            "bounded summary",
+            id="ads_paper",
+        ),
+        pytest.param(
+            "pendo",
+            "parse",
+            "http://llm.internal:11434/v1",
+            "http://127.0.0.1:7890",
+            17,
+            "local answer",
+            id="pendo",
+        ),
+        pytest.param(
+            "xiaoqing_chat",
+            "chat",
+            "http://127.0.0.1:11434/v1",
+            "http://proxy.internal:8080",
+            19,
+            "ok",
+            id="xiaoqing_chat",
+        ),
+    ],
+)
+async def test_llm_route_uses_bounded_private_request(
+    plugin_name: str,
+    route_name: str,
+    api_base: str,
+    proxy: str | None,
+    timeout: int,
+    content: str,
+) -> None:
     session = _Session(
         _json_response(
-            {"choices": [{"message": {"content": "bounded summary"}}]},
+            {"choices": [{"message": {"content": content}}]},
             compressed=True,
         )
     )
 
-    config, secrets = _core_ai_settings("http://127.0.0.1:18080/v1")
+    config, secrets = _core_ai_settings(api_base)
+    if proxy is not None:
+        config["ai"]["providers"]["local"]["proxy"] = proxy
     result = await complete_configured_route(
         session     = session,
         config      = config,
         secrets     = secrets,
-        plugin_name = "ads_paper",
-        route_name  = "summary",
-        messages    = [{"role": "user", "content": "abstract"}],
+        plugin_name = plugin_name,
+        route_name  = route_name,
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
-    assert result.content == "bounded summary"
+    assert result.content == content
     method, url, kwargs = session.calls[0]
-    assert (method, url) == ("POST", "http://127.0.0.1:18080/v1/chat/completions")
+    assert (method, url) == ("POST", f"{api_base}/chat/completions")
+    assert kwargs.get("proxy") == proxy
+    assert kwargs["timeout"].total == timeout
     assert kwargs["allow_redirects"] is False
     assert kwargs["auto_decompress"] is False
-    assert kwargs["timeout"].total == 60
     assert kwargs["headers"]["Accept-Encoding"] == "gzip, deflate"
-
-
-@pytest.mark.asyncio
-async def test_pendo_llm_preserves_private_base_proxy_timeout_and_no_redirect() -> None:
-    session = _Session(
-        _json_response(
-            {"choices": [{"message": {"content": "local answer"}}]},
-            compressed=True,
-        )
-    )
-
-    config, secrets = _core_ai_settings("http://llm.internal:11434/v1")
-    config["ai"]["providers"]["local"]["proxy"] = "http://127.0.0.1:7890"
-    result                                      = await complete_configured_route(
-        session     = session,
-        config      = config,
-        secrets     = secrets,
-        plugin_name = "pendo",
-        route_name  = "parse",
-        messages    = [{"role": "user", "content": "hello"}],
-    )
-
-    assert result.content == "local answer"
-    _, url, kwargs = session.calls[0]
-    assert url == "http://llm.internal:11434/v1/chat/completions"
-    assert kwargs["proxy"] == "http://127.0.0.1:7890"
-    assert kwargs["timeout"].total == 17
-    assert kwargs["allow_redirects"] is False
-    assert kwargs["auto_decompress"] is False
-
-
-@pytest.mark.asyncio
-async def test_xiaoqing_llm_preserves_private_base_proxy_and_payload() -> None:
-    session = _Session(
-        _json_response(
-            {"choices": [{"message": {"content": "ok"}}]},
-            compressed=True,
-        )
-    )
-
-    config, secrets = _core_ai_settings("http://127.0.0.1:11434/v1")
-    config["ai"]["providers"]["local"]["proxy"] = "http://proxy.internal:8080"
-    result                                      = await complete_configured_route(
-        session     = session,
-        config      = config,
-        secrets     = secrets,
-        plugin_name = "xiaoqing_chat",
-        route_name  = "chat",
-        messages    = [{"role": "user", "content": "hello"}],
-    )
-
-    assert result.content == "ok"
-    _, url, kwargs = session.calls[0]
-    assert url == "http://127.0.0.1:11434/v1/chat/completions"
-    assert kwargs["proxy"] == "http://proxy.internal:8080"
-    assert kwargs["timeout"].total == 19
     assert kwargs["json"]["stream"] is False
-    assert kwargs["allow_redirects"] is False
 
 
 @pytest.mark.asyncio

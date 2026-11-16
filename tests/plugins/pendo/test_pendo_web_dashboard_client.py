@@ -1,4 +1,4 @@
-"""Pendo Web 看板的数据边界、原生图表和异步生命周期回归。"""
+"""Pendo Web 看板的数据边界、原生图表和异步生命周期。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ DASHBOARD_SETUP: Final = r"""
     };
     globalThis.__toastCalls = [];
     globalThis.__showToast = (...args) => __toastCalls.push(args);
-    globalThis.__styleCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
     globalThis.__subscribeDataChanges = (_type, callback) => {
@@ -88,7 +87,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (_breakpoint, cssText) => cssText;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",

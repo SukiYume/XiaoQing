@@ -93,7 +93,6 @@ def test_simbad_tap_post_is_streamed_bounded_and_explicit(
         captured.update({"method": method, "url": url, **kwargs})
         return response
 
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", request)
 
     result = obj._query_simbad_object("M31")
@@ -120,7 +119,7 @@ def test_simbad_tap_post_is_streamed_bounded_and_explicit(
         "LANG"   : "ADQL",
         "FORMAT" : "json",
         "MAXREC" : "1",
-        "QUERY"  : "SELECT TOP 1 ra",
+        "QUERY"  : obj._build_simbad_query("M31"),
     }
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["Accept-Encoding"] == "gzip, deflate"
@@ -147,7 +146,6 @@ def test_simbad_passes_total_deadline_shorter_than_outer_wait(
             decoded_bytes = len(body),
         )
 
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(obj, "requests_request_bounded", bounded_request)
 
     assert obj._query_simbad_object("M31") is not None
@@ -161,7 +159,6 @@ def test_simbad_slow_drip_hits_transport_total_deadline(
     clock        = [0.0]
     response     = _Response(b"")
     response.raw = _ClockedRawBody((b"{", b"}"), clock)
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: response)
     monkeypatch.setattr(bounded_http.time, "monotonic", lambda: clock[0])
 
@@ -179,7 +176,6 @@ def test_simbad_rejects_false_content_length_wire_overflow(
         b"{" + b"x" * obj._SIMBAD_BODY_LIMITS.max_wire_bytes,
         content_length=2,
     )
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ResponseLimitError):
@@ -193,7 +189,6 @@ def test_simbad_rejects_wrong_mime_before_reading_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _Response(b"SIMBAD_MIME_BODY_CANARY", content_type="text/html")
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ResponseFormatError):
@@ -210,7 +205,6 @@ def test_simbad_json_depth_is_bounded_before_shape_validation(
     for _ in range(obj._SIMBAD_JSON_LIMITS.max_depth + 1):
         deep_value = [deep_value]
     response = _Response(json.dumps(deep_value).encode())
-    monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ResponseLimitError):
@@ -285,14 +279,7 @@ def test_simbad_adql_builder_limits_rows_and_escapes_quotes() -> None:
     assert 'LEFT JOIN allfluxes ON basic."oid" = allfluxes."oidref"' in query
 
 
-def test_simbad_adql_builder_is_pure_local_and_deterministic(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def forbidden_client() -> None:
-        raise AssertionError("query construction must not initialize astroquery")
-
-    monkeypatch.setattr(obj, "_build_simbad_client", forbidden_client, raising=False)
-
+def test_simbad_adql_builder_is_pure_local_and_deterministic() -> None:
     first  = obj._build_simbad_query("  M 31  ")
     second = obj._build_simbad_query("M 31")
 
@@ -301,17 +288,7 @@ def test_simbad_adql_builder_is_pure_local_and_deterministic(
 
 
 @pytest.mark.parametrize("name", ["   ", "M31\nDROP TABLE basic"])
-def test_simbad_adql_builder_rejects_blank_or_control_character_names(
-    name: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        obj,
-        "_build_simbad_client",
-        lambda: pytest.fail("invalid names must be rejected before query construction"),
-        raising=False,
-    )
-
+def test_simbad_adql_builder_rejects_blank_or_control_character_names(name: str) -> None:
     with pytest.raises(ValueError, match="object name"):
         obj._build_simbad_query(name)
 
@@ -324,16 +301,16 @@ async def test_simbad_transport_error_is_public_and_does_not_log_raw_details(
     raw_endpoint = "https://private.example.invalid/secret-path"
     raw_secret   = "SIMBAD_RAW_ERROR_SECRET"
 
-    def fail(_name: str) -> None:
+    def fail(*_args: Any, **_kwargs: Any) -> None:
         raise requests.ConnectTimeout(f"request to {raw_endpoint} api_key={raw_secret}")
 
-    logger  = logging.getLogger("test.cr221.simbad")
+    logger  = logging.getLogger("test.simbad")
     context = SimpleNamespace(
         logger     = logger,
         request_id = "simbad-request",
         secrets    = {"plugins": {"astro_tools": {"api_key": raw_secret}}},
     )
-    monkeypatch.setattr(obj, "_query_simbad_object", fail)
+    monkeypatch.setattr(requests, "request", fail)
 
     with caplog.at_level(logging.ERROR, logger=logger.name):
         result = await obj.handle_obj("M31", context)

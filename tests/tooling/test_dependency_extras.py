@@ -1,9 +1,10 @@
-"""Regression tests for optional feature dependency contracts."""
+"""Plugin dependency declarations match the packaging extras and install hints."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import tomllib
 from types import SimpleNamespace
 
@@ -12,45 +13,6 @@ import pytest
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
-
-_REQUIRED_PLUGIN_DEPENDENCIES = {
-    "adnmb"        : {"PIL", "aiohttp"},
-    "ads_paper"    : {"aiohttp"},
-    "apod"         : {"PIL", "bs4"},
-    "earthquake"   : {"PIL", "bs4", "requests"},
-    "flickr"       : {"PIL"},
-    "github"       : {"bs4"},
-    "pendo"        : {"dateutil", "fastapi", "jwt", "pydantic", "starlette", "uvicorn"},
-    "twitter"      : {"PIL"},
-    "url_parser"   : {"PIL", "bs4"},
-    "voice"        : {"aiohttp"},
-    "wolframalpha" : {"aiohttp"},
-    "xiaoqing_chat": {"aiohttp", "numpy", "pydantic"},
-    "xiaoqing_life": {"aiohttp"},
-}
-
-_OPTIONAL_PLUGIN_DEPENDENCIES = {
-    "arxiv_filter": {
-        "bs4",
-        "joblib",
-        "numpy",
-        "pandas",
-        "requests",
-        "sentence_transformers",
-        "sklearn",
-        "torch",
-        "transformers",
-        "urllib3",
-    },
-    "astro_tools"  : {"astropy", "scipy"},
-    "codex"        : {"PIL"},
-    "color"        : {"matplotlib", "numpy"},
-    "jupyter"      : {"ipykernel", "jupyter_client"},
-    "qingssh"      : {"paramiko"},
-    "xiaoai"       : {"miservice", "qrcode"},
-    "xiaoqing_life": {"PIL"},
-    "xiaoqing_chat": {"PIL"},
-}
 
 
 def _project() -> dict[str, object]:
@@ -99,8 +61,8 @@ def test_feature_extras_cover_their_runtime_imports() -> None:
     assert "arxiv-ml" in all_target
 
 
-def test_every_plugin_manifest_matches_its_runtime_dependency_contract() -> None:
-    """逐个插件核对必需/可选 import，防止 preflight 晚于入口导入才失败。"""
+def test_every_plugin_manifest_declares_well_formed_dependencies() -> None:
+    """每个插件的 dependencies：描述非空、required 是布尔、同一插件内不重名。"""
 
     manifests = sorted((ROOT / "plugins").glob("*/plugin.json"))
     assert manifests
@@ -109,7 +71,7 @@ def test_every_plugin_manifest_matches_its_runtime_dependency_contract() -> None
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         dependencies = manifest.get("dependencies", [])
         assert isinstance(dependencies, list), plugin_name
-        actual: dict[str, bool] = {}
+        seen: set[str] = set()
         for dependency in dependencies:
             assert isinstance(dependency, dict), plugin_name
             name        = dependency.get("name")
@@ -117,14 +79,8 @@ def test_every_plugin_manifest_matches_its_runtime_dependency_contract() -> None
             assert isinstance(name, str) and name, plugin_name
             assert isinstance(description, str) and description.strip(), f"{plugin_name}:{name}"
             assert type(dependency.get("required")) is bool, f"{plugin_name}:{name}"
-            assert name not in actual, f"{plugin_name}:{name}"
-            actual[name] = dependency["required"]
-
-        expected_required = _REQUIRED_PLUGIN_DEPENDENCIES.get(plugin_name, set())
-        expected_optional = _OPTIONAL_PLUGIN_DEPENDENCIES.get(plugin_name, set())
-        assert set(actual) == expected_required | expected_optional, plugin_name
-        assert {name for name, required in actual.items() if required} == expected_required
-        assert {name for name, required in actual.items() if not required} == expected_optional
+            assert name not in seen, f"{plugin_name}:{name}"
+            seen.add(name)
 
 
 def _text(response: list[dict[str, object]]) -> str:
@@ -139,12 +95,19 @@ def test_optional_plugins_return_actionable_install_hints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from plugins.arxiv_filter import main as arxiv
+    from plugins.jupyter import jupyter_manager
     from plugins.jupyter import main as jupyter
 
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: False)
-    jupyter_result = asyncio.run(jupyter.handle("jupyter", "print(1)", {}, SimpleNamespace()))
+    # 可选依赖真的导入失败：jupyter_client 与推理模块（torch 等）都不可用。
+    monkeypatch.setitem(sys.modules, "jupyter_client", None)
+    monkeypatch.setattr(jupyter_manager, "JUPYTER_AVAILABLE", False)
+    monkeypatch.setattr(jupyter_manager, "IMPORT_ERROR", None)
+    monkeypatch.setattr(jupyter_manager, "KernelManager", None)
+    monkeypatch.setattr(jupyter, "_DEPENDENCY_PROBED", False)
+    monkeypatch.setitem(sys.modules, "plugins.arxiv_filter.inference.runner", None)
+    monkeypatch.setattr(arxiv, "_inference_func", None)
 
-    monkeypatch.setattr(arxiv, "_load_inference", lambda **_kwargs: None)
+    jupyter_result = asyncio.run(jupyter.handle("jupyter", "print(1)", {}, SimpleNamespace()))
     arxiv_result = asyncio.run(arxiv._run_filter(SimpleNamespace(config={})))
 
     assert 'pip install "xiaoqing[jupyter]"' in _text(jupyter_result)

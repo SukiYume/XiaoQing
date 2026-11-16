@@ -4,99 +4,99 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import threading
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from tests.helpers.plugin_manager_test_support import (
-    LoadedPlugin,
-    ModuleType,
+    HOOKED_PLUGIN_SOURCE,
+    FatalLifecycleError,
     PluginDefinition,
-    PluginExecutionGate,
     PluginLifecycleFatalError,
-    _build_definition,
-    _build_manager,
-    _FatalLifecycleError,
+    build_manager,
+    load_plugin,
+    load_plugin_dir,
+    write_plugin,
+    write_runtime_manifest,
 )
+from tests.helpers.plugin_probe import PROBE
 
 _isolate_process_global_plugin_import_state = (
     _fixture_support._isolate_process_global_plugin_import_state
 )
 
+# 关闭回调失败的一代：卸载它会被隔离。
+_FAILING_SHUTDOWN_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+PROBE.log("import").append(1)
+
+async def shutdown(context=None):
+    PROBE.log("shutdown").append(1)
+    raise RuntimeError("resource still live")
+"""
+
+# 每个版本的源码：导入时按名字记一笔，``VERSION`` 区分新旧。
+_VERSIONED_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+VERSION = {version}
+PROBE.log("{name}").append(VERSION)
+"""
+
+
+def versioned_source(name: str, version: int) -> str:
+    return _VERSIONED_SOURCE.format(name=name, version=version)
+
+
+def definition_of(manager, name: str = "demo") -> PluginDefinition:  # type: ignore[no-untyped-def]
+    """磁盘上插件当前的清单经真实的清单读取得到的定义。"""
+
+    definition = manager._load_definition(manager.plugins_dir / name)
+    assert isinstance(definition, PluginDefinition)
+    return definition
+
+
+async def wait_until(condition, *, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "condition was not reached in time"
+        await asyncio.sleep(0.01)
+
 
 @pytest.mark.asyncio
 async def test_watch_does_not_auto_reload_quarantined_plugin(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    old_gate = PluginExecutionGate("parallel", plugin_name="demo")
-    await old_gate.close()
-    manager._plugins["demo"] = LoadedPlugin(
-        definition     = definition,
-        module         = ModuleType("plugins.demo.main"),
-        mtime          = 0.0,
-        execution_gate = old_gate,
-    )
-    manager._execution_gates["demo"] = old_gate
-    manager._quarantined_plugins.add("demo")
-    manager._load_definition = Mock(return_value=definition)
-    manager._capture_plugin_snapshot_async = AsyncMock(return_value=1.0)
-    manager._load_new_plugin_from_watch = AsyncMock()
-    manager.reload_plugin               = AsyncMock()
+    manager     = build_manager(tmp_path)
+    quarantined = await load_plugin(manager, "demo", _FAILING_SHUTDOWN_SOURCE)
+    await manager.unload_plugin("demo")
+    assert "demo" in manager._quarantined_plugins
+    write_plugin(manager, "demo", versioned_source("demo", 2))
+    # 磁盘上另有一个新插件：它被装入，就说明监听确实跑过了一轮。
+    write_plugin(manager, "fresh", versioned_source("fresh", 1))
     manager.update_poll_interval(0.01)
-    reconciled     = asyncio.Event()
-    original_clear = manager.router.clear_plugin
 
-    def clear_plugin(name: str) -> None:
-        original_clear(name)
-        reconciled.set()
-
-    manager.router.clear_plugin = Mock(side_effect=clear_plugin)
     watcher = asyncio.create_task(manager.watch())
-    await asyncio.wait_for(reconciled.wait(), timeout=1)
-    watcher.cancel()
-
+    try:
+        await wait_until(lambda: manager.get("fresh") is not None)
+    finally:
+        watcher.cancel()
     with pytest.raises(asyncio.CancelledError):
         await watcher
 
-    manager._load_new_plugin_from_watch.assert_not_awaited()
-    manager.reload_plugin.assert_not_awaited()
+    assert manager._plugins["demo"] is quarantined
+    assert PROBE.log("demo") == []
+    assert len(PROBE.log("import")) == 1
     assert manager._watch_waiters == {}
-
-
-@pytest.mark.asyncio
-async def test_watch_retries_after_ordinary_reconcile_failure(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    manager.update_poll_interval(0.01)
-    second_poll = asyncio.Event()
-    calls       = 0
-
-    async def reconcile() -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("first poll failed after quarantine")
-        second_poll.set()
-
-    manager.reconcile_plugins = AsyncMock(side_effect=reconcile)
-    watcher = asyncio.create_task(manager.watch())
-    try:
-        await asyncio.wait_for(second_poll.wait(), timeout=1)
-        assert watcher.done() is False
-        assert manager.reconcile_plugins.await_count >= 2
-    finally:
-        watcher.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await watcher
 
 
 def test_plugin_watch_poll_interval_rejects_non_finite_and_non_positive_values(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     manager.update_poll_interval(0.25)
 
     for invalid in (0, -1, float("nan"), float("inf"), float("-inf"), True):
@@ -107,16 +107,28 @@ def test_plugin_watch_poll_interval_rejects_non_finite_and_non_positive_values(
     assert manager._poll_interval == 0.01
 
 
-@pytest.mark.asyncio
-async def test_watch_interval_decrease_interrupts_old_long_wait(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    manager.update_poll_interval(60)
-    reconciled = asyncio.Event()
+def observe_reconcile_rounds(manager, *, failures: list[BaseException] | None = None) -> list[int]:  # type: ignore[no-untyped-def]
+    """记录监听每一轮协调的发生，随后照常调用原函数；``failures`` 里的异常依次在前几轮抛出。"""
+
+    rounds: list[int] = []
+    real_reconcile    = manager.reconcile_plugins
 
     async def reconcile() -> None:
-        reconciled.set()
+        rounds.append(len(rounds) + 1)
+        if failures:
+            raise failures.pop(0)
+        await real_reconcile()
 
-    manager.reconcile_plugins = AsyncMock(side_effect=reconcile)
+    # 监听循环只认 ``reconcile_plugins``：在这一处记录每一轮，并在需要时注入失败。
+    manager.reconcile_plugins = reconcile
+    return rounds
+
+
+@pytest.mark.asyncio
+async def test_watch_interval_decrease_interrupts_old_long_wait(tmp_path: Path) -> None:
+    manager = build_manager(tmp_path)
+    manager.update_poll_interval(60)
+    rounds  = observe_reconcile_rounds(manager)
     watcher = asyncio.create_task(manager.watch())
     for _ in range(20):
         if manager._watch_waiters:
@@ -126,7 +138,7 @@ async def test_watch_interval_decrease_interrupts_old_long_wait(tmp_path: Path) 
         pytest.fail("watcher did not register its managed interval waiter")
 
     manager.update_poll_interval(0.01)
-    await asyncio.wait_for(reconciled.wait(), timeout=1)
+    await wait_until(lambda: rounds)
 
     watcher.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -138,22 +150,17 @@ async def test_watch_interval_decrease_interrupts_old_long_wait(tmp_path: Path) 
 async def test_watch_interval_increase_does_not_trigger_immediate_reconcile(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     manager.update_poll_interval(0.01)
-    first_reconcile = asyncio.Event()
-
-    async def reconcile() -> None:
-        first_reconcile.set()
-
-    manager.reconcile_plugins = AsyncMock(side_effect=reconcile)
+    rounds  = observe_reconcile_rounds(manager)
     watcher = asyncio.create_task(manager.watch())
-    await asyncio.wait_for(first_reconcile.wait(), timeout=1)
-    manager.reconcile_plugins.reset_mock()
+    await wait_until(lambda: rounds)
+    rounds_before = len(rounds)
 
     manager.update_poll_interval(0.2)
     await asyncio.sleep(0.05)
 
-    manager.reconcile_plugins.assert_not_awaited()
+    assert len(rounds) == rounds_before
     watcher.cancel()
     with pytest.raises(asyncio.CancelledError):
         await watcher
@@ -165,23 +172,16 @@ async def test_watch_rate_limits_repeated_round_failures_and_recovers(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     manager.update_poll_interval(0.01)
-    recovered = asyncio.Event()
-    calls     = 0
-
-    async def reconcile() -> None:
-        nonlocal calls
-        calls += 1
-        if calls <= 5:
-            raise OSError("transient root scan failure")
-        recovered.set()
-
-    manager.reconcile_plugins = AsyncMock(side_effect=reconcile)
+    rounds = observe_reconcile_rounds(
+        manager,
+        failures=[OSError("transient root scan failure") for _ in range(5)],
+    )
     caplog.set_level("WARNING", logger="core.plugin_manager")
     watcher = asyncio.create_task(manager.watch())
     try:
-        await asyncio.wait_for(recovered.wait(), timeout=1)
+        await wait_until(lambda: len(rounds) > 5)
         assert watcher.done() is False
         failures = [
             record
@@ -197,10 +197,10 @@ async def test_watch_rate_limits_repeated_round_failures_and_recovers(
 
 @pytest.mark.asyncio
 async def test_watch_propagates_fatal_lifecycle_carrier(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     manager.update_poll_interval(0.01)
-    fatal = PluginLifecycleFatalError("demo", _FatalLifecycleError("fatal watch"))
-    manager.reconcile_plugins = AsyncMock(side_effect=fatal)
+    fatal = PluginLifecycleFatalError("demo", FatalLifecycleError("fatal watch"))
+    observe_reconcile_rounds(manager, failures=[fatal])
 
     with pytest.raises(PluginLifecycleFatalError) as raised:
         await asyncio.wait_for(manager.watch(), timeout=1)
@@ -211,41 +211,30 @@ async def test_watch_propagates_fatal_lifecycle_carrier(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reconcile_path_stat_failure_preserves_runtime_and_processes_sibling(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager      = _build_manager(tmp_path)
+    manager      = build_manager(tmp_path)
+    old_plugin   = await load_plugin(manager, "a_inaccessible")
     inaccessible = manager.plugins_dir / "a_inaccessible"
-    healthy      = manager.plugins_dir / "b_healthy"
-    inaccessible.mkdir()
-    healthy.mkdir()
-    (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-    old_definition = _build_definition("a_inaccessible")
-    old_plugin     = LoadedPlugin(
-        definition = old_definition,
-        module     = ModuleType("plugins.a_inaccessible.main"),
-        mtime      = 0,
-    )
-    manager._plugins[old_definition.name] = old_plugin
-    healthy_definition                    = _build_definition("b_healthy")
-    original_is_plugin_dir                = manager._is_plugin_dir
+    write_plugin(manager, "b_healthy", versioned_source("healthy", 1))
+    original_lstat = Path.lstat
 
-    def classify(path: Path) -> bool:
+    def flaky_lstat(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
         if path == inaccessible:
             raise PermissionError("stat denied")
-        return original_is_plugin_dir(path)
+        return original_lstat(path, *args, **kwargs)
 
-    manager._is_plugin_dir = Mock(side_effect=classify)
-    manager._load_definition = Mock(return_value=healthy_definition)
-    manager._capture_plugin_snapshot_async = AsyncMock(return_value=1)
-    manager._load_new_plugin_from_watch = AsyncMock()
+    # 操作系统边界：这个目录的元数据读取被拒绝，监听既不能当它不存在，也不能放弃同级插件。
+    monkeypatch.setattr(Path, "lstat", flaky_lstat)
 
     await manager.reconcile_plugins()
 
-    assert manager._plugins[old_definition.name] is old_plugin
-    manager._load_new_plugin_from_watch.assert_awaited_once_with(
-        healthy,
-        healthy_definition,
-        1,
-    )
+    assert manager._plugins["a_inaccessible"] is old_plugin
+    assert old_plugin.execution_gate.closed is False
+    assert PROBE.log("shutdown") == []
+    healthy = manager.get("b_healthy")
+    assert healthy is not None
+    assert healthy.module.VERSION == 1
 
 
 @pytest.mark.asyncio
@@ -253,21 +242,10 @@ async def test_reconcile_incomplete_root_iteration_preserves_unknown_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    unseen  = manager.plugins_dir / "a_unseen"
-    healthy = manager.plugins_dir / "b_healthy"
-    unseen.mkdir()
-    healthy.mkdir()
-    (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-    old_definition = _build_definition("a_unseen")
-    old_plugin     = LoadedPlugin(
-        definition = old_definition,
-        module     = ModuleType("plugins.a_unseen.main"),
-        mtime      = 0,
-    )
-    manager._plugins[old_definition.name] = old_plugin
-    healthy_definition                    = _build_definition("b_healthy")
-    original_iterdir                      = Path.iterdir
+    manager          = build_manager(tmp_path)
+    old_plugin       = await load_plugin(manager, "a_unseen")
+    healthy          = write_plugin(manager, "b_healthy", versioned_source("healthy", 1))
+    original_iterdir = Path.iterdir
 
     def flaky_iterdir(path: Path):
         if path != manager.plugins_dir:
@@ -279,69 +257,56 @@ async def test_reconcile_incomplete_root_iteration_preserves_unknown_runtime(
 
         return incomplete()
 
+    # 操作系统边界：插件根目录遍历到一半失败，只见到了同级插件。
     monkeypatch.setattr(Path, "iterdir", flaky_iterdir)
-    manager._load_definition = Mock(return_value=healthy_definition)
-    manager._capture_plugin_snapshot_async = AsyncMock(return_value=1)
-    manager._load_new_plugin_from_watch = AsyncMock()
 
     await manager.reconcile_plugins()
 
-    assert manager._plugins[old_definition.name] is old_plugin
-    manager._load_new_plugin_from_watch.assert_awaited_once_with(
-        healthy,
-        healthy_definition,
-        1,
-    )
+    assert manager._plugins["a_unseen"] is old_plugin
+    assert old_plugin.execution_gate.closed is False
+    assert PROBE.log("shutdown") == []
+    loaded_healthy = manager.get("b_healthy")
+    assert loaded_healthy is not None
+    assert loaded_healthy.module.VERSION == 1
 
 
 @pytest.mark.asyncio
-async def test_reconcile_deleted_plugin_failure_does_not_block_siblings_and_retries(
+async def test_reconcile_deleted_plugin_failure_does_not_block_siblings_and_stays_quarantined(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    for name in ("a_broken", "b_deleted"):
-        manager._plugins[name] = LoadedPlugin(
-            definition = _build_definition(name),
-            module     = ModuleType(f"plugins.{name}.main"),
-            mtime      = 0,
-        )
-    healthy = manager.plugins_dir / "c_healthy"
-    healthy.mkdir()
-    (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-    healthy_definition = _build_definition("c_healthy")
-    broken_attempts    = 0
+    manager = build_manager(tmp_path)
+    broken  = await load_plugin(manager, "a_broken")
+    await load_plugin(manager, "b_deleted")
+    write_plugin(manager, "c_healthy", versioned_source("healthy", 1))
+    shutil.rmtree(manager.plugins_dir / "a_broken")
+    shutil.rmtree(manager.plugins_dir / "b_deleted")
+    real_purge = manager._purge_plugin_modules
 
-    async def unload(name: str) -> None:
-        nonlocal broken_attempts
+    def purge(name: str) -> None:
         if name == "a_broken":
-            broken_attempts += 1
-            if broken_attempts == 1:
-                raise RuntimeError("shutdown failed")
-        manager._plugins.pop(name, None)
+            raise RuntimeError("purge failed")
+        real_purge(name)
 
-    manager._unload_plugin_once = AsyncMock(side_effect=unload)
-    manager._load_definition = Mock(return_value=healthy_definition)
-    manager._capture_plugin_snapshot_async = AsyncMock(return_value=1)
-    manager._load_new_plugin_from_watch = AsyncMock()
+    # 真实输入走不到清理本身失败：只能在清理处对这一个插件注入失败，其余照常。
+    manager._purge_plugin_modules = purge
 
     await manager.reconcile_plugins()
 
-    assert "a_broken" in manager._plugins
-    assert "b_deleted" not in manager._plugins
-    manager._load_new_plugin_from_watch.assert_awaited_once_with(
-        healthy,
-        healthy_definition,
-        1,
-    )
+    # 失败的那个被隔离，不拖累同级：别的被删插件照常退役，新插件照常装入。
+    assert manager._plugins["a_broken"] is broken
+    assert "a_broken" in manager._quarantined_plugins
+    assert "b_deleted" not in manager.list_runtime_plugins()
+    healthy = manager.get("c_healthy")
+    assert healthy is not None
+    assert healthy.module.VERSION == 1
 
+    caplog.clear()
     await manager.reconcile_plugins()
 
-    assert "a_broken" not in manager._plugins
-    assert manager._unload_plugin_once.await_args_list[:3] == [
-        (("a_broken",), {}),
-        (("b_deleted",), {}),
-        (("a_broken",), {}),
-    ]
+    # 被隔离的一代不会被自动重试退役，等运维处理。
+    assert manager._plugins["a_broken"] is broken
+    assert "Keeping quarantined plugin a_broken after directory removal" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -351,17 +316,13 @@ async def test_reconcile_manifest_read_failure_does_not_block_sibling(
     monkeypatch: pytest.MonkeyPatch,
     manifest_error: type[OSError],
 ) -> None:
-    manager      = _build_manager(tmp_path)
+    manager      = build_manager(tmp_path)
     inaccessible = manager.plugins_dir / "a_inaccessible"
     healthy      = manager.plugins_dir / "b_healthy"
     for plugin_dir in (inaccessible, healthy):
         plugin_dir.mkdir()
         (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-        (plugin_dir / "plugin.json").write_text(
-            f'{{"name":"{plugin_dir.name}","version":"1.0.0","entry":"main.py",'
-            '"commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
-            encoding="utf-8",
-        )
+        write_runtime_manifest(plugin_dir, plugin_dir.name)
     original_open = Path.open
 
     def flaky_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -371,14 +332,13 @@ async def test_reconcile_manifest_read_failure_does_not_block_sibling(
         return original_open(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", flaky_open)
-    manager._load_new_plugin_from_watch = AsyncMock()
 
     await manager.reconcile_plugins()
 
-    manager._load_new_plugin_from_watch.assert_awaited_once()
-    load_args = manager._load_new_plugin_from_watch.await_args.args
-    assert load_args[0] == healthy
-    assert load_args[1].name == healthy.name
+    assert manager.get("a_inaccessible") is None
+    loaded_healthy = manager.get("b_healthy")
+    assert loaded_healthy is not None
+    assert loaded_healthy.module.VALUE == 1
 
 
 @pytest.mark.asyncio
@@ -388,7 +348,7 @@ async def test_watcher_manifest_errors_are_rate_limited_but_manual_loads_are_not
     caplog: pytest.LogCaptureFixture,
     manifest_state: str,
 ) -> None:
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "broken"
     plugin_dir.mkdir()
     if manifest_state == "invalid":
@@ -410,44 +370,32 @@ async def test_watcher_manifest_errors_are_rate_limited_but_manual_loads_are_not
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["rglob", "open"])
+@pytest.mark.parametrize("failure_stage", ["scandir", "open"])
 async def test_reconcile_fingerprint_race_isolated_to_one_plugin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
 ) -> None:
-    manager                                  = _build_manager(tmp_path)
-    definitions: dict[str, PluginDefinition] = {}
-    for name in ("a_racy", "b_changed"):
-        plugin_dir = manager.plugins_dir / name
-        plugin_dir.mkdir()
-        (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
-        (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
-        definition             = _build_definition(name)
-        definitions[name]      = definition
-        manager._plugins[name] = LoadedPlugin(
-            definition = definition,
-            module     = ModuleType(f"plugins.{name}.main"),
-            mtime      = 0,
-        )
+    manager = build_manager(tmp_path)
+    racy    = await load_plugin(manager, "a_racy", versioned_source("a_racy", 1))
+    changed = await load_plugin(manager, "b_changed", versioned_source("b_changed", 1))
+    # 两个插件的源码都改了：监听都要重新取指纹，只有 a_racy 的读取撞上了竞态。
+    racy_dir = write_plugin(manager, "a_racy", versioned_source("a_racy", 2))
+    write_plugin(manager, "b_changed", versioned_source("b_changed", 2))
+    if failure_stage == "scandir":
+        original_scandir = os.scandir
 
-    manager._load_definition = Mock(side_effect=lambda path: definitions[path.name])
-    manager._reload_plugin_once = AsyncMock()
-    racy_dir                    = manager.plugins_dir / "a_racy"
-    if failure_stage == "rglob":
-        original_iter = manager._iter_watch_files
+        def flaky_scandir(path):  # type: ignore[no-untyped-def]
+            if Path(path) == racy_dir:
+                raise OSError("directory replaced during scan")
+            return original_scandir(path)
 
-        def flaky_iter(plugin_dir: Path, definition: PluginDefinition) -> list[Path]:
-            if plugin_dir == racy_dir:
-                raise OSError("directory replaced during rglob")
-            return original_iter(plugin_dir, definition)
-
-        manager._iter_watch_files = Mock(side_effect=flaky_iter)
+        monkeypatch.setattr(os, "scandir", flaky_scandir)
     else:
         original_open = Path.open
         failed_path   = racy_dir / "main.py"
 
-        def flaky_open(path: Path, *args, **kwargs):
+        def flaky_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
             if path == failed_path:
                 raise FileNotFoundError("file renamed before open")
             return original_open(path, *args, **kwargs)
@@ -456,96 +404,85 @@ async def test_reconcile_fingerprint_race_isolated_to_one_plugin(
 
     await manager.reconcile_plugins()
 
-    assert manager._plugins["a_racy"].mtime == 0
-    manager._reload_plugin_once.assert_awaited_once()
-    reload_call = manager._reload_plugin_once.await_args
-    assert reload_call.args == ("b_changed",)
-    assert reload_call.kwargs["authorization"].mtime != 0
+    # 指纹失败的插件保持原样、等下一轮；同级插件照常换到新一代。
+    assert manager._plugins["a_racy"] is racy
+    assert PROBE.log("a_racy") == [1]
+    assert manager._plugins["b_changed"] is not changed
+    assert manager._plugins["b_changed"].module.VERSION == 2
 
 
 @pytest.mark.asyncio
 async def test_reconcile_transient_fingerprint_failure_recovers_next_round(
     tmp_path: Path,
 ) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    (plugin_dir / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
-    definition = _build_definition()
-    old_plugin = LoadedPlugin(
-        definition = definition,
-        module     = ModuleType("plugins.demo.main"),
-        mtime      = 1,
-    )
-    manager._plugins[definition.name] = old_plugin
-    manager._load_definition = Mock(return_value=definition)
-    manager._capture_plugin_snapshot_async = AsyncMock(
-        side_effect=[OSError("file replaced during read"), 2]
-    )
-    manager._reload_plugin_once = AsyncMock()
+    manager    = build_manager(tmp_path)
+    old_plugin = await load_plugin(manager, "demo", versioned_source("demo", 1))
+    write_plugin(manager, "demo", versioned_source("demo", 2))
+    real_capture = manager._capture_plugin_snapshot_async
+    failures     = [OSError("file replaced during read")]
+
+    async def capture(plugin_dir, definition, **kwargs):  # type: ignore[no-untyped-def]
+        if failures:
+            raise failures.pop()
+        return await real_capture(plugin_dir, definition, **kwargs)
+
+    # 文件在读取中途被换掉的竞态无法稳定地用真实输入造出来：只能在取指纹处注入失败（只一次）。
+    manager._capture_plugin_snapshot_async = capture
 
     await manager.reconcile_plugins()
-    assert manager._plugins[definition.name] is old_plugin
-    manager._reload_plugin_once.assert_not_awaited()
+    assert manager._plugins["demo"] is old_plugin
+    assert PROBE.log("demo") == [1]
 
     await manager.reconcile_plugins()
-    manager._reload_plugin_once.assert_awaited_once()
-    reload_call = manager._reload_plugin_once.await_args
-    assert reload_call.args == (definition.name,)
-    assert reload_call.kwargs["authorization"].mtime == 2
+    assert manager._plugins["demo"] is not old_plugin
+    assert manager._plugins["demo"].module.VERSION == 2
+    assert PROBE.log("demo") == [1, 2]
 
 
 @pytest.mark.asyncio
 async def test_reload_authorization_snapshot_runs_off_event_loop(tmp_path: Path) -> None:
-    import threading
-    import time
-
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    old_plugin = LoadedPlugin(
-        definition = definition,
-        module     = ModuleType("plugins.demo.main"),
-        mtime      = 0,
-    )
-    manager._load_definition = Mock(return_value=definition)
+    manager = build_manager(tmp_path)
+    old     = await load_plugin(manager, "demo", versioned_source("demo", 1))
+    write_plugin(manager, "demo", versioned_source("demo", 2))
+    real_snapshot           = manager._authorize_plugin_snapshot
     started                 = threading.Event()
     release                 = threading.Event()
     blocked_at: list[float] = []
 
-    def blocking_fingerprint(_plugin_dir: Path, _definition: PluginDefinition) -> int:
-        blocked_at.append(time.perf_counter())
-        started.set()
-        release.wait(timeout=1)
-        return 1
+    def blocking_fingerprint(plugin_dir: Path, definition: PluginDefinition):
+        # 屏障：第一次取指纹停在这里，放行后照常调用原函数。
+        if not blocked_at:
+            blocked_at.append(time.perf_counter())
+            started.set()
+            release.wait(timeout=1)
+        return real_snapshot(plugin_dir, definition)
 
-    manager._authorize_plugin_snapshot = Mock(side_effect=blocking_fingerprint)
-    safety_release = threading.Timer(0.5, release.set)
+    manager._authorize_plugin_snapshot = blocking_fingerprint
+    safety_release                     = threading.Timer(0.5, release.set)
     safety_release.start()
-    task = asyncio.create_task(manager._prepare_reload_authorization("demo", old_plugin))
+    task = asyncio.create_task(manager.reload_plugin("demo"))
     try:
         assert await asyncio.to_thread(started.wait, 1)
+        # 取指纹被拦住期间事件循环仍然在转。
         assert time.perf_counter() - blocked_at[0] < 0.3
         release.set()
-        authorization = await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(task, timeout=2)
     finally:
         safety_release.cancel()
         release.set()
 
-    assert authorization is not None
-    assert authorization.mtime == 1
+    assert manager._plugins["demo"] is not old
+    assert manager._plugins["demo"].module.VERSION == 2
 
 
 def test_capture_plugin_snapshot_rejects_atomic_replace_after_open(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    main       = plugin_dir / "main.py"
-    main.write_text("VALUE = 1\n", encoding="utf-8")
-    (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
+    manager = build_manager(tmp_path)
+    plugin_dir = write_plugin(manager, source="VALUE = 1\n")
+    definition    = definition_of(manager)
+    main          = plugin_dir / "main.py"
     original_open = Path.open
     original_stat = Path.stat
     opened        = False
@@ -588,16 +525,10 @@ def test_capture_plugin_snapshot_rejects_atomic_replace_after_open(
 async def test_watch_snapshot_reuses_recent_stable_metadata_then_hashes_change(
     tmp_path: Path,
 ) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    source     = plugin_dir / "main.py"
-    source.write_text("VALUE = 1\n", encoding="utf-8")
-    (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
-    first = manager._capture_plugin_snapshot(plugin_dir, definition)
-    full_capture = Mock(wraps=manager._capture_plugin_snapshot)
-    manager._capture_plugin_snapshot = full_capture
+    manager = build_manager(tmp_path)
+    plugin_dir = write_plugin(manager, source="VALUE = 1\n")
+    definition = definition_of(manager)
+    first      = manager._capture_plugin_snapshot(plugin_dir, definition)
 
     stable = await manager._capture_plugin_snapshot_async(
         plugin_dir,
@@ -605,18 +536,19 @@ async def test_watch_snapshot_reuses_recent_stable_metadata_then_hashes_change(
         previous=first,
     )
 
+    # 元数据没变、上一次的指纹还新鲜：直接复用那一个对象，不重新散列。
     assert stable is first
-    full_capture.assert_not_called()
 
-    source.write_text("VALUE = 200\n", encoding="utf-8")
+    (plugin_dir / "main.py").write_text("VALUE = 200\n", encoding="utf-8")
     changed = await manager._capture_plugin_snapshot_async(
         plugin_dir,
         definition,
         previous=first,
     )
 
-    full_capture.assert_called_once_with(plugin_dir, definition)
+    assert changed is not first
     assert changed != first
+    assert changed.sources["main.py"].decode().strip() == "VALUE = 200"
 
 
 @pytest.mark.asyncio
@@ -624,33 +556,26 @@ async def test_reconcile_rejects_cross_file_mixed_fingerprint_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     monkeypatch.setattr(
         "core.plugin_watcher._PLUGIN_FINGERPRINT_AUDIT_INTERVAL_SECONDS",
         0.0,
     )
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    definition       = _build_definition()
-    definition.entry = "a.py"
-    first            = plugin_dir / "a.py"
-    second           = plugin_dir / "b.py"
-    replacement      = plugin_dir / "replacement.tmp"
-    manifest         = plugin_dir / "plugin.json"
-    first.write_text("VALUE = 1\n", encoding="utf-8")
+    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
+    first       = plugin_dir / "a.py"
+    second      = plugin_dir / "b.py"
+    replacement = plugin_dir / "replacement.tmp"
+    first.write_text(HOOKED_PLUGIN_SOURCE, encoding="utf-8")
     second.write_text("VALUE = 1\n", encoding="utf-8")
-    replacement.write_text("VALUE = 2\n", encoding="utf-8")
-    manifest.write_text("{}", encoding="utf-8")
-    old_plugin = LoadedPlugin(
-        definition = definition,
-        module     = ModuleType("plugins.demo.main"),
-        mtime      = manager._capture_plugin_snapshot(plugin_dir, definition),
-    )
-    manager._plugins[definition.name] = old_plugin
-    manager._load_definition = Mock(return_value=definition)
-    manager._reload_plugin_once = AsyncMock()
-    original_open               = Path.open
-    replaced                    = False
+    replacement.write_text(HOOKED_PLUGIN_SOURCE + "\nVALUE = 2\n", encoding="utf-8")
+    write_runtime_manifest(plugin_dir, "demo", "a.py")
+    await load_plugin_dir(manager, plugin_dir)
+    old_plugin = manager.get("demo")
+    assert old_plugin is not None
+    original_open = Path.open
+    replaced      = False
 
     def replace_first_before_reading_second(path: Path, *args, **kwargs):
         nonlocal replaced
@@ -660,36 +585,31 @@ async def test_reconcile_rejects_cross_file_mixed_fingerprint_snapshot(
             os.replace(replacement, first)
         return handle
 
+    # 操作系统边界：读第二个文件时，第一个文件被原子换成了新内容。
     monkeypatch.setattr(Path, "open", replace_first_before_reading_second)
 
     await manager.reconcile_plugins()
 
     assert replaced is True
-    assert manager._plugins[definition.name] is old_plugin
-    manager._reload_plugin_once.assert_not_awaited()
+    assert manager._plugins["demo"] is old_plugin
+    assert len(PROBE.log("import")) == 1
 
 
 def test_iter_watch_files_traverses_data_named_source_directory(tmp_path: Path) -> None:
     data_ancestor = tmp_path / "data"
     data_ancestor.mkdir()
-    manager    = _build_manager(data_ancestor)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition   = _build_definition()
+    manager = build_manager(data_ancestor)
+    plugin_dir = write_plugin(manager, source="VALUE = 1\n")
+    definition   = definition_of(manager)
     main         = plugin_dir / "main.py"
     helper       = plugin_dir / "helper.py"
     runtime_data = plugin_dir / "data"
     runtime_data.mkdir()
     state         = runtime_data / "state.json"
     nested_source = runtime_data / "helper.py"
-    main.write_text("VALUE = 1\n", encoding="utf-8")
     helper.write_text("HELPER = 1\n", encoding="utf-8")
     state.write_text("{}", encoding="utf-8")
     nested_source.write_text("NESTED = 1\n", encoding="utf-8")
-    (plugin_dir / "plugin.json").write_text(
-        '{"name":"demo","entry":"main.py","enabled":true}',
-        encoding="utf-8",
-    )
 
     files = manager._iter_watch_files(plugin_dir, definition)
 
@@ -703,16 +623,11 @@ def test_fingerprint_prunes_bytecode_before_descent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    definition = _build_definition()
-    main       = plugin_dir / "main.py"
-    manifest   = plugin_dir / "plugin.json"
+    manager = build_manager(tmp_path)
+    plugin_dir = write_plugin(manager, source="VALUE = 1\n")
+    definition = definition_of(manager)
     cache_dir  = plugin_dir / "__pycache__"
     cache_dir.mkdir()
-    main.write_text("VALUE = 1\n", encoding="utf-8")
-    manifest.write_text("{}", encoding="utf-8")
     (cache_dir / "generated.py").write_text("VALUE = 2\n", encoding="utf-8")
     original_scandir    = os.scandir
     original_stat       = Path.stat

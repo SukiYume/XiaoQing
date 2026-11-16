@@ -1,4 +1,4 @@
-"""Regression tests for release-time plugin resources."""
+"""发布包完整：插件资源与源码子包都写进了打包声明。"""
 
 from __future__ import annotations
 

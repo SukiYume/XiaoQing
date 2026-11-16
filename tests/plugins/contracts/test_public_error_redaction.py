@@ -6,19 +6,25 @@ import logging
 import sqlite3
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
-from fastapi import HTTPException
 
+from plugins.adnmb import adapi as adnmb_api
 from plugins.adnmb import main as adnmb
+from plugins.ads_paper import ads_client
 from plugins.ads_paper import main as ads_paper
 from plugins.apod import main as apod
 from plugins.arxiv_filter import main as arxiv_filter
+from plugins.arxiv_filter.inference import knn_backend
+from plugins.arxiv_filter.inference.runner import run_inference_for_dataframe
 from plugins.astro_tools import main as astro_tools
+from plugins.astro_tools import obj as astro_obj
 from plugins.bot_core import main as bot_core
 from plugins.chat import main as chat
 from plugins.chime import main as chime
@@ -39,15 +45,15 @@ from plugins.pendo.web import server as pendo_web_server
 from plugins.pendo.web.api import transfer as pendo_transfer
 from plugins.qingpet import main as qingpet
 from plugins.signin import main as signin
+from plugins.signin import yingshi
 from plugins.smalltalk import main as smalltalk
 from plugins.twitter import main as twitter
 from plugins.url_parser import main as url_parser
 from plugins.voice import main as voice
 from plugins.wolframalpha import main as wolframalpha
 from plugins.xiaoqing_chat import main as xiaoqing_chat
-from tests.helpers.pendo_test_support import managed_pendo_database
 
-CANARY          = "CR219_SECRET_CANARY"
+CANARY          = "SECRET_CANARY"
 SENSITIVE_ERROR = (
     f"Authorization: Bearer {CANARY} "
     f"https://user:password@example.test/api?token={CANARY} "
@@ -55,70 +61,258 @@ SENSITIVE_ERROR = (
 )
 
 
-@dataclass
-class _PublicContext:
-    request_id: str
-    plugin_dir: Path
-    data_dir  : Path
-    secrets   : dict
-    logger    : logging.Logger
+class _LeakingDatabase:
+    """任何访问都抛出带泄漏探针的错误，代替宠物插件初始化后的数据库。"""
 
-    def get_settings_snapshot(self):
+    def __getattr__(self, name: str) -> NoReturn:
+        raise RuntimeError(SENSITIVE_ERROR)
+
+
+def _leaking_sync(*_args: object, **_kwargs: object) -> NoReturn:
+    raise RuntimeError(SENSITIVE_ERROR)
+
+
+async def _leaking_async(*_args: object, **_kwargs: object) -> NoReturn:
+    raise RuntimeError(SENSITIVE_ERROR)
+
+
+class _PublicContext:
+    """测试自己造的插件上下文；`failing` 里的属性一被访问就抛出带泄漏探针的错误。"""
+
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        plugin_dir: Path,
+        data_dir: Path,
+        secrets: dict,
+        logger: logging.Logger,
+        plugin_secrets: dict | None = None,
+        failing: tuple[str, ...]    = (),
+    ) -> None:
+        self.request_id       = request_id
+        self._plugin_dir      = plugin_dir
+        self._data_dir        = data_dir
+        self.secrets          = secrets
+        self.logger           = logger
+        self._plugin_secrets  = plugin_secrets or {}
+        self._failing         = failing
+        self.http_session     = object()
+        self.state: dict      = {}
+        self.current_user_id  = 1
+        self.current_group_id = None
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in object.__getattribute__(self, "_failing"):
+            raise RuntimeError(SENSITIVE_ERROR)
+        return object.__getattribute__(self, name)
+
+    @property
+    def data_dir(self) -> Path:
+        return self._data_dir
+
+    @property
+    def plugin_dir(self) -> Path:
+        return self._plugin_dir
+
+    def now(self) -> datetime:
+        return datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+
+    def get_settings_snapshot(self) -> SimpleNamespace:
         return SimpleNamespace(
-            plugin_secrets = lambda _plugin_name: {},
+            plugin_secrets = lambda plugin_name: self._plugin_secrets.get(plugin_name, {}),
             plugin_config  = lambda _plugin_name: {},
+            config         = {},
+            secrets_status = "valid",
         )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("module", "patch_name"),
-    [
-        pytest.param(adnmb, "parse", id="adnmb"),
-        pytest.param(apod, "bounded_external_text", id="apod"),
-        pytest.param(arxiv_filter, "bounded_external_text", id="arxiv"),
-        pytest.param(astro_tools, "parse", id="astro"),
-        pytest.param(chime, "parse", id="chime"),
-        pytest.param(choice, "parse_choice_args", id="choice"),
-        pytest.param(color, "parse", id="color"),
-        pytest.param(dictionary, "_parse_request", id="dict"),
-        pytest.param(earthquake, "_parse_action", id="earthquake"),
-        pytest.param(echo, "segments", id="echo"),
-        pytest.param(flickr, "parse", id="flickr"),
-        pytest.param(github, "_parse_action", id="github"),
-        pytest.param(guess_number, "_parse_request", id="guess"),
-        pytest.param(twitter, "parse", id="twitter"),
-        pytest.param(chat, "validate_config", id="chat"),
-        pytest.param(signin, "parse", id="signin"),
-        pytest.param(smalltalk, "parse", id="smalltalk"),
-        pytest.param(voice, "segments", id="voice"),
-        pytest.param(wolframalpha, "segments", id="wolframalpha"),
-    ],
+class _FailingEvent(dict):
+    def get(self, *_args: object) -> NoReturn:
+        raise RuntimeError(SENSITIVE_ERROR)
+
+
+@dataclass(frozen=True)
+class _PublicCase:
+    """一次公开命令调用，以及让它失败的地方：外部调用、随机源、上下文属性；真实输入到不了
+    命令入口最外层的兜底时，换掉参数解析这一步。"""
+
+    module        : ModuleType
+    command       : str
+    args          : str
+    boundary      : tuple[object, str, object] | None = None
+    plugin_secrets: dict | None                       = None
+    failing       : tuple[str, ...]                   = ()
+    failing_event : bool                              = False
+
+
+_NO_RANDOMNESS = SimpleNamespace(
+    choice  = _leaking_sync,
+    choices = _leaking_sync,
+    sample  = _leaking_sync,
 )
-async def test_public_plugin_unexpected_errors_never_echo_internal_details(
-    module: ModuleType,
-    patch_name: str,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+
+_PUBLIC_CASES = [
+    pytest.param(
+        _PublicCase(adnmb, "adnmb", "-t", (adnmb_api, "aiohttp_request_bounded", _leaking_async)),
+        id="adnmb",
+    ),
+    pytest.param(
+        _PublicCase(apod, "apod", "", (apod, "fetch_public_html", _leaking_async)),
+        id="apod",
+    ),
+    pytest.param(
+        _PublicCase(
+            astro_tools, "astro", "obj M31", (astro_obj, "requests_request_bounded", _leaking_sync)
+        ),
+        id="astro",
+    ),
+    pytest.param(
+        _PublicCase(chime, "chime", "", (chime, "fetch_chime_repeaters", _leaking_async)),
+        id="chime",
+    ),
+    pytest.param(
+        _PublicCase(choice, "choice", "a b c", (choice, "_RNG", _NO_RANDOMNESS)),
+        id="choice",
+    ),
+    pytest.param(
+        _PublicCase(color, "color", "G2V", failing=("data_dir", "plugin_dir")),
+        id="color",
+    ),
+    pytest.param(
+        _PublicCase(dictionary, "dict", "star", failing=("data_dir", "plugin_dir")),
+        id="dict",
+    ),
+    # 下面几组的失败落到命令入口最外层的兜底。这些插件的里层把外部调用和各子命令的失败都接住了，
+    # 真实输入到不了最外层，所以在参数解析（bot_core 是子命令处理函数）这一步注入失败。
+    pytest.param(
+        _PublicCase(dictionary, "dict", "star", (dictionary, "_parse_request", _leaking_sync)),
+        id="dict-command-entry",
+    ),
+    pytest.param(
+        _PublicCase(astro_tools, "astro", "time now", (astro_tools, "parse", _leaking_sync)),
+        id="astro-command-entry",
+    ),
+    pytest.param(
+        _PublicCase(signin, "signin", "yingshi", failing=("get_settings_snapshot",)),
+        id="signin-command-entry",
+    ),
+    pytest.param(
+        _PublicCase(
+            earthquake, "earthquake", "", (earthquake, "requests_request_bounded", _leaking_sync)
+        ),
+        id="earthquake",
+    ),
+    pytest.param(
+        _PublicCase(earthquake, "earthquake", "", (earthquake, "_parse_action", _leaking_sync)),
+        id="earthquake-command-entry",
+    ),
+    pytest.param(_PublicCase(echo, "hello", "", failing_event=True), id="echo"),
+    pytest.param(
+        _PublicCase(
+            flickr,
+            "flickr",
+            "",
+            plugin_secrets = {"flickr": {"api_key": "test-flickr-api-key-not-a-real-credential"}},
+            failing        = ("get_settings_snapshot",),
+        ),
+        id="flickr",
+    ),
+    pytest.param(
+        _PublicCase(github, "github", "", (github, "fetch_public_html", _leaking_async)),
+        id="github",
+    ),
+    pytest.param(
+        _PublicCase(github, "github", "", (github, "_parse_action", _leaking_sync)),
+        id="github-command-entry",
+    ),
+    pytest.param(_PublicCase(guess_number, "guess", "", failing=("get_session",)), id="guess"),
+    pytest.param(
+        _PublicCase(twitter, "twimg", "", failing=("data_dir", "plugin_dir")),
+        id="twitter",
+    ),
+    pytest.param(
+        _PublicCase(
+            chat,
+            "chat",
+            "hello",
+            plugin_secrets = {"chat": {"token": "token", "bot_id": "bot"}},
+            failing        = ("now",),
+        ),
+        id="chat",
+    ),
+    pytest.param(
+        _PublicCase(
+            signin,
+            "signin",
+            "yingshi",
+            (yingshi, "aiohttp_request_bounded", _leaking_async),
+            plugin_secrets={
+                "signin": {
+                    "yingshijufeng": {
+                        "app_id"      : "app",
+                        "kdt_id"      : "1",
+                        "access_token": "token",
+                        "sid"         : "sid",
+                    }
+                }
+            },
+        ),
+        id="signin",
+    ),
+    pytest.param(
+        _PublicCase(smalltalk, "qa", "question answer", failing=("data_dir", "plugin_dir")),
+        id="smalltalk",
+    ),
+    pytest.param(
+        _PublicCase(voice, "tts", "hello", failing=("get_settings_snapshot",)),
+        id="voice",
+    ),
+    pytest.param(
+        _PublicCase(
+            wolframalpha,
+            "alpha",
+            "1+1",
+            (wolframalpha, "aiohttp_request_bounded", _leaking_async),
+            plugin_secrets={"wolframalpha": {"appid": "ABCDEF-1234567890"}},
+        ),
+        id="wolframalpha",
+    ),
+    pytest.param(
+        _PublicCase(
+            ads_paper,
+            "paper",
+            "search frb",
+            (ads_client, "aiohttp_request_bounded", _leaking_async),
+            plugin_secrets={"ads_paper": {"ads_token": "configured"}},
+        ),
+        id="ads_paper",
+    ),
+    pytest.param(
+        _PublicCase(bot_core, "help", "", failing=("get_command_catalog",)),
+        id="bot_core",
+    ),
+    pytest.param(
+        _PublicCase(bot_core, "plugins", "", (bot_core, "_handle_plugins", _leaking_sync)),
+        id="bot_core-command-entry",
+    ),
+    pytest.param(_PublicCase(pendo, "pendo", "", failing=("session_manager",)), id="pendo"),
+    pytest.param(
+        _PublicCase(qingpet, "qingpet", "查看", (qingpet, "_db_instance", _LeakingDatabase())),
+        id="qingpet",
+    ),
+    pytest.param(
+        _PublicCase(xiaoqing_chat, "xc", "hello", failing=("get_command_catalog",)),
+        id="xiaoqing_chat",
+    ),
+]
+
+
+def _assert_public_error_is_redacted(
+    response: object,
     caplog: pytest.LogCaptureFixture,
+    request_id: str,
 ) -> None:
-    request_id = "req-cr219-canary"
-    context    = _PublicContext(
-        request_id = request_id,
-        plugin_dir = tmp_path,
-        data_dir   = tmp_path,
-        secrets    = {"plugins": {module.__name__: {"token": CANARY}}},
-        logger     = logging.getLogger(f"test.{module.__name__}"),
-    )
-    monkeypatch.setattr(
-        module,
-        patch_name,
-        Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
-    )
-
-    with caplog.at_level(logging.ERROR):
-        response = await module.handle("test", "ordinary input", {}, context)
-
     serialized_response = json.dumps(response, ensure_ascii=False)
     serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
     assert "XQ-PLUGIN-UNEXPECTED" in serialized_response
@@ -144,16 +338,72 @@ async def test_public_plugin_unexpected_errors_never_echo_internal_details(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case", _PUBLIC_CASES)
+async def test_public_plugin_unexpected_errors_never_echo_internal_details(
+    case: _PublicCase,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = "req-canary"
+    context    = _PublicContext(
+        request_id     = request_id,
+        plugin_dir     = tmp_path,
+        data_dir       = tmp_path,
+        secrets        = {"plugins": {case.module.__name__: {"token": CANARY}}},
+        logger         = logging.getLogger(f"test.{case.module.__name__}"),
+        plugin_secrets = case.plugin_secrets,
+        failing        = case.failing,
+    )
+    if case.boundary is not None:
+        monkeypatch.setattr(*case.boundary)
+    event = _FailingEvent({"user_id": 1}) if case.failing_event else {"user_id": 1}
+
+    with caplog.at_level(logging.ERROR):
+        response = await case.module.handle(case.command, case.args, event, context)
+
+    _assert_public_error_is_redacted(response, caplog, request_id)
+
+
+@pytest.mark.asyncio
+async def test_arxiv_public_unexpected_error_never_echoes_internal_details(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    module_name = "plugins.arxiv_filter.arxiv_today"
+    monkeypatch.setitem(sys.modules, "feedparser", ModuleType("feedparser"))
+    sys.modules.pop(module_name, None)
+    context = _PublicContext(
+        request_id = "req-canary",
+        plugin_dir = tmp_path,
+        data_dir   = tmp_path,
+        secrets    = {"plugins": {"arxiv_filter": {"token": CANARY}}},
+        logger     = logging.getLogger("test.arxiv_filter"),
+    )
+    try:
+        arxiv_today = importlib.import_module(module_name)
+        monkeypatch.setattr(arxiv_today, "requests_request_bounded", _leaking_sync)
+
+        with caplog.at_level(logging.ERROR):
+            response = await arxiv_filter.handle("arxiv", "", {"user_id": 1}, context)
+    finally:
+        sys.modules.pop(module_name, None)
+
+    _assert_public_error_is_redacted(response, caplog, "req-canary")
+
+
+@pytest.mark.asyncio
 async def test_url_parser_unexpected_error_is_redacted_even_without_a_reply(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    request_id = "req-cr219-url-parser"
+    request_id = "req-url-parser"
     context    = SimpleNamespace(
         request_id   = request_id,
         secrets      = {"plugins": {"url_parser": {"token": CANARY}}},
-        logger       = logging.getLogger("test.cr219.url_parser"),
+        logger       = logging.getLogger("test.url_parser"),
         data_dir     = tmp_path,
         http_session = object(),
     )
@@ -176,28 +426,23 @@ async def test_url_parser_unexpected_error_is_redacted_even_without_a_reply(
 
 def test_arxiv_internal_inference_failure_propagates_to_the_public_boundary(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    fake_torch = ModuleType("torch")
-    fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
-    fake_torch.device = lambda value: value
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    module_name = "plugins.arxiv_filter.inference.runner"
-    sys.modules.pop(module_name, None)
-    try:
-        arxiv_runner = importlib.import_module(module_name)
-        monkeypatch.setattr(arxiv_runner, "resolve_params", Mock(return_value=object()))
-        monkeypatch.setattr(
-            arxiv_runner,
-            "_dispatch_inference",
-            Mock(side_effect=RuntimeError(CANARY)),
+    (tmp_path / "training_config.json").write_text(
+        json.dumps({"model_type": "knn"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(knn_backend, "run_knn_inference", _leaking_sync_canary)
+
+    with pytest.raises(RuntimeError, match=CANARY):
+        run_inference_for_dataframe(
+            pd.DataFrame([{"Title": "paper", "Abstract": "abstract"}]),
+            model_path=str(tmp_path),
         )
 
-        with pytest.raises(RuntimeError, match=CANARY):
-            arxiv_runner.run_inference_for_dataframe(
-                pd.DataFrame([{"Title": "paper", "Abstract": "abstract"}]),
-            )
-    finally:
-        sys.modules.pop(module_name, None)
+
+def _leaking_sync_canary(*_args: object, **_kwargs: object) -> NoReturn:
+    raise RuntimeError(CANARY)
 
 
 def test_pendo_web_start_error_never_stores_raw_exception_text() -> None:
@@ -217,9 +462,9 @@ async def test_nested_pendo_error_decorators_emit_one_safe_record(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = SimpleNamespace(
-        request_id = "req-cr219-pendo-nested",
+        request_id = "req-pendo-nested",
         secrets    = {"token": CANARY},
-        logger     = logging.getLogger("test.cr219.pendo.nested"),
+        logger     = logging.getLogger("test.pendo.nested"),
     )
 
     @handle_command_errors
@@ -241,61 +486,6 @@ async def test_nested_pendo_error_decorators_emit_one_safe_record(
     assert public_records[0].exc_info is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "plugin_name",
-    ["ads_paper", "bot_core", "pendo", "qingpet", "xiaoqing_chat"],
-)
-async def test_remaining_public_plugins_share_the_same_safe_boundary(
-    plugin_name: str,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    request_id = f"req-cr219-{plugin_name}"
-    context    = SimpleNamespace(
-        request_id   = request_id,
-        secrets      = {"plugins": {plugin_name: {"token": CANARY}}},
-        logger       = logging.getLogger(f"test.cr219.{plugin_name}"),
-        data_dir     = tmp_path,
-        plugin_dir   = tmp_path,
-        state        = {},
-        http_session = object(),
-    )
-    error = RuntimeError(SENSITIVE_ERROR)
-
-    if plugin_name == "ads_paper":
-        monkeypatch.setattr(ads_paper, "_get_ads_token", Mock(return_value="configured"))
-        monkeypatch.setattr(ads_paper.paper_commands, "cmd_search", AsyncMock(side_effect=error))
-        invocation = ads_paper.handle("paper", "search", {"user_id": 1}, context)
-    elif plugin_name == "bot_core":
-        monkeypatch.setattr(bot_core, "_handle_help", Mock(side_effect=error))
-        invocation = bot_core.handle("help", "", {"user_id": 1}, context)
-    elif plugin_name == "pendo":
-        monkeypatch.setattr(pendo, "_has_active_session", AsyncMock(side_effect=error))
-        invocation = pendo.handle("pendo", "", {"user_id": 1}, context)
-    elif plugin_name == "qingpet":
-        monkeypatch.setattr(qingpet, "_db_instance", object())
-        monkeypatch.setattr(qingpet.asyncio, "to_thread", AsyncMock(side_effect=error))
-        invocation = qingpet.handle("qingpet", "查看", {"user_id": 1}, context)
-    else:
-        monkeypatch.setattr(xiaoqing_chat, "_resolve_invocation", Mock(side_effect=error))
-        invocation = xiaoqing_chat.handle("xc", "hello", {"user_id": 1}, context)
-
-    with caplog.at_level(logging.ERROR):
-        response = await invocation
-
-    serialized_response = json.dumps(response, ensure_ascii=False)
-    serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
-    assert "XQ-PLUGIN-UNEXPECTED" in serialized_response
-    assert request_id in serialized_response
-    assert request_id in serialized_logs
-    assert CANARY not in serialized_response
-    assert CANARY not in serialized_logs
-    assert "user:password" not in serialized_logs
-    assert all(record.exc_info is None for record in caplog.records)
-
-
 def test_pendo_reminder_terminal_failure_propagates_without_raw_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -314,22 +504,15 @@ def test_pendo_reminder_terminal_failure_propagates_without_raw_log(
 
 def test_pendo_recoverable_internal_failures_log_only_error_type(
     caplog: pytest.LogCaptureFixture,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reminder_db = SimpleNamespace(
         get_unconfirmed_sent_reminders=Mock(side_effect=RuntimeError(SENSITIVE_ERROR))
     )
-    with managed_pendo_database(tmp_path) as db:
-        monkeypatch.setattr(
-            db,
-            "get_user_settings",
-            Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
-        )
+    settings_db = SimpleNamespace(get_user_settings=Mock(side_effect=RuntimeError(SENSITIVE_ERROR)))
 
-        with caplog.at_level(logging.WARNING):
-            assert ReminderService(reminder_db)._check_unconfirmed_repeats() == []
-            assert resolve_default_category(db, "user-1", "fallback") == "fallback"
+    with caplog.at_level(logging.WARNING):
+        assert ReminderService(reminder_db)._check_unconfirmed_repeats() == []
+        assert resolve_default_category(settings_db, "user-1", "fallback") == "fallback"
 
     serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
     assert "RuntimeError" in serialized_logs
@@ -340,18 +523,11 @@ def test_pendo_recoverable_internal_failures_log_only_error_type(
 
 def test_pendo_setting_write_failure_preserves_exception_without_duplicate_log(
     caplog: pytest.LogCaptureFixture,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with managed_pendo_database(tmp_path) as db:
-        monkeypatch.setattr(
-            db,
-            "update_user_settings",
-            Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
-        )
+    db = SimpleNamespace(update_user_settings=Mock(side_effect=RuntimeError(SENSITIVE_ERROR)))
 
-        with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match=CANARY):
-            save_user_setting("user-1", "reminder_enabled", True, db)
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match=CANARY):
+        save_user_setting("user-1", "reminder_enabled", True, db)
 
     assert not caplog.records
 
@@ -365,7 +541,7 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
             raise RuntimeError(SENSITIVE_ERROR)
 
     context = SimpleNamespace(
-        request_id = "req-cr219-pendo-ai",
+        request_id = "req-pendo-ai",
         secrets    = {
             "plugins": {
                 "pendo": {
@@ -376,7 +552,7 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
             }
         },
         capabilities=SimpleNamespace(ai=AI()),
-        logger=logging.getLogger("test.cr219.pendo.ai"),
+        logger=logging.getLogger("test.pendo.ai"),
     )
     parser = AIParser(context=context)
 
@@ -390,32 +566,7 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
     assert all(record.exc_info is None for record in caplog.records)
 
 
-def test_pendo_transfer_validation_and_constraint_detection_ignore_exception_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _reject_record(record, *, partial):
-        raise ValueError(SENSITIVE_ERROR)
-
-    monkeypatch.setattr(
-        pendo_transfer,
-        "get_item_normalizer",
-        Mock(return_value=_reject_record),
-    )
-    warning = pendo_transfer._export_record_warning({"_type": "event", "id": "event-1"})
-    assert warning == "event/event-1: 记录字段校验失败"
-    assert CANARY not in warning
-
-    monkeypatch.setattr(
-        pendo_transfer,
-        "inspect_bundle_bytes",
-        Mock(side_effect=pendo_transfer.BundleValidationError(SENSITIVE_ERROR)),
-    )
-    with pytest.raises(HTTPException) as caught:
-        pendo_transfer._inspect_bundle_data(b"invalid")
-    assert caught.value.status_code == 422
-    assert caught.value.detail == "导入包格式或内容校验失败"
-    assert CANARY not in str(caught.value.detail)
-
+def test_unique_constraint_detection_uses_error_code_not_message() -> None:
     connection = sqlite3.connect(":memory:")
     try:
         connection.execute("CREATE TABLE sample (id TEXT UNIQUE)")

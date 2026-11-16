@@ -371,6 +371,10 @@ context.get_settings_snapshot()
 | `plugins.minecraft.servers.<配置名>` | Minecraft 服务器的 `host`、`port`、`log_file`，RCON 密码在 `secrets.plugins.minecraft.<配置名>` |
 | `plugins.xiaoqing_chat.<字段>` | 覆盖行为文件 `xiaoqing_config.json` 里的同名字段，逐层合并 |
 
+`scripts/sync_to_remote.sh` 用本机的 `config/config.json` 覆盖部署机上的那份。本机这份漏写某个任务的 `group_ids` 时，任务不会停，而是改投 `plugin.json` 条目或 `default_group_ids` 里的群。
+所以同步前，脚本经 ssh 只读取回部署机的 `config/config.json` 和各插件的 `plugin.json`，用 `scripts/check_schedule_targets.py` 分别算出两边每个会投递的定时任务发往哪些群：有差别时预览会列出来，`--apply` 拒绝同步，确认是有意的改动再加 `--accept-target-changes`。
+本机运行比对用的 Python 默认是 `python`，可用 `PYTHON_BIN` 指定。
+
 仓库的 `.githooks/pre-commit` 运行 `scripts/check_private.py`：要提交的文件里出现本机 config 或 secrets 里的群号、账号、凭据、用户目录，或 `config/private_terms.txt` 列出的词（一行一个，比如群友昵称）时拒绝提交，只报文件和字段路径，不打印值。
 文本文件整篇按文字查；图片、PSD 这类二进制文件按字节查元数据里常见的 UTF-8 和 UTF-16 写法，命中处前后紧挨着字母或数字的不算（那是压缩像素数据里碰巧出现的一段）。
 克隆后执行一次 `git config core.hooksPath .githooks` 启用；`python scripts/check_private.py --all` 检查全部文件。
@@ -611,6 +615,8 @@ Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。
 
 网络地址或 token 变化会唤醒主动 WebSocket 任务，并通过候选 Listener 提交 Inbound 新代。
 同一时间只有已提交代接纳新事件。
+候选 Listener 起不来（例如新端口已被占用）时，配置应用报出这个错误，旧 Listener 在原地址继续接纳事件，只认当前发布的 token：发布前的 token 不再有效，当前没有可信 token 时它也不接纳。
+之后再执行 `/reload` 会重新尝试切换到配置声明的 Listener。
 
 ---
 

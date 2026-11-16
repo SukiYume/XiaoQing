@@ -1,4 +1,4 @@
-"""guess_number 插件的命令、状态不变量和会话所有权回归测试。"""
+"""guess_number 插件的命令、状态不变量和会话所有权测试。"""
 
 from __future__ import annotations
 
@@ -521,7 +521,7 @@ def test_load_game_state_rejects_inconsistent_values(changes: dict[str, Any]) ->
         guess_number._load_game_state(MockSession(data))
 
 
-def test_load_game_state_accepts_legacy_alias_and_ignores_old_derived_fields() -> None:
+def test_load_game_state_derives_remaining_and_hint_from_core_fields() -> None:
     data = _game_data(
         target       = 25,
         maximum      = 50,

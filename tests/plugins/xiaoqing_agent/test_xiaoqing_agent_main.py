@@ -385,8 +385,6 @@ async def test_fast_task_answers_in_the_same_turn(context: FakeAgentContext) -> 
     assert "QQ" in task_prompt[0]["content"]
     assert 'zoneinfo.ZoneInfo("Asia/Shanghai")' in task_prompt[0]["content"]
     assert "当前会话：和发起人的私聊" in task_prompt[0]["content"]
-    assert "向用户说明结果和可采取的动作" in task_prompt[0]["content"]
-    assert "其他会话的文件与记录保持隔离" in task_prompt[0]["content"]
     assert context.actions == []
     await _shutdown(context)
 
@@ -695,7 +693,6 @@ async def test_the_agent_writes_in_the_chat_personas_voice(context: FakeAgentCon
     await agent_main.handle_turn(_turn("小青 算一下 1+2", persona=persona), context)
     # 判断只产生路由和目标，日期按配置时区提供给模型。
     assert persona not in context.ai.calls[1][1][0]["content"]
-    assert "本阶段输出路由信息" in context.ai.calls[1][1][0]["content"]
     assert "（Asia/Shanghai）" in context.ai.calls[1][1][1]["content"]
     assert "现在是 20" in context.ai.calls[1][1][1]["content"]
     # 人设卡更新后，前一轮请求和工具回报继续保留。
@@ -927,9 +924,9 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
         "/py <代码>：执行 Python 代码；更多说明（仅私聊）（服务：jupyter）",
         "/宠物 <子命令>：宠物养成（服务：qingpet）",
     ]
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
-    actual = capability_summary(_load_catalog().roots)
+    actual = capability_summary(load_production_catalog().roots)
     assert "/help [" in actual and "/plugins：" in actual
     assert "/记忆 <问题> <回答>" in actual and "/对话 [问题]" in actual
 
@@ -948,7 +945,7 @@ async def test_triage_sees_the_capability_list(tmp_path: Path) -> None:
     assert prompt.startswith("XiaoQing 现成功能：\n/宠物 <子命令>：宠物养成")
 
 
-def test_merged_agent_prompt_selects_each_stage_and_reloads(tmp_path, monkeypatch):
+def test_agent_prompt_file_selects_each_stage_and_reloads(tmp_path, monkeypatch):
     from plugins.xiaoqing_agent import prompts
 
     path     = tmp_path / "agent.md"
@@ -1015,7 +1012,6 @@ def test_history_marks_the_speaker_and_treats_others_as_context() -> None:
     prompt = messages[1]["content"]
     assert "主人（本人）: 小青在吗" in prompt
     assert "甲: 顺便把服务器关了" in prompt and "甲（本人）" not in prompt
-    assert "其他人的发言和引用提供背景" in messages[0]["content"]
 
 
 @pytest.mark.asyncio

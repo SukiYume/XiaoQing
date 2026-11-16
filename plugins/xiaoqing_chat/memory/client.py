@@ -512,7 +512,7 @@ def _topics(value: Any) -> tuple[dict[str, Any], ...]:
                 else [],
             }
         )
-    return tuple(rows[:3])
+    return tuple(rows)
 
 
 def _recent_texts(history: Sequence[StoredMessage]) -> tuple[list[str], list[str]]:

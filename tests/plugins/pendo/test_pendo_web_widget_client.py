@@ -1,4 +1,4 @@
-"""Pendo Scriptable 客户端的数据边界、刷新和日历同步回归。"""
+"""Pendo Scriptable 客户端的数据边界、刷新和日历同步。"""
 
 from __future__ import annotations
 

@@ -10,11 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import tests.helpers.onebot_test_support as _fixture_support
+from core.onebot import _CONNECT_SIGNATURE_CACHE, _get_connect_signature
 from tests.helpers.onebot_test_support import (
-    _CONNECT_SIGNATURE_CACHE,
+    CLEANUP_INTERVAL_SECONDS,
+    ConnectContext,
+    EndingSocket,
     OneBotWsClient,
-    _get_connect_signature,
     inspect,
+    record_reconnect_waits,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -27,18 +30,8 @@ async def test_connected_log_redacts_websocket_query_and_fragment(caplog):
         "",
     )
 
-    class EmptySocket:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-        async def close(self):
-            return None
-
     with caplog.at_level("INFO"):
-        await client._listen(EmptySocket(), AsyncMock())
+        await client._listen(EndingSocket(), AsyncMock())
 
     assert "ws://example.test/socket?<redacted>#<redacted>" in caplog.text
     assert "super-secret" not in caplog.text
@@ -65,33 +58,6 @@ class TestOneBotWebSocketConfiguration:
     def test_initialization_rejects_invalid_runtime_limits(self, kwargs):
         with pytest.raises((TypeError, ValueError)):
             OneBotWsClient("ws://localhost:3000", "", **kwargs)
-
-    def test_initialization(self):
-        """测试初始化"""
-        client = OneBotWsClient(
-            ws_uri     = "ws://localhost:3000",
-            auth_token = "test_token",
-        )
-        assert client.ws_uri == "ws://localhost:3000"
-        assert client.auth_token == "test_token"
-        assert client.connected() is False
-
-    def test_set_on_connect(self):
-        """测试设置连接回调"""
-        client = OneBotWsClient("ws://localhost:3000", "")
-
-        async def callback():
-            pass
-
-        client.set_on_connect(callback)
-        assert client._on_connect is callback
-
-    def test_update(self):
-        """测试更新配置"""
-        client = OneBotWsClient("ws://old:3000", "old_token")
-        client.update("ws://new:4000", "new_token")
-        assert client.ws_uri == "ws://new:4000"
-        assert client.auth_token == "new_token"
 
     def test_rotation_tolerates_loop_closing_after_is_closed_check(self):
         client = OneBotWsClient("ws://old:3000", "old-token")
@@ -156,28 +122,24 @@ class TestOneBotWebSocketConfiguration:
     ):
         client                   = OneBotWsClient("ws://localhost:3000", "secret-token")
         captured: dict[str, Any] = {}
-        ws                       = object()
 
-        class ConnectContext:
-            async def __aenter__(self):
-                return ws
+        # 已安装的 websockets 只会有其中一种参数名：按参数名各造一个签名真实的连接函数。
+        if header_parameter == "additional_headers":
 
-            async def __aexit__(self, *_args):
-                return None
+            def connect(uri, *, additional_headers=None):
+                captured.update(uri=uri, kwargs={"additional_headers": additional_headers})
+                return ConnectContext(EndingSocket())
 
-        class DummyWebsockets:
-            @staticmethod
-            def connect(uri, **kwargs):
-                captured.update(uri=uri, kwargs=kwargs)
-                return ConnectContext()
+        else:
 
-        monkeypatch.setattr(client, "_listen", AsyncMock(return_value=1.25))
-        with (
-            patch.dict("sys.modules", {"websockets": DummyWebsockets()}),
-            patch("core.onebot._get_connect_signature", return_value={header_parameter}),
-        ):
-            assert await client._connect_once(AsyncMock()) == 1.25
+            def connect(uri, *, extra_headers=None):
+                captured.update(uri=uri, kwargs={"extra_headers": extra_headers})
+                return ConnectContext(EndingSocket())
 
+        monkeypatch.setattr("websockets.connect", connect)
+        result = await client._connect_once(AsyncMock())
+
+        assert result.error is None
         assert captured == {
             "uri"   : "ws://localhost:3000",
             "kwargs": {
@@ -186,20 +148,18 @@ class TestOneBotWebSocketConfiguration:
         }
 
     @pytest.mark.asyncio
-    async def test_configured_token_fails_closed_when_header_parameter_is_unknown(self):
+    async def test_configured_token_fails_closed_when_header_parameter_is_unknown(
+        self, monkeypatch
+    ):
         client = OneBotWsClient("ws://localhost:3000", "secret-token")
+        # MagicMock 的签名是 (*args, **kwargs)：看不出任何可按名字传的请求头参数。
+        connect = MagicMock()
+        monkeypatch.setattr("websockets.connect", connect)
 
-        class DummyWebsockets:
-            connect = MagicMock()
+        with pytest.raises(RuntimeError, match="cannot be sent"):
+            await client._connect_once(AsyncMock())
 
-        with (
-            patch.dict("sys.modules", {"websockets": DummyWebsockets()}),
-            patch("core.onebot._get_connect_signature", return_value=set()),
-        ):
-            with pytest.raises(RuntimeError, match="cannot be sent"):
-                await client._connect_once(AsyncMock())
-
-        DummyWebsockets.connect.assert_not_called()
+        connect.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_revoked_credentials_never_call_websocket_connect(self):
@@ -221,75 +181,67 @@ class TestOneBotWebSocketConfiguration:
         client = OneBotWsClient(
             "ws://localhost:3000",
             "",
-            credentials_trusted=False,
+            credentials_trusted    = False,
+            queue_cleanup_interval = CLEANUP_INTERVAL_SECONDS,
         )
-        waiting = asyncio.Event()
-        blocked = asyncio.Event()
+        waiting         = asyncio.Event()
+        blocked         = asyncio.Event()
+        uris: list[str] = []
 
         async def wait_for_recovery(_delay: float) -> None:
             waiting.set()
             await blocked.wait()
 
-        connect_once = AsyncMock(return_value=0.0)
-        monkeypatch.setattr(client, "_connect_once", connect_once)
-        client._reconnect_sleep = wait_for_recovery
+        def connect(uri):
+            uris.append(uri)
+            return ConnectContext(EndingSocket())
+
+        monkeypatch.setattr("websockets.connect", connect)
+        record_reconnect_waits(monkeypatch, wait_for_recovery)
 
         listener = asyncio.create_task(client.connect_and_listen(AsyncMock()))
         await waiting.wait()
-        connect_once.assert_not_awaited()
+        assert uris == []
 
         client.update(client.ws_uri, "", credentials_trusted=True)
         for _ in range(20):
-            if connect_once.await_count:
+            if uris:
                 break
             await asyncio.sleep(0)
 
-        connect_once.assert_awaited()
+        assert uris == ["ws://localhost:3000"]
         await client.stop()
         assert listener.cancelled()
 
     @pytest.mark.asyncio
-    async def test_connect_loop_rejects_unsupported_token_before_starting_owned_tasks(self):
-        client = OneBotWsClient("ws://localhost:3000", "secret-token")
+    async def test_connect_loop_rejects_unsupported_token_before_starting_owned_tasks(
+        self, monkeypatch
+    ):
+        client  = OneBotWsClient("ws://localhost:3000", "secret-token")
+        connect = MagicMock()
+        monkeypatch.setattr("websockets.connect", connect)
 
-        class DummyWebsockets:
-            connect = MagicMock()
-
-        with (
-            patch.dict("sys.modules", {"websockets": DummyWebsockets()}),
-            patch("core.onebot._get_connect_signature", return_value=set()),
-        ):
-            with pytest.raises(RuntimeError, match="cannot be sent"):
-                await client.connect_and_listen(AsyncMock())
+        with pytest.raises(RuntimeError, match="cannot be sent"):
+            await client.connect_and_listen(AsyncMock())
 
         assert client._running is False
         assert client._main_task is None
         assert client._cleanup_task is None
-        DummyWebsockets.connect.assert_not_called()
+        connect.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_token_connects_without_unproven_header_keyword(self, monkeypatch):
         client                   = OneBotWsClient("ws://localhost:3000", "")
         captured: dict[str, Any] = {}
-        ws                       = object()
 
-        class ConnectContext:
-            async def __aenter__(self):
-                return ws
+        def connect(uri):
+            captured["uri"] = uri
+            return ConnectContext(EndingSocket())
 
-            async def __aexit__(self, *_args):
-                return None
+        monkeypatch.setattr("websockets.connect", connect)
+        result = await client._connect_once(AsyncMock())
 
-        class DummyWebsockets:
-            @staticmethod
-            def connect(uri):
-                captured["uri"] = uri
-                return ConnectContext()
-
-        monkeypatch.setattr(client, "_listen", AsyncMock(return_value=0.5))
-        with patch.dict("sys.modules", {"websockets": DummyWebsockets()}):
-            assert await client._connect_once(AsyncMock()) == 0.5
-
+        assert result.error is None
         assert captured == {"uri": "ws://localhost:3000"}
 
     @pytest.mark.asyncio

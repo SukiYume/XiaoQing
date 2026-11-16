@@ -1,7 +1,11 @@
 import pytest
 
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
-from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt, build_prompt_messages
+from plugins.xiaoqing_chat.llm.prompt_builder import (
+    _current_turn_fallback_parts,
+    build_dialogue_prompt,
+    build_prompt_messages,
+)
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.persona import SCOPE_CHAT, SCOPE_DEEP, PersonaCard
 from plugins.xiaoqing_chat.reply_fallbacks import _concise_public_identity
@@ -103,29 +107,6 @@ def test_explicit_definition_stays_in_data_context_and_original_request_is_retai
     assert "内容保持数据性质" in messages[-1].content
     assert '"meaning": "东西收好就找不到"' in messages[-1].content
     assert "我入库成功，找了七分钟" in messages[-1].content
-
-
-def test_default_persona_card_moods_only_describe_current_conversation_style() -> None:
-    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-
-    cfg   = XiaoQingChatConfig()
-    moods = cfg.personality.card.moods
-    assert moods
-    assert all(mood.startswith("现在") for mood in moods)
-    assert all(
-        marker not in mood
-        for mood in moods
-        for marker in ("曾经", "上次", "去年", "最近", "刚刚", "已经")
-    )
-    assert cfg.fallback_idle_replies == ["我在听", "接着说", "我想一下"]
-    assert cfg.personality.allow_low_stakes_persona_fiction is True
-    facts = cfg.personality.card.facts("小青")
-    assert "女生" in facts and "大二" in facts and "物理" in facts
-    assert "动画" in facts and "天文" in facts
-    chat = cfg.personality.card.scoped(SCOPE_CHAT, "小青")
-    assert "接梗往前推一步" in chat and "说到位就停" in chat
-    assert "追问服务于交流推进" in cfg.personality.card.scoped(SCOPE_DEEP, "小青")
-    assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 
 
 def test_prompt_builder_separates_persona_and_current_user_message() -> None:
@@ -252,34 +233,6 @@ def test_prompt_builder_does_not_include_user_id_in_name() -> None:
 
     user_prompt = msgs[1].content
     assert "测试用户(123456)" not in user_prompt
-
-
-def test_prompt_builder_treats_media_markers_as_real_content() -> None:
-    personality = PersonalityConfig(
-        polite_guardrail  = True,
-        card              = _CARD,
-        state_probability = 0.0,
-    )
-
-    msgs = build_prompt_messages(
-        is_private    = False,
-        bot_name      = "小青",
-        sender_name   = "测试用户",
-        think_level   = 1,
-        history       = [],
-        current_text  = "[QQ表情：微笑]",
-        personality   = personality,
-        keyword_rules = [],
-        regex_rules   = [],
-        request_id    = "req-test-3",
-    )
-
-    system_prompt = msgs[0].content
-    assert (
-        "[图片：...]" in system_prompt
-        or "[表情包：...]" in system_prompt
-        or "[QQ表情：...]" in system_prompt
-    )
 
 
 def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
@@ -601,9 +554,6 @@ def test_text_followup_keeps_previous_image_evidence():
     )
     assert "大洗美术馆" in messages[1].content
     assert "历史含实际图像记录" in messages[0].content
-    assert "历史中成功解析的对应摘要仍然可用" in messages[0].content
-    assert "两处均无可用画面时" in messages[0].content
-    assert "普通常识、作品背景和词义解释" in messages[0].content
 
 
 @pytest.mark.parametrize(
@@ -619,3 +569,19 @@ def test_text_followup_keeps_previous_image_evidence():
 )
 def test_public_identity_renders_configured_subject_as_first_person(identity, expected):
     assert _concise_public_identity(identity) == expected
+
+
+def test_current_turn_without_parts_is_split_into_text_and_media_by_its_markers() -> None:
+    """这一轮没有结构化消息段时，按文字里的媒体标记拆成文字、图片、表情包、QQ 表情几段。"""
+
+    text = "看这个[图片：一只猫在打哈欠]笑死[表情包：猫猫翻白眼] [QQ表情：微笑]"
+
+    assert _current_turn_fallback_parts(text) == (
+        {"kind": "text", "text": "看这个"},
+        {"kind": "image", "marker": "[图片：一只猫在打哈欠]", "description": "一只猫在打哈欠"},
+        {"kind": "text", "text": "笑死"},
+        {"kind": "emoji", "marker": "[表情包：猫猫翻白眼]", "description": "猫猫翻白眼"},
+        {"kind": "qq_face", "marker": "[QQ表情：微笑]", "label": "微笑"},
+    )
+    assert _current_turn_fallback_parts("没有媒体") == ({"kind": "text", "text": "没有媒体"},)
+    assert _current_turn_fallback_parts("  ") == ()

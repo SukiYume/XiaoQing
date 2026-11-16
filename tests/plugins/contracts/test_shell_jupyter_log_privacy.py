@@ -3,19 +3,28 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
+from core.process_tree import ProcessResult
 from core.sensitive_audit import summarize_sensitive
+from plugins.jupyter import jupyter_manager as manager_module
 from plugins.jupyter import main as jupyter_main
-from plugins.jupyter.jupyter_models import ExecutionResult
+from plugins.jupyter.jupyter_manager import JupyterKernelManager
 from plugins.shell import main as shell_main
 from tests.helpers.assertions import text_segments_text
+from tests.helpers.jupyter_test_support import (
+    FakeKernel,
+    FakeKernelClient,
+    install_kernel_backend,
+)
 from tests.helpers.settings_snapshot import with_settings_reader
 
-COMMAND_CANARY = "CR220_SHELL_TOKEN_CANARY"
-CODE_CANARY    = "CR220_JUPYTER_CODE_CANARY"
-ERROR_CANARY   = "CR220_PRIVATE_EXCEPTION_CANARY"
+COMMAND_CANARY = "SHELL_TOKEN_CANARY"
+CODE_CANARY    = "JUPYTER_CODE_CANARY"
+ERROR_CANARY   = "PRIVATE_EXCEPTION_CANARY"
 
 
 def _messages(caplog: pytest.LogCaptureFixture, *logger_names: str) -> str:
@@ -32,19 +41,11 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
         f'python -c "print(1)" --token={COMMAND_CANARY} '
         r"C:\private\operator-script.py"
     )
-    executed: dict[str, object] = {}
-
-    async def execute(command_args: list[str], timeout: int):
-        executed["args"]    = command_args
-        executed["timeout"] = timeout
-        return 0, "ok", ""
-
-    monkeypatch.setattr(shell_main, "_validate_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(shell_main, "_split_command", lambda _value: ["python", command])
-    monkeypatch.setattr(shell_main, "_execute_command", execute)
+    run = AsyncMock(return_value=ProcessResult(0, "ok", ""))
+    monkeypatch.setattr(shell_main, "run_process", run)
     context = with_settings_reader(
         SimpleNamespace(
-            request_id = "req-shell-cr220",
+            request_id = "req-shell",
             secrets    = {"plugins": {"shell": {"timeout": 17}}},
         )
     )
@@ -53,22 +54,25 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
         response = await shell_main.handle(
             "shell",
             command,
-            {"user_id": "CR220_PRIVATE_USER_ID"},
+            {"user_id": "PRIVATE_USER_ID"},
             context,
         )
 
     logged  = _messages(caplog, shell_main.logger.name)
     summary = summarize_sensitive(command)
-    assert executed == {"args": ["python", command], "timeout": 17}
+    argv    = run.await_args.args[0]
+    assert argv[0] == "python"
+    assert f"--token={COMMAND_CANARY}" in argv
+    assert run.await_args.kwargs["timeout"] == 17
     assert "ok" in text_segments_text(response)
     assert command not in logged
     assert COMMAND_CANARY not in logged
     assert "operator-script.py" not in logged
-    assert "CR220_PRIVATE_USER_ID" not in logged
+    assert "PRIVATE_USER_ID" not in logged
     assert f"payload_length={summary.length}" in logged
     assert f"payload_bytes={summary.byte_length}" in logged
     assert f"payload_fingerprint={summary.fingerprint}" in logged
-    assert "request_id=req-shell-cr220" in logged
+    assert "request_id=req-shell" in logged
     assert "status=started" in logged
     assert "status=succeeded" in logged
 
@@ -81,12 +85,7 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
     command = f"echo {COMMAND_CANARY}"
     detail  = f"{ERROR_CANARY} C:\\private\\shell-error.txt"
 
-    async def fail_execute(_command_args: list[str], _timeout: int):
-        raise RuntimeError(detail)
-
-    monkeypatch.setattr(shell_main, "_validate_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(shell_main, "_split_command", lambda _value: ["echo", COMMAND_CANARY])
-    monkeypatch.setattr(shell_main, "_execute_command", fail_execute)
+    monkeypatch.setattr(shell_main, "run_process", AsyncMock(side_effect=RuntimeError(detail)))
     context = with_settings_reader(
         SimpleNamespace(
             request_id = "req-shell-error",
@@ -112,9 +111,20 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
     assert "status=error" in logged
 
 
+@pytest_asyncio.fixture
+async def kernel_client(monkeypatch: pytest.MonkeyPatch):
+    """依赖可用，内核由替身承担；用例结束时关掉全部内核。"""
+
+    client = FakeKernelClient()
+    install_kernel_backend(monkeypatch, lambda **_kwargs: FakeKernel(client))
+    await JupyterKernelManager.shutdown_all_async()
+    yield client
+    await JupyterKernelManager.shutdown_all_async()
+
+
 @pytest.mark.asyncio
 async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_client: FakeKernelClient,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
@@ -124,23 +134,14 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
         r'path = "C:\private\analysis.ipynb"'
         "\nprint(token)"
     )
-    executed: dict[str, object] = {}
-
-    class Manager:
-        async def execute(self, value: str, *, timeout: float, audit_id: str):
-            executed.update(value=value, timeout=timeout, audit_id=audit_id)
-            return ExecutionResult(stdout="ok")
-
-    monkeypatch.setattr(
-        jupyter_main.JupyterKernelManager,
-        "get_instance",
-        lambda *_args: Manager(),
-    )
+    kernel_client.responder = lambda _code: [
+        {"msg_type": "stream", "content": {"name": "stdout", "text": "ok"}}
+    ]
     context = SimpleNamespace(
         data_dir         = tmp_path,
         current_user_id  = 1,
         current_group_id = None,
-        request_id       = "req-jupyter-cr220",
+        request_id       = "req-jupyter",
     )
 
     with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
@@ -148,9 +149,7 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
 
     logged  = _messages(caplog, jupyter_main.logger.name)
     summary = summarize_sensitive(code)
-    assert executed["value"] == code
-    assert executed["timeout"] > 0
-    assert isinstance(executed["audit_id"], str)
+    assert kernel_client.executed[-1] == code
     assert "ok" in text_segments_text(response)
     assert code not in logged
     assert CODE_CANARY not in logged
@@ -158,30 +157,21 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
     assert f"payload_length={summary.length}" in logged
     assert f"payload_bytes={summary.byte_length}" in logged
     assert f"payload_fingerprint={summary.fingerprint}" in logged
-    assert "request_id=req-jupyter-cr220" in logged
+    assert "request_id=req-jupyter" in logged
     assert "status=started" in logged
     assert "status=succeeded" in logged
 
 
 @pytest.mark.asyncio
 async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_client: FakeKernelClient,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
-    code   = f'raise RuntimeError("{CODE_CANARY}")'
-    detail = f"{ERROR_CANARY} C:\\private\\kernel.json"
-
-    class Manager:
-        async def execute(self, _value: str, *, timeout: float, audit_id: str):
-            raise RuntimeError(detail)
-
-    monkeypatch.setattr(
-        jupyter_main.JupyterKernelManager,
-        "get_instance",
-        lambda *_args: Manager(),
-    )
-    context = SimpleNamespace(
+    code                      = f'raise RuntimeError("{CODE_CANARY}")'
+    detail                    = f"{ERROR_CANARY} C:\\private\\kernel.json"
+    kernel_client.fail_submit = detail
+    context                   = SimpleNamespace(
         data_dir         = tmp_path,
         current_user_id  = 1,
         current_group_id = None,
@@ -191,7 +181,7 @@ async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
     with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
         response = await jupyter_main._handle_execute(code, context)
 
-    logged      = _messages(caplog, jupyter_main.logger.name)
+    logged      = _messages(caplog, jupyter_main.logger.name, manager_module.logger.name)
     public_text = text_segments_text(response)
     assert "执行失败，请稍后重试" in public_text
     assert detail not in public_text

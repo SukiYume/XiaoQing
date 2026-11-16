@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Protocol, TypeVar
 
-from aiohttp import ContentTypeError, web
+from aiohttp import ContentTypeError, WSCloseCode, web
 from pydantic import ValidationError
 
 from .auth import verify_bearer_token
@@ -68,18 +68,16 @@ async def _resolve_delivery_actions(
 
 
 async def _finalize_http_action_response(
-    request: Any,
+    request: web.Request,
     actions: list[dict[str, Any]],
     *,
-    write_to_transport: bool,
     standard_onebot: bool = False,
 ) -> web.Response:
     """Serialize actions and resolve receipts only after the HTTP write boundary.
 
-    Constructing an aiohttp ``Response`` does not write any bytes.  For real
-    aiohttp requests this helper prepares the response and completes
-    ``write_eof`` before acknowledging delivery. Disconnects and serialization
-    failures roll back every attached receipt.
+    Constructing an aiohttp ``Response`` does not write any bytes, so this helper
+    prepares the response and completes ``write_eof`` before acknowledging delivery.
+    Disconnects and serialization failures roll back every attached receipt.
     """
 
     clean_actions = [strip_receipt(action) for action in actions]
@@ -88,9 +86,8 @@ async def _finalize_http_action_response(
             {} if standard_onebot else {"actions": clean_actions},
             dumps=lambda obj: json.dumps(obj, ensure_ascii=False),
         )
-        if write_to_transport:
-            await response.prepare(request)
-            await response.write_eof()
+        await response.prepare(request)
+        await response.write_eof()
     except BaseException:
         await _resolve_delivery_actions(actions, delivered=False)
         raise
@@ -831,9 +828,8 @@ class InboundServer:
         # 活跃的 WebSocket 连接集合
         self._active_sockets: set[web.WebSocketResponse]                         = set()
         self._socket_auth_states: dict[web.WebSocketResponse, _InboundAuthState] = {}
-        # A constructed server may be invoked directly by embedders/tests.
-        # Network admission is still impossible until ``start`` binds a site.
-        self._accepting_events                             = True
+        # Events are admitted only once ``start`` (or ``commit_admission``) opens the listener.
+        self._accepting_events                             = False
         self._active_handler_tasks: set[asyncio.Task[Any]] = set()
 
     @property
@@ -1248,11 +1244,13 @@ class InboundServer:
         try:
             assert normalized is not None
             normalized[EVENT_SOURCE_KEY] = "inbound_http"
-            # 只有显式请求 action-envelope 的测试/自定义客户端接收动作列表。
+            # 只有显式请求 action-envelope 的开发验收客户端接收动作列表。
             # 标准 HTTP 上报由应用通过 action API 投递，响应正文仅确认接收。
             normalized["_http_action_delivery"] = (
                 request.headers.get("X-XiaoQing-Response-Mode", "onebot") != "actions"
             )
+            # 上报方断开连接时不取消这件事：标准 OneBot 上报的回复经 action API 发出，这个 POST
+            # 只确认收到，NapCat 等超时断开时这条消息照样要处理。
             actions = await self._invoke_handler(
                 normalized,
                 auth_generation=auth_state,
@@ -1282,11 +1280,7 @@ class InboundServer:
         return await _finalize_http_action_response(
             request,
             actions,
-            # Unit tests call handlers with a small request double.  A real
-            # aiohttp Request owns the payload writer and therefore uses the
-            # explicit prepare/write_eof acknowledgement boundary.
-            write_to_transport = isinstance(request, web.Request),
-            standard_onebot    = bool(normalized.get("_http_action_delivery")),
+            standard_onebot=bool(normalized.get("_http_action_delivery")),
         )
 
     async def ws_handler(self, request: web.Request) -> web.StreamResponse:
@@ -1298,8 +1292,6 @@ class InboundServer:
         connection_auth = self._auth_state
         if not self._authorized(request, connection_auth):
             raise web.HTTPUnauthorized()
-        if not self.enable_ws:
-            raise web.HTTPNotFound()
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         if not self._accepting_events:
@@ -1752,9 +1744,13 @@ class InboundServer:
             raise RuntimeError(f"{len(pending)} WebSocket worker task(s) ignored cancellation")
 
     def _discard_queued_ws_events(self) -> None:
-        """在 worker 全部退出后撤销仍未处理事件的 dispatcher 票据。"""
+        """撤销 WS 队列里还没有 worker 接手的事件票据。
 
-        if self._ws_worker_tasks or self._ws_event_queue is None:
+        这些事件已经登记进分发器，但停止后没有人会把结果发回去；在停止一开始就撤掉，
+        分发器不会再去执行它们。worker 正在处理的那一件不在队列里，照常收尾。
+        """
+
+        if self._ws_event_queue is None:
             return
         while True:
             try:
@@ -1764,10 +1760,35 @@ class InboundServer:
             self._event_dispatcher.discard(queued_event)
             self._ws_event_queue.task_done()
 
+    async def _close_connected_websockets(self) -> None:
+        """等 worker 把已经拿到的结果发完，再关掉还连着的 WebSocket 客户端。
+
+        空闲的连接停在读消息上，不会自己发现服务器在停止；不主动关掉，清理 runner 时要等到
+        aiohttp 的关闭超时（60 秒）。每条连接的关闭都有界，不会被不回关闭帧的对端拖住。
+        """
+
+        queue = self._ws_event_queue
+        if queue is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(queue.join(), timeout=self._handler_drain_timeout_seconds)
+        sockets = list(self._active_sockets)
+        if sockets:
+            await asyncio.gather(
+                *(
+                    self._close_ws_bounded(
+                        ws,
+                        code    = WSCloseCode.GOING_AWAY,
+                        message = b"inbound server stopping",
+                    )
+                    for ws in sockets
+                )
+            )
+
     async def _stop_locked(self) -> None:
         """停止入站服务器，并在单个清理步骤失败时继续收敛其余资源。"""
-        self._accepting_events                           = False
-        self._running                                    = False
+        self._accepting_events = False
+        self._running          = False
+        self._discard_queued_ws_events()
         errors         : list[tuple[str, BaseException]] = []
         caller_cancel  : asyncio.CancelledError | None   = None
         cancelled_steps: set[str]                        = set()
@@ -1792,6 +1813,7 @@ class InboundServer:
             await cleanup_step("site", site.stop)
 
         await cleanup_step("handlers", self._drain_handler_tasks)
+        await cleanup_step("WebSocket connections", self._close_connected_websockets)
 
         runner       = self._runner
         self._runner = None
@@ -1802,7 +1824,6 @@ class InboundServer:
         self._ws_close_tasks = {task for task in self._ws_close_tasks if not task.done()}
 
         await cleanup_step("WebSocket workers", self._stop_ws_workers)
-        self._discard_queued_ws_events()
         if not self._ws_close_tasks and not any(
             not task.done() for task in self._active_handler_tasks
         ):

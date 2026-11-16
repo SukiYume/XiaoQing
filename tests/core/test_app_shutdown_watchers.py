@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -14,15 +15,51 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 import tests.helpers.app_test_support as _fixture_support
+from core.onebot import _ConnectionAttemptResult
 from tests.helpers.app_test_support import (
+    PROBE,
     XiaoQingApp,
     cancellation_resistant_callback,
     cancellation_then_release_callback,
+    load_test_plugin,
     resist_cancellation_until_released,
 )
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root                               = _fixture_support.temp_app_root
+_isolate_process_global_plugin_import_state = (
+    _fixture_support._isolate_process_global_plugin_import_state
+)
+
+# 带关闭钩子的插件：钩子执行时在记录里留下插件名（模块名是 ``plugins.<插件名>.main``）。
+SHUTDOWN_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def shutdown():
+    PROBE.log("shutdowns").append(__name__.split(".")[1])
+"""
+
+SCHEDULED_SOURCE = """
+async def scheduled(context):
+    return None
+"""
+
+
+async def _register_plugin_with_shutdown_log(
+    app: XiaoQingApp,
+    name: str,
+    *,
+    scheduled = False,
+    schedule  = (),
+) -> list[str]:
+    """经真实的插件目录加载一个带关闭钩子的插件；返回的列表记录关闭钩子被执行的次数。"""
+
+    await load_test_plugin(
+        app,
+        name,
+        SHUTDOWN_SOURCE + (SCHEDULED_SOURCE if scheduled else ""),
+        schedule=list(schedule),
+    )
+    return PROBE.log("shutdowns")
 
 
 @pytest.mark.asyncio
@@ -31,24 +68,17 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
     """Test app stop unloads all plugins"""
     app = XiaoQingApp(temp_app_root)
 
-    runtime_plugins = ["test_plugin"]
-
-    async def unload_plugin(name: str) -> None:
-        runtime_plugins.remove(name)
-
-    app.plugin_manager.list_runtime_plugins = Mock(side_effect=lambda: list(runtime_plugins))
-    app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
-
     # Start
-    app.plugin_manager.load_all = AsyncMock()
-    app.plugin_manager.schedule_definitions = Mock(return_value=[])
     await app.start()
+    shutdowns = await _register_plugin_with_shutdown_log(app, "test_plugin")
+    assert app.plugin_manager.list_runtime_plugins() == ["test_plugin"]
 
     # Stop
     await app.stop()
 
-    # Verify unload was called
-    app.plugin_manager.unload_plugin.assert_called_once_with("test_plugin")
+    # 停机时每个插件都被卸载、关闭钩子各执行一次
+    assert shutdowns == ["test_plugin"]
+    assert app.plugin_manager.list_runtime_plugins() == []
 
 
 @pytest.mark.asyncio
@@ -337,12 +367,9 @@ async def test_app_retains_plugins_and_http_until_scheduler_jobs_stop(
     started           = asyncio.Event()
     cancellation_seen = asyncio.Event()
     release           = asyncio.Event()
-    runtime_plugins   = ["scheduled_plugin"]
+    shutdowns         = await _register_plugin_with_shutdown_log(app, "scheduled_plugin")
 
     resistant_job = cancellation_then_release_callback(started, cancellation_seen, release)
-
-    async def unload_plugin(name: str) -> None:
-        runtime_plugins.remove(name)
 
     scheduler.add_job(resistant_job, "date")
     await asyncio.wait_for(started.wait(), timeout=1)
@@ -351,8 +378,6 @@ async def test_app_retains_plugins_and_http_until_scheduler_jobs_stop(
     )
     session = MagicMock(close=AsyncMock())
     app.http_session = session
-    app.plugin_manager.list_runtime_plugins = Mock(side_effect=lambda: list(runtime_plugins))
-    app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
 
     try:
         await app.stop()
@@ -361,8 +386,8 @@ async def test_app_retains_plugins_and_http_until_scheduler_jobs_stop(
         assert cancellation_seen.is_set()
         assert job_task.done() is False
         assert app.scheduler.scheduler is scheduler
-        assert runtime_plugins == ["scheduled_plugin"]
-        app.plugin_manager.unload_plugin.assert_not_awaited()
+        assert app.plugin_manager.list_runtime_plugins() == ["scheduled_plugin"]
+        assert shutdowns == []
         session.close.assert_not_awaited()
         assert app.http_session is session
 
@@ -372,8 +397,8 @@ async def test_app_retains_plugins_and_http_until_scheduler_jobs_stop(
 
         assert app._lifecycle_state.value == "stopped"
         assert app.scheduler.scheduler is None
-        assert runtime_plugins == []
-        app.plugin_manager.unload_plugin.assert_awaited_once_with("scheduled_plugin")
+        assert app.plugin_manager.list_runtime_plugins() == []
+        assert shutdowns == ["scheduled_plugin"]
         session.close.assert_awaited_once()
         assert app.http_session is None
     finally:
@@ -817,16 +842,14 @@ async def test_plugin_watcher_does_not_start_outside_active_lifecycle(
     temp_app_root: Path,
     inactive_state: str,
 ) -> None:
-    app                      = XiaoQingApp(temp_app_root)
-    app._lifecycle_state     = getattr(type(app._lifecycle_state), inactive_state)
-    app.plugin_manager.watch = AsyncMock()
+    app                  = XiaoQingApp(temp_app_root)
+    app._lifecycle_state = getattr(type(app._lifecycle_state), inactive_state)
 
     app._configure_plugin_watch({"enable_plugin_watcher": True})
     await asyncio.sleep(0)
 
     assert app._plugin_watch_task is None
     assert app._plugin_watch_restart_task is None
-    app.plugin_manager.watch.assert_not_awaited()
     app.scheduler.shutdown()
 
 
@@ -889,23 +912,18 @@ async def test_plugin_watcher_resistant_generation_is_retained_until_stop_retry(
 async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
     temp_app_root: Path,
 ):
-    app                                       = XiaoQingApp(temp_app_root)
+    app = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.01
-    entered                                   = asyncio.Event()
-    cancelled                                 = asyncio.Event()
-    release                                   = asyncio.Event()
-    runtime_plugins                           = ["reload_plugin"]
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    shutdowns = await _register_plugin_with_shutdown_log(app, "reload_plugin")
     session = MagicMock(close=AsyncMock())
 
     resistant_reload = cancellation_resistant_callback(entered, cancelled, release)
 
-    async def unload_plugin(name: str) -> None:
-        runtime_plugins.remove(name)
-
     reload_task      = asyncio.create_task(resistant_reload())
     app._reload_task = reload_task
-    app.plugin_manager.list_runtime_plugins = Mock(side_effect=lambda: list(runtime_plugins))
-    app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
     app.http_session = session
     await entered.wait()
 
@@ -916,8 +934,8 @@ async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
         assert reload_task.done() is False
         assert app._reload_task is reload_task
         assert app.scheduler.scheduler is not None
-        assert runtime_plugins == ["reload_plugin"]
-        app.plugin_manager.unload_plugin.assert_not_awaited()
+        assert app.plugin_manager.list_runtime_plugins() == ["reload_plugin"]
+        assert shutdowns == []
         session.close.assert_not_awaited()
         assert app._lifecycle_state.value == "failed"
 
@@ -927,8 +945,8 @@ async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
 
         assert app._reload_task is None
         assert app.scheduler.scheduler is None
-        assert runtime_plugins == []
-        app.plugin_manager.unload_plugin.assert_awaited_once_with("reload_plugin")
+        assert app.plugin_manager.list_runtime_plugins() == []
+        assert shutdowns == ["reload_plugin"]
         session.close.assert_awaited_once()
         assert app._lifecycle_state.value == "stopped"
     finally:
@@ -1044,7 +1062,7 @@ async def test_app_ws_stop_starts_close_before_waiting_for_cancel_resistant_atte
             attempt_cancelled,
             release_attempt,
         )
-        return 0.0
+        return _ConnectionAttemptResult(connected_seconds=0.0)
 
     monkeypatch.setattr(client, "_connect_once", resistant_attempt)
     listener = asyncio.create_task(client.connect_and_listen(AsyncMock()))
@@ -1094,22 +1112,47 @@ async def test_app_stop_retains_resistant_ws_client_until_retry(temp_app_root: P
     assert app._lifecycle_state.value == "stopped"
 
 
+@pytest.mark.asyncio
 @pytest.mark.unit
-def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: Path):
+async def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: Path):
     """Configuration callbacks cannot recreate runtime components after stop begins."""
-    from core.config import ConfigSnapshot
+    app = XiaoQingApp(temp_app_root)
 
-    app                                 = XiaoQingApp(temp_app_root)
-    app._stopping                       = True
-    app.dispatcher.refresh_prefix_cache = Mock()
-    app.scheduler.replace_prefix        = Mock()
-    app.config_manager.reload           = Mock()
+    async def scheduled() -> None:
+        return None
 
-    snapshot = ConfigSnapshot(config=app.config, secrets=app.secrets)
-    app._apply_config(snapshot)
+    await _register_plugin_with_shutdown_log(
+        app,
+        "scheduled_plugin",
+        scheduled = True,
+        schedule  = [{"id": "tick", "handler": "scheduled", "cron": {"minute": "*"}}],
+    )
+    app.scheduler.add_job("plugin.old.keep", scheduled, {"minute": "0", "hour": "0"})
+    prefixes_before = app.dispatcher.parser._cached_prefixes
+    revision_before = app.config_manager.revision
+    app._stopping   = True
+    # 登记插件时任务已经排好；撤掉它，下面检查停机期间不会被重新排回来
+    app.scheduler.remove_job("plugin.scheduled_plugin.tick")
+
+    config_path = temp_app_root / "config" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["command_prefixes"] = ["!"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    # 停机开始后重新加载配置是空操作：磁盘上的新配置不会被读进来
     app.reload_config()
-    app._reschedule("startup")
+    assert app.config_manager.revision == revision_before
+    assert app.config["command_prefixes"] == ("/",)
 
-    app.dispatcher.refresh_prefix_cache.assert_not_called()
-    app.config_manager.reload.assert_not_called()
-    app.scheduler.replace_prefix.assert_not_called()
+    # 配置管理器自己读到新配置后，运行时也不会再据此刷新分发器的前缀缓存
+    app.config_manager.reload()
+    app._apply_config(app.config_manager.snapshot())
+    assert app.config["command_prefixes"] == ("!",)
+    assert app.dispatcher.parser._cached_prefixes == prefixes_before
+
+    # 计划任务也不再重排：旧任务还在，插件新声明的任务没有加进去
+    app._reschedule("startup")
+    assert app.scheduler.scheduler is not None
+    assert [job.id for job in app.scheduler.scheduler.get_jobs()] == ["plugin.old.keep"]
+    app._stopping = False
+    app.scheduler.shutdown()

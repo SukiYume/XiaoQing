@@ -12,9 +12,9 @@ import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
     FakeContext,
     FakeRunner,
-    _install_fake_manager,
-    _wait_until,
     codex_main,
+    install_fake_manager,
+    wait_until,
 )
 
 reset_codex_manager = _fixture_support.reset_codex_manager
@@ -32,7 +32,7 @@ async def test_agent_task_creates_session_runs_and_returns_text_and_images(tmp_p
     context                 = FakeContext(tmp_path)
     context.current_user_id = 101
     runner = FakeRunner(result_text="画好了", artifact_name="chart.png")
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     result = await _run(
         {"session": "agent-u101", "prompt": "画一张图", "cwd": None, "timeout_seconds": 30},
@@ -58,7 +58,7 @@ async def test_agent_task_creates_session_runs_and_returns_text_and_images(tmp_p
 async def test_agent_task_reuses_existing_session_thread(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     first  = {"session": "agent-g9", "prompt": "第一步", "cwd": None, "timeout_seconds": 30}
     second = {"session": "agent-g9", "prompt": "第二步", "cwd": None, "timeout_seconds": 30}
@@ -71,7 +71,7 @@ async def test_agent_task_reuses_existing_session_thread(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_agent_task_timeout_cancels_the_running_job(tmp_path: Path):
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
 
     result = await _run(
         {"session": "agent-u1", "prompt": "block forever", "cwd": None, "timeout_seconds": 0.2},
@@ -87,13 +87,13 @@ async def test_agent_task_timeout_cancels_the_running_job(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_agent_task_caller_cancellation_cancels_the_job(tmp_path: Path):
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
 
     waiter = await codex_main.agent_task_service(
         {"session": "agent-u2", "prompt": "block", "cwd": None, "timeout_seconds": 30},
         context,
     )
-    await _wait_until(lambda: "agent-u2" in manager.running)
+    await wait_until(lambda: "agent-u2" in manager.running)
     job = manager.running["agent-u2"]
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -105,13 +105,13 @@ async def test_agent_task_caller_cancellation_cancels_the_job(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_agent_task_still_waiting_is_cancelled_by_manager_shutdown(tmp_path: Path):
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
 
     waiter = await codex_main.agent_task_service(
         {"session": "agent-u5", "prompt": "block", "cwd": None, "timeout_seconds": 30},
         context,
     )
-    await _wait_until(lambda: "agent-u5" in manager.running)
+    await wait_until(lambda: "agent-u5" in manager.running)
     await manager.shutdown()
 
     assert waiter.done()
@@ -122,7 +122,7 @@ async def test_agent_task_still_waiting_is_cancelled_by_manager_shutdown(tmp_pat
 async def test_agent_task_rejects_bad_labels_and_empty_prompts(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     bad_label = await _run(
         {"session": "bad label!", "prompt": "x", "cwd": None, "timeout_seconds": 5},

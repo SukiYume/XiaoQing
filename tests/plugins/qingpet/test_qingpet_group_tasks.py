@@ -1,4 +1,4 @@
-"""Regression coverage for QingPet daily group-task identity and transactions."""
+"""QingPet 每日群任务的日期标识、旧库迁移和事务边界。"""
 
 from __future__ import annotations
 

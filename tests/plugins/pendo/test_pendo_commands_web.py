@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from tests.helpers.pendo_test_support import (
     ROOT,
@@ -277,19 +279,23 @@ class TestSessions:
         assert offset_calls == [("2030-01-02T09:00:00", ["提前30分钟"], "1001")]
         assert end_calls == [True]
 
-    def test_active_session_with_missing_raw_message_routes_explicit_command(self, monkeypatch):
+    def test_active_session_with_missing_raw_message_routes_explicit_command(self, db, tmp_path):
 
         from plugins.pendo import main as pendo_main
+        from plugins.pendo.utils import db_ops
 
         end_calls = []
-        routed    = []
 
         class _Session:
             plugin_name = "pendo"
 
         class _Context:
-            logger  = pendo_main.logger
-            metrics = None
+            logger   = pendo_main.logger
+            metrics  = None
+            data_dir = tmp_path / "pendo-data"
+
+            def __init__(self):
+                self.state = {}
 
             async def get_session(self):
                 return _Session()
@@ -298,28 +304,27 @@ class TestSessions:
                 end_calls.append(True)
                 return True
 
-        async def _fake_route(user_id, args, context, group_id=None, log=None):
-            routed.append((user_id, args, group_id))
-            return [{"type": "text", "data": {"text": "ok"}}]
-
-        monkeypatch.setattr(pendo_main, "_handle_command_routing", _fake_route)
-
-        result = asyncio.run(
-            pendo_main.handle(
-                "pendo",
-                "todo add CX_RAW_FALLBACK",
-                {
-                    "user_id"    : "u-raw",
-                    "group_id"   : 42,
-                    "raw_message": None,
-                },
-                _Context(),
+        db_ops.set_database_singleton(db)
+        try:
+            result = asyncio.run(
+                pendo_main.handle(
+                    "pendo",
+                    "todo add CX_RAW_FALLBACK",
+                    {
+                        "user_id"    : "u-raw",
+                        "group_id"   : 42,
+                        "raw_message": None,
+                    },
+                    _Context(),
+                )
             )
-        )
+        finally:
+            db_ops.set_database_singleton(None)
 
-        assert result == [{"type": "text", "data": {"text": "ok"}}]
+        assert result and result[0]["type"] == "text"
         assert end_calls == [True]
-        assert routed == [("u-raw", "todo add CX_RAW_FALLBACK", 42)]
+        tasks = db.get_items("u-raw", filters={"type": "task"})
+        assert [task.title for task in tasks] == ["CX_RAW_FALLBACK"]
 
     def test_event_info_session_keeps_new_conflict_session_active(self):
 
@@ -348,19 +353,18 @@ class TestSessions:
                 assert partial is True
                 return {"title": "会议"}
 
-        context  = _Context()
-        services = {"event_handler": _EventHandler(), "ai_parser": _AiParser()}
+        context       = _Context()
+        context.state = {
+            "pendo_runtime": {
+                "services": {"event_handler": _EventHandler(), "ai_parser": _AiParser()}
+            }
+        }
 
-        original_get_cached_services       = session_module.get_cached_services
-        session_module.get_cached_services = lambda _context: services
-        try:
-            result = asyncio.run(
-                session_module.handle_event_info_session(
-                    "u1", "补充信息", {"data": {"title": "会议"}}, context
-                )
+        result = asyncio.run(
+            session_module.handle_event_info_session(
+                "u1", "补充信息", {"data": {"title": "会议"}}, context
             )
-        finally:
-            session_module.get_cached_services = original_get_cached_services
+        )
 
         assert result["status"] == "need_confirm"
         assert len(create_calls) == 1
@@ -368,87 +372,63 @@ class TestSessions:
 
 
 class TestOperationsAndExport:
-    def test_confirm_handles_aware_reminder_times(self, monkeypatch):
-        from datetime import datetime
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.commands import operations
+    def test_confirm_handles_aware_reminder_times(self, db):
         from plugins.pendo.commands.operations import handle_confirm
-        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.reminder import ReminderService
 
-        fixed_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
-        monkeypatch.setattr(operations.TimezoneHelper, "now", lambda tz=None: fixed_now)
-
-        db                       = MagicMock()
-        db.get_item.return_value = EventItem(
-            id           = "evt123",
-            title        = "带时区提醒",
-            remind_times = [
-                "2030-01-01T08:00:00+08:00",
-                "2030-01-01T10:00:00+08:00",
-            ],
+        now = datetime.now(UTC).replace(microsecond=0)
+        item_id = db.insert_item(
+            {
+                "owner_id"    : "u1",
+                "type"        : "event",
+                "title"       : "带时区提醒",
+                "start_time"  : (now + timedelta(hours=5)).isoformat(),
+                "remind_times": [
+                    (now - timedelta(minutes=30))
+                    .astimezone(timezone(timedelta(hours=8)))
+                    .isoformat(),
+                    (now + timedelta(hours=1)).astimezone(timezone(timedelta(hours=8))).isoformat(),
+                ],
+            }
         )
-        db.get_last_unconfirmed_remind_time.return_value = "2030-01-01T08:00:00+08:00"
+        sent_time = db.get_item(item_id, "u1").remind_times[0]
+        db.log_reminder(item_id, sent_time, sent=True)
 
-        reminder_service                               = MagicMock()
-        reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
-
-        result = asyncio.run(handle_confirm("u1", "evt123", reminder_service, db))
+        result = asyncio.run(handle_confirm("u1", item_id, ReminderService(db), db))
 
         assert result["status"] == "success"
         assert "后续还有 1 个提醒" in result["message"]
-        reminder_service.confirm_reminder.assert_called_once_with(
-            "evt123",
-            "confirmed",
-            "u1",
-            "2030-01-01T08:00:00+08:00",
-        )
+        confirmed = {row["remind_time"]: row for row in db.get_reminder_logs(item_id)}
+        assert confirmed[sent_time]["user_action"] == "confirmed"
+        assert [row["state"] for row in confirmed.values()] == ["confirmed", "pending"]
 
-    def test_snooze_keeps_future_aware_reminders(self, monkeypatch):
-        from datetime import datetime
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.commands import operations
+    def test_snooze_keeps_future_aware_reminders(self, db):
         from plugins.pendo.commands.operations import handle_snooze
-        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.reminder import ReminderService
 
-        fixed_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
-
-        monkeypatch.setattr(operations.TimezoneHelper, "now", lambda tz=None: fixed_now)
-        monkeypatch.setattr(
-            operations,
-            "_parse_snooze_time",
-            lambda time_arg, base_time=None, now=None: "2030-01-01T11:00:00+08:00",
+        now = datetime.now(UTC).replace(microsecond=0)
+        past_time = (now - timedelta(minutes=90)).astimezone(timezone(timedelta(hours=8)))
+        later_time = (now + timedelta(hours=1)).astimezone(timezone(timedelta(hours=8)))
+        item_id = db.insert_item(
+            {
+                "owner_id"    : "u1",
+                "type"        : "event",
+                "title"       : "延后测试",
+                "start_time"  : (now + timedelta(hours=5)).isoformat(),
+                "remind_times": [past_time.isoformat(), later_time.isoformat()],
+            }
         )
+        stored_later = db.get_item(item_id, "u1").remind_times[1]
 
-        db                       = MagicMock()
-        db.get_item.return_value = EventItem(
-            id           = "evt123",
-            title        = "延后测试",
-            remind_times = [
-                "2030-01-01T08:00:00+08:00",
-                "2030-01-01T10:00:00+08:00",
-            ],
-        )
-        db.get_last_unconfirmed_remind_time.return_value = None
-        db.update_item.return_value                      = True
-
-        reminder_service                               = MagicMock()
-        reminder_service.db                            = db
-        reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
-
-        result = asyncio.run(handle_snooze("u1", "evt123 10m", reminder_service))
+        result = asyncio.run(handle_snooze("u1", f"{item_id} 10m", ReminderService(db)))
 
         assert result["status"] == "success"
-        assert "已将提醒延后到: 01月01日 11:00" in result["message"]
-        db.update_item.assert_called_once()
-        assert db.update_item.call_args.args[1] == {
-            "remind_times": [
-                "2030-01-01T10:00:00+08:00",
-                "2030-01-01T11:00:00+08:00",
-            ]
-        }
-        reminder_service.confirm_reminder.assert_not_called()
+        snoozed, kept = db.get_item(item_id, "u1").remind_times
+        assert kept == stored_later
+        assert timedelta(minutes=9) < datetime.fromisoformat(snoozed) - now < timedelta(minutes=11)
+        shown = datetime.fromisoformat(snoozed).astimezone(ZoneInfo("Asia/Shanghai"))
+        assert result["message"] == f"已将提醒延后到: {shown:%m月%d日 %H:%M}"
+        assert {row["state"] for row in db.get_reminder_logs(item_id)} == {"pending"}
 
     def test_snooze_missing_args_returns_error_result(self):
 

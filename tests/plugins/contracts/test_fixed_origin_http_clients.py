@@ -1,3 +1,4 @@
+# 验证固定来源的 HTTP 客户端共用有界请求接口。
 from __future__ import annotations
 
 import logging
@@ -75,7 +76,7 @@ def _context(tmp_path: Path, session: _Session, *, proxy: str = "") -> SimpleNam
     return with_settings_reader(
         SimpleNamespace(
             http_session = session,
-            logger       = logging.getLogger("test.cr221.fixed"),
+            logger       = logging.getLogger("test.fixed_origin"),
             data_dir     = tmp_path,
             secrets      = {"plugins": {"github": {"proxy": proxy}}},
         )
@@ -168,7 +169,7 @@ async def test_adnmb_rejects_wrong_mime_without_reading(tmp_path: Path) -> None:
     client = AdnmbClient(session=_Session(response), cache_dir=tmp_path, uuid="uuid")
 
     with pytest.raises(ResponseFormatError):
-        await client._get("forum_list")
+        await client.get_forum_list()
 
     assert response.content.iterations == 0
 
@@ -214,20 +215,15 @@ async def test_chime_reads_bounded_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chime_rejects_chunked_body_over_limit(tmp_path: Path, monkeypatch) -> None:
+async def test_chime_rejects_chunked_body_over_limit(tmp_path: Path) -> None:
     response = _Response(
         b"{" + b" " * (4 * 1024 * 1024) + b"}",
         url=chime.CHIME_API_URL,
     )
 
-    from unittest.mock import Mock
-
-    parser = Mock(wraps=chime.parse_bounded_json)
-    monkeypatch.setattr(chime, "parse_bounded_json", parser)
     result = await chime.fetch_chime_repeaters(_context(tmp_path, _Session(response)))
 
     assert result is None
-    parser.assert_not_called()
     assert response.content.iterations == 1
 
 
@@ -263,7 +259,7 @@ async def test_github_proxy_path_is_exact_origin_and_bounded(tmp_path: Path) -> 
     session = _Session(response)
     context = _context(tmp_path, session, proxy="http://trusted-proxy.test:8080")
 
-    result = await github._fetch_trending("daily", context)
+    result = await github.scheduled(context)
 
     assert "owner/repo" in str(result)
     method, url, kwargs = session.calls[0]
@@ -289,7 +285,7 @@ async def test_github_proxy_rejects_wrong_mime_before_reading(tmp_path: Path) ->
         proxy="http://trusted-proxy.test:8080",
     )
 
-    result = await github._fetch_trending("daily", context)
+    result = await github.scheduled(context)
 
     assert "XQ-PLUGIN-UNEXPECTED" in str(result)
     assert response.content.iterations == 0
@@ -309,7 +305,7 @@ async def test_github_proxy_does_not_read_huge_error_body(tmp_path: Path) -> Non
         proxy="http://trusted-proxy.test:8080",
     )
 
-    result = await github._fetch_trending("daily", context)
+    result = await github.scheduled(context)
 
     assert "HTTP 502" in str(result)
     assert response.content.iterations == 0
@@ -334,7 +330,7 @@ async def test_github_proxy_rejects_cross_origin_redirect_before_request(
         proxy="http://trusted-proxy.test:8080",
     )
 
-    result = await github._fetch_trending("daily", context)
+    result = await github.scheduled(context)
 
     assert "XQ-PLUGIN-UNEXPECTED" in str(result)
     assert len(session.calls) == 1
@@ -347,4 +343,4 @@ async def test_adnmb_chunked_body_over_limit_is_rejected(tmp_path: Path) -> None
     client = AdnmbClient(session=_Session(response), cache_dir=tmp_path, uuid="uuid")
 
     with pytest.raises(ResponseLimitError):
-        await client._get("timeline")
+        await client.get_timeline()

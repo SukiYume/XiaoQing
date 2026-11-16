@@ -10,10 +10,24 @@ from typing import Any
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.interfaces import PluginCapabilities
+from plugins.xiaoqing_chat import handlers
 from plugins.xiaoqing_chat.memory import client as memory_client
 from plugins.xiaoqing_chat.memory.person_profile import clear_profiles_and_memory
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-from tests.plugins.xiaoqing_chat.memory_support import MemoryHarness
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_CLOSED,
+    ScriptedChatModel,
+    chat_message_event,
+    scripted_chat_context,
+    settle_chat_background,
+)
+
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
 
 
 class FlakyMemory:
@@ -22,6 +36,7 @@ class FlakyMemory:
     def __init__(self, inner: Any) -> None:
         self.inner                       = inner
         self.down                        = False
+        self.hold: asyncio.Event | None  = None
         self.calls: list[dict[str, Any]] = []
 
     async def record(self, payload: dict[str, Any]) -> Any:
@@ -31,6 +46,8 @@ class FlakyMemory:
         return await self.inner.record(payload)
 
     async def forget(self, payload: dict[str, Any]) -> Any:
+        if self.hold is not None:
+            await self.hold.wait()
         if self.down:
             raise TimeoutError("memory plugin unavailable")
         return await self.inner.forget(payload)
@@ -200,6 +217,17 @@ async def test_nothing_is_read_from_a_scope_that_is_waiting_to_be_cleared(tmp_pa
     assert reads == ["recall", "search"], "待清期间不向记忆服务读这个范围"
 
 
+def test_no_pending_clear_is_retried_when_the_memory_service_is_absent(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(data_dir=tmp_path, capabilities=SimpleNamespace(memory=None))
+    memory_client.outbox_for(tmp_path).mark_forgetting("u7")
+
+    # 记忆服务不在：待清的会话还在记着，但没有地方可以重试。
+    assert memory_client.forget_retry_due(context) is False
+    assert memory_client.outbox_for(tmp_path).forgetting() == ["u7"]
+
+
 @pytest.mark.asyncio
 async def test_any_message_retries_a_pending_clear_at_a_limited_rate(
     tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -233,15 +261,16 @@ async def test_any_message_retries_a_pending_clear_at_a_limited_rate(
 
 @pytest.mark.asyncio
 async def test_incoming_message_clears_a_waiting_chat_in_the_background(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    mock_context, sample_group_event, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """处理消息时顺手重试是后台任务：不等它，做完后等着清的会话已经清掉。"""
 
-    from plugins.xiaoqing_chat import handlers, task_scheduler
-
-    state, harness, flaky, context = _setup(tmp_path, "u7")
-    context.logger = SimpleNamespace(debug=lambda *args, **kwargs: None)
-    monkeypatch.setattr(task_scheduler, "_state", lambda: state)
+    model   = ScriptedChatModel()
+    context = scripted_chat_context(mock_context, model, GROUP_GATE_CLOSED)
+    state   = bound_state(context)
+    harness = MemoryHarness(context.data_dir)
+    flaky   = FlakyMemory(harness.service("u7"))
+    context.capabilities = PluginCapabilities(ai=model, memory=flaky)  # type: ignore[arg-type]
     monkeypatch.setattr(memory_client, "_forget_retried_at", {})
     _say(state, "u7", "我叫阿梨", "m1")
     await memory_client.push_pending(context, state, "u7", bot_name="小青")
@@ -249,17 +278,22 @@ async def test_incoming_message_clears_a_waiting_chat_in_the_background(
     state.memory_store.clear("u7")
     assert await memory_client.forget_chat(context, "u7") is False
     flaky.down = False
+    flaky.hold = asyncio.Event()
+    box        = memory_client.outbox_for(context.data_dir)
 
-    handlers._retry_pending_forgets(context)
-    assert memory_client.outbox_for(tmp_path).forgetting() == ["u7"], "没有等它做完"
+    event = chat_message_event(sample_group_event, "在吗")
+    await asyncio.wait_for(handlers.handle_smalltalk("在吗", event, context), 5)
+    assert box.forgetting() == ["u7"], "没有等它做完"
     tasks = state.background_tasks()
     assert len(tasks) == 1
+    flaky.hold.set()
     await asyncio.gather(*tasks)
 
-    assert memory_client.outbox_for(tmp_path).forgetting() == []
+    assert box.forgetting() == []
     assert harness.store.events.events("u7") == []
-    handlers._retry_pending_forgets(context)
+    await asyncio.wait_for(handlers.handle_smalltalk("在吗", event, context), 5)
     assert state.background_tasks() == set(), "没有等着清的会话时不起任务"
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
@@ -294,7 +328,7 @@ async def test_memory_written_only_by_the_agent_is_still_cleared_after_an_outage
     state.memory_store.bind_data_dir(chat_dir)
     await memory_client.sync_all(context, state, bot_name="小青")
 
-    assert harness.notes("u7") == {} or len(harness.notes("u7")) == 0
+    assert harness.notes("u7") == []
     assert memory_client.outbox_for(chat_dir).forgetting() == []
 
 

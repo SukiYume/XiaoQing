@@ -28,7 +28,7 @@ from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.planner import THREAD, WORK_ON, Decision
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.stores import LifeStore
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     SHANGHAI,
     FakeFetcher,
@@ -412,6 +412,6 @@ async def test_timeline_works_research_methods_dossier_and_tone(tmp_path: Path) 
     assert "独立游戏" in store.dossiers and "天文摄影" in store.dossiers
     assert dossier.recall_lines(store.dossiers["天文摄影"], moment, cfg.episode_detail_days)
     assert works.get_work(store.works, work_id)["status"] == "done"
-    print("\n[simulation round5]")  # noqa: T201
+    print("\n[simulation 23 days]")  # noqa: T201
     for key, value in summary.items():
         print(f"  {key}: {value}")  # noqa: T201

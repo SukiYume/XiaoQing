@@ -9,7 +9,7 @@ import pytest
 
 from plugins.pendo.services import db as db_module
 from plugins.pendo.services.db import Database
-from tests.helpers.pendo_test_support import _read_scheduled_delivery
+from tests.helpers.pendo_test_support import read_scheduled_delivery
 
 
 @pytest.mark.parametrize(
@@ -35,35 +35,32 @@ def test_sql_serializers_reject_noncanonical_timestamp_forms(
     }
 
 
-def test_item_producer_guard_catches_a_skipped_normalizer_and_rolls_back(
+def test_item_producer_guard_rejects_an_uncovered_timestamp_field_and_rolls_back(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """笔记的 ``start_time`` 不在规范化覆盖的字段里，裸时间到 SQL 写入口会被整次拒绝。"""
+
     db.insert_item(
         {
-            "id"        : "guarded-event",
-            "owner_id"  : "guard-owner",
-            "type"      : "event",
-            "title"     : "原始时间",
-            "start_time": "2030-01-01T09:00:00",
+            "id"      : "guarded-note",
+            "owner_id": "guard-owner",
+            "type"    : "note",
+            "title"   : "原始标题",
         }
-    )
-    original_start = db.get_item("guarded-event", "guard-owner").start_time
-    monkeypatch.setattr(
-        db_module,
-        "normalize_item_datetimes_for_storage",
-        lambda payload, _timezone: dict(payload),
     )
 
     with pytest.raises(ValueError, match="start_time must use UTC"):
         db.update_item(
-            "guarded-event",
-            {"start_time": "2030-01-02T09:00:00"},
+            "guarded-note",
+            {"title": "不该落库", "start_time": "2030-01-02T09:00:00"},
             owner_id="guard-owner",
         )
 
     db.cache_clear()
-    assert db.get_item("guarded-event", "guard-owner").start_time == original_start
+    note = db.get_item("guarded-note", "guard-owner")
+    assert note is not None
+    assert note.title == "原始标题"
+    assert getattr(note, "start_time", None) is None
 
 
 def test_collection_producer_guards_reject_headers_and_children_before_commit(
@@ -267,7 +264,7 @@ def test_reminder_and_outbox_lifecycle_timestamps_use_canonical_precision(db: Da
     assert reminder_row["claim_expires_at"] == "2030-01-01T00:00:30+00:00"
 
     assert db.claim_scheduled_delivery("daily", owner_id, "2030-01-01", now=now)
-    outbox = _read_scheduled_delivery(db, "daily", owner_id, "2030-01-01")
+    outbox = read_scheduled_delivery(db, "daily", owner_id, "2030-01-01")
     assert outbox is not None
     assert outbox["created_at"] == "2030-01-01T00:00:00+00:00"
     assert outbox["claim_expires_at"] == "2030-01-01T00:02:00+00:00"

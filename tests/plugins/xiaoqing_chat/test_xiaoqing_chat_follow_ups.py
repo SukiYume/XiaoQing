@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,9 +19,18 @@ from plugins.xiaoqing_chat.follow_ups import (
     take_carried_attention,
     take_carried_texts,
 )
-from tests.helpers.xiaoqing_chat_test_support import _make_hctx
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    scripted_chat_context,
+    settle_chat_background,
+)
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
 
 BOT_ID = 11111
 
@@ -121,79 +130,120 @@ def test_carried_attention_is_per_sender_and_used_once(monkeypatch) -> None:
     assert take_carried_attention(_event(2)) is False
 
 
-@pytest.mark.asyncio
-async def test_a_turn_with_a_follow_up_waiting_is_recorded_but_not_answered(mock_context) -> None:
-    from plugins.xiaoqing_chat import handlers
+def _chatting_context(mock_context, model, backlog: list[dict[str, Any]]):
+    """能跑完整一轮的群聊上下文：插话概率为 1，积压队列是 ``backlog``（测试可以随时往里加）。"""
 
-    event = _event(1)
-    runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
-    state = MagicMock()
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-    recorded = AsyncMock(return_value="m1")
-    prepared = SimpleNamespace(text="小青", forced=True)
-    waiting                   = _context(_pending(2, _text("帮我看个题")))
-    mock_context.capabilities = waiting.capabilities
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
+    mock_context.capabilities = replace(
+        mock_context.capabilities,
+        inbound_backlog=SimpleNamespace(waiting=lambda: tuple(backlog)),
+    )
+    return mock_context
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(handlers, "ensure_user_message_recorded", recorded)
-        assert await handlers._yields_to_follow_up(prepared, event, mock_context, hctx) is True
-        recorded.assert_awaited_once()
-        # 她是被叫到的：让给下一条之后，下一条也算在跟她说；没回的那句话一起带过去。
-        assert take_carried_attention(_event(2)) is True
-        assert take_carried_texts(_event(2)) == ["小青"]
 
-        # 显式命令照常回复，不让。
-        forced = {**event, "_xc_command_forced": True}
-        assert await handlers._yields_to_follow_up(prepared, forced, mock_context, hctx) is False
-
-        # 没人在等：照常生成。
-        mock_context.capabilities = _context().capabilities
-        assert await handlers._yields_to_follow_up(prepared, event, mock_context, hctx) is False
+def _group_message(sample_group_event, text: str, message_id: int, **extra: Any) -> dict[str, Any]:
+    return chat_message_event(sample_group_event, text, message_id=message_id, **extra)
 
 
 @pytest.mark.asyncio
-async def test_plain_interjections_yield_without_carrying_attention(mock_context) -> None:
-    from plugins.xiaoqing_chat import handlers
+async def test_a_turn_with_a_follow_up_waiting_is_recorded_but_not_answered(
+    mock_context, sample_group_event
+) -> None:
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
-    hctx = _make_hctx(runtime=runtime, state=MagicMock(), context=mock_context)
-    mock_context.capabilities = _context(_pending(2, _text("老板又骂人了"))).capabilities
-    prepared = SimpleNamespace(text="今天好累", forced=False)
+    # 同一句话她不会连着说两遍，每次回复的内容各不相同。
+    model = ScriptedChatModel(reply=["在呢", "刚在看书，怎么啦"])
+    backlog = [_pending(2, _text("帮我看个题"))]
+    context = _chatting_context(mock_context, model, backlog)
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(handlers, "ensure_user_message_recorded", AsyncMock(return_value="m1"))
-        assert await handlers._yields_to_follow_up(prepared, _event(1), mock_context, hctx)
-    assert take_carried_attention(_event(2)) is False
+    # 她是被叫到的：让给下一条之后，下一条也算在跟她说；没回的那句话一起带过去。
+    result = await handle_smalltalk("小青", _group_message(sample_group_event, "小青", 1), context)
+    assert result == [] and model.calls == []
+    history = await bound_state(context).memory_store.get_async("g67890")
+    assert [message.content for message in history] == ["小青"]
+    next_event = _event(2, user_id=12345, group_id=67890)
+    assert take_carried_attention(next_event) is True
+    assert take_carried_texts(next_event) == ["小青"]
+
+    # 显式命令照常回复，不让。
+    forced = _group_message(sample_group_event, "小青", 3, _xc_command_forced=True)
+    result = await handle_smalltalk("小青", forced, context)
+    assert result == [{"type": "text", "data": {"text": "在呢"}}]
+    await ack_reply_delivery(result)
+
+    # 没人在等：照常生成。
+    backlog.clear()
+    result = await handle_smalltalk("小青", _group_message(sample_group_event, "小青", 4), context)
+    assert result == [{"type": "text", "data": {"text": "刚在看书，怎么啦"}}]
+    await ack_reply_delivery(result)
+    await settle_chat_background(context, model)
 
 
-def test_a_generated_reply_is_withheld_when_the_sender_kept_typing(mock_context) -> None:
-    from plugins.xiaoqing_chat.turn_delivery import _SmalltalkFinalization, _yield_to_follow_up
+@pytest.mark.asyncio
+async def test_plain_interjections_yield_without_carrying_attention(
+    mock_context, sample_group_event
+) -> None:
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
-    hctx = _make_hctx(runtime=runtime, state=MagicMock(), context=mock_context)
-    generated          = MagicMock()
-    generated.local_id = "m1"
+    model   = ScriptedChatModel()
+    context = _chatting_context(mock_context, model, [_pending(2, _text("老板又骂人了"))])
 
-    def finalization(event: dict[str, Any], *, forced: bool) -> _SmalltalkFinalization:
-        return _SmalltalkFinalization(
-            prepared=SimpleNamespace(forced=forced, text="我今天"),
-            generated  = generated,
-            event      = event,
-            context    = mock_context,
-            hctx       = hctx,
-            started_at = 0.0,
-        )
+    result = await handle_smalltalk(
+        "今天好累", _group_message(sample_group_event, "今天好累", 1), context
+    )
 
-    mock_context.capabilities = _context(_pending(2, _text("考试挂了"))).capabilities
-    assert _yield_to_follow_up(finalization(_event(1), forced=True), phase="after_presend_delay")
-    assert take_carried_attention(_event(2)) is True
-    assert take_carried_texts(_event(2)) == ["我今天"]
+    # 插话概率放行了这一轮，让出来的是它：话记进了聊天记录，没有生成回复，也不算在叫她。
+    assert result == [] and model.calls == []
+    history = await bound_state(context).memory_store.get_async("g67890")
+    assert [message.content for message in history] == ["今天好累"]
+    assert take_carried_attention(_event(2, user_id=12345, group_id=67890)) is False
+    await settle_chat_background(context, model)
 
-    command = {**_event(1), "_xc_command_forced": True}
-    assert not _yield_to_follow_up(finalization(command, forced=True), phase="after_presend_delay")
 
-    mock_context.capabilities = _context().capabilities
-    assert not _yield_to_follow_up(finalization(_event(1), forced=True), phase="before_last_batch")
+@pytest.mark.asyncio
+async def test_a_generated_reply_is_withheld_when_the_sender_kept_typing(
+    mock_context, sample_group_event
+) -> None:
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+
+    backlog: list[dict[str, Any]] = []
+    typing_during_generation      = True
+    replies                       = iter(["怎么了", "刚在看书，咋啦", "来了来了，说吧"])
+
+    def keeps_typing(_call) -> str:
+        # 模型生成回复的这段时间里，对方又发来了一条。
+        if typing_during_generation:
+            backlog.append(_pending(2, _text("考试挂了")))
+        return next(replies)
+
+    model = ScriptedChatModel(reply=keeps_typing)
+    context = _chatting_context(mock_context, model, backlog)
+
+    result = await handle_smalltalk(
+        "小青，我今天", _group_message(sample_group_event, "小青，我今天", 1), context
+    )
+
+    assert result == [] and len(model.calls_of("reply")) == 1
+    next_event = _event(2, user_id=12345, group_id=67890)
+    assert take_carried_attention(next_event) is True
+    assert take_carried_texts(next_event) == ["小青，我今天"]
+
+    # 显式命令照常发出，哪怕生成期间对方又发了。
+    backlog.clear()
+    command = _group_message(sample_group_event, "小青，我今天", 3, _xc_command_forced=True)
+    result = await handle_smalltalk("小青，我今天", command, context)
+    assert result == [{"type": "text", "data": {"text": "刚在看书，咋啦"}}]
+    await ack_reply_delivery(result)
+
+    # 生成期间没有新消息：照常发出。
+    typing_during_generation = False
+    backlog.clear()
+    result = await handle_smalltalk(
+        "小青，我今天", _group_message(sample_group_event, "小青，我今天", 4), context
+    )
+    assert result == [{"type": "text", "data": {"text": "来了来了，说吧"}}]
+    await ack_reply_delivery(result)
+    await settle_chat_background(context, model)
 
 
 def test_yielded_fragments_reach_the_next_turn_in_order(monkeypatch) -> None:

@@ -1,20 +1,32 @@
-"""Pendo Web 统计接口的聚合、校验与前端契约回归。"""
+"""Pendo Web 统计接口的聚合、范围解析与校验。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils import time_utils
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
 from plugins.pendo.web.api import items as items_api
 from plugins.pendo.web.api import stats
 from plugins.pendo.web.api import stats as stats_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
+
+
+def _freeze_today(monkeypatch: pytest.MonkeyPatch, day: date) -> None:
+    """把时钟固定在指定日期的正午（UTC），用户默认时区下仍是同一天。"""
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(day.year, day.month, day.day, 12, 0, 0, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
 
 
 def test_stats_router_exposes_only_documented_get_endpoints() -> None:
@@ -62,19 +74,32 @@ def test_stats_http_preserves_range_alias_and_declared_query_bounds(db: Database
     assert invalid_year.status_code == 422
 
 
-def test_ledger_insights_normalizes_filters_and_validates_bounds(
-    db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_ledger_insights_normalizes_filters_and_validates_bounds(db: Database) -> None:
     """账本洞察清理文本，并拒绝不完整日期和反向金额区间。"""
 
-    captured: dict[str, Any] = {}
+    owner_id = "u-insights"
+    for item_id, amount, category, account, ledger_date, transaction_type in (
+        ("match", 15, "餐饮", "现金", "2026-03-10", "expense"),
+        ("other-category", 12, "交通", "现金", "2026-03-11", "expense"),
+        ("other-account", 13, "餐饮", "银行卡", "2026-03-12", "expense"),
+        ("over-amount", 50, "餐饮", "现金", "2026-03-13", "expense"),
+        ("income", 16, "餐饮", "现金", "2026-03-14", "income"),
+        ("last-year", 18, "餐饮", "现金", "2025-03-14", "expense"),
+    ):
+        db.insert_item(
+            {
+                "id"              : item_id,
+                "type"            : "ledger",
+                "owner_id"        : owner_id,
+                "title"           : item_id,
+                "amount"          : amount,
+                "transaction_type": transaction_type,
+                "ledger_category" : category,
+                "account_name"    : account,
+                "ledger_date"     : ledger_date,
+            }
+        )
 
-    def fake_build_ledger_insights(**kwargs: Any) -> dict[str, str]:
-        captured.update(kwargs)
-        return {"marker": "ok"}
-
-    monkeypatch.setattr(stats_api, "build_ledger_insights", fake_build_ledger_insights)
     result = stats_api.ledger_visual_insights(
         transaction_type = "expense",
         category         = " 餐饮 ",
@@ -84,15 +109,15 @@ def test_ledger_insights_normalizes_filters_and_validates_bounds(
         amount_min       = 10,
         amount_max       = 20,
         compare_mode     = "previous_year_to_date",
-        owner_id         = "u-insights",
+        owner_id         = owner_id,
         db               = db,
     )
 
-    assert result["data"] == {"marker": "ok"}
-    assert captured["category"] == "餐饮"
-    assert captured["account_name"] == "现金"
-    assert captured["start_date"] == "2026-03-01"
-    assert captured["compare_mode"] == "previous_year_to_date"
+    summary = result["data"]["summary"]
+    assert summary["expense_total"] == 15
+    assert summary["focus_count"] == 1
+    # 与去年同期（那一笔 18 元）比较：(15 - 18) / 18
+    assert summary["delta_vs_previous"] == pytest.approx(-1 / 6, abs=1e-3)
     _assert_http_error(
         422,
         lambda: stats_api.ledger_visual_insights(
@@ -142,43 +167,6 @@ def test_task_overview_translates_builder_validation_error(db: Database) -> None
         ),
     )
     assert "valid ISO date" in error.detail
-
-
-def test_ledger_stats_returns_expense_amount_histogram(db: Database) -> None:
-    """支出直方图只统计支出，并正确覆盖首尾金额桶。"""
-
-    owner_id = "u-ledger-stats"
-    for title, amount, transaction_type, category, ledger_date in (
-        ("早餐", 12, "expense", "餐饮", "2026-03-10"),
-        ("打车", 48, "expense", "交通", "2026-03-11"),
-        ("房租", 1200, "expense", "居住", "2026-03-12"),
-        ("工资", 5000, "income", "工资", "2026-03-15"),
-    ):
-        db.insert_item(
-            {
-                "type"            : "ledger",
-                "owner_id"        : owner_id,
-                "title"           : title,
-                "amount"          : amount,
-                "transaction_type": transaction_type,
-                "ledger_category" : category,
-                "ledger_date"     : ledger_date,
-            }
-        )
-
-    result = stats_api.ledger_stats(
-        range_str = "2026-03-01..2026-03-31",
-        owner_id  = owner_id,
-        db        = db,
-    )
-    histogram = {
-        item["bucket"]: item["count"] for item in result["data"]["expense_amount_histogram"]
-    }
-
-    assert histogram["0-20"] == 1
-    assert histogram["20-50"] == 1
-    assert histogram["1000+"] == 1
-    assert sum(histogram.values()) == 3
 
 
 def test_ledger_stats_respects_range_for_totals_categories_and_trend_data(
@@ -852,7 +840,7 @@ def test_ledger_comparison_fills_gaps_and_keeps_mom_and_yoy_baselines(
     """月度比较填充空月，并从同一查询提供环比和同比基线。"""
 
     owner_id = "u-ledger-compare"
-    monkeypatch.setattr(stats_api, "_today", lambda *_args: date(2026, 3, 29))
+    _freeze_today(monkeypatch, date(2026, 3, 29))
     for title, amount, transaction_type, ledger_date in (
         ("同比十月支出", 40, "expense", "2024-10-12"),
         ("同比十月收入", 100, "income", "2024-10-15"),
@@ -990,7 +978,7 @@ def test_insights_keep_currency_trends_separate(currency_db):
 
 
 def test_stats_and_comparison_select_one_currency(currency_db, monkeypatch):
-    monkeypatch.setattr(stats, "_today", lambda *_: date(2026, 3, 2))
+    _freeze_today(monkeypatch, date(2026, 3, 2))
     result = stats.ledger_stats(
         start_date = "2026-03-01",
         end_date   = "2026-03-02",

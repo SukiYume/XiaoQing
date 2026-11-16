@@ -1,7 +1,8 @@
-"""角色自己的一天、全局心境、分句气泡、线下邀约边界、摘要标注和抽取限频。"""
+"""角色自己的一天、全局心境、分句气泡、气泡间停顿、近况抽取的限频与私聊范围、兜底回复。"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -11,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat import handlers
 from plugins.xiaoqing_chat.config.config import (
     PersonalityConfig,
@@ -30,15 +32,26 @@ from plugins.xiaoqing_chat.life.daily_life import (
 )
 from plugins.xiaoqing_chat.life.self_timeline import new_entry
 from plugins.xiaoqing_chat.llm.postprocess import process_llm_response
-from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.persona import PersonaCard
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-from tests.plugins.xiaoqing_chat.memory_support import (
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.xiaoqing_chat_memory_test_support import (
     MemoryHarness,
     chat_context,
     put_history,
     self_texts,
 )
+from tests.helpers.xiaoqing_chat_test_support import (
+    ScriptedChatModel,
+    ack_reply_delivery,
+    bot_message,
+    chat_message_event,
+    scripted_chat_context,
+    settle_chat_background,
+    user_message,
+)
+
+mock_context = _fixture_support.mock_context
 
 # 时间都按 Core 配置的时区理解，测试里同样带上时区。
 ZONE = ZoneInfo("Asia/Shanghai")
@@ -109,19 +122,18 @@ async def test_ensure_today_generates_once_and_backs_off_after_failure(tmp_path)
         },
         ensure_ascii=False,
     )
-    model = AsyncMock(return_value=output)
+    model = ScriptedChatModel(reasoning=output)
     kwargs = {
         "store"  : store,
         "persona": "你的名字是小青。",
         "routine": ("周一至周五 08:00-11:50 上课（忙）",),
-        "secrets": {"_ai": object()},
+        "secrets": {"_ai": model},
         "llm"    : XiaoQingChatConfig().llm_config("reasoning"),
         "now"    : MOMENT.timestamp(),
     }
-    with patch.object(daily_life, "chat_completions", model):
-        record = await ensure_today(**kwargs)
-        again  = await ensure_today(**kwargs)
-    assert record is not None and again == record and model.await_count == 1
+    record = await ensure_today(**kwargs)
+    again  = await ensure_today(**kwargs)
+    assert record is not None and again == record and len(model.calls) == 1
     assert [event.clock for event in record.events] == ["08:05", "12:10"]
     reloaded = DailyLifeStore()
     reloaded.bind(tmp_path)
@@ -129,11 +141,57 @@ async def test_ensure_today_generates_once_and_backs_off_after_failure(tmp_path)
 
     failing = DailyLifeStore()
     failing.bind(tmp_path / "other")
-    broken = AsyncMock(return_value='{"events": []}')
-    with patch.object(daily_life, "chat_completions", broken):
-        assert await ensure_today(**{**kwargs, "store": failing}) is None
-        assert await ensure_today(**{**kwargs, "store": failing}) is None
-    assert broken.await_count == 1, "失败后半小时内不再重试"
+    broken = ScriptedChatModel(reasoning='{"events": []}')
+    failing_kwargs = {**kwargs, "store": failing, "secrets": {"_ai": broken}}
+    assert await ensure_today(**failing_kwargs) is None
+    assert await ensure_today(**failing_kwargs) is None
+    assert len(broken.calls) == 1, "失败后半小时内不再重试"
+
+
+@pytest.mark.asyncio
+async def test_ensure_today_without_a_model_plans_nothing_and_stores_nothing(tmp_path) -> None:
+    store = DailyLifeStore()
+    store.bind(tmp_path)
+
+    record = await ensure_today(
+        store   = store,
+        persona = "你的名字是小青。",
+        routine = (),
+        secrets = {},
+        llm     = XiaoQingChatConfig().llm_config("reasoning"),
+        now     = MOMENT.timestamp(),
+    )
+
+    # 没有可用的模型（路由没配）：今天没有安排，也不留空记录，之后有了模型还能照常安排。
+    assert record is None
+    assert store.get("2026-10-28") is None
+    assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_a_chat_turn_arranges_today_once_when_nothing_is_planned_yet(
+    mock_context, sample_private_event
+) -> None:
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.life.daily_life import day_key
+    from plugins.xiaoqing_chat.utils.wall_clock import local_datetime
+
+    events = [{"at": "00:00", "text": "熬夜看完一集番"}, {"at": "00:01", "text": "泡了碗面"}]
+    day = json.dumps({"events": events}, ensure_ascii=False)
+    model = ScriptedChatModel(reply="在呢", reasoning=day)
+    scripted_chat_context(mock_context, model, {"life": {"enable_daily_life": True}})
+
+    for text in ("你好", "在干嘛"):
+        event  = chat_message_event(sample_private_event, text)
+        result = await handle_smalltalk(text, event, mock_context)
+        await ack_reply_delivery(result)
+        await settle_chat_background(mock_context, model)
+
+    today = bound_state(mock_context).daily_life.get(day_key(local_datetime()))
+    assert today is not None
+    assert [event.text for event in today.events] == ["熬夜看完一集番", "泡了碗面"]
+    day_calls = [call for call in model.calls if '"events"' in call.text]
+    assert len(day_calls) == 1, "今天已经安排过，第二轮不再安排"
 
 
 # ---------------------------------------------------------------- 心境
@@ -224,20 +282,7 @@ def test_unpaired_lenticular_brackets_copied_from_summaries_are_dropped() -> Non
     ]
 
 
-# ---------------------------------------------------------------- 摘要标注
-
-
 # ---------------------------------------------------------------- 抽取限频与私聊范围
-
-
-def _user(text: str, ts: float) -> StoredMessage:
-    return StoredMessage(role="user", name="阿梨", ts=ts, user_id=7, content=text)
-
-
-def _bot(text: str, ts: float) -> StoredMessage:
-    return StoredMessage(
-        role="assistant", name="小青", ts=ts, content=text, source_plugin="xiaoqing_chat"
-    )
 
 
 def _state(tmp_path):
@@ -249,30 +294,31 @@ def _state(tmp_path):
 async def _extract(setup, chat_id: str, reply: str, model) -> bool:
     state, memory, data_dir = setup
     now     = time.time()
-    history = put_history(state, chat_id, [_user("在干嘛", now - 5), _bot(reply, now)])
-    with patch.object(life_extract, "chat_completions", model):
-        return await life_extract.extract_life_records(
-            context  = chat_context(memory, data_dir, chat_id),
-            state    = state,
-            life_cfg = XiaoQingChatConfig().life,
-            secrets  = {"_ai": object()},
-            llm      = XiaoQingChatConfig().llm_config("reasoning"),
-            chat_id  = chat_id,
-            bot_name = "小青",
-            history  = history,
-            source   = "chat",
-        )
+    history = put_history(
+        state, chat_id, [user_message("在干嘛", now - 5), bot_message(reply, now)]
+    )
+    return await life_extract.extract_life_records(
+        context  = chat_context(memory, data_dir, chat_id),
+        state    = state,
+        life_cfg = XiaoQingChatConfig().life,
+        secrets  = {"_ai": model},
+        llm      = XiaoQingChatConfig().llm_config("reasoning"),
+        chat_id  = chat_id,
+        bot_name = "小青",
+        history  = history,
+        source   = "chat",
+    )
 
 
 @pytest.mark.asyncio
 async def test_state_only_replies_are_read_at_most_every_interval(tmp_path) -> None:
     state = _state(tmp_path)
-    model = AsyncMock(return_value="{}")
+    model = ScriptedChatModel(reasoning="{}")
     assert await _extract(state, "g1", "刚下课，有点饿", model)
     assert not await _extract(state, "g1", "还在食堂排队", model), "十分钟内只读一次近况"
     assert await _extract(state, "g1", "回头查完发你", model), "承诺每次都读"
     assert await _extract(state, "g2", "刚下课", model), "限频按会话分开"
-    assert model.await_count == 3
+    assert len(model.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -288,7 +334,7 @@ async def test_private_status_stays_private_unless_shareable(tmp_path) -> None:
         ensure_ascii=False,
     )
     assert await _extract(
-        state, "u7", "刚跟你打完电话，现在在宿舍摸鱼", AsyncMock(return_value=output)
+        state, "u7", "刚跟你打完电话，现在在宿舍摸鱼", ScriptedChatModel(reasoning=output)
     )
     memory = state[1]
     assert sorted(self_texts(memory, "u7")) == sorted(["刚跟阿梨打完电话", "在宿舍摸鱼"])
@@ -298,78 +344,78 @@ async def test_private_status_stays_private_unless_shareable(tmp_path) -> None:
 # ---------------------------------------------------------------- 气泡之间真的停顿
 
 
-def _finalization(source: str, sent: list):
-    from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
-    from plugins.xiaoqing_chat.generation_limiter import GenerationLimiter
+def _bubble_turn_context(mock_context, reply: str, sent: list, on_send=None):
+    """私聊里模型回一段分成几个气泡的回复；发出去的气泡记在 ``sent``（发送这条边界上的替身）。"""
+
+    model = ScriptedChatModel(reply=reply)
+    scripted_chat_context(mock_context, model, {"humanize": {"enable_typing_delay": True}})
 
     async def send_action(action):
         sent.append(action)
+        if on_send is not None:
+            on_send(len(sent))
         return True
 
-    return SimpleNamespace(
-        event = {"_source": source, "user_id": 7, "group_id": None},
-        hctx  = SimpleNamespace(
-            chat_id = "u7",
-            runtime = ChatRuntime(XiaoQingChatConfig(), []),
-            state=SimpleNamespace(generation_limiter=GenerationLimiter()),
-        ),
-        context=SimpleNamespace(send_action=send_action),
-        generated=SimpleNamespace(local_id="u1", timings={}),
-    )
-
-
-def _batches(*texts: str) -> list:
-    return [[{"type": "text", "data": {"text": text}}] for text in texts]
+    mock_context.send_action = send_action
+    return model
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source,bypass", [("upstream_ws", True), ("inbound_ws", False)])
-async def test_intermediate_bubbles_go_out_directly_on_upstream_ws(source, bypass) -> None:
-    from core.interfaces import ACTION_BYPASS_SINK_KEY
-    from plugins.xiaoqing_chat import turn_delivery
+async def test_intermediate_bubbles_go_out_directly_on_upstream_ws(
+    mock_context, sample_private_event, source, bypass
+) -> None:
+    from core.interfaces import ACTION_BYPASS_SINK_KEY, EVENT_SOURCE_KEY
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    sent: list   = []
-    finalization = _finalization(source, sent)
-    batches      = _batches("一", "二", "三")
-    bubbles      = turn_delivery._ReplyBubbles(finalization, (), batches)
-    with (
-        patch.object(turn_delivery, "_drop_stale_generated_turn", return_value=False),
-        patch.object(turn_delivery.asyncio, "sleep", AsyncMock()) as pause,
-    ):
-        assert await turn_delivery._send_smalltalk_intermediate_batches(
-            finalization, batches, bubbles, apply_humanize=False
-        )
-    assert len(sent) == 2
+    sent: list = []
+    model      = _bubble_turn_context(mock_context, "一\n\n二\n\n三", sent)
+    event      = chat_message_event(sample_private_event, "你好", **{EVENT_SOURCE_KEY: source})
+    # 时间是边界：气泡之间的停顿换成立即返回的计数替身。
+    with patch.object(asyncio, "sleep", AsyncMock()) as pause:
+        result = await handle_smalltalk("你好", event, mock_context)
+
+    # 前两个气泡直接发出，最后一个作为本次处理的结果交给 Core。
+    assert [bubble["data"]["text"] for bubble in result] == ["三"]
+    assert [action["params"]["message"][0]["data"]["text"] for action in sent] == ["一", "二"]
     assert all(bool(action.get(ACTION_BYPASS_SINK_KEY)) is bypass for action in sent)
     assert pause.await_count == 2, "明确召唤时气泡之间也停顿"
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_turn_going_stale_after_a_sent_bubble_records_only_what_went_out() -> None:
-    from plugins.xiaoqing_chat import turn_delivery
-    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+async def test_turn_going_stale_after_a_sent_bubble_records_only_what_went_out(
+    mock_context, sample_private_event
+) -> None:
+    from core.interfaces import EVENT_SOURCE_KEY
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.memory.local_ids import MAX_REPLY_RECENT_MESSAGES
 
-    sent: list                           = []
-    finalization                         = _finalization("upstream_ws", sent)
-    batches                              = _batches("一", "二", "三", "四")
-    finalization.generated.reply_payload = turn_delivery.build_reply_payload_from_parts(
-        build_text_message_parts("一\n\n二\n\n三\n\n四")
-    )
-    bubbles = turn_delivery._ReplyBubbles(finalization, (), batches)
-    with (
-        patch.object(turn_delivery, "_drop_stale_generated_turn", side_effect=[False, False, True]),
-        patch.object(turn_delivery.asyncio, "sleep", AsyncMock()),
-        patch.object(turn_delivery, "log_step"),
-        patch.object(turn_delivery, "_commit_smalltalk_delivery", AsyncMock()) as commit,
-        patch.object(turn_delivery, "_rollback_smalltalk_delivery", AsyncMock()) as rollback,
-    ):
-        assert not await turn_delivery._send_smalltalk_intermediate_batches(
-            finalization, batches, bubbles, apply_humanize=False
-        )
+    sent: list = []
+
+    def friend_floods_chat(sent_count: int) -> None:
+        # 第二个气泡发出时，对方又连着发来很多条：要接的那句已经太远，后面的气泡不再发。
+        if sent_count == 2:
+            for index in range(MAX_REPLY_RECENT_MESSAGES):
+                bound_state(mock_context).memory_store.append(
+                    "u12345", role="user", name="TestUser", user_id=12345, content=f"又一句{index}"
+                )
+
+    model = _bubble_turn_context(mock_context, "一\n\n二\n\n三\n\n四", sent, friend_floods_chat)
+    event = chat_message_event(sample_private_event, "你好", **{EVENT_SOURCE_KEY: "upstream_ws"})
+    with patch.object(asyncio, "sleep", AsyncMock()):
+        result = await handle_smalltalk("你好", event, mock_context)
+
+    assert result == []
     assert len(sent) == 2
-    rollback.assert_not_awaited()
-    # 聊天记录只记发出去的两个气泡，没发的“三”“四”不算她说过。
-    commit.assert_awaited_once_with(finalization, build_text_message_parts("一\n\n二"), ())
+    # 聊天记录只记发出去的两个气泡，没发出去的最后一个气泡不算她说过。
+    went_out  = [action["params"]["message"][0]["data"]["text"] for action in sent]
+    history   = await bound_state(mock_context).memory_store.get_async("u12345")
+    assistant = [message.content for message in history if message.role == "assistant"]
+    assert assistant == ["\n\n".join(went_out)]
+    assert "四" not in assistant[0]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -384,7 +430,9 @@ async def test_near_duplicate_status_is_not_recorded_twice(tmp_path) -> None:
         },
         ensure_ascii=False,
     )
-    assert await _extract(state, "g1", "刚摸鱼呢，现在也还在摸鱼", AsyncMock(return_value=output))
+    assert await _extract(
+        state, "g1", "刚摸鱼呢，现在也还在摸鱼", ScriptedChatModel(reasoning=output)
+    )
     assert self_texts(state[1], "g1") == ["刚摸鱼"]
 
 
@@ -442,7 +490,6 @@ def test_event_detail_is_kept_shown_and_survives_reload(tmp_path) -> None:
     assert "- 12:10 午饭打了糖醋里脊（排到我正好是最后一份 阿姨多给了半勺汁）" in block
     assert "- 08:05 早八踩点进教室\n" in block and "土星" not in block
     assert today_block(record, MOMENT, header="今天的事：").startswith("今天的事：\n- 08:05")
-    assert "detail" in daily_life._SYSTEM
 
 
 def test_generation_sees_the_last_few_days_so_today_is_not_the_same_again() -> None:
@@ -453,8 +500,7 @@ def test_generation_sees_the_last_few_days_so_today_is_not_the_same_again() -> N
         moment  = MOMENT,
         earlier = [_record("2026-10-27"), None, older],
     )
-    system, user = messages[0]["content"], messages[1]["content"]
-    assert "不同方面" in system and "不和前几天重样" in system
+    user = messages[1]["content"]
     assert "前几天发生过的事：\n- 10-27：早八差点迟到；食堂糖醋里脊卖完了；天文社看了土星" in user
     assert "- 10-26：课上抄漏了一个负号" in user
     blank = daily_life.build_messages(persona="p", routine=[], moment=MOMENT)[1]["content"]

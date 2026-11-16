@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 
 import tests.helpers.onebot_test_support as _fixture_support
-from tests.helpers.onebot_test_support import (
+from core.onebot import (
     _extract_message_preview,
     _mask_sensitive_text,
     _onebot_action_succeeded,
     _summarize_event,
-    verify_bearer_token,
 )
+from tests.helpers.onebot_test_support import verify_bearer_token
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
 
@@ -30,91 +30,64 @@ def test_onebot_action_success_requires_exact_integer_retcode(response, expected
     assert _onebot_action_succeeded(response) is expected
 
 
-class TestVerifyBearerToken:
-    """共享 Bearer token 验证测试。"""
-
-    def test_valid_token(self):
-        """测试有效 token"""
-        result = verify_bearer_token("Bearer my_token", "my_token")
-        assert result is True
-
-    def test_no_token_configured(self):
-        """测试未配置 token 时默认拒绝，避免鉴权失败开放"""
-        result = verify_bearer_token("Bearer anything", "")
-        assert result is False
-
-        result = verify_bearer_token("Bearer anything", None)
-        assert result is False
-
-    def test_invalid_token(self):
-        """测试无效 token"""
-        result = verify_bearer_token("Bearer wrong_token", "my_token")
-        assert result is False
-
-    def test_missing_bearer_prefix(self):
-        """测试缺少 Bearer 前缀"""
-        result = verify_bearer_token("my_token", "my_token")
-        assert result is False
-
-    def test_length_mismatch(self):
-        """测试长度不匹配"""
-        result = verify_bearer_token("short", "much_longer_token")
-        assert result is False
+@pytest.mark.parametrize(
+    ("header", "configured", "expected"),
+    [
+        pytest.param("Bearer my_token", "my_token", True, id="valid"),
+        pytest.param("Bearer anything", "", False, id="no-token-configured-empty"),
+        pytest.param("Bearer anything", None, False, id="no-token-configured-none"),
+        pytest.param("Bearer wrong_token", "my_token", False, id="wrong-token"),
+        pytest.param("my_token", "my_token", False, id="missing-bearer-prefix"),
+        pytest.param("short", "much_longer_token", False, id="length-mismatch"),
+    ],
+)
+def test_verify_bearer_token(header, configured, expected):
+    """未配置 token 时默认拒绝，避免鉴权失败开放。"""
+    assert verify_bearer_token(header, configured) is expected
 
 
-class TestMaskSensitiveText:
-    """_mask_sensitive_text 测试"""
-
-    def test_mask_token(self):
-        """测试屏蔽 token"""
-        for text in (
-            "Authorization: Bearer secret_token_123",
+@pytest.mark.parametrize(
+    ("text", "secret"),
+    [
+        pytest.param("Authorization: Bearer secret_token_123", "secret_token_123", id="header"),
+        pytest.param(
             "authorization:bearer   secret_token_123",
-            "AUTHORIZATION = Basic secret_token_123",
-            "header Bearer secret_token_123",
-        ):
-            result = _mask_sensitive_text(text)
-            assert "secret_token_123" not in result
-            assert "********" in result
+            "secret_token_123",
+            id="header-lowercase-spaced",
+        ),
+        pytest.param(
+            "AUTHORIZATION = Basic secret_token_123", "secret_token_123", id="header-basic"
+        ),
+        pytest.param("header Bearer secret_token_123", "secret_token_123", id="bare-bearer"),
+        pytest.param(
+            "authorization=secret_token_123", "secret_token_123", id="authorization-value"
+        ),
+        pytest.param("api_key=sk-1234567890", "sk-1234567890", id="api-key"),
+    ],
+)
+def test_mask_credential_is_replaced_with_marker(text, secret):
+    result = _mask_sensitive_text(text)
+    assert secret not in result
+    assert "********" in result
 
-    def test_mask_authorization_header(self):
-        """测试屏蔽直接提供的 authorization 值"""
-        text   = "authorization=secret_token_123"
-        result = _mask_sensitive_text(text)
-        assert "secret_token_123" not in result
-        assert "********" in result
 
-    def test_mask_api_key(self):
-        """测试屏蔽 api_key"""
-        text   = "api_key=sk-1234567890"
-        result = _mask_sensitive_text(text)
-        assert "sk-1234567890" not in result
-        assert "********" in result
+@pytest.mark.parametrize(
+    ("text", "secrets"),
+    [
+        pytest.param("password=my_password", ("my_password",), id="password"),
+        pytest.param("token=abc123 and password=xyz789", ("abc123", "xyz789"), id="multiple"),
+        pytest.param("API_KEY=secret", ("secret",), id="case-insensitive"),
+    ],
+)
+def test_mask_sensitive_values(text, secrets):
+    result = _mask_sensitive_text(text)
+    for secret in secrets:
+        assert secret not in result
 
-    def test_mask_password(self):
-        """测试屏蔽 password"""
-        text   = "password=my_password"
-        result = _mask_sensitive_text(text)
-        assert "my_password" not in result
 
-    def test_mask_multiple(self):
-        """测试屏蔽多个敏感信息"""
-        text   = "token=abc123 and password=xyz789"
-        result = _mask_sensitive_text(text)
-        assert "abc123" not in result
-        assert "xyz789" not in result
-
-    def test_case_insensitive(self):
-        """测试大小写不敏感"""
-        text   = "API_KEY=secret"
-        result = _mask_sensitive_text(text)
-        assert "secret" not in result
-
-    def test_no_sensitive_data(self):
-        """测试无敏感数据"""
-        text   = "hello world"
-        result = _mask_sensitive_text(text)
-        assert result == text
+def test_mask_leaves_plain_text_unchanged():
+    text = "hello world"
+    assert _mask_sensitive_text(text) == text
 
 
 class TestExtractMessagePreview:

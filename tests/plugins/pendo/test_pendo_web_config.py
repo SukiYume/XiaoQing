@@ -1,4 +1,4 @@
-"""Pendo Web 只读配置路由的结构、顺序和响应隔离回归。"""
+"""Pendo Web 只读配置路由的结构、顺序和响应隔离。"""
 
 from __future__ import annotations
 

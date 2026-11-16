@@ -12,15 +12,22 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 import tests.helpers.app_test_support as _fixture_support
-from tests.helpers.app_test_support import (
-    InboundManager,
-    XiaoQingApp,
-    _onebot_credentials,
-)
-from tests.helpers.config_test_support import _last_notified_revision
+from core.app_support import _onebot_credentials
+from tests.helpers.app_test_support import InboundManager, XiaoQingApp, load_text_command_plugin
+from tests.helpers.config_test_support import last_notified_revision
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root                               = _fixture_support.temp_app_root
+_isolate_process_global_plugin_import_state = (
+    _fixture_support._isolate_process_global_plugin_import_state
+)
+
+
+_ECHO_EVENT = {
+    "post_type"   : "message",
+    "message_type": "private",
+    "user_id"     : 12345,
+    "message"     : "/echo",
+}
 
 
 @pytest.mark.asyncio
@@ -51,48 +58,55 @@ async def test_valid_external_plugin_secret_change_keeps_control_channel_until_r
     app           = XiaoQingApp(temp_app_root)
     ws_client     = OneBotWsClient("ws://127.0.0.1:6700", "stable-onebot")
     app.ws_client = ws_client
-    app._send_action = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    # OneBot 发送器是边界：管理员通知经真实的 Core 投递链路到达它（WS 连接未连上，走 HTTP）。
+    send = AsyncMock(return_value=True)
+    app.http_sender = SimpleNamespace(
+        http_base           = "http://onebot",
+        credentials_trusted = True,
+        send_action         = send,
+    )
+    generation                              = ws_client._endpoint_auth.generation
     before                                  = app.config_manager.snapshot()
     candidate                               = json.loads(json.dumps(active_secrets))
     candidate["plugins"]["demo"]["api_key"] = "new-plugin-secret"
     secrets_path.write_text(json.dumps(candidate), encoding="utf-8")
 
-    with patch.object(ws_client, "_request_auth_rotation") as request_rotation:
-        await app.config_manager._watch_reconcile_once()
+    await app.config_manager._watch_reconcile_once()
 
-        pending = app.config_manager.snapshot()
-        assert pending.revision == before.revision
-        assert pending.secrets_status.value == "valid"
-        assert pending.secrets["plugins"]["demo"]["api_key"] == "old-plugin-secret"
-        assert app.is_admin(12345) is True
-        assert app._runtime_onebot_token == "stable-onebot"
-        assert app._runtime_onebot_credentials_trusted is True
-        assert ws_client.auth_token == "stable-onebot"
-        assert ws_client.credentials_trusted is True
-        request_rotation.assert_not_called()
+    pending = app.config_manager.snapshot()
+    assert pending.revision == before.revision
+    assert pending.secrets_status.value == "valid"
+    assert pending.secrets["plugins"]["demo"]["api_key"] == "old-plugin-secret"
+    assert app.is_admin(12345) is True
+    assert app._runtime_onebot_token == "stable-onebot"
+    assert app._runtime_onebot_credentials_trusted is True
+    assert ws_client.auth_token == "stable-onebot"
+    assert ws_client.credentials_trusted is True
+    # 凭据没有变：控制通道的授权代数不动（没有触发重新授权 / 断开重连）
+    assert ws_client._endpoint_auth.generation == generation
 
-        assert app._send_action.await_count == 2
-        first_action = app._send_action.await_args_list[0].args[0]
-        notice_text  = first_action["params"]["message"][0]["data"]["text"]
-        assert first_action["action"] == "send_private_msg"
-        assert first_action["params"]["user_id"] == 12345
-        assert "✅ 文件完整且格式有效" in notice_text
-        assert "plugins.demo.api_key" in notice_text
-        assert "发送 /reload 确认并应用" in notice_text
-        assert "old-plugin-secret" not in notice_text
-        assert "new-plugin-secret" not in notice_text
+    assert send.await_count == 2
+    first_action = send.await_args_list[0].args[0]
+    notice_text  = first_action["params"]["message"][0]["data"]["text"]
+    assert first_action["action"] == "send_private_msg"
+    assert first_action["params"]["user_id"] == 12345
+    assert "✅ 文件完整且格式有效" in notice_text
+    assert "plugins.demo.api_key" in notice_text
+    assert "发送 /reload 确认并应用" in notice_text
+    assert "old-plugin-secret" not in notice_text
+    assert "new-plugin-secret" not in notice_text
 
-        app.reload_config()
-        if app._config_apply_tasks:
-            await asyncio.gather(*tuple(app._config_apply_tasks))
+    app.reload_config()
+    if app._config_apply_tasks:
+        await asyncio.gather(*tuple(app._config_apply_tasks))
 
-        confirmed = app.config_manager.snapshot()
-        assert confirmed.secrets["plugins"]["demo"]["api_key"] == "new-plugin-secret"
-        assert app.config_manager._pending_secrets_source is None
-        assert app.is_admin(12345) is True
-        assert ws_client.auth_token == "stable-onebot"
-        assert ws_client.credentials_trusted is True
-        request_rotation.assert_not_called()
+    confirmed = app.config_manager.snapshot()
+    assert confirmed.secrets["plugins"]["demo"]["api_key"] == "new-plugin-secret"
+    assert app.config_manager._pending_secrets_source is None
+    assert app.is_admin(12345) is True
+    assert ws_client.auth_token == "stable-onebot"
+    assert ws_client.credentials_trusted is True
+    assert ws_client._endpoint_auth.generation == generation
 
     app.scheduler.shutdown()
 
@@ -166,7 +180,7 @@ async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
 
     callback_release.set()
     for _ in range(20):
-        if _last_notified_revision(app.config_manager) == app.config_manager.revision:
+        if last_notified_revision(app.config_manager) == app.config_manager.revision:
             break
         await asyncio.sleep(0)
     await asyncio.gather(*tuple(app._config_apply_tasks), return_exceptions=True)
@@ -203,7 +217,7 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
     async def drain_config_publications() -> None:
         for _ in range(50):
             if (
-                _last_notified_revision(app.config_manager) == app.config_manager.revision
+                last_notified_revision(app.config_manager) == app.config_manager.revision
                 and not app._config_apply_tasks
             ):
                 return
@@ -351,8 +365,25 @@ def test_nonvalid_secret_source_revokes_even_an_explicitly_empty_onebot_token(
     app.scheduler.shutdown()
 
 
+class _FalseString(str):
+    """布尔值为假的 str 子类：不能让空令牌的头部语义被改写。"""
+
+    def __bool__(self) -> bool:
+        return False
+
+
 @pytest.mark.unit
-@pytest.mark.parametrize("invalid_token", [False, 0, None, ["token"], {"token": "value"}])
+@pytest.mark.parametrize(
+    "invalid_token",
+    [
+        pytest.param(False, id="bool"),
+        pytest.param(0, id="int"),
+        pytest.param(None, id="none"),
+        pytest.param(["token"], id="list"),
+        pytest.param({"token": "value"}, id="dict"),
+        pytest.param(_FalseString("must-not-be-silently-anonymous"), id="falsy_str_subclass"),
+    ],
+)
 def test_valid_secret_source_with_nonstring_onebot_token_is_revoked(
     temp_app_root: Path,
     invalid_token: Any,
@@ -369,25 +400,6 @@ def test_valid_secret_source_with_nonstring_onebot_token_is_revoked(
     assert _onebot_credentials(snapshot) == ("", False)
     app._apply_security_snapshot(snapshot)
     assert app._runtime_onebot_credentials_trusted is False
-    app.scheduler.shutdown()
-
-
-@pytest.mark.unit
-def test_string_subclass_cannot_change_empty_token_header_semantics(temp_app_root: Path):
-    from core.config import ConfigSnapshot
-
-    class FalseString(str):
-        def __bool__(self) -> bool:
-            return False
-
-    app      = XiaoQingApp(temp_app_root)
-    snapshot = ConfigSnapshot(
-        config   = app.config,
-        secrets  = {"onebot_token": FalseString("must-not-be-silently-anonymous")},
-        revision = 1,
-    )
-
-    assert _onebot_credentials(snapshot) == ("", False)
     app.scheduler.shutdown()
 
 
@@ -509,6 +521,7 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
     http_send = AsyncMock(return_value=True)
     ws_request = AsyncMock(return_value={"status": "ok"})
     ws_send = AsyncMock(return_value=True)
+    received = await load_text_command_plugin(app)
 
     class BrokenHttpHolder:
         http_base           = "http://127.0.0.1:5700"
@@ -541,7 +554,6 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
     app.http_sender     = http_holder  # type: ignore[assignment]
     app.ws_client       = ws_holder  # type: ignore[assignment]
     app._ws_client_task = listener_task
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
 
     app._apply_security_snapshot(
         ConfigSnapshot(
@@ -561,13 +573,13 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
     assert app._http_transport_is_trusted(app.http_sender) is False
     assert await app._request_onebot_action("get_status", {}) is None
     assert await app._send_single_action({"action": "get_status", "params": {}}) is False
-    await app._handle_upstream_event({}, source_client=ws_holder)  # type: ignore[arg-type]
+    await app._handle_upstream_event(_ECHO_EVENT, source_client=ws_holder)  # type: ignore[arg-type]
 
     http_request.assert_not_awaited()
     http_send.assert_not_awaited()
     ws_request.assert_not_awaited()
     ws_send.assert_not_awaited()
-    app.dispatcher.handle_event.assert_not_awaited()
+    assert received == []
     app._ws_client_task            = None
     app.ws_client                  = None
     app._ws_client_auth_quarantine = None
@@ -581,7 +593,8 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app      = XiaoQingApp(temp_app_root)
+    received = await load_text_command_plugin(app)
     http_request = AsyncMock(return_value={"status": "ok"})
     ws_request = AsyncMock(return_value={"status": "ok"})
     ws_send = AsyncMock(return_value=True)
@@ -615,8 +628,7 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
     ws_holder       = NoopWsHolder()
     app.http_sender = http_holder  # type: ignore[assignment]
     app.ws_client   = ws_holder  # type: ignore[assignment]
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
-    config = app.config_manager.snapshot().mutable_config()
+    config          = app.config_manager.snapshot().mutable_config()
     config.update(
         {
             "onebot_http_base": "http://new.example",
@@ -638,11 +650,11 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
     assert app._ws_client_auth_quarantine is ws_holder
     assert await app._request_onebot_action("get_status", {}) is None
     assert await app._send_single_action({"action": "get_status", "params": {}}) is False
-    await app._handle_upstream_event({}, source_client=ws_holder)  # type: ignore[arg-type]
+    await app._handle_upstream_event(_ECHO_EVENT, source_client=ws_holder)  # type: ignore[arg-type]
     http_request.assert_not_awaited()
     ws_request.assert_not_awaited()
     ws_send.assert_not_awaited()
-    app.dispatcher.handle_event.assert_not_awaited()
+    assert received == []
     app.ws_client                  = None
     app._ws_client_auth_quarantine = None
     app.scheduler.shutdown()
@@ -699,7 +711,7 @@ def test_closed_loop_listener_cancellation_failure_cannot_skip_inbound_revocatio
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_legacy_holder_without_explicit_trust_is_never_used(temp_app_root: Path):
+async def test_holder_without_explicit_trust_is_never_used(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
     ws_request = AsyncMock(return_value={"status": "ok"})
     ws_send = AsyncMock(return_value=True)
@@ -860,9 +872,12 @@ async def test_structural_inbound_failure_never_restores_revoked_token(temp_app_
     ):
         await app._reconcile_inbound_manager({}, {"inbound_token": ""})
 
-    assert observed_tokens == ["", ""]
+    # 旧监听器停下时凭据已收回；没有凭据就不再重新启动，留给终态清理。
+    assert observed_tokens == [""]
+    current.start.assert_not_awaited()
     assert current._token == ""
-    assert app.inbound_manager is current
+    assert app.inbound_manager is None
+    assert app._inbound_cleanup_pending == [current]
     app.scheduler.shutdown()
 
 
@@ -902,11 +917,10 @@ def test_endpoint_rotation_revokes_old_holders_without_pairing_them_with_new_tok
         revision = 1,
     )
 
-    with patch("core.app_ingress.InboundManager.from_config") as inbound_factory:
-        app._apply_config(snapshot)
+    app._apply_config(snapshot)
 
-    inbound_factory.assert_not_called()
-
+    # 端点变了：旧的持有者只被撤销凭据，没有立刻换成新的监听器、也没有配上新令牌
+    assert app.inbound_manager is old_inbound
     assert (old_http.http_base, old_http.auth_token) == ("http://127.0.0.1:5700", "")
     assert (old_ws.ws_uri, old_ws.auth_token) == ("ws://127.0.0.1:6700", "")
     assert old_http.credentials_trusted is False

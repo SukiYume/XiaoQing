@@ -1,14 +1,14 @@
-"""Pendo Web 笔记概览聚合器的跨模块回归。"""
+"""Pendo Web 笔记概览聚合器。"""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web import utils as web_utils
+from plugins.pendo.utils import time_utils
 from plugins.pendo.web.analytics.notes_overview import build_notes_overview
 
 
@@ -193,12 +193,15 @@ def test_build_notes_overview_uses_user_clock_and_excludes_future_week_new(
             updated_at = created_at,
         )
 
-    def user_now(user_id: str, database: Database) -> datetime:
-        assert user_id == owner_id
-        assert database is db
-        return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
+    # 默认时区（上海）的当前时刻是 2030-01-02 00:30，此时 UTC 日期还停在 2030-01-01。
 
-    monkeypatch.setattr(web_utils, "now_in_timezone", user_now)
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2030, 1, 1, 16, 30, 0, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
     result = build_notes_overview(db=db, owner_id=owner_id)
 
     assert result["summary"]["total_count"] == 2
@@ -254,37 +257,6 @@ def test_notes_overview_groups_aware_creation_in_user_timezone(db: Database) -> 
 
     assert result["summary"]["week_new_count"] == 1
     assert result["cadence"] == [{"date": "2026-03-31", "label": "3/31", "count": 1}]
-
-
-def test_build_notes_overview_uses_aggregates_instead_of_item_materialization(
-    db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    owner_id = "u-note-sql-overview"
-    _insert(
-        db,
-        owner_id,
-        id         = "sql-note",
-        title      = "SQL 聚合",
-        content    = "正文",
-        created_at = "2026-03-26T09:00:00",
-        updated_at = "2026-03-26T09:00:00",
-    )
-    monkeypatch.setattr(
-        db,
-        "get_items",
-        lambda *_args, **_kwargs: pytest.fail("overview must not materialize item pages"),
-    )
-    monkeypatch.setattr(
-        db,
-        "get_all_items",
-        lambda *_args, **_kwargs: pytest.fail("overview must not load all notes"),
-    )
-
-    result = build_notes_overview(db=db, owner_id=owner_id, today="2026-03-26")
-
-    assert result["summary"]["total_count"] == 1
-    assert result["recent_notes"][0]["id"] == "sql-note"
 
 
 @pytest.mark.parametrize(

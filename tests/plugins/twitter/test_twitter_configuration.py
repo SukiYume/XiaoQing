@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,10 +13,11 @@ from tests.helpers.settings_snapshot import with_settings_reader
 
 
 @pytest.fixture
-def context() -> SimpleNamespace:
+def context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            secrets={"plugins": {"twitter": {"user_id": "123456789"}}},
+            data_dir = tmp_path,
+            secrets  = {"plugins": {"twitter": {"user_id": "123456789"}}},
         )
     )
 
@@ -53,11 +55,8 @@ async def test_background_fetch_reports_missing_user_id(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        twitter,
-        "_fetch_twitter_images",
-        AsyncMock(side_effect=twitter.TwitterConfigurationError()),
-    )
+    del context.secrets["plugins"]["twitter"]["user_id"]
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
     outcome = await twitter._run_background_fetch(context)
 

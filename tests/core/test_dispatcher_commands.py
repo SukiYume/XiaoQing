@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -24,6 +25,15 @@ mock_metrics           = _fixture_support.mock_metrics
 mock_router            = _fixture_support.mock_router
 mock_session_manager   = _fixture_support.mock_session_manager
 sample_message_context = _fixture_support.sample_message_context
+
+
+@pytest.fixture
+def wall_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """分发器静音按 ``time.time()`` 计时：在标准库边界上换成可拨动的时钟，列表里放当前秒数。"""
+
+    now = [1_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    return now
 
 
 class TestDispatcherMuteControl:
@@ -64,35 +74,42 @@ class TestDispatcherMuteControl:
         dispatcher.mute_group(12345, 10.0)
         assert dispatcher.is_muted(None) is False
 
-    def test_mute_expiration(self, dispatcher: Dispatcher):
+    def test_mute_expiration(self, dispatcher: Dispatcher, wall_clock: list[float]):
         """测试静音过期"""
-        # 使用短时间的 mock clock
-        dispatcher.mute_group(12345, 0.001)  # 非常短的静音时间
-        # 等待过期
-        import time
+        dispatcher.mute_group(12345, 1.0)
+        wall_clock[0] += 59
+        assert dispatcher.is_muted(12345) is True
 
-        time.sleep(0.1)
+        wall_clock[0] += 2
         assert dispatcher.is_muted(12345) is False
 
-    def test_get_mute_remaining(self, dispatcher: Dispatcher):
+    def test_get_mute_remaining(self, dispatcher: Dispatcher, wall_clock: list[float]):
         """测试获取剩余静音时间"""
         dispatcher.mute_group(12345, 10.0)
-        remaining = dispatcher.get_mute_remaining(12345)
-        assert 0 < remaining <= 10
+        assert dispatcher.get_mute_remaining(12345) == pytest.approx(10.0)
+
+        wall_clock[0] += 150
+        assert dispatcher.get_mute_remaining(12345) == pytest.approx(7.5)
 
     def test_get_mute_remaining_no_mute(self, dispatcher: Dispatcher):
         """测试未静音时获取剩余时间"""
         remaining = dispatcher.get_mute_remaining(12345)
         assert remaining == 0
 
-    def test_mute_check_prunes_expired_entries_from_other_groups(self, dispatcher: Dispatcher):
+    def test_mute_check_prunes_expired_entries_from_other_groups(
+        self,
+        dispatcher: Dispatcher,
+        wall_clock: list[float],
+    ):
         """访问任意群时都回收历史过期项，而不是等待原群再次出现。"""
 
-        now = dispatcher.clock.now()
-        dispatcher._muted_groups.update({111: now - 1, 222: now + 60})
+        dispatcher.mute_group(111, 1.0)
+        dispatcher.mute_group(222, 5.0)
+        muted_until = dispatcher._muted_groups[222]
+        wall_clock[0] += 120
 
         assert dispatcher.is_muted(222) is True
-        assert dispatcher._muted_groups == {222: now + 60}
+        assert dispatcher._muted_groups == {222: muted_until}
 
 
 class TestExecuteCommand:
@@ -171,7 +188,7 @@ class TestExecuteCommand:
         sample_message_context: MessageContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        canary                   = "CR219_DISPATCHER_SECRET"
+        canary                   = "DISPATCHER_SECRET"
         dispatcher.build_context = Mock(
             side_effect=lambda _plugin, _user, _group, request_id, principal: SimpleNamespace(
                 request_id = request_id,
@@ -209,7 +226,7 @@ async def test_unexpected_session_error_is_redacted_and_closes_session(
     mock_session_manager: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    canary = "CR219_SESSION_SECRET"
+    canary = "SESSION_SECRET"
     session = SimpleNamespace(plugin_name="public_session", session_id="public-session-1")
     mock_session_manager.get.return_value = session
     mock_session_manager.delete = AsyncMock(return_value=True)

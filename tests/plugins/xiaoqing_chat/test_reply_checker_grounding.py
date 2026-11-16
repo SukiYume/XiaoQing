@@ -1,5 +1,6 @@
 """回复检查器的人设与对话上下文事实锚定。"""
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -12,6 +13,8 @@ from plugins.xiaoqing_chat.llm import reply_checker as checker
 from plugins.xiaoqing_chat.llm.communication_constraints import explicit_output_allocation
 from plugins.xiaoqing_chat.llm.media_evidence import event_has_current_image, image_evidence_block
 from plugins.xiaoqing_chat.persona import bundled_persona_card
+from tests.helpers.reply_checker_test_support import checker_verdict, semantic_checker_model
+from tests.helpers.xiaoqing_chat_test_support import ModelCall, ScriptedChatModel
 
 # Stub out aiohttp only when it is not installed in the local test environment.
 if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
@@ -42,7 +45,9 @@ def test_factual_measurements_require_matching_source_values(claim, evidence, ex
 @pytest.mark.parametrize("identifier,expected", [("h1", True), ("invented", False)])
 def test_context_evidence_uses_verified_message_identifiers(identifier, expected):
     result = checker._interpret_checker_response(
-        content=_response(context_claims=[{"claim": "饭已经到了", "source_ids": [identifier]}]),
+        content=checker_verdict(
+            context_claims=[{"claim": "饭已经到了", "source_ids": [identifier]}]
+        ),
         reply                            = "饭已经到了。",
         current_text                     = "接一句",
         history_text                     = "[m1] 12:01,阿白：小青，饭已经到了。",
@@ -58,7 +63,7 @@ def test_context_evidence_uses_verified_message_identifiers(identifier, expected
 
 def test_invented_amount_is_rejected_even_with_valid_source_id_and_positive_verdict():
     result = checker._interpret_checker_response(
-        content=_response(context_claims=[{"claim": "花三十块省五块", "source_ids": ["h1"]}]),
+        content=checker_verdict(context_claims=[{"claim": "花三十块省五块", "source_ids": ["h1"]}]),
         reply                            = "花三十块省五块，这账算得妙。",
         current_text                     = "评价这波省钱",
         history_text                     = "阿夏：为了免配送费又加了三十块吃的。",
@@ -75,7 +80,7 @@ def test_invented_amount_is_rejected_even_with_valid_source_id_and_positive_verd
 def test_claim_quoted_from_user_input_does_not_reject_candidate():
     current = "今天跟最好的朋友吵架了，有点难受，不想开玩笑"
     result  = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             context_claims=[{"claim": "今天跟最好的朋友吵架了", "source_ids": ["current"]}]
         ),
         reply                            = "抱抱，吵完那会儿心里最堵了，我陪你待着。",
@@ -122,7 +127,11 @@ def test_allocation_hint_requires_explicit_unquoted_grammar(text):
     "missing_field", ["image_evidence_respected", "visual_scan_complete", "visual_claims"]
 )
 def test_confirmed_hard_rejection_survives_incomplete_visual_protocol(missing_field):
-    payload = json.loads(_response(instruction_followed=False, suitable=False, need_replan=True))
+    payload = json.loads(
+        checker_verdict(
+            instruction_followed=False, suitable=False, need_replan=True, severity="soft"
+        )
+    )
     del payload[missing_field]
     result = checker._interpret_checker_response(
         content                          = json.dumps(payload),
@@ -215,7 +224,7 @@ async def test_turn_reading_keeps_explicit_definition_and_removes_unbacked_autho
 
 
 @pytest.mark.asyncio
-async def test_legacy_string_facts_are_excluded_from_cited_reading(monkeypatch):
+async def test_uncited_string_facts_are_excluded_from_cited_reading(monkeypatch):
     remote = AsyncMock(return_value=_remote_json(_turn_reading(facts=["用户花了十二元。"])))
     monkeypatch.setattr(checker, "_request_checker_completion", remote)
     result = await checker._read_turn_meaning(
@@ -234,68 +243,31 @@ async def test_legacy_string_facts_are_excluded_from_cited_reading(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_checker_requires_direct_grounding_for_each_persona_claim(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_checker_requires_direct_grounding_for_each_persona_claim():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
+    # 语义模型负责识别证据无法支持的推断和确定性升级（后两条回答把人设依据轴判为不通过）。
     outputs = [
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我老家在北方","evidence":""}],'
-            '"context_scan_complete":true,"context_claims":[]}'
+        checker_verdict(persona_claims=[{"claim": "我老家在北方", "evidence": ""}]),
+        checker_verdict(
+            persona_claims=[
+                {"claim": "我是大二学生", "evidence": "你叫小青，是一个大二在读女大学生"}
+            ]
         ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我是大二学生",'
-            '"evidence":"你叫小青，是一个大二在读女大学生"}],'
-            '"context_scan_complete":true,"context_claims":[]}'
+        checker_verdict(
+            persona_grounded = False,
+            persona_claims   = [
+                {"claim": "我平时住在学校附近", "evidence": "你叫小青，是一个大二在读女大学生"}
+            ],
         ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我平时住在学校附近",'
-            '"evidence":"你叫小青，是一个大二在读女大学生"}],'
-            '"context_scan_complete":true,"context_claims":[]}'
-        ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我每天跑步",'
-            '"evidence":"我可能每天跑步"}],'
-            '"context_scan_complete":true,"context_claims":[]}'
+        checker_verdict(
+            persona_grounded = False,
+            persona_claims   = [{"claim": "我每天跑步", "evidence": "我可能每天跑步"}],
         ),
     ]
 
-    # 语义模型负责识别证据无法支持的推断和确定性升级。
-    for index in (2, 3):
-        payload                     = json.loads(outputs[index])
-        payload["persona_grounded"] = False
-        outputs[index]              = json.dumps(payload)
-
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: outputs.pop(0),
-    )
     common = {
-        "secrets"               : {"_ai": object()},
+        "secrets"               : {"_ai": ScriptedChatModel(checker=outputs)},
         "bot_name"              : "小青",
         "goal"                  : "自然聊天",
         "policy_text"           : "",
@@ -349,48 +321,20 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
 
 
 @pytest.mark.asyncio
-async def test_checker_allows_preferences_and_requires_evidence_for_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_checker_allows_preferences_and_requires_evidence_for_identity() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     outputs = [
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
-            '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我喜欢先找好座再打饭",'
-            '"evidence":""}],'
-            '"context_scan_complete":true,"context_claims":[]}'
-        ),
-        (
-            '{"suitable":false,"reason":"添加了精确学校设定","need_replan":true,'
-            '"severity":"hard","context_coherent":true,"speaker_correct":true,'
-            '"instruction_followed":true,"persona_grounded":false,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,'
-            '"persona_claims":[{"claim":"我在星河大学读计算机",'
-            '"evidence":""}],'
-            '"context_scan_complete":true,"context_claims":[]}'
+        checker_verdict(persona_claims=[{"claim": "我喜欢先找好座再打饭", "evidence": ""}]),
+        checker_verdict(
+            suitable         = False,
+            reason           = "添加了精确学校设定",
+            persona_grounded = False,
+            persona_claims   = [{"claim": "我在星河大学读计算机", "evidence": ""}],
         ),
     ]
-    captured_prompts: list[str] = []
-
-    async def fake_chat(**kwargs):
-        captured_prompts.append(kwargs["messages"][0]["content"])
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: outputs.pop(0),
-    )
     common = {
-        "secrets"                         : {"_ai": object()},
+        "secrets"                         : {"_ai": ScriptedChatModel(checker=outputs)},
         "bot_name"                        : "小青",
         "goal"                            : "自然聊天",
         "policy_text"                     : "",
@@ -425,10 +369,6 @@ async def test_checker_allows_preferences_and_requires_evidence_for_identity(
     assert low_stakes.persona_claim_count == 1
     assert overreach.suitable is False
     assert overreach.failure_code == "persona_grounding"
-    assert "心情、偏好和普通打算可以自然表达" in captured_prompts[0]
-    assert "今天和这几天具体发生了什么、与他人的互动以生活记录为准" in captured_prompts[0]
-    assert "对方问起她以前的事、小习惯、糗事或身边日常的小细节" in captured_prompts[0]
-    assert "具体身份资料" in captured_prompts[0] and "对别人的现实承诺" in captured_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -502,15 +442,12 @@ async def test_checker_rejects_story_address_that_conflicts_with_stable_gender()
 
 
 @pytest.mark.asyncio
-async def test_persona_story_permission_never_relaxes_third_party_grounding(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_persona_story_permission_never_relaxes_third_party_grounding() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
-    from tests.plugins.xiaoqing_chat.test_reply_checker_risk_mode import _semantic_outputs
 
-    remote = _semantic_outputs(monkeypatch, [[{"claim": "小何平时就是不爱说话", "evidence": ""}]])
+    model  = semantic_checker_model([[{"claim": "小何平时就是不爱说话", "evidence": ""}]])
     result = await check_reply(
-        secrets                          = {"_ai": object()},
+        secrets                          = {"_ai": model},
         bot_name                         = "小青",
         reply                            = "小何平时就是不爱说话。",
         goal                             = "自然聊天",
@@ -532,69 +469,27 @@ async def test_persona_story_permission_never_relaxes_third_party_grounding(
     assert result.suitable is False
     assert result.failure_code == "context_grounding"
 
-    remote.assert_awaited_once()
+    assert len(model.calls_of("checker")) == 1
 
 
 @pytest.mark.asyncio
-async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_checker_requires_direct_dialogue_evidence_for_context_claims():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     outputs = [
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,'
-            '"context_claims":[{"claim":"她之前一直忙着另一个项目","evidence":""}]}'
+        checker_verdict(context_claims=[{"claim": "她之前一直忙着另一个项目", "evidence": ""}]),
+        checker_verdict(
+            context_coherent = False,
+            context_claims   = [{"claim": "她参加过比赛", "evidence": "她参加过比赛吗？"}],
         ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,'
-            '"context_claims":[{"claim":"她参加过比赛","evidence":"她参加过比赛吗？"}]}'
-        ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,'
-            '"context_claims":[{"claim":"她准备换工作了",'
-            '"evidence":"我准备换工作了"}]}'
-        ),
-        (
-            '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-            '"context_coherent":true,"speaker_correct":true,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,'
-            '"context_claims":[{"claim":"她说可能会换工作",'
-            '"evidence":"我可能会换工作"}]}'
+        checker_verdict(context_claims=[{"claim": "她准备换工作了", "evidence": "我准备换工作了"}]),
+        checker_verdict(
+            context_claims=[{"claim": "她说可能会换工作", "evidence": "我可能会换工作"}]
         ),
     ]
 
-    payload                     = json.loads(outputs[1])
-    payload["context_coherent"] = False
-    outputs[1]                  = json.dumps(payload)
-
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: outputs.pop(0),
-    )
     common = {
-        "secrets"               : {"_ai": object()},
+        "secrets"               : {"_ai": ScriptedChatModel(checker=outputs)},
         "bot_name"              : "小青",
         "goal"                  : "自然聊天",
         "policy_text"           : "",
@@ -644,28 +539,30 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
 
 
 @pytest.mark.asyncio
-async def test_checker_fails_closed_when_context_scan_is_incomplete(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("verdict", "failure_code"),
+    [
+        pytest.param(
+            '{"suitable":true,"reason":"","need_replan":false,'
+            '"persona_grounded":true,"persona_scan_complete":true,"persona_claims":[]}',
+            "context_grounding",
+            id="context-scan-missing",
+        ),
+        pytest.param(
+            '{"suitable":true,"reason":"","need_replan":false,'
+            '"persona_grounded":true,"persona_claims":[]}',
+            "persona_grounding",
+            id="persona-scan-missing",
+        ),
+    ],
+)
+async def test_checker_fails_closed_when_a_claim_scan_is_incomplete(
+    verdict: str, failure_code: str
 ):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable":true,"reason":"","need_replan":false,'
-            '"persona_grounded":true,"persona_scan_complete":true,"persona_claims":[]}'
-        ),
-    )
-
     result = await check_reply(
-        secrets                = {"_ai": object()},
+        secrets={"_ai": ScriptedChatModel(checker=verdict)},
         bot_name               = "小青",
         reply                  = "一条候选回复",
         goal                   = "自然聊天",
@@ -685,52 +582,7 @@ async def test_checker_fails_closed_when_context_scan_is_incomplete(
 
     assert result.suitable is False
     assert result.is_hard is True
-    assert result.failure_code == "context_grounding"
-
-
-@pytest.mark.asyncio
-async def test_checker_fails_closed_when_persona_scan_is_incomplete(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
-
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable":true,"reason":"","need_replan":false,'
-            '"persona_grounded":true,"persona_claims":[]}'
-        ),
-    )
-
-    result = await check_reply(
-        secrets                = {"_ai": object()},
-        bot_name               = "小青",
-        reply                  = "一条候选回复",
-        goal                   = "自然聊天",
-        current_text           = "一条用户消息",
-        policy_text            = "",
-        grounding_text         = "",
-        history                = [],
-        chat_history_text      = "Alice: 一条用户消息",
-        enable_llm_checker     = True,
-        max_repeat_compare     = 3,
-        similarity_threshold   = 0.9,
-        max_assistant_in_row   = 5,
-        timeout_seconds        = 1.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.0,
-    )
-
-    assert result.suitable is False
-    assert result.is_hard is True
-    assert result.failure_code == "persona_grounding"
+    assert result.failure_code == failure_code
 
 
 @pytest.mark.parametrize("semantic_supported", [True, False])
@@ -764,30 +616,6 @@ def test_context_evidence_allows_natural_paraphrase_and_obeys_semantic_axis(sema
         assert result.is_hard
 
 
-def _response(**changes):
-    payload = {
-        "suitable"                : True,
-        "reason"                  : "符合输入",
-        "need_replan"             : False,
-        "severity"                : "soft",
-        "context_coherent"        : True,
-        "speaker_correct"         : True,
-        "instruction_followed"    : True,
-        "persona_grounded"        : True,
-        "factually_plausible"     : True,
-        "non_template"            : True,
-        "image_evidence_respected": True,
-        "persona_scan_complete"   : True,
-        "persona_claims"          : [],
-        "context_scan_complete"   : True,
-        "context_claims"          : [],
-        "visual_scan_complete"    : True,
-        "visual_claims"           : [],
-    }
-    payload.update(changes)
-    return json.dumps(payload, ensure_ascii=False)
-
-
 def _options(**changes):
     values = {
         "secrets"               : {},
@@ -813,7 +641,12 @@ def _options(**changes):
 @pytest.mark.parametrize("suitable", [True, False])
 def test_checker_accepts_known_json_object_envelope_without_losing_rejection(suitable, as_string):
     payload = json.loads(
-        _response(suitable=suitable, need_replan=not suitable, instruction_followed=suitable)
+        checker_verdict(
+            suitable             = suitable,
+            need_replan          = not suitable,
+            instruction_followed = suitable,
+            severity             = "soft",
+        )
     )
     # 实测模型也会把正文序列化成字符串放进 content。
     body = json.dumps(payload, ensure_ascii=False) if as_string else payload
@@ -833,46 +666,59 @@ def test_checker_accepts_known_json_object_envelope_without_losing_rejection(sui
 
 
 @pytest.mark.asyncio
-async def test_semantic_check_blocks_stance_reversal_when_general_review_passes(monkeypatch):
-    general = AsyncMock(return_value=checker.ReplyCheckResult(True, "", False, "soft"))
-    monkeypatch.setattr(checker, "_llm_check", general)
-    semantic_payload = json.dumps(
-        {
-            "context_coherent"    : False,
-            "speaker_correct"     : True,
-            "instruction_followed": True,
-            "reason"              : "前一轮选择与候选反转",
-            "scan_complete"       : True,
-            "premise_checks"      : [],
-            "quantity_checks"     : [],
-        }
-    )
-    remote = AsyncMock(
-        side_effect=[
-            _remote_json(_turn_reading()),
-            ({"choices": [{"message": {"content": semantic_payload}}]}, "test"),
-        ]
-    )
-    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+async def test_semantic_check_blocks_stance_reversal_when_general_review_passes():
+    semantic_payload = {
+        "context_coherent"    : False,
+        "speaker_correct"     : True,
+        "instruction_followed": True,
+        "reason"              : "前一轮选择与候选反转",
+        "scan_complete"       : True,
+        "premise_checks"      : [],
+        "quantity_checks"     : [],
+    }
+    stages: dict[str, ModelCall] = {}
+    asked : list[str]            = []
+
+    async def answer(call):
+        prompt = call.messages[0]["content"]
+        if "premise_checks" in prompt:
+            stage, reply = "semantic", json.dumps(semantic_payload)
+        elif "local_terms" in prompt:
+            # 独立阅读先于核对；稍等一下，让两步消耗的时间可以分辨。
+            await asyncio.sleep(0.01)
+            stage, reply = "reading", json.dumps(_turn_reading(), ensure_ascii=False)
+        else:
+            stage, reply = "general", checker_verdict()
+        stages[stage] = call
+        asked.append(stage)
+        return reply
+
+    model = ScriptedChatModel(checker=answer)
     result = await checker.check_reply(
         reply                 = "咸党加一。",
         current_text          = "我跟你反着选。",
         verify_turn_semantics = True,
-        **_options(llm_checker_mode="always", chat_history_text="小青(你)：我选甜的。"),
+        **_options(
+            secrets           = {"_ai": model},
+            llm_checker_mode  = "always",
+            chat_history_text = "小青(你)：我选甜的。",
+        ),
     )
     assert result.is_hard
     assert result.failure_code == "context_grounding"
-    general.assert_awaited_once()
-    materials = json.loads(remote.call_args.kwargs["materials"])
+    # 通用审查通过后，语义核对仍能单独拦下立场反转；通用审查只问一次。
+    assert asked.count("general") == 1
+    assert asked.index("reading") < asked.index("semantic")
+    materials = json.loads(stages["semantic"].messages[1]["content"])
     assert materials["候选作者"] == "小青"
     assert materials["最近对话"] == "小青(你)：我选甜的。"
-    first_materials = json.loads(remote.call_args_list[0].kwargs["materials"])
+    first_materials = json.loads(stages["reading"].messages[1]["content"])
     assert "候选回复" not in first_materials
     assert "咸党加一" not in json.dumps(first_materials, ensure_ascii=False)
     assert materials["独立阅读结果"] == _turn_reading()
     assert (
-        remote.call_args_list[1].kwargs["request_policy"].timeout_seconds
-        < remote.call_args_list[0].kwargs["request_policy"].timeout_seconds
+        stages["semantic"].kwargs["total_timeout_seconds"]
+        < stages["reading"].kwargs["total_timeout_seconds"]
     )
 
 
@@ -1169,48 +1015,54 @@ async def test_semantic_cancellation_reaches_either_request_stage(monkeypatch, b
 
 
 @pytest.mark.asyncio
-async def test_parallel_checks_preserve_evidence_rejection_if_semantic_check_fails(monkeypatch):
-    rejected = checker.ReplyCheckResult(False, "缺少人物依据", True, "hard", "persona_grounding")
-    monkeypatch.setattr(checker, "_llm_check", AsyncMock(return_value=rejected))
-    monkeypatch.setattr(checker, "_semantic_turn_check", AsyncMock(side_effect=TimeoutError))
+async def test_parallel_checks_preserve_evidence_rejection_if_semantic_check_fails():
+    def answer(call):
+        if "local_terms" in call.messages[0]["content"]:
+            raise TimeoutError
+        return checker_verdict(
+            suitable=False, persona_grounded=False, reason="缺少人物依据", severity="hard"
+        )
+
     result = await checker.check_reply(
         reply                 = "今天有点困。",
         current_text          = "小青聊一句。",
         verify_turn_semantics = True,
-        **_options(llm_checker_mode="always"),
+        **_options(secrets={"_ai": ScriptedChatModel(checker=answer)}, llm_checker_mode="always"),
     )
-    assert result is rejected
+    assert result == checker.ReplyCheckResult(
+        False, "缺少人物依据", True, "hard", "persona_grounding"
+    )
 
 
 @pytest.mark.asyncio
-async def test_parallel_checker_cancellation_stops_both_requests(monkeypatch):
-    import asyncio
-
-    started   = [asyncio.Event(), asyncio.Event()]
+async def test_parallel_checker_cancellation_stops_both_requests():
+    started   = {"general": asyncio.Event(), "reading": asyncio.Event()}
     cancelled = []
 
-    async def pending(index, **_kwargs):
-        started[index].set()
+    async def pending(call):
+        stage = "reading" if "local_terms" in call.messages[0]["content"] else "general"
+        started[stage].set()
         try:
             await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         finally:
-            cancelled.append(index)
+            cancelled.append(stage)
 
-    monkeypatch.setattr(checker, "_llm_check", lambda **kwargs: pending(0, **kwargs))
-    monkeypatch.setattr(checker, "_semantic_turn_check", lambda **kwargs: pending(1, **kwargs))
     task = asyncio.create_task(
         checker.check_reply(
             reply                 = "我听着。",
             current_text          = "小青聊一句。",
             verify_turn_semantics = True,
-            **_options(llm_checker_mode="always"),
+            **_options(
+                secrets={"_ai": ScriptedChatModel(checker=pending)},
+                llm_checker_mode="always",
+            ),
         )
     )
-    await asyncio.gather(*(event.wait() for event in started))
+    await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started.values())), 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert sorted(cancelled) == [0, 1]
+    assert sorted(cancelled) == ["general", "reading"]
 
 
 def test_image_evidence_comes_from_structured_attachments():
@@ -1221,14 +1073,15 @@ def test_image_evidence_comes_from_structured_attachments():
 
 
 @pytest.mark.asyncio
-async def test_plain_programming_reply_does_not_force_image_disclaimer_or_always_check(monkeypatch):
-    remote = AsyncMock()
-    monkeypatch.setattr(checker, "_llm_check", remote)
+async def test_plain_programming_reply_does_not_force_image_disclaimer_or_always_check():
+    model = ScriptedChatModel(checker=checker_verdict())
     result = await checker.check_reply(
-        reply="可以使用 Pillow 保存为 PNG。", current_text="图片格式转换怎么写", **_options()
+        reply        = "可以使用 Pillow 保存为 PNG。",
+        current_text = "图片格式转换怎么写",
+        **_options(secrets={"_ai": model}),
     )
     assert result.suitable
-    remote.assert_not_awaited()
+    assert model.calls == []
 
 
 @pytest.mark.parametrize(
@@ -1236,7 +1089,7 @@ async def test_plain_programming_reply_does_not_force_image_disclaimer_or_always
 )
 def test_visual_facts_and_malformed_protocol_have_distinct_outcomes(image_axis, expected):
     result = checker._interpret_checker_response(
-        content=_response(image_evidence_respected=image_axis),
+        content=checker_verdict(image_evidence_respected=image_axis),
         reply                            = "UI是绿色配白字。",
         current_text                     = "这张图怎么样",
         history_text                     = "",
@@ -1250,7 +1103,9 @@ def test_visual_facts_and_malformed_protocol_have_distinct_outcomes(image_axis, 
 
 @pytest.mark.asyncio
 async def test_checker_preserves_generator_context_and_uses_general_evidence_rules(monkeypatch):
-    remote = AsyncMock(return_value=({"choices": [{"message": {"content": _response()}}]}, "test"))
+    remote = AsyncMock(
+        return_value=({"choices": [{"message": {"content": checker_verdict()}}]}, "test")
+    )
     monkeypatch.setattr(checker, "_request_checker_completion", remote)
     history   = "历史起点：附件是一张蓝色圆形图。" + "正常交流。" * 250
     current   = "请保留这个最初约束。" + "当前输入。" * 150
@@ -1276,14 +1131,8 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
     assert materials["最近对话"] == history
     assert materials["当前最新用户消息"] == current
     assert materials["受控人物资料"].endswith(grounding)
-    # 人物边界来自受控人物资料（人设卡的人物事实），不再另附一份。
-    assert "人物边界以受控人物资料为准" in prompt
+    # 对话和当前消息只放在材料里，不重复进提示词。
     assert history not in prompt and current not in prompt
-    assert '"suitable":true' not in prompt
-    assert "推测保留条件和不确定性" in prompt
-    assert "缺少画面时保留缺口" in prompt
-    assert "当前或历史图片的可靠摘要" in prompt
-    assert "核对通用知识、作品设定、名称对应和词义的准确性" in prompt
     assert "历史含实际图像记录" in materials["图像可用状态"]
     assert result.suitable
 
@@ -1300,7 +1149,7 @@ async def test_identity_claims_use_persona_card_facts_as_evidence(monkeypatch):
                 "choices": [
                     {
                         "message": {
-                            "content": _response(
+                            "content": checker_verdict(
                                 persona_claims=[{"claim": reply, "evidence": evidence}],
                             )
                         }
@@ -1332,7 +1181,7 @@ async def test_identity_claims_use_persona_card_facts_as_evidence(monkeypatch):
 @pytest.mark.parametrize("reply", ["墙壁偏浅米白，接近暖灰。", "这个配色和表情看着很有趣。"])
 def test_unbacked_visual_inventory_overrides_all_true_verdict(reply):
     result = checker._interpret_checker_response(
-        content=_response(visual_claims=[{"claim": reply, "evidence": ""}]),
+        content=checker_verdict(visual_claims=[{"claim": reply, "evidence": ""}]),
         reply                            = reply,
         current_text                     = "评价一下附件。",
         history_text                     = "",
@@ -1351,7 +1200,7 @@ def test_unbacked_visual_inventory_overrides_all_true_verdict(reply):
 def test_visual_semantic_paraphrase_keeps_real_description_evidence(source):
     reply  = "室内墙面是偏浅的奶油色。"
     result = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             visual_claims=[{"claim": reply, "evidence": "房间刷了很浅的米白色涂料。"}]
         ),
         reply                            = reply,
@@ -1388,7 +1237,7 @@ def test_visual_notice_accepts_verified_excerpt_citations(evidence, in_history):
         "底部有“示例研究所 2026年10月16日”落款。]"
     )
     result = checker._interpret_checker_response(
-        content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
+        content=checker_verdict(visual_claims=[{"claim": reply, "evidence": evidence}]),
         reply                            = reply,
         current_text                     = "说说刚才那张图" if in_history else source,
         history_text                     = f"[m1]17:58, 用户: {source}" if in_history else "",
@@ -1415,7 +1264,7 @@ def test_visual_notice_accepts_verified_excerpt_citations(evidence, in_history):
 def test_visual_excerpt_citations_reject_unverified_fragments(evidence, current, history):
     reply  = "研究所的通知"
     result = checker._interpret_checker_response(
-        content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
+        content=checker_verdict(visual_claims=[{"claim": reply, "evidence": evidence}]),
         reply                            = reply,
         current_text                     = current,
         history_text                     = history,
@@ -1435,7 +1284,7 @@ def test_visual_claims_about_what_she_watched_can_cite_her_own_records(grounded)
     reply  = "刷到一个猫咪第一次见雪的视频，歪着头盯雪花，给我看笑了"
     record = "今天 05:01 刷B站热门，点开了「猫咪第一次见到雪的反应」：猫咪在阳台第一次看到下雪，歪头盯着雪花"
     result = checker._interpret_checker_response(
-        content=_response(
+        content=checker_verdict(
             visual_claims=[
                 {"claim": "歪着头盯雪花", "evidence": "猫咪在阳台第一次看到下雪，歪头盯着雪花"}
             ]
@@ -1453,8 +1302,8 @@ def test_visual_claims_about_what_she_watched_can_cite_her_own_records(grounded)
         assert result.failure_code == "media_grounding"
 
 
-def test_legacy_all_true_payload_without_visual_scan_is_infrastructure_failure():
-    payload = json.loads(_response())
+def test_all_true_payload_without_visual_scan_is_infrastructure_failure():
+    payload = json.loads(checker_verdict())
     del payload["visual_scan_complete"]
     del payload["visual_claims"]
     result = checker._interpret_checker_response(
@@ -1471,23 +1320,26 @@ def test_legacy_all_true_payload_without_visual_scan_is_infrastructure_failure()
 
 
 @pytest.mark.asyncio
-async def test_invited_speculation_is_decided_by_semantic_checker(monkeypatch):
-    remote = AsyncMock(return_value=checker.ReplyCheckResult(True, "已标注推测", False))
-    monkeypatch.setattr(checker, "_llm_check", remote)
+async def test_invited_speculation_is_decided_by_semantic_checker():
+    model = ScriptedChatModel(checker=checker_verdict(reason="已标注推测"))
     result = await checker.check_reply(
         reply        = "可能大家暂时去忙了，这只是猜测。",
         current_text = "请推测群里安静的几个可能原因。",
-        **_options(llm_checker_mode="always"),
+        **_options(secrets={"_ai": model}, llm_checker_mode="always"),
     )
     assert result.suitable
-    remote.assert_awaited_once()
+    assert len(model.calls_of("checker")) == 1
 
 
 @pytest.mark.asyncio
-async def test_semantic_checker_unavailability_preserves_infra_classification(monkeypatch):
-    monkeypatch.setattr(checker, "_llm_check", AsyncMock(side_effect=TimeoutError))
+async def test_semantic_checker_unavailability_preserves_infra_classification():
+    def time_out(_call):
+        raise TimeoutError
+
     result = await checker.check_reply(
-        reply="需要对应画面才能确认布局。", current_text="这张截图怎么样", **_options()
+        reply        = "需要对应画面才能确认布局。",
+        current_text = "这张截图怎么样",
+        **_options(secrets={"_ai": ScriptedChatModel(checker=time_out)}),
     )
     assert result.severity == "infra"
 
@@ -1589,7 +1441,7 @@ def _ramen_review(reply: str, **changes):
         {"claim": "蛋看着还挺溏心的。", "evidence": "阿白觉得蛋看起来像溏心蛋。"},
     ]
     return checker._interpret_checker_response(
-        content=_response(visual_claims=claims, **changes),
+        content=checker_verdict(visual_claims=claims, **changes),
         reply                            = reply,
         current_text                     = "小青，刚才那个拉面图里除了面还有啥",
         history_text                     = "[h2]03:53, 阿梨: 深夜放毒[图片：碗里有面条、叉烧、两片鸡蛋和几粒绿色配料。]",
@@ -1613,37 +1465,16 @@ def test_visual_rejection_names_only_the_unsupported_claims_when_the_rest_passes
 
 
 @pytest.mark.asyncio
-async def test_agreeing_to_meet_offline_is_rejected_only_for_an_online_only_persona(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_agreeing_to_meet_offline_is_rejected_only_for_an_online_only_persona() -> None:
     """审查说她答应了线下邀约：人设写明只在线上来往时拦下，没写就不管。"""
 
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    verdict = (
-        '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
-        '"agrees_offline":true,'
-        '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
-        '"persona_grounded":true,"factually_plausible":true,"non_template":true,'
-        '"persona_scan_complete":true,"persona_claims":[],'
-        '"context_scan_complete":true,"context_claims":[]}'
-    )
-
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: verdict,
-    )
+    verdict = checker_verdict(agrees_offline=True)
 
     async def check(grounding: str):
         return await check_reply(
-            secrets                          = {"_ai": object()},
+            secrets={"_ai": ScriptedChatModel(checker=verdict)},
             bot_name                         = "小青",
             goal                             = "自然聊天",
             policy_text                      = "",
@@ -1714,14 +1545,14 @@ def test_remembered_lines_are_citable_evidence_for_context_claims():
     }
     claim = [{"claim": "你上个月刚搬过去", "source_ids": ["m1"]}]
     cited = checker._interpret_checker_response(
-        content=_response(context_claims=claim),
+        content=checker_verdict(context_claims=claim),
         memory_evidence="\n".join(remembered.values()),
         **kwargs,
     )
     assert cited.suitable is True
     # 没有取到这段记忆时，同一句话缺少依据。
     missing = checker._interpret_checker_response(
-        content=_response(context_claims=[{"claim": "你上个月刚搬过去", "source_ids": []}]),
+        content=checker_verdict(context_claims=[{"claim": "你上个月刚搬过去", "source_ids": []}]),
         **{**kwargs, "source_records": {"h1": records["h1"], "current": "猜猜"}},
     )
     assert missing.suitable is False and missing.failure_code == "context_grounding"

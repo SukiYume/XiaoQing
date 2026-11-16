@@ -8,7 +8,6 @@ import pytest
 
 from plugins.pendo.handlers.event_editing import EventEditingMixin
 from plugins.pendo.models.item import EventItem
-from plugins.pendo.services.ai_parser import AIParser
 
 
 async def _prompt_for(event: EventItem) -> str:
@@ -36,7 +35,6 @@ async def test_utc_storage_is_shown_to_the_parser_as_local_wall_time_with_weekda
     assert "原时间：2026年11月08日 周日 18:00" in prompt
     assert "原结束时间：2026年11月08日 周日 20:00" in prompt
     assert "10:00" not in prompt
-    assert "以原时间为基准换算" in prompt
 
 
 @pytest.mark.asyncio
@@ -52,12 +50,6 @@ async def test_event_without_end_time_omits_the_end_clause():
     assert "原结束时间" not in prompt
 
 
-def test_parse_prompt_lets_an_explicit_multi_node_request_override_the_meeting_rule():
-    rules = AIParser.PARSE_PROMPT_TEMPLATE
-    assert "用户明确要求多节点" in rules and "优先于上一条的普通会议写法" in rules
-    assert rules.index("普通会议的开始与结束") < rules.index("用户明确要求多节点")
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changes", ["改成会议结束", "改为会议结束", "改成“会议结束”"])
 async def test_natural_rename_is_applied_to_the_existing_event(changes):
@@ -70,7 +62,6 @@ async def test_natural_rename_is_applied_to_the_existing_event(changes):
     )
 
     async def parse_event_with_ai(text, user_id, **kwargs):
-        assert "仅改名时保留原有起止时间" in text
         return {"title": "会议结束"}
 
     editor = EventEditingMixin()

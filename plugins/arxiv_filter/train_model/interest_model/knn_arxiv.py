@@ -13,7 +13,8 @@ arXiv k-NN 兴趣模型训练脚本
   - 可解释性强：可以输出"匹配了哪几篇历史论文"
 
 训练流程：
-  - 产物写入 plugins/arxiv_filter/best_model_knn/，即推理系统加载的目录
+  - 产物写入 plugins/arxiv_filter/best_model_knn/；推理加载的是 `model.path` 指向的目录（默认 best_model/），
+    要用这份产物就把 `model.path` 指到它
   - embedding 缓存：首次编码后存盘，后续训练直接从磁盘加载，节省数十分钟
   - per-topic recall 分析：训练结束时输出 FRB / Pulsar / WD / Gaia 等子领域通过率
 """
@@ -88,7 +89,7 @@ def _validate_hyperparameters(
 class KNNConfig:
     input_path: Path = _TRAIN_DIR / "arxiv_papers_with_abstract.csv"
 
-    # 训练产物固定写入运行时加载器所使用的 best_model_knn 目录。
+    # 训练产物写入 best_model_knn；推理时由 `model.path` 选择加载哪个目录。
     output_dir: Path = _PLUGIN_DIR / "best_model_knn"
 
     # 默认跟随 output_dir；显式指定时可把大体积缓存放到其他磁盘。

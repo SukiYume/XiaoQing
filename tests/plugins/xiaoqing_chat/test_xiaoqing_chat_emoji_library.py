@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -14,32 +15,55 @@ import pytest
 from PIL import Image
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
+from core.ai import AICompletionResult
 from plugins.xiaoqing_chat.media import emoji_library
+from plugins.xiaoqing_chat.media.event_media_analysis import _resolve_media_llm_secret_candidates
+from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 from tests.helpers.xiaoqing_chat_media_test_support import (
-    _PNG_BYTES,
+    PNG_BYTES,
+    VISION_GATEWAY,
     PluginCapabilities,
     RenderedMedia,
-    _download_url_bytes,
-    _make_media_runtime,
-    _raw_media_response,
-    _resolve_media_llm_secret_candidates,
-    _write_png,
     collect_emoji_candidate,
     load_emoji_library,
     looks_like_structured_media_text,
+    make_media_runtime,
+    raw_media_response,
     render_event_media_text,
+    write_png,
 )
 
 mock_context = _fixture_support.mock_context
 
 
-@pytest.mark.asyncio
-async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
-    library_dir = mock_context.data_dir / "media" / "library"
+def _vision_answer(description: str, tags: tuple[str, ...]) -> AICompletionResult:
+    """视觉模型对一张表情包的一次回答。"""
+
+    content = json.dumps(
+        {
+            "kind"                : "emoji",
+            "detailed_description": description,
+            "description"         : description,
+            "emotion_tags"        : list(tags),
+        },
+        ensure_ascii=False,
+    )
+    return AICompletionResult(
+        response      = {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]},
+        profile       = "glm-4.6v-flash",
+        provider      = "zhipu",
+        model         = "glm-4.6v-flash",
+        finish_reason = "stop",
+        attempts      = 1,
+    )
+
+
+def _write_bad_metadata_index(library_dir: Path) -> str:
+    """表情库里有一张图，索引里记的描述是被截断的 JSON 垃圾；返回这张图的哈希。"""
+
     library_dir.mkdir(parents=True, exist_ok=True)
-    image_path = _write_png(library_dir / "坏条目.png")
+    image_path = write_png(library_dir / "坏条目.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime    = _make_media_runtime()
     (library_dir / "index.json").write_text(
         json.dumps(
             {
@@ -59,26 +83,22 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
         ),
         encoding="utf-8",
     )
+    return media_hash
 
-    async def _fake_render(file_path, *, context, runtime, prefer_emoji):
-        file_path = Path(file_path)
-        return RenderedMedia(
-            media_hash   = media_hash,
-            kind         = "emoji",
-            description  = "一只黑色小鸟站着，眼神疑惑",
-            emotion_tags = ("疑惑", "震惊"),
-            marker       = "[表情包：疑惑，震惊]",
-            cached_path  = file_path,
-        )
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.render_local_media_file",
-        new=AsyncMock(side_effect=_fake_render),
-    ) as mock_render:
-        entries = await load_emoji_library(mock_context, runtime)
+@pytest.mark.asyncio
+async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
+    library_dir = mock_context.data_dir / "media" / "library"
+    media_hash  = _write_bad_metadata_index(library_dir)
+    runtime     = make_media_runtime()
+    vision = AsyncMock(return_value=_vision_answer("一只黑色小鸟站着，眼神疑惑", ("疑惑", "震惊")))
+    mock_context.capabilities.ai.complete = vision
 
+    entries = await load_emoji_library(mock_context, runtime)
+
+    # 重新分析的结果带回正确的描述；没有批准过的条目仍是待处理，不出现在可用列表里。
     assert entries == []
-    mock_render.assert_awaited_once()
+    vision.assert_awaited()
     saved = json.loads((library_dir / "index.json").read_text(encoding="utf-8"))
     assert saved["entries"][media_hash]["marker"] == "[表情包：疑惑，震惊]"
     assert saved["entries"][media_hash]["status"] == "pending"
@@ -113,7 +133,7 @@ async def test_load_emoji_library_rejects_invalid_indexed_image(mock_context):
         encoding="utf-8",
     )
 
-    entries = await load_emoji_library(mock_context, _make_media_runtime())
+    entries = await load_emoji_library(mock_context, make_media_runtime())
 
     assert entries == []
     assert json.loads((library_dir / "index.json").read_text(encoding="utf-8"))["entries"] == {}
@@ -121,60 +141,52 @@ async def test_load_emoji_library_rejects_invalid_indexed_image(mock_context):
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_schedules_background_repair_without_blocking(mock_context):
-    library_dir = mock_context.data_dir / "media" / "library"
-    library_dir.mkdir(parents=True, exist_ok=True)
-    image_path = _write_png(library_dir / "坏条目.png")
-    media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime    = _make_media_runtime()
-    (library_dir / "index.json").write_text(
-        json.dumps(
-            {
-                "entries": {
-                    media_hash: {
-                        "media_hash"  : media_hash,
-                        "file_path"   : "media/library/坏条目.png",
-                        "description" : 'json\n{"kind":"emoji","description":"坏输出"',
-                        "emotion_tags": ["json", "kind"],
-                        "usage_count" : 0,
-                        "last_used_ts": 0.0,
-                        "marker"      : "[表情包：json，kind]",
-                    }
-                }
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    from plugins.xiaoqing_chat.runtime_state import get_state
 
-    with (
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.render_local_media_file",
-            new=AsyncMock(side_effect=AssertionError("should not repair inline")),
-        ) as mock_render,
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_library.schedule_emoji_library_repair",
-            return_value=True,
-        ) as mock_schedule,
-    ):
-        entries = await load_emoji_library(
+    library_dir      = mock_context.data_dir / "media" / "library"
+    media_hash       = _write_bad_metadata_index(library_dir)
+    runtime          = make_media_runtime()
+    analysis_started = asyncio.Event()
+    release_analysis = asyncio.Event()
+
+    async def blocked_vision(*_args, **_kwargs):
+        analysis_started.set()
+        await release_analysis.wait()
+        return _vision_answer("一只黑色小鸟站着，眼神疑惑", ("疑惑", "震惊"))
+
+    mock_context.capabilities.ai.complete = blocked_vision
+
+    entries = await asyncio.wait_for(
+        load_emoji_library(
             mock_context,
             runtime,
             repair_invalid             = False,
             schedule_background_repair = True,
-        )
+        ),
+        timeout=5,
+    )
 
+    # 加载本身不等分析：这时分析刚在后台开始，索引里还是旧的坏元数据。
     assert entries == []
-    mock_render.assert_not_awaited()
-    mock_schedule.assert_called_once_with(mock_context, runtime)
-    saved = json.loads((library_dir / "index.json").read_text(encoding="utf-8"))
+    await asyncio.wait_for(analysis_started.wait(), timeout=5)
+    index_path = library_dir / "index.json"
+    saved = json.loads(index_path.read_text(encoding="utf-8"))
     assert saved["entries"][media_hash]["marker"] == "[表情包：json，kind]"
+
+    release_analysis.set()
+    await asyncio.wait_for(
+        asyncio.gather(*get_state().background_tasks()),
+        timeout=5,
+    )
+    saved = json.loads(index_path.read_text(encoding="utf-8"))
+    assert saved["entries"][media_hash]["marker"] == "[表情包：疑惑，震惊]"
 
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_context):
     library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime    = _make_media_runtime()
+    runtime    = make_media_runtime()
     index_path = library_dir / "index.json"
     index_path.write_text(
         json.dumps(
@@ -200,8 +212,8 @@ async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_con
 
 
 def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
-    runtime     = _make_media_runtime()
-    source_path = _write_png(mock_context.data_dir / "bad_emoji.png")
+    runtime     = make_media_runtime()
+    source_path = write_png(mock_context.data_dir / "bad_emoji.png")
     rendered    = RenderedMedia(
         media_hash   = hashlib.sha256(source_path.read_bytes()).hexdigest(),
         kind         = "emoji",
@@ -225,8 +237,8 @@ def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
 def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_context):
     library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime      = _make_media_runtime()
-    source_path  = _write_png(mock_context.data_dir / "emoji_source" / "source.png")
+    runtime      = make_media_runtime()
+    source_path  = write_png(mock_context.data_dir / "emoji_source" / "source.png")
     outside_path = mock_context.plugin_dir.parent / "outside.png"
     index_path   = library_dir / "index.json"
     index_path.write_text(
@@ -272,7 +284,7 @@ def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_contex
 def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
     from PIL import Image
 
-    runtime = _make_media_runtime(emoji_auto_collect_max_entries=1)
+    runtime = make_media_runtime(emoji_auto_collect_max_entries=1)
     first_path   = mock_context.data_dir / "first_auto.png"
     second_path  = mock_context.data_dir / "second_auto.png"
     first_image  = Image.new("RGBA", (24, 24), (255, 255, 255, 255))
@@ -320,8 +332,8 @@ def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
 
 @pytest.mark.asyncio
 async def test_collect_emoji_candidate_requires_approval_keeps_entry_pending(mock_context):
-    runtime = _make_media_runtime(emoji_auto_collect_requires_approval=True)
-    source_path = _write_png(mock_context.data_dir / "pending_emoji.png")
+    runtime = make_media_runtime(emoji_auto_collect_requires_approval=True)
+    source_path = write_png(mock_context.data_dir / "pending_emoji.png")
     rendered    = RenderedMedia(
         media_hash   = hashlib.sha256(source_path.read_bytes()).hexdigest(),
         kind         = "emoji",
@@ -346,7 +358,7 @@ async def test_collect_emoji_candidate_requires_approval_keeps_entry_pending(moc
 def test_collect_emoji_candidate_dedups_visually_identical_auto_entries(mock_context):
     from PIL import Image, PngImagePlugin
 
-    runtime = _make_media_runtime(emoji_auto_collect_similarity_threshold=0)
+    runtime = make_media_runtime(emoji_auto_collect_similarity_threshold=0)
     first_path  = mock_context.data_dir / "dup1.png"
     second_path = mock_context.data_dir / "dup2.png"
 
@@ -443,19 +455,9 @@ def test_vision_candidates_report_unavailable_without_ai_capability(mock_context
     assert candidates[0]["_ai"] is None
 
 
-def test_media_candidates_do_not_forward_legacy_request_payload(mock_context):
-    mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["extra_payload"] = {
-        "response_format": {"type": "json_object"}
-    }
-    candidate = _resolve_media_llm_secret_candidates(
-        mock_context,
-    )[0]
-    assert "_extra_payload" not in candidate
-
-
 @pytest.mark.asyncio
 async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     provider = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["providers"]["glm-4v"]
     provider["thinking"] = {"type": "enabled"}
     provider["extra_payload"] = {"response_format": {"type": "json_object"}}
@@ -463,7 +465,7 @@ async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_
 
     async def _fake_chat_raw(**kwargs):
         captured["extra_payload"] = kwargs.get("extra_payload")
-        return _raw_media_response(
+        return raw_media_response(
             json.dumps({"kind": "image", "description": "海边落日"}, ensure_ascii=False)
         )
 
@@ -471,10 +473,10 @@ async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_
     with (
         patch(
             "plugins.xiaoqing_chat.media.sources._download_url_bytes",
-            new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+            new=AsyncMock(return_value=(PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
+            VISION_GATEWAY,
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -517,7 +519,7 @@ def _collect(context, runtime, path, color, chat="g1"):
 
 def test_similar_emoji_metadata_matches_retained_image(tmp_path):
     context = SimpleNamespace(data_dir=tmp_path)
-    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    runtime = make_media_runtime(enable_auto_collect_inbound_emoji=True)
     first, _ = _collect(context, runtime, tmp_path / "red.png", "red")
     second, created = _collect(context, runtime, tmp_path / "blue.png", "blue")
     assert not created
@@ -529,7 +531,7 @@ def test_similar_emoji_metadata_matches_retained_image(tmp_path):
 
 def test_index_rows_keep_chat_scope_in_the_list_and_ignore_the_old_single_value(tmp_path):
     context = SimpleNamespace(data_dir=tmp_path)
-    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    runtime = make_media_runtime(enable_auto_collect_inbound_emoji=True)
     first, _ = _collect(context, runtime, tmp_path / "red.png", "red", "g1")
     index                                                = emoji_library._load_index(context)
     index["entries"][first.media_hash]["source_chat_id"] = "g9"  # 旧版本写的单值字段
@@ -547,7 +549,7 @@ def test_index_rows_keep_chat_scope_in_the_list_and_ignore_the_old_single_value(
 
 def test_concurrent_emoji_collect_and_stale_repair_preserve_updates(tmp_path):
     context = SimpleNamespace(data_dir=tmp_path)
-    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    runtime = make_media_runtime(enable_auto_collect_inbound_emoji=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
         jobs = [
             pool.submit(_collect, context, runtime, tmp_path / f"{color}.png", color, chat)

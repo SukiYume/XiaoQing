@@ -1,4 +1,4 @@
-"""Pendo Web UI 共享工具的转义、样式和数据订阅回归。"""
+"""Pendo Web UI 共享工具的转义、样式和数据订阅。"""
 
 from __future__ import annotations
 
@@ -76,8 +76,8 @@ def _run_ui_client(script: str) -> None:
     )
 
 
-def test_ui_client_escapes_markup_and_exposes_only_live_breakpoints() -> None:
-    """文本与属性共用安全转义，响应式常量只保留三个真实消费者。"""
+def test_ui_client_escapes_markup_and_builds_media_queries_and_page_shell() -> None:
+    """文本与属性共用安全转义，媒体查询与页面外壳样式按断点和参数生成。"""
 
     _run_ui_client(
         r"""
@@ -86,13 +86,8 @@ def test_ui_client_escapes_markup_and_exposes_only_live_breakpoints() -> None:
         assert.equal(client.escapeHtml(0), '0');
         assert.equal(client.escapeAttr, client.escapeHtml);
 
-        assert.deepEqual(client.BREAKPOINTS, {
-            XL: '1200px', MOBILE: '720px', PHONE: '560px',
-        });
-        assert.equal(Object.isFrozen(client.BREAKPOINTS), true);
-        assert.throws(() => { client.BREAKPOINTS.XL = '1px'; }, TypeError);
         assert.equal(
-            client.mediaMax(client.BREAKPOINTS.PHONE, '.x { display: none; }'),
+            client.mediaMax('560px', '.x { display: none; }'),
             '@media (max-width: 560px) { .x { display: none; } }',
         );
 

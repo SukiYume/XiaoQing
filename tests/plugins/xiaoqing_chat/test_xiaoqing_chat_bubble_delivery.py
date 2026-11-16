@@ -6,26 +6,37 @@ Core 在 ``send_action()`` 返回之前就按传输结果结算动作上的回�
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 import tests.helpers.app_test_support as _app_support
+import tests.helpers.xiaoqing_chat_test_support as _chat_support
 from core.delivery import resolve_action_handoff
 from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
-from plugins.xiaoqing_chat import reply_media, turn_delivery
-from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
-from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-from plugins.xiaoqing_chat.media_registry import MediaRegistryStore
+from plugins.xiaoqing_chat import turn_delivery
+from plugins.xiaoqing_chat.handler_context import HandlerContext
+from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+from plugins.xiaoqing_chat.runtime_state import get_state
 from plugins.xiaoqing_chat.smalltalk_models import GeneratedSmalltalkTurn, PreparedSmalltalkTurn
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.app_test_support import OneBotActionOutcomeUnknown, XiaoQingApp
+from tests.helpers.xiaoqing_chat_test_support import (
+    ScriptedChatModel,
+    scripted_chat_context,
+    settle_chat_background,
+)
 
 temp_app_root = _app_support.temp_app_root
+mock_context  = _chat_support.mock_context
 
-REPLY = "在呢\n\n刚下课\n\n你说吧"
+REPLY   = "在呢\n\n刚下课\n\n你说吧"
+CHAT_ID = "u7"
 
 
 class _OneBotWs:
@@ -53,9 +64,15 @@ class _OneBotWs:
         return outcome
 
 
-def _app_with_turn(root: Path, tmp_path: Path, ws: _OneBotWs | None):
-    """真实 Core 应用，事件分发到一轮三气泡的回复；中间气泡经 Core 的 ``_send_action`` 发出。"""
+def _app_with_turn(root: Path, context, ws: _OneBotWs | None):
+    """真实 Core 应用，事件分发到一轮三气泡的回复；中间气泡经 Core 的 ``_send_action`` 发出。
 
+    聊天记录、行动历史、媒体登记都用真实的运行时状态（数据在 ``context.data_dir`` 下），
+    要接的那句用户消息（本地 ID ``u1``）已经在聊天记录里。
+    """
+
+    # Core 应用一建好就挡住插件模块的惰性导入，所以先把聊天运行时加载好。
+    hctx                = HandlerContext.from_event(_event(), context)
     app                 = XiaoQingApp(root)
     app.ws_client       = ws
     app.http_sender     = None
@@ -75,20 +92,14 @@ def _app_with_turn(root: Path, tmp_path: Path, ws: _OneBotWs | None):
         brain_chat_active = False,
         mood_text         = "",
     )
-    hctx = SimpleNamespace(
-        runtime  = ChatRuntime(XiaoQingChatConfig(), []),
-        state    = MagicMock(),
-        chat_id  = "u7",
-        bot_name = "小青",
+    bound_state(context).memory_store.append(
+        CHAT_ID, role="user", name="朋友", user_id=7, local_id="u1", content="在吗", ts=time.time()
     )
-    hctx.state.media_store = MediaRegistryStore()
-    hctx.state.memory_store.get_async = AsyncMock(return_value=[])
-    hctx.state.heartflow.on_bot_reply_async = AsyncMock()
-    context = SimpleNamespace(send_action=app._send_action, data_dir=tmp_path, logger=MagicMock())
+    context.send_action = app._send_action
 
     async def finalize(event):
         return await turn_delivery.finalize_smalltalk_turn(
-            prepared, generated, event, context, hctx, started_at=0.0
+            prepared, generated, event, context, hctx, started_at=time.monotonic()
         )
 
     app.dispatcher.handle_event = finalize
@@ -100,33 +111,52 @@ def _event() -> dict:
 
 
 @pytest.fixture
-def recorded():
-    """替换掉提交之后的记忆写入和后台任务，只看提交了哪些内容、哪些消息 ID。"""
+def turn_model(mock_context):
+    """投递这一段不该请求模型，所以不写任何剧本；打字延迟关掉，气泡之间不等。"""
 
-    deliver = turn_delivery._record_delivered_reply
+    model = ScriptedChatModel()
+    scripted_chat_context(
+        mock_context,
+        model,
+        {"humanize": {"enable_typing_delay": False, "type_per_char_seconds": 0.0}},
+    )
+    return model
 
-    def drop_task(_context, coro, *, name):
-        coro.close()
 
-    with (
-        patch.object(turn_delivery, "_drop_stale_generated_turn", return_value=False),
-        patch.object(
-            turn_delivery, "_apply_smalltalk_presend_delay", AsyncMock(return_value=False)
-        ),
-        patch.object(turn_delivery, "_smalltalk_interbubble_delay", return_value=0.0),
-        patch.object(
-            turn_delivery,
-            "sync_message_parts_to_registry",
-            side_effect=lambda _state, parts, **_: tuple(parts),
-        ),
-        patch.object(turn_delivery, "spawn_bg_task", side_effect=drop_task),
-        patch.object(turn_delivery, "log_step"),
-        patch.object(
-            turn_delivery, "_record_delivered_reply", AsyncMock(return_value=[])
-        ) as record,
-        patch.object(turn_delivery, "_rollback_smalltalk_delivery", AsyncMock()) as rollback,
-    ):
-        yield SimpleNamespace(record=record, rollback=rollback, deliver=deliver)
+async def _finish(context, model: ScriptedChatModel) -> None:
+    """等回复送达之后的后台任务（落盘、记媒体使用次数）做完，再用插件自己的关闭流程收尾。"""
+
+    tasks = get_state().background_tasks()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    await settle_chat_background(context, model)
+
+
+def _bot_replies() -> list:
+    """聊天记录里小青说过的话。"""
+
+    return [
+        message for message in get_state().memory_store.get(CHAT_ID) if message.role == "assistant"
+    ]
+
+
+async def _action_records() -> list:
+    return await get_state().action_history.get_recent_async(CHAT_ID)
+
+
+async def _assert_delivery_settled() -> None:
+    """这一轮的回复已经结算：同会话的下一轮不用再等它。"""
+
+    async with asyncio.timeout(1):
+        async with get_state().generation_limiter.admit(
+            chat_id                    = CHAT_ID,
+            user_id                    = "7",
+            max_global                 = 0,
+            max_per_chat               = 0,
+            max_per_user               = 0,
+            max_calls_per_user_per_day = 0,
+        ):
+            pass
 
 
 @pytest.mark.asyncio
@@ -139,74 +169,77 @@ def recorded():
         ([True, None], ["在呢", "刚下课"], "在呢\n\n刚下课", (101,)),
         # 最后一条（由 Core 在处理完事件后发出）失败：只记前两条。
         ([True, True, False], ["在呢", "刚下课", "你说吧"], "在呢\n\n刚下课", (101, 102)),
+        # 三条都发出：整条回复连同每个消息 ID 都记。
+        ([True, True, True], ["在呢", "刚下课", "你说吧"], REPLY, (101, 102, 103)),
     ],
 )
-async def test_partially_sent_reply_records_only_bubbles_that_went_out(
-    temp_app_root, tmp_path, recorded, outcomes, sent_texts, recorded_text, message_ids
+async def test_reply_records_only_bubbles_that_went_out(
+    temp_app_root, mock_context, turn_model, outcomes, sent_texts, recorded_text, message_ids
 ) -> None:
     ws = _OneBotWs(outcomes)
-    app, _generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    app, _generated = _app_with_turn(temp_app_root, mock_context, ws)
 
     await app._handle_upstream_event(_event())
+    await _finish(mock_context, turn_model)
 
     assert ws.texts == sent_texts
-    recorded.rollback.assert_not_awaited()
-    recorded.record.assert_awaited_once()
-    _finalization, parts, ids = recorded.record.await_args.args
-    assert parts == build_text_message_parts(recorded_text)
-    assert ids == message_ids
-
-
-@pytest.mark.asyncio
-async def test_fully_sent_reply_records_whole_reply_with_every_message_id(
-    temp_app_root, tmp_path, recorded
-) -> None:
-    ws = _OneBotWs([True, True, True])
-    app, generated = _app_with_turn(temp_app_root, tmp_path, ws)
-
-    await app._handle_upstream_event(_event())
-
-    assert ws.texts == ["在呢", "刚下课", "你说吧"]
-    recorded.rollback.assert_not_awaited()
-    _finalization, parts, ids = recorded.record.await_args.args
-    assert parts == generated.reply_parts
-    assert ids == (101, 102, 103)
+    (reply,) = _bot_replies()
+    assert reply.parts == build_text_message_parts(recorded_text)
+    assert reply.remote_ids() == message_ids
+    assert len(await _action_records()) == 1
+    await _assert_delivery_settled()
 
 
 @pytest.mark.asyncio
 async def test_reply_whose_first_bubble_fails_is_rolled_back(
-    temp_app_root, tmp_path, recorded
+    temp_app_root, mock_context, turn_model
 ) -> None:
     ws = _OneBotWs([False])
-    app, _generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    app, _generated = _app_with_turn(temp_app_root, mock_context, ws)
 
     await app._handle_upstream_event(_event())
+    await _finish(mock_context, turn_model)
 
     assert ws.texts == ["在呢"]
-    recorded.record.assert_not_awaited()
-    recorded.rollback.assert_awaited_once()
+    assert _bot_replies() == []
+    assert await _action_records() == []
+    await _assert_delivery_settled()
 
 
 @pytest.mark.asyncio
 async def test_collected_bubbles_settle_when_the_server_actually_sends_them(
-    temp_app_root, tmp_path, recorded
+    temp_app_root, mock_context, turn_model
 ) -> None:
     """反向 WS 下气泡先被 Core 收起来，等服务端真正写出后才有结果，结算也要等到那时。"""
 
-    app, _generated = _app_with_turn(temp_app_root, tmp_path, None)
+    app, _generated = _app_with_turn(temp_app_root, mock_context, None)
 
     actions = await app._collect_actions_for_event(_event(), default_source="inbound_ws")
     assert len(actions) == 3
-    recorded.record.assert_not_awaited()
+    assert _bot_replies() == []
 
     # 与服务端逐条写出的顺序一致：第二条写出失败，剩下的不再写，按失败结算。
     for action, delivered in zip(actions, (True, False, False), strict=True):
         await resolve_action_handoff(action, delivered=delivered)
+    await _finish(mock_context, turn_model)
 
-    recorded.rollback.assert_not_awaited()
-    _finalization, parts, ids = recorded.record.await_args.args
-    assert parts == build_text_message_parts("在呢")
-    assert ids == ()
+    (reply,) = _bot_replies()
+    assert reply.parts == build_text_message_parts("在呢")
+    assert reply.remote_ids() == ()
+    await _assert_delivery_settled()
+
+
+def _emoji_usage(context) -> int:
+    index = context.data_dir / "media" / "library" / "index.json"
+    return int(json.loads(index.read_text(encoding="utf-8"))["entries"]["test-hash"]["usage_count"])
+
+
+async def _face_usage(context, face_id: str) -> int:
+    return sum(
+        entry.usage_count
+        for entry in await load_qq_face_catalog(context)
+        if entry.face_id == face_id
+    )
 
 
 @pytest.mark.asyncio
@@ -225,10 +258,10 @@ async def test_collected_bubbles_settle_when_the_server_actually_sends_them(
     ],
 )
 async def test_media_delivery_scope(
-    temp_app_root, tmp_path, recorded, kind, media_bubble, outcomes, seen
+    temp_app_root, mock_context, turn_model, kind, media_bubble, outcomes, seen
 ):
     ws = _OneBotWs(outcomes)
-    app, generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    app, generated = _app_with_turn(temp_app_root, mock_context, ws)
     media = {
         "kind"       : "qq_face" if kind == "unicode_face" else kind,
         "media_key"  : "media:test",
@@ -239,7 +272,7 @@ async def test_media_delivery_scope(
     if kind in ("qq_face", "unicode_face"):
         media.update(face_id="14" if kind == "qq_face" else "🚀", label="微笑")
     else:
-        media.update(media_hash="test-hash", file_path=str(tmp_path / "test.png"))
+        media.update(media_hash="test-hash", file_path=str(mock_context.data_dir / "test.png"))
     parts = []
     for index, word in enumerate(("看这个", "第二条", "第三条")):
         parts.append({"kind": "text", "text": ("\n\n" if index else "") + word})
@@ -248,61 +281,37 @@ async def test_media_delivery_scope(
     generated.reply_parts = tuple(parts)
     # 保留生成标记，验证结算内容决定历史与使用统计。
     generated.media_marker = MagicMock(kind=media["kind"], marker=media["marker"])
-    recorded.record.side_effect = recorded.deliver
-    tasks                       = []
+    # 表情库里已有这张表情（使用次数只给已有条目加）。
+    library = mock_context.data_dir / "media" / "library"
+    library.mkdir(parents=True)
+    (library / "index.json").write_text(
+        json.dumps({"entries": {"test-hash": {"media_hash": "test-hash", "usage_count": 0}}}),
+        encoding="utf-8",
+    )
 
-    def run_media_task(_context, coro, *, name):
-        if name.startswith("reply_media_used:"):
-            tasks.append(coro)
-        else:
-            coro.close()
-
-    with (
-        patch.object(turn_delivery, "spawn_bg_task", side_effect=run_media_task),
-        patch.object(
-            turn_delivery,
-            "sync_message_parts_to_registry",
-            side_effect=reply_media.sync_message_parts_to_registry,
-        ),
-        patch.object(reply_media, "schedule_media_registry_flush"),
-        patch.object(turn_delivery, "schedule_memory_persist"),
-        patch.object(turn_delivery, "schedule_action_history_flush"),
-        patch.object(turn_delivery, "record_reply_frequency"),
-        patch.object(reply_media, "mark_emoji_used_by_hash") as emoji_used,
-        patch.object(reply_media, "mark_qq_face_used_by_id") as face_used,
-    ):
-        await app._handle_upstream_event(_event())
-        for task in tasks:
-            await task
+    await app._handle_upstream_event(_event())
+    await _finish(mock_context, turn_model)
 
     assert len(ws.messages) == len(outcomes)
     expected_media = media_bubble in seen
-    assert emoji_used.call_count == int(expected_media and kind == "emoji")
-    assert face_used.call_count == int(expected_media and kind in ("qq_face", "unicode_face"))
-    if emoji_used.called:
-        assert emoji_used.call_args.args[1] == "test-hash"
-    if face_used.called:
-        assert face_used.call_args.args[1] == media["face_id"]
+    assert _emoji_usage(mock_context) == int(expected_media and kind == "emoji")
+    if kind in ("qq_face", "unicode_face"):
+        assert await _face_usage(mock_context, media["face_id"]) == int(expected_media)
+    await _assert_delivery_settled()
     if not seen:
-        recorded.record.assert_not_awaited()
-        recorded.rollback.assert_awaited_once()
-        assert tasks == []
+        assert _bot_replies() == []
+        assert await _action_records() == []
         return
-    recorded.record.assert_awaited_once()
-    recorded.rollback.assert_not_awaited()
-    finalization, delivered_parts, ids = recorded.record.await_args.args
-    assert ids == tuple(101 + i for i, outcome in enumerate(outcomes) if outcome is True)
-    assert [part for part in delivered_parts if part["kind"] != "text"] == (
+    (reply,) = _bot_replies()
+    assert reply.remote_ids() == tuple(
+        101 + i for i, outcome in enumerate(outcomes) if outcome is True
+    )
+    assert [part for part in reply.parts if part["kind"] != "text"] == (
         [media] if expected_media else []
     )
-    state = finalization.hctx.state
-    state.memory_store.append.assert_called_once()
-    assert state.memory_store.append.call_args.kwargs["parts"] == delivered_parts
-    assert state.memory_store.append.call_args.kwargs["message_ids"] == ids
-    state.action_history.append.assert_called_once()
-    detail = state.action_history.append.call_args.args[1].detail
-    assert detail.get("media_key") == ("media:test" if expected_media else None)
-    assert detail.get("media_kind") == (media["kind"] if expected_media else None)
+    (record,) = await _action_records()
+    assert record.detail.get("media_key") == ("media:test" if expected_media else None)
+    assert record.detail.get("media_kind") == (media["kind"] if expected_media else None)
 
 
 @pytest.mark.asyncio
@@ -315,11 +324,11 @@ async def test_media_delivery_scope(
     ],
 )
 async def test_collected_media_receipts_settle_once(
-    temp_app_root, tmp_path, recorded, outcomes, expected
+    temp_app_root, mock_context, turn_model, outcomes, expected
 ):
-    app, generated = _app_with_turn(temp_app_root, tmp_path, None)
+    app, generated = _app_with_turn(temp_app_root, mock_context, None)
     generated.reply_parts = (
-        {"kind": "image", "media_key": "one", "file_path": str(tmp_path / "one.png")},
+        {"kind": "image", "media_key": "one", "file_path": str(mock_context.data_dir / "one.png")},
         {"kind": "text", "text": "\n\n"},
         {"kind": "qq_face", "media_key": "two", "face_id": "14"},
         {"kind": "text", "text": "\n\n"},
@@ -327,43 +336,44 @@ async def test_collected_media_receipts_settle_once(
             "kind"      : "emoji",
             "media_key" : "three",
             "media_hash": "third",
-            "file_path" : str(tmp_path / "three.png"),
+            "file_path" : str(mock_context.data_dir / "three.png"),
         },
     )
     actions = await app._collect_actions_for_event(_event(), default_source="inbound_ws")
     assert len(actions) == 3
-    recorded.record.assert_not_awaited()
+    assert _bot_replies() == []
     # 乱序回执仍按发送顺序合并，并等待全部在途批次结算。
     for index in (2, 0):
         await resolve_action_handoff(actions[index], delivered=outcomes[index])
-        recorded.record.assert_not_awaited()
-        recorded.rollback.assert_not_awaited()
+        assert _bot_replies() == []
     await resolve_action_handoff(actions[1], delivered=outcomes[1])
     for action in actions:
         await resolve_action_handoff(action, delivered=True)
+    await _finish(mock_context, turn_model)
+
+    await _assert_delivery_settled()
     if expected:
-        recorded.record.assert_awaited_once()
-        recorded.rollback.assert_not_awaited()
-        _, parts, ids = recorded.record.await_args.args
-        assert [p["media_key"] for p in parts if p["kind"] != "text"] == expected
-        assert ids == ()
+        (reply,) = _bot_replies()
+        assert [p["media_key"] for p in reply.parts if p["kind"] != "text"] == expected
+        assert reply.remote_ids() == ()
     else:
-        recorded.record.assert_not_awaited()
-        recorded.rollback.assert_awaited_once()
+        assert _bot_replies() == []
+        assert await _action_records() == []
 
 
 @pytest.mark.asyncio
 async def test_full_delivery_excludes_media_without_a_sendable_segment(
-    temp_app_root, tmp_path, recorded
+    temp_app_root, mock_context, turn_model
 ):
     ws = _OneBotWs([True])
-    app, generated = _app_with_turn(temp_app_root, tmp_path, ws)
+    app, generated = _app_with_turn(temp_app_root, mock_context, ws)
     generated.reply_parts = (
         {"kind": "text", "text": "文字"},
         {"kind": "emoji", "media_hash": "missing-file", "marker": "[表情包:缺失]"},
     )
     await app._handle_upstream_event(_event())
-    recorded.record.assert_awaited_once()
-    _, parts, ids = recorded.record.await_args.args
-    assert parts == build_text_message_parts("文字")
-    assert ids == (101,)
+    await _finish(mock_context, turn_model)
+
+    (reply,) = _bot_replies()
+    assert reply.parts == build_text_message_parts("文字")
+    assert reply.remote_ids() == (101,)

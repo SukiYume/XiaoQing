@@ -253,7 +253,7 @@ class AgentRuntime:
             memory=memory,
         )
         if session is None:
-            session = Session(system, memory=memory)
+            session = await self.sessions.new_session(task.chat, system, memory=memory)
             recent = await self.recent_records(task.chat, config.history_tasks)
         # 当前身份、人设和工具以本轮配置为准；已经发生的对话继续保留。
         session.system       = system

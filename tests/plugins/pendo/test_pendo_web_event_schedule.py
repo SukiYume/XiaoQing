@@ -1,4 +1,4 @@
-"""Pendo Web 共享日程时间轴的边界回归。"""
+"""Pendo Web 共享日程时间轴的边界。"""
 
 from datetime import date, datetime
 from zoneinfo import ZoneInfo

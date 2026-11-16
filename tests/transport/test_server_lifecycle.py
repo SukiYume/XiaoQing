@@ -4,28 +4,41 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import tests.helpers.server_test_support as _fixture_support
+from core.server import _parse_http_base, _parse_positive_int, _parse_ws_uri
 from tests.helpers.server_test_support import (
     ClientSession,
     InboundManager,
     StandaloneInboundServer,
     WSServerHandshakeError,
-    _lane_count,
-    _make_server,
-    _onebot_message_payload,
-    _parse_http_base,
-    _parse_positive_int,
-    _parse_ws_uri,
     cancellation_resistant_callback,
+    lane_count,
+    make_server,
+    onebot_message_payload,
     web,
 )
 
 mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
+
+
+async def _occupy(port: int) -> asyncio.Server:
+    """在 127.0.0.1 上占住一个端口（操作系统边界），用来制造真实的绑定失败。"""
+
+    return await asyncio.start_server(lambda _reader, writer: writer.close(), "127.0.0.1", port)
+
+
+async def _release(listener: asyncio.Server) -> None:
+    listener.close()
+    await listener.wait_closed()
+
+
+async def _assert_port_free(port: int) -> None:
+    await _release(await _occupy(port))
 
 
 @pytest.mark.unit
@@ -81,34 +94,29 @@ def test_parse_positive_int():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_inbound_server_site_start_failure_cleans_runner(mock_handler):
+async def test_inbound_server_site_start_failure_cleans_runner(mock_handler, unused_tcp_port):
     server = StandaloneInboundServer(
         host    = "127.0.0.1",
-        port    = 8765,
+        port    = unused_tcp_port,
         token   = "test_token",
         handler = mock_handler,
     )
-    runner         = MagicMock()
-    runner.setup   = AsyncMock()
-    runner.cleanup = AsyncMock()
-    site           = MagicMock()
-    site.start = AsyncMock(side_effect=OSError("port occupied"))
-    site.stop = AsyncMock()
+    occupier = await _occupy(unused_tcp_port)
+    try:
+        with pytest.raises(OSError):
+            await server.start()
 
-    with (
-        patch("core.server.web.AppRunner", return_value=runner),
-        patch("core.server.web.TCPSite", return_value=site),
-        pytest.raises(OSError, match="port occupied"),
-    ):
-        await server.start()
+        assert server._site is None
+        assert server._runner is None
+        assert server._running is False
+        assert server._accepting_events is False
+    finally:
+        await _release(occupier)
 
-    runner.setup.assert_awaited_once()
-    site.stop.assert_awaited_once()
-    runner.cleanup.assert_awaited_once()
-    assert server._site is None
-    assert server._runner is None
-    assert server._running is False
-    assert server._accepting_events is False
+    # 失败的启动没有留下半成品：同一个对象可以在端口空出来之后正常启动。
+    await server.start()
+    await server.stop()
+    await _assert_port_free(unused_tcp_port)
 
 
 @pytest.mark.asyncio
@@ -188,9 +196,9 @@ async def test_inbound_server_concurrent_starts_bind_once(mock_handler):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_inbound_manager_stop_waits_for_concurrent_start():
+async def test_inbound_manager_stop_waits_for_concurrent_start(unused_tcp_port):
     manager = InboundManager(
-        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_http_base = f"http://127.0.0.1:{unused_tcp_port}",
         inbound_ws_uri    = "",
         token             = "test_token",
         handler=AsyncMock(return_value=[]),
@@ -198,19 +206,15 @@ async def test_inbound_manager_stop_waits_for_concurrent_start():
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def blocked_start(*, accept_events: bool = True) -> None:
-        assert accept_events is False
-        entered.set()
-        await release.wait()
+    class BlockedRunner(web.AppRunner):
+        """aiohttp 的 AppRunner：`setup` 在这里等放行，制造“启动进行中”的时刻。"""
 
-    server = MagicMock(
-        start=AsyncMock(side_effect=blocked_start),
-        stop                 = AsyncMock(),
-        set_status_providers = Mock(),
-        commit_admission     = Mock(),
-    )
+        async def setup(self) -> None:
+            entered.set()
+            await release.wait()
+            await super().setup()
 
-    with patch("core.server.InboundServer", return_value=server):
+    with patch("core.server.web.AppRunner", BlockedRunner):
         start_task = asyncio.create_task(manager.start())
         await entered.wait()
         stop_task = asyncio.create_task(manager.stop())
@@ -219,10 +223,11 @@ async def test_inbound_manager_stop_waits_for_concurrent_start():
         release.set()
         await asyncio.gather(start_task, stop_task)
 
-    server.stop.assert_awaited_once()
     assert manager._running is False
     assert manager.http_server is None
     assert manager.ws_server is None
+    # 启动完成后才执行停止：监听器已经关掉，端口空出来了。
+    await _assert_port_free(unused_tcp_port)
 
 
 @pytest.mark.asyncio
@@ -297,35 +302,32 @@ async def test_scheduled_websocket_close_isolates_fatal(mock_handler):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_inbound_manager_second_listener_failure_stops_first():
-    manager = InboundManager(
-        inbound_http_base = "http://127.0.0.1:18080",
-        inbound_ws_uri    = "ws://127.0.0.1:18081/ws",
+async def test_inbound_manager_second_listener_failure_stops_first(unused_tcp_port_factory):
+    http_port = unused_tcp_port_factory()
+    ws_port   = unused_tcp_port_factory()
+    manager   = InboundManager(
+        inbound_http_base = f"http://127.0.0.1:{http_port}",
+        inbound_ws_uri    = f"ws://127.0.0.1:{ws_port}/ws",
         token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
-    first       = MagicMock()
-    first.start = AsyncMock()
-    first.stop  = AsyncMock()
-    second      = MagicMock()
-    second.start = AsyncMock(side_effect=OSError("second bind failed"))
-    second.stop = AsyncMock()
+    occupier = await _occupy(ws_port)
+    try:
+        with pytest.raises(OSError):
+            await manager.start()
 
-    with (
-        patch("core.server.InboundServer", side_effect=[first, second]),
-        pytest.raises(OSError, match="second bind failed"),
-    ):
-        await manager.start()
+        assert manager.http_server is None
+        assert manager.ws_server is None
+        assert manager._event_dispatcher is None
+        assert manager._running is False
+        # 第一个监听器已经被收回：它的端口空出来了。
+        await _assert_port_free(http_port)
+    finally:
+        await _release(occupier)
 
-    first.start.assert_awaited_once()
-    first.stop.assert_awaited_once()
-    second.stop.assert_awaited_once()
-    first.start.assert_awaited_once_with(accept_events=False)
-    second.start.assert_awaited_once_with(accept_events=False)
-    first.commit_admission.assert_not_called()
-    assert manager.http_server is None
-    assert manager.ws_server is None
-    assert manager._running is False
+    # 回滚没有留下半成品：端口空出来之后同一个管理器可以正常启动。
+    await manager.start()
+    await manager.stop()
 
 
 @pytest.mark.unit
@@ -351,7 +353,7 @@ def test_inbound_manager_binding_ports_deduplicates_shared_port():
 @pytest.mark.integration
 async def test_server_start_stop(mock_handler, unused_tcp_port):
     """Test server start and stop"""
-    server = _make_server(mock_handler, unused_tcp_port)
+    server = make_server(mock_handler, unused_tcp_port)
     await server.start()
 
     assert server._runner is not None
@@ -412,7 +414,7 @@ async def test_server_token_rotation_revokes_old_ws_and_accepts_new_token(
                 url,
                 headers={"Authorization": "Bearer new-token"},
             )
-            payload               = _onebot_message_payload("/help")
+            payload               = onebot_message_payload("/help")
             payload["message_id"] = 902
             await new_ws.send_json(payload)
             response = await new_ws.receive_json(timeout=2)
@@ -429,7 +431,7 @@ async def test_server_token_rotation_revokes_old_ws_and_accepts_new_token(
 @pytest.mark.integration
 async def test_server_stop_with_workers(mock_handler, unused_tcp_port):
     """Test server stop cleans up worker tasks"""
-    server = _make_server(mock_handler, unused_tcp_port)
+    server = make_server(mock_handler, unused_tcp_port)
 
     # Start server
     await server.start()
@@ -444,7 +446,7 @@ async def test_server_stop_with_workers(mock_handler, unused_tcp_port):
     # Tasks should be cancelled
     assert mock_task1.cancelled()
     assert mock_task2.cancelled()
-    assert _lane_count(server._event_dispatcher) == 0
+    assert lane_count(server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -501,7 +503,7 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
     headers = {"Authorization": "Bearer shared-token", "X-XiaoQing-Response-Mode": "actions"}
 
     def payload(marker: str, user_id: int) -> dict[str, Any]:
-        event = _onebot_message_payload(marker)
+        event = onebot_message_payload(marker)
         event.update(marker=marker, user_id=user_id)
         return event
 

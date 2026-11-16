@@ -1,4 +1,4 @@
-"""小爱桥接的单次提交、答复归属和型号协议回归。"""
+"""小爱桥接的单次提交、答复归属和型号协议。"""
 
 import asyncio
 import json
@@ -6,9 +6,20 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import aiohttp
 import pytest
+import pytest_asyncio
 
 from plugins.xiaoai import client, main
+from tests.helpers.http import callback_result, mocked_aiohttp
+from tests.helpers.xiaoai_test_support import (
+    ACTION,
+    DEVICES,
+    MINA_LIST,
+    SPEC_ALL,
+    SPEC_ONE,
+    UBUS,
+)
 
 
 @pytest.mark.asyncio
@@ -76,8 +87,53 @@ def test_shared_journal_enforces_capacity_including_message_identity(tmp_path):
     assert path.read_bytes() == before
 
 
-@pytest.fixture
-def env(tmp_path, monkeypatch):
+def _nlp_reply(request_id, timestamp_ms, question, answer):
+    """音箱 ubus 接口的 ``nlp_result_get`` 响应：一条已完成的问答。"""
+
+    nlp = {
+        "meta"    : {"request_id": request_id, "timestamp": timestamp_ms},
+        "response": {
+            "answer": [{"intention": {"query": question}, "content": {"to_speak": answer}}]
+        },
+    }
+    info = {"result": [{"nlp": json.dumps(nlp)}]}
+    return {"code": 0, "data": {"code": 0, "info": json.dumps(info)}}
+
+
+class _Cloud:
+    """米家云端（设备列表、动作、音箱问答）的 HTTP 替身：记录动作参数，结果由测试设定。
+
+    ``action_outcome`` 为异常时在请求发出时抛出，为整数时作为动作返回码；``mina_replies`` 依次
+    给出每次音箱问答查询的响应（列表项可以是调用时才生成响应的函数），用尽或未设置时云端回 500。
+    """
+
+    def __init__(self, mocked, model):
+        self.devices        = [{"did": "123", "model": model, "isOnline": True}]
+        self.actions        = []
+        self.action_outcome = 0
+        self.mina_replies   = []
+        mocked.post(DEVICES, callback=self._device_list, repeat=True)
+        mocked.post(ACTION, callback=self._action, repeat=True)
+        mocked.post(UBUS, callback=self._ubus, repeat=True)
+
+    def _device_list(self, _url, **_kwargs):
+        return callback_result(payload={"code": 0, "result": {"list": self.devices}})
+
+    def _action(self, _url, **kwargs):
+        self.actions.append(json.loads(kwargs["data"]["data"])["params"])
+        if isinstance(self.action_outcome, BaseException):
+            raise self.action_outcome
+        return callback_result(payload={"code": 0, "result": {"code": self.action_outcome}})
+
+    def _ubus(self, _url, **_kwargs):
+        if not self.mina_replies:
+            return callback_result(status=500, payload={})
+        reply = self.mina_replies.pop(0)
+        return callback_result(payload=reply() if callable(reply) else reply)
+
+
+@pytest_asyncio.fixture
+async def env(tmp_path):
     profile = {
         "name"     : "卧室音箱",
         "model"    : "xiaomi.wifispeaker.lx06",
@@ -92,36 +148,34 @@ def env(tmp_path, monkeypatch):
         tmp_path / "token.json",
         {
             "userId"       : "secret",
+            "deviceId"     : "device",
+            "xiaomiio"     : ["a2V5", "io"],
+            "micoapi"      : ["a2V5", "mina"],
             "_refreshed_at": {"xiaomiio": time.time(), "micoapi": time.time()},
         },
     )
-    io = SimpleNamespace(
-        device_list=AsyncMock(
-            return_value=[{"did": "123", "model": profile["model"], "isOnline": True}]
-        ),
-        miot_action=AsyncMock(return_value=0),
-    )
-    mina = SimpleNamespace(get_latest_ask=AsyncMock(side_effect=RuntimeError("sensitive token")))
-    monkeypatch.setattr(main, "services", lambda *args: (io, mina))
-    context = SimpleNamespace(data_dir=tmp_path, http_session=object(), state={})
-    return context, io, mina
+    async with aiohttp.ClientSession() as session:
+        with mocked_aiohttp() as mocked:
+            cloud = _Cloud(mocked, profile["model"])
+            context = SimpleNamespace(data_dir=tmp_path, http_session=session, state={})
+            yield context, cloud
 
 
 @pytest.mark.asyncio
 async def test_exact_directive_and_persistent_duplicate_guard(env):
-    context, io, _ = env
+    context, cloud = env
     event = {"message_id": 1, "user_id": 42}
     assert "已提交" in await main.execute(context, "打开台灯", event)
-    io.miot_action.assert_awaited_once_with("123", (5, 5), ["打开台灯", True])
+    assert cloud.actions == [{"did": "123", "siid": 5, "aiid": 5, "in": ["打开台灯", True]}]
     context.state.clear()
     assert "重复保护" in await main.execute(context, "打开台灯", {"message_id": 2})
     assert "重复保护" in await main.execute(context, "开台灯", event)
-    assert io.miot_action.await_count == 1
+    assert len(cloud.actions) == 1
 
 
 @pytest.mark.asyncio
 async def test_duplicate_text_allows_new_message_at_twenty_seconds(env, monkeypatch):
-    context, io, _ = env
+    context, cloud = env
     now = time.time()
     monkeypatch.setattr(main.time, "time", lambda: now)
     assert "已提交" in await main.execute(context, "开台灯", {"message_id": 1})
@@ -129,26 +183,26 @@ async def test_duplicate_text_allows_new_message_at_twenty_seconds(env, monkeypa
     assert "20 秒" in await main.execute(context, "开台灯", {"message_id": 2})
     now += 0.1
     assert "已提交" in await main.execute(context, "开台灯", {"message_id": 2})
-    assert io.miot_action.await_count == 2
+    assert len(cloud.actions) == 2
     now += 21
     assert "重复保护" in await main.execute(context, "开台灯", {"message_id": 2})
-    assert io.miot_action.await_count == 2
+    assert len(cloud.actions) == 2
 
 
 @pytest.mark.asyncio
 async def test_timeout_is_ambiguous_and_never_retried(env):
-    context, io, _ = env
-    io.miot_action.side_effect = TimeoutError("password token secret")
-    result                     = await main.execute(context, "打开台灯", {})
+    context, cloud = env
+    cloud.action_outcome = TimeoutError("password token secret")
+    result               = await main.execute(context, "打开台灯", {})
     assert "待确认" in result and "secret" not in result
     assert "重复保护" in await main.execute(context, "打开台灯", {})
-    assert io.miot_action.await_count == 1
+    assert len(cloud.actions) == 1
 
 
 @pytest.mark.asyncio
 async def test_cancellation_retains_journal(env):
-    context, io, _ = env
-    io.miot_action.side_effect = asyncio.CancelledError()
+    context, cloud = env
+    cloud.action_outcome = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         await main.execute(context, "打开台灯", {})
     assert "重复保护" in await main.execute(context, "打开台灯", {})
@@ -156,13 +210,13 @@ async def test_cancellation_retains_journal(env):
 
 @pytest.mark.asyncio
 async def test_check_is_read_only_and_offline_blocks(env):
-    context, io, _ = env
+    context, cloud = env
     assert "正常" in await main.execute(context, "检查", {}, check=True)
     assert not (context.data_dir / "requests.json").exists()
-    io.device_list.return_value[0]["isOnline"] = False
+    cloud.devices[0]["isOnline"] = False
     with pytest.raises(client.BridgeError, match="离线"):
         await main.execute(context, "开灯", {})
-    io.miot_action.assert_not_awaited()
+    assert cloud.actions == []
 
 
 def test_answers_require_new_id_time_and_matching_question():
@@ -232,13 +286,13 @@ async def test_account_single_request_no_retry_and_no_sensitive_errors(monkeypat
 
 @pytest.mark.asyncio
 async def test_handler_help_status_and_busy(env):
-    context, io, _ = env
+    context, cloud = env
     assert "配置已就绪" in str(await main.handle("xiaoai", "状态", {}, context))
     assert "查看设备" in str(await main.handle("xiaoai", "执行", {}, context))
     context.state["xiaoai_lock"] = asyncio.Lock()
     async with context.state["xiaoai_lock"]:
         assert "正在处理" in str(await main.handle("xiaoai", "开灯", {}, context))
-    io.miot_action.assert_not_awaited()
+    assert cloud.actions == []
 
 
 def test_manifest_limits_control_to_private_admin():
@@ -279,26 +333,17 @@ async def test_real_library_protocol_uses_cloud_once():
 
 @pytest.mark.asyncio
 async def test_polling_returns_only_current_answer(env, monkeypatch):
-    context, io, mina = env
-    polls = iter(([], None))
+    context, cloud = env
 
-    async def latest_ask(_mina_id: str) -> list[dict[str, object]]:
-        previous = next(polls)
-        if previous is not None:
-            return previous
+    def fresh_answer():
         # 回答时间在轮询时才取：总晚于执行开始时记下的时刻，机器忙时也不会被当成旧回答。
-        return [
-            {
-                "request_id"  : "fresh",
-                "timestamp_ms": int(time.time() * 1000),
-                "response"    : {"answer": [{"question": "温度多少", "content": "25度"}]},
-            }
-        ]
+        return _nlp_reply("fresh", int(time.time() * 1000), "温度多少", "25度")
 
-    mina.get_latest_ask.side_effect = latest_ask
+    no_answers         = {"code": 0, "data": {"code": 0, "info": json.dumps({"result": []})}}
+    cloud.mina_replies = [no_answers, fresh_answer]
     monkeypatch.setattr(main.asyncio, "sleep", AsyncMock())
     assert "小爱回复：25度" in await main.execute(context, "温度多少", {})
-    assert io.miot_action.await_count == 1
+    assert len(cloud.actions) == 1
 
 
 @pytest.mark.asyncio
@@ -311,7 +356,12 @@ async def test_setup_binds_miot_id_and_keeps_password_in_memory(tmp_path, monkey
         def __init__(self, session, username, password, token_store, otp_callback):
             assert token_store is None
             assert password == "test-password"
-            self.token = {"userId": "u", "xiaomiio": ["key", "token"], "micoapi": ["key", "token"]}
+            self.token = {
+                "userId"  : "u",
+                "deviceId": "device",
+                "xiaomiio": ["a2V5", "token"],
+                "micoapi" : ["a2V5", "token"],
+            }
 
         async def login(self, sid):
             return True
@@ -321,26 +371,53 @@ async def test_setup_binds_miot_id_and_keeps_password_in_memory(tmp_path, monkey
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda _: "test-password")
     monkeypatch.setattr(setup.logging, "disable", lambda _: None)
-    monkeypatch.setattr(setup, "protect_directory", lambda p: p.mkdir(exist_ok=True))
-    io = SimpleNamespace(
-        device_list=AsyncMock(
-            return_value=[
-                {"did": 123, "model": "xiaomi.wifispeaker.lx06", "name": "卧室"},
-            ]
+    model = "xiaomi.wifispeaker.lx06"
+    spec  = {
+        "services": [
+            {
+                "iid"       : 5,
+                "properties": [
+                    {
+                        "iid"   : 1,
+                        "type"  : "urn:miot-spec-v2:property:text-content:abc",
+                        "format": "string",
+                    },
+                    {
+                        "iid"   : 2,
+                        "type"  : "urn:miot-spec-v2:property:silent-execution:abc",
+                        "format": "bool",
+                    },
+                ],
+                "actions": [
+                    {
+                        "iid" : 5,
+                        "type": "urn:miot-spec-v2:action:execute-text-directive:abc",
+                        "in"  : [1, 2],
+                    }
+                ],
+            }
+        ]
+    }
+    with mocked_aiohttp() as mocked:
+        mocked.post(
+            DEVICES,
+            payload={
+                "code"  : 0,
+                "result": {"list": [{"did": 123, "model": model, "name": "卧室"}]},
+            },
         )
-    )
-    mina = SimpleNamespace(
-        device_list=AsyncMock(return_value=[{"miotDID": "123", "deviceID": "mina"}])
-    )
-    monkeypatch.setattr(setup, "services", lambda *args: (io, mina))
-    monkeypatch.setattr(
-        setup,
-        "fetch_spec",
-        AsyncMock(return_value={"siid": 5, "aiid": 5, "inputs": ["text", "silent"]}),
-    )
-    monkeypatch.setattr(setup, "directive_spec", lambda spec: spec)
-    await setup.setup(tmp_path, "cn", False)
+        mocked.get(
+            MINA_LIST,
+            payload={"code": 0, "data": [{"miotDID": "123", "deviceID": "mina"}]},
+        )
+        mocked.get(
+            SPEC_ALL,
+            payload={"instances": [{"model": model, "version": 1, "type": "urn:spec"}]},
+        )
+        mocked.get(SPEC_ONE, payload=spec)
+        await setup.setup(tmp_path, "cn", False)
     profile = client.read_json(tmp_path / "speaker.json")
     assert profile["did"] == "123" and profile["mina_id"] == "mina"
     assert profile["silent"] is True
+    assert profile["directive"] == {"siid": 5, "aiid": 5, "inputs": ["text", "silent"]}
     assert "test-password" not in (tmp_path / "token.json").read_text()

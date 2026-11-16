@@ -1,4 +1,4 @@
-"""Pendo 用户命令的同一对象生命周期与字段级业务回归。"""
+"""Pendo 用户命令在同一对象上的完整生命周期与字段级行为。"""
 
 from __future__ import annotations
 

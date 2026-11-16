@@ -80,17 +80,11 @@ class XiaoQingApp(
     def __init__(
         self,
         root: Path,
-        config_manager: ConfigManager | None   = None,
-        router: CommandRouter | None           = None,
-        plugin_manager: PluginManager | None   = None,
-        dispatcher: Dispatcher | None          = None,
-        scheduler: SchedulerManager | None     = None,
-        session_manager: SessionManager | None = None,
     ) -> None:
         self.root: Path = root
 
         # 加载配置
-        self.config_manager: ConfigManager = config_manager or ConfigManager(
+        self.config_manager: ConfigManager = ConfigManager(
             root / "config" / "config.json",
             root / "config" / "secrets.json",
         )
@@ -112,14 +106,14 @@ class XiaoQingApp(
         self.identity_service = AppIdentityService()
 
         # 核心组件
-        self.router: CommandRouter = router or CommandRouter()
+        self.router: CommandRouter = CommandRouter()
         self.plugins_dir: Path     = root / "plugins"
         poll_interval              = _runtime_plugin_poll_interval(self.config_manager.config)
         configured_data_root       = self.config_manager.config.get("data_root")
         plugin_data_root           = (
             root / "data" if configured_data_root is None else Path(str(configured_data_root))
         )
-        self.plugin_manager: PluginManager = plugin_manager or PluginManager(
+        self.plugin_manager: PluginManager = PluginManager(
             self.plugins_dir,
             self.router,
             self._build_plugin_context,
@@ -127,23 +121,21 @@ class XiaoQingApp(
             data_root     = plugin_data_root,
         )
         self._configure_plugin_execution(self.config_manager.config)
-        self.scheduler: SchedulerManager = scheduler or SchedulerManager(
+        self.scheduler: SchedulerManager = SchedulerManager(
             _runtime_timezone(self.config_manager.config)
         )
         self.metrics: MetricsCollector = MetricsCollector()
 
         # 会话管理器（用于多轮对话）
-        session_timeout                      = _runtime_session_timeout(self.config_manager.config)
-        self.session_manager: SessionManager = session_manager or SessionManager(
-            default_timeout=session_timeout
-        )
+        session_timeout = _runtime_session_timeout(self.config_manager.config)
+        self.session_manager: SessionManager = SessionManager(default_timeout=session_timeout)
 
         # 消息分发器
         concurrency                  = _runtime_max_concurrency(self.config_manager.config)
         self._dispatcher_concurrency = concurrency
         semaphore                    = AdjustableSemaphore(concurrency)
 
-        self.dispatcher: Dispatcher = dispatcher or Dispatcher(
+        self.dispatcher: Dispatcher = Dispatcher(
             self.router,
             self,
             self.plugin_manager,
@@ -185,15 +177,17 @@ class XiaoQingApp(
         ) = _onebot_credentials(initial_snapshot)
         self._runtime_inbound_token = _inbound_credentials(initial_snapshot)
         self.identity_service.load_admins(_trusted_secrets(initial_snapshot))
-        self._runtime_inbound_key: tuple[Any, ...] | None = None
-        self._onebot_auth_generation = 0
-        self._ws_client_auth_generation = 0
-        self._ws_client_auth_quarantine: OneBotWsClient | None = None
-        self._shutdown_task: asyncio.Task[None] | None = None
-        self._lifecycle_lock = _LazyAsyncLock()
-        self._inbound_reconcile_lock = _LazyAsyncLock()
-        self._inbound_cleanup_pending: list[InboundManager] = []
+        self._runtime_inbound_key: tuple[Any, ...] | None          = None
+        self._onebot_auth_generation                               = 0
+        self._ws_client_auth_generation                            = 0
+        self._ws_client_auth_quarantine: OneBotWsClient | None     = None
+        self._shutdown_task: asyncio.Task[None] | None             = None
+        self._lifecycle_lock                                       = _LazyAsyncLock()
+        self._inbound_reconcile_lock                               = _LazyAsyncLock()
+        self._inbound_cleanup_pending: list[InboundManager]        = []
         self._inbound_cleanup_quarantine: dict[int, BaseException] = {}
+        # 新声明的监听器起不来时，顶替它继续收消息的旧监听器，以及它顶替的监听配置。
+        self._inbound_stand_in: tuple[InboundManager, tuple[Any, ...]] | None = None
         self._runtime_auth_lock = threading.RLock()
         self._inbound_candidates_active: set[InboundManager] = set()
         self._inbound_candidates_lock = threading.RLock()

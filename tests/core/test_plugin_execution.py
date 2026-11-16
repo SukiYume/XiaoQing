@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -89,10 +90,11 @@ async def test_broker_submit_failure_releases_global_and_lane_slots(monkeypatch)
         sync_broker=broker,
     )
 
-    def fail_executor_access():
-        raise RuntimeError("executor unavailable")
+    class UnavailableExecutor(ThreadPoolExecutor):
+        def submit(self, *args, **kwargs):
+            raise RuntimeError("executor unavailable")
 
-    monkeypatch.setattr(broker, "_ensure_executor_locked", fail_executor_access)
+    monkeypatch.setattr("core.plugin_execution.ThreadPoolExecutor", UnavailableExecutor)
 
     with pytest.raises(RuntimeError, match="executor unavailable"):
         await gate.run(lambda: call_plugin_callback(lambda: "not-run"))
@@ -924,7 +926,12 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
 
 @pytest.mark.asyncio
 async def test_many_plugin_gates_share_fixed_broker_thread_bound() -> None:
-    broker = PluginSyncBroker(max_workers=4, global_queue_limit=32)
+    prefix = "shared-broker-bound-test"
+
+    def broker_threads() -> list[threading.Thread]:
+        return [thread for thread in threading.enumerate() if thread.name.startswith(prefix)]
+
+    broker = PluginSyncBroker(max_workers=4, global_queue_limit=32, thread_name_prefix=prefix)
     policy = PluginExecutionPolicy(timeout_seconds=None)
     gates = [
         PluginExecutionGate(
@@ -954,7 +961,7 @@ async def test_many_plugin_gates_share_fixed_broker_thread_bound() -> None:
     try:
         assert await asyncio.to_thread(four_started.wait, 1)
         assert broker.running_callbacks == 4
-        assert broker.worker_thread_count <= 4
+        assert len(broker_threads()) == 4
         assert broker.queued_callbacks <= 32
     finally:
         release.set()
@@ -963,6 +970,10 @@ async def test_many_plugin_gates_share_fixed_broker_thread_bound() -> None:
             await gate.close()
         result = await broker.close(timeout_seconds=1)
         assert result.drained is True
+    assert started == 20
+    for thread in broker_threads():
+        await asyncio.to_thread(thread.join, 1)
+    assert broker_threads() == []
 
 
 @pytest.mark.asyncio

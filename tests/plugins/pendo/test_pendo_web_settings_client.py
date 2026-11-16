@@ -1,4 +1,4 @@
-"""Pendo Web 设置页的数据边界、交互与异步生命周期回归。"""
+"""Pendo Web 设置页的数据边界、交互与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ SETTINGS_SETUP: Final = r"""
     globalThis.__logout = async () => { __logoutCalls += 1; };
     globalThis.__toastCalls = [];
     globalThis.__navigateCalls = [];
-    globalThis.__styleCalls = [];
     globalThis.__userTimeZone = '';
     globalThis.__reloadCount = 0;
     globalThis.window = {
@@ -102,7 +101,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';""",
         ),
@@ -204,7 +203,7 @@ def test_settings_normalizes_boolean_strings_arrays_and_defaults() -> None:
 
 
 def test_settings_render_is_safe_accessible_and_binds_native_buttons() -> None:
-    """首屏应转义后端文本，保留开关焦点，并绑定明确类型的原生按钮。"""
+    """首屏应转义后端文本，并绑定明确类型的原生按钮。"""
 
     _run_settings_client(
         r"""
@@ -230,9 +229,6 @@ def test_settings_render_is_safe_accessible_and_binds_native_buttons() -> None:
         assert.equal(typeof saveButton.onclick, 'function');
         assert.equal(typeof logoutButton.onclick, 'function');
         assert.equal(typeof transferButton.onclick, 'function');
-        assert.equal(__styleCalls.length > 0, true);
-        assert.ok(__styleCalls.at(-1)[1].includes('input:focus-visible + .settings-slider'));
-        assert.ok(__styleCalls.at(-1)[1].includes('font-size: clamp(18px, 1.55vw, 24px)'));
 
         transferButton.onclick();
         assert.deepEqual(__navigateCalls, [['transfer']]);

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
-def test_interrupted_scenario_runs_remaining_cleanup(monkeypatch, error) -> None:
+def test_interrupted_scenario_runs_remaining_cleanup(error) -> None:
     steps = tuple(
         matrix.ScenarioStep(
             name, "demo.test", name, (), (), (), (), cleanup=name.startswith("cleanup")
@@ -42,13 +42,8 @@ def test_interrupted_scenario_runs_remaining_cleanup(monkeypatch, error) -> None
                 raise failure
             if message == "cleanup1":
                 raise RuntimeError("cleanup failed")
-            return matrix.EventResponse(200, {}, 0)
+            return matrix.EventResponse(200, {"actions": [{"params": {"message": "ok"}}]}, 0)
 
-    monkeypatch.setattr(
-        matrix,
-        "_scenario_step_result",
-        lambda *args, **kwargs: {"execution_status": "passed_business_semantics"},
-    )
     with pytest.raises(error) as caught:
         matrix.execute_business_scenarios(
             Client(),

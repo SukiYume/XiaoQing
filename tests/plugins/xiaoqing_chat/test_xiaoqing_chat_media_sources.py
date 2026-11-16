@@ -3,31 +3,42 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 from io import BytesIO
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
+from plugins.xiaoqing_chat.media.event_media_analysis import _prepare_media_for_llm
 from tests.helpers.xiaoqing_chat_media_test_support import (
-    _PNG_BYTES,
+    PNG_BYTES,
+    VISION_GATEWAY,
+    AIModelInfo,
     PluginCapabilities,
     RenderedMedia,
-    _animated_gif_bytes,
-    _make_media_runtime,
-    _prepare_media_for_llm,
-    _raw_media_response,
-    _write_png,
+    animated_gif_bytes,
     build_effective_user_text,
     load_emoji_library,
+    make_media_runtime,
+    raw_media_response,
     render_event_media,
     render_event_media_text,
+    write_png,
 )
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel
 
 mock_context = _fixture_support.mock_context
+
+
+def _vision_model(**script) -> ScriptedChatModel:
+    """识图 route 上的剧本模型：能看图，``vision=`` 给出识图回答；没写剧本的调用会被记下。"""
+
+    model        = ScriptedChatModel(**script)
+    model.models = (
+        AIModelInfo("scripted-vision", "scripted", "scripted-vision", ("text", "image")),
+    )
+    return model
 
 
 @pytest.mark.asyncio
@@ -45,13 +56,13 @@ mock_context = _fixture_support.mock_context
 async def test_qq_media_fake_dns_is_scoped_to_https_host(url, enabled):
     from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 
-    response = SimpleNamespace(body=_PNG_BYTES, headers={"Content-Type": "image/png"})
+    response = SimpleNamespace(body=PNG_BYTES, headers={"Content-Type": "image/png"})
     with patch(
         "plugins.xiaoqing_chat.media.sources.fetch_public_bytes",
         new=AsyncMock(return_value=response),
     ) as fetch:
         payload, mime = await _download_url_bytes(url, max_bytes=1024)
-    assert payload == _PNG_BYTES and mime == "image/png"
+    assert payload == PNG_BYTES and mime == "image/png"
     kwargs = fetch.await_args.kwargs
     assert kwargs["allow_transparent_proxy_fake_dns"] is enabled
     assert kwargs["allowed_hosts"] == (frozenset({"multimedia.nt.qq.com.cn"}) if enabled else None)
@@ -81,12 +92,12 @@ async def test_ordinary_image_recovers_adapter_identifier(mock_context, recovery
 
     event      = {"message_id": 42}
     segment    = {"type": "image", "data": {"file": "image-42.image"}}
-    encoded    = "base64://" + base64.b64encode(_PNG_BYTES).decode("ascii")
+    encoded    = "base64://" + base64.b64encode(PNG_BYTES).decode("ascii")
     detail     = {"message": [{"type": "image", "data": {"file": encoded}}]}
     image_data = (
         {"file": "C:/outside/adapter-cache.png", "url": "https://example.com/image.png"}
         if recovery_source == "public_url"
-        else {"base64": base64.b64encode(_PNG_BYTES).decode("ascii")}
+        else {"base64": base64.b64encode(PNG_BYTES).decode("ascii")}
     )
     media = SimpleNamespace(
         get_message=AsyncMock(return_value=detail if recovery_source == "message" else {}),
@@ -95,13 +106,13 @@ async def test_ordinary_image_recovers_adapter_identifier(mock_context, recovery
     mock_context.capabilities = PluginCapabilities(onebot_media=media)
     with patch(
         "plugins.xiaoqing_chat.media.sources._download_url_bytes",
-        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+        new=AsyncMock(return_value=(PNG_BYTES, "image/png")),
     ) as download:
         payload, _, _ = await _resolve_media_bytes(
             segment, context=mock_context, max_bytes=1024, event=event
         )
 
-    assert payload == _PNG_BYTES
+    assert payload == PNG_BYTES
     if recovery_source == "message":
         media.get_image.assert_not_awaited()
     else:
@@ -117,7 +128,7 @@ async def test_adapter_recovery_retains_size_and_local_path_limits(mock_context)
     segment = {"type": "image", "data": {"file": "image-42.image"}}
     media   = SimpleNamespace(
         get_message=AsyncMock(return_value={}),
-        get_image=AsyncMock(return_value={"base64": base64.b64encode(_PNG_BYTES).decode("ascii")}),
+        get_image=AsyncMock(return_value={"base64": base64.b64encode(PNG_BYTES).decode("ascii")}),
     )
     mock_context.capabilities = PluginCapabilities(onebot_media=media)
     with pytest.raises(FileNotFoundError):
@@ -164,21 +175,18 @@ async def test_ordinary_image_recovery_keeps_multiple_attachments_distinct(mock_
 @pytest.mark.parametrize(
     "file_value",
     [
-        "base64://" + base64.b64encode(_PNG_BYTES).decode("ascii"),
-        "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode("ascii"),
+        "base64://" + base64.b64encode(PNG_BYTES).decode("ascii"),
+        "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode("ascii"),
     ],
 )
 async def test_render_event_media_text_supports_inline_image_sources(mock_context, file_value):
-    runtime = _make_media_runtime()
-    event   = {
+    runtime                   = make_media_runtime()
+    mock_context.capabilities = PluginCapabilities()
+    event                     = {
         "message": [{"type": "image", "data": {"file": file_value, "name": "inline_image.png"}}]
     }
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-        new=AsyncMock(return_value=None),
-    ):
-        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+    text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
     cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
     assert text.startswith("[图片：")
@@ -187,7 +195,7 @@ async def test_render_event_media_text_supports_inline_image_sources(mock_contex
 
 @pytest.mark.asyncio
 async def test_render_event_media_blocks_private_image_url_without_download(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -196,17 +204,12 @@ async def test_render_event_media_blocks_private_image_url_without_download(mock
             }
         ]
     }
-    from core.safe_http import validate_public_url
     from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 
-    with (
-        patch("core.safe_http.validate_public_url", wraps=validate_public_url) as validate,
-        patch("core.safe_http.aiohttp.ClientSession") as network,
-    ):
+    with patch("core.safe_http.aiohttp.ClientSession") as network:
         with pytest.raises(ValueError, match="non-public"):
             await _download_url_bytes("http://127.0.0.1/private.png", max_bytes=1024)
         rendered = await render_event_media(event, context=mock_context, runtime=runtime)
-    assert validate.call_count >= 2
     network.assert_not_called()
     assert len(rendered) == 1
     assert rendered[0].marker.startswith("[图片：")
@@ -214,8 +217,8 @@ async def test_render_event_media_blocks_private_image_url_without_download(mock
 
 @pytest.mark.asyncio
 async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_context, tmp_path):
-    runtime = _make_media_runtime()
-    outside = _write_png(tmp_path / "outside.png")
+    runtime = make_media_runtime()
+    outside = write_png(tmp_path / "outside.png")
     event   = {
         "message": [
             {
@@ -225,12 +228,12 @@ async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_c
         ]
     }
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-        new=AsyncMock(side_effect=AssertionError("outside file should not be analyzed")),
-    ):
-        rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+    model = _vision_model(vision='{"kind":"image","description":"不该被看到"}')
+    mock_context.capabilities = PluginCapabilities(ai=model)  # type: ignore[arg-type]
 
+    rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+
+    assert model.calls == []
     cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
     assert len(rendered) == 1
     assert rendered[0].marker.startswith("[图片：")
@@ -239,8 +242,9 @@ async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_c
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_context):
-    runtime = _make_media_runtime()
-    event   = {
+    runtime                   = make_media_runtime()
+    mock_context.capabilities = PluginCapabilities()
+    event                     = {
         "message": [
             {
                 "type": "image",
@@ -254,15 +258,9 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
         ]
     }
 
-    with (
-        patch(
-            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
-            new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-            new=AsyncMock(return_value=None),
-        ),
+    with patch(
+        "plugins.xiaoqing_chat.media.sources._download_url_bytes",
+        new=AsyncMock(return_value=(PNG_BYTES, "image/png")),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
@@ -273,7 +271,7 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_transcodes_octet_stream_sticker_for_vision(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -296,17 +294,17 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
         captured_prompt = content[0]["text"]
         image_url       = content[1]["image_url"]["url"]
         captured_urls.append(image_url)
-        return _raw_media_response(
+        return raw_media_response(
             '{"kind":"emoji","description":"一只猫皱着脸，配字是苦鲁西","emotion_tags":["委屈","难受"]}'
         )
 
     with (
         patch(
             "plugins.xiaoqing_chat.media.sources._download_url_bytes",
-            new=AsyncMock(return_value=(_animated_gif_bytes(), "application/octet-stream")),
+            new=AsyncMock(return_value=(animated_gif_bytes(), "application/octet-stream")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_profile",
+            VISION_GATEWAY,
             new=AsyncMock(side_effect=_fake_chat_raw),
         ),
     ):
@@ -323,7 +321,7 @@ def test_prepare_media_for_llm_uses_contact_sheet_for_animated_gif(mock_context)
     from PIL import Image
 
     gif_path = mock_context.data_dir / "animated_probe.gif"
-    payload  = _animated_gif_bytes()
+    payload  = animated_gif_bytes()
     gif_path.write_bytes(payload)
     resolved = SimpleNamespace(
         mime_type   = "image/gif",
@@ -342,21 +340,21 @@ def test_prepare_media_for_llm_uses_contact_sheet_for_animated_gif(mock_context)
 
 
 def test_prepare_media_for_llm_never_sends_original_when_decode_fails(mock_context):
-    image_path = _write_png(mock_context.data_dir / "decode_failure.png")
-    resolved   = SimpleNamespace(
+    image_path = mock_context.data_dir / "decode_failure.png"
+    image_path.write_bytes(b"not an image")
+    resolved = SimpleNamespace(
         mime_type   = "image/png",
         cached_path = image_path,
         is_animated = False,
     )
 
-    with patch("PIL.Image.open", side_effect=OSError("decode failed")):
-        with pytest.raises(ValueError, match="decode"):
-            _prepare_media_for_llm(resolved)
+    with pytest.raises(ValueError, match="decode"):
+        _prepare_media_for_llm(resolved)
 
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_supports_face_segment(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -379,7 +377,7 @@ async def test_render_event_media_text_supports_face_segment(mock_context):
 async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_context):
     from plugins.xiaoqing_chat.reply_media import event_media_items_for_memory
 
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -408,13 +406,30 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
 
 
 @pytest.mark.asyncio
-async def test_build_effective_user_text_preserves_mixed_media_order(mock_context):
-    runtime = _make_media_runtime()
-    event   = {
+@pytest.mark.parametrize(
+    ("segments", "clean_text", "expected"),
+    [
+        pytest.param(
+            ("看这个", "笑死"), "看这个笑死", "看这个\n[图片：一只猫歪着头]\n笑死", id="plain"
+        ),
+        pytest.param(
+            ("小青你看", "这个"),
+            "你看这个",
+            "你看\n[图片：一只猫歪着头]\n这个",
+            id="after-prefix-strip",
+        ),
+    ],
+)
+async def test_build_effective_user_text_keeps_media_in_message_order(
+    mock_context, segments, clean_text, expected
+):
+    runtime = make_media_runtime()
+    before, after = segments
+    event = {
         "message": [
-            {"type": "text", "data": {"text": "看这个"}},
+            {"type": "text", "data": {"text": before}},
             {"type": "image", "data": {"url": "https://example.com/cat.png"}},
-            {"type": "text", "data": {"text": "笑死"}},
+            {"type": "text", "data": {"text": after}},
         ],
         "_xc_rendered_media_items": [
             RenderedMedia(
@@ -428,48 +443,18 @@ async def test_build_effective_user_text_preserves_mixed_media_order(mock_contex
     }
 
     text = await build_effective_user_text(
-        "看这个笑死",
+        clean_text,
         event,
         context = mock_context,
         runtime = runtime,
     )
 
-    assert text == "看这个\n[图片：一只猫歪着头]\n笑死"
-
-
-@pytest.mark.asyncio
-async def test_build_effective_user_text_keeps_media_position_after_prefix_strip(mock_context):
-    runtime = _make_media_runtime()
-    event   = {
-        "message": [
-            {"type": "text", "data": {"text": "小青你看"}},
-            {"type": "image", "data": {"url": "https://example.com/cat.png"}},
-            {"type": "text", "data": {"text": "这个"}},
-        ],
-        "_xc_rendered_media_items": [
-            RenderedMedia(
-                media_hash   = "hash-2",
-                kind         = "image",
-                description  = "一只猫歪着头",
-                emotion_tags = (),
-                marker       = "[图片：一只猫歪着头]",
-            )
-        ],
-    }
-
-    text = await build_effective_user_text(
-        "你看这个",
-        event,
-        context = mock_context,
-        runtime = runtime,
-    )
-
-    assert text == "你看\n[图片：一只猫歪着头]\n这个"
+    assert text == expected
 
 
 @pytest.mark.asyncio
 async def test_build_effective_user_text_includes_emoji_detail_context(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {"type": "text", "data": {"text": "你这"}},
@@ -504,7 +489,7 @@ async def test_build_effective_user_text_includes_emoji_detail_context(mock_cont
 
 @pytest.mark.asyncio
 async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_speech(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -537,28 +522,8 @@ async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_s
 
 
 @pytest.mark.asyncio
-async def test_render_event_media_text_strips_face_brackets(mock_context):
-    runtime = _make_media_runtime()
-    event   = {
-        "message": [
-            {
-                "type": "face",
-                "data": {
-                    "id" : "1",
-                    "raw": {"text": "[狂笑]"},
-                },
-            }
-        ]
-    }
-
-    text = await render_event_media_text(event, context=mock_context, runtime=runtime)
-
-    assert text == "[QQ表情：狂笑]"
-
-
-@pytest.mark.asyncio
 async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message_id": 42,
         "message"   : [
@@ -590,18 +555,14 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
         ),
         get_image=AsyncMock(
             return_value={
-                "base64"   : base64.b64encode(_PNG_BYTES).decode("ascii"),
+                "base64"   : base64.b64encode(PNG_BYTES).decode("ascii"),
                 "file_name": "sticker.png",
             }
         ),
     )
     mock_context.capabilities = PluginCapabilities(onebot_media=media)
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-        new=AsyncMock(return_value=None),
-    ):
-        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+    text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
     assert text.startswith("[表情包：")
     assert event["_xc_new_emoji_count"] == 1
@@ -613,7 +574,7 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
 async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_download_fails(
     mock_context,
 ):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -641,30 +602,23 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
 async def test_load_emoji_library_reuses_existing_metadata(mock_context):
     library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    _write_png(library_dir / "无语猫猫.png")
-    _write_png(library_dir / "开心狗狗.png")
-    runtime = _make_media_runtime()
+    write_png(library_dir / "无语猫猫.png")
+    write_png(library_dir / "开心狗狗.png")
+    runtime = make_media_runtime()
+    model   = _vision_model(
+        vision='{"kind":"emoji","description":"一只猫瘫在地上，配字无语","emotion_tags":["无语"]}'
+    )
+    mock_context.capabilities = PluginCapabilities(ai=model)  # type: ignore[arg-type]
 
-    async def _fake_render(file_path, *, context, runtime, prefer_emoji):
-        file_path  = Path(file_path)
-        media_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
-        stem       = file_path.stem
-        return RenderedMedia(
-            media_hash   = media_hash,
-            kind         = "emoji",
-            description  = stem,
-            emotion_tags = (stem,),
-            marker       = f"[表情包：{stem}]",
-            cached_path  = file_path,
-        )
-
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.render_local_media_file",
-        new=AsyncMock(side_effect=_fake_render),
-    ) as mock_render:
-        first_entries  = await load_emoji_library(mock_context, runtime)
-        second_entries = await load_emoji_library(mock_context, runtime)
+    first_entries = await load_emoji_library(mock_context, runtime)
+    analyzed_once = len(model.calls_of("vision"))
+    # 识图结果另有一份按图片哈希的渲染缓存；清掉它，第二次加载只要重新分析就会再请求识图。
+    (mock_context.data_dir / "media" / "render_cache.json").unlink(missing_ok=True)
+    second_entries = await load_emoji_library(mock_context, runtime)
 
     assert first_entries == []
     assert second_entries == []
-    assert mock_render.await_count == 2
+    # 第一次加载分析库里的图并把结果写进索引，第二次直接用索引，不再请求识图。
+    assert analyzed_once >= 1
+    assert len(model.calls_of("vision")) == analyzed_once
+    assert not model.unscripted

@@ -9,7 +9,7 @@ import pytest
 from plugins.xiaoqing_memory import topics as topics_mod
 from plugins.xiaoqing_memory.consolidate.runner import consolidate_scope
 from plugins.xiaoqing_memory.recall import recall
-from tests.plugins.xiaoqing_memory.support import (
+from tests.helpers.xiaoqing_memory_test_support import (
     ALI,
     BO,
     CFG,

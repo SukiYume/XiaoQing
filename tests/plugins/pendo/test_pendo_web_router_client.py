@@ -1,4 +1,4 @@
-"""Pendo Web hash 路由的解析、订阅和异步页面生命周期回归。"""
+"""Pendo Web hash 路由的解析、订阅和异步页面生命周期。"""
 
 from __future__ import annotations
 

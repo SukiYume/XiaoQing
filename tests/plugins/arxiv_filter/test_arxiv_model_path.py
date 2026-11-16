@@ -4,43 +4,27 @@ from __future__ import annotations
 from pathlib import Path
 
 from plugins.arxiv_filter.inference import shared
-from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.arxiv_filter_test_support import use_plugin_config
 
-ROOT = REPOSITORY_ROOT
+# 相对路径按插件目录解析；config.json、模型目录都在这个目录里。
+_PLUGIN_DIR = Path(shared.__file__).resolve().parent.parent
 
 
 def test_explicit_model_path_is_authoritative_over_environment_and_config(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plugin_dir = tmp_path / "plugin"
-    plugin_dir.mkdir()
-    (plugin_dir / "configured").mkdir()
-    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
-    monkeypatch.setattr(
-        shared,
-        "load_plugin_config",
-        lambda: {"model": {"path": "configured"}},
-    )
+    use_plugin_config(monkeypatch, tmp_path, {"model": {"path": "configured"}})
     monkeypatch.setenv("ARXIV_MODEL_PATH", str(tmp_path / "environment"))
 
-    assert shared.resolve_model_path("explicit") == str(plugin_dir / "explicit")
+    assert Path(shared.resolve_model_path("explicit")) == _PLUGIN_DIR / "explicit"
 
 
 def test_environment_model_path_is_authoritative_and_does_not_silently_fallback(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plugin_dir = tmp_path / "plugin"
-    configured = plugin_dir / "configured"
-    configured.mkdir(parents=True)
     missing_environment = tmp_path / "missing-external-model"
-    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
-    monkeypatch.setattr(
-        shared,
-        "load_plugin_config",
-        lambda: {"model": {"path": "configured"}},
-    )
     monkeypatch.setenv("ARXIV_MODEL_PATH", str(missing_environment))
 
     assert shared.resolve_model_path() == str(missing_environment)
@@ -50,32 +34,17 @@ def test_config_can_use_legacy_fallback_only_without_an_override(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plugin_dir = tmp_path / "plugin"
-    fallback   = plugin_dir / "best_model"
-    fallback.mkdir(parents=True)
-    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
-    monkeypatch.setattr(
-        shared,
-        "load_plugin_config",
-        lambda: {"model": {}},
-    )
+    use_plugin_config(monkeypatch, tmp_path, {"model": {}})
     monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
 
-    assert shared.resolve_model_path() == str(fallback)
+    assert Path(shared.resolve_model_path()) == _PLUGIN_DIR / "best_model"
 
 
 def test_missing_explicit_configured_model_path_is_not_silently_replaced(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    plugin_dir = tmp_path / "plugin"
-    (plugin_dir / "best_model").mkdir(parents=True)
-    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
-    monkeypatch.setattr(
-        shared,
-        "load_plugin_config",
-        lambda: {"model": {"path": "missing-configured"}},
-    )
+    use_plugin_config(monkeypatch, tmp_path, {"model": {"path": "missing-configured"}})
     monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
 
-    assert shared.resolve_model_path() == str(plugin_dir / "missing-configured")
+    assert Path(shared.resolve_model_path()) == _PLUGIN_DIR / "missing-configured"

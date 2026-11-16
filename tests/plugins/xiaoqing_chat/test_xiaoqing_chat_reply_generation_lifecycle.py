@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import json
+from contextlib import suppress
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.persona import PersonaCard
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.xiaoqing_chat_test_support import (
-    _complete_test_runtime_config,
-    _make_hctx,
-    _set_context_principal,
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    set_context_principal,
+    settle_chat_background,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -22,168 +27,49 @@ sample_group_event = _fixture_support.sample_group_event
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mock_context):
-    from contextlib import ExitStack
+async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size = 20,
-            top_p            = 0.9,
-            max_tokens       = 256,
-            timeout_seconds  = 3.0,
-            reply_check      = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess=ResponsePostProcessConfig(),
-        )
-    )
-    _complete_test_runtime_config(runtime)
-    runtime.cfg.reply_check.llm_checker_mode = "risk"
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
-
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "正常回复",
+    model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply="这条回复需要检查")
+    scripted_chat_context(
+        mock_context,
+        model,
+        GROUP_GATE_OPEN,
+        {"reply_check": {"enable_llm_checker": False, "llm_checker_mode": "risk"}},
     )
 
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
+    # 审查本身出了没想到的错：记成审查出错（不是超时），风险模式下候选照常发出。
+    with patch(
+        "plugins.xiaoqing_chat.reply_generator.check_reply",
+        new=AsyncMock(side_effect=RuntimeError("checker bug")),
+    ):
+        result = await handle_smalltalk(
+            "你好", chat_message_event(sample_group_event, "你好"), mock_context
         )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.build_policy_block", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    ChatMessage(role="system", content="s"),
-                    ChatMessage(role="user", content="u"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=("这条回复需要检查", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response",
-                return_value=["这条回复需要检查"],
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="这条回复需要检查")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
-                return_value="dialogue",
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(side_effect=RuntimeError("checker bug")),
-            )
-        )
-        mock_log_step = stack.enter_context(patch("plugins.xiaoqing_chat.reply_generator.log_step"))
 
-        draft = await generate_reply_draft(
-            text           = "你好",
-            event          = {"message_id": 1, "user_id": 1},
-            context        = mock_context,
-            runtime        = runtime,
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "",
-            bot_name       = "小青",
-            secrets        = None,
-        )
-    assert draft is not None
-    assert draft.text == "这条回复需要检查"
-    assert any(
-        call.kwargs.get("step") == "reply.check.error" for call in mock_log_step.call_args_list
-    )
-    assert not any(
-        call.kwargs.get("step") == "reply.check.timeout" for call in mock_log_step.call_args_list
-    )
+    assert result == [{"type": "text", "data": {"text": "这条回复需要检查"}}]
+    steps = [
+        json.loads(call.args[1])["step"]
+        for call in mock_context.logger.info.call_args_list
+        if call.args and str(call.args[0]).startswith("xiaoqing_chat step=")
+    ]
+    assert "reply.check.error" in steps
+    assert "reply.check.timeout" not in steps
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
 async def test_handle_internal_reset_cancels_pending_persist_task(
     mock_context, sample_group_event, tmp_path
 ):
-    from contextlib import suppress
-
     from plugins.xiaoqing_chat.commands import handle_internal
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-    from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
-    chat_id = "g67890"
-    runtime = MagicMock()
-    state   = ChatRuntimeState()
-    bind_all_stores(state, tmp_path)
+    chat_id               = "g67890"
+    mock_context.data_dir = tmp_path
+    state                 = bound_state(mock_context)
 
     async def _pending_persist():
         await asyncio.sleep(30)
@@ -191,10 +77,8 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
     persist_task                 = asyncio.create_task(_pending_persist())
     state.persist_tasks[chat_id] = persist_task
 
-    _set_context_principal(mock_context, sample_group_event, group_role="admin")
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
-    with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("重置", "确认", sample_group_event, mock_context)
+    set_context_principal(mock_context, sample_group_event, group_role="admin")
+    result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert chat_id not in state.persist_tasks

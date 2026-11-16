@@ -8,7 +8,6 @@
 import asyncio
 import hashlib
 import json
-import logging
 import math
 import re
 import secrets
@@ -179,12 +178,6 @@ _HELP_CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
-def _get_logger(context):
-    if context and hasattr(context, "logger"):
-        return context.logger
-    return logging.getLogger(__name__)
-
-
 def _extract_first_at_qq(event: dict[str, Any]) -> str:
     message = event.get("message")
     if not isinstance(message, list):
@@ -253,7 +246,7 @@ async def _open_database_owned(db_path: str) -> Database:
 async def init(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
 
-    log                       = _get_logger(context)
+    log                       = context.logger
     database: Database | None = None
 
     try:
@@ -303,7 +296,7 @@ async def init(context) -> None:
 
 async def cleanup(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
-    log = _get_logger(context)
+    log = context.logger
 
     database        = _db_instance
     _db_instance    = None
@@ -732,7 +725,7 @@ def _execute_qingpet_command(
         return public_error_message(
             context,
             exc,
-            logger    = _get_logger(context),
+            logger    = context.logger,
             component = "qingpet.command",
         )
 
@@ -742,7 +735,7 @@ async def handle(
 ) -> list[dict[str, Any]]:
     """把根命令交给隔离线程执行，并统一规范化插件输出。"""
 
-    log          = _get_logger(context)
+    log          = context.logger
     raw_group_id = event.get("group_id")
     try:
         group_id = int(raw_group_id) if raw_group_id is not None else 0
@@ -837,7 +830,7 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
     定时衰减任务（每分钟执行）。
     复用初始化阶段的 PetService，确保定时任务与命令共享同一数据库状态。
     """
-    log = _get_logger(context)
+    log = context.logger
 
     if _db_instance is None or _pet_service is None:
         return []
@@ -884,7 +877,7 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
 
 async def scheduled_trade_expiry(context) -> None:
     """独立结算已到期交易托管；数据库 claim 使重复/并发执行保持幂等。"""
-    log = _get_logger(context)
+    log = context.logger
     if _db_instance is None:
         return
 
@@ -905,7 +898,7 @@ async def scheduled_trade_expiry(context) -> None:
 
 async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
     """在展示会截止后结算有效票；事务 claim 保证并发调度只奖励一次。"""
-    log = _get_logger(context)
+    log = context.logger
     if _db_instance is None or _social_service is None:
         return []
     db             = _db_instance
@@ -962,7 +955,7 @@ async def scheduled_daily_reset(context) -> None:
     每日重置（每天00:00）。
     按群原子重置每日状态、递增宠物年龄并登记调度完成状态。
     """
-    log = _get_logger(context)
+    log = context.logger
 
     if _db_instance is None:
         return
@@ -984,7 +977,7 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
     每周活动结算。
     数据库事务负责排行奖励和称号；展示会由独立调度任务结算。
     """
-    log = _get_logger(context)
+    log = context.logger
 
     if _db_instance is None:
         return []

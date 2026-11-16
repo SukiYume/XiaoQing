@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,33 @@ def _image_response(
         charset = None,
         headers = {"Content-Type": content_type},
     )
+
+
+def _png_larger_than(limit: int) -> bytes:
+    """一个能正常解码、字节数超过 ``limit`` 的 PNG（靠多个文本块撑大）。"""
+
+    from PIL import Image, PngImagePlugin
+
+    info  = PngImagePlugin.PngInfo()
+    total = 0
+    index = 0
+    while total <= limit:
+        info.add_text(f"padding{index}", "a" * 900_000)
+        total += 900_000
+        index += 1
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), (1, 2, 3)).save(output, format="PNG", pnginfo=info)
+    return output.getvalue()
+
+
+def _wide_png(width: int) -> bytes:
+    """宽 ``width``、高 1 的单色 PNG：像素多而压缩后字节很少。"""
+
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("1", (width, 1)).save(output, format="PNG")
+    return output.getvalue()
 
 
 @pytest.fixture
@@ -134,10 +162,10 @@ def test_html_parser_supports_fallback_metadata(
     assert (description, image_reference) == (expected_description, expected_image)
 
 
-def test_html_parser_drops_overlong_image_reference(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_URL_LENGTH", 8)
+def test_html_parser_drops_overlong_image_reference() -> None:
+    overlong = "/" + "a" * url_parser.MAX_IMAGE_URL_LENGTH
     _, _, image_reference = url_parser._parse_preview_html(
-        '<meta property="og:image" content="/much-too-long.png">'
+        f'<meta property="og:image" content="{overlong}">'
     )
     assert image_reference == ""
 
@@ -156,22 +184,18 @@ def test_image_validation_uses_actual_format(image_format: str, extension: str) 
     assert url_parser._detect_image_extension(_image_bytes(image_format)) == extension
 
 
-def test_image_validation_rejects_invalid_unsupported_and_oversized_payloads(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_image_validation_rejects_invalid_unsupported_and_oversized_payloads() -> None:
     with pytest.raises(ValueError, match="valid image"):
         url_parser._detect_image_extension(b"not an image")
     with pytest.raises(ValueError, match="unsupported"):
         url_parser._detect_image_extension(_image_bytes("GIF"))
 
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_PIXELS", 3)
     with pytest.raises(ValueError, match="dimensions"):
-        url_parser._detect_image_extension(_image_bytes())
+        url_parser._detect_image_extension(_wide_png(url_parser.MAX_IMAGE_PIXELS + 1))
 
 
 def test_cached_preview_rejects_mismatched_and_oversized_files(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache = url_parser._preview_cache(context)
     cache.directory.mkdir()
@@ -181,8 +205,7 @@ def test_cached_preview_rejects_mismatched_and_oversized_files(
     assert not mismatched.exists()
 
     oversized = cache.directory / "oversized.png"
-    oversized.write_bytes(_image_bytes("PNG"))
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", 1)
+    oversized.write_bytes(_png_larger_than(url_parser.MAX_IMAGE_BYTES))
     assert url_parser._validated_cached_preview(cache, (oversized.name,)) is None
     assert not oversized.exists()
 
@@ -257,7 +280,7 @@ async def test_relative_preview_image_is_validated_cached_and_reused(
     cache_dir = context.data_dir / "url_previews"
     cache_dir.mkdir()
     stale_path = cache_dir / f"{digest}.jpg"
-    stale_path.write_bytes(b"legacy invalid image")
+    stale_path.write_bytes(b"invalid cached image")
 
     first  = await url_parser.handle_url("https://example.com/input", {}, context)
     second = await url_parser.handle_url("https://example.com/input", {}, context)
@@ -301,7 +324,6 @@ async def test_image_only_metadata_returns_an_image_segment(
 async def test_empty_and_oversized_pages_return_no_preview(
     context: SimpleNamespace,
     network: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     network.page.return_value = None
     assert await url_parser.handle_url("https://example.com", {}, context) == []
@@ -309,12 +331,10 @@ async def test_empty_and_oversized_pages_return_no_preview(
     network.page.return_value = _html_response("<html><body>no metadata</body></html>")
     assert await url_parser.handle_url("https://example.com", {}, context) == []
 
-    monkeypatch.setattr(url_parser, "MAX_HTML_BYTES", 3)
-    network.page.return_value = _html_response("<title>Valid preview</title>")
-    decoder = MagicMock(wraps=url_parser._decode_html)
-    monkeypatch.setattr(url_parser, "_decode_html", decoder)
+    network.page.return_value = _html_response(
+        "<title>Valid preview</title>" + " " * url_parser.MAX_HTML_BYTES
+    )
     assert await url_parser.handle_url("https://example.com", {}, context) == []
-    decoder.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -394,13 +414,11 @@ async def test_empty_oversized_or_uncacheable_image_keeps_text(
     result                     = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1
 
-    payload                    = _image_bytes()
-    network.image.return_value = _image_response(payload)
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", len(payload) - 1)
-    result = await url_parser.handle_url("https://example.com", {}, context)
+    network.image.return_value = _image_response(_png_larger_than(url_parser.MAX_IMAGE_BYTES))
+    result                     = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1
 
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", 5 * 1024 * 1024)
+    network.image.return_value = _image_response(_image_bytes())
     monkeypatch.setattr(
         url_parser,
         "PREVIEW_CACHE_LIMITS",
@@ -415,13 +433,11 @@ async def test_empty_oversized_or_uncacheable_image_keeps_text(
 async def test_overlong_resolved_image_url_is_not_validated(
     context: SimpleNamespace,
     network: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(url_parser, "MAX_IMAGE_URL_LENGTH", 20)
     assert (
         await url_parser._cache_preview_image(
             "https://example.com",
-            "/a-very-long-image-name.png",
+            "/" + "a" * url_parser.MAX_IMAGE_URL_LENGTH,
             context,
         )
         is None

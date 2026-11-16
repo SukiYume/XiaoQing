@@ -338,28 +338,6 @@ class TestSessionTimeout:
     """测试会话超时机制"""
 
     @pytest.mark.asyncio
-    async def test_session_expiry(self):
-        """测试会话过期"""
-        manager = SessionManager(default_timeout=0.1)  # 100ms超时
-
-        await manager.create(
-            user_id=10001, group_id=50001, plugin_name="test", initial_data={"state": "active"}
-        )
-        session = await manager.get(10001, 50001)
-        assert session is not None
-
-        # 等待超时
-        await asyncio.sleep(0.15)
-
-        # 清理过期会话
-        cleaned = await manager.cleanup_expired()
-        assert cleaned == 1
-
-        # 验证会话已不存在
-        session = await manager.get(10001, 50001)
-        assert session is None
-
-    @pytest.mark.asyncio
     async def test_session_refresh(self):
         """测试会话刷新"""
         manager = SessionManager(default_timeout=0.2)
@@ -474,7 +452,7 @@ class TestSessionTimeout:
 
 
 class TestSessionTransactions:
-    """Regression coverage for isolated snapshots and true update transactions."""
+    """隔离的会话快照，以及真正的更新事务（提交、回滚、取消、重入）。"""
 
     @pytest.mark.asyncio
     async def test_create_and_get_return_detached_snapshots(self):

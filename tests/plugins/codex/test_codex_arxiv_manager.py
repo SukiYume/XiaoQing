@@ -7,27 +7,25 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
-    CodexQueueManager,
-    CodexRunResult,
+    CallbackStreamingProcess,
     DeliveryTarget,
     FakeContext,
     FakeRunner,
     PluginCapabilities,
     PluginPrincipal,
     PluginSettingsSnapshot,
-    _arxiv_addon,
-    _install_fake_manager,
-    _valid_arxiv_summary,
-    _wait_manager_idle,
-    _wait_until,
+    arxiv_addon,
     codex_arxiv_summary,
     codex_main,
+    install_fake_manager,
+    valid_arxiv_summary,
+    wait_manager_idle,
+    wait_until,
 )
 
 reset_codex_manager = _fixture_support.reset_codex_manager
@@ -39,9 +37,9 @@ async def test_arxiv_summary_validates_date_links_and_canonicalizes_pdf_urls(
 ) -> None:
     context   = FakeContext(tmp_path)
     canonical = "https://arxiv.org/abs/2605.16917"
-    runner = FakeRunner(result_text=_valid_arxiv_summary("2026-05-19", canonical))
-    manager = _install_fake_manager(context, runner)
-    addon   = _arxiv_addon(manager)
+    runner = FakeRunner(result_text=valid_arxiv_summary("2026-05-19", canonical))
+    manager = install_fake_manager(context, runner)
+    addon   = arxiv_addon(manager)
 
     bad_date = await addon.enqueue_or_replay(
         date     = "2026-02-30",
@@ -77,7 +75,7 @@ async def test_arxiv_summary_validates_date_links_and_canonicalizes_pdf_urls(
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in queued
     assert canonical in runner.calls[-1][1]
@@ -85,10 +83,7 @@ async def test_arxiv_summary_validates_date_links_and_canonicalizes_pdf_urls(
 
 
 @pytest.mark.asyncio
-async def test_arxiv_summary_public_entrypoint_uses_addon(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_arxiv_summary_public_entrypoint_uses_addon(tmp_path: Path):
     context           = FakeContext(tmp_path)
     context.principal = PluginPrincipal(
         kind             = "scheduled_system",
@@ -96,18 +91,14 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
     )
     context.capabilities = PluginCapabilities(is_system=True)
     runner = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
             "entrypoint summary",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    async def fake_get_manager(_context: Any) -> CodexQueueManager:
-        return manager
-
-    monkeypatch.setattr(codex_arxiv_summary, "get_manager", fake_get_manager)
     result = await codex_arxiv_summary.enqueue_or_replay_arxiv_summary(
         context,
         date     = "2026-05-19",
@@ -115,7 +106,7 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
         user_id  = 1,
         group_id = 2,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(runner.calls) == 2
@@ -131,17 +122,17 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
     context.principal = PluginPrincipal(kind="scheduled_system", delivery_targets=targets)
     context.capabilities = PluginCapabilities(is_system=True)
     runner = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-07-11",
             "https://arxiv.org/abs/2607.00001",
             "fanout summary",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
     await manager.create_session("astro-ph", None, user_id=999, group_id=333)
     manager.sessions["astro-ph"].thread_id = "existing-thread"
 
-    result = await _arxiv_addon(manager).enqueue_or_replay(
+    result = await arxiv_addon(manager).enqueue_or_replay(
         date             = "2026-07-11",
         links            = ["https://arxiv.org/abs/2607.00001"],
         user_id          = None,
@@ -149,7 +140,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
         context          = context,
         delivery_targets = targets,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(runner.calls) == 1
@@ -158,7 +149,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
 
     context.actions.clear()
     replay_targets = (DeliveryTarget("group", 44), DeliveryTarget("group", 55))
-    replay         = await _arxiv_addon(manager).enqueue_or_replay(
+    replay         = await arxiv_addon(manager).enqueue_or_replay(
         date             = "2026-07-11",
         links            = ["https://arxiv.org/abs/2607.00001"],
         user_id          = None,
@@ -171,7 +162,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
     assert [action["params"].get("group_id") for action in context.actions] == [44, 55]
 
     context.actions.clear()
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date             = "2026-07-12",
         links            = ["https://arxiv.org/abs/2607.00002"],
         user_id          = None,
@@ -179,7 +170,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
         context          = context,
         delivery_targets = (),
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     assert len(runner.calls) == 2
     assert context.actions == []
 
@@ -192,26 +183,26 @@ async def test_same_date_replays_only_when_canonical_link_set_matches(
     first_link  = "https://arxiv.org/abs/2608.00001"
     second_link = "https://arxiv.org/abs/2608.00002"
     runner      = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-08-06",
             first_link,
             "first listing summary",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-08-06",
         links    = [first_link],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     assert len(runner.calls) == 2  # 初始化 + 第一份摘要
 
     context.actions.clear()
-    replay = await _arxiv_addon(manager).enqueue_or_replay(
+    replay = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-08-06",
         links    = ["http://arxiv.org/pdf/2608.00001v3.pdf?download=1"],
         user_id  = 1,
@@ -221,20 +212,20 @@ async def test_same_date_replays_only_when_canonical_link_set_matches(
     assert "已重发" in replay
     assert len(runner.calls) == 2
 
-    runner.result_text = _valid_arxiv_summary(
+    runner.result_text = valid_arxiv_summary(
         "2026-08-06",
         second_link,
         "updated listing summary",
     )
     context.actions.clear()
-    updated = await _arxiv_addon(manager).enqueue_or_replay(
+    updated = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-08-06",
         links    = [second_link],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in updated
     assert len(runner.calls) == 3
@@ -263,47 +254,32 @@ async def test_arxiv_summary_public_entrypoint_rejects_wrong_context(
 
 
 @pytest.mark.asyncio
-async def test_codex_main_exports_only_the_fixed_arxiv_summary_entrypoint(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_codex_main_exports_only_the_fixed_arxiv_summary_entrypoint(tmp_path: Path):
+    # 调用方没有带收件目标时，结果发给服务参数里的群。
+    link    = "https://arxiv.org/abs/2607.00001"
     context = FakeContext(tmp_path)
-    exported = AsyncMock(return_value="queued")
-    monkeypatch.setattr(codex_main, "enqueue_or_replay_arxiv_summary", exported)
+    runner = FakeRunner(result_text=valid_arxiv_summary("2026-07-11", link))
+    manager = install_fake_manager(context, runner)
 
-    assert (
-        await codex_main.enqueue_arxiv_summary_service(
-            "2026-07-11",
-            ["https://arxiv.org/abs/2607.00001"],
-            1,
-            2,
-            context,
-        )
-        == "queued"
-    )
-    exported.assert_awaited_once_with(
-        context,
-        date     = "2026-07-11",
-        links    = ["https://arxiv.org/abs/2607.00001"],
-        user_id  = 1,
-        group_id = 2,
-    )
+    result = await codex_main.enqueue_arxiv_summary_service("2026-07-11", [link], 1, 2, context)
+    await wait_manager_idle(manager)
+
+    assert "已投递" in result
+    assert link in runner.calls[-1][1]
+    assert [action["params"].get("group_id") for action in context.actions] == [2]
 
 
 @pytest.mark.asyncio
-async def test_codex_shutdown_without_manager_does_not_construct_one(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_codex_shutdown_without_manager_does_not_construct_one(tmp_path: Path):
     import plugins.codex.manager as manager_module
 
-    def forbidden_constructor(_context):
-        raise AssertionError("shutdown constructed a manager")
+    context = FakeContext(tmp_path)
 
-    monkeypatch.setattr(manager_module, "CodexQueueManager", forbidden_constructor)
+    await codex_main.shutdown(context)
 
-    await codex_main.shutdown(FakeContext(tmp_path))
     assert manager_module._MANAGER is None
+    # 构造 manager 会在插件数据目录里建立会话状态文件。
+    assert not context.data_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -483,7 +459,7 @@ async def test_codex_parallel_limit_resize_preserves_outstanding_permits(tmp_pat
     from dataclasses import replace
 
     context = FakeContext(tmp_path, max_parallel_jobs=2)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     limiter = manager.global_sem
     await limiter.acquire()
     await limiter.acquire()
@@ -513,7 +489,7 @@ async def test_codex_manager_rejects_late_stale_settings_revision(tmp_path: Path
     from dataclasses import replace
 
     context = FakeContext(tmp_path, max_parallel_jobs=1)
-    manager    = _install_fake_manager(context, FakeRunner())
+    manager    = install_fake_manager(context, FakeRunner())
     old_config = manager.config
     new_config = replace(
         old_config,
@@ -556,45 +532,36 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
     first_started               = asyncio.Event()
     release_first               = asyncio.Event()
 
-    class GenerationRunner:
-        def __init__(self, config, output_dir):
-            self.config     = config
-            self.output_dir = output_dir
+    async def spawn(*args: Any, **_kwargs: Any) -> CallbackStreamingProcess:
+        """进程边界：不真起 codex，按真实命令行记录这次执行用的策略，并回一段完成的事件流。"""
+        argv = list(args)
 
-        async def run(
-            self,
-            *,
-            cwd,
-            prompt,
-            thread_id,
-            job,
-            artifact_dir    = None,
-            process_handoff = None,
-            prompt_handoff  = None,
-        ):
-            if process_handoff is not None and not await process_handoff(None):
-                raise AssertionError("job was unexpectedly cancelled before runner start")
-            if prompt_handoff is not None and not await prompt_handoff():
-                raise AssertionError("job was unexpectedly cancelled before prompt")
+        async def exchange(payload: bytes) -> tuple[bytes, bytes]:
+            prompt = payload.decode("utf-8").split("\n", 1)[0]
+            label  = "active" if prompt == "block active" else "waiting"
+            job    = manager.running[label]
+            assert job.execution_config is not None
             calls.append(
                 {
                     "prompt"           : prompt,
-                    "runner"           : self,
-                    "sandbox"          : self.config.sandbox,
-                    "approval_policy"  : self.config.approval_policy,
-                    "allowed_cwd_roots": self.config.allowed_cwd_roots,
+                    "sandbox"          : argv[argv.index("--sandbox") + 1],
+                    "approval_policy"  : argv[argv.index("-c") + 1],
+                    "allowed_cwd_roots": job.execution_config.allowed_cwd_roots,
                 }
             )
-            if prompt == "block active":
+            if label == "active":
                 first_started.set()
                 await release_first.wait()
-            return CodexRunResult(
-                exit_code   = 0,
-                thread_id   = thread_id or "thread-policy-refresh",
-                final_text  = f"done: {prompt}",
-                stdout_tail = "",
-                stderr_tail = "",
+            events = (
+                {"type": "thread.started", "thread_id": "thread-policy-refresh"},
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": f"done: {prompt}"},
+                },
             )
+            return b"".join(json.dumps(event).encode("utf-8") + b"\n" for event in events), b""
+
+        return CallbackStreamingProcess(exchange)
 
     root       = tmp_path / "app"
     config_dir = root / "config"
@@ -641,10 +608,11 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
     app     = XiaoQingApp(root)
     context = app._build_plugin_context("codex", plugin_dir, data_dir, {})
     assert callable(context.get_settings_snapshot)
-    monkeypatch.setattr(manager_module, "CodexRunner", GenerationRunner)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
 
-    manager = await manager_module.get_manager(context)
-    limiter = manager.global_sem
+    manager      = await manager_module.get_manager(context)
+    first_runner = manager.runner
+    limiter      = manager.global_sem
     await manager.create_session("active", None, user_id=1, group_id=None)
     await manager.create_session("waiting", None, user_id=1, group_id=None)
     await manager.enqueue(
@@ -687,15 +655,15 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
     # the scoped settings reader when it advances on its own.  The raw
     # ConfigManager is intentionally unavailable to plugins.
     release_first.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert [call["prompt"] for call in calls] == ["block active", "queued after reload"]
     assert calls[0]["sandbox"] == "workspace-write"
-    assert calls[0]["approval_policy"] == "never"
+    assert calls[0]["approval_policy"] == "approval_policy='never'"
     assert calls[1]["sandbox"] == "read-only"
-    assert calls[1]["approval_policy"] == "on-request"
+    assert calls[1]["approval_policy"] == "approval_policy='on-request'"
     assert calls[1]["allowed_cwd_roots"] == (str(default_cwd),)
-    assert calls[0]["runner"] is not calls[1]["runner"]
+    assert manager.runner is not first_runner
     assert manager.global_sem is limiter
     assert manager.config.sandbox == "read-only"
     app.scheduler.shutdown()
@@ -707,7 +675,7 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
 
     context = FakeContext(tmp_path, max_parallel_jobs=2)
     runner       = FakeRunner()
-    manager      = _install_fake_manager(context, runner)
+    manager      = install_fake_manager(context, runner)
     old_snapshot = ConfigSnapshot(
         config   = context.config,
         secrets  = {},
@@ -754,7 +722,7 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
         context  = context,
         metadata = {"suppress_delivery": True},
     )
-    await _wait_until(lambda: runner.started == ["active"])
+    await wait_until(lambda: runner.started == ["active"])
     await manager.enqueue(
         "waiting",
         "after shrink",
@@ -771,7 +739,7 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
     assert runner.started == ["active"]
 
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert runner.started == ["active", "waiting"]
     assert reads >= 5
@@ -781,25 +749,25 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
 async def test_arxiv_summary_replays_existing_success_without_rerun(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
             "cached summary",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-19",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     context.actions.clear()
 
-    result = await _arxiv_addon(manager).enqueue_or_replay(
+    result = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-19",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,

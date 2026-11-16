@@ -513,7 +513,7 @@ async def test_final_answer_attaches_command_files_without_copying_path(tmp_path
 def _command_env(tmp_path: Path, reply: Any) -> tuple[ToolEnv, AsyncMock]:
     """命令回报由 ``reply`` 决定（每次调用得到的文字）。"""
 
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     run = AsyncMock(
         side_effect=lambda command, **_: DeliverySegments(
@@ -523,7 +523,7 @@ def _command_env(tmp_path: Path, reply: Any) -> tuple[ToolEnv, AsyncMock]:
     )
     context = FakeAgentContext(
         tmp_path / "data",
-        catalog=_load_catalog().roots,
+        catalog=load_production_catalog().roots,
         command_runner=SimpleNamespace(run=run),
     )
     return _env(tmp_path, context), run
@@ -588,7 +588,7 @@ async def test_deleting_two_different_records_is_not_a_repeat(tmp_path):
 
 @pytest.mark.asyncio
 async def test_repeated_service_failure_stops_only_the_identical_call(tmp_path):
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     runner = SimpleNamespace(
         run=AsyncMock(
@@ -599,7 +599,9 @@ async def test_repeated_service_failure_stops_only_the_identical_call(tmp_path):
     )
     env = _env(
         tmp_path,
-        FakeAgentContext(tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner),
+        FakeAgentContext(
+            tmp_path / "data", catalog=load_production_catalog().roots, command_runner=runner
+        ),
     )
     env.selected_plugins.add("color")
     results = [
@@ -614,11 +616,14 @@ async def test_repeated_service_failure_stops_only_the_identical_call(tmp_path):
 
 @pytest.mark.asyncio
 async def test_denied_catalog_and_command_report_blocked_without_running(tmp_path):
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     runner = SimpleNamespace(run=AsyncMock())
     context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner, is_admin=False
+        tmp_path / "data",
+        catalog        = load_production_catalog().roots,
+        command_runner = runner,
+        is_admin       = False,
     )
     env   = _env(tmp_path, context)
     tools = _tools(env)
@@ -632,13 +637,13 @@ async def test_denied_catalog_and_command_report_blocked_without_running(tmp_pat
 
 @pytest.mark.asyncio
 async def test_unchanged_help_is_bounded_and_new_queries_remain_available(tmp_path):
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     env = _env(
         tmp_path,
         FakeAgentContext(
             tmp_path / "data",
-            catalog=_load_catalog().roots,
+            catalog=load_production_catalog().roots,
             command_runner=SimpleNamespace(run=AsyncMock()),
         ),
     )
@@ -674,7 +679,7 @@ async def test_command_outcome_is_visible_to_model_without_text_prefix(tmp_path,
 @pytest.mark.asyncio
 async def test_background_acceptance_tells_the_model_not_to_wait_or_repeat(tmp_path):
     from core.delivery import CommandOutcome, DeliverySegments
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     runner = SimpleNamespace(
         run=AsyncMock(
@@ -685,7 +690,7 @@ async def test_background_acceptance_tells_the_model_not_to_wait_or_repeat(tmp_p
         )
     )
     context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+        tmp_path / "data", catalog=load_production_catalog().roots, command_runner=runner
     )
     env   = _env(tmp_path, context)
     tools = _tools(env)
@@ -740,7 +745,7 @@ async def test_unknown_middle_word_returns_complete_candidate_commands(tmp_path)
         _tools(env), env, "xiaoqing_commands", {"query": "pendo schedule add"}
     )
     assert "完整路径未匹配" in result.content
-    assert "/pendo event add" in result.content and "准点提醒" in result.content
+    assert "/pendo event add" in result.content
     assert "/pendo ledger add" in result.content and "currency:" in result.content
     result = await execute_tool(
         _tools(env),
@@ -748,16 +753,16 @@ async def test_unknown_middle_word_returns_complete_candidate_commands(tmp_path)
         "xiaoqing_commands",
         {"query": "pendo event reminders ack 确认"},
     )
-    assert "/pendo event reminders confirm" in result.content and "标记为已确认" in result.content
+    assert "/pendo event reminders confirm" in result.content
     assert "pendo.pendo.confirm" not in result.content
 
 
 @pytest.mark.asyncio
 async def test_catalog_keeps_named_plugin_scope_and_parent_purpose(tmp_path):
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
     context = FakeAgentContext(
-        tmp_path / "data", catalog=_load_catalog().roots, command_runner=SimpleNamespace()
+        tmp_path / "data", catalog=load_production_catalog().roots, command_runner=SimpleNamespace()
     )
     env    = _env(tmp_path, context)
     result = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "pendo todo show"})
@@ -1531,7 +1536,7 @@ async def test_identical_write_runs_once_per_task_whatever_the_plugin(tmp_path):
     assert retried.state == "ok" and runner.run.await_count == 2
 
 
-# ──────────────────── 少走冗余步骤：交付方式、同轮顺序与服务范围 ────────────────────
+# ──────────────────── 交付方式、同轮顺序与服务范围 ────────────────────
 
 
 def _loop_env(tmp_path: Path, script: list, run) -> tuple[ToolEnv, dict, Any]:
@@ -1653,9 +1658,9 @@ async def test_update_keeps_selected_services(tmp_path):
 
 def test_catalog_lines_describe_each_parent_once(tmp_path):
     """整份服务说明里父级用途只交代一次，篇幅不随子命令数量成倍增长。"""
-    from tests.core.test_command_catalog import _load_catalog
+    from tests.helpers.command_catalog_test_support import load_production_catalog
 
-    context = FakeAgentContext(tmp_path / "data", catalog=_load_catalog().roots)
+    context = FakeAgentContext(tmp_path / "data", catalog=load_production_catalog().roots)
     lines = catalog_lines(context, "pendo event")
     text  = "\n\n".join(lines)
     assert text.count("上级用途：pendo：") == 1

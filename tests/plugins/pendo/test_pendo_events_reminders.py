@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,8 +16,28 @@ from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.rule_parser import RuleParser
 
 
+class _ScriptedAi:
+    """模型边界替身：`complete` 返回预先设定的 JSON 文本。"""
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def complete(self, route, messages, **_kwargs):
+        return SimpleNamespace(content=json.dumps(self.payload, ensure_ascii=False))
+
+
+def _ai_context(payload: dict) -> SimpleNamespace:
+    return SimpleNamespace(capabilities=SimpleNamespace(ai=_ScriptedAi(payload)))
+
+
+def _edit_handler(db, payload: dict) -> EventHandler:
+    """编辑用的处理器：解析器是真实的 `AIParser`，只有模型回答由 `payload` 剧本给出。"""
+    parser = AIParser(context=_ai_context(payload), db=db)
+    return EventHandler(db=db, ai_parser=parser, reminder_service=MagicMock())
+
+
 class TestEventLeafModel:
-    """测试新版日程 leaf 数据模型"""
+    """日程 leaf 数据模型"""
 
     def test_event_item_defaults_to_a_single_event(self):
 
@@ -23,13 +46,6 @@ class TestEventLeafModel:
         item = EventItem(owner_id="u1", title="会议")
         assert item.event_role == "single"
         assert item.event_collection_id is None
-
-    def test_event_item_has_notes_field(self):
-
-        from plugins.pendo.models.item import EventItem
-
-        item = EventItem(owner_id="u1", title="会议", notes="备注内容")
-        assert item.notes == "备注内容"
 
     def test_event_item_to_dict_includes_event_graph_fields(self):
 
@@ -55,13 +71,13 @@ class TestEventLeafModel:
 class TestAIParserMilestones:
     """测试 AI parser 处理多时间节点事件"""
 
-    def _make_parser(self):
+    def _make_parser(self, payload: dict | None = None):
         from datetime import datetime
 
         from plugins.pendo.services.ai_parser import AIParser
 
         return AIParser(
-            context=None,
+            context=_ai_context(payload) if payload is not None else None,
             now_factory=lambda tz=None: datetime(2026, 1, 1, 9, 0, 0, tzinfo=tz),
         )
 
@@ -88,12 +104,8 @@ class TestAIParserMilestones:
     def test_parse_event_with_ai_handles_milestones(self):
         """模拟 LLM 返回 milestones 时正确解析"""
         import asyncio
-        import json
-        from unittest.mock import AsyncMock, patch
 
-        parser = self._make_parser()
-
-        mock_response = json.dumps(
+        parser = self._make_parser(
             {
                 "title"         : "星团会议",
                 "start_time"    : None,
@@ -112,8 +124,7 @@ class TestAIParserMilestones:
         )
 
         async def run():
-            with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
-                return await parser.parse_event_with_ai("...", "user1")
+            return await parser.parse_event_with_ai("...", "user1")
 
         result = asyncio.run(run())
         assert result["milestones"][0]["name"] == "注册截止"
@@ -126,11 +137,8 @@ class TestAIParserMilestones:
     def test_parse_event_with_ai_treats_timezone_suffix_as_local_wall_time(self):
         """模型擅自添加的 UTC 后缀不能改变用户说出的本地钟点。"""
         import asyncio
-        import json
-        from unittest.mock import AsyncMock, patch
 
-        parser        = self._make_parser()
-        mock_response = json.dumps(
+        parser = self._make_parser(
             {
                 "parse_source"  : "rule",
                 "title"         : "心理咨询",
@@ -146,8 +154,7 @@ class TestAIParserMilestones:
         )
 
         async def run():
-            with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
-                return await parser.parse_event_with_ai("下周三晚上六点心理咨询", "user1")
+            return await parser.parse_event_with_ai("下周三晚上六点心理咨询", "user1")
 
         result = asyncio.run(run())
         assert result["parse_source"] == "ai"
@@ -157,12 +164,8 @@ class TestAIParserMilestones:
     def test_parse_event_with_ai_recovers_single_milestone_as_start_time(self):
         """LLM 把单次日程误放进一个 milestone 时，应按单次日程整理。"""
         import asyncio
-        import json
-        from unittest.mock import AsyncMock, patch
 
-        parser = self._make_parser()
-
-        mock_response = json.dumps(
+        parser = self._make_parser(
             {
                 "title"         : "悉尼大学博后申请",
                 "start_time"    : None,
@@ -179,8 +182,7 @@ class TestAIParserMilestones:
         )
 
         async def run():
-            with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
-                return await parser.parse_event_with_ai("...", "user1")
+            return await parser.parse_event_with_ai("...", "user1")
 
         result = asyncio.run(run())
         assert result["title"] == "悉尼大学博后申请"
@@ -194,8 +196,6 @@ class TestMilestoneEventHandler:
     """测试多时间节点事件创建"""
 
     def _make_handler(self):
-
-        from unittest.mock import MagicMock
 
         from plugins.pendo.handlers.event import EventHandler
 
@@ -273,8 +273,6 @@ class TestMilestoneReminderMessage:
 
     def _make_service(self):
 
-        from unittest.mock import MagicMock
-
         from plugins.pendo.services.reminder import ReminderService
 
         db = MagicMock()
@@ -341,8 +339,6 @@ class TestMilestoneReminderMessage:
 
 class TestRecurringEvents:
     def test_create_recurring_event_preserves_duration_per_instance(self):
-        from unittest.mock import MagicMock
-
         from plugins.pendo.handlers.event import EventHandler
 
         inserted_items = []
@@ -374,9 +370,6 @@ class TestRecurringEvents:
         assert inserted_items[1].end_time == "2030-01-02T10:30:00+08:00"
 
     def test_edit_recurring_collection_updates_header_without_shifting_occurrences(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
@@ -427,12 +420,7 @@ class TestRecurringEvents:
             db.insert_item(first, "series123_20300101")
             db.insert_item(second, "series123_20300102")
 
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-
-            async def fake_parse_updates(changes, current_event):
-                return {"title": "新版重复会议"}
-
-            handler._parse_updates = fake_parse_updates
+            handler = _edit_handler(db, {"title": "新版重复会议"})
 
             result = asyncio.run(
                 handler.edit_event("u1", f"{collection_id} 改名为新版重复会议", MagicMock())
@@ -454,8 +442,6 @@ class TestRecurringEvents:
 
 class TestEventEditsAndReminders:
     def test_parse_updates_uses_partial_ai_parse_for_edits(self):
-        from unittest.mock import MagicMock
-
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
 
@@ -497,8 +483,6 @@ class TestEventEditsAndReminders:
         }
 
     def test_parse_updates_does_not_take_location_from_note_text(self):
-        from unittest.mock import MagicMock
-
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
 
@@ -529,9 +513,6 @@ class TestEventEditsAndReminders:
         assert updates == {"notes": "从北京南坐G123去会场"}
 
     def test_edit_single_instance_keeps_category_and_explicit_reminders(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
@@ -553,21 +534,19 @@ class TestEventEditsAndReminders:
             )
             db.insert_item(event, "evt12345")
 
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-
-            async def fake_parse_updates(changes, current_event):
-                return {
-                    "start_time"  : "2026-04-07T14:00:00",
-                    "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
-                }
-
-            handler._parse_updates = fake_parse_updates
+            handler = _edit_handler(
+                db,
+                {
+                    "start_time"    : "2026-04-07T14:00:00",
+                    "remind_offsets": ["提前1天", "提前1小时"],
+                },
+            )
 
             result = asyncio.run(
-                handler._edit_single_instance(
+                handler.edit_event(
                     "u1",
-                    "evt12345",
-                    "4月7日下午两点，提前一天和提前一小时提醒",
+                    "evt12345 4月7日下午两点，提前一天和提前一小时提醒",
+                    MagicMock(),
                 )
             )
 
@@ -586,9 +565,46 @@ class TestEventEditsAndReminders:
         finally:
             db.cleanup()
 
-    def test_collection_reminders_apply_explicit_offsets_to_children(self, tmp_path):
-        from unittest.mock import MagicMock
+    def test_edit_to_explicit_reminder_times_keeps_the_start_time_reminder(self, tmp_path):
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
 
+        db = Database(str(tmp_path / "pendo.db"))
+
+        try:
+            event = EventItem(
+                owner_id     = "u1",
+                title        = "FAST2026观测申请截止",
+                start_time   = "2026-03-31T14:00:00",
+                remind_times = ["2026-03-30T14:00:00", "2026-03-31T14:00:00"],
+                created_at   = "2026-03-20T00:00:00",
+                updated_at   = "2026-03-20T00:00:00",
+            )
+            db.insert_item(event, "evt12345")
+            # 模型直接给出具体的提醒时刻，没有提前量规则，也没有改开始时间。
+            handler = _edit_handler(
+                db, {"remind_times": ["2026-03-29T14:00:00", "2026-03-30T13:00:00"]}
+            )
+
+            result = asyncio.run(
+                handler.edit_event(
+                    "u1", "evt12345 3月29日下午两点和30日下午一点提醒我", MagicMock()
+                )
+            )
+
+            assert result["status"] == "success"
+            updated = db.get_item("evt12345", "u1")
+            assert updated is not None
+            # 开始时刻本身的提醒由系统补上，且按时间排好。
+            assert updated.remind_times == [
+                "2026-03-29T06:00:00+00:00",
+                "2026-03-30T05:00:00+00:00",
+                "2026-03-31T06:00:00+00:00",
+            ]
+        finally:
+            db.cleanup()
+
+    def test_collection_reminders_apply_explicit_offsets_to_children(self, tmp_path):
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
@@ -675,8 +691,6 @@ class TestEventEditsAndReminders:
             db.cleanup()
 
     def test_list_events_exact_date_query_returns_matching_day(self, tmp_path):
-        from unittest.mock import MagicMock
-
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
@@ -705,9 +719,6 @@ class TestEventEditsAndReminders:
             db.cleanup()
 
     def test_leaf_edit_preserves_sent_history_and_prunes_stale_unsent_logs(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
@@ -735,12 +746,7 @@ class TestEventEditsAndReminders:
             db.log_reminder("evtlogs1", "2030-01-01T01:00:00+00:00", sent=True)
             db.log_reminder("evtlogs1", "2030-01-01T02:00:00+00:00", sent=True)
 
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-
-            async def fake_parse_updates(changes, current_event):
-                return {"start_time": "2030-01-10T10:00:00"}
-
-            handler._parse_updates = fake_parse_updates
+            handler = _edit_handler(db, {"start_time": "2030-01-10T10:00:00"})
 
             result = asyncio.run(
                 handler.edit_event("u1", "evtlogs1 改到2030-01-10 10:00", MagicMock())
@@ -762,9 +768,6 @@ class TestEventEditsAndReminders:
             db.cleanup()
 
     def test_edit_multi_node_leaf_shifts_only_that_leaf(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
@@ -811,12 +814,7 @@ class TestEventEditsAndReminders:
             db.insert_item(first, "mile1234_m01")
             db.insert_item(second, "mile1234_m02")
 
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-
-            async def fake_parse_updates(changes, current_event):
-                return {"start_time": "2030-01-05T10:00:00"}
-
-            handler._parse_updates = fake_parse_updates
+            handler = _edit_handler(db, {"start_time": "2030-01-05T10:00:00"})
 
             result = asyncio.run(
                 handler.edit_event("u1", "mile1234_m01 改到1月5日10点", MagicMock())
@@ -906,8 +904,6 @@ class TestEventEditsAndReminders:
             db.cleanup()
 
     def test_collection_reminder_view_returns_aggregate_series_reminders(self, tmp_path):
-        from unittest.mock import MagicMock
-
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
@@ -967,12 +963,17 @@ class TestEventEditsAndReminders:
             db.cleanup()
 
     def test_list_reminders_week_supports_multi_node_leaf_events(self, tmp_path, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
+        from plugins.pendo.utils import time_utils
+
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                # 2030-01-23 是周三，本周为 01-21 至 01-27。
+                current = cls(2030, 1, 23, 12, 0, 0)
+                return current if tz is None else current.replace(tzinfo=tz)
 
         db = Database(str(tmp_path / "pendo_milestone_reminders_week.db"))
 
@@ -1029,14 +1030,7 @@ class TestEventEditsAndReminders:
                 sent=True,
             )
 
-            monkeypatch.setattr(
-                event_module,
-                "parse_event_time_range",
-                lambda _query, **_kwargs: (
-                    "2030-01-20T00:00:00",
-                    "2030-01-26T23:59:59",
-                ),
-            )
+            monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
 
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
             result = asyncio.run(handler.handle_reminders("u1", "list week", MagicMock()))

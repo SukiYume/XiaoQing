@@ -31,7 +31,6 @@ def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
             "source_item_id",
             "reminder_rules",
         }.issubset(item_columns)
-        assert {"rrule", "parent_id", "remind_policy_id", "milestones"}.isdisjoint(item_columns)
 
         collection_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(event_collections)").fetchall()

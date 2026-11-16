@@ -22,7 +22,7 @@ from plugins.xiaoqing_life.activity import SessionDeps
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceError
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     SHANGHAI,
     FakeFetcher,
@@ -285,7 +285,6 @@ async def test_fourteen_days_of_feedback_shape_choices_habits_and_curiosity(tmp_
     )
     assert next(f for f in store.frontier if f["topic"] == target["topic"])["tried"] is True
     summary["frontier tried"] = target["topic"]
-    assert end > 0
 
     # 5. 小课题收获变成 learnings，后续问题逐层加深（最多 3 层）
     store.episodes.append(

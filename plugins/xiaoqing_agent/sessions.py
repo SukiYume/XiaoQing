@@ -38,6 +38,9 @@ class Session:
     updated_at: float = 0.0
     # 开会话时从统一记忆取的、关于发起人的记忆；会话内不变，系统提示保持相同。
     memory: str = ""
+    # 读到（或新开）这份会话时文件的修订号。文件每写一次（包括 /agent new 清空）加一，
+    # 写回时据此判断这期间会话有没有被换掉或清空。
+    revision: int = 0
 
     def messages(self) -> list[dict[str, Any]]:
         return [self.system, *(message for turn in self.turns for message in turn["messages"])]
@@ -101,7 +104,11 @@ def _size(turn: dict[str, Any]) -> int:
 
 
 class SessionStore:
-    """每个（会话, 发起人）一份文件；读改写持有路径锁，并发结束的任务各自追加一轮。"""
+    """每个（会话, 发起人）一份文件；读改写持有路径锁，并发结束的任务各自追加一轮。
+
+    文件带修订号，每次写入加一。清空不是删文件，而是写一个修订号更大的“已清空”标记：
+    清空前就在跑的任务结束时，看得出会话已经从头开始，不会把旧会话写回来。
+    """
 
     def __init__(self, data_dir: Path) -> None:
         self.root  = data_dir / "sessions"
@@ -112,28 +119,37 @@ class SessionStore:
             raise ValueError("invalid chat key")
         return self.root / f"{chat.key}-{chat.user_id}.json"
 
-    def _read(self, path: Path) -> Session | None:
-        """读不出来（缺失、损坏）就当没有这份会话：它只是对话上下文，丢了从头开始，不像任务记录要隔离保留。"""
+    def _read(self, path: Path) -> tuple[Session | None, int]:
+        """返回文件里的会话（没有或已清空为 ``None``）和文件的修订号。
+
+        读不出来（缺失、损坏）就当没有这份会话：它只是对话上下文，丢了从头开始，不像任务记录要隔离保留。
+        """
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return None
+            return None, 0
         except ValueError:
             logger.warning("xiaoqing_agent session unreadable, starting fresh path=%s", path.name)
-            return None
+            return None, 0
+        revision = data.get("revision") if isinstance(data, dict) else None
+        revision = revision if type(revision) is int and revision >= 0 else 0
+        if isinstance(data, dict) and data.get("cleared") is True:
+            return None, revision
         try:
-            return Session(
+            session = Session(
                 system     = dict(data["system"]),
                 session_id = str(data["session_id"]),
                 turns      = [dict(turn) for turn in data["turns"]],
                 plugins    = [str(item) for item in data["plugins"]],
                 updated_at = float(data["updated_at"]),
                 memory     = str(data.get("memory") or ""),
+                revision   = revision,
             )
         except (KeyError, TypeError, ValueError):
             logger.warning("xiaoqing_agent session malformed, starting fresh path=%s", path.name)
-            return None
+            return None, revision
+        return session, revision
 
     async def _run_locked(self, path: Path, work: Callable[[], _T]) -> _T:
         return await run_locked(self._lock, path, work)
@@ -143,19 +159,34 @@ class SessionStore:
 
         if idle_seconds <= 0:
             return None
-        path    = self._path(chat)
-        session = await self._run_locked(path, lambda: self._read(path))
+        path = self._path(chat)
+        session, _ = await self._run_locked(path, lambda: self._read(path))
         if session is None or not session.turns:
             return None
         if time.time() - session.updated_at > idle_seconds:
             return None
         return session
 
-    async def clear(self, chat: ChatRef) -> None:
-        """发起人要求从头开始：删掉这份会话，下一件事开新会话。"""
+    async def new_session(
+        self, chat: ChatRef, system: dict[str, Any], *, memory: str = ""
+    ) -> Session:
+        """这件事开一份新会话，记下此刻文件的修订号。"""
 
         path = self._path(chat)
-        await self._run_locked(path, lambda: path.unlink(missing_ok=True))
+        _, revision = await self._run_locked(path, lambda: self._read(path))
+        return Session(system, memory=memory, revision=revision)
+
+    async def clear(self, chat: ChatRef) -> None:
+        """发起人要求从头开始：会话换成“已清空”标记，下一件事开新会话。"""
+
+        path = self._path(chat)
+
+        def wipe() -> None:
+            _, revision = self._read(path)
+            payload = {"version": 1, "revision": revision + 1, "cleared": True}
+            atomic_write_text(path, json.dumps(payload, ensure_ascii=False) + "\n")
+
+        await self._run_locked(path, wipe)
 
     async def append(
         self,
@@ -167,22 +198,33 @@ class SessionStore:
     ) -> None:
         """把这次任务的一轮接到会话后面。
 
-        同一会话里另一个任务先结束、已经追加了一轮时，接在它后面；会话已经换了（比如过期后另一个任务
-        开了新会话）时，以这次任务开始时看到的记录为准。
+        同一会话里另一个任务先结束、已经追加了一轮时，接在它后面。这次任务开始以后会话被清空过，
+        或者被别的会话换掉了（比如过期后另一个任务开了新会话并已保存），这一轮不写回：
+        新的会话以后来者为准，这件事的结果仍在任务记录里。
         """
 
         path = self._path(chat)
 
         def update() -> None:
-            current = self._read(path)
-            same    = current is not None and current.session_id == base.session_id
-            turns   = [*(current.turns if same and current else base.turns), turn][-max_turns:]
+            current, revision = self._read(path)
+            if current is not None and current.session_id == base.session_id:
+                previous = current.turns
+            elif revision == base.revision:
+                previous = base.turns
+            else:
+                logger.info(
+                    "xiaoqing_agent session changed since the task started; turn not saved path=%s",
+                    path.name,
+                )
+                return
+            turns = [*previous, turn][-max_turns:]
             while len(turns) > 1 and sum(_size(item) for item in turns) > _MAX_SESSION_CHARS:
                 turns.pop(0)
             # 工具说明随所在轮次一起保留；裁掉该轮后，下一次使用时重新加载说明。
             plugins = dict.fromkeys(plugin for item in turns for plugin in item.get("plugins", ()))
             payload = {
                 "version"   : 1,
+                "revision"  : revision + 1,
                 "session_id": base.session_id,
                 "updated_at": time.time(),
                 "plugins"   : list(plugins),

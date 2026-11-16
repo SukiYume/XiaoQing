@@ -22,6 +22,7 @@ import asyncio
 import inspect
 import logging
 import math
+import random
 import re
 import time
 import uuid
@@ -33,7 +34,6 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from . import constants
-from .clock import IClock, IRandom, SystemClock, SystemRandom
 from .delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from .interfaces import (
     COMMAND_REQUEST_TEXTS_EVENT_KEY,
@@ -369,11 +369,9 @@ class Dispatcher:
         plugin_registry: PluginRegistry,
         admin_check: AdminCheck,
         build_context: ContextFactory,
-        semaphore: AdjustableSemaphore | None,
+        semaphore: AdjustableSemaphore,
         session_manager: SessionManager | None = None,
         metrics: MetricsCollector | None       = None,
-        clock: IClock | None                   = None,
-        random_gen: IRandom | None             = None,
         parser: MessageParser | None           = None,
     ) -> None:
         """
@@ -385,7 +383,7 @@ class Dispatcher:
             plugin_registry: 插件注册表
             admin_check: 管理员权限检查
             build_context: 构建插件上下文的函数
-            semaphore: 并发控制信号量（可选，测试时可为 None）
+            semaphore: 并发控制信号量
             session_manager: 会话管理器（可选）
         """
         self.router          = router
@@ -396,8 +394,6 @@ class Dispatcher:
         self.semaphore       = semaphore
         self.session_manager = session_manager
         self.metrics         = metrics
-        self.clock           = clock or SystemClock()
-        self.random          = random_gen or SystemRandom()
         if parser is None:
             self.parser = MessageParser(config_provider)
         else:
@@ -436,12 +432,7 @@ class Dispatcher:
         # 才清理对应条目。
         self._prune_expired_mutes()
 
-        # Use semaphore if available (for concurrency control)
-        if self.semaphore:
-            async with self.semaphore:
-                return await self._process_event(event_data)
-        else:
-            # No semaphore (e.g., in tests)
+        async with self.semaphore:
             return await self._process_event(event_data)
 
     @staticmethod
@@ -477,7 +468,7 @@ class Dispatcher:
         ):
             raise ValueError("duration_minutes must be a positive finite number")
         duration = float(duration_minutes)
-        now      = self.clock.now()
+        now      = time.time()
         self._prune_expired_mutes(now)
         unmute_time                  = now + duration * constants.SECONDS_PER_MINUTE
         self._muted_groups[group_id] = unmute_time
@@ -502,7 +493,7 @@ class Dispatcher:
         """获取剩余静音时间（分钟）"""
         if not self._muted_groups:
             return 0
-        now = self.clock.now()
+        now = time.time()
         self._prune_expired_mutes(now)
         if group_id not in self._muted_groups:
             return 0
@@ -514,7 +505,7 @@ class Dispatcher:
 
         if not self._muted_groups:
             return
-        current = self.clock.now() if now is None else now
+        current = time.time() if now is None else now
         expired = [
             group_id
             for group_id, unmute_time in self._muted_groups.items()
@@ -679,7 +670,7 @@ class Dispatcher:
     # ============================================================
 
     def _principal_for_event(self, ctx: MessageContext) -> PluginPrincipal:
-        # getattr_static 防止 Mock/动态代理凭空制造一个看似可调用的签发器属性。
+        # getattr_static 防止动态代理凭空制造一个看似可调用的签发器属性。
         declared_issuer = inspect.getattr_static(
             self.admin_check,
             "issue_user_principal",
@@ -1229,7 +1220,7 @@ class Dispatcher:
 
         只喊一声多半是在看机器人在不在：交给闲聊插件立刻回一句短应答，不走模型。
         """
-        default_response = self.random.choice(constants.DEFAULT_BOT_NAME_RESPONSES_LIST)
+        default_response = random.choice(constants.DEFAULT_BOT_NAME_RESPONSES_LIST)
         return await self._dispatch_to_provider(
             ctx,
             "call_bot_name_only",

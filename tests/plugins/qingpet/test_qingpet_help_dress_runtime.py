@@ -2,8 +2,8 @@
 
 import asyncio
 import inspect
-import os
-import tempfile
+import time
+from datetime import timedelta
 
 import pytest
 
@@ -15,21 +15,14 @@ from plugins.qingpet.commands.new_commands import (
     _dress_unequip,
     _trade_sell,
 )
-from plugins.qingpet.services.database import Database
+from plugins.qingpet.services import pet_service as pet_service_module
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
+from plugins.qingpet.utils.constants import PetStatus
 from plugins.qingpet.utils.formatters import format_pet_card
-
-
-@pytest.fixture
-def temp_db():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    db = Database(db_path)
-    yield db
-    db.cleanup()
-    if os.path.exists(db_path):
-        os.unlink(db_path)
+from plugins.qingpet.utils.time import utc_now
+from tests.helpers.assertions import text_segments_text
+from tests.helpers.qingpet_test_support import fail_updates_to
 
 
 def test_help_menu_categories():
@@ -82,54 +75,54 @@ def test_dress_shop_display():
     assert "爱心背景" in text
 
 
-def test_dress_buy_with_friendship_points(temp_db):
+def test_dress_buy_with_friendship_points(qingpet_db):
     user_id  = "test_fp_user"
     group_id = 1001
 
-    user_service           = UserService(temp_db)
+    user_service           = UserService(qingpet_db)
     user                   = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 300
     user.coins             = 0
-    temp_db.update_user(user)
+    qingpet_db.update_user(user)
 
-    success, msg = _dress_buy(user_id, group_id, "halo", temp_db)
+    success, msg = _dress_buy(user_id, group_id, "halo", qingpet_db)
     assert success
     assert "花费100友情点" in msg
 
-    user = temp_db.get_user(user_id, group_id)
+    user = qingpet_db.get_user(user_id, group_id)
     assert user.friendship_points == 200
 
-    owned = temp_db.get_dress_inventory(user_id, group_id)
+    owned = qingpet_db.get_dress_inventory(user_id, group_id)
     assert "halo" in owned
 
 
-def test_dress_buy_insufficient_friendship_points(temp_db):
+def test_dress_buy_insufficient_friendship_points(qingpet_db):
     user_id  = "test_poor_fp_user"
     group_id = 1002
 
-    user_service           = UserService(temp_db)
+    user_service           = UserService(qingpet_db)
     user                   = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 50
-    temp_db.update_user(user)
+    qingpet_db.update_user(user)
 
-    success, msg = _dress_buy(user_id, group_id, "halo", temp_db)
+    success, msg = _dress_buy(user_id, group_id, "halo", qingpet_db)
     assert not success
     assert "友情点不足" in msg
 
 
-def test_pet_card_with_dress(temp_db):
+def test_pet_card_with_dress(qingpet_db):
     user_id  = "test_dress_user"
     group_id = 1003
 
-    user_service = UserService(temp_db)
+    user_service = UserService(qingpet_db)
     user         = user_service.get_or_create_user(user_id, group_id)
-    pet_service  = PetService(temp_db)
+    pet_service  = PetService(qingpet_db)
     pet_service.adopt_pet(user_id, group_id, "FashionPet")
 
-    assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
-    _dress_equip(user_id, group_id, "halo", temp_db)
+    assert qingpet_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
+    _dress_equip(user_id, group_id, "halo", qingpet_db)
 
-    pet  = temp_db.get_pet(user_id, group_id)
+    pet  = qingpet_db.get_pet(user_id, group_id)
     card = format_pet_card(pet, user)
 
     assert "🎩 帽子: 天使光环" in card
@@ -138,46 +131,46 @@ def test_pet_card_with_dress(temp_db):
     assert "❤️ 友情点" in card
 
 
-def test_dress_equip_reports_persistence_failure(temp_db, monkeypatch):
+def test_dress_equip_reports_persistence_failure(qingpet_db):
     user_id  = "failed_dress_user"
     group_id = 1004
-    PetService(temp_db).adopt_pet(user_id, group_id, "试衣宝")
-    assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
-    monkeypatch.setattr(temp_db, "update_pet", lambda _pet: False)
+    PetService(qingpet_db).adopt_pet(user_id, group_id, "试衣宝")
+    assert qingpet_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
+    fail_updates_to(qingpet_db, "pets")
 
-    success, message = _dress_equip(user_id, group_id, "halo", temp_db)
+    success, message = _dress_equip(user_id, group_id, "halo", qingpet_db)
 
     assert success is False
     assert "失败" in message
-    assert temp_db.get_pet(user_id, group_id).dress_hat is None
+    assert qingpet_db.get_pet(user_id, group_id).dress_hat is None
 
 
-def test_dress_unequip_reports_persistence_failure(temp_db, monkeypatch):
+def test_dress_unequip_reports_persistence_failure(qingpet_db):
     user_id  = "failed_unequip_user"
     group_id = 1005
-    PetService(temp_db).adopt_pet(user_id, group_id, "换装宝")
-    assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
-    equipped, _message = _dress_equip(user_id, group_id, "halo", temp_db)
+    PetService(qingpet_db).adopt_pet(user_id, group_id, "换装宝")
+    assert qingpet_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
+    equipped, _message = _dress_equip(user_id, group_id, "halo", qingpet_db)
     assert equipped is True
-    monkeypatch.setattr(temp_db, "update_pet", lambda _pet: False)
+    fail_updates_to(qingpet_db, "pets")
 
-    success, message = _dress_unequip(user_id, group_id, "帽子", temp_db)
+    success, message = _dress_unequip(user_id, group_id, "帽子", qingpet_db)
 
     assert success is False
     assert "失败" in message
-    assert temp_db.get_pet(user_id, group_id).dress_hat == "halo"
+    assert qingpet_db.get_pet(user_id, group_id).dress_hat == "halo"
 
 
-def test_trade_sell_rejects_trailing_arguments_without_consuming_inventory(temp_db):
+def test_trade_sell_rejects_trailing_arguments_without_consuming_inventory(qingpet_db):
     user_id  = "invalid_trade_user"
     group_id = 1006
-    UserService(temp_db).get_or_create_user(user_id, group_id)
-    assert temp_db.purchase_item_atomic(user_id, group_id, "apple", 2, 0)[0]
+    UserService(qingpet_db).get_or_create_user(user_id, group_id)
+    assert qingpet_db.purchase_item_atomic(user_id, group_id, "apple", 2, 0)[0]
 
-    success, _message = _trade_sell(user_id, group_id, "apple 1 10 trailing", temp_db)
+    success, _message = _trade_sell(user_id, group_id, "apple 1 10 trailing", qingpet_db)
 
     assert success is False
-    inventory = temp_db.get_or_create_inventory(user_id, group_id)
+    inventory = qingpet_db.get_or_create_inventory(user_id, group_id)
     assert inventory.get_item_count("apple") == 2
 
 
@@ -186,159 +179,112 @@ def test_qingpet_handle_signature_matches_core_dispatcher():
     assert params[:4] == ["command", "args", "event", "context"]
 
 
-class _FakeGroupConfig:
-    enabled = True
+@pytest.mark.asyncio
+async def test_qingpet_handle_uses_bounded_worker_for_command_path(qingpet_runtime, monkeypatch):
+    context, _database = qingpet_runtime
+    calls         = {"count": 0}
+    real_run_sync = qingpet_main.run_sync
 
-
-class _FakeDB:
-    def get_recent_command_count(self, group_id, window_seconds, *, user_id=None):
-        return 0
-
-    def record_command_timestamp(self, user_id, group_id):
-        return None
-
-    def get_group_config(self, group_id):
-        return _FakeGroupConfig()
-
-    def get_user(self, user_id, group_id):
-        return None
-
-
-def _segments_text(payload) -> str:
-    if isinstance(payload, str):
-        return payload
-    if not isinstance(payload, list):
-        return ""
-    return "".join(
-        str(seg.get("data", {}).get("text", ""))
-        for seg in payload
-        if isinstance(seg, dict) and seg.get("type") == "text"
-    )
-
-
-def test_qingpet_help_subcategory_routed_from_args(monkeypatch):
-    monkeypatch.setattr(qingpet_main, "_db_instance", _FakeDB())
-    monkeypatch.setattr(qingpet_main, "_router", None)
-
-    event  = {"user_id": 10001, "group_id": 20001}
-    result = asyncio.run(qingpet_main.handle("qingpet", "help social", event, None))
-
-    assert isinstance(result, list)
-    assert "社交互动" in _segments_text(result)
-
-
-def test_qingpet_handle_uses_bounded_worker_for_command_path(monkeypatch):
-    calls = {"count": 0}
-
-    async def _fake_run_sync(func, *args, **kwargs):
+    async def counting_run_sync(func, *args, **kwargs):
         calls["count"] += 1
-        return func(*args, **kwargs)
+        return await real_run_sync(func, *args, **kwargs)
 
-    monkeypatch.setattr(qingpet_main, "_db_instance", _FakeDB())
-    monkeypatch.setattr(qingpet_main, "_router", None)
-    monkeypatch.setattr(qingpet_main, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(qingpet_main, "run_sync", counting_run_sync)
 
     event  = {"user_id": 10001, "group_id": 20001}
-    result = asyncio.run(qingpet_main.handle("qingpet", "help social", event, None))
+    result = await qingpet_main.handle("qingpet", "help social", event, context)
 
     assert calls["count"] == 1
     assert isinstance(result, list)
-    assert "社交互动" in _segments_text(result)
+    assert "社交互动" in text_segments_text(result)
 
 
 @pytest.mark.asyncio
-async def test_qingpet_handle_does_not_create_nested_event_loop(monkeypatch):
+async def test_qingpet_handle_does_not_create_nested_event_loop(qingpet_runtime, monkeypatch):
     """命令热路径只应切换工作线程，不能为每条消息再创建事件循环。"""
+
+    context, _database = qingpet_runtime
 
     def reject_nested_run(coroutine):
         coroutine.close()
         raise AssertionError("QingPet command path created a nested event loop")
 
-    monkeypatch.setattr(qingpet_main, "_db_instance", _FakeDB())
-    monkeypatch.setattr(qingpet_main, "_router", None)
     monkeypatch.setattr(qingpet_main.asyncio, "run", reject_nested_run)
 
     event  = {"user_id": 10001, "group_id": 20001}
-    result = await qingpet_main.handle("qingpet", "help social", event, None)
+    result = await qingpet_main.handle("qingpet", "help social", event, context)
 
     assert isinstance(result, list)
-    assert "社交互动" in _segments_text(result)
+    assert "社交互动" in text_segments_text(result)
 
 
-class _FakeJobDB:
-    def get_enabled_group_decay_map(self):
-        return {}
+@pytest.mark.asyncio
+async def test_qingpet_scheduled_decay_uses_to_thread(qingpet_runtime, monkeypatch):
+    context, _database = qingpet_runtime
+    calls          = {"count": 0}
+    real_to_thread = asyncio.to_thread
 
-    def get_all_pets(self):
-        return []
-
-    def cleanup_old_timestamps(self):
-        return None
-
-    def get_active_trustee_keys(self):
-        return set()
-
-
-class _FakePetService:
-    def apply_decay(self, pet, decay_multiplier, *, is_trustee_override=False):
-        return None
-
-
-def test_qingpet_scheduled_decay_uses_to_thread(monkeypatch):
-    calls = {"count": 0}
-
-    async def _fake_to_thread(func, *args, **kwargs):
+    async def counting_to_thread(func, *args, **kwargs):
         calls["count"] += 1
-        return func(*args, **kwargs)
+        return await real_to_thread(func, *args, **kwargs)
 
-    monkeypatch.setattr(qingpet_main, "_db_instance", _FakeJobDB())
-    monkeypatch.setattr(qingpet_main, "_pet_service", _FakePetService())
-    monkeypatch.setattr(qingpet_main.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(qingpet_main.asyncio, "to_thread", counting_to_thread)
 
-    result = asyncio.run(qingpet_main.scheduled_decay(None))
+    result = await qingpet_main.scheduled_decay(context)
 
     assert calls["count"] == 1
     assert result == []
 
 
-def test_qingpet_scheduled_decay_uses_enabled_group_decay_map(monkeypatch):
-    class _FakeDB:
-        def __init__(self):
-            self.cleaned = False
+@pytest.mark.asyncio
+async def test_qingpet_scheduled_decay_uses_enabled_group_decay_map(qingpet_runtime, monkeypatch):
+    """只衰减已启用群里的宠物，并按各群自己的衰减倍率；陈旧的命令时间戳一并清掉。"""
 
-        def get_enabled_group_decay_map(self):
-            return {123: 1.5}
+    context, database = qingpet_runtime
+    monkeypatch.setattr(pet_service_module.random, "random", lambda: 1.0)
+    fast_group, normal_group, disabled_group, neglected_group = 123, 124, 999, 125
+    assert database.update_group_config_field(fast_group, "decay_multiplier", 2.0)
+    assert database.update_group_config_field(normal_group, "enabled", True)
+    assert database.update_group_config_field(disabled_group, "enabled", False)
+    assert database.update_group_config_field(neglected_group, "enabled", True)
 
-        def get_all_pets(self):
-            return [
-                type("Pet", (), {"user_id": "one", "group_id": 123})(),
-                type("Pet", (), {"user_id": "two", "group_id": 999})(),
-            ]
+    last_update = utc_now() - timedelta(minutes=30)
+    for group_id in (fast_group, normal_group, disabled_group, neglected_group):
+        user_id = f"owner-{group_id}"
+        assert PetService(database).adopt_pet(user_id, group_id, f"宠{group_id}")[0]
+        pet = database.get_pet(user_id, group_id)
+        assert pet is not None
+        stat = 5 if group_id == neglected_group else 100
+        pet.hunger = pet.mood = pet.clean = pet.energy = pet.health = stat
+        pet.last_update = last_update
+        assert database.update_pet(pet)
 
-        def cleanup_old_timestamps(self):
-            self.cleaned = True
+    connection = database._get_connection()
+    connection.execute(
+        "INSERT INTO command_timestamps (user_id, group_id, timestamp) VALUES (?, ?, ?)",
+        ("stale-user", fast_group, 1.0),
+    )
+    connection.execute(
+        "INSERT INTO command_timestamps (user_id, group_id, timestamp) VALUES (?, ?, ?)",
+        ("recent-user", fast_group, time.time()),
+    )
+    connection.commit()
 
-        def get_active_trustee_keys(self):
-            return set()
+    deliveries = await qingpet_main.scheduled_decay(context)
 
-    applied = []
+    def stored(group_id: int):
+        pet = database.get_pet(f"owner-{group_id}", group_id)
+        assert pet is not None
+        return pet
 
-    class _FakeService:
-        def apply_decay(self, pet, decay_multiplier, *, is_trustee_override=False):
-            applied.append((pet.group_id, decay_multiplier))
-            return None
-
-    db = _FakeDB()
-
-    async def _fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(qingpet_main, "_db_instance", db)
-    monkeypatch.setattr(qingpet_main, "_pet_service", _FakeService())
-    monkeypatch.setattr(qingpet_main.asyncio, "to_thread", _fake_to_thread)
-
-    result = asyncio.run(qingpet_main.scheduled_decay(None))
-
-    assert result == []
-    assert applied == [(123, 1.5)]
-    assert db.cleaned is True
+    assert (stored(normal_group).hunger, stored(normal_group).mood) == (85, 76)
+    assert (stored(fast_group).hunger, stored(fast_group).mood) == (70, 52)
+    assert (stored(disabled_group).hunger, stored(disabled_group).mood) == (100, 100)
+    assert stored(disabled_group).last_update == last_update
+    assert stored(neglected_group).status == PetStatus.TRAVELING
+    assert [delivery.target.group_id for delivery in deliveries] == [neglected_group]
+    assert "旅行" in deliveries[0].message[0]["data"]["text"]
+    remaining = {
+        row["user_id"] for row in connection.execute("SELECT user_id FROM command_timestamps")
+    }
+    assert remaining == {"recent-user"}

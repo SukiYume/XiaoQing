@@ -221,8 +221,8 @@ async def fetch_share_candidates(
 ) -> list[dict[str, Any]]:
     """她手里可以拿出来说的事（``turn_context(mode="proactive")``）；任何失败或关闭都是空。
 
-    ``topics`` 是这个群这两三天的话题词（只在群聊里给）：对方据此认出哪些经历是这个群聊到才去搜
-    的，在候选里标成 ``heard_here``。
+    ``topics`` 是这个群还记着的话题词（只在群聊里给，最多 ``_MAX_KNOWN_TOPICS`` 个）：对方据此认出
+    哪些经历是这个群聊到才去搜的，在候选里标成 ``heard_here``。
     """
 
     life_cfg   = runtime.cfg.life

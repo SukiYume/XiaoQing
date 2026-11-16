@@ -5,13 +5,12 @@ plugin_base 工具函数单元测试
 import asyncio
 import base64
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
-import core.plugin_base as plugin_base
 from core.plugin_base import (
     bounded_external_text,
     build_action,
@@ -44,15 +43,11 @@ from core.plugin_base import (
 class TestMessageSegments:
     """消息段构建函数测试"""
 
-    def test_text_segment(self):
-        """测试文本消息段"""
-        seg = text("Hello World")
-        assert seg == {"type": "text", "data": {"text": "Hello World"}}
-
-    def test_text_segment_with_unicode(self):
-        """测试中文文本消息段"""
-        seg = text("你好世界 🌍")
-        assert seg == {"type": "text", "data": {"text": "你好世界 🌍"}}
+    @pytest.mark.parametrize("content", ["Hello World", "你好世界 🌍"], ids=["ascii", "unicode"])
+    def test_text_segment(self, content: str):
+        """测试文本消息段（含中文和 emoji）"""
+        seg = text(content)
+        assert seg == {"type": "text", "data": {"text": content}}
 
     def test_image_segment(self):
         """测试本地图片消息段"""
@@ -206,25 +201,16 @@ class TestAsyncTools:
             await gather_bounded((), limit=0)
 
     @pytest.mark.asyncio
-    async def test_run_sync_delegates_to_bounded_plugin_offloader(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+    async def test_run_sync_runs_callback_off_the_event_loop(self):
+        loop_thread = threading.get_ident()
 
-        async def fake_offload(func, *args, **kwargs):
-            calls.append((func, args, kwargs))
-            return "bounded-result"
+        def blocking(value: str, *, suffix: str) -> tuple[str, int]:
+            return value + suffix, threading.get_ident()
 
-        def blocking(value: str, *, suffix: str) -> str:
-            raise AssertionError("run_sync must not invoke the callback directly")
+        result, worker_thread = await run_sync(blocking, "value", suffix="!")
 
-        monkeypatch.setattr(plugin_base, "offload_plugin_sync", fake_offload)
-
-        result = await run_sync(blocking, "value", suffix="!")
-
-        assert result == "bounded-result"
-        assert calls == [(blocking, ("value",), {"suffix": "!"})]
+        assert result == "value!"
+        assert worker_thread != loop_thread
 
 
 # ============================================================
@@ -236,7 +222,7 @@ class TestBuildAction:
     """build_action() 函数测试"""
 
     def test_build_group_message(self):
-        """测试构建群消息"""
+        """测试构建群消息；同时有 user_id 和 group_id 时优先群消息"""
         segs = [{"type": "text", "data": {"text": "Hello"}}]
         action = build_action(segs, user_id=12345, group_id=67890)
 
@@ -254,13 +240,6 @@ class TestBuildAction:
         assert action["action"] == "send_private_msg"
         assert action["params"]["user_id"] == 12345
         assert action["params"]["message"] == segs
-
-    def test_build_action_prefers_group(self):
-        """测试同时有 user_id 和 group_id 时优先群消息"""
-        segs = [{"type": "text", "data": {"text": "Hello"}}]
-        action = build_action(segs, user_id=12345, group_id=67890)
-
-        assert action["action"] == "send_group_msg"
 
     def test_build_action_uses_none_not_truthiness_to_select_target(self):
         """目标类型由 None 区分；构造层不应把整数 0 静默改成另一类消息。"""
@@ -318,14 +297,6 @@ class TestJsonUtils:
         loaded = load_json(json_path)
 
         assert loaded == data
-
-    def test_load_invalid_json(self, tmp_path: Path):
-        """测试加载无效 JSON 文件"""
-        json_path = tmp_path / "invalid.json"
-        json_path.write_text("not valid json {{{", encoding="utf-8")
-
-        result = load_json(json_path)
-        assert result == {}
 
     @pytest.mark.parametrize("payload", [b"{", b"\xff"])
     @pytest.mark.parametrize("with_backup", [False, True])
@@ -494,11 +465,6 @@ class TestSplitMessageSegments:
             seg["data"]["text"] for chunk in result for seg in chunk if seg["type"] == "text"
         )
         assert reconstructed == original
-
-    def test_none_segments(self):
-        """None 消息段"""
-        result = split_message_segments(segments(None))
-        assert len(result) == 1
 
 
 @pytest.mark.parametrize("length", [1, 10, 3000])

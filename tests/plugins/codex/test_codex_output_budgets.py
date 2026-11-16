@@ -68,6 +68,18 @@ def _job() -> SimpleNamespace:
     )
 
 
+def _launch_script_instead_of_codex(monkeypatch: pytest.MonkeyPatch, script: str) -> None:
+    """进程边界：runner 要启动 codex 时改为启动一个真实的 Python 脚本，其他进程（taskkill）照常。"""
+    real_spawn = asyncio.create_subprocess_exec
+
+    def spawn(*args, **kwargs):
+        if args and args[0] == "taskkill":
+            return real_spawn(*args, **kwargs)
+        return real_spawn(sys.executable, "-u", "-c", script, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+
 def _run_with_subprocess_loop(coroutine):
     if sys.platform == "win32":
         loop = asyncio.ProactorEventLoop()
@@ -299,11 +311,7 @@ def test_runner_streams_real_subprocess_events(
         " print(json.dumps(event,separators=(',',':')),flush=True)\n"
     )
     runner = CodexRunner(codex_config, tmp_path / "outputs")
-    monkeypatch.setattr(
-        runner,
-        "_build_args",
-        lambda *_args, **_kwargs: [sys.executable, "-u", "-c", script],
-    )
+    _launch_script_instead_of_codex(monkeypatch, script)
 
     async def exercise_runner():
         return await asyncio.wait_for(
@@ -344,11 +352,7 @@ def test_runner_terminates_real_subprocess_on_stdout_limit(
         f"pathlib.Path({str(survived)!r}).write_text('survived',encoding='utf-8')\n"
     )
     runner = CodexRunner(codex_config, tmp_path / "outputs")
-    monkeypatch.setattr(
-        runner,
-        "_build_args",
-        lambda *_args, **_kwargs: [sys.executable, "-u", "-c", script],
-    )
+    _launch_script_instead_of_codex(monkeypatch, script)
 
     async def exercise_runner():
         job    = _job()

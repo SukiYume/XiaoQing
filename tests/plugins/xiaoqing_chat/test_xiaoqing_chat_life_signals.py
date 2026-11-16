@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import shutil
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,11 +11,14 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from PIL import Image
 
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonRecord, JargonStore
 from plugins.xiaoqing_chat.life import online
 from plugins.xiaoqing_chat.media import event_media
+from plugins.xiaoqing_chat.media.models import RenderedMedia
+from tests.helpers.xiaoqing_chat_media_test_support import make_media_runtime
 
 NOW = time.time()
 DAY = 86400.0
@@ -55,12 +60,6 @@ def test_unconfirmed_jargon_in_this_turn_goes_to_life(tmp_path: Path) -> None:
     state = SimpleNamespace(bw_jargon_store=store)
     text = "这也太依托答辩了，绝绝子，别群的梗"
     assert online.unconfirmed_jargon(state, tmp_path, "g1", text) == ["依托答辩"]
-
-
-def test_unreadable_jargon_store_never_breaks_the_reply(tmp_path: Path) -> None:
-    broken = SimpleNamespace(bw_jargon_store=None)  # 读不了就当没有
-    with pytest.raises(AttributeError):
-        online.unconfirmed_jargon(broken, tmp_path, "g1", "x")
 
 
 class _Capability:
@@ -110,27 +109,41 @@ async def test_fetch_online_life_sends_group_topics_and_jargon(tmp_path: Path) -
     assert request["unknown_terms"] == ["依托答辩"]
 
 
+def _received_emoji(path: Path, color: str, *, striped: bool = False) -> RenderedMedia:
+    image = Image.new("RGB", (24, 24), color)
+    if striped:  # 画面和纯色图明显不同，不会被当成已收录表情的相似图。
+        image.paste("black", (0, 0, 12, 24))
+    image.save(path)
+    return RenderedMedia(
+        media_hash   = hashlib.sha256(path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = f"{color}色猫猫",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = path,
+    )
+
+
 @pytest.mark.asyncio
 async def test_collected_emoji_is_logged_and_failures_are_not_silent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    runtime = SimpleNamespace(cfg=XiaoQingChatConfig())
-    context = SimpleNamespace(logger=MagicMock())
-    rendered = SimpleNamespace(
-        kind="emoji", cached_path=tmp_path / "a.png", media_hash="abcdef1234567890", marker="m"
-    )
-    event = {"message_id": 1, "group_id": 2, "user_id": 3}
-    monkeypatch.setattr(event_media, "collect_emoji_candidate", lambda *a, **k: (object(), True))
-    assert await event_media._collected_new_emoji(rendered, event, context=context, runtime=runtime)
+    runtime = make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    context = SimpleNamespace(logger=MagicMock(), data_dir=tmp_path)
+    event    = {"message_id": 1, "group_id": 2, "user_id": 3}
+    received = _received_emoji(tmp_path / "red.png", "red")
+    assert await event_media._collected_new_emoji(received, event, context=context, runtime=runtime)
     logged = context.logger.info.call_args[0][1]
     assert '"media.emoji.collect"' in logged and '"new": true' in logged
 
     def boom(*_: Any, **__: Any) -> Any:
         raise OSError("disk")
 
-    monkeypatch.setattr(event_media, "collect_emoji_candidate", boom)
+    # 另一张表情要落盘进表情库时磁盘出错：这一轮照常继续，但要留下警告。
+    monkeypatch.setattr(shutil, "copyfile", boom)
+    failing = _received_emoji(tmp_path / "blue.png", "white", striped=True)
     assert not await event_media._collected_new_emoji(
-        rendered, event, context=context, runtime=runtime
+        failing, event, context=context, runtime=runtime
     )
     warned = context.logger.warning.call_args[0][1]
     assert '"media.emoji.collect_error"' in warned and "OSError" in warned

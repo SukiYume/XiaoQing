@@ -1,23 +1,31 @@
+"""聊天的 MemoryDB：保存与脏标记、按会话删除、切换目录、配置知识库的刷新与预算、运行时刷新、本地编号。"""
+
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 
-from plugins.xiaoqing_chat.memory import knowledge_base as knowledge_base_module
+from plugins.xiaoqing_chat import chat_runtime
 from plugins.xiaoqing_chat.memory.knowledge_base import (
+    MAX_KNOWLEDGE_CHUNKS,
+    MAX_KNOWLEDGE_FILE_BYTES,
+    MAX_KNOWLEDGE_FILES,
+    MAX_TOTAL_KNOWLEDGE_BYTES,
     KnowledgeIndexError,
     ensure_knowledge_index,
 )
 from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 from plugins.xiaoqing_chat.memory.vector_store import VectorDoc, VectorStore
 from plugins.xiaoqing_chat.persona import BUNDLED_PERSONA_FILE
-from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, get_state
+from tests.helpers.settings_snapshot import settings_snapshot
 
 
 def _knowledge_snapshot(db: MemoryDB) -> list[tuple[str, str, dict]]:
@@ -44,66 +52,42 @@ def test_memory_db_save_persists_documents_and_clears_dirty(tmp_path: Path) -> N
 
 
 def test_memory_db_save_keeps_dirty_when_shared_write_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from plugins.xiaoqing_chat.memory import memory_db as memory_db_module
-    from plugins.xiaoqing_chat.memory import vector_store as vector_store_module
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-
-    logger = MagicMock()
-
-    def fake_write(
-        *,
-        dir_path: Path,
-        name: str,
-        docs: Sequence[VectorDoc],
-        dim: int,
-        matrix: np.ndarray,
-    ) -> None:
-        _ = (dir_path, name, docs, dim, matrix)
+    def disk_full(*_args: object, **_kwargs: object) -> None:
         raise OSError("disk full")
-
-    monkeypatch.setattr(memory_db_module, "_logger", logger, raising=False)
-    monkeypatch.setattr(vector_store_module, "write_vector_store_files", fake_write, raising=False)
-    monkeypatch.setattr(memory_db_module, "write_vector_store_files", fake_write, raising=False)
 
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(doc_id="doc-1", text="hello", meta={"type": "knowledge"})
 
-    db.save()
+    with monkeypatch.context() as scoped, caplog.at_level(logging.WARNING):
+        scoped.setattr(os, "replace", disk_full)
+        db.save()
 
     assert db.is_dirty() is True
-    logger.warning.assert_called_once()
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
 
 
 def test_memory_db_save_keeps_dirty_when_new_write_happens_during_save(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from plugins.xiaoqing_chat.memory import memory_db as memory_db_module
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(doc_id="doc-1", text="hello", meta={"type": "knowledge"})
 
     did_race_write = False
+    real_replace   = os.replace
 
-    def fake_write(
-        *,
-        dir_path: Path,
-        name: str,
-        docs: Sequence[VectorDoc],
-        dim: int,
-        matrix: np.ndarray,
-    ) -> None:
+    def replace_after_racing_write(*args: Any, **kwargs: Any) -> None:
+        # 落盘的第一次原子替换之前，另一个线程写入了新文档：这次保存的快照里没有它。
         nonlocal did_race_write
-        _ = (dir_path, name, docs, dim, matrix)
         if not did_race_write:
             did_race_write = True
             db.upsert_text(doc_id="doc-2", text="new info", meta={"type": "knowledge"})
+        real_replace(*args, **kwargs)
 
-    monkeypatch.setattr(memory_db_module, "write_vector_store_files", fake_write, raising=False)
+    monkeypatch.setattr(os, "replace", replace_after_racing_write)
 
     db.save()
 
@@ -261,7 +245,6 @@ def test_configured_knowledge_metadata_never_stores_absolute_source_paths(
 
 
 def test_knowledge_budget_and_decode_failures_preserve_last_complete_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     plugin_dir = tmp_path / "plugin"
@@ -281,38 +264,39 @@ def test_knowledge_budget_and_decode_failures_preserve_last_complete_snapshot(
     )
     baseline = _knowledge_snapshot(db)
 
-    first        = plugin_dir / "first.txt"
-    second       = plugin_dir / "second.txt"
-    oversized    = plugin_dir / "oversized.txt"
-    chunked      = plugin_dir / "chunked.txt"
-    invalid_utf8 = plugin_dir / "invalid.txt"
-    first.write_text("aaa", encoding="utf-8")
-    second.write_text("bbb", encoding="utf-8")
-    oversized.write_text("abcd", encoding="utf-8")
-    chunked.write_text("one\n\ntwo", encoding="utf-8")
-    invalid_utf8.write_bytes(b"\xff")
+    many_names = []
+    for index in range(MAX_KNOWLEDGE_FILES + 1):
+        (plugin_dir / f"many-{index}.txt").write_text("x", encoding="utf-8")
+        many_names.append(f"many-{index}.txt")
+    (plugin_dir / "oversized.txt").write_bytes(b"a" * (MAX_KNOWLEDGE_FILE_BYTES + 1))
+    # 每个文件都不超限，合计超过总预算：最后一个文件让合计多出 1 字节。
+    full_files  = MAX_TOTAL_KNOWLEDGE_BYTES // MAX_KNOWLEDGE_FILE_BYTES
+    total_names = []
+    for index in range(full_files):
+        (plugin_dir / f"full-{index}.txt").write_bytes(b"b" * MAX_KNOWLEDGE_FILE_BYTES)
+        total_names.append(f"full-{index}.txt")
+    (plugin_dir / "extra.txt").write_bytes(b"c")
+    total_names.append("extra.txt")
+    (plugin_dir / "chunked.txt").write_text(
+        "\n\n".join(f"chunk {index}" for index in range(MAX_KNOWLEDGE_CHUNKS + 1)),
+        encoding="utf-8",
+    )
+    (plugin_dir / "invalid.txt").write_bytes(b"\xff")
 
-    def reject(files: list[str], **limits: int) -> None:
-        with monkeypatch.context() as scoped:
-            for name, value in limits.items():
-                scoped.setattr(knowledge_base_module, name, value)
-            with pytest.raises(KnowledgeIndexError):
-                ensure_knowledge_index(
-                    memory_db  = db,
-                    data_dir   = data_dir,
-                    plugin_dir = plugin_dir,
-                    files      = files,
-                )
+    def reject(files: list[str]) -> None:
+        with pytest.raises(KnowledgeIndexError):
+            ensure_knowledge_index(
+                memory_db  = db,
+                data_dir   = data_dir,
+                plugin_dir = plugin_dir,
+                files      = files,
+            )
         assert _knowledge_snapshot(db) == baseline
 
-    reject(["first.txt", "second.txt"], MAX_KNOWLEDGE_FILES=1)
-    reject(["oversized.txt"], MAX_KNOWLEDGE_FILE_BYTES=3)
-    reject(
-        ["first.txt", "second.txt"],
-        MAX_KNOWLEDGE_FILE_BYTES  = 10,
-        MAX_TOTAL_KNOWLEDGE_BYTES = 5,
-    )
-    reject(["chunked.txt"], MAX_KNOWLEDGE_CHUNKS=1)
+    reject(many_names)
+    reject(["oversized.txt"])
+    reject(total_names)
+    reject(["chunked.txt"])
     reject(["invalid.txt"])
 
 
@@ -347,101 +331,74 @@ def test_memory_db_configured_replacement_build_failure_is_not_partially_visible
     assert db.get("reviewed-public") is not None
 
 
+def _runtime_context(plugin_dir: Path, data_dir: Path, config: dict, revision: int):
+    return SimpleNamespace(
+        plugin_dir = plugin_dir,
+        data_dir   = data_dir,
+        get_settings_snapshot=lambda: settings_snapshot(config=config, revision=revision),
+        logger=MagicMock(),
+    )
+
+
+def _knowledge_config(*, enabled: bool, files: list[str]) -> dict:
+    return {
+        "plugins": {"xiaoqing_chat": {"knowledge": {"enable_knowledge": enabled, "files": files}}}
+    }
+
+
 def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from plugins.xiaoqing_chat import chat_runtime
-
     plugin_dir = tmp_path / "plugin"
     data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
-    memory_db = MagicMock()
-    state     = SimpleNamespace(
-        memory_db=memory_db,
-        get_runtime=MagicMock(return_value=None),
-        get_runtime_mtime=MagicMock(return_value=None),
-        get_runtime_revision=MagicMock(return_value=None),
-        set_runtime=MagicMock(),
-    )
-    config = SimpleNamespace(
-        ban_regex=[],
-        knowledge=SimpleNamespace(enable_knowledge=False, files=["stale.txt"]),
-        personality=SimpleNamespace(persona_file=""),
-    )
-    ensure = MagicMock(return_value=True)
-    monkeypatch.setattr(chat_runtime, "_state", lambda: state)
-    monkeypatch.setattr(
-        chat_runtime,
-        "load_xiaoqing_chat_config",
-        lambda **_kwargs: config,
-    )
-    monkeypatch.setattr(knowledge_base_module, "ensure_knowledge_index", ensure)
-
-    from tests.helpers.settings_snapshot import with_settings_reader
+    (plugin_dir / "stale.txt").write_text("stale reference", encoding="utf-8")
+    state = get_state()
 
     chat_runtime.load_runtime(
-        with_settings_reader(
-            SimpleNamespace(plugin_dir=plugin_dir, data_dir=data_dir, config={}, logger=MagicMock())
+        _runtime_context(
+            plugin_dir, data_dir, _knowledge_config(enabled=True, files=["stale.txt"]), 1
+        )
+    )
+    assert [text for _doc_id, text, _meta in _knowledge_snapshot(state.memory_db)] == [
+        "stale reference"
+    ]
+
+    chat_runtime.load_runtime(
+        _runtime_context(
+            plugin_dir, data_dir, _knowledge_config(enabled=False, files=["stale.txt"]), 2
         )
     )
 
-    ensure.assert_called_once_with(
-        memory_db  = memory_db,
-        data_dir   = data_dir,
-        plugin_dir = plugin_dir,
-        files      = (),
-    )
+    assert _knowledge_snapshot(state.memory_db) == []
 
 
 def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_change(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from plugins.xiaoqing_chat import chat_runtime
-    from tests.helpers.settings_snapshot import settings_snapshot
-
     plugin_dir = tmp_path / "plugin"
     data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
-    cached_runtime = object()
-    state          = SimpleNamespace(
-        memory_db=MagicMock(),
-        get_runtime=MagicMock(return_value=cached_runtime),
-        get_runtime_mtime=MagicMock(return_value=-1),
-        get_runtime_revision=MagicMock(return_value=1),
-        set_runtime=MagicMock(),
-    )
-    config = SimpleNamespace(
-        ban_regex=[],
-        knowledge=SimpleNamespace(enable_knowledge=False, files=[]),
-        personality=SimpleNamespace(persona_file=""),
-    )
-    load_config = MagicMock(return_value=config)
-    ensure = MagicMock(return_value=True)
-    settings = settings_snapshot(
-        config   = {"plugins": {"xiaoqing_chat": {"changed": True}}},
-        revision = 2,
-    )
-    context = SimpleNamespace(
-        plugin_dir            = plugin_dir,
-        data_dir              = data_dir,
-        get_settings_snapshot = lambda: settings,
-        logger                = MagicMock(),
-    )
-    monkeypatch.setattr(chat_runtime, "_state", lambda: state)
-    monkeypatch.setattr(chat_runtime, "load_xiaoqing_chat_config", load_config)
-    monkeypatch.setattr(knowledge_base_module, "ensure_knowledge_index", ensure)
+    state = get_state()
 
-    refreshed = chat_runtime.load_runtime(context)
-
-    assert refreshed is not cached_runtime
-    load_config.assert_called_once_with(
-        context_config=settings.config, plugin_dir=plugin_dir, logger=context.logger
+    cached = chat_runtime.load_runtime(
+        _runtime_context(plugin_dir, data_dir, {"plugins": {"xiaoqing_chat": {}}}, 1)
     )
+    changed = {"plugins": {"xiaoqing_chat": {"planner": {"enable_planner": False}}}}
+    assert cached.cfg.planner.enable_planner is True
+    same = chat_runtime.load_runtime(_runtime_context(plugin_dir, data_dir, changed, 1))
+    assert same is cached, "修订号没变就沿用缓存，即使部署配置的内容不同"
+
+    refreshed = chat_runtime.load_runtime(_runtime_context(plugin_dir, data_dir, changed, 2))
+
+    assert refreshed is not cached
+    assert refreshed.cfg.planner.enable_planner is False
     # 缓存戳是配置文件和人设卡（这里用插件自带的）各自的修改时间。
     persona_mtime = BUNDLED_PERSONA_FILE.stat().st_mtime_ns
-    state.set_runtime.assert_called_once_with(str(plugin_dir), refreshed, (-1, persona_mtime), 2)
+    key           = str(plugin_dir)
+    assert state.get_runtime(key) is refreshed
+    assert state.get_runtime_mtime(key) == (-1, persona_mtime)
+    assert state.get_runtime_revision(key) == 2
 
 
 def test_local_ids_survive_restarts_and_idle_reset(tmp_path):
@@ -457,3 +414,25 @@ def test_local_ids_survive_restarts_and_idle_reset(tmp_path):
         state.clear_transient_chat_state("g1")
         assert state.fetch_and_increment_local_id("g1") == index + 2
     assert len(state.memory_store.get("g1")) == 3
+
+
+def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
+
+    first_dir  = tmp_path / "a"
+    second_dir = tmp_path / "b"
+    first_dir.mkdir()
+    second_dir.mkdir()
+
+    db = MemoryDB()
+    db.bind(first_dir)
+    db.upsert_text(
+        doc_id = "doc1",
+        text   = "旧目录里的记忆",
+        meta   = {"type": "knowledge", "global_approved": True},
+    )
+    assert db.query_knowledge("旧目录", top_k=5)
+
+    db.bind(second_dir)
+
+    assert db.query_knowledge("旧目录", top_k=5) == []

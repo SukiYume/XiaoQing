@@ -1,4 +1,4 @@
-"""xiaoqing_life 测试共用的假 HTTP、假模型、假上下文与固定样例。"""
+"""xiaoqing_life 测试共用的假 HTTP、假模型、假上下文、人设卡文件与固定样例。"""
 
 from __future__ import annotations
 
@@ -155,3 +155,23 @@ def make_context(
 
 def fixed_clock(moment: datetime) -> Callable[[Any], datetime]:
     return lambda _context: moment
+
+
+def write_persona_card(
+    context: SimpleNamespace, tmp_path: Path, routine: tuple[str, ...] | None
+) -> None:
+    """给上下文配一张真实的人设卡文件，带这组〔作息〕。
+
+    ``None`` 表示人设卡文件不存在（读不到人设卡）；空元组是只有人物事实、没有〔作息〕的卡。
+    写了不合格式的作息条目时，人设卡读入时就被拒绝，和读不到人设卡一样退回 ``quiet_hours``。
+    """
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    card = tmp_path / "persona.md"
+    card.unlink(missing_ok=True)
+    if routine is not None:
+        lines   = "\n".join(f"- {line}" for line in routine)
+        section = f"\n\n## 作息〔作息〕\n{lines}" if routine else ""
+        card.write_text(f"## 基本情况\n是个学生。{section}\n", encoding="utf-8")
+    plugins                  = context.config.setdefault("plugins", {})
+    plugins["xiaoqing_chat"] = {"personality": {"persona_file": str(card)}}

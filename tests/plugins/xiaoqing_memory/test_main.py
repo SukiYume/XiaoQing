@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from plugins.xiaoqing_memory import main as memory_main
-from tests.plugins.xiaoqing_memory.support import ALI, GROUP, bot_event, user_event
+from tests.helpers.xiaoqing_memory_test_support import ALI, GROUP, bot_event, user_event
 
 
 class FakeAI:
@@ -25,8 +25,10 @@ class FakeAI:
         return SimpleNamespace(content=output if isinstance(output, str) else json.dumps(output))
 
 
-def _context(tmp_path: Path, *, enabled: bool = True, ai: Any = None, routes: bool = True) -> Any:
-    plugin: dict[str, Any] = {"enabled": enabled}
+def _context(
+    tmp_path: Path, *, enabled: bool = True, ai: Any = None, routes: bool = True, **options: Any
+) -> Any:
+    plugin: dict[str, Any] = {"enabled": enabled, **options}
     if routes:
         plugin["ai"] = {"routes": {"reasoning": ["m"]}}
     sent: list[dict[str, Any]] = []
@@ -82,27 +84,42 @@ async def test_services_enforce_scope_and_disabled_switch(temp_data_dir) -> None
 
 
 @pytest.mark.asyncio
-async def test_tick_only_gates_and_spawns_one_consolidation(temp_data_dir, monkeypatch) -> None:
-    context = _context(temp_data_dir)
+async def test_tick_only_gates_and_spawns_one_consolidation(temp_data_dir) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
-    calls   = []
 
-    async def fake_pass(store, cfg, deps, moment):
-        calls.append(moment)
-        started.set()
-        await release.wait()
+    class GatedAI(FakeAI):
+        """整理要调模型：卡在第一次调用上，直到测试放行。"""
 
-    monkeypatch.setattr(memory_main, "nightly_pass", fake_pass)
+        async def complete(self, route: str, messages: list[dict[str, str]]) -> Any:
+            result = await super().complete(route, messages)
+            started.set()
+            await release.wait()
+            return result
+
+    ai = GatedAI()
+    # 待整理的事件够多（不必等到夜间窗口），定时检查才会真的去整理这个群。
+    context = _context(temp_data_dir, ai=ai, backlog_trigger_events=10)
+    events = [user_event(f"第{n}句", ALI, "阿梨", f"k{n}") for n in range(10)]
+    await memory_main.record(_payload(GROUP, events=events), context)
+    runtime = memory_main.get_runtime(context)
+
     await memory_main.scheduled_tick(context)
     await asyncio.wait_for(started.wait(), 1)
+    first = runtime.task
+    assert first is not None and not first.done()
     await memory_main.scheduled_tick(context)
-    assert len(calls) == 1, "整理是单飞的"
+    assert runtime.task is first and ai.calls == 1, "整理是单飞的"
     release.set()
     await memory_main.shutdown(context)
-    no_route = _context(temp_data_dir / "noroute", routes=False)
+
+    no_route_ai = FakeAI()
+    no_route = _context(temp_data_dir / "noroute", ai=no_route_ai, routes=False)
+    await memory_main.record(_payload(GROUP, events=events), no_route)
     await memory_main.scheduled_tick(no_route)
-    assert len(calls) == 1, "没有配置模型时不整理"
+    assert memory_main.get_runtime(no_route).task is None and no_route_ai.calls == 0, (
+        "没有配置模型时不整理"
+    )
 
 
 @pytest.mark.asyncio

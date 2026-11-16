@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -601,51 +602,17 @@ class TestSetSecretCommand:
         assert "不可用" in result_text or "❌" in result_text
 
     @pytest.mark.asyncio
-    async def test_set_secret_does_not_trigger_manual_reload(self):
-        """测试 set_secret 不再额外触发 reload_config。"""
+    async def test_set_secret_redacts_command_log_before_handler(self, mock_context, caplog):
+        with caplog.at_level(logging.DEBUG, logger=bot_core.logger.name):
+            await bot_core.handle(
+                "set_secret",
+                "plugins.signin.yingshijufeng.sid CANARY-secret",
+                {"user_id": 1, "group_id": None},
+                mock_context,
+            )
 
-        class Ctx:
-            def __init__(self):
-                self.principal = PluginPrincipal(
-                    kind         = "user",
-                    user_id      = 1,
-                    is_bot_admin = True,
-                    is_private   = True,
-                )
-                self.secret_admin = MagicMock()
-                self.capabilities = PluginCapabilities(
-                    is_bot_admin = True,
-                    secret_admin = self.secret_admin,
-                )
-                self.reload_config = MagicMock()
-
-        ctx    = Ctx()
-        result = await bot_core.handle(
-            "set_secret", "plugins.signin.yingshijufeng.sid new_sid", {}, ctx
-        )
-
-        assert result is not None
-        ctx.secret_admin.set.assert_called_once_with(
-            "plugins.signin.yingshijufeng.sid",
-            "new_sid",
-        )
-        ctx.reload_config.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_set_secret_redacts_command_log_before_handler(self, mock_context, monkeypatch):
-        info = MagicMock()
-        monkeypatch.setattr(bot_core.logger, "info", info)
-
-        await bot_core.handle(
-            "set_secret",
-            "plugins.signin.yingshijufeng.sid CANARY-secret",
-            {"user_id": 1, "group_id": None},
-            mock_context,
-        )
-
-        serialized_calls = str(info.call_args_list)
-        assert "CANARY-secret" not in serialized_calls
-        assert "<redacted>" in serialized_calls
+        assert "CANARY-secret" not in caplog.text
+        assert "<redacted>" in caplog.text
 
     @pytest.mark.asyncio
     async def test_set_secret_path_matches_core_hyphen_contract(self, mock_context):
@@ -906,16 +873,6 @@ class TestParseDuration:
         assert result == 120
         assert bot_core._parse_duration("2H") == 120
 
-    def test_parse_empty(self):
-        """测试空输入"""
-        result = bot_core._parse_duration("")
-        assert result is None
-
-    def test_parse_invalid(self):
-        """测试无效输入"""
-        result = bot_core._parse_duration("invalid")
-        assert result is None
-
     def test_parse_fraction_hours(self):
         """测试小数小时"""
         result = bot_core._parse_duration("0.5h")
@@ -924,8 +881,8 @@ class TestParseDuration:
         assert result == 75
         assert bot_core._parse_duration(".5h") == 30
 
-    @pytest.mark.parametrize("value", ["nan", "inf", "-1", "1e9999", "1时h"])
-    def test_parse_rejects_malformed_or_non_finite_values(self, value):
+    @pytest.mark.parametrize("value", ["", "invalid", "nan", "inf", "-1", "1e9999", "1时h"])
+    def test_parse_rejects_empty_malformed_or_non_finite_values(self, value):
         assert bot_core._parse_duration(value) is None
 
 

@@ -6,6 +6,7 @@ import difflib
 import re
 from collections.abc import Sequence
 
+from ..media.marker_resolver import text_without_outbound_marker
 from ..memory.memory import StoredMessage, is_conversation_reply
 from ..message_parts import render_stored_message
 from ..persona import persona_subject_pattern
@@ -345,11 +346,16 @@ def _current_media_only_anchors(current_text: str) -> tuple[str, ...]:
 
 
 def media_meta_reply_check(*, reply: str, current_text: str) -> ReplyCheckResult | None:
+    """对方只发了媒体时，拒绝围着“图片 / 表情”这种形式本身打转的回复。
+
+    回复里她自己要发的表情、图片标记不算谈论媒体形式：用一个表情回应表情是正常的接话。
+    """
+
     anchors = _current_media_only_anchors(current_text)
     if not anchors:
         return None
 
-    normalized_reply = normalize_text(reply)
+    normalized_reply = normalize_text(text_without_outbound_marker(reply))
     if not normalized_reply:
         return None
 

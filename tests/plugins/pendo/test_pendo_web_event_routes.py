@@ -1,18 +1,20 @@
-"""Pendo Web 日程集合路由的规范化、事务和审计回归。"""
+"""Pendo Web 日程集合路由的规范化、事务和审计。"""
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from typing import Any, cast
-from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
 
 from plugins.pendo.core.exceptions import ItemNotFoundException, ItemVersionConflictException
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils import time_utils
 from plugins.pendo.web.api import events as events_api
+from tests.helpers.pendo_test_support import reject_inserts
 
 
 def _create_collection(
@@ -390,7 +392,7 @@ def test_category_endpoint_reads_scoped_categories_without_building_an_overview(
                 "start_time": "2030-01-01T10:00:00",
             }
         )
-    # 模拟旧版本遗留的空分类；读接口仍应给出稳定的默认显示值。
+    # 写入空分类记录；读接口仍应给出稳定的默认显示值。
     with db.get_connection():
         db.get_connection().execute(
             "UPDATE items SET category = '' WHERE id = ?",
@@ -398,7 +400,7 @@ def test_category_endpoint_reads_scoped_categories_without_building_an_overview(
         )
 
     def fail_if_overview_is_built(**_kwargs: object) -> dict[str, object]:
-        """旧实现一旦回归到概览构造便立即失败。"""
+        """分类端点一旦去构造概览便立即失败。"""
 
         raise AssertionError("category endpoint must not build the event overview")
 
@@ -413,15 +415,81 @@ def test_category_endpoint_reads_scoped_categories_without_building_an_overview(
     }
 
 
-def test_overview_endpoint_forwards_every_filter_and_wraps_the_result(
-    monkeypatch: pytest.MonkeyPatch,
+def _seed_multi_node(
     db: Database,
-) -> None:
+    owner_id: str,
+    collection_id: str,
+    *,
+    title: str,
+    category: str,
+    start_time: str               = "2030-01-10T18:00:00",
+    remind_times: tuple[str, ...] = ("2030-01-10T17:00:00",),
+) -> str:
+    """写入一个带单个叶子节点的多节点集合，返回叶子 id。"""
+
+    child_id = f"{collection_id}_m01"
+    db.create_event_collection(
+        {
+            "id"        : collection_id,
+            "owner_id"  : owner_id,
+            "kind"      : "multi_node",
+            "title"     : title,
+            "category"  : category,
+            "start_time": start_time,
+            "end_time"  : start_time,
+        }
+    )
+    db.insert_item(
+        {
+            "id"                   : child_id,
+            "owner_id"             : owner_id,
+            "type"                 : "event",
+            "title"                : "提审",
+            "category"             : category,
+            "start_time"           : start_time,
+            "remind_times"         : list(remind_times),
+            "event_role"           : "multi_node_child",
+            "event_collection_id"  : collection_id,
+            "event_collection_kind": "multi_node",
+            "event_index"          : 1,
+            "event_node_key"       : "m01",
+        }
+    )
+    return child_id
+
+
+def test_overview_endpoint_forwards_every_filter_and_wraps_the_result(db: Database) -> None:
     """概览端点只负责所有者范围转发和统一响应信封。"""
 
-    overview = {"events": [{"id": "event-a"}], "summary": {"event_count": 1}}
-    builder = Mock(return_value=overview)
-    monkeypatch.setattr(events_api, "build_events_overview", builder)
+    owner_id = "overview-owner"
+    matching = _seed_multi_node(db, owner_id, "match", title="发布准备", category="项目")
+    # 以下每条只在一个筛选条件上不符合（日期、分类、关键词、类型、提醒、所有者各一条）。
+    _seed_multi_node(db, owner_id, "other-category", title="发布准备", category="其他")
+    _seed_multi_node(db, owner_id, "other-keyword", title="评审安排", category="项目")
+    _seed_multi_node(
+        db, owner_id, "no-reminder", title="发布准备", category="项目", remind_times=()
+    )
+    _seed_multi_node(
+        db,
+        owner_id,
+        "out-of-range",
+        title        = "发布准备",
+        category     = "项目",
+        start_time   = "2030-03-10T18:00:00",
+        remind_times = ("2030-03-10T17:00:00",),
+    )
+    db.insert_item(
+        {
+            "id"          : "single-event",
+            "owner_id"    : owner_id,
+            "type"        : "event",
+            "title"       : "发布单点",
+            "category"    : "项目",
+            "start_time"  : "2030-01-12T10:00:00",
+            "remind_times": ["2030-01-12T09:00:00"],
+        }
+    )
+    foreign = _seed_multi_node(db, "someone-else", "foreign", title="发布准备", category="项目")
 
     response = events_api.get_events_overview(
         start_date = "2030-01-01",
@@ -430,34 +498,20 @@ def test_overview_endpoint_forwards_every_filter_and_wraps_the_result(
         category   = "项目",
         kind       = "multi_node",
         reminder   = "with",
-        owner_id   = "overview-owner",
+        owner_id   = owner_id,
         db         = db,
     )
 
-    assert response == {"ok": True, "data": overview, "message": ""}
-    builder.assert_called_once_with(
-        db         = db,
-        owner_id   = "overview-owner",
-        start_date = "2030-01-01",
-        end_date   = "2030-01-31",
-        keyword    = "发布",
-        category   = "项目",
-        kind       = "multi_node",
-        reminder   = "with",
-    )
+    assert response["ok"] is True
+    assert response["message"] == ""
+    data = cast(dict[str, Any], response["data"])
+    assert [event["id"] for event in data["events"]] == [matching]
+    assert foreign not in [event["id"] for event in data["events"]]
+    assert data["summary"]["event_count"] == 1
 
 
-def test_overview_endpoint_translates_invalid_query_to_422(
-    monkeypatch: pytest.MonkeyPatch,
-    db: Database,
-) -> None:
+def test_overview_endpoint_translates_invalid_query_to_422(db: Database) -> None:
     """分析层的日期与枚举校验错误应作为客户端错误返回。"""
-
-    monkeypatch.setattr(
-        events_api,
-        "build_events_overview",
-        Mock(side_effect=ValueError("unsupported reminder filter: later")),
-    )
 
     with pytest.raises(HTTPException) as exc_info:
         events_api.get_events_overview(
@@ -509,11 +563,12 @@ def test_create_collection_falls_back_when_clock_timezone_has_no_zone_key(
 ) -> None:
     """自定义时钟只给固定偏移时，集合仍应使用配置中的合法默认时区。"""
 
-    monkeypatch.setattr(
-        events_api,
-        "now_in_timezone",
-        lambda _owner_id, _db: datetime(2030, 1, 1, tzinfo=UTC),
-    )
+    class _FixedOffsetDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2030, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr(time_utils, "datetime", _FixedOffsetDateTime)
 
     collection_id, _child_ids = _create_collection(db, "owner-clock-fallback")
     collection = db.get_event_collection(collection_id, "owner-clock-fallback")
@@ -670,26 +725,14 @@ def test_explicit_null_reminder_rules_clear_collection_and_children(db: Database
         assert db.get_reminder_logs(child_id) == []
 
 
-def test_mixed_update_rolls_back_metadata_and_reminders_when_audit_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    db: Database,
-) -> None:
+def test_mixed_update_rolls_back_metadata_and_reminders_when_audit_fails(db: Database) -> None:
     """审计写入失败时，集合头和两个叶子提醒必须全部回滚。"""
 
     owner_id = "owner-update-rollback"
     collection_id, child_ids = _create_collection(db, owner_id, title="旧标题")
-    original_log = db._log_operation_with_cursor
+    reject_inserts(db, "operation_logs", "注入更新审计失败", action="update_event_collection")
 
-    def fail_update_audit(cursor: Any, **kwargs: Any) -> None:
-        """仅在更新审计阶段注入失败，确保数据写入已经执行。"""
-
-        if kwargs.get("action") == "update_event_collection":
-            raise RuntimeError("注入更新审计失败")
-        original_log(cursor, **kwargs)
-
-    monkeypatch.setattr(db, "_log_operation_with_cursor", fail_update_audit)
-
-    with pytest.raises(RuntimeError, match="注入更新审计失败"):
+    with pytest.raises(sqlite3.IntegrityError, match="注入更新审计失败"):
         events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(
@@ -742,26 +785,14 @@ def test_delete_collection_writes_one_atomic_audit_with_child_ids(db: Database) 
     assert json.loads(str(delete_rows[0]["details"])) == {"child_ids": child_ids}
 
 
-def test_delete_collection_rolls_back_data_when_audit_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    db: Database,
-) -> None:
+def test_delete_collection_rolls_back_data_when_audit_fails(db: Database) -> None:
     """删除审计失败时不得留下已删除集合或叶子。"""
 
     owner_id = "owner-delete-rollback"
     collection_id, child_ids = _create_collection(db, owner_id)
-    original_log = db._log_operation_with_cursor
+    reject_inserts(db, "operation_logs", "注入删除审计失败", action="delete_event_collection")
 
-    def fail_delete_audit(cursor: Any, **kwargs: Any) -> None:
-        """在集合和叶子已标记删除后注入日志失败。"""
-
-        if kwargs.get("action") == "delete_event_collection":
-            raise RuntimeError("注入删除审计失败")
-        original_log(cursor, **kwargs)
-
-    monkeypatch.setattr(db, "_log_operation_with_cursor", fail_delete_audit)
-
-    with pytest.raises(RuntimeError, match="注入删除审计失败"):
+    with pytest.raises(sqlite3.IntegrityError, match="注入删除审计失败"):
         events_api.delete_collection(collection_id, owner_id=owner_id, db=db)
 
     collection_row = (
@@ -787,34 +818,29 @@ def test_delete_collection_rolls_back_data_when_audit_fails(
 
 
 def test_detail_endpoints_return_builder_data_and_translate_missing_records(
-    monkeypatch: pytest.MonkeyPatch,
     db: Database,
 ) -> None:
     """集合和叶子详情端点都应保留统一信封及明确的 404。"""
 
-    collection_detail = {"collection": {"id": "collection-a"}, "children": []}
-    event_detail      = {"event": {"id": "event-a"}, "reminder_logs": []}
-    collection_builder = Mock(side_effect=[collection_detail, None])
-    event_builder = Mock(side_effect=[event_detail, None])
-    monkeypatch.setattr(events_api, "build_event_collection_detail", collection_builder)
-    monkeypatch.setattr(events_api, "build_event_detail", event_builder)
+    owner_id = "owner-detail"
+    collection_id, child_ids = _create_collection(db, owner_id)
 
-    assert events_api.get_collection_detail("collection-a", owner_id="owner", db=db) == {
-        "ok"     : True,
-        "data"   : collection_detail,
-        "message": "",
-    }
+    collection_response = events_api.get_collection_detail(collection_id, owner_id=owner_id, db=db)
+    assert collection_response["ok"] is True
+    assert collection_response["message"] == ""
+    collection_data = cast(dict[str, Any], collection_response["data"])
+    assert collection_data["collection"]["id"] == collection_id
+    assert [child["id"] for child in collection_data["children"]] == child_ids
     with pytest.raises(HTTPException) as collection_error:
-        events_api.get_collection_detail("missing", owner_id="owner", db=db)
+        events_api.get_collection_detail("missing", owner_id=owner_id, db=db)
     assert collection_error.value.status_code == 404
 
-    assert events_api.get_event_detail("event-a", owner_id="owner", db=db) == {
-        "ok"     : True,
-        "data"   : event_detail,
-        "message": "",
-    }
+    event_response = events_api.get_event_detail(child_ids[0], owner_id=owner_id, db=db)
+    assert event_response["ok"] is True
+    assert event_response["message"] == ""
+    assert cast(dict[str, Any], event_response["data"])["event"]["id"] == child_ids[0]
     with pytest.raises(HTTPException) as event_error:
-        events_api.get_event_detail("missing", owner_id="owner", db=db)
+        events_api.get_event_detail("missing", owner_id=owner_id, db=db)
     assert event_error.value.status_code == 404
 
 

@@ -20,7 +20,6 @@ from .app_support import (
     _trusted_secrets,
 )
 from .config import ConfigSnapshot, ConfigSourceStatus, PendingSecretsChange
-from .dispatcher import AdjustableSemaphore
 from .interfaces import ACTION_BYPASS_SINK_KEY
 from .onebot import OneBotHttpSender
 from .plugin_base import text
@@ -162,6 +161,7 @@ class AppConfigApplyMixin:
     _onebot_auth_generation            : int
     _dispatcher_concurrency            : int
     _inbound_cleanup_pending           : list[InboundManager]
+    _inbound_stand_in                  : tuple[InboundManager, tuple[Any, ...]] | None
     _stopping                          : bool
 
     async def _notify_pending_secrets_change(self, change: PendingSecretsChange) -> None:
@@ -359,7 +359,11 @@ class AppConfigApplyMixin:
                 "Invalid inbound configuration during synchronous auth rotation: %s",
                 exc,
             )
-        self._runtime_inbound_key             = desired_inbound_key
+        self._runtime_inbound_key = desired_inbound_key
+        stand_in                  = self._inbound_stand_in
+        if stand_in is not None and stand_in[1] != desired_inbound_key:
+            # 监听配置又变了：旧监听器不再顶替任何已发布的监听器，按未声明的收回凭据。
+            self._inbound_stand_in = None
         inbound_holders: list[InboundManager] = []
         for manager in (
             self.inbound_manager,
@@ -370,13 +374,9 @@ class AppConfigApplyMixin:
                 inbound_holders.append(manager)
         for manager in inbound_holders:
             try:
-                safe_token = (
-                    inbound_token
-                    if desired_inbound_key is not None
-                    and self._inbound_manager_key(manager) == desired_inbound_key
-                    else ""
+                manager.update_token(
+                    self._inbound_token_for_locked(manager, desired_inbound_key, inbound_token)
                 )
-                manager.update_token(safe_token)
             except BaseException as exc:
                 logger.exception("Could not synchronously rotate inbound auth", exc_info=exc)
 
@@ -424,18 +424,37 @@ class AppConfigApplyMixin:
 
     def _latest_safe_inbound_token(self, manager: InboundManager) -> str:
         with self._runtime_auth_lock:
-            if self._inbound_manager_key(manager) == self._runtime_inbound_key:
-                return self._runtime_inbound_token
+            return self._inbound_token_for_locked(
+                manager,
+                self._runtime_inbound_key,
+                self._runtime_inbound_token,
+            )
+
+    def _inbound_token_for_locked(
+        self,
+        manager: InboundManager,
+        desired_key: tuple[Any, ...] | None,
+        token: str,
+    ) -> str:
+        """``manager`` 此刻能持有的入站凭据，只会是当前发布的 ``token`` 或空。
+
+        它就是已发布配置声明的监听器时给凭据；它在顶替已发布配置声明、却没能启动的那个监听器时
+        也给，好让入站不断；其余一律为空。旧监听器从不拿回它原来的凭据。
+        """
+
+        if desired_key is None or not token:
             return ""
+        if self._inbound_manager_key(manager) == desired_key:
+            return token
+        stand_in = self._inbound_stand_in
+        if stand_in is not None and stand_in[0] is manager and stand_in[1] == desired_key:
+            return token
+        return ""
 
     def _apply_dispatcher_concurrency(self, concurrency: int) -> None:
-        """把分发器的并发上限调成 ``concurrency``；还不是可调 limiter 的就换成可调的。"""
+        """把分发器的并发上限调成 ``concurrency``。"""
 
-        limiter = self.dispatcher.semaphore
-        if isinstance(limiter, AdjustableSemaphore):
-            limiter.resize(concurrency)
-        else:
-            self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
+        self.dispatcher.semaphore.resize(concurrency)
         self._dispatcher_concurrency = concurrency
 
     def _apply_config(self, snapshot: ConfigSnapshot) -> None:

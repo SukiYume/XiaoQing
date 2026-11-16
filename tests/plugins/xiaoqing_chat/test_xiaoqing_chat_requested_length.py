@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,7 +17,8 @@ from plugins.xiaoqing_chat.llm.communication_constraints import (
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, ReplyAttemptState
 from plugins.xiaoqing_chat.reply_fallbacks import queue_reply_regeneration
-from tests.helpers.xiaoqing_chat_test_support import reply_plan
+from tests.helpers.reply_checker_test_support import checker_verdict
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel, reply_plan
 
 
 @pytest.mark.parametrize(
@@ -85,53 +85,58 @@ async def test_drafts_within_range_pass_and_over_limit_asks_to_cut():
     assert not too_long.suitable and "压缩" in too_long.reason
 
 
+_REVIEW_KWARGS = {
+    "bot_name"              : "小青",
+    "goal"                  : "写检讨",
+    "current_text"          : "写个800字的检讨",
+    "history"               : [],
+    "chat_history_text"     : "",
+    "enable_llm_checker"    : True,
+    "llm_checker_mode"      : "always",
+    "max_repeat_compare"    : 2,
+    "similarity_threshold"  : 0.9,
+    "max_assistant_in_row"  : 5,
+    "timeout_seconds"       : 1.0,
+    "max_retry"             : 0,
+    "retry_interval_seconds": 0.0,
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chars", [800, 450])
-async def test_the_remote_checker_leaves_length_to_the_local_count(monkeypatch, chars):
+async def test_the_remote_checker_leaves_length_to_the_local_count(chars):
     # 不论够不够字，审查模型都不再凭估计按字数判；否则篇幅不够会被当成硬错误改发兜底句。
-    remote = AsyncMock(
-        return_value=({"choices": [{"message": {"content": "{}"}}]}, "test"),
-    )
-    monkeypatch.setattr(checker, "_request_checker_completion", remote)
-    await checker._llm_check(
-        secrets     = {},
-        check_input = checker._LLMCheckInput(
-            "小青", "好" * chars, "写检讨", "写个800字的检讨", "", "", "", False
-        ),
-        request_policy=checker._LLMRequestPolicy(1024, 1, 0, 0),
-    )
-    prompt = remote.call_args.kwargs["prompt"]
-    assert f"候选实际 {chars} 字；篇幅由本地逐字核对，instruction_followed 不按字数判断" in prompt
-    assert json.loads(remote.call_args.kwargs["materials"])["待检查回复"] == "好" * chars
+    model = ScriptedChatModel(checker="{}")
+    await checker.check_reply(secrets={"_ai": model}, reply="好" * chars, **_REVIEW_KWARGS)
+
+    [call] = model.calls_of("checker")
+    system, materials = call.messages[0]["content"], call.messages[-1]["content"]
+    assert f"候选实际 {chars} 字；篇幅由本地逐字核对，instruction_followed 不按字数判断" in system
+    assert json.loads(materials)["待检查回复"] == "好" * chars
 
 
 @pytest.mark.asyncio
-async def test_other_problems_win_over_length(monkeypatch):
+async def test_other_problems_win_over_length():
     # 篇幅只在其他核对都通过后才看：放行的短稿也一定过了事实与人设审查。
-    hard = ReplyCheckResult(False, "编造了经历", True, "hard", "persona_grounding")
-    monkeypatch.setattr(checker, "_llm_check", AsyncMock(return_value=hard))
-    passed = ReplyCheckResult(True, "", False, "soft")
-    kwargs = {
-        "secrets"               : {},
-        "bot_name"              : "小青",
-        "goal"                  : "写检讨",
-        "current_text"          : "写个800字的检讨",
-        "history"               : [],
-        "chat_history_text"     : "",
-        "enable_llm_checker"    : True,
-        "max_repeat_compare"    : 2,
-        "similarity_threshold"  : 0.9,
-        "max_assistant_in_row"  : 5,
-        "timeout_seconds"       : 1.0,
-        "max_retry"             : 0,
-        "retry_interval_seconds": 0.0,
+    review = {
+        "secrets": {
+            "_ai": ScriptedChatModel(
+                checker=[
+                    checker_verdict(suitable=False, reason="编造了经历", persona_grounded=False),
+                    checker_verdict(),
+                    checker_verdict(),
+                ]
+            )
+        },
+        **_REVIEW_KWARGS,
     }
 
-    assert await checker.check_reply(reply="好" * 450, **kwargs) is hard
-    monkeypatch.setattr(checker, "_llm_check", AsyncMock(return_value=passed))
-    short = await checker.check_reply(reply="好" * 450, **kwargs)
+    wrong = await checker.check_reply(reply="好" * 450, **review)
+    assert wrong.is_hard and wrong.failure_code == "persona_grounding"
+    assert wrong.reason == "编造了经历"
+    short = await checker.check_reply(reply="好" * 450, **review)
     assert not short.suitable and not short.is_hard and "这一稿 450 字" in short.reason
-    assert (await checker.check_reply(reply="好" * 800, **kwargs)).suitable
+    assert (await checker.check_reply(reply="好" * 800, **review)).suitable
 
 
 def test_a_length_retry_asks_for_the_length_not_for_shorter_replies():
@@ -174,8 +179,8 @@ def test_long_requests_get_room_to_finish():
 
 
 @pytest.mark.asyncio
-async def test_the_raised_budget_reaches_the_generation_request(monkeypatch):
-    # 实测出现过：计划里放宽了预算，生成请求却仍按配置的 512 发，800 字的稿子在半句处截断。
+async def test_the_raised_budget_reaches_the_generation_request():
+    # 计划里放宽的预算要传到生成请求；否则请求仍按配置的 512 发，800 字的稿子会在半句处截断。
     from plugins.xiaoqing_chat import reply_generator
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
     from plugins.xiaoqing_chat.reply_plan import foreground_call_config
@@ -188,14 +193,13 @@ async def test_the_raised_budget_reaches_the_generation_request(monkeypatch):
     foreground = foreground_call_config(runtime, "小青，帮我写个800字的检讨书")
     assert foreground.max_tokens >= 1400
 
-    completion = AsyncMock(return_value=("检讨书", "chat"))
-    monkeypatch.setattr(reply_generator, "chat_completions_with_profile", completion)
+    model = ScriptedChatModel(reply="检讨书")
     plan = reply_plan(
         forced     = True,
         text       = "小青，帮我写个800字的检讨书",
         runtime    = runtime,
         foreground = foreground,
-        secrets    = {"_route": "chat"},
+        secrets    = {"_ai": model, "_route": "chat"},
     )
     await reply_generator._request_reply_candidate(plan, [{"role": "user", "content": "x"}])
-    assert completion.call_args.kwargs["max_tokens"] == foreground.max_tokens
+    assert model.calls[-1].kwargs["max_tokens"] == foreground.max_tokens

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.pendo.commands import scheduled
+from plugins.pendo.utils.settings_utils import parse_custom_settings
+from tests.helpers.pendo_test_support import read_scheduled_delivery
 
 
 @pytest.mark.asyncio
@@ -90,63 +92,51 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch) -> None:
+async def test_daily_marker_is_written_only_after_confirmed_delivery(db, monkeypatch) -> None:
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
             instant = datetime(2030, 1, 1, tzinfo=UTC)
             return instant if tz else instant.replace(tzinfo=None)
 
-    async def active_users(_db):
-        return ["1001"]
-
-    async def settings_map(_users, _db):
-        return {
-            "1001": {
-                "settings"       : {"timezone": "UTC", "daily_report_time": "00:00"},
-                "custom_settings": {"daily_briefing_enabled": True},
-            }
-        }
-
-    async def content(_user, _db, **_kwargs):
-        return "daily-secret"
-
-    saved    : list[tuple] = []
-    completed: list[tuple] = []
-    released : list[tuple] = []
-    db                     = SimpleNamespace(
-        get_due_scheduled_delivery_periods = lambda *_args, **_kwargs: [],
-        claim_scheduled_delivery           = lambda task, owner, period, **_kwargs: {
-            "claim_token" : "lease-1",
-            "delivery_key": f"{task}:{owner}:{period}",
+    db.insert_item({"owner_id": "1001", "type": "note", "title": "有数据的用户"})
+    db.update_user_settings(
+        "1001",
+        {
+            "timezone"         : "UTC",
+            "daily_report_time": "00:00",
+            "settings_json"    : {"daily_briefing_enabled": True},
         },
-        complete_scheduled_delivery = lambda *args: completed.append(args) or True,
-        release_scheduled_delivery  = lambda *args: released.append(args) or True,
     )
     monkeypatch.setattr(scheduled, "datetime", FixedDateTime)
-    monkeypatch.setattr(scheduled, "_get_active_user_ids", active_users)
-    monkeypatch.setattr(scheduled, "get_user_settings_bundle_map", settings_map)
-    monkeypatch.setattr(scheduled, "_generate_briefing_content", content)
-    monkeypatch.setattr(scheduled, "save_user_setting", lambda *args: saved.append(args))
 
-    async def rejected(_action):
+    def marker() -> str | None:
+        return parse_custom_settings(db.get_user_settings("1001")).get("last_daily_briefing_date")
+
+    sent_actions: list[dict] = []
+
+    async def rejected(action):
+        sent_actions.append(action)
         return False
 
     await scheduled.send_daily_briefings(SimpleNamespace(send_action=rejected), db)
-    assert saved == []
-    assert len(released) == 1
-    assert completed == []
+    assert len(sent_actions) == 1
+    assert marker() is None
+    outbox = read_scheduled_delivery(db, "daily_briefing", "1001", "2030-01-01")
+    assert outbox is not None
+    assert outbox["state"] == "failed"
+    assert outbox["sent_at"] is None
 
-    async def confirmed(_action):
+    async def confirmed(action):
+        sent_actions.append(action)
         return True
 
     await scheduled.send_daily_briefings(SimpleNamespace(send_action=confirmed), db)
-    assert saved and saved[0][:3] == (
-        "1001",
-        "last_daily_briefing_date",
-        "2030-01-01",
-    )
-    assert len(completed) == 1
+    assert len(sent_actions) == 2
+    assert marker() == "2030-01-01"
+    outbox = read_scheduled_delivery(db, "daily_briefing", "1001", "2030-01-01")
+    assert outbox is not None
+    assert outbox["state"] == "sent"
 
 
 @pytest.mark.asyncio

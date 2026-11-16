@@ -25,7 +25,7 @@ from plugins.xiaoqing_memory.consolidate.runner import (
 from plugins.xiaoqing_memory.forget import forget
 from plugins.xiaoqing_memory.model import GLOBAL, PAGE_LIMITS, Note, Page, PageLine, page_kind
 from plugins.xiaoqing_memory.recall import recall
-from tests.plugins.xiaoqing_memory.support import (
+from tests.helpers.xiaoqing_memory_test_support import (
     ALI,
     BO,
     CFG,
@@ -638,8 +638,8 @@ def test_pending_pages_of_quiet_scopes_are_rewritten_at_night(temp_data_dir) -> 
 
 
 @pytest.mark.unit
-def test_bounded_growth_over_thirty_days(temp_data_dir) -> None:
-    """可控时钟跑 30 天脚本化对话，模型每批都给新事实：笔记数、页面字数、事件文件数都有上限。"""
+def test_bounded_growth_over_sixty_days(temp_data_dir) -> None:
+    """可控时钟跑 60 天脚本化对话（事件保留 31 天），模型每批都给新事实：笔记数、页面字数、事件文件数都有上限。"""
 
     store = new_store(temp_data_dir)
     cfg = MemoryConfig(max_notes_per_subject=12, event_keep_days=31)

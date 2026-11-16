@@ -19,7 +19,7 @@ from plugins.xiaoqing_life.planner import INTEREST, Decision
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceError, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -166,7 +166,6 @@ async def test_wind_down_lets_her_pick_public_topics_from_what_friends_talked_ab
     )
     record = json.loads(ai.calls[0][1][1]["content"])["untrusted_record"]
     assert [h["topic"] for h in record["friends_topics_heard"]] == ["新番推荐", "期末考试"]
-    assert "谁的私事" in ai.calls[0][1][0]["content"]
     assert result.details["friends_topics"] == 1
     assert [p["topic"] for p in store.state["chat_topics"]] == ["新番推荐"]
 
@@ -507,7 +506,6 @@ def test_the_research_prompt_carries_the_claim_being_checked() -> None:
     messages = research.build_messages(
         persona="", thread=check, items=[], methods=[], round_no=1, rounds_left=2
     )
-    assert "question.claim 不为空时" in messages[0]["content"]
     question = json.loads(messages[1]["content"])["question"]
     assert question["claim"] == "铁锅导热更好"
     assert question["claim_basis"] == ["铸铁的导热系数比不锈钢高"]
@@ -517,7 +515,7 @@ def test_the_research_prompt_carries_the_claim_being_checked() -> None:
 async def test_a_check_that_found_evidence_goes_to_review_instead_of_parking(
     tmp_path: Path,
 ) -> None:
-    """真实回放：第二轮维基对上了，第三轮 B站没东西写了 stuck，整个核实被搁置、依据白查了。"""
+    """核实课题已经查到依据时，即使最后一轮没东西可写（stuck）也进入复核，不被搁置。"""
 
     store = new_store(tmp_path)
     check = _thread(
@@ -558,7 +556,7 @@ async def test_a_check_that_found_evidence_goes_to_review_instead_of_parking(
 
 @pytest.mark.asyncio
 async def test_terms_baike_does_not_know_are_not_queued_again_for_a_month(tmp_path: Path) -> None:
-    """真实回放：“依托答辩”百科没有词条；聊天每次听到本群没确认的说法都会交过来，不能每次都去查。"""
+    """百科没有词条的说法，聊天每次听到都会交过来，一个月内不重复排队去查。"""
 
     store = new_store(tmp_path)
     cfg   = make_cfg()

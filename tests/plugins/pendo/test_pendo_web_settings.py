@@ -1,4 +1,4 @@
-"""Regression tests for Pendo web settings persistence."""
+"""Pendo 设置的 Web 接口、规范化与聊天端设置命令。"""
 
 import asyncio
 import threading
@@ -103,14 +103,11 @@ def test_settings_http_rejects_unknown_fields_and_returns_defaults(db: Database)
     assert invalid.status_code == 422
 
 
-def test_settings_update_rejects_empty_and_skips_normalized_noop(
-    db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_settings_update_rejects_empty_and_skips_normalized_noop(db: Database) -> None:
     """空补丁返回 422，相同值不能写库或增加设置版本。"""
 
     owner_id = "owner-settings-noop"
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {
             "timezone"     : "Asia/Shanghai",
@@ -125,15 +122,6 @@ def test_settings_update_rejects_empty_and_skips_normalized_noop(
         )
         .fetchone()[0]
     )
-    calls = 0
-
-    def unexpected_update(*_args: object, **_kwargs: object) -> bool:
-        nonlocal calls
-        calls += 1
-        return True
-
-    monkeypatch.setattr(db, "update_user_settings", unexpected_update)
-
     _assert_http_error(
         422,
         lambda: settings_api.update_settings(
@@ -152,7 +140,6 @@ def test_settings_update_rejects_empty_and_skips_normalized_noop(
     )
 
     assert response["message"] == "无变化"
-    assert calls == 0
     version_after = (
         db.get_connection()
         .execute(
@@ -204,23 +191,12 @@ def test_settings_update_persists_normalized_patch_and_maps_storage_failure(
     )
     assert invalid.detail == "Invalid daily_report_time, expected HH:MM"
 
-    monkeypatch.setattr(db, "update_user_settings", lambda *_args, **_kwargs: False)
-    error = _assert_http_error(
-        500,
-        lambda: settings_api.update_settings(
-            settings_api.SettingsUpdate(timezone="UTC"),
-            owner_id = owner_id,
-            db       = db,
-        ),
-    )
-    assert error.detail == "Failed to update settings"
-
 
 def test_user_settings_round_trip_parses_and_merges_settings_json(db: Database) -> None:
     """连续 JSON 补丁应合并而非覆盖其他已保存开关。"""
 
     owner_id = "u-settings"
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {
             "timezone"     : "Asia/Shanghai",
@@ -230,7 +206,7 @@ def test_user_settings_round_trip_parses_and_merges_settings_json(db: Database) 
             },
         },
     )
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {"settings_json": {"extension_enabled": True}},
     )
@@ -303,7 +279,7 @@ def test_resolve_default_category_prefers_user_setting(db: Database) -> None:
 
     owner_id = "u-settings-category"
 
-    assert db.update_user_settings(owner_id, {"default_category": "工作手稿"}) is True
+    db.update_user_settings(owner_id, {"default_category": "工作手稿"})
     assert resolve_default_category(db, owner_id) == "工作手稿"
 
 
@@ -312,7 +288,7 @@ def test_user_settings_normalizes_legacy_daily_report_enabled_key(db: Database) 
 
     owner_id = "u-settings-legacy"
 
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {"settings_json": {"daily_report_enabled": False}},
     )
@@ -327,7 +303,7 @@ def test_save_user_setting_updates_dict_backed_settings_json(db: Database) -> No
 
     owner_id = "u-settings-save"
 
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {"settings_json": {"extension_enabled": True}},
     )
@@ -373,7 +349,7 @@ def test_web_saved_settings_reflect_in_plugin_settings_output(db: Database) -> N
 
     owner_id = "u-settings-plugin"
 
-    assert db.update_user_settings(
+    db.update_user_settings(
         owner_id,
         {
             "timezone"         : "Asia/Shanghai",
@@ -503,7 +479,7 @@ def test_note_and_event_handlers_apply_persisted_default_category(db: Database) 
     from plugins.pendo.handlers.note import NoteHandler
 
     owner_id = "u-handler-default-category"
-    assert db.update_user_settings(owner_id, {"default_category": "工作手稿"})
+    db.update_user_settings(owner_id, {"default_category": "工作手稿"})
 
     note_result = asyncio.run(
         NoteHandler(db).create_note(owner_id, "默认分类笔记", cast(Any, None))

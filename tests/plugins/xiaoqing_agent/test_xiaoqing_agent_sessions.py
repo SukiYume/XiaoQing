@@ -99,7 +99,7 @@ async def test_a_new_session_replaces_an_expired_one_and_size_is_bounded(tmp_pat
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     assert await store.load(CHAT, idle_seconds=60) is None
 
-    fresh = Session({"role": "system", "content": "新"})
+    fresh = await store.new_session(CHAT, {"role": "system", "content": "新"})
     await store.append(CHAT, fresh, _turn("big", "长" * 150_000), max_turns=8)
     await store.append(CHAT, fresh, _turn("next", "长" * 150_000), max_turns=8)
     session = await store.load(CHAT, idle_seconds=60)
@@ -108,3 +108,57 @@ async def test_a_new_session_replaces_an_expired_one_and_size_is_bounded(tmp_pat
     assert [turn["task_id"] for turn in session.turns] == ["next"]
     await store.clear(CHAT)
     assert await store.load(CHAT, idle_seconds=60) is None
+
+
+async def _saved_session(store: SessionStore, task_id: str) -> Session:
+    """开一份新会话并存下一轮，返回之后任务开始时读到的那份会话。"""
+
+    base = await store.new_session(CHAT, {"role": "system", "content": "办事"})
+    await store.append(CHAT, base, _turn(task_id, f"{task_id} 的话"), max_turns=8)
+    loaded = await store.load(CHAT, idle_seconds=60)
+    assert loaded is not None
+    return loaded
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_ends_after_agent_new_does_not_bring_the_old_session_back(tmp_path):
+    store       = SessionStore(tmp_path)
+    old_session = await _saved_session(store, "old")
+
+    await store.clear(CHAT)
+    await store.append(CHAT, old_session, _turn("late", "迟到的一轮"), max_turns=8)
+
+    assert await store.load(CHAT, idle_seconds=60) is None
+
+
+@pytest.mark.asyncio
+async def test_a_late_task_does_not_overwrite_the_session_started_after_agent_new(tmp_path):
+    store       = SessionStore(tmp_path)
+    old_session = await _saved_session(store, "old")
+
+    await store.clear(CHAT)
+    fresh = await store.new_session(CHAT, {"role": "system", "content": "从头开始"})
+    await store.append(CHAT, fresh, _turn("new", "新的一件事"), max_turns=8)
+    await store.append(CHAT, old_session, _turn("late", "迟到的一轮"), max_turns=8)
+
+    session = await store.load(CHAT, idle_seconds=60)
+    assert session is not None and session.session_id == fresh.session_id
+    assert [turn["task_id"] for turn in session.turns] == ["new"]
+
+
+@pytest.mark.asyncio
+async def test_a_late_task_does_not_overwrite_the_session_that_replaced_its_expired_one(tmp_path):
+    store       = SessionStore(tmp_path)
+    old_session = await _saved_session(store, "old")
+    path        = store.root / f"{CHAT.key}-{CHAT.user_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["updated_at"] = time.time() - 3600
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    assert await store.load(CHAT, idle_seconds=60) is None
+    fresh = await store.new_session(CHAT, {"role": "system", "content": "新会话"})
+    await store.append(CHAT, fresh, _turn("new", "过期后的新事"), max_turns=8)
+    await store.append(CHAT, old_session, _turn("late", "迟到的一轮"), max_turns=8)
+
+    session = await store.load(CHAT, idle_seconds=60)
+    assert session is not None and [turn["task_id"] for turn in session.turns] == ["new"]

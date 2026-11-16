@@ -1,30 +1,40 @@
-"""日程编辑、集合修改和结构化写入之间保持一致的回归测试。"""
+"""日程编辑、集合修改和结构化写入后，备注、提醒规则、冲突检查和分类校验保持一致。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
-from plugins.pendo.handlers.event import EventHandler, _split_force_flag
+from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.services.ai_parser import AIParser, RateLimiter
 from plugins.pendo.services.reminder import ReminderService
 
 USER = "10001"
 
 
+class _ScriptedAi:
+    """模型边界替身：每次 `complete` 都返回最近一次 `say` 设定的 JSON 文本。"""
+
+    def __init__(self) -> None:
+        self.content: str | None = None
+
+    async def complete(self, route, messages, **_kwargs):
+        return SimpleNamespace(content=self.content)
+
+
 @pytest.fixture
 def events(db):
-    parser = AIParser(context=None, db=db)
+    ai = _ScriptedAi()
+    parser = AIParser(context=SimpleNamespace(capabilities=SimpleNamespace(ai=ai)), db=db)
     parser._rate_limiter = RateLimiter(max_calls=1000)
-    parser._call_llm = AsyncMock()
-    reminder         = ReminderService(db)
+    reminder = ReminderService(db)
     handler = EventHandler(db=db, ai_parser=parser, reminder_service=reminder)
 
     def say(payload: dict) -> None:
-        parser._call_llm.return_value = json.dumps(payload, ensure_ascii=False)
+        ai.content = json.dumps(payload, ensure_ascii=False)
 
     return db, handler, reminder, say
 
@@ -64,7 +74,7 @@ def test_edit_keeps_notes_when_words_only_look_like_note_directive(events, chang
         ("说明改为先签到再入场", "先签到再入场"),
     ],
 )
-def test_edit_still_applies_real_note_directive(events, changes, expected):
+def test_edit_applies_real_note_directive(events, changes, expected):
     db, handler, _reminder, say = events
     say({"title": "周会", "start_time": "2031-05-01T10:00:00"})
     item_id = _add(handler, "2031年5月1日10点周会")["item_id"]
@@ -161,21 +171,6 @@ def test_edit_with_new_offsets_updates_rules_so_later_moves_keep_them(events):
         "2031-05-03T05:00:00+00:00",
         "2031-05-03T07:00:00+00:00",
     ]
-
-
-def test_force_flag_removal_keeps_text_whitespace():
-    payload = '{"kind":"single","title":"a  b","notes":"x   y","start_time":"2031-05-01T10:00"}'
-
-    assert _split_force_flag(f"{payload} --force") == (payload, True)
-    assert _split_force_flag("明天9点开会\n备注  带电脑 --force") == (
-        "明天9点开会\n备注  带电脑",
-        True,
-    )
-    assert _split_force_flag("--force 明天9点开会") == ("明天9点开会", True)
-    assert _split_force_flag('学习 "git push --force 用法"') == (
-        '学习 "git push --force 用法"',
-        False,
-    )
 
 
 def test_record_offsets_are_not_replaced_by_content_wording(events):

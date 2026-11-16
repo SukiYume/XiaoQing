@@ -6,6 +6,7 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -13,15 +14,72 @@ import pytest
 import tests.helpers.app_test_support as _fixture_support
 from core.app_delivery import AppDeliveryMixin
 from core.app_support import current_action_sink
-from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.constants import (
+    INBOUND_EVENT_DEDUP_TTL_SECONDS,
+    MAX_INBOUND_EVENT_DEDUP_KEYS,
+    MAX_MESSAGE_TEXT_LENGTH,
+)
 from core.delivery import DeliveryReceipt, attach_receipt, send_with_receipt
 from tests.helpers.app_test_support import (
+    PROBE,
     BroadcastResult,
     OneBotActionOutcomeUnknown,
     XiaoQingApp,
+    command_declaration,
+    load_test_plugin,
+    load_text_command_plugin,
 )
 
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root                               = _fixture_support.temp_app_root
+_isolate_process_global_plugin_import_state = (
+    _fixture_support._isolate_process_global_plugin_import_state
+)
+
+
+# 命令回一段超长文字加一张图；和测试里的 ``original_text``、``image_segment`` 逐字相同。
+LONG_REPLY_SOURCE = """
+from core.constants import MAX_MESSAGE_TEXT_LENGTH
+
+async def handle(_command, _args, _event, _context):
+    return [
+        {"type": "text", "data": {"text": "A" * (MAX_MESSAGE_TEXT_LENGTH + 17)}},
+        {"type": "image", "data": {"file": "test.png"}},
+    ]
+"""
+
+# 聊天插件的闲聊入口：回一条超长文字，回执的提交回调记下它收到的每条消息 ID。
+SMALLTALK_SOURCE = """
+from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.delivery import DeliveryReceipt, DeliverySegments
+from tests.helpers.plugin_probe import PROBE
+
+async def handle_smalltalk(_text, _event, _context):
+    committed = PROBE.log("committed")
+
+    def commit() -> None:
+        committed.append(receipt.message_ids)
+
+    receipt = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = commit,
+        rollback         = lambda: committed.append("rollback"),
+        unknown          = lambda: committed.append("unknown"),
+    )
+    long_text = "长" * (MAX_MESSAGE_TEXT_LENGTH + 10)
+    return DeliverySegments([{"type": "text", "data": {"text": long_text}}], receipt)
+"""
+
+
+def _echo_event(**overrides: Any) -> dict[str, Any]:
+    """一条会触发 ``/echo`` 的私聊消息事件。"""
+
+    return {
+        "post_type"   : "message",
+        "message_type": "private",
+        "user_id"     : 12345,
+        "message"     : "/echo",
+        **overrides,
+    }
 
 
 @pytest.mark.asyncio
@@ -29,30 +87,12 @@ temp_app_root = _fixture_support.temp_app_root
 async def test_inbound_event_uses_same_long_message_splitter_as_active_delivery(
     temp_app_root: Path,
 ):
-    app                = XiaoQingApp(temp_app_root)
-    image_segment      = {"type": "image", "data": {"file": "test.png"}}
-    original_text      = "A" * (MAX_MESSAGE_TEXT_LENGTH + 17)
-    app._process_event = AsyncMock(
-        return_value={
-            "action": "send_group_msg",
-            "params": {
-                "group_id": 67890,
-                "message" : [
-                    {"type": "text", "data": {"text": original_text}},
-                    image_segment,
-                ],
-            },
-        }
-    )
+    app           = XiaoQingApp(temp_app_root)
+    image_segment = {"type": "image", "data": {"file": "test.png"}}
+    original_text = "A" * (MAX_MESSAGE_TEXT_LENGTH + 17)
+    await load_test_plugin(app, "echo", LONG_REPLY_SOURCE, commands=[command_declaration("echo")])
 
-    actions = await app._handle_inbound_event(
-        {
-            "post_type"   : "message",
-            "message_type": "group",
-            "user_id"     : 12345,
-            "group_id"    : 67890,
-        }
-    )
+    actions = await app._handle_inbound_event(_echo_event())
 
     assert len(actions) == 2
     messages = [action["params"]["message"] for action in actions]
@@ -95,17 +135,14 @@ async def test_send_single_action_logs_full_logical_message_length(
 async def test_app_process_event(temp_app_root: Path):
     """Test _process_event processes event through dispatcher"""
     app = XiaoQingApp(temp_app_root)
-
-    # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(
-        return_value=[{"type": "text", "data": {"text": "test"}}]
-    )
+    await load_text_command_plugin(app)
 
     event = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
         "group_id"    : 67890,
+        "message"     : "/echo",
     }
 
     result = await app._process_event(event)
@@ -120,15 +157,15 @@ async def test_app_process_event(temp_app_root: Path):
 async def test_app_process_event_no_response(temp_app_root: Path):
     """Test _process_event with no response from dispatcher"""
     app = XiaoQingApp(temp_app_root)
+    await load_text_command_plugin(app)
 
-    # Mock dispatcher to return empty
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
-
+    # 群里没叫到小青、也不是命令：分发器没有回复。
     event = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
         "group_id"    : 67890,
+        "message"     : "随便聊聊",
     }
 
     result = await app._process_event(event)
@@ -147,17 +184,14 @@ async def test_app_handle_upstream_event(temp_app_root: Path):
     app.ws_client.credentials_trusted = True
     app.ws_client.connected = Mock(return_value=True)
     app.ws_client.send_action = AsyncMock()
-
-    # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(
-        return_value=[{"type": "text", "data": {"text": "test"}}]
-    )
+    await load_text_command_plugin(app)
 
     event = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
         "group_id"    : 67890,
+        "message"     : "/echo",
     }
 
     await app._handle_upstream_event(event)
@@ -181,17 +215,14 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
         credentials_trusted = True,
         send_action         = AsyncMock(),
     )
-
-    # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(
-        return_value=[{"type": "text", "data": {"text": "test"}}]
-    )
+    await load_text_command_plugin(app)
 
     event = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
         "group_id"    : 67890,
+        "message"     : "/echo",
     }
 
     await app._handle_upstream_event(event)
@@ -206,17 +237,14 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
 async def test_app_handle_inbound_event(temp_app_root: Path):
     """Test _handle_inbound_event returns actions"""
     app = XiaoQingApp(temp_app_root)
-
-    # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(
-        return_value=[{"type": "text", "data": {"text": "test"}}]
-    )
+    await load_text_command_plugin(app)
 
     event = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
         "group_id"    : 67890,
+        "message"     : "/echo",
     }
 
     result = await app._handle_inbound_event(event)
@@ -229,18 +257,10 @@ async def test_app_handle_inbound_event(temp_app_root: Path):
 @pytest.mark.unit
 async def test_app_handle_inbound_event_with_source(temp_app_root: Path):
     """Test _handle_inbound_event sets source correctly"""
-    app = XiaoQingApp(temp_app_root)
+    app             = XiaoQingApp(temp_app_root)
+    received_events = await load_text_command_plugin(app)
 
-    received_events = []
-
-    async def mock_handle(event):
-        received_events.append(event)
-        return []
-
-    app.dispatcher.handle_event = mock_handle
-
-    event = {"test": "data"}
-    await app._handle_inbound_event(event)
+    await app._handle_inbound_event(_echo_event())
 
     assert len(received_events) == 1
     assert received_events[0].get("_source") == "inbound_http"
@@ -249,49 +269,42 @@ async def test_app_handle_inbound_event_with_source(temp_app_root: Path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_deduplicates_message_id_across_inbound_transports(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
-    event = {
-        "post_type"   : "message",
-        "message_type": "private",
-        "self_id"     : 10000,
-        "user_id"     : 12345,
-        "message_id"  : 99,
-        "message"     : [{"type": "text", "data": {"text": "hello"}}],
-    }
+    app      = XiaoQingApp(temp_app_root)
+    received = await load_text_command_plugin(app)
+    event = _echo_event(self_id=10000, message_id=99)
 
     await app._handle_upstream_event(event)
     await app._handle_inbound_event(event)
 
-    app.dispatcher.handle_event.assert_awaited_once()
+    assert len(received) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_does_not_deduplicate_events_without_message_id(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
-    event = {"post_type": "message", "message_type": "private", "user_id": 12345, "message": "same"}
+    app      = XiaoQingApp(temp_app_root)
+    received = await load_text_command_plugin(app)
+    event    = _echo_event()
 
     await app._handle_upstream_event(event)
     await app._handle_inbound_event(event)
 
-    assert app.dispatcher.handle_event.await_count == 2
+    assert len(received) == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_dedupe_key_includes_group_and_user_scope(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    app.dispatcher.handle_event = AsyncMock(return_value=[])
-    base = {
+    app      = XiaoQingApp(temp_app_root)
+    received = await load_text_command_plugin(app)
+    base     = {
         "post_type"   : "message",
         "message_type": "group",
         "self_id"     : 10000,
         "user_id"     : 1,
         "group_id"    : 10,
         "message_id"  : 99,
-        "message"     : "hello",
+        "message"     : "/echo",
     }
 
     await app._handle_inbound_event(base)
@@ -299,7 +312,7 @@ async def test_app_dedupe_key_includes_group_and_user_scope(temp_app_root: Path)
     await app._handle_inbound_event({**base, "user_id": 2})
     await app._handle_inbound_event(dict(base))
 
-    assert app.dispatcher.handle_event.await_count == 3
+    assert len(received) == 3
 
 
 @pytest.mark.asyncio
@@ -317,11 +330,11 @@ async def test_app_dedupe_hot_path_never_scans_live_key_map(
 
     app                   = XiaoQingApp(temp_app_root)
     app._recent_event_ids = NoScanDict()
-    monkeypatch.setattr("core.app_delivery.MAX_INBOUND_EVENT_DEDUP_KEYS", 2)
-    now = 100.0
+    now                   = 100.0
     monkeypatch.setattr("core.app_delivery.time.monotonic", lambda: now)
 
-    for message_id in (1, 2, 3):
+    # 真实的容量上限：再多来三条，最旧的三条被挤出去，登记表始终不超过上限。
+    for message_id in range(MAX_INBOUND_EVENT_DEDUP_KEYS + 3):
         assert await app._claim_inbound_event(
             {
                 "post_type"   : "message",
@@ -331,8 +344,8 @@ async def test_app_dedupe_hot_path_never_scans_live_key_map(
             }
         )
 
-    assert len(app._recent_event_ids) == 2
-    assert len(app._event_dedupe_expirations) == 2
+    assert len(app._recent_event_ids) == MAX_INBOUND_EVENT_DEDUP_KEYS
+    assert len(app._event_dedupe_expirations) == MAX_INBOUND_EVENT_DEDUP_KEYS
 
 
 @pytest.mark.asyncio
@@ -343,7 +356,6 @@ async def test_app_dedupe_heap_prunes_only_expired_entries(
 ):
     app = XiaoQingApp(temp_app_root)
     now = 100.0
-    monkeypatch.setattr("core.app_delivery.INBOUND_EVENT_DEDUP_TTL_SECONDS", 5.0)
     monkeypatch.setattr("core.app_delivery.time.monotonic", lambda: now)
 
     first  = {"message_id": 1, "user_id": 7, "message_type": "private"}
@@ -351,7 +363,8 @@ async def test_app_dedupe_heap_prunes_only_expired_entries(
     assert await app._claim_inbound_event(first)
     now = 102.0
     assert await app._claim_inbound_event(second)
-    now = 105.0
+    # 第一条刚到期，第二条还差两秒。
+    now = 100.0 + INBOUND_EVENT_DEDUP_TTL_SECONDS
 
     assert await app._claim_inbound_event(first)
     assert await app._claim_inbound_event(second) is False
@@ -651,7 +664,6 @@ async def test_app_send_action_propagates_onebot_business_rejection(temp_app_roo
     app.http_sender.credentials_trusted     = True
     app._runtime_onebot_credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=False)
-    app.plugin_manager.get = Mock(return_value=None)
 
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
     assert await app._send_action(action) is False
@@ -695,12 +707,15 @@ async def test_captured_receipt_waits_for_transport_failure():
 
 
 @pytest.mark.asyncio
-async def test_receipt_helper_does_not_count_core_partial_success_twice():
-    callbacks = []
-    app       = AppDeliveryMixin()
-    app._send_single_action = AsyncMock(return_value=True)
-    app._notify_outgoing_action_observers = AsyncMock()
-    receipt                               = DeliveryReceipt(
+async def test_receipt_helper_does_not_count_core_partial_success_twice(temp_app_root: Path):
+    callbacks       = []
+    app             = XiaoQingApp(temp_app_root)
+    app.http_sender = SimpleNamespace(
+        http_base           = "http://onebot",
+        credentials_trusted = True,
+        send_action=AsyncMock(return_value=True),
+    )
+    receipt = DeliveryReceipt(
         expected_actions = 2,
         commit           = lambda: callbacks.append("commit"),
         rollback         = lambda: None,
@@ -723,51 +738,15 @@ async def test_reply_commit_sees_every_message_id_of_a_split_reply(temp_app_root
     """
     import json
 
-    from core.constants import MAX_MESSAGE_TEXT_LENGTH
-    from core.delivery import DeliverySegments
     from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
-    from tests.helpers.app_test_support import (
-        ModuleType,
-        PluginDefinition,
-        _register_test_loaded_plugin,
-    )
 
     config_path = temp_app_root / "config" / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["plugins"] = {"smalltalk_provider": "xiaoqing_chat"}
     config_path.write_text(json.dumps(config), encoding="utf-8")
-    app             = XiaoQingApp(temp_app_root)
-    committed: list = []
-
-    async def handle_smalltalk(_text, _event, _context):
-        receipt: DeliveryReceipt
-
-        def commit() -> None:
-            committed.append(receipt.message_ids)
-
-        receipt = DeliveryReceipt(
-            expected_actions = 1,
-            commit           = commit,
-            rollback         = lambda: committed.append("rollback"),
-            unknown          = lambda: committed.append("unknown"),
-        )
-        long_text = "长" * (MAX_MESSAGE_TEXT_LENGTH + 10)
-        return DeliverySegments([{"type": "text", "data": {"text": long_text}}], receipt)
-
-    module                  = ModuleType("plugins.xiaoqing_chat.main")
-    module.handle_smalltalk = handle_smalltalk  # type: ignore[attr-defined]
-    _register_test_loaded_plugin(
-        app,
-        PluginDefinition(
-            name        = "xiaoqing_chat",
-            version     = "1.0.0",
-            entry       = "main.py",
-            commands    = [],
-            schedule    = [],
-            concurrency = "parallel",
-        ),
-        module,
-    )
+    app       = XiaoQingApp(temp_app_root)
+    committed = PROBE.log("committed")
+    await load_test_plugin(app, "xiaoqing_chat", SMALLTALK_SOURCE)
     next_id = iter((4242, 4243))
 
     async def send(action):
@@ -779,21 +758,18 @@ async def test_reply_commit_sees_every_message_id_of_a_split_reply(temp_app_root
     app.ws_client.connected = Mock(return_value=True)
     app.ws_client.send_action = AsyncMock(side_effect=send)
 
-    from unittest.mock import patch
-
-    with patch("core.app_delivery.MESSAGE_SPLIT_DELAY", 0):
-        await app._handle_upstream_event(
-            {
-                "post_type"   : "message",
-                "message_type": "private",
-                "sub_type"    : "friend",
-                "user_id"     : 12345,
-                "self_id"     : 11111,
-                "message_id"  : 7,
-                "message"     : "在吗",
-                "raw_message" : "在吗",
-            }
-        )
+    await app._handle_upstream_event(
+        {
+            "post_type"   : "message",
+            "message_type": "private",
+            "sub_type"    : "friend",
+            "user_id"     : 12345,
+            "self_id"     : 11111,
+            "message_id"  : 7,
+            "message"     : "在吗",
+            "raw_message" : "在吗",
+        }
+    )
 
     assert app.ws_client.send_action.await_count == 2
     assert committed == [(4242, 4243)]

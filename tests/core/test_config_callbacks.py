@@ -11,7 +11,7 @@ import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
     ConfigManager,
     ConfigSnapshot,
-    _last_notified_revision,
+    last_notified_revision,
 )
 
 config_file     = _fixture_support.config_file
@@ -24,7 +24,7 @@ class TestConfigManagerOnReload:
     """ConfigManager.on_reload 测试"""
 
     @pytest.mark.asyncio
-    async def test_reload_callback(self, config_manager: ConfigManager):
+    async def test_manual_reload_does_not_notify_callbacks(self, config_manager: ConfigManager):
         """手动 reload 不触发只属于 watch 方法的重新加载回调。"""
         callbacks_called = []
 
@@ -104,7 +104,7 @@ class TestConfigManagerOnReload:
         assert fatal_revisions == observed_revisions
         assert len(observed_revisions) == 2
         assert observed_revisions == sorted(observed_revisions)
-        assert _last_notified_revision(config_manager) == observed_revisions[-1]
+        assert last_notified_revision(config_manager) == observed_revisions[-1]
 
     @pytest.mark.asyncio
     async def test_async_fatal_callback_does_not_wedge_later_notifications(
@@ -136,7 +136,7 @@ class TestConfigManagerOnReload:
 
         assert fatal_revisions == [first, second]
         assert first < second
-        assert _last_notified_revision(config_manager) == second
+        assert last_notified_revision(config_manager) == second
 
     @pytest.mark.asyncio
     async def test_async_callback_to_thread_mutation_does_not_deadlock(
@@ -164,7 +164,7 @@ class TestConfigManagerOnReload:
         await asyncio.wait_for(completed.wait(), timeout=2)
         assert revisions == sorted(revisions)
         assert len(revisions) == 2
-        assert _last_notified_revision(config_manager) == revisions[-1]
+        assert last_notified_revision(config_manager) == revisions[-1]
         assert config_manager.get_plugin_secret("qingssh", "callback_thread") == "committed"
 
     @pytest.mark.asyncio
@@ -192,7 +192,7 @@ class TestConfigManagerOnReload:
         await asyncio.wait_for(entered.wait(), timeout=1)
         await asyncio.wait_for(observed.wait(), timeout=1)
         assert observed_revisions == [config_manager.revision]
-        assert _last_notified_revision(config_manager) == config_manager.revision
+        assert last_notified_revision(config_manager) == config_manager.revision
 
     @pytest.mark.asyncio
     async def test_pending_config_notifications_coalesce_to_latest_revision(
@@ -227,7 +227,7 @@ class TestConfigManagerOnReload:
         await asyncio.wait_for(completed.wait(), timeout=1)
 
         assert observed_revisions == [first_revision, latest_revision]
-        assert _last_notified_revision(config_manager) == latest_revision
+        assert last_notified_revision(config_manager) == latest_revision
 
 
 class TestConfigManagerSecurityUpdates:

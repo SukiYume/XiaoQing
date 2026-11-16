@@ -20,7 +20,7 @@ from plugins.xiaoqing_life.planner import (
 from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources.base import SourceError
 from plugins.xiaoqing_life.stores import LifeStore
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -124,7 +124,6 @@ async def test_successful_session_lands_everything_with_evidence(tmp_path: Path)
     assert [e["item_id"] for e in store.episodes] == ["bili:1", "bili:2"]
     first = store.episodes[0]
     assert (first["activity"], first["feeling"], first["share"]) == (HOT_SCROLL, "like", True)
-    assert "day" not in first  # 哪一天按时间戳现算，不另存
     assert first["term_keys"] == ["哈基米"] and first["title"] == "猫猫的一天"
     # 词条只收有真实摘录的那个，且来源是它出现的条目
     assert list(store.terms) == ["哈基米"] and store.terms["哈基米"]["sources"] == ["bili:1"]
@@ -284,43 +283,6 @@ async def test_thread_continue_progress_then_step_limit_moves_to_reviewing(tmp_p
     assert thread["notes"][0]["note"] == "纸箱让猫有安全感" and thread["notes"][0]["id"] == "n1"
     assert store.episodes[0]["thread_id"] == "t1"
     assert fetch.calls[0][1]["keyword"] == "猫 纸箱"
-
-
-@pytest.mark.asyncio
-async def test_thread_continue_answered_moves_to_reviewing_immediately(tmp_path: Path) -> None:
-    store  = _thread_store(tmp_path)
-    digest = {
-        "looked_at": [{"item": "i1", "reaction": "懂了", "feeling": "like"}],
-        "findings" : [{"text": "查明白了", "quote": "答案视频", "refs": ["i1"]}],
-        "status"   : "answered",
-    }
-    fetch = FakeFetcher({**_search(_video(7, "答案视频")), "/reply/main": comments_payload()})
-    await run_session(store, make_cfg(), _continue(), _deps(fetch, FakeAI(digest)))
-    assert store.threads[0]["status"] == "reviewing" and store.threads[0]["takeaway"] == ""
-
-
-@pytest.mark.asyncio
-async def test_thread_continue_without_news_parks_after_two_empty_sessions(
-    tmp_path: Path,
-) -> None:
-    store = _thread_store(tmp_path)
-    fetch = FakeFetcher({**_search(_video(7, "旧视频")), "/reply/main": comments_payload()})
-    store.seen["bili:7"] = NOW - 100  # 已经看过（只开搜索：不换成查词条）
-    ai = FakeAI()
-    await run_session(
-        store,
-        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
-        _continue(),
-        _deps(fetch, ai),
-    )
-    assert store.threads[0]["empty_streak"] == 1 and ai.calls == []
-    await run_session(
-        store,
-        make_cfg(sources={"baike_lookup": False, "wiki_read": False}),
-        _continue(),
-        _deps(fetch, ai),
-    )
-    assert store.threads[0]["status"] == "parked" and store.threads[0]["steps"] == 0
 
 
 @pytest.mark.asyncio

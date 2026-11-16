@@ -5,20 +5,22 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
+from plugins.pendo.utils import time_utils
+from tests.helpers.pendo_test_support import reject_inserts
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
     items_api,
     normalize_diary_fields,
-    normalize_item_fields,
     normalize_note_fields,
     normalize_task_fields,
     sqlite3,
 )
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 
 def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_path):
@@ -391,29 +393,6 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
         )
 
 
-def test_normalize_item_fields_rejects_legacy_event_and_task_fields():
-    with pytest.raises(ValueError, match="Unsupported event field: milestones"):
-        normalize_item_fields(
-            {
-                "type"      : "event",
-                "title"     : "旧事件",
-                "start_time": "2026-03-26T10:00:00",
-                "milestones": [],
-            },
-            partial=False,
-        )
-
-    with pytest.raises(ValueError, match="Unsupported task field: due_time"):
-        normalize_item_fields(
-            {
-                "type"    : "task",
-                "title"   : "旧待办",
-                "due_time": "2026-03-26T18:00:00",
-            },
-            partial=False,
-        )
-
-
 def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_date(
     monkeypatch,
     tmp_path,
@@ -423,11 +402,14 @@ def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_dat
     db  = Database(str(tmp_path / "pendo_diary_api.db"))
     request.addfinalizer(db.cleanup)
     owner_id = "u-diary-api"
-    monkeypatch.setattr(
-        mod,
-        "now_in_timezone",
-        lambda _owner_id, _db: datetime(2026, 4, 29, 21, 30, 45),
-    )
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 4, 29, 13, 30, 45, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
     body = mod.ItemCreate(
         type       = "diary",
         title      = "",
@@ -454,7 +436,7 @@ def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_dat
     assert db.count_items(owner_id, {"type": "diary"}) == 2
 
 
-def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tmp_path, request):
+def test_web_item_crud_rolls_back_when_operation_log_write_fails(tmp_path, request):
     items_module = items_api
     db           = Database(str(tmp_path / "pendo_crud_audit_atomic.db"))
     request.addfinalizer(db.cleanup)
@@ -470,12 +452,10 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
         }
     )
 
-    def fail_log(*_args, **_kwargs):
-        raise RuntimeError("injected operation log failure")
+    # 让数据库在写入任何审计行时报错，此时条目写入已经执行。
+    reject_inserts(db, "operation_logs", "injected operation log failure")
 
-    monkeypatch.setattr(db, "_log_operation_with_cursor", fail_log)
-
-    with pytest.raises(RuntimeError, match="injected operation log failure"):
+    with pytest.raises(sqlite3.IntegrityError, match="injected operation log failure"):
         items_module.create_item(
             items_module.ItemCreate(
                 type     = "note",
@@ -496,7 +476,7 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
         == 0
     )
 
-    with pytest.raises(RuntimeError, match="injected operation log failure"):
+    with pytest.raises(sqlite3.IntegrityError, match="injected operation log failure"):
         items_module.update_item(
             "existing-note",
             items_module.ItemUpdate(title="不得提交的新标题", version=0),
@@ -513,7 +493,7 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
     )
     assert (row["title"], row["version"], row["deleted"]) == ("原始标题", 0, 0)
 
-    with pytest.raises(RuntimeError, match="injected operation log failure"):
+    with pytest.raises(sqlite3.IntegrityError, match="injected operation log failure"):
         items_module.delete_item("existing-note", owner_id=owner_id, db=db)
     row = (
         db.get_connection()
@@ -588,14 +568,12 @@ def test_note_reference_resolution_uses_one_owner_scoped_query(tmp_path, request
         }
     )
 
-    statements = []
-    db.get_connection().set_trace_callback(statements.append)
-    resolved = items_module._resolve_note_reference_payload(
-        db,
-        owner_id,
-        {"related_items": ids},
-    )
-    db.get_connection().set_trace_callback(None)
+    with trace_sql_statements(db.get_connection()) as statements:
+        resolved = items_module._resolve_note_reference_payload(
+            db,
+            owner_id,
+            {"related_items": ids},
+        )
 
     item_selects = [sql for sql in statements if "SELECT * FROM items" in sql and "id IN" in sql]
     assert len(item_selects) == 1

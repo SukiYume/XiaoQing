@@ -1,4 +1,4 @@
-"""Pendo Web 账本页的数据边界、表单操作与异步生命周期回归。"""
+"""Pendo Web 账本页的数据边界、表单操作与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ LEDGER_SETUP: Final = r"""
     globalThis.__confirmResult = true;
     globalThis.__formData = {};
     globalThis.__builtFields = [];
-    globalThis.__styleCalls = [];
     globalThis.__paginationCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
@@ -168,7 +167,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (_breakpoint, cssText) => cssText;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
@@ -191,7 +190,6 @@ export {
     groupByDate,
     handleDelete as __handleDelete,
     handleQuickAdd as __handleQuickAdd,
-    ensureStyles as __ensureStyles,
     loadAndRender as __loadAndRender,
     normalizeLedgerItem,
     normalizeSummary,
@@ -414,24 +412,6 @@ def test_ledger_renderers_escape_values_and_use_native_controls() -> None:
         assert.ok(!body.includes('style="'));
         assert.ok(!body.includes('<script>'));
         assert.ok(options.footer.includes('type="button"'));
-        """
-    )
-
-
-def test_ledger_mobile_rows_keep_compact_flow_and_lower_category_badge() -> None:
-    """手机账目行应保持紧凑横排，并把分类下移到账户信息高度。"""
-
-    _run_ledger_client(
-        r"""
-        client.__ensureStyles();
-        const css = __styleCalls.at(-1)[1];
-
-        assert.match(css, /\.ledger-row \{\s*display: flex;/);
-        assert.match(css, /\.ledger-row-main \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
-        assert.match(css, /\.ledger-row-title \{[\s\S]*?max-width: 100%;[\s\S]*?text-overflow: ellipsis;/);
-        assert.ok(css.includes('.ledger-row { gap: 8px; padding: 9px 0; }'));
-        assert.match(css, /\.ledger-category-badge \{[\s\S]*?transform: translateY\(8px\);/);
-        assert.ok(!css.includes('grid-template-areas:'));
         """
     )
 

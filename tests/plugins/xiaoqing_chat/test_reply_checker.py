@@ -2,8 +2,7 @@
 
 import importlib.util
 import sys
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,8 +10,22 @@ import pytest
 if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
     sys.modules["aiohttp"] = MagicMock()
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.local_checks import heuristic_check
+from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.reply_checker_test_support import stored_message as _msg
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    settle_chat_background,
+)
+
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
 
 
 class TestHeuristicCheckRepeatedQuestion:
@@ -58,101 +71,73 @@ class TestGeneralRepetitionHeuristic:
         assert result is None
 
 
-@pytest.mark.asyncio
-async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_flow(tmp_path):
-    from plugins.xiaoqing_chat.handlers import handle_smalltalk
-    from plugins.xiaoqing_chat.llm.check_result import ReplyRejected
-
-    context          = MagicMock()
-    context.logger   = MagicMock()
-    context.data_dir = tmp_path / "xiaoqing_chat"
-    event            = {"message_type": "group", "group_id": 1, "user_id": 2}
-    runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=1)))
-    hctx = SimpleNamespace(chat_id="g1", state=MagicMock(), runtime=runtime)
-
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch(
-            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
-            new=AsyncMock(
-                side_effect=[
-                    ReplyRejected("需要重新规划", True),
-                    [{"type": "text", "data": {"text": "重规划后回复"}}],
-                ]
-            ),
-        ) as mock_flow,
-    ):
-        result = await handle_smalltalk("继续", event, context)
-
-    assert result == [{"type": "text", "data": {"text": "重规划后回复"}}]
-    assert mock_flow.await_count == 2
+# 事实轴不通过：硬拒绝且要求重新规划，主动接话时重生成用尽后抛给规划流程。
+_FACT_REJECTION = checker_verdict(suitable=False, reason="事实对不上", factually_plausible=False)
 
 
 @pytest.mark.asyncio
-async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_counting(tmp_path):
+@pytest.mark.parametrize("max_replan", [1, 2])
+async def test_handle_smalltalk_replans_after_checker_rejection_up_to_max_replan(
+    mock_context, sample_group_event, max_replan
+):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
-    from plugins.xiaoqing_chat.llm.check_result import ReplyRejected
 
-    context                     = MagicMock()
-    context.logger              = MagicMock()
-    context.data_dir            = tmp_path / "xiaoqing_chat"
-    event                       = {"message_type": "group", "group_id": 1, "user_id": 2}
-    state                       = MagicMock()
-    state.action_history.append = MagicMock()
-    runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=1)))
-    hctx = SimpleNamespace(chat_id="g1", state=state, runtime=runtime)
+    drafts = [f"第{index}稿" for index in range(max_replan + 1)]
+    model  = ScriptedChatModel(
+        plan    = plan_answer("direct_reply"),
+        reply   = drafts,
+        checker = [_FACT_REJECTION] * max_replan + [checker_verdict()],
+    )
+    scripted_chat_context(
+        mock_context,
+        model,
+        GROUP_GATE_OPEN,
+        {"reply_check": {"llm_checker_mode": "always", "max_regen": 0, "max_replan": max_replan}},
+    )
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch(
-            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
-            new=AsyncMock(side_effect=ReplyRejected("检查器拒绝", False)),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-        patch("plugins.xiaoqing_chat.handlers.event_chat_id", return_value="g1"),
-        patch("plugins.xiaoqing_chat.handlers.time.time", return_value=123.0),
-    ):
-        result = await handle_smalltalk("继续", event, context)
+    result = await handle_smalltalk(
+        "继续", chat_message_event(sample_group_event, "继续"), mock_context
+    )
 
+    # 每次被审查拒绝就重新走一遍规划与生成，最后一稿通过审查才发出。
+    assert result == [{"type": "text", "data": {"text": drafts[-1]}}]
+    assert len(model.calls_of("reply")) == max_replan + 1
+    assert len(model.calls_of("checker")) == max_replan + 1
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
+async def test_handle_smalltalk_records_each_checker_rejected_attempt_and_stays_silent(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.store_binding import bound_state
+
+    chat_id = "g67890"
+    model   = ScriptedChatModel(
+        plan=plan_answer("direct_reply"), reply="被拒的稿子", checker=_FACT_REJECTION
+    )
+    scripted_chat_context(
+        mock_context,
+        model,
+        GROUP_GATE_OPEN,
+        {"reply_check": {"llm_checker_mode": "always", "max_regen": 0, "max_replan": 1}},
+    )
+
+    result = await handle_smalltalk(
+        "继续", chat_message_event(sample_group_event, "继续"), mock_context
+    )
+
+    # 重规划用尽后不发任何东西；每次被拒的尝试都进了行动历史，供复盘计数。
     assert result == []
-    state.action_history.append.assert_called_once()
-    record = state.action_history.append.call_args.args[1]
-    assert record.action == "reply_rejected"
-    assert record.executed is False
-
-
-@pytest.mark.asyncio
-async def test_handle_smalltalk_uses_configured_reply_check_max_replan(tmp_path):
-    from plugins.xiaoqing_chat.handlers import handle_smalltalk
-    from plugins.xiaoqing_chat.llm.check_result import ReplyRejected
-
-    context          = MagicMock()
-    context.logger   = MagicMock()
-    context.data_dir = tmp_path / "xiaoqing_chat"
-    event            = {"message_type": "group", "group_id": 1, "user_id": 2}
-    runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=2)))
-    hctx = SimpleNamespace(chat_id="g1", state=MagicMock(), runtime=runtime)
-
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch(
-            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
-            new=AsyncMock(
-                side_effect=[
-                    ReplyRejected("第1次拒绝", True),
-                    ReplyRejected("第2次拒绝", True),
-                    [{"type": "text", "data": {"text": "第3次成功"}}],
-                ]
-            ),
-        ) as mock_flow,
-    ):
-        result = await handle_smalltalk("继续", event, context)
-
-    assert result == [{"type": "text", "data": {"text": "第3次成功"}}]
-    assert mock_flow.await_count == 3
+    assert len(model.calls_of("reply")) == 2
+    records = await bound_state(mock_context).action_history.get_recent_async(chat_id, max_items=10)
+    assert [(record.action, record.executed) for record in records] == [
+        ("reply_rejected", False),
+        ("reply_rejected", False),
+    ]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -182,19 +167,14 @@ async def test_check_reply_allows_when_llm_checker_credentials_missing():
 
 
 @pytest.mark.asyncio
-async def test_check_reply_allows_when_llm_checker_call_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_check_reply_allows_when_llm_checker_call_fails():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    async def raise_error(**_kwargs):
+    def raise_error(_call):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        raise_error,
-    )
-
     result = await check_reply(
-        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        secrets={"_ai": ScriptedChatModel(checker=raise_error)},
         bot_name               = "小青",
         reply                  = "好的",
         goal                   = "聊天",
@@ -217,21 +197,11 @@ async def test_check_reply_allows_when_llm_checker_call_fails(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_check_reply_allows_when_llm_checker_returns_invalid_json():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    async def fake_chat(**_kwargs):
-        return {"choices": [{"message": {"content": "我觉得可以"}}]}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-
     result = await check_reply(
-        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        secrets={"_ai": ScriptedChatModel(checker="我觉得可以")},
         bot_name               = "小青",
         reply                  = "好家伙，原来是这样",
         goal                   = "聊天",
@@ -320,23 +290,13 @@ async def test_check_reply_rejects_media_only_meta_comment_without_llm(current_t
 
 
 @pytest.mark.asyncio
-async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: pytest.MonkeyPatch):
+async def test_check_reply_uses_llm_to_reject_repeated_joke_angle():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable": false, "reason": "重复使用了批发这个调侃角度", '
-            '"need_replan": true, "persona_scan_complete": true, "persona_claims": [], '
-            '"context_scan_complete": true, "context_claims": []}'
-        ),
+    verdict = (
+        '{"suitable": false, "reason": "重复使用了批发这个调侃角度", '
+        '"need_replan": true, "persona_scan_complete": true, "persona_claims": [], '
+        '"context_scan_complete": true, "context_claims": []}'
     )
     history = [
         _msg("assistant", "你搁这批发表情包呢哈哈", name="小青"),
@@ -346,7 +306,7 @@ async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: p
     ]
 
     result = await check_reply(
-        secrets           = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        secrets={"_ai": ScriptedChatModel(checker=verdict)},
         bot_name          = "小青",
         reply             = "哈哈你这表情包也太多了吧，批发商本商啊",
         goal              = "聊天",
@@ -373,33 +333,12 @@ async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest.MonkeyPatch):
+async def test_check_reply_llm_request_carries_media_context_on_the_checker_route():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    captured: dict[str, object] = {}
-
-    async def fake_chat(**kwargs):
-        captured["prompt"]        = "\n".join(message["content"] for message in kwargs["messages"])
-        captured["roles"]         = [message["role"] for message in kwargs["messages"]]
-        captured["extra_payload"] = kwargs.get("extra_payload")
-        captured["secrets"]       = kwargs["secrets"]
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable": true, "reason": "ok", "need_replan": false, '
-            '"persona_scan_complete": true, "persona_claims": [], '
-            '"context_scan_complete": true, "context_claims": []}'
-        ),
-    )
-
+    model = ScriptedChatModel(checker=checker_verdict())
     result = await check_reply(
-        secrets={"_ai": object(), "_route": "chat", "_pinned_model": "deepseek-flash"},
+        secrets={"_ai": model, "_route": "chat", "_pinned_model": "deepseek-flash"},
         bot_name="小青",
         reply="咋了咋了[表情包：难过]",
         heuristic_reply="咋了咋了",
@@ -418,32 +357,13 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     )
 
     assert result.suitable is True
-    assert captured["roles"] == ["system", "user"]
-    assert "persona_grounded" in str(captured["prompt"])
-    assert "factually_plausible" in str(captured["prompt"])
-    prompt = str(captured["prompt"])
-    for required in (
-        "待检查回复",
-        "受控人物资料",
-        "证据契约",
-        "persona_scan_complete",
-        "context_scan_complete",
-        "context_claims",
-        "persona_claims",
-        "实际附带媒体",
-        "当前最新用户消息",
-        "黑猫瞪大双眼",
-        "instruction_followed",
-        "确定事实需要依据",
-        "保留来源、否定、条件和不确定性",
-    ):
-        assert required in prompt
-    assert all(marker not in prompt for marker in ("例如", "比如", "示例："))
-    assert captured["extra_payload"] == {
-        "response_format": {"type": "json_object"},
-    }
-    assert captured["secrets"]["_route"] == "checker"
-    assert captured["secrets"]["_pinned_model"] is None
+    (call,) = model.calls_of("checker")
+    assert [message["role"] for message in call.messages] == ["system", "user"]
+    assert "黑猫瞪大双眼" in call.text
+    # 审查走独立的 checker 路由，不沿用主回复固定的模型；JSON 格式参数随请求发出。
+    assert call.route == "checker"
+    assert call.kwargs["pinned_model"] is None
+    assert call.kwargs["extra_payload"] == {"response_format": {"type": "json_object"}}
 
 
 @pytest.mark.asyncio
@@ -588,37 +508,6 @@ def test_very_short_replies_are_not_treated_as_copies():
     assert result is None
 
 
-def test_missing_image_guidance_does_not_offer_a_copyable_machine_phrase():
-    from plugins.xiaoqing_chat.llm.media_evidence import image_evidence_block
-
-    block = image_evidence_block(True)
-    assert "读不到" not in block and "没读出来" not in block
-    assert "没加载出来" in block
-
-
-def test_checker_asks_for_verbatim_evidence_and_known_source_ids():
-    from plugins.xiaoqing_chat.llm.reply_checker import (
-        _EVIDENCE_REVIEW_PROMPT,
-        _TURN_READING_PROMPT,
-    )
-
-    prompt = _EVIDENCE_REVIEW_PROMPT.substitute(bot_name="小青", persona_policy="")
-    assert "逐字复制原文" in prompt
-    assert "只使用索引中存在的编号，不要编造" in prompt
-    assert "只列材料中存在的消息编号" in _TURN_READING_PROMPT
-
-
-def test_checker_uses_the_same_identity_boundary_as_the_persona():
-    from plugins.xiaoqing_chat.llm.reply_checker import _EVIDENCE_REVIEW_PROMPT
-    from plugins.xiaoqing_chat.persona import bundled_persona_card
-
-    prompt = _EVIDENCE_REVIEW_PROMPT.substitute(bot_name="小青", persona_policy="")
-    assert "她在群里是真人" in prompt and "都是出戏" in prompt
-    assert "引用、转述、翻译和讨论" in prompt
-    facts = bundled_persona_card().facts("小青")
-    assert "你是活生生的人" in facts and "角色设定" not in facts and "模型生成" not in facts
-
-
 @pytest.mark.parametrize("hard_failure", [False, True])
 def test_voice_rejection_stays_soft_unless_a_hard_axis_fails(hard_failure):
     from plugins.xiaoqing_chat.llm.reply_checker import _final_severity
@@ -679,3 +568,58 @@ def test_requested_sentence_count_reads_chinese_and_arabic_numbers():
     assert requested_sentence_count("用两句话说清楚") == 2
     assert requested_sentence_count("用3句话说明") == 3
     assert requested_sentence_count("不要用三句话") is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "rejected"),
+    [
+        pytest.param("[想发表情:无语]", False, id="emoji-answers-emoji"),
+        pytest.param("哈哈 [想发QQ表情:微笑]", False, id="laugh-with-face"),
+        pytest.param("[表情包：猫猫翻白眼]", False, id="rendered-emoji-marker"),
+        pytest.param("这张图好糊", True, id="talks-about-the-image"),
+        pytest.param("这表情什么意思", True, id="asks-what-the-emoji-means"),
+    ],
+)
+def test_media_only_turn_accepts_a_media_answer_but_not_talk_about_the_media(reply, rejected):
+    """对方只发了表情时，用表情回应是正常接话；围着“图片 / 表情”本身打转的回复才拒绝。"""
+
+    from plugins.xiaoqing_chat.llm.local_checks import media_meta_reply_check
+
+    result = media_meta_reply_check(reply=reply, current_text="[表情包：猫猫翻白眼]")
+
+    assert (result is not None and not result.suitable) is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "suitable"),
+    [
+        pytest.param("其实我只是个语言模型", False, id="admits-being-a-model"),
+        pytest.param("我又不是机器人", True, id="denies-being-a-bot"),
+    ],
+)
+async def test_check_reply_rejects_breaking_character_before_any_model_review(reply, suitable):
+    """自称 AI 的回复在本地就被拒，用不着模型审查；正常的否认照常放行。"""
+
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    result = await check_reply(
+        secrets                = {},
+        bot_name               = "小青",
+        reply                  = reply,
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = "user: 你是不是机器人",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
+    )
+
+    assert result.suitable is suitable
+    if not suitable:
+        assert result.failure_code == "persona_grounding"

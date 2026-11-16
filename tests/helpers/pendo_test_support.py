@@ -1,15 +1,18 @@
 """Pendo 基础测试共享导入和私有 helper。"""
 
-import asyncio
-import json
+import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any
+
+import pytest
 
 from core.interfaces import PluginCapabilities
 from plugins.pendo.config import PendoConfig
+from plugins.pendo.utils import db_ops
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
@@ -36,7 +39,121 @@ def reset_pendo_runtime_config() -> None:
         PendoConfig._runtime_revision = None
 
 
-class _ReminderMessageService:
+class PendoClock:
+    """可手动拨动的固定时钟：``instant`` 就是被冻结模块里 ``datetime.now`` 读到的时刻。"""
+
+    def __init__(self, instant: datetime) -> None:
+        self.instant = instant
+
+
+class _ClockType(type):
+    """让真实的 ``datetime`` 实例通过对冻结类的 ``isinstance`` 检查。"""
+
+    def __instancecheck__(cls, obj: object) -> bool:
+        return isinstance(obj, datetime)
+
+
+def freeze_pendo_clock(
+    monkeypatch: pytest.MonkeyPatch,
+    instant: datetime,
+    *modules: Any,
+) -> PendoClock:
+    """时钟是产品之外的边界：把 ``modules`` 里的 ``datetime.now`` 固定在 ``instant``。
+
+    返回的时钟可以改写 ``instant`` 来推进时间；带时区的 ``now(tz)`` 按 ``tz`` 换算，
+    不带时区的 ``now()`` 取 ``instant`` 的本地墙钟。
+    """
+
+    clock = PendoClock(instant)
+
+    class _FrozenDateTime(datetime, metaclass=_ClockType):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return clock.instant.astimezone(tz)
+            return clock.instant.replace(tzinfo=None)
+
+    for module in modules:
+        monkeypatch.setattr(module, "datetime", _FrozenDateTime)
+    return clock
+
+
+def freeze_pendo_reminder_clock(monkeypatch: pytest.MonkeyPatch, instant: datetime) -> PendoClock:
+    """冻结提醒与定时任务链路读取当前时刻的全部模块（时间工具、提醒服务、定时命令、提醒存储）。"""
+
+    from plugins.pendo.commands import scheduled as scheduled_module
+    from plugins.pendo.services import db_reminders
+    from plugins.pendo.services import reminder as reminder_module
+    from plugins.pendo.utils import time_utils
+
+    return freeze_pendo_clock(
+        monkeypatch, instant, time_utils, reminder_module, scheduled_module, db_reminders
+    )
+
+
+@contextmanager
+def pendo_service_context(
+    db: Any,
+    data_dir: Path,
+    logger_name: str,
+    **attributes: Any,
+) -> Iterator[SimpleNamespace]:
+    """真实服务集合的运行上下文：把 ``db`` 装成 Pendo 数据库单例，退出时清掉。
+
+    ``attributes`` 是测试要观察的额外上下文属性，例如 ``send_action`` 或 ``end_session``。
+    """
+
+    db_ops.set_database_singleton(db)
+    context = SimpleNamespace(
+        state    = {},
+        data_dir = data_dir,
+        logger   = logging.getLogger(logger_name),
+        **attributes,
+    )
+    try:
+        yield context
+    finally:
+        db_ops.set_database_singleton(None)
+
+
+def attach_action_recorder(context: Any) -> list[dict]:
+    """给上下文装上记录动作、一律回执成功的 ``send_action``，返回动作记录。"""
+
+    sent: list[dict] = []
+
+    async def send_action(action):
+        sent.append(action)
+        return True
+
+    context.send_action = send_action
+    return sent
+
+
+def reject_inserts(
+    db: Any,
+    table: str,
+    message: str,
+    *,
+    action: str | None = None,
+) -> str:
+    """让存储层拒绝向 ``table`` 插入行并以 ``message`` 中止，模拟写入在前序改动之后失败。
+
+    给出 ``action`` 时只拒绝 ``action`` 列等于它的行（用于操作日志）。返回触发器名，
+    测试要“恢复存储”时用 ``DROP TRIGGER`` 删掉它。
+    """
+
+    name       = f"reject_{table}_{action or 'insert'}"
+    guard      = f"WHEN NEW.action = '{action}' " if action is not None else ""
+    connection = db.get_connection()
+    with connection:
+        connection.execute(
+            f"CREATE TRIGGER {name} BEFORE INSERT ON {table} "
+            f"{guard}BEGIN SELECT RAISE(ABORT, '{message}'); END"
+        )
+    return name
+
+
+class ReminderMessageService:
     """返回一条固定提醒，供调度发送与拒绝分支共同使用。"""
 
     def check_and_send_reminders(self):
@@ -52,34 +169,7 @@ class _ReminderMessageService:
         }
 
 
-async def _single_user_shanghai_settings(user_ids, _db):
-    """为财务摘要测试返回固定的单用户时区设置。"""
-    return {
-        user_ids[0]: {
-            "settings"       : {"timezone": "Asia/Shanghai"},
-            "custom_settings": {},
-        }
-    }
-
-
-def _with_scheduled_delivery_contract(db: Any) -> Any:
-    """给轻量数据库替身补齐生产环境使用的周期投递租约接口。"""
-
-    def claim(task_name, owner_id, period_key, *, now, lease_seconds):
-        del now, lease_seconds
-        return {
-            "claim_token" : f"lease:{task_name}:{owner_id}:{period_key}",
-            "delivery_key": f"delivery:{task_name}:{owner_id}:{period_key}",
-        }
-
-    db.get_due_scheduled_delivery_periods = lambda *_args, **_kwargs: []
-    db.claim_scheduled_delivery           = claim
-    db.complete_scheduled_delivery        = lambda *_args: True
-    db.release_scheduled_delivery         = lambda *_args: True
-    return db
-
-
-def _read_scheduled_delivery(
+def read_scheduled_delivery(
     db: Any,
     task_name: str,
     owner_id: str,
@@ -101,104 +191,20 @@ def _read_scheduled_delivery(
     return dict(row) if row is not None else None
 
 
-class _StubSimpleHandler:
-    async def handle(self, user_id, args, context, group_id=None):
-        return {"status": "success", "message": "ok"}
-
-    async def search(self, user_id, args, context):
-        return {"status": "success", "message": "ok"}
-
-
-class _StubTaskHandler:
-    def __init__(self):
-        self.group_ids = []
-
-    async def handle(self, user_id, args, context, group_id=None):
-        self.group_ids.append(group_id)
-        return {"status": "success", "message": f"group:{group_id}"}
-
-
-class _StubCaptureHandler:
-    def __init__(self):
-        self.calls = []
-
-    async def handle(self, user_id, args, context, group_id=None):
-        self.calls.append(
-            {"user_id": user_id, "args": args, "context": context, "group_id": group_id}
-        )
-        return {"status": "success", "message": args}
-
-
-class _StubExporter:
-    def export_markdown(self, user_id, args, options):
-        return {
-            "status"   : "success",
-            "message"  : "exported",
-            "file_path": "C:/tmp/pendo-export.md",
-            "file_name": "pendo-export.md",
-        }
-
-
-class _FakeItemsRepo:
-    def __init__(self, tasks):
-        self._tasks = tasks
-
-    def get_items(self, user_id, filters, limit):
-        status = filters.get("status")
-        if status is None:
-            return list(self._tasks)
-        return [task for task in self._tasks if task.status == status]
-
-    def get_all_items(self, user_id, filters):
-        return self.get_items(user_id, filters, limit=len(self._tasks))
-
-
-class _FakeDb:
-    def __init__(self, tasks):
-        self._repo = _FakeItemsRepo(tasks)
-
-    def get_items(self, user_id, filters, limit):
-        return self._repo.get_items(user_id, filters, limit)
-
-    def get_all_items(self, user_id, filters):
-        return self._repo.get_all_items(user_id, filters)
-
-
-def _build_task(task_id: str, category: str, created_at: str):
-    return SimpleNamespace(
-        id          = task_id,
-        title       = task_id,
-        category    = category,
-        status      = "done",
-        priority    = 3,
-        plan_date   = None,
-        deadline_at = None,
-        created_at  = created_at,
-    )
-
-
 __all__ = (
     "Any",
-    "ClassVar",
     "Path",
+    "PendoClock",
     "PluginCapabilities",
     "ROOT",
-    "SimpleNamespace",
-    "_FakeDb",
-    "_FakeItemsRepo",
-    "_ReminderMessageService",
-    "_StubCaptureHandler",
-    "_StubExporter",
-    "_StubSimpleHandler",
-    "_StubTaskHandler",
-    "_build_task",
-    "_single_user_shanghai_settings",
-    "_read_scheduled_delivery",
-    "_with_scheduled_delivery_contract",
-    "asyncio",
+    "ReminderMessageService",
+    "read_scheduled_delivery",
+    "attach_action_recorder",
     "datetime",
-    "json",
+    "freeze_pendo_clock",
+    "freeze_pendo_reminder_clock",
     "managed_pendo_database",
+    "pendo_service_context",
+    "reject_inserts",
     "reset_pendo_runtime_config",
-    "timezone",
 )

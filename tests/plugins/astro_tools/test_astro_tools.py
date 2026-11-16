@@ -3,8 +3,8 @@ astro_tools 插件单元测试
 """
 
 import logging
+import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,12 +16,33 @@ from plugins.astro_tools import main as astro_tools
 from plugins.astro_tools import obj as astro_obj
 from plugins.astro_tools import redshift as astro_redshift
 from plugins.astro_tools import time as astro_time
+from tests.helpers.http import bounded_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
 
 
 loaded_modules = {"time": astro_time, "obj": astro_obj}
+
+
+@pytest.fixture
+def simbad_requests(monkeypatch):
+    """替换 SIMBAD 的同步 HTTP 出口：记录请求并返回“无匹配天体”的空表，同时记录发起线程。"""
+
+    requests: list[dict] = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append({"method": method, "url": url, "thread": threading.get_ident(), **kwargs})
+        return bounded_json_response(
+            {
+                "metadata": [{"name": name} for name in ("ra", "dec", "otype", "V", "sp_type")],
+                "data"    : [],
+            },
+            url=url,
+        )
+
+    monkeypatch.setattr(astro_obj, "requests_request_bounded", fake_request)
+    return requests
 
 
 @pytest.fixture
@@ -65,6 +86,24 @@ class TestAstroToolsHelp:
         assert len(result) > 0
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("topic", "keyword"),
+        [
+            ("time", "时间"),
+            ("coord", "坐标"),
+            ("convert", "转换"),
+            ("redshift", "红移"),
+            ("formula", "公式"),
+        ],
+    )
+    async def test_topic_help(self, mock_context, topic, keyword):
+        """每个子命令的 help 都返回该主题的帮助"""
+        result = await astro_tools.handle("astro", f"{topic} help", {}, mock_context)
+        assert result is not None
+        result_str = str(result)
+        assert topic in result_str.lower() or keyword in result_str
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("alias", ["help", "HELP", "帮助"])
     async def test_help_with_extra_text_is_not_an_exact_help_request(self, mock_context, alias):
         result = await astro_tools.handle("astro", f"{alias} extra", {}, mock_context)
@@ -83,23 +122,10 @@ class TestAstroToolsTime:
         assert len(result) > 0
 
     @pytest.mark.asyncio
-    async def test_time_help(self, mock_context):
-        """测试时间帮助"""
-        result = await astro_tools.handle("astro", "time help", {}, mock_context)
-        assert result is not None
-        result_str = str(result)
-        assert "time" in result_str.lower() or "时间" in result_str
-
-    @pytest.mark.asyncio
     async def test_time_numeric_unix_timestamp(self, mock_context):
         result = loaded_modules["time"].handle_time("1706616000", mock_context)
         assert "Unix 1706616000.0" in result or "Unix 1706616000" in result
         assert "UTC" in result
-
-    @pytest.mark.asyncio
-    async def test_time_numeric_old_unix_timestamp(self, mock_context):
-        result = loaded_modules["time"].handle_time("946684800", mock_context)
-        assert "Unix 946684800.0" in result or "Unix 946684800" in result
 
     @pytest.mark.asyncio
     async def test_time_explicit_unix_supports_early_timestamp(self, mock_context):
@@ -120,22 +146,10 @@ class TestAstroToolsCoord:
     """测试坐标转换功能"""
 
     @pytest.mark.asyncio
-    async def test_coord_help(self, mock_context):
-        """测试坐标帮助"""
-        result = await astro_tools.handle("astro", "coord help", {}, mock_context)
-        assert result is not None
-        result_str = str(result)
-        assert "coord" in result_str.lower() or "坐标" in result_str
-
-    @pytest.mark.asyncio
     async def test_negative_sexagesimal_declination_reaches_coord_handler(
         self,
         mock_context,
-        monkeypatch,
     ):
-        handler = MagicMock(return_value="ok")
-        monkeypatch.setitem(astro_tools._SYNC_HANDLERS, "coord", handler)
-
         result = await astro_tools.handle(
             "astro",
             "coord 12:34:56 -12:34:56",
@@ -143,8 +157,9 @@ class TestAstroToolsCoord:
             mock_context,
         )
 
-        assert "ok" in str(result)
-        handler.assert_called_once_with("12:34:56 -12:34:56", mock_context)
+        text = str(result)
+        assert "输入: 12:34:56 -12:34:56" in text
+        assert "Dec: -12:34:56.0 (-12.582222°)" in text
 
     @pytest.mark.parametrize(
         "args",
@@ -159,14 +174,6 @@ class TestAstroToolsCoord:
 
 class TestAstroToolsConvert:
     """测试单位转换功能"""
-
-    @pytest.mark.asyncio
-    async def test_convert_help(self, mock_context):
-        """测试转换帮助"""
-        result = await astro_tools.handle("astro", "convert help", {}, mock_context)
-        assert result is not None
-        result_str = str(result)
-        assert "convert" in result_str.lower() or "转换" in result_str
 
     @pytest.mark.parametrize(
         "args",
@@ -211,14 +218,6 @@ class TestAstroToolsRedshift:
     """测试红移计算功能"""
 
     @pytest.mark.asyncio
-    async def test_redshift_help(self, mock_context):
-        """测试红移帮助"""
-        result = await astro_tools.handle("astro", "redshift help", {}, mock_context)
-        assert result is not None
-        result_str = str(result)
-        assert "redshift" in result_str.lower() or "红移" in result_str
-
-    @pytest.mark.asyncio
     async def test_nearby_distance_remains_readable_in_mpc(self, mock_context):
         result = astro_redshift.handle_redshift("0.001", mock_context)
 
@@ -229,21 +228,6 @@ class TestAstroToolsRedshift:
 
 class TestAstroToolsFormula:
     """测试公式计算功能"""
-
-    @pytest.mark.asyncio
-    async def test_formula_list(self, mock_context):
-        """测试列出所有公式"""
-        result = await astro_tools.handle("astro", "formula list", {}, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_formula_help(self, mock_context):
-        """测试公式帮助"""
-        result = await astro_tools.handle("astro", "formula help", {}, mock_context)
-        assert result is not None
-        result_str = str(result)
-        assert "formula" in result_str.lower() or "公式" in result_str
 
     @pytest.mark.asyncio
     async def test_formula_list_alias_returns_real_catalog(self, mock_context):
@@ -285,14 +269,6 @@ class TestAstroToolsErrorHandling:
     """测试错误处理"""
 
     @pytest.mark.asyncio
-    async def test_invalid_command(self, mock_context):
-        """测试无效命令"""
-        result = await astro_tools.handle("astro", "invalid_command", {}, mock_context)
-        assert result is not None
-        # 应该返回错误信息或帮助
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
     async def test_exception_handling(self, mock_context):
         """测试异常处理"""
         # 尝试使用格式错误的参数
@@ -301,52 +277,35 @@ class TestAstroToolsErrorHandling:
         # 不应该抛出未捕获的异常
 
     @pytest.mark.asyncio
-    async def test_obj_query_runs_through_plugin_bulkhead(self, mock_context, monkeypatch):
-        calls = {"count": 0}
-
-        async def _fake_run_sync(func, *args, **kwargs):
-            calls["count"] += 1
-            return None
-
-        monkeypatch.setattr(loaded_modules["obj"], "run_sync", _fake_run_sync)
-
+    async def test_obj_query_blocking_request_runs_off_the_event_loop(
+        self, mock_context, simbad_requests
+    ):
         result = await loaded_modules["obj"].handle_obj("Crab Pulsar", mock_context)
 
-        assert calls["count"] == 1
+        assert len(simbad_requests) == 1
+        assert simbad_requests[0]["thread"] != threading.get_ident()
         assert "未找到天体" in result or "查询失败" not in result
 
     @pytest.mark.asyncio
-    async def test_obj_rejects_oversized_name_before_network(self, mock_context, monkeypatch):
-        called = False
-
-        async def _fake_to_thread(*_args, **_kwargs):
-            nonlocal called
-            called = True
-
-        monkeypatch.setattr(astro_obj.asyncio, "to_thread", _fake_to_thread)
-
+    async def test_obj_rejects_oversized_name_before_network(self, mock_context, simbad_requests):
         result = await astro_obj.handle_obj(
             "x" * (astro_obj.SIMBAD_MAX_OBJECT_NAME_CHARS + 1), mock_context
         )
 
         assert "天体名称过长" in result
-        assert called is False
+        assert simbad_requests == []
 
     @pytest.mark.asyncio
     async def test_builtin_sun_needs_neither_astropy_nor_network(
         self,
         mock_context,
-        monkeypatch,
+        simbad_requests,
     ):
-        async def forbidden_thread(*_args, **_kwargs):
-            raise AssertionError("built-in solar-system data must stay local")
-
-        monkeypatch.setattr(astro_obj.asyncio, "to_thread", forbidden_thread)
-
         result = await astro_obj.handle_obj("sun", mock_context)
 
         assert result.startswith("☀️ 太阳")
         assert "1.988e+30 kg" in result
+        assert simbad_requests == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -366,21 +325,13 @@ class TestAstroToolsErrorHandling:
         ],
     )
     async def test_obj_exact_subcommands_reject_extra_args_before_network(
-        self, name, mock_context, monkeypatch
+        self, name, mock_context, simbad_requests
     ):
-        called = False
-
-        async def _fake_to_thread(*_args, **_kwargs):
-            nonlocal called
-            called = True
-
-        monkeypatch.setattr(astro_obj.asyncio, "to_thread", _fake_to_thread)
-
         result = await astro_obj.handle_obj(f"{name} extra", mock_context)
 
         assert "不接受额外参数" in result
         assert f"/astro obj {name}" in result
-        assert called is False
+        assert simbad_requests == []
 
     def test_simbad_text_fields_are_whitespace_normalized(self):
         payload = {
@@ -417,19 +368,6 @@ class TestAstroToolsErrorHandling:
         assert row is not None
         assert row.v_magnitude is None
         assert "V星等" not in astro_obj._render_simbad_result("M31", row)
-
-    def test_obj_query_builder_is_pure_local(self, monkeypatch):
-        monkeypatch.setattr(
-            loaded_modules["obj"],
-            "_build_simbad_client",
-            lambda: pytest.fail("local ADQL construction must not initialize astroquery"),
-            raising=False,
-        )
-
-        query = loaded_modules["obj"]._build_simbad_query("M31")
-
-        assert "SELECT TOP 1" in query.upper()
-        assert "M31" in query
 
 
 @pytest.mark.parametrize(

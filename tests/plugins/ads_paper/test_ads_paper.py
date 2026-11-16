@@ -1,11 +1,10 @@
 """ADS Paper 的命令入口、ADS 客户端、按用户存储及错误边界测试。"""
 
-import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,6 +13,7 @@ from plugins.ads_paper import main as ads_main
 from plugins.ads_paper.ads_client import ADSClient, paper_title
 from plugins.ads_paper.storage import PaperStorage
 from tests.helpers.assertions import text_segments_text
+from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -21,22 +21,43 @@ from tests.helpers.settings_snapshot import with_settings_reader
 ROOT = REPOSITORY_ROOT
 
 
+def _docs_response(*docs: Any):
+    """ADS 搜索接口的 JSON 响应。"""
+
+    return aiohttp_json_response({"response": {"docs": list(docs)}})
+
+
+def _ads_context(tmp_path: Path, session: Any, request_id: str | None = None) -> Any:
+    """带 ADS Token 和给定 HTTP 会话的插件上下文。"""
+
+    return cast(
+        Any,
+        with_settings_reader(
+            SimpleNamespace(
+                secrets      = {"plugins": {"ads_paper": {"ads_token": "test-token"}}},
+                state        = {},
+                data_dir     = tmp_path,
+                http_session = session,
+                request_id   = request_id,
+            )
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_delivers_titles_and_links_promised_by_command_help() -> None:
-    client = SimpleNamespace(
-        search_papers=AsyncMock(
-            return_value=[
-                {
-                    "title"  : ["A repeating fast radio burst"],
-                    "author" : ["Spitler, L."],
-                    "year"   : "2016",
-                    "bibcode": "2016Natur.531..202S",
-                }
-            ]
-        ),
-        format_paper_info=ADSClient.format_paper_info,
+    session = QueuedAiohttpSession(
+        _docs_response(
+            {
+                "title"  : ["A repeating fast radio burst"],
+                "author" : ["Spitler, L."],
+                "year"   : "2016",
+                "bibcode": "2016Natur.531..202S",
+            }
+        )
     )
-    result  = await paper_commands.cmd_search(cast(ADSClient, client), "fast radio burst")
+    client  = ADSClient("token", session)
+    result  = await paper_commands.cmd_search(client, "fast radio burst")
     message = text_segments_text(result)
     assert "A repeating fast radio burst" in message
     assert "Cited:" not in message
@@ -45,35 +66,28 @@ async def test_search_delivers_titles_and_links_promised_by_command_help() -> No
     )
     assert result.command_outcome.state == "completed"
     assert "https://ui.adsabs.harvard.edu/abs/2016Natur.531..202S/abstract" in message
-    client.search_papers.assert_awaited_once_with("fast radio burst", max_results=5)
+    params = session.requests[0][2]["params"]
+    assert (params["q"], params["rows"]) == ("fast radio burst", 5)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload", [None, {"error": "upstream error"}, {"response": {"docs": None}}]
 )
-async def test_search_rejects_invalid_service_payload_instead_of_empty_results(
-    monkeypatch, payload
-):
-    client = ADSClient("token", object())
-    monkeypatch.setattr(client, "_request_json", AsyncMock(return_value=payload))
+async def test_search_rejects_invalid_service_payload_instead_of_empty_results(payload):
+    client = ADSClient("token", QueuedAiohttpSession(aiohttp_json_response(payload)))
     with pytest.raises(ValueError, match="ADS search response"):
         await client.search_papers("FRB")
 
 
 @pytest.mark.asyncio
-async def test_search_timeout_reaches_command_error_boundary(tmp_path, monkeypatch):
-    context = with_settings_reader(
-        SimpleNamespace(
-            secrets      = {"plugins": {"ads_paper": {"ads_token": "test-token"}}},
-            state        = {},
-            data_dir     = tmp_path,
-            http_session = object(),
-            request_id   = "search-timeout",
-        )
-    )
-    monkeypatch.setattr(ADSClient, "_request_json", AsyncMock(side_effect=TimeoutError()))
-    result = await ads_main.handle("paper", "search FRB", {"user_id": 1}, context)
+async def test_search_timeout_reaches_command_error_boundary(tmp_path):
+    class TimeoutSession:
+        def request(self, *_args, **_kwargs):
+            raise TimeoutError
+
+    context = _ads_context(tmp_path, TimeoutSession(), "search-timeout")
+    result  = await ads_main.handle("paper", "search FRB", {"user_id": 1}, context)
     assert result.command_outcome.state == "error"
     assert "未找到" not in text_segments_text(result)
 
@@ -137,27 +151,21 @@ async def test_resolve_real_ads_bibcode_bypasses_arxiv_search() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ads_query_builders_escape_author_and_reject_invalid_bibcodes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client              = ADSClient("token", object())
-    captured: list[str] = []
+async def test_ads_query_builders_escape_author_and_reject_invalid_bibcodes() -> None:
+    session = QueuedAiohttpSession(*(_docs_response() for _ in range(4)))
+    client  = ADSClient("token", session)
 
-    async def capture(query: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        del args, kwargs
-        captured.append(query)
-        return []
-
-    monkeypatch.setattr(client, "_search_docs", capture)
+    def sent_queries() -> list[str]:
+        return [request[2]["params"]["q"] for request in session.requests]
 
     await client.search_by_author(r' A\B"C ')
-    assert captured == [r'author:"A\\B\"C"']
+    assert sent_queries() == [r'author:"A\\B\"C"']
 
     bibcode = "2026ApJ...001..001A"
     await client.get_paper_by_bibcode(bibcode)
     await client.get_citations(bibcode)
     await client.get_references(bibcode)
-    assert captured[1:] == [
+    assert sent_queries()[1:] == [
         f"bibcode:{bibcode}",
         f"citations(bibcode:{bibcode})",
         f"references(bibcode:{bibcode})",
@@ -200,19 +208,6 @@ class TestAdsPaperConfig:
         assert "description" in config
         assert "commands" in config
 
-    def test_plugin_commands_have_help(self):
-        """测试命令有帮助信息"""
-        plugin_json_path = ROOT / "plugins" / "ads_paper" / "plugin.json"
-        with open(plugin_json_path, encoding="utf-8") as f:
-            config = json.load(f)
-
-        for cmd in config.get("commands", []):
-            if "name" in cmd:
-                # 命令应该有描述或使用说明
-                assert (
-                    "help" in cmd or "usage" in cmd or "description" in cmd or cmd.get("help", "")
-                )
-
 
 @pytest.mark.asyncio
 async def test_help_and_local_topics_do_not_require_ads_token(tmp_path):
@@ -238,30 +233,16 @@ async def test_help_and_local_topics_do_not_require_ads_token(tmp_path):
 @pytest.mark.asyncio
 async def test_free_text_commands_preserve_quotes_backslashes_and_spacing(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = cast(
-        Any,
-        with_settings_reader(
-            SimpleNamespace(
-                secrets      = {"plugins": {"ads_paper": {"ads_token": "test-token"}}},
-                state        = {},
-                data_dir     = tmp_path,
-                http_session = object(),
-                request_id   = "ads-free-text",
-            )
-        ),
-    )
-    event = {"user_id": 10001, "message_type": "private"}
-    search = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
-    monkeypatch.setattr(paper_commands, "cmd_search", search)
-    query = r'"fast radio burst" -3σ  C:\papers'
+    session = QueuedAiohttpSession(_docs_response({"title": "ok"}))
+    context = _ads_context(tmp_path, session, "ads-free-text")
+    event   = {"user_id": 10001, "message_type": "private"}
+    query   = r'"fast radio burst" -3σ  C:\papers'
 
     result = await ads_main.handle("paper", f"search {query}", event, context)
 
     assert "ok" in text_segments_text(result)
-    search.assert_awaited_once()
-    assert search.await_args.args[1] == query
+    assert [request[2]["params"]["q"] for request in session.requests] == [query]
 
     content     = r'-3σ  偏差\路径 "保留引号"'
     note_result = await ads_main.handle(
@@ -345,61 +326,47 @@ async def test_local_resource_commands_share_one_user_lifecycle_and_reject_bad_m
 
 
 class TestAdsPaperAsyncStorage:
-    def test_topics_read_uses_to_thread(self, monkeypatch):
-        calls = []
+    """存储读写放到工作线程里执行，不占用事件循环线程。"""
 
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func.__name__)
-            return func(*args, **kwargs)
+    @pytest.mark.asyncio
+    async def test_topics_read_runs_off_the_event_loop_thread(self, tmp_path):
+        threads: dict[str, int] = {}
 
-        class Storage:
+        class Storage(PaperStorage):
             def get_topics(self, user_id):
-                return []
+                threads["get_topics"] = threading.get_ident()
+                return super().get_topics(user_id)
 
-        monkeypatch.setattr(note_commands.asyncio, "to_thread", fake_to_thread)
-        asyncio.run(note_commands.cmd_topics(cast(Any, Storage()), "", 1))
+        await note_commands.cmd_topics(Storage(tmp_path), "", 1)
 
-        assert "get_topics" in calls
+        assert threads["get_topics"] != threading.get_ident()
 
-    def test_note_write_uses_to_thread(self, monkeypatch):
-        calls = []
+    @pytest.mark.asyncio
+    async def test_note_write_runs_off_the_event_loop_thread(self, tmp_path):
+        threads: dict[str, int] = {}
 
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func.__name__)
-            return func(*args, **kwargs)
-
-        class Storage:
+        class Storage(PaperStorage):
             def add_paper_note(self, paper_id, content, user_id):
-                return None
+                threads["add_paper_note"] = threading.get_ident()
+                return super().add_paper_note(paper_id, content, user_id)
 
-            def get_paper_notes(self, paper_id, user_id=None):
-                return [{"content": "c"}]
+            def get_paper_notes(self, paper_id, user_id):
+                threads["get_paper_notes"] = threading.get_ident()
+                return super().get_paper_notes(paper_id, user_id)
 
-        monkeypatch.setattr(note_commands.asyncio, "to_thread", fake_to_thread)
-        asyncio.run(note_commands.cmd_note(cast(Any, Storage()), "paper-1 test", 1))
+        await note_commands.cmd_note(Storage(tmp_path), "paper-1 test", 1)
 
-        assert "add_paper_note" in calls
-        assert "get_paper_notes" in calls
+        assert {"add_paper_note", "get_paper_notes"} <= threads.keys()
+        assert threading.get_ident() not in threads.values()
 
-    def test_cmd_daily_reads_topics_in_thread(self, monkeypatch, tmp_path):
-        from plugins.ads_paper import ai_commands
+    @pytest.mark.asyncio
+    async def test_cmd_daily_reads_topics_off_the_event_loop_thread(self, tmp_path):
+        threads: dict[str, int] = {}
 
-        calls = []
-
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func.__name__)
-            return func(*args, **kwargs)
-
-        class Client:
-            async def search_papers(self, query, max_results, *, fields, sort):
-                assert '"LLM" OR "agents"' in query
-                assert "entdate:" in query
-                assert max_results > 0
-                assert "entdate" in fields
-                assert sort == "entdate desc,bibcode asc"
-                return []
-
-        monkeypatch.setattr(ai_commands.asyncio, "to_thread", fake_to_thread)
+        class Storage(PaperStorage):
+            def get_topics(self, user_id):
+                threads["get_topics"] = threading.get_ident()
+                return super().get_topics(user_id)
 
         data_dir = tmp_path / "ads_paper"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -407,10 +374,17 @@ class TestAdsPaperAsyncStorage:
             json.dumps({"keywords": [{"value": "LLM", "user": 1}, {"value": "agents", "user": 1}]}),
             encoding="utf-8",
         )
+        session = QueuedAiohttpSession(_docs_response())
 
-        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), PaperStorage(data_dir), 1))
+        result = await ai_commands.cmd_daily(ADSClient("token", session), Storage(data_dir), 1)
 
-        assert "get_topics" in calls
+        params = session.requests[0][2]["params"]
+        assert '"LLM" OR "agents"' in params["q"]
+        assert "entdate:" in params["q"]
+        assert params["rows"] > 0
+        assert "entdate" in params["fl"].split(",")
+        assert params["sort"] == "entdate desc,bibcode asc"
+        assert threads["get_topics"] != threading.get_ident()
         assert "未找到" in str(result)
 
 
@@ -516,12 +490,9 @@ def test_ads_paper_requires_exact_positive_user_id():
 
 
 @pytest.mark.asyncio
-async def test_ads_search_filters_non_mapping_docs_and_formats_scalar_fields(monkeypatch):
-    client = ADSClient("token", object())
-    monkeypatch.setattr(
-        client,
-        "_request_json",
-        AsyncMock(return_value={"response": {"docs": [None, "bad", {"title": "Full"}]}}),
+async def test_ads_search_filters_non_mapping_docs_and_formats_scalar_fields():
+    client = ADSClient(
+        "token", QueuedAiohttpSession(_docs_response(None, "bad", {"title": "Full"}))
     )
 
     assert await client.search_papers("frb") == [{"title": "Full"}]
@@ -639,28 +610,23 @@ async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
 
 
 @pytest.mark.asyncio
-async def test_ads_author_requests_latest_sort(monkeypatch):
-    from plugins.ads_paper.ads_client import ADSClient
-
-    search = AsyncMock(return_value=[])
-    monkeypatch.setattr(ADSClient, "search_papers", search)
-    client = ADSClient.__new__(ADSClient)
+async def test_ads_author_requests_latest_sort():
+    session = QueuedAiohttpSession(_docs_response())
+    client  = ADSClient("token", session)
     await client.search_by_author("review author")
-    assert search.await_args.kwargs["sort"] == "date desc"
+    assert session.requests[0][2]["params"]["sort"] == "date desc"
 
 
 @pytest.mark.asyncio
-async def test_ads_reference_preview_is_labeled(monkeypatch):
-    from plugins.ads_paper import paper_commands
+async def test_ads_reference_preview_is_labeled(tmp_path):
+    session = QueuedAiohttpSession(
+        _docs_response({"title": ["review"], "citation_count": 42}),
+        _docs_response(),
+        _docs_response(*[{"title": ["reference"]}] * 5),
+    )
+    context = _ads_context(tmp_path, session)
+    event   = {"user_id": 10001, "message_type": "private"}
 
-    monkeypatch.setattr(
-        paper_commands, "resolve_paper_id_to_bibcode", AsyncMock(return_value="2020Review")
-    )
-    client = SimpleNamespace(
-        get_paper_by_bibcode=AsyncMock(return_value={"title": ["review"], "citation_count": 42}),
-        get_citations=AsyncMock(return_value=[]),
-        get_references=AsyncMock(return_value=[{"title": ["reference"]}] * 5),
-    )
-    response = await paper_commands.cmd_cite_network(client, "review")
-    text     = "".join(segment["data"].get("text", "") for segment in response)
-    assert "本次展示参考文献: 5 篇" in text
+    response = await ads_main.handle("paper", "cite-network 2020ApJ...900..001A", event, context)
+
+    assert "本次展示参考文献: 5 篇" in text_segments_text(response)

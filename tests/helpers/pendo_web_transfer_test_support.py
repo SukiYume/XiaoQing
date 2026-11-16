@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
 import json
-import re
-import threading
-import time
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -20,7 +14,6 @@ import pytest
 
 from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem
 from plugins.pendo.services.db import Database, DuplicateBundleImportError
-from tests.helpers.paths import REPOSITORY_ROOT
 
 try:
     from plugins.pendo.web.auth import issue_login_code
@@ -39,9 +32,6 @@ from plugins.pendo.web.services.transfer_bundle import (
     write_bundle,
 )
 
-ROOT = REPOSITORY_ROOT
-
-
 OWNER_ID = "u-transfer"
 
 
@@ -55,7 +45,7 @@ def auth_headers(client: Any) -> dict[str, str]:
     return {"X-CSRF-Token": response.json()["data"]["csrf_token"]}
 
 
-def _seed_items(db: Database) -> None:
+def seed_items(db: Database) -> None:
     """写入覆盖五类条目和范围内外日期的导出样本。"""
 
     db.insert_item(
@@ -223,7 +213,7 @@ def _seed_items(db: Database) -> None:
     )
 
 
-def _build_sample_bundle_bytes(
+def build_sample_bundle_bytes(
     records_by_type: dict[str, list[dict[str, Any]]],
     selection: dict[str, Any] | None = None,
     *,
@@ -261,7 +251,7 @@ def _build_sample_bundle_bytes(
     return buf.getvalue()
 
 
-def _build_raw_bundle(
+def build_raw_bundle(
     manifest: object,
     members: list[tuple[str, str | bytes]],
 ) -> io.BytesIO:
@@ -276,7 +266,7 @@ def _build_raw_bundle(
     return buf
 
 
-def _build_single_member_manifest(
+def build_single_member_manifest(
     item_type: str,
     content: bytes,
     *,
@@ -298,7 +288,7 @@ def _build_single_member_manifest(
     )
 
 
-class _ImportRequest:
+class ImportRequest:
     """满足传输 API 直接调用所需最小接口的请求替身。"""
 
     def __init__(
@@ -321,10 +311,10 @@ class _ImportRequest:
             yield chunk
 
 
-def _simple_task_bundle(source_id: str) -> bytes:
+def simple_task_bundle(source_id: str) -> bytes:
     """构造只含一条任务的有效传输包。"""
 
-    return _build_sample_bundle_bytes(
+    return build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -349,18 +339,14 @@ __all__ = (
     "LedgerItem",
     "NoteItem",
     "OWNER_ID",
-    "Path",
-    "ROOT",
-    "SimpleNamespace",
     "TaskItem",
     "ZoneInfo",
-    "_ImportRequest",
-    "_build_raw_bundle",
-    "_build_sample_bundle_bytes",
-    "_build_single_member_manifest",
-    "_seed_items",
-    "_simple_task_bundle",
-    "asyncio",
+    "ImportRequest",
+    "build_raw_bundle",
+    "build_sample_bundle_bytes",
+    "build_single_member_manifest",
+    "seed_items",
+    "simple_task_bundle",
     "auth_headers",
     "build_manifest",
     "datetime",
@@ -368,12 +354,9 @@ __all__ = (
     "io",
     "json",
     "pytest",
-    "re",
     "read_bundle",
     "serialize_event_collection",
     "serialize_item",
-    "threading",
-    "time",
     "timezone",
     "transfer_api",
     "transfer_bundle_module",

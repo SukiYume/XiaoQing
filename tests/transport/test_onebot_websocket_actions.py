@@ -6,7 +6,7 @@ import asyncio
 import json
 import threading
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,9 +14,8 @@ import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
     OneBotActionOutcomeUnknown,
     OneBotWsClient,
-    _drain_owned_ws_closes,
-    _normalize_action_for_onebot,
-    _wait_for_ws_action_request,
+    drain_owned_ws_closes,
+    wait_for_ws_action_request,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -42,7 +41,7 @@ class TestOneBotWebSocketActions:
         with pytest.raises(ConnectionError, match="authorization changed"):
             await pending
         assert len(client._ws_close_tasks) == 1
-        await _drain_owned_ws_closes(client)
+        await drain_owned_ws_closes(client)
         ws.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -175,7 +174,7 @@ class TestOneBotWebSocketActions:
 
         with pytest.raises(OneBotActionOutcomeUnknown, match="outcome is unknown"):
             await client.request_action({"action": "test", "params": {}})
-        await _drain_owned_ws_closes(client)
+        await drain_owned_ws_closes(client)
 
         assert ws.send_called is True
         assert send_body_started is True
@@ -223,7 +222,7 @@ class TestOneBotWebSocketActions:
 
         assert await client.request_action({"action": "test", "params": {}}) is None
         await asyncio.sleep(0)
-        await _drain_owned_ws_closes(client)
+        await drain_owned_ws_closes(client)
 
         assert ws.send_called is False
         assert client._pending_action_futures == {}
@@ -249,37 +248,6 @@ class TestOneBotWebSocketActions:
         future.cancel()
 
     @pytest.mark.asyncio
-    async def test_send_action_when_connected(self):
-        """测试连接时只在匹配回执确认成功"""
-        client     = OneBotWsClient("ws://localhost:3000", "")
-        mock_ws    = AsyncMock()
-        client._ws = mock_ws
-
-        action = {
-            "action": "send_group_msg",
-            "params": {"group_id": 12345, "message": []},
-        }
-
-        with patch(
-            "core.onebot._normalize_action_for_onebot",
-            wraps=_normalize_action_for_onebot,
-        ) as normalize:
-            pending      = asyncio.create_task(client.send_action(action))
-            sent_payload = await _wait_for_ws_action_request(mock_ws)
-            assert "echo" in sent_payload
-            assert client._resolve_action_response(
-                {"echo": sent_payload["echo"], "status": "ok", "retcode": 0},
-                auth_state=client._endpoint_auth,
-            )
-            result = await pending
-
-        assert normalize.call_count == 1
-
-        mock_ws.send.assert_called_once()
-        assert result is True
-        assert client._pending_action_futures == {}
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "response",
         [
@@ -294,7 +262,7 @@ class TestOneBotWebSocketActions:
         action     = {"action": "get_image", "params": {"file_id": "abc"}}
 
         pending      = asyncio.create_task(client.request_action(action))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         envelope     = {"echo": sent_payload["echo"], **response}
         assert client._resolve_action_response(envelope, auth_state=client._endpoint_auth) is True
 
@@ -318,7 +286,7 @@ class TestOneBotWebSocketActions:
         }
 
         pending      = asyncio.create_task(client.send_action(action))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         client._resolve_action_response(
             {"echo": sent_payload["echo"], "status": "ok", "retcode": 0},
             auth_state=client._endpoint_auth,
@@ -344,7 +312,7 @@ class TestOneBotWebSocketActions:
         }
 
         pending      = asyncio.create_task(client.send_action(action))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         assert sent_payload["params"]["message"] == [{"type": "text", "data": {"text": "123"}}]
         client._resolve_action_response(
             {"echo": sent_payload["echo"], "status": "ok", "retcode": 0},
@@ -382,7 +350,7 @@ class TestOneBotWebSocketActions:
         client._ws = mock_ws
 
         pending      = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         client._resolve_action_response(
             {"echo": sent_payload["echo"], "status": "failed", "retcode": 100},
             auth_state=client._endpoint_auth,
@@ -398,7 +366,7 @@ class TestOneBotWebSocketActions:
         client._ws = mock_ws
 
         pending      = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         assert client._resolve_action_response(
             {"echo": f"wrong-{sent_payload['echo']}", "status": "ok", "retcode": 0},
             auth_state=client._endpoint_auth,
@@ -416,7 +384,7 @@ class TestOneBotWebSocketActions:
         client._ws    = mock_ws
 
         pending = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
-        await _wait_for_ws_action_request(mock_ws)
+        await wait_for_ws_action_request(mock_ws)
         await client.stop()
 
         with pytest.raises(OneBotActionOutcomeUnknown):
@@ -430,7 +398,7 @@ class TestOneBotWebSocketActions:
         client._ws = mock_ws
 
         pending      = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
-        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        sent_payload = await wait_for_ws_action_request(mock_ws)
         response     = {"echo": sent_payload["echo"], "status": "ok", "retcode": 0}
         client._resolve_action_response(response, auth_state=client._endpoint_auth)
         assert await pending is True

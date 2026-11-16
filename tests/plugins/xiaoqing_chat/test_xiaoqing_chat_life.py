@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.life import extract as life_extract
 from plugins.xiaoqing_chat.life import proactive
@@ -23,10 +24,20 @@ from plugins.xiaoqing_chat.life.schedule import (
     state_text,
 )
 from plugins.xiaoqing_chat.life.self_timeline import new_entry, self_timeline_block
-from plugins.xiaoqing_chat.memory.memory import StoredMessage
+from plugins.xiaoqing_chat.message_parts import render_stored_message
 from plugins.xiaoqing_chat.persona import PersonaCard
-from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-from tests.plugins.xiaoqing_chat.memory_support import MemoryHarness
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, reset_global_state
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness, put_history
+from tests.helpers.xiaoqing_chat_test_support import (
+    ScriptedChatModel,
+    bot_message,
+    scripted_chat_context,
+    settle_chat_background,
+    user_message,
+)
+
+mock_context = _fixture_support.mock_context
 
 NOW = 1_800_000_000.0
 
@@ -36,18 +47,6 @@ def _fresh_extraction_throttle():
     life_extract._last_state_read.clear()
     yield
     life_extract._last_state_read.clear()
-
-
-def _user(
-    text: str, *, ts: float, user_id: int = 7, name: str = "阿梨", message_id: int | None = None
-):
-    return StoredMessage(
-        role="user", name=name, ts=ts, user_id=user_id, content=text, message_id=message_id
-    )
-
-
-def _bot(text: str, *, ts: float, source: str = "xiaoqing_chat"):
-    return StoredMessage(role="assistant", name="小青", ts=ts, content=text, source_plugin=source)
 
 
 # ---------------------------------------------------------------- 作息
@@ -81,6 +80,9 @@ def test_routine_pacing_and_prompt_text() -> None:
     assert routine_factor(None, busy=0.5, asleep=0.1) == 1.0
     assert routine_factor(asleep, busy=1.5, asleep=3.0) == 3.0
     assert "上课" in state_text(busy) and "回得短一点" in state_text(busy)
+    free = parse_routine(ROUTINE)[3]
+    assert "吃晚饭" in state_text(free)
+    assert state_text(asleep) != state_text(free) != state_text(busy)
     assert state_text(None) == ""
 
 
@@ -118,18 +120,30 @@ def test_closing_vocabulary_rejects_new_content(text: str) -> None:
     assert not closing_kinds(text)
 
 
-def test_bot_closing_needs_a_strong_closing_without_question() -> None:
-    assert bot_closed("好嘞，早点睡，晚安～")
-    assert not bot_closed("好的")
-    assert not bot_closed("早呀")
-    assert not bot_closed("晚安，明天要我叫你吗？")
+@pytest.mark.parametrize(
+    ("text", "closed"),
+    [
+        pytest.param("好嘞，早点睡，晚安～", True, id="strong-closing"),
+        pytest.param("晚安晚安，快睡吧～", True, id="repeated-goodnight"),
+        pytest.param(
+            "好，快去吃饭吧\n\n回聊～\n\n面试要是想练了再喊我呀", True, id="trailing-reminder"
+        ),
+        pytest.param("晚安，睡个好觉～周五交实验报告别忘啦！", True, id="goodnight-with-reminder"),
+        pytest.param("好的", False, id="weak-ack"),
+        pytest.param("早呀", False, id="greeting"),
+        pytest.param("晚安，明天要我叫你吗？", False, id="closing-with-question"),
+        pytest.param("抱抱，想说就说", False, id="comfort-keeps-door-open"),
+    ],
+)
+def test_bot_closing_needs_a_strong_closing_without_question(text: str, closed: bool) -> None:
+    assert bot_closed(text) is closed
 
 
 def test_silence_only_after_the_bot_has_closed() -> None:
-    history = [_user("我睡了", ts=NOW - 60), _bot("晚安，好梦", ts=NOW - 50)]
+    history = [user_message("我睡了", ts=NOW - 60), bot_message("晚安，好梦", ts=NOW - 50)]
     assert should_stay_silent(
         "晚安",
-        [*history, _user("晚安", ts=NOW, message_id=9)],
+        [*history, user_message("晚安", ts=NOW, message_id=9)],
         now                = NOW,
         window_seconds     = 1800,
         current_message_id = 9,
@@ -137,13 +151,13 @@ def test_silence_only_after_the_bot_has_closed() -> None:
     # 角色还没收尾时，第一句晚安要回。
     assert not should_stay_silent(
         "晚安",
-        [_user("今天好累", ts=NOW - 60), _bot("抱抱", ts=NOW - 50)],
+        [user_message("今天好累", ts=NOW - 60), bot_message("抱抱", ts=NOW - 50)],
         now            = NOW,
         window_seconds = 1800,
     )
     # 收尾之后对方又说了别的内容，那一句还没被接住。
     assert not should_stay_silent(
-        "晚安", [*history, _user("对了明天降温", ts=NOW - 10)], now=NOW, window_seconds=1800
+        "晚安", [*history, user_message("对了明天降温", ts=NOW - 10)], now=NOW, window_seconds=1800
     )
     # 收尾太久以前的，不算这一段对话。
     assert not should_stay_silent("晚安", history, now=NOW + 7200, window_seconds=1800)
@@ -165,9 +179,6 @@ def test_self_timeline_block_describes_entries() -> None:
     block = self_timeline_block([promise], now=NOW)
     assert "约2小时前答应阿梨：帮她整理照片（还没办完）" in block
     assert self_timeline_block([], now=NOW) == ""
-
-
-# ---------------------------------------------------------------- 未完话头
 
 
 # ---------------------------------------------------------------- 投递后抽取
@@ -195,12 +206,12 @@ def _extraction_setup(tmp_path, chat_id, messages):
     return state, context, harness, state.memory_store.get(chat_id)
 
 
-async def _extract(state, context, chat_id, history, source="chat"):
+async def _extract(state, context, chat_id, history, model, source="chat"):
     return await life_extract.extract_life_records(
         context  = context,
         state    = state,
         life_cfg = XiaoQingChatConfig().life,
-        secrets  = {"_ai": object()},
+        secrets  = {"_ai": model},
         llm      = XiaoQingChatConfig().llm_config("reasoning"),
         chat_id  = chat_id,
         bot_name = "小青",
@@ -216,8 +227,8 @@ async def test_extraction_records_self_claims_and_loops_from_trusted_speakers(tm
         tmp_path,
         "g1",
         [
-            _user("我明天上午九点考数电", ts=now - 30),
-            _bot("我刚在食堂，考完告诉我结果，我帮你对答案", ts=now),
+            user_message("我明天上午九点考数电", ts=now - 30),
+            bot_message("我刚在食堂，考完告诉我结果，我帮你对答案", ts=now),
         ],
     )
     due = datetime.fromtimestamp(now + 86400, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%dT09:00")
@@ -237,8 +248,7 @@ async def test_extraction_records_self_claims_and_loops_from_trusted_speakers(tm
         },
         ensure_ascii=False,
     )
-    with patch.object(life_extract, "chat_completions", AsyncMock(return_value=model_output)):
-        assert await _extract(state, context, "g1", h)
+    assert await _extract(state, context, "g1", h, ScriptedChatModel(reasoning=model_output))
     entries = memory.notes("global", "g1", kinds=("self.state", "self.promise"))
     assert [(note.kind, note.text, note.scope) for note in entries] == [
         ("self.state", "在食堂", "global"),
@@ -254,23 +264,52 @@ async def test_extraction_records_self_claims_and_loops_from_trusted_speakers(tm
 @pytest.mark.asyncio
 async def test_extraction_skips_model_without_any_cue(tmp_path) -> None:
     state, context, _memory, history = _extraction_setup(
-        tmp_path, "g1", [_user("哈哈哈", ts=NOW - 5), _bot("笑死", ts=NOW)]
+        tmp_path, "g1", [user_message("哈哈哈", ts=NOW - 5), bot_message("笑死", ts=NOW)]
     )
-    model = AsyncMock(return_value="{}")
-    with patch.object(life_extract, "chat_completions", model):
-        called = await _extract(state, context, "g1", history)
-    assert not called and model.await_count == 0
+    model = ScriptedChatModel(reasoning="{}")
+    called = await _extract(state, context, "g1", history, model)
+    assert not called and model.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["both-features-off", "no-model"])
+async def test_extraction_does_nothing_without_a_feature_or_a_model(tmp_path, missing) -> None:
+    state, context, memory, history = _extraction_setup(
+        tmp_path,
+        "g1",
+        [user_message("我明天上午九点考数电", ts=NOW - 30), bot_message("我刚在食堂", ts=NOW)],
+    )
+    model = ScriptedChatModel(reasoning='{"self": [{"kind": "state", "text": "在食堂"}]}')
+    life_cfg = XiaoQingChatConfig().life
+    if missing == "both-features-off":
+        life_cfg = life_cfg.model_copy(
+            update={"enable_self_timeline": False, "enable_open_loops": False}
+        )
+    called = await life_extract.extract_life_records(
+        context  = context,
+        state    = state,
+        life_cfg = life_cfg,
+        secrets  = {} if missing == "no-model" else {"_ai": model},
+        llm      = XiaoQingChatConfig().llm_config("reasoning"),
+        chat_id  = "g1",
+        bot_name = "小青",
+        history  = history,
+        source   = "chat",
+    )
+
+    # 两个功能都关着、或者没有可用的模型：不调模型，也不往记忆里写任何东西。
+    assert called is False and model.calls == []
+    assert memory.notes("global", "g1", kinds=("self.state", "self.promise")) == []
 
 
 @pytest.mark.asyncio
 async def test_agent_result_resolves_an_earlier_promise(tmp_path) -> None:
     now = time.time()
     state, context, memory, history = _extraction_setup(
-        tmp_path, "u7", [_bot("好，照片我回头整理完发你", ts=now - 60)]
+        tmp_path, "u7", [bot_message("好，照片我回头整理完发你", ts=now - 60)]
     )
     promise = json.dumps({"self": [{"kind": "promise", "text": "整理照片", "hours": 24}]})
-    with patch.object(life_extract, "chat_completions", AsyncMock(return_value=promise)):
-        await _extract(state, context, "u7", history)
+    await _extract(state, context, "u7", history, ScriptedChatModel(reasoning=promise))
     [note] = memory.notes("u7", kinds=("self.promise",))
     state.memory_store.append(
         "u7",
@@ -281,8 +320,14 @@ async def test_agent_result_resolves_an_earlier_promise(tmp_path) -> None:
         source_plugin = "xiaoqing_agent",
     )
     output = json.dumps({"self": [], "resolved_self": [{"id": note.id, "status": "done"}]})
-    with patch.object(life_extract, "chat_completions", AsyncMock(return_value=output)):
-        await _extract(state, context, "u7", state.memory_store.get("u7"), source="agent")
+    await _extract(
+        state,
+        context,
+        "u7",
+        state.memory_store.get("u7"),
+        ScriptedChatModel(reasoning=output),
+        source="agent",
+    )
     assert memory.notes("u7", kinds=("self.promise",))[0].status == "done"
 
 
@@ -295,8 +340,8 @@ async def test_agent_reply_records_friends_loops_but_not_her_own_promises(tmp_pa
         tmp_path,
         "u7",
         [
-            _user("后天下午三点高铁出发，帮我加个日程", ts=now - 30),
-            _bot("加好了，后天下午三点出发，到点提醒你", ts=now, source="xiaoqing_agent"),
+            user_message("后天下午三点高铁出发，帮我加个日程", ts=now - 30),
+            bot_message("加好了，后天下午三点出发，到点提醒你", ts=now, source="xiaoqing_agent"),
         ],
     )
     due = datetime.fromtimestamp(now + 2 * 86400, ZoneInfo("Asia/Shanghai")).strftime(
@@ -312,8 +357,8 @@ async def test_agent_reply_records_friends_loops_but_not_her_own_promises(tmp_pa
         },
         ensure_ascii=False,
     )
-    with patch.object(life_extract, "chat_completions", AsyncMock(return_value=output)):
-        assert await _extract(state, context, "u7", history, source="agent")
+    model = ScriptedChatModel(reasoning=output)
+    assert await _extract(state, context, "u7", history, model, source="agent")
     assert memory.notes("global", "u7", kinds=("self.promise", "self.state")) == []
     assert [loop.text for loop in memory.notes("u7", kinds=("person.loop",))] == ["高铁出发"]
 
@@ -334,12 +379,6 @@ def test_agent_reply_without_a_done_or_loop_cue_skips_the_model() -> None:
     assert worth(True) and not worth(False)
 
 
-# ---------------------------------------------------------------- 记忆用法
-
-
-# ---------------------------------------------------------------- 改口
-
-
 # ---------------------------------------------------------------- 主动开口
 
 
@@ -354,169 +393,190 @@ def test_active_hours_wrap_midnight() -> None:
     assert proactive.within_active_hours("22:00", "02:00", 60)
 
 
-def _proactive_runtime(**overrides) -> ChatRuntime:
-    cfg = XiaoQingChatConfig.model_validate({"proactive": {"enabled": True, **overrides}})
-    return ChatRuntime(cfg, [])
+def _hours_ago(hours: float) -> float:
+    return time.time() - hours * 3600
 
 
-async def _consider(tmp_path, history, outputs, *, runtime=None):
-    state    = ChatRuntimeState()
-    data_dir = tmp_path / f"run{len(list(tmp_path.iterdir()))}"
-    state.proactive_state.bind(data_dir)
-    state.memory_store.get_recent_async = AsyncMock(return_value=history)
-    model = AsyncMock(side_effect=outputs)
-    with (
-        patch.object(proactive, "chat_completions", model),
-        patch.object(proactive, "configured_bot_name", return_value="小青"),
-        patch.object(proactive, "ai_route_context", return_value={"_ai": object()}),
-    ):
-        delivery = await proactive._consider_group(
-            SimpleNamespace(logger=None),
-            runtime or _proactive_runtime(),
-            state,
-            42,
-            now       = NOW,
-            life_text = "",
-        )
-    return delivery, model, state
+def _proactive_setup(mock_context, tmp_path, model, history, **life):
+    """主动开口检查要的上下文：群 42 是默认群、全天都在活跃时段、人设卡里没有作息（不会因为
+    睡觉 / 上课而跳过）；聊天记录是 ``history``。每次都是全新的运行时状态和数据目录。"""
+
+    reset_global_state()
+    mock_context.data_dir = tmp_path / f"run{len(list(tmp_path.glob('run*')))}"
+    persona               = tmp_path / "persona.md"
+    persona.write_text("## 你是谁\n- 学生。\n", encoding="utf-8")
+    scripted_chat_context(
+        mock_context,
+        model,
+        {
+            "proactive": {
+                "enabled"           : True,
+                "active_hours_start": "00:00",
+                "active_hours_end"  : "00:00",
+            },
+            "personality": {"persona_file": str(persona)},
+            "life"       : life,
+        },
+    )
+    mock_context.default_groups = lambda: [42]
+    put_history(bound_state(mock_context), "g42", history)
+    return mock_context
+
+
+async def _consider(mock_context, tmp_path, history, *, settle=True, life=None, **scripts):
+    """让主动开口的定时检查跑一次；``scripts`` 是模型按调用种类的剧本：``reply`` 是起草，
+    ``checker`` 是发送前自检。返回（要发的群消息或 None，剧本模型）。"""
+
+    model = ScriptedChatModel(**scripts)
+    _proactive_setup(mock_context, tmp_path, model, history, **(life or {}))
+    deliveries = await proactive.run_proactive(mock_context)
+    if settle:
+        await settle_chat_background(mock_context, model)
+    return (deliveries[0] if deliveries else None), model
+
+
+def _logged(context) -> str:
+    return " ".join(str(call) for call in context.logger.info.call_args_list)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["", "xiaoqing_chat", "xiaoqing_agent"])
-async def test_proactive_stops_after_own_reply(tmp_path, source) -> None:
-    with patch.object(proactive, "log_skip") as skip:
-        delivery, model, _state = await _consider(
-            tmp_path, [_bot("任务完成了", ts=NOW - 2 * 3600, source=source)], []
-        )
+async def test_proactive_stops_after_own_reply(mock_context, tmp_path, source) -> None:
+    delivery, model = await _consider(
+        mock_context, tmp_path, [bot_message("任务完成了", ts=_hours_ago(2), source=source)]
+    )
     assert delivery is None
-    model.assert_not_awaited()
-    assert skip.call_args.args[3] == "own_last_word"
+    assert model.calls == []
+    assert '"reason_code": "own_last_word"' in _logged(mock_context)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("next_speaker", ["apod", "user"])
-async def test_proactive_resumes_after_external_message(tmp_path, next_speaker) -> None:
-    history = [_bot("任务完成了", ts=NOW - 3 * 3600, source="xiaoqing_agent")]
-    history.append(
-        _bot("今日天文图：土星环", ts=NOW - 2 * 3600, source="apod")
-        if next_speaker == "apod"
-        else _user("今天的土星环真好看", ts=NOW - 2 * 3600)
-    )
-    delivery, model, _state = await _consider(
+async def test_proactive_resumes_after_external_message(mock_context, tmp_path) -> None:
+    history = [
+        bot_message("任务完成了", ts=_hours_ago(3), source="xiaoqing_agent"),
+        user_message("今天的土星环真好看", ts=_hours_ago(2)),
+    ]
+    delivery, model = await _consider(
+        mock_context,
         tmp_path,
         history,
-        ['{"decision":"send","text":"这张土星环好漂亮"}', '{"decision":"send","reason":"自然"}'],
+        reply   = ['{"decision":"send","text":"这张土星环好漂亮"}'],
+        checker = ['{"decision":"send","reason":"自然"}'],
     )
     assert delivery is not None
-    assert model.await_count == 2
-    if next_speaker == "apod":
-        assert "今日天文图：土星环" in model.await_args_list[0].kwargs["messages"][1]["content"]
+    assert len(model.calls) == 2
 
 
 @pytest.mark.asyncio
-async def test_proactive_sends_after_draft_and_judge(tmp_path) -> None:
+async def test_proactive_sends_after_draft_and_judge(mock_context, tmp_path) -> None:
     history = [
-        _user("有人看今天的 APOD 吗", ts=NOW - 3 * 3600),
-        _bot("今日天文图：土星环", ts=NOW - 2 * 3600, source="apod"),
+        user_message("有人看今天的 APOD 吗", ts=_hours_ago(3)),
+        bot_message("今日天文图：土星环", ts=_hours_ago(2), source="apod"),
     ]
-    delivery, model, _state = await _consider(
+    delivery, model = await _consider(
+        mock_context,
         tmp_path,
         history,
-        [
-            '{"decision":"send","text":"今天这张土星环也太好看了"}',
-            '{"decision":"send","reason":"自然"}',
-        ],
+        reply   = ['{"decision":"send","text":"今天这张土星环也太好看了"}'],
+        checker = ['{"decision":"send","reason":"自然"}'],
     )
     assert delivery is not None and delivery.target.target_id == 42
     assert delivery.message[0]["data"]["text"] == "今天这张土星环也太好看了"
-    assert model.await_count == 2
-    assert "今日天文图：土星环" in model.await_args_list[0].kwargs["messages"][1]["content"]
+    assert len(model.calls) == 2
+    assert "今日天文图：土星环" in model.calls[0].messages[1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_proactive_respects_judge_skip_and_quiet_rules(tmp_path) -> None:
-    quiet = [_user("晚上吃啥", ts=NOW - 3 * 3600)]
+async def test_proactive_respects_judge_skip_and_quiet_rules(mock_context, tmp_path) -> None:
+    quiet = [user_message("晚上吃啥", ts=_hours_ago(3))]
     drop = '{"decision":"drop","reason":"材料里没有二楼"}'
-    delivery, model, _state = await _consider(
+    delivery, model = await _consider(
+        mock_context,
         tmp_path,
         quiet,
-        [
+        reply=[
             '{"decision":"send","text":"食堂二楼走起"}',
-            drop,
             '{"decision":"send","text":"食堂二楼真的走起"}',
-            drop,
         ],
+        checker=[drop, drop],
     )
-    assert delivery is None and model.await_count == 4
+    assert delivery is None and len(model.calls) == 4
 
     # 自检拦下后带着理由重写一次；第二稿过了就发第二稿
-    delivery, model, _state = await _consider(
+    delivery, model = await _consider(
+        mock_context,
         tmp_path,
         quiet,
-        [
+        reply=[
             '{"decision":"send","text":"食堂二楼走起"}',
-            drop,
             '{"decision":"send","text":"晚上想吃糖醋里脊"}',
-            '{"decision":"send","reason":"自然"}',
         ],
+        checker=[drop, '{"decision":"send","reason":"自然"}'],
     )
     assert delivery is not None
     assert delivery.message[0]["data"]["text"] == "晚上想吃糖醋里脊"
-    second = model.await_args_list[2].kwargs["messages"][1]["content"]
+    second = model.calls[2].messages[1]["content"]
     assert "你刚才想发：食堂二楼走起" in second and "觉得不行：材料里没有二楼" in second
-    assert (
-        model.await_args_list[3]
-        .kwargs["messages"][1]["content"]
-        .endswith("她准备发：晚上想吃糖醋里脊")
-    )
+    assert model.calls[3].messages[1]["content"].endswith("她准备发：晚上想吃糖醋里脊")
 
     # 自检没给理由（或自检本身失败）：没有可改的方向，不重写
-    delivery, model, _state = await _consider(
-        tmp_path, quiet, ['{"decision":"send","text":"食堂二楼走起"}', '{"decision":"drop"}']
+    delivery, model = await _consider(
+        mock_context,
+        tmp_path,
+        quiet,
+        reply   = ['{"decision":"send","text":"食堂二楼走起"}'],
+        checker = ['{"decision":"drop"}'],
     )
-    assert delivery is None and model.await_count == 2
+    assert delivery is None and len(model.calls) == 2
 
-    delivery, model, _state = await _consider(
-        tmp_path, quiet, ['{"decision":"skip","reason":"no_natural_opening"}']
+    delivery, model = await _consider(
+        mock_context, tmp_path, quiet, reply=['{"decision":"skip","reason":"no_natural_opening"}']
     )
-    assert delivery is None and model.await_count == 1
+    assert delivery is None and len(model.calls) == 1
 
     # 群里刚有人说话，或者最后一句就是她自己说的：都不开口，也不调用模型。
-    for history in ([_user("在吗", ts=NOW - 60)], [_bot("有人吗", ts=NOW - 3 * 3600)]):
-        delivery, model, _state = await _consider(tmp_path, history, [])
-        assert delivery is None and model.await_count == 0
+    for history in (
+        [user_message("在吗", ts=_hours_ago(1 / 60))],
+        [bot_message("有人吗", ts=_hours_ago(3))],
+    ):
+        delivery, model = await _consider(mock_context, tmp_path, history)
+        assert delivery is None and model.calls == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", [True, None, False])
-async def test_proactive_commit_records_message_and_rhythm(tmp_path, outcome) -> None:
-    history = [_user("有人看今天的 APOD 吗", ts=NOW - 3 * 3600)]
-    delivery, _model, state = await _consider(
+async def test_proactive_commit_records_message_and_rhythm(mock_context, tmp_path, outcome) -> None:
+    history = [user_message("有人看今天的 APOD 吗", ts=_hours_ago(3))]
+    text = "刚看完今天那张图，真好看"
+    delivery, model = await _consider(
+        mock_context,
         tmp_path,
         history,
-        ['{"decision":"send","text":"今天那张图好看"}', '{"decision":"send","reason":"ok"}'],
+        settle = False,
+        life   = {"enable_self_timeline": True},
+        reply=[json.dumps({"decision": "send", "text": text}, ensure_ascii=False)],
+        checker   = ['{"decision":"send","reason":"ok"}'],
+        reasoning = ["{}"],
     )
-    appended: list[dict]      = []
-    state.memory_store.append = lambda chat_id, **kwargs: appended.append(
-        {"chat_id": chat_id, **kwargs}
-    )
-    with (
-        patch.object(proactive, "schedule_memory_persist"),
-        patch.object(proactive, "schedule_action_history_flush"),
-        patch.object(proactive, "spawn_life_extraction") as extraction,
-    ):
-        await delivery.receipt.record(outcome)
-        await delivery.receipt.record(True)  # 重复回报保持首次结算结果。
+    assert delivery is not None
+    state = bound_state(mock_context)
+    await delivery.receipt.record(outcome)
+    await delivery.receipt.record(True)  # 重复回报保持首次结算结果。
+    await asyncio.gather(*state.background_tasks())
+
+    said    = [m for m in await state.memory_store.get_async("g42") if m.role == "assistant"]
+    rhythm  = state.proactive_state.get("g42")
+    reading = model.calls_of("reasoning")
     if outcome is False:
-        assert appended == []
-        assert state.proactive_state.get("g42").count == 0
-        extraction.assert_not_called()
-        return
-    assert len(appended) == 1
-    assert appended[0]["chat_id"] == "g42" and appended[0]["role"] == "assistant"
-    record = state.proactive_state.get("g42")
-    assert record.count == 1 and record.last_ts > 0
-    assert extraction.call_args.kwargs["source"] == "proactive"
+        assert said == []
+        assert rhythm.count == 0
+        assert reading == []
+    else:
+        assert [render_stored_message(m) for m in said] == [text]
+        assert rhythm.count == 1 and rhythm.last_ts > 0
+        # 发出去的话交给近况抽取读一遍。
+        assert len(reading) == 1
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -526,8 +586,8 @@ async def test_extraction_recognises_a_reworded_follow_up_question(tmp_path) -> 
         tmp_path,
         "g1",
         [
-            _user("下午考数电期末", ts=now - 7200),
-            _user("我下午考驾照科目二", ts=now - 7100, user_id=8, name="老王"),
+            user_message("下午考数电期末", ts=now - 7200),
+            user_message("我下午考驾照科目二", ts=now - 7100, user_id=8, name="老王"),
         ],
     )
     from plugins.xiaoqing_chat.memory.client import push_pending
@@ -558,67 +618,55 @@ async def test_extraction_recognises_a_reworded_follow_up_question(tmp_path) -> 
     )
     state.memory_store.append("g1", role="assistant", name="小青", content="考得咋样", ts=now)
     output = json.dumps({"asked_loops": [mine.id, theirs.id]})
-    model = AsyncMock(return_value=output)
-    with patch.object(life_extract, "chat_completions", model):
-        await _extract(state, context, "g1", state.memory_store.get("g1")[-2:])
+    model = ScriptedChatModel(reasoning=output)
+    await _extract(state, context, "g1", state.memory_store.get("g1")[-2:], model)
     statuses = {
         loop.data["user_id"]: loop.data.get("loop", "open")
         for loop in memory.notes("g1", kinds=("person.loop",))
     }
     # 只把这段对话里说话人的话头交给模型；别人的话头不会被顺带改掉。
     assert statuses == {7: "asked", 8: "open"}
-    assert "驾照科目二" not in model.await_args.kwargs["messages"][1]["content"]
-
-
-def test_bot_closing_with_a_trailing_reminder_still_counts() -> None:
-    assert bot_closed("好，快去吃饭吧\n\n回聊～\n\n面试要是想练了再喊我呀")
-    assert bot_closed("晚安晚安，快睡吧～")
-    assert bot_closed("晚安，睡个好觉～周五交实验报告别忘啦！")
-    assert not bot_closed("抱抱，想说就说")
+    assert "驾照科目二" not in model.calls[0].messages[1]["content"]
 
 
 @pytest.mark.asyncio
 async def test_extraction_ignores_canned_fallbacks_but_reads_subjectless_status(tmp_path) -> None:
     state, context, _memory, _history = _extraction_setup(tmp_path, "g1", [])
-    model = AsyncMock(
-        return_value=json.dumps({"self": [{"kind": "state", "text": "刚下课", "hours": 1}]})
+    model = ScriptedChatModel(
+        reasoning=json.dumps({"self": [{"kind": "state", "text": "刚下课", "hours": 1}]})
     )
-    with patch.object(life_extract, "chat_completions", model):
-        assert not await _extract(
-            state,
-            context,
-            "g1",
-            [_user("在干嘛", ts=NOW - 5), _bot("等我一下，脑子突然卡壳了", ts=NOW)],
-        )
-        assert await _extract(
-            state, context, "g1", [_user("在干嘛", ts=NOW - 5), _bot("刚下课，正往食堂冲", ts=NOW)]
-        )
-    assert model.await_count == 1
+    assert not await _extract(
+        state,
+        context,
+        "g1",
+        [user_message("在干嘛", ts=NOW - 5), bot_message("等我一下，脑子突然卡壳了", ts=NOW)],
+        model,
+    )
+    assert await _extract(
+        state,
+        context,
+        "g1",
+        [user_message("在干嘛", ts=NOW - 5), bot_message("刚下课，正往食堂冲", ts=NOW)],
+        model,
+    )
+    assert len(model.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_proactive_backs_off_after_a_skip(tmp_path) -> None:
-    quiet = [_user("晚上吃啥", ts=NOW - 3 * 3600)]
-    state = ChatRuntimeState()
-    state.proactive_state.bind(tmp_path)
-    state.memory_store.get_recent_async = AsyncMock(return_value=quiet)
-    model = AsyncMock(return_value='{"decision":"skip","reason":"no_natural_opening"}')
-    with (
-        patch.object(proactive, "chat_completions", model),
-        patch.object(proactive, "configured_bot_name", return_value="小青"),
-        patch.object(proactive, "ai_route_context", return_value={"_ai": object()}),
-    ):
+async def test_proactive_backs_off_after_a_skip(mock_context, tmp_path) -> None:
+    base = time.time()
+    quiet = [user_message("晚上吃啥", ts=base - 3 * 3600)]
+    model = ScriptedChatModel(reply='{"decision":"skip","reason":"no_natural_opening"}')
+    _proactive_setup(mock_context, tmp_path, model, quiet)
+    clock = [base]
+    # 时间是边界：三次检查依次发生在 0、10 分钟后、3 小时后。
+    with patch.object(time, "time", side_effect=lambda: clock[0]):
         for offset in (0, 600, 3 * 3600):
-            await proactive._consider_group(
-                SimpleNamespace(logger=None),
-                _proactive_runtime(),
-                state,
-                42,
-                now       = NOW + offset,
-                life_text = "",
-            )
+            clock[0] = base + offset
+            await proactive.run_proactive(mock_context)
     # 第二次在两小时内被跳过，第三次才再问模型。
-    assert model.await_count == 2
+    assert len(model.calls) == 2
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.parametrize(

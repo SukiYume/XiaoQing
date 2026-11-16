@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +23,7 @@ from plugins.codex.runner import (
     _remove_output_path_with_retry,
 )
 from tests.helpers.codex_fakes import CallbackStreamingProcess
+from tests.helpers.codex_test_support import confirmed_termination, install_termination_probe
 from tests.helpers.settings_snapshot import with_settings_reader
 
 
@@ -60,29 +62,6 @@ def _job() -> SimpleNamespace:
 
 def _raw_outputs(output_dir: Path) -> list[Path]:
     return list(output_dir.glob("codex-last-*.txt")) if output_dir.exists() else []
-
-
-def _confirmed_termination() -> ProcessTreeTerminationResult:
-    return ProcessTreeTerminationResult(
-        tree_confirmed = True,
-        parent_reaped  = True,
-        forced         = True,
-    )
-
-
-def _install_cleanup_probe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[list[Any], AsyncMock]:
-    calls: list[Any] = []
-
-    async def cleanup(process: Any):
-        calls.append(process)
-        process.returncode = -9
-        return _confirmed_termination(), b"", b""
-
-    mock = AsyncMock(side_effect=cleanup)
-    monkeypatch.setattr(codex_runner, "_terminate_and_drain_process", mock)
-    return calls, mock
 
 
 class _Writer:
@@ -159,32 +138,41 @@ class _BlockingStreamingProcess:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method_name",
-    ["_prompt_with_artifact_instruction", "_build_args"],
-)
+@pytest.mark.parametrize("failing_step", ["artifact_dir", "codex_lookup"])
 async def test_pre_spawn_failures_remove_raw_output(
     tmp_path: Path,
     config: CodexPluginConfig,
     monkeypatch: pytest.MonkeyPatch,
-    method_name: str,
+    failing_step: str,
 ) -> None:
-    output_dir = tmp_path / "outputs"
-    runner     = CodexRunner(config, output_dir)
+    output_dir   = tmp_path / "outputs"
+    runner       = CodexRunner(config, output_dir)
+    artifact_dir = tmp_path / "artifacts" if failing_step == "artifact_dir" else None
+    real_mkdir   = Path.mkdir
+    real_which   = shutil.which
 
-    def fail(*_args: Any, **_kwargs: Any) -> Any:
-        raise OSError("preflight failed")
+    def failing_mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self == artifact_dir:
+            raise OSError("preflight failed")
+        real_mkdir(self, *args, **kwargs)
 
-    monkeypatch.setattr(runner, method_name, fail)
+    def failing_which(command: str, *args: Any, **kwargs: Any) -> str | None:
+        if failing_step == "codex_lookup" and command == config.codex_bin:
+            raise OSError("preflight failed")
+        return real_which(command, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+    monkeypatch.setattr(shutil, "which", failing_which)
     spawn = AsyncMock()
     monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", spawn)
 
     with pytest.raises(OSError, match="preflight failed"):
         await runner.run(
-            cwd       = tmp_path,
-            prompt    = "body",
-            thread_id = None,
-            job       = _job(),
+            cwd          = tmp_path,
+            prompt       = "body",
+            thread_id    = None,
+            job          = _job(),
+            artifact_dir = artifact_dir,
         )
 
     spawn.assert_not_awaited()
@@ -248,7 +236,7 @@ async def test_stream_reader_failure_terminates_owned_process_and_removes_raw(
         "create_subprocess_exec",
         AsyncMock(return_value=process),
     )
-    calls, _ = _install_cleanup_probe(monkeypatch)
+    probe = install_termination_probe(monkeypatch)
 
     with pytest.raises(OSError, match="reader failed"):
         await CodexRunner(config, output_dir).run(
@@ -258,7 +246,8 @@ async def test_stream_reader_failure_terminates_owned_process_and_removes_raw(
             job       = _job(),
         )
 
-    assert calls == [process]
+    assert probe.terminated
+    assert all(terminated is process for terminated in probe.terminated)
     assert process.returncode == -9
     assert not _raw_outputs(output_dir)
 
@@ -276,9 +265,7 @@ async def test_stream_cancel_preserves_cancel_when_first_tree_cleanup_fails(
         "create_subprocess_exec",
         AsyncMock(return_value=process),
     )
-    first_cleanup = AsyncMock(side_effect=OSError("tree helper failed"))
-    monkeypatch.setattr(codex_runner, "_terminate_streaming_process", first_cleanup)
-    calls, _ = _install_cleanup_probe(monkeypatch)
+    probe = install_termination_probe(monkeypatch, fail_first=True)
     task = asyncio.create_task(
         CodexRunner(config, output_dir).run(
             cwd       = tmp_path,
@@ -293,8 +280,8 @@ async def test_stream_cancel_preserves_cancel_when_first_tree_cleanup_fails(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    first_cleanup.assert_awaited_once()
-    assert calls == [process]
+    assert probe.attempts == [process, process]
+    assert probe.terminated == [process]
     assert process.returncode == -9
     assert not _raw_outputs(output_dir)
 
@@ -321,7 +308,7 @@ async def test_capture_failure_terminates_owned_process_and_removes_raw(
         "_capture_final_output",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("capture failed")),
     )
-    calls, _ = _install_cleanup_probe(monkeypatch)
+    probe = install_termination_probe(monkeypatch)
 
     with pytest.raises(ValueError, match="capture failed"):
         await CodexRunner(config, output_dir).run(
@@ -331,7 +318,7 @@ async def test_capture_failure_terminates_owned_process_and_removes_raw(
             job       = _job(),
         )
 
-    assert calls == [process]
+    assert probe.terminated == [process]
     assert not _raw_outputs(output_dir)
 
 
@@ -366,8 +353,8 @@ async def test_cancel_during_capture_waits_for_thread_then_removes_windows_raw_f
 
     monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(codex_runner, "_capture_final_output", blocked_capture)
-    calls, _ = _install_cleanup_probe(monkeypatch)
-    task = asyncio.create_task(
+    probe = install_termination_probe(monkeypatch)
+    task  = asyncio.create_task(
         CodexRunner(config, output_dir).run(
             cwd       = tmp_path,
             prompt    = "body",
@@ -385,7 +372,7 @@ async def test_cancel_during_capture_waits_for_thread_then_removes_windows_raw_f
 
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert calls == [process]
+    assert probe.terminated == [process]
     assert not _raw_outputs(output_dir)
 
 
@@ -428,14 +415,15 @@ async def test_cancel_during_final_cleanup_preserves_cancel_and_cleans_all_resou
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("post-capture failed")),
     )
 
-    async def blocked_cleanup(_process: Any):
+    async def blocked_terminate(terminating: Any, **_kwargs: Any) -> ProcessTreeTerminationResult:
         nonlocal cleanup_finished
         cleanup_entered.set()
         await asyncio.wait_for(cleanup_release.wait(), timeout=10)
-        cleanup_finished = True
-        return _confirmed_termination(), b"", b""
+        cleanup_finished       = True
+        terminating.returncode = -9
+        return confirmed_termination(forced=True)
 
-    monkeypatch.setattr(codex_runner, "_terminate_and_drain_process", blocked_cleanup)
+    monkeypatch.setattr(codex_runner, "terminate_process_tree", blocked_terminate)
     task = asyncio.create_task(
         CodexRunner(config, output_dir).run(
             cwd       = tmp_path,
@@ -491,9 +479,8 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
         return True
 
     monkeypatch.setattr(codex_runner, "_remove_output_path_with_retry", blocked_remove)
-    cleanup = AsyncMock()
-    monkeypatch.setattr(codex_runner, "_terminate_and_drain_process", cleanup)
-    task = asyncio.create_task(
+    probe = install_termination_probe(monkeypatch)
+    task  = asyncio.create_task(
         CodexRunner(config, output_dir).run(
             cwd       = tmp_path,
             prompt    = "body",
@@ -509,7 +496,7 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
 
     with pytest.raises(asyncio.CancelledError):
         await task
-    cleanup.assert_not_awaited()
+    assert probe.attempts == []
     assert not _raw_outputs(output_dir)
     assert not list(output_dir.glob("codex-*.txt"))
 
@@ -623,8 +610,7 @@ async def test_success_keeps_archive_does_not_kill_and_closes_handle_before_spaw
         return process
 
     monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", spawn)
-    cleanup = AsyncMock()
-    monkeypatch.setattr(codex_runner, "_terminate_and_drain_process", cleanup)
+    probe = install_termination_probe(monkeypatch)
 
     result = await CodexRunner(config, output_dir).run(
         cwd       = tmp_path,
@@ -633,7 +619,7 @@ async def test_success_keeps_archive_does_not_kill_and_closes_handle_before_spaw
         job       = _job(),
     )
 
-    cleanup.assert_not_awaited()
+    assert probe.attempts == []
     assert result.output_path is not None
     archive = Path(result.output_path)
     assert archive.exists()

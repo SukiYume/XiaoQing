@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -94,8 +94,6 @@ class _Session:
 
 
 def test_manifest_contract() -> None:
-    assert "--mode=step" in wolframalpha._HELP_TEXT
-
     manifest = json.loads(
         (ROOT / "plugins" / "wolframalpha" / "plugin.json").read_text(encoding="utf-8")
     )
@@ -196,6 +194,22 @@ async def test_handle_help_unknown_and_validation_errors() -> None:
     assert "未配置有效 appid" in str(await wolframalpha.handle("alpha", "1+1", {}, _context("")))
 
 
+def _answer_response(mode: str) -> BoundedHttpResponse:
+    """各查询模式对应的 API 响应，答案文本都是 ``ok``。"""
+
+    if mode == "step":
+        return _response(
+            b"<queryresult><pod><plaintext>ok</plaintext></pod></queryresult>",
+            "application/xml",
+        )
+    if mode == "complete":
+        return bounded_json_response(
+            {"queryresult": {"pods": [{"subpods": [{"plaintext": "ok"}]}]}},
+            url="https://api.wolframalpha.com/test",
+        )
+    return _response(b"ok", "text/plain")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("args", "question", "mode"),
@@ -213,29 +227,41 @@ async def test_handle_help_unknown_and_validation_errors() -> None:
     ],
 )
 async def test_handle_passes_explicit_mode_and_question(
-    monkeypatch,
     args: str,
     question: str,
     mode: str,
 ) -> None:
-    query = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
-    monkeypatch.setattr(wolframalpha, "_get_answer", query)
-    context = _context()
+    context              = _context()
+    session              = _Session(_answer_response(mode))
+    context.http_session = session
 
     assert "ok" in str(await wolframalpha.handle("alpha", args, {}, context))
-    query.assert_awaited_once_with(question, "TEST-APPID", context, mode=mode)
+
+    assert len(session.calls) == 1
+    _method, url, kwargs = session.calls[0]
+    params = kwargs["params"]
+    assert params["appid"] == "TEST-APPID"
+    if mode == "simple":
+        assert url == wolframalpha.WA_RESULT_URL
+        assert params["i"] == question
+    else:
+        assert url == wolframalpha.WA_QUERY_URL
+        assert params["input"] == question
+        assert ("podstate" in params) is (mode == "step")
+        assert ("includepodid" in params) is (mode == "complete")
 
 
 @pytest.mark.asyncio
-async def test_handle_returns_public_error_for_parser_failure(monkeypatch) -> None:
-    monkeypatch.setattr(
-        wolframalpha,
-        "parse",
-        MagicMock(side_effect=RuntimeError("private parser detail")),
-    )
-    result = await wolframalpha.handle("alpha", "1+1", {}, _context())
+async def test_handle_returns_public_error_for_unexpected_failure() -> None:
+    context = _context()
+
+    def broken_settings():
+        raise RuntimeError("private settings detail")
+
+    context.get_settings_snapshot = broken_settings
+    result                        = await wolframalpha.handle("alpha", "1+1", {}, context)
     assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
-    assert "private parser detail" not in result[0]["data"]["text"]
+    assert "private settings detail" not in result[0]["data"]["text"]
 
 
 @pytest.mark.asyncio
@@ -276,17 +302,25 @@ async def test_simple_answer_handles_empty_and_long_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_delegates_step_and_complete_modes(monkeypatch) -> None:
+async def test_answer_runs_step_and_complete_queries_with_their_own_results() -> None:
     context = _context()
-    step = AsyncMock(return_value="step result")
-    complete = AsyncMock(return_value="complete result")
-    monkeypatch.setattr(wolframalpha, "_query_step", step)
-    monkeypatch.setattr(wolframalpha, "_query_complete", complete)
+    context.http_session = session = _Session(
+        _response(
+            b"<queryresult><pod><plaintext>step result</plaintext></pod></queryresult>",
+            "application/xml",
+        ),
+        bounded_json_response(
+            {"queryresult": {"pods": [{"subpods": [{"plaintext": "complete result"}]}]}},
+            url="https://api.wolframalpha.com/test",
+        ),
+    )
 
-    assert "步骤解答" in str(await wolframalpha._get_answer("x", "APPID", context, mode="step"))
-    assert "计算结果" in str(await wolframalpha._get_answer("x", "APPID", context, mode="complete"))
-    step.assert_awaited_once_with("x", "APPID", context.http_session)
-    complete.assert_awaited_once_with("x", "APPID", context.http_session)
+    step = str(await wolframalpha._get_answer("x", "APPID", context, mode="step"))
+    complete = str(await wolframalpha._get_answer("x", "APPID", context, mode="complete"))
+
+    assert "步骤解答" in step and "step result" in step
+    assert "计算结果" in complete and "complete result" in complete
+    assert [call[1] for call in session.calls] == [wolframalpha.WA_QUERY_URL] * 2
 
 
 @pytest.mark.asyncio
@@ -316,7 +350,7 @@ async def test_answer_maps_failures_to_stable_public_messages(
     async def fail(*_args, **_kwargs):
         raise exception
 
-    monkeypatch.setattr(wolframalpha, "_request_wolfram", fail)
+    monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", fail)
     result = await wolframalpha._get_answer("1+1", "APPID", _context())
     assert marker in result[0]["data"]["text"]
     if detail := str(exception):

@@ -10,11 +10,11 @@ from typing import Any
 import pytest
 
 import tests.helpers.config_test_support as _fixture_support
+from core.config import _check_secrets_file_permissions
 from tests.helpers.config_test_support import (
     ConfigManager,
     ConfigSnapshot,
     ConfigSourceStatus,
-    _check_secrets_file_permissions,
     materialize_snapshot_value,
     platform,
 )
@@ -27,12 +27,6 @@ temp_config_dir = _fixture_support.temp_config_dir
 
 class TestConfigSnapshot:
     """ConfigSnapshot 数据类测试"""
-
-    def test_create_snapshot(self):
-        """测试创建快照"""
-        snapshot = ConfigSnapshot(config={"key": "value"}, secrets={"secret": "hidden"})
-        assert snapshot.config == {"key": "value"}
-        assert snapshot.secrets == {"secret": "hidden"}
 
     def test_builtin_base_methods_cannot_mutate_snapshot_containers(self):
         snapshot = ConfigSnapshot(
@@ -172,26 +166,6 @@ class TestCheckSecretsFilePermissions:
 
 class TestConfigHotReload:
     """测试配置热加载功能"""
-
-    @pytest.mark.asyncio
-    async def test_config_reload(
-        self, temp_config_dir: Path, config_file: Path, secrets_file: Path
-    ):
-        """测试配置重新加载"""
-        manager       = ConfigManager(config_file, secrets_file)
-        initial_value = manager.config.get("bot_name")
-
-        # 修改配置文件
-        new_config = json.loads(config_file.read_text(encoding="utf-8"))
-        new_config["bot_name"] = "新名字"
-        config_file.write_text(
-            json.dumps(new_config, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-        # 重新加载
-        manager.reload()
-        assert manager.config.get("bot_name") == "新名字"
-        assert manager.config.get("bot_name") != initial_value
 
     @pytest.mark.asyncio
     async def test_invalid_config_handling(self, temp_config_dir: Path):

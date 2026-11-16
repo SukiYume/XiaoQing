@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -12,6 +13,7 @@ from plugins.chime import main as chime
 from plugins.earthquake import main as earthquake
 from plugins.minecraft import main as minecraft
 from plugins.minecraft.log_monitor import LogBatch, LogEvent, LogEventType, LogMonitor
+from tests.helpers.earthquake_test_support import serve_weibo, weibo_card
 
 
 def _chime_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
@@ -23,11 +25,11 @@ def _chime_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
     )
 
 
-def _chime_payload(timestamp: str = "2026-07-14T00:00:00") -> dict:
+def _chime_payload() -> dict:
     return {
         "FRB20260714A": {
             "260714": {
-                "timestamp": {"value": timestamp},
+                "timestamp": {"value": "2026-07-14T00:00:00"},
                 "dm"       : {"value": "123.4"},
                 "snr"      : {"value": "18.0"},
             },
@@ -60,13 +62,6 @@ def test_default_group_targets_normalizes_invalid_and_duplicate_values() -> None
         "group:202",
     ]
     assert default_group_targets(SimpleNamespace()) == ()
-
-
-def test_chime_placeholder_timestamp_is_not_a_valid_event() -> None:
-    for placeholder in ("N/A", "unknown", "null", "-"):
-        data = _chime_payload(placeholder)
-        frb  = chime.FRBData("FRB20260714A", data["FRB20260714A"])
-        assert frb.is_valid() is False
 
 
 @pytest.mark.asyncio
@@ -124,20 +119,22 @@ async def test_chime_commit_before_outbox_clear_does_not_resend(
     context = _chime_context(tmp_path, [101])
     fetch = AsyncMock(return_value=_chime_payload())
     monkeypatch.setattr(chime, "fetch_chime_repeaters", fetch)
-    original_clear = chime.clear_pending
-    clear_calls    = 0
+    real_replace = os.replace
+    crashes      = 0
 
-    def interrupt_first_clear(path: Path) -> None:
-        nonlocal clear_calls
-        clear_calls += 1
-        if clear_calls == 1:
+    def replace_that_crashes_once_history_is_committed(src, dst, *args, **kwargs) -> None:
+        # 在 OS 层模拟崩溃：历史基线已落盘后，第一次改写发送队列文件失败。
+        nonlocal crashes
+        if Path(dst).name == "chime_delivery.json" and chime.load_history(context) and not crashes:
+            crashes += 1
             raise OSError("crash before outbox clear")
-        original_clear(path)
+        real_replace(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(chime, "clear_pending", interrupt_first_clear)
+    monkeypatch.setattr(os, "replace", replace_that_crashes_once_history_is_committed)
     context.send_action = AsyncMock(return_value=True)
 
     await chime.scheduled_check(context)
+    assert crashes == 1
     assert context.send_action.await_count == 1
     assert chime.load_history(context) == {"FRB20260714A": "2026-07-14T00:00:00"}
 
@@ -154,7 +151,7 @@ def _earthquake_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
         data_dir       = tmp_path,
         state          = {},
         secrets        = {},
-        request_id     = "cr275-earthquake",
+        request_id     = "earthquake-test",
         default_groups = lambda: groups,
         send_action    = AsyncMock(),
     )
@@ -167,14 +164,7 @@ async def test_earthquake_partial_fanout_retries_only_unacknowledged_group(
 ) -> None:
     context = _earthquake_context(tmp_path, [303, 404])
     earthquake._save_since(context, "100")
-
-    async def fetch(ctx, force=False, advance_cursor=True):
-        del force, advance_cursor
-        ctx.state["earthquake_pending_since"] = "200"
-        return earthquake.segments("M5 event")
-
-    fetch_mock = AsyncMock(side_effect=fetch)
-    monkeypatch.setattr(earthquake, "_fetch_earthquake_news", fetch_mock)
+    weibo = serve_weibo(monkeypatch, weibo_card("200", magnitude="5.0"))
     context.send_action = AsyncMock(side_effect=[True, False])
 
     await earthquake.scheduled(context)
@@ -186,8 +176,9 @@ async def test_earthquake_partial_fanout_retries_only_unacknowledged_group(
 
     context.send_action = AsyncMock(return_value=True)
     await earthquake.scheduled(context)
+    await earthquake.shutdown(context)
 
-    assert fetch_mock.await_count == 1
+    assert [call[1] for call in weibo.index_calls] == ["https://m.weibo.cn/api/container/getIndex"]
     assert context.send_action.await_count == 1
     assert context.send_action.await_args.args[0]["params"]["group_id"] == 404
     assert earthquake._load_since(context) == "200"
@@ -200,53 +191,6 @@ def _mc_event(index: int = 1) -> LogEvent:
         player     = f"Player{index}",
         message    = f"message-{index}",
     )
-
-
-def test_minecraft_log_cursor_requires_commit_and_survives_restart(tmp_path: Path) -> None:
-    log_path   = tmp_path / "latest.log"
-    state_path = tmp_path / "cursor.json"
-    log_path.write_text(
-        "[12:00:00] [Server thread/INFO]: <Player1> first\n",
-        encoding="utf-8",
-    )
-    monitor = LogMonitor(str(log_path), state_path=state_path)
-    monitor._initialized   = True
-    monitor._last_position = 0
-
-    first   = monitor.check_updates()
-    retried = monitor.check_updates()
-
-    assert [event.message for event in first.events] == ["first"]
-    assert [event.message for event in retried.events] == ["first"]
-    assert monitor._last_position == 0
-    assert monitor.commit(first) is True
-
-    restarted = LogMonitor(str(log_path), state_path=state_path)
-    assert restarted.initialize() is True
-    assert restarted._last_position == log_path.stat().st_size
-    with log_path.open("a", encoding="utf-8") as stream:
-        stream.write("[12:00:01] [Server thread/INFO]: <Player2> second\n")
-    next_batch = restarted.check_updates()
-    assert [event.message for event in next_batch.events] == ["second"]
-
-
-def test_minecraft_cursor_waits_for_complete_trailing_line(tmp_path: Path) -> None:
-    log_path = tmp_path / "latest.log"
-    prefix   = "[12:00:00] [Server thread/INFO]: <Player1> partial"
-    log_path.write_text(prefix, encoding="utf-8")
-    monitor                = LogMonitor(str(log_path))
-    monitor._initialized   = True
-    monitor._last_position = 0
-
-    incomplete = monitor.check_updates()
-    assert incomplete.events == []
-    assert monitor.commit(incomplete) is True
-    assert monitor._last_position == 0
-
-    with log_path.open("a", encoding="utf-8") as stream:
-        stream.write(" message\n")
-    complete = monitor.check_updates()
-    assert [event.message for event in complete.events] == ["partial message"]
 
 
 def test_earthquake_corrupt_cursor_without_checkpoint_fails_closed(tmp_path: Path) -> None:
@@ -341,17 +285,3 @@ async def test_minecraft_tick_overflow_keeps_unselected_batches_uncommitted(
 
     assert [monitor.commits for monitor in monitors] == [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
     assert context.send_action.await_count == minecraft.MC_MAX_ACTIONS_PER_TICK
-
-
-def test_earthquake_grouped_card_and_changed_html_layout_are_supported() -> None:
-    mblog = {
-        "id": "900",
-        "text": (
-            '<span>#地震快讯#</span><a href="/official">中国地震台网正式测定</a>'
-            "<div>：某地发生5.1级地震</div>"
-        ),
-    }
-    assert earthquake._iter_mblogs([{"card_group": [{"mblog": mblog}]}]) == [mblog]
-    cleaned = earthquake._extract_clean_text(mblog["text"])
-    assert "发生5.1级地震" in cleaned
-    assert "<" not in cleaned

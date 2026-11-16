@@ -1,4 +1,4 @@
-"""Regression tests for cross-plugin command trigger ownership."""
+"""Cross-plugin command trigger ownership."""
 
 import json
 from typing import Any

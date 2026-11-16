@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from plugins.jupyter import jupyter_manager as manager_module
+from plugins.jupyter import main as jupyter_main
 from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
 
@@ -96,6 +97,10 @@ class FakeKernel:
         self.cleanup_calls += 1
 
 
+def _unexpected_kernel_factory(**_kwargs: Any) -> None:
+    raise AssertionError("测试没有安装内核替身，不应启动真实内核")
+
+
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
     with JupyterKernelManager._instances_lock:  # noqa: SLF001 - lifecycle isolation.
@@ -105,7 +110,9 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch):
         JupyterKernelManager._quarantined_instances.clear()  # noqa: SLF001
     monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", True)
     monkeypatch.setattr(manager_module, "IMPORT_ERROR", None)
-    monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
+    # 内核类是第三方边界：默认换成一个会报错的工厂，需要启动内核的测试自己装替身，绝不拉起真实内核。
+    monkeypatch.setattr(manager_module, "KernelManager", _unexpected_kernel_factory)
+    monkeypatch.setattr(jupyter_main, "_DEPENDENCY_PROBED", False)
     yield
     with JupyterKernelManager._instances_lock:
         owned = (
@@ -337,21 +344,40 @@ def test_restart_keeps_registered_manager_identity(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_all_async_propagates_cleanup_failures(tmp_path: Path) -> None:
-    first                 = JupyterKernelManager.get_instance(tmp_path / "a", "user-1")
-    second                = JupyterKernelManager.get_instance(tmp_path / "b", "user-2")
-    first.shutdown_kernel = lambda *args, **kwargs: None  # type: ignore[method-assign]
+async def test_shutdown_all_async_reports_a_kernel_that_will_not_stop_and_keeps_it_quarantined(
+    tmp_path: Path,
+) -> None:
+    """关不掉的内核让关闭报错，并留在隔离名单里等下次清理；关得掉的照常移除。"""
 
-    def fail_shutdown(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("cleanup failed")
+    JupyterKernelManager.get_instance(tmp_path / "a", "user-1")
+    stuck_manager = JupyterKernelManager.get_instance(tmp_path / "b", "user-2")
+    stuck = FakeKernel(fail_shutdown=True)
+    stuck.alive = True
 
-    second.shutdown_kernel = fail_shutdown  # type: ignore[method-assign]
+    class Provisioner:
+        process = SimpleNamespace(kill=lambda: (_ for _ in ()).throw(RuntimeError("kill failed")))
 
-    with pytest.raises(RuntimeError, match="1 Jupyter kernel cleanup"):
-        await JupyterKernelManager.shutdown_all_async()
+        def kill(self, restart: bool = False) -> None:
+            del restart
+            raise RuntimeError("provisioner kill failed")
 
-    assert JupyterKernelManager._instances == {}  # noqa: SLF001
-    assert JupyterKernelManager._quarantined_instances == set()  # noqa: SLF001
+    def private_kill() -> None:
+        raise RuntimeError("private kill failed")
+
+    stuck.provisioner  = Provisioner()  # type: ignore[attr-defined]
+    stuck._kill_kernel = private_kill  # type: ignore[attr-defined]
+    stuck_manager._km  = stuck  # noqa: SLF001
+    stuck_manager._kc  = stuck.client_instance  # noqa: SLF001
+
+    try:
+        with pytest.raises(RuntimeError, match="1 Jupyter kernel cleanup"):
+            await JupyterKernelManager.shutdown_all_async()
+
+        assert JupyterKernelManager._instances == {}  # noqa: SLF001
+        assert JupyterKernelManager._quarantined_instances == {stuck_manager}  # noqa: SLF001
+    finally:
+        stuck.fail_shutdown = False
+        stuck_manager.shutdown_kernel()
 
 
 def test_unconfirmed_orphan_marks_instance_broken_and_evicts_registry(
@@ -422,38 +448,32 @@ def test_shutdown_waits_for_inflight_start_then_leaves_no_kernel(
 @pytest.mark.asyncio
 async def test_kernel_shutdown_command_does_not_claim_success_when_unconfirmed(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from plugins.jupyter import main as jupyter_main
-
-    class BrokenManager:
-        def shutdown_kernel(self) -> None:
-            raise RuntimeError("orphan still alive")
-
-    monkeypatch.setattr(
-        jupyter_main.JupyterKernelManager,
-        "get_instance",
-        lambda *_args, **_kwargs: BrokenManager(),
-    )
-    context = SimpleNamespace(
+    kernel = FakeKernel(fail_shutdown=True)
+    kernel.alive = True
+    manager      = JupyterKernelManager.get_instance(tmp_path, "user:1:group:2")
+    manager._km  = kernel  # noqa: SLF001
+    manager._kc  = kernel.client_instance  # noqa: SLF001
+    context      = SimpleNamespace(
         data_dir         = tmp_path,
         current_user_id  = 1,
         current_group_id = 2,
     )
 
-    response = await jupyter_main._handle_kernel("shutdown", context)
+    try:
+        response = await jupyter_main.handle("jupyter_kernel", "shutdown", {}, context)
+    finally:
+        kernel.fail_shutdown = False
 
     text = response[0]["data"]["text"]
     assert "无法确认" in text
     assert "内核已关闭" not in text
+    assert manager.broken is True
 
 
 @pytest.mark.asyncio
-async def test_jupyter_status_keeps_loop_responsive(tmp_path, monkeypatch):
-    from plugins.jupyter import main
-    from plugins.jupyter.jupyter_manager import JupyterKernelManager
-
-    manager = JupyterKernelManager(tmp_path)
+async def test_jupyter_status_keeps_loop_responsive(tmp_path):
+    manager = JupyterKernelManager.get_instance(tmp_path, "user:1:private")
     acquired, release = (threading.Event(), threading.Event())
 
     def hold():
@@ -464,9 +484,8 @@ async def test_jupyter_status_keeps_loop_responsive(tmp_path, monkeypatch):
     thread = threading.Thread(target=hold)
     thread.start()
     assert await asyncio.to_thread(acquired.wait, 3)
-    monkeypatch.setattr(JupyterKernelManager, "get_instance", lambda *args: manager)
     context = SimpleNamespace(data_dir=tmp_path, current_user_id=1, current_group_id=None)
-    task = asyncio.create_task(main._handle_kernel("status", context))
+    task = asyncio.create_task(jupyter_main._handle_kernel("status", context))
     try:
         await asyncio.sleep(0.02)
         assert not task.done()

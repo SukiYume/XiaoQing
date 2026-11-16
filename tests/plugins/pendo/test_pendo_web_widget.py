@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import sys
-import types
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from plugins.pendo.services.db import Database
-from tests.helpers.paths import REPOSITORY_ROOT
+from plugins.pendo.utils import time_utils
 
 try:
     from plugins.pendo.web.auth import generate_widget_token
@@ -19,8 +16,7 @@ except ModuleNotFoundError as exc:
         raise
     pytest.skip("pendo web widget requires PyJWT", allow_module_level=True)
 from plugins.pendo.web.api import widget as widget_api
-
-ROOT = REPOSITORY_ROOT
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 
 def _seed_widget_data(db: Database, owner_id: str) -> None:
@@ -319,27 +315,8 @@ def test_widget_calendar_sync_rejects_invalid_ranges(
     assert response.status_code == 422
 
 
-def test_build_widget_summary_returns_expected_panels_directly(temp_db: Database) -> None:
-    """直接调用真实模块时仍返回与 HTTP 路由一致的板块结构。"""
-
-    owner_id = "u-widget-direct"
-    _seed_widget_data(temp_db, owner_id)
-
-    tasks_data = widget_api.build_widget_summary(
-        temp_db, owner_id, section="tasks", now="2026-03-25T09:30:00"
-    )
-    ledger_data = widget_api.build_widget_summary(
-        temp_db, owner_id, section="ledger", now="2026-03-25T09:30:00"
-    )
-
-    assert tasks_data["section"] == "tasks"
-    assert tasks_data["agenda"]["today_count"] == 1
-    assert tasks_data["panel"]["items"][0]["title"] == "处理周报"
-    assert ledger_data["section"] == "ledger"
-    assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥36"
-
-
-def test_parse_now_uses_user_timezone_and_converts_aware_inputs(
+def test_summary_now_uses_user_timezone_and_converts_aware_inputs(
+    client: Any,
     temp_db: Database,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,21 +324,25 @@ def test_parse_now_uses_user_timezone_and_converts_aware_inputs(
 
     owner_id = "u-widget-timezone"
     temp_db.update_user_settings(owner_id, {"timezone": "America/Los_Angeles"})
-    monkeypatch.setattr(
-        widget_api,
-        "now_in_timezone",
-        lambda requested_owner, requested_db: datetime.fromisoformat(
-            "2026-03-25T09:30:12.345678-07:00"
-        ),
-    )
+    headers = _headers(generate_widget_token(owner_id, db=temp_db))
 
-    assert widget_api._parse_now(None, owner_id, temp_db) == datetime(2026, 3, 25, 9, 30, 12)
-    assert widget_api._parse_now("2026-03-25T16:30:00+00:00", owner_id, temp_db) == datetime(
-        2026, 3, 25, 9, 30
-    )
-    with pytest.raises(widget_api.HTTPException) as exc_info:
-        widget_api._parse_now("not-a-time", owner_id, temp_db)
-    assert exc_info.value.status_code == 422
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 3, 25, 16, 30, 12, 345678, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
+
+    def generated_at(**params: str) -> str:
+        response = client.get("/api/widget/summary", params=params, headers=headers)
+        assert response.status_code == 200
+        return response.json()["data"]["generated_at"]
+
+    assert generated_at() == "2026-03-25T09:30:12"
+    assert generated_at(now="2026-03-25T16:30:00+00:00") == "2026-03-25T09:30:00"
+    invalid = client.get("/api/widget/summary", params={"now": "not-a-time"}, headers=headers)
+    assert invalid.status_code == 422
 
 
 def test_widget_text_and_meta_helpers_cover_compact_boundaries() -> None:
@@ -477,22 +458,13 @@ def test_build_widget_summary_batches_collection_titles_for_agenda(
             }
         )
 
-    real_batch_lookup                  = temp_db.get_event_collections_by_ids
-    calls: list[tuple[str, list[str]]] = []
+    with trace_sql_statements(temp_db.get_connection()) as statements:
+        data = widget_api.build_widget_summary(
+            temp_db, owner_id, section="tasks", now="2026-03-25T09:30:00"
+        )
 
-    def track_batch_lookup(
-        lookup_owner_id: str, collection_ids: list[str]
-    ) -> dict[str, dict[str, Any]]:
-        calls.append((lookup_owner_id, collection_ids))
-        return real_batch_lookup(lookup_owner_id, collection_ids)
-
-    monkeypatch.setattr(temp_db, "get_event_collections_by_ids", track_batch_lookup)
-
-    data = widget_api.build_widget_summary(
-        temp_db, owner_id, section="tasks", now="2026-03-25T09:30:00"
-    )
-
-    assert calls == [(owner_id, ["widget-conf", "widget-observe"])]
+    collection_reads = [sql for sql in statements if "FROM event_collections" in sql]
+    assert len(collection_reads) == 1
     assert [item["title"] for item in data["agenda"]["items"]] == [
         "FRB2026会议 · 摘要截止",
         "春季观测 · 开机检查",
@@ -760,32 +732,24 @@ def test_widget_endpoint_rejects_missing_auth(client: Any) -> None:
 
 
 def test_web_handler_never_inlines_widget_token_when_private_delivery_is_unavailable(
+    temp_db: Database,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """无法私聊投递凭据时，群消息错误不得内联敏感 token。"""
 
-    monkeypatch.syspath_prepend(str(ROOT))
-    monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-    monkeypatch.setitem(
-        sys.modules,
-        "plugins.pendo.web.server",
-        types.SimpleNamespace(
-            get_url    = lambda: "http://127.0.0.1:8765",
-            is_running = lambda: True,
-            start      = lambda _db: True,
-            stop       = lambda: True,
-        ),
-    )
+    from plugins.pendo.handlers.web import WebHandler
+    from plugins.pendo.web import auth
 
-    web_module = importlib.import_module("plugins.pendo.handlers.web")
+    # 签发令牌会把认证仓储和签名密钥绑定到本用例的数据库，结束后还原。
+    monkeypatch.setattr(auth, "_AUTH_DATABASE", None)
+    monkeypatch.setattr(auth, "_SECRET_FILE", None)
+    monkeypatch.setattr(auth, "_SECRET_CACHE", None)
 
-    monkeypatch.setattr(
-        web_module, "generate_widget_token", lambda *_args, **_kwargs: "mock-widget-token"
-    )
-
-    handler = web_module.WebHandler(db=None)
+    handler = WebHandler(db=temp_db)
     result = asyncio.run(handler.handle("1001", "widget token", context=None))
 
     assert result["status"] == "error"
     assert "无法通过私聊安全发送凭据" in result["message"]
-    assert "mock-widget-token" not in result["message"]
+    # 令牌确实已签发并登记，但 JWT 头部（eyJ 开头）不出现在命令回复里。
+    assert temp_db.revoke_widget_tokens("1001") == 1
+    assert "eyJ" not in result["message"]

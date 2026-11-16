@@ -1,10 +1,9 @@
-"""Pendo Web 日程概览清理后的最小响应与批量查询回归。"""
+"""Pendo Web 日程概览的最小响应与批量查询。"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -13,6 +12,7 @@ from plugins.pendo.web.analytics.events_overview import (
     build_event_detail,
     build_events_overview,
 )
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def db(tmp_path: Path) -> Iterator[Database]:
 
 
 def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) -> None:
-    """概览与详情不能重新泄漏所有者、上下文或服务端中间字段。"""
+    """概览与详情不得泄漏所有者、上下文或服务端中间字段。"""
 
     db.insert_item(
         {
@@ -98,11 +98,8 @@ def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) 
     assert detail["event"]["reminders"][0]["status"] == "sent"
 
 
-def test_overview_batches_collection_reads(
-    db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """多个集合叶子必须经批量入口读取，不能退回逐条集合查询。"""
+def test_overview_batches_collection_reads(db: Database) -> None:
+    """多个集合叶子必须经批量入口读取，不逐条查询集合。"""
 
     for collection_id, event_day in (("group-a", "03"), ("group-b", "04")):
         db.create_event_collection(
@@ -128,25 +125,15 @@ def test_overview_batches_collection_reads(
             }
         )
 
-    original_batch_read          = db.get_event_collections_by_ids
-    batch_calls: list[list[str]] = []
-
-    def record_batch(owner_id: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
-        batch_calls.append(list(collection_ids))
-        return original_batch_read(owner_id, collection_ids)
-
-    def fail_single_read(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("overview must not read collections one by one")
-
-    monkeypatch.setattr(db, "get_event_collections_by_ids", record_batch)
-    monkeypatch.setattr(db, "get_event_collection", fail_single_read)
-
-    overview = build_events_overview(
-        db,
-        "owner-a",
-        start_date = "2030-01-01",
-        end_date   = "2030-01-31",
-    )
+    with trace_sql_statements(db.get_connection()) as statements:
+        overview = build_events_overview(
+            db,
+            "owner-a",
+            start_date = "2030-01-01",
+            end_date   = "2030-01-31",
+        )
 
     assert overview["summary"]["event_count"] == 2
-    assert batch_calls == [["group-a", "group-b"]]
+    collection_reads = [sql for sql in statements if "FROM event_collections" in sql]
+    assert len(collection_reads) == 1
+    assert "group-a" in collection_reads[0] and "group-b" in collection_reads[0]

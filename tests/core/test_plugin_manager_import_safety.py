@@ -14,46 +14,46 @@ import pytest
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from core.plugin_watcher import _ManifestRejection
 from tests.helpers.plugin_manager_test_support import (
-    LoadedPlugin,
     ModuleType,
     PluginDefinition,
-    PluginExecutionGate,
-    PluginLoadError,
-    _build_definition,
-    _build_manager,
-    _runtime_symlink_or_skip,
-    _write_runtime_manifest,
+    build_definition,
+    build_manager,
+    load_plugin,
     load_plugin_dir,
+    runtime_symlink_or_skip,
+    write_plugin,
+    write_runtime_manifest,
 )
+from tests.helpers.plugin_probe import PROBE
 
 _isolate_process_global_plugin_import_state = (
     _fixture_support._isolate_process_global_plugin_import_state
 )
 
 
-def test_prepare_module_load_compiles_lazy_helpers_before_any_plugin_code_runs(
+@pytest.mark.asyncio
+async def test_load_compiles_lazy_helpers_before_any_plugin_code_runs(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    _write_runtime_manifest(plugin_dir, "demo")
-    (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    manager    = build_manager(tmp_path)
+    plugin_dir = write_plugin(manager)
     (plugin_dir / "lazy_helper.py").write_text("def broken(:\n", encoding="utf-8")
-    definition = manager._load_definition(plugin_dir)
-    assert definition is not None
 
-    with pytest.raises(PluginLoadError, match="source could not be compiled"):
-        manager._prepare_module_load(plugin_dir, definition, None)
+    await load_plugin_dir(manager, plugin_dir)
+
+    assert "source could not be compiled" in caplog.text
+    assert manager.get("demo") is None
+    assert PROBE.log("import") == []
 
 
 def test_capture_plugin_snapshot_tracks_submodule_changes(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     helper = plugin_dir / "helper.py"
     helper.write_text("value = 1\n", encoding="utf-8")
-    definition = _build_definition()
+    definition = build_definition()
     (plugin_dir / "plugin.json").write_text(
         '{"name":"demo","version":"1.0.0","entry":"main.py","commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
         encoding="utf-8",
@@ -69,10 +69,10 @@ def test_capture_plugin_snapshot_tracks_submodule_changes(tmp_path: Path):
 
 
 def test_capture_plugin_snapshot_ignores_unchanged_content_metadata(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    definition = _build_definition()
+    definition = build_definition()
     main       = plugin_dir / "main.py"
     helper     = plugin_dir / "helper.py"
     (plugin_dir / "plugin.json").write_text(
@@ -97,10 +97,10 @@ def test_capture_plugin_snapshot_ignores_unchanged_content_metadata(tmp_path: Pa
 def test_capture_plugin_snapshot_detects_same_size_content_with_preserved_timestamp(
     tmp_path: Path,
 ):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    definition = _build_definition()
+    definition = build_definition()
     main       = plugin_dir / "main.py"
     (plugin_dir / "plugin.json").write_text(
         '{"name":"demo","version":"1.0.0","entry":"main.py",'
@@ -121,12 +121,12 @@ def test_capture_plugin_snapshot_detects_same_size_content_with_preserved_timest
 
 
 def test_iter_watch_files_treats_data_named_source_tree_as_ordinary_source(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     data_dir = plugin_dir / "data"
     data_dir.mkdir()
-    definition = _build_definition()
+    definition = build_definition()
     (plugin_dir / "plugin.json").write_text(
         '{"name":"demo","version":"1.0.0","entry":"main.py","commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
         encoding="utf-8",
@@ -141,7 +141,7 @@ def test_iter_watch_files_treats_data_named_source_tree_as_ordinary_source(tmp_p
 
 
 def test_build_context_ensures_data_dir_once(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     (manager.plugins_dir / "demo").mkdir()
 
     manager.build_context("demo")
@@ -156,7 +156,7 @@ def test_build_context_ensures_data_dir_once(tmp_path: Path):
 def test_data_directory_inside_the_plugin_tree_is_left_alone(tmp_path: Path):
     """插件目录下名叫 data 的目录只是普通源码目录：不搬、不删，数据目录仍在 data_root 下。"""
 
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
     in_tree = manager.plugins_dir / "demo" / "data"
     in_tree.mkdir(parents=True)
     (in_tree / "state.json").write_text("in-tree", encoding="utf-8")
@@ -169,7 +169,7 @@ def test_data_directory_inside_the_plugin_tree_is_left_alone(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_runtime_loads_nested_entry_and_binds_its_exact_origin(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "nested_entry_runtime"
     plugin_dir = manager.plugins_dir / name
     nested     = plugin_dir / "nested"
@@ -179,7 +179,7 @@ async def test_runtime_loads_nested_entry_and_binds_its_exact_origin(tmp_path: P
     (nested / "helper.py").write_text("VALUE = 41\n", encoding="utf-8")
     entry = nested / "entry.py"
     entry.write_text("from .helper import VALUE\nRESULT = VALUE + 1\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name, "nested/entry.py")
+    write_runtime_manifest(plugin_dir, name, "nested/entry.py")
 
     try:
         await load_plugin_dir(manager, plugin_dir)
@@ -200,14 +200,14 @@ async def test_runtime_entry_loader_ignores_mtime_size_matched_stale_bytecode(
 ) -> None:
     import py_compile
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "stale_bytecode_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     entry = plugin_dir / "main.py"
     entry.write_text("VALUE = 'first'\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name)
+    write_runtime_manifest(plugin_dir, name)
     original = entry.stat()
     py_compile.compile(str(entry), doraise=True)
     entry.write_text("VALUE = 'other'\n", encoding="utf-8")
@@ -227,7 +227,7 @@ async def test_runtime_entry_loader_ignores_mtime_size_matched_stale_bytecode(
 async def test_live_plugin_lazy_imports_remain_source_only(tmp_path: Path) -> None:
     import py_compile
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "lazy_source_only_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
@@ -238,7 +238,7 @@ async def test_live_plugin_lazy_imports_remain_source_only(tmp_path: Path) -> No
     )
     helper = plugin_dir / "helper.py"
     helper.write_text("VALUE = 'first'\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name)
+    write_runtime_manifest(plugin_dir, name)
     original = helper.stat()
     py_compile.compile(str(helper), doraise=True)
     helper.write_text("VALUE = 'other'\n", encoding="utf-8")
@@ -265,22 +265,22 @@ async def test_same_named_managers_never_reuse_or_purge_foreign_cached_modules(
     second_root = tmp_path / "second"
     first_root.mkdir()
     second_root.mkdir()
-    first = _build_manager(first_root)
+    first = build_manager(first_root)
     first._purge_plugin_modules(name)
     first_plugin = first.plugins_dir / name
     first_plugin.mkdir()
     (first_plugin / "__init__.py").write_text("", encoding="utf-8")
     (first_plugin / "main.py").write_text("VALUE = 'first'\n", encoding="utf-8")
-    _write_runtime_manifest(first_plugin, name)
+    write_runtime_manifest(first_plugin, name)
     await load_plugin_dir(first, first_plugin)
     first_module = first._plugins[name].module
 
-    second        = _build_manager(second_root)
+    second        = build_manager(second_root)
     second_plugin = second.plugins_dir / name
     second_plugin.mkdir()
     (second_plugin / "__init__.py").write_text("", encoding="utf-8")
     (second_plugin / "main.py").write_text("VALUE = 'second'\n", encoding="utf-8")
-    _write_runtime_manifest(second_plugin, name)
+    write_runtime_manifest(second_plugin, name)
 
     try:
         await load_plugin_dir(second, second_plugin)
@@ -302,7 +302,7 @@ async def test_same_named_managers_never_reuse_or_purge_foreign_cached_modules(
 async def test_runtime_rejects_entry_symlink_without_executing_its_target(tmp_path: Path) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "linked_entry_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
@@ -314,8 +314,8 @@ async def test_runtime_rejects_entry_symlink_without_executing_its_target(tmp_pa
         "import xiaoqing_linked_entry_tracker as tracker\ntracker.executions += 1\n",
         encoding="utf-8",
     )
-    _runtime_symlink_or_skip(outside, plugin_dir / "main.py")
-    _write_runtime_manifest(plugin_dir, name)
+    runtime_symlink_or_skip(outside, plugin_dir / "main.py")
+    write_runtime_manifest(plugin_dir, name)
 
     try:
         await load_plugin_dir(manager, plugin_dir)
@@ -330,7 +330,7 @@ async def test_runtime_rejects_entry_symlink_without_executing_its_target(tmp_pa
 
 @pytest.mark.asyncio
 async def test_runtime_rejects_linked_manifest_authorization(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "linked_manifest_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
@@ -340,7 +340,7 @@ async def test_runtime_rejects_linked_manifest_authorization(tmp_path: Path) -> 
         f'{{"name":"{name}","entry":"main.py","enabled":true}}',
         encoding="utf-8",
     )
-    _runtime_symlink_or_skip(outside_manifest, plugin_dir / "plugin.json")
+    runtime_symlink_or_skip(outside_manifest, plugin_dir / "plugin.json")
 
     rejection = manager._load_definition(plugin_dir)
     assert isinstance(rejection, _ManifestRejection)
@@ -349,17 +349,16 @@ async def test_runtime_rejects_linked_manifest_authorization(tmp_path: Path) -> 
     assert name not in manager._plugins
 
 
-def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_cached_entry_origin_mismatch_is_rejected_before_any_import(
+    tmp_path: Path,
+) -> None:
     import importlib.machinery
     import sys
 
-    manager    = _build_manager(tmp_path)
-    name       = "cached_origin_mismatch"
-    plugin_dir = manager.plugins_dir / name
-    plugin_dir.mkdir()
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    (plugin_dir / "main.py").write_text("VALUE = 'authorized'\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name)
+    manager = build_manager(tmp_path)
+    name    = "cached_origin_mismatch"
+    write_plugin(manager, name)
     outside = tmp_path / "foreign.py"
     outside.write_text("VALUE = 'foreign'\n", encoding="utf-8")
     cached          = ModuleType(f"plugins.{name}.main")
@@ -372,11 +371,12 @@ def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Pa
     sys.modules[cached.__name__] = cached
 
     try:
-        with pytest.raises(PluginLoadError, match="Failed to load plugin"):
-            manager._load_module(plugin_dir, _build_definition(name))
+        await manager.load_all()
 
+        assert manager.get(name) is None
+        assert PROBE.log("import") == []
         assert sys.modules[cached.__name__] is cached
-        assert not hasattr(cached, "VALUE")
+        assert not hasattr(cached, "handle")
     finally:
         sys.modules.pop(cached.__name__, None)
         manager._purge_plugin_modules(name)
@@ -386,7 +386,7 @@ def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Pa
 async def test_post_import_origin_drift_is_restart_only_quarantined(tmp_path: Path) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "origin_drift_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
@@ -402,7 +402,7 @@ async def test_post_import_origin_drift_is_restart_only_quarantined(tmp_path: Pa
         f"__file__ = {str(outside)!r}\n",
         encoding="utf-8",
     )
-    _write_runtime_manifest(plugin_dir, name)
+    write_runtime_manifest(plugin_dir, name)
 
     try:
         await load_plugin_dir(manager, plugin_dir)
@@ -423,14 +423,15 @@ def test_fingerprint_explicitly_includes_entry_when_walk_snapshot_omits_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "explicit_entry_fingerprint"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     entry = plugin_dir / "main.py"
     entry.write_text("VALUE = 1\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name)
-    definition = _build_definition(name)
+    write_runtime_manifest(plugin_dir, name)
+    definition = manager._load_definition(plugin_dir)
+    assert isinstance(definition, PluginDefinition)
 
     with os.scandir(plugin_dir) as entries:
         snapshot = [item for item in entries if item.name != "main.py"]
@@ -449,14 +450,14 @@ async def test_entry_replaced_after_fingerprint_is_neither_executed_nor_publishe
 ) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     name       = "entry_replace_transaction"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     entry = plugin_dir / "main.py"
     entry.write_text("VALUE = 'old'\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, name)
+    write_runtime_manifest(plugin_dir, name)
     tracker                       = ModuleType("xiaoqing_entry_replace_tracker")
     tracker.executions            = 0
     sys.modules[tracker.__name__] = tracker
@@ -466,7 +467,7 @@ async def test_entry_replaced_after_fingerprint_is_neither_executed_nor_publishe
     def fingerprint_then_replace(
         current_dir: Path,
         definition: PluginDefinition,
-    ) -> int:
+    ):
         nonlocal fingerprint_calls
         result = original_fingerprint(current_dir, definition)
         fingerprint_calls += 1
@@ -479,7 +480,8 @@ async def test_entry_replaced_after_fingerprint_is_neither_executed_nor_publishe
             )
         return result
 
-    manager._authorize_plugin_snapshot = Mock(side_effect=fingerprint_then_replace)
+    # 取完指纹、发布之前文件被换掉：这个窗口只能在取指纹处插手，随后照常返回原指纹。
+    manager._authorize_plugin_snapshot = fingerprint_then_replace
     try:
         await load_plugin_dir(manager, plugin_dir)
 
@@ -500,7 +502,7 @@ async def test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling(
 ) -> None:
     import sys
 
-    manager     = _build_manager(tmp_path)
+    manager     = build_manager(tmp_path)
     unsafe_name = "a_unsafe_linked_entry"
     safe_name   = "b_safe_entry"
     unsafe      = manager.plugins_dir / unsafe_name
@@ -515,10 +517,10 @@ async def test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling(
         "import xiaoqing_watcher_link_tracker as tracker\ntracker.executions += 1\n",
         encoding="utf-8",
     )
-    _runtime_symlink_or_skip(outside, unsafe / "main.py")
-    _write_runtime_manifest(unsafe, unsafe_name)
+    runtime_symlink_or_skip(outside, unsafe / "main.py")
+    write_runtime_manifest(unsafe, unsafe_name)
     (safe / "main.py").write_text("VALUE = 'safe'\n", encoding="utf-8")
-    _write_runtime_manifest(safe, safe_name)
+    write_runtime_manifest(safe, safe_name)
 
     try:
         await manager.reconcile_plugins()
@@ -536,24 +538,10 @@ async def test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling(
 
 @pytest.mark.asyncio
 async def test_unload_cancels_running_plugin_gate_before_shutdown(tmp_path: Path):
-    manager         = _build_manager(tmp_path)
-    definition      = _build_definition()
-    gate            = PluginExecutionGate("sequential")
-    entered         = asyncio.Event()
-    shutdown_called = asyncio.Event()
-    module          = ModuleType("demo.main")
-
-    async def shutdown():
-        shutdown_called.set()
-
-    module.shutdown          = shutdown
-    manager._plugins["demo"] = LoadedPlugin(
-        definition     = definition,
-        module         = module,
-        mtime          = 0.0,
-        execution_gate = gate,
-    )
-    manager._execution_gates["demo"] = gate
+    manager = build_manager(tmp_path)
+    plugin = await load_plugin(manager, concurrency="sequential")
+    gate    = plugin.execution_gate
+    entered = asyncio.Event()
 
     async def slow_handler() -> None:
         entered.set()
@@ -565,6 +553,6 @@ async def test_unload_cancels_running_plugin_gate_before_shutdown(tmp_path: Path
     await manager.unload_plugin("demo")
 
     assert running.cancelled()
-    assert shutdown_called.is_set()
+    assert len(PROBE.log("shutdown")) == 1
     assert "demo" not in manager._plugins
     assert "demo" not in manager._execution_gates

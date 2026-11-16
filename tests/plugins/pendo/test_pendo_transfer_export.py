@@ -15,14 +15,15 @@ from plugins.pendo.web.utils import parse_iso_date
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Database,
+    ImportRequest,
     ZoneInfo,
-    _build_sample_bundle_bytes,
-    _ImportRequest,
-    _seed_items,
+    build_sample_bundle_bytes,
     io,
+    seed_items,
     transfer_api,
     zipfile,
 )
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 auth_headers = _fixture_support.auth_headers
 
@@ -178,7 +179,7 @@ def test_export_requests_reject_unknown_fields(
 def test_export_preview_returns_counts_by_type_and_filters_by_time_field(
     client: Any, temp_db: Database, auth_headers: dict
 ):
-    _seed_items(temp_db)
+    seed_items(temp_db)
 
     response = client.post(
         "/api/transfer/export/preview",
@@ -200,7 +201,7 @@ def test_export_preview_returns_counts_by_type_and_filters_by_time_field(
 
 
 def test_export_preview_returns_warnings_field(client: Any, temp_db: Database, auth_headers: dict):
-    _seed_items(temp_db)
+    seed_items(temp_db)
 
     response = client.post(
         "/api/transfer/export/preview",
@@ -217,7 +218,7 @@ def test_export_preview_returns_warnings_field(client: Any, temp_db: Database, a
 def test_export_download_returns_bundle_with_manifest(
     client: Any, temp_db: Database, auth_headers: dict
 ):
-    _seed_items(temp_db)
+    seed_items(temp_db)
 
     response = client.post(
         "/api/transfer/export/download",
@@ -312,39 +313,24 @@ def test_export_download_includes_event_collections_for_event_graph(
     assert collection_rows[0]["title"] == "FRB2026会议"
 
 
-def test_export_record_validation_distinguishes_unknown_and_invalid_shapes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_export_record_validation_distinguishes_unknown_and_invalid_shapes() -> None:
     """无规范的扩展类型不告警，已知类型的历史坏字段会产生可定位告警。"""
 
-    monkeypatch.setattr(transfer_api, "get_item_normalizer", lambda _item_type: None)
     assert transfer_api._export_record_warning({"_type": "extension"}) is None
 
-    def reject_record(_record: dict[str, Any], *, partial: bool) -> None:
-        assert partial is True
-        raise ValueError("invalid historical field")
-
-    monkeypatch.setattr(
-        transfer_api,
-        "get_item_normalizer",
-        lambda _item_type: reject_record,
-    )
-    warning = transfer_api._export_record_warning({"_type": "task", "id": "legacy"})
+    warning = transfer_api._export_record_warning({"_type": "task", "id": "legacy", "priority": 99})
     assert warning == "task/legacy: 记录字段校验失败"
 
 
 def test_export_dataset_keeps_serialized_records_when_compatibility_warns(
     temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """兼容性告警只提示历史字段，不得丢弃用户导出记录。"""
 
-    _seed_items(temp_db)
-    monkeypatch.setattr(
-        transfer_api,
-        "_export_record_warning",
-        lambda record: f"{record['id']}: warning",
-    )
+    seed_items(temp_db)
+    # 模拟历史数据：落库的优先级超出当前规范。
+    with temp_db.get_connection() as conn:
+        conn.execute("UPDATE items SET priority = 99 WHERE type = 'task'")
 
     records, counts, _bounds, warnings = transfer_api._build_export_dataset(
         temp_db,
@@ -359,7 +345,6 @@ def test_export_dataset_keeps_serialized_records_when_compatibility_warns(
 
 def test_event_collection_export_uses_one_batch_lookup_and_warns_for_missing_headers(
     temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """多个日程叶子只批量读取一次集合头，缺失集合则保留来源告警。"""
 
@@ -371,30 +356,23 @@ def test_event_collection_export_uses_one_batch_lookup_and_warns_for_missing_hea
             "title"   : "存在的集合",
         }
     )
-    real_lookup                        = temp_db.get_event_collections_by_ids
-    calls: list[tuple[str, list[str]]] = []
-
-    def track_lookup(owner_id: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
-        calls.append((owner_id, collection_ids))
-        return real_lookup(owner_id, collection_ids)
-
-    monkeypatch.setattr(temp_db, "get_event_collections_by_ids", track_lookup)
+    # 在 SQLite 连接上记录实际执行的语句，数出读集合表的查询次数。
     warnings: list[str] = []
-    records             = transfer_api._collect_event_collection_records(
-        temp_db,
-        OWNER_ID,
-        [
-            {"id": "event-1", "event_collection_id": "collection-present"},
-            {"id": "event-2", "event_collection_id": "collection-present"},
-            {"id": "event-3", "event_collection_id": "collection-missing"},
-            {"id": "event-4"},
-        ],
-        warnings,
-    )
+    with trace_sql_statements(temp_db.get_connection()) as statements:
+        records = transfer_api._collect_event_collection_records(
+            temp_db,
+            OWNER_ID,
+            [
+                {"id": "event-1", "event_collection_id": "collection-present"},
+                {"id": "event-2", "event_collection_id": "collection-present"},
+                {"id": "event-3", "event_collection_id": "collection-missing"},
+                {"id": "event-4"},
+            ],
+            warnings,
+        )
 
-    assert calls == [
-        (OWNER_ID, ["collection-present", "collection-missing"]),
-    ]
+    collection_reads = [sql for sql in statements if "FROM event_collections" in sql]
+    assert len(collection_reads) == 1
     assert [record["id"] for record in records] == ["collection-present"]
     assert warnings == ["event/event-3: missing event collection collection-missing"]
 
@@ -421,7 +399,7 @@ def test_bundle_manifest_count_is_derived_from_written_records() -> None:
 
 
 def test_export_download_creates_audit_log(client: Any, temp_db: Database, auth_headers: dict):
-    _seed_items(temp_db)
+    seed_items(temp_db)
 
     client.post(
         "/api/transfer/export/download",
@@ -473,7 +451,7 @@ def test_selected_import_types_distinguish_omitted_duplicate_and_empty_choices()
     """省略类型表示全选，重复选择只导入一次，显式空集必须报错。"""
 
     parsed, _records, _errors = transfer_api._inspect_bundle_data(
-        _build_sample_bundle_bytes(
+        build_sample_bundle_bytes(
             {
                 "task": [{"_type": "task", "_schema": 2, "title": "任务"}],
                 "note": [{"_type": "note", "_schema": 2, "title": "笔记"}],
@@ -499,18 +477,18 @@ async def test_upload_body_rejects_empty_and_actual_oversized_payloads(
 
     with pytest.raises(transfer_api.HTTPException) as empty_error:
         await transfer_api._read_upload_body(
-            _ImportRequest(b"", {"content-length": "not-an-integer"})
+            ImportRequest(b"", {"content-length": "not-an-integer"})
         )
     assert empty_error.value.status_code == 422
 
     monkeypatch.setattr(transfer_api, "MAX_UPLOAD_SIZE", 3)
     with pytest.raises(transfer_api.HTTPException) as size_error:
-        await transfer_api._read_upload_body(_ImportRequest(b"four"))
+        await transfer_api._read_upload_body(ImportRequest(b"four"))
     assert size_error.value.status_code == 413
 
     # 缺少 Content-Length 的流式上传：越界后立即停止读取，不会先整体读入内存。
     monkeypatch.setattr(transfer_api, "MAX_UPLOAD_SIZE", 32)
-    streamed = _ImportRequest(b"x" * 64, chunk_size=16)
+    streamed = ImportRequest(b"x" * 64, chunk_size=16)
     with pytest.raises(transfer_api.HTTPException) as stream_error:
         await transfer_api._read_upload_body(streamed)
     assert stream_error.value.status_code == 413

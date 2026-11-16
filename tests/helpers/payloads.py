@@ -14,6 +14,19 @@ def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", crc)
 
 
+def valid_png(width: int = 1, height: int = 1) -> bytes:
+    """构造结构和 CRC 完整的最小 RGBA PNG，避免把残缺文件当作测试夹具。"""
+
+    header   = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    scanline = (b"\x00" + b"\x00\x00\x00\x00" * width) * height
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", header)
+        + png_chunk(b"IDAT", zlib.compress(scanline))
+        + png_chunk(b"IEND", b"")
+    )
+
+
 def image_bytes(
     image_format: str           = "PNG",
     color: tuple[int, int, int] = (1, 2, 3),
@@ -25,12 +38,3 @@ def image_bytes(
     output = io.BytesIO()
     Image.new("RGB", (2, 2), color).save(output, format=image_format)
     return output.getvalue()
-
-
-def text_reply_draft(text: str):
-    """按 xiaoqing_chat 当前回复草稿契约构造纯文本载荷。"""
-
-    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
-    from plugins.xiaoqing_chat.reply_draft import ReplyDraft
-
-    return ReplyDraft(text=text, text_parts=(text,), parts=build_text_message_parts(text))

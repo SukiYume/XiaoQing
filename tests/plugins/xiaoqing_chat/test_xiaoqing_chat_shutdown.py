@@ -4,19 +4,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from plugins.xiaoqing_chat import main
-from plugins.xiaoqing_chat import main as xiaoqing_chat
 from plugins.xiaoqing_chat.memory.memory import MemoryStore
+from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState, PFCStateStore
+from plugins.xiaoqing_chat.store_binding import bound_state
+from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
 
 
 def test_shutdown_store_flushers_persist_all_dirty_conversations(tmp_path) -> None:
-    from plugins.xiaoqing_chat.memory.memory import MemoryStore
-    from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState, PFCStateStore
-
     memory_dir   = tmp_path / "memory"
     memory_store = MemoryStore(memory_dir)
     memory_store.append("g1", role="user", name="one", content="first")
@@ -39,62 +37,79 @@ def test_shutdown_store_flushers_persist_all_dirty_conversations(tmp_path) -> No
     assert reloaded_pfc.get("g1").goal_list == [{"goal": "persist on shutdown"}]
 
 
-@pytest.mark.asyncio
-async def test_shutdown_flushes_memory_and_pfc_before_cancelling_pending_tasks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    order: list[str] = []
-
-    class _PendingTask:
-        def cancel(self) -> None:
-            order.append("cancel")
-
-    pending = _PendingTask()
-    state   = SimpleNamespace(
-        stop_accepting_background_tasks=Mock(side_effect=lambda: order.append("stop")),
-        background_tasks=Mock(return_value={pending}),
-        memory_store=SimpleNamespace(persist_all=Mock(side_effect=lambda: order.append("memory"))),
-        pfc_state_store=SimpleNamespace(flush=Mock(side_effect=lambda: order.append("pfc"))),
-        action_history=SimpleNamespace(flush=Mock(side_effect=lambda: order.append("actions"))),
-        media_store=SimpleNamespace(flush=Mock(side_effect=lambda: order.append("media"))),
-        memory_db=SimpleNamespace(is_dirty=Mock(return_value=False)),
+def _shutdown_context(tmp_path) -> SimpleNamespace:
+    return SimpleNamespace(
+        logger=logging.getLogger("test.xiaoqing_chat.shutdown"), data_dir=tmp_path
     )
-    monkeypatch.setattr(xiaoqing_chat, "_state", Mock(return_value=state))
-    monkeypatch.setattr(
-        xiaoqing_chat.asyncio,
-        "wait",
-        AsyncMock(return_value=({pending}, set())),
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_memory_and_pfc_before_cancelling_pending_tasks(tmp_path) -> None:
+    context = _shutdown_context(tmp_path)
+    state   = bound_state(context)
+    state.memory_store.append("g1", role="user", name="user", content="before shutdown")
+    state.pfc_state_store.set_state(
+        "g1", PFCConversationState(chat_id="g1", goal_list=[{"goal": "persist on shutdown"}])
     )
-    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing_chat.shutdown"))
+    seen_on_cancel: dict[str, object] = {}
 
-    await xiaoqing_chat.shutdown(context)
+    async def pending_work():
+        try:
+            await asyncio.sleep(30)
+        finally:
+            # 被取消的这一刻，磁盘上已经有关闭前的聊天记录和规划状态；后台任务也已不再接收新任务。
+            seen_on_cancel["memory"] = [m.content for m in MemoryStore(tmp_path).get("g1")]
+            reloaded                 = PFCStateStore()
+            reloaded.bind(tmp_path)
+            seen_on_cancel["pfc"]       = reloaded.get("g1").goal_list
+            seen_on_cancel["accepting"] = state.can_add_bg_task()
 
-    assert order[0] == "stop"
-    assert order.index("memory") < order.index("cancel")
-    assert order.index("pfc") < order.index("cancel")
-    assert order.count("memory") == 2
-    assert order.count("pfc") == 2
+    spawn_bg_task(context, pending_work(), name="pending")
+    [task] = state.background_tasks()
+    await asyncio.sleep(0)
+
+    await main.shutdown(context)
+
+    assert task.cancelled()
+    assert seen_on_cancel == {
+        "memory"   : ["before shutdown"],
+        "pfc"      : [{"goal": "persist on shutdown"}],
+        "accepting": False,
+    }
 
 
 @pytest.mark.asyncio
-async def test_shutdown_reports_live_cleanup(monkeypatch):
-    from plugins.xiaoqing_chat import main
+async def test_shutdown_reports_live_cleanup(tmp_path):
+    context = _shutdown_context(tmp_path)
+    state   = bound_state(context)
+    stubborn = SimpleNamespace(cancels=0, finish=False)
 
-    task = Mock()
-    state = SimpleNamespace(stop_accepting_background_tasks=Mock(), background_tasks=lambda: {task})
-    monkeypatch.setattr(main, "_state", lambda: state)
-    monkeypatch.setattr(main, "_flush_shutdown_state", AsyncMock())
-    monkeypatch.setattr(main.asyncio, "wait", AsyncMock(return_value=(set(), {task})))
-    with pytest.raises(TimeoutError, match="still running"):
-        await main.shutdown(SimpleNamespace(logger=Mock()))
-    task.cancel.assert_called_once()
+    async def ignores_cancellation():
+        while True:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                stubborn.cancels += 1
+                if stubborn.finish:
+                    raise
+
+    spawn_bg_task(context, ignores_cancellation(), name="stubborn")
+    [task] = state.background_tasks()
+    await asyncio.sleep(0)
+    try:
+        with pytest.raises(TimeoutError, match="still running"):
+            await main.shutdown(context)
+        assert stubborn.cancels == 1
+    finally:
+        stubborn.finish = True
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_sleeping_work_and_flushes_within_shared_budget(
-    tmp_path, monkeypatch
-):
-    memory = MemoryStore(tmp_path)
+async def test_shutdown_cancels_sleeping_work_and_flushes_within_shared_budget(tmp_path):
+    context = _shutdown_context(tmp_path)
+    memory  = bound_state(context).memory_store
     memory.append("g1", role="user", name="user", content="before shutdown")
     started = asyncio.Event()
 
@@ -105,20 +120,11 @@ async def test_shutdown_cancels_sleeping_work_and_flushes_within_shared_budget(
         finally:
             memory.append("g1", role="assistant", name="bot", content="cleanup complete")
 
-    task = asyncio.create_task(delayed_work())
+    spawn_bg_task(context, delayed_work(), name="delayed")
+    [task] = bound_state(context).background_tasks()
     await started.wait()
-    state = SimpleNamespace(
-        stop_accepting_background_tasks = Mock(),
-        background_tasks                = lambda: {task},
-        memory_store                    = memory,
-        pfc_state_store=SimpleNamespace(flush=Mock()),
-        action_history=SimpleNamespace(flush=Mock()),
-        media_store=SimpleNamespace(flush=Mock()),
-        memory_db=SimpleNamespace(is_dirty=lambda: False),
-    )
-    monkeypatch.setattr(main, "_state", lambda: state)
     try:
-        await asyncio.wait_for(main.shutdown(SimpleNamespace(logger=Mock())), timeout=2)
+        await asyncio.wait_for(main.shutdown(context), timeout=2)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

@@ -4,29 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.message import extract_text
 from plugins.xiaoqing_chat.chat_event import (
     MENTION_LABELS_KEY,
     is_bare_name_call,
     is_called_by_name,
 )
-from plugins.xiaoqing_chat.config.config import PersonalityConfig, XiaoQingChatConfig
+from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.generation_limiter import (
     CHAT_SUPERSEDED,
     GenerationLimiter,
     GenerationLimitExceeded,
 )
-from plugins.xiaoqing_chat.handler_context import HandlerContext
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
-from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
-from plugins.xiaoqing_chat.runtime_state import ChatRuntime
-from plugins.xiaoqing_chat.smalltalk_models import GeneratedSmalltalkTurn, PreparedSmalltalkTurn
+from tests.helpers.reply_checker_test_support import checker_verdict
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    settle_chat_background,
+)
+
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
 
 BOT_ID   = 11111
 OTHER_ID = "20003"
@@ -151,30 +161,6 @@ def test_effective_text_and_parts_interleave_media_in_message_order():
 # 点名他人不抢答
 
 
-@pytest.mark.asyncio
-async def test_reply_gate_lets_planner_judge_turn_that_mentions_someone_else():
-    """点名别人不再硬拦：话题小青感兴趣也可以接一句，由规划器判断。"""
-
-    from plugins.xiaoqing_chat.frequency_control import decide_reply
-
-    runtime                                          = MagicMock()
-    runtime.cfg.reply_probability_base               = 1.0
-    runtime.cfg.min_reply_interval_seconds           = 0.0
-    runtime.cfg.max_replies_per_minute               = 100
-    runtime.cfg.heartflow.enable_heartflow           = False
-    runtime.cfg.goal.enable_goal                     = False
-    state                                            = MagicMock()
-    state.get_last_reply_ts.return_value             = 0.0
-    state.get_continuous_cooldown_until.return_value = 0.0
-    state.get_reply_timestamps.return_value          = []
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
-
-    assert await decide_reply(runtime, state, "g1", "@小橘 喂", False, False) is True
-    decision = state.set_reply_gate_decision.call_args.args[1]
-    assert decision.reason == "allowed"
-
-
 def _planner_kwargs(history: list[StoredMessage], current_text: str) -> dict:
     return {
         "secrets": {},
@@ -191,38 +177,6 @@ def _planner_kwargs(history: list[StoredMessage], current_text: str) -> dict:
         "llm": LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=1.0),
         "current_text": current_text,
     }
-
-
-def _planner_wait_response(*_args, **_kwargs):
-    content = (
-        '{"thinking": "他俩在聊", "action": "wait", "reason": "在接对方的话", "wait_seconds": 0}'
-    )
-    return {"choices": [{"message": {"content": content}}]}, "responses"
-
-
-@pytest.mark.asyncio
-async def test_open_question_answering_another_member_goes_through_planner(monkeypatch):
-    from plugins.xiaoqing_chat.planning import pfc_action_planner
-
-    fake_chat = AsyncMock(side_effect=_planner_wait_response)
-    monkeypatch.setattr(pfc_action_planner, "chat_completions_raw_with_profile", fake_chat)
-    history = [
-        StoredMessage(role="user", name="阿禾", ts=100.0, user_id=1, content="搞不好是双层白名单"),
-        StoredMessage(
-            role    = "user",
-            name    = "Momo",
-            ts      = 135.0,
-            user_id = 2,
-            content = "白名单是不是没生效？应该没这么复杂",
-        ),
-    ]
-
-    plan = await pfc_action_planner.plan_next_action(
-        **_planner_kwargs(history, "白名单是不是没生效？应该没这么复杂")
-    )
-
-    assert plan.action == "wait"
-    fake_chat.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -269,52 +223,88 @@ async def test_fresh_group_turn_respects_planner_decision(monkeypatch, text, act
     assert "下次一定" in prompt
 
 
+def _group_chat_context(mock_context, model, *config: dict) -> object:
+    """群里没叫她时插话概率为 1（门控必放行）的上下文。群聊统一进入规划器，开关只控制私聊。"""
+
+    return scripted_chat_context(
+        mock_context, model, GROUP_GATE_OPEN, {"planner": {"enable_planner": False}}, *config
+    )
+
+
+def _segments_event(sample_group_event, *segments: dict, **overrides) -> dict:
+    """群里的一条消息，消息段由调用方给出；事件时间取现在。"""
+
+    return chat_message_event(
+        sample_group_event,
+        extract_text({"message": list(segments)}),
+        message=list(segments),
+        **overrides,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "segments,silenced",
+    "segments,fragment",
     [
-        ([_text("不用回复了")], True),
-        ([_text("小青，别回复了")], True),
-        ([_at(BOT_ID), _text("别回复了")], True),
-        ([_text("阿梨，别回复我了")], False),
-        ([_at(OTHER_ID, "小明"), _text("别回复我了")], False),
-        ([_text("小明，不是叫你")], False),
-        ([_text("Momo，别回复了")], False),
-        ([_text("不用回复了吗？")], False),
+        pytest.param([_text("不用回复了")], "不用回复了", id="bare-stop"),
+        pytest.param([_text("阿梨，别回复我了")], "别回复我了", id="named-other-member"),
+        pytest.param(
+            [_at(OTHER_ID, "小明"), _text("别回复我了")], "别回复我了", id="at-other-member"
+        ),
+        pytest.param([_text("小明，不是叫你")], "不是叫你", id="not-talking-to-her"),
+        pytest.param([_text("Momo，别回复了")], "别回复了", id="named-foreign-name"),
+        pytest.param([_text("不用回复了吗？")], "不用回复了吗", id="stop-as-a-question"),
     ],
 )
-async def test_prepare_turn_keeps_stop_requests_for_context_planning(tmp_path, segments, silenced):
-    from core.message import extract_text
-    from plugins.xiaoqing_chat import handlers
-    from plugins.xiaoqing_chat.attention_gate import AttentionDecision
+async def test_stop_requests_not_addressed_to_her_go_to_context_planning(
+    mock_context, sample_group_event, segments, fragment
+):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    runtime                                             = ChatRuntime(XiaoQingChatConfig(), [])
-    runtime.cfg.goal.enable_goal                        = False
-    runtime.cfg.reflection.enable_expression_reflection = False
-    history = [StoredMessage(role="user", name="Momo", user_id=2, ts=1, content="在")]
-    state = _state_with_history(*history)
-    context = SimpleNamespace(data_dir=tmp_path, logger=Mock())
-    hctx  = HandlerContext("g123456789", runtime, state, {}, tmp_path, "小青", context)
-    event = _group_event(*segments)
-    attention = AsyncMock(return_value=(AttentionDecision(False, False), False))
-    with patch.multiple(
-        handlers,
-        build_effective_user_text=AsyncMock(side_effect=lambda text, *_args, **_kwargs: text),
-        is_ignored_text=Mock(return_value=False),
-        chat_lock=Mock(return_value=asyncio.Lock()),
-        _maybe_reset_idle_conversation = AsyncMock(),
-        _resolve_attention             = attention,
-        _apply_routine=Mock(return_value=1.0),
-        spawn_daily_life=Mock(),
-        decide_reply=AsyncMock(return_value=True),
-        _refresh_mood_state=Mock(return_value=""),
-        log_step=Mock(),
-    ):
-        result = await handlers._prepare_smalltalk_turn(extract_text(event), event, context, hctx)
-    assert result is not None
-    assert not result.forced
-    assert "回复" in result.text or "叫你" in result.text
-    attention.assert_awaited_once()
+    model = ScriptedChatModel(
+        plan=plan_answer("direct_reply"), reply="好的", checker=checker_verdict()
+    )
+    _group_chat_context(mock_context, model)
+    event = _segments_event(sample_group_event, *segments)
+
+    result = await handle_smalltalk(extract_text(event), event, mock_context)
+
+    # 这句话没有被当成静默指令吞掉，也没有被当成冲她来的：交给规划器按上下文判断。
+    (plan_call,) = model.calls_of("plan")
+    assert fragment in plan_call.text
+    assert result == [{"type": "text", "data": {"text": "好的"}}]
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "segments",
+    [
+        pytest.param([_text("小青，别回复了")], id="named-her"),
+        pytest.param([_at(BOT_ID), _text("别回复了")], id="at-her"),
+    ],
+)
+async def test_stop_request_addressed_to_her_still_gets_a_direct_reply(
+    mock_context, sample_group_event, segments
+):
+    """冲着她说的“别回复了”不当静默指令吞掉：被叫到就直接回一句。"""
+
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+
+    model = ScriptedChatModel(
+        plan=plan_answer("direct_reply"), reply="好的", checker=checker_verdict()
+    )
+    _group_chat_context(mock_context, model)
+    event = _segments_event(sample_group_event, *segments)
+
+    result = await handle_smalltalk(extract_text(event), event, mock_context)
+
+    # 被叫到就直接回，不交给规划器判断要不要接。
+    assert model.calls_of("plan") == []
+    assert result == [{"type": "text", "data": {"text": "好的"}}]
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
 
 
 # 生成配额：同会话排队，最新的一轮接手
@@ -432,85 +422,94 @@ async def test_chat_slot_wait_is_bounded_and_other_chats_are_unaffected():
 
 
 @pytest.mark.asyncio
-async def test_superseded_forced_turn_does_not_send_busy_notice():
-    from plugins.xiaoqing_chat import handlers
+async def test_superseded_forced_turn_does_not_send_busy_notice(mock_context, sample_group_event):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.store_binding import bound_state
 
-    @asynccontextmanager
-    async def superseded(**_kwargs):
-        raise GenerationLimitExceeded(CHAT_SUPERSEDED)
-        yield
+    first_generating = asyncio.Event()
+    release_first    = asyncio.Event()
+    replies          = iter(["来了来了", "刚好看到，怎么啦"])
 
-    prepared = PreparedSmalltalkTurn(
-        text              = "小青，在吗",
-        mentioned         = True,
-        is_private        = False,
-        forced            = True,
-        force_reason      = "mentioned",
-        brain_chat_active = False,
-        mood_text         = "",
-    )
-    state = SimpleNamespace(generation_limiter=SimpleNamespace(admit=superseded))
-    hctx = SimpleNamespace(runtime=ChatRuntime(XiaoQingChatConfig(), []), state=state, chat_id="g1")
+    async def reply(_call) -> str:
+        answer = next(replies)
+        if not first_generating.is_set():
+            # 第一轮占着会话的生成名额，等到后面两轮都到了才放开。
+            first_generating.set()
+            await release_first.wait()
+        return answer
 
-    with (
-        patch.object(handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=prepared)),
-        patch.object(handlers, "log_step", Mock()),
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "在吗", _group_event(_text("小青，在吗")), MagicMock(), hctx=hctx
+    model = ScriptedChatModel(reply=reply, checker=checker_verdict())
+    scripted_chat_context(mock_context, model)
+    limiter = bound_state(mock_context).generation_limiter
+
+    def called(user_id: int, message_id: int, text: str) -> dict:
+        return chat_message_event(sample_group_event, text, user_id=user_id, message_id=message_id)
+
+    turns = [
+        asyncio.create_task(
+            handle_smalltalk("小青，在吗", called(111, 1, "小青，在吗"), mock_context)
+        )
+    ]
+    try:
+        await asyncio.wait_for(first_generating.wait(), timeout=5)
+        # 第二轮排队等名额；第三轮到了，第二轮就让给它。
+        turns.append(
+            asyncio.create_task(
+                handle_smalltalk("小青，你好", called(222, 2, "小青，你好"), mock_context)
+            )
+        )
+        async with asyncio.timeout(5):
+            while "g67890" not in limiter._chat_waiters:
+                await asyncio.sleep(0)
+        turns.append(
+            asyncio.create_task(
+                handle_smalltalk("小青，看一下", called(333, 3, "小青，看一下"), mock_context)
+            )
         )
 
-    assert result == []
+        # 被顶替的这一轮是被叫到的，但不说“消息有点多”：由新一轮接手。
+        assert await asyncio.wait_for(turns[1], timeout=5) == []
+
+        release_first.set()
+        first = await asyncio.wait_for(turns[0], timeout=5)
+        assert first == [{"type": "text", "data": {"text": "来了来了"}}]
+        await ack_reply_delivery(first)
+        third = await asyncio.wait_for(turns[2], timeout=5)
+        assert third == [{"type": "text", "data": {"text": "刚好看到，怎么啦"}}]
+        await ack_reply_delivery(third)
+    finally:
+        release_first.set()
+        for turn in turns:
+            turn.cancel()
+        await asyncio.gather(*turns, return_exceptions=True)
+    await settle_chat_background(mock_context, model)
 
 
 # 规划器观望不阻塞
 
 
 @pytest.mark.asyncio
-async def test_planner_wait_ends_turn_without_sleeping(tmp_path):
-    from plugins.xiaoqing_chat import turn_generation
+async def test_planner_wait_ends_turn_without_sleeping(mock_context, sample_group_event):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.store_binding import bound_state
 
-    runtime = ChatRuntime(XiaoQingChatConfig(), [])
-    state   = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.pfc_state_store.get_async = AsyncMock(return_value=None)
-    context = SimpleNamespace(data_dir=tmp_path, logger=MagicMock())
-    hctx     = HandlerContext("g1", runtime, state, {}, tmp_path, "小青", context)
-    prepared = PreparedSmalltalkTurn(
-        text              = "那大概几点",
-        mentioned         = False,
-        is_private        = False,
-        forced            = False,
-        force_reason      = "",
-        brain_chat_active = False,
-        mood_text         = "",
+    wait = json.dumps(
+        {"action": "wait", "reason": "给他们留空间", "wait_seconds": 20}, ensure_ascii=False
     )
-    waiting = PFCRunResult(
-        reply="", action="wait", reason="给他们留空间", ended=False, wait_seconds=20
-    )
-    sleep = AsyncMock()
-    lock  = asyncio.Lock()
+    model = ScriptedChatModel(plan=wait)
+    _group_chat_context(mock_context, model)
+    event = chat_message_event(sample_group_event, "那大概几点")
 
-    with (
-        patch.multiple(
-            turn_generation,
-            ensure_user_message_recorded=AsyncMock(return_value="m1"),
-            chat_lock=lambda _: lock,
-            run_pfc_once=AsyncMock(return_value=waiting),
-            log_step=Mock(),
-        ),
-        patch.object(
-            turn_generation, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep})
-        ),
-    ):
-        generated = await turn_generation.generate_smalltalk_turn(
-            prepared, {"group_id": 1, "user_id": 2}, context, hctx
-        )
+    # 时间是边界：要是真的去等那 20 秒，睡眠替身会被调用。
+    with patch.object(asyncio, "sleep", AsyncMock()) as sleep:
+        result = await handle_smalltalk("那大概几点", event, mock_context)
 
-    assert isinstance(generated, GeneratedSmalltalkTurn)
-    assert generated.reply == ""
-    assert generated.pfc_result is waiting
+    assert result == []
+    assert len(model.calls_of("plan")) == 1 and model.calls_of("reply") == []
+    records = await bound_state(mock_context).action_history.get_recent_async("g67890", max_items=5)
+    assert [record.action for record in records] == ["wait"]
     sleep.assert_not_awaited()
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -533,16 +532,19 @@ async def test_planner_wait_ends_turn_without_sleeping(tmp_path):
         ("小青昨天说过这个", "other_at"),
     ],
 )
-async def test_group_entry_reaches_context_planner(tmp_path, text, entry, action):
-    generated, prepared, model, draft = await _run_group_turn(tmp_path, text, entry, action)
-    assert prepared.forced is False
-    model.assert_awaited_once()
-    prompt = model.await_args.kwargs["messages"][0]["content"]
-    assert prepared.text in prompt and "刚才已经回答了" in prompt
-    assert "实际含义" in prompt
-    assert generated.pfc_result.action == action
-    assert draft.await_count == (1 if action == "direct_reply" else 0)
-    assert bool(generated.reply) is (action == "direct_reply")
+async def test_group_entry_reaches_context_planner(
+    mock_context, sample_group_event, text, entry, action
+):
+    result, model, state = await _run_group_turn(
+        mock_context, sample_group_event, text, entry, action
+    )
+    # 规划器被问到了（这一轮不是被叫到的）：它看到了这句话和群里刚说过的话，并按它的决定走。
+    (plan_call,) = model.calls_of("plan")
+    assert text in plan_call.text and "刚才已经回答了" in plan_call.text
+    assert len(model.calls_of("reply")) == (1 if action == "direct_reply" else 0)
+    assert bool(result) is (action == "direct_reply")
+    records = await state.action_history.get_recent_async("g67890", max_items=5)
+    assert records[-1].action == action
 
 
 @pytest.mark.asyncio
@@ -560,37 +562,41 @@ async def test_group_entry_reaches_context_planner(tmp_path, text, entry, action
         ("聊聊刚才的事", "command", "command"),
     ],
 )
-async def test_group_turns_addressed_to_her_get_a_direct_reply(tmp_path, text, entry, reason):
+async def test_group_turns_addressed_to_her_get_a_direct_reply(
+    mock_context, sample_group_event, text, entry, reason
+):
     # 规划器即使想旁听也问不到：明确跟她说的话不经概率门、冷却和规划器，直接回复。
-    generated, prepared, model, draft = await _run_group_turn(tmp_path, text, entry, "wait")
-    assert prepared.forced is True and prepared.force_reason == reason
-    model.assert_not_awaited()
-    assert draft.await_count == 1 and generated.reply == "接话内容"
-    assert generated.reply_source == "forced"
+    result, model, state = await _run_group_turn(
+        mock_context, sample_group_event, text, entry, "wait"
+    )
+    assert model.calls_of("plan") == []
+    assert result == [{"type": "text", "data": {"text": "接话内容"}}]
+    records = await state.action_history.get_recent_async("g67890", max_items=5)
+    assert records[-1].reasoning == f"forced_direct:{reason}"
+    assert records[-1].detail["source"] == "forced"
 
 
-async def _run_group_turn(tmp_path, text: str, entry: str, action: str):
-    import time
+async def _run_group_turn(mock_context, sample_group_event, text: str, entry: str, action: str):
+    """群里先有一句旁人的 “小青” 和她的回答，再来这一条 ``text``（``entry`` 是它进来的方式）；
+    规划器的回答是 ``action``。返回（这一轮的返回, 剧本模型, 运行时状态）。"""
 
-    from plugins.xiaoqing_chat import handlers, turn_generation
-    from plugins.xiaoqing_chat.message_parts import build_text_message_parts
-    from plugins.xiaoqing_chat.planning import pfc_action_planner
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.store_binding import bound_state
 
-    cfg                                         = XiaoQingChatConfig()
-    cfg.goal.enable_goal                        = False
-    cfg.reflection.enable_expression_reflection = False
-    cfg.reply_probability_base                  = 1.0
-    cfg.heartflow.enable_heartflow              = False
-    cfg.planner.enable_planner                  = False  # 群聊统一进入 PFC，开关只控制私聊。
-    runtime                                     = ChatRuntime(cfg, [])
-    state                                       = ChatRuntimeState()
-    now                                         = time.time()
+    chat_id = "g67890"
+    model   = ScriptedChatModel(
+        plan    = plan_answer(action, "上下文判断"),
+        reply   = "接话内容",
+        checker = checker_verdict(),
+    )
+    _group_chat_context(mock_context, model)
+    state = bound_state(mock_context)
+    now   = time.time()
     state.memory_store.append(
-        "g123456789", role="user", name="甲", user_id=2, ts=now - 60, local_id="m1", content="小青"
+        chat_id, role="user", name="甲", user_id=2, ts=now - 60, local_id="m1", content="小青"
     )
     state.memory_store.append(
-        "g123456789",
+        chat_id,
         role       = "assistant",
         name       = "小青",
         ts         = now - 50,
@@ -598,50 +604,21 @@ async def _run_group_turn(tmp_path, text: str, entry: str, action: str):
         message_id = 88,
         content    = "刚才已经回答了",
     )
-    event = _group_event(_text(text))
-    if entry in {"bot_at", "other_at"}:
-        event["message"].insert(0, _at(BOT_ID if entry == "bot_at" else OTHER_ID))
+    segments = [_text(text)]
+    if entry == "bot_at":
+        segments.insert(0, _at(BOT_ID))
+    if entry == "other_at":
+        segments.insert(0, _at(OTHER_ID))
     if entry == "reply":
-        event["message"].insert(0, {"type": "reply", "data": {"id": "88"}})
-    if entry == "command":
-        event["_xc_command_forced"] = True
-    context = SimpleNamespace(data_dir=tmp_path, logger=Mock())
-    hctx     = HandlerContext("g123456789", runtime, state, {}, tmp_path, "小青", context)
-    response = {
-        "choices": [
-            {"message": {"content": json.dumps({"action": action, "reason": "上下文判断"})}}
-        ]
-    }
-    model = AsyncMock(return_value=(response, "responses"))
-    draft = AsyncMock(return_value=("接话内容", build_text_message_parts("接话内容"), None))
-    with (
-        patch.object(
-            handlers,
-            "build_effective_user_text",
-            AsyncMock(side_effect=lambda value, *_args, **_kwargs: value),
-        ),
-        patch.object(handlers, "_maybe_reset_idle_conversation", AsyncMock()),
-        patch.object(handlers, "spawn_daily_life"),
-        patch.object(handlers, "_apply_routine", return_value=1.0),
-        patch.object(handlers, "_refresh_mood_state", return_value=""),
-        patch.object(handlers, "log_step"),
-        patch.object(pfc_action_planner, "chat_completions_raw_with_profile", model),
-        patch.object(turn_generation, "ensure_user_message_recorded", AsyncMock(return_value="m3")),
-        patch.object(turn_generation, "_generate_reply_result", draft),
-    ):
-        prepared = await handlers._prepare_smalltalk_turn(text, event, context, hctx)
-        assert prepared is not None
-        state.memory_store.append(
-            hctx.chat_id,
-            role     = "user",
-            name     = "甲",
-            user_id  = 2,
-            ts       = now,
-            local_id = "m3",
-            content  = prepared.text,
-        )
-        generated = await turn_generation.generate_smalltalk_turn(prepared, event, context, hctx)
-    return generated, prepared, model, draft
+        segments.insert(0, {"type": "reply", "data": {"id": "88"}})
+    extra = {"_xc_command_forced": True} if entry == "command" else {}
+    event = chat_message_event(sample_group_event, text, message=segments, **extra)
+
+    result = await handle_smalltalk(text, event, mock_context)
+    if result:
+        await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
+    return result, model, state
 
 
 @pytest.mark.parametrize(

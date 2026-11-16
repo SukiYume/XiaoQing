@@ -117,7 +117,7 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
                     "is_global"           : True,  # 旧版本的全局标记：忽略，不报错
                     "count"               : "not-an-int",
                     "is_jargon"           : "false",
-                    "is_complete"         : 1,  # 旧字段名不再被读取
+                    "is_complete"         : 1,  # 旧字段名被忽略
                     "last_inference_count": -3,
                     "updated_at"          : "not-a-time",
                 }

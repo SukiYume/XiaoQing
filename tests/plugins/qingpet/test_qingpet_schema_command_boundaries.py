@@ -1,10 +1,8 @@
 """数据库升级、命令作用域、事务回滚与调度边界测试。"""
 
-import asyncio
 import logging
-import os
 import sqlite3
-import tempfile
+import threading
 from contextlib import closing
 from datetime import datetime, timedelta
 
@@ -27,40 +25,15 @@ from plugins.qingpet.commands.advanced_commands import (
     handle_view_pet,
 )
 from plugins.qingpet.commands.basic_commands import handle_feed, handle_status
-from plugins.qingpet.services import database as database_module
 from plugins.qingpet.services import database_clock
 from plugins.qingpet.services.database import Database
-from plugins.qingpet.services.database_types import PetActionAtomicResult
 from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import DAILY_LIMITS, PetStage, PetStatus
-
-
-def _segments_text(payload) -> str:
-    if isinstance(payload, str):
-        return payload
-    if not isinstance(payload, list):
-        return ""
-    parts = []
-    for seg in payload:
-        if isinstance(seg, dict) and seg.get("type") == "text":
-            parts.append(str(seg.get("data", {}).get("text", "")))
-    return "".join(parts)
-
-
-def _make_temp_db():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    db = Database(db_path)
-    return db, db_path
-
-
-def _cleanup_temp_db(db: Database, db_path: str) -> None:
-    db.cleanup()
-    if os.path.exists(db_path):
-        os.unlink(db_path)
+from tests.helpers.assertions import text_segments_text
+from tests.helpers.qingpet_test_support import fail_updates_to
 
 
 def test_database_initialization_schema_is_complete_and_idempotent(tmp_path):
@@ -145,9 +118,7 @@ def test_version_six_database_loses_its_retired_bookkeeping(tmp_path) -> None:
         db.cleanup()
 
 
-def test_daily_coin_cap_trigger_tracks_updated_limit(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_daily_coin_cap_trigger_tracks_updated_limit(tmp_path) -> None:
     db_path = tmp_path / "qingpet-cap-trigger.db"
     db      = Database(str(db_path))
     try:
@@ -156,13 +127,26 @@ def test_daily_coin_cap_trigger_tracks_updated_limit(
             "INSERT INTO users (user_id, group_id, coins, today_coins_earned) VALUES (?, ?, ?, ?)",
             ("cap-user", 123, 1000, 0),
         )
+        # 模拟旧版本部署留下的触发器：上限比现在的小。
+        connection.execute("DROP TRIGGER trg_users_daily_coin_cap")
+        connection.execute(
+            """CREATE TRIGGER trg_users_daily_coin_cap
+               AFTER UPDATE OF today_coins_earned ON users
+               WHEN NEW.today_coins_earned > 200
+               BEGIN
+                   UPDATE users SET
+                       coins = MAX(0, NEW.coins - (NEW.today_coins_earned - 200)),
+                       today_coins_earned = 200
+                   WHERE user_id = NEW.user_id AND group_id = NEW.group_id;
+               END"""
+        )
         connection.commit()
 
-        monkeypatch.setattr(database_module, "_DAILY_COIN_LIMIT", 1000)
-        db._init_database()
+        # 重新打开数据库（相当于升级后重启），触发器按现在的上限重建。
+        Database(str(db_path)).cleanup()
 
         connection.execute(
-            "UPDATE users SET today_coins_earned = 600 WHERE user_id = ? AND group_id = ?",
+            "UPDATE users SET today_coins_earned = 400 WHERE user_id = ? AND group_id = ?",
             ("cap-user", 123),
         )
         connection.commit()
@@ -170,7 +154,7 @@ def test_daily_coin_cap_trigger_tracks_updated_limit(
             "SELECT coins, today_coins_earned FROM users WHERE user_id = ? AND group_id = ?",
             ("cap-user", 123),
         ).fetchone()
-        assert (row["coins"], row["today_coins_earned"]) == (1000, 600)
+        assert (row["coins"], row["today_coins_earned"]) == (1000, 400)
     finally:
         db.cleanup()
 
@@ -194,20 +178,25 @@ def test_legacy_task_date_column_and_index_are_installed_in_one_upgrade(tmp_path
 def test_database_failure_log_omits_exception_text_path_and_query_data(
     monkeypatch,
     caplog,
+    qingpet_db,
 ):
-    db, db_path = _make_temp_db()
-    sensitive = "password=do-not-log C:\\private\\qingpet.db user=private-user"
+    sensitive             = "password=do-not-log C:\\private\\qingpet.db user=private-user"
+    results: list[object] = []
 
-    def fail_connection():
+    def fail_connect(*_args, **_kwargs):
         raise RuntimeError(sensitive)
 
-    try:
-        monkeypatch.setattr(db, "_get_connection", fail_connection)
-        with caplog.at_level(logging.ERROR):
-            assert db.get_user("private-user", 70099) is None
-    finally:
-        _cleanup_temp_db(db, db_path)
+    def read_from_new_thread() -> None:
+        # 连接按线程缓存；新线程要重新建连接，建连接这一步在这里失败。
+        results.append(qingpet_db.get_user("private-user", 70099))
 
+    with monkeypatch.context() as patch, caplog.at_level(logging.ERROR):
+        patch.setattr(sqlite3, "connect", fail_connect)
+        worker = threading.Thread(target=read_from_new_thread)
+        worker.start()
+        worker.join()
+
+    assert results == [None]
     log_text = "\n".join(record.getMessage() for record in caplog.records)
     assert "operation=get_user" in log_text
     assert "error_type=RuntimeError" in log_text
@@ -230,24 +219,20 @@ class _PrincipalContext:
     ("role", "is_bot_admin"),
     [("owner", False), ("admin", False), ("member", True)],
 )
-def test_admin_command_uses_core_principal_for_current_group(role, is_bot_admin):
-    temp_db, db_path = _make_temp_db()
-    try:
-        context = _PrincipalContext(
-            PluginPrincipal(
-                kind         = "user",
-                user_id      = 123456789,
-                group_id     = 10001,
-                is_bot_admin = is_bot_admin,
-                group_role   = role,
-            ),
-            PluginCapabilities(is_bot_admin=is_bot_admin),
-        )
-        ok, msg = qingpet_main._handle_admin_command(
-            "123456789", 10001, "开启", temp_db, context=context
-        )
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_admin_command_uses_core_principal_for_current_group(role, is_bot_admin, qingpet_db):
+    context = _PrincipalContext(
+        PluginPrincipal(
+            kind         = "user",
+            user_id      = 123456789,
+            group_id     = 10001,
+            is_bot_admin = is_bot_admin,
+            group_role   = role,
+        ),
+        PluginCapabilities(is_bot_admin=is_bot_admin),
+    )
+    ok, msg = qingpet_main._handle_admin_command(
+        "123456789", 10001, "开启", qingpet_db, context=context
+    )
 
     assert ok is True
     assert "已在群 10001 中启用" in msg
@@ -280,21 +265,17 @@ def test_admin_commands_are_declared_for_group_managers(principal, allowed):
     assert (command_access(admin, principal) is None) is allowed
 
 
-def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
-    item_service = ItemService(temp_db)
+@pytest.mark.asyncio
+async def test_private_backpack_uses_real_group_scope_and_private_rate_bucket(qingpet_runtime):
+    context, qingpet_db = qingpet_runtime
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
+    item_service = ItemService(qingpet_db)
 
     user_service.get_or_create_user("private_owner", 81001)
     pet_service.adopt_pet("private_owner", 81001, "私聊宠")
     ok, _ = item_service.buy_item("private_owner", 81001, "apple", 2)
     assert ok is True
-
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = temp_db
-    qingpet_main._router      = None
 
     event = {
         "user_id"     : "private_owner",
@@ -302,24 +283,19 @@ def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
         "message"     : [{"type": "text", "data": {"text": "/宠物 背包"}}],
     }
 
-    try:
-        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "背包", event, None)))
-        conn = temp_db._get_connection()
-        group_zero_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE group_id = 0"
-        ).fetchone()["cnt"]
-        real_group_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id = ?",
-            ("private_owner", 81001),
-        ).fetchone()["cnt"]
-        negative_bucket_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id < 0",
-            ("private_owner",),
-        ).fetchone()["cnt"]
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
-        _cleanup_temp_db(temp_db, db_path)
+    msg              = text_segments_text(await qingpet_main.handle("pet", "背包", event, context))
+    conn             = qingpet_db._get_connection()
+    group_zero_count = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE group_id = 0"
+    ).fetchone()["cnt"]
+    real_group_count = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id = ?",
+        ("private_owner", 81001),
+    ).fetchone()["cnt"]
+    negative_bucket_count = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id < 0",
+        ("private_owner",),
+    ).fetchone()["cnt"]
 
     assert "苹果" in msg
     assert group_zero_count == 0
@@ -327,20 +303,16 @@ def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
     assert negative_bucket_count == 0
 
 
-def test_private_view_auto_scopes_to_single_pet_group():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+@pytest.mark.asyncio
+async def test_private_view_auto_scopes_to_single_pet_group(qingpet_runtime):
+    context, qingpet_db = qingpet_runtime
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("viewer_private", 81002)
     user_service.get_or_create_user("10086", 81002)
     pet_service.adopt_pet("viewer_private", 81002, "观察者")
     pet_service.adopt_pet("10086", 81002, "被看见")
-
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = temp_db
-    qingpet_main._router      = None
 
     event = {
         "user_id"     : "viewer_private",
@@ -348,30 +320,21 @@ def test_private_view_auto_scopes_to_single_pet_group():
         "message"     : [{"type": "text", "data": {"text": "/宠物 查看 10086"}}],
     }
 
-    try:
-        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "查看 10086", event, None)))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
-        _cleanup_temp_db(temp_db, db_path)
+    msg = text_segments_text(await qingpet_main.handle("pet", "查看 10086", event, context))
 
     assert "被看见" in msg
 
 
-def test_private_status_lists_all_group_pets():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+def test_private_status_lists_all_group_pets(qingpet_db):
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("u_private", 20001)
     user_service.get_or_create_user("u_private", 20002)
     pet_service.adopt_pet("u_private", 20001, "小白")
     pet_service.adopt_pet("u_private", 20002, "小黑")
 
-    try:
-        ok, msg = handle_status("u_private", 0, "", temp_db)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg = handle_status("u_private", 0, "", qingpet_db)
 
     assert ok is True
     assert "小白" in msg
@@ -380,18 +343,17 @@ def test_private_status_lists_all_group_pets():
     assert "20002" in msg
 
 
-def test_decay_applies_after_elapsed_hours():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
+def test_decay_applies_after_elapsed_hours(qingpet_db):
+    user_service = UserService(qingpet_db)
     user_service.get_or_create_user("u_decay", 30001)
 
-    pet_service = PetService(temp_db)
+    pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("u_decay", 30001, "慢慢")
 
-    pet = temp_db.get_pet("u_decay", 30001)
+    pet = qingpet_db.get_pet("u_decay", 30001)
     assert pet is not None
     pet.last_update = datetime.now() - timedelta(hours=3)
-    temp_db.update_pet(pet)
+    qingpet_db.update_pet(pet)
 
     import plugins.qingpet.services.pet_service as pet_service_module
 
@@ -399,34 +361,29 @@ def test_decay_applies_after_elapsed_hours():
     pet_service_module.random.random = lambda: 1.0
 
     try:
-        pet = temp_db.get_pet("u_decay", 30001)
+        pet = qingpet_db.get_pet("u_decay", 30001)
         assert pet is not None
         pet_service.apply_decay(pet, 1.0)
-        updated = temp_db.get_pet("u_decay", 30001)
+        updated = qingpet_db.get_pet("u_decay", 30001)
         assert updated is not None
     finally:
         pet_service_module.random.random = original_random
-        _cleanup_temp_db(temp_db, db_path)
 
     assert updated.hunger < 100
     assert updated.clean < 100
     assert updated.mood < 100
 
 
-def test_private_feed_requires_group_when_user_has_multiple_pets():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+def test_private_feed_requires_group_when_user_has_multiple_pets(qingpet_db):
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("u_multi", 40001)
     user_service.get_or_create_user("u_multi", 40002)
     pet_service.adopt_pet("u_multi", 40001, "甲")
     pet_service.adopt_pet("u_multi", 40002, "乙")
 
-    try:
-        ok, msg = handle_feed("u_multi", 0, "", temp_db, spam_decay_factor=1.0)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg = handle_feed("u_multi", 0, "", qingpet_db, spam_decay_factor=1.0)
 
     assert ok is False
     assert "请先指定群号" in msg
@@ -434,164 +391,134 @@ def test_private_feed_requires_group_when_user_has_multiple_pets():
     assert "40002" in msg
 
 
-def test_private_feed_with_group_uses_target_group_pet():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+def test_private_feed_with_group_uses_target_group_pet(qingpet_db):
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("u_multi2", 50001)
     user_service.get_or_create_user("u_multi2", 50002)
     pet_service.adopt_pet("u_multi2", 50001, "阿白")
     pet_service.adopt_pet("u_multi2", 50002, "阿黑")
 
-    try:
-        ok, msg = handle_feed("u_multi2", 0, "50002 apple", temp_db, spam_decay_factor=1.0)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg = handle_feed("u_multi2", 0, "50002 apple", qingpet_db, spam_decay_factor=1.0)
 
     assert ok is True
     assert "阿黑" in msg
 
 
-def test_view_pet_with_plain_qq_id_still_works():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+@pytest.mark.parametrize(
+    ("target_id", "argument", "pet_name"),
+    [
+        pytest.param("10086", "10086", "可可", id="plain-qq"),
+        pytest.param("10010", "[CQ:at,qq=10010]", "团团", id="cq-at"),
+    ],
+)
+def test_view_pet_accepts_plain_qq_and_cq_at_targets(target_id, argument, pet_name, qingpet_db):
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("viewer", 60001)
-    user_service.get_or_create_user("10086", 60001)
-    pet_service.adopt_pet("10086", 60001, "可可")
+    user_service.get_or_create_user(target_id, 60001)
+    pet_service.adopt_pet(target_id, 60001, pet_name)
 
-    try:
-        ok, msg = handle_view_pet("viewer", 60001, "10086", temp_db)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg = handle_view_pet("viewer", 60001, argument, qingpet_db)
 
     assert ok is True
-    assert "可可" in msg
+    assert pet_name in msg
 
 
-def test_view_pet_accepts_cq_at_format():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+@pytest.mark.parametrize(
+    ("command", "trailing_text", "pet_name", "expected"),
+    [
+        pytest.param("查看", "", "球球", "球球", id="view"),
+        pytest.param("互访", "", "被访宠", "访问了被访宠", id="visit"),
+        pytest.param(
+            "留言", " 你好呀", "留言宠", "已给留言宠留言", id="message-with-trailing-text"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_qingpet_handle_uses_event_at_as_target_when_args_omit_it(
+    command, trailing_text, pet_name, expected, qingpet_runtime
+):
+    context, qingpet_db = qingpet_runtime
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
-    user_service.get_or_create_user("viewer2", 60002)
-    user_service.get_or_create_user("10010", 60002)
-    pet_service.adopt_pet("10010", 60002, "团团")
-
-    try:
-        ok, msg = handle_view_pet("viewer2", 60002, "[CQ:at,qq=10010]", temp_db)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
-
-    assert ok is True
-    assert "团团" in msg
-
-
-def test_qingpet_handle_view_uses_event_at_when_args_missing_target():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
-
-    user_service.get_or_create_user("viewer3", 60003)
+    user_service.get_or_create_user("actor", 60003)
     user_service.get_or_create_user("10011", 60003)
-    pet_service.adopt_pet("10011", 60003, "球球")
+    pet_service.adopt_pet("10011", 60003, pet_name)
 
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = temp_db
-    qingpet_main._router      = None
+    segments = [
+        {"type": "text", "data": {"text": f"/pet {command} "}},
+        {"type": "at", "data": {"qq": "10011"}},
+    ]
+    if trailing_text:
+        segments.append({"type": "text", "data": {"text": trailing_text}})
+    event = {"user_id": "actor", "group_id": 60003, "message": segments}
 
-    event = {
-        "user_id" : "viewer3",
-        "group_id": 60003,
-        "message" : [
-            {"type": "text", "data": {"text": "/pet 查看 "}},
-            {"type": "at", "data": {"qq": "10011"}},
-        ],
-    }
+    msg = text_segments_text(await qingpet_main.handle("pet", command, event, context))
 
-    try:
-        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "查看", event, None)))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
-        _cleanup_temp_db(temp_db, db_path)
-
-    assert "球球" in msg
+    assert expected in msg
 
 
-def test_feed_shows_remaining_free_apple_count_in_message():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_feed_shows_remaining_free_apple_count_in_message(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("free_feed_user", 70001)
     pet_service.adopt_pet("free_feed_user", 70001, "苹果酱")
-    pet = temp_db.get_pet("free_feed_user", 70001)
+    pet = qingpet_db.get_pet("free_feed_user", 70001)
     assert pet is not None
 
-    try:
-        ok, msg, _ = pet_service.feed_pet(pet, user, "apple")
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg, _ = pet_service.feed_pet(pet, user, "apple")
 
     assert ok is True
     assert "免费苹果" in msg
     assert "剩余" in msg
 
 
-def test_free_feed_counter_persists_after_feed():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_free_feed_counter_persists_after_feed(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("free_counter_user", 70010)
     pet_service.adopt_pet("free_counter_user", 70010, "果果")
-    pet = temp_db.get_pet("free_counter_user", 70010)
+    pet = qingpet_db.get_pet("free_counter_user", 70010)
     assert pet is not None
 
-    try:
-        ok, _, _ = pet_service.feed_pet(pet, user, "apple")
-        persisted_user = temp_db.get_user("free_counter_user", 70010)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _, _ = pet_service.feed_pet(pet, user, "apple")
+    persisted_user = qingpet_db.get_user("free_counter_user", 70010)
 
     assert ok is True
     assert persisted_user is not None
     assert persisted_user.today_free_feed_count == 1
 
 
-def test_feed_updates_daily_task_before_task_panel_initialized():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_feed_updates_daily_task_before_task_panel_initialized(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("task_feed_user", 70011)
     pet_service.adopt_pet("task_feed_user", 70011, "任务果")
-    pet = temp_db.get_pet("task_feed_user", 70011)
+    pet = qingpet_db.get_pet("task_feed_user", 70011)
     assert pet is not None
 
-    try:
-        ok, _, _ = pet_service.feed_pet(pet, user, "apple")
-        tasks = temp_db.get_or_create_daily_tasks("task_feed_user", 70011)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _, _ = pet_service.feed_pet(pet, user, "apple")
+    tasks = qingpet_db.get_or_create_daily_tasks("task_feed_user", 70011)
 
     assert ok is True
     feed_task = next(t for t in tasks if t["task_type"] == "feed")
     assert feed_task["current_value"] == 1
 
 
-def test_feed_blocks_when_daily_limit_reached():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_feed_blocks_when_daily_limit_reached(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("limit_user", 70012)
     # 今天的次数记在 action_quotas 里，判定只看这张表。
-    conn = temp_db._get_connection()
+    conn = qingpet_db._get_connection()
     conn.execute(
         """INSERT INTO action_quotas
            (user_id, group_id, action, period_date, action_count, available_at)
@@ -600,30 +527,26 @@ def test_feed_blocks_when_daily_limit_reached():
     )
     conn.commit()
     pet_service.adopt_pet("limit_user", 70012, "满满")
-    pet = temp_db.get_pet("limit_user", 70012)
+    pet = qingpet_db.get_pet("limit_user", 70012)
     assert pet is not None
 
-    try:
-        ok, msg, _ = pet_service.feed_pet(pet, user, "apple")
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg, _ = pet_service.feed_pet(pet, user, "apple")
 
     assert ok is False
     assert "上限" in msg
 
 
-def test_train_failed_attempt_still_counts_daily_usage():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_train_failed_attempt_still_counts_daily_usage(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("train_limit_user", 70013)
     pet_service.adopt_pet("train_limit_user", 70013, "练练")
-    pet = temp_db.get_pet("train_limit_user", 70013)
+    pet = qingpet_db.get_pet("train_limit_user", 70013)
     assert pet is not None
     pet.energy = 100
     pet.stage  = PetStage.YOUNG
-    temp_db.update_pet(pet)
+    qingpet_db.update_pet(pet)
 
     import plugins.qingpet.services.pet_service as pet_service_module
 
@@ -632,10 +555,9 @@ def test_train_failed_attempt_still_counts_daily_usage():
 
     try:
         ok, _, _ = pet_service.train_pet(pet, user, training_type="strength")
-        persisted_user = temp_db.get_user("train_limit_user", 70013)
+        persisted_user = qingpet_db.get_user("train_limit_user", 70013)
     finally:
         pet_service_module.random.random = original_random
-        _cleanup_temp_db(temp_db, db_path)
 
     assert ok is True
     assert persisted_user is not None
@@ -643,17 +565,16 @@ def test_train_failed_attempt_still_counts_daily_usage():
     assert persisted_user.total_train_count == 1
 
 
-def test_explore_uses_numeric_event_reward_values():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_explore_uses_numeric_event_reward_values(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
 
     user = user_service.get_or_create_user("explore_user", 70002)
     pet_service.adopt_pet("explore_user", 70002, "探探")
-    pet = temp_db.get_pet("explore_user", 70002)
+    pet = qingpet_db.get_pet("explore_user", 70002)
     assert pet is not None
     pet.energy = 100
-    temp_db.update_pet(pet)
+    qingpet_db.update_pet(pet)
 
     import plugins.qingpet.services.pet_service as pet_service_module
 
@@ -666,55 +587,45 @@ def test_explore_uses_numeric_event_reward_values():
         ok, msg, coins = pet_service.explore(pet, user, spam_decay_factor=1.0)
     finally:
         pet_service_module.random.choices = original_choices
-        _cleanup_temp_db(temp_db, db_path)
 
     assert ok is True
     assert "固定事件" in msg
     assert coins == 20
 
 
-def test_explore_message_contains_pet_name_prefix():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
+def test_explore_message_contains_pet_name_prefix(qingpet_db):
+    pet_service  = PetService(qingpet_db)
+    user_service = UserService(qingpet_db)
 
     user_service.get_or_create_user("u_msg", 70003)
     pet_service.adopt_pet("u_msg", 70003, "阿星")
 
-    try:
-        ok, msg = handle_explore("u_msg", 70003, "", temp_db, spam_decay_factor=1.0)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, msg = handle_explore("u_msg", 70003, "", qingpet_db, spam_decay_factor=1.0)
 
     assert ok is True
     assert msg.startswith("🐾 阿星\n")
 
 
-def test_minigame_respects_configured_cooldown():
-    temp_db, db_path = _make_temp_db()
-    user_service   = UserService(temp_db)
-    pet_service    = PetService(temp_db)
-    social_service = SocialService(temp_db)
+def test_minigame_respects_configured_cooldown(qingpet_db):
+    user_service   = UserService(qingpet_db)
+    pet_service    = PetService(qingpet_db)
+    social_service = SocialService(qingpet_db)
 
     user_service.get_or_create_user("dice_user", 70014)
     pet_service.adopt_pet("dice_user", 70014, "骰骰")
 
-    try:
-        ok1, _ = social_service.play_dice("dice_user", 70014)
-        ok2, msg2 = social_service.play_dice("dice_user", 70014)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok1, _ = social_service.play_dice("dice_user", 70014)
+    ok2, msg2 = social_service.play_dice("dice_user", 70014)
 
     assert ok1 is True
     assert ok2 is False
     assert "冷却" in msg2
 
 
-def test_pet_show_settlement_grants_temporary_champion_title():
-    temp_db, db_path = _make_temp_db()
-    user_service   = UserService(temp_db)
-    pet_service    = PetService(temp_db)
-    social_service = SocialService(temp_db)
+def test_pet_show_settlement_grants_temporary_champion_title(qingpet_db):
+    user_service   = UserService(qingpet_db)
+    pet_service    = PetService(qingpet_db)
+    social_service = SocialService(qingpet_db)
 
     user_service.get_or_create_user("show_winner", 70015)
     user_service.get_or_create_user("show_other", 70015)
@@ -723,96 +634,25 @@ def test_pet_show_settlement_grants_temporary_champion_title():
     user_service.get_or_create_user("voter-3", 70015)
     pet_service.adopt_pet("show_winner", 70015, "冠军宠")
     pet_service.adopt_pet("show_other", 70015, "陪跑宠")
-    show_id = temp_db.create_pet_show(70015, "春季展示会", 24)
+    show_id = qingpet_db.create_pet_show(70015, "春季展示会", 24)
     assert show_id is not None
-    assert temp_db.vote_pet_show_atomic(show_id, "voter-1", "show_winner", 5) is True
-    assert temp_db.vote_pet_show_atomic(show_id, "voter-2", "show_winner", 5) is True
-    assert temp_db.vote_pet_show_atomic(show_id, "voter-3", "show_other", 5) is True
+    assert qingpet_db.vote_pet_show_atomic(show_id, "voter-1", "show_winner", 5) is True
+    assert qingpet_db.vote_pet_show_atomic(show_id, "voter-2", "show_winner", 5) is True
+    assert qingpet_db.vote_pet_show_atomic(show_id, "voter-3", "show_other", 5) is True
 
-    try:
-        result = social_service.settle_pet_show(70015)
-        titles = user_service.get_user_titles("show_winner", 70015)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    result = social_service.settle_pet_show(70015)
+    titles = user_service.get_user_titles("show_winner", 70015)
 
     assert "冠军宠" in result
     assert "展示会冠军" in titles
 
 
-def test_qingpet_handle_visit_uses_event_at_when_args_missing_target():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
-
-    user_service.get_or_create_user("visitor", 70004)
-    user_service.get_or_create_user("20001", 70004)
-    pet_service.adopt_pet("20001", 70004, "被访宠")
-
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = temp_db
-    qingpet_main._router      = None
-
-    event = {
-        "user_id" : "visitor",
-        "group_id": 70004,
-        "message" : [
-            {"type": "text", "data": {"text": "/pet 互访 "}},
-            {"type": "at", "data": {"qq": "20001"}},
-        ],
-    }
-
-    try:
-        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "互访", event, None)))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
-        _cleanup_temp_db(temp_db, db_path)
-
-    assert "访问了被访宠" in msg
-
-
-def test_qingpet_handle_message_uses_event_at_with_trailing_text():
-    temp_db, db_path = _make_temp_db()
-    pet_service  = PetService(temp_db)
-    user_service = UserService(temp_db)
-
-    user_service.get_or_create_user("writer", 70005)
-    user_service.get_or_create_user("20002", 70005)
-    pet_service.adopt_pet("20002", 70005, "留言宠")
-
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = temp_db
-    qingpet_main._router      = None
-
-    event = {
-        "user_id" : "writer",
-        "group_id": 70005,
-        "message" : [
-            {"type": "text", "data": {"text": "/pet 留言 "}},
-            {"type": "at", "data": {"qq": "20002"}},
-            {"type": "text", "data": {"text": " 你好呀"}},
-        ],
-    }
-
-    try:
-        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "留言", event, None)))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
-        _cleanup_temp_db(temp_db, db_path)
-
-    assert "已给留言宠留言" in msg
-
-
-def test_failed_pet_action_keeps_caller_models_unchanged(monkeypatch):
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_failed_pet_action_keeps_caller_models_unchanged(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user         = user_service.get_or_create_user("rollback-action", 70020)
     pet_service.adopt_pet(user.user_id, user.group_id, "稳稳")
-    pet = temp_db.get_pet(user.user_id, user.group_id)
+    pet = qingpet_db.get_pet(user.user_id, user.group_id)
     assert pet is not None
     before = (
         pet.clean,
@@ -824,16 +664,9 @@ def test_failed_pet_action_keeps_caller_models_unchanged(monkeypatch):
         user.today_clean_count,
         user.version,
     )
-    monkeypatch.setattr(
-        temp_db,
-        "commit_pet_action",
-        lambda *_args, **_kwargs: PetActionAtomicResult(False, reason="persistence"),
-    )
+    fail_updates_to(qingpet_db, "pets")
 
-    try:
-        ok, _message, _coins = pet_service.clean_pet(pet, user)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _message, _coins = pet_service.clean_pet(pet, user)
 
     assert ok is False
     assert (
@@ -848,52 +681,44 @@ def test_failed_pet_action_keeps_caller_models_unchanged(monkeypatch):
     ) == before
 
 
-def test_feed_resolves_chinese_food_name_and_rejects_non_food():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_feed_resolves_chinese_food_name_and_rejects_non_food(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user         = user_service.get_or_create_user("food-type", 70021)
     pet_service.adopt_pet(user.user_id, user.group_id, "饭饭")
-    pet = temp_db.get_pet(user.user_id, user.group_id)
+    pet = qingpet_db.get_pet(user.user_id, user.group_id)
     assert pet is not None
 
-    try:
-        invalid, invalid_message, _ = pet_service.feed_pet(pet, user, "加速卡")
-        valid, _valid_message, _ = pet_service.feed_pet(pet, user, "苹果")
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    invalid, invalid_message, _ = pet_service.feed_pet(pet, user, "加速卡")
+    valid, _valid_message, _ = pet_service.feed_pet(pet, user, "苹果")
 
     assert invalid is False
     assert "不是食物" in invalid_message
     assert valid is True
 
 
-def test_treatment_commits_quota_item_and_pet_state_together():
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_treatment_commits_quota_item_and_pet_state_together(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user         = user_service.get_or_create_user("atomic-treatment", 70022)
     pet_service.adopt_pet(user.user_id, user.group_id, "药药")
-    pet = temp_db.get_pet(user.user_id, user.group_id)
+    pet = qingpet_db.get_pet(user.user_id, user.group_id)
     assert pet is not None
     pet.stage  = PetStage.YOUNG
     pet.status = PetStatus.SICK
     pet.health = 10
-    assert temp_db.update_pet(pet)
-    assert temp_db.purchase_item_atomic(user.user_id, user.group_id, "rare_medicine", 1, 0)[0]
+    assert qingpet_db.update_pet(pet)
+    assert qingpet_db.purchase_item_atomic(user.user_id, user.group_id, "rare_medicine", 1, 0)[0]
 
-    try:
-        ok, _message = handle_treat(user.user_id, user.group_id, "稀有药品", temp_db)
-        persisted_pet       = temp_db.get_pet(user.user_id, user.group_id)
-        persisted_inventory = temp_db.get_or_create_inventory(user.user_id, user.group_id)
-        quota_available, quota_remaining = temp_db.check_action_quota(
-            user.user_id,
-            user.group_id,
-            "treat",
-            20,
-        )
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _message = handle_treat(user.user_id, user.group_id, "稀有药品", qingpet_db)
+    persisted_pet       = qingpet_db.get_pet(user.user_id, user.group_id)
+    persisted_inventory = qingpet_db.get_or_create_inventory(user.user_id, user.group_id)
+    quota_available, quota_remaining = qingpet_db.check_action_quota(
+        user.user_id,
+        user.group_id,
+        "treat",
+        20,
+    )
 
     assert ok is True
     assert persisted_pet is not None
@@ -904,37 +729,30 @@ def test_treatment_commits_quota_item_and_pet_state_together():
     assert quota_remaining > 0
 
 
-def test_failed_treatment_rolls_back_quota_item_and_pet(monkeypatch):
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_failed_treatment_rolls_back_quota_item_and_pet(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user         = user_service.get_or_create_user("failed-treatment", 70023)
     pet_service.adopt_pet(user.user_id, user.group_id, "安安")
-    pet = temp_db.get_pet(user.user_id, user.group_id)
+    pet = qingpet_db.get_pet(user.user_id, user.group_id)
     assert pet is not None
     pet.stage  = PetStage.YOUNG
     pet.status = PetStatus.SICK
     pet.health = 10
-    assert temp_db.update_pet(pet)
-    assert temp_db.purchase_item_atomic(user.user_id, user.group_id, "rare_medicine", 1, 0)[0]
+    assert qingpet_db.update_pet(pet)
+    assert qingpet_db.purchase_item_atomic(user.user_id, user.group_id, "rare_medicine", 1, 0)[0]
     before = (pet.health, pet.clean, pet.status, pet.version)
 
-    def fail_inventory_write(*_args, **_kwargs):
-        raise sqlite3.DatabaseError("forced inventory failure")
-
-    monkeypatch.setattr(temp_db, "_save_inventory_items", fail_inventory_write)
-    try:
-        ok, _message = handle_treat(user.user_id, user.group_id, "稀有药品", temp_db)
-        persisted_pet       = temp_db.get_pet(user.user_id, user.group_id)
-        persisted_inventory = temp_db.get_or_create_inventory(user.user_id, user.group_id)
-        quota_available, quota_remaining = temp_db.check_action_quota(
-            user.user_id,
-            user.group_id,
-            "treat",
-            20,
-        )
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    fail_updates_to(qingpet_db, "inventories")
+    ok, _message = handle_treat(user.user_id, user.group_id, "稀有药品", qingpet_db)
+    persisted_pet       = qingpet_db.get_pet(user.user_id, user.group_id)
+    persisted_inventory = qingpet_db.get_or_create_inventory(user.user_id, user.group_id)
+    quota_available, quota_remaining = qingpet_db.check_action_quota(
+        user.user_id,
+        user.group_id,
+        "treat",
+        20,
+    )
 
     assert ok is False
     assert (pet.health, pet.clean, pet.status, pet.version) == before
@@ -945,22 +763,20 @@ def test_failed_treatment_rolls_back_quota_item_and_pet(monkeypatch):
     assert quota_remaining == 0
 
 
-def test_failed_trusteeship_coupon_keeps_user_and_inventory_unchanged(monkeypatch):
-    temp_db, db_path = _make_temp_db()
-    user_service = UserService(temp_db)
-    pet_service  = PetService(temp_db)
+def test_failed_trusteeship_coupon_keeps_user_and_inventory_unchanged(qingpet_db):
+    user_service = UserService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user         = user_service.get_or_create_user("failed-trustee", 70024)
     pet_service.adopt_pet(user.user_id, user.group_id, "托托")
-    pet = temp_db.get_pet(user.user_id, user.group_id)
+    pet = qingpet_db.get_pet(user.user_id, user.group_id)
     assert pet is not None
-    assert temp_db.purchase_item_atomic(user.user_id, user.group_id, "trusteeship_coupon", 1, 0)[0]
-    monkeypatch.setattr(temp_db, "atomic_update_pet_and_user", lambda *_args, **_kwargs: False)
+    assert qingpet_db.purchase_item_atomic(user.user_id, user.group_id, "trusteeship_coupon", 1, 0)[
+        0
+    ]
+    fail_updates_to(qingpet_db, "pets")
 
-    try:
-        ok, _message = pet_service.use_trusteeship_coupon(pet, user)
-        persisted_inventory = temp_db.get_or_create_inventory(user.user_id, user.group_id)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _message = pet_service.use_trusteeship_coupon(pet, user)
+    persisted_inventory = qingpet_db.get_or_create_inventory(user.user_id, user.group_id)
 
     assert ok is False
     assert user.trustee_until is None
@@ -968,37 +784,61 @@ def test_failed_trusteeship_coupon_keeps_user_and_inventory_unchanged(monkeypatc
 
 
 @pytest.mark.parametrize("arguments", ["apple two", "apple 1 extra"])
-def test_buy_rejects_malformed_quantity_instead_of_defaulting_to_one(arguments):
-    temp_db, db_path = _make_temp_db()
-    try:
-        ok, _message = handle_buy("invalid-buy", 70025, arguments, temp_db)
-        inventory = temp_db.get_or_create_inventory("invalid-buy", 70025)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_buy_rejects_malformed_quantity_instead_of_defaulting_to_one(arguments, qingpet_db):
+    ok, _message = handle_buy("invalid-buy", 70025, arguments, qingpet_db)
+    inventory = qingpet_db.get_or_create_inventory("invalid-buy", 70025)
 
     assert ok is False
     assert inventory.get_item_count("apple") == 0
 
 
-def test_private_task_claim_uses_the_group_prefix(monkeypatch):
-    temp_db, db_path = _make_temp_db()
+def test_private_task_claim_uses_the_group_prefix(qingpet_db):
     user_id  = "private-task"
     group_id = 70026
-    PetService(temp_db).adopt_pet(user_id, group_id, "任务宝")
-    claimed_groups: list[int] = []
+    PetService(qingpet_db).adopt_pet(user_id, group_id, "任务宝")
+    tasks = qingpet_db.get_or_create_daily_tasks(user_id, group_id)
+    conn  = qingpet_db._get_connection()
+    conn.execute(
+        "UPDATE tasks SET current_value = target_value WHERE user_id = ? AND group_id = ?",
+        (user_id, group_id),
+    )
+    conn.commit()
+    coins_before = qingpet_db.get_user(user_id, group_id).coins
 
-    def record_claim(_user_id: str, claimed_group_id: int, _task_type: str):
-        claimed_groups.append(claimed_group_id)
-        return None
-
-    monkeypatch.setattr(temp_db, "claim_task_reward", record_claim)
-    try:
-        ok, _message = handle_task(user_id, 0, f"{group_id} 领取", temp_db)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+    ok, _message = handle_task(user_id, 0, f"{group_id} 领取", qingpet_db)
 
     assert ok is True
-    assert claimed_groups == [group_id] * 4
+    claimed = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND group_id = ? AND claimed = 1",
+        (user_id, group_id),
+    ).fetchone()[0]
+    assert claimed == len(tasks) == 4
+    assert qingpet_db.get_user(user_id, group_id).coins > coins_before
+
+
+def test_task_claim_with_nothing_to_claim_says_so_and_pays_nothing(qingpet_db):
+    user_id  = "idle-task"
+    group_id = 70029
+    PetService(qingpet_db).adopt_pet(user_id, group_id, "任务宝")
+    qingpet_db.get_or_create_daily_tasks(user_id, group_id)
+    coins_before = qingpet_db.get_user(user_id, group_id).coins
+
+    ok, message = handle_task(user_id, group_id, "领取", qingpet_db)
+
+    # 任务都没完成：照常回复“没有可领的”，不发奖励；奖励领过一次后再领也是这样。
+    assert ok is True and "暂无可领取" in message and "任务宝" in message
+    assert qingpet_db.get_user(user_id, group_id).coins == coins_before
+    conn = qingpet_db._get_connection()
+    conn.execute(
+        "UPDATE tasks SET current_value = target_value WHERE user_id = ? AND group_id = ?",
+        (user_id, group_id),
+    )
+    conn.commit()
+    assert "成功领取" in handle_task(user_id, group_id, "领取", qingpet_db)[1]
+    coins_after_claim = qingpet_db.get_user(user_id, group_id).coins
+    assert coins_after_claim > coins_before
+    assert "暂无可领取" in handle_task(user_id, group_id, "领取", qingpet_db)[1]
+    assert qingpet_db.get_user(user_id, group_id).coins == coins_after_claim
 
 
 @pytest.mark.parametrize(
@@ -1011,43 +851,31 @@ def test_private_task_claim_uses_the_group_prefix(monkeypatch):
         (handle_manage_log, "many"),
     ],
 )
-def test_admin_commands_reject_malformed_arguments(handler, arguments):
-    temp_db, db_path = _make_temp_db()
-    try:
-        ok, _message = handler("admin", 70027, arguments, temp_db)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_admin_commands_reject_malformed_arguments(handler, arguments, qingpet_db):
+    ok, _message = handler("admin", 70027, arguments, qingpet_db)
 
     assert ok is False
 
 
 @pytest.mark.parametrize("arguments", ["创建 unknown 10 20", "创建 feed 0 20"])
-def test_activity_creation_rejects_unreachable_or_empty_progress(arguments):
-    temp_db, db_path = _make_temp_db()
-    try:
-        ok, _message = handle_manage_activity("admin", 70028, arguments, temp_db)
-        activities = temp_db.get_active_activities(70028)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_activity_creation_rejects_unreachable_or_empty_progress(arguments, qingpet_db):
+    ok, _message = handle_manage_activity("admin", 70028, arguments, qingpet_db)
+    activities = qingpet_db.get_active_activities(70028)
 
     assert ok is False
     assert activities == []
 
 
-def test_activity_storage_rejects_invalid_parameters_and_hides_expired_rows():
-    temp_db, db_path = _make_temp_db()
-    try:
-        assert temp_db.create_activity(70029, "feed", "无效目标", 0, 20) is None
-        assert temp_db.create_activity(70029, " ", "空类型", 10, 20) is None
-        activity_id = temp_db.create_activity(70029, "feed", "限时活动", 10, 20)
-        assert activity_id is not None
-        temp_db._get_connection().execute(
-            "UPDATE activities SET end_time = ? WHERE id = ?",
-            (datetime(2000, 1, 1).isoformat(), activity_id),
-        )
-        temp_db._get_connection().commit()
-        activities = temp_db.get_active_activities(70029)
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_activity_storage_rejects_invalid_parameters_and_hides_expired_rows(qingpet_db):
+    assert qingpet_db.create_activity(70029, "feed", "无效目标", 0, 20) is None
+    assert qingpet_db.create_activity(70029, " ", "空类型", 10, 20) is None
+    activity_id = qingpet_db.create_activity(70029, "feed", "限时活动", 10, 20)
+    assert activity_id is not None
+    qingpet_db._get_connection().execute(
+        "UPDATE activities SET end_time = ? WHERE id = ?",
+        (datetime(2000, 1, 1).isoformat(), activity_id),
+    )
+    qingpet_db._get_connection().commit()
+    activities = qingpet_db.get_active_activities(70029)
 
     assert activities == []

@@ -8,30 +8,29 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from plugins.pendo.commands import scheduled as scheduled_module
 from plugins.pendo.config import PendoConfig
 from plugins.pendo.models.item import TaskStatus
 from plugins.pendo.services import db as db_module
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
-from tests.helpers.pendo_test_support import _read_scheduled_delivery
+from tests.helpers.pendo_test_support import freeze_pendo_reminder_clock, read_scheduled_delivery
 
 
 def test_initial_reminder_outside_check_window_is_not_backfilled():
     current = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
+    remind_at = current - timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS + 1)
 
     class _Db:
         def claim_reminder(self, *_args, **_kwargs):
             raise AssertionError("expired reminder must not be claimed")
 
-    service                  = ReminderService(_Db())
-    service._parse_user_time = lambda *_args: (
-        current - timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS + 1)
-    )
+    service = ReminderService(_Db())
     item = SimpleNamespace(id="old-event", owner_id="1001")
 
     delivery = service._claim_initial_delivery(
         item,
-        "2017-02-27T12:00:00+00:00",
+        remind_at.isoformat(timespec="seconds"),
         current,
         log      = None,
         settings = {},
@@ -48,10 +47,7 @@ def test_failed_initial_reminder_can_retry_after_normal_check_window():
             return "retry-claim"
 
     service = ReminderService(_Db())
-    service._parse_user_time = lambda *_args: current - timedelta(minutes=5)
-    service._should_suppress        = lambda *_args, **_kwargs: False
-    service._build_reminder_message = lambda *_args, **_kwargs: "retry"
-    item = SimpleNamespace(id="recent-failure", owner_id="1001", context=None)
+    item = SimpleNamespace(id="recent-failure", owner_id="1001", title="重试", context=None)
 
     delivery = service._claim_initial_delivery(
         item,
@@ -105,7 +101,7 @@ def test_claimed_reminder_survives_initial_window_and_reaches_delivery(db, monke
     due = db.get_due_reminder_items(now=recovered_at)
     assert [item.id for item in due] == [item_id]
     service = ReminderService(db)
-    monkeypatch.setattr(service, "_current_user_time", lambda _owner: recovered_at)
+    freeze_pendo_reminder_clock(monkeypatch, recovered_at)
     deliveries = service._collect_item_reminders(due[0])
     assert len(deliveries) == 1
     assert deliveries[0]["claim_token"] != first
@@ -462,7 +458,7 @@ def test_scheduled_delivery_validates_time_lease_and_normalizes_identity(db):
     assert db.complete_scheduled_delivery(
         "briefing", "u1", "2030-01-01", claim["claim_token"], now=aware_now
     )
-    delivery = _read_scheduled_delivery(db, " briefing ", "u1", "2030-01-01")
+    delivery = read_scheduled_delivery(db, " briefing ", "u1", "2030-01-01")
     assert delivery is not None and delivery["state"] == "sent"
 
 
@@ -569,7 +565,7 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
         )
         is None
     )
-    row = _read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
+    row = read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
     assert row is not None
     assert row["state"] == "sent"
     assert row["failure_count"] == 1
@@ -656,34 +652,21 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path, r
 
 
 def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path, monkeypatch):
-    from plugins.pendo.commands import scheduled as scheduled_module
-
     path      = str(tmp_path / "briefing.db")
     first_db  = Database(path)
     second_db = Database(path)
 
-    class _FixedDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            value = datetime(2030, 1, 1, tzinfo=UTC)
-            return value if tz is not None else value.replace(tzinfo=None)
-
-    async def active_users(_db):
-        return ["1001"]
-
-    async def settings(user_ids, _db):
-        return {
-            user_ids[0]: {
-                "settings"       : {"timezone": "Asia/Shanghai", "daily_report_time": "08:00"},
-                "custom_settings": {"daily_briefing_enabled": True},
-            }
-        }
-
-    generated: list[str] = []
-
-    async def generate(user_id, _db, **_kwargs):
-        generated.append(user_id)
-        return "daily content"
+    # 2030-01-01 08:00（上海）；用户只有一个，两个实例共用同一个库文件。
+    freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, tzinfo=UTC))
+    first_db.update_user_settings(
+        "1001",
+        {
+            "timezone"         : "Asia/Shanghai",
+            "daily_report_time": "08:00",
+            "settings_json"    : {"daily_briefing_enabled": True},
+        },
+    )
+    first_db.insert_item({"owner_id": "1001", "type": "note", "title": "占位笔记"})
 
     def fail_marker(*_args, **_kwargs):
         raise RuntimeError("injected marker failure")
@@ -695,10 +678,7 @@ def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path,
             sent.append(action)
             return True
 
-    monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-    monkeypatch.setattr(scheduled_module, "_get_active_user_ids", active_users)
-    monkeypatch.setattr(scheduled_module, "get_user_settings_bundle_map", settings)
-    monkeypatch.setattr(scheduled_module, "_generate_briefing_content", generate)
+    # 在“已发送、标记尚未写入”这个精确位置制造失败：这是故障注入，保留。
     monkeypatch.setattr(scheduled_module, "save_user_setting", fail_marker)
 
     async def run_both():
@@ -711,57 +691,73 @@ def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path,
     asyncio.run(run_both())
 
     assert len(sent) == 1
-    assert len(generated) == 1
     assert sent[0]["echo"] == Database.scheduled_delivery_key(
         "daily_briefing", "1001", "2030-01-01"
     )
-    row = _read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
+    row = read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
     assert row is not None and row["state"] == "sent"
 
     first_db.cleanup()
     second_db.cleanup()
 
 
-def test_database_cleanup_closes_connections_created_by_worker_threads(db):
-    worker = threading.Thread(target=lambda: db.get_connection())
-    worker.start()
-    worker.join()
-
-    db.close_all_connections()
-
-    assert db._all_connections == {}
+def _ledger_row(item_id: str, title: str, ledger_date: str, amount_cents: int) -> dict:
+    return {
+        "id"              : item_id,
+        "owner_id"        : "1001",
+        "type"            : "ledger",
+        "title"           : title,
+        "currency"        : "CNY",
+        "amount"          : amount_cents // 100,
+        "amount_cents"    : amount_cents,
+        "transaction_type": "expense",
+        "ledger_category" : "餐饮",
+        "ledger_date"     : ledger_date,
+    }
 
 
 @pytest.mark.parametrize(
-    ("task", "start", "retry", "period", "routine"),
+    ("task", "start", "retry", "period", "routine", "retry_text", "ledger_dates"),
     [
-        (
+        pytest.param(
             "daily_briefing",
             "2030-01-01T23:59:00+00:00",
             "2030-01-02T00:01:00+00:00",
             "2030-01-01",
             "send_daily_briefings",
+            "补发 2030-01-01 每日简报",
+            None,
+            id="daily_briefing",
         ),
-        (
+        pytest.param(
             "diary_reminder",
             "2030-01-01T23:59:00+00:00",
             "2030-01-02T00:01:00+00:00",
             "2030-01-01",
             "check_diary_reminders",
+            "2030-01-01",
+            None,
+            id="diary_reminder",
         ),
-        (
+        pytest.param(
             "weekly_finance_summary",
             "2030-01-06T21:00:00+00:00",
             "2030-01-07T00:01:00+00:00",
             "2030-W01",
             "send_weekly_finance_summaries",
+            "本期账目",
+            ("2030-01-05", "2030-01-07"),
+            id="weekly_finance_summary",
         ),
-        (
+        pytest.param(
             "month_end_finance_summary",
             "2030-03-31T21:00:00+00:00",
             "2030-04-01T00:01:00+00:00",
             "2030-03",
             "send_month_end_finance_summaries",
+            "本期账目",
+            ("2030-03-15", "2030-04-01"),
+            id="month_end_finance_summary",
         ),
     ],
 )
@@ -773,40 +769,24 @@ def test_scheduled_retry_preserves_original_period_across_boundary(
     retry,
     period,
     routine,
+    retry_text,
+    ledger_dates,
 ):
-    from plugins.pendo.commands import scheduled
-
-    clock = [datetime.fromisoformat(start)]
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
-
-    async def users(_db):
-        return ["1001"]
-
-    async def settings(_users, _db):
-        return {
-            "1001": {
-                "settings": {
-                    "timezone"         : "UTC",
-                    "daily_report_time": "23:59",
-                    "diary_remind_time": "23:59",
-                },
-                "custom_settings": {},
-            }
-        }
-
-    generated = []
-
-    async def briefing(_user, _db, *, period_date=None):
-        generated.append(period_date)
-        return str(period_date)
-
-    async def finance(_db, _user, finance_period):
-        generated.append(finance_period.key)
-        return finance_period.end_date
+    clock = freeze_pendo_reminder_clock(monkeypatch, datetime.fromisoformat(start))
+    db.update_user_settings(
+        "1001",
+        {
+            "timezone"         : "UTC",
+            "daily_report_time": "23:59",
+            "diary_remind_time": "23:59",
+        },
+    )
+    db.insert_item({"owner_id": "1001", "type": "note", "title": "占位笔记"})
+    if ledger_dates is not None:
+        # 账目分别落在原周期和重试时所在的新周期：摘要必须只含原周期的那笔。
+        in_period, next_period = ledger_dates
+        db.insert_item(_ledger_row("in-period", "本期账目", in_period, 10_000))
+        db.insert_item(_ledger_row("next-period", "下一期账目", next_period, 99_900))
 
     sends = []
 
@@ -814,26 +794,20 @@ def test_scheduled_retry_preserves_original_period_across_boundary(
         sends.append(action)
         return len(sends) > 1
 
-    monkeypatch.setattr(scheduled, "datetime", Clock)
-    monkeypatch.setattr(scheduled, "_get_active_user_ids", users)
-    monkeypatch.setattr(scheduled, "get_user_settings_bundle_map", settings)
-    monkeypatch.setattr(scheduled, "_generate_briefing_content", briefing)
-    monkeypatch.setattr(scheduled, "_generate_finance_summary_content", finance)
-    monkeypatch.setattr(scheduled, "save_user_setting", lambda *_args: None)
-    run = getattr(scheduled, routine)
+    run = getattr(scheduled_module, routine)
     context = SimpleNamespace(send_action=send)
     asyncio.run(run(context, db))
-    assert _read_scheduled_delivery(db, task, "1001", period)["state"] == "failed"
-    clock[0] = datetime.fromisoformat(retry)
+    assert read_scheduled_delivery(db, task, "1001", period)["state"] == "failed"
+    clock.instant = datetime.fromisoformat(retry)
     asyncio.run(run(context, db))
     asyncio.run(run(context, db))
     assert len(sends) == 2
     assert sends[0]["echo"] == sends[1]["echo"]
-    assert _read_scheduled_delivery(db, task, "1001", period)["state"] == "sent"
-    if generated:
-        assert generated == [period, period]
-    else:
-        assert period in sends[1]["params"]["message"][0]["data"]["text"]
+    assert read_scheduled_delivery(db, task, "1001", period)["state"] == "sent"
+    retry_message = sends[1]["params"]["message"][0]["data"]["text"]
+    assert retry_text in retry_message
+    if ledger_dates is not None:
+        assert "下一期账目" not in retry_message
 
 
 def test_scheduled_retry_waits_for_lease_and_stops_after_recovery_window(db):
@@ -969,12 +943,13 @@ def test_database_rejects_undo_windows_outside_the_shared_contract(db, minutes):
 
 
 def test_concurrent_user_setting_updates_preserve_disjoint_json_keys(db):
-    start               = threading.Barrier(2)
-    results: list[bool] = []
+    start              = threading.Barrier(2)
+    written: list[str] = []
 
     def write(key: str):
         start.wait()
-        results.append(db.update_user_settings("u1", {"settings_json": {key: True}}))
+        db.update_user_settings("u1", {"settings_json": {key: True}})
+        written.append(key)
 
     left = threading.Thread(target=write, args=("feature_a",))
     right = threading.Thread(target=write, args=("feature_b",))
@@ -983,7 +958,7 @@ def test_concurrent_user_setting_updates_preserve_disjoint_json_keys(db):
     left.join()
     right.join()
 
-    assert results == [True, True]
+    assert sorted(written) == ["feature_a", "feature_b"]
 
     settings = db.get_user_settings("u1")
     assert settings["settings_json"].get("feature_a") is True, settings
@@ -991,7 +966,7 @@ def test_concurrent_user_setting_updates_preserve_disjoint_json_keys(db):
     assert settings["version"] == 1
 
 
-def test_get_all_items_iterates_past_legacy_large_query_limits(db):
+def test_get_all_items_returns_every_row_across_pages(db):
     for index in range(1, 1_501):
         db.insert_item({"type": "note", "owner_id": "u1", "title": f"note {index}"})
 

@@ -132,7 +132,7 @@ async def test_session_keeps_its_memory_and_the_system_prompt_carries_it(tmp_pat
         "tool_names": ("xiaoqing_command",),
     }
     with_memory = build_system_message(**kwargs, memory=loaded.memory)["content"]
-    assert "记账默认用微信" in with_memory and "以这次为准" in with_memory
+    assert "记账默认用微信" in with_memory
     assert build_system_message(**kwargs, memory=loaded.memory) == build_system_message(
         **kwargs, memory=loaded.memory
     ), "同一会话里系统提示逐字不变"

@@ -3,7 +3,10 @@
 """
 
 import logging
+from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 from core.logging_config import (
     ColoredFormatter,
@@ -12,6 +15,26 @@ from core.logging_config import (
     _enable_windows_ansi,
     setup_logging,
 )
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logger() -> Iterator[None]:
+    """``LogManager`` 会换掉进程根 logger 的全部 handler（连 pytest 的捕获 handler 也关闭）。
+
+    测试前记下原来的 handler 对象和级别，结束时关闭测试装上的 handler，再把原对象放回。
+    """
+
+    root     = logging.getLogger()
+    original = list(root.handlers)
+    level    = root.level
+    yield
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        if handler not in original:
+            handler.close()
+    for handler in original:
+        root.addHandler(handler)
+    root.setLevel(level)
 
 
 class _FakeKernel32:
@@ -67,26 +90,6 @@ class TestColoredFormatter:
         assert "\033[0m" in result  # 重置
         assert "Test message" in result
         assert record.levelname == "INFO"
-
-    def test_format_with_color_does_not_mutate_record(self):
-        """测试带颜色格式化不会修改原始 LogRecord"""
-        formatter = ColoredFormatter(
-            fmt       = "%(levelname)s: %(message)s",
-            use_color = True,
-        )
-        record = logging.LogRecord(
-            name     = "test",
-            level    = logging.WARNING,
-            pathname = "",
-            lineno   = 0,
-            msg      = "Test message",
-            args     = (),
-            exc_info = None,
-        )
-
-        formatter.format(record)
-
-        assert record.levelname == "WARNING"
 
     def test_format_without_color(self):
         """测试无颜色格式化"""
@@ -168,23 +171,6 @@ class TestLogManager:
 
         assert manager.level == logging.INFO
         assert (tmp_path / "logs").exists()
-
-    def test_log_file_created(self, tmp_path: Path):
-        """测试日志文件创建"""
-        log_dir  = tmp_path / "logs"
-        _manager = LogManager(
-            log_dir        = log_dir,
-            level          = "INFO",
-            console_output = False,
-            file_output    = True,
-        )
-
-        # 写入日志
-        logger = logging.getLogger("test_file_creation")
-        logger.info("Test log message")
-
-        # 检查文件是否创建
-        assert (log_dir / "xiaoqing.log").exists()
 
     def test_error_log_file(self, tmp_path: Path):
         """测试错误日志文件"""

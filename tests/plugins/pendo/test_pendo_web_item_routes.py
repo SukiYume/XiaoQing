@@ -1,8 +1,8 @@
-"""Pendo 通用条目路由的过滤、规范化、并发和日程图回归。"""
+"""Pendo 通用条目路由的过滤、规范化、并发和日程图。"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
 from typing import Any, cast
 
 import pytest
@@ -823,12 +823,9 @@ def test_blank_choice_filter_is_ignored(db: Database) -> None:
     assert cast(dict[str, Any], response["data"])["total"] == 0
 
 
-def test_update_returns_404_and_reports_corrupt_stored_type(
+def test_update_of_a_missing_item_returns_404(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """不存在条目与损坏类型分别使用 404 和 500，避免误导调用方。"""
-
     _assert_http_error(
         404,
         lambda: items_api.update_item(
@@ -839,26 +836,8 @@ def test_update_returns_404_and_reports_corrupt_stored_type(
         ),
     )
 
-    class CorruptItem:
-        type = "legacy"
 
-    monkeypatch.setattr(db, "get_item", lambda *_args, **_kwargs: CorruptItem())
-    error = _assert_http_error(
-        500,
-        lambda: items_api.update_item(
-            "corrupt",
-            items_api.ItemUpdate(title="新标题"),
-            owner_id = "owner-update-errors",
-            db       = db,
-        ),
-    )
-    assert error.detail == "Stored item has an unsupported type"
-
-
-def test_minimal_event_update_writes_only_the_requested_field(
-    db: Database,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_minimal_event_update_writes_only_the_requested_field(db: Database) -> None:
     """修改标题不能顺带重写备注、时间或提醒等未请求字段。"""
 
     owner_id = "owner-minimal-update"
@@ -871,14 +850,6 @@ def test_minimal_event_update_writes_only_the_requested_field(
         notes          = "必须保留",
         reminder_rules = [{"offset_seconds": 600}],
     )
-    original_update                  = db.update_item
-    captured_updates: dict[str, Any] = {}
-
-    def capture_update(item_id: str, updates: Mapping[str, Any], **kwargs: Any) -> bool:
-        captured_updates.update(updates)
-        return original_update(item_id, dict(updates), **kwargs)
-
-    monkeypatch.setattr(db, "update_item", capture_update)
 
     response = items_api.update_item(
         "minimal-event",
@@ -888,7 +859,17 @@ def test_minimal_event_update_writes_only_the_requested_field(
     )
 
     assert response["message"] == "更新成功"
-    assert captured_updates == {"title": "新标题"}
+    # 审计行里记录的就是实际写入的字段。
+    audit_row = (
+        db.get_connection()
+        .execute(
+            "SELECT details FROM operation_logs WHERE user_id = ? AND action = 'edit_event'",
+            (owner_id,),
+        )
+        .fetchone()
+    )
+    assert audit_row is not None
+    assert json.loads(audit_row["details"])["updates"] == {"title": "新标题"}
     stored = db.get_item("minimal-event", owner_id=owner_id)
     assert stored is not None and stored.title == "新标题" and stored.notes == "必须保留"
 

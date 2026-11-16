@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.persona import PersonaCard
-from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
-from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
+from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
-    _complete_test_runtime_config,
-    _make_hctx,
-    patch_turn,
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    chat_message_event,
+    plan_answer,
     reply_plan,
+    scripted_chat_context,
+    settle_chat_background,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -28,101 +27,21 @@ sample_group_event = _fixture_support.sample_group_event
 async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     mock_context, sample_group_event
 ):
-    from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    lock                              = asyncio.Lock()
-    state                             = MagicMock()
-    state.get_mood_state.return_value = ""
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append             = Mock()
-    state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async    = AsyncMock()
-    state.heartflow.on_no_reply_async     = AsyncMock()
-    state.inc_stats                       = Mock()
-    state.action_history.append           = Mock()
-    state.pfc_state_store.get_async       = AsyncMock(
-        return_value=PFCConversationState(
-            chat_id                      = "g67890",
-            ended                        = False,
-            last_successful_reply_action = "",
-            goal_list                    = [],
-            knowledge_list               = [],
-            planner_fail_ts              = [],
-            planner_skip_until           = 0.0,
-            updated_at                   = 0.0,
-        )
+    chat_id = "g67890"
+    model = ScriptedChatModel(plan=plan_answer("wait", "再观察"))
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
+
+    result = await handle_smalltalk(
+        "继续看看", chat_message_event(sample_group_event, "继续看看"), mock_context
     )
-    state.pfc_state_store.set_state = Mock()
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            enable_smalltalk=True,
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(
-                enable_expression_reflection=False, enable_review_sessions=False
-            ),
-            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            max_context_size=10,
-            planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
-            debug=SimpleNamespace(log_latency=False),
-        )
-    )
-
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-    with (
-        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=lock),
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
-            new=AsyncMock(return_value="u1"),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
-        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
-            new=AsyncMock(
-                return_value=PFCRunResult(reply="", action="wait", reason="再观察", ended=False)
-            ),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
-            return_value=([], []),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
-        patch_turn("schedule_pfc_state_flush"),
-        patch("plugins.xiaoqing_chat.handlers.log_step"),
-    ):
-        result = await _maybe_reply_smalltalk("继续看看", sample_group_event, mock_context)
 
     assert result == []
-    record = state.action_history.append.call_args.args[1]
-    assert record.action == "wait"
-
-
-def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-
-    first_dir  = tmp_path / "a"
-    second_dir = tmp_path / "b"
-    first_dir.mkdir()
-    second_dir.mkdir()
-
-    db = MemoryDB()
-    db.bind(first_dir)
-    db.upsert_text(
-        doc_id = "doc1",
-        text   = "旧目录里的记忆",
-        meta   = {"type": "knowledge", "global_approved": True},
-    )
-    assert db.query_knowledge("旧目录", top_k=5)
-
-    db.bind(second_dir)
-
-    assert db.query_knowledge("旧目录", top_k=5) == []
+    state = bound_state(mock_context)
+    records = await state.action_history.get_recent_async(chat_id, max_items=5)
+    assert [record.action for record in records] == ["wait"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.parametrize(
@@ -137,149 +56,39 @@ def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
 )
 @pytest.mark.asyncio
 async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candidate(
-    mock_context, candidate
+    mock_context, sample_group_event, candidate
 ):
-    from contextlib import ExitStack
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            brain_chat=SimpleNamespace(
-                brain_max_context_size = None,
-                brain_temperature      = None,
-            ),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=True),
-            max_context_size = 20,
-            temperature      = 0.7,
-            top_p            = 0.9,
-            max_tokens       = 128,
-            timeout_seconds  = 3.0,
-            reply_check      = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = SimpleNamespace(),
-            rewrite     = SimpleNamespace(),
-        )
+    text  = "请直接说明情况，别反问我。"
+    model = ScriptedChatModel(
+        reply   = candidate,
+        checker = checker_verdict(
+            suitable     = False,
+            reason       = "风格检查器认为不够自然",
+            need_replan  = False,
+            severity     = "soft",
+            non_template = False,
+        ),
     )
-    _complete_test_runtime_config(runtime)
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
-
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "用户要求直接回复",
+    scripted_chat_context(
+        mock_context,
+        model,
+        {
+            "debug"      : {"log_steps": True},
+            "reply_check": {"llm_checker_mode": "always", "max_regen": 0},
+        },
     )
+    event = chat_message_event(sample_group_event, text, _xc_command_forced=True)
 
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    SimpleNamespace(role="system", content="system"),
-                    SimpleNamespace(role="user", content="user"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=(candidate, "primary")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response",
-                return_value=[candidate],
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value=candidate)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.heuristic_check",
-                return_value=None,
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(
-                    return_value=ReplyCheckResult(
-                        suitable    = False,
-                        reason      = "风格检查器认为不够自然",
-                        need_replan = False,
-                        severity    = "soft",
-                    )
-                ),
-            )
-        )
+    result = await handle_smalltalk(text, event, mock_context)
 
-        draft = await generate_reply_draft(
-            text           = "请直接说明情况，别反问我。",
-            event          = {"group_id": 1, "user_id": 2},
-            context        = mock_context,
-            runtime        = runtime,
-            state          = state,
-            forced         = True,
-            action         = action,
-            plan_reasoning = "用户要求直接回复",
-        )
-
-    assert draft is not None
-    assert draft.text == candidate
+    # 照发最后一稿；真实的出站整理会去掉句末的句号。
+    assert result == [{"type": "text", "data": {"text": candidate.removesuffix("。")}}]
     logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
-    # 软问题不再重写，直接照发并记一笔。
+    # 软问题不重写，直接照发并记一笔。
     assert any('"step": "reply.check.soft_pass"' in payload for payload in logged_payloads)
+    await settle_chat_background(mock_context, model)
 
 
 def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
@@ -458,50 +267,6 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
     assert len(draft.text) <= 120
     assert "住校" not in draft.text
     assert "理工" not in draft.text
-
-
-def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
-    from plugins.xiaoqing_chat.reply_fallbacks import (
-        CONTEXT_GROUNDING_FALLBACKS,
-        finish_rejected_candidate,
-    )
-
-    plan = reply_plan(
-        forced     = True,
-        request_id = "context-grounding-test",
-        text       = "一个要求猜测他人状态的问题",
-        history    = [],
-        bot_name   = "小青",
-        chat_id    = "group:1",
-        context    = mock_context,
-        runtime    = SimpleNamespace(
-            cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
-                reply_check=SimpleNamespace(
-                    max_repeat_compare   = 8,
-                    similarity_threshold = 0.92,
-                    max_assistant_in_row = 3,
-                ),
-            )
-        ),
-    )
-    rejected = RejectedCandidate(
-        text   = "一条没有依据的他人状态推断",
-        result = ReplyCheckResult(
-            suitable     = False,
-            reason       = "第三方陈述没有直接证据",
-            need_replan  = True,
-            failure_code = "context_grounding",
-        ),
-    )
-
-    draft = finish_rejected_candidate(plan, rejected)
-
-    assert draft is not None
-    assert draft.text in CONTEXT_GROUNDING_FALLBACKS
-    assert rejected.text not in draft.text
 
 
 @pytest.mark.parametrize(

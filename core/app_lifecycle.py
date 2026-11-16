@@ -315,7 +315,6 @@ class AppLifecycleMixin:
 
         # Build every authentication holder from one immutable snapshot.
         # Another thread can publish security state during this operation.
-        # A patched test factory can also publish state during re-entry.
         # Retry until one owner remains current across each await and publication.
         ownership_started_at = time.monotonic()
         ownership_attempt    = 0

@@ -1,4 +1,4 @@
-"""Pendo Web 日期范围工具的自然周期和数据边界回归。"""
+"""Pendo Web 日期范围工具的自然周期和数据边界。"""
 
 from __future__ import annotations
 

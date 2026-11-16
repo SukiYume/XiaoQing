@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from plugins.pendo.utils import db_ops
 from tests.helpers.pendo_test_support import (
     PluginCapabilities,
-    _StubCaptureHandler,
-    _StubExporter,
-    _StubSimpleHandler,
-    _StubTaskHandler,
+    attach_action_recorder,
+    pendo_service_context,
     reset_pendo_runtime_config,
 )
+from tests.helpers.sqlite_test_support import trace_sql_statements
+
+
+@pytest.fixture
+def pendo_context(db, tmp_path):
+    """真实服务集合（共用测试数据库）；私聊动作记录在 ``sent``，一律回执成功。"""
+
+    with pendo_service_context(db, tmp_path, "test.pendo.runtime_boundaries") as context:
+        context.sent = attach_action_recorder(context)
+        yield context
 
 
 class TestPendoRuntimeBoundaries:
@@ -85,14 +95,8 @@ class TestPendoRuntimeBoundaries:
     ):
         from plugins.pendo import main as pendo_main
         from plugins.pendo.config import PendoConfig
+        from plugins.pendo.web import server as web_server
         from tests.helpers.settings_snapshot import settings_snapshot
-
-        class _DummyDb:
-            def __init__(self):
-                self.cleanup_count = 0
-
-            def cleanup(self):
-                self.cleanup_count += 1
 
         class _DummySubscription:
             def __init__(self):
@@ -110,16 +114,8 @@ class TestPendoRuntimeBoundaries:
 
                 return unsubscribe
 
-        subscription     = _DummySubscription()
-        databases        = []
-        database_paths   = []
-        reconfigurations = []
-
-        def build_database(path):
-            database_paths.append(Path(path))
-            db = _DummyDb()
-            databases.append(db)
-            return db
+        subscription = _DummySubscription()
+        web_starts   = []
 
         initial_snapshot = settings_snapshot(
             config={
@@ -143,217 +139,153 @@ class TestPendoRuntimeBoundaries:
             get_settings_snapshot=lambda: current_settings["value"],
         )
 
-        monkeypatch.setattr(pendo_main, "Database", build_database)
-        monkeypatch.setattr(
-            pendo_main,
-            "_reconfigure_web_server",
-            lambda db, before, after: reconfigurations.append((db, before, after)),
-        )
+        # Web 监听是边界：不真的启动 uvicorn，只记录启动时已发布的端点。
+        def fake_start(db):
+            runtime = PendoConfig.runtime()
+            web_starts.append((db, runtime.web_host, runtime.web_port))
+            return True
+
+        monkeypatch.setattr(web_server, "is_running", lambda: False)
+        monkeypatch.setattr(web_server, "start", fake_start)
         reset_pendo_runtime_config()
+        db_ops.set_database_singleton(None)
 
         pendo_main.init(context)
+        try:
+            database = pendo_main._runtime_service.database
+            assert database is not None
+            connection = database.get_connection()
 
-        assert PendoConfig.runtime().web_demo_enabled is True
-        assert len(subscription.callbacks) == 1
-        assert database_paths == [context.data_dir / PendoConfig.DB_FILENAME]
+            assert PendoConfig.runtime().web_demo_enabled is True
+            assert len(subscription.callbacks) == 1
+            assert Path(database.db_path) == context.data_dir / PendoConfig.DB_FILENAME
+            before = PendoConfig.runtime()
+            assert (before.web_enabled, before.web_host, before.web_port) == (
+                False,
+                "127.0.0.1",
+                12001,
+            )
+            assert web_starts == []
 
-        replacement_snapshot = settings_snapshot(
-            config={
-                "plugins": {
-                    "pendo": {
-                        "web_enabled"     : True,
-                        "web_host"        : "localhost",
-                        "web_port"        : 12003,
-                        "web_demo_enabled": False,
+            replacement_snapshot = settings_snapshot(
+                config={
+                    "plugins": {
+                        "pendo": {
+                            "web_enabled"     : True,
+                            "web_host"        : "localhost",
+                            "web_port"        : 12003,
+                            "web_demo_enabled": False,
+                        }
                     }
-                }
-            },
-            revision=2,
-        )
-        current_settings["value"] = replacement_snapshot
-        asyncio.run(subscription.callbacks[0](replacement_snapshot.config))
+                },
+                revision=2,
+            )
+            current_settings["value"] = replacement_snapshot
+            asyncio.run(subscription.callbacks[0](replacement_snapshot.config))
 
-        assert PendoConfig.runtime().web_demo_enabled is False
-        assert len(reconfigurations) == 1
-        database, before, after = reconfigurations[0]
-        assert database is databases[0]
-        assert (before.web_enabled, before.web_host, before.web_port) == (
-            False,
-            "127.0.0.1",
-            12001,
-        )
-        assert (after.web_enabled, after.web_host, after.web_port) == (
-            True,
-            "localhost",
-            12003,
-        )
+            assert PendoConfig.runtime().web_demo_enabled is False
+            after = PendoConfig.runtime()
+            assert (after.web_enabled, after.web_host, after.web_port) == (
+                True,
+                "localhost",
+                12003,
+            )
+            assert web_starts == [(database, "localhost", 12003)]
 
-        pendo_main._cleanup_resources(context, stop_web=False)
+            pendo_main._cleanup_resources(context, stop_web=False)
 
-        assert subscription.callbacks == []
-        assert context.state["pendo_runtime"] == {}
-        assert databases[0].cleanup_count == 1
+            assert subscription.callbacks == []
+            assert context.state["pendo_runtime"] == {}
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+            assert pendo_main._runtime_service.database is None
+            assert db_ops.detach_database_singleton() is None
+        finally:
+            pendo_main._cleanup_resources(context, stop_web=False)
 
-    def test_router_is_not_reused_across_group_contexts(self, monkeypatch):
+    def test_router_is_not_reused_across_group_contexts(self, db, pendo_context):
         from plugins.pendo import main as pendo_main
 
-        task_handler = _StubTaskHandler()
-        services     = {
-            "db"              : object(),
-            "reminder_service": object(),
-            "exporter"        : _StubExporter(),
-            "event_handler"   : _StubSimpleHandler(),
-            "task_handler"    : task_handler,
-            "note_handler"    : _StubSimpleHandler(),
-            "diary_handler"   : _StubSimpleHandler(),
-            "search_handler"  : _StubSimpleHandler(),
-            "ledger_handler"  : _StubSimpleHandler(),
-            "web_handler"     : _StubSimpleHandler(),
-        }
-
-        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
-
-        context = SimpleNamespace(state={})
-        router_g1 = pendo_main._build_command_router(context, group_id=1001)
-        router_g2 = pendo_main._build_command_router(context, group_id=1002)
+        router_g1 = pendo_main._build_command_router(pendo_context, group_id=1001)
+        router_g2 = pendo_main._build_command_router(pendo_context, group_id=1002)
 
         assert router_g1 is not router_g2
 
-        result_g1 = asyncio.run(router_g1.route("todo", "u1", "list", context))
-        result_g2 = asyncio.run(router_g2.route("todo", "u1", "list", context))
+        result_g1 = asyncio.run(router_g1.route("todo", "u1", "add 群一待办", pendo_context))
+        result_g2 = asyncio.run(router_g2.route("todo", "u1", "add 群二待办", pendo_context))
 
-        assert result_g1["message"] == "group:1001"
-        assert result_g2["message"] == "group:1002"
-        assert task_handler.group_ids == [1001, 1002]
+        assert "群一待办" in result_g1["message"]
+        assert "群二待办" in result_g2["message"]
+        task_groups = {
+            task.title: task.context["group_id"] for task in db.get_items("u1", {"type": "task"})
+        }
+        assert task_groups == {"群一待办": 1001, "群二待办": 1002}
 
-    def test_import_command_guides_user_to_web_import(self, monkeypatch):
+    def test_import_command_guides_user_to_web_import(self, pendo_context):
         from plugins.pendo import main as pendo_main
 
-        services = {
-            "db"              : object(),
-            "reminder_service": object(),
-            "exporter"        : _StubExporter(),
-            "event_handler"   : _StubSimpleHandler(),
-            "task_handler"    : _StubSimpleHandler(),
-            "note_handler"    : _StubSimpleHandler(),
-            "diary_handler"   : _StubSimpleHandler(),
-            "search_handler"  : _StubSimpleHandler(),
-            "ledger_handler"  : _StubSimpleHandler(),
-            "web_handler"     : _StubSimpleHandler(),
-        }
-
-        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
-
-        router = pendo_main._build_command_router(SimpleNamespace(state={}))
+        router = pendo_main._build_command_router(pendo_context)
 
         assert "import" in router.commands
 
-        result = asyncio.run(router.route("import", "u1", "", SimpleNamespace(state={})))
+        result = asyncio.run(router.route("import", "u1", "", pendo_context))
 
         assert result["status"] == "success"
         assert "/pendo web token" in result["message"]
         assert "Web 数据迁移页" in result["message"]
         assert "不接收本地文件路径" in result["message"]
 
-    def test_plugin_trigger_aliases_are_routed_to_matching_subcommands(self, monkeypatch):
-        import logging
-
+    def test_plugin_trigger_aliases_are_routed_to_matching_subcommands(self, db, pendo_context):
         from plugins.pendo import main as pendo_main
 
-        task_handler  = _StubCaptureHandler()
-        event_handler = _StubCaptureHandler()
-        diary_handler = _StubCaptureHandler()
-        services      = {
-            "db"              : object(),
-            "reminder_service": object(),
-            "exporter"        : _StubExporter(),
-            "event_handler"   : event_handler,
-            "task_handler"    : task_handler,
-            "note_handler"    : _StubSimpleHandler(),
-            "diary_handler"   : diary_handler,
-            "search_handler"  : _StubSimpleHandler(),
-            "ledger_handler"  : _StubSimpleHandler(),
-            "web_handler"     : _StubSimpleHandler(),
-        }
+        event = {"user_id": "u1"}
 
-        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
-        context = SimpleNamespace(state={}, logger=logging.getLogger("pendo-test"))
-
-        asyncio.run(pendo_main.handle("待办", "add TEST_ALIAS_TASK", {"user_id": "u1"}, context))
-        asyncio.run(pendo_main.handle("日程", "add TEST_ALIAS_EVENT", {"user_id": "u1"}, context))
-        asyncio.run(pendo_main.handle("日记", "add TEST_ALIAS_DIARY", {"user_id": "u1"}, context))
-
-        assert task_handler.calls[0]["args"] == "add TEST_ALIAS_TASK"
-        assert event_handler.calls[0]["args"] == "add TEST_ALIAS_EVENT"
-        assert diary_handler.calls[0]["args"] == "add TEST_ALIAS_DIARY"
-
-    def test_handle_command_routing_preserves_multiline_note_body(self, monkeypatch):
-        from plugins.pendo import main as pendo_main
-
-        note_handler = _StubCaptureHandler()
-        services     = {
-            "db"              : object(),
-            "reminder_service": object(),
-            "exporter"        : _StubExporter(),
-            "event_handler"   : _StubSimpleHandler(),
-            "task_handler"    : _StubSimpleHandler(),
-            "note_handler"    : note_handler,
-            "diary_handler"   : _StubSimpleHandler(),
-            "search_handler"  : _StubSimpleHandler(),
-            "ledger_handler"  : _StubSimpleHandler(),
-            "web_handler"     : _StubSimpleHandler(),
-        }
-
-        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
-
-        context = SimpleNamespace(state={})
-        args = "note add title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av"
-
-        result = asyncio.run(pendo_main._handle_command_routing("u1", args, context))
-
-        assert note_handler.calls
-        assert (
-            note_handler.calls[0]["args"]
-            == "add title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av"
+        asyncio.run(pendo_main.handle("待办", "add TEST_ALIAS_TASK", event, pendo_context))
+        asyncio.run(
+            pendo_main.handle("日程", "add 明天上午九点 TEST_ALIAS_EVENT", event, pendo_context)
         )
-        assert (
-            "title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av" in result[0]["data"]["text"]
+        asyncio.run(pendo_main.handle("日记", "add TEST_ALIAS_DIARY", event, pendo_context))
+
+        items = {type(item).__name__: item for item in db.get_items("u1", {})}
+        assert set(items) == {"TaskItem", "EventItem", "DiaryItem"}
+        assert items["TaskItem"].title == "TEST_ALIAS_TASK"
+        assert "TEST_ALIAS_EVENT" in items["EventItem"].title
+        assert "TEST_ALIAS_DIARY" in items["DiaryItem"].content
+
+    def test_handle_command_routing_preserves_multiline_note_body(self, db, pendo_context):
+        from plugins.pendo import main as pendo_main
+
+        args = "note add title:周末书单\n1. 三体\n2. 活着\ncat:其他 #阅读"
+
+        result = asyncio.run(pendo_main._handle_command_routing("u1", args, pendo_context))
+
+        [note] = db.get_items("u1", {"type": "note"})
+        assert note.title == "周末书单"
+        assert note.content == "1. 三体\n2. 活着"
+        assert note.category == "其他"
+        assert note.tags == ["阅读"]
+        assert "周末书单" in result[0]["data"]["text"]
+
+    def test_export_command_uploads_private_markdown_file(self, db, pendo_context):
+        from plugins.pendo import main as pendo_main
+
+        db.insert_item(
+            {"owner_id": "1001", "type": "task", "title": "导出的待办", "status": "open"}
         )
 
-    def test_export_command_uploads_private_markdown_file(self, monkeypatch):
-        from plugins.pendo import main as pendo_main
-
-        actions = []
-
-        async def send_action(action):
-            actions.append(action)
-            return True
-
-        services = {
-            "db"              : object(),
-            "reminder_service": object(),
-            "exporter"        : _StubExporter(),
-            "event_handler"   : _StubSimpleHandler(),
-            "task_handler"    : _StubSimpleHandler(),
-            "note_handler"    : _StubSimpleHandler(),
-            "diary_handler"   : _StubSimpleHandler(),
-            "search_handler"  : _StubSimpleHandler(),
-            "ledger_handler"  : _StubSimpleHandler(),
-            "web_handler"     : _StubSimpleHandler(),
-        }
-
-        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
-
-        context = SimpleNamespace(state={}, send_action=send_action)
-        router = pendo_main._build_command_router(context)
-        result = asyncio.run(router.route("export", "1001", "工作档案 last30d event,todo", context))
+        router = pendo_main._build_command_router(pendo_context)
+        result = asyncio.run(
+            router.route("export", "1001", "工作档案 last30d event,todo", pendo_context)
+        )
 
         assert result["status"] == "success"
         assert "已通过 QQ 私聊文件发送给你" in result["message"]
+        actions = pendo_context.sent
         assert len(actions) == 1
         assert actions[0]["action"] == "upload_private_file"
         assert actions[0]["params"]["user_id"] == 1001
-        assert actions[0]["params"]["name"] == "pendo-export.md"
+        assert actions[0]["params"]["name"] == "工作档案.md"
+        assert "导出的待办" in Path(actions[0]["params"]["file"]).read_text(encoding="utf-8")
 
     def test_export_month_week_and_type_combinations_use_list_style_ranges(
         self, tmp_path, monkeypatch, request
@@ -561,7 +493,7 @@ class TestPendoRuntimeBoundaries:
             if database is not None:
                 database.cleanup()
 
-    def test_cached_empty_values_do_not_fall_through_to_sql(self, monkeypatch):
+    def test_cached_empty_values_do_not_fall_through_to_sql(self):
         from plugins.pendo.services.db import Database
 
         db = Database(":memory:")
@@ -572,13 +504,15 @@ class TestPendoRuntimeBoundaries:
             db._cache_set(settings_key, {})
             db._cache_set(items_key, [])
 
-            def _boom():
-                raise AssertionError("should not hit sqlite when cache already has an empty value")
+            # 在 SQLite 连接上记录实际执行的语句，缓存命中时不应有任何查询。
+            with trace_sql_statements(db.get_connection()) as statements:
+                assert db.get_user_settings("u-empty") == {}
+                assert db.get_items("u-empty", {"type": "note"}, 10, 0) == []
+                assert statements == []
 
-            monkeypatch.setattr(db, "get_connection", _boom)
-
-            assert db.get_user_settings("u-empty") == {}
-            assert db.get_items("u-empty", {"type": "note"}, 10, 0) == []
+                # 对照：没有缓存的用户确实会查库，说明上面的记录是有效的。
+                db.get_user_settings("u-uncached")
+                assert statements
         finally:
             db.cleanup()
 
@@ -635,6 +569,7 @@ class TestPendoRuntimeBoundaries:
     def test_shutdown_stops_web_and_cleans_owned_pendo_database(self, monkeypatch):
         from plugins.pendo import main as pendo_main
         from plugins.pendo.services.runtime import PendoRuntimeService
+        from plugins.pendo.web import server as web_server
 
         class _DummyDb:
             def __init__(self):
@@ -648,11 +583,12 @@ class TestPendoRuntimeBoundaries:
         runtime_service.adopt_database(database)
         stopped = []
 
-        async def fake_stop_web_server_async():
+        # Web 监听是边界：不真的停 uvicorn，只记录停止请求。
+        def fake_stop(*_args, **_kwargs):
             stopped.append("web")
             return True
 
-        monkeypatch.setattr(pendo_main, "_stop_web_server_async", fake_stop_web_server_async)
+        monkeypatch.setattr(web_server, "stop", fake_stop)
 
         context = SimpleNamespace(
             state={
@@ -676,6 +612,7 @@ class TestPendoRuntimeBoundaries:
     def test_cleanup_retains_resources_until_web_stops(self, monkeypatch, asynchronous):
         from plugins.pendo import main as pendo_main
         from plugins.pendo.services.runtime import PendoRuntimeService
+        from plugins.pendo.web import server as web_server
 
         cleaned = []
         database = SimpleNamespace(cleanup=lambda: cleaned.append("db"))
@@ -683,11 +620,9 @@ class TestPendoRuntimeBoundaries:
         service.adopt_database(database)
         stopped = [False]
 
-        async def stop_async():
-            return stopped[0]
-
-        monkeypatch.setattr(pendo_main, "_stop_web_server", lambda: stopped[0])
-        monkeypatch.setattr(pendo_main, "_stop_web_server_async", stop_async)
+        # Web 监听是边界：停不掉时 stop() 为假且服务线程仍在运行。
+        monkeypatch.setattr(web_server, "stop", lambda *_args, **_kwargs: stopped[0])
+        monkeypatch.setattr(web_server, "is_managed_running", lambda: not stopped[0])
         runtime = {"services": {"ready": True}, "lifecycle_service": service}
         context = SimpleNamespace(
             state={"pendo_runtime": runtime},
@@ -713,25 +648,23 @@ class TestPendoRuntimeBoundaries:
     def test_run_scheduled_task_swallows_cancelled_error(self):
         from plugins.pendo import main as pendo_main
 
-        metrics: list[tuple[str, float, bool]] = []
-        context                                = SimpleNamespace()
-        log_messages: list[str]                = []
+        metrics     : list[tuple[str, float, bool]] = []
+        log_messages: list[str]                     = []
         log = SimpleNamespace(info=lambda msg, *args: log_messages.append(msg % args))
 
-        async def fake_record_metric(_context, name, duration, is_error=False):
-            metrics.append((name, duration, is_error))
+        class _Metrics:
+            async def record_plugin_execution(self, plugin, name, duration, *, is_error=False):
+                assert plugin == "pendo"
+                metrics.append((name, duration, is_error))
+
+        context = SimpleNamespace(metrics=_Metrics())
 
         async def cancelled_task():
             raise asyncio.CancelledError()
 
-        original_record_metric    = pendo_main._record_metric
-        pendo_main._record_metric = fake_record_metric
-        try:
-            result = asyncio.run(
-                pendo_main._run_scheduled_task(context, "daily_briefings", cancelled_task, log)
-            )
-        finally:
-            pendo_main._record_metric = original_record_metric
+        result = asyncio.run(
+            pendo_main._run_scheduled_task(context, "daily_briefings", cancelled_task, log)
+        )
 
         assert result == []
         assert metrics and metrics[0][0] == "scheduled.daily_briefings"

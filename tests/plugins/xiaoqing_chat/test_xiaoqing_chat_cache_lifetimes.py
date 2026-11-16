@@ -1,37 +1,42 @@
 import asyncio
 import gc
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from plugins.xiaoqing_chat.media.models import RenderedMedia, ResolvedMedia
+from core.interfaces import PluginCapabilities
+from plugins.xiaoqing_chat.media import emoji_library
 from plugins.xiaoqing_chat.runtime_state import SELF_MOOD_KEY, ChatRuntimeState
+from tests.helpers.xiaoqing_chat_media_test_support import make_media_runtime, write_png
 
 
-def test_provider_overrides_have_a_hard_lru_capacity(monkeypatch):
-    monkeypatch.setattr(ChatRuntimeState, "_MAX_PROVIDER_OVERRIDES", 2, raising=False)
-    state = ChatRuntimeState()
+def test_provider_overrides_have_a_hard_lru_capacity():
+    capacity = ChatRuntimeState._MAX_PROVIDER_OVERRIDES
+    state    = ChatRuntimeState()
 
-    state.set_chat_provider("g1", "one")
-    state.set_chat_provider("g2", "two")
-    assert state.get_chat_provider("g1") == "one"
-    state.set_chat_provider("g3", "three")
+    for index in range(capacity):
+        state.set_chat_provider(f"g{index}", f"p{index}")
+    assert state.get_chat_provider("g0") == "p0"
+    state.set_chat_provider("extra", "one-more")
 
-    assert state.get_chat_provider("g1") == "one"
-    assert state.get_chat_provider("g2") is None
-    assert state.get_chat_provider("g3") == "three"
-    assert len(state._active_provider_by_chat) == 2
+    assert state.get_chat_provider("g0") == "p0"
+    assert state.get_chat_provider("g1") is None
+    assert state.get_chat_provider("extra") == "one-more"
+    assert len(state._active_provider_by_chat) == capacity
 
 
-def test_stale_chat_cleanup_removes_provider_override(monkeypatch):
-    monkeypatch.setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", 1)
-    state = ChatRuntimeState()
+def test_stale_chat_cleanup_removes_provider_override():
+    capacity = ChatRuntimeState._MAX_TRACKED_CHATS
+    state    = ChatRuntimeState()
     state.set_chat_provider("old", "one")
     state.set_chat_provider("recent", "two")
     state.set_last_observe_ts("old", 1.0)
-    state.set_last_observe_ts("recent", 2.0)
+    for index in range(capacity):
+        state.set_last_observe_ts("recent" if index == 0 else f"busy{index}", 2.0 + index)
 
     state.set_mood_state(SELF_MOOD_KEY, "现在有点调皮")
 
@@ -42,34 +47,63 @@ def test_stale_chat_cleanup_removes_provider_override(monkeypatch):
     assert state.get_mood_state(SELF_MOOD_KEY) == "现在有点调皮", "她自己的心境不属于任何会话"
 
 
-def test_runtime_config_cache_has_a_hard_lru_capacity(monkeypatch):
-    monkeypatch.setattr(ChatRuntimeState, "_MAX_RUNTIME_CACHES", 2, raising=False)
-    state = ChatRuntimeState()
+def test_runtime_config_cache_has_a_hard_lru_capacity():
+    capacity = ChatRuntimeState._MAX_RUNTIME_CACHES
+    state    = ChatRuntimeState()
 
-    state.set_runtime("one", SimpleNamespace(), 1, 10)
-    state.set_runtime("two", SimpleNamespace(), 2, 20)
-    assert state.get_runtime("one") is not None
-    state.set_runtime("three", SimpleNamespace(), 3, 30)
+    for index in range(capacity):
+        state.set_runtime(f"k{index}", SimpleNamespace(), index, index * 10)
+    assert state.get_runtime("k0") is not None
+    state.set_runtime("extra", SimpleNamespace(), capacity, capacity * 10)
 
-    assert state.get_runtime("one") is not None
-    assert state.get_runtime("two") is None
-    assert state.get_runtime_mtime("two") is None
-    assert state.get_runtime_revision("two") is None
-    assert state.get_runtime("three") is not None
+    assert state.get_runtime("k0") is not None
+    assert state.get_runtime("k1") is None
+    assert state.get_runtime_mtime("k1") is None
+    assert state.get_runtime_revision("k1") is None
+    assert state.get_runtime("extra") is not None
 
 
-def test_emoji_library_cache_has_a_hard_lru_capacity(monkeypatch):
-    from plugins.xiaoqing_chat.media import emoji_library
+def _emoji_library_context(root: Path, name: str) -> SimpleNamespace:
+    """数据目录下有一个表情库：一张图加一条可直接使用的已启用索引。"""
 
-    monkeypatch.setattr(emoji_library, "_LIBRARY_CACHE_MAX_ENTRIES", 2)
+    context = SimpleNamespace(data_dir=root / name)
+    library = context.data_dir / "media" / "library"
+    digest  = hashlib.sha256(write_png(library / "a.png").read_bytes()).hexdigest()
+    entry   = {
+        "media_hash"  : digest,
+        "file_path"   : "media/library/a.png",
+        "description" : "一只小鸟",
+        "emotion_tags": ["疑惑"],
+        "usage_count" : 0,
+        "last_used_ts": 0.0,
+        "marker"      : "[表情包：疑惑]",
+        "status"      : "active",
+    }
+    (library / "index.json").write_text(
+        json.dumps({"entries": {digest: entry}}, ensure_ascii=False), encoding="utf-8"
+    )
+    return context
+
+
+@pytest.mark.asyncio
+async def test_emoji_library_cache_has_a_hard_lru_capacity(tmp_path: Path):
+    capacity  = emoji_library._LIBRARY_CACHE_MAX_ENTRIES
+    runtime   = make_media_runtime()
+    libraries = [_emoji_library_context(tmp_path, f"lib{index}") for index in range(capacity + 1)]
+
     emoji_library._LIBRARY_CACHE.clear()
     try:
-        emoji_library._store_library_cache("one", (1.0, 1.0), [])
-        emoji_library._store_library_cache("two", (2.0, 2.0), [])
-        assert emoji_library._get_library_cache("one", (1.0, 1.0)) == []
-        emoji_library._store_library_cache("three", (3.0, 3.0), [])
+        for context in libraries[:capacity]:
+            assert len(await emoji_library.load_emoji_library(context, runtime)) == 1
+        # 再读第一个库：它成了最近使用的，下一个新库挤掉的是第二个。
+        await emoji_library.load_emoji_library(libraries[0], runtime)
+        await emoji_library.load_emoji_library(libraries[capacity], runtime)
 
-        assert list(emoji_library._LIBRARY_CACHE) == ["one", "three"]
+        cached = list(emoji_library._LIBRARY_CACHE)
+        assert len(cached) == capacity
+        assert emoji_library._library_cache_key(libraries[0]) in cached
+        assert emoji_library._library_cache_key(libraries[1]) not in cached
+        assert emoji_library._library_cache_key(libraries[capacity]) in cached
     finally:
         emoji_library._LIBRARY_CACHE.clear()
 
@@ -78,38 +112,20 @@ def test_emoji_library_cache_has_a_hard_lru_capacity(monkeypatch):
 async def test_media_render_singleflight_lock_is_released_after_use(tmp_path: Path):
     from plugins.xiaoqing_chat.media import event_media as event_media_module
 
-    resolved = ResolvedMedia(
-        media_hash   = "cache-lifetime",
-        segment_type = "image",
-        source_name  = "fixture.png",
-        mime_type    = "image/png",
-        cached_path  = tmp_path / "fixture.png",
+    image   = write_png(tmp_path / "fixture.png")
+    context = SimpleNamespace(
+        data_dir     = tmp_path / "data",
+        logger       = MagicMock(),
+        capabilities = PluginCapabilities(),
     )
-    rendered = RenderedMedia(
-        media_hash   = resolved.media_hash,
-        kind         = "image",
-        description  = "fixture",
-        emotion_tags = (),
-        marker       = "[图片：fixture]",
-        cached_path  = resolved.cached_path,
-    )
-    context = SimpleNamespace(data_dir=tmp_path)
-    loop     = asyncio.get_running_loop()
-    lock_key = f"{tmp_path.resolve()}::{resolved.media_hash}"
+    loop = asyncio.get_running_loop()
 
-    with patch.object(
-        event_media_module,
-        "_render_resolved_media_locked",
-        new=AsyncMock(return_value=rendered),
-    ):
-        result = await event_media_module._render_resolved_media(
-            resolved,
-            context      = context,
-            runtime      = SimpleNamespace(),
-            prefer_emoji = False,
-        )
+    result = await event_media_module.render_local_media_file(
+        image, context=context, runtime=make_media_runtime()
+    )
 
     gc.collect()
-    locks = event_media_module._MEDIA_RENDER_LOCKS_BY_LOOP.get(loop, {})
-    assert result is rendered
+    assert result is not None
+    lock_key = f"{context.data_dir.resolve()}::{result.media_hash}"
+    locks    = event_media_module._MEDIA_RENDER_LOCKS_BY_LOOP.get(loop, {})
     assert lock_key not in locks

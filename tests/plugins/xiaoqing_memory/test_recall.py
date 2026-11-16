@@ -13,7 +13,7 @@ from plugins.xiaoqing_memory.model import GLOBAL, Note, Page, PageLine
 from plugins.xiaoqing_memory.recall import recall
 from plugins.xiaoqing_memory.search import search
 from plugins.xiaoqing_memory.store import MemoryStore
-from tests.plugins.xiaoqing_memory.support import (
+from tests.helpers.xiaoqing_memory_test_support import (
     ALI,
     BO,
     CFG,
@@ -515,7 +515,7 @@ def test_notes_the_page_writer_left_out_are_not_listed_as_new(temp_data_dir) -> 
 
 @pytest.mark.unit
 def test_imported_promises_and_states_keep_the_time_they_were_said(temp_data_dir) -> None:
-    """迁移那天导入的旧承诺和近况，按原话说出的时间算“多久以前”，不当成刚说的。"""
+    """记入时间晚于原话说出时间的承诺和近况（比如批量导入的旧记录），按原话说出的时间算“多久以前”，不当成刚说的。"""
 
     store = new_store(temp_data_dir)
     said  = T0 - 3 * 86400

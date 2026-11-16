@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,13 +11,20 @@ from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
+from plugins.qingpet.utils import time as qingpet_time
 from plugins.qingpet.utils.constants import PetStage
 
 
 def _setup(path: str, *, group_id: int = 73001):
     database = Database(path)
-    user     = UserService(database).get_or_create_user("keeper", group_id)
-    service  = PetService(database)
+    return database, _seed_keeper(database, group_id=group_id)
+
+
+def _seed_keeper(database: Database, *, group_id: int):
+    """建一个带幼年宠物的用户。"""
+
+    user    = UserService(database).get_or_create_user("keeper", group_id)
+    service = PetService(database)
     assert service.adopt_pet(user.user_id, group_id, "事务兽")[0]
     pet = database.get_pet(user.user_id, group_id)
     assert pet is not None
@@ -26,7 +32,7 @@ def _setup(path: str, *, group_id: int = 73001):
     pet.clean = 50
     pet.age   = 3
     assert database.update_pet(pet)
-    return database, user
+    return user
 
 
 def _drop_trigger(database: Database, name: str) -> None:
@@ -123,60 +129,53 @@ def test_daily_reset_failure_rolls_back_users_pets_and_scheduler_then_retries(tm
         database.cleanup()
 
 
-class _Context:
-    logger = logging.getLogger("test.qingpet.transaction_closure")
-
-
-def test_weekly_failure_is_retryable_and_announcement_uses_actual_ledger_grant(
-    tmp_path,
+@pytest.mark.asyncio
+async def test_weekly_failure_is_retryable_and_announcement_uses_actual_ledger_grant(
+    qingpet_runtime,
     monkeypatch,
 ):
-    database, user = _setup(str(tmp_path / "weekly.db"), group_id=73003)
-    try:
-        limited_user = database.get_user(user.user_id, user.group_id)
-        assert limited_user is not None
-        limited_user.today_coins_earned = 498
-        assert database.update_user(limited_user)
-        before_coins = limited_user.coins
-        conn         = database._get_connection()
+    context, database = qingpet_runtime
+    user = _seed_keeper(database, group_id=73003)
+    limited_user = database.get_user(user.user_id, user.group_id)
+    assert limited_user is not None
+    limited_user.today_coins_earned = 498
+    assert database.update_user(limited_user)
+    before_coins = limited_user.coins
+    conn         = database._get_connection()
+    conn.execute(
+        """CREATE TRIGGER fail_weekly_ledger BEFORE INSERT ON asset_ledger
+           BEGIN SELECT RAISE(ABORT, 'injected weekly ledger failure'); END"""
+    )
+    conn.commit()
+    monkeypatch.setattr(qingpet_time, "utc_now", lambda: datetime(2026, 7, 13, 12, 0, tzinfo=UTC))
+
+    assert await qingpet_main.scheduled_weekly_activity(context) == []
+    assert database.get_user(user.user_id, user.group_id).coins == before_coins
+    assert (
         conn.execute(
-            """CREATE TRIGGER fail_weekly_ledger BEFORE INSERT ON asset_ledger
-               BEGIN SELECT RAISE(ABORT, 'injected weekly ledger failure'); END"""
-        )
-        conn.commit()
-        monkeypatch.setattr(qingpet_main, "_db_instance", database)
-        monkeypatch.setattr(qingpet_main, "_social_service", SocialService(database))
-        monkeypatch.setattr(qingpet_main, "business_week", lambda: "2026-W29")
+            "SELECT COUNT(*) FROM asset_ledger WHERE reason = 'weekly_ranking'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM scheduler_runs").fetchone()[0] == 0
 
-        assert asyncio.run(qingpet_main.scheduled_weekly_activity(_Context())) == []
-        assert database.get_user(user.user_id, user.group_id).coins == before_coins
-        assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM asset_ledger WHERE reason = 'weekly_ranking'"
-            ).fetchone()[0]
-            == 0
-        )
-        assert conn.execute("SELECT COUNT(*) FROM scheduler_runs").fetchone()[0] == 0
-
-        _drop_trigger(database, "fail_weekly_ledger")
-        messages = asyncio.run(qingpet_main.scheduled_weekly_activity(_Context()))
-        assert len(messages) == 1
-        rendered = messages[0].message[0]["data"]["text"]
-        assert "+2金币" in rendered
-        assert "+100金币" not in rendered
-        ledger = conn.execute(
-            "SELECT delta FROM asset_ledger WHERE reason = 'weekly_ranking'"
-        ).fetchone()
-        assert ledger is not None and ledger["delta"] == 2
-        winner = database.get_user(user.user_id, user.group_id)
-        assert winner is not None
-        assert winner.coins == before_coins + 2
-        assert "本周之星" in winner.titles
-        scheduler = conn.execute("SELECT * FROM scheduler_runs").fetchone()
-        assert scheduler["status"] == "completed"
-        assert asyncio.run(qingpet_main.scheduled_weekly_activity(_Context())) == []
-    finally:
-        database.cleanup()
+    _drop_trigger(database, "fail_weekly_ledger")
+    messages = await qingpet_main.scheduled_weekly_activity(context)
+    assert len(messages) == 1
+    rendered = messages[0].message[0]["data"]["text"]
+    assert "+2金币" in rendered
+    assert "+100金币" not in rendered
+    ledger = conn.execute(
+        "SELECT delta FROM asset_ledger WHERE reason = 'weekly_ranking'"
+    ).fetchone()
+    assert ledger is not None and ledger["delta"] == 2
+    winner = database.get_user(user.user_id, user.group_id)
+    assert winner is not None
+    assert winner.coins == before_coins + 2
+    assert "本周之星" in winner.titles
+    scheduler = conn.execute("SELECT * FROM scheduler_runs").fetchone()
+    assert scheduler["status"] == "completed"
+    assert await qingpet_main.scheduled_weekly_activity(context) == []
 
 
 def test_pet_show_reward_and_announcement_roll_back_together(tmp_path):

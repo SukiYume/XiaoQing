@@ -14,22 +14,30 @@ import pytest
 
 from tests.helpers.qingssh_test_support import (
     EXIT_CODE_TIMEOUT,
+    FakeChannel,
+    FakeClient,
     SessionKeys,
-    _connected_session,
-    _FakeChannel,
-    _FakeClient,
-    _SessionStub,
+    SessionStub,
+    connected_session,
     ssh_manager_module,
     ssh_session_handlers,
 )
 from tests.helpers.settings_snapshot import with_settings_reader
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """known_hosts 和 ~/.ssh/config 都从临时目录读，不碰开发机的真实文件。"""
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+
 def test_disconnect_closes_active_channel_and_jump_connection(tmp_path):
     manager = ssh_manager_module.SSHManager(tmp_path)
     key     = manager.build_connection_key("10001", "20001", "srv")
-    channel = _FakeChannel()
-    client  = _FakeClient()
+    channel = FakeChannel()
+    client  = FakeClient()
 
     manager.active_channels[key] = channel
     manager.connections[key]     = client
@@ -98,7 +106,7 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
 
         def connect(self, **_kwargs):
             raise ssh_manager_module.paramiko.SSHException(
-                r"CR_P02_SSH_SECRET C:\private\id_ed25519 target failed"
+                r"SSH_PRIVATE_CANARY C:\private\id_ed25519 target failed"
             )
 
     clients = [_FakeTargetClient(), _FakeJumpClient()]
@@ -107,11 +115,10 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
         return clients.pop(0)
 
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", _client_factory)
-    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
 
     context            = MagicMock()
     context.request_id = "req-qingssh-connect"
-    context.secrets    = {"private_exception_canary": "CR_P02_SSH_SECRET"}
+    context.secrets    = {"private_exception_canary": "SSH_PRIVATE_CANARY"}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager._ssh_config                    = MagicMock()
     manager._ssh_config.lookup.side_effect = lambda host: {
@@ -133,7 +140,7 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
     assert ok is False
     assert "XQ-PLUGIN-UNEXPECTED" in message
     assert "req-qingssh-connect" in message
-    assert "CR_P02_SSH_SECRET" not in message
+    assert "SSH_PRIVATE_CANARY" not in message
     assert "id_ed25519" not in message
     jump_client = _FakeJumpClient.instances[0]
     assert jump_client.closed is True
@@ -193,25 +200,24 @@ def test_authentication_failure_never_exposes_private_key_path(tmp_path):
 
 @pytest.mark.asyncio
 async def test_stream_failure_uses_correlated_public_error(tmp_path):
-    canary             = "CR_P02_STREAM_SECRET"
+    canary             = "STREAM_PRIVATE_CANARY"
     context            = MagicMock()
     context.request_id = "req-qingssh-stream"
     context.secrets    = {"private_exception_canary": canary}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     key = manager.build_connection_key("1", "2", "srv")
 
-    class Client:
-        def get_transport(self):
-            raise RuntimeError(rf"{canary} C:\private\stream.sock")
+    def open_session():
+        raise RuntimeError(rf"{canary} C:\private\stream.sock")
 
-    manager.connections[key] = cast(Any, Client())
-    manager.is_connected = Mock(return_value=True)
+    transport = SimpleNamespace(is_active=lambda: True, open_session=open_session)
+    manager.connections[key] = cast(Any, SimpleNamespace(get_transport=lambda: transport))
     output: list[str] = []
 
     async def collect(text: str) -> None:
         output.append(text)
 
-    exit_code = await manager._execute_command_stream_impl(
+    exit_code = await manager.execute_command_stream(
         "1",
         "2",
         "srv",
@@ -229,6 +235,9 @@ async def test_stream_failure_uses_correlated_public_error(tmp_path):
 
 @pytest.mark.asyncio
 async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tmp_path):
+    dial_started = threading.Event()
+    release_dial = threading.Event()
+
     class _Client:
         def __init__(self):
             self.closed    = False
@@ -237,7 +246,16 @@ async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tm
         def set_missing_host_key_policy(self, _policy):
             return None
 
+        def load_system_host_keys(self):
+            return None
+
+        def load_host_keys(self, _path):
+            return None
+
         def connect(self, **_kwargs):
+            # 拨号卡在第三方 connect 里：首个连接已占用容量，还没发布。
+            dial_started.set()
+            assert release_dial.wait(timeout=10)
             self.connected = True
 
         def close(self):
@@ -250,15 +268,6 @@ async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tm
         clients.append(client)
         return client
 
-    dial_started = asyncio.Event()
-    release_dial = asyncio.Event()
-
-    async def controlled_to_thread(func, *args, **kwargs):
-        if getattr(func, "__name__", "") == "connect":
-            dial_started.set()
-            await asyncio.wait_for(release_dial.wait(), timeout=10)
-        return func(*args, **kwargs)
-
     context = with_settings_reader(Mock(config={"plugins": {"qingssh": {"max_connections": 1}}}))
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers.update(
@@ -267,13 +276,10 @@ async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tm
             "second": {"host": "second.internal", "port": 22, "username": "root"},
         }
     )
-    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", client_factory)
-    monkeypatch.setattr(manager, "_load_host_keys", lambda *_args: None)
-    monkeypatch.setattr(ssh_manager_module.asyncio, "to_thread", controlled_to_thread)
 
     first_task = asyncio.create_task(manager.connect("u1", "g1", "first"))
-    await asyncio.wait_for(dial_started.wait(), timeout=10)
+    assert await asyncio.to_thread(dial_started.wait, 10)
     second_result = await manager.connect("u2", "g1", "second")
     release_dial.set()
     first_result = await first_task
@@ -304,13 +310,19 @@ async def test_connect_prunes_stale_clients_before_enforcing_capacity(monkeypatc
         def set_missing_host_key_policy(self, _policy):
             return None
 
+        def load_system_host_keys(self):
+            return None
+
+        def load_host_keys(self, _path):
+            return None
+
         def connect(self, **_kwargs):
             return None
 
         def close(self):
             self.closed = True
 
-    context = Mock(config={"plugins": {"qingssh": {"max_connections": 1}}})
+    context = with_settings_reader(Mock(config={"plugins": {"qingssh": {"max_connections": 1}}}))
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["new"] = {
         "host"    : "new.internal",
@@ -321,15 +333,100 @@ async def test_connect_prunes_stale_clients_before_enforcing_capacity(monkeypatc
     stale_key                      = manager.build_connection_key("old-user", "g1", "old")
     manager.connections[stale_key] = cast(Any, stale)
     new_client                     = _NewClient()
-    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: new_client)
-    monkeypatch.setattr(manager, "_load_host_keys", lambda *_args: None)
 
     result = await manager.connect("new-user", "g1", "new")
 
     assert result[0] is True
     assert stale.closed is True
     assert stale_key not in manager.connections
+    manager.close_all()
+
+
+class _DialClient:
+    """第三方 SSHClient 的替身：记录加载过的 known_hosts，拨号直接成功。"""
+
+    def __init__(self, load_error: Exception | None = None):
+        self.load_error              = load_error
+        self.loaded_paths: list[str] = []
+
+    def set_missing_host_key_policy(self, _policy):
+        return None
+
+    def load_system_host_keys(self):
+        return None
+
+    def load_host_keys(self, path):
+        self.loaded_paths.append(path)
+        if self.load_error is not None:
+            raise self.load_error
+
+    def connect(self, **_kwargs):
+        return None
+
+    def get_transport(self):
+        return SimpleNamespace(is_active=lambda: True)
+
+    def close(self):
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unreadable", [False, True])
+async def test_connect_trusts_the_local_known_hosts_and_survives_an_unreadable_file(
+    monkeypatch, tmp_path, unreadable
+):
+    known_hosts = tmp_path / "home" / ".ssh" / "known_hosts"
+    known_hosts.parent.mkdir(parents=True)
+    known_hosts.write_text("srv.internal ssh-ed25519 AAAA\n", encoding="utf-8")
+    canary = "KNOWN_HOSTS_PRIVATE_CANARY"
+    client = _DialClient(
+        ssh_manager_module.paramiko.SSHException(f"{canary} {known_hosts}") if unreadable else None
+    )
+    context = with_settings_reader(Mock(config={}, logger=Mock()))
+    manager = ssh_manager_module.SSHManager(tmp_path, context=context)
+    manager.servers["srv"] = {"host": "srv.internal", "port": 22, "username": "root"}
+    monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: client)
+
+    result = await manager.connect("u1", "g1", "srv")
+
+    # 本机 known_hosts 交给第三方库校验主机指纹；读不了只记警告，连接照常建立，日志里没有路径。
+    assert result[0] is True
+    assert client.loaded_paths == [str(known_hosts)]
+    warnings = [str(call.args[0]) for call in context.logger.warning.call_args_list]
+    assert any("known_hosts" in line for line in warnings) is unreadable
+    assert canary not in "".join(warnings) and str(known_hosts) not in "".join(warnings)
+    manager.close_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "second_connects"),
+    [("many", True), (None, True), (0, False)],
+    ids=["not-a-number", "null", "zero-is-raised-to-one"],
+)
+async def test_connection_limit_falls_back_to_the_default_when_the_setting_is_unusable(
+    monkeypatch, tmp_path, configured, second_connects
+):
+    context = with_settings_reader(
+        Mock(config={"plugins": {"qingssh": {"max_connections": configured}}})
+    )
+    manager = ssh_manager_module.SSHManager(tmp_path, context=context)
+    manager.servers.update(
+        {
+            "first" : {"host": "first.internal", "port": 22, "username": "root"},
+            "second": {"host": "second.internal", "port": 22, "username": "root"},
+        }
+    )
+    monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", _DialClient)
+
+    first  = await manager.connect("u1", "g1", "first")
+    second = await manager.connect("u2", "g1", "second")
+
+    assert first[0] is True
+    assert second[0] is second_connects
+    if not second_connects:
+        assert "(1)" in second[1]
     manager.close_all()
 
 
@@ -340,6 +437,12 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
             self.closed = False
 
         def set_missing_host_key_policy(self, _policy):
+            return None
+
+        def load_system_host_keys(self):
+            return None
+
+        def load_host_keys(self, _path):
             return None
 
         def close(self):
@@ -369,19 +472,7 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
         "username"    : "root",
         "proxycommand": "ssh -W %h:%p jump-host",
     }
-    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: clients.pop(0))
-    monkeypatch.setattr(manager, "_load_host_keys", lambda *_args: None)
-    monkeypatch.setattr(
-        manager,
-        "get_ssh_config_for_host",
-        lambda host: {
-            "hostname"    : host,
-            "port"        : 22,
-            "user"        : "root",
-            "identityfile": [],
-        },
-    )
 
     ok, message = await manager.connect("u1", "g1", "srv")
 
@@ -396,6 +487,9 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
 
 @pytest.mark.asyncio
 async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypatch, tmp_path):
+    dial_started = threading.Event()
+    release_dial = threading.Event()
+
     class _Client:
         def __init__(self):
             self.closed = False
@@ -403,31 +497,27 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
         def set_missing_host_key_policy(self, _policy):
             return None
 
-        def connect(self, **_kwargs):
+        def load_system_host_keys(self):
             return None
+
+        def load_host_keys(self, _path):
+            return None
+
+        def connect(self, **_kwargs):
+            # 拨号卡在第三方 connect 里时取消连接。
+            dial_started.set()
+            assert release_dial.wait(timeout=10)
 
         def close(self):
             self.closed = True
 
-    client       = _Client()
-    dial_started = asyncio.Event()
-    release_dial = asyncio.Event()
-
-    async def blocked_to_thread(func, *args, **kwargs):
-        if getattr(func, "__name__", "") == "connect":
-            dial_started.set()
-            await asyncio.wait_for(release_dial.wait(), timeout=10)
-        return func(*args, **kwargs)
-
+    client                 = _Client()
     manager                = ssh_manager_module.SSHManager(tmp_path)
     manager.servers["srv"] = {"host": "srv.internal", "port": 22, "username": "root"}
-    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: client)
-    monkeypatch.setattr(manager, "_load_host_keys", lambda *_args: None)
-    monkeypatch.setattr(ssh_manager_module.asyncio, "to_thread", blocked_to_thread)
 
     task = asyncio.create_task(manager.connect("u1", "g1", "srv"))
-    await asyncio.wait_for(dial_started.wait(), timeout=10)
+    assert await asyncio.to_thread(dial_started.wait, 10)
     task.cancel()
     await asyncio.sleep(0)
     assert not task.done()
@@ -442,28 +532,44 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
 
 @pytest.mark.asyncio
 async def test_execute_command_stream_applies_timeout(monkeypatch, tmp_path):
+    class _HangingChannel:
+        """远端命令一直不退出，也没有打印 PID 标记。"""
+
+        def __init__(self):
+            self.closed = False
+
+        def set_combine_stderr(self, _flag):
+            return None
+
+        def exec_command(self, _command):
+            return None
+
+        def exit_status_ready(self):
+            return False
+
+        def recv_ready(self):
+            return False
+
+        def send_ready(self):
+            return False
+
+        def close(self):
+            self.closed = True
+
     manager = ssh_manager_module.SSHManager(tmp_path)
-
-    async def fake_impl(*args, **kwargs):
-        await asyncio.sleep(0.05)
-        return 0
-
-    terminate = AsyncMock(
-        return_value=ssh_manager_module.CommandTerminationResult(
-            found            = True,
-            local_cleaned    = True,
-            remote_confirmed = False,
-        )
+    channel = _HangingChannel()
+    transport = SimpleNamespace(is_active=lambda: True, open_session=lambda: channel)
+    manager.connections["10001:20001:srv"] = cast(
+        Any, SimpleNamespace(get_transport=lambda: transport)
     )
     output = AsyncMock()
-    monkeypatch.setattr(ssh_manager_module, "COMMAND_TIMEOUT", 0.01)
-    monkeypatch.setattr(manager, "_execute_command_stream_impl", fake_impl)
-    monkeypatch.setattr(manager, "_terminate_active_command", terminate)
+    monkeypatch.setattr(ssh_manager_module, "COMMAND_TIMEOUT", 0.3)
 
     result = await manager.execute_command_stream("10001", "20001", "srv", "sleep 1", output)
 
     assert result == EXIT_CODE_TIMEOUT
-    terminate.assert_awaited_once_with("10001:20001:srv")
+    assert channel.closed is True
+    assert manager.active_channels == {}
     assert "状态未知" in output.await_args.args[0]
 
 
@@ -471,7 +577,7 @@ async def test_execute_command_stream_applies_timeout(monkeypatch, tmp_path):
 async def test_password_setup_is_rejected_in_group_chat():
     context = Mock(current_user_id=10001, current_group_id=20001)
     context.end_session = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.STEP         : "auth_type",
             SessionKeys.SERVER_CONFIG: {
@@ -501,7 +607,7 @@ async def test_private_password_setup_keeps_plaintext_out_of_session_state():
     context.end_session = AsyncMock()
     manager             = MagicMock()
     manager.add_server = AsyncMock(return_value=True)
-    session = _SessionStub(
+    session = SessionStub(
         {
             SessionKeys.STEP         : "password",
             SessionKeys.SERVER_CONFIG: {
@@ -526,7 +632,7 @@ async def test_private_password_setup_keeps_plaintext_out_of_session_state():
 async def test_corrupt_add_session_is_ended_instead_of_raising():
     context = Mock(current_user_id=10001, current_group_id=None)
     context.end_session = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.STEP         : "password",
             SessionKeys.SERVER_CONFIG: {},
@@ -550,7 +656,7 @@ async def test_agent_add_failure_does_not_report_success_or_end_session():
     context.end_session = AsyncMock()
     manager             = MagicMock()
     manager.add_server = AsyncMock(return_value=False)
-    session = _SessionStub(
+    session = SessionStub(
         {
             SessionKeys.STEP         : "auth_type",
             SessionKeys.SERVER_CONFIG: {
@@ -589,7 +695,7 @@ def test_session_without_plugin_identity_cannot_own_qingssh_job():
 async def test_connected_session_rejects_overlong_command_before_starting_job():
     context = Mock(current_user_id=10001, current_group_id=20001, config={})
     context.end_session = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.SERVER_NAME  : "srv",
             SessionKeys.STATE        : "connected",
@@ -616,7 +722,7 @@ async def test_connected_session_rejects_overlong_command_before_starting_job():
 async def test_connected_session_help_aliases_do_not_start_remote_commands(alias: str):
     context = Mock(current_user_id=10001, current_group_id=20001)
     context.end_session               = AsyncMock()
-    session                           = _connected_session()
+    session                           = connected_session()
     manager                           = MagicMock()
     manager.is_connected.return_value = True
 
@@ -642,7 +748,7 @@ async def test_showimg_without_pattern_returns_usage_instead_of_running_remote_c
 ):
     context = Mock(current_user_id=10001, current_group_id=20001)
     context.end_session               = AsyncMock()
-    session                           = _connected_session()
+    session                           = connected_session()
     manager                           = MagicMock()
     manager.is_connected.return_value = True
     manager.list_files                = AsyncMock()
@@ -738,11 +844,14 @@ async def test_list_files_applies_wildcard_and_returns_stable_filename_order(tmp
         def open_sftp(self):
             return self.sftp
 
+        @staticmethod
+        def get_transport():
+            return SimpleNamespace(is_active=lambda: True)
+
     manager                  = ssh_manager_module.SSHManager(tmp_path)
     sftp                     = SFTP()
     key                      = manager.build_connection_key("10001", "20001", "srv")
     manager.connections[key] = cast(Any, Client(sftp))
-    manager.is_connected = Mock(return_value=True)
 
     success, files = await manager.list_files(
         "10001",
@@ -758,7 +867,7 @@ async def test_list_files_applies_wildcard_and_returns_stable_filename_order(tmp
 
 
 @pytest.mark.asyncio
-async def test_list_files_keeps_matches_beyond_historical_first_hundred(tmp_path: Path):
+async def test_list_files_returns_every_match_beyond_the_first_hundred(tmp_path: Path):
     filenames = [f"plot-{index:03}.png" for index in range(125, 0, -1)]
 
     class SFTP:
@@ -775,10 +884,13 @@ async def test_list_files_keeps_matches_beyond_historical_first_hundred(tmp_path
         def open_sftp():
             return SFTP()
 
+        @staticmethod
+        def get_transport():
+            return SimpleNamespace(is_active=lambda: True)
+
     manager                  = ssh_manager_module.SSHManager(tmp_path)
     key                      = manager.build_connection_key("10001", "20001", "srv")
     manager.connections[key] = cast(Any, Client())
-    manager.is_connected = Mock(return_value=True)
 
     success, files = await manager.list_files(
         "10001",
@@ -802,7 +914,7 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.CWD        : "/remote",
@@ -879,7 +991,7 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
-    session             = _SessionStub(
+    session             = SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.CWD        : "/remote",
@@ -914,7 +1026,7 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock(side_effect=RuntimeError("send failed"))
-    session = _SessionStub(
+    session = SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.CWD        : "/remote",

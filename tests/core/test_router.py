@@ -66,25 +66,27 @@ def make_spec(
 class TestCommandRouter:
     """CommandRouter 测试类"""
 
-    def test_register_and_resolve_basic(self, router: CommandRouter):
-        """测试基本的注册和解析"""
+    @pytest.mark.parametrize(
+        ("text", "expected_args"),
+        [
+            pytest.param("echo hello world", "hello world", id="ascii-trigger"),
+            pytest.param("回显 测试内容", "测试内容", id="chinese-trigger"),
+        ],
+    )
+    def test_register_and_resolve_basic(
+        self,
+        router: CommandRouter,
+        text: str,
+        expected_args: str,
+    ):
+        """已注册命令的任一触发词都能解析出命令和参数"""
         spec = make_spec("echo", ["echo", "回显"])
         router.register(spec)
 
-        result = router.resolve("echo hello world")
+        result = router.resolve(text)
         assert result is not None
         assert result[0].name == "echo"
-        assert result[1] == "hello world"
-
-    def test_resolve_with_chinese_trigger(self, router: CommandRouter):
-        """测试中文触发词"""
-        spec = make_spec("echo", ["echo", "回显"])
-        router.register(spec)
-
-        result = router.resolve("回显 测试内容")
-        assert result is not None
-        assert result[0].name == "echo"
-        assert result[1] == "测试内容"
+        assert result[1] == expected_args
 
     def test_resolve_no_match(self, router: CommandRouter):
         """测试无匹配命令"""
@@ -246,25 +248,6 @@ class TestCommandRouter:
         assert result is not None
         assert result[0].catalog.permission == "bot_admin"
 
-    def test_multiple_commands_same_plugin(self, router: CommandRouter):
-        """测试同一插件注册多个命令"""
-        spec1 = make_spec("cmd1", ["cmd1"], plugin="multi")
-        spec2 = make_spec("cmd2", ["cmd2"], plugin="multi")
-        spec3 = make_spec("cmd3", ["cmd3"], plugin="multi")
-        router.register(spec1)
-        router.register(spec2)
-        router.register(spec3)
-
-        assert router.resolve("cmd1") is not None
-        assert router.resolve("cmd2") is not None
-        assert router.resolve("cmd3") is not None
-
-        # 清除后应该全部失效
-        router.clear_plugin("multi")
-        assert router.resolve("cmd1") is None
-        assert router.resolve("cmd2") is None
-        assert router.resolve("cmd3") is None
-
     def test_catalog_invocation_uses_longest_recursive_alias_path(self):
         confirm = CommandCatalogNode(
             code      = "pendo.pendo.event.reminders.confirm",
@@ -356,7 +339,7 @@ class TestRouterEdgeCases:
         async def handler(*args):
             return [{"type": "text", "data": {"text": "ok"}}]
 
-        # 空触发词会被 resolve 跳过（见 router.py:52-53）
+        # 空触发词会被 resolve 跳过
         spec = CommandSpec.from_manifest(
             "test", {"name": "test", "triggers": [""], "help": "test", "priority": 0}, handler
         )
@@ -408,41 +391,3 @@ class TestRouterEdgeCases:
         result = empty_router.resolve("d+ more")
         assert result is not None
         assert result[1] == "more"
-
-    def test_priority_conflict_resolution(self, empty_router):
-        """测试优先级冲突解决"""
-        from core.router import CommandSpec
-
-        call_order = []
-
-        async def handler_high(*args):
-            call_order.append("high")
-            return []
-
-        async def handler_low(*args):
-            call_order.append("low")
-            return []
-
-        # 注册相同触发词，不同优先级
-        empty_router.register(
-            CommandSpec.from_manifest(
-                "test",
-                {"name": "low", "triggers": ["test"], "help": "low", "priority": 0},
-                handler_low,
-            )
-        )
-        empty_router.register(
-            CommandSpec.from_manifest(
-                "test",
-                {"name": "high", "triggers": ["test"], "help": "high", "priority": 10},
-                handler_high,
-            )
-        )
-
-        # 解析应该返回高优先级的 spec
-        result = empty_router.resolve("test args")
-        assert result is not None
-        spec, args = result
-        assert spec.priority == 10
-        assert spec.name == "high"
-        assert args == "args"

@@ -172,8 +172,20 @@ Test data uses temporary directories or databases.
 
 Tests are organized by current feature: `tests/core` covers Core behavior, `tests/transport` covers protocols and transport, `tests/plugins/<plugin>` covers plugins, `tests/integration` covers component interaction, and `tests/tooling` covers test tools and package resources.
 Cases examine input, output, state changes, errors, permissions, concurrency, and resource lifecycles, and parameterized cases combine identical execution paths.
-Isolated substitutes supply external-service responses. Web-client tests execute actual JavaScript.
-Assertions use runtime results and valid data contracts. Code review keeps documentation wording, comments, fixed provider domains, removed-file lists, and source implementation form correct.
+Cases enter through public entry points: commands, services, scheduled tasks, and a module's public functions.
+Substitutes sit only at boundaries: network and external services, the model gateway, message sending, the clock, randomness, subprocesses, process-wide logging setup, the operating system, and third-party libraries.
+Functions, constants, and module state of Core and plugins are not replaced, with these exceptions:
+to stop concurrent work at one exact point, a test wraps that function in a barrier that calls the original once released;
+to check failure handling at an exact point no real input reaches, a test injects the failure there;
+module-level locks, caches, and background-task handles are reset between tests;
+constants that point at fixed file locations are redirected to temporary directories;
+timeouts and polling intervals are shortened so tests do not wait in real time;
+a limit that would take very large input to reach is lowered;
+a flag that records whether an optional dependency is available is set to unavailable to check behavior without it.
+Web-client tests execute actual JavaScript.
+Substitutes and helpers shared by several test files live in `tests/helpers/`; test files do not import from each other.
+Assertions use runtime results and valid data contracts.
+Code review keeps the exact wording of prompts, persona, help text, and constants correct, along with documentation wording, comments, fixed provider domains, removed-file lists, and source implementation form.
 Sample URLs in tests examine parsing, configuration transfer, and access policies.
 
 The duplicate-code check runs with the tests (`tests/tooling/test_check_redundancy.py`) and on its own as `python scripts/check_redundancy.py`: `core`, `plugins`, `scripts`, and `main.py` must not contain two functions with identical bodies (functions under 8 lines and interface declarations containing only `...`, `pass`, or `raise NotImplementedError` are exempt). When it fails, keep one copy and call it from the others; a copy that must stay separate is listed in the script's `ALLOWED` with its reason.

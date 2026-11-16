@@ -44,10 +44,14 @@ def test_pipe_close_failure_still_closes_other_pipe_and_joins_threads(monkeypatc
         stdout=SimpleNamespace(close=close_stdout),
         stderr=SimpleNamespace(close=lambda: calls.append("stderr")),
     )
+    thread = SimpleNamespace(
+        name     = "stdout-pump",
+        join     = lambda timeout: calls.append("join"),
+        is_alive = lambda: False,
+    )
     monkeypatch.setattr(runner, "_terminate_process_tree", lambda process: (0, None))
-    monkeypatch.setattr(runner, "_join_pump_threads", lambda *args: calls.append("join"))
     errors = []
-    runner._cleanup_owned_process(process, [], errors)
+    runner._cleanup_owned_process(process, [thread], errors)
 
     assert errors == [failure]
     assert calls == ["stdout", "stderr", "join"]

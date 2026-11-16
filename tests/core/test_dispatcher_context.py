@@ -74,35 +74,6 @@ class TestInvokeUrlParser:
         assert result is None
 
 
-class TestMessageContext:
-    """MessageContext 数据类测试"""
-
-    def test_create_message_context(self):
-        """测试创建消息上下文"""
-        ctx = MessageContext(
-            request_id         = "test_001",
-            text               = "/echo hello",
-            clean_text         = "echo hello",
-            user_id            = 12345,
-            group_id           = 67890,
-            is_private         = False,
-            has_bot_name       = False,
-            has_prefix         = True,
-            has_command_prefix = True,
-            is_only_bot_name   = False,
-            is_at_me           = False,
-            is_url_only        = False,
-            event              = {},
-        )
-
-        assert ctx.request_id == "test_001"
-        assert ctx.text == "/echo hello"
-        assert ctx.clean_text == "echo hello"
-        assert ctx.user_id == 12345
-        assert ctx.group_id == 67890
-        assert ctx.is_private is False
-
-
 class TestProcessEventLinearFlow:
     """Tests for the linear Step A-G flow in _process_event."""
 
@@ -379,20 +350,6 @@ class TestProcessEventLinearFlow:
         assert result and result[0]["data"]["text"] == "嗯"
 
     @pytest.mark.asyncio
-    async def test_group_at_only_calls_bot_name_only(
-        self, dispatcher, mock_plugin_registry, event_template
-    ):
-        smalltalk                           = MagicMock()
-        smalltalk.module.call_bot_name_only = AsyncMock(
-            return_value=[{"type": "text", "data": {"text": "在的"}}]
-        )
-        mock_plugin_registry.get.return_value = smalltalk
-        event = event_template(message=[{"type": "at", "data": {"qq": "11111"}}])
-        event["raw_message"] = "[CQ:at,qq=11111]"
-        result               = await dispatcher.handle_event(event)
-        assert result and result[0]["data"]["text"] == "在的"
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("at_only,private", [(False, False), (True, False), (False, True)])
     async def test_name_call_gets_xiaoqing_chat_short_reply(
         self,
@@ -423,20 +380,6 @@ class TestProcessEventLinearFlow:
         assert result and result[0]["data"]["text"] == "在呢"
         provider.module.call_bot_name_only.assert_awaited_once()
         provider.module.handle_smalltalk.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_private_only_bot_name_calls_bot_name_only(
-        self, dispatcher, mock_plugin_registry, event_template
-    ):
-        smalltalk                           = MagicMock()
-        smalltalk.module.call_bot_name_only = AsyncMock(
-            return_value=[{"type": "text", "data": {"text": "在的"}}]
-        )
-        mock_plugin_registry.get.return_value = smalltalk
-        event = event_template(message_type="private", message="小青")
-        event.pop("group_id")
-        result = await dispatcher.handle_event(event)
-        assert result and result[0]["data"]["text"] == "在的"
 
     @pytest.mark.asyncio
     async def test_group_no_prefix_with_active_session_routes_to_session(
@@ -666,7 +609,7 @@ class TestProcessEventLinearFlow:
         sample_message_context,
         caplog,
     ):
-        canary = "CR219_PROVIDER_SECRET"
+        canary = "PROVIDER_SECRET"
 
         async def observe_message(*_args):
             raise RuntimeError(

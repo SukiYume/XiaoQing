@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import json
+import threading
+import time
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.interfaces import PluginCapabilities
+from core.plugin_base import load_json as real_load_json
+from plugins.xiaoqing_chat.chat_runtime import load_runtime
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.xiaoqing_chat_test_support import (
-    _complete_test_runtime_config,
-    _make_hctx,
+    ScriptedChatModel,
+    chat_message_event,
     message_parts_to_legacy,
-    patch_turn,
-    xiaoqing_chat,
+    scripted_chat_context,
+    seed_chat_history,
+    settle_chat_background,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -307,79 +314,54 @@ def test_memory_store_load_prefers_canonical_parts_over_stale_legacy_fields(tmp_
     assert reloaded[0].media_items[0]["marker"] == "[表情包：猫猫翻白眼]"
 
 
+def _chat(mock_context, *config, model=None):
+    """一个能跑真实记录 / 观察代码的聊天上下文：剧本模型 + 真实运行时状态。"""
+
+    model   = model or ScriptedChatModel()
+    context = scripted_chat_context(mock_context, model, *config)
+    return context, model, bound_state(context)
+
+
 @pytest.mark.asyncio
-async def test_handle_internal_stats_uses_async_memory_read(mock_context, sample_group_event):
+async def test_handle_internal_stats_reports_the_stored_history(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.commands import handle_internal
 
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            brain_chat=SimpleNamespace(
-                enable_private_brain_chat = False,
-                brain_max_context_size    = 30,
-                brain_think_level         = 2,
-                brain_temperature         = 0.7,
-            ),
-            memory=SimpleNamespace(enable_memory_retrieval=True, top_k=5, min_score=0.1),
-            expression=SimpleNamespace(enable_expression_learning=True, max_store=200),
-            reply_probability_base     = 0.6,
-            min_reply_interval_seconds = 12.0,
-            max_replies_per_minute     = 6,
-            max_context_size           = 30,
-        )
-    )
+    context, model, state = _chat(mock_context)
+    seed_chat_history(state, "g67890", 3)
 
-    state = MagicMock()
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.get.side_effect      = AssertionError("sync memory read should not be used")
-    state.bw_expr_store.load.return_value   = []
-    state.bw_jargon_store.load.return_value = {}
-    state.action_history.get_recent_async = AsyncMock(return_value=[])
-    state.get_stats.return_value = {"replies": 1, "resets": 0}
+    result = await handle_internal("统计", "", sample_group_event, context)
 
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-    with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("统计", "", sample_group_event, mock_context)
-
-    assert state.memory_store.get_async.await_count == 1
-    assert "会话统计" in result[0]["data"]["text"]
+    text = result[0]["data"]["text"]
+    assert "会话统计" in text and "上下文消息数: 3" in text
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
-async def test_handle_internal_stats_uses_async_action_history_read(
+async def test_handle_internal_stats_reports_the_stored_action_history(
     mock_context, sample_group_event
 ):
     from plugins.xiaoqing_chat.commands import handle_internal
+    from plugins.xiaoqing_chat.planning.action_history import ActionRecord
 
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            brain_chat=SimpleNamespace(
-                enable_private_brain_chat = False,
-                brain_max_context_size    = 30,
-                brain_think_level         = 2,
-                brain_temperature         = 0.7,
+    context, model, state = _chat(mock_context)
+    for index in range(2):
+        state.action_history.append(
+            "g67890",
+            ActionRecord(
+                ts           = time.time() - index,
+                local_target = "",
+                action       = "reply",
+                reasoning    = "测试",
+                detail       = {},
+                executed     = True,
             ),
-            memory=SimpleNamespace(enable_memory_retrieval=True, top_k=5, min_score=0.1),
-            expression=SimpleNamespace(enable_expression_learning=True, max_store=200),
-            reply_probability_base     = 0.6,
-            min_reply_interval_seconds = 12.0,
-            max_replies_per_minute     = 6,
-            max_context_size           = 30,
         )
-    )
 
-    state = MagicMock()
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.bw_expr_store.load.return_value   = []
-    state.bw_jargon_store.load.return_value = {}
-    state.action_history.get_recent_async = AsyncMock(return_value=[])
-    state.get_stats.return_value = {"replies": 1, "resets": 0}
+    result = await handle_internal("统计", "", sample_group_event, context)
 
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-    with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("统计", "", sample_group_event, mock_context)
-
-    assert state.action_history.get_recent_async.await_count == 1
-    assert "近期行动记录" in result[0]["data"]["text"]
+    text = result[0]["data"]["text"]
+    assert "近期行动记录" in text and "近期行动记录: 2" in text
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
@@ -513,9 +495,8 @@ async def test_extract_and_learn_resets_future_watermark_after_clock_rollback(
 
 
 @pytest.mark.asyncio
-async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(
-    mock_context, monkeypatch
-):
+async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(mock_context):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
     from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionStore
     from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonStore
     from plugins.xiaoqing_chat.expression.bw_message_recorder import (
@@ -536,52 +517,57 @@ async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(
             ts       = float(idx + 1),
         )
 
-    async def fake_learn_from_messages(**_kwargs):
-        return [{"text": "哈哈", "description": "轻松口语"}]
+    def gateway_answer(payload) -> tuple[dict, str]:
+        content = json.dumps(payload, ensure_ascii=False)
+        return {"choices": [{"message": {"content": content}}]}, "test"
 
-    async def fake_upsert_learned(**_kwargs):
-        return 2
+    # 表达学习：先学到两条，再各自通过审核；黑话挖掘的模型调用返回空响应。
+    learned = [
+        {"situation": "想轻松带过时", "style": "哈哈", "source_id": "m3"},
+        {"situation": "想附和时", "style": "确实", "source_id": "m5"},
+    ]
+    approved         = {"checked": True, "rejected": False, "reason": "approved"}
+    expression_model = AsyncMock(
+        side_effect=[gateway_answer(learned), gateway_answer(approved), gateway_answer(approved)]
+    )
 
     async def raise_empty_response(**_kwargs):
         raise LLMError("empty_response")
 
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.expression.bw_message_recorder.learn_from_messages",
-        fake_learn_from_messages,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.expression.bw_message_recorder.upsert_learned",
-        fake_upsert_learned,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
-        raise_empty_response,
-    )
-
     recorder = MessageRecorder()
-    changed  = await extract_and_learn(
-        context              = mock_context,
-        secrets              = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name             = "小青",
-        chat_id              = "g1",
-        memory_store         = memory_store,
-        expr_store           = ExpressionStore(),
-        jargon_store         = JargonStore(),
-        recorder             = recorder,
-        personality          = MagicMock(),
-        min_interval_seconds = 0.0,
-        min_messages         = 10,
-        max_store            = 2000,
-        self_reflect         = True,
-        llm                  = LLMCallConfig(
-            temperature            = 0.7,
-            top_p                  = 0.9,
-            max_tokens             = 128,
-            timeout_seconds        = 1.0,
-            max_retry              = 0,
-            retry_interval_seconds = 0.0,
+    with (
+        patch(
+            "plugins.xiaoqing_chat.expression.bw_expression_learner.chat_completions_raw_with_profile",
+            new=expression_model,
         ),
-    )
+        patch(
+            "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
+            new=raise_empty_response,
+        ),
+    ):
+        changed = await extract_and_learn(
+            context=mock_context,
+            secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+            bot_name="小青",
+            chat_id="g1",
+            memory_store=memory_store,
+            expr_store=ExpressionStore(),
+            jargon_store=JargonStore(),
+            recorder=recorder,
+            personality=XiaoQingChatConfig().personality,
+            min_interval_seconds=0.0,
+            min_messages=10,
+            max_store=2000,
+            self_reflect=True,
+            llm=LLMCallConfig(
+                temperature            = 0.7,
+                top_p                  = 0.9,
+                max_tokens             = 128,
+                timeout_seconds        = 1.0,
+                max_retry              = 0,
+                retry_interval_seconds = 0.0,
+            ),
+        )
 
     assert changed == 2
     assert recorder.get_last_time("g1") > 0
@@ -643,18 +629,15 @@ async def test_action_history_get_recent_async_loads_via_to_thread(tmp_path):
         encoding="utf-8",
     )
 
-    import threading
-    from unittest.mock import patch
-
     caller_thread  = threading.get_ident()
     loader_threads = []
-    load           = store._load
 
-    def tracked_load(key):
+    def recording_read(path, *args, **kwargs):
         loader_threads.append(threading.get_ident())
-        return load(key)
+        return real_load_json(path, *args, **kwargs)
 
-    with patch.object(store, "_load", side_effect=tracked_load):
+    # 记下读盘发生在哪个线程：冷加载必须在工作线程里读，不能卡住事件循环所在的线程。
+    with patch("plugins.xiaoqing_chat.planning.action_history.load_json", new=recording_read):
         items = await store.get_recent_async(chat_id, max_items=10)
     assert len(loader_threads) == 1
     assert loader_threads[0] != caller_thread
@@ -687,111 +670,78 @@ async def test_build_tool_info_block_uses_async_action_history_read(mock_context
 
 
 @pytest.mark.asyncio
-async def test_ensure_user_message_recorded_uses_async_heartflow(mock_context, sample_group_event):
+async def test_ensure_user_message_recorded_updates_heartflow(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.turn_generation import ensure_user_message_recorded
 
-    runtime = MagicMock()
-    state   = MagicMock()
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.append                   = Mock()
-    state.heartflow.on_user_message_async       = AsyncMock()
-    state.heartflow.on_user_message.side_effect = AssertionError(
-        "sync heartflow update should not be used"
+    context, model, state = _chat(mock_context)
+    runtime = load_runtime(context)
+    assert (await state.heartflow.get_async("g67890")).last_user_ts == 0.0
+
+    local_id = await ensure_user_message_recorded(
+        "你好", sample_group_event, context, runtime, state=state
     )
 
-    with (
-        patch("plugins.xiaoqing_chat.store_binding.bind_all_stores"),
-        patch_turn("schedule_memory_persist"),
-    ):
-        local_id = await ensure_user_message_recorded(
-            "你好", sample_group_event, mock_context, runtime, state=state
-        )
-
     assert local_id
-    assert state.heartflow.on_user_message_async.await_count == 1
+    assert [message.local_id for message in state.memory_store.get("g67890")] == [local_id]
+    assert (await state.heartflow.get_async("g67890")).last_user_ts > 0
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
 async def test_observe_message_skips_prefixed_xc_command(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import observe_message
 
-    runtime = SimpleNamespace(cfg=SimpleNamespace(enable_smalltalk=True))
-    event                = dict(sample_group_event)
-    event["message"]     = [{"type": "text", "data": {"text": "/xc 你好"}}]
-    event["raw_message"] = "/xc 你好"
+    context, model, state = _chat(mock_context)
+    event = chat_message_event(sample_group_event, "/xc 你好")
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
-            new=AsyncMock(),
-        ) as mock_record,
-    ):
-        result = await observe_message("xc 你好", event, mock_context)
+    result = await observe_message("xc 你好", event, context)
 
     assert result == []
-    mock_record.assert_not_awaited()
+    assert state.memory_store.get("g67890") == []
+    await settle_chat_background(context, model)
+
+
+def _group_push(*segments: dict, group_id: int = 67890, **extra) -> dict:
+    return {
+        "action": "send_group_msg",
+        "params": {"group_id": group_id, "message": list(segments)},
+        **extra,
+    }
 
 
 @pytest.mark.asyncio
 async def test_observe_outgoing_action_records_external_plugin_text_only(mock_context):
     from plugins.xiaoqing_chat.handlers import observe_outgoing_action
 
-    await xiaoqing_chat.init(mock_context)
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            enable_smalltalk = True,
-            ban_words        = [],
-        ),
-        compiled_ban_regex=[],
-    )
-    _complete_test_runtime_config(runtime)
-    state                              = MagicMock()
-    state.memory_store.append          = Mock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.action_history.append        = Mock()
-    action                             = {
-        "action": "send_group_msg",
-        "params": {
-            "group_id": 67890,
-            "message" : [
-                {
-                    "type": "text",
-                    "data": {
-                        "text": "中国地震台网正式测定：04月24日11时18分在地中海东部发生5.7级地震。"
-                    },
-                },
-                {"type": "image", "data": {"file": "file:///tmp/quake.jpg"}},
-            ],
+    context, model, state = _chat(mock_context)
+    action = _group_push(
+        {
+            "type": "text",
+            "data": {"text": "中国地震台网正式测定：04月24日11时18分在地中海东部发生5.7级地震。"},
         },
-    }
+        {"type": "image", "data": {"file": "file:///tmp/quake.jpg"}},
+    )
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
-        patch("plugins.xiaoqing_chat.handlers.allocate_local_id", return_value="m-out"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
-    ):
-        result = await observe_outgoing_action(action, mock_context, source_plugin="earthquake")
+    result = await observe_outgoing_action(action, context, source_plugin="earthquake")
 
     assert result == []
-    append_kwargs = state.memory_store.append.call_args.kwargs
-    assert state.memory_store.append.call_args.args[0] == "g67890"
-    assert append_kwargs["role"] == "assistant"
-    assert append_kwargs["name"] == "小青"
-    assert append_kwargs["source_plugin"] == "earthquake"
-    content, media_items = message_parts_to_legacy(append_kwargs["parts"])
+    history = state.memory_store.get("g67890")
+    assert len(history) == 1
+    message = history[0]
+    assert message.role == "assistant"
+    assert message.name == "小青"
+    assert message.source_plugin == "earthquake"
+    content, media_items = message_parts_to_legacy(message.parts)
     assert "地中海东部" in content
     assert "5.7级地震" in content
     assert "[图片" not in content
     assert media_items == []
-    state.heartflow.on_bot_reply_async.assert_not_awaited()
+    assert (await state.heartflow.get_async("g67890")).last_bot_ts == 0.0
     # 全文和配图另存进推送记录，她主动开口时看得到
-    chat_id, push = state.push_log.append.call_args.args
-    assert chat_id == "g67890" and push.source == "earthquake" and push.local_id == "m-out"
+    [push] = state.push_log.since("g67890", 0.0)
+    assert push.source == "earthquake" and push.local_id == message.local_id
     assert "5.7级地震" in push.text and push.images == ("/tmp/quake.jpg",)
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
@@ -806,73 +756,43 @@ async def test_long_agent_results_are_kept_shortened_but_other_long_output_keeps
     from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
     from plugins.xiaoqing_chat.handlers import observe_outgoing_action
 
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(enable_smalltalk=True, ban_words=[]),
-        compiled_ban_regex=[],
-    )
-    _complete_test_runtime_config(runtime)
-    state                       = MagicMock()
-    state.memory_store.append   = Mock()
-    state.action_history.append = Mock()
+    # agent 的结果送出后，聊天会在后台从中抽取生活记录，那是一次模型调用。
+    context, model, state = _chat(mock_context, model=ScriptedChatModel(reasoning="[]"))
 
     def long_result() -> dict:
-        return {
-            "action": "send_group_msg",
-            "params": {
-                "group_id": 67890,
-                "message" : [
-                    {"type": "at", "data": {"qq": "30003"}},
-                    {"type": "text", "data": {"text": " "}},
-                    {"type": "text", "data": {"text": "今日推荐\n" + "结果" * 800}},
-                ],
-            },
-            ACTION_RESULT_MESSAGE_ID_KEY: 4242,
-        }
-
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
-        patch("plugins.xiaoqing_chat.handlers.allocate_local_id", return_value="m-agent"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
-    ):
-        await observe_outgoing_action(long_result(), mock_context, source_plugin="arxiv_filter")
-        headline, _media = message_parts_to_legacy(
-            state.memory_store.append.call_args.kwargs["parts"]
+        return _group_push(
+            {"type": "at", "data": {"qq": "30003"}},
+            {"type": "text", "data": {"text": " "}},
+            {"type": "text", "data": {"text": "今日推荐\n" + "结果" * 800}},
+            **{ACTION_RESULT_MESSAGE_ID_KEY: 4242},
         )
-        assert headline.startswith("今日推荐 结果结果") and headline.endswith(
-            "（内容较长，只记下开头）"
-        )
-        assert len(headline) < 200
-        # 对话里只记开头，推送记录里是全文
-        logged = state.push_log.append.call_args.args[1]
-        assert logged.text.startswith("今日推荐") and len(logged.text) > 1500
-        await observe_outgoing_action(long_result(), mock_context, source_plugin="xiaoqing_agent")
-        assert state.push_log.append.call_count == 1  # agent 的结果是她自己说的话，不算推送
 
-    append_kwargs = state.memory_store.append.call_args.kwargs
-    assert append_kwargs["message_id"] == 4242
-    assert append_kwargs["source_plugin"] == "xiaoqing_agent"
-    content, _media = message_parts_to_legacy(append_kwargs["parts"])
+    await observe_outgoing_action(long_result(), context, source_plugin="arxiv_filter")
+    headline, _media = message_parts_to_legacy(state.memory_store.get("g67890")[-1].parts)
+    assert headline.startswith("今日推荐 结果结果") and headline.endswith(
+        "（内容较长，只记下开头）"
+    )
+    assert len(headline) < 200
+    # 对话里只记开头，推送记录里是全文
+    [logged] = state.push_log.since("g67890", 0.0)
+    assert logged.text.startswith("今日推荐") and len(logged.text) > 1500
+    await observe_outgoing_action(long_result(), context, source_plugin="xiaoqing_agent")
+    assert len(state.push_log.since("g67890", 0.0)) == 1  # agent 的结果是她自己说的话，不算推送
+
+    last = state.memory_store.get("g67890")[-1]
+    assert last.message_id == 4242
+    assert last.source_plugin == "xiaoqing_agent"
+    content, _media = message_parts_to_legacy(last.parts)
     assert "结果结果" in content and len(content) <= 1000
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
 async def test_observe_outgoing_action_skips_sensitive_external_plugin_output(mock_context):
     from plugins.xiaoqing_chat.handlers import observe_outgoing_action
 
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            enable_smalltalk = True,
-            ban_words        = [],
-        ),
-        compiled_ban_regex=[],
-    )
-    _complete_test_runtime_config(runtime)
-    state                     = MagicMock()
-    state.memory_store.append = Mock()
-    action                    = {
+    context, model, state = _chat(mock_context)
+    action = {
         "action": "send_private_msg",
         "params": {
             "user_id": 123456789,
@@ -891,44 +811,26 @@ async def test_observe_outgoing_action_skips_sensitive_external_plugin_output(mo
         },
     }
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-    ):
-        result = await observe_outgoing_action(action, mock_context, source_plugin="pendo")
+    result = await observe_outgoing_action(action, context, source_plugin="pendo")
 
     assert result == []
-    state.memory_store.append.assert_not_called()
+    assert state.memory_store.get("u123456789") == []
+    assert state.push_log.since("u123456789", 0.0) == []
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
 async def test_observe_outgoing_action_skips_xiaoqing_source(mock_context):
     from plugins.xiaoqing_chat.handlers import observe_outgoing_action
 
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            enable_smalltalk = True,
-            ban_words        = [],
-        ),
-        compiled_ban_regex=[],
-    )
-    state  = MagicMock()
-    action = {
-        "action": "send_group_msg",
-        "params": {
-            "group_id": 67890,
-            "message" : [{"type": "text", "data": {"text": "这是小青自己回复的内容"}}],
-        },
-    }
+    context, model, state = _chat(mock_context)
+    action = _group_push({"type": "text", "data": {"text": "这是小青自己回复的内容"}})
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-    ):
-        result = await observe_outgoing_action(action, mock_context, source_plugin="xiaoqing_chat")
+    result = await observe_outgoing_action(action, context, source_plugin="xiaoqing_chat")
 
     assert result == []
-    state.memory_store.append.assert_not_called()
+    assert state.memory_store.get("g67890") == []
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
@@ -938,26 +840,8 @@ async def test_ensure_user_message_recorded_persists_rendered_media_items(
     from plugins.xiaoqing_chat.media.models import RenderedMedia
     from plugins.xiaoqing_chat.turn_generation import ensure_user_message_recorded
 
-    runtime = MagicMock()
-    state   = MagicMock()
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append             = Mock()
-    state.heartflow.on_user_message_async = AsyncMock()
-    state.media_store.upsert_media_items  = Mock(
-        return_value=[
-            {
-                "kind"        : "image",
-                "media_hash"  : "hash-cat",
-                "media_key"   : "media:hash-cat",
-                "marker"      : "[图片：猫猫在发呆]",
-                "description" : "猫猫在发呆",
-                "emotion_tags": ["发呆"],
-                "file_path"   : str(mock_context.data_dir / "cat.png"),
-            }
-        ]
-    )
-    state.media_store.is_dirty.return_value        = True
+    context, model, state = _chat(mock_context)
+    runtime                                        = load_runtime(context)
     sample_group_event["_xc_rendered_media_items"] = [
         RenderedMedia(
             kind         = "image",
@@ -965,23 +849,15 @@ async def test_ensure_user_message_recorded_persists_rendered_media_items(
             description  = "猫猫在发呆",
             emotion_tags = ("发呆",),
             marker       = "[图片：猫猫在发呆]",
-            cached_path  = mock_context.data_dir / "cat.png",
+            cached_path  = context.data_dir / "cat.png",
         )
     ]
 
-    with (
-        patch("plugins.xiaoqing_chat.store_binding.bind_all_stores"),
-        patch_turn("schedule_memory_persist"),
-        patch(
-            "plugins.xiaoqing_chat.reply_media.schedule_media_registry_flush"
-        ) as mock_media_flush,
-    ):
-        await ensure_user_message_recorded(
-            "[图片：猫猫在发呆]", sample_group_event, mock_context, runtime, state=state
-        )
+    await ensure_user_message_recorded(
+        "[图片：猫猫在发呆]", sample_group_event, context, runtime, state=state
+    )
 
-    append_kwargs = state.memory_store.append.call_args.kwargs
-    parts         = append_kwargs["parts"]
+    parts = state.memory_store.get("g67890")[-1].parts
     content, media_items = message_parts_to_legacy(parts)
     assert content == "[[xc_media_1]]"
     assert media_items[0]["media_hash"] == "hash-cat"
@@ -990,7 +866,10 @@ async def test_ensure_user_message_recorded_persists_rendered_media_items(
     assert [part["kind"] for part in parts] == ["image"]
     assert "description" not in media_items[0]
     assert "emotion_tags" not in media_items[0]
-    mock_media_flush.assert_called_once_with(mock_context, runtime)
+    # 媒体登记表在收尾时落盘：这张图的描述进了登记表，下次重启后还在。
+    await settle_chat_background(context, model)
+    registry = json.loads((context.data_dir / "media" / "index.json").read_text(encoding="utf-8"))
+    assert registry["entries"]["media:hash-cat"]["description"] == "猫猫在发呆"
 
 
 @pytest.mark.asyncio
@@ -998,28 +877,9 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
     from plugins.xiaoqing_chat.media.event_media import RenderedMedia, build_effective_user_text
     from plugins.xiaoqing_chat.turn_generation import ensure_user_message_recorded
 
-    runtime = MagicMock()
-    state   = MagicMock()
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append             = Mock()
-    state.heartflow.on_user_message_async = AsyncMock()
-    state.review_store.cleanup_expired    = Mock()
-    state.set_last_observe_ts             = Mock()
-    state.media_store.upsert_media_items  = Mock(
-        return_value=[
-            {
-                "kind"       : "image",
-                "media_hash" : "hash-cat",
-                "media_key"  : "media:hash-cat",
-                "marker"     : "[图片：猫猫在发呆]",
-                "description": "猫猫在发呆",
-                "file_path"  : str(mock_context.data_dir / "cat.png"),
-            }
-        ]
-    )
-    state.media_store.is_dirty.return_value = False
-    event                                   = {
+    context, model, state = _chat(mock_context)
+    runtime               = load_runtime(context)
+    event: dict[str, Any] = {
         "post_type"   : "message",
         "message_type": "group",
         "user_id"     : 12345,
@@ -1037,7 +897,7 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
                 description  = "猫猫在发呆",
                 emotion_tags = (),
                 marker       = "[图片：猫猫在发呆]",
-                cached_path  = mock_context.data_dir / "cat.png",
+                cached_path  = context.data_dir / "cat.png",
             )
         ],
     }
@@ -1045,22 +905,15 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
     text = await build_effective_user_text(
         "看这个笑死",
         event,
-        context = mock_context,
+        context = context,
         runtime = runtime,
     )
+    # 渲染好的媒体清单拿走：要是记录时重新拼一遍，图片就会丢，只有缓存的 parts 还带着它。
+    event["_xc_rendered_media_items"] = []
 
-    with (
-        patch("plugins.xiaoqing_chat.store_binding.bind_all_stores"),
-        patch_turn("schedule_memory_persist"),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.build_message_parts",
-            side_effect=AssertionError("cached effective parts should bypass rebuild"),
-        ),
-    ):
-        await ensure_user_message_recorded(text, event, mock_context, runtime, state=state)
+    await ensure_user_message_recorded(text, event, context, runtime, state=state)
 
-    append_kwargs = state.memory_store.append.call_args.kwargs
-    parts         = append_kwargs["parts"]
+    parts = state.memory_store.get("g67890")[-1].parts
     content, media_items = message_parts_to_legacy(parts)
     assert text == "看这个\n[图片：猫猫在发呆]\n笑死"
     assert [part["kind"] for part in event["_xc_effective_user_parts"]] == ["text", "image", "text"]
@@ -1068,40 +921,57 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
     assert content == "看这个[[xc_media_1]]笑死"
     assert media_items[0]["media_hash"] == "hash-cat"
     assert media_items[0]["media_key"] == "media:hash-cat"
+    await settle_chat_background(context, model)
 
 
 @pytest.mark.asyncio
-async def test_fetch_pfc_knowledge_preserves_planner_intent(monkeypatch, tmp_path):
-    from plugins.xiaoqing_chat.planning import pfc_engine
-    from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
+async def test_fetch_pfc_knowledge_preserves_planner_intent(tmp_path):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
+    from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
+    from tests.helpers.xiaoqing_chat_test_support import plan_answer
 
     captured: dict = {}
 
-    async def search(context, chat_id, payload):
-        captured.update(payload, chat_id=chat_id)
-        return [{"type": "note", "text": "retrieved memory"}]
+    class RecordingMemory:
+        async def search(self, payload):
+            captured.update(payload)
+            return {"items": [{"type": "note", "text": "retrieved memory"}]}
 
-    next_plan = PFCPlan(action="direct_reply", reason="memory loaded")
-    monkeypatch.setattr(pfc_engine.memory_client, "search", search)
-    monkeypatch.setattr(pfc_engine, "_plan_pfc_action", AsyncMock(return_value=next_plan))
-    monkeypatch.setattr(pfc_engine, "log_step", Mock())
-    state = SimpleNamespace(knowledge_list=[])
-    session = SimpleNamespace(
-        context=SimpleNamespace(data_dir=tmp_path, http_session=None),
-        runtime_cfg=SimpleNamespace(memory=SimpleNamespace()),
-        planner_llm=LLMCallConfig(temperature=0.2, top_p=0.8, max_tokens=200, timeout_seconds=1.0),
-        chat_id      = "chat-1",
-        secrets      = {"_ai": object()},
-        bot_name     = "小青",
-        history      = [],
-        current_text = "把刚才那个偏好找出来",
-        state        = state,
+    chat_id              = "chat-1"
+    context              = MagicMock()
+    context.data_dir     = tmp_path
+    context.http_session = AsyncMock()
+    context.capabilities = PluginCapabilities(memory=RecordingMemory())  # type: ignore[arg-type]
+    memory_store = MemoryStore()
+    memory_store.append(chat_id, role="user", name="用户", content="把刚才那个偏好找出来")
+    state = PFCConversationState(chat_id)
+    generate_reply = AsyncMock(return_value="找到了")
+    model = ScriptedChatModel(
+        plan=[
+            plan_answer("fetch_knowledge", "需要核对用户刚才提过的偏好"),
+            plan_answer("direct_reply", "memory loaded"),
+        ]
     )
-    request = PFCPlan(action="fetch_knowledge", reason="需要核对用户刚才提过的偏好")
 
-    result = await pfc_engine._fetch_pfc_knowledge(session, request)
+    result = await run_pfc_once(
+        context        = context,
+        runtime_cfg    = XiaoQingChatConfig(),
+        secrets        = {"_ai": model, "_route": "reasoning"},
+        bot_name       = "小青",
+        is_private     = False,
+        chat_id        = chat_id,
+        current_text   = "把刚才那个偏好找出来",
+        memory_store   = memory_store,
+        action_history = ActionHistoryStore(),
+        state          = state,
+        generate_reply = generate_reply,
+    )
 
-    assert result is next_plan
-    assert request.reason in captured["query"] and captured["chat_id"] == "chat-1"
+    assert result.reason == "memory loaded" and result.reply == "找到了"
+    assert "需要核对用户刚才提过的偏好" in captured["query"] and captured["scope"] == chat_id
     assert len(state.knowledge_list) == 1
     assert state.knowledge_list[0]["text"] == "- retrieved memory"
+    assert not model.unscripted

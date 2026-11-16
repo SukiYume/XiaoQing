@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers.reply_checker_test_support import checker_verdict
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel
+
 
 @pytest.mark.asyncio
 async def test_social_speculation_has_no_local_keyword_veto_when_semantic_checker_is_disabled() -> (
@@ -107,32 +110,17 @@ async def test_proactive_reply_rejects_omitted_subject_life_episode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_enforces_latest_explicit_communication_constraint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_risk_mode_enforces_latest_explicit_communication_constraint() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    async def fake_chat(**_kwargs):
-        return {"ok": True}, "/v1/chat/completions"
-
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_profile",
-        fake_chat,
-    )
-    monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
-        lambda _resp: (
-            '{"suitable":false,"reason":"没有遵守本轮表达约束","need_replan":true,'
-            '"severity":"hard","context_coherent":true,"speaker_correct":true,'
-            '"instruction_followed":false,"persona_grounded":true,'
-            '"factually_plausible":true,"non_template":true,'
-            '"persona_scan_complete":true,"persona_claims":[],'
-            '"context_scan_complete":true,"context_claims":[]}'
-        ),
+    model = ScriptedChatModel(
+        checker=checker_verdict(
+            suitable=False, reason="没有遵守本轮表达约束", instruction_followed=False
+        )
     )
 
     result = await check_reply(
-        secrets                = {"_ai": object()},
+        secrets                = {"_ai": model},
         bot_name               = "小青",
         reply                  = "先抱抱你，别太难受了。",
         goal                   = "自然聊天",

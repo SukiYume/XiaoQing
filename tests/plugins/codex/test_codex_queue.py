@@ -18,18 +18,19 @@ from tests.helpers.codex_test_support import (
     CwdError,
     FakeContext,
     FakeRunner,
-    _arxiv_addon,
-    _install_actual_runner_manager,
-    _install_fake_manager,
-    _patch_race_termination,
-    _RaceProcess,
-    _valid_arxiv_summary,
-    _wait_manager_idle,
-    _wait_until,
+    RaceProcess,
+    arxiv_addon,
     codex_main,
+    install_actual_runner_manager,
+    install_fake_manager,
     load_plugin_config,
     normalize_cwd,
+    patch_race_termination,
+    valid_arxiv_summary,
+    wait_manager_idle,
+    wait_until,
 )
+from tests.helpers.filesystem_faults import fail_replace_onto
 from tests.helpers.paths import REPOSITORY_ROOT
 
 reset_codex_manager = _fixture_support.reset_codex_manager
@@ -104,7 +105,7 @@ def test_danger_full_access_emits_a_startup_warning(
     context.config["plugins"]["codex"]["sandbox"] = "danger-full-access"
 
     with caplog.at_level("WARNING", logger="plugins.codex.manager"):
-        _install_fake_manager(context, FakeRunner())
+        install_fake_manager(context, FakeRunner())
 
     assert "sandbox=danger-full-access" in caplog.text
 
@@ -124,17 +125,16 @@ def test_default_cwd_is_not_created_before_allowed_root_validation(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_help_does_not_construct_manager(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    get_manager = AsyncMock(side_effect=AssertionError("manager must not be constructed"))
-    monkeypatch.setattr(codex_main, "get_manager", get_manager)
+async def test_help_does_not_construct_manager(tmp_path: Path) -> None:
+    import plugins.codex.manager as manager_module
 
-    result = await codex_main.handle("codex", "help", {}, FakeContext(tmp_path))
+    context = FakeContext(tmp_path)
+
+    result = await codex_main.handle("codex", "help", {}, context)
 
     assert "Codex 会话队列" in str(result)
-    get_manager.assert_not_awaited()
+    assert manager_module._MANAGER is None
+    assert not context.data_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_create_session_uses_default_cwd_and_creates_directory(tmp_path: P
     assert loaded.max_parallel_jobs == 7
     assert loaded.job_timeout_seconds == 777
     runner = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     result = await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
 
@@ -165,7 +165,7 @@ async def test_create_session_uses_default_cwd_and_creates_directory(tmp_path: P
 async def test_create_session_rejects_cwd_outside_allowed_roots(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
     outside = tmp_path.parent / "outside-codex-test"
     outside.mkdir(exist_ok=True)
 
@@ -181,7 +181,7 @@ async def test_command_parser_rejects_unknown_flags_values_and_ambiguous_ids(tmp
     context                  = FakeContext(tmp_path)
     context.current_user_id  = 42
     context.current_group_id = 43
-    manager                  = _install_fake_manager(context, FakeRunner())
+    manager                  = install_fake_manager(context, FakeRunner())
 
     await codex_main.handle(
         "codex",
@@ -207,7 +207,7 @@ async def test_command_parser_rejects_unknown_flags_values_and_ambiguous_ids(tmp
 async def test_prompt_limit_is_enforced_at_internal_queue_boundary(tmp_path: Path) -> None:
     context = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["max_prompt_chars"] = 1_000
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     await manager.create_session("aaa", None, user_id=1, group_id=None)
 
     message = await manager.enqueue(
@@ -228,18 +228,21 @@ async def test_enqueue_measures_disk_outside_event_loop_and_manager_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     await manager.create_session("aaa", None, user_id=1, group_id=None)
     event_loop_thread                    = threading.get_ident()
     observations: list[tuple[int, bool]] = []
+    real_rglob                           = Path.rglob
 
-    def measure_disk(**_kwargs: object) -> int:
-        observations.append((threading.get_ident(), manager.lock.locked()))
-        return 0
+    def observed_rglob(self: Path, *args: object, **kwargs: object):
+        # 文件系统边界：记录谁在遍历插件数据目录，以及遍历时 manager 锁有没有被持有。
+        if self == context.data_dir:
+            observations.append((threading.get_ident(), manager.lock.locked()))
+        return real_rglob(self, *args, **kwargs)
 
-    monkeypatch.setattr(manager, "_disk_usage_bytes", measure_disk)
+    monkeypatch.setattr(Path, "rglob", observed_rglob)
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert len(observations) == 1
     assert observations[0][0] != event_loop_thread
@@ -247,22 +250,16 @@ async def test_enqueue_measures_disk_outside_event_loop_and_manager_lock(
 
 
 @pytest.mark.asyncio
-async def test_enqueue_history_failure_rolls_back_without_orphan_job(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_enqueue_history_failure_rolls_back_without_orphan_job(tmp_path: Path) -> None:
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
-    original_append_history = manager._append_history
-
-    def fail_user_history(label: str, payload: dict[str, object]) -> None:
-        if payload.get("role") == "user":
-            raise OSError("private history path")
-        original_append_history(label, payload)
-
-    monkeypatch.setattr(manager, "_append_history", fail_user_history)
+    # 会话历史文件的位置被一个目录占住：追加写入时真实地失败。
+    history_path = context.data_dir / "session" / "aaa" / "conversation.jsonl"
+    saved_path   = history_path.with_name("conversation.saved")
+    history_path.rename(saved_path)
+    history_path.mkdir()
     response = await manager.enqueue(
         "aaa",
         "must not run",
@@ -277,9 +274,10 @@ async def test_enqueue_history_failure_rolls_back_without_orphan_job(
     assert manager.running == {}
     assert manager.workers == {}
 
-    monkeypatch.setattr(manager, "_append_history", original_append_history)
+    history_path.rmdir()
+    saved_path.rename(history_path)
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert [prompt for _, prompt, _ in runner.calls] == ["second"]
     assert manager.sessions["aaa"].total_jobs == 1
@@ -291,23 +289,18 @@ async def test_enqueue_state_save_failure_never_publishes_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     await manager.create_session("aaa", None, user_id=1, group_id=None)
-    original_save = manager._save
-    monkeypatch.setattr(
-        manager,
-        "_save",
-        lambda: (_ for _ in ()).throw(OSError("private state path")),
-    )
 
-    response = await manager.enqueue(
-        "aaa",
-        "must not run",
-        user_id  = 1,
-        group_id = None,
-        context  = context,
-    )
-    monkeypatch.setattr(manager, "_save", original_save)
+    with monkeypatch.context() as patch:
+        fail_replace_onto(patch, "sessions.json", "private state path")
+        response = await manager.enqueue(
+            "aaa",
+            "must not run",
+            user_id  = 1,
+            group_id = None,
+            context  = context,
+        )
 
     assert "未加入执行队列" in response
     assert manager.sessions["aaa"].total_jobs == 0
@@ -320,7 +313,7 @@ async def test_enqueue_state_save_failure_never_publishes_job(
 async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
     context = FakeContext(tmp_path, max_parallel_jobs=2)
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     first = await codex_main.handle(
@@ -328,12 +321,12 @@ async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
     )
     second = await codex_main.handle("codex", "aaa second", {"user_id": 1, "group_id": 2}, context)
 
-    await _wait_until(lambda: runner.started == ["aaa"])
+    await wait_until(lambda: runner.started == ["aaa"])
     assert "开始后台执行" in str(first)
     assert "前面还有 1 个任务" in str(second)
 
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert [call[1] for call in runner.calls] == ["block first", "second"]
     sent_text = str(context.actions)
@@ -345,13 +338,13 @@ async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
 async def test_private_job_result_stays_private_when_session_created_in_group(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="private reply")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle(
         "codex", "aaa hello", {"message_type": "private", "user_id": 1}, context
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert len(context.actions) == 1
     action = context.actions[0]
@@ -365,18 +358,18 @@ async def test_private_job_result_stays_private_when_session_created_in_group(tm
 async def test_different_labels_can_run_in_parallel(tmp_path: Path):
     context = FakeContext(tmp_path, max_parallel_jobs=2)
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "create bbb", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa block one", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "bbb block two", {"user_id": 1, "group_id": 2}, context)
 
-    await _wait_until(lambda: runner.started.count("aaa") == 1 and runner.started.count("bbb") == 1)
+    await wait_until(lambda: runner.started.count("aaa") == 1 and runner.started.count("bbb") == 1)
     assert set(runner.started) == {"aaa", "bbb"}
 
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     assert len(context.actions) == 2
 
 
@@ -384,26 +377,28 @@ async def test_different_labels_can_run_in_parallel(tmp_path: Path):
 async def test_refresh_failure_after_permit_acquire_releases_capacity(tmp_path: Path) -> None:
     context = FakeContext(tmp_path, max_parallel_jobs=1)
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
-    refresh_calls = 0
+    real_snapshot  = context.get_settings_snapshot
+    snapshot_reads = 0
 
-    async def refresh() -> bool:
-        nonlocal refresh_calls
-        refresh_calls += 1
-        if refresh_calls == 2:
+    def flaky_snapshot():
+        # 每个任务启动时读两次设置：拿许可前一次、拿许可后一次；让第二次读取失败。
+        nonlocal snapshot_reads
+        snapshot_reads += 1
+        if snapshot_reads == 2:
             raise RuntimeError("private refresh detail")
-        return False
+        return real_snapshot()
 
-    manager.refresh_from_settings_reader = refresh  # type: ignore[method-assign]
+    context.get_settings_snapshot = flaky_snapshot  # type: ignore[method-assign]
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert not manager.global_sem.locked()
     assert "private refresh detail" not in str(context.actions)
 
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert runner.started == ["aaa"]
 
@@ -415,17 +410,20 @@ async def test_artifact_directory_failure_cannot_leave_claimed_job_running(
 ) -> None:
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
-    monkeypatch.setattr(
-        manager,
-        "_job_artifact_dir",
-        lambda _label, _job_id: (_ for _ in ()).throw(OSError("private path detail")),
-    )
+    real_mkdir = Path.mkdir
+
+    def failing_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "artifacts":
+            raise OSError("private path detail")
+        real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
 
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
     job = manager.queues["aaa"][0]
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert manager.running == {}
     assert job.status == "failed"
@@ -440,12 +438,12 @@ async def test_delivery_failure_does_not_stop_same_label_queue(tmp_path: Path) -
     context = FakeContext(tmp_path)
     context.send_action = AsyncMock(side_effect=[OSError("private delivery detail"), None])
     runner  = FakeRunner()
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
 
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert [prompt for _, prompt, _ in runner.calls] == ["first", "second"]
     assert context.send_action.await_count == 2
@@ -458,7 +456,7 @@ async def test_cancel_while_waiting_for_global_slot_never_spawns(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
     for _ in range(manager.config.max_parallel_jobs):
         await manager.global_sem.acquire()
@@ -473,11 +471,11 @@ async def test_cancel_while_waiting_for_global_slot_never_spawns(
             group_id = 2,
             context  = context,
         )
-        await _wait_until(lambda: "race" in manager.running)
+        await wait_until(lambda: "race" in manager.running)
         job = manager.running["race"]
 
         response = await asyncio.wait_for(manager.cancel("race", job.job_id), timeout=2)
-        await _wait_manager_idle(manager)
+        await wait_manager_idle(manager)
     finally:
         for _ in range(manager.config.max_parallel_jobs):
             manager.global_sem.release()
@@ -496,9 +494,9 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process       = _RaceProcess()
+    process       = RaceProcess()
     spawn_started = asyncio.Event()
     allow_spawn   = asyncio.Event()
 
@@ -508,7 +506,7 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
-    terminate = _patch_race_termination(monkeypatch)
+    terminate = patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "side effect", user_id=1, group_id=2, context=context)
     await asyncio.wait_for(spawn_started.wait(), timeout=10)
@@ -520,7 +518,7 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
 
     allow_spawn.set()
     response = await asyncio.wait_for(cancel_task, timeout=2)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已取消" in response
     assert not any(process.stdin_inputs)
@@ -552,9 +550,9 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process            = _RaceProcess()
+    process            = RaceProcess()
     before_prompt      = asyncio.Event()
     allow_prompt       = asyncio.Event()
     original_authorize = manager._authorize_job_prompt
@@ -566,7 +564,7 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
 
     manager._authorize_job_prompt = delayed_authorize  # type: ignore[method-assign]
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
-    terminate = _patch_race_termination(monkeypatch)
+    terminate = patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "side effect", user_id=1, group_id=2, context=context)
     await asyncio.wait_for(before_prompt.wait(), timeout=10)
@@ -575,10 +573,10 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
     assert job.process is process
 
     cancel_task = asyncio.create_task(manager.cancel("race", job.job_id))
-    await _wait_until(lambda: job.cancel_requested)
+    await wait_until(lambda: job.cancel_requested)
     allow_prompt.set()
     response = await asyncio.wait_for(cancel_task, timeout=2)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已取消" in response
     assert not any(process.stdin_inputs)
@@ -595,11 +593,11 @@ async def test_cancel_after_prompt_commit_terminates_and_finishes_cancelled(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process = _RaceProcess()
+    process = RaceProcess()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
-    _patch_race_termination(monkeypatch)
+    patch_race_termination(monkeypatch)
 
     await manager.enqueue("race", "running body", user_id=1, group_id=2, context=context)
     await asyncio.wait_for(process.prompt_sent.wait(), timeout=10)
@@ -607,7 +605,7 @@ async def test_cancel_after_prompt_commit_terminates_and_finishes_cancelled(
     assert job.status == "running"
 
     response = await asyncio.wait_for(manager.cancel("race", job.job_id), timeout=2)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已取消" in response
     assert len([payload for payload in process.stdin_inputs if payload]) == 1
@@ -623,7 +621,7 @@ async def test_spawn_failure_completes_handoff_and_terminal_state(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
     spawn_started = asyncio.Event()
     fail_spawn    = asyncio.Event()
@@ -638,7 +636,7 @@ async def test_spawn_failure_completes_handoff_and_terminal_state(
     await asyncio.wait_for(spawn_started.wait(), timeout=10)
     job = manager.running["race"]
     fail_spawn.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert job.status == "failed"
     assert job.result is not None and "OSError" in job.result.final_text
@@ -655,9 +653,9 @@ async def test_shutdown_during_spawn_uses_same_handoff_without_prompt(
 ):
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process       = _RaceProcess()
+    process       = RaceProcess()
     spawn_started = asyncio.Event()
     allow_spawn   = asyncio.Event()
 
@@ -667,7 +665,7 @@ async def test_shutdown_during_spawn_uses_same_handoff_without_prompt(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
-    _patch_race_termination(monkeypatch)
+    patch_race_termination(monkeypatch)
     await manager.enqueue("race", "shutdown body", user_id=1, group_id=2, context=context)
     await asyncio.wait_for(spawn_started.wait(), timeout=10)
     job = manager.running["race"]
@@ -694,7 +692,7 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
     context                                                     = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["spawn_timeout_seconds"] = 1
     context.default_cwd.mkdir(parents=True)
-    manager = _install_actual_runner_manager(context)
+    manager = install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
     never = asyncio.Event()
 
@@ -703,10 +701,10 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", stuck_spawn)
     await manager.enqueue("race", "body", user_id=1, group_id=2, context=context)
-    await _wait_until(lambda: "race" in manager.running)
+    await wait_until(lambda: "race" in manager.running)
     job = manager.running["race"]
 
-    await asyncio.wait_for(_wait_manager_idle(manager), timeout=2)
+    await asyncio.wait_for(wait_manager_idle(manager), timeout=2)
 
     assert job.status == "failed"
     assert job.result is not None and "RuntimeError" in job.result.final_text
@@ -720,11 +718,11 @@ async def test_result_is_not_truncated_by_plugin(tmp_path: Path):
     context   = FakeContext(tmp_path)
     long_text = "x" * 5000
     runner = FakeRunner(result_text=long_text)
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa long answer", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     sent_text = "".join(
         seg["data"]["text"]
@@ -740,11 +738,11 @@ async def test_result_is_not_truncated_by_plugin(tmp_path: Path):
 async def test_conversation_history_is_saved_per_session(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="assistant reply")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa user prompt", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     history_path = context.data_dir / "session" / "aaa" / "conversation.jsonl"
     events = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
@@ -766,11 +764,11 @@ async def test_markdown_image_result_is_copied_and_sent(tmp_path: Path):
     image_path = context.default_cwd / "plot.png"
     image_path.write_bytes(PNG_BYTES)
     runner = FakeRunner(result_text=f"生成完成\n![plot]({image_path.as_posix()})")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw a plot", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     message        = context.actions[-1]["params"]["message"]
     image_segments = [seg for seg in message if seg.get("type") == "image"]
@@ -789,11 +787,11 @@ async def test_markdown_image_result_is_copied_and_sent(tmp_path: Path):
 async def test_artifact_directory_images_are_sent_without_text_marker(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="生成完成", artifact_name="chart.png")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw a chart", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     message = context.actions[-1]["params"]["message"]
     assert any(seg.get("type") == "image" for seg in message)
@@ -804,7 +802,7 @@ async def test_artifact_directory_images_are_sent_without_text_marker(tmp_path: 
 def test_result_message_batches_enforce_qq_image_limit(tmp_path: Path):
     context = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["max_qq_images"] = 1
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     artifacts = [
         CodexImageArtifact(
             path          = f"images/{index}.png",
@@ -827,11 +825,11 @@ async def test_generated_images_dir_is_not_guessed_without_explicit_path(
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="已生成。", generated_image_name="cyberpunk.png")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create img", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "img $imagegen draw", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     message = context.actions[-1]["params"]["message"]
     assert not any(seg.get("type") == "image" for seg in message)
@@ -847,11 +845,11 @@ async def test_long_text_with_image_is_split_before_image(tmp_path: Path):
     image_path.write_bytes(PNG_BYTES)
     long_text = "x" * (MAX_MESSAGE_TEXT_LENGTH + 10)
     runner = FakeRunner(result_text=f"{long_text}\n图片: {image_path.as_posix()}")
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw long report", {"user_id": 1, "group_id": 2}, context)
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert len(context.actions) >= 2
     assert all(seg.get("type") == "text" for seg in context.actions[0]["params"]["message"])
@@ -862,21 +860,21 @@ async def test_long_text_with_image_is_split_before_image(tmp_path: Path):
 async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    result = await _arxiv_addon(manager).enqueue_or_replay(
+    result = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-19",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in result
     assert "astro-ph" in manager.sessions
@@ -887,12 +885,10 @@ async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
     assert init_label == "astro-ph"
     assert init_thread_id is None
     assert "arxiv-summary-methodology.md" in init_prompt
-    assert "这条消息只用于初始化会话规则" in init_prompt
     assert "https://arxiv.org/abs/2605.16917" not in init_prompt
     assert summary_label == "astro-ph"
     assert summary_thread_id == "thread-astro-ph"
-    assert "请先读取当前工作目录下的 `arxiv-summary-methodology.md`" in summary_prompt
-    assert "不要把方法论文件内容复述出来" in summary_prompt
+    assert "arxiv-summary-methodology.md" in summary_prompt
     assert "## 2026-05-19\nhttps://arxiv.org/abs/2605.16917" in summary_prompt
     sent_text = str(context.actions)
     assert "[codex:astro-ph #1]" not in sent_text

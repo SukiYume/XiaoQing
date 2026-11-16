@@ -1,38 +1,24 @@
-"""
-jupyter 插件单元测试
-
-由于 jupyter 插件使用相对导入且依赖 jupyter_client（外部依赖），
-本测试主要测试模块结构和可导入性。
-"""
+"""jupyter 插件的代码提取、内核管理器执行/取消/输出边界和 REPL 会话测试。"""
 
 import asyncio
 import base64
 import struct
+import sys
 import threading
 import zlib
 from queue import Empty as QueueEmpty
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
+import pytest_asyncio
 
 from core.session import Session
 
 # 在其他生命周期测试安装有意设置的 ``plugins.*`` 命名空间墓碑前导入当前插件版本；
 # 这些单元测试直接覆盖仓库源码，而不是 PluginManager 动态加载出的版本。
+from tests.helpers.jupyter_test_support import KernelBackend, install_kernel_backend
 from tests.helpers.payloads import png_chunk as _png_chunk
-
-
-def _valid_png(width: int = 1, height: int = 1) -> bytes:
-    """构造结构和 CRC 完整的最小 RGBA PNG，避免把残缺文件当作测试夹具。"""
-
-    header   = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    scanline = (b"\x00" + b"\x00\x00\x00\x00" * width) * height
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", header)
-        + _png_chunk(b"IDAT", zlib.compress(scanline))
-        + _png_chunk(b"IEND", b"")
-    )
+from tests.helpers.payloads import valid_png as _valid_png
 
 
 def _response_text(response: list[dict[str, object]]) -> str:
@@ -43,14 +29,50 @@ def _response_text(response: list[dict[str, object]]) -> str:
     )
 
 
-# ============================================================
-# Test Module Structure
-# ============================================================
+@pytest_asyncio.fixture
+async def kernel_backend(monkeypatch: pytest.MonkeyPatch):
+    """依赖可用，内核由替身承担；用例结束时关掉全部内核并清空实例注册表。"""
+
+    from plugins.jupyter import jupyter_manager
+
+    manager_class = jupyter_manager.JupyterKernelManager
+    backend       = KernelBackend()
+    install_kernel_backend(monkeypatch, backend)
+    with manager_class._instances_lock:  # noqa: SLF001 - 隔离其他用例留下的全局注册表。
+        manager_class._instances.clear()  # noqa: SLF001
+        manager_class._quarantined_instances.clear()  # noqa: SLF001
+    yield backend
+    await manager_class.shutdown_all_async()
 
 
-# ============================================================
-# Test Module Import (with mocking)
-# ============================================================
+async def _stop_idle_monitor(manager: object) -> None:
+    """取消执行时登记的空闲监视器，避免它在用例结束后继续挂着。"""
+
+    task = getattr(manager, "_shutdown_task", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def _grayscale_png(width: int, height: int) -> bytes:
+    """构造 1 位灰度 PNG：像素数可以很大，而文件只有几 KiB。"""
+
+    header   = struct.pack(">IIBBBBB", width, height, 1, 0, 0, 0, 0)
+    scanline = b"\x00" * (1 + (width + 7) // 8)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(scanline * height))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _png_of_exact_size(size: int) -> bytes:
+    """在合法 PNG 的 IEND 前塞一个私有辅助块，凑出恰好 ``size`` 字节的合法 PNG。"""
+
+    base    = _valid_png()
+    padding = size - len(base) - 12
+    return base[:-12] + _png_chunk(b"prVt", b"x" * padding) + base[-12:]
 
 
 class TestJupyterExecution:
@@ -123,13 +145,6 @@ class TestJupyterExecution:
         assert manager_a is not manager_b
         await JupyterKernelManager.shutdown_all_async()
 
-    def test_owner_key_uses_group_context_when_available(self):
-        from plugins.jupyter.main import _owner_key
-
-        context = SimpleNamespace(current_user_id=10001, current_group_id=20002)
-
-        assert _owner_key(context) == "user:10001:group:20002"
-
     @pytest.mark.parametrize(
         ("group_id", "expected"),
         ((None, "user:10001:private"), (20002, "user:10001:group:20002")),
@@ -176,32 +191,14 @@ class TestJupyterExecution:
         assert fake_km.interrupted is True
 
     @pytest.mark.asyncio
-    async def test_cancel_during_kernel_start_waits_then_shuts_down(self, tmp_path):
+    async def test_cancel_during_kernel_start_waits_then_shuts_down(self, tmp_path, kernel_backend):
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager           = JupyterKernelManager(tmp_path / "jupyter")
-        start_entered     = threading.Event()
-        release_start     = threading.Event()
-        shutdown_finished = threading.Event()
-
-        class _FakeKernelManager:
-            def is_alive(self):
-                return True
-
-        def blocking_start():
-            start_entered.set()
-            assert release_start.wait(timeout=2)
-            manager._km = _FakeKernelManager()
-            manager._kc = SimpleNamespace()
-
-        def shutdown():
-            manager._km = None
-            manager._kc = None
-            shutdown_finished.set()
-
-        manager.start_kernel        = blocking_start
-        manager.shutdown_kernel     = shutdown
-        manager.ensure_idle_monitor = lambda: None
+        manager       = JupyterKernelManager(tmp_path / "jupyter")
+        start_entered = threading.Event()
+        release_start = threading.Event()
+        # 屏障放在第三方内核的启动调用里：内核已经起来，启动线程还没返回。
+        kernel_backend.block_start = (start_entered, release_start)
 
         execution = asyncio.create_task(manager.execute("1 + 1"))
         assert await asyncio.to_thread(start_entered.wait, 1)
@@ -213,7 +210,9 @@ class TestJupyterExecution:
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(execution, timeout=2)
 
-        assert shutdown_finished.is_set()
+        (kernel,) = kernel_backend.kernels
+        assert kernel.shutdown_calls == 1
+        assert kernel.alive is False
         assert manager._km is None and manager._kc is None
         assert not {
             task.get_name()
@@ -252,10 +251,9 @@ class TestJupyterExecution:
                     "parent_header": {"msg_id": "msg-cancel"},
                 }
 
-        fake_km                     = _FakeKernelManager()
-        manager._km                 = fake_km
-        manager._kc                 = _FakeKernelClient()
-        manager.ensure_idle_monitor = lambda: None
+        fake_km     = _FakeKernelManager()
+        manager._km = fake_km
+        manager._kc = _FakeKernelClient()
 
         execution = asyncio.create_task(manager.execute("1 + 1"))
         assert await asyncio.to_thread(submit_entered.wait, 1)
@@ -275,6 +273,7 @@ class TestJupyterExecution:
             for task in asyncio.all_tasks()
             if not task.done() and task.get_name().startswith("jupyter-")
         }
+        await _stop_idle_monitor(manager)
 
     @pytest.mark.asyncio
     async def test_cancel_during_read_drains_reader_before_recovery(self, tmp_path):
@@ -328,11 +327,10 @@ class TestJupyterExecution:
                     with reader_lock:
                         self.active_readers -= 1
 
-        fake_km                     = _FakeKernelManager()
-        fake_kc                     = _FakeKernelClient()
-        manager._km                 = fake_km
-        manager._kc                 = fake_kc
-        manager.ensure_idle_monitor = lambda: None
+        fake_km     = _FakeKernelManager()
+        fake_kc     = _FakeKernelClient()
+        manager._km = fake_km
+        manager._kc = fake_kc
 
         execution = asyncio.create_task(manager.execute("print('partial')"))
         assert await asyncio.to_thread(read_entered.wait, 1)
@@ -352,6 +350,7 @@ class TestJupyterExecution:
             for task in asyncio.all_tasks()
             if not task.done() and task.get_name().startswith("jupyter-")
         }
+        await _stop_idle_monitor(manager)
 
     @pytest.mark.asyncio
     async def test_execute_filters_iopub_messages_by_parent_msg_id(self, tmp_path):
@@ -480,21 +479,21 @@ class TestJupyterExecution:
         assert result.error == f"输出超过 {MAX_OUTPUT_BYTES} 字节安全上限，已中断内核"
         assert "secret" not in result.error
 
-    def test_total_image_budget_is_shared_across_messages(self, tmp_path, monkeypatch):
+    def test_total_image_budget_is_shared_across_messages(self, tmp_path):
         from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES
         from plugins.jupyter.jupyter_manager import JupyterKernelManager, _OutputBudget
         from plugins.jupyter.jupyter_models import ExecutionResult
 
         manager = JupyterKernelManager(tmp_path / "jupyter")
-        image   = b"x" * MAX_IMAGE_BYTES
-        monkeypatch.setattr(manager, "_decode_image", lambda _value: image)
-        result = ExecutionResult()
-        budget = _OutputBudget()
-        total  = 0
+        image   = _png_of_exact_size(MAX_IMAGE_BYTES)
+        encoded = base64.b64encode(image).decode("ascii")
+        result  = ExecutionResult()
+        budget  = _OutputBudget()
+        total   = 0
 
         for _ in range(MAX_TOTAL_IMAGE_BYTES // MAX_IMAGE_BYTES):
             total, exceeded = manager._process_data_message(
-                {"image/png": "encoded"},
+                {"image/png": encoded},
                 result,
                 budget,
                 total,
@@ -502,7 +501,7 @@ class TestJupyterExecution:
             )
             assert exceeded is False
         total, exceeded = manager._process_data_message(
-            {"image/png": "encoded"},
+            {"image/png": encoded},
             result,
             budget,
             total,
@@ -514,8 +513,8 @@ class TestJupyterExecution:
         assert len(result.images) == 2
         assert "图片输出超过" in result.error
 
-    def test_image_decode_rejects_size_and_pixel_bombs(self, tmp_path, monkeypatch):
-        from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES
+    def test_image_decode_rejects_size_and_pixel_bombs(self, tmp_path):
+        from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
         manager   = JupyterKernelManager(tmp_path / "jupyter")
@@ -525,19 +524,14 @@ class TestJupyterExecution:
         png     = _valid_png(3, 2)
         encoded = base64.b64encode(png).decode("ascii")
         assert manager._decode_image(encoded) == png
-        monkeypatch.setattr("plugins.jupyter.jupyter_manager.MAX_IMAGE_PIXELS", 4)
-        assert manager._decode_image(encoded) is None
 
-    def test_valid_image_decode_is_in_memory_only(self, tmp_path):
-        from plugins.jupyter.jupyter_manager import JupyterKernelManager
-
-        manager = JupyterKernelManager(tmp_path / "jupyter")
-        png     = _valid_png()
-        encoded = base64.b64encode(png).decode("ascii")
-
-        decoded = manager._decode_image(encoded)
-
-        assert decoded == png
+        side         = int(MAX_IMAGE_PIXELS**0.5)
+        within_limit = _grayscale_png(side, side)
+        assert side * side <= MAX_IMAGE_PIXELS
+        assert manager._decode_image(base64.b64encode(within_limit).decode("ascii")) == within_limit
+        over_limit = _grayscale_png(side + 1, side + 1)
+        assert (side + 1) * (side + 1) > MAX_IMAGE_PIXELS
+        assert manager._decode_image(base64.b64encode(over_limit).decode("ascii")) is None
 
     @pytest.mark.parametrize("mutation", ("crc", "trailing", "missing_iend"))
     def test_image_decode_rejects_structurally_invalid_png(self, tmp_path, mutation):
@@ -561,23 +555,17 @@ class TestJupyterExecution:
     async def test_execute_handler_returns_validated_png_as_inline_segment(
         self,
         tmp_path,
-        monkeypatch,
+        kernel_backend,
     ):
         from plugins.jupyter import main as jupyter_main
-        from plugins.jupyter.jupyter_models import ExecutionResult
 
-        png          = _valid_png()
-        fake_manager = SimpleNamespace(
-            execute=lambda *_args, **_kwargs: asyncio.sleep(
-                0,
-                result=ExecutionResult(images=[png]),
-            )
-        )
-        monkeypatch.setattr(
-            jupyter_main.JupyterKernelManager,
-            "get_instance",
-            lambda *_args, **_kwargs: fake_manager,
-        )
+        png                      = _valid_png()
+        kernel_backend.responder = lambda _code: [
+            {
+                "msg_type": "display_data",
+                "content" : {"data": {"image/png": base64.b64encode(png).decode("ascii")}},
+            }
+        ]
         context = SimpleNamespace(
             data_dir         = tmp_path / "jupyter",
             current_user_id  = 1,
@@ -585,7 +573,7 @@ class TestJupyterExecution:
             request_id       = "request-1",
         )
 
-        response = await jupyter_main._handle_execute("print('image')", context)
+        response = await jupyter_main.handle("jupyter", "print('image')", {}, context)
 
         image_segments = [segment for segment in response if segment["type"] == "image"]
         assert image_segments == [
@@ -608,28 +596,32 @@ class TestJupyterExecution:
         await asyncio.gather(manager._shutdown_task, return_exceptions=True)
 
     def test_main_reads_lazy_dependency_state_from_module(self, monkeypatch):
+        from plugins.jupyter import jupyter_manager
         from plugins.jupyter import main as jupyter_main
 
-        def make_available():
-            jupyter_main.jupyter_manager.JUPYTER_AVAILABLE = True
-            jupyter_main.jupyter_manager.IMPORT_ERROR      = None
-
-        monkeypatch.setattr(jupyter_main.jupyter_manager, "JUPYTER_AVAILABLE", False)
-        monkeypatch.setattr(jupyter_main.jupyter_manager, "lazy_import_jupyter", make_available)
+        installed = ModuleType("jupyter_client")
+        installed.KernelManager = type("InstalledKernelManager", (), {})  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "jupyter_client", installed)
+        monkeypatch.setattr(jupyter_manager, "JUPYTER_AVAILABLE", False)
+        monkeypatch.setattr(jupyter_manager, "IMPORT_ERROR", None)
+        monkeypatch.setattr(jupyter_manager, "KernelManager", None)
+        monkeypatch.setattr(jupyter_main, "_DEPENDENCY_PROBED", False)
 
         jupyter_main.init()
 
         assert jupyter_main.jupyter_manager.JUPYTER_AVAILABLE is True
+        assert jupyter_main._dependencies_available() is True
 
     @pytest.mark.asyncio
     async def test_help_does_not_require_optional_dependency(self, monkeypatch, tmp_path):
+        from plugins.jupyter import jupyter_manager
         from plugins.jupyter import main as jupyter_main
 
-        monkeypatch.setattr(
-            jupyter_main,
-            "_dependencies_available",
-            lambda: (_ for _ in ()).throw(AssertionError("dependency probe must not run")),
-        )
+        monkeypatch.setitem(sys.modules, "jupyter_client", None)
+        monkeypatch.setattr(jupyter_manager, "JUPYTER_AVAILABLE", False)
+        monkeypatch.setattr(jupyter_manager, "IMPORT_ERROR", None)
+        monkeypatch.setattr(jupyter_manager, "KernelManager", None)
+        monkeypatch.setattr(jupyter_main, "_DEPENDENCY_PROBED", False)
         context = SimpleNamespace(data_dir=tmp_path)
 
         main_help   = await jupyter_main.handle("jupyter", "help", {}, context)
@@ -637,6 +629,8 @@ class TestJupyterExecution:
 
         assert "Jupyter" in _response_text(main_help)
         assert "内核" in _response_text(kernel_help)
+        # 依赖探测一旦运行，缺失的 jupyter_client 会留下导入错误；帮助命令不应触发探测。
+        assert jupyter_manager.IMPORT_ERROR is None
 
     @pytest.mark.asyncio
     async def test_handle_routes_only_canonical_manifest_commands(self, tmp_path):
@@ -689,23 +683,13 @@ class TestJupyterExecution:
     async def test_repl_execution_updates_state_only_after_success(
         self,
         tmp_path,
-        monkeypatch,
+        kernel_backend,
         success,
     ):
         from plugins.jupyter import main as jupyter_main
-        from plugins.jupyter.jupyter_models import ExecutionResult
 
-        executed = {}
-
-        class Manager:
-            async def execute(self, code, *, timeout, audit_id):
-                executed.update(code=code, timeout=timeout, audit_id=audit_id)
-                return ExecutionResult(success=success, error="code failed" if not success else "")
-
-        monkeypatch.setattr(
-            jupyter_main.JupyterKernelManager,
-            "get_instance",
-            lambda *_args, **_kwargs: Manager(),
+        kernel_backend.responder = lambda _code: (
+            [] if success else [{"msg_type": "error", "content": {"traceback": ["code failed"]}}]
         )
         original_lines = ["for i in range(2):", "    print(i)"]
         session        = Session(
@@ -724,7 +708,8 @@ class TestJupyterExecution:
 
         response = await jupyter_main.handle_session("run", {}, context, session)
 
-        assert executed["code"] == "for i in range(2):\n    print(i)"
+        (kernel,) = kernel_backend.kernels
+        assert kernel.client_instance.executed[-1] == "for i in range(2):\n    print(i)"
         assert session.get("code_buffer") == ([] if success else original_lines)
         assert session.get("execution_count") == (8 if success else 7)
         assert ("执行完成" if success else "缓冲区已保留") in _response_text(response)

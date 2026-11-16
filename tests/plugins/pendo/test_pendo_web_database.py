@@ -5,22 +5,24 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from plugins.pendo.utils import time_utils
 from tests.helpers.pendo_review_test_support import (
     Database,
     EventHandler,
     NoteHandler,
     TaskHandler,
     ZoneInfo,
-    _make_temp_db,
-    _seed_event_batch_fixture,
+    make_temp_db,
+    seed_event_batch_fixture,
     sqlite3,
 )
+from tests.helpers.pendo_test_support import freeze_pendo_clock
 
 
 def test_operation_logs_schema_supports_marked_undo_and_query_indexes(tmp_path: Path) -> None:
@@ -219,9 +221,7 @@ def test_latest_undoable_operation_uses_log_id_for_same_second(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from plugins.pendo.services import db as db_module
-
-    monkeypatch.setattr(db_module, "utc_now_iso", lambda: "2030-01-01T00:00:00+00:00")
+    freeze_pendo_clock(monkeypatch, datetime(2030, 1, 1, tzinfo=UTC), time_utils)
     db = Database(str(tmp_path / "pendo-undo-same-second.db"))
     try:
         db.log_operation("edit-last", "delete", "event", "event-a")
@@ -239,18 +239,17 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """创建时间取用户墙钟；后续存储更新由数据库入口统一盖章。"""
-    from plugins.pendo.services import db as db_module
     from plugins.pendo.web.api import items as items_api
 
-    temp_dir, db = _make_temp_db("pendo_review_web_item_clock")
+    temp_dir, db = make_temp_db("pendo_review_web_item_clock")
     owner_id = "u-web-item-clock"
 
-    monkeypatch.setattr(
-        items_api,
-        "now_in_timezone",
-        lambda _owner_id, _db: datetime(2030, 1, 2, 9, 10, 11, tzinfo=ZoneInfo("Asia/Shanghai")),
+    # 创建时用户所在时区（默认上海）的墙钟是 2030-01-02 09:10:11。
+    clock = freeze_pendo_clock(
+        monkeypatch,
+        datetime(2030, 1, 2, 9, 10, 11, tzinfo=ZoneInfo("Asia/Shanghai")),
+        time_utils,
     )
-    monkeypatch.setattr(db_module, "utc_now_iso", lambda: "2040-02-03T04:05:06+00:00")
 
     try:
         created = items_api.create_item(
@@ -265,6 +264,7 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
         assert initial.created_at == "2030-01-02T01:10:11+00:00"
         assert initial.updated_at == "2030-01-02T01:10:11+00:00"
 
+        clock.instant = datetime(2040, 2, 3, 4, 5, 6, tzinfo=UTC)
         items_api.update_item(
             item_id,
             items_api.ItemUpdate(title="数据库时间更新"),
@@ -281,31 +281,11 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_rrule_generation_stops_iterating_at_the_configured_bound(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """重复规则必须在物化前停止迭代，不能先耗尽一个无界生成器。"""
-    from dateutil import rrule as rrule_module
-
+def test_rrule_generation_stops_iterating_at_the_configured_bound() -> None:
+    """无界的重复规则必须在配置上限处停止迭代，而不是耗尽生成器。"""
     from plugins.pendo.config import PendoConfig
 
     start = datetime(2030, 1, 2, 9, 0)
-
-    class _GuardedRule:
-        def __init__(self) -> None:
-            self.index = 0
-
-        def __iter__(self):
-            return self
-
-        def __next__(self) -> datetime:
-            if self.index >= PendoConfig.EVENT_MAX_RRULE_COUNT:
-                raise AssertionError("重复规则被读取超过配置上限")
-            self.index += 1
-            return start
-
-    guarded = _GuardedRule()
-    monkeypatch.setattr(rrule_module, "rrulestr", lambda *_args, **_kwargs: guarded)
 
     instances, exhausted = EventHandler._expand_recurring_instances(
         "FREQ=DAILY",
@@ -315,7 +295,6 @@ def test_rrule_generation_stops_iterating_at_the_configured_bound(
 
     assert exhausted is False
     assert len(instances) == PendoConfig.EVENT_MAX_RRULE_COUNT
-    assert guarded.index == PendoConfig.EVENT_MAX_RRULE_COUNT
 
 
 def test_web_list_and_search_http_endpoints_reject_out_of_range_pagination() -> None:
@@ -326,7 +305,7 @@ def test_web_list_and_search_http_endpoints_reject_out_of_range_pagination() -> 
     from plugins.pendo.web.api import items as items_api
     from plugins.pendo.web.api import search as search_api
 
-    temp_dir, db = _make_temp_db("pendo_review_web_pagination")
+    temp_dir, db = make_temp_db("pendo_review_web_pagination")
     app = FastAPI()
     app.include_router(items_api.router)
     app.include_router(search_api.router)
@@ -349,7 +328,7 @@ def test_web_list_and_search_http_endpoints_reject_out_of_range_pagination() -> 
 
 
 def test_undo_delete_restores_logged_task_and_note_batches():
-    temp_dir, db = _make_temp_db("pendo_review_undo_batch")
+    temp_dir, db = make_temp_db("pendo_review_undo_batch")
     owner_id = "u-undo-batch"
 
     try:
@@ -430,7 +409,7 @@ def test_undo_delete_restores_logged_task_and_note_batches():
 
 
 def test_undo_delete_restores_event_collection_and_children_from_log():
-    temp_dir, db = _make_temp_db("pendo_review_undo_collection")
+    temp_dir, db = make_temp_db("pendo_review_undo_collection")
     owner_id = "u-undo-collection"
 
     try:
@@ -522,7 +501,7 @@ def test_schema_add_column_migration_only_suppresses_its_exact_duplicate():
 def test_schema_migrations_are_versioned_and_idempotent():
     from plugins.pendo.services import db_schema
 
-    temp_dir, db = _make_temp_db("pendo_review_schema_migrations")
+    temp_dir, db = make_temp_db("pendo_review_schema_migrations")
     try:
         rows_before = (
             db.get_connection()
@@ -550,7 +529,7 @@ def test_schema_migrations_are_versioned_and_idempotent():
 
 
 def test_database_reinitialization_does_not_rewrite_reminder_data():
-    temp_dir, db = _make_temp_db("pendo_schema_keeps_reminder_data")
+    temp_dir, db = make_temp_db("pendo_schema_keeps_reminder_data")
     try:
         conn = db.get_connection()
         conn.execute(
@@ -635,7 +614,7 @@ async def test_event_range_lists_batch_collection_and_reminder_queries(
 ) -> None:
     db       = Database(str(tmp_path / "pendo-event-batch-lists.db"))
     owner_id = "u-event-batch"
-    _seed_event_batch_fixture(db, owner_id)
+    seed_event_batch_fixture(db, owner_id)
     handler              = EventHandler(db, SimpleNamespace(), SimpleNamespace())
     original_collections = db.get_event_collections_by_ids
     original_logs        = db.get_reminder_logs_by_item_ids

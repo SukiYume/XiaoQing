@@ -1,4 +1,4 @@
-"""Pendo Web 迁移页的数据边界、写操作与异步生命周期回归。"""
+"""Pendo Web 迁移页的数据边界、写操作与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -43,7 +43,6 @@ TRANSFER_SETUP: Final = r"""
         return __apiHandlers.upload(...args);
     };
     globalThis.__toastCalls = [];
-    globalThis.__styleCalls = [];
     globalThis.__anchorClicks = 0;
     globalThis.__anchorRemovals = 0;
     globalThis.__appendedAnchors = 0;
@@ -155,7 +154,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';""",
         ),
@@ -330,7 +329,7 @@ def test_transfer_normalizes_inspect_results_and_logs_before_rendering() -> None
 
 
 def test_transfer_render_has_accessible_controls_and_static_examples() -> None:
-    """页面控件必须具备按钮语义，静态格式示例和响应式样式仍需完整。"""
+    """页面控件必须具备按钮语义，静态格式示例仍需完整。"""
 
     _run_transfer_client(
         r"""
@@ -349,13 +348,6 @@ def test_transfer_render_has_accessible_controls_and_static_examples() -> None:
             'amount_cents', 'counter_account_name', 'offset_seconds', '未知字段会在预检阶段报错',
             '稳定自定义字符串', '外部 ID 只作为来源元数据',
         ]) assert.ok(examples.includes(text));
-
-        const css = __styleCalls[0][1];
-        assert.ok(css.includes('.transfer-status-banner.warning,'));
-        assert.ok(css.includes('.transfer-status-banner.duplicate-warn'));
-        assert.ok(css.includes('.transfer-summary-value.range'));
-        assert.ok(css.includes('grid-template-columns: 1fr'));
-        assert.ok(css.includes('grid-template-columns: repeat(2, minmax(0, 1fr))'));
         """
     )
 

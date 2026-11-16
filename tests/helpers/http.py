@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import Mock
 
 from aiohttp import ClientResponse
-from aioresponses import aioresponses
+from aioresponses import CallbackResult, aioresponses
 from yarl import URL
 
 from core.bounded_http import BoundedHttpResponse
@@ -136,16 +136,22 @@ class QueuedAiohttpSession:
         return response
 
 
-class _MockedClientResponse(ClientResponse):
+class MockedClientResponse(ClientResponse):
     """aioresponses 按旧签名构造响应；aiohttp 3.14 起多了必填的 ``stream_writer``，这里补上。"""
 
     def __init__(self, method: str, url: URL, **kwargs: Any) -> None:
         super().__init__(method, url, stream_writer=Mock(), **kwargs)
 
 
+def callback_result(**kwargs: Any) -> CallbackResult:
+    """``aioresponses`` 回调的返回值，响应类同样补上了当前 aiohttp 要求的构造参数。"""
+
+    return CallbackResult(response_class=MockedClientResponse, **kwargs)
+
+
 class mocked_aiohttp(aioresponses):  # noqa: N801 - 和 aioresponses 一样当上下文管理器用
     """``aioresponses``，登记的响应都能在当前的 aiohttp 上构造出来。"""
 
     def add(self, url: Any, *args: Any, **kwargs: Any) -> None:
-        kwargs.setdefault("response_class", _MockedClientResponse)
+        kwargs.setdefault("response_class", MockedClientResponse)
         super().add(url, *args, **kwargs)

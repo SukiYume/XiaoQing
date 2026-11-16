@@ -792,7 +792,7 @@ async def _generate_checked_draft(
             if draft is None:
                 if not plan.forced:
                     return None
-                raise ReplyRejected("未生成可发送的回复", True)
+                raise ReplyRejected("未生成可发送的回复")
             check_started = time.monotonic()
             rejected      = await _check_candidate_draft(
                 plan, draft, trimmed_history, memory_block, attempt.turn_reading

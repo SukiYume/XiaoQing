@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,40 +11,41 @@ import tests.helpers.plugin_manager_test_support as _fixture_support
 from core.models import _CAPABILITY_CONTRACTS
 from tests.helpers.plugin_manager_test_support import (
     ConcurrentFuture,
-    LoadedPlugin,
     ModuleType,
     PluginExecutionGate,
-    PluginExecutionPolicy,
     PluginLifecycleFatalError,
     PluginPathError,
-    _build_definition,
-    _build_manager,
-    _write_runtime_manifest,
+    build_manager,
+    load_plugin,
     load_plugin_dir,
     textwrap,
+    write_plugin,
 )
+from tests.helpers.plugin_probe import PROBE
 
 _isolate_process_global_plugin_import_state = (
     _fixture_support._isolate_process_global_plugin_import_state
 )
 
 
-def test_load_module_rejects_same_file_under_noncanonical_alias(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_rejects_same_file_under_noncanonical_alias(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "alias_demo"
-    plugin_dir.mkdir()
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    entry = plugin_dir / "main.py"
-    entry.write_text("VALUE = 1\n", encoding="utf-8")
-    _write_runtime_manifest(plugin_dir, "alias_demo")
+    manager                     = build_manager(tmp_path)
+    plugin_dir                  = write_plugin(manager, "alias_demo")
     alias                       = ModuleType("alias_demo.main")
-    alias.__file__              = str(entry)
+    alias.__file__              = str(plugin_dir / "main.py")
     sys.modules[alias.__name__] = alias
     try:
-        with pytest.raises(Exception, match="Non-canonical plugin module aliases"):
-            manager._load_module(plugin_dir, _build_definition("alias_demo"))
+        await load_plugin_dir(manager, plugin_dir)
+
+        assert "Non-canonical plugin module aliases" in caplog.text
+        assert manager.get("alias_demo") is None
+        assert PROBE.log("import") == []
     finally:
         sys.modules.pop(alias.__name__, None)
         manager._purge_plugin_modules("alias_demo")
@@ -57,7 +57,7 @@ def test_alias_scan_stats_only_lexical_plugin_candidates_and_bounds_cache(
 ) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "alias_demo"
     plugin_dir.mkdir()
     aliases: dict[str, ModuleType] = {}
@@ -100,7 +100,7 @@ def test_alias_scan_stats_only_lexical_plugin_candidates_and_bounds_cache(
 def test_purge_plugin_modules_preserves_unowned_alias_even_when_path_matches(tmp_path: Path):
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "purge_demo"
     plugin_dir.mkdir()
     entry = plugin_dir / "main.py"
@@ -118,7 +118,7 @@ def test_purge_plugin_modules_preserves_unowned_alias_even_when_path_matches(tmp
 def test_purge_uses_exact_raw_parent_bindings_without_module_hooks(tmp_path: Path) -> None:
     import sys
 
-    manager = _build_manager(tmp_path)
+    manager = build_manager(tmp_path)
 
     class HookedPackage(ModuleType):
         hook_calls = 0
@@ -185,48 +185,57 @@ def test_purge_uses_exact_raw_parent_bindings_without_module_hooks(tmp_path: Pat
 async def test_undrained_partial_import_cannot_downgrade_restart_only_ledger(
     tmp_path: Path,
 ) -> None:
-    manager         = _build_manager(tmp_path)
-    definition      = _build_definition()
-    module          = ModuleType("plugins.demo.main")
-    module.shutdown = AsyncMock()
-    gate            = PluginExecutionGate(
-        "parallel",
-        plugin_name="demo",
-        policy=PluginExecutionPolicy(drain_timeout_seconds=0.01),
-    )
+    manager = build_manager(tmp_path)
+    manager.configure_execution({"drain_timeout_seconds": 0.01})
     unfinished: ConcurrentFuture[None] = ConcurrentFuture()
-    gate._sync_futures.add(unfinished)
-    manager._plugin_states["demo"]   = {"resource": object()}
-    manager._execution_gates["demo"] = gate
 
-    clean = await manager._rollback_pending_plugin(
-        definition,
-        module,
-        0.0,
-        retain_quarantine=True,
+    class GatesWithUnfinishedWork(dict[str, PluginExecutionGate]):
+        """候选代的执行门一登记，就挂上一件做不完的同步工作：回滚时排不空。"""
+
+        def __setitem__(self, name: str, gate: PluginExecutionGate) -> None:
+            super().__setitem__(name, gate)
+            if name == "demo" and not gate.closed:
+                gate._sync_futures.add(unfinished)
+
+    # 真实输入造不出“导入到一半、而候选代的执行门里还有没做完的同步工作”：
+    # 只能在候选代执行门登记处挂上这件工作。
+    manager._execution_gates = GatesWithUnfinishedWork(manager._execution_gates)
+    write_plugin(
+        manager,
+        "demo",
+        """
+        from tests.helpers.plugin_probe import PROBE
+
+        async def shutdown(context=None):
+            PROBE.log("shutdown").append(1)
+
+        raise RuntimeError("partial import")
+        """,
     )
 
-    assert clean is False
+    await load_plugin_dir(manager, manager.plugins_dir / "demo")
+
+    gate = manager._execution_gates["demo"]
     assert "demo" in manager._restart_required_plugins
     assert "demo" in manager._quarantined_plugins
-    assert manager._plugins["demo"].module is module
+    assert manager._plugins["demo"].module.__name__ == "plugins.demo.main"
     assert gate.closed is True
 
     unfinished.set_result(None)
     await asyncio.sleep(0)
     await manager.unload_plugin("demo")
     assert "demo" in manager.list_runtime_plugins()
-    module.shutdown.assert_not_awaited()
+    assert PROBE.log("shutdown") == []
 
     manager._restart_required_plugins.discard("demo")
     manager._quarantined_plugins.discard("demo")
     await manager.unload_plugin("demo")
-    module.shutdown.assert_awaited_once()
+    assert len(PROBE.log("shutdown")) == 1
 
 
 @pytest.mark.asyncio
 async def test_plugin_is_published_after_async_init_completes(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -282,7 +291,7 @@ async def test_init_context_carries_the_declarations_of_the_generation_being_loa
 
     # 能力按插件名放行：让这个测试插件可以声明一项。
     monkeypatch.setitem(_CAPABILITY_CONTRACTS, "config_subscription", frozenset({"declares"}))
-    manager                          = _build_manager(tmp_path)
+    manager                          = build_manager(tmp_path)
     issued: list[tuple[object, ...]] = []
     manager.context_factory          = lambda *args: issued.append(args) or object()
     plugin_dir                       = manager.plugins_dir / "declares"
@@ -310,7 +319,7 @@ async def test_init_context_carries_the_declarations_of_the_generation_being_loa
 
 @pytest.mark.asyncio
 async def test_async_init_with_kwargs_does_not_receive_positional_context(tmp_path: Path):
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "kwargs_init"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -336,7 +345,7 @@ async def test_async_init_with_kwargs_does_not_receive_positional_context(tmp_pa
 async def test_async_init_system_exit_rolls_back_before_rethrow(tmp_path: Path) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "fatal_init"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -376,7 +385,7 @@ async def test_top_level_system_exit_is_deferred_until_rollback_finishes(
 ) -> None:
     import sys
 
-    manager    = _build_manager(tmp_path)
+    manager    = build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "fatal_import"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -421,25 +430,14 @@ async def test_top_level_system_exit_is_deferred_until_rollback_finishes(
 
 @pytest.mark.asyncio
 async def test_shutdown_system_exit_quarantines_before_rethrow(tmp_path: Path) -> None:
-    manager    = _build_manager(tmp_path)
-    definition = _build_definition()
-    module     = ModuleType("plugins.demo.main")
-
-    async def fatal_shutdown(context=None) -> None:
+    async def fatal_shutdown(_context) -> None:
         raise SystemExit("fatal shutdown")
 
-    module.shutdown = fatal_shutdown
-    gate = PluginExecutionGate("parallel", plugin_name="demo")
-    plugin = LoadedPlugin(
-        definition     = definition,
-        module         = module,
-        mtime          = 0.0,
-        execution_gate = gate,
-    )
-    state                            = {"resource": object()}
-    manager._plugins["demo"]         = plugin
-    manager._plugin_states["demo"]   = state
-    manager._execution_gates["demo"] = gate
+    PROBE.slots["on_shutdown"] = fatal_shutdown
+    manager                    = build_manager(tmp_path)
+    plugin                     = await load_plugin(manager)
+    gate                       = plugin.execution_gate
+    state                      = manager._plugin_states["demo"]
 
     with pytest.raises(PluginLifecycleFatalError) as raised:
         await manager.unload_plugin("demo")

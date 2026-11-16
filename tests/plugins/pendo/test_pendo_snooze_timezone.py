@@ -8,6 +8,8 @@ import pytest
 
 from plugins.pendo.commands.operations import _parse_snooze_time
 from plugins.pendo.handlers.task import TaskHandler
+from plugins.pendo.utils import time_utils
+from tests.helpers.pendo_test_support import freeze_pendo_clock
 
 
 def test_relative_snooze_uses_user_aware_instant_not_server_timezone() -> None:
@@ -18,9 +20,8 @@ def test_relative_snooze_uses_user_aware_instant_not_server_timezone() -> None:
     assert (result - user_now).total_seconds() == 600
 
 
-def test_absolute_snooze_uses_user_wall_clock_across_dst_server_zone() -> None:
-    # The host timezone is irrelevant: the injected user instant carries the
-    # user's zone and DST rules.
+def test_absolute_snooze_uses_user_wall_clock_and_offset() -> None:
+    # 与服务器所在时区无关：注入的用户当前时刻自带用户时区。
     user_now = datetime(2030, 3, 10, 18, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
     result = datetime.fromisoformat(_parse_snooze_time("19:00", now=user_now))
     assert result.hour == 19 and result.minute == 0
@@ -36,13 +37,17 @@ async def test_task_timezone_and_deadline_reschedule(db, monkeypatch):
             "owner_id"      : "u",
             "type"          : "task",
             "title"         : "future",
+            "status"        : "open",
             "deadline_at"   : "2030-01-01T12:00:00+08:00",
             "reminder_rules": [{"offset_seconds": 3600}],
         }
     )
     handler = TaskHandler(db)
-    monkeypatch.setattr(handler, "_user_local_now", lambda _uid: datetime(2030, 1, 1, 10))
-    assert "future" not in (await handler.list_tasks("u", "overdue", None))["message"]
+    # 用户时区（上海）的 10:00，早于截止时间 12:00。
+    freeze_pendo_clock(monkeypatch, datetime(2030, 1, 1, 2, tzinfo=UTC), time_utils)
+    overdue = await handler.list_tasks("u", "overdue", None)
+    assert overdue["status"] == "success"
+    assert "future" not in overdue["message"]
     result = await handler.edit_task("u", iid + " deadline:2030-01-02T12:00", None)
     assert result["status"] == "success"
     assert db.get_item(iid, "u").remind_times == ["2030-01-02T03:00:00+00:00"]

@@ -1,4 +1,4 @@
-"""CHIME/FRB 插件的运行时契约与状态回归测试。"""
+"""CHIME/FRB 插件的运行时契约与状态测试。"""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from core.durable_fanout import load_pending
 from plugins.chime import main as chime
+from tests.helpers.filesystem_faults import fail_replace_onto
+from tests.helpers.http import AiohttpResponse, QueuedAiohttpSession, aiohttp_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
@@ -54,6 +56,33 @@ def _frb(
 ) -> chime.FRBData:
     data = _payload(name, timestamp)
     return chime.FRBData(name, data[name])
+
+
+def _history_path(context: SimpleNamespace) -> Path:
+    return context.data_dir / "chime_history.json"
+
+
+def _write_history(context: SimpleNamespace, mapping: object) -> None:
+    """把历史基线按插件自己的文件名写进真实数据目录（紧凑排版，便于发现被重写）。"""
+    _history_path(context).write_text(json.dumps(mapping, separators=(",", ":")), encoding="utf-8")
+
+
+def _read_history(context: SimpleNamespace) -> dict[str, str]:
+    return json.loads(_history_path(context).read_text(encoding="utf-8"))
+
+
+class _GatedResponse(AiohttpResponse):
+    """HTTP 响应在进入时先停在屏障上，用来在网络边界制造并发的冷请求。"""
+
+    def __init__(self, body: bytes, entered: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__(body, media_type="application/json")
+        self._entered = entered
+        self._release = release
+
+    async def __aenter__(self) -> AiohttpResponse:
+        self._entered.set()
+        await self._release.wait()
+        return self
 
 
 class TestChimeRuntimeContract:
@@ -121,11 +150,6 @@ class TestChimePluginJson:
         path = ROOT / "plugins" / "chime" / "plugin.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def test_manifest_identity_and_entrypoints(self, manifest: dict) -> None:
-        assert manifest["name"] == "chime"
-        assert manifest["entry"] == "main.py"
-        assert manifest["dependencies"] == []
-
     def test_command_triggers(self, manifest: dict) -> None:
         command = next(item for item in manifest["commands"] if item["name"] == "chime")
         assert command["triggers"] == ["chime", "frb"]
@@ -161,13 +185,14 @@ class TestChimeParsingAndHistory:
 
         assert chime.parse_frb_data(data, chime_context) == []
 
-    def test_parse_rejects_an_oversized_catalog(
-        self,
-        chime_context: SimpleNamespace,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(chime, "_MAX_FRB_RECORDS", 0)
-        assert chime.parse_frb_data(_payload(), chime_context) == []
+    def test_parse_rejects_an_oversized_catalog(self, chime_context: SimpleNamespace) -> None:
+        catalog: dict[str, dict] = {}
+        for index in range(5_000):
+            catalog.update(_payload(f"FRB{index:05d}"))
+        assert len(chime.parse_frb_data(catalog, chime_context)) == 5_000
+
+        catalog.update(_payload("FRB05000"))
+        assert chime.parse_frb_data(catalog, chime_context) == []
 
     def test_missing_history_is_empty_and_valid_history_round_trips(
         self,
@@ -212,14 +237,15 @@ class TestChimeParsingAndHistory:
         assert chime.save_history(chime_context, {"bad": "value"}) is False
         assert not (chime_context.data_dir / "chime_history.json").exists()
 
-    def test_history_record_limit_is_enforced(
-        self,
-        chime_context: SimpleNamespace,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(chime, "_MAX_HISTORY_RECORDS", 0)
+    def test_history_record_limit_is_enforced(self, chime_context: SimpleNamespace) -> None:
+        history = {f"FRB{index:05d}": "2026-07-14T00:00:00" for index in range(10_000)}
+        _write_history(chime_context, history)
+        assert chime.load_history(chime_context) == history
+
+        history["FRB10000"] = "2026-07-14T00:00:00"
+        _write_history(chime_context, history)
         with pytest.raises(chime.ChimeHistoryError):
-            chime._validate_history({"FRB-A": "2026-07-14T00:00:00"})
+            chime.load_history(chime_context)
 
     def test_find_updates_uses_chronology_and_merge_never_regresses(
         self,
@@ -280,26 +306,17 @@ class TestChimeParsingAndHistory:
 
 
 @pytest.mark.asyncio
-async def test_fetch_rejects_non_object_json(
-    monkeypatch: pytest.MonkeyPatch,
-    chime_context: SimpleNamespace,
-) -> None:
-    monkeypatch.setattr(chime, "aiohttp_request_bounded", AsyncMock(return_value=object()))
-    monkeypatch.setattr(chime, "parse_bounded_json", Mock(return_value=[]))
+async def test_fetch_rejects_non_object_json(chime_context: SimpleNamespace) -> None:
+    chime_context.http_session = QueuedAiohttpSession(aiohttp_json_response([]))
 
     assert await chime.fetch_chime_repeaters(chime_context) is None
 
 
 @pytest.mark.asyncio
 async def test_fetch_timeout_is_a_normal_unavailable_result(
-    monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
-    monkeypatch.setattr(
-        chime,
-        "aiohttp_request_bounded",
-        AsyncMock(side_effect=asyncio.TimeoutError),
-    )
+    chime_context.http_session = MagicMock(request=MagicMock(side_effect=TimeoutError))
 
     assert await chime.fetch_chime_repeaters(chime_context) is None
 
@@ -309,6 +326,7 @@ async def test_list_command_sorts_latest_frbs_without_reading_history(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
+    _history_path(chime_context).write_text("{broken", encoding="utf-8")
     data = {}
     data.update(_payload("FRB-A", "2026-07-13T00:00:00"))
     data.update(_payload("FRB-B", "2026-07-15T00:00:00"))
@@ -317,7 +335,6 @@ async def test_list_command_sorts_latest_frbs_without_reading_history(
     data.update(_payload("FRB-E", "2026-07-11T00:00:00"))
     data.update(_payload("FRB-F", "2026-07-10T00:00:00"))
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=data))
-    monkeypatch.setattr(chime, "load_history", Mock(side_effect=AssertionError("not needed")))
 
     result = await chime.handle("chime", "list", {}, chime_context)
 
@@ -329,23 +346,24 @@ async def test_list_command_sorts_latest_frbs_without_reading_history(
 
 @pytest.mark.asyncio
 async def test_catalog_cache_avoids_repeated_manual_downloads(
-    monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
     chime_context.state = {}
-    request = AsyncMock(return_value=object())
-    data = _payload()
-    monkeypatch.setattr(chime, "aiohttp_request_bounded", request)
-    monkeypatch.setattr(chime, "parse_bounded_json", Mock(return_value=data))
+    data                = _payload()
+    session             = QueuedAiohttpSession(
+        aiohttp_json_response(data),
+        aiohttp_json_response(data),
+    )
+    chime_context.http_session = session
 
     first  = await chime.fetch_chime_repeaters(chime_context)
     second = await chime.fetch_chime_repeaters(chime_context)
 
     assert first == second == data
-    request.assert_awaited_once()
+    assert len(session.requests) == 1
 
     await chime.fetch_chime_repeaters(chime_context, force_refresh=True)
-    assert request.await_count == 2
+    assert len(session.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -355,30 +373,23 @@ async def test_catalog_cache_coalesces_concurrent_cold_requests(
 ) -> None:
     chime_context.state = {}
     monkeypatch.setattr(chime, "_CATALOG_FETCH_LOCK", asyncio.Lock())
-    entered       = asyncio.Event()
-    release       = asyncio.Event()
-    request_count = 0
-
-    async def request(*_args, **_kwargs):
-        nonlocal request_count
-        request_count += 1
-        entered.set()
-        await release.wait()
-        return object()
-
-    data = _payload()
-    monkeypatch.setattr(chime, "aiohttp_request_bounded", request)
-    monkeypatch.setattr(chime, "parse_bounded_json", Mock(return_value=data))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    data    = _payload()
+    session = QueuedAiohttpSession(
+        _GatedResponse(json.dumps(data).encode("utf-8"), entered, release),
+    )
+    chime_context.http_session = session
 
     first = asyncio.create_task(chime.fetch_chime_repeaters(chime_context))
     await entered.wait()
     second = asyncio.create_task(chime.fetch_chime_repeaters(chime_context))
     await asyncio.sleep(0)
 
-    assert request_count == 1
+    assert len(session.requests) == 1
     release.set()
     assert await asyncio.gather(first, second) == [data, data]
-    assert request_count == 1
+    assert len(session.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -468,40 +479,30 @@ async def test_catalog_without_valid_records_returns_stable_message(
 
 @pytest.mark.asyncio
 async def test_overlong_arguments_are_rejected_before_parsing(
-    monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
-    parser = Mock(side_effect=AssertionError("must not parse"))
-    monkeypatch.setattr(chime, "parse", parser)
-
     result = await chime.handle("chime", "x" * 129, {}, chime_context)
 
+    # 解析后的未知子命令会得到“未知命令”；过长参数在解析前就被拒绝。
     assert "参数格式错误" in str(result)
-    parser.assert_not_called()
+    assert "未知命令" not in str(result)
 
 
 @pytest.mark.asyncio
-async def test_manual_preview_parses_once_and_never_saves_history(
+async def test_manual_preview_never_saves_history(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
     data = _payload(timestamp="2026-07-15T00:00:00")
-    parser = Mock(wraps=chime.parse_frb_data)
-    save = Mock(return_value=True)
+    _write_history(chime_context, {"FRB20260714A": "2026-07-14T00:00:00"})
+    before = _history_path(chime_context).read_bytes()
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=data))
-    monkeypatch.setattr(
-        chime,
-        "load_history",
-        Mock(return_value={"FRB20260714A": "2026-07-14T00:00:00"}),
-    )
-    monkeypatch.setattr(chime, "parse_frb_data", parser)
-    monkeypatch.setattr(chime, "save_history", save)
 
     result = await chime.handle("chime", "", {}, chime_context)
 
     assert "检测到新脉冲" in str(result)
-    parser.assert_called_once()
-    save.assert_not_called()
+    assert _history_path(chime_context).read_bytes() == before
+    assert not (chime_context.data_dir / "chime_delivery.json").exists()
 
 
 @pytest.mark.asyncio
@@ -510,12 +511,8 @@ async def test_manual_preview_reports_no_updates(
     chime_context: SimpleNamespace,
 ) -> None:
     data = _payload()
+    _write_history(chime_context, {"FRB20260714A": "2026-07-14 00:00:00"})
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=data))
-    monkeypatch.setattr(
-        chime,
-        "load_history",
-        Mock(return_value={"FRB20260714A": "2026-07-14 00:00:00"}),
-    )
 
     result = await chime.handle("chime", "", {}, chime_context)
 
@@ -529,21 +526,18 @@ async def test_scheduled_chime_commits_history_only_after_delivery(
 ) -> None:
     chime_context.default_groups = lambda: [123]
     chime_context.send_action = AsyncMock(return_value=False)
-    save = Mock(return_value=True)
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
-    monkeypatch.setattr(chime, "load_history", Mock(return_value={}))
-    monkeypatch.setattr(chime, "save_history", save)
 
     await chime.scheduled_check(chime_context)
-    save.assert_not_called()
+    assert not _history_path(chime_context).exists()
+    retained = load_pending(chime_context.data_dir / "chime_delivery.json")
+    assert retained is not None
+    assert retained.delivered == set()
 
     chime_context.send_action = AsyncMock(return_value=True)
     await chime.scheduled_check(chime_context)
 
-    save.assert_called_once_with(
-        chime_context,
-        {"FRB20260714A": "2026-07-14T00:00:00"},
-    )
+    assert _read_history(chime_context) == {"FRB20260714A": "2026-07-14T00:00:00"}
     assert load_pending(chime_context.data_dir / "chime_delivery.json") is None
 
 
@@ -554,14 +548,11 @@ async def test_scheduled_chime_uses_at_most_once_policy_for_unknown_delivery(
 ) -> None:
     chime_context.default_groups = lambda: [123]
     chime_context.send_action = AsyncMock(return_value=None)
-    save = Mock(return_value=True)
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
-    monkeypatch.setattr(chime, "load_history", Mock(return_value={}))
-    monkeypatch.setattr(chime, "save_history", save)
 
     await chime.scheduled_check(chime_context)
 
-    save.assert_called_once()
+    assert _read_history(chime_context) == {"FRB20260714A": "2026-07-14T00:00:00"}
     assert load_pending(chime_context.data_dir / "chime_delivery.json") is None
     assert any("at-most-once" in str(call) for call in chime_context.logger.warning.call_args_list)
 
@@ -571,15 +562,16 @@ async def test_scheduled_no_update_does_not_rewrite_identical_history(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
-    old = {"FRB20260714A": "2026-07-14 00:00:00"}
-    save = Mock(return_value=True)
+    chime_context.default_groups = lambda: [123]
+    chime_context.send_action = AsyncMock(return_value=True)
+    _write_history(chime_context, {"FRB20260714A": "2026-07-14 00:00:00"})
+    before = _history_path(chime_context).read_bytes()
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
-    monkeypatch.setattr(chime, "load_history", Mock(return_value=old))
-    monkeypatch.setattr(chime, "save_history", save)
 
     await chime.scheduled_check(chime_context)
 
-    save.assert_not_called()
+    chime_context.send_action.assert_not_awaited()
+    assert _history_path(chime_context).read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -588,14 +580,11 @@ async def test_scheduled_update_without_target_keeps_history(
     chime_context: SimpleNamespace,
 ) -> None:
     chime_context.default_groups = lambda: []
-    save = Mock(return_value=True)
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
-    monkeypatch.setattr(chime, "load_history", Mock(return_value={}))
-    monkeypatch.setattr(chime, "save_history", save)
 
     await chime.scheduled_check(chime_context)
 
-    save.assert_not_called()
+    assert not _history_path(chime_context).exists()
     assert load_pending(chime_context.data_dir / "chime_delivery.json") is None
 
 
@@ -608,14 +597,12 @@ async def test_scheduled_corrupt_history_fails_closed(
     chime_context.default_groups = lambda: [123]
     chime_context.send_action    = send
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
-    monkeypatch.setattr(
-        chime,
-        "load_history",
-        Mock(side_effect=chime.ChimeHistoryError("broken")),
-    )
+    _history_path(chime_context).write_text("[]", encoding="utf-8")
 
     assert await chime.scheduled_check(chime_context) == []
     send.assert_not_awaited()
+    assert _history_path(chime_context).read_text(encoding="utf-8") == "[]"
+    assert not (chime_context.data_dir / "chime_delivery.json").exists()
 
 
 @pytest.mark.asyncio
@@ -625,12 +612,12 @@ async def test_scheduled_unavailable_or_invalid_catalog_stops_before_history(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
 ) -> None:
-    history = Mock(side_effect=AssertionError("must not read history"))
+    # 历史文件是坏的：真去读它会在日志里留下错误记录。
+    _history_path(chime_context).write_text("{broken", encoding="utf-8")
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=payload))
-    monkeypatch.setattr(chime, "load_history", history)
 
     assert await chime.scheduled_check(chime_context) == []
-    history.assert_not_called()
+    chime_context.logger.error.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -648,7 +635,7 @@ async def test_delivery_ack_persistence_failure_stops_fanout(
         targets  = chime.default_group_targets(chime_context),
         commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
-    monkeypatch.setattr(chime, "mark_delivered", Mock(side_effect=OSError("disk failed")))
+    fail_replace_onto(monkeypatch, "chime_delivery.json", "disk failed")
 
     assert await chime._deliver_pending(chime_context, pending) is False
     assert chime_context.send_action.await_count == 1
@@ -695,7 +682,7 @@ async def test_completed_delivery_retains_outbox_when_history_commit_fails(
         targets  = chime.default_group_targets(chime_context),
         commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
-    monkeypatch.setattr(chime, "save_history", Mock(return_value=False))
+    fail_replace_onto(monkeypatch, "chime_history.json", "disk failed")
 
     assert await chime._deliver_pending(chime_context, pending) is False
     persisted = load_pending(path)

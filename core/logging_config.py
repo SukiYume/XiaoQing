@@ -117,11 +117,9 @@ class LogManager:
         root_logger = logging.getLogger()
         root_logger.setLevel(self.level)
 
-        # 清除现有 handlers；pytest 的捕获 handler 只摘除不关闭
+        # 清除并关闭现有 handlers
         for handler in list(root_logger.handlers):
             root_logger.removeHandler(handler)
-            if handler.__class__.__module__.startswith("_pytest."):
-                continue
             for close_step in (handler.flush, handler.close):
                 try:
                     close_step()

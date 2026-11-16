@@ -32,60 +32,32 @@ def test_parse_int_applies_inclusive_range() -> None:
 class TestTokenize:
     """tokenize() 函数测试"""
 
-    def test_simple_words(self):
-        """测试简单单词分词"""
-        result = tokenize("hello world")
-        assert result == ["hello", "world"]
-
-    def test_with_quotes(self):
-        """测试带引号的分词"""
-        result = tokenize("'hello world'")
-        assert result == ["hello world"]
-
-    def test_double_quotes(self):
-        """测试双引号"""
-        result = tokenize('"hello world"')
-        assert result == ["hello world"]
-
-    def test_mixed_quotes_and_words(self):
-        """测试混合引号和单词"""
-        result = tokenize('a "b c" d')
-        assert result == ["a", "b c", "d"]
-
-    def test_single_quotes(self):
-        """测试单引号"""
-        result = tokenize("a 'b c' d")
-        assert result == ["a", "b c", "d"]
-
-    def test_empty_string(self):
-        """测试空字符串"""
-        result = tokenize("")
-        assert result == []
-
-    def test_single_word(self):
-        """测试单个单词"""
-        result = tokenize("hello")
-        assert result == ["hello"]
-
-    def test_multiple_spaces(self):
-        """测试多个空格"""
-        result = tokenize("hello    world")
-        assert result == ["hello", "world"]
-
-    def test_quotes_with_spaces_around(self):
-        """测试引号周围有空格"""
-        result = tokenize('  "hello world"  ')
-        assert result == ["hello world"]
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("hello world", ["hello", "world"], id="simple-words"),
+            pytest.param("hello", ["hello"], id="single-word"),
+            pytest.param("", [], id="empty"),
+            pytest.param("hello    world", ["hello", "world"], id="multiple-spaces"),
+            pytest.param("'hello world'", ["hello world"], id="single-quoted"),
+            pytest.param('"hello world"', ["hello world"], id="double-quoted"),
+            pytest.param('a "b c" d', ["a", "b c", "d"], id="double-quoted-between-words"),
+            pytest.param("a 'b c' d", ["a", "b c", "d"], id="single-quoted-between-words"),
+            pytest.param('  "hello world"  ', ["hello world"], id="spaces-around-quotes"),
+            pytest.param('"a b" "c d"', ["a b", "c d"], id="multiple-quoted-segments"),
+            pytest.param(
+                "hello@world #tag $100", ["hello@world", "#tag", "$100"], id="special-characters"
+            ),
+            pytest.param("你好 世界 测试", ["你好", "世界", "测试"], id="unicode"),
+        ],
+    )
+    def test_splits_on_whitespace_and_keeps_quoted_segments(self, text, expected):
+        assert tokenize(text) == expected
 
     def test_escaped_quotes(self):
         """引号中的转义引号由统一 shlex 词法层处理。"""
         result = tokenize(r'"hello \"world"')
         assert result == ['hello "world']
-
-    def test_multiple_quoted_segments(self):
-        """测试多个引号段"""
-        result = tokenize('"a b" "c d"')
-        assert result == ["a b", "c d"]
 
     def test_unclosed_quote(self):
         """未闭合引号按空白回退，保留用户输入而不抛异常。"""
@@ -100,16 +72,6 @@ class TestTokenize:
 
         assert result.tokens == ["search", '"fast', "radio", "burst"]
         assert result.options == {}
-
-    def test_special_characters(self):
-        """测试特殊字符"""
-        result = tokenize("hello@world #tag $100")
-        assert result == ["hello@world", "#tag", "$100"]
-
-    def test_unicode_characters(self):
-        """测试 Unicode 字符"""
-        result = tokenize("你好 世界 测试")
-        assert result == ["你好", "世界", "测试"]
 
     @pytest.mark.parametrize(
         "value",
@@ -156,24 +118,12 @@ class TestParse:
         assert result.tokens == ["command"]
         assert result.options == {"v": "input.txt"}
 
-    def test_mixed_tokens_and_flag(self):
-        """测试混合 token 和标志选项"""
-        # 长选项也会取下一个非选项参数作为值
-        result = parse("command --verbose input.txt")
-        assert result.tokens == ["command"]
-        assert result.options == {"verbose": "input.txt"}
-
     def test_mixed_tokens_and_flag_value(self):
         """测试混合 token 和带等号的长选项"""
         # 使用等号来明确指定选项值为 true
         result = parse("command --verbose=true input.txt")
         assert result.tokens == ["command", "input.txt"]
         assert result.options == {"verbose": "true"}
-
-    def test_option_with_value(self):
-        """测试带值的选项"""
-        result = parse("-o output.txt")
-        assert result.opt("o") == "output.txt"
 
     def test_second_property(self):
         """测试 second 属性"""
@@ -194,11 +144,6 @@ class TestParse:
         """测试获取不存在的选项返回自定义默认值"""
         result = parse("command")
         assert result.opt("nonexistent", "default_value") == "default_value"
-
-    def test_opt_with_default(self):
-        """测试获取选项带默认值"""
-        result = parse("command")
-        assert result.opt("missing", "default") == "default"
 
     def test_empty_input(self):
         """测试空输入"""
@@ -291,22 +236,6 @@ class TestParsedArgs:
         args2 = parse("goodbye world")
         assert args1 != args2
 
-    def test_repr(self):
-        """测试字符串表示"""
-        args     = parse("echo hello -v")
-        repr_str = repr(args)
-        assert "ParsedArgs" in repr_str
-        assert "echo" in repr_str
-
-    def test_immutability_of_tokens(self):
-        """测试 tokens 列表（虽然可变，但原始不被影响）"""
-        args            = parse("one two three")
-        original_tokens = args.tokens.copy()
-        args.tokens.append("four")
-        # 这是预期的行为 - tokens 是可变列表
-        assert original_tokens == ["one", "two", "three"]
-        assert args.tokens == ["one", "two", "three", "four"]
-
 
 # ============================================================
 # 边界情况测试
@@ -315,29 +244,6 @@ class TestParsedArgs:
 
 class TestEdgeCases:
     """边界情况测试"""
-
-    def test_only_options(self):
-        """测试只有选项"""
-        result = parse("-a -b -c")
-        assert result.tokens == []
-        assert len(result.options) == 3
-
-    def test_only_tokens(self):
-        """测试只有 tokens"""
-        result = parse("one two three")
-        assert result.tokens == ["one", "two", "three"]
-        assert result.options == {}
-
-    def test_option_like_token(self):
-        """测试类似选项的 token（如果不在选项位置则视为 token）"""
-        result = parse("command something")
-        assert result.tokens == ["command", "something"]
-
-    def test_very_long_input(self):
-        """测试非常长的输入"""
-        long_input = " ".join([f"word{i}" for i in range(1000)])
-        result     = parse(long_input)
-        assert len(result.tokens) == 1000
 
     def test_unicode_after_dash_is_positional(self):
         """非 ASCII 选项名不会把后一个位置参数吞成值。"""

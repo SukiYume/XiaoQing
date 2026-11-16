@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import tempfile
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
 
 from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.services import database_clock
@@ -22,12 +23,9 @@ BUYER_ID  = "buyer"
 FROZEN_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
 
 
-@pytest.fixture
-def trade_db(monkeypatch):
-    monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
-        db_path = file.name
-    database     = Database(db_path)
+def _seed_listing(database: Database) -> int:
+    """卖家挂出 3 个苹果，返回挂单 ID。"""
+
     users        = UserService(database)
     seller       = users.get_or_create_user(SELLER_ID, GROUP_ID)
     buyer        = users.get_or_create_user(BUYER_ID, GROUP_ID)
@@ -45,17 +43,29 @@ def trade_db(monkeypatch):
         expire_hours = 72,
         max_listings = 5,
     )
-    listing_id = int(
-        database._get_connection().execute("SELECT id FROM trade_listings").fetchone()["id"]
-    )
+    return int(database._get_connection().execute("SELECT id FROM trade_listings").fetchone()["id"])
+
+
+@pytest.fixture
+def trade_db(monkeypatch, qingpet_db: Database):
+    monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
+    return qingpet_db, _seed_listing(qingpet_db)
+
+
+@pytest_asyncio.fixture
+async def trade_runtime(monkeypatch, tmp_path: Path):
+    """经插件自己的 init 打开真实数据库；测试另开一个句柄读写同一个库文件。"""
+
+    monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
+    context = SimpleNamespace(data_dir=tmp_path, logger=logging.getLogger("test.qingpet"))
+    await qingpet_main.init(context)
+    assert qingpet_main._db_instance is not None
+    database = Database(str(tmp_path / "qingpet" / "qingpet.db"))
     try:
-        yield database, db_path, listing_id
+        yield context, database, _seed_listing(database)
     finally:
         database.cleanup()
-        os.unlink(db_path)
-        backup_path = db_path + ".pre-migration.bak"
-        if os.path.exists(backup_path):
-            os.unlink(backup_path)
+        await qingpet_main.cleanup(context)
 
 
 def _set_expiry(database: Database, listing_id: int, expires_at: datetime) -> None:
@@ -98,7 +108,7 @@ def _asset_state(database: Database, listing_id: int) -> dict:
 
 
 def test_saved_listing_id_cannot_purchase_at_expiry_and_refunds_once(trade_db):
-    database, _db_path, listing_id = trade_db
+    database, listing_id = trade_db
     _set_expiry(database, listing_id, FROZEN_NOW)
 
     success, message = database.purchase_trade_listing(listing_id, BUYER_ID, GROUP_ID, 0.05)
@@ -120,9 +130,9 @@ def test_saved_listing_id_cannot_purchase_at_expiry_and_refunds_once(trade_db):
 
 
 def test_exact_expiry_purchase_cancel_and_settlement_have_one_terminal_state(trade_db):
-    database, db_path, listing_id = trade_db
+    database, listing_id = trade_db
     _set_expiry(database, listing_id, FROZEN_NOW)
-    contenders = [Database(db_path) for _ in range(3)]
+    contenders = [Database(database.db_path) for _ in range(3)]
     barrier    = threading.Barrier(3)
 
     def purchase():
@@ -167,10 +177,10 @@ def test_exact_expiry_purchase_cancel_and_settlement_have_one_terminal_state(tra
 
 
 def test_unexpired_purchase_and_cancel_claim_only_one_terminal_state(trade_db):
-    database, db_path, listing_id = trade_db
+    database, listing_id = trade_db
     _set_expiry(database, listing_id, FROZEN_NOW + timedelta(seconds=1))
-    purchase_db = Database(db_path)
-    cancel_db   = Database(db_path)
+    purchase_db = Database(database.db_path)
+    cancel_db   = Database(database.db_path)
     barrier     = threading.Barrier(2)
 
     def purchase():
@@ -214,19 +224,23 @@ def test_unexpired_purchase_and_cancel_claim_only_one_terminal_state(trade_db):
         }
 
 
-def test_trade_expiry_has_independent_scheduled_handler(monkeypatch):
-    calls = 0
+@pytest.mark.asyncio
+async def test_trade_expiry_has_independent_scheduled_handler(trade_runtime):
+    context, database, listing_id = trade_runtime
+    _set_expiry(database, listing_id, FROZEN_NOW)
 
-    class FakeDatabase:
-        def settle_expired_trade_listings(self):
-            nonlocal calls
-            calls += 1
-            return 2
+    assert await qingpet_main.scheduled_trade_expiry(context) is None
 
-    monkeypatch.setattr(qingpet_main, "_db_instance", FakeDatabase())
-
-    assert asyncio.run(qingpet_main.scheduled_trade_expiry(None)) is None
-    assert calls == 1
+    assert _raw_listing(database, listing_id)["status"] == "expired"
+    assert _asset_state(database, listing_id) == {
+        "seller_coins": 100,
+        "buyer_coins" : 200,
+        "seller_items": {"apple": 3},
+        "buyer_items" : {},
+        "ledger_count": 1,
+    }
+    assert await qingpet_main.scheduled_trade_expiry(context) is None
+    assert _asset_state(database, listing_id)["ledger_count"] == 1
     root = REPOSITORY_ROOT
     manifest = json.loads((root / "plugins/qingpet/plugin.json").read_text(encoding="utf-8"))
     jobs = {job["id"]: job for job in manifest["schedule"]}

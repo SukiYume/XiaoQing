@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Mapping
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 
@@ -84,12 +84,6 @@ def _queue_success(
             "data": {"desc": description, "times": times, "list": rewards},
         },
     )
-
-
-def test_help_describes_current_contract() -> None:
-    help_text = signin._HELP_TEXT
-    assert "/signin yingshi" in help_text
-    assert "plugins.signin.yingshijufeng" in help_text
 
 
 @pytest.mark.asyncio
@@ -403,16 +397,15 @@ async def test_token_uses_authorization_header_not_query(context: _Context) -> N
 
 
 @pytest.mark.asyncio
-async def test_scheduled_entry_delegates_to_signin(
-    monkeypatch: pytest.MonkeyPatch,
-    context: _Context,
-) -> None:
-    expected = [{"type": "text", "data": {"text": "scheduled"}}]
-    sign = AsyncMock(return_value=expected)
-    monkeypatch.setattr(signin.yingshi, "yingshi_sign", sign)
+async def test_scheduled_entry_runs_the_signin_flow(context: _Context) -> None:
+    _queue_success(context)
 
-    assert await signin.scheduled_yingshi(context) == expected
-    sign.assert_awaited_once_with(context)
+    result = await signin.scheduled_yingshi(context)
+
+    text = text_segments_text(result)
+    assert "✅ 影视签到" in text
+    assert "累计签到: 5 次" in text
+    assert len(context.raw_session.requests) == 2
 
 
 def test_get_config_accepts_frozen_and_malformed_mappings(context: _Context) -> None:
@@ -439,15 +432,8 @@ def test_get_config_accepts_frozen_and_malformed_mappings(context: _Context) -> 
 
 
 @pytest.mark.asyncio
-async def test_unexpected_error_uses_public_error_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-    context: _Context,
-) -> None:
-    monkeypatch.setattr(
-        yingshi,
-        "_get_checkin_id",
-        AsyncMock(side_effect=RuntimeError("private upstream detail")),
-    )
+async def test_unexpected_error_uses_public_error_boundary(context: _Context) -> None:
+    context.raw_session.request = Mock(side_effect=RuntimeError("private upstream detail"))
 
     result = await yingshi.yingshi_sign(context)
 

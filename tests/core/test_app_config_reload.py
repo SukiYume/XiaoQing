@@ -14,17 +14,16 @@ import tests.helpers.app_test_support as _fixture_support
 from tests.helpers.app_test_support import (
     Mapping,
     XiaoQingApp,
-    _plugin_context_for,
+    plugin_context_for,
 )
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root = _fixture_support.temp_app_root
 
 
 @pytest.mark.unit
 def test_manual_reload_notifies_pendo_config_subscription(temp_app_root: Path):
     app     = XiaoQingApp(temp_app_root)
-    context = _plugin_context_for(
+    context = plugin_context_for(
         app,
         "pendo",
         manifest_capabilities=frozenset({"config_subscription"}),
@@ -47,7 +46,7 @@ def test_manual_reload_notifies_pendo_config_subscription(temp_app_root: Path):
 @pytest.mark.unit
 async def test_pendo_subscription_preserves_each_fast_revision_snapshot(temp_app_root: Path):
     app     = XiaoQingApp(temp_app_root)
-    context = _plugin_context_for(
+    context = plugin_context_for(
         app,
         "pendo",
         manifest_capabilities=frozenset({"config_subscription"}),
@@ -208,19 +207,17 @@ def test_app_apply_config_resizes_dispatcher_limiter_without_replacing_it(
 
 
 @pytest.mark.unit
-def test_apply_dispatcher_concurrency_replaces_a_non_adjustable_limiter(temp_app_root: Path):
-    """启动和热更新共用同一个调容入口：不是可调 limiter 的换成可调的，并记下当前上限。"""
-    from core.dispatcher import AdjustableSemaphore
+def test_apply_dispatcher_concurrency_resizes_the_limiter_in_place(temp_app_root: Path):
+    """启动和热更新共用同一个调容入口：原地调整 limiter 上限，并记下当前上限。"""
 
-    app                      = XiaoQingApp(temp_app_root)
-    app.dispatcher.semaphore = asyncio.Semaphore(1)
+    app     = XiaoQingApp(temp_app_root)
+    limiter = app.dispatcher.semaphore
     app._apply_dispatcher_concurrency(7)
 
-    assert isinstance(app.dispatcher.semaphore, AdjustableSemaphore)
-    assert app.dispatcher.semaphore.capacity == 7
+    assert app.dispatcher.semaphore is limiter
+    assert limiter.capacity == 7
     assert app._dispatcher_concurrency == 7
 
-    limiter = app.dispatcher.semaphore
     app._apply_dispatcher_concurrency(3)
 
     assert app.dispatcher.semaphore is limiter

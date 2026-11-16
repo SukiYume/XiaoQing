@@ -24,6 +24,7 @@ from plugins.xiaoqing_agent.loop import (
 from plugins.xiaoqing_agent.shells import resolve_shell
 from plugins.xiaoqing_agent.tasks import AgentTask, ChatRef
 from plugins.xiaoqing_agent.tools import Tool, ToolEnv, ToolResult, build_tools
+from tests.helpers.asyncio_tools import run_with_subprocess_loop
 from tests.helpers.xiaoqing_agent_test_support import (
     ADMIN_ID,
     FakeAgentContext,
@@ -441,18 +442,10 @@ def test_compaction_retains_command_help_and_delivered_answers() -> None:
     assert json.loads(messages[1]["tool_calls"][0]["function"]["arguments"])["text"] == answer
 
 
-@pytest.mark.asyncio
-async def test_transcript_keeps_full_messages_while_the_model_sees_compacted_ones(
+def test_transcript_keeps_full_messages_while_the_model_sees_compacted_ones(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    big = "y" * 15_000
-
-    async def output(_env, _argv, _timeout):
-        return ToolResult(big)
-
-    # 本例验证上下文压缩；真实子进程由使用 Proactor 循环的工具测试覆盖。
-    monkeypatch.setattr("plugins.xiaoqing_agent.tools._run_in_workspace", output)
+    big   = "y" * 15_000
     steps = [
         ai_response("", [tool_call("run_python", {"code": f"print('{big}')"}, f"c{index}")])
         for index in range(6)
@@ -463,12 +456,17 @@ async def test_transcript_keeps_full_messages_while_the_model_sees_compacted_one
         config=AgentConfig(enabled=True, max_tool_output_chars=40_000),
     )
     transcript = list(messages)
-    outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
 
-    assert outcome.text == "好了"
+    async def scenario() -> None:
+        outcome = await run_agent_loop(env, tools, messages, transcript=transcript)
+        assert outcome.text == "好了"
+
+    run_with_subprocess_loop(scenario)
+
     assert len(transcript) == len(messages)
     sent_last = ai.calls[-1][1]
     assert any("较早调用的参数已省略" in json.dumps(item, ensure_ascii=False) for item in sent_last)
+    assert any(big in str(item.get("content")) for item in transcript if item["role"] == "tool")
     assert all(
         big in call["function"]["arguments"]
         for item in transcript

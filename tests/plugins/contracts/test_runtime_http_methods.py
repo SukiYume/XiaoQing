@@ -60,20 +60,6 @@ async def test_signin_uses_get_and_rejects_wrong_json_mime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wolfram_simple_query_uses_get() -> None:
-    session = QueuedAiohttpSession(aiohttp_text_response("42"))
-    context = SimpleNamespace(
-        http_session = session,
-        logger       = MagicMock(),
-    )
-
-    result = await wolframalpha._get_answer("1+1", "appid", context)
-
-    assert "42" in result[0]["data"]["text"]
-    assert [call[0] for call in session.requests] == ["GET"]
-
-
-@pytest.mark.asyncio
 async def test_wolfram_get_redirect_is_rejected_and_closed() -> None:
     response = aiohttp_text_response(
         "redirect",

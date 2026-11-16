@@ -51,9 +51,6 @@ def schedule_codex_summary(
     if not links:
         logger.info("skip Codex arXiv summary enqueue for %s: no links", date)
         return None
-    if not hasattr(context, "send_action"):
-        logger.debug("skip Codex arXiv summary enqueue: context has no send_action")
-        return None
 
     async def _runner() -> None:
         try:
@@ -87,13 +84,10 @@ def schedule_codex_summary(
 
     try:
         task = asyncio.create_task(_runner())
-        # 真实插件上下文会提供代际 state；轻量测试替身或旧嵌入方没有该字段时，
-        # 任务仍可执行，只是不登记到卸载期可见的后台任务集合。
-        state = getattr(context, "state", None)
-        if isinstance(state, dict):
-            tasks = state.setdefault("arxiv_background_tasks", set())
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
+        # 登记到插件代内的后台任务集合，卸载时可见、可等待。
+        tasks = context.state.setdefault("arxiv_background_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
         return task
     except Exception as exc:
         public_error_message(

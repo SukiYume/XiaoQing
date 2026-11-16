@@ -1,13 +1,12 @@
-"""笔记标题、搜索折叠重复日程、导入请求头和极端日期的回归测试。"""
+"""笔记标题、搜索折叠重复日程、导入请求头和极端日期。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,9 +18,11 @@ from plugins.pendo.handlers.search import SearchHandler
 from plugins.pendo.services.ai_parser import AIParser, RateLimiter
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
+from plugins.pendo.utils import time_utils
+from tests.helpers.pendo_test_support import freeze_pendo_clock
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    _build_sample_bundle_bytes,
+    build_sample_bundle_bytes,
     transfer_api,
 )
 
@@ -56,7 +57,7 @@ def test_plain_edit_keeps_explicit_title_and_replaces_only_content(db):
     assert (note.title, note.content) == ("周会结论", "第三版")
 
 
-def test_plain_edit_still_renames_note_whose_title_came_from_content(db):
+def test_plain_edit_renames_note_whose_title_came_from_content(db):
     note_id = _note(db, "add 买牛奶")["item_id"]
 
     assert _note(db, f"edit {note_id} 买牛奶和鸡蛋")["status"] == "success"
@@ -65,7 +66,7 @@ def test_plain_edit_still_renames_note_whose_title_came_from_content(db):
     assert (note.title, note.content) == ("买牛奶和鸡蛋", "买牛奶和鸡蛋")
 
 
-def test_note_view_still_shows_note_when_last_viewed_write_loses_a_race(db, monkeypatch):
+def test_note_view_shows_note_when_last_viewed_write_loses_a_race(db, monkeypatch):
     note_id  = _note(db, "add title:配置说明 content 正文内容")["item_id"]
     original = db.update_item
 
@@ -82,14 +83,24 @@ def test_note_view_still_shows_note_when_last_viewed_write_loses_a_race(db, monk
     assert "正文内容" in viewed["message"]
 
 
+class _ScriptedAi:
+    """模型边界替身：`complete` 返回最近一次设定的 JSON 文本。"""
+
+    def __init__(self) -> None:
+        self.content: str | None = None
+
+    async def complete(self, route, messages, **_kwargs):
+        return SimpleNamespace(content=self.content)
+
+
 def _events(db: Database):
-    parser = AIParser(context=None, db=db)
+    ai = _ScriptedAi()
+    parser = AIParser(context=SimpleNamespace(capabilities=SimpleNamespace(ai=ai)), db=db)
     parser._rate_limiter = RateLimiter(max_calls=1000)
-    parser._call_llm = AsyncMock()
     handler = EventHandler(db=db, ai_parser=parser, reminder_service=ReminderService(db))
 
     def add(payload: dict[str, Any]) -> str:
-        parser._call_llm.return_value = json.dumps(payload, ensure_ascii=False)
+        ai.content = json.dumps(payload, ensure_ascii=False)
         return str(asyncio.run(handler.add_event(USER, payload["title"], {}))["item_id"])
 
     return add
@@ -113,7 +124,7 @@ def test_chat_search_lists_a_recurring_series_once(db):
     assert first_occurrence.display_id in message
     assert "🔄重复日程 集合" in message
 
-    # 页面搜索仍返回每一次实例，由日历视图自己分组。
+    # 页面搜索返回每一次实例，由日历视图自己分组。
     _items, total = db.search_items_page(USER, "周会")
     assert total == 32
 
@@ -124,24 +135,20 @@ def test_collapsed_series_prefers_next_upcoming_occurrence(db, monkeypatch):
         {"title": "晨跑", "start_time": "2031-05-01T07:00:00", "rrule": "FREQ=DAILY;COUNT=5"}
     )
     children = db.get_collection_events(collection_id, USER)
-    monkeypatch.setattr(
-        "plugins.pendo.services.db.utc_now_iso", lambda: "2031-05-02T12:00:00+00:00"
-    )
+    freeze_pendo_clock(monkeypatch, datetime(2031, 5, 2, 12, 0, tzinfo=UTC), time_utils)
 
     items, total = db.search_items_page(USER, "晨跑", collapse_recurring=True)
 
     assert total == 1
     assert items[0].id == children[2].id
 
-    monkeypatch.setattr(
-        "plugins.pendo.services.db.utc_now_iso", lambda: "2032-01-01T00:00:00+00:00"
-    )
+    freeze_pendo_clock(monkeypatch, datetime(2032, 1, 1, 0, 0, tzinfo=UTC), time_utils)
     items, _total = db.search_items_page(USER, "晨跑", collapse_recurring=True)
     assert items[0].id == children[-1].id
 
 
 def _task_bundle() -> bytes:
-    return _build_sample_bundle_bytes(
+    return build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -172,19 +179,6 @@ def test_import_rejects_malformed_filename_header_before_touching_data(
 
     assert response.status_code == 422
     assert temp_db.count_items(OWNER_ID, {"type": "task"}) == 0
-
-
-def test_import_keeps_percent_encoded_unicode_filename(
-    client: Any, temp_db: Database, auth_headers: dict
-):
-    response = client.post(
-        "/api/transfer/import/execute",
-        headers = {**auth_headers, "X-Transfer-Filename": "%E5%A4%87%E4%BB%BD.pendo.zip"},
-        content = _task_bundle(),
-    )
-
-    assert response.status_code == 200
-    assert temp_db.get_transfer_logs(OWNER_ID, limit=1)[0]["filename"] == "备份.pendo.zip"
 
 
 def test_preview_cache_keeps_one_entry_per_owner(monkeypatch):

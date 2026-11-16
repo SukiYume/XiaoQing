@@ -11,7 +11,7 @@ from tests.helpers.http import (
     aiohttp_json_response,
     aiohttp_text_response,
 )
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeFetcher,
     bili_reply,
     bili_video,

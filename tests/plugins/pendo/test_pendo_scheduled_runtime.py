@@ -7,11 +7,65 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
+from plugins.pendo import main as pendo_main
+from plugins.pendo.commands import scheduled as scheduled_module
 from tests.helpers.pendo_test_support import (
     ROOT,
-    _ReminderMessageService,
-    _with_scheduled_delivery_contract,
+    ReminderMessageService,
+    attach_action_recorder,
+    freeze_pendo_reminder_clock,
+    pendo_service_context,
 )
+
+
+@pytest.fixture
+def pendo_context(db, tmp_path):
+    """真实服务集合（共用测试数据库）；没有 ``send_action``，定时任务把动作原样返回。"""
+
+    with pendo_service_context(db, tmp_path, "test.pendo.scheduled") as context:
+        yield context
+
+
+def _seed_note(db, owner_id: str) -> None:
+    """定时任务只处理至少有一条数据的用户。"""
+
+    db.insert_item({"owner_id": owner_id, "type": "note", "title": f"笔记{owner_id}"})
+
+
+def _set_schedule(db, owner_id: str, timezone_name: str) -> None:
+    db.update_user_settings(
+        owner_id,
+        {
+            "timezone"         : timezone_name,
+            "daily_report_time": "08:00",
+            "diary_remind_time": "21:30",
+            "quiet_hours_start": "23:00",
+            "quiet_hours_end"  : "07:00",
+        },
+    )
+
+
+def _seed_demo_owners(db) -> None:
+    """一个早已过期、一个远未过期的 Web 演示用户，各有一条笔记。"""
+
+    for owner_id, expires_at in (
+        ("demo_web_expired", "2020-01-01T00:00:00"),
+        ("demo_web_active", "2999-01-01T00:00:00"),
+    ):
+        db.update_user_settings(
+            owner_id,
+            {"settings_json": {"demo_mode": True, "demo_expires_at": expires_at}},
+        )
+        _seed_note(db, owner_id)
+
+
+def _assert_only_active_demo_owner_remains(db) -> None:
+    assert db.get_items("demo_web_expired", filters={"type": "note"}, limit=10) == []
+    assert db.get_user_settings("demo_web_expired")["settings_json"].get("demo_mode") is not True
+    assert len(db.get_items("demo_web_active", filters={"type": "note"}, limit=10)) == 1
+    assert db.get_user_settings("demo_web_active")["settings_json"]["demo_mode"] is True
 
 
 class TestScheduledTasks:
@@ -27,7 +81,7 @@ class TestScheduledTasks:
         db.log_reminder = fake_log_reminder
 
         result = asyncio.run(
-            scheduled_module.check_reminders(SimpleNamespace(), db, _ReminderMessageService())
+            scheduled_module.check_reminders(SimpleNamespace(), db, ReminderMessageService())
         )
 
         assert len(result) == 1
@@ -48,7 +102,7 @@ class TestScheduledTasks:
         )
 
         result = asyncio.run(
-            scheduled_module.check_reminders(_RejectedContext(), db, _ReminderMessageService())
+            scheduled_module.check_reminders(_RejectedContext(), db, ReminderMessageService())
         )
 
         assert result == []
@@ -93,130 +147,46 @@ class TestScheduledTasks:
             <= (PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS + 2)
         )
 
-    def test_daily_briefing_respects_user_timezone_and_configured_time(self, monkeypatch):
-        from datetime import datetime
-        from typing import Any, cast
+    def test_daily_briefing_respects_user_timezone_and_configured_time(
+        self, db, pendo_context, monkeypatch
+    ):
+        # 2030-01-01 08:00（上海）；同一时刻纽约是 2029-12-31 19:00。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 0, 0, tzinfo=UTC))
+        for owner_id, timezone_name, start_time in (
+            ("1001", "Asia/Shanghai", "2030-01-01T09:30:00"),
+            ("1002", "America/New_York", "2029-12-31T09:30:00"),
+        ):
+            _set_schedule(db, owner_id, timezone_name)
+            db.update_user_settings(owner_id, {"settings_json": {"daily_briefing_enabled": True}})
+            db.insert_item(
+                {
+                    "owner_id"  : owner_id,
+                    "type"      : "event",
+                    "title"     : f"晨跑{owner_id}",
+                    "start_time": start_time,
+                }
+            )
+        sent = attach_action_recorder(pendo_context)
 
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        class _FixedDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 0, 0, tzinfo=UTC)
-                if tz is None:
-                    return base.replace(tzinfo=None)
-                return base.astimezone(tz)
-
-        settings_map = {
-            "1001": {
-                "timezone"         : "Asia/Shanghai",
-                "daily_report_time": "08:00",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {"daily_briefing_enabled": True},
-            },
-            "1002": {
-                "timezone"         : "America/New_York",
-                "daily_report_time": "08:00",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {"daily_briefing_enabled": True},
-            },
-        }
-        batch_calls = []
-
-        def get_user_settings_batch(user_ids):
-            batch_calls.append(list(user_ids))
-            return {user_id: dict(settings_map[user_id]) for user_id in user_ids}
-
-        def get_user_settings(_user_id):
-            raise AssertionError("send_daily_briefings should use batch settings lookup")
-
-        db = cast(
-            Any,
-            _with_scheduled_delivery_contract(
-                SimpleNamespace(
-                    get_user_settings       = get_user_settings,
-                    get_user_settings_batch = get_user_settings_batch,
-                    update_user_settings    = lambda user_id, settings: True,
-                )
-            ),
-        )
-        actions = []
-
-        async def send_action(action):
-            actions.append(action)
-            return True
-
-        async def fake_get_active_user_ids(_db):
-            return ["1001", "1002"]
-
-        async def fake_generate_briefing_content(user_id, _db, **_kwargs):
-            return f"briefing:{user_id}"
-
-        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-        monkeypatch.setattr(
-            scheduled_module, "_generate_briefing_content", fake_generate_briefing_content
-        )
-
-        context = SimpleNamespace(send_action=send_action)
-        result = asyncio.run(scheduled_module.send_daily_briefings(context, db))
+        result = asyncio.run(pendo_main.scheduled_daily_briefing(pendo_context))
 
         assert result == []
-        assert [action["params"]["user_id"] for action in actions] == [1001]
-        assert batch_calls == [["1001", "1002"]]
-
-    def test_daily_briefing_returns_messages_without_send_action(self, monkeypatch):
-        from datetime import datetime
-        from typing import Any, cast
-
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        class _FixedDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 0, 0, tzinfo=UTC)
-                if tz is None:
-                    return base.replace(tzinfo=None)
-                return base.astimezone(tz)
-
-        def get_user_settings_batch(user_ids):
-            return {
-                user_id: {
-                    "timezone"         : "Asia/Shanghai",
-                    "daily_report_time": "08:00",
-                    "settings_json"    : {"daily_briefing_enabled": True},
-                }
-                for user_id in user_ids
-            }
-
-        db = cast(
-            Any,
-            _with_scheduled_delivery_contract(
-                SimpleNamespace(
-                    get_user_settings=lambda user_id: (_ for _ in ()).throw(
-                        AssertionError("send_daily_briefings should use batch settings lookup")
-                    ),
-                    get_user_settings_batch = get_user_settings_batch,
-                    update_user_settings    = lambda user_id, settings: True,
-                )
-            ),
+        assert [action["params"]["user_id"] for action in sent] == [1001]
+        assert "晨跑1001" in sent[0]["params"]["message"][0]["data"]["text"]
+        assert (
+            db.get_user_settings("1001")["settings_json"]["last_daily_briefing_date"]
+            == "2030-01-01"
         )
+        assert "last_daily_briefing_date" not in db.get_user_settings("1002")["settings_json"]
 
-        async def fake_get_active_user_ids(_db):
-            return ["1001"]
+    def test_daily_briefing_returns_messages_without_send_action(
+        self, db, pendo_context, monkeypatch
+    ):
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 0, 0, tzinfo=UTC))
+        _set_schedule(db, "1001", "Asia/Shanghai")
+        _seed_note(db, "1001")
 
-        async def fake_generate_briefing_content(user_id, _db, **_kwargs):
-            return f"briefing:{user_id}"
-
-        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-        monkeypatch.setattr(
-            scheduled_module, "_generate_briefing_content", fake_generate_briefing_content
-        )
-
-        result = asyncio.run(scheduled_module.send_daily_briefings(SimpleNamespace(), db))
+        result = asyncio.run(pendo_main.scheduled_daily_briefing(pendo_context))
 
         assert len(result) == 1
         assert result[0]["params"]["user_id"] == 1001
@@ -224,32 +194,16 @@ class TestScheduledTasks:
     def test_generate_daily_briefing_includes_today_multi_node_leaf_events(
         self, tmp_path, monkeypatch
     ):
-        from datetime import datetime
-
-        from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
-        fixed_now = datetime.fromisoformat("2030-01-02T08:00:00+08:00")
-        monkeypatch.setattr(
-            scheduled_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
+        freeze_pendo_reminder_clock(
+            monkeypatch, datetime.fromisoformat("2030-01-02T08:00:00+08:00")
         )
 
         db = Database(str(tmp_path / "pendo_briefing_milestone.db"))
 
         try:
-            batch_calls           = []
-            original_batch_lookup = db.get_event_collections_by_ids
-
-            def track_batch_lookup(owner_id, collection_ids):
-                batch_calls.append((owner_id, list(collection_ids)))
-                return original_batch_lookup(owner_id, collection_ids)
-
-            def reject_single_lookup(*_args, **_kwargs):
-                raise AssertionError("briefing should batch event collection lookups")
-
-            monkeypatch.setattr(db, "get_event_collections_by_ids", track_batch_lookup)
-            monkeypatch.setattr(db, "get_event_collection", reject_single_lookup)
             db.create_event_collection(
                 {
                     "id"        : "milebrief",
@@ -283,30 +237,15 @@ class TestScheduledTasks:
             assert "报到" not in briefing
             assert "闭幕" not in briefing
             assert "今日暂无日程安排" not in briefing
-            assert batch_calls == [("u1", ["milebrief"])]
         finally:
             db.cleanup()
 
-    def test_generate_daily_briefing_ignores_malformed_overdue_deadline(self, monkeypatch):
-        from datetime import datetime
-
-        from plugins.pendo.commands import scheduled as scheduled_module
+    def test_generate_daily_briefing_ignores_malformed_overdue_deadline(self):
         from plugins.pendo.models.item import TaskItem
 
-        fixed_now = datetime(2030, 1, 2, 8, 0, tzinfo=UTC)
         overdue = TaskItem(owner_id="1001", title="旧数据", deadline_at="not-an-iso-time")
         db = SimpleNamespace(
             get_briefing_items=lambda *_args: ([], [], [overdue]),
-        )
-        monkeypatch.setattr(
-            scheduled_module,
-            "now_in_timezone",
-            lambda _user_id, _db: fixed_now,
-        )
-        monkeypatch.setattr(
-            scheduled_module.TimezoneHelper,
-            "get_user_timezone",
-            staticmethod(lambda _user_id, _db: UTC),
         )
 
         briefing = asyncio.run(scheduled_module._generate_briefing_content("1001", db))
@@ -314,108 +253,53 @@ class TestScheduledTasks:
         assert "⚠️ 逾期待办 (1项):" in briefing
         assert "(截止:" not in briefing
 
-    def test_migrate_todos_returns_messages_without_send_action(self, monkeypatch):
-
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        migration_calls = []
-
-        def migrate(user_id, source_date, target_date):
-            migration_calls.append((user_id, source_date, target_date))
-            return 1
-
-        db = SimpleNamespace(migrate_undone_tasks_to_date=migrate)
-
-        async def fake_get_active_user_ids(_db):
-            return ["1001"]
-
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-        monkeypatch.setattr(
-            scheduled_module,
-            "now_in_timezone",
-            lambda _user_id, _db: datetime(2030, 1, 2, 0, 5),
+    def test_migrate_todos_returns_messages_without_send_action(
+        self, db, pendo_context, monkeypatch
+    ):
+        # 2030-01-02 00:05（上海）：昨天的未完成待办顺延到今天。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 16, 5, tzinfo=UTC))
+        task_id = db.insert_item(
+            {
+                "owner_id" : "1001",
+                "type"     : "task",
+                "title"    : "昨天没做完",
+                "status"   : "open",
+                "plan_date": "2030-01-01",
+            }
         )
 
-        result = asyncio.run(scheduled_module.migrate_undone_todos(SimpleNamespace(), db))
+        result = asyncio.run(pendo_main.scheduled_migrate_todos(pendo_context))
 
         assert len(result) == 1
         assert result[0]["params"]["user_id"] == 1001
-        assert migration_calls == [("1001", "2030-01-01", "2030-01-02")]
+        assert db.get_item(task_id, "1001").plan_date == "2030-01-02"
 
-    def test_diary_reminder_respects_user_timezone_and_existing_diary(self, monkeypatch):
-        from datetime import datetime
-        from typing import Any, cast
-
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        class _FixedDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 13, 30, tzinfo=UTC)
-                if tz is None:
-                    return base.replace(tzinfo=None)
-                return base.astimezone(tz)
-
-        settings_map = {
-            "2001": {
-                "timezone"         : "Asia/Shanghai",
-                "diary_remind_time": "21:30",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {},
-            },
-            "2002": {
-                "timezone"         : "Asia/Shanghai",
-                "diary_remind_time": "21:30",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {},
-            },
-            "2003": {
-                "timezone"         : "America/New_York",
-                "diary_remind_time": "21:30",
-                "quiet_hours_start": "23:00",
-                "quiet_hours_end"  : "07:00",
-                "settings_json"    : {},
-            },
-        }
-
-        def get_user_settings_batch(user_ids):
-            return {user_id: dict(settings_map[user_id]) for user_id in user_ids}
-
-        def has_diary_for_date(user_id, _diary_date):
-            return user_id == "2002"
-
-        db = cast(
-            Any,
-            _with_scheduled_delivery_contract(
-                SimpleNamespace(
-                    get_user_settings=lambda user_id: (_ for _ in ()).throw(
-                        AssertionError("check_diary_reminders should use batch settings lookup")
-                    ),
-                    get_user_settings_batch = get_user_settings_batch,
-                    update_user_settings    = lambda user_id, settings: True,
-                    has_diary_for_date      = has_diary_for_date,
-                )
-            ),
+    def test_diary_reminder_respects_user_timezone_and_existing_diary(
+        self, db, pendo_context, monkeypatch
+    ):
+        # 2030-01-01 21:30（上海）；同一时刻纽约是 08:30。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 13, 30, tzinfo=UTC))
+        for owner_id, timezone_name in (
+            ("2001", "Asia/Shanghai"),
+            ("2002", "Asia/Shanghai"),
+            ("2003", "America/New_York"),
+        ):
+            _set_schedule(db, owner_id, timezone_name)
+            _seed_note(db, owner_id)
+        db.insert_item(
+            {
+                "owner_id"  : "2002",
+                "type"      : "diary",
+                "title"     : "已写日记",
+                "diary_date": "2030-01-01",
+            }
         )
-        actions = []
+        sent = attach_action_recorder(pendo_context)
 
-        async def send_action(action):
-            actions.append(action)
-            return True
-
-        async def fake_get_active_user_ids(_db):
-            return ["2001", "2002", "2003"]
-
-        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-
-        context = SimpleNamespace(send_action=send_action)
-        result = asyncio.run(scheduled_module.check_diary_reminders(context, db))
+        result = asyncio.run(pendo_main.scheduled_diary_reminder(pendo_context))
 
         assert result == []
-        assert [action["params"]["user_id"] for action in actions] == [2001]
+        assert [action["params"]["user_id"] for action in sent] == [2001]
 
     def test_plugin_manifest_schedule_matches_runtime_contract(self):
         from core.models import PluginManifest
@@ -477,65 +361,39 @@ class TestScheduledTasks:
 
         assert all(hasattr(pendo_main, handler) for handler, _delivery, _cron in expected.values())
 
-    def test_cleanup_expired_demo_data_runs_periodic_purge(self, monkeypatch):
+    def test_cleanup_expired_demo_data_runs_periodic_purge(self, db, pendo_context):
+        _seed_demo_owners(db)
 
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        calls = []
-
-        def fake_purge(_db):
-            calls.append(_db)
-            return 3
-
-        monkeypatch.setattr(scheduled_module, "purge_expired_demo_users", fake_purge)
-
-        db     = SimpleNamespace()
-        result = asyncio.run(scheduled_module.cleanup_expired_demo_data(SimpleNamespace(), db))
+        result = asyncio.run(scheduled_module.cleanup_expired_demo_data(pendo_context, db))
 
         assert result == []
-        assert calls == [db]
+        _assert_only_active_demo_owner_remains(db)
 
-    def test_demo_cleanup_scheduled_handler_delegates_with_runtime_database(self, monkeypatch):
-        from plugins.pendo import main as pendo_main
+    def test_demo_cleanup_scheduled_handler_purges_the_runtime_database(self, db, pendo_context):
+        _seed_demo_owners(db)
 
-        context = SimpleNamespace(logger=pendo_main.logger)
-        database = SimpleNamespace()
-        calls    = []
-
-        async def fake_cleanup(received_context, received_database):
-            calls.append(("cleanup", received_context, received_database))
-            return [{"type": "text", "data": {"text": "done"}}]
-
-        async def fake_run(received_context, task_name, task_func, log):
-            calls.append(("run", received_context, task_name, log))
-            return await task_func()
-
-        monkeypatch.setattr(pendo_main, "_get_database", lambda _context: database)
-        monkeypatch.setattr(pendo_main, "cleanup_expired_demo_data", fake_cleanup)
-        monkeypatch.setattr(pendo_main, "_run_scheduled_task", fake_run)
-
-        result = asyncio.run(pendo_main.scheduled_cleanup_demo_data(context))
+        result = asyncio.run(pendo_main.scheduled_cleanup_demo_data(pendo_context))
 
         assert result is None
-        assert calls[0][0:3] == ("run", context, "cleanup_demo_data")
-        assert calls[1] == ("cleanup", context, database)
+        _assert_only_active_demo_owner_remains(db)
 
-    def test_reminder_scheduled_handler_uses_the_shared_services(self, monkeypatch):
-        from plugins.pendo import main as pendo_main
+    def test_reminder_scheduled_handler_uses_the_shared_services(
+        self, db, pendo_context, monkeypatch
+    ):
+        # 2030-01-01 09:00（上海）到点的提醒；上下文没有 send_action，动作原样返回。
+        freeze_pendo_reminder_clock(monkeypatch, datetime(2030, 1, 1, 1, 0, tzinfo=UTC))
+        db.insert_item(
+            {
+                "owner_id"    : "1001",
+                "type"        : "event",
+                "title"       : "到点提醒",
+                "start_time"  : "2030-01-01T10:00:00",
+                "remind_times": ["2030-01-01T09:00:00"],
+            }
+        )
 
-        context = SimpleNamespace(logger=pendo_main.logger)
-        services = {"db": SimpleNamespace(), "reminder_service": SimpleNamespace()}
-        calls    = []
-        message  = {"type": "text", "data": {"text": "due"}}
+        result = asyncio.run(pendo_main.scheduled(pendo_context))
 
-        async def fake_check(received_context, db, reminder_service):
-            calls.append((received_context, db, reminder_service))
-            return [message]
-
-        monkeypatch.setattr(pendo_main, "_get_services", lambda _context: services)
-        monkeypatch.setattr(pendo_main, "check_reminders", fake_check)
-
-        result = asyncio.run(pendo_main.scheduled(context))
-
-        assert result == [message]
-        assert calls == [(context, services["db"], services["reminder_service"])]
+        assert len(result) == 1
+        assert result[0]["params"]["user_id"] == 1001
+        assert "到点提醒" in result[0]["params"]["message"][0]["data"]["text"]

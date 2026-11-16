@@ -10,9 +10,7 @@ from typing import Any
 import pytest
 
 from plugins.xiaoqing_life import main as life_main
-from plugins.xiaoqing_life.persona_bridge import Presence
-from tests.plugins.xiaoqing_life.support import (
-    FREE,
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -22,6 +20,7 @@ from tests.plugins.xiaoqing_life.support import (
     fixed_clock,
     make_context,
     popular_payload,
+    write_persona_card,
 )
 
 MOMENT = at(14, 0)
@@ -59,15 +58,17 @@ def _fetch() -> FakeFetcher:
 
 @pytest.fixture
 def patched(monkeypatch: pytest.MonkeyPatch):
-    state = {"presence": FREE, "fetch": _fetch()}
-    monkeypatch.setattr(life_main.persona_bridge, "availability", lambda *_a: state["presence"])
-    monkeypatch.setattr(life_main.persona_bridge, "persona_facts", lambda _c: "你是小青。")
+    """外部边界：B站取材。``state["fetch"]`` 是当前的取材替身，测试里可以换成别的。"""
+
+    state = {"fetch": _fetch()}
     monkeypatch.setattr(life_main, "BoundedFetcher", lambda _session, *_a, **_k: state["fetch"])
     return state
 
 
 def _context(tmp_path: Path, ai: FakeAI | None = None, **life: Any):
     context = make_context(tmp_path, life={"session_probability": 1.0, **life}, ai=ai)
+    # 人设卡不带〔作息〕：此刻是睡是醒只由 quiet_hours 决定，不受仓库自带人设卡的作息影响。
+    write_persona_card(context, tmp_path, ())
     runtime       = life_main.get_runtime(context)
     runtime.clock = fixed_clock(MOMENT)
     runtime.rng   = random.Random(3)
@@ -114,8 +115,8 @@ async def test_disabled_or_asleep_ticks_start_nothing_and_write_no_records(
     await life_main.scheduled_tick(context)
     assert runtime.task is None and runtime.store.state["last_decision"] == {}
 
-    context, runtime = _context(tmp_path / "b", FakeAI(DIGEST))
-    patched["presence"] = Presence("asleep", "睡觉", 0)
+    # quiet_hours 盖住此刻（14:00）：她正在睡觉。
+    context, runtime = _context(tmp_path / "b", FakeAI(DIGEST), quiet_hours="13:00-15:00")
     await life_main.scheduled_tick(context)
     assert runtime.task is None and runtime.store.episodes == []
     decision = runtime.store.state["last_decision"]
@@ -130,7 +131,8 @@ async def test_wind_down_window_runs_the_tidy_up_as_a_tracked_task_and_browses_n
     tmp_path: Path, patched
 ) -> None:
     diary = {"diary": {"date": "2026-11-05", "text": "今天刷了猫猫视频。", "episode_ids": ["e1"]}}
-    context, runtime = _context(tmp_path, FakeAI(diary))
+    # quiet_hours 从 14:20 开始：离睡觉还有 20 分钟，落在收尾窗口里。
+    context, runtime = _context(tmp_path, FakeAI(diary), quiet_hours="14:20-23:00")
     runtime.store.episodes.append(
         {
             "id"      : "e1",
@@ -142,7 +144,6 @@ async def test_wind_down_window_runs_the_tidy_up_as_a_tracked_task_and_browses_n
             "gist"    : "",
         }
     )
-    patched["presence"] = Presence("free", "", 20)
     await life_main.scheduled_tick(context)
     assert runtime.task is not None
     await asyncio.wait_for(runtime.task, timeout=2)
@@ -288,7 +289,7 @@ async def test_life_run_skips_dice_and_gap_but_not_the_switch_or_sleep(
     assert "已安排一次上网" in await _life(context, "run")  # 间隔内再来一次也行
     await asyncio.wait_for(runtime.task, timeout=2)
     assert runtime.store.state["sessions_today"] == 2
-    patched["presence"] = Presence("asleep", "睡觉", 0)
+    context.config["plugins"]["xiaoqing_life"]["quiet_hours"] = "13:00-15:00"
     assert "不上网：asleep" in await _life(context, "run")
     off, _ = _context(tmp_path / "off", enabled=False)
     assert "没有开启" in await _life(off, "run")

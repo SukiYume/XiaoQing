@@ -1,5 +1,4 @@
-# 验证安装包的控制台入口能够解析运行模块。
-"""Regression tests for the installed console entry point."""
+"""验证安装包的控制台入口能够解析运行模块，且 --help 不加载运行期。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Pendo Web 模态框的内容边界、焦点和关闭生命周期回归。"""
+"""Pendo Web 模态框的内容边界、焦点和关闭生命周期。"""
 
 from __future__ import annotations
 

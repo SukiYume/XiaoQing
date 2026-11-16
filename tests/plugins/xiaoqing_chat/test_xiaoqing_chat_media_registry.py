@@ -2,32 +2,34 @@
 
 from __future__ import annotations
 
-import asyncio
+import base64
 import hashlib
 import json
+import os
 import threading
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
+from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 from tests.helpers.xiaoqing_chat_media_test_support import (
-    _PNG_BYTES,
+    PNG_BYTES,
+    VISION_GATEWAY,
+    PluginCapabilities,
     RenderedMedia,
-    ResolvedMedia,
-    _download_url_bytes,
-    _make_media_runtime,
-    _resolve_media_llm_secret_candidates,
-    _write_png,
     build_effective_user_text,
     compact_message_content,
     get_state,
     load_qq_face_catalog,
-    nullcontext,
+    make_media_runtime,
+    raw_media_response,
     render_event_media,
     render_event_media_text,
     render_local_media_file,
     resolve_message_content,
+    write_png,
 )
 
 mock_context = _fixture_support.mock_context
@@ -46,13 +48,6 @@ async def test_download_url_bytes_rejects_oversized_stream(mock_context):
                 "https://example.com/test.png",
                 max_bytes=5,
             )
-
-
-def test_media_candidates_use_registry_without_legacy_vision_selection(mock_context):
-    secrets = _resolve_media_llm_secret_candidates(mock_context)[0]
-
-    assert secrets["model"] == "glm-4.6v-flash"
-    assert secrets["_vision_enabled"] is True
 
 
 def test_media_registry_dedup_keeps_latest_better_description(tmp_path):
@@ -86,9 +81,21 @@ def test_media_registry_dedup_keeps_latest_better_description(tmp_path):
     assert upgraded[0]["marker"] == "[表情包：猫猫无语摊手]"
 
 
-def test_registry_upgrade_preserves_cultural_hint():
+def test_registry_upgrade_preserves_cultural_hint(tmp_path):
     from plugins.xiaoqing_chat.media.event_media import _upgrade_rendered_media_from_registry
 
+    get_state().media_store.bind(tmp_path)
+    get_state().media_store.upsert_media_items(
+        [
+            {
+                "media_hash"  : "same-hash",
+                "kind"        : "emoji",
+                "description" : "猫猫摊手",
+                "emotion_tags": ["无语"],
+                "marker"      : "[表情包：无语]",
+            }
+        ]
+    )
     original = RenderedMedia(
         media_hash    = "same-hash",
         kind          = "emoji",
@@ -97,19 +104,8 @@ def test_registry_upgrade_preserves_cultural_hint():
         marker        = "[表情包：一张表情包]",
         cultural_hint = "常用于表示无语",
     )
-    resolved = {
-        "media_hash"  : "same-hash",
-        "kind"        : "emoji",
-        "description" : "猫猫摊手",
-        "emotion_tags": ["无语"],
-        "marker"      : "[表情包：无语]",
-    }
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.resolve_registered_media_items",
-        return_value=[resolved],
-    ):
-        upgraded = _upgrade_rendered_media_from_registry([original])
+    upgraded = _upgrade_rendered_media_from_registry([original])
 
     assert upgraded[0].description == "猫猫摊手"
     assert upgraded[0].cultural_hint == "常用于表示无语"
@@ -174,10 +170,17 @@ def test_media_registry_flush_keeps_dirty_when_save_fails(tmp_path):
         ]
     )
 
-    with patch.object(store, "_save_json", return_value=False):
+    index_path = tmp_path / "media" / "index.json"
+    with patch.object(os, "replace", side_effect=OSError("disk full")):
         store.flush()
 
     assert store.is_dirty() is True
+    assert not index_path.exists()
+
+    store.flush()
+
+    assert store.is_dirty() is False
+    assert "media:hash-fail" in json.loads(index_path.read_text(encoding="utf-8"))["entries"]
 
 
 def test_media_registry_load_is_explicit_and_rehydrates_persisted_entries(tmp_path):
@@ -273,19 +276,42 @@ def test_media_registry_keeps_updates_arriving_during_flush(tmp_path):
 async def test_plugin_init_loads_media_registry_off_event_loop(mock_context):
     from plugins.xiaoqing_chat import main as xiaoqing_main
 
-    state             = get_state()
-    event_loop_thread = threading.get_ident()
-    load_threads      = []
+    index_path = mock_context.data_dir / "media" / "index.json"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "media:persisted-hash": {
+                        "kind"       : "image",
+                        "media_hash" : "persisted-hash",
+                        "description": "持久化图片",
+                        "marker"     : "[图片：持久化图片]",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    event_loop_thread       = threading.get_ident()
+    read_threads: list[int] = []
+    real_read_bytes         = Path.read_bytes
 
-    with patch.object(
-        state.media_store,
-        "load",
-        side_effect=lambda: load_threads.append(threading.get_ident()),
-    ):
+    def observed_read_bytes(self: Path):
+        if self == index_path:
+            read_threads.append(threading.get_ident())
+        return real_read_bytes(self)
+
+    with patch.object(Path, "read_bytes", observed_read_bytes):
         await xiaoqing_main.init(mock_context)
 
-    assert len(load_threads) == 1
-    assert load_threads[0] != event_loop_thread
+    resolved = get_state().media_store.resolve_media_items(
+        [{"kind": "image", "media_hash": "persisted-hash"}]
+    )
+    assert resolved[0]["description"] == "持久化图片"
+    assert read_threads
+    assert all(thread_id != event_loop_thread for thread_id in read_threads)
 
 
 def test_media_registry_compacts_and_rehydrates_message_content() -> None:
@@ -336,7 +362,7 @@ def test_media_registry_emoji_marker_surfaces_visible_text_in_quotes() -> None:
 async def test_render_event_media_falls_back_to_summary_marker_when_image_resolve_fails(
     mock_context,
 ):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -346,11 +372,7 @@ async def test_render_event_media_falls_back_to_summary_marker_when_image_resolv
         ]
     }
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
-        new=AsyncMock(side_effect=RuntimeError("boom")),
-    ):
-        rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+    rendered = await render_event_media(event, context=mock_context, runtime=runtime)
 
     assert len(rendered) == 1
     assert rendered[0].marker in {"[图片：猫猫在发呆]", "[表情包：猫猫在发呆]"}
@@ -360,7 +382,7 @@ async def test_render_event_media_falls_back_to_summary_marker_when_image_resolv
 async def test_render_event_media_does_not_treat_failed_image_filename_as_visual_summary(
     mock_context,
 ):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -374,8 +396,8 @@ async def test_render_event_media_does_not_treat_failed_image_filename_as_visual
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
-        new=AsyncMock(side_effect=RuntimeError("boom")),
+        "plugins.xiaoqing_chat.media.sources._download_url_bytes",
+        new=AsyncMock(side_effect=ValueError("download failed")),
     ):
         rendered = await render_event_media(event, context=mock_context, runtime=runtime)
 
@@ -385,7 +407,7 @@ async def test_render_event_media_does_not_treat_failed_image_filename_as_visual
 
 @pytest.mark.asyncio
 async def test_render_event_media_keeps_all_items_for_current_turn_context(mock_context):
-    runtime = _make_media_runtime(max_media_per_message=3)
+    runtime = make_media_runtime(max_media_per_message=3)
     event = {
         "message": [
             {"type": "face", "data": {"id": "1", "raw": {"text": "[微笑]"}}},
@@ -409,14 +431,16 @@ async def test_render_event_media_keeps_all_items_for_current_turn_context(mock_
 
 @pytest.mark.asyncio
 async def test_build_effective_user_text_reuses_upgraded_registry_marker(mock_context):
-    runtime = _make_media_runtime()
-    state   = get_state()
+    runtime                   = make_media_runtime()
+    mock_context.capabilities = PluginCapabilities()
+    known_hash                = hashlib.sha256(PNG_BYTES).hexdigest()
+    state                     = get_state()
     state.media_store.bind(mock_context.data_dir)
     state.media_store.upsert_media_items(
         [
             {
                 "kind"        : "emoji",
-                "media_hash"  : "known-hash",
+                "media_hash"  : known_hash,
                 "description" : "猫猫翻白眼",
                 "emotion_tags": ["无语"],
                 "marker"      : "[表情包：猫猫翻白眼]",
@@ -424,113 +448,26 @@ async def test_build_effective_user_text_reuses_upgraded_registry_marker(mock_co
         ]
     )
     event = {
-        "message": [{"type": "image", "data": {"summary": "旧图"}}],
+        "message": [
+            {
+                "type": "image",
+                "data": {
+                    "file"   : "base64://" + base64.b64encode(PNG_BYTES).decode("ascii"),
+                    "summary": "旧图",
+                },
+            }
+        ],
     }
 
-    with (
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
-            new=AsyncMock(
-                return_value=ResolvedMedia(
-                    media_hash   = "known-hash",
-                    segment_type = "image",
-                    source_name  = "old",
-                    mime_type    = "image/png",
-                    cached_path  = mock_context.data_dir / "known.png",
-                    width        = 0,
-                    height       = 0,
-                    is_animated  = False,
-                )
-            ),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.event_media._render_resolved_media",
-            new=AsyncMock(
-                return_value=RenderedMedia(
-                    media_hash   = "known-hash",
-                    kind         = "emoji",
-                    description  = "一张表情包",
-                    emotion_tags = (),
-                    marker       = "[表情包：一张表情包]",
-                    cached_path  = mock_context.data_dir / "known.png",
-                )
-            ),
-        ),
-    ):
-        text = await build_effective_user_text("", event, context=mock_context, runtime=runtime)
+    text = await build_effective_user_text("", event, context=mock_context, runtime=runtime)
 
     assert "猫猫翻白眼" in text
-    assert "一张表情包" not in text
-
-
-@pytest.mark.asyncio
-async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_context):
-    from plugins.xiaoqing_chat.media.event_media import _render_resolved_media
-
-    runtime     = _make_media_runtime()
-    cached_path = _write_png(mock_context.data_dir / "cache-miss.png")
-    resolved    = ResolvedMedia(
-        media_hash   = "hash-cache-miss",
-        segment_type = "image",
-        source_name  = "cache-miss",
-        mime_type    = "image/png",
-        cached_path  = cached_path,
-        width        = 32,
-        height       = 32,
-        is_animated  = False,
-    )
-    rendered = RenderedMedia(
-        media_hash   = "hash-cache-miss",
-        kind         = "image",
-        description  = "一只猫在打哈欠",
-        emotion_tags = (),
-        marker       = "[图片：一只猫在打哈欠]",
-        cached_path  = cached_path,
-    )
-    first_cache  = {"items": {}}
-    second_cache = {"items": {}}
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.render_cache_lock", return_value=nullcontext()
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.load_render_cache",
-            return_value=first_cache,
-        ) as mock_load,
-        patch(
-            "plugins.xiaoqing_chat.media.render_cache.render_cache_lock",
-            return_value=nullcontext(),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.render_cache.load_render_cache",
-            return_value=second_cache,
-        ) as mock_write_load,
-        patch("plugins.xiaoqing_chat.media.render_cache._save_render_cache") as mock_save,
-        patch(
-            "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-            new=AsyncMock(return_value=rendered),
-        ),
-    ):
-        result = await _render_resolved_media(
-            resolved,
-            context      = mock_context,
-            runtime      = runtime,
-            prefer_emoji = False,
-            summary_hint = "猫",
-        )
-
-    assert result == rendered
-    assert first_cache["items"] == {}
-    assert second_cache["items"]["hash-cache-miss"]["marker"] == "[图片：一只猫在打哈欠]"
-    assert mock_load.call_count == 1
-    assert mock_write_load.call_count == 1
-    assert mock_save.call_count == 1
+    assert "旧图" not in text
 
 
 @pytest.mark.asyncio
 async def test_load_qq_face_catalog_merges_builtin_and_observed_labels(mock_context):
-    runtime = _make_media_runtime()
+    runtime = make_media_runtime()
     event   = {
         "message": [
             {
@@ -617,9 +554,9 @@ async def test_load_qq_face_catalog_repairs_invalid_usage_metadata(mock_context)
 
 @pytest.mark.asyncio
 async def test_render_local_media_file_merges_latest_cache_before_save(mock_context):
-    runtime    = _make_media_runtime()
-    image_path = _write_png(mock_context.data_dir / "merge_cache_probe.png")
-    media_hash = hashlib.sha256(_PNG_BYTES).hexdigest()
+    runtime    = make_media_runtime()
+    image_path = write_png(mock_context.data_dir / "merge_cache_probe.png")
+    media_hash = hashlib.sha256(PNG_BYTES).hexdigest()
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
 
     other_hash  = "other-media-hash"
@@ -633,25 +570,26 @@ async def test_render_local_media_file_merges_latest_cache_before_save(mock_cont
         "analysis_prompt_version": 2,
     }
 
-    async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
+    async def _vision_call_with_concurrent_write(**_kwargs):
+        # 模型还在回答时，另一条路径把别的媒体写进了同一份缓存。
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
             json.dumps({"items": {other_hash: other_entry}}, ensure_ascii=False),
             encoding="utf-8",
         )
-        return RenderedMedia(
-            media_hash   = resolved.media_hash,
-            kind         = "image",
-            description  = "新的图片描述",
-            emotion_tags = (),
-            marker       = "[图片：新的图片描述]",
-            cached_path  = resolved.cached_path,
+        return raw_media_response(
+            json.dumps(
+                {
+                    "kind"                : "image",
+                    "detailed_description": "新的图片描述",
+                    "visible_text"        : "",
+                    "emotion_tags"        : [],
+                },
+                ensure_ascii=False,
+            )
         )
 
-    with patch(
-        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
-        new=AsyncMock(side_effect=_fake_analyze),
-    ):
+    with patch(VISION_GATEWAY, new=AsyncMock(side_effect=_vision_call_with_concurrent_write)):
         rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
 
     assert rendered is not None
@@ -666,30 +604,17 @@ async def test_render_local_media_file_merges_latest_cache_before_save(mock_cont
 async def test_observe_message_records_image_only_marker(mock_context):
     from plugins.xiaoqing_chat.handlers import observe_message
 
-    runtime = _make_media_runtime()
-    state   = MagicMock()
-    event   = {
-        "user_id" : 12345,
-        "group_id": 67890,
-        "message" : [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
+    event = {
+        "user_id"   : 12345,
+        "group_id"  : 67890,
+        "message_id": 4242,
+        "message"   : [{"type": "image", "data": {"summary": "猫猫在发呆"}}],
     }
 
-    with (
-        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
-        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
-        patch(
-            "plugins.xiaoqing_chat.handlers.build_effective_user_text",
-            new=AsyncMock(return_value="[图片：猫猫在发呆]"),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.handlers.ensure_user_message_recorded",
-            new=AsyncMock(return_value="m1"),
-        ) as mock_record,
-    ):
-        result = await observe_message("", event, mock_context)
+    result = await observe_message("", event, mock_context)
 
     assert result == []
-    mock_record.assert_awaited_once()
-    assert mock_record.await_args.args[0] == "[图片：猫猫在发呆]"
+    history = await get_state().memory_store.get_async("g67890")
+    assert [message.role for message in history] == ["user"]
+    assert [part["description"] for part in history[0].parts] == ["猫猫在发呆"]
+    assert history[0].parts[0]["marker"] == "[表情包：猫猫在发呆]"

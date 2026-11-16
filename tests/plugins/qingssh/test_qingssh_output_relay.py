@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shlex
 import threading
 import uuid
 from pathlib import Path
@@ -13,6 +15,7 @@ from plugins.qingssh import session_handlers
 from plugins.qingssh import ssh_manager as ssh_manager_module
 from plugins.qingssh.config import SessionKeys
 from plugins.qingssh.output_relay import SSHOutputPolicy, SSHOutputRelay
+from tests.helpers.qingssh_test_support import StreamChannel, StreamClient
 from tests.helpers.settings_snapshot import with_settings_reader
 
 
@@ -224,24 +227,53 @@ async def test_archive_filesystem_operations_run_off_event_loop(
     )
     event_loop_thread                        = threading.get_ident()
     operation_threads: list[tuple[str, int]] = []
+    real_open                                = Path.open
+    real_fsync                               = os.fsync
+    real_replace                             = os.replace
 
-    for method_name in ("_open_archive", "_archive", "_commit_archive"):
-        original = getattr(relay, method_name)
+    def record(name: str) -> None:
+        operation_threads.append((name, threading.get_ident()))
 
-        def tracked(*args: Any, _name: str = method_name, _original: Any = original) -> Any:
-            operation_threads.append((_name, threading.get_ident()))
-            return _original(*args)
+    class TrackedHandle:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
 
-        monkeypatch.setattr(relay, method_name, tracked)
+        def write(self, payload: bytes) -> int:
+            record("write")
+            return int(self._handle.write(payload))
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._handle, name)
+
+    def tracked_open(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(path, mode, *args, **kwargs)
+        if mode != "xb":
+            return handle
+        record("open")
+        return TrackedHandle(handle)
+
+    def tracked_fsync(fd: int) -> None:
+        record("fsync")
+        real_fsync(fd)
+
+    def tracked_replace(source: Any, destination: Any) -> None:
+        if Path(destination).name.startswith("ssh-output-"):
+            record("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    monkeypatch.setattr(os, "fsync", tracked_fsync)
+    monkeypatch.setattr(os, "replace", tracked_replace)
 
     await relay.feed("x" * 20_000)
     summary = await relay.finish("✅ done")
 
     assert summary.archive_path is not None
     assert {name for name, _thread_id in operation_threads} == {
-        "_open_archive",
-        "_archive",
-        "_commit_archive",
+        "open",
+        "write",
+        "fsync",
+        "replace",
     }
     assert all(thread_id != event_loop_thread for _name, thread_id in operation_threads)
 
@@ -377,6 +409,19 @@ async def test_cancelled_finish_removes_unreported_archive_and_sender(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_abort_while_streaming_removes_the_archive_being_written(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs"
+    relay = SSHOutputRelay(output_dir=output_dir, policy=_fast_policy(), send_text=_ignore_output)
+    await relay.feed("x" * 20_000)
+    assert list(output_dir.glob("*.tmp"))
+
+    await relay.abort()
+
+    # 命令在输出还没收完时被中止：写了一半的归档文件和为它新建的目录都不留下。
+    assert not output_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path: Path) -> None:
     entered          = asyncio.Event()
     remote_cancelled = asyncio.Event()
@@ -426,85 +471,69 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
     }
 
 
+async def _ignore_output(_text: str) -> None:
+    return None
+
+
+async def _until(predicate: Any, *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio
-async def test_explicit_zero_timeout_does_not_wrap_unlimited_admin_command(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager                 = ssh_manager_module.SSHManager(tmp_path)
-    command_seen: list[str] = []
-
-    async def operation(*args: Any, **_kwargs: Any) -> int:
-        command_seen.append(args[3])
-        return 17
-
-    async def forbidden_wait_for(*_args: Any, **_kwargs: Any) -> int:
-        raise AssertionError("zero timeout must not use asyncio.wait_for")
-
-    monkeypatch.setattr(manager, "_execute_command_stream_impl", operation)
-    monkeypatch.setattr(ssh_manager_module.asyncio, "wait_for", forbidden_wait_for)
+async def test_explicit_zero_timeout_does_not_wrap_unlimited_admin_command(tmp_path: Path) -> None:
+    manager = ssh_manager_module.SSHManager(tmp_path)
+    channel = StreamChannel(exit_status=17)
+    manager.connections[manager.build_connection_key("1", "2", "srv")] = StreamClient(channel)
+    command = "arbitrary-admin-command --with 'quotes'"
 
     result = await manager.execute_command_stream(
         "1",
         "2",
         "srv",
-        "arbitrary-admin-command --with 'quotes'",
-        lambda _text: None,
+        command,
+        _ignore_output,
         timeout=0,
     )
 
     assert result == 17
-    assert command_seen == ["arbitrary-admin-command --with 'quotes'"]
+    assert len(channel.executed) == 1
+    assert shlex.quote(command) in channel.executed[0]
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancel_cannot_abort_remote_cleanup(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager           = ssh_manager_module.SSHManager(tmp_path)
-    operation_started = asyncio.Event()
-    cleanup_started   = asyncio.Event()
-    release_cleanup   = asyncio.Event()
+async def test_repeated_cancel_cannot_abort_remote_cleanup(tmp_path: Path) -> None:
+    manager         = ssh_manager_module.SSHManager(tmp_path)
+    key             = manager.build_connection_key("1", "2", "srv")
+    release_cleanup = threading.Event()
+    channel         = StreamChannel((b"__XQ_PID__321\n",))
 
-    async def operation(*_args: Any, **_kwargs: Any) -> int:
-        operation_started.set()
-        await asyncio.Event().wait()
-        return 0
+    def hold_signal() -> None:
+        # 远端终止信号在工作线程里发出；卡在这里就是“清理进行中”。
+        assert release_cleanup.wait(timeout=5)
+        channel.exit_status = 143
 
-    async def cleanup(_key: str) -> ssh_manager_module.CommandTerminationResult:
-        cleanup_started.set()
-        await release_cleanup.wait()
-        return ssh_manager_module.CommandTerminationResult(
-            found            = True,
-            local_cleaned    = True,
-            remote_confirmed = True,
-        )
-
-    monkeypatch.setattr(manager, "_execute_command_stream_impl", operation)
-    monkeypatch.setattr(manager, "_terminate_active_command", cleanup)
-    task = asyncio.create_task(
-        manager.execute_command_stream(
-            "1",
-            "2",
-            "srv",
-            "long command",
-            lambda _text: None,
-            timeout=0,
-        )
+    client = StreamClient(channel, on_signal=hold_signal)
+    manager.connections[key] = client
+    task                     = asyncio.create_task(
+        manager.execute_command_stream("1", "2", "srv", "long command", _ignore_output, timeout=0)
     )
-    await asyncio.wait_for(operation_started.wait(), timeout=1)
+    await _until(lambda: (manager.active_channels.get(key) or {}).get("remote_pid") == 321)
 
     task.cancel()
-    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    await _until(lambda: bool(client.signals))
     task.cancel()
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.1)
     assert not task.done()
 
     release_cleanup.set()
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(task, timeout=5)
 
+    assert client.signals == ["kill -TERM -- -321 2>/dev/null || kill -TERM 321"]
+    assert channel.closed is True
+    assert key not in manager.active_channels
     assert not {
         pending.get_name()
         for pending in asyncio.all_tasks()

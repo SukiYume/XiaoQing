@@ -1,4 +1,4 @@
-"""Pendo Web 通用表单的安全渲染、取值和交互回归。"""
+"""Pendo Web 通用表单的安全渲染、取值和交互。"""
 
 from __future__ import annotations
 

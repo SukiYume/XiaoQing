@@ -1,14 +1,12 @@
 """消息分发器测试共享 fixture、导入和私有 helper。"""
 
-import asyncio
 import inspect
-import logging
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
 from core.dispatcher import (
+    AdjustableSemaphore,
     Dispatcher,
     MessageContext,
     MessageParser,
@@ -126,14 +124,13 @@ def dispatcher(
     mock_metrics: MagicMock,
 ):
     """创建 Dispatcher 实例"""
-    semaphore = asyncio.Semaphore(10)
     return Dispatcher(
         router          = mock_router,
         config_provider = mock_config_provider,
         plugin_registry = mock_plugin_registry,
         admin_check     = mock_admin_check,
         build_context   = mock_context_factory,
-        semaphore       = semaphore,
+        semaphore       = AdjustableSemaphore(10),
         session_manager = mock_session_manager,
         metrics         = mock_metrics,
     )
@@ -150,11 +147,8 @@ __all__ = (
     "MessageParser",
     "Mock",
     "PluginExecutionGate",
-    "SimpleNamespace",
-    "asyncio",
     "dispatcher",
     "inspect",
-    "logging",
     "mock_admin_check",
     "mock_config_provider",
     "mock_context_factory",

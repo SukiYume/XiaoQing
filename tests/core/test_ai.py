@@ -6,6 +6,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+import aiohttp
 import pytest
 
 from core.ai import (
@@ -725,3 +726,67 @@ def test_first_json_object_extracts_the_first_object(text: str, expected: dict[s
 )
 def test_first_json_object_returns_none_without_an_object(text: str) -> None:
     assert first_json_object(text) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_retry", [0, 1, 2])
+async def test_ai_route_retries_transport_errors_exactly_max_retry_times(
+    monkeypatch: pytest.MonkeyPatch, max_retry: int
+) -> None:
+    attempts = 0
+
+    async def fail_request(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise aiohttp.ClientConnectionError("offline")
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "core.ai.aiohttp_request_bounded",
+        fail_request,
+    )
+    monkeypatch.setattr("core.ai.asyncio.sleep", no_sleep)
+
+    config = {
+        "ai": {
+            "providers": {
+                "test": {
+                    "api_base"     : "https://example.com",
+                    "endpoint_path": "/chat/completions",
+                }
+            },
+            "models": {
+                "test-model": {
+                    "provider"  : "test",
+                    "model"     : "model",
+                    "modalities": ["text"],
+                }
+            },
+        },
+        "plugins": {
+            "demo": {
+                "ai": {
+                    "routes": {
+                        "chat": {
+                            "models"                : ["test-model"],
+                            "max_retry"             : max_retry,
+                            "retry_interval_seconds": 0.0,
+                        }
+                    }
+                }
+            }
+        },
+    }
+    with pytest.raises(AIRequestError, match="ai_transport"):
+        await complete_configured_route(
+            session     = object(),
+            config      = config,
+            secrets     = {"ai": {"providers": {"test": {"api_key": "key"}}}},
+            plugin_name = "demo",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
+        )
+
+    assert attempts == 1 + max_retry

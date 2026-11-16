@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,8 +24,21 @@ class _Context:
         self.sessions.append(initial_data)
 
 
-def _handler(db: Database) -> EventHandler:
-    return EventHandler(db, AIParser(db=db), ReminderService(db))
+class _ScriptedAi:
+    """模型边界替身：记录每次调用，并返回预先设定的 JSON 文本。"""
+
+    def __init__(self, payload: dict | None = None) -> None:
+        self.payload                           = payload
+        self.calls: list[list[dict[str, str]]] = []
+
+    async def complete(self, route, messages, **_kwargs):
+        self.calls.append(messages)
+        return SimpleNamespace(content=json.dumps(self.payload, ensure_ascii=False))
+
+
+def _handler(db: Database, ai: _ScriptedAi | None = None) -> EventHandler:
+    context = SimpleNamespace(capabilities=SimpleNamespace(ai=ai)) if ai else None
+    return EventHandler(db, AIParser(context=context, db=db), ReminderService(db))
 
 
 async def _record(handler: EventHandler, payload: dict, context=None, suffix: str = "") -> dict:
@@ -276,38 +290,32 @@ def test_rule_fallback_results_are_not_turned_into_records(db):
 
 
 @pytest.mark.asyncio
-async def test_add_conflict_offers_exact_record_confirmation(db, monkeypatch):
+async def test_add_conflict_offers_exact_record_confirmation(db):
     """add 冲突时给出按本次解析结果原样创建的命令：确认时不再调用解析模型。"""
     from plugins.pendo.main import _format_result
 
-    handler = _handler(db)
+    fields = {
+        "title"         : "研讨会",
+        "remind_offsets": ["提前1天"],
+        "milestones"    : [
+            {"name": "会议开始", "time": "2030-11-14T09:00:00"},
+            {"name": "会议结束", "time": "2030-11-15T09:00:00"},
+        ],
+    }
+    ai      = _ScriptedAi(fields)
+    handler = _handler(db, ai)
     await _record(handler, {"kind": "single", "title": "甲", "start_time": "2030-11-14T09:00"})
     text   = "添加一个多节点事件，11月14日会议开始，15日会议结束，提前一天提醒"
-    parsed = _ai_parsed(
-        handler,
-        text,
-        {
-            "title"         : "研讨会",
-            "remind_offsets": ["提前1天"],
-            "milestones"    : [
-                {"name": "会议开始", "time": "2030-11-14T09:00:00"},
-                {"name": "会议结束", "time": "2030-11-15T09:00:00"},
-            ],
-        },
-    )
-    calls: list[str] = []
+    parsed = _ai_parsed(handler, text, fields)
 
-    async def fake_parse(source, user_id, **_kwargs):
-        calls.append(source)
-        return dict(parsed)
-
-    monkeypatch.setattr(handler.ai_parser, "parse_event_with_ai", fake_parse)
     asked = await handler.handle(USER, "add " + text, _Context())
     assert asked["status"] == "need_confirm"
     command = _format_result(asked).command_outcome.confirmation_command
     assert command.startswith("/pendo event record ")
     confirmed = await handler.handle(USER, command.removeprefix("/pendo event "), _Context())
-    assert confirmed["status"] == "success" and calls == [text]
+    assert confirmed["status"] == "success"
+    assert len(ai.calls) == 1
+    assert text in ai.calls[0][-1]["content"]
     nodes = [item for item in db.get_all_items(USER, {"type": "event"}) if item.event_collection_id]
     assert sorted(item.title for item in nodes) == ["会议开始", "会议结束"]
     assert all(item.reminder_rules == parsed["reminder_rules"] for item in nodes)

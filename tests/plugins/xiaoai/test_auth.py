@@ -1,8 +1,7 @@
-"""扫码、凭据续期和授权失效的协议回归。"""
+"""扫码登录、凭据续期和授权失效的协议行为。"""
 
 import asyncio
 import json
-import re
 import time
 from copy import deepcopy
 from unittest.mock import AsyncMock
@@ -11,13 +10,14 @@ import aiohttp
 import pytest
 
 from plugins.xiaoai import auth, client
-from tests.helpers.http import mocked_aiohttp
+from tests.helpers.http import (
+    AiohttpResponse,
+    aiohttp_json_response,
+    mocked_aiohttp,
+)
+from tests.helpers.xiaoai_test_support import LOGIN, MINA_STS, QR, STS
 
-LOGIN    = re.compile(r"https://account\.xiaomi\.com/pass/serviceLogin\?.*")
-QR       = re.compile(r"https://account\.xiaomi\.com/longPolling/loginUrl\?.*")
-STS      = re.compile(r"https://sts\.api\.io\.mi\.com/sts\?.*")
-MINA_STS = re.compile(r"https://api2\.mina\.mi\.com/sts\?.*")
-POLL     = "https://ak.lp.account.xiaomi.com/lp/s?ticket=private"
+POLL = "https://ak.lp.account.xiaomi.com/lp/s?ticket=private"
 
 
 def credentials():
@@ -29,6 +29,47 @@ def credentials():
         "micoapi"      : ["a2V5", "old-mina"],
         "_refreshed_at": {"xiaomiio": 0, "micoapi": 0},
     }
+
+
+class _PollSession:
+    """按顺序给出预置响应（或抛出预置异常）的 aiohttp 会话替身，只实现 ``get``。"""
+
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+
+    def get(self, _url, **_kwargs):
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class _TimeoutBody:
+    async def iter_chunked(self, _size):
+        raise TimeoutError()
+        yield b""
+
+
+def _timeout_while_reading_body():
+    response = AiohttpResponse(b"{}", media_type="application/json")
+    response.content = _TimeoutBody()
+    response.cookies = {}
+    return response
+
+
+def _json_poll_response(payload):
+    response         = aiohttp_json_response(payload)
+    response.cookies = {}
+    return response
+
+
+def _login_requests(mocked):
+    return [
+        call
+        for (_method, url), calls in mocked.requests.items()
+        if url.path == "/pass/serviceLogin"
+        for call in calls
+    ]
 
 
 def login_response(sid="xiaomiio"):
@@ -110,91 +151,96 @@ async def test_callback_redirect_blocks_external_host():
 
 @pytest.mark.asyncio
 async def test_qr_start_error_closes_owned_session(monkeypatch):
-    session = aiohttp.ClientSession()
-    monkeypatch.setattr(auth, "session_factory", lambda: session)
-    monkeypatch.setattr(auth, "account_json", AsyncMock(side_effect=TimeoutError()))
-    with pytest.raises(TimeoutError):
-        await auth.QRFlow().start()
-    assert session.closed
+    opened     = []
+    real_close = aiohttp.ClientSession.close
+
+    async def tracked_close(session):
+        opened.append(session)
+        await real_close(session)
+
+    monkeypatch.setattr(aiohttp.ClientSession, "close", tracked_close)
+    flow = auth.QRFlow()
+    with mocked_aiohttp() as mocked:
+        mocked.get(LOGIN, exception=TimeoutError())
+        with pytest.raises(TimeoutError):
+            await flow.start()
+    assert len(opened) == 1 and opened[0].closed
+    assert flow.session is None and not flow.poll_url
 
 
 @pytest.mark.asyncio
-async def test_qr_poll_timeout_expires_and_cancellation_propagates(monkeypatch):
+async def test_qr_poll_timeout_expires_and_cancellation_propagates():
     flow            = auth.QRFlow()
     flow.poll_url   = POLL
     flow.expires_at = time.monotonic() - 1
     with pytest.raises(client.BridgeError, match="过期"):
         await flow.wait()
     flow.expires_at = time.monotonic() + 300
-    monkeypatch.setattr(auth, "account_json", AsyncMock(side_effect=asyncio.CancelledError()))
+    flow.session    = _PollSession(asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
         await flow.wait()
 
 
 @pytest.mark.asyncio
-async def test_refresh_persists_rotated_credentials_and_serializes(tmp_path, monkeypatch):
+async def test_refresh_persists_rotated_credentials_and_serializes(tmp_path):
     token = credentials()
     client.write_json(tmp_path / "token.json", token)
     manager = auth.TokenManager(tmp_path)
-
-    async def renew(session, observed, sid):
-        result                       = deepcopy(observed)
-        result[sid]                  = ["new-key", "new-service"]
-        result["passToken"]          = "new-pass"
-        result["_refreshed_at"][sid] = time.time()
-        await asyncio.sleep(0)
-        return result
-
-    refresh = AsyncMock(side_effect=renew)
-    monkeypatch.setattr(auth, "refresh_service", refresh)
-    results = await asyncio.gather(
-        manager.refresh("xiaomiio", token), manager.refresh("xiaomiio", token)
-    )
+    with mocked_aiohttp() as mocked:
+        mocked.get(LOGIN, payload=login_response())
+        mocked.get(STS, headers={"Set-Cookie": "serviceToken=io-new; Path=/"}, body="ok")
+        results = await asyncio.gather(
+            manager.refresh("xiaomiio", token), manager.refresh("xiaomiio", token)
+        )
+        assert len(_login_requests(mocked)) == 1
     assert results[0] == results[1]
-    assert refresh.await_count == 1
-    assert manager.load()["passToken"] == "new-pass"
+    assert manager.load()["passToken"] == "rotated-pass"
+    assert manager.load()["xiaomiio"] == ["a2V5", "io-new"]
     assert token["passToken"] == "private-pass"
 
 
 @pytest.mark.asyncio
-async def test_explicit_auth_failure_is_persisted_and_network_failure_is_transient(
-    tmp_path, monkeypatch
-):
+async def test_explicit_auth_failure_is_persisted_and_network_failure_is_transient(tmp_path):
     token = credentials()
     client.write_json(tmp_path / "token.json", token)
     manager = auth.TokenManager(tmp_path)
-    failure = AsyncMock(side_effect=TimeoutError())
-    monkeypatch.setattr(auth, "refresh_service", failure)
-    with pytest.raises(TimeoutError):
-        await manager.ensure_fresh()
-    assert not manager.status()
-    assert manager.load() == token
-    failure.side_effect = client.AuthRequired()
-    with pytest.raises(client.AuthRequired):
-        await manager.ensure_fresh()
-    assert manager.status()["needs_login"] is True
-    assert manager.load() == token
-    count = failure.await_count
-    with pytest.raises(client.AuthRequired):
-        await manager.ensure_fresh()
-    assert failure.await_count == count
+    with mocked_aiohttp() as mocked:
+        mocked.get(LOGIN, exception=TimeoutError())
+        mocked.get(LOGIN, payload={"code": 70016})
+        with pytest.raises(TimeoutError):
+            await manager.ensure_fresh()
+        assert not manager.status()
+        assert manager.load() == token
+        with pytest.raises(client.AuthRequired):
+            await manager.ensure_fresh()
+        assert manager.status()["needs_login"] is True
+        assert manager.load() == token
+        count = len(_login_requests(mocked))
+        assert count == 2
+        with pytest.raises(client.AuthRequired):
+            await manager.ensure_fresh()
+        assert len(_login_requests(mocked)) == count
 
 
 @pytest.mark.asyncio
-async def test_proactive_refresh_uses_six_hour_age(tmp_path, monkeypatch):
+async def test_proactive_refresh_uses_six_hour_age(tmp_path):
     token                  = credentials()
     token["_refreshed_at"] = {sid: time.time() for sid in auth.SERVICES}
     client.write_json(tmp_path / "token.json", token)
     manager = auth.TokenManager(tmp_path)
-    refresh = AsyncMock(return_value=token)
-    monkeypatch.setattr(manager, "refresh", refresh)
-    assert await manager.ensure_fresh() == token
-    refresh.assert_not_awaited()
-    token["_refreshed_at"]["xiaomiio"] = time.time() - auth.RENEW_AFTER - 1
-    client.write_json(tmp_path / "token.json", token)
-    await manager.ensure_fresh()
-    assert refresh.await_args.args[0] == "xiaomiio"
-    assert refresh.await_count == 1
+    with mocked_aiohttp() as mocked:
+        assert await manager.ensure_fresh() == token
+        assert not mocked.requests
+        token["_refreshed_at"]["xiaomiio"] = time.time() - auth.RENEW_AFTER - 1
+        client.write_json(tmp_path / "token.json", token)
+        mocked.get(LOGIN, payload=login_response())
+        mocked.get(STS, headers={"Set-Cookie": "serviceToken=io-new; Path=/"}, body="ok")
+        renewed = await manager.ensure_fresh()
+        logins  = _login_requests(mocked)
+        assert len(logins) == 1
+        assert logins[0].kwargs["params"]["sid"] == "xiaomiio"
+    assert renewed["xiaomiio"] == ["a2V5", "io-new"]
+    assert renewed["micoapi"] == token["micoapi"]
 
 
 @pytest.mark.asyncio
@@ -270,19 +316,17 @@ async def test_rejected_service_after_successful_renewal_keeps_login_recoverable
 
 
 @pytest.mark.asyncio
-async def test_qr_body_timeout_continues_polling(monkeypatch):
-    from core.bounded_http import ResponseTransportError
-
+async def test_qr_body_timeout_continues_polling():
     flow            = auth.QRFlow()
     flow.poll_url   = POLL
     flow.expires_at = time.monotonic() + 300
-    error           = ResponseTransportError("response body transport failed")
-    error.__cause__ = TimeoutError()
-    request = AsyncMock(side_effect=[error, {"code": 1}])
-    monkeypatch.setattr(auth, "account_json", request)
+    flow.session    = _PollSession(
+        _timeout_while_reading_body(),
+        _json_poll_response({"code": 1}),
+    )
     with pytest.raises(client.BridgeError, match="二维码"):
         await flow.wait()
-    assert request.await_count == 2
+    assert flow.session.outcomes == []
 
 
 @pytest.mark.asyncio

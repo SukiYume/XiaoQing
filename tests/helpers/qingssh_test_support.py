@@ -1,15 +1,11 @@
 """QingSSH 测试共享导入和私有 helper。"""
 
+from __future__ import annotations
+
 import asyncio
 import copy
-import inspect
-import json
-import threading
 from pathlib import Path
-from typing import Any, ClassVar, cast
-from unittest.mock import AsyncMock, MagicMock, Mock
-
-import pytest
+from typing import Any, cast
 
 from core.session import SessionManager
 from plugins.qingssh import main as qingssh_main
@@ -28,7 +24,7 @@ from tests.helpers.paths import REPOSITORY_ROOT
 ROOT = REPOSITORY_ROOT
 
 
-def _command_parent(command: str, context: Any, manager: Any):
+def command_parent(command: str, context: Any, manager: Any):
     """构造只负责提交一条后台命令的父事务回调。"""
 
     async def run(working: Any) -> None:
@@ -42,7 +38,7 @@ def _command_parent(command: str, context: Any, manager: Any):
     return run
 
 
-class _SessionStub:
+class SessionStub:
     def __init__(self, data=None):
         self.data        = data or {}
         self.plugin_name = "qingssh"
@@ -54,7 +50,7 @@ class _SessionStub:
         self.data[key] = value
 
 
-class _ManagerStub:
+class ManagerStub:
     data_dir = ROOT
 
     def __init__(self):
@@ -77,7 +73,7 @@ class _ManagerStub:
         return 0
 
 
-class _DisconnectManagerStub:
+class DisconnectManagerStub:
     def __init__(self):
         self.calls = []
 
@@ -96,10 +92,10 @@ class _DisconnectManagerStub:
 _NO_REPLACEMENT = object()
 
 
-class _TransactionalContext:
+class TransactionalContext:
     """Small deterministic model of the framework's per-session transaction."""
 
-    def __init__(self, session: _SessionStub) -> None:
+    def __init__(self, session: SessionStub) -> None:
         self.current_user_id        = 10001
         self.current_group_id       = 50001
         self.config: dict[str, Any] = {
@@ -111,7 +107,7 @@ class _TransactionalContext:
             }
         }
         self.request_id                    = "qingssh-transaction-test"
-        self.session: _SessionStub | None  = session
+        self.session: SessionStub | None   = session
         self.actions: list[dict[str, Any]] = []
         self._lock                         = asyncio.Lock()
 
@@ -144,7 +140,7 @@ class _TransactionalContext:
             return result
 
 
-class _CommandGateManager:
+class CommandGateManager:
     def __init__(self, data_dir: Path, *, output: str = "") -> None:
         self.data_dir                                = data_dir
         self.output                                  = output
@@ -189,8 +185,8 @@ class _CommandGateManager:
         return 0
 
 
-def _connected_session() -> _SessionStub:
-    return _SessionStub(
+def connected_session() -> SessionStub:
+    return SessionStub(
         {
             SessionKeys.STATE        : "connected",
             SessionKeys.SERVER_NAME  : "srv1",
@@ -202,7 +198,7 @@ def _connected_session() -> _SessionStub:
     )
 
 
-async def _wait_for(predicate: Any, *, attempts: int = 100) -> None:
+async def wait_for(predicate: Any, *, attempts: int = 100) -> None:
     for _ in range(attempts):
         if predicate():
             return
@@ -218,7 +214,7 @@ class _FakeJumpClient:
         self.closed = True
 
 
-class _FakeClient:
+class FakeClient:
     def __init__(self):
         self.closed       = False
         self._jump_client = _FakeJumpClient()
@@ -227,7 +223,7 @@ class _FakeClient:
         self.closed = True
 
 
-class _FakeChannel:
+class FakeChannel:
     def __init__(self):
         self.closed = False
         self.sent   = []
@@ -242,39 +238,92 @@ class _FakeChannel:
         self.closed = True
 
 
+class StreamChannel:
+    """paramiko 通道替身：按脚本给出输出；``exit_status`` 为 ``None`` 表示命令一直不结束。"""
+
+    active = True
+
+    def __init__(self, chunks: tuple[bytes, ...] = (), *, exit_status: int | None = None) -> None:
+        self.chunks              = list(chunks)
+        self.exit_status         = exit_status
+        self.executed: list[str] = []
+        self.closed              = False
+
+    def set_combine_stderr(self, _combine: bool) -> None:
+        return None
+
+    def exec_command(self, command: str) -> None:
+        self.executed.append(command)
+
+    def exit_status_ready(self) -> bool:
+        return self.exit_status is not None and not self.chunks
+
+    def recv_ready(self) -> bool:
+        return bool(self.chunks)
+
+    def recv(self, _size: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class StreamClient:
+    """paramiko 客户端替身：同时充当传输层，终止信号命令记录在 ``signals``。
+
+    ``on_signal`` 在每次发出终止信号时调用，测试可借它卡住“远端清理进行中”。
+    """
+
+    def __init__(self, channel: StreamChannel, on_signal: Any = None) -> None:
+        self._channel           = channel
+        self._on_signal         = on_signal
+        self.signals: list[str] = []
+
+    def get_transport(self) -> StreamClient:
+        return self
+
+    def is_active(self) -> bool:
+        return True
+
+    def open_session(self) -> StreamChannel:
+        return self._channel
+
+    def exec_command(self, command: str) -> None:
+        self.signals.append(command)
+        if self._on_signal is not None:
+            self._on_signal()
+
+    def close(self) -> None:
+        return None
+
+
 __all__ = (
     "Any",
-    "AsyncMock",
-    "ClassVar",
     "EXIT_CODE_TIMEOUT",
-    "MagicMock",
-    "Mock",
     "Path",
     "ROOT",
     "SessionKeys",
     "SessionManager",
-    "_CommandGateManager",
-    "_DisconnectManagerStub",
-    "_FakeChannel",
-    "_FakeClient",
+    "StreamChannel",
+    "StreamClient",
+    "CommandGateManager",
+    "DisconnectManagerStub",
+    "FakeChannel",
+    "FakeClient",
     "_FakeJumpClient",
-    "_ManagerStub",
+    "ManagerStub",
     "_NO_REPLACEMENT",
-    "_SessionStub",
-    "_TransactionalContext",
-    "_command_parent",
-    "_connected_session",
-    "_wait_for",
+    "SessionStub",
+    "TransactionalContext",
+    "command_parent",
+    "connected_session",
+    "wait_for",
     "asyncio",
     "cast",
     "copy",
-    "inspect",
-    "json",
-    "pytest",
     "qingssh_main",
     "ssh_manager_module",
     "ssh_session_handlers",
-    "threading",
     "validate_command",
     "validate_hostname",
     "validate_port",

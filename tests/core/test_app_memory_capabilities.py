@@ -10,15 +10,18 @@ from pydantic import ValidationError
 import tests.helpers.app_test_support as _fixture_support
 from core.models import PluginManifest
 from tests.helpers.app_test_support import (
-    ModuleType,
-    PluginDefinition,
-    PluginServiceDefinition,
+    PROBE,
     XiaoQingApp,
-    _plugin_context_for,
-    _register_test_loaded_plugin,
+    load_test_plugin,
+    plugin_context_for,
+    service_declaration,
+    user_principal,
 )
 
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root                               = _fixture_support.temp_app_root
+_isolate_process_global_plugin_import_state = (
+    _fixture_support._isolate_process_global_plugin_import_state
+)
 
 CALLERS = {
     "memory.record": ["xiaoqing_agent", "xiaoqing_chat", "xiaoqing_life"],
@@ -32,43 +35,40 @@ def _service(name: str, callers: list[str] | None = None) -> dict:
     return {"name": name, "callback": name.split(".")[1], "callers": callers or CALLERS[name]}
 
 
-def _private(app: XiaoQingApp, user_id: int = 7):
-    return app.issue_user_principal(
-        {"sender": {"user_id": user_id}}, user_id=user_id, group_id=None, is_private=True
+MEMORY_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+def _answer(method, payload, context):
+    PROBE.log("memory").append((method, payload, context.plugin_name))
+    return {"version": 1, "method": method}
+
+async def record(payload, context):
+    return _answer("record", payload, context)
+
+async def recall(payload, context):
+    return _answer("recall", payload, context)
+
+async def search(payload, context):
+    return _answer("search", payload, context)
+
+async def forget(payload, context):
+    return _answer("forget", payload, context)
+"""
+
+
+async def _install_memory(app: XiaoQingApp) -> list:
+    """装入 xiaoqing_memory；返回的列表按顺序收录它收到的 ``(方法, 载荷, 所有者)``。"""
+
+    await load_test_plugin(
+        app,
+        "xiaoqing_memory",
+        MEMORY_SOURCE,
+        services=[
+            service_declaration(name, name.split(".")[1], tuple(callers))
+            for name, callers in CALLERS.items()
+        ],
     )
-
-
-def _group(app: XiaoQingApp, user_id: int = 7, group_id: int = 300):
-    return app.issue_user_principal(
-        {"sender": {"user_id": user_id}}, user_id=user_id, group_id=group_id, is_private=False
-    )
-
-
-def _install_memory(app: XiaoQingApp, seen: list) -> None:
-    module   = ModuleType("plugins.xiaoqing_memory.main")
-    services = []
-    for name, callers in CALLERS.items():
-        method = name.split(".")[1]
-
-        async def callback(payload, context, _method=method):
-            seen.append((_method, payload, context.plugin_name))
-            return {"version": 1, "method": _method}
-
-        callback.__name__ = method
-        setattr(module, method, callback)
-        services.append(
-            PluginServiceDefinition(name=name, callback=method, callers=frozenset(callers))
-        )
-    definition = PluginDefinition(
-        name        = "xiaoqing_memory",
-        version     = "1.0.0",
-        entry       = "main.py",
-        commands    = [],
-        schedule    = [],
-        concurrency = "parallel",
-        services    = tuple(services),
-    )
-    _register_test_loaded_plugin(app, definition, module)
+    return PROBE.log("memory")
 
 
 @pytest.mark.unit
@@ -97,16 +97,16 @@ def test_memory_contracts_fix_owner_and_callers() -> None:
 def test_memory_capability_only_has_declared_methods(temp_app_root: Path) -> None:
     app = XiaoQingApp(temp_app_root)
     assert (
-        _plugin_context_for(
-            app, "xiaoqing_chat", user_id=7, principal=_private(app)
+        plugin_context_for(
+            app, "xiaoqing_chat", user_id=7, principal=user_principal(app, 7)
         ).capabilities.memory
         is None
     )
-    declared = _plugin_context_for(
+    declared = plugin_context_for(
         app,
         "xiaoqing_agent",
         user_id       = 7,
-        principal     = _private(app),
+        principal     = user_principal(app, 7),
         uses_services = frozenset({"memory.record"}),
     ).capabilities.memory
     assert declared is not None
@@ -115,17 +115,16 @@ def test_memory_capability_only_has_declared_methods(temp_app_root: Path) -> Non
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_core_injects_caller_and_scope_over_forged_fields(temp_app_root: Path) -> None:
-    app        = XiaoQingApp(temp_app_root)
-    seen: list = []
-    _install_memory(app, seen)
+    app    = XiaoQingApp(temp_app_root)
+    seen   = await _install_memory(app)
     forged = {"caller": "xiaoqing_life", "principal_scope": "u1", "principal_kind": "system"}
 
-    group = _plugin_context_for(
+    group = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id       = 7,
         group_id      = 300,
-        principal     = _group(app),
+        principal     = user_principal(app, 7, 300),
         uses_services = frozenset(CALLERS),
     ).capabilities.memory
     assert await group.recall({"scope": "g300", **forged}) == {"version": 1, "method": "recall"}
@@ -136,11 +135,11 @@ async def test_core_injects_caller_and_scope_over_forged_fields(temp_app_root: P
     assert payload["principal_kind"] == "user"
     assert payload["scope"] == "g300"
 
-    private = _plugin_context_for(
+    private = plugin_context_for(
         app,
         "xiaoqing_chat",
         user_id       = 7,
-        principal     = _private(app),
+        principal     = user_principal(app, 7),
         uses_services = frozenset(CALLERS),
     ).capabilities.memory
     await private.forget({"scope": "u7", **forged})
@@ -152,11 +151,10 @@ async def test_core_injects_caller_and_scope_over_forged_fields(temp_app_root: P
 async def test_system_principal_has_empty_scope_and_undeclared_methods_fail(
     temp_app_root: Path,
 ) -> None:
-    app        = XiaoQingApp(temp_app_root)
-    seen: list = []
-    _install_memory(app, seen)
+    app  = XiaoQingApp(temp_app_root)
+    seen = await _install_memory(app)
     system = app.identity_service.issue(kind="scheduled_system")
-    life = _plugin_context_for(
+    life = plugin_context_for(
         app,
         "xiaoqing_life",
         principal     = system,

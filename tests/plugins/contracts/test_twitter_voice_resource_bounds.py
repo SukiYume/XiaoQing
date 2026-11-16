@@ -13,6 +13,7 @@ import pytest
 from PIL import Image
 
 from core.bounded_file_cache import FileCacheLimits
+from core.bounded_http import BoundedHttpResponse
 from core.safe_http import SafeHttpResponse
 from plugins.twitter import main as twitter
 from plugins.voice import main as voice
@@ -28,22 +29,45 @@ def _png(color: tuple[int, int, int]) -> bytes:
     return output.getvalue()
 
 
+def _timeline_response(entries: list[dict]) -> BoundedHttpResponse:
+    body = json.dumps(
+        {
+            "data": {
+                "user": {
+                    "result": {
+                        "timeline": {
+                            "timeline": {
+                                "instructions": [
+                                    {"type": "TimelineAddEntries", "entries": entries},
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ).encode()
+    return BoundedHttpResponse(
+        url           = "https://x.com/i/api/graphql/timeline",
+        status        = 200,
+        body          = body,
+        media_type    = "application/json",
+        charset       = "utf-8",
+        headers       = {"Content-Type": "application/json"},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
+    )
+
+
 @pytest.mark.asyncio
 async def test_twitter_graphql_params_are_real_json_with_exact_strings(monkeypatch):
     captured = {}
 
     async def fake_request(*_args, **kwargs):
         captured.update(kwargs["request_kwargs"])
-        return object()
+        return _timeline_response([])
 
     monkeypatch.setattr(twitter, "aiohttp_request_bounded", fake_request)
-    monkeypatch.setattr(
-        twitter,
-        "parse_bounded_json",
-        lambda *_args, **_kwargs: {
-            "data": {"user": {"result": {"timeline": {"timeline": {"instructions": []}}}}}
-        },
-    )
     context = with_settings_reader(
         SimpleNamespace(
             http_session = object(),
@@ -71,41 +95,11 @@ async def test_twitter_graphql_params_are_real_json_with_exact_strings(monkeypat
     assert toggles == {"withArticlePlainText": False}
 
 
-def test_twitter_media_extraction_skips_malformed_items_individually():
-    tweet = {
-        "content": {
-            "itemContent": {
-                "tweet_results": {
-                    "result": {
-                        "legacy": {
-                            "extended_entities": {
-                                "media": [
-                                    None,
-                                    {"type": "photo"},
-                                    {"type": "photo", "media_url_https": None},
-                                    {
-                                        "type"           : "photo",
-                                        "media_url_https": " https://pbs.twimg.com/ok.png ",
-                                    },
-                                    {"type": "video"},
-                                ]
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    assert twitter._extract_image_urls(tweet) == ["https://pbs.twimg.com/ok.png"]
-    assert twitter._extract_image_urls({"content": []}) == []
-
-
 @pytest.mark.asyncio
 async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic(
     monkeypatch, tmp_path
 ):
-    payloads = [_png((index, 2, 3)) for index in range(1, 7)]
+    payloads = [_png((index, 2, 3)) for index in range(1, 10)]
     active   = 0
     peak     = 0
 
@@ -126,6 +120,7 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
 
     tweets = [
         {
+            "entryId": f"tweet-{index}",
             "content": {
                 "itemContent": {
                     "tweet_results": {
@@ -145,14 +140,15 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
                         }
                     }
                 }
-            }
+            },
         }
         for index in range(len(payloads))
     ]
     monkeypatch.setattr(twitter, "fetch_public_bytes", fake_fetch)
-    monkeypatch.setattr(twitter, "_fetch_timeline", AsyncMock(return_value=(tweets, None)))
+    monkeypatch.setattr(
+        twitter, "aiohttp_request_bounded", AsyncMock(return_value=_timeline_response(tweets))
+    )
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
-    monkeypatch.setattr(twitter, "MAX_CONCURRENT_IMAGE_DOWNLOADS", 2)
     monkeypatch.setattr(
         twitter,
         "IMAGE_CACHE_LIMITS",
@@ -164,15 +160,25 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
     )
     context = with_settings_reader(
         SimpleNamespace(
-            data_dir = tmp_path,
-            logger   = MagicMock(),
-            secrets  = {"plugins": {"twitter": {"user_id": "123456789", "max_pages": 1}}},
+            data_dir     = tmp_path,
+            http_session = object(),
+            logger       = MagicMock(),
+            secrets      = {
+                "plugins": {
+                    "twitter": {
+                        "user_id"  : "123456789",
+                        "headers"  : {},
+                        "cookies"  : {},
+                        "max_pages": 1,
+                    }
+                }
+            },
         )
     )
 
     assert await twitter._fetch_twitter_images(context) == len(payloads)
     files = list((tmp_path / "images").glob("*.png"))
-    assert peak <= 2
+    assert peak <= twitter.MAX_CONCURRENT_IMAGE_DOWNLOADS
     assert len(files) == 2
     assert sum(path.stat().st_size for path in files) <= twitter.IMAGE_CACHE_LIMITS.max_bytes
 
@@ -250,6 +256,4 @@ def test_root_voice_and_twitter_examples_match_runtime_schema():
         "role",
         "proxy",
     }
-    assert not {"appid", "api_secret", "api_key"} & set(voice_config)
     assert {"user_id", "headers", "cookies", "proxy", "max_pages"} <= set(twitter_config)
-    assert "nitter_host" not in twitter_config

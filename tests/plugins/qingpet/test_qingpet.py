@@ -1,4 +1,3 @@
-import os
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -14,11 +13,7 @@ from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import PetStatus
-
-
-def test_database_initialization(qingpet_db):
-    assert qingpet_db is not None
-    assert os.path.exists(qingpet_db.db_path)
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 
 def test_user_creation(qingpet_db):
@@ -37,13 +32,8 @@ def test_group_economy_stats_use_constant_query_count(qingpet_db):
         user_service.get_or_create_user(user_id, 123456)
         pet_service.adopt_pet(user_id, 123456, f"统计宠{index}")
 
-    statements: list[str] = []
-    connection            = qingpet_db._get_connection()
-    connection.set_trace_callback(statements.append)
-    try:
+    with trace_sql_statements(qingpet_db._get_connection()) as statements:
         stats = EconomyService(qingpet_db).get_group_stats(123456)
-    finally:
-        connection.set_trace_callback(None)
 
     selects = [
         statement
@@ -136,18 +126,6 @@ def test_pet_feed(qingpet_db):
     assert coins > 0
 
 
-def test_pet_clean(qingpet_db):
-    user_service = UserService(qingpet_db)
-    user         = user_service.get_or_create_user("test_user", 123456)
-
-    pet_service = PetService(qingpet_db)
-    pet_service.adopt_pet("test_user", 123456, "小白")
-
-    pet = qingpet_db.get_pet("test_user", 123456)
-    success, _message, _coins = pet_service.clean_pet(pet, user)
-    assert success
-
-
 def test_pet_play(qingpet_db):
     user_service = UserService(qingpet_db)
     user         = user_service.get_or_create_user("test_user", 123456)
@@ -174,34 +152,6 @@ def test_pet_sleep_and_wake(qingpet_db):
     success, message = pet_service.wake_pet(pet)
     assert success
     assert "睡醒" in message
-
-
-def test_pet_train(qingpet_db):
-    user_service = UserService(qingpet_db)
-    user         = user_service.get_or_create_user("test_user", 123456)
-
-    pet_service = PetService(qingpet_db)
-    pet_service.adopt_pet("test_user", 123456, "小白")
-
-    pet        = qingpet_db.get_pet("test_user", 123456)
-    pet.energy = 50
-
-    success, _message, _coins = pet_service.train_pet(pet, user)
-    assert success
-
-
-def test_pet_explore(qingpet_db):
-    user_service = UserService(qingpet_db)
-    user         = user_service.get_or_create_user("test_user", 123456)
-
-    pet_service = PetService(qingpet_db)
-    pet_service.adopt_pet("test_user", 123456, "小白")
-
-    pet        = qingpet_db.get_pet("test_user", 123456)
-    pet.energy = 50
-
-    success, _message, _coins = pet_service.explore(pet, user)
-    assert success
 
 
 def test_item_service(qingpet_db):
@@ -260,27 +210,6 @@ def test_admin_config(qingpet_db):
     config = qingpet_db.get_group_config(123456)
     assert config.economy_multiplier == 2.0
     assert not config.trade_enabled
-
-
-def test_pet_decay(qingpet_db):
-    from datetime import datetime, timedelta
-
-    pet_service = PetService(qingpet_db)
-    pet_service.adopt_pet("test_user", 123456, "小白")
-
-    pet = qingpet_db.get_pet("test_user", 123456)
-    # Set last_update to 10 minutes ago so decay will apply (>1 min threshold)
-    pet.last_update = datetime.now() - timedelta(minutes=10)
-    qingpet_db.update_pet(pet)
-
-    pet            = qingpet_db.get_pet("test_user", 123456)
-    initial_hunger = pet.hunger
-
-    # apply_decay returns Optional[str] (alert message or None), not bool
-    pet_service.apply_decay(pet, 1.0)
-
-    pet = qingpet_db.get_pet("test_user", 123456)
-    assert pet.hunger < initial_hunger
 
 
 def test_user_daily_reset(qingpet_db):

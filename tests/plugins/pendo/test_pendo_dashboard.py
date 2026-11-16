@@ -1,14 +1,13 @@
-"""Pendo Web 看板聚合器的跨模块回归。"""
+"""Pendo Web 看板聚合器跨日程、待办、账本和日记的汇总行为。"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
 
-import pytest
-
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.dashboard_overview import build_dashboard_overview
+from tests.helpers.sqlite_test_support import trace_sql_statements
 
 
 def _insert(db: Database, owner_id: str, **values: Any) -> None:
@@ -19,7 +18,6 @@ def _insert(db: Database, owner_id: str, **values: Any) -> None:
 
 def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """看板应按一次覆盖查询构建月日程、未来议程和跨模块摘要。"""
 
@@ -146,35 +144,18 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
         diary_date = "2026-03-05",
     )
 
-    range_calls       : list[tuple[str, str, str]] = []
-    collection_batches: list[list[str]]            = []
-    get_events_for_range                           = db.get_events_for_range
-    get_event_collections_by_ids                   = db.get_event_collections_by_ids
+    with trace_sql_statements(db.get_connection()) as statements:
+        result = build_dashboard_overview(
+            db       = db,
+            owner_id = owner_id,
+            now      = datetime(2026, 3, 25, 9, 30),
+        )
 
-    def track_range(user_id: str, start: str, end: str) -> list[Any]:
-        range_calls.append((user_id, start, end))
-        return get_events_for_range(user_id, start, end)
-
-    def track_collections(user_id: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
-        collection_batches.append(list(collection_ids))
-        return get_event_collections_by_ids(user_id, collection_ids)
-
-    monkeypatch.setattr(db, "get_events_for_range", track_range)
-    monkeypatch.setattr(db, "get_event_collections_by_ids", track_collections)
-    monkeypatch.setattr(
-        db,
-        "get_event_collection",
-        lambda *_args, **_kwargs: pytest.fail("看板不应逐个读取日程集合"),
-    )
-
-    result = build_dashboard_overview(
-        db       = db,
-        owner_id = owner_id,
-        now      = datetime(2026, 3, 25, 9, 30),
-    )
-
-    assert range_calls == [(owner_id, "2026-03-01T00:00:00", "2026-04-15T23:59:59")]
-    assert collection_batches == [["ev4col"]]
+    event_reads = [text for text in statements if "FROM items" in text and "type = 'event'" in text]
+    collection_reads = [text for text in statements if "FROM event_collections" in text]
+    assert len(event_reads) == 1
+    assert len(collection_reads) == 1
+    assert "'ev4col'" in collection_reads[0]
     assert result["summary"] == {
         "events_month"        : 3,
         "tasks_pending"       : 2,

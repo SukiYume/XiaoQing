@@ -305,12 +305,12 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
                 state.action_history.append(
                     chat_id,
                     ActionRecord(
-                        ts=time.time(),
-                        local_target=str(event.get("_xc_user_recorded_local_id") or ""),
-                        action="reply_rejected",
-                        reasoning=str(exc),
-                        detail={"source": "reply_checker", "need_replan": bool(exc.need_replan)},
-                        executed=False,
+                        ts           = time.time(),
+                        local_target = str(event.get("_xc_user_recorded_local_id") or ""),
+                        action       = "reply_rejected",
+                        reasoning    = str(exc),
+                        detail       = {"source": "reply_checker"},
+                        executed     = False,
                     ),
                 )
                 if hctx is not None:
@@ -320,7 +320,7 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
                     "xiaoqing_chat failed to record rejected reply error_type=%s",
                     type(history_exc).__name__,
                 )
-            if exc.need_replan and attempt < max_replan:
+            if attempt < max_replan:
                 context.logger.info(
                     "XiaoQing Chat 回复被拒绝，触发重规划重试 rejection_type=%s",
                     type(exc).__name__,
@@ -667,9 +667,6 @@ async def _update_observed_goal(context, hctx: HandlerContext, text: str, *, for
         )
     elif preserve:
         log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.keep", fields={})
-    elif not planner_top_goal:
-        await asyncio.to_thread(state.goal_store.clear, chat_id)
-        log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.clear", fields={})
 
 
 async def _log_reply_gate_skip(context, hctx: HandlerContext, text: str) -> None:

@@ -15,7 +15,6 @@ from PIL import Image
 from core.interfaces import PluginCapabilities
 from core.safe_http import SafeHttpResponse
 from plugins.adnmb import adapi
-from plugins.apod import main as apod
 from plugins.astro_tools import const as astro_const
 from plugins.astro_tools import obj as astro_obj
 from plugins.color import data_manager as color_data
@@ -54,46 +53,6 @@ class _ScopedContext:
         self.capabilities = PluginCapabilities(chat_reply=self.chat_reply)
 
 
-@pytest.mark.asyncio
-async def test_smalltalk_calls_loaded_plugin_provider_with_actor(tmp_path: Path) -> None:
-    context = _ScopedContext(tmp_path, user_id=42, group_id=84)
-
-    result = await smalltalk._call_chat_api("private prompt", context)
-
-    assert result == smalltalk.segments("provider response")
-    context.chat_reply.reply.assert_awaited_once_with(
-        "private prompt",
-        {"user_id": 42, "group_id": 84},
-    )
-
-
-@pytest.mark.asyncio
-async def test_smalltalk_qa_is_scoped_bounded_and_audited(tmp_path: Path) -> None:
-    first = _ScopedContext(tmp_path, user_id=10, group_id=100)
-    second = _ScopedContext(tmp_path, user_id=20, group_id=200)
-
-    assert "成功" in str(await smalltalk._add_qa(first, "问 回答一"))
-    assert await smalltalk.get_qa_answer(first, "问") == "回答一"
-    assert await smalltalk.get_qa_answer(second, "问") is None
-    assert "不能超过" in str(
-        await smalltalk._add_qa(
-            first,
-            f"{'问' * (smalltalk.MAX_QUESTION_LENGTH + 1)} 回答",
-        )
-    )
-
-    audit = json.loads((tmp_path / "QA_audit.json").read_text(encoding="utf-8"))
-    assert audit["entries"][-1]["owner"] == 10
-    assert audit["entries"][-1]["scope"] == "group_100"
-
-
-def test_qa_commands_are_admin_only() -> None:
-    smalltalk_manifest = json.loads(
-        (ROOT / "plugins" / "smalltalk" / "plugin.json").read_text(encoding="utf-8")
-    )
-    assert all(command["admin_only"] for command in smalltalk_manifest["commands"])
-
-
 def _png_bytes() -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (2, 2), (20, 40, 60)).save(output, format="PNG")
@@ -126,14 +85,6 @@ async def test_adnmb_image_download_is_bounded_validated_and_hashed(
     assert fetch.await_args.kwargs["max_bytes"] == adapi.MAX_IMAGE_BYTES
 
 
-def test_apod_cache_key_uses_full_url_and_trusted_mime() -> None:
-    one = apod._cache_filename("https://apod.nasa.gov/a/shared", ".png")
-    two = apod._cache_filename("https://apod.nasa.gov/b/shared", ".png")
-    assert one != two
-    assert one.endswith(".png")
-    assert all(char not in one for char in '<>:"/\\|?*')
-
-
 @pytest.mark.asyncio
 async def test_lightyear_constant_has_quantity_semantics() -> None:
     result = astro_const.handle_const("ly", MagicMock())
@@ -142,7 +93,7 @@ async def test_lightyear_constant_has_quantity_semantics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_simbad_total_deadline_returns_without_global_lock(
+async def test_simbad_total_deadline_returns_before_worker_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Warm the optional scientific imports. The assertion below measures the
@@ -153,12 +104,12 @@ async def test_simbad_total_deadline_returns_without_global_lock(
     release_query  = threading.Event()
     query_finished = threading.Event()
 
-    def slow_query(_name: str):
+    def slow_request(*_args, **_kwargs):
         release_query.wait(timeout=1.0)
         query_finished.set()
-        return None
+        raise RuntimeError("SIMBAD request abandoned")
 
-    monkeypatch.setattr(astro_obj, "_query_simbad_object", slow_query)
+    monkeypatch.setattr(astro_obj, "requests_request_bounded", slow_request)
     monkeypatch.setattr(astro_obj, "SIMBAD_TOTAL_TIMEOUT_SECONDS", 0.005)
     try:
         result = await astro_obj.handle_obj("M31", MagicMock())

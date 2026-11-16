@@ -10,12 +10,13 @@ from typing import Any
 import pytest
 
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
+from tests.helpers.pendo_test_support import reject_inserts
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Database,
     DuplicateBundleImportError,
-    _build_sample_bundle_bytes,
-    _ImportRequest,
+    ImportRequest,
+    build_sample_bundle_bytes,
     transfer_api,
 )
 
@@ -40,7 +41,7 @@ def test_import_execute_isolates_external_ids_and_selected_types(
         }
     )
 
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -105,7 +106,7 @@ def test_import_execute_isolates_external_ids_and_selected_types(
     assert (first_overwrite_body["inserted"], first_overwrite_body["updated"]) == (1, 0)
     assert "内部 UUID" in first_overwrite.json()["data"]["details"]["inserted"][0]["reason"]
     assert temp_db.get_item("task_existing", owner_id=OWNER_ID).title == "旧任务"
-    overwrite_bundle = _build_sample_bundle_bytes(
+    overwrite_bundle = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -148,7 +149,7 @@ def test_import_execute_isolates_external_ids_and_selected_types(
     assert len(imported_after_overwrite) == 1
     assert imported_after_overwrite[0].title == "新任务标题"
 
-    duplicate_bundle = _build_sample_bundle_bytes(
+    duplicate_bundle = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -190,9 +191,9 @@ def test_import_execute_isolates_external_ids_and_selected_types(
 
 
 def test_import_execute_hides_internal_transaction_errors(
-    client: Any, temp_db: Database, auth_headers: dict, monkeypatch
+    client: Any, temp_db: Database, auth_headers: dict
 ):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -206,10 +207,8 @@ def test_import_execute_hides_internal_transaction_errors(
         }
     )
 
-    def fail_execute_import_bundle(**kwargs):
-        raise RuntimeError("C:\\secret\\pendo.db SQL failed")
-
-    monkeypatch.setattr(temp_db, "execute_import_bundle", fail_execute_import_bundle)
+    # 存储层在写入条目时报错，错误文字里带着本机路径和 SQL 细节。
+    reject_inserts(temp_db, "items", "C:\\secret\\pendo.db SQL failed")
 
     response = client.post(
         "/api/transfer/import/execute",
@@ -234,7 +233,7 @@ def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata
     auth_headers: dict,
 ):
     hostile_id = '"><svg onload=alert(1)>'
-    bundle     = _build_sample_bundle_bytes(
+    bundle     = build_sample_bundle_bytes(
         {
             "note": [
                 {
@@ -282,7 +281,7 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     )
 
     def bundle(title: str) -> bytes:
-        return _build_sample_bundle_bytes(
+        return build_sample_bundle_bytes(
             {
                 "task": [
                     {
@@ -303,7 +302,7 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
 
     skip_result = asyncio.run(
         transfer_api.execute_import(
-            _ImportRequest(bundle("跳过")),
+            ImportRequest(bundle("跳过")),
             x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "skip"}),
             owner_id           = OWNER_ID,
             db                 = temp_db,
@@ -314,7 +313,7 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
 
     overwrite_result = asyncio.run(
         transfer_api.execute_import(
-            _ImportRequest(bundle("覆盖")),
+            ImportRequest(bundle("覆盖")),
             x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "overwrite"}),
             owner_id           = OWNER_ID,
             db                 = temp_db,
@@ -333,7 +332,7 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
 
     duplicate_result = asyncio.run(
         transfer_api.execute_import(
-            _ImportRequest(bundle("副本")),
+            ImportRequest(bundle("副本")),
             x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
             owner_id           = OWNER_ID,
             db                 = temp_db,
@@ -365,7 +364,7 @@ def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Databas
         }
     )
     temp_db.delete_item("task_deleted_global", owner_id=OWNER_ID)
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -385,7 +384,7 @@ def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Databas
 
     result = asyncio.run(
         transfer_api.execute_import(
-            _ImportRequest(bundle_bytes),
+            ImportRequest(bundle_bytes),
             x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
             owner_id           = OWNER_ID,
             db                 = temp_db,
@@ -436,7 +435,7 @@ def test_import_execute_duplicate_rewrites_note_relationships_to_duplicated_item
         }
     )
 
-    duplicate_bundle = _build_sample_bundle_bytes(
+    duplicate_bundle = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -530,7 +529,7 @@ def test_import_relationship_rewrite_remaps_note_links_and_event_source_ids():
 def test_import_execute_restores_event_collection_before_leaf_events(
     client: Any, temp_db: Database, auth_headers: dict
 ):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "event_collection": [
                 {
@@ -604,7 +603,7 @@ def test_import_execute_restores_event_collection_before_leaf_events(
 def test_import_execute_idempotency_blocks_duplicate_bundle(
     client: Any, temp_db: Database, auth_headers: dict
 ):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -704,9 +703,7 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
     assert len(logs) == 1
 
 
-def test_import_execute_transaction_atomicity(
-    client: Any, temp_db: Database, auth_headers: dict, monkeypatch
-):
+def test_import_execute_transaction_atomicity(client: Any, temp_db: Database, auth_headers: dict):
     """如果导入事务中有记录失败，整体应该回滚"""
     # 插入一条已存在的记录用于 overwrite
     temp_db.insert_item(
@@ -724,14 +721,9 @@ def test_import_execute_transaction_atomicity(
         }
     )
 
-    from unittest.mock import Mock
-
-    def fail_audit(*args, **kwargs):
-        raise RuntimeError("injected audit failure")
-
-    audit = Mock(side_effect=fail_audit)
-    monkeypatch.setattr(temp_db, "_log_transfer_with_cursor", audit)
-    bundle_bytes = _build_sample_bundle_bytes(
+    # 存储层拒绝写入迁移审计：此时条目与 bundle 标记都已在同一事务里写过。
+    audit_rejection = reject_inserts(temp_db, "transfer_logs", "injected audit failure")
+    bundle_bytes    = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -771,14 +763,26 @@ def test_import_execute_transaction_atomicity(
         content=bundle_bytes,
     )
     assert resp.status_code == 500
-    assert audit.call_count == 1
     items = temp_db.get_all_items(OWNER_ID, {"type": "task"})
     assert [(item.id, item.title) for item in items] == [("task_atom_exist", "旧任务")]
     assert temp_db.get_transfer_logs(OWNER_ID) == []
 
+    # 审计恢复后同一个 bundle 能完整导入：失败的那次没有留下条目，也没有占用 bundle 标记。
+    temp_db.get_connection().execute(f"DROP TRIGGER {audit_rejection}")
+    retry = client.post(
+        "/api/transfer/import/execute",
+        headers={
+            **auth_headers,
+            "X-Transfer-Options": json.dumps({"types": ["task"], "conflict_policy": "skip"}),
+        },
+        content=bundle_bytes,
+    )
+    assert retry.status_code == 200
+    assert retry.json()["data"]["results"]["inserted"] == 2
+
 
 def test_import_execute_rejects_empty_selected_types(client: Any, auth_headers: dict):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -811,7 +815,7 @@ def test_import_execute_rejects_empty_selected_types(client: Any, auth_headers: 
 
 
 def test_import_execute_creates_audit_log(client: Any, temp_db: Database, auth_headers: dict):
-    bundle_bytes = _build_sample_bundle_bytes(
+    bundle_bytes = build_sample_bundle_bytes(
         {
             "task": [
                 {
@@ -880,7 +884,7 @@ def test_import_samples_pagination(client: Any, auth_headers: dict):
                 "updated_at": "2026-03-20T09:00:00+08:00",
             }
         )
-    bundle_bytes = _build_sample_bundle_bytes({"task": tasks})
+    bundle_bytes = build_sample_bundle_bytes({"task": tasks})
 
     # 请求第1页 (5条/页)
     response = client.post(

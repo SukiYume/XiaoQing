@@ -1,4 +1,4 @@
-"""Pendo Web 顶栏的路由、搜索和退出交互回归。"""
+"""Pendo Web 顶栏的路由、搜索和退出交互。"""
 
 from __future__ import annotations
 

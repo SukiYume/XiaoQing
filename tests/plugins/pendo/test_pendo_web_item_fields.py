@@ -541,54 +541,6 @@ def test_normalize_event_fields_compares_timezone_offsets_by_absolute_time():
         )
 
 
-def test_event_update_route_preserves_event_notes_when_title_changes():
-    temp_dir = (
-        ROOT / ".pytest_cache" / "tmp" / f"pendo_event_update_preserves_notes_{uuid.uuid4().hex}"
-    )
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db           = Database(str(temp_dir / "pendo.db"))
-    owner_id     = "u-event-metadata"
-    items_module = items_api
-
-    try:
-        db.insert_item(
-            normalize_event_fields(
-                {
-                    "id"          : "ev-note",
-                    "owner_id"    : owner_id,
-                    "type"        : "event",
-                    "title"       : "学术会议",
-                    "category"    : "会议",
-                    "start_time"  : "2026-04-22T12:43:00",
-                    "end_time"    : "2026-04-26T12:00:00",
-                    "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
-                    "notes"       : "全局备注",
-                },
-                partial=False,
-            )
-        )
-
-        body = items_module.ItemUpdate(
-            title="学术会议（更新标题）",
-        )
-
-        result = items_module.update_item(
-            "ev-note",
-            body     = body,
-            owner_id = owner_id,
-            db       = db,
-        )
-
-        assert result["ok"] is True
-        updated = db.get_item("ev-note", owner_id=owner_id)
-        assert updated is not None
-        assert updated.title == "学术会议（更新标题）"
-        assert updated.notes == "全局备注"
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
 def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
     task = normalize_task_fields(
         {

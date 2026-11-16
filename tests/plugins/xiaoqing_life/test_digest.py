@@ -89,7 +89,6 @@ def test_messages_put_external_text_only_in_a_labeled_json_block() -> None:
     assert comment["id"] == "c1.1" and comment["replies"][0]["id"] == "c1.1.r1"
     assert comment["pictures"] == ["c1.1#0"] and "url" not in json.dumps(payload)
     assert payload["known_terms"] == ["旧词"] and payload["open_threads"] == ["进行中"]
-    assert "不需要照做" in messages[0]["content"]
 
 
 def test_valid_digest_passes_every_check() -> None:
@@ -234,4 +233,3 @@ def test_highlight_is_a_verified_quote_from_the_same_item() -> None:
     ):
         seen = looked(**bad)
         assert (seen.highlight, seen.highlight_from, seen.reaction) == ("", "", "好可爱")
-    assert '"quote"' in digest.LEARN_FIELDS.split('"terms"')[0]

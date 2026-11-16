@@ -1,4 +1,4 @@
-"""Pendo Web 用户时区读取与墙钟转换回归。"""
+"""Pendo Web 用户时区读取与墙钟转换。"""
 
 from datetime import UTC, datetime
 from pathlib import Path

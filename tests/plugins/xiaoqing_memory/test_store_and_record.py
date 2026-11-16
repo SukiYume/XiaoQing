@@ -10,7 +10,7 @@ import pytest
 from plugins.xiaoqing_memory.events import month_of
 from plugins.xiaoqing_memory.model import GLOBAL, Page, PageLine
 from plugins.xiaoqing_memory.store import MemoryStore
-from tests.plugins.xiaoqing_memory.support import (
+from tests.helpers.xiaoqing_memory_test_support import (
     ALI,
     BO,
     GROUP,

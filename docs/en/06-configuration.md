@@ -369,6 +369,10 @@ Group IDs, QQ IDs, server addresses, and local paths that belong to one deployme
 | `plugins.minecraft.servers.<profile>` | Minecraft server `host`, `port`, and `log_file`. The RCON password lives in `secrets.plugins.minecraft.<profile>` |
 | `plugins.xiaoqing_chat.<field>` | Overrides the same field in the behavior file `xiaoqing_config.json`, merged level by level |
 
+`scripts/sync_to_remote.sh` replaces the deployment's `config/config.json` with the local one. If the local copy leaves out a schedule's `group_ids`, the schedule does not stop; it delivers to the groups in its `plugin.json` entry or in `default_group_ids` instead.
+Before syncing, the script therefore reads the deployment's `config/config.json` and every plugin's `plugin.json` over ssh, read-only, and uses `scripts/check_schedule_targets.py` to work out which groups each delivering schedule reaches on each side. A preview lists any difference, and `--apply` refuses to sync until `--accept-target-changes` confirms the change is intended.
+The comparison runs locally with `python` by default; set `PYTHON_BIN` to use another interpreter.
+
 The repository's `.githooks/pre-commit` runs `scripts/check_private.py`.
 It rejects a commit when staged files contain group IDs, accounts, credentials, or user directories from the local config or secrets, or terms listed in `config/private_terms.txt` (one per line, such as member nicknames).
 It reports files and field paths only, never values.
@@ -622,6 +626,8 @@ During a shutdown window, deployment scripts write temporary files, replace targ
 
 Address or token changes wake the active WebSocket task.
 Candidate listeners commit the new inbound generation. Only the committed generation admits new events at any time.
+If the candidate listener cannot start (for example, the new port is already in use), the configuration apply reports that error and the previous listener keeps admitting events at its old address with the currently published token only: the token from before the publication stops working, and with no trusted token the previous listener admits nothing.
+A later `/reload` tries the switch to the declared listener again.
 
 ## ✅ Production configuration checklist
 

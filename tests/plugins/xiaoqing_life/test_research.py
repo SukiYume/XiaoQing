@@ -1,4 +1,4 @@
-"""有限步骤的自主研究、方法复用、矛盾与走向、搁置、规划器改动。"""
+"""有限步骤的自主研究、方法复用、矛盾与走向、搁置、规划器对小课题的取舍。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import subtitle
 from plugins.xiaoqing_life.sources.base import SourceError, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
     FakeFetcher,
     at,
@@ -61,7 +61,7 @@ def _thread(**kw: Any) -> dict[str, Any]:
         "topic"     : "猫",
         "why"       : "好奇",
         "next_query": "猫 纸箱",
-        # 这组测试走 B站搜索那条路；按问题类型先查百科的情形见 test_research_production_cases.py。
+        # 这组测试走 B站搜索那条路；按问题类型先查百科的情形见 test_research_direction.py。
         "kind"        : "practice",
         "status"      : "open",
         "steps"       : 0,
@@ -481,7 +481,6 @@ async def test_three_rounds_split_the_span_and_commit_each_round(tmp_path: Path)
 
 
 async def test_rounds_are_capped_by_config(tmp_path: Path) -> None:
-    ai = FakeAI(*[_reply(next={"action": "search", "arg": "再搜"}) for _ in range(5)])
     for rounds in (1, 2):
         store = _with_thread(tmp_path / str(rounds))
         ai = FakeAI(*[_reply(next={"action": "search", "arg": "再搜"}) for _ in range(5)])
@@ -498,9 +497,7 @@ async def test_rounds_are_capped_by_config(tmp_path: Path) -> None:
         assert len(ai.calls) == rounds
     assert parse_life_config({"research_max_rounds": 9}).research_max_rounds == 5
     assert parse_life_config({"research_max_rounds": 0}).research_max_rounds == 1
-    assert make_cfg().research_max_rounds == 3 and make_cfg().park_days == 3
     assert parse_life_config({"park_days": 99}).park_days == 30
-    assert make_cfg().session_minutes["thread_continue"] == (20, 40)
 
 
 async def test_deep_read_action_reads_the_chosen_video_deeper(tmp_path: Path) -> None:
@@ -1364,7 +1361,7 @@ async def test_thread_events_are_a_bounded_record_of_what_happened() -> None:
     assert len(thread["events"]) == th.MAX_EVENTS
 
 
-async def test_thread_candidate_no_longer_requires_bili_search() -> None:
+async def test_thread_candidate_needs_any_one_research_source() -> None:
     cfg = make_cfg(sources={"bili_search": False}, choice_temperature=0.5)
     score = planner.choose(cfg, default_state(), [_thread()], {}, MOMENT, random.Random(1)).scores
     assert THREAD in score
@@ -1397,7 +1394,7 @@ async def test_unhealthy_bili_search_penalizes_only_interest_dive() -> None:
     assert shaky[planner.INTEREST] == base[planner.INTEREST] - planner.UNRELIABLE_SEARCH_PENALTY
 
 
-async def test_status_and_threads_commands_show_the_new_fields(tmp_path: Path) -> None:
+async def test_threads_status_and_methods_commands_show_thread_details(tmp_path: Path) -> None:
     store = _with_thread(
         tmp_path,
         status      = "parked",
@@ -1440,7 +1437,7 @@ async def test_methods_collection_is_persisted(tmp_path: Path) -> None:
     assert again.methods[0]["id"] == "m1"
 
 
-# ───────────────────────────── 复查补充 ─────────────────────────────
+# ───────────────────────────── 其他研究场景 ─────────────────────────────
 
 
 async def test_repeat_item_in_a_later_round_merges_into_the_same_episode(tmp_path: Path) -> None:

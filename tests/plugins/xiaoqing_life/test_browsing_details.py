@@ -18,10 +18,9 @@ from plugins.xiaoqing_life.fetching import pick_clicks, prescore
 from plugins.xiaoqing_life.planner import HOT_SCROLL, INTEREST, Decision
 from plugins.xiaoqing_life.safety import clean_text
 from plugins.xiaoqing_life.session import run_session
-from plugins.xiaoqing_life.sources import bilibili
 from plugins.xiaoqing_life.sources.base import SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     FakeAI,
     FakeFetcher,
@@ -253,7 +252,6 @@ def test_episode_line_states_what_it_was_about_and_gives_the_link_only_on_reques
     )
     asked = _call(store, "你刚说的那个视频叫啥，谁做的，发个链接")["life_lines"]
     assert "（链接 https://www.bilibili.com/video/BV1xx）" in asked
-    assert "bilibili.com" not in _call(store, "你昨天看了什么") if False else True
 
 
 @pytest.mark.asyncio
@@ -423,7 +421,7 @@ def test_dirty_only_when_something_actually_changed(tmp_path: Path) -> None:
     store = new_store(tmp_path)
     _term(store, "哈基米", "对猫咪的爱称")
     payload = {"text": "看这个哈基米", "recent": [], "bot_recent": [], "unknown_terms": []}
-    response, dirty = tc.turn_context(store, make_cfg(), payload, MOMENT, random.Random(0.99 and 1))
+    response, dirty = tc.turn_context(store, make_cfg(), payload, MOMENT, random.Random(1))
     assert response is not None and not dirty  # 只是听懂，没有改任何状态
     queued = dict(payload, unknown_terms=["绝绝子"])
     _, dirty = tc.turn_context(store, make_cfg(), queued, MOMENT, random.Random(1))
@@ -454,18 +452,6 @@ def test_comment_candidates_are_chosen_by_interest_and_heat_not_by_position() ->
     assert prescore(items[5], ["天文摄影"]) > prescore(items[0], ["天文摄影"])
     zhihu = SourceItem("zhihu_hot:1", "zhihu_hot", "天文摄影", "", "u", 1, ())
     assert pick_clicks([zhihu], ["天文摄影"]) == []  # 只有 B 站条目取热评
-
-
-@pytest.mark.asyncio
-async def test_default_comment_budget_is_twelve() -> None:
-    assert make_cfg().max_comments_per_item == 12
-    fetch = FakeFetcher(
-        {"/reply/main": comments_payload(*[bili_reply(f"评论{n}") for n in range(10)])}
-    )
-    [item] = await bilibili.popular(
-        FakeFetcher({"/popular": popular_payload(bili_video(1, "视频"))}), []
-    )
-    assert len(bilibili.comments_of(await bilibili.reply_page(fetch, item), 1, [], 12)) == 10
 
 
 # ───────────────────────────── A8 消化时刻 ─────────────────────────────

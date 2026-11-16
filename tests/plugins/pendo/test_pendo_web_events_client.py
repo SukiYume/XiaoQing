@@ -1,4 +1,4 @@
-"""Pendo Web 日程页的数据边界、编辑器与异步生命周期回归。"""
+"""Pendo Web 日程页的数据边界、编辑器与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ EVENTS_SETUP: Final = r"""
     globalThis.__modalContent = null;
     globalThis.__closeModalCount = 0;
     globalThis.__confirmResult = true;
-    globalThis.__styleCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
     globalThis.__dispatchedEvents = [];
@@ -168,7 +167,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (_breakpoint, cssText) => cssText;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",

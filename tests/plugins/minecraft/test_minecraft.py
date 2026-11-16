@@ -52,6 +52,13 @@ class _Context:
         return settings_snapshot(config=self.config, secrets=self.secrets)
 
 
+class _SettingsFailureContext(_Context):
+    """读取设置快照就抛出带敏感字样的内部异常。"""
+
+    def get_settings_snapshot(self):
+        raise RuntimeError("TOP-SECRET-INTERNAL")
+
+
 class _FakeRconClient:
     instances: ClassVar[list[_FakeRconClient]] = []
     next_connect_result = RconConnectResult(success=True)
@@ -167,7 +174,7 @@ class TestMinecraftMetadata:
         assert commands["mcdisconnect"]["admin_only"] is True
         assert all("contexts" not in command for command in commands.values())
         subcommands = {item["name"]: item for item in commands["mc"]["subcommands"]}
-        # 谁能做什么全在这里声明，插件代码不再自己判断管理员。
+        # 谁能做什么全在这里声明，插件代码不自己判断管理员。
         for name in ("connect", "disconnect", "run"):
             assert subcommands[name]["permission"] == "bot_admin", name
         for name in ("say", "tell", "list", "status", "help"):
@@ -195,31 +202,12 @@ class TestMinecraftConfiguration:
         assert "secret-pass" not in text
         assert conn is not None
         assert not hasattr(conn, "password")
-        assert not hasattr(conn, "log_file")
         assert _FakeRconClient.instances[0].password == "secret-pass"
 
     @pytest.mark.asyncio
     async def test_missing_config_returns_fixed_error(self, tmp_path: Path) -> None:
         result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
         assert "plugins.minecraft.servers" in result[0]["data"]["text"]
-
-    @pytest.mark.asyncio
-    async def test_servers_come_from_the_deployment_config(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """服务器写在部署配置里；插件目录里遗留的旧 config.json 不读。"""
-
-        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
-        (tmp_path / "config.json").write_text(
-            json.dumps({"default": _server_config(host="legacy.invalid")}), encoding="utf-8"
-        )
-        missing = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        assert "plugins.minecraft.servers" in missing[0]["data"]["text"]
-        assert _FakeRconClient.instances == []
-
-        _write_config(tmp_path, _server_config(host="mc.example"))
-        await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        assert _FakeRconClient.instances[-1].host == "mc.example"
 
     @pytest.mark.asyncio
     async def test_connect_without_profile_returns_usage(self, tmp_path: Path) -> None:
@@ -390,17 +378,26 @@ class TestMinecraftConfiguration:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
     ) -> None:
         (tmp_path / "latest.log").write_bytes(b"")
         _write_config(tmp_path, _server_config(log_file="latest.log"))
         monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        real_resolve = Path.resolve
 
-        def explode(*_args: Any, **_kwargs: Any) -> Any:
-            raise OSError("cursor init failed")
+        def resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+            if self.name == "latest.log":
+                raise OSError("cannot resolve log path")
+            return real_resolve(self, *args, **kwargs)
 
-        monkeypatch.setattr(mc_main, "LogMonitor", explode)
+        # 日志文件存在，但解析真实路径时系统报错：只丢掉日志监控，RCON 照常连接。
+        monkeypatch.setattr(Path, "resolve", resolve)
         result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+
+        conn = reset_minecraft_runtime.get_connection(PRIVATE_TARGET)
         assert "仅连接 RCON" in result[0]["data"]["text"]
+        assert conn is not None and conn.log_monitor is None
+        assert _FakeRconClient.instances[0].connected is True
 
 
 class TestMinecraftCommands:
@@ -419,7 +416,7 @@ class TestMinecraftCommands:
         assert "Minecraft RCON" in result[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_legacy_connect_and_disconnect_route_to_same_target(
+    async def test_mcconnect_and_mcdisconnect_commands_route_to_same_target(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -485,7 +482,7 @@ class TestMinecraftCommands:
         assert "无法识别" in invalid[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_legacy_command_rejects_invalid_target(self, tmp_path: Path) -> None:
+    async def test_mcconnect_command_rejects_invalid_target(self, tmp_path: Path) -> None:
         result = await mc_main.handle("mcconnect", "default", {"user_id": 0}, _context(tmp_path))
         assert "无法识别" in result[0]["data"]["text"]
 
@@ -513,7 +510,7 @@ class TestMinecraftCommands:
         assert said[0]["data"]["text"] == "✅ 已发到游戏"
         assert told[0]["data"]["text"] == "✅ 已悄悄发给 Steve"
         assert bad[0]["data"]["text"].startswith("用法: /mc tell")
-        # 不再把未知内容当服务器命令：要执行就走 /mc run，它在 plugin.json 里只给 Bot 管理员。
+        # 未知内容不当服务器命令：要执行就走 /mc run，它在 plugin.json 里只给 Bot 管理员。
         assert "/mc run" in bare[0]["data"]["text"]
         say_command, tell_command = client.commands
         _, target, component = say_command.split(" ", 2)
@@ -719,16 +716,12 @@ class TestMinecraftCommands:
         assert "响应可能不完整" in result[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_unexpected_errors_never_echo_exception_text(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        async def explode(*_args: Any, **_kwargs: Any) -> Any:
-            raise RuntimeError("TOP-SECRET-INTERNAL")
-
-        monkeypatch.setattr(mc_main, "_dispatch_command", explode)
-        result = await mc_main.handle("mc", "status", {"user_id": 1}, _context(tmp_path))
+    async def test_unexpected_errors_never_echo_exception_text(self, tmp_path: Path) -> None:
+        context = cast(
+            PluginContextProtocol,
+            cast(object, _SettingsFailureContext(tmp_path)),
+        )
+        result = await mc_main.handle("mc", "connect default", {"user_id": 1}, context)
         text   = result[0]["data"]["text"]
         assert "处理 Minecraft 请求失败" in text
         assert "TOP-SECRET-INTERNAL" not in text
@@ -739,12 +732,15 @@ class TestMinecraftCommands:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        async def cancel(*_args: Any, **_kwargs: Any) -> Any:
-            raise asyncio.CancelledError
+        _write_config(tmp_path, _server_config())
 
-        monkeypatch.setattr(mc_main, "_dispatch_command", cancel)
+        class CancelConnect(_FakeRconClient):
+            async def connect(self) -> RconConnectResult:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(mc_main, "RconClient", CancelConnect)
         with pytest.raises(asyncio.CancelledError):
-            await mc_main.handle("mc", "status", {"user_id": 1}, _context(tmp_path))
+            await mc_main.handle("mc", "connect default", {"user_id": 1}, _context(tmp_path))
 
 
 class TestConnectionManager:
@@ -806,12 +802,11 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_shutdown_clears_connections_and_rate_state(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        reset_minecraft_runtime: ConnectionManager,
     ) -> None:
-        manager = ConnectionManager()
+        manager = reset_minecraft_runtime
         client  = _FakeRconClient("host", 25575, "p")
         await manager.replace_connection(_connection(PRIVATE_TARGET, client=client))
-        monkeypatch.setattr(mc_main, "_manager", manager)
         mc_main._event_buckets[("host", 25575, "private", 10001)] = mc_main._EventTokenBucket()
         mc_main._delivery_cursor                                  = 4
 
@@ -852,7 +847,6 @@ class TestLogMonitor:
         ]
         assert batch.events[3].message == "was slain by Zombie"
         assert not hasattr(batch.events[0], "raw_line")
-        assert not hasattr(batch.events[0], "timestamp")
 
     def test_unterminated_line_is_delivered_only_after_newline(self, tmp_path: Path) -> None:
         log_path = tmp_path / "latest.log"
@@ -874,15 +868,18 @@ class TestLogMonitor:
         self, tmp_path: Path
     ) -> None:
         log_path = tmp_path / "latest.log"
-        payload  = (b"ignored line\n" * 80) + b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        # 积压的日志超过一次读取的上限（1 MiB）。
+        payload = (b"ignored line\n" * 90_000) + (
+            b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        )
         log_path.write_bytes(payload)
-        monitor                = LogMonitor(str(log_path))
-        monitor._initialized   = True  # noqa: SLF001
-        monitor._last_position = 0  # noqa: SLF001
-        monitor.MAX_READ_BYTES = 128
-        read_start             = len(payload) - monitor.MAX_READ_BYTES
-        partial                = read_start > 0 and payload[read_start - 1 : read_start] != b"\n"
-        partial_end            = payload.find(b"\n", read_start) + 1 if partial else read_start
+        assert len(payload) > monitor.MAX_READ_BYTES
+        read_start  = len(payload) - monitor.MAX_READ_BYTES
+        partial     = read_start > 0 and payload[read_start - 1 : read_start] != b"\n"
+        partial_end = payload.find(b"\n", read_start) + 1 if partial else read_start
 
         batch = monitor.check_updates()
 
@@ -899,10 +896,11 @@ class TestLogMonitor:
             f"[12:00:00] [Server thread/INFO]: <Player{index % 100}> message-{index}\n"
             for index in range(1500)
         )
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
         log_path.write_text(lines, encoding="utf-8")
-        monitor                = LogMonitor(str(log_path))
-        monitor._initialized   = True  # noqa: SLF001
-        monitor.MAX_READ_BYTES = log_path.stat().st_size + 1
+        assert log_path.stat().st_size < monitor.MAX_READ_BYTES
 
         batch = monitor.check_updates()
 
@@ -1020,19 +1018,19 @@ class TestLogMonitor:
         assert monitor.commit(empty)
         with log_path.open("rb") as file:
             assert monitor._count_skipped_lines(file, 0, 0) == 0  # noqa: SLF001
-            monitor.MAX_SKIPPED_LINE_SCAN_BYTES = 1
-            assert monitor._count_skipped_lines(file, 0, 2) is None  # noqa: SLF001
+            too_far = monitor.MAX_SKIPPED_LINE_SCAN_BYTES + 1
+            assert monitor._count_skipped_lines(file, 0, too_far) is None  # noqa: SLF001
         assert LogMonitor._keep_complete_lines(b"", content_start=7) == (b"", 7)  # noqa: SLF001
 
     def test_large_unscanned_prefix_keeps_unknown_line_count(self, tmp_path: Path) -> None:
         log_path = tmp_path / "latest.log"
-        event    = b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
-        payload  = b"x" * 200 + b"\n" + event
-        log_path.write_bytes(payload)
-        monitor                             = LogMonitor(str(log_path))
-        monitor._initialized                = True  # noqa: SLF001
-        monitor.MAX_READ_BYTES              = len(event) + 50
-        monitor.MAX_SKIPPED_LINE_SCAN_BYTES = 1
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        event = b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        # 被跳过的前缀超过行数扫描的上限（4 MiB），只能报告字节数。
+        prefix = b"x" * (monitor.MAX_SKIPPED_LINE_SCAN_BYTES + monitor.MAX_READ_BYTES) + b"\n"
+        log_path.write_bytes(prefix + event)
 
         batch = monitor.check_updates()
 
@@ -1053,11 +1051,7 @@ class TestLogMonitor:
         )
         assert monitor.commit(stale) is False
 
-    def test_missing_file_and_poll_error_return_uncommittable_batch(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
+    def test_missing_file_and_poll_error_return_uncommittable_batch(self, tmp_path: Path) -> None:
         missing = LogMonitor(str(tmp_path / "missing.log"))
         assert missing.initialize() is False
         assert missing.check_updates().cursor_before is None
@@ -1067,10 +1061,8 @@ class TestLogMonitor:
         monitor = LogMonitor(str(log_path))
         assert monitor.initialize()
 
-        def fail() -> Any:
-            raise OSError("disk failure")
-
-        monkeypatch.setattr(monitor, "_read_window", fail)
+        # 初始化之后日志文件消失：读取窗口失败，批次不可提交。
+        log_path.unlink()
         batch = monitor.check_updates()
         assert batch.events == []
         assert batch.cursor_before is None

@@ -1,4 +1,4 @@
-"""``/pendo event add --force``：已经知道时间冲突时直接创建，不再进入确认会话。"""
+"""``/pendo event add --force``：已经知道时间冲突时直接创建，不进入确认会话。"""
 
 from __future__ import annotations
 
@@ -14,12 +14,31 @@ from plugins.pendo.handlers.event import EventHandler, _split_force_flag
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("明天九点组会", ("明天九点组会", False)),
-        ("明天九点组会 --force", ("明天九点组会", True)),
-        ("--force 明天九点组会", ("明天九点组会", True)),
-        ("明天 --force 九点组会", ("明天 九点组会", True)),
-        ("讨论 --forcex 参数", ("讨论 --forcex 参数", False)),
-        ("--force", ("", True)),
+        pytest.param("明天九点组会", ("明天九点组会", False), id="no-flag"),
+        pytest.param("明天九点组会 --force", ("明天九点组会", True), id="flag-at-end"),
+        pytest.param("--force 明天九点组会", ("明天九点组会", True), id="flag-at-start"),
+        pytest.param("明天 --force 九点组会", ("明天 九点组会", True), id="flag-in-middle"),
+        pytest.param("讨论 --forcex 参数", ("讨论 --forcex 参数", False), id="longer-word"),
+        pytest.param("--force", ("", True), id="flag-only"),
+        pytest.param(
+            '{"kind":"single","title":"a  b","notes":"x   y","start_time":"2031-05-01T10:00"}'
+            " --force",
+            (
+                '{"kind":"single","title":"a  b","notes":"x   y","start_time":"2031-05-01T10:00"}',
+                True,
+            ),
+            id="keeps-whitespace-inside-json",
+        ),
+        pytest.param(
+            "明天9点开会\n备注  带电脑 --force",
+            ("明天9点开会\n备注  带电脑", True),
+            id="keeps-newline-and-double-space",
+        ),
+        pytest.param(
+            '学习 "git push --force 用法"',
+            ('学习 "git push --force 用法"', False),
+            id="flag-inside-quotes-is-text",
+        ),
     ],
 )
 def test_split_force_flag(raw: str, expected: tuple[str, bool]) -> None:
@@ -60,7 +79,7 @@ def test_force_flag_creates_despite_conflict_without_a_session() -> None:
     assert sessions == []
 
 
-def test_conflict_without_force_still_asks_for_confirmation() -> None:
+def test_conflict_without_force_asks_for_confirmation() -> None:
     sessions: list = []
 
     class Context:

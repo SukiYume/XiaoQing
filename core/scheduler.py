@@ -24,9 +24,6 @@ from apscheduler.triggers.cron import CronTrigger
 from .clock import DEFAULT_CONFIG_TIMEZONE
 
 logger = logging.getLogger(__name__)
-# 真实的 APScheduler 类。测试会把本模块里的 ``AsyncIOScheduler`` 换成替身，而
-# ``isinstance`` 判断（能否走私有排空路径）始终要对真实类做。
-_REAL_ASYNCIO_SCHEDULER = AsyncIOScheduler
 
 
 # ============================================================
@@ -52,7 +49,7 @@ def _unavailable(reason: str) -> SchedulerDrainCapability:
 def probe_asyncio_scheduler_drain(scheduler: object) -> SchedulerDrainCapability:
     """Inspect the concrete 3.x scheduler layout without mutating it."""
 
-    if not isinstance(scheduler, _REAL_ASYNCIO_SCHEDULER):
+    if not isinstance(scheduler, AsyncIOScheduler):
         return _unavailable("scheduler is not APScheduler's AsyncIOScheduler")
 
     for name in (
@@ -492,7 +489,7 @@ class SchedulerManager:
             self._complete_shutdown()
             return
 
-        if isinstance(scheduler, _REAL_ASYNCIO_SCHEDULER):
+        if isinstance(scheduler, AsyncIOScheduler):
             drain = self._private_drain_for(scheduler)
             if drain is not None:
                 self._started = False
@@ -513,7 +510,7 @@ class SchedulerManager:
             self._complete_shutdown()
             return
 
-        if isinstance(scheduler, _REAL_ASYNCIO_SCHEDULER):
+        if isinstance(scheduler, AsyncIOScheduler):
             drain = self._private_drain_for(scheduler)
             if drain is not None:
                 self._started = False
@@ -536,9 +533,7 @@ class SchedulerManager:
         if not self._call_public_shutdown(scheduler, wait=wait):
             return
 
-        if isinstance(scheduler, _REAL_ASYNCIO_SCHEDULER) and bool(
-            getattr(scheduler, "running", False)
-        ):
+        if isinstance(scheduler, AsyncIOScheduler) and bool(getattr(scheduler, "running", False)):
             self._public_shutdown_owner = scheduler
             self._started               = False
             raise RuntimeError(

@@ -282,11 +282,18 @@ def mock_context_factory():
         group_id: int | None         = None,
         request_id: str | None       = None,
     ):
+        from core.config import lookup_dotted
         from core.context import PluginContext
+        from tests.helpers.settings_snapshot import settings_snapshot
+
+        # Core 给插件上下文的两个读取器：同一代配置里读设置与密钥。
+        settings = settings_snapshot(config={"bot_name": "测试"}, secrets={"plugins": {}})
 
         return PluginContext(
-            config              = {"bot_name": "测试"},
-            secrets             = {"plugins": {}},
+            config              = settings.config,
+            secrets             = settings.secrets,
+            settings_reader     = lambda: settings,
+            secret_reader       = lambda path: lookup_dotted(settings.plugin_secrets(name), path),
             plugin_name         = name,
             plugin_dir          = plugin_dir,
             data_dir            = data_dir,

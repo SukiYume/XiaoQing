@@ -88,19 +88,3 @@ def self_texts(harness: MemoryHarness, scope: str, *, kinds: tuple[str, ...] = (
     )
     entries = [*result["self_entries"], *result["stories"]]
     return [entry["text"] for entry in entries if not kinds or entry["kind"] in kinds]
-
-
-def attach(context: Any, harness: MemoryHarness, scope: str) -> Any:
-    """把记忆能力挂到测试上下文上（``capabilities`` 是 SimpleNamespace 或 PluginCapabilities）。"""
-
-    capabilities = getattr(context, "capabilities", None)
-    service      = harness.service(scope)
-    if capabilities is None:
-        context.capabilities = SimpleNamespace(memory=service)
-    elif isinstance(capabilities, SimpleNamespace):
-        capabilities.memory = service
-    else:
-        from dataclasses import replace
-
-        context.capabilities = replace(capabilities, memory=service)
-    return context

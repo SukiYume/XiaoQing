@@ -13,10 +13,11 @@ from urllib.parse import urlsplit
 import aiohttp
 import pytest
 
-from core.bounded_http import BoundedHttpResponse, HttpStatusError
+from core.bounded_http import BoundedHttpResponse
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
 from core.safe_http import SafeHttpResponse
 from plugins.github import main as github
+from tests.helpers.http import AiohttpResponse, QueuedAiohttpSession
 from tests.helpers.settings_snapshot import with_settings_reader
 
 SAMPLE_TRENDING_HTML = """
@@ -108,11 +109,12 @@ async def test_handle_routes_complete_range_argument(
     args: str,
     expected_range: str,
 ) -> None:
-    fetch = AsyncMock(return_value=github.segments("result"))
-    with patch.object(github, "_fetch_trending", new=fetch):
+    fetch = AsyncMock(return_value=_safe_html(SAMPLE_TRENDING_HTML))
+    with patch.object(github, "fetch_public_html", new=fetch):
         result = await github.handle("github", args, event, context)
-    assert result == github.segments("result")
-    fetch.assert_awaited_once_with(expected_range, context)
+    assert "octocat/Hello-World" in str(result)
+    fetch.assert_awaited_once()
+    assert fetch.await_args.args[0] == f"https://github.com/trending?since={expected_range}"
 
 
 @pytest.mark.asyncio
@@ -135,8 +137,8 @@ async def test_handle_rejects_invalid_arguments_without_fetching(
     event: dict[str, Any],
     args: str,
 ) -> None:
-    fetch = AsyncMock(return_value=github.segments("unexpected"))
-    with patch.object(github, "_fetch_trending", new=fetch):
+    fetch = AsyncMock(return_value=_safe_html(SAMPLE_TRENDING_HTML))
+    with patch.object(github, "fetch_public_html", new=fetch):
         result = await github.handle("github", args, event, context)
     assert result
     fetch.assert_not_awaited()
@@ -219,12 +221,13 @@ async def test_fetch_none_and_empty_page_return_stable_messages(context: SimpleN
 async def test_fetch_errors_are_bounded_for_manual_and_scheduled_paths(
     context: SimpleNamespace,
 ) -> None:
-    with patch.object(
-        github,
-        "_download_trending_html",
-        new=AsyncMock(side_effect=HttpStatusError(502)),
-    ):
-        assert "HTTP 502" in str(await github._fetch_trending("daily", context))
+    # 代理路径：HTTP 会话返回 502，真实的有界请求抛出状态错误。
+    context.secrets["plugins"]["github"]["proxy"] = "http://proxy.example:8080"
+    context.http_session                          = QueuedAiohttpSession(
+        AiohttpResponse(b"", media_type="text/html", status=502)
+    )
+    assert "HTTP 502" in str(await github._fetch_trending("daily", context))
+    context.secrets["plugins"]["github"]["proxy"] = ""
     with patch.object(
         github,
         "fetch_public_html",
@@ -295,7 +298,7 @@ def test_proxy_configuration_handles_missing_or_wrong_secret_shapes(
         assert github._get_proxy(context) == ""
 
 
-def test_html_decode_accepts_utf8_ascii_and_rejects_other_boundaries(monkeypatch) -> None:
+def test_html_decode_accepts_utf8_ascii_and_rejects_other_boundaries() -> None:
     assert github._decode_html("中文".encode(), "UTF-8") == "中文"
     assert github._decode_html(b"ascii", None) == "ascii"
     assert github._decode_html(b"ascii", "us-ascii") == "ascii"
@@ -305,9 +308,8 @@ def test_html_decode_accepts_utf8_ascii_and_rejects_other_boundaries(monkeypatch
         github._decode_html(b"html", "utf-16")
     with pytest.raises(ValueError, match="charset"):
         github._decode_html(b"html", 123)
-    monkeypatch.setattr(github, "MAX_HTML_BYTES", 3)
     with pytest.raises(ValueError, match="byte"):
-        github._decode_html(b"four", "utf-8")
+        github._decode_html(b"x" * (github.MAX_HTML_BYTES + 1), "utf-8")
 
 
 def test_parse_current_shape_and_period_stats() -> None:
@@ -375,14 +377,12 @@ def test_parse_removes_hidden_content_controls_and_bounds_fields() -> None:
     assert len(repository["description"]) == github.MAX_DESCRIPTION_CHARS
 
 
-def test_parse_has_html_and_article_budgets(monkeypatch) -> None:
-    monkeypatch.setattr(github, "MAX_HTML_CHARS", 3)
+def test_parse_has_html_and_article_budgets() -> None:
     with pytest.raises(ValueError, match="character"):
-        github._parse_trending_html("four")
+        github._parse_trending_html("x" * (github.MAX_HTML_CHARS + 1))
     with pytest.raises(TypeError):
         github._parse_trending_html(b"html")  # type: ignore[arg-type]
 
-    monkeypatch.setattr(github, "MAX_HTML_CHARS", 2 * 1024 * 1024)
     articles = "".join(
         f'<article class="Box-row"><h2><a href="/o/r{index}">o/r{index}</a></h2></article>'
         for index in range(github.MAX_REPOSITORIES + 5)

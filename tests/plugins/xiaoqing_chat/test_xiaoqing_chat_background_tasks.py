@@ -1,11 +1,11 @@
 # 验证后台任务登记、异常观察和关闭回收。
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, get_state
 from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
 
 
@@ -20,7 +20,7 @@ from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
     ],
 )
 async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
-    state = ChatRuntimeState()
+    state = get_state()
     context = SimpleNamespace(logger=MagicMock())
     gate    = asyncio.Event()
     started = 0
@@ -31,13 +31,12 @@ async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
         await gate.wait()
 
     try:
-        with patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state):
-            spawn_bg_task(context, blocked_job(), name=task_name)
-            spawn_bg_task(context, blocked_job(), name=task_name)
-            await asyncio.sleep(0)
+        spawn_bg_task(context, blocked_job(), name=task_name)
+        spawn_bg_task(context, blocked_job(), name=task_name)
+        await asyncio.sleep(0)
 
-            assert started == 1
-            assert len(state.background_tasks()) == 1
+        assert started == 1
+        assert len(state.background_tasks()) == 1
     finally:
         gate.set()
         tasks = state.background_tasks()
@@ -46,9 +45,9 @@ async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
 
 
 @pytest.mark.asyncio
-async def test_background_task_registry_rejects_work_above_global_capacity(monkeypatch):
-    state = ChatRuntimeState()
-    monkeypatch.setattr(ChatRuntimeState, "_MAX_BACKGROUND_TASKS", 2, raising=False)
+async def test_background_task_registry_rejects_work_above_global_capacity():
+    state    = get_state()
+    capacity = ChatRuntimeState._MAX_BACKGROUND_TASKS
     context = SimpleNamespace(logger=MagicMock())
     gate    = asyncio.Event()
     started = 0
@@ -59,13 +58,12 @@ async def test_background_task_registry_rejects_work_above_global_capacity(monke
         await gate.wait()
 
     try:
-        with patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state):
-            for index in range(3):
-                spawn_bg_task(context, blocked_job(), name=f"facts:g{index}")
-            await asyncio.sleep(0)
+        for index in range(capacity + 1):
+            spawn_bg_task(context, blocked_job(), name=f"facts:g{index}")
+        await asyncio.sleep(0)
 
-            assert started == 2
-            assert len(state.background_tasks()) == 2
+        assert started == capacity
+        assert len(state.background_tasks()) == capacity
     finally:
         gate.set()
         tasks = state.background_tasks()

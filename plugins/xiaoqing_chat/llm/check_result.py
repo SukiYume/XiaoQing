@@ -38,10 +38,11 @@ def checker_unavailable(reason: str) -> ReplyCheckResult:
 
 
 class ReplyRejected(RuntimeError):
-    def __init__(self, reason: str, need_replan: bool) -> None:
+    """这一稿被审查拒绝、没有可发送的回复，需要重新规划。"""
+
+    def __init__(self, reason: str) -> None:
         super().__init__(reason)
-        self.reason      = reason
-        self.need_replan = need_replan
+        self.reason = reason
 
 
 def hard_rejection(reason: str, failure_code: str) -> ReplyCheckResult:

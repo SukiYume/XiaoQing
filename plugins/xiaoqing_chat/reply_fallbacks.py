@@ -350,7 +350,7 @@ def finish_rejected_candidate(
                 fields  = {"failure_code": result.failure_code},
             )
             return None
-        raise ReplyRejected(result.reason or "回复被检查拒绝", True)
+        raise ReplyRejected(result.reason or "回复被检查拒绝")
 
     if result.failure_code == "checker_unavailable":
         return _fallback_draft(rejected, NOT_READY_FALLBACK)

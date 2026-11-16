@@ -2,214 +2,127 @@
 
 from __future__ import annotations
 
-import dataclasses
-from contextlib import ExitStack
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.persona import PersonaCard
+from core.ai import AIError
 from tests.helpers.xiaoqing_chat_test_support import (
-    _complete_test_runtime_config,
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    chat_message_event,
+    draft_reply,
+    plan_answer,
     reply_plan,
+    scripted_chat_context,
+    settle_chat_background,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
+sample_group_event = _fixture_support.sample_group_event
+
+# 对方明说“别反问”：风险模式下这类交流约束也要送审，所以审查模型一定会被问到。
+_NO_FOLLOWUP_TEXT = "别反问我了，随便聊聊"
+# 审查路由的总时限压到最低（0.1 秒），“审查模型一直不回答”不必真的等半分钟。
+_FAST_CHECKER_TIMEOUT = {
+    "ai": {
+        "routes": {
+            "checker": {
+                "models"               : ["scripted-chat"],
+                "timeout_seconds"      : 0.1,
+                "total_timeout_seconds": 0.1,
+            }
+        }
+    }
+}
+
+
+async def _checker_never_answers(_call) -> str:
+    await asyncio.sleep(3600)
+    return ""
+
+
+def _checker_down(_call) -> str:
+    raise AIError("checker down")
+
+
+# 审查模型没能给出审查结果的三种方式：一直不答、调用失败、答的不是审查 JSON。
+_CHECKER_FAILURES = {
+    "timeout" : _checker_never_answers,
+    "error"   : _checker_down,
+    "protocol": "这不是审查 JSON",
+}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["always", "risk"])
 @pytest.mark.parametrize("failure", ["timeout", "error", "protocol"])
-async def test_checker_infrastructure_failure_respects_review_mode(monkeypatch, mode, failure):
-    from plugins.xiaoqing_chat import reply_generator as generator
-    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+async def test_checker_infrastructure_failure_respects_review_mode(
+    mock_context, sample_group_event, mode, failure
+):
+    model = ScriptedChatModel(reply="未经审查的候选", checker=_CHECKER_FAILURES[failure])
+    scripted_chat_context(
+        mock_context, model, {"reply_check": {"llm_checker_mode": mode}}, _FAST_CHECKER_TIMEOUT
+    )
+    event = chat_message_event(sample_group_event, _NO_FOLLOWUP_TEXT)
 
-    cfg                              = XiaoQingChatConfig()
-    cfg.reply_check.llm_checker_mode = mode
-    plan                             = reply_plan(
-        runtime=SimpleNamespace(cfg=cfg),
-        context=SimpleNamespace(http_session=None),
-        chat_id            = "test",
-        bot_name           = "小青",
-        text               = "随便聊聊",
-        event              = {},
-        secrets            = {},
-        effective_goal     = "聊天",
-        merged_reasoning   = "",
-        policy_block       = "",
-        jargon_explanation = "",
-        effective_identity = "",
-        state_text         = "",
-        profile_block      = "",
-        forced             = True,
-    )
-    remote = AsyncMock(
-        side_effect=TimeoutError()
-        if failure == "timeout"
-        else RuntimeError()
-        if failure == "error"
-        else None,
-        return_value=ReplyCheckResult(True, "检查不可用", False, "infra"),
-    )
-    monkeypatch.setattr(generator, "check_reply", remote)
-    monkeypatch.setattr(generator, "log_step", Mock())
-    draft    = generator.build_reply_draft(("未经审查的候选。",))
-    rejected = await generator._check_candidate_draft(plan, draft, [], "")
-    remote.assert_awaited_once()
+    forced = await draft_reply(mock_context, event, text=_NO_FOLLOWUP_TEXT, forced=True)
+
+    # 审查模型被问到了一次；审查本身出了故障，重生成救不回来，不会再叫生成模型。
+    assert len(model.calls_of("checker")) == 1
+    assert len(model.calls_of("reply")) == 1
+    assert forced is not None
     if mode == "risk":
-        assert rejected is None
+        # 风险模式：没审成就按没发现风险放行候选。
+        assert forced.text == "未经审查的候选"
+        await settle_chat_background(mock_context, model)
         return
-    assert rejected.result.suitable is False
-    assert rejected.result.failure_code == "checker_unavailable"
-    assert rejected.allow_after_regen_exhausted is False
-    attempt = SimpleNamespace(regen_used=0)
-    assert not generator.queue_reply_regeneration(plan, attempt, rejected, step="test")
-    assert attempt.regen_used == 0
-    assert generator.finish_rejected_candidate(plan, rejected).text == "等我一下，脑子突然卡壳了"
-    plan = dataclasses.replace(plan, forced=False)
-    assert generator.finish_rejected_candidate(plan, rejected) is None
+    # 总是审查模式：不发没审过的候选。被点名时回一句安全的兜底，主动接话则沉默。
+    assert forced.text == "等我一下，脑子突然卡壳了"
+    unforced = await draft_reply(mock_context, event, text=_NO_FOLLOWUP_TEXT, forced=False)
+    assert unforced is None
+    assert len(model.calls_of("reply")) == 2
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_context):
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(card=PersonaCard()),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            brain_chat=SimpleNamespace(
-                brain_max_context_size = None,
-                brain_temperature      = None,
-            ),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size = 20,
-            temperature      = 0.7,
-            top_p            = 0.9,
-            max_tokens       = 128,
-            timeout_seconds  = 3.0,
-            reply_check      = SimpleNamespace(
-                enable_reply_checker = True,
-                enable_llm_checker   = False,
-                max_repeat_compare   = 5,
-                similarity_threshold = 0.9,
-                max_assistant_in_row = 3,
-                max_regen            = 0,
-            ),
-            postprocess = SimpleNamespace(),
-            rewrite     = SimpleNamespace(),
-        )
+async def test_generate_reply_checker_timeout_allows_non_forced_reply(
+    mock_context, sample_group_event
+):
+    model = ScriptedChatModel(reply="这条回复需要检查", checker=_checker_never_answers)
+    scripted_chat_context(
+        mock_context, model, {"reply_check": {"llm_checker_mode": "risk"}}, _FAST_CHECKER_TIMEOUT
     )
-    _complete_test_runtime_config(runtime)
-    runtime.cfg.reply_check.llm_checker_mode = "risk"
-    state                                    = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats         = Mock()
+    event = chat_message_event(sample_group_event, _NO_FOLLOWUP_TEXT)
 
-    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
-    action = PlannedAction(
-        think_level = 1,
-        reasoning   = "正常回复",
-    )
+    draft = await draft_reply(mock_context, event, text=_NO_FOLLOWUP_TEXT, reasoning="正常回复")
 
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.jargon_block", return_value=("", ()))
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.tool_status_context", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.build_policy_block", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[ChatMessage(role="user", content="hi")],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_profile",
-                new=AsyncMock(return_value=("这条回复需要检查", "")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.process_llm_response",
-                return_value=("这条回复需要检查", "", []),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(side_effect=TimeoutError()),
-            )
-        )
-
-        draft = await generate_reply_draft(
-            text           = "你好",
-            event          = {"message_id": 1, "user_id": 1},
-            context        = mock_context,
-            runtime        = runtime,
-            state          = state,
-            forced         = False,
-            action         = action,
-            plan_reasoning = "",
-            bot_name       = "小青",
-            secrets        = None,
-        )
-
+    assert len(model.calls_of("checker")) == 1
     assert draft is not None
     assert draft.text == "这条回复需要检查"
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_result_handles_missing_draft():
-    from plugins.xiaoqing_chat.turn_generation import _generate_reply_result
+async def test_smalltalk_sends_nothing_when_the_model_gives_no_reply_text(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    draft_mock = AsyncMock(return_value=None)
+    model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply="")
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
 
-    with patch("plugins.xiaoqing_chat.turn_generation.generate_reply_draft", new=draft_mock):
-        text, parts, media_marker = await _generate_reply_result(text="你好")
+    result = await handle_smalltalk(
+        "你好", chat_message_event(sample_group_event, "你好"), mock_context
+    )
 
-    assert text == ""
-    assert parts == ()
-    assert media_marker is None
+    assert result == []
+    assert len(model.calls_of("reply")) >= 1
+    # 没有草稿不是故障：处理器没有记错误。
+    mock_context.logger.error.assert_not_called()
+    await settle_chat_background(mock_context, model)
 
 
 def test_context_grounding_failure_reports_unavailable_reply(mock_context) -> None:
@@ -308,7 +221,7 @@ def test_media_rejection_fallback_never_contradicts_the_reading(
 
 
 def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock_context):
-    """实测：只@小青发了通知截图，审查把“咱本科的看看就好”当成无出处的群聊事实拦下。
+    """只发了一张已读出的通知截图，上下文依据检查拒绝候选时，兜底说“看到了”。
 
     图已经读出来，兜底不能说“没跟上你们说的是哪件事”。
     """

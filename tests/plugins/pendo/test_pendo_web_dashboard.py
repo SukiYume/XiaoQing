@@ -1,17 +1,18 @@
-"""Pendo Web 看板路由的注册和所有者范围转发回归。"""
+"""Pendo Web 看板路由的注册和所有者范围转发。"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import cast
-from unittest.mock import Mock
+from typing import Any
 
-import pytest
-
+import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.dashboard_overview import build_dashboard_overview
 from plugins.pendo.web.api import dashboard as dashboard_module
 from plugins.pendo.web.api import widget
+from tests.helpers.pendo_web_transfer_test_support import OWNER_ID
+
+auth_headers = _fixture_support.auth_headers
 
 
 def test_dashboard_router_registers_one_read_endpoint() -> None:
@@ -24,19 +25,39 @@ def test_dashboard_router_registers_one_read_endpoint() -> None:
 
 
 def test_dashboard_endpoint_forwards_database_and_current_owner(
-    monkeypatch: pytest.MonkeyPatch,
+    client: Any, temp_db: Database, auth_headers: dict
 ) -> None:
-    """端点应原样转发认证主体与数据库，并套用统一响应信封。"""
+    """端点只汇总认证主体自己的数据，并套用统一响应信封。"""
 
-    overview = {"tasks": {"open": 3}, "events": []}
-    build_overview = Mock(return_value=overview)
-    monkeypatch.setattr(dashboard_module, "build_dashboard_overview", build_overview)
-    db = cast(Database, Mock(spec=Database))
+    for index in range(2):
+        temp_db.insert_item(
+            {
+                "id"      : f"mine-{index}",
+                "owner_id": OWNER_ID,
+                "type"    : "task",
+                "title"   : "我的待办",
+                "status"  : "open",
+            }
+        )
+    for index in range(5):
+        temp_db.insert_item(
+            {
+                "id"      : f"theirs-{index}",
+                "owner_id": "other-owner",
+                "type"    : "task",
+                "title"   : "别人的待办",
+                "status"  : "open",
+            }
+        )
 
-    payload = dashboard_module.get_dashboard(owner_id="owner-a", db=db)
+    response = client.get("/api/dashboard")
 
-    assert payload == {"ok": True, "data": overview, "message": ""}
-    build_overview.assert_called_once_with(db=db, owner_id="owner-a")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["message"] == ""
+    assert payload["data"]["summary"]["tasks_pending"] == 2
+    assert {task["title"] for task in payload["data"]["tasks"]["active"]} == {"我的待办"}
 
 
 def test_dashboard_and_widget_show_currency_specific_totals(currency_db):

@@ -1008,11 +1008,11 @@ class LoadedPluginService:
 class LoadedPlugin:
     definition        : PluginDefinition
     module            : ModuleType
-    mtime             : int | float
-    execution_gate    : PluginExecutionGate | None = None
-    shutdown_attempted: bool                       = False
-    shutdown_completed: bool                       = False
-    shutdown_task     : asyncio.Task[Any] | None   = field(
+    mtime             : _PluginContentFingerprint
+    execution_gate    : PluginExecutionGate
+    shutdown_attempted: bool                     = False
+    shutdown_completed: bool                     = False
+    shutdown_task     : asyncio.Task[Any] | None = field(
         default = None,
         repr    = False,
         compare = False,
@@ -1040,7 +1040,7 @@ class _PluginLoadTransaction:
 
     definition             : PluginDefinition
     gate                   : PluginExecutionGate
-    mtime                  : float
+    mtime                  : _PluginContentFingerprint
     import_attempted       : bool              = False
     import_completed       : bool              = False
     uncertain_external_code: bool              = False
@@ -1055,7 +1055,7 @@ class _ReloadAuthorization:
 
     plugin_dir        : Path
     definition        : PluginDefinition
-    mtime             : int | float
+    mtime             : _PluginContentFingerprint
     definition_changed: bool
 
 

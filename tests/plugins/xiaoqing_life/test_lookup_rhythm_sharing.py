@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
-from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,7 +20,7 @@ from plugins.xiaoqing_life.session import run_session
 from plugins.xiaoqing_life.sources import watch
 from plugins.xiaoqing_life.sources.base import SourceComment, SourceItem
 from plugins.xiaoqing_life.stores import LifeStore, default_state
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     FakeAI,
     FakeFetcher,
@@ -35,6 +33,7 @@ from tests.plugins.xiaoqing_life.support import (
     make_context,
     new_store,
     popular_payload,
+    write_persona_card,
 )
 
 MOMENT = at(14, 0)
@@ -152,7 +151,7 @@ def _item(*comments: SourceComment) -> SourceItem:
     return SourceItem("bili:1", "bili_popular", "视频", "", "u", 1, (), tuple(comments))
 
 
-def test_preselect_needs_median_likes_short_text_and_prefers_light_formats() -> None:
+def test_preselect_needs_median_likes_short_text_and_a_picture() -> None:
     item = _item(
         SourceComment("c1.1", "笑死", 50, ("https://i0.hdslb.com/a.jpg",)),
         SourceComment("c1.2", "笑死", 40, ("https://i0.hdslb.com/b.gif",)),
@@ -167,10 +166,8 @@ def test_preselect_needs_median_likes_short_text_and_prefers_light_formats() -> 
         SourceComment("c1.6", "无图", 70),
     )
     picks = [ref for ref, _ in memes.preselect([item])]
-    assert picks == ["c1.5#0", "c1.2#0"][:0] or picks[0] == "c1.5#0"
-    assert (
-        "c1.3#0" not in picks and "c1.4#0" not in picks and "c1.1#0" not in picks
-    )  # 长评论 / 低赞 / 低于中位数
+    # 中位数 55：c1.1 / c1.2 / c1.4 低于中位数，c1.3 评论太长，c1.6 没有配图。
+    assert picks == ["c1.5#0"]
     assert memes.preselect([_item()]) == []
 
 
@@ -299,15 +296,14 @@ def test_thread_gets_a_morning_bonus_within_two_hours_of_waking() -> None:
 
 
 def test_wake_time_comes_from_the_sleep_slot_in_the_routine_and_in_quiet_hours(
-    monkeypatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
-    card = SimpleNamespace(routine=("每天 00:30-08:00 睡觉（睡）",), facts=lambda n: "")
-    monkeypatch.setattr(pb, "persona_card", lambda _c: card)
     context, cfg = make_context(tmp_path), make_cfg()
+    write_persona_card(context, tmp_path, ("每天 00:30-08:00 睡觉（睡）",))
     assert pb.availability(context, cfg, at(9, 0)).minutes_since_wake in range(60, 66)
     assert pb.availability(context, cfg, at(10, 5)).minutes_since_wake is None  # 超过 2 小时
     assert pb.availability(context, cfg, at(7, 0)).availability == "asleep"
-    monkeypatch.setattr(pb, "persona_card", lambda _c: None)
+    write_persona_card(context, tmp_path, None)
     assert pb.availability(
         context, make_cfg(quiet_hours="00:30-08:00"), at(8, 30)
     ).minutes_since_wake in range(30, 36)
@@ -488,42 +484,39 @@ def test_plan_questions_get_the_rest_of_todays_routine_and_the_threads_next_step
     assert four.count("\n- ") == 4  # 3 个时段 + 小课题
 
 
-def test_upcoming_plans_come_from_todays_remaining_slots(monkeypatch, tmp_path: Path) -> None:
-    card = SimpleNamespace(
-        routine=(
+def test_upcoming_plans_come_from_todays_remaining_slots(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    write_persona_card(
+        context,
+        tmp_path,
+        (
             "每天 00:30-08:00 睡觉（睡）",
             "每天 15:00-17:00 社团活动（闲）",
             "每天 19:00-21:00 自习（忙）",
             "工作日 21:00-22:00 刷番（闲）",
             "周末 10:00-11:00 补觉（闲）",
             "每天 23:00-23:50 洗漱（闲）",
-        )
+        ),
     )
-    monkeypatch.setattr(pb, "persona_card", lambda _c: card)
-    plans = pb.upcoming_plans(make_context(tmp_path), MOMENT)  # 周四 14:00
+    plans = pb.upcoming_plans(context, MOMENT)  # 周四 14:00
     assert plans == ["15:00 社团活动", "19:00 自习", "21:00 刷番"]
-    assert pb.upcoming_plans(make_context(tmp_path), at(22, 0)) == ["23:00 洗漱"]
-    monkeypatch.setattr(pb, "persona_card", lambda _c: None)
-    assert pb.upcoming_plans(make_context(tmp_path), MOMENT) == []
+    assert pb.upcoming_plans(context, at(22, 0)) == ["23:00 洗漱"]
+    write_persona_card(context, tmp_path, None)
+    assert pb.upcoming_plans(context, MOMENT) == []
 
 
 @pytest.mark.asyncio
-async def test_service_adds_the_routine_slots_only_for_plan_questions(
-    monkeypatch, tmp_path: Path
-) -> None:
-    context          = make_context(tmp_path)
-    runtime          = life_main.get_runtime(context)
-    runtime.clock    = fixed_clock(MOMENT)
-    calls: list[Any] = []
-    monkeypatch.setattr(
-        pb, "upcoming_plans", lambda c, m, limit=3: calls.append(m) or ["20:00 社团活动"]
-    )
+async def test_service_adds_the_routine_slots_only_for_plan_questions(tmp_path: Path) -> None:
+    context       = make_context(tmp_path)
+    runtime       = life_main.get_runtime(context)
+    runtime.clock = fixed_clock(MOMENT)
+    write_persona_card(context, tmp_path, ("每天 20:00-22:00 社团活动（闲）",))
     response = await life_main.turn_context(
         {"version": 1, "mode": "reply", "text": "等会干嘛"}, context
     )
-    assert "- 20:00 社团活动" in response["life_lines"] and len(calls) == 1
-    await life_main.turn_context({"version": 1, "mode": "reply", "text": "你好"}, context)
-    assert len(calls) == 1
+    assert "- 20:00 社团活动" in response["life_lines"]
+    other = await life_main.turn_context({"version": 1, "mode": "reply", "text": "你好"}, context)
+    assert other is None or "社团活动" not in str(other)
 
 
 def test_recent_week_like_and_link_intents_keep_the_guidance_line(tmp_path: Path) -> None:
@@ -560,7 +553,6 @@ def test_recent_week_like_and_link_intents_keep_the_guidance_line(tmp_path: Path
     for lines in (today, week, like, link):
         assert "打算和做完分开说；兴趣变了要前后都有记录才算" in lines
     assert "bilibili.com" not in today
-    _ = timedelta
 
 
 def test_follow_up_about_the_video_she_just_mentioned_brings_its_gist_back(tmp_path: Path) -> None:

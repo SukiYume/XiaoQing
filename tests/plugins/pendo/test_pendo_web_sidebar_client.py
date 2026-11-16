@@ -1,4 +1,4 @@
-"""Pendo Web 侧栏的导航结构、路由和移动端抽屉回归。"""
+"""Pendo Web 侧栏的导航结构、路由和移动端抽屉。"""
 
 from __future__ import annotations
 
@@ -263,7 +263,7 @@ def test_sidebar_mobile_toggle_escape_and_backdrop_keep_aria_in_sync() -> None:
     )
 
 
-def test_sidebar_uses_one_media_change_listener_instead_of_resize_width_checks() -> None:
+def test_sidebar_media_change_closes_drawer_and_syncs_accessibility_state() -> None:
     """媒体条件变化应关闭抽屉并同步桌面/移动可访问状态。"""
 
     _run_sidebar_client(

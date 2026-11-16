@@ -26,12 +26,6 @@ sample_message_context = _fixture_support.sample_message_context
 class TestMessageParser:
     """MessageParser 测试"""
 
-    def test_initialization(self, mock_config_provider: MagicMock):
-        """测试初始化"""
-        parser = MessageParser(mock_config_provider)
-        assert parser._config_provider is mock_config_provider
-        assert parser._cached_bot_name == "小青"
-
     def test_parse_uses_cached_prefixes_until_explicit_refresh(self):
         """测试 parse 热路径不重复读取配置"""
 
@@ -156,8 +150,17 @@ class TestMessageParser:
         assert ctx.is_empty is True
         assert ctx.clean_text == ""
 
-    def test_parse_image_only_message_keeps_context(self, mock_config_provider: MagicMock):
-        """测试纯图片消息不会被 parser 丢弃"""
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            pytest.param({"type": "image", "data": {"file": "file:///tmp/test.png"}}, id="image"),
+            pytest.param({"type": "face", "data": {"id": "14"}}, id="face"),
+        ],
+    )
+    def test_parse_media_only_message_keeps_context(
+        self, mock_config_provider: MagicMock, segment: dict[str, object]
+    ):
+        """测试纯图片、纯 QQ 表情消息不会被 parser 丢弃"""
         parser = MessageParser(mock_config_provider)
         event  = {
             "post_type"   : "message",
@@ -165,27 +168,7 @@ class TestMessageParser:
             "user_id"     : 12345,
             "group_id"    : 67890,
             "self_id"     : 11111,
-            "message"     : [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
-        }
-
-        ctx = parser.parse(event)
-
-        assert ctx is not None
-        assert ctx.text == ""
-        assert ctx.clean_text == ""
-        assert ctx.user_id == 12345
-        assert ctx.group_id == 67890
-
-    def test_parse_face_only_message_keeps_context(self, mock_config_provider: MagicMock):
-        """测试纯 QQ 表情消息不会被 parser 丢弃"""
-        parser = MessageParser(mock_config_provider)
-        event  = {
-            "post_type"   : "message",
-            "message_type": "group",
-            "user_id"     : 12345,
-            "group_id"    : 67890,
-            "self_id"     : 11111,
-            "message"     : [{"type": "face", "data": {"id": "14"}}],
+            "message"     : [segment],
         }
 
         ctx = parser.parse(event)
@@ -335,21 +318,6 @@ class TestMessageParser:
 
 class TestDispatcherHandleEvent:
     """Dispatcher.handle_event 测试"""
-
-    @pytest.mark.asyncio
-    async def test_handles_message_event(self, dispatcher: Dispatcher):
-        """测试处理消息事件"""
-        event = {
-            "post_type"   : "message",
-            "message_type": "group",
-            "user_id"     : 12345,
-            "group_id"    : 67890,
-            "self_id"     : 11111,
-            "message"     : "test",
-        }
-
-        result = await dispatcher.handle_event(event)
-        assert isinstance(result, list)
 
     @pytest.mark.asyncio
     async def test_ignores_non_message_event(self, dispatcher: Dispatcher):

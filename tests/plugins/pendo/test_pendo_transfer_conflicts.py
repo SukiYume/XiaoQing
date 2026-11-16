@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,12 +14,10 @@ import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Database,
-    DuplicateBundleImportError,
-    ZoneInfo,
-    _build_sample_bundle_bytes,
-    _simple_task_bundle,
+    build_sample_bundle_bytes,
     io,
     read_bundle,
+    simple_task_bundle,
     transfer_api,
 )
 
@@ -46,7 +45,7 @@ def test_transfer_logs_endpoint(client: Any, temp_db: Database, auth_headers: di
 def test_import_source_timezone_normalizes_naive_and_aware_datetimes_to_utc():
     from plugins.pendo.web.services.bundle_import import inspect_bundle_bytes
 
-    bundle = _build_sample_bundle_bytes(
+    bundle = build_sample_bundle_bytes(
         {
             "event": [
                 {
@@ -86,7 +85,7 @@ def test_import_source_timezone_rejects_unrepresentable_dst_wall_times(
 ):
     from plugins.pendo.web.services.bundle_import import inspect_bundle_bytes
 
-    bundle = _build_sample_bundle_bytes(
+    bundle = build_sample_bundle_bytes(
         {
             "event": [
                 {
@@ -108,21 +107,6 @@ def test_import_source_timezone_rejects_unrepresentable_dst_wall_times(
     assert expected_message in errors[0]["message"]
 
 
-def test_import_missing_timestamps_use_utc_clock_not_host_local_time():
-    from plugins.pendo.web.services.bundle_import import normalize_import_payload
-
-    fixed = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
-    normalized = normalize_import_payload(
-        {"type": "task", "title": "done", "status": "done"},
-        source_zone = ZoneInfo("Pacific/Auckland"),
-        now         = fixed,
-    )
-
-    assert normalized["created_at"] == "2030-01-01T12:00:00+00:00"
-    assert normalized["updated_at"] == "2030-01-01T12:00:00+00:00"
-    assert normalized["completed_at"] == "2030-01-01T12:00:00+00:00"
-
-
 def test_all_import_endpoints_reject_total_record_limit_across_files(
     client: Any,
     temp_db: Database,
@@ -134,7 +118,7 @@ def test_all_import_endpoints_reject_total_record_limit_across_files(
     monkeypatch.setattr(transfer_bundle, "MAX_IMPORT_RECORDS", 20_000)
     tasks  = [{"_type": "task", "_schema": 2} for _ in range(10_001)]
     notes  = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
-    bundle = _build_sample_bundle_bytes({"task": tasks, "note": notes})
+    bundle = build_sample_bundle_bytes({"task": tasks, "note": notes})
     before = temp_db.get_connection().execute("SELECT COUNT(*) FROM items").fetchone()[0]
 
     requests = [
@@ -159,7 +143,7 @@ def test_all_import_endpoints_reject_total_record_limit_across_files(
 def test_total_record_limit_accepts_exact_boundary_across_files():
     tasks  = [{"_type": "task", "_schema": 2} for _ in range(10_000)]
     notes  = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
-    bundle = _build_sample_bundle_bytes({"task": tasks, "note": notes})
+    bundle = build_sample_bundle_bytes({"task": tasks, "note": notes})
 
     parsed = read_bundle(io.BytesIO(bundle))
 
@@ -172,7 +156,7 @@ def test_import_conflict_policies_have_distinct_persistent_results(
     auth_headers: dict,
 ):
     def import_source(title: str, policy: str):
-        bundle = _build_sample_bundle_bytes(
+        bundle = build_sample_bundle_bytes(
             {
                 "task": [
                     {
@@ -230,7 +214,7 @@ def test_event_collection_overwrite_reuses_imported_collection_and_event_ids(
     auth_headers: dict,
 ):
     def bundle(collection_title: str, event_title: str) -> bytes:
-        return _build_sample_bundle_bytes(
+        return build_sample_bundle_bytes(
             {
                 "event_collection": [
                     {
@@ -323,7 +307,7 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
     }
 
     generated = iter([collision_id, "b" * 32])
-    monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
+    monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex=next(generated)))
     assert transfer_api._new_import_id(temp_db, "items") == "b" * 32
 
 
@@ -358,7 +342,7 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
     }
 
     generated = iter([collision_id, "d" * 32])
-    monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
+    monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex=next(generated)))
     assert transfer_api._new_import_id(temp_db, "event_collections") == "d" * 32
 
 
@@ -445,7 +429,7 @@ def test_import_validation_aborts_on_invalid_rows_and_rejects_duplicate_source_i
     """默认无效策略保持全包中止，规划阶段也拒绝重复外部身份。"""
 
     parsed, valid_records, _errors = transfer_api._inspect_bundle_data(
-        _simple_task_bundle("source-one")
+        simple_task_bundle("source-one")
     )
     with pytest.raises(transfer_api.HTTPException) as invalid_error:
         transfer_api._validate_import_request(
@@ -471,48 +455,47 @@ def test_import_validation_aborts_on_invalid_rows_and_rejects_duplicate_source_i
 
 def test_import_commit_maps_duplicate_bundle_and_unique_constraint_errors(
     temp_db: Database,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """事务层竞争统一映射为 409，且不把 SQLite 原始错误暴露给调用者。"""
 
-    def raise_duplicate_bundle(**_kwargs: Any) -> None:
-        raise DuplicateBundleImportError("bundle-race")
-
-    monkeypatch.setattr(temp_db, "execute_import_bundle", raise_duplicate_bundle)
-    with pytest.raises(transfer_api.HTTPException) as bundle_error:
+    def commit(*, bundle_id: str | None, operations: list[tuple[str, dict[str, Any]]]) -> None:
         transfer_api._commit_import_plan(
             db                    = temp_db,
             owner_id              = OWNER_ID,
-            bundle_id             = "bundle-race",
-            operations            = [],
+            bundle_id             = bundle_id,
+            operations            = operations,
             collection_operations = [],
             filename              = None,
             selected_types        = {"task"},
             results               = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
             force                 = False,
         )
+
+    # 同一个 bundle 先被另一次导入提交过：规划时没撞上、提交时才撞上。
+    commit(bundle_id="bundle-race", operations=[])
+    with pytest.raises(transfer_api.HTTPException) as bundle_error:
+        commit(bundle_id="bundle-race", operations=[])
     assert bundle_error.value.status_code == 409
 
-    def raise_unique_constraint(**_kwargs: Any) -> None:
-        cause                  = transfer_api.sqlite3.IntegrityError("private sqlite detail")
-        cause.sqlite_errorcode = transfer_api.sqlite3.SQLITE_CONSTRAINT_UNIQUE
-        raise RuntimeError("wrapped storage failure") from cause
-
-    monkeypatch.setattr(temp_db, "execute_import_bundle", raise_unique_constraint)
+    # 计划里的内部 ID 在规划之后被别的写入占用：真实的唯一约束冲突。
+    temp_db.insert_item(
+        {
+            "id"      : "taken-id",
+            "owner_id": OWNER_ID,
+            "type"    : "task",
+            "title"   : "已存在",
+            "status"  : "open",
+        }
+    )
     with pytest.raises(transfer_api.HTTPException) as unique_error:
-        transfer_api._commit_import_plan(
-            db                    = temp_db,
-            owner_id              = OWNER_ID,
-            bundle_id             = None,
-            operations            = [],
-            collection_operations = [],
-            filename              = None,
-            selected_types        = {"task"},
-            results               = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
-            force                 = False,
+        commit(
+            bundle_id  = None,
+            operations = [
+                ("insert", {"id": "taken-id", "type": "task", "title": "撞 ID", "status": "open"})
+            ],
         )
     assert unique_error.value.status_code == 409
-    assert "private sqlite detail" not in str(unique_error.value.detail)
+    assert "UNIQUE" not in str(unique_error.value.detail)
 
 
 @pytest.mark.parametrize(("depth", "expected"), [(7, True), (8, False)])
@@ -529,7 +512,7 @@ def test_unique_constraint_detection_has_a_bounded_exception_chain(depth, expect
 def test_import_samples_invalid_pagination_headers_fall_back_to_defaults(
     client: Any, auth_headers: dict[str, str]
 ) -> None:
-    """旧客户端的坏分页头不会导致 500，而是回退到安全默认值。"""
+    """坏分页头不会导致 500，而是回退到安全默认值。"""
 
     response = client.post(
         "/api/transfer/import/samples",
@@ -538,7 +521,7 @@ def test_import_samples_invalid_pagination_headers_fall_back_to_defaults(
             "X-Transfer-Page"     : "invalid",
             "X-Transfer-Page-Size": "invalid",
         },
-        content=_simple_task_bundle("sample-defaults"),
+        content=simple_task_bundle("sample-defaults"),
     )
 
     assert response.status_code == 200

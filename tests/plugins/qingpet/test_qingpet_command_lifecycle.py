@@ -5,17 +5,29 @@ from __future__ import annotations
 import pytest
 
 from plugins.qingpet import main as qingpet_main
+from plugins.qingpet.services import database_community
 from plugins.qingpet.utils.constants import PetStatus
 from tests.helpers.assertions import text_segments_text
+
+
+class _Clock:
+    """限流按 ``time.time`` 计窗口；每条命令前拨快，让连续命令不触发群级限流。"""
+
+    def __init__(self) -> None:
+        self.now = 1_800_000_000.0
+
+    def time(self) -> float:
+        return self.now
 
 
 @pytest.mark.asyncio
 async def test_real_command_entry_reuses_one_pet_and_invalid_steps_do_not_mutate(
     monkeypatch: pytest.MonkeyPatch,
-    qingpet_db,
+    qingpet_runtime,
 ) -> None:
     """领养、查看、改名、睡醒和删除必须作用于同一只真实宠物。"""
 
+    context, qingpet_db = qingpet_runtime
     group_id = 880_721_001
     user_id  = "880721002"
     event    = {
@@ -26,19 +38,12 @@ async def test_real_command_entry_reuses_one_pet_and_invalid_steps_do_not_mutate
     }
     assert qingpet_db.update_group_config_field(group_id, "enabled", True) is True
 
-    # 隔离限流噪声，只验证生产路由、处理器和数据库之间的业务契约。
-    monkeypatch.setattr(qingpet_main, "_db_instance", qingpet_db)
-    monkeypatch.setattr(qingpet_main, "_router", None)
-    monkeypatch.setattr(qingpet_main, "_is_group_rate_limited", lambda _group_id: False)
-    monkeypatch.setattr(
-        qingpet_main,
-        "_get_anti_spam_state",
-        lambda _user_id, _group_id: (None, 1.0),
-    )
-    monkeypatch.setattr(qingpet_main, "_record_command", lambda _user_id, _group_id: None)
+    clock = _Clock()
+    monkeypatch.setattr(database_community, "time", clock)
 
     async def call(args: str) -> str:
-        result = await qingpet_main.handle("qingpet", args, event, None)
+        clock.now += 11  # 超过群级限流窗口
+        result = await qingpet_main.handle("qingpet", args, event, context)
         return text_segments_text(result, separator="\n")
 
     assert "还没有宠物" in await call("status")

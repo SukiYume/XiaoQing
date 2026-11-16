@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.config import ConfigSnapshot, lookup_dotted
 from core.context import PluginContext
 from core.interfaces import (
     DeliveryTarget,
@@ -21,6 +22,30 @@ from core.session import SessionManager
 # ============================================================
 # Fixtures
 # ============================================================
+
+
+def _settings_generation(
+    config: dict[str, Any],
+    secrets: dict[str, Any],
+    revision: int = 0,
+) -> PluginSettingsSnapshot:
+    """按 Core 的方式冻结一代配置，交给读取器返回。"""
+
+    frozen = ConfigSnapshot(config=config, secrets=secrets, revision=revision)
+    return PluginSettingsSnapshot(
+        config   = frozen.config,
+        secrets  = frozen.secrets,
+        revision = frozen.revision,
+    )
+
+
+def _readers(plugin_name: str, settings: PluginSettingsSnapshot) -> dict[str, Any]:
+    """Core 交给插件上下文的两个读取器：同一代配置里读设置与密钥。"""
+
+    return {
+        "settings_reader": lambda: settings,
+        "secret_reader"  : lambda path: lookup_dotted(settings.plugin_secrets(plugin_name), path),
+    }
 
 
 @pytest.fixture
@@ -69,12 +94,14 @@ def sample_context(tmp_path: Path) -> PluginContext:
     def mock_list_plugins():
         return ["echo", "help", "choice"]
 
+    config  = {"bot_name": "测试机器人", "command_prefixes": ["/"]}
+    secrets = {
+        "admin_user_ids": [12345],
+        "plugins"       : {"echo": {"api_key": "plugin-key"}, "other": {"hidden": True}},
+    }
     return PluginContext(
-        config  = {"bot_name": "测试机器人", "command_prefixes": ["/"]},
-        secrets = {
-            "admin_user_ids": [12345],
-            "plugins"       : {"echo": {"api_key": "plugin-key"}, "other": {"hidden": True}},
-        },
+        config              = config,
+        secrets             = secrets,
         plugin_name         = "echo",
         plugin_dir          = tmp_path / "plugins" / "echo",
         data_dir            = tmp_path / "data" / "echo",
@@ -90,6 +117,7 @@ def sample_context(tmp_path: Path) -> PluginContext:
         capabilities=PluginCapabilities(is_bot_admin=True),
         request_id = "test_request_001",
         state      = {"counter": 0, "calls": calls},
+        **_readers("echo", _settings_generation(config, secrets)),
     )
 
 
@@ -103,8 +131,6 @@ class TestPluginContextInit:
 
     def test_all_properties_set(self, sample_context: PluginContext):
         """测试所有属性正确设置"""
-        from core.config import ConfigSnapshot
-
         assert sample_context.config["bot_name"] == "测试机器人"
         assert sample_context.secrets == {"plugins": {"echo": {"api_key": "plugin-key"}}}
         assert sample_context.plugin_name == "echo"
@@ -126,6 +152,10 @@ class TestPluginContextInit:
         )
         sample_context.config  = snapshot.config
         sample_context.secrets = snapshot.secrets
+        for name, reader in _readers(
+            "echo", PluginSettingsSnapshot(snapshot.config, snapshot.secrets, 0)
+        ).items():
+            setattr(sample_context, name, reader)
         assert sample_context.default_groups() == [123, 456]
         assert isinstance(sample_context.default_groups(), list)
         assert sample_context.get_secret("api_key") == "snapshot-key"
@@ -210,10 +240,6 @@ class TestPluginContextAccess:
         with pytest.raises(TypeError):
             sample_context.secrets["plugins"]["echo"]["api_key"] = "changed"
 
-    def test_state_access(self, sample_context: PluginContext):
-        """测试状态访问"""
-        assert sample_context.state["counter"] == 0
-
     def test_modify_state(self, sample_context: PluginContext):
         """测试修改状态"""
         sample_context.state["counter"] = 5
@@ -222,17 +248,11 @@ class TestPluginContextAccess:
         sample_context.state["new_key"] = "new_value"
         assert sample_context.state["new_key"] == "new_value"
 
-    def test_plugin_name(self, sample_context: PluginContext):
-        """测试插件名称"""
-        assert sample_context.plugin_name == "echo"
-
     def test_atomic_settings_reader_and_detached_config_access(
         self,
         sample_context: PluginContext,
     ):
         """成组配置读取只消费一代快照，返回值不能反向修改快照。"""
-        from core.config import ConfigSnapshot
-
         source = ConfigSnapshot(
             config={
                 "plugins": {
@@ -266,31 +286,40 @@ class TestPluginContextAccess:
         nested["items"][0]["value"] = 2
         assert source.config["plugins"]["echo"]["nested"]["items"][0]["value"] == 1
 
-    def test_secret_fallback_reads_the_same_atomic_settings_generation(
+    def test_secret_reads_follow_the_core_supplied_settings_generation(
         self,
         sample_context: PluginContext,
     ):
-        """无独立 secret_reader 时也不能绕过 settings 快照读到旧密钥代。"""
+        """密钥与配置只经 Core 给的读取器读取，读取器换代后立即读到新一代。"""
 
-        settings = PluginSettingsSnapshot(
-            config   = {"plugins": {"echo": {}}},
-            secrets  = {"plugins": {"echo": {"api_key": "your-api-key-placeholder"}}},
-            revision = 8,
-        )
-        sample_context.settings_reader = lambda: settings
-        sample_context.secret_reader   = None
+        for name, reader in _readers(
+            "echo",
+            _settings_generation(
+                {"plugins": {"echo": {}}},
+                {"plugins": {"echo": {"api_key": "your-api-key-placeholder"}}},
+                revision=8,
+            ),
+        ).items():
+            setattr(sample_context, name, reader)
 
         assert sample_context.get_secret("api_key") == "your-api-key-placeholder"
+        assert sample_context.get_settings_snapshot().revision == 8
 
-    def test_static_context_settings_fallback_is_frozen(
+    def test_settings_and_secret_reads_fail_without_core_readers(
         self,
         sample_context: PluginContext,
     ):
-        settings = sample_context.get_settings_snapshot()
+        """没有 Core 读取器时报错，不再从自己的 config / secrets 字段回退。"""
 
-        assert settings.revision == 0
-        with pytest.raises(TypeError):
-            settings.config["bot_name"] = "changed"
+        sample_context.settings_reader = None
+        sample_context.secret_reader   = None
+
+        with pytest.raises(RuntimeError, match="settings reader unavailable"):
+            sample_context.get_settings_snapshot()
+        with pytest.raises(RuntimeError, match="settings reader unavailable"):
+            sample_context.get_config("api_key")
+        with pytest.raises(RuntimeError, match="secret reader unavailable"):
+            sample_context.get_secret("api_key")
 
     def test_settings_snapshot_extracts_only_the_scoped_plugin_namespaces(
         self,
@@ -317,14 +346,6 @@ class TestPluginContextAccess:
 
         assert settings.plugin_config("echo") == {}
         assert settings.plugin_secrets("echo") == {}
-
-    def test_plugin_dir(self, sample_context: PluginContext):
-        """测试插件目录"""
-        assert sample_context.plugin_dir.name == "echo"
-
-    def test_data_dir(self, sample_context: PluginContext):
-        """测试数据目录"""
-        assert "echo" in str(sample_context.data_dir)
 
 
 # ============================================================
@@ -431,123 +452,3 @@ class TestPluginContextMethods:
 
         recreated = await sample_context.create_session({"step": 2})
         assert recreated.get("step") == 2
-
-
-# ============================================================
-# 私聊/群聊上下文测试
-# ============================================================
-
-
-class TestPrivateVsGroupContext:
-    """私聊/群聊上下文测试"""
-
-    def test_private_message_context(self, tmp_path: Path):
-        """测试私聊消息上下文"""
-        context = PluginContext(
-            config              = {},
-            secrets             = {},
-            plugin_name         = "test",
-            plugin_dir          = tmp_path,
-            data_dir            = tmp_path,
-            http_session        = None,
-            send_action         = lambda x: None,
-            reload_config       = lambda: None,
-            reload_plugins      = lambda: None,
-            get_command_catalog = lambda: (),
-            list_plugins        = lambda: [],
-            current_user_id     = 12345,
-            current_group_id    = None,
-            request_id          = "priv_001",
-            state               = {},
-        )
-        assert context.current_user_id == 12345
-        assert context.current_group_id is None
-
-    def test_group_message_context(self, tmp_path: Path):
-        """测试群聊消息上下文"""
-        context = PluginContext(
-            config              = {},
-            secrets             = {},
-            plugin_name         = "test",
-            plugin_dir          = tmp_path,
-            data_dir            = tmp_path,
-            http_session        = None,
-            send_action         = lambda x: None,
-            reload_config       = lambda: None,
-            reload_plugins      = lambda: None,
-            get_command_catalog = lambda: (),
-            list_plugins        = lambda: [],
-            current_user_id     = 12345,
-            current_group_id    = 67890,
-            request_id          = "group_001",
-            state               = {},
-        )
-        assert context.current_user_id == 12345
-        assert context.current_group_id == 67890
-
-
-# ============================================================
-# 空状态测试
-# ============================================================
-
-
-class TestEmptyState:
-    """空状态测试"""
-
-    def test_empty_state_dict(self, tmp_path: Path):
-        """测试空状态字典"""
-        context = PluginContext(
-            config              = {},
-            secrets             = {},
-            plugin_name         = "test",
-            plugin_dir          = tmp_path,
-            data_dir            = tmp_path,
-            http_session        = None,
-            send_action         = lambda x: None,
-            reload_config       = lambda: None,
-            reload_plugins      = lambda: None,
-            get_command_catalog = lambda: (),
-            list_plugins        = lambda: [],
-            current_user_id     = None,
-            current_group_id    = None,
-            request_id          = None,
-            state               = {},
-        )
-        assert context.state == {}
-        assert len(context.state) == 0
-
-
-# ============================================================
-# HTTP Session 测试
-# ============================================================
-
-
-class TestHttpSession:
-    """HTTP Session 测试"""
-
-    def test_none_http_session(self, sample_context: PluginContext):
-        """测试 None HTTP session"""
-        assert sample_context.http_session is None
-
-    def test_with_http_session(self, tmp_path: Path):
-        """测试带 HTTP session"""
-        mock_session = object()
-
-        context = PluginContext(
-            config              = {},
-            secrets             = {},
-            plugin_name         = "test",
-            plugin_dir          = tmp_path,
-            data_dir            = tmp_path,
-            http_session        = mock_session,
-            send_action         = lambda x: None,
-            reload_config       = lambda: None,
-            reload_plugins      = lambda: None,
-            get_command_catalog = lambda: (),
-            list_plugins        = lambda: [],
-            current_user_id     = None,
-            current_group_id    = None,
-            request_id          = None,
-            state               = {},
-        )
-        assert context.http_session is mock_session

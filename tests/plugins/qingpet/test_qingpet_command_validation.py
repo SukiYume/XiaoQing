@@ -179,13 +179,10 @@ def test_invalid_arguments_are_rejected_without_database_side_effects(
 
 
 def test_catalog_examples_use_real_static_ids_and_explicit_dynamic_placeholders() -> None:
-    """目录不得再伪造不存在的道具，也不能把易碰撞的固定数据库 ID 当示例。"""
+    """目录示例里的道具 ID 是真实存在的静态 ID，数据库动态 ID 用明确的占位符表示。"""
 
     manifest_path = REPOSITORY_ROOT / "plugins" / "qingpet" / "plugin.json"
-    manifest_text = manifest_path.read_text(encoding="utf-8")
-    manifest = json.loads(manifest_text)
-    assert "food_basic" not in manifest_text
-    assert "hat_basic" not in manifest_text
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     root  = manifest["commands"][0]
     nodes = {node["name"]: node for node in root["subcommands"]}

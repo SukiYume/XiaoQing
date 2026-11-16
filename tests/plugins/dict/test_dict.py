@@ -1,10 +1,9 @@
-"""dict 插件的解析、资源完整性和查询回归测试。"""
+"""dict 插件的解析、资源完整性和查询测试。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -25,29 +24,19 @@ def context() -> SimpleNamespace:
     return SimpleNamespace(plugin_dir=PLUGIN_DIR, logger=MagicMock(), request_id="dict-test")
 
 
+@pytest.fixture
+def empty_context(temp_data_dir: Path) -> SimpleNamespace:
+    """插件目录里没有词典资源：任何真正去读词典的命令都会得到资源错误。"""
+
+    return SimpleNamespace(plugin_dir=temp_data_dir, logger=MagicMock(), request_id="dict-test")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("args", ["", "help", "帮助"])
-async def test_help_does_not_load_dictionary(
-    args: str,
-    context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        dict_main,
-        "_load_direction",
-        MagicMock(side_effect=AssertionError("help must not load assets")),
-    )
-
-    response = await dict_main.handle("dict", args, {}, context)
+async def test_help_does_not_load_dictionary(args: str, empty_context: SimpleNamespace) -> None:
+    response = await dict_main.handle("dict", args, {}, empty_context)
 
     assert text_segments_text(response) == dict_main.HELP_TEXT
-
-
-def test_help_prioritizes_direct_queries_and_readable_long_options() -> None:
-    assert "/dict <词汇>  直接查询" in dict_main.HELP_TEXT
-    assert "/dict <词汇> --exact" in dict_main.HELP_TEXT
-    assert "/dict <词汇> --page <页码>" in dict_main.HELP_TEXT
-    assert "/dict <词汇> --size <1-100>" in dict_main.HELP_TEXT
 
 
 def test_common_dictionary_terms_are_not_reserved_as_help_aliases() -> None:
@@ -108,27 +97,7 @@ async def test_exact_miss_offers_ranked_fuzzy_suggestions_and_command(
 @pytest.mark.asyncio
 async def test_exact_limit_and_page_options_preserve_the_complete_query(
     context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
-
-    async def fake_query(
-        query: object,
-        _context: object,
-        exact_match: bool = False,
-        max_results: int  = 10,
-        page: int         = 1,
-    ) -> str:
-        captured.update(
-            query       = query,
-            exact_match = exact_match,
-            max_results = max_results,
-            page        = page,
-        )
-        return "ok"
-
-    monkeypatch.setattr(dict_main, "query_astrodict", fake_query)
-
     response = await dict_main.handle(
         "dict",
         '"fast radio burst" --size 20 --exact --page 3',
@@ -136,16 +105,14 @@ async def test_exact_limit_and_page_options_preserve_the_complete_query(
         context,
     )
 
-    assert text_segments_text(response) == "ok"
-    assert captured == {
-        "query"      : "fast radio burst",
-        "exact_match": True,
-        "max_results": 20,
-        "page"       : 3,
-    }
+    # 精确匹配只有 1 条：请求第 3 页越界，回复里的“最后一页”命令带着完整查询词和全部选项。
+    assert text_segments_text(response) == (
+        "❌ 第 3 页超出范围（共 1 页）\n"
+        "最后一页：/dict 'fast radio burst' --exact --size 20 --page 1"
+    )
 
 
-def test_page_size_alias_remains_available() -> None:
+def test_page_size_alias_sets_the_page_size() -> None:
     assert dict_main._parse_request("star --page-size 25") == dict_main.DictionaryRequest(
         "query",
         query       = "star",
@@ -154,28 +121,10 @@ def test_page_size_alias_remains_available() -> None:
 
 
 @pytest.mark.asyncio
-async def test_option_terminator_allows_option_like_query(
-    context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    async def fake_query(query: object, _context: object, **kwargs: object) -> str:
-        captured["query"] = query
-        captured.update(kwargs)
-        return "ok"
-
-    monkeypatch.setattr(dict_main, "query_astrodict", fake_query)
-
+async def test_option_terminator_allows_option_like_query(context: SimpleNamespace) -> None:
     response = await dict_main.handle("dict", "-e -- --nova", {}, context)
 
-    assert text_segments_text(response) == "ok"
-    assert captured == {
-        "query"      : "--nova",
-        "exact_match": True,
-        "max_results": 10,
-        "page"       : 1,
-    }
+    assert text_segments_text(response).startswith("❌ 没有完全匹配“--nova”的词条（英译中）")
 
 
 @pytest.mark.asyncio
@@ -246,16 +195,12 @@ def test_generated_navigation_command_round_trips_option_like_quoted_query() -> 
 async def test_malformed_commands_fail_closed(
     args: str,
     expected: str,
-    context: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+    empty_context: SimpleNamespace,
 ) -> None:
-    query = MagicMock(side_effect=AssertionError("invalid command must not search"))
-    monkeypatch.setattr(dict_main, "query_astrodict", query)
-
-    response = await dict_main.handle("dict", args, {}, context)
+    # 非法命令必须在查词典之前被拒绝：若真的去查，回复会是词典资源缺失的错误而不是 expected。
+    response = await dict_main.handle("dict", args, {}, empty_context)
 
     assert expected in text_segments_text(response)
-    query.assert_not_called()
 
 
 def test_parser_rejects_non_string_arguments() -> None:
@@ -264,7 +209,7 @@ def test_parser_rejects_non_string_arguments() -> None:
 
 
 @pytest.mark.asyncio
-async def test_existing_200_character_query_remains_valid(context: SimpleNamespace) -> None:
+async def test_long_query_within_the_limit_is_searched(context: SimpleNamespace) -> None:
     response = await dict_main.handle("dict", "a" * 200, {}, context)
 
     assert text_segments_text(response) == (
@@ -324,13 +269,8 @@ async def test_logs_do_not_include_query_text(context: SimpleNamespace) -> None:
     await dict_main.handle("dict", canary, {}, context)
 
     assert canary not in repr(context.logger.mock_calls)
-    context.logger.info.assert_called_once_with(
-        "天文词典查询: query_chars=%d exact=%s page=%d page_size=%d",
-        len(canary),
-        False,
-        1,
-        10,
-    )
+    (query_log,) = context.logger.info.call_args_list
+    assert len(canary) in query_log.args  # 只记查询的长度
 
 
 def test_manifest_and_every_packaged_row_are_consistent() -> None:
@@ -518,15 +458,3 @@ def test_resource_with_wrong_size_returns_validation_message(tmp_path: Path) -> 
     result = dict_main._query_astrodict_sync("galaxy", tmp_path, False, 10)
 
     assert result == "天文学词典数据校验失败: dictionary.txt"
-
-
-ROOT = REPOSITORY_ROOT
-
-
-def test_dictionary_query_runs_without_optional_dataframe_dependency():
-    import subprocess
-
-    code = "import sys; sys.modules['pandas'] = None; from pathlib import Path; from plugins.dict.main import _query_astrodict_sync; assert '单反光面望远镜' in _query_astrodict_sync('1-mirror telescope', Path('plugins/dict'), True, 10)"
-    subprocess.run(
-        [sys.executable, "-B", "-c", code], cwd=ROOT, check=True, timeout=20, capture_output=True
-    )

@@ -5,24 +5,28 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.router import build_command_catalog_node, command_access
-from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
+from plugins.xiaoqing_chat.runtime_state import get_state
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_OPEN,
     PluginCapabilities,
     PluginPrincipal,
-    _make_hctx,
-    _provider_test_ai,
-    _set_context_principal,
-    patch_turn,
+    ScriptedChatModel,
+    chat_message_event,
+    plan_answer,
+    provider_test_ai,
+    scripted_chat_context,
+    set_context_principal,
+    settle_chat_background,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -33,17 +37,15 @@ sample_group_event = _fixture_support.sample_group_event
 async def test_handle_provider_list_mode_shows_the_fallback_chain(mock_context, sample_group_event):
     from core.config import ConfigSnapshot
     from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state                = ChatRuntimeState()
+    state                = get_state()
     mock_context.secrets = ConfigSnapshot(
         config  = {},
         secrets = {},
     ).secrets
-    _set_context_principal(mock_context, sample_group_event, group_role="admin")
+    set_context_principal(mock_context, sample_group_event, group_role="admin")
 
-    with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
-        result = await handle_provider("", sample_group_event, mock_context)
+    result = await handle_provider("", sample_group_event, mock_context)
 
     assert state.get_chat_provider("g67890") is None
     assert "LLM 模型" in result[0]["data"]["text"]
@@ -57,19 +59,14 @@ async def test_handle_provider_group_admin_switch_is_scoped_to_current_group(
 ):
     from plugins.xiaoqing_chat.chat_runtime import ai_route_context
     from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state                = ChatRuntimeState()
+    state                = get_state()
     mock_context.secrets = {}
-    _set_context_principal(mock_context, sample_group_event, group_role="admin")
+    set_context_principal(mock_context, sample_group_event, group_role="admin")
 
-    with (
-        patch("plugins.xiaoqing_chat.commands.get_state", return_value=state),
-        patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=state),
-    ):
-        result = await handle_provider("glm", sample_group_event, mock_context)
-        group_a = ai_route_context(mock_context, chat_id="g67890")
-        group_b = ai_route_context(mock_context, chat_id="g99999")
+    result = await handle_provider("glm", sample_group_event, mock_context)
+    group_a = ai_route_context(mock_context, chat_id="g67890")
+    group_b = ai_route_context(mock_context, chat_id="g99999")
 
     assert state.get_chat_provider("g67890") == "glm"
     assert state.global_active_provider is None
@@ -130,29 +127,24 @@ async def test_handle_provider_global_switch_is_separate_from_session_switch(
 ):
     from plugins.xiaoqing_chat.chat_runtime import ai_route_context
     from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state                = ChatRuntimeState()
+    state                = get_state()
     mock_context.secrets = {}
-    _set_context_principal(
+    set_context_principal(
         mock_context,
         sample_group_event,
         group_role   = "member",
         is_bot_admin = True,
     )
 
-    with (
-        patch("plugins.xiaoqing_chat.commands.get_state", return_value=state),
-        patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=state),
-    ):
-        allowed = await handle_provider("global glm", sample_group_event, mock_context)
-        other_group = ai_route_context(mock_context, chat_id="g99999")
-        await handle_provider("deepseek", sample_group_event, mock_context)
-        local = ai_route_context(mock_context, chat_id="g67890")
-        await handle_provider("default", sample_group_event, mock_context)
-        inherited = ai_route_context(mock_context, chat_id="g67890")
-        await handle_provider("global default", sample_group_event, mock_context)
-        reset_global = ai_route_context(mock_context, chat_id="g99999")
+    allowed = await handle_provider("global glm", sample_group_event, mock_context)
+    other_group = ai_route_context(mock_context, chat_id="g99999")
+    await handle_provider("deepseek", sample_group_event, mock_context)
+    local = ai_route_context(mock_context, chat_id="g67890")
+    await handle_provider("default", sample_group_event, mock_context)
+    inherited = ai_route_context(mock_context, chat_id="g67890")
+    await handle_provider("global default", sample_group_event, mock_context)
+    reset_global = ai_route_context(mock_context, chat_id="g99999")
 
     assert "全局运行时模型" in allowed[0]["data"]["text"]
     assert other_group["_provider_name"] == "glm"
@@ -165,9 +157,8 @@ async def test_handle_provider_global_switch_is_separate_from_session_switch(
 @pytest.mark.asyncio
 async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
     from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state  = ChatRuntimeState()
+    state  = get_state()
     config = {
         "plugins": {
             "xiaoqing_chat": {
@@ -187,7 +178,7 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             secrets = {},
             config  = config,
             principal=PluginPrincipal(kind="user", user_id=1, group_id=10, group_role="admin"),
-            capabilities=PluginCapabilities(ai=_provider_test_ai()),
+            capabilities=PluginCapabilities(ai=provider_test_ai()),
             logger     = MagicMock(),
             request_id = "provider-a",
         )
@@ -197,17 +188,16 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             secrets = {},
             config  = config,
             principal=PluginPrincipal(kind="user", user_id=2, group_id=20, group_role="owner"),
-            capabilities=PluginCapabilities(ai=_provider_test_ai()),
+            capabilities=PluginCapabilities(ai=provider_test_ai()),
             logger     = MagicMock(),
             request_id = "provider-b",
         )
     )
 
-    with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
-        await asyncio.gather(
-            handle_provider("glm", event_a, context_a),
-            handle_provider("deepseek", event_b, context_b),
-        )
+    await asyncio.gather(
+        handle_provider("glm", event_a, context_a),
+        handle_provider("deepseek", event_b, context_b),
+    )
 
     assert state.get_chat_provider("g10") == "glm"
     assert state.get_chat_provider("g20") == "deepseek"
@@ -255,90 +245,34 @@ def test_chat_id_requires_group_or_user_identifier():
 async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_runs(
     mock_context, sample_group_event
 ):
-    from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    lock                              = asyncio.Lock()
-    state                             = MagicMock()
-    state.get_mood_state.return_value = ""
-    state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append             = Mock()
-    state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async    = AsyncMock()
-    state.heartflow.on_no_reply_async     = AsyncMock()
-    state.inc_stats                       = Mock()
-    state.action_history.append           = Mock()
-    state.pfc_state_store.get_async       = AsyncMock(
-        return_value=PFCConversationState(
-            chat_id                      = "g67890",
+    chat_id = "g67890"
+    model = ScriptedChatModel(plan=plan_answer("wait", "再观察"))
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
+    # 上一轮以告别结束，规划器状态里留着“已结束”。
+    bound_state(mock_context).pfc_state_store.set_state(
+        chat_id,
+        PFCConversationState(
+            chat_id                      = chat_id,
             ended                        = True,
             last_successful_reply_action = "say_goodbye",
-            goal_list                    = [],
-            knowledge_list               = [],
-            planner_fail_ts              = [],
-            planner_skip_until           = 0.0,
-            updated_at                   = 0.0,
-        )
-    )
-    state.pfc_state_store.set_state = Mock()
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            enable_smalltalk=True,
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(
-                enable_expression_reflection=False, enable_review_sessions=False
-            ),
-            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            max_context_size=10,
-            planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
-            debug=SimpleNamespace(log_latency=False),
-        )
+        ),
     )
 
-    captured: dict[str, Any] = {}
+    result = await handle_smalltalk(
+        "新消息", chat_message_event(sample_group_event, "新消息"), mock_context
+    )
 
-    async def fake_run_pfc_once(**kwargs):
-        captured["state"] = kwargs["state"]
-        return PFCRunResult(reply="", action="wait", reason="再观察", ended=False)
-
-    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
-    with (
-        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=lock),
-        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
-            new=AsyncMock(return_value="u1"),
-        ),
-        patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
-        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch(
-            "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
-            new=AsyncMock(side_effect=fake_run_pfc_once),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.turn_delivery.split_history_at",
-            return_value=([], []),
-        ),
-        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
-        patch_turn("schedule_pfc_state_flush"),
-        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
-        patch("plugins.xiaoqing_chat.handlers.log_step"),
-    ):
-        result = await _maybe_reply_smalltalk("新消息", sample_group_event, mock_context)
-
+    # 对方的新消息让规划器重新开始：规划器真的被问了一次，而不是直接回“已结束”。
     assert result == []
-    assert captured["state"].ended is False
+    assert len(model.calls_of("plan")) == 1
+    await settle_chat_background(mock_context, model)
 
 
 def test_default_model_tracks_available_route_order_without_a_separate_default():
     from core.ai import AIModelInfo
     from plugins.xiaoqing_chat.chat_runtime import ai_route_context
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     models = [
         AIModelInfo("chatgpt", "openai", "chat-latest", ("text",)),
@@ -363,11 +297,10 @@ def test_default_model_tracks_available_route_order_without_a_separate_default()
             ),
         )
     )
-    with patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=ChatRuntimeState()):
-        assert ai_route_context(context)["_default"] == "chatgpt"
-        # Core omits the first entry while its provider has no key.
-        models.pop(0)
-        resolved = ai_route_context(context)
-        assert resolved["_default"] == "deepseek"
-        assert resolved["_profile"] == "deepseek-flash"
-        assert resolved["_pinned_model"] is None
+    assert ai_route_context(context)["_default"] == "chatgpt"
+    # Core omits the first entry while its provider has no key.
+    models.pop(0)
+    resolved = ai_route_context(context)
+    assert resolved["_default"] == "deepseek"
+    assert resolved["_profile"] == "deepseek-flash"
+    assert resolved["_pinned_model"] is None

@@ -92,10 +92,8 @@ def is_low_information_turn(text: str) -> bool:
 
 
 def derive_goal(current_text: str) -> str:
-    """根据当前消息推导本轮目标。"""
+    """根据当前消息推导本轮目标；纯反应消息由调用方先判断（它们保留原目标）。"""
     t = (current_text or "").strip()
-    if t and is_low_information_turn(t):
-        return ""
     if t and len(t) <= 14:
         return f'围绕"{t}"继续聊'
     return "自然聊天"

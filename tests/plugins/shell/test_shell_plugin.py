@@ -1,6 +1,8 @@
 """Shell 插件的配置、解析、执行与资源回收测试。"""
 
 import json
+import logging
+import re
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -16,6 +18,29 @@ from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = REPOSITORY_ROOT
+
+GIT_BASH_CONFIG = {
+    "plugins": {
+        "shell": {
+            "terminal": {
+                "backend"   : "git-bash",
+                "executable": "C:/Program Files/Git/bin/bash.exe",
+            }
+        }
+    }
+}
+GIT_BASH_PATH = r"C:\Program Files\Git\bin\bash.exe"
+
+
+def _audit_statuses(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """/shell 写下的审计日志里的状态，按先后顺序。"""
+
+    return [
+        match.group(1)
+        for record in caplog.records
+        if record.name == shell_main.logger.name
+        and (match := re.search(r"status=(\w+)", record.getMessage()))
+    ]
 
 
 @pytest.fixture
@@ -157,20 +182,6 @@ class TestShellConfig:
         assert shell_main._get_config(context) == {}
         assert shell_main._get_timeout(context) == shell_config.DEFAULT_TIMEOUT
         assert shell_main._get_whitelist(context) == set(shell_config.DEFAULT_WHITELIST)
-
-    def test_dangerous_patterns_defined(self):
-        """测试危险模式已定义"""
-        assert len(shell_config.DANGEROUS_PATTERNS) > 0
-        # 应该包含常见的命令注入模式
-        assert any("&&" in p or "||" in p or ";" in p for p in shell_config.DANGEROUS_PATTERNS)
-
-    def test_default_timeout_positive(self):
-        """测试默认超时为正数"""
-        assert shell_config.DEFAULT_TIMEOUT > 0
-
-    def test_max_output_length_positive(self):
-        """测试最大输出长度为正数"""
-        assert shell_config.MAX_OUTPUT_LENGTH > 0
 
 
 class TestCommandValidation:
@@ -382,18 +393,12 @@ class TestShellHandle:
         assert "Shell 命令执行插件" in text_segments_text(result)
 
     @pytest.mark.asyncio
-    async def test_handle_list_whitelist(self, mock_context, mock_event):
-        """测试列出白名单"""
-        result = await shell_main.handle("shell", "list", mock_event, mock_context)
-        assert isinstance(result, list)
-        assert "echo" in str(result)
-        assert "ls" in str(result)
-
-    @pytest.mark.asyncio
     async def test_handle_list_distinguishes_enabled_from_available(
         self, monkeypatch, mock_context, mock_event
     ):
-        monkeypatch.setattr(shell_main, "_command_available", lambda name: name == "echo")
+        monkeypatch.setattr(
+            shell_main.shutil, "which", lambda name: name if name == "echo" else None
+        )
 
         result = await shell_main.handle("shell", "list", mock_event, mock_context)
 
@@ -406,23 +411,10 @@ class TestShellHandle:
 
     @pytest.mark.asyncio
     async def test_handle_list_queries_git_bash_once(self, monkeypatch, mock_context, mock_event):
-        mock_context.config = {
-            "plugins": {
-                "shell": {
-                    "terminal": {
-                        "backend"   : "git-bash",
-                        "executable": "C:/Program Files/Git/bin/bash.exe",
-                    }
-                }
-            }
-        }
-        monkeypatch.setattr(
-            shell_main,
-            "_resolve_terminal_executable",
-            lambda _settings: r"C:\Program Files\Git\bin\bash.exe",
-        )
-        execute = AsyncMock(return_value=(0, "ls\npwd\n", ""))
-        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        mock_context.config = GIT_BASH_CONFIG
+        monkeypatch.setattr(shell_main.shutil, "which", lambda _name: GIT_BASH_PATH)
+        run = AsyncMock(return_value=ProcessResult(0, "ls\npwd\n", ""))
+        monkeypatch.setattr(shell_main, "run_process", run)
 
         result = await shell_main.handle("shell", "list", mock_event, mock_context)
 
@@ -431,14 +423,9 @@ class TestShellHandle:
         assert "当前 Git Bash 未找到（1）" in rendered
         assert "ls, pwd" in rendered
         assert "echo" in rendered
-        execute.assert_awaited_once()
-        queried = execute.await_args.args[0]
-        assert queried[:4] == [
-            r"C:\Program Files\Git\bin\bash.exe",
-            "--noprofile",
-            "--norc",
-            "-c",
-        ]
+        run.assert_awaited_once()
+        queried = run.await_args.args[0]
+        assert queried[:4] == [GIT_BASH_PATH, "--noprofile", "--norc", "-c"]
         assert queried[-3:] == ["echo", "ls", "pwd"]
 
     @pytest.mark.asyncio
@@ -459,58 +446,45 @@ class TestShellHandle:
 
     @pytest.mark.asyncio
     async def test_handle_missing_executable_returns_actionable_error(
-        self, monkeypatch, mock_context, mock_event
+        self, monkeypatch, caplog, mock_context, mock_event
     ):
-        execute = AsyncMock(side_effect=FileNotFoundError(2, "not found"))
-        audit = MagicMock()
-        monkeypatch.setattr(shell_main, "_execute_command", execute)
-        monkeypatch.setattr(shell_main, "_log_command_audit", audit)
+        run = AsyncMock(side_effect=FileNotFoundError(2, "not found"))
+        monkeypatch.setattr(shell_main, "run_process", run)
         monkeypatch.setattr(shell_main.sys, "platform", "win32")
 
-        result = await shell_main.handle("shell", "ls", mock_event, mock_context)
+        with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+            result = await shell_main.handle("shell", "ls", mock_event, mock_context)
 
         rendered = text_segments_text(result)
         assert "找不到可执行命令 'ls'" in rendered
         assert "启用列表只控制允许执行的入口" in rendered
         assert "/shell cmd /c dir" in rendered
         assert "XQ-PLUGIN-UNEXPECTED" not in rendered
-        execute.assert_awaited_once_with(["ls"], 30)
-        assert [call.kwargs["status"] for call in audit.call_args_list] == [
-            "started",
-            "unavailable",
-        ]
+        run.assert_awaited_once()
+        assert run.await_args.args[0] == ["ls"]
+        assert run.await_args.kwargs["timeout"] == 30
+        assert _audit_statuses(caplog) == ["started", "unavailable"]
 
     @pytest.mark.asyncio
     async def test_handle_executes_original_command_through_configured_git_bash(
         self, monkeypatch, mock_context, mock_event
     ):
-        mock_context.config = {
-            "plugins": {
-                "shell": {
-                    "terminal": {
-                        "backend"   : "git-bash",
-                        "executable": "C:/Program Files/Git/bin/bash.exe",
-                    }
-                }
-            }
-        }
-        bash = r"C:\Program Files\Git\bin\bash.exe"
-        monkeypatch.setattr(shell_main, "_resolve_terminal_executable", lambda _settings: bash)
-        execute = AsyncMock(return_value=(0, "ok", ""))
-        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        mock_context.config = GIT_BASH_CONFIG
+        monkeypatch.setattr(shell_main.shutil, "which", lambda _name: GIT_BASH_PATH)
+        run = AsyncMock(return_value=ProcessResult(0, "ok", ""))
+        monkeypatch.setattr(shell_main, "run_process", run)
         command = 'echo "C:/Program Files/example.txt"'
 
         result = await shell_main.handle("shell", command, mock_event, mock_context)
 
         assert "返回码: 0" in text_segments_text(result)
-        execute.assert_awaited_once_with(
-            [bash, "--noprofile", "--norc", "-c", command],
-            30,
-        )
+        run.assert_awaited_once()
+        assert run.await_args.args[0] == [GIT_BASH_PATH, "--noprofile", "--norc", "-c", command]
+        assert run.await_args.kwargs["timeout"] == 30
 
     @pytest.mark.asyncio
     async def test_handle_missing_configured_git_bash_fails_before_audit(
-        self, monkeypatch, mock_context, mock_event
+        self, monkeypatch, caplog, mock_context, mock_event
     ):
         mock_context.config = {
             "plugins": {
@@ -522,19 +496,18 @@ class TestShellHandle:
                 }
             }
         }
-        monkeypatch.setattr(shell_main, "_resolve_terminal_executable", lambda _settings: None)
-        execute = AsyncMock()
-        audit   = MagicMock()
-        monkeypatch.setattr(shell_main, "_execute_command", execute)
-        monkeypatch.setattr(shell_main, "_log_command_audit", audit)
+        monkeypatch.setattr(shell_main.shutil, "which", lambda _name: None)
+        run = AsyncMock()
+        monkeypatch.setattr(shell_main, "run_process", run)
 
-        result = await shell_main.handle("shell", "ls", mock_event, mock_context)
+        with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+            result = await shell_main.handle("shell", "ls", mock_event, mock_context)
 
         rendered = text_segments_text(result)
         assert "Shell 终端配置不可用" in rendered
         assert "plugins.shell.terminal" in rendered
-        execute.assert_not_awaited()
-        audit.assert_not_called()
+        run.assert_not_awaited()
+        assert _audit_statuses(caplog) == []
 
     @pytest.mark.asyncio
     async def test_handle_list_whitelist_hides_unsupported_builtins(self, mock_context, mock_event):
@@ -552,8 +525,8 @@ class TestShellHandle:
     ):
         monkeypatch.setattr(
             shell_main,
-            "_execute_command",
-            AsyncMock(return_value=(1, "o" * 6000, "e" * 6000)),
+            "run_process",
+            AsyncMock(return_value=ProcessResult(1, "o" * 6000, "e" * 6000)),
         )
 
         result = await shell_main.handle("shell", "echo ok", mock_event, mock_context)
@@ -570,13 +543,13 @@ class TestShellHandle:
         mock_context,
         mock_event,
     ):
-        execute = AsyncMock()
-        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        run = AsyncMock()
+        monkeypatch.setattr(shell_main, "run_process", run)
 
         result = await shell_main.handle("shell", 'echo "unterminated', mock_event, mock_context)
 
         assert "无法解析" in text_segments_text(result)
-        execute.assert_not_awaited()
+        run.assert_not_awaited()
 
     def test_manifest_entry_and_command_authorization(self):
         plugin_dir = ROOT / "plugins" / "shell"

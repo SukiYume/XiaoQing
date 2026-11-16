@@ -1,4 +1,4 @@
-"""Pendo Web 账目洞察图表的渲染、边界和安全回归。"""
+"""Pendo Web 账目洞察图表的渲染、边界和安全。"""
 
 from __future__ import annotations
 
@@ -166,7 +166,7 @@ def test_ledger_insights_escapes_server_text_and_normalizes_broken_numbers() -> 
 
 
 def test_ledger_insights_handles_focus_copy_first_spend_and_complete_ring_geometry() -> None:
-    """收入/转账文案、首次支出语义和单分类完整圆环应保持原契约。"""
+    """收入/转账文案、首次发生语义和单分类完整圆环。"""
 
     _run_ledger_insights_client(
         r"""

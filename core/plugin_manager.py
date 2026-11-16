@@ -35,28 +35,17 @@ from .plugin_manager_support import (
     _PLUGIN_IMPORT_LOCK,
     _PLUGIN_NAMESPACE_GUARD,
     _PLUGIN_NAMESPACE_OWNERS,
-    _PROCESS_IMPORT_PATH_LEASES,
     LoadedPlugin,
     LoadedPluginService,
     PluginDefinition,
     PluginPathError,
-    PluginServiceDefinition,
     _acquire_process_import_path,
     _install_namespace_tombstone_locked,
     _meta_path_identity_index,
-    _ModuleImportBarrierCapability,
-    _ModuleImportBarrierCoordinator,
     _PluginDataDirectory,
     _ProcessImportPathLeaseKey,
     _release_process_import_paths,
     _SourceOnlyPluginFinder,
-    _SourceOnlyPluginLoader,
-    is_link_like,
-    resolve_contained_directory,
-    resolve_contained_regular_file,
-    resolve_plugin_entry,
-    resolve_plugin_root,
-    validate_plugin_module_origin,
 )
 from .plugin_runtime import PluginRuntimeMixin
 from .plugin_watcher import PluginWatcherMixin
@@ -64,27 +53,7 @@ from .router import CommandRouter
 
 logger = logging.getLogger(__name__)
 
-# 实现拆在几个专门模块里；这里重新导出别处（测试和夹具）按 ``core.plugin_manager``
-# 取用的名字。它们是同一份定义的别名，不是另一份实现。
-__all__ = [
-    "LoadedPlugin",
-    "LoadedPluginService",
-    "PluginDefinition",
-    "PluginManager",
-    "PluginPathError",
-    "PluginServiceDefinition",
-    "is_link_like",
-    "resolve_contained_directory",
-    "resolve_contained_regular_file",
-    "resolve_plugin_entry",
-    "resolve_plugin_root",
-    "validate_plugin_module_origin",
-    "_ModuleImportBarrierCapability",
-    "_ModuleImportBarrierCoordinator",
-    "_PLUGIN_NAMESPACE_OWNERS",
-    "_PROCESS_IMPORT_PATH_LEASES",
-    "_SourceOnlyPluginLoader",
-]
+__all__ = ["PluginManager"]
 
 
 class PluginManager(
@@ -208,9 +177,8 @@ class PluginManager(
             project_root = os.path.abspath(self.plugins_dir.parent)
             lease_keys.append(_acquire_process_import_path(sys.path, project_root))
 
-            # ``plugins`` may already be imported by another manager (notably
-            # in tests that create an isolated root). Extend that exact package
-            # path rather than enabling a top-level plugin alias.
+            # ``plugins`` may already be imported by another manager. Extend that
+            # exact package path rather than enabling a top-level plugin alias.
             package = importlib.import_module("plugins")
             if not isinstance(package, ModuleType):
                 raise PluginPathError("canonical plugins package is not a module")
@@ -333,22 +301,6 @@ class PluginManager(
                 owned=owned,
             )
         self._owned_plugin_modules[plugin_name] = {}
-
-    def _record_private_module(
-        self,
-        plugin_name: str,
-        module_name: str,
-        module: ModuleType,
-    ) -> None:
-        """Track exact objects created by the non-lifecycle private load helper."""
-
-        canonical = f"plugins.{plugin_name}"
-        if module_name != canonical and not module_name.startswith(f"{canonical}."):
-            raise PluginPathError("private plugin loader produced a non-canonical module")
-        with _PLUGIN_IMPORT_LOCK:
-            if sys.modules.get(module_name) is not module:
-                raise PluginPathError("private plugin module lost its cache binding")
-            self._private_plugin_modules.setdefault(plugin_name, {})[module_name] = module
 
     def _validate_owned_namespace(
         self,

@@ -953,9 +953,7 @@ def update_item(
         raise HTTPException(status_code=422, detail="No fields to update")
 
     item_type = get_item_type_value(getattr(item, "type", None), default="")
-    allowed_fields = MUTABLE_FIELDS_BY_TYPE.get(item_type)
-    if allowed_fields is None:
-        raise HTTPException(status_code=500, detail="Stored item has an unsupported type")
+    allowed_fields = MUTABLE_FIELDS_BY_TYPE[item_type]
     invalid_fields = requested_fields - allowed_fields
     if invalid_fields:
         raise HTTPException(

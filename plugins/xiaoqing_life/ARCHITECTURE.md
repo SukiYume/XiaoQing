@@ -129,7 +129,7 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 ## 验证
 
 全部测试离线：假 HTTP、假模型，不访问真实网络。`tests/plugins/xiaoqing_life/`：按模块的测试（`test_planner`、`test_research`、`test_digest`、`test_turn_context`……）、
-生产案例（`test_research_production_cases.py`）、对照 dafeiyu 的话题与知识门控（`test_friends_topics_and_knowledge.py`）、
+研究的取向与门槛（`test_research_direction.py`）、对照 dafeiyu 的话题与知识门控（`test_friends_topics_and_knowledge.py`）、
 活动比例（`test_planner_mix.py`）、14 天与 23 天可控时钟模拟。
 
 ### 真实端点回放

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -19,8 +20,10 @@ from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory import client as memory_client
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
+from plugins.xiaoqing_chat.planning.action_history import ActionRecord
+from plugins.xiaoqing_chat.store_binding import bound_state
 
-CANARY          = "CR219_INTERNAL_LOG_SECRET"
+CANARY          = "INTERNAL_LOG_SECRET"
 SENSITIVE_ERROR = (
     f"Authorization: Bearer {CANARY} "
     f"https://user:password@example.test/api?token={CANARY} "
@@ -131,31 +134,42 @@ async def test_xiaoqing_memory_failure_logs_only_the_error_type(
 async def test_xiaoqing_shutdown_failures_use_correlated_public_log(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
-    state = SimpleNamespace(
-        stop_accepting_background_tasks=Mock(),
-        background_tasks=Mock(return_value=set()),
-        memory_store=SimpleNamespace(persist_all=Mock()),
-        pfc_state_store=SimpleNamespace(flush=Mock()),
-        action_history=SimpleNamespace(
-            flush=Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
-        ),
-        media_store=SimpleNamespace(flush=Mock()),
-        memory_db=SimpleNamespace(is_dirty=Mock(return_value=False)),
-    )
-    monkeypatch.setattr(xiaoqing_chat, "_state", Mock(return_value=state))
     context = SimpleNamespace(
-        logger     = logging.getLogger("test.cr219.xiaoqing.shutdown"),
-        request_id = "req-cr219-shutdown",
+        data_dir   = tmp_path,
+        logger     = logging.getLogger("test.xiaoqing.shutdown"),
+        request_id = "req-shutdown",
         secrets    = {"token": CANARY},
     )
+    state = bound_state(context)
+    state.action_history.append(
+        "chat-1",
+        ActionRecord(
+            ts           = 1.0,
+            local_target = "chat-1",
+            action       = "reply",
+            reasoning    = "",
+            detail       = {},
+            executed     = True,
+        ),
+    )
+    real_replace = os.replace
+
+    def replace_that_fails_for_action_history(src, dst, *args, **kwargs) -> None:
+        # 在 OS 层让行动历史落盘失败，错误文字里带着泄漏探针。
+        if Path(dst).parent == tmp_path / "action_history":
+            raise OSError(SENSITIVE_ERROR)
+        real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace_that_fails_for_action_history)
 
     with caplog.at_level(logging.ERROR):
         await xiaoqing_chat.shutdown(context)
 
     logged = _log_text(caplog)
-    assert "req-cr219-shutdown" in logged
-    assert "RuntimeError" in logged
+    assert "req-shutdown" in logged
+    assert "OSError" in logged
     assert CANARY not in logged
     assert all(record.exc_info is None for record in caplog.records)
 

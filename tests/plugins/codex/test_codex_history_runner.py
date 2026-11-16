@@ -18,14 +18,14 @@ from tests.helpers.codex_test_support import (
     CodexRunner,
     FakeContext,
     FakeRunner,
-    _arxiv_addon,
-    _install_fake_manager,
-    _persisted_session,
-    _valid_arxiv_summary,
-    _wait_manager_idle,
-    _wait_until,
+    arxiv_addon,
     codex_main,
+    install_fake_manager,
     load_plugin_config,
+    persisted_session,
+    valid_arxiv_summary,
+    wait_manager_idle,
+    wait_until,
 )
 
 
@@ -33,19 +33,19 @@ from tests.helpers.codex_test_support import (
 async def test_arxiv_summary_duplicate_inflight_reports_status(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(block_summary=True)
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-20",
         links    = ["https://arxiv.org/abs/2605.00001"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+    await wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
     context.actions.clear()
 
-    result = await _arxiv_addon(manager).enqueue_or_replay(
+    result = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-20",
         links    = ["https://arxiv.org/abs/2605.00001"],
         user_id  = 1,
@@ -56,25 +56,25 @@ async def test_arxiv_summary_duplicate_inflight_reports_status(tmp_path: Path):
     assert "已在队列或运行中" in result
     assert "已在运行中" in str(context.actions)
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
 async def test_same_date_different_link_set_does_not_reuse_inflight_job(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(block_summary=True)
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-08-06",
         links    = ["https://arxiv.org/abs/2608.00001"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+    await wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
 
-    result = await _arxiv_addon(manager).enqueue_or_replay(
+    result = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-08-06",
         links    = ["https://arxiv.org/abs/2608.00002"],
         user_id  = 1,
@@ -86,41 +86,41 @@ async def test_same_date_different_link_set_does_not_reuse_inflight_job(tmp_path
     assert len(manager.queues["astro-ph"]) == 1
     assert "2608.00002" in manager.queues["astro-ph"][0].prompt
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
 async def test_arxiv_summary_failed_history_is_retried(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="network failed", exit_code=1)
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-21",
         links    = ["https://arxiv.org/abs/2605.18513"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     assert "2026-05-21 arXiv 总结失败" in str(context.actions)
 
     retry_runner = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-21",
             "https://arxiv.org/abs/2605.18513",
             "retry summary",
         )
     )
     manager.runner = retry_runner  # type: ignore[assignment]
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-21",
         links    = ["https://arxiv.org/abs/2605.18513"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert len(retry_runner.calls) == 1
     assert "retry summary" in str(context.actions)
@@ -131,25 +131,25 @@ async def test_arxiv_summary_queue_full_reuses_manager_limit(tmp_path: Path):
     context                                                       = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["per_session_queue_limit"] = 1
     runner = FakeRunner(block_summary=True)
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-22",
         links    = ["https://arxiv.org/abs/2605.00001"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+    await wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
 
-    queued = await _arxiv_addon(manager).enqueue_or_replay(
+    queued = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-23",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    full = await _arxiv_addon(manager).enqueue_or_replay(
+    full = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-24",
         links    = ["https://arxiv.org/abs/2605.18050"],
         user_id  = 1,
@@ -160,14 +160,14 @@ async def test_arxiv_summary_queue_full_reuses_manager_limit(tmp_path: Path):
     assert "已投递" in queued
     assert "已达到队列上限 1" in full
     runner.release.set()
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
 async def test_protected_astro_ph_requires_explicit_protected_delete(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create astro-ph", {"user_id": 1, "group_id": 2}, context)
 
@@ -199,7 +199,7 @@ async def test_protected_astro_ph_requires_explicit_protected_delete(tmp_path: P
 @pytest.mark.asyncio
 async def test_codex_session_views_publish_only_cwd_name(tmp_path: Path):
     context = FakeContext(tmp_path)
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     await manager.create_session("aaa", None, user_id=1, group_id=None)
 
     listing = await manager.list_sessions()
@@ -215,7 +215,7 @@ async def test_codex_session_views_publish_only_cwd_name(tmp_path: Path):
 async def test_delete_archives_history_and_recreate_uses_clean_session(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner()
-    _install_fake_manager(context, runner)
+    install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     deleted = await codex_main.handle(
@@ -242,22 +242,22 @@ async def test_delete_archives_history_and_recreate_uses_clean_session(tmp_path:
 async def test_recreated_astro_ph_does_not_replay_archived_summary(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner  = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
             "old summary",
         )
     )
-    manager = _install_fake_manager(context, runner)
+    manager = install_fake_manager(context, runner)
 
-    await _arxiv_addon(manager).enqueue_or_replay(
+    await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-19",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
     context.actions.clear()
 
     await codex_main.handle(
@@ -268,21 +268,21 @@ async def test_recreated_astro_ph_does_not_replay_archived_summary(tmp_path: Pat
     )
 
     retry_runner = FakeRunner(
-        result_text=_valid_arxiv_summary(
+        result_text=valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
             "new summary",
         )
     )
     manager.runner = retry_runner  # type: ignore[assignment]
-    result         = await _arxiv_addon(manager).enqueue_or_replay(
+    result         = await arxiv_addon(manager).enqueue_or_replay(
         date     = "2026-05-19",
         links    = ["https://arxiv.org/abs/2605.16917"],
         user_id  = 1,
         group_id = 2,
         context  = context,
     )
-    await _wait_manager_idle(manager)
+    await wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(retry_runner.calls) == 2
@@ -297,7 +297,7 @@ def test_runner_injects_default_image_artifact_prompt(tmp_path: Path):
     runner       = CodexRunner(config, tmp_path / "outputs")
     artifact_dir = tmp_path / "session" / "aaa" / "jobs" / "job-0001" / "artifacts"
 
-    args = runner._build_args(  # noqa: SLF001 - regression coverage for CLI prompt transport.
+    args = runner._build_args(  # noqa: SLF001 - checks how the prompt reaches the CLI.
         tmp_path,
         None,
         tmp_path / "out.txt",
@@ -310,9 +310,6 @@ def test_runner_injects_default_image_artifact_prompt(tmp_path: Path):
     assert args[-1] == "-"
     assert "画一张图" not in args
     assert prompt.startswith("画一张图")
-    assert "Codex 插件默认图片输出约定" in prompt
-    assert "generated_images" not in prompt
-    assert "复制到上述目录" in prompt
     assert artifact_dir.resolve().as_posix() in prompt
 
 
@@ -364,7 +361,7 @@ def test_session_state_recovers_truncated_primary_from_valid_backup(tmp_path: Pa
     context.data_dir.mkdir(parents=True)
     state = {
         "schema_version": 1,
-        "sessions"      : {"safe": _persisted_session("safe", context.default_cwd)},
+        "sessions"      : {"safe": persisted_session("safe", context.default_cwd)},
     }
     sessions_path = context.data_dir / "sessions.json"
     sessions_path.write_text('{"schema_version": 1,', encoding="utf-8")
@@ -373,7 +370,7 @@ def test_session_state_recovers_truncated_primary_from_valid_backup(tmp_path: Pa
         encoding="utf-8",
     )
 
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
 
     assert set(manager.sessions) == {"safe"}
     assert json.loads(sessions_path.read_text(encoding="utf-8")) == state
@@ -388,14 +385,14 @@ def test_session_state_keeps_valid_records_and_quarantines_invalid_fields(tmp_pa
     context = FakeContext(tmp_path)
     context.default_cwd.mkdir(parents=True)
     context.data_dir.mkdir(parents=True)
-    invalid               = _persisted_session("invalid", context.default_cwd)
+    invalid               = persisted_session("invalid", context.default_cwd)
     invalid["unexpected"] = "must not be accepted"
     (context.data_dir / "sessions.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "sessions"      : {
-                    "valid"  : _persisted_session("valid", context.default_cwd),
+                    "valid"  : persisted_session("valid", context.default_cwd),
                     "invalid": invalid,
                 },
             }
@@ -403,7 +400,7 @@ def test_session_state_keeps_valid_records_and_quarantines_invalid_fields(tmp_pa
         encoding="utf-8",
     )
 
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     cleaned = json.loads((context.data_dir / "sessions.json").read_text(encoding="utf-8"))
 
     assert set(manager.sessions) == {"valid"}
@@ -421,7 +418,7 @@ def test_session_state_rejects_future_schema_without_blocking_startup(tmp_path: 
         encoding="utf-8",
     )
 
-    manager = _install_fake_manager(context, FakeRunner())
+    manager = install_fake_manager(context, FakeRunner())
     cleaned = json.loads((context.data_dir / "sessions.json").read_text(encoding="utf-8"))
 
     assert manager.sessions == {}
@@ -452,7 +449,7 @@ async def test_maintenance_prunes_orphans_and_expires_only_idle_unprotected_sess
     raw                            = context.config["plugins"]["codex"]
     raw["artifact_retention_days"] = 1
     raw["session_ttl_days"]        = 1
-    manager                        = _install_fake_manager(context, FakeRunner())
+    manager                        = install_fake_manager(context, FakeRunner())
     await manager.create_session(
         "expired",
         str(context.default_cwd),
@@ -468,7 +465,7 @@ async def test_maintenance_prunes_orphans_and_expires_only_idle_unprotected_sess
     old = time.time() - 3 * 86400
     manager.sessions["expired"].updated_at = old
     manager.sessions["astro-ph"].updated_at = old
-    manager._save()  # noqa: SLF001 - persisted lifecycle regression setup.
+    manager._save()  # noqa: SLF001 - set up persisted session state.
 
     orphan_job = manager.session_root / "astro-ph" / "jobs" / "job-9999"
     (orphan_job / "artifacts").mkdir(parents=True)

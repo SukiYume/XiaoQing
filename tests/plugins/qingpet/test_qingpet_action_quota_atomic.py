@@ -1,4 +1,4 @@
-"""Atomic quota/resource regression tests for QingPet actions."""
+"""QingPet 日常动作的配额、冷却和物品消耗在失败与并发下保持原子。"""
 
 from __future__ import annotations
 

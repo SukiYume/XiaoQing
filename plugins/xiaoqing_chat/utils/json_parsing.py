@@ -164,11 +164,29 @@ def parse_first_json_array(text: str) -> list[dict[str, Any]]:
     return []
 
 
+def _is_empty_json_array(text: str) -> bool:
+    arr_text = extract_first_json_array_text(text)
+    if not arr_text:
+        return False
+    try:
+        parsed = json.loads(arr_text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, list) and not parsed
+
+
 def parse_first_json_value(text: str) -> dict[str, Any] | list[dict[str, Any]] | None:
+    """取模型输出开头的 JSON 对象或对象数组。
+
+    数组只保留对象条目。字面上就是空数组时返回 ``[]``（模型明确答“一个都没有”）；
+    解析不出，或数组里一个对象都没有时返回 ``None``。
+    """
     s = normalize_llm_text(text)
     if s.startswith("["):
         arr = parse_first_json_array(s)
-        return arr if arr else None
+        if arr:
+            return arr
+        return [] if _is_empty_json_array(s) else None
     if s.startswith("{"):
         return parse_first_json_object(s)
     return None

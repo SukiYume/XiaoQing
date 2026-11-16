@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import time
 from pathlib import Path
@@ -38,7 +37,7 @@ PNG_BYTES = base64.b64decode(
 )
 
 
-def _valid_arxiv_summary(date: str, link: str, text: str = "summary") -> str:
+def valid_arxiv_summary(date: str, link: str, text: str = "summary") -> str:
     return (
         f"## {date}\n\n"
         f"1. [Example Paper Title]({link})\n\n"
@@ -174,7 +173,7 @@ class FakeRunner:
         )
 
 
-class _RaceProcess(CallbackStreamingProcess):
+class RaceProcess(CallbackStreamingProcess):
     def __init__(self, pid: int = 43210) -> None:
         self.stdin_inputs: list[bytes] = []
         self.prompt_sent               = asyncio.Event()
@@ -196,7 +195,7 @@ class _RaceProcess(CallbackStreamingProcess):
         self.terminated.set()
 
 
-async def _wait_until(predicate, timeout: float = 1.0) -> None:
+async def wait_until(predicate, timeout: float = 1.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
         if asyncio.get_running_loop().time() > deadline:
@@ -204,7 +203,7 @@ async def _wait_until(predicate, timeout: float = 1.0) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _wait_manager_idle(manager: CodexQueueManager) -> None:
+async def wait_manager_idle(manager: CodexQueueManager) -> None:
     """等待测试 manager 的当前 worker 收敛，不扩张生产 Manager 接口。"""
 
     while True:
@@ -222,7 +221,7 @@ def _reset_manager_state() -> None:
     codex_manager_module._MANAGER_LOCK = LazyAsyncLock()
 
 
-def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueueManager:
+def install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueueManager:
     import plugins.codex.manager as manager_module
 
     manager = CodexQueueManager(
@@ -234,7 +233,7 @@ def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueu
     return manager
 
 
-def _install_actual_runner_manager(context: FakeContext) -> CodexQueueManager:
+def install_actual_runner_manager(context: FakeContext) -> CodexQueueManager:
     import plugins.codex.manager as manager_module
 
     config  = load_plugin_config(context)
@@ -247,14 +246,47 @@ def _install_actual_runner_manager(context: FakeContext) -> CodexQueueManager:
     return manager
 
 
-def _patch_race_termination(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+def confirmed_termination(*, forced: bool) -> ProcessTreeTerminationResult:
+    """进程树回收的成功结果：整棵树已确认退出、父进程已回收；``forced`` 表示动用了强制终止。"""
+
+    return ProcessTreeTerminationResult(tree_confirmed=True, parent_reaped=True, forced=forced)
+
+
+def install_termination_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_first: bool = False,
+) -> SimpleNamespace:
+    """进程边界：不真的去杀进程树，只记录被要求回收的子进程，并把它们标记为已终止。
+
+    ``attempts`` 记录每一次回收请求，``terminated`` 只记录成功的；``fail_first`` 让第一次
+    请求抛错，用来模拟进程树回收辅助程序失败。
+    """
+
+    import plugins.codex.runner as runner_module
+
+    probe = SimpleNamespace(attempts=[], terminated=[])
+
+    async def terminate(process: Any, **_kwargs: Any) -> ProcessTreeTerminationResult:
+        probe.attempts.append(process)
+        if fail_first and len(probe.attempts) == 1:
+            raise OSError("tree helper failed")
+        probe.terminated.append(process)
+        process.returncode = -9
+        return confirmed_termination(forced=True)
+
+    monkeypatch.setattr(runner_module, "terminate_process_tree", terminate)
+    return probe
+
+
+def patch_race_termination(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     import plugins.codex.manager as manager_module
     import plugins.codex.runner as runner_module
 
-    async def terminate(process: _RaceProcess) -> ProcessTreeTerminationResult:
+    async def terminate(process: RaceProcess) -> ProcessTreeTerminationResult:
         process.returncode = -15
         process.terminated.set()
-        return ProcessTreeTerminationResult(tree_confirmed=True, parent_reaped=True)
+        return confirmed_termination(forced=False)
 
     mocked = AsyncMock(side_effect=terminate)
     monkeypatch.setattr(manager_module, "terminate_process_tree", mocked)
@@ -262,7 +294,7 @@ def _patch_race_termination(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return mocked
 
 
-def _arxiv_addon(manager: CodexQueueManager) -> codex_arxiv_summary.ArxivSummaryAddon:
+def arxiv_addon(manager: CodexQueueManager) -> codex_arxiv_summary.ArxivSummaryAddon:
     return codex_arxiv_summary.ArxivSummaryAddon(manager)
 
 
@@ -273,7 +305,7 @@ def reset_codex_manager():
     _reset_manager_state()
 
 
-def _persisted_session(label: str, cwd: Path, **updates: Any) -> dict[str, Any]:
+def persisted_session(label: str, cwd: Path, **updates: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "label"              : label,
         "cwd"                : str(cwd),
@@ -310,21 +342,21 @@ __all__ = (
     "PluginPrincipal",
     "PluginSettingsSnapshot",
     "ProcessTreeTerminationResult",
-    "SimpleNamespace",
-    "_RaceProcess",
-    "_arxiv_addon",
-    "_install_actual_runner_manager",
-    "_install_fake_manager",
-    "_patch_race_termination",
-    "_persisted_session",
-    "_valid_arxiv_summary",
-    "_wait_manager_idle",
-    "_wait_until",
+    "RaceProcess",
+    "arxiv_addon",
+    "install_actual_runner_manager",
+    "install_fake_manager",
+    "patch_race_termination",
+    "persisted_session",
+    "valid_arxiv_summary",
+    "wait_manager_idle",
+    "wait_until",
     "asyncio",
     "base64",
     "codex_arxiv_summary",
     "codex_main",
-    "json",
+    "confirmed_termination",
+    "install_termination_probe",
     "load_plugin_config",
     "normalize_cwd",
     "os",

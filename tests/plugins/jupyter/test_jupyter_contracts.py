@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from core.session import Session
+from plugins.jupyter import jupyter_manager as manager_module
 from plugins.jupyter import main as jupyter
 from plugins.jupyter.jupyter_config import (
     MAX_CODE_BYTES,
@@ -19,7 +22,9 @@ from plugins.jupyter.jupyter_config import (
     MAX_REPL_PREVIEW_CHARS,
     REPL_SESSION_TIMEOUT,
 )
+from plugins.jupyter.jupyter_manager import JupyterKernelManager
 from plugins.jupyter.jupyter_models import ExecutionResult
+from tests.helpers.jupyter_test_support import KernelBackend, install_kernel_backend
 
 
 def _text(response: list[dict[str, Any]]) -> str:
@@ -68,32 +73,27 @@ class ReplContext:
         return True
 
 
-class KernelManagerStub:
-    def __init__(self, *, running: bool = False, fail: str | None = None) -> None:
-        self.running          = running
-        self.fail             = fail
-        self.calls: list[str] = []
-        self.monitor_calls    = 0
+@pytest_asyncio.fixture
+async def kernel_backend(monkeypatch: pytest.MonkeyPatch):
+    """依赖可用，内核由替身承担；用例结束时关掉全部内核并清空实例注册表。"""
 
-    def get_status(self) -> dict[str, object]:
-        return {"running": self.running, "message": "测试状态"}
+    backend = KernelBackend()
+    install_kernel_backend(monkeypatch, backend)
+    await JupyterKernelManager.shutdown_all_async()
+    yield backend
+    for kernel in backend.kernels:
+        kernel.shutdown_fails = None
+    await JupyterKernelManager.shutdown_all_async()
 
-    def _record(self, action: str) -> None:
-        self.calls.append(action)
-        if self.fail == action:
-            raise RuntimeError("private lifecycle detail")
 
-    def start_kernel(self) -> None:
-        self._record("start")
+def _remove_optional_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让 jupyter_client 的导入真实失败，并清掉插件已缓存的探测结果。"""
 
-    def restart_kernel(self) -> None:
-        self._record("restart")
-
-    def shutdown_kernel(self) -> None:
-        self._record("shutdown")
-
-    def ensure_idle_monitor(self) -> None:
-        self.monitor_calls += 1
+    monkeypatch.setitem(sys.modules, "jupyter_client", None)
+    monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", False)
+    monkeypatch.setattr(manager_module, "IMPORT_ERROR", None)
+    monkeypatch.setattr(manager_module, "KernelManager", None)
+    monkeypatch.setattr(jupyter, "_DEPENDENCY_PROBED", False)
 
 
 @pytest.mark.parametrize(
@@ -197,38 +197,45 @@ async def test_empty_execute_request_returns_usage_without_manager(tmp_path: Pat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("action", "expected", "monitor_calls"),
-    (("start", "已启动", 1), ("restart", "已重启", 1), ("shutdown", "已关闭", 0)),
+    ("action", "expected"),
+    (("start", "已启动"), ("restart", "已重启"), ("shutdown", "已关闭")),
 )
 async def test_kernel_lifecycle_actions_have_precise_success_messages(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
     action: str,
     expected: str,
-    monitor_calls: int,
 ) -> None:
-    manager = KernelManagerStub()
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "get_instance", lambda *_args: manager)
-    context = ReplContext(tmp_path)
+    manager = JupyterKernelManager.get_instance(tmp_path, "user:1:group:2")
+    if action != "start":
+        manager.start_kernel()
 
-    response = await jupyter._handle_kernel(action, context)
+    response = await jupyter.handle("jupyter_kernel", action, {}, ReplContext(tmp_path))
 
-    assert manager.calls == [action]
-    assert manager.monitor_calls == monitor_calls
     assert expected in _text(response)
+    kernels = kernel_backend.kernels
+    if action == "start":
+        assert [kernel.alive for kernel in kernels] == [True]
+        assert manager._shutdown_task is not None  # noqa: SLF001 - 启动后登记了空闲监视器。
+    elif action == "restart":
+        assert [kernel.alive for kernel in kernels] == [False, True]
+        assert manager._shutdown_task is not None  # noqa: SLF001
+    else:
+        assert [kernel.alive for kernel in kernels] == [False]
+        assert manager._shutdown_task is None  # noqa: SLF001 - 关闭后不再登记监视器。
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("running", "marker"), ((True, "🟢"), (False, "⚫")))
 async def test_kernel_status_marker_matches_state(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
     running: bool,
     marker: str,
 ) -> None:
-    manager = KernelManagerStub(running=running)
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "get_instance", lambda *_args: manager)
-    response = await jupyter._handle_kernel("status", ReplContext(tmp_path))
+    if running:
+        JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
+    response = await jupyter.handle("jupyter_kernel", "status", {}, ReplContext(tmp_path))
     assert _text(response).startswith(marker)
 
 
@@ -239,13 +246,16 @@ async def test_kernel_status_marker_matches_state(
 )
 async def test_kernel_lifecycle_errors_do_not_expose_exception_body(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
     action: str,
     expected: str,
 ) -> None:
-    manager = KernelManagerStub(fail=action)
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "get_instance", lambda *_args: manager)
-    response = await jupyter._handle_kernel(action, ReplContext(tmp_path))
+    if action == "start":
+        kernel_backend.fail_start = "private lifecycle detail"
+    else:
+        JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
+        kernel_backend.kernels[0].shutdown_fails = "private lifecycle detail"
+    response = await jupyter.handle("jupyter_kernel", action, {}, ReplContext(tmp_path))
     assert expected in _text(response)
     assert "private lifecycle detail" not in _text(response)
 
@@ -329,10 +339,7 @@ async def test_start_repl_discards_only_invalid_jupyter_session(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_execute_repl_handles_empty_limit_and_internal_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_execute_repl_handles_empty_limit_and_internal_failure(tmp_path: Path) -> None:
     context = ReplContext(tmp_path)
     session = _session([])
     assert "缓冲区为空" in _text(
@@ -346,20 +353,15 @@ async def test_execute_repl_handles_empty_limit_and_internal_failure(
         )
     )
 
-    class BrokenManager:
-        async def execute(self, *_args, **_kwargs):
-            raise RuntimeError("private repl detail")
-
-    monkeypatch.setattr(
-        jupyter.JupyterKernelManager, "get_instance", lambda *_args: BrokenManager()
-    )
-    response = await jupyter._execute_repl_buffer(
+    # 身份无效时拿不到内核实例：执行失败，缓冲区保留，异常正文不外露。
+    context.current_user_id = None
+    response                = await jupyter._execute_repl_buffer(
         jupyter.ReplState(("print(1)",), 0),
         _session(["print(1)"]),
         context,
     )
     assert "缓冲区已保留" in _text(response)
-    assert "private repl detail" not in _text(response)
+    assert "exact positive user id" not in _text(response)
 
 
 @pytest.mark.asyncio
@@ -418,13 +420,15 @@ async def test_handle_session_returns_boundary_error_without_mutating_buffer(
 async def test_top_level_handle_dependency_and_input_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
 ) -> None:
     context = ReplContext(tmp_path)
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: False)
+    _remove_optional_dependency(monkeypatch)
     assert "依赖不可用" in _text(await jupyter.handle("jupyter", "print(1)", {}, context))
     assert "依赖不可用" in _text(await jupyter.handle("jupyter_kernel", "status", {}, context))
 
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: True)
+    monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", True)
+    monkeypatch.setattr(manager_module, "KernelManager", kernel_backend)
     assert "timeout" in _text(await jupyter.handle("jupyter", "-t nope", {}, context))
     assert "未知内核操作" in _text(await jupyter.handle("jupyter_kernel", "destroy", {}, context))
     assert "处理请求失败" in _text(await jupyter.handle("jupyter", None, {}, context))
@@ -433,16 +437,12 @@ async def test_top_level_handle_dependency_and_input_errors(
 @pytest.mark.asyncio
 async def test_top_level_handle_routes_repl_and_execute(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
 ) -> None:
-    context = ReplContext(tmp_path)
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: True)
-
-    class Manager:
-        async def execute(self, code: str, **_kwargs) -> ExecutionResult:
-            return ExecutionResult(stdout=code)
-
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "get_instance", lambda *_args: Manager())
+    context                  = ReplContext(tmp_path)
+    kernel_backend.responder = lambda code: [
+        {"msg_type": "stream", "content": {"name": "stdout", "text": code}}
+    ]
     assert "REPL 已启动" in _text(await jupyter.handle("jupyter", "repl", {}, context))
     assert "print(1)" in _text(await jupyter.handle("jupyter", "print(1)", {}, context))
 
@@ -451,50 +451,47 @@ async def test_top_level_handle_routes_repl_and_execute(
 async def test_shutdown_skips_missing_dependency_and_contains_cleanup_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
 ) -> None:
     context = ReplContext(tmp_path)
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: False)
+    _remove_optional_dependency(monkeypatch)
     assert await jupyter.shutdown(context) is None
+    assert kernel_backend.kernels == []
 
-    async def fail_shutdown() -> None:
-        raise RuntimeError("private shutdown detail")
-
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: True)
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "shutdown_all_async", fail_shutdown)
+    monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", True)
+    monkeypatch.setattr(manager_module, "KernelManager", kernel_backend)
+    JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
+    kernel_backend.kernels[0].shutdown_fails = "private shutdown detail"
     assert await jupyter.shutdown(context) is None
+    assert kernel_backend.kernels[0].shutdown_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_shutdown_success_calls_manager_once(
+async def test_shutdown_success_cleans_up_registered_kernels_once(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    kernel_backend: KernelBackend,
 ) -> None:
-    calls = 0
+    JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
 
-    async def shutdown_all() -> None:
-        nonlocal calls
-        calls += 1
-
-    monkeypatch.setattr(jupyter, "_dependencies_available", lambda: True)
-    monkeypatch.setattr(jupyter.JupyterKernelManager, "shutdown_all_async", shutdown_all)
     await jupyter.shutdown(ReplContext(tmp_path))
-    assert calls == 1
+
+    kernel = kernel_backend.kernels[0]
+    assert kernel.shutdown_calls == 1
+    assert kernel.alive is False
+    assert JupyterKernelManager._instances == {}  # noqa: SLF001
 
 
 def test_missing_dependency_probe_is_cached_until_plugin_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
-
-    def probe() -> None:
-        nonlocal calls
-        calls += 1
-
-    monkeypatch.setattr(jupyter, "_DEPENDENCY_PROBED", False)
-    monkeypatch.setattr(jupyter.jupyter_manager, "lazy_import_jupyter", probe)
-    monkeypatch.setattr(jupyter.jupyter_manager, "JUPYTER_AVAILABLE", False)
-    monkeypatch.setattr(jupyter.jupyter_manager, "KernelManager", None)
-
+    _remove_optional_dependency(monkeypatch)
     assert jupyter._dependencies_available() is False
+
+    # 依赖随后装好，探测结果在插件重新 init 之前保持不变。
+    installed               = ModuleType("jupyter_client")
+    installed.KernelManager = KernelBackend()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "jupyter_client", installed)
     assert jupyter._dependencies_available() is False
-    assert calls == 1
+
+    jupyter.init()
+    assert jupyter._dependencies_available() is True

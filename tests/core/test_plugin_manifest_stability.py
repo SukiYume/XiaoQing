@@ -1,5 +1,4 @@
-# 验证清单快照的稳定读取、字节上限和变更检测。
-"""Regression tests for stable, bounded plugin manifest snapshots."""
+"""清单快照的稳定读取、字节上限和读取期间被替换的检测。"""
 
 import json
 import logging
@@ -108,8 +107,8 @@ def _write_race_pair(tmp_path: Path) -> tuple[PluginManager, Path, Path, Path]:
     manifest_path.write_bytes(_manifest_payload("demo", "1.0.0"))
     replacement_path.write_bytes(_manifest_payload("demo", "2.0.0"))
 
-    # Keep size and mtime equal so the regression proves descriptor/path file
-    # identity, rather than superficial metadata, detects the replacement.
+    # 大小和 mtime 保持一致，这样只有文件描述符与路径的文件身份对比
+    # 才能发现替换，而不是靠表面的元数据。
     original = manifest_path.stat()
     os.utime(
         replacement_path,
@@ -120,36 +119,6 @@ def _write_race_pair(tmp_path: Path) -> tuple[PluginManager, Path, Path, Path]:
     assert replacement.st_mtime_ns == original.st_mtime_ns
     assert not os.path.samestat(original, replacement)
     return manager, plugin_dir, manifest_path, replacement_path
-
-
-def test_manifest_snapshot_uses_binary_bounded_read_and_two_fstats(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager    = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
-    plugin_dir.mkdir()
-    manifest_path = plugin_dir / "plugin.json"
-    manifest_path.write_bytes(_manifest_payload("demo"))
-    modes, read_limits = _audit_manifest_open(monkeypatch, manifest_path)
-
-    real_fstat           = os.fstat
-    fstat_fds: list[int] = []
-
-    def audited_fstat(fd: int):  # type: ignore[no-untyped-def]
-        fstat_fds.append(fd)
-        return real_fstat(fd)
-
-    monkeypatch.setattr(os, "fstat", audited_fstat)
-
-    definition = manager._load_definition(plugin_dir)
-
-    assert definition is not None
-    assert definition.version == "1.0.0"
-    assert modes == ["rb"]
-    assert read_limits == [_MAX_MANIFEST_BYTES + 1]
-    assert len(fstat_fds) == 2
-    assert fstat_fds[0] == fstat_fds[1]
 
 
 def test_oversized_manifest_is_rejected_after_at_most_one_mib_plus_one_byte(

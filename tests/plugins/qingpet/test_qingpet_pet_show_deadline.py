@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -23,12 +20,10 @@ TARGET_ID = "target"
 
 
 @pytest.fixture
-def show_context(monkeypatch):
+def show_context(monkeypatch, qingpet_db: Database):
     current_time = [BASE_TIME]
     monkeypatch.setattr(database_clock, "now", lambda: current_time[0])
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
-        db_path = file.name
-    database = Database(db_path)
+    database = qingpet_db
     users    = UserService(database)
     pets     = PetService(database)
     for user_id in [TARGET_ID, "voter-before", "voter-exact", "voter-after", "voter-late"]:
@@ -36,14 +31,7 @@ def show_context(monkeypatch):
     pets.adopt_pet(TARGET_ID, GROUP_ID, "星星")
     show_id = database.create_pet_show(GROUP_ID, "限时展示会", 1)
     assert show_id is not None
-    try:
-        yield database, db_path, int(show_id), current_time
-    finally:
-        database.cleanup()
-        os.unlink(db_path)
-        backup_path = db_path + ".pre-migration.bak"
-        if os.path.exists(backup_path):
-            os.unlink(backup_path)
+    return database, int(show_id), current_time
 
 
 def _raw_show(database: Database, show_id: int) -> dict:
@@ -57,7 +45,7 @@ def _raw_show(database: Database, show_id: int) -> dict:
 
 
 def test_vote_is_allowed_only_strictly_before_end_time(show_context):
-    database, _db_path, show_id, current_time = show_context
+    database, show_id, current_time = show_context
     end_time = BASE_TIME + timedelta(hours=1)
 
     current_time[0] = end_time - timedelta(microseconds=1)
@@ -74,7 +62,7 @@ def test_vote_is_allowed_only_strictly_before_end_time(show_context):
 
 
 def test_vote_rejects_forged_show_and_pet_from_another_group(show_context):
-    database, _db_path, show_id, current_time = show_context
+    database, show_id, current_time = show_context
     users = UserService(database)
     pets  = PetService(database)
     users.get_or_create_user("other-target", GROUP_ID + 1)
@@ -87,7 +75,7 @@ def test_vote_rejects_forged_show_and_pet_from_another_group(show_context):
 
 
 def test_expired_show_is_settled_and_does_not_block_new_show(show_context):
-    database, _db_path, show_id, current_time = show_context
+    database, show_id, current_time = show_context
     current_time[0] = BASE_TIME + timedelta(hours=1)
 
     assert database.get_active_pet_show(GROUP_ID) is None
@@ -106,12 +94,12 @@ def test_expired_show_is_settled_and_does_not_block_new_show(show_context):
 
 
 def test_concurrent_vote_and_settlement_reward_winner_once(show_context):
-    database, db_path, show_id, current_time = show_context
+    database, show_id, current_time = show_context
     current_time[0] = BASE_TIME + timedelta(minutes=30)
     assert database.vote_pet_show_atomic(show_id, "voter-before", TARGET_ID, 3)
     assert database.vote_pet_show_atomic(show_id, "voter-exact", TARGET_ID, 3)
     current_time[0] = BASE_TIME + timedelta(hours=1)
-    contenders = [Database(db_path) for _ in range(3)]
+    contenders = [Database(database.db_path) for _ in range(3)]
     barrier    = threading.Barrier(3)
 
     def late_vote():
@@ -156,10 +144,10 @@ def test_concurrent_vote_and_settlement_reward_winner_once(show_context):
 
 
 def test_concurrent_creation_keeps_one_active_show_per_group(show_context):
-    database, db_path, _show_id, current_time = show_context
+    database, _show_id, current_time = show_context
     current_time[0] = BASE_TIME + timedelta(hours=1)
     assert database.settle_pet_show_atomic(GROUP_ID, force=False) is not None
-    contenders = [Database(db_path), Database(db_path)]
+    contenders = [Database(database.db_path), Database(database.db_path)]
     barrier    = threading.Barrier(2)
 
     def create(index: int):
@@ -188,28 +176,30 @@ def test_concurrent_creation_keeps_one_active_show_per_group(show_context):
     assert int(active_count) == 1
 
 
-def test_pet_show_deadline_has_independent_scheduled_handler(monkeypatch):
-    calls: list[tuple[int, bool]] = []
+@pytest.mark.asyncio
+async def test_pet_show_deadline_has_independent_scheduled_handler(qingpet_runtime, monkeypatch):
+    context, database = qingpet_runtime
+    current_time = [BASE_TIME]
+    monkeypatch.setattr(database_clock, "now", lambda: current_time[0])
+    users, pets = UserService(database), PetService(database)
+    expired_group, running_group = 2, 1
+    for group_id in (expired_group, running_group):
+        for user_id in (f"owner-{group_id}", f"voter-{group_id}"):
+            users.get_or_create_user(user_id, group_id)
+        assert pets.adopt_pet(f"owner-{group_id}", group_id, f"展示宠{group_id}")[0]
+    expired_show = database.create_pet_show(expired_group, "已到期展示会", 1)
+    running_show = database.create_pet_show(running_group, "进行中展示会", 3)
+    assert expired_show is not None and running_show is not None
+    assert database.vote_pet_show_atomic(expired_show, "voter-2", "owner-2", 3)
+    current_time[0] = BASE_TIME + timedelta(hours=1)
 
-    class FakeDatabase:
-        @staticmethod
-        def get_all_group_ids():
-            return [1, 2]
+    deliveries = await qingpet_main.scheduled_pet_show_settlement(context)
 
-    class FakeSocialService:
-        @staticmethod
-        def settle_pet_show(group_id: int, *, force: bool):
-            calls.append((group_id, force))
-            return "已结算" if group_id == 2 else ""
-
-    monkeypatch.setattr(qingpet_main, "_db_instance", FakeDatabase())
-    monkeypatch.setattr(qingpet_main, "_social_service", FakeSocialService())
-
-    deliveries = asyncio.run(qingpet_main.scheduled_pet_show_settlement(None))
     assert len(deliveries) == 1
-    assert deliveries[0].target.group_id == 2
-    assert deliveries[0].message == ({"type": "text", "data": {"text": "已结算"}},)
-    assert calls == [(1, False), (2, False)]
+    assert deliveries[0].target.group_id == expired_group
+    assert "已到期展示会" in deliveries[0].message[0]["data"]["text"]
+    assert _raw_show(database, int(expired_show))["status"] == "settled"
+    assert _raw_show(database, int(running_show))["is_active"] == 1
     root = REPOSITORY_ROOT
     manifest = json.loads((root / "plugins/qingpet/plugin.json").read_text(encoding="utf-8"))
     jobs = {job["id"]: job for job in manifest["schedule"]}

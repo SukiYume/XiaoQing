@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -271,23 +270,16 @@ def test_visit_rechecks_target_pet_status_inside_transaction(tmp_path):
     db.cleanup()
 
 
-def test_main_forwards_message_id_so_delivery_retry_is_idempotent(tmp_path):
-    db = Database(str(tmp_path / "main.db"))
+@pytest.mark.asyncio
+async def test_main_forwards_message_id_so_delivery_retry_is_idempotent(qingpet_runtime):
+    context, db = qingpet_runtime
     UserService(db).get_or_create_user("visitor", GROUP)
     UserService(db).get_or_create_user("123", GROUP)
     assert PetService(db).adopt_pet("123", GROUP, "消息宠")[0]
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = db
-    qingpet_main._router      = None
-    event                     = {"user_id": "visitor", "group_id": GROUP, "message_id": 123456}
-    try:
-        first  = asyncio.run(qingpet_main.handle("pet", "互访 123", event, None))
-        second = asyncio.run(qingpet_main.handle("pet", "互访 123", event, None))
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
+    event = {"user_id": "visitor", "group_id": GROUP, "message_id": 123456}
+
+    first  = await qingpet_main.handle("pet", "互访 123", event, context)
+    second = await qingpet_main.handle("pet", "互访 123", event, context)
 
     assert first == second
     assert db._get_connection().execute("SELECT COUNT(*) FROM visit_settlements").fetchone()[0] == 1
-    db.cleanup()

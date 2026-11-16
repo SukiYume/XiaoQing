@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
+import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat import commands as chat_handlers
 from plugins.xiaoqing_chat.memory.review_sessions import ReviewStore
+from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.assertions import text_segments_text
+
+mock_context = _fixture_support.mock_context
 
 
 def _open_session(
@@ -37,37 +38,22 @@ def _open_session(
 
 @pytest.mark.asyncio
 async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutations(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    mock_context,
 ) -> None:
     """``ok/answer/close/no`` 串联真实 ID，并检查越权和错误输入不改状态。"""
 
     # 生产 ``_chat_id`` 使用 ``g<群号>``，同时避免 Windows 文件名中的冒号。
     chat_id = "g880721010"
-    store   = ReviewStore()
-    store.bind(tmp_path)
-    reflection = SimpleNamespace(goal_lock_seconds=600.0)
-    hctx = SimpleNamespace(
-        chat_id=chat_id,
-        state=SimpleNamespace(review_store=store),
-        runtime=SimpleNamespace(cfg=SimpleNamespace(reflection=reflection)),
-    )
-    context = SimpleNamespace(logger=MagicMock())
-    event = {
+    store   = bound_state(mock_context).review_store
+    event   = {
         "message_type": "group",
         "group_id"    : 880_721_010,
         "user_id"     : 880_721_011,
     }
 
-    monkeypatch.setattr(
-        chat_handlers.HandlerContext,
-        "from_event",
-        staticmethod(lambda _event, _context: hctx),
-    )
-
     async def call(args: str) -> str:
         return text_segments_text(
-            await chat_handlers.handle_review(args, event, context),
+            await chat_handlers.handle_review(args, event, mock_context),
             separator="\n",
         )
 

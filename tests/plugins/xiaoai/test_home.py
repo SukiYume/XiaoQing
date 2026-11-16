@@ -2,13 +2,30 @@
 
 import asyncio
 import json
+import time
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import aiohttp
 import pytest
+import pytest_asyncio
 
 from plugins.xiaoai import catalog, client, home, main, operations, planner, weather
+from tests.helpers.http import callback_result, mocked_aiohttp
+from tests.helpers.xiaoai_test_support import (
+    ACTION,
+    DEVICES,
+    PROP_GET,
+    PROP_SET,
+    SPEC_ALL,
+    SPEC_ONE,
+    UBUS,
+)
+
+LAMP    = catalog.device_key("123")
+FEEDER  = "xiaomi.feeder.pi2001"
+SPEAKER = "xiaomi.wifispeaker.lx06"
 
 
 def prop(iid, name, fmt="uint8", access=None, **kwargs):
@@ -439,17 +456,41 @@ def test_portion_preferences_are_scoped_and_validated(env):
 
 
 @pytest.mark.asyncio
-async def test_default_handler_routes_to_home_explicit_keeps_speaker(env, monkeypatch):
-    ctx = env[0]
-    monkeypatch.setattr(main.login, "command", AsyncMock(return_value=None))
-    natural = AsyncMock(return_value="home result")
-    legacy = AsyncMock(return_value="speaker result")
-    monkeypatch.setattr(main.home, "handle", natural)
-    monkeypatch.setattr(main, "execute", legacy)
-    assert "home result" in str(await main.handle("xiaoai", "台灯调最高", {}, ctx))
-    assert "speaker result" in str(await main.handle("xiaoai", "执行 今天天气", {}, ctx))
-    natural.assert_awaited_once()
-    legacy.assert_awaited_once()
+async def test_default_handler_routes_to_home_explicit_keeps_speaker(env):
+    ctx, _io, _cat, ai, spec = env
+    speaker = {
+        "name"      : "卧室音箱",
+        "model"     : SPEAKER,
+        "region"    : "cn",
+        "did"       : "spk",
+        "mina_id"   : "mina-1",
+        "silent"    : True,
+        "directive" : {"siid": 5, "aiid": 5, "inputs": ["text", "silent"]},
+        "account_id": "u",
+    }
+    client.write_json(ctx.data_dir / "speaker.json", speaker)
+    client.write_json(ctx.data_dir / "token.json", _token("u"))
+    devices = [
+        {"did": "123", "name": "台灯", "model": "test.device", "isOnline": True},
+        {"did": "spk", "name": "卧室音箱", "model": SPEAKER, "isOnline": True},
+    ]
+    ai.complete.side_effect = [
+        SimpleNamespace(content=json.dumps({"devices": [LAMP]})),
+        SimpleNamespace(content=json.dumps(plan(value=100, device=LAMP))),
+    ]
+    async with aiohttp.ClientSession() as session:
+        with mocked_aiohttp() as mocked:
+            ctx.http_session = session
+            cloud            = _Cloud(mocked, devices, {"test.device": spec})
+            natural          = str(await main.handle("xiaoai", "台灯调最高", {}, ctx))
+            assert "云端最近回报" in natural
+            assert cloud.writes == [("set", {"did": "123", "siid": 2, "piid": 2, "value": 100})]
+            explicit = str(await main.handle("xiaoai", "执行 今天天气", {}, ctx))
+            assert "指令已提交" in explicit
+            assert cloud.writes[1:] == [
+                ("action", {"did": "spk", "siid": 5, "aiid": 5, "in": ["今天天气", True]})
+            ]
+    assert ai.complete.await_count == 2
 
 
 def test_duplicate_device_names_require_unique_ids(env):
@@ -513,64 +554,132 @@ def portion_feeder(cat):
     return cat
 
 
-def setup_structured_home(env, monkeypatch):
-    ctx, io, cat, ai, _ = env
-    cat = portion_feeder(cat)
-    monkeypatch.setattr(home, "read_json", lambda _: {"account_id": "u", "region": "cn"})
-    manager = SimpleNamespace(
-        ensure_fresh=AsyncMock(return_value={"userId": "u"}), refresh=AsyncMock()
+class _Cloud:
+    """米家云端与公开规格站的 HTTP 替身：记录每次设备写入（属性设置、动作）的参数。
+
+    ``writes`` 里是 ``("set", 参数)`` / ``("action", 参数)``；属性读回统一回报亮度 100；音箱问答
+    接口回 500；``specs`` 里没有的型号在规格索引中查不到。
+    """
+
+    def __init__(self, mocked, devices, specs):
+        self.devices = devices
+        self.specs   = specs
+        self.writes  = []
+        mocked.post(DEVICES, callback=self._device_list, repeat=True)
+        mocked.post(PROP_GET, callback=self._prop_get, repeat=True)
+        mocked.post(PROP_SET, callback=self._prop_set, repeat=True)
+        mocked.post(ACTION, callback=self._action, repeat=True)
+        mocked.post(UBUS, callback=self._ubus, repeat=True)
+        mocked.get(SPEC_ALL, callback=self._spec_index, repeat=True)
+        mocked.get(SPEC_ONE, callback=self._spec, repeat=True)
+
+    @staticmethod
+    def _reply(payload, status=200):
+        return callback_result(status=status, payload=payload)
+
+    @staticmethod
+    def _params(kwargs):
+        return json.loads(kwargs["data"]["data"])["params"]
+
+    def _device_list(self, _url, **_kwargs):
+        return self._reply({"code": 0, "result": {"list": self.devices}})
+
+    def _prop_get(self, _url, **kwargs):
+        result = [{**item, "value": 100, "code": 0} for item in self._params(kwargs)]
+        return self._reply({"code": 0, "result": result})
+
+    def _prop_set(self, _url, **kwargs):
+        params = self._params(kwargs)
+        self.writes.extend(("set", item) for item in params)
+        return self._reply({"code": 0, "result": [{**item, "code": 0} for item in params]})
+
+    def _action(self, _url, **kwargs):
+        self.writes.append(("action", self._params(kwargs)))
+        return self._reply({"code": 0, "result": {"code": 0}})
+
+    def _ubus(self, _url, **_kwargs):
+        return self._reply({}, status=500)
+
+    def _spec_index(self, _url, **_kwargs):
+        instances = [
+            {"model": model, "version": 1, "type": f"urn:test:{model}"} for model in self.specs
+        ]
+        return self._reply({"instances": instances})
+
+    def _spec(self, url, **_kwargs):
+        return self._reply(self.specs[str(url.query["type"]).removeprefix("urn:test:")])
+
+
+def _token(user):
+    return {
+        "userId"       : user,
+        "deviceId"     : "device",
+        "xiaomiio"     : ["a2V5", "io"],
+        "micoapi"      : ["a2V5", "mina"],
+        "_refreshed_at": {"xiaomiio": time.time(), "micoapi": time.time()},
+    }
+
+
+@pytest_asyncio.fixture
+async def structured(env):
+    """一台已配置每份 10 克的喂食器（规格同 ``env`` 里的灯），数据目录里是真实的凭据和偏好文件。"""
+
+    ctx, _io, _cat, ai, spec = env
+    client.write_json(ctx.data_dir / "speaker.json", {"account_id": "u", "region": "cn"})
+    client.write_json(ctx.data_dir / "token.json", _token("u"))
+    client.write_json(
+        ctx.data_dir / "preferences.json",
+        {"account_id": "u", "feeding_grams": {LAMP: 10}},
     )
-    monkeypatch.setattr(home.login, "runtime", lambda _: SimpleNamespace(manager=manager))
-    monkeypatch.setattr(home, "services", lambda *args: (io, None))
-    monkeypatch.setattr(home.catalog, "discover", AsyncMock(return_value=cat))
-    monkeypatch.setattr(home, "preferences", lambda *args: {"feeding_grams": {"d1": 10}})
-    return ctx, io, ai
+    devices = [{"did": "123", "name": "台灯", "model": FEEDER, "isOnline": True}]
+    async with aiohttp.ClientSession() as session:
+        with mocked_aiohttp() as mocked:
+            ctx.http_session = session
+            yield ctx, _Cloud(mocked, devices, {FEEDER: spec}), ai
 
 
 @pytest.mark.asyncio
-async def test_structured_discovery_and_execution_skip_plugin_ai(env, monkeypatch):
-    ctx, io, ai = setup_structured_home(env, monkeypatch)
+async def test_structured_discovery_and_execution_skip_plugin_ai(structured):
+    ctx, cloud, ai = structured
     devices = json.loads(await home.handle(ctx, "数据", {}))
-    assert devices["devices"]["d1"]["name"] == "台灯"
-    assert "did" not in devices["devices"]["d1"]
-    assert "p2.2" in await home.handle(ctx, "接口 d1 1", {})
+    assert devices["devices"][LAMP]["name"] == "台灯"
+    assert "did" not in devices["devices"][LAMP]
+    assert "p2.2" in await home.handle(ctx, f"接口 {LAMP} 1", {})
     ctx.request_texts = ("出两份粮",)
-    result = await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
+    result            = await home.handle(
+        ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20], device=LAMP)), {}
+    )
     assert "已提交 2 份" in result
-    io.miot_action.assert_awaited_once_with("123", (2, 1), [2])
+    assert cloud.writes == [("action", {"did": "123", "siid": 2, "aiid": 1, "in": [2]})]
     ai.complete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_natural_language_rejects_invalid_later_step_before_any_device_write(
-    env, monkeypatch
-):
-    ctx, io, ai = setup_structured_home(env, monkeypatch)
-    p = plan(value=100)
-    p["operations"].append({"device": "d1", "capability": "a99.1", "op": "action", "args": []})
+async def test_natural_language_rejects_invalid_later_step_before_any_device_write(structured):
+    ctx, cloud, ai = structured
+    p = plan(value=100, device=LAMP)
+    p["operations"].append({"device": LAMP, "capability": "a99.1", "op": "action", "args": []})
     ai.complete.side_effect = [
-        SimpleNamespace(content=json.dumps({"devices": ["d1"]})),
+        SimpleNamespace(content=json.dumps({"devices": [LAMP]})),
         SimpleNamespace(content=json.dumps(p)),
     ]
     with pytest.raises(client.BridgeError, match="未在该设备规格中定义"):
         await home.handle(ctx, "台灯亮度调最高", {})
-    io.miot_set_props.assert_not_awaited()
-    io.miot_action.assert_not_awaited()
+    assert cloud.writes == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("grams,utterance", [(20, "出一份粮"), (15, "出15克粮"), (20, "出粮")])
 async def test_structured_feeding_rejects_changed_or_unrepresentable_amount(
-    env, monkeypatch, grams, utterance
+    structured, grams, utterance
 ):
-    ctx, io, ai = setup_structured_home(env, monkeypatch)
-    p = plan(value=100)
-    p["operations"].append(plan("action", "a2.1", args=[grams])["operations"][0])
+    ctx, cloud, ai = structured
+    p = plan(value=100, device=LAMP)
+    p["operations"].append(plan("action", "a2.1", args=[grams], device=LAMP)["operations"][0])
     ctx.request_texts = (utterance,)
     with pytest.raises(client.BridgeError, match="出粮已拦截"):
         await home.handle(ctx, "调用 " + json.dumps(p), {})
-    io.miot_action.assert_not_awaited()
-    io.miot_set_props.assert_not_awaited()
+    assert cloud.writes == []
     ai.complete.assert_not_awaited()
 
 
@@ -640,7 +749,7 @@ async def test_feeding_plan_must_match_original_quantity(env, text, model_grams,
         io.miot_action.assert_not_awaited()
 
 
-def test_old_feeder_cache_is_adapted_without_mutating_source(env):
+def test_cached_feeder_spec_is_adapted_without_mutating_source(env):
     cat          = portion_feeder(env[2])
     caps         = cat["specs"]["xiaomi.feeder.pi2001"]["capabilities"]
     caps["p2.7"] = caps["p2.2"] | {
@@ -682,31 +791,37 @@ async def test_speaker_forwarding_cannot_bypass_feeding_quantity_guard(env):
 
 
 @pytest.mark.asyncio
-async def test_structured_interface_accepts_json_arguments(env, monkeypatch):
+async def test_structured_interface_accepts_json_arguments(structured):
     """接口命令的 JSON 写法和“设备 页码”写法结果相同；格式不对时报出用法。"""
 
-    ctx, _io, _ai = setup_structured_home(env, monkeypatch)
-    assert await home.handle(ctx, '接口 {"device": "d1", "page": 1}', {}) == await home.handle(
-        ctx, "接口 d1 1", {}
-    )
-    for bad in ('{"device": "d1", "page": 0}', '{"device": ""}', '{"device": "d1", "x": 1}', "{"):
+    ctx, _cloud, _ai = structured
+    assert await home.handle(
+        ctx, '接口 {"device": "' + LAMP + '", "page": 1}', {}
+    ) == await home.handle(ctx, f"接口 {LAMP} 1", {})
+    for bad in (
+        '{"device": "' + LAMP + '", "page": 0}',
+        '{"device": ""}',
+        '{"device": "' + LAMP + '", "x": 1}',
+        "{",
+    ):
         with pytest.raises(client.BridgeError, match="接口参数需要"):
             await home.handle(ctx, "接口 " + bad, {})
 
 
 @pytest.mark.asyncio
-async def test_delegated_call_checks_amount_against_initiator_words(env, monkeypatch):
+async def test_delegated_call_checks_amount_against_initiator_words(structured):
     """代为执行时按 Core 传入的发起人原话核对数量；参数里不能自带原话。"""
 
-    ctx, io, _ai = setup_structured_home(env, monkeypatch)
+    ctx, cloud, _ai = structured
     ctx.request_texts = ("出一份粮",)
+    call = plan("action", "a2.1", args=[20], device=LAMP)
     with pytest.raises(client.BridgeError, match="出粮已拦截"):
-        await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
-    forged = plan("action", "a2.1", args=[20]) | {"original_request": "出两份粮"}
+        await home.handle(ctx, "调用 " + json.dumps(call), {})
+    forged = call | {"original_request": "出两份粮"}
     with pytest.raises(client.BridgeError, match="operations"):
         await home.handle(ctx, "调用 " + json.dumps(forged), {})
-    io.miot_action.assert_not_awaited()
+    assert cloud.writes == []
 
     ctx.request_texts = ("出一份粮", "改成两份")
-    result = await home.handle(ctx, "调用 " + json.dumps(plan("action", "a2.1", args=[20])), {})
+    result            = await home.handle(ctx, "调用 " + json.dumps(call), {})
     assert "已提交 2 份" in result

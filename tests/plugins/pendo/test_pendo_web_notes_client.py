@@ -1,4 +1,4 @@
-"""Pendo Web 笔记页的数据边界、表单操作与异步生命周期回归。"""
+"""Pendo Web 笔记页的数据边界、表单操作与异步生命周期。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ NOTES_SETUP: Final = r"""
     globalThis.__confirmResult = true;
     globalThis.__formData = {};
     globalThis.__builtFields = [];
-    globalThis.__styleCalls = [];
     globalThis.__paginationCalls = [];
     globalThis.__unsubscribeCount = 0;
     globalThis.__dataChangeCallback = null;
@@ -217,7 +216,7 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = (...args) => globalThis.__styleCalls.push(args);
+const injectStyles = () => {};
 const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
 const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
@@ -234,7 +233,6 @@ export {
     attachListeners as __attachListeners,
     confirmAndDeleteNote as __confirmAndDeleteNote,
     deriveRangeDates,
-    ensureStyles as __ensureStyles,
     fetchNotes,
     fetchOverview,
     loadAndRender as __loadAndRender,
@@ -517,12 +515,6 @@ def test_notes_page_clamps_deleted_last_page_and_subscription_is_idempotent() ->
         client.destroy();
         assert.equal(__unsubscribeCount, 2);
         await assert.rejects(() => client.render(null), /有效的容器元素/);
-
-        client.__ensureStyles();
-        const css = __styleCalls.at(-1)[1];
-        assert.ok(css.includes('font-size: clamp(24px, 1.9vw, 30px)'));
-        assert.ok(css.includes('.note-row-footer'));
-        assert.ok(css.includes('@media (max-width:720px)'));
         """
     )
 

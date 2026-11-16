@@ -1,4 +1,4 @@
-"""Pendo Web 浏览器入口的登录、路由和全局交互契约回归。"""
+"""Pendo Web 浏览器入口的登录、路由和全局交互契约。"""
 
 from __future__ import annotations
 

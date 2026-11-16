@@ -26,7 +26,7 @@ from plugins.xiaoqing_life.sources.base import (
 )
 from plugins.xiaoqing_life.stores import LifeStore, default_state
 from tests.helpers.http import AiohttpResponse, QueuedAiohttpSession
-from tests.plugins.xiaoqing_life.support import (
+from tests.helpers.xiaoqing_life_test_support import (
     FREE,
     FakeAI,
     FakeFetcher,
@@ -204,12 +204,6 @@ def test_danmaku_lines_are_valid_quote_sources_and_one_video_is_one_source() -> 
         "terms": [{"term": "哈基米", "meaning": "m", "quote": "不存在的弹幕", "refs": ["d1.1"]}]
     }
     assert digest.validate(forged, [item], max_memes=0).terms == []
-    assert (
-        "没有看画面"
-        in digest.build_messages(persona="p", items=[item], known_terms=[], thread_titles=[])[0][
-            "content"
-        ]
-    )
 
 
 @pytest.mark.asyncio

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from plugins.xiaoqing_chat import reply_plan
 from plugins.xiaoqing_chat.config.config import PersonalityConfig, XiaoQingChatConfig
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
-from plugins.xiaoqing_chat.memory.client import Recalled
 from plugins.xiaoqing_chat.planning import pfc_action_planner
 from plugins.xiaoqing_chat.planning.pfc_action_planner import plan_next_action
 
@@ -61,16 +59,33 @@ async def test_planner_sees_what_she_remembers_about_the_speaker_and_group(monke
     assert "【你记得的人和群】" not in await _planner_prompt(monkeypatch, "")
 
 
+class _CountingMemory:
+    """统一记忆能力的替身：记下每次 recall 的请求，回答固定的一页。"""
+
+    def __init__(self, result: dict) -> None:
+        self.result              = result
+        self.recalls: list[dict] = []
+
+    async def recall(self, payload: dict) -> dict:
+        self.recalls.append(payload)
+        return self.result
+
+
 @pytest.mark.asyncio
-async def test_one_recall_per_turn_is_shared_by_planning_and_drafting() -> None:
+async def test_one_recall_per_turn_is_shared_by_planning_and_drafting(tmp_path) -> None:
+    speaker_block = "你记得的关于阿梨的事：\n- 爱吃螺蛳粉"
+    memory        = _CountingMemory({"blocks": {"speaker": speaker_block}})
     runtime = SimpleNamespace(cfg=XiaoQingChatConfig())
-    context = SimpleNamespace(logger=SimpleNamespace(info=lambda *a, **k: None))
-    event = {"user_id": 7, "group_id": 1, "sender": {"card": "阿梨"}}
-    recalled = Recalled(blocks={"speaker": "你记得的关于阿梨的事：\n- 爱吃螺蛳粉"}, available=True)
-    recall = AsyncMock(return_value=recalled)
+    context = SimpleNamespace(
+        logger=SimpleNamespace(info=lambda *a, **k: None),
+        capabilities=SimpleNamespace(memory=memory),
+        data_dir=tmp_path,
+    )
+    event  = {"user_id": 7, "group_id": 1, "sender": {"card": "阿梨"}}
     kwargs = {"chat_id": "g1", "event": event, "text": "在吗", "history": []}
-    with patch.object(reply_plan.memory_client, "recall", recall):
-        first  = await reply_plan.recall_for_reply(context, runtime, **kwargs)
-        second = await reply_plan.recall_for_reply(context, runtime, **kwargs)
-        assert first is second and recall.await_count == 1
-    assert reply_plan.planner_memory(runtime, recalled) == recalled.block("speaker")
+
+    first  = await reply_plan.recall_for_reply(context, runtime, **kwargs)
+    second = await reply_plan.recall_for_reply(context, runtime, **kwargs)
+
+    assert first is second and len(memory.recalls) == 1
+    assert reply_plan.planner_memory(runtime, first) == speaker_block

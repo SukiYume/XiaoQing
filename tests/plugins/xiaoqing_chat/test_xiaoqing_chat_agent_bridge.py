@@ -1,28 +1,44 @@
-"""xiaoqing_chat → xiaoqing_agent 的挂钩：只在 agent 接手时改变本轮，否则完全保持原聊天流程。"""
+"""xiaoqing_chat → xiaoqing_agent 的挂钩：只在 agent 接手时改变本轮，否则完全保持原聊天流程。
+
+聊天插件用的是真实的运行时状态、门控、生成和投递代码；agent 是另一个插件，经
+``context.capabilities.agent_turn`` 这条插件间的边界接入，测试里用替身；模型用剧本模型。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.delivery import DeliverySegments
-from core.interfaces import PluginCapabilities
 from plugins.xiaoqing_chat import agent_bridge, handlers
-from plugins.xiaoqing_chat.chat_runtime import ChatRuntime
-from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+from plugins.xiaoqing_chat.chat_event import event_chat_id
+from plugins.xiaoqing_chat.generation_limiter import GenerationLimitExceeded
 from plugins.xiaoqing_chat.handler_context import HandlerContext
-from plugins.xiaoqing_chat.memory.memory import StoredMessage
+from plugins.xiaoqing_chat.runtime_state import get_state
 from plugins.xiaoqing_chat.smalltalk_models import PreparedSmalltalkTurn
 from plugins.xiaoqing_memory.model import Note
-from tests.plugins.xiaoqing_chat.memory_support import MemoryHarness
+from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness
+from tests.helpers.xiaoqing_chat_test_support import (
+    GROUP_GATE_CLOSED,
+    GROUP_GATE_OPEN,
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    settle_chat_background,
+)
 
 mock_context = _fixture_support.mock_context
+
+CHAT_ID = "g67890"
 
 
 def _prepared(
@@ -67,69 +83,108 @@ async def _delegate(prepared, event, context, hctx):
     return await agent_bridge.answer_with_agent_or_chat(prepared, event, context, hctx, no_chat)
 
 
-def _hctx(tmp_path, agent) -> tuple[HandlerContext, SimpleNamespace]:
-    history = [
-        StoredMessage(role="user", name="甲", ts=1.0, user_id=1, message_id=97, content="早"),
-        StoredMessage(role="assistant", name="小青", ts=2.0, content="早呀"),
-        StoredMessage(
-            role="user", name="主人", ts=3.0, user_id=12345, message_id=99, content="当前"
-        ),
-    ]
-    state = SimpleNamespace(
-        memory_store=SimpleNamespace(
-            get_recent_async=AsyncMock(return_value=history),
-            append=Mock(),
-        ),
-        action_history=SimpleNamespace(append=Mock()),
-        set_last_reply_ts=Mock(),
+def _seed_history(*, earlier: bool = True) -> None:
+    """聊天记录：一条群友的话、她的回复、再加上此刻这条用户消息（已经记进聊天记录）。"""
+
+    store = get_state().memory_store
+    if earlier:
+        store.append(
+            CHAT_ID,
+            role       = "user",
+            name       = "甲",
+            user_id    = 1,
+            message_id = 97,
+            local_id   = "m97",
+            content    = "早",
+            ts         = 1.0,
+        )
+        store.append(CHAT_ID, role="assistant", name="小青", local_id="m98", content="早呀", ts=2.0)
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "主人",
+        user_id    = 12345,
+        message_id = 99,
+        local_id   = "m99",
+        content    = "当前",
+        ts         = 3.0,
     )
-    context = SimpleNamespace(
-        capabilities=PluginCapabilities(
-            is_bot_admin=True, agent_turn=agent, memory=MemoryHarness(tmp_path).service("g67890")
-        ),
-        logger   = MagicMock(),
-        data_dir = tmp_path,
-    )
-    runtime = ChatRuntime(XiaoQingChatConfig(), [])
-    return HandlerContext("g67890", runtime, state, {}, tmp_path, "小青", context), context
 
 
-@pytest.fixture
-def quiet_side_effects():
-    fakes = {
-        "ensure_user_message_recorded" : AsyncMock(return_value="m7"),
-        "schedule_memory_persist"      : Mock(),
-        "schedule_action_history_flush": Mock(),
-        "log_step"                     : Mock(),
-        "allocate_local_id"            : Mock(return_value="m8"),
+def _hctx(context, agent, *config, seed: bool = True, model=None, **capabilities):
+    """聊天插件的真实上下文：模型是剧本模型，agent 是替身（插件之间的边界）。"""
+
+    model = model or ScriptedChatModel()
+    scripted_chat_context(context, model, *config)
+    context.capabilities = replace(
+        context.capabilities, is_bot_admin=True, agent_turn=agent, **capabilities
+    )
+    hctx = HandlerContext.from_event(_event(), context)
+    if seed:
+        _seed_history()
+    return hctx, model
+
+
+def _handled(text: str, task_id: str = "a1b2c3", **extra):
+    return {
+        "handled"   : True,
+        "segments"  : [{"type": "text", "data": {"text": text}}],
+        "reply_text": text,
+        "task_id"   : task_id,
+        **extra,
     }
-    with patch.multiple(agent_bridge, **fakes):
-        yield fakes
+
+
+def _bot_replies() -> list:
+    """聊天记录里小青说过的话。"""
+
+    return [m for m in get_state().memory_store.get(CHAT_ID) if m.role == "assistant"]
+
+
+async def _agent_tasks() -> list:
+    """行动历史里 agent 接手的记录（agent 接手的一轮才会把用户的请求记进聊天、写下这条）。"""
+
+    records = await get_state().action_history.get_recent_async(CHAT_ID)
+    return [record for record in records if record.action == "agent_task"]
+
+
+async def _chat_slot_is_free(chat_id: str = CHAT_ID, user_id: object = 12345) -> bool:
+    """同会话的生成名额空着、也没有还没结算的回复在占用。"""
+
+    try:
+        async with asyncio.timeout(1):
+            async with get_state().generation_limiter.admit(
+                chat_id                    = chat_id,
+                user_id                    = str(user_id),
+                max_global                 = 0,
+                max_per_chat               = 1,
+                max_per_user               = 0,
+                max_calls_per_user_per_day = 0,
+            ):
+                return True
+    except GenerationLimitExceeded:
+        return False
 
 
 @pytest.mark.asyncio
-async def test_handled_turn_returns_agent_reply_and_records_both_sides(
-    tmp_path, quiet_side_effects
-):
-    agent = SimpleNamespace(
-        handle_turn=AsyncMock(
-            return_value={
-                "handled"   : True,
-                "segments"  : [{"type": "text", "data": {"text": "画好了"}}],
-                "reply_text": "画好了",
-                "task_id"   : "a1b2c3",
-            }
-        )
+async def test_handled_turn_returns_agent_reply_and_records_both_sides(mock_context, tmp_path):
+    agent = SimpleNamespace(handle_turn=AsyncMock(return_value=_handled("画好了")))
+    # 近况来自统一记忆里的自我记录；回复送达后的生活记录抽取要调模型，剧本里答空。
+    hctx, model = _hctx(
+        mock_context,
+        agent,
+        {"life": {"enable_self_timeline": True}},
+        model=ScriptedChatModel(reasoning="{}"),
+        memory=MemoryHarness(tmp_path).service(CHAT_ID),
     )
-    hctx, context = _hctx(tmp_path, agent)
     now = time.time()
     MemoryHarness(tmp_path).store.put_notes(
-        "g67890",
+        CHAT_ID,
         [
             Note(
                 id          = "n1",
                 kind        = "self.promise",
-                scope       = "g67890",
+                scope       = CHAT_ID,
                 subject     = "self",
                 text        = "弄完图告诉你",
                 origin      = "self",
@@ -140,7 +195,7 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
         ],
     )
 
-    result = await _delegate(_prepared(), _event(), context, hctx)
+    result = await _delegate(_prepared(), _event(), mock_context, hctx)
 
     assert result == [{"type": "text", "data": {"text": "画好了"}}]
     assert isinstance(result, DeliverySegments)
@@ -154,25 +209,24 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
         {"role": "assistant", "name": "小青", "user_id": None, "text": "早呀", "ts": 2.0},
     ]
     # 人设只在聊天插件里配置，随每轮交给 agent，agent 的回复和平时聊天是同一个人。
-    # agent 拿到人物事实和〔办事〕各节，闲聊示例留在聊天这边。
+    # agent 拿人物事实和〔办事〕各节，闲聊示例留在聊天这边。
     card = hctx.runtime.cfg.personality.card
     assert turn["persona"] == card.for_agent("小青")
     assert turn["persona"].startswith("你的名字是小青。")
-    assert "记好了，打车 32" in turn["persona"]
-    assert "又喝，明早有你受的" not in turn["persona"]
     # 近况每轮不同，单独交：人设卡在一个办事会话里保持不变。
     assert "弄完图告诉你" in turn["recent_self"] and "弄完图告诉你" not in turn["persona"]
 
-    quiet_side_effects["ensure_user_message_recorded"].assert_awaited_once()
-    append = hctx.state.memory_store.append
+    # 这句请求记进聊天记录（已有的那条，不重复）、行动历史记下 agent 接手；
     # 回复确认发出后才记成小青的发言。
-    append.assert_not_called()
+    (task,) = await _agent_tasks()
+    assert task.local_target == "m99"
+    assert task.detail == {"task_id": "a1b2c3"}
+    assert [m.content for m in get_state().memory_store.get(CHAT_ID)].count("当前") == 1
+    assert _bot_replies()[-1].content == "早呀"
     await result.delivery_receipt.record(True)
-    append.assert_called_once()
-    assert append.call_args.kwargs["role"] == "assistant"
-    assert append.call_args.kwargs["source_plugin"] == "xiaoqing_agent"
-    record = hctx.state.action_history.append.call_args.args[1]
-    assert record.action == "agent_task" and record.detail == {"task_id": "a1b2c3"}
+    reply = _bot_replies()[-1]
+    assert (reply.source_plugin, reply.content) == ("xiaoqing_agent", "画好了")
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -181,26 +235,20 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
     [(True, True), (False, False), (None, True)],
 )
 async def test_reply_receipt_reports_the_delivery_back_to_the_agent(
-    tmp_path, quiet_side_effects, delivered, recorded
+    mock_context, delivered, recorded
 ):
     agent = SimpleNamespace(
-        handle_turn=AsyncMock(
-            return_value={
-                "handled"   : True,
-                "segments"  : [{"type": "text", "data": {"text": "画好了"}}],
-                "reply_text": "画好了",
-                "task_id"   : "a1b2c3",
-            }
-        ),
+        handle_turn=AsyncMock(return_value=_handled("画好了")),
         report_delivery=AsyncMock(side_effect=RuntimeError("agent unloaded")),
     )
-    hctx, context = _hctx(tmp_path, agent)
-    result = await _delegate(_prepared(), _event(), context, hctx)
+    hctx, model = _hctx(mock_context, agent)
+    result = await _delegate(_prepared(), _event(), mock_context, hctx)
 
     # 回报失败（比如 agent 刚被卸载）不影响聊天侧的收尾。
     await result.delivery_receipt.record(delivered)
     agent.report_delivery.assert_awaited_once_with("a1b2c3", delivered)
-    assert hctx.state.memory_store.append.called is recorded
+    assert any(m.source_plugin == "xiaoqing_agent" for m in _bot_replies()) is recorded
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -214,22 +262,23 @@ async def test_reply_receipt_reports_the_delivery_back_to_the_agent(
         PermissionError("agent capability requires a current Bot admin"),
     ],
 )
-async def test_any_non_handled_outcome_falls_back_to_chat(tmp_path, quiet_side_effects, outcome):
+async def test_any_non_handled_outcome_falls_back_to_chat(mock_context, outcome):
     if isinstance(outcome, Exception):
         agent = SimpleNamespace(handle_turn=AsyncMock(side_effect=outcome))
     else:
         agent = SimpleNamespace(handle_turn=AsyncMock(return_value=outcome))
-    hctx, context = _hctx(tmp_path, agent)
+    hctx, model = _hctx(mock_context, agent)
+    before = list(get_state().memory_store.get(CHAT_ID))
 
-    assert await _delegate(_prepared(), _event(), context, hctx) is None
-    quiet_side_effects["ensure_user_message_recorded"].assert_not_awaited()
-    hctx.state.memory_store.append.assert_not_called()
+    assert await _delegate(_prepared(), _event(), mock_context, hctx) is None
+    assert await _agent_tasks() == []
+    assert list(get_state().memory_store.get(CHAT_ID)) == before
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
 async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
-    tmp_path,
-    quiet_side_effects,
+    mock_context, tmp_path
 ):
     from plugins.xiaoqing_agent import main as agent_main
     from tests.helpers.xiaoqing_agent_test_support import (
@@ -260,14 +309,16 @@ async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
         return await agent_main.handle_turn(turn, agent_context)
 
     agent = SimpleNamespace(handle_turn=handle_turn, report_delivery=AsyncMock())
-    hctx, context = _hctx(tmp_path / "chat", agent)
+    hctx, model = _hctx(mock_context, agent)
     chat = AsyncMock(return_value=[{"type": "text", "data": {"text": "普通聊天回复"}}])
     prepared = _prepared(text="帮我记一下，订阅费98，支付宝")
-    reply = await agent_bridge.answer_with_agent_or_chat(prepared, _event(), context, hctx, chat)
+    reply = await agent_bridge.answer_with_agent_or_chat(
+        prepared, _event(), mock_context, hctx, chat
+    )
     assert reply == [] and sent_texts(agent_context) == []
     assert chat.await_count <= 1
-    quiet_side_effects["ensure_user_message_recorded"].assert_awaited_once()
-    hctx.state.memory_store.append.assert_not_called()
+    assert len(await _agent_tasks()) == 1
+    assert _bot_replies()[-1].content == "早呀"
 
     runtime = agent_main.get_runtime(agent_context)
     task    = next(iter(runtime.running.values()))
@@ -283,7 +334,7 @@ async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
         ai_response(json.dumps({"action": "task", "goal": "把刚才订阅费的账户改为微信"})),
         ai_response("", [tool_call("final_answer", {"text": "改好了，走的微信"})]),
     ]
-    reply = await _delegate(_prepared(text="刚才那笔改成微信"), _event(), context, hctx)
+    reply = await _delegate(_prepared(text="刚才那笔改成微信"), _event(), mock_context, hctx)
     assert isinstance(reply, DeliverySegments)
     assert reply[0]["data"]["text"] == "改好了，走的微信"
     # 接着说：前一轮的交付（final_answer 的调用）在同一份办事会话里。
@@ -294,31 +345,33 @@ async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
     ]
     assert "记好了，98，走的支付宝" in delivered
     await reply.delivery_receipt.record(True)
-    hctx.state.memory_store.append.assert_called_once()
+    assert [m.content for m in _bot_replies()][-1] == "改好了，走的微信"
+    assert sum(m.source_plugin == "xiaoqing_agent" for m in _bot_replies()) == 1
     await agent_main.shutdown(agent_context)
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_agent_is_not_consulted_without_capability_or_explicit_address(tmp_path):
+async def test_agent_is_not_consulted_without_capability_or_explicit_address(mock_context):
     agent = SimpleNamespace(handle_turn=AsyncMock())
-    hctx, context = _hctx(tmp_path, agent)
-    assert await _delegate(_prepared(forced=False), _event(), context, hctx) is None
+    hctx, model = _hctx(mock_context, agent)
+    assert await _delegate(_prepared(forced=False), _event(), mock_context, hctx) is None
     agent.handle_turn.assert_not_awaited()
 
-    hctx, context = _hctx(tmp_path, None)
-    assert await _delegate(_prepared(), _event(), context, hctx) is None
+    hctx, model = _hctx(mock_context, None, seed=False, model=model)
+    assert await _delegate(_prepared(), _event(), mock_context, hctx) is None
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_private_turns_reach_the_agent_even_without_a_forced_summon(
-    tmp_path, quiet_side_effects
-):
+async def test_private_turns_reach_the_agent_even_without_a_forced_summon(mock_context):
     agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
-    hctx, context = _hctx(tmp_path, agent)
+    hctx, model = _hctx(mock_context, agent)
     prepared = _prepared(forced=False, is_private=True, text="帮我算一下 3 的 50 次方")
-    assert await _delegate(prepared, _event(), context, hctx) is None
+    assert await _delegate(prepared, _event(), mock_context, hctx) is None
     agent.handle_turn.assert_awaited_once()
     assert agent.handle_turn.await_args.args[0]["is_private"] is True
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
@@ -333,32 +386,30 @@ async def test_private_turns_reach_the_agent_even_without_a_forced_summon(
     ids=["active", "idle", "idle-with-other-speaker", "expired"],
 )
 async def test_name_call_does_not_bypass_gate_after_idle_cleanup(
-    tmp_path, quiet_side_effects, monkeypatch, text, idle_seconds, followup_delay, interleaved
+    mock_context, monkeypatch, text, idle_seconds, followup_delay, interleaved
 ):
-    from dataclasses import replace
-
-    from plugins.xiaoqing_chat.runtime_state import get_state
-    from plugins.xiaoqing_chat.store_binding import bind_all_stores
-
-    reply = [{"type": "text", "data": {"text": "任务结果"}}]
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             side_effect=[
                 {"handled": True, "decision": {"action": "task", "task_id": ""}},
-                {"handled": True, "segments": reply, "reply_text": "任务结果", "task_id": "task1"},
+                _handled("任务结果", "task1"),
             ]
         )
     )
-    hctx, context = _hctx(tmp_path, agent)
+    # 群里没人叫她、插话概率为 0：门控必然不放行。
+    hctx, model = _hctx(
+        mock_context,
+        agent,
+        GROUP_GATE_CLOSED,
+        {
+            "goal"       : {"enable_goal": False},
+            "reflection" : {"enable_expression_reflection": False},
+            "personality": {"state_probability": 0.0},
+        },
+        seed=False,
+    )
     state = get_state()
-    bind_all_stores(state, tmp_path)
-    hctx = replace(hctx, state=state)
-    hctx.runtime.cfg.goal.enable_goal                        = False
-    hctx.runtime.cfg.reflection.enable_expression_reflection = False
-    hctx.runtime.cfg.personality.state_probability           = 0.0
-    context.current_user_id                                  = 12345
-    context.current_group_id                                 = 67890
-    clock                                                    = [handlers.time.time()]
+    clock = [time.time()]
     monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
     state.memory_store.append(
         hctx.chat_id,
@@ -370,67 +421,61 @@ async def test_name_call_does_not_bypass_gate_after_idle_cleanup(
     )
     state.set_continuous_reply_count(hctx.chat_id, 3)
 
-    with (
-        patch.object(handlers, "load_runtime", return_value=hctx.runtime),
-        patch.object(handlers, "decide_reply", AsyncMock(return_value=False)),
-        patch.object(handlers, "_reply_with_chat", AsyncMock(return_value=[])),
-    ):
-        if interleaved:
-            clock[0] += 5
-            other = {
-                **_event(),
-                "user_id"                   : 54321,
-                "message_id"                : 98,
-                "message"                   : [{"type": "text", "data": {"text": "今天好冷"}}],
-                "_xc_user_recorded_local_id": "other",
-            }
-            state.memory_store.append(
-                hctx.chat_id,
-                role       = "user",
-                name       = "群友",
-                content    = "今天好冷",
-                ts         = clock[0],
-                local_id   = "other",
-                user_id    = 54321,
-                message_id = 98,
-            )
-            assert (
-                await handlers._maybe_reply_smalltalk("今天好冷", other, context, hctx=hctx) == []
-            )
-            agent.handle_turn.assert_not_awaited()
-            clock[0] -= 5
-        clock[0] += followup_delay
-        event = {
+    if interleaved:
+        clock[0] += 5
+        other = {
             **_event(),
-            "message"                   : [{"type": "text", "data": {"text": text}}],
-            "_xc_user_recorded_local_id": "current",
+            "user_id"                   : 54321,
+            "message_id"                : 98,
+            "message"                   : [{"type": "text", "data": {"text": "今天好冷"}}],
+            "_xc_user_recorded_local_id": "other",
         }
         state.memory_store.append(
             hctx.chat_id,
             role       = "user",
-            name       = "主人",
-            content    = text,
+            name       = "群友",
+            content    = "今天好冷",
             ts         = clock[0],
-            local_id   = "current",
-            user_id    = 12345,
-            message_id = 99,
+            local_id   = "other",
+            user_id    = 54321,
+            message_id = 98,
         )
-        result = await handlers._maybe_reply_smalltalk(text, event, context, hctx=hctx)
+        assert await handlers.handle_smalltalk("今天好冷", other, mock_context) == []
+        agent.handle_turn.assert_not_awaited()
+        clock[0] -= 5
+    clock[0] += followup_delay
+    event = {
+        **_event(),
+        "message"                   : [{"type": "text", "data": {"text": text}}],
+        "_xc_user_recorded_local_id": "current",
+    }
+    state.memory_store.append(
+        hctx.chat_id,
+        role       = "user",
+        name       = "主人",
+        content    = text,
+        ts         = clock[0],
+        local_id   = "current",
+        user_id    = 12345,
+        message_id = 99,
+    )
+    result = await handlers.handle_smalltalk(text, event, mock_context)
 
     assert state.get_continuous_reply_count(hctx.chat_id) == (0 if idle_seconds > 1800 else 3)
     assert result == []
     agent.handle_turn.assert_not_awaited()
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_stuck_agent_is_abandoned_after_the_bridge_timeout(tmp_path, quiet_side_effects):
+async def test_stuck_agent_is_abandoned_after_the_bridge_timeout(mock_context):
     async def never(_turn):
         await asyncio.Event().wait()
 
-    hctx, context = _hctx(tmp_path, SimpleNamespace(handle_turn=never))
-    # 判断阶段和执行阶段各有自己的兜底时限。
+    hctx, model = _hctx(mock_context, SimpleNamespace(handle_turn=never))
+    # 判断阶段和执行阶段各有自己的兜底时限（25 秒 / 50 秒，没有假时钟可推进，所以缩短它们）。
     with patch.object(agent_bridge, "_AGENT_DECIDE_TIMEOUT_SECONDS", 0.05):
-        assert await _delegate(_prepared(), _event(), context, hctx) is None
+        assert await _delegate(_prepared(), _event(), mock_context, hctx) is None
 
     calls: list[dict] = []
 
@@ -440,211 +485,205 @@ async def test_stuck_agent_is_abandoned_after_the_bridge_timeout(tmp_path, quiet
             return {"handled": True, "decision": {"action": "task", "goal": "g"}}
         await asyncio.Event().wait()
 
-    hctx, context = _hctx(tmp_path, SimpleNamespace(handle_turn=decides_then_hangs))
+    hctx, model = _hctx(
+        mock_context, SimpleNamespace(handle_turn=decides_then_hangs), seed=False, model=model
+    )
     with patch.object(agent_bridge, "_AGENT_TURN_TIMEOUT_SECONDS", 0.05):
-        assert await _delegate(_prepared(), _event(), context, hctx) is None
+        assert await _delegate(_prepared(), _event(), mock_context, hctx) is None
     assert [turn["phase"] for turn in calls] == ["decide", "act"]
     assert calls[1]["decision"] == {"action": "task", "goal": "g"}
+    await settle_chat_background(mock_context, model)
 
 
-def _slot_spy() -> tuple[SimpleNamespace, list[str]]:
-    """记录聊天生成名额的占用与释放。"""
-
-    events: list[str] = []
-
-    class _Admit:
-        async def __aenter__(self):
-            events.append("enter")
-
-        async def __aexit__(self, *_exc):
-            events.append("exit")
-            return False
-
-    return SimpleNamespace(admit=lambda **_kwargs: _Admit()), events
-
-
-def _handler_ctx(limiter: SimpleNamespace) -> SimpleNamespace:
-    state = SimpleNamespace(generation_limiter=limiter)
-    return SimpleNamespace(runtime=ChatRuntime(XiaoQingChatConfig(), []), state=state, chat_id="g1")
-
-
-def _agent_context() -> MagicMock:
-    context = MagicMock()
-    context.capabilities = PluginCapabilities(agent_turn=SimpleNamespace())
-    return context
+def _private_event(text: str) -> dict:
+    return chat_message_event(_event(), text, message_type="private", group_id=None)
 
 
 @pytest.mark.asyncio
-async def test_agent_taking_over_cancels_the_chat_reply_generated_alongside(tmp_path):
-    limiter, slots = _slot_spy()
-    started = asyncio.Event()
-    reply   = [{"type": "text", "data": {"text": "交给 agent 了"}}]
-    plan    = object()
+async def test_agent_taking_over_cancels_the_chat_reply_generated_alongside(mock_context):
+    started   = asyncio.Event()
+    cancelled = []
+    busy      = []
+    phases    = []
+    decisions = []
+    reply     = [{"type": "text", "data": {"text": "交给 agent 了"}}]
+    event     = _private_event("画图")
+    chat_id   = event_chat_id(event)
 
-    async def generate(*_args):
+    async def generate(_call):
         started.set()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
 
-    async def decide(*_args):
-        await started.wait()
-        return plan
+    async def handle_turn(turn):
+        phases.append(turn["phase"])
+        if turn["phase"] == "decide":
+            # 生成和判断同时开始：判断出来时聊天回复正在生成，占着会话的生成名额。
+            await started.wait()
+            busy.append(not await _chat_slot_is_free(chat_id))
+            return {"handled": True, "decision": {"action": "task"}}
+        decisions.append(turn["decision"])
+        return _handled("交给 agent 了", "t1")
 
-    act = AsyncMock(return_value=reply)
-    with (
-        patch.object(
-            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
-        ),
-        patch.object(agent_bridge, "_decide", decide),
-        patch.object(agent_bridge, "_act", act),
-        patch.object(handlers, "generate_smalltalk_turn", generate),
-        patch.object(handlers, "finalize_smalltalk_turn", AsyncMock()) as finalize,
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
+    _, model = _hctx(
+        mock_context,
+        SimpleNamespace(handle_turn=handle_turn),
+        seed=False,
+        model=ScriptedChatModel(reply=generate),
+    )
+
+    result = await handlers.handle_smalltalk("画图", event, mock_context)
 
     assert result == reply
-    # 生成和判断同时开始；接手后生成被取消、名额立即让出，聊天回复没有发出。
-    assert slots == ["enter", "exit"]
-    finalize.assert_not_awaited()
-    assert act.await_args.args[0] is plan
+    # 接手后生成被取消、名额立即让出，聊天回复没有发出。
+    assert busy == [True] and cancelled == [True] and phases == ["decide", "act"]
+    assert decisions == [{"action": "task"}]
+    assert await _chat_slot_is_free(chat_id)
+    await ack_reply_delivery(result)
+    assert [
+        m.source_plugin for m in get_state().memory_store.get(chat_id) if m.role == "assistant"
+    ] == ["xiaoqing_agent"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_declined_turn_uses_the_chat_reply_already_being_generated(tmp_path):
-    limiter, slots = _slot_spy()
-    normal           = [{"type": "text", "data": {"text": "普通回复"}}]
-    generating       = asyncio.Event()
-    order: list[str] = []
+async def test_declined_turn_uses_the_chat_reply_already_being_generated(mock_context):
+    generating = asyncio.Event()
+    order      = []
+    phases     = []
+    event      = _private_event("在吗")
+    chat_id    = event_chat_id(event)
 
-    async def generate(*_args):
+    def generate(_call):
         order.append("generate")
         generating.set()
-        return "generated"
+        return "普通回复"
 
-    async def decide(*_args):
+    async def handle_turn(turn):
+        phases.append(turn["phase"])
         # 判断还没出来时聊天回复已经在生成：闲聊不用先等判断。
         await generating.wait()
         order.append("declined")
-        return None
+        return {"handled": False}
 
-    act = AsyncMock()
-    with (
-        patch.object(
-            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
-        ),
-        patch.object(agent_bridge, "_decide", decide),
-        patch.object(agent_bridge, "_act", act),
-        patch.object(handlers, "generate_smalltalk_turn", generate),
-        patch.object(
-            handlers, "finalize_smalltalk_turn", AsyncMock(return_value=normal)
-        ) as finalize,
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "在吗", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
+    _, model = _hctx(
+        mock_context,
+        SimpleNamespace(handle_turn=handle_turn),
+        seed=False,
+        model=ScriptedChatModel(reply=generate),
+    )
 
-    assert result == normal
+    result = await handlers.handle_smalltalk("在吗", event, mock_context)
+
+    assert [seg["data"]["text"] for seg in result] == ["普通回复"]
     assert order == ["generate", "declined"]
-    assert slots == ["enter", "exit"]
-    assert finalize.await_args.args[1] == "generated"
-    act.assert_not_awaited()
+    assert phases == ["decide"]
+    # 用的就是已经在生成的那份回复，没有重新生成。
+    assert len(model.calls_of("reply")) == 1
+    await ack_reply_delivery(result)
+    assert [m.content for m in get_state().memory_store.get(chat_id) if m.role == "assistant"] == [
+        "普通回复"
+    ]
+    assert await _chat_slot_is_free(chat_id)
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_chat_reply_finished_first_waits_for_the_decision_and_is_dropped(tmp_path):
-    limiter, _slots = _slot_spy()
-    generated = MagicMock()
-    finished  = asyncio.Event()
-    reply     = [{"type": "text", "data": {"text": "agent 的结果"}}]
+async def test_chat_reply_finished_first_waits_for_the_decision_and_is_dropped(mock_context):
+    finished = asyncio.Event()
+    event    = _private_event("画图")
+    chat_id  = event_chat_id(event)
 
-    async def generate(*_args):
+    def generate(_call):
         finished.set()
-        return generated
+        return "聊天回复"
 
-    async def decide(*_args):
-        await finished.wait()
-        await asyncio.sleep(0)
-        return object()
+    async def handle_turn(turn):
+        if turn["phase"] == "decide":
+            # 聊天回复先生成完；判断晚到，这期间聊天回复不能发出去。
+            await finished.wait()
+            await asyncio.sleep(0.05)
+            return {"handled": True, "decision": {"action": "task"}}
+        return _handled("agent 的结果", "t1")
 
-    with (
-        patch.object(
-            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
-        ),
-        patch.object(agent_bridge, "_decide", decide),
-        patch.object(agent_bridge, "_act", AsyncMock(return_value=reply)),
-        patch.object(handlers, "generate_smalltalk_turn", generate),
-        patch.object(handlers, "finalize_smalltalk_turn", AsyncMock()) as finalize,
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
+    _, model = _hctx(
+        mock_context,
+        SimpleNamespace(handle_turn=handle_turn),
+        seed=False,
+        model=ScriptedChatModel(reply=generate),
+    )
 
-    assert result == reply
-    finalize.assert_not_awaited()
+    result = await handlers.handle_smalltalk("画图", event, mock_context)
 
-
-@pytest.mark.asyncio
-async def test_failed_agent_handoff_generates_one_chat_reply(tmp_path):
-    limiter, _slots = _slot_spy()
-    generated = MagicMock()
-    reply     = [{"type": "text", "data": {"text": "agent 的结果"}}]
-
-    async def generate(*_args):
-        return generated
-
-    with (
-        patch.object(
-            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(is_private=True))
-        ),
-        patch.object(agent_bridge, "_decide", AsyncMock(return_value=object())),
-        patch.object(agent_bridge, "_act", AsyncMock(return_value=None)),
-        patch.object(handlers, "generate_smalltalk_turn", generate),
-        patch.object(
-            handlers, "finalize_smalltalk_turn", AsyncMock(return_value=reply)
-        ) as finalize,
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "画图", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
-
-    assert result == reply
-    finalize.assert_awaited_once()
+    assert [seg["data"]["text"] for seg in result] == ["agent 的结果"]
+    # 聊天回复没有进入投递：没有等着结算的回复占着会话。
+    assert await _chat_slot_is_free(chat_id)
+    await ack_reply_delivery(result)
+    assert [
+        m.source_plugin for m in get_state().memory_store.get(chat_id) if m.role == "assistant"
+    ] == ["xiaoqing_agent"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_turns_the_agent_cannot_take_skip_the_decision(tmp_path):
-    limiter, slots = _slot_spy()
-    normal = [{"type": "text", "data": {"text": "普通回复"}}]
-    decide = AsyncMock()
-    with (
-        patch.object(
-            handlers, "_prepare_smalltalk_turn", AsyncMock(return_value=_prepared(forced=False))
-        ),
-        patch.object(agent_bridge, "_decide", decide),
-        patch.object(
-            handlers,
-            "generate_smalltalk_turn",
-            AsyncMock(return_value=SimpleNamespace(reply="", pfc_result=None)),
-        ),
-        patch.object(handlers, "finalize_smalltalk_turn", AsyncMock(return_value=normal)),
-    ):
-        result = await handlers._maybe_reply_smalltalk(
-            "在吗", _event(), _agent_context(), hctx=_handler_ctx(limiter)
-        )
+async def test_failed_agent_handoff_generates_one_chat_reply(mock_context):
+    phases  = []
+    event   = _private_event("画图")
+    chat_id = event_chat_id(event)
 
-    assert result == normal and slots == ["enter", "exit"]
-    decide.assert_not_awaited()
+    async def handle_turn(turn):
+        phases.append(turn["phase"])
+        if turn["phase"] == "decide":
+            return {"handled": True, "decision": {"action": "task"}}
+        return {"handled": False}
+
+    _, model = _hctx(
+        mock_context,
+        SimpleNamespace(handle_turn=handle_turn),
+        seed=False,
+        model=ScriptedChatModel(reply="聊天回复"),
+    )
+
+    result = await handlers.handle_smalltalk("画图", event, mock_context)
+
+    assert phases == ["decide", "act"]
+    assert [seg["data"]["text"] for seg in result] == ["聊天回复"]
+    await ack_reply_delivery(result)
+    assert [m.content for m in get_state().memory_store.get(chat_id) if m.role == "assistant"] == [
+        "聊天回复"
+    ]
+    assert await _chat_slot_is_free(chat_id)
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_quoted_message_and_downloaded_images_reach_the_agent(tmp_path, quiet_side_effects):
-    from dataclasses import replace
+async def test_turns_the_agent_cannot_take_skip_the_decision(mock_context):
+    agent = SimpleNamespace(handle_turn=AsyncMock())
+    # 群里没人叫她：只走聊天，由规划器决定参与（插话概率 1，门控放行）。
+    model = ScriptedChatModel(reply="普通回复", plan=plan_answer("direct_reply"))
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
+    mock_context.capabilities = replace(
+        mock_context.capabilities, is_bot_admin=True, agent_turn=agent
+    )
+    event = chat_message_event(_event(), "今天好冷")
 
+    result = await handlers.handle_smalltalk("今天好冷", event, mock_context)
+
+    assert [seg["data"]["text"] for seg in result] == ["普通回复"]
+    agent.handle_turn.assert_not_awaited()
+    await ack_reply_delivery(result)
+    assert await _chat_slot_is_free()
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
+async def test_quoted_message_and_downloaded_images_reach_the_agent(mock_context, tmp_path):
     from plugins.xiaoqing_chat.media.models import RenderedMedia
 
     agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
-    hctx, context = _hctx(tmp_path, agent)
     media = SimpleNamespace(
         get_message=AsyncMock(
             return_value={
@@ -656,7 +695,7 @@ async def test_quoted_message_and_downloaded_images_reach_the_agent(tmp_path, qu
             }
         )
     )
-    context.capabilities = replace(context.capabilities, onebot_media=media)
+    hctx, model = _hctx(mock_context, agent, onebot_media=media)
     cached = tmp_path / "cached.png"
     cached.write_bytes(b"png")
     event = _event()
@@ -666,119 +705,96 @@ async def test_quoted_message_and_downloaded_images_reach_the_agent(tmp_path, qu
         RenderedMedia("h2", "image", "图", (), "[图片]", cached_path=tmp_path / "gone.png"),
     ]
 
-    await _delegate(_prepared(), event, context, hctx)
+    await _delegate(_prepared(), event, mock_context, hctx)
 
     media.get_message.assert_awaited_once_with("555")
     turn = agent.handle_turn.await_args.args[0]
     assert turn["quoted_text"] == "甲: 这是上个月的数据表"
     assert turn["images"] == ["https://img.example/a.png", "https://img.example/quoted.png"]
     assert turn["image_files"] == [str(cached)]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_quote_lookup_failure_does_not_block_the_turn(tmp_path, quiet_side_effects):
-    from dataclasses import replace
-
+async def test_quote_lookup_failure_does_not_block_the_turn(mock_context):
     agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
-    hctx, context = _hctx(tmp_path, agent)
     media = SimpleNamespace(get_message=AsyncMock(side_effect=RuntimeError("onebot down")))
-    context.capabilities = replace(context.capabilities, onebot_media=media)
+    hctx, model = _hctx(mock_context, agent, onebot_media=media)
     event = _event()
     event["message"].insert(0, {"type": "reply", "data": {"id": "555"}})
 
-    await _delegate(_prepared(), event, context, hctx)
+    await _delegate(_prepared(), event, mock_context, hctx)
 
     turn = agent.handle_turn.await_args.args[0]
     assert turn["quoted_text"] == ""
     assert turn["images"] == ["https://img.example/a.png"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_command_runner_events_never_reach_the_agent(tmp_path, quiet_side_effects):
+async def test_command_runner_events_never_reach_the_agent(mock_context):
     from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 
     agent = SimpleNamespace(handle_turn=AsyncMock())
-    hctx, context = _hctx(tmp_path, agent)
+    hctx, model = _hctx(mock_context, agent)
     event = {**_event(), COMMAND_RUNNER_EVENT_KEY: "xiaoqing_agent"}
-    assert await _delegate(_prepared(), event, context, hctx) is None
+    assert await _delegate(_prepared(), event, mock_context, hctx) is None
     agent.handle_turn.assert_not_awaited()
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_xc_free_chat_refuses_tool_calls_but_subcommands_still_work(mock_context):
+async def test_xc_free_chat_refuses_command_runner_tool_calls(mock_context):
     from core.interfaces import COMMAND_RUNNER_EVENT_KEY
     from plugins.xiaoqing_chat import main as chat_main
 
+    model = ScriptedChatModel(reply="不该有这句")
+    scripted_chat_context(mock_context, model)
     event = {"user_id": 12345, "group_id": None, COMMAND_RUNNER_EVENT_KEY: "xiaoqing_agent"}
-    with patch.object(chat_main, "handle_smalltalk", AsyncMock()) as smalltalk:
-        reply = await chat_main.handle("xc", "帮我画个图", event, mock_context)
-    smalltalk.assert_not_awaited()
+
+    reply = await chat_main.handle("xc", "帮我画个图", event, mock_context)
+
+    assert model.calls == []
     assert "不能作为工具调用" in reply[0]["data"]["text"]
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_quoting_the_agent_reply_in_a_group_is_recognized_as_talking_to_the_bot(tmp_path):
+async def test_quoting_the_agent_reply_in_a_group_is_recognized_as_talking_to_the_bot(mock_context):
     """回执提交时，这条回复拆成几条发出的全部消息 ID 和记录一起写入，引用哪一条都认得出。"""
-
-    import asyncio as _asyncio
 
     from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
     from core.plugin_base import build_action
     from plugins.xiaoqing_chat.attention_gate import is_reply_to_bot
-    from plugins.xiaoqing_chat.memory.memory import MemoryStore
 
-    store      = MemoryStore(tmp_path)
     long_reply = "图画好了，" + "细节说明" * 400
     agent      = SimpleNamespace(
-        handle_turn=AsyncMock(
-            return_value={
-                "handled"   : True,
-                "segments"  : [{"type": "text", "data": {"text": long_reply}}],
-                "reply_text": long_reply,
-                "task_id"   : "a1b2c3",
-            }
-        ),
+        handle_turn=AsyncMock(return_value=_handled(long_reply)),
         report_delivery=AsyncMock(),
     )
-    hctx, context = _hctx(tmp_path, agent)
-    hctx.state.memory_store = store
-    store.append("g67890", role="assistant", name="小青", content="更早的闲聊", ts=1.0)
-    with patch.multiple(
-        agent_bridge,
-        ensure_user_message_recorded=AsyncMock(return_value="m7"),
-        schedule_memory_persist       = Mock(),
-        schedule_action_history_flush = Mock(),
-        log_step                      = Mock(),
-    ):
-        reply = await _delegate(_prepared(), _event(), context, hctx)
-        # 像 Core 一样：长回复拆成两条，每条发出后先登记消息 ID 再记下发送结果。
-        receipt = reply.delivery_receipt
-        receipt.add_expected_actions(1)
-        for message_id in (5555, 5556):
-            receipt.add_message_id(message_id)
-            await receipt.record(True)
+    hctx, model = _hctx(mock_context, agent, seed=False)
+    store = get_state().memory_store
+    store.append(CHAT_ID, role="assistant", name="小青", content="更早的闲聊", ts=1.0)
+    _seed_history(earlier=False)
+    reply = await _delegate(_prepared(), _event(), mock_context, hctx)
+    # 像 Core 一样：长回复拆成两条，每条发出后先登记消息 ID 再记下发送结果。
+    receipt = reply.delivery_receipt
+    receipt.add_expected_actions(1)
+    for message_id in (5555, 5556):
+        receipt.add_message_id(message_id)
+        await receipt.record(True)
     agent.report_delivery.assert_awaited_once_with("a1b2c3", True)
 
-    history = store.get("g67890")
+    history = store.get(CHAT_ID)
     assert history[-1].remote_ids() == (5555, 5556)
     assert history[0].remote_ids() == ()
 
-    # 出站观察者不再按“最近一条”回填聊天自己的回复，也不会重复记一条。
+    # 出站观察者不按“最近一条”回填聊天自己的回复，也不会重复记一条。
     action = build_action(list(reply), 12345, 67890)
     assert action is not None
     action[ACTION_RESULT_MESSAGE_ID_KEY] = 5556
-    runtime                              = SimpleNamespace(
-        cfg=SimpleNamespace(enable_smalltalk=True, ban_words=[]), compiled_ban_regex=[]
-    )
-    _fixture_support._complete_test_runtime_config(runtime)
-    with (
-        patch.object(handlers, "load_runtime", return_value=runtime),
-        patch.object(handlers, "bound_state", return_value=SimpleNamespace(memory_store=store)),
-        patch.object(handlers, "chat_lock", return_value=_asyncio.Lock()),
-        patch.object(handlers, "schedule_memory_persist"),
-    ):
-        await handlers.observe_outgoing_action(action, context, source_plugin="xiaoqing_chat")
-    assert len(store.get("g67890")) == 2
+    await handlers.observe_outgoing_action(action, mock_context, source_plugin="xiaoqing_chat")
+    assert len(store.get(CHAT_ID)) == len(history)
 
     for quoted in ("5555", "5556"):
         quote = {
@@ -787,152 +803,112 @@ async def test_quoting_the_agent_reply_in_a_group_is_recognized_as_talking_to_th
                 {"type": "text", "data": {"text": "改成红色"}},
             ]
         }
-        assert await is_reply_to_bot(
-            event=quote, state=SimpleNamespace(memory_store=store), chat_id="g67890"
-        ), quoted
+        assert await is_reply_to_bot(event=quote, state=get_state(), chat_id=CHAT_ID), quoted
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_replies_keep_their_own_message_ids(tmp_path):
+async def test_concurrent_replies_keep_their_own_message_ids(mock_context):
     """两条回复几乎同时发出、回执先后顺序打乱，各自的记录仍对应各自的消息。"""
 
-    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+    answers = iter([("回复 A", "aaaaaa"), ("回复 B", "bbbbbb")])
 
-    store   = MemoryStore(tmp_path)
-    replies = []
-    for text_value, task_id in (("回复 A", "aaaaaa"), ("回复 B", "bbbbbb")):
-        agent = SimpleNamespace(
-            handle_turn=AsyncMock(
-                return_value={
-                    "handled"   : True,
-                    "segments"  : [{"type": "text", "data": {"text": text_value}}],
-                    "reply_text": text_value,
-                    "task_id"   : task_id,
-                }
-            ),
-            report_delivery=AsyncMock(),
-        )
-        hctx, context = _hctx(tmp_path, agent)
-        hctx.state.memory_store = store
-        with patch.multiple(
-            agent_bridge,
-            ensure_user_message_recorded=AsyncMock(return_value="m7"),
-            schedule_memory_persist       = Mock(),
-            schedule_action_history_flush = Mock(),
-            log_step                      = Mock(),
-        ):
-            replies.append(await _delegate(_prepared(), _event(), context, hctx))
+    async def handle_turn(turn):
+        if turn["phase"] == "decide":
+            return {"handled": True, "decision": {"action": "task"}}
+        text, task_id = next(answers)
+        return _handled(text, task_id)
+
+    agent = SimpleNamespace(handle_turn=handle_turn, report_delivery=AsyncMock())
+    hctx, model = _hctx(mock_context, agent, seed=False)
+    store = get_state().memory_store
+    _seed_history(earlier=False)
+    replies = [await _delegate(_prepared(), _event(), mock_context, hctx) for _ in range(2)]
 
     first, second = (reply.delivery_receipt for reply in replies)
     first.add_message_id(501)
     second.add_message_id(502)
-    with patch.multiple(
-        agent_bridge,
-        schedule_memory_persist = Mock(),
-        log_step                = Mock(),
-    ):
-        await second.record(True)
-        await first.record(True)
+    await second.record(True)
+    await first.record(True)
 
-    by_text = {message.content: message.remote_ids() for message in store.get("g67890")}
+    by_text = {
+        message.content: message.remote_ids()
+        for message in store.get(CHAT_ID)
+        if message.role == "assistant"
+    }
     assert by_text == {"回复 A": (501,), "回复 B": (502,)}
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_a_request_split_over_several_messages_reaches_the_agent_whole(
-    tmp_path, quiet_side_effects
-):
+async def test_a_request_split_over_several_messages_reaches_the_agent_whole(mock_context):
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             side_effect=[
                 {"handled": True, "decision": {"action": "task"}},
-                {
-                    "handled"   : True,
-                    "segments"  : [{"type": "text", "data": {"text": "记好了"}}],
-                    "reply_text": "记好了",
-                    "task_id"   : "t1",
-                    "status"    : "done",
-                },
+                _handled("记好了", "t1", status="done"),
             ]
         ),
         report_delivery=AsyncMock(),
     )
-    hctx, context = _hctx(tmp_path, agent)
+    hctx, model = _hctx(mock_context, agent)
     event = {**_event(), "_xc_burst_texts": ["帮我记一笔"]}
 
-    result = await _delegate(_prepared(text="18 块 麻辣烫 微信"), event, context, hctx)
+    result = await _delegate(_prepared(text="18 块 麻辣烫 微信"), event, mock_context, hctx)
 
     assert isinstance(result, DeliverySegments)
     assert agent.handle_turn.await_args_list[0].args[0]["text"] == "帮我记一笔\n18 块 麻辣烫 微信"
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_a_question_the_next_message_already_answers_is_not_sent(
-    tmp_path, quiet_side_effects
-):
+async def test_a_question_the_next_message_already_answers_is_not_sent(mock_context):
     from plugins.xiaoqing_chat import follow_ups
 
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             side_effect=[
                 {"handled": True, "decision": {"action": "task"}},
-                {
-                    "handled"   : True,
-                    "segments"  : [{"type": "text", "data": {"text": "记什么呀？"}}],
-                    "reply_text": "记什么呀？",
-                    "task_id"   : "t1",
-                    "status"    : "needs_user",
-                },
+                _handled("记什么呀？", "t1", status="needs_user"),
             ]
         ),
         report_delivery=AsyncMock(),
     )
-    hctx, context = _hctx(tmp_path, agent)
     waiting = ({"message_id": 100, "message": [{"type": "text", "data": {"text": "18 块"}}]},)
-    context.capabilities = PluginCapabilities(
-        is_bot_admin = True,
-        agent_turn   = agent,
-        inbound_backlog=SimpleNamespace(waiting=lambda: waiting),
+    hctx, model = _hctx(
+        mock_context, agent, inbound_backlog=SimpleNamespace(waiting=lambda: waiting)
     )
     follow_ups._carried.clear()
     try:
-        result = await _delegate(_prepared(text="小青，帮我记一笔"), _event(), context, hctx)
+        result = await _delegate(_prepared(text="小青，帮我记一笔"), _event(), mock_context, hctx)
         # 追问没发；这句请求照常记进聊天记录，下一条算接着跟她说。
         assert result == []
-        quiet_side_effects["ensure_user_message_recorded"].assert_awaited()
+        assert len(await _agent_tasks()) == 1
+        assert _bot_replies()[-1].content == "早呀"
         agent.report_delivery.assert_awaited_once_with("t1", None)
         assert follow_ups.take_carried_attention({**_event(), "message_id": 100}) is True
     finally:
         follow_ups._carried.clear()
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_a_finished_result_is_sent_even_when_more_messages_are_waiting(
-    tmp_path, quiet_side_effects
-):
+async def test_a_finished_result_is_sent_even_when_more_messages_are_waiting(mock_context):
     agent = SimpleNamespace(
         handle_turn=AsyncMock(
             side_effect=[
                 {"handled": True, "decision": {"action": "task"}},
-                {
-                    "handled"   : True,
-                    "segments"  : [{"type": "text", "data": {"text": "记好了"}}],
-                    "reply_text": "记好了",
-                    "task_id"   : "t1",
-                    "status"    : "done",
-                },
+                _handled("记好了", "t1", status="done"),
             ]
         ),
         report_delivery=AsyncMock(),
     )
-    hctx, context = _hctx(tmp_path, agent)
     waiting = ({"message_id": 100, "message": [{"type": "text", "data": {"text": "谢谢"}}]},)
-    context.capabilities = PluginCapabilities(
-        is_bot_admin = True,
-        agent_turn   = agent,
-        inbound_backlog=SimpleNamespace(waiting=lambda: waiting),
+    hctx, model = _hctx(
+        mock_context, agent, inbound_backlog=SimpleNamespace(waiting=lambda: waiting)
     )
 
-    result = await _delegate(_prepared(text="小青，记一笔 25 午饭"), _event(), context, hctx)
+    result = await _delegate(_prepared(text="小青，记一笔 25 午饭"), _event(), mock_context, hctx)
 
     assert isinstance(result, DeliverySegments)
+    await settle_chat_background(mock_context, model)

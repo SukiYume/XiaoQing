@@ -123,7 +123,6 @@ def update_settings(
     current = db.get_user_settings(owner_id)
     if not _settings_patch_changes(current, updates):
         return {"ok": True, "data": current, "message": "无变化"}
-    if not db.update_user_settings(owner_id, updates):
-        raise HTTPException(status_code=500, detail="Failed to update settings")
+    db.update_user_settings(owner_id, updates)
     settings = db.get_user_settings(owner_id)
     return {"ok": True, "data": settings, "message": "设置已更新"}

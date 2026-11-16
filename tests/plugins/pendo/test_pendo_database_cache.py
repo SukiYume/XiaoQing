@@ -1,4 +1,4 @@
-"""Pendo 缓存行为回归测试。"""
+"""Pendo 数据库缓存行为：LRU 淘汰、更新后失效、并发读写不回写旧快照。"""
 
 from threading import Event, Thread
 

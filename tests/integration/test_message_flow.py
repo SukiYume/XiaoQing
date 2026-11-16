@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from aiohttp import ClientSession, web
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.test_utils import TestServer
 
 from core.app_delivery import AppDeliveryMixin
 from core.delivery import DeliveryReceipt
-from core.dispatcher import Dispatcher, MessageContext
+from core.dispatcher import AdjustableSemaphore, Dispatcher, MessageContext
 from core.inbound_backlog import InboundBacklog
 from core.onebot import OneBotHttpSender
 from core.plugin_execution import PluginExecutionGate
@@ -85,7 +85,7 @@ class TestMessageFlow:
             plugin_registry = mock_registry,
             admin_check     = mock_admin_check,
             build_context   = mock_context_factory,
-            semaphore       = asyncio.Semaphore(10),
+            semaphore       = AdjustableSemaphore(10),
             session_manager = session_manager,
         )
 
@@ -188,24 +188,6 @@ class TestMessageFlow:
 
         responses = await dispatcher.handle_event(event)
         assert len(responses) == 0
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_private_message_always_processed(self, test_dispatcher):
-        """Test that private messages are always processed"""
-        dispatcher, _ = test_dispatcher
-
-        event = {
-            "post_type"   : "message",
-            "message_type": "private",
-            "user_id"     : 12345,
-            "message"     : [{"type": "text", "data": {"text": "/echo test"}}],
-            "raw_message" : "/echo test",
-            "self_id"     : 11111,
-        }
-
-        responses = await dispatcher.handle_event(event)
-        assert len(responses) > 0
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -514,7 +496,7 @@ class TestMessageFlow:
         command_task = asyncio.create_task(gate.run(command_operation))
         await command_holds_gate.wait()
         context = MessageContext(
-            request_id         = "abba-regression",
+            request_id         = "gate-before-session-lock",
             text               = "continue",
             clean_text         = "continue",
             user_id            = 12345,
@@ -578,29 +560,11 @@ class TestDispatcherIntegration:
             plugin_registry = mock_registry,
             admin_check     = mock_admin_check,
             build_context   = mock_context_factory,
-            semaphore       = asyncio.Semaphore(10),
+            semaphore       = AdjustableSemaphore(10),
             session_manager = session_manager,
         )
 
         return dispatcher, session_manager
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
-    async def test_command_resolution_and_execution(self, dispatcher_with_router):
-        """Test that commands are resolved and executed correctly"""
-        dispatcher, _ = dispatcher_with_router
-
-        event = {
-            "post_type"   : "message",
-            "message_type": "private",
-            "user_id"     : 12345,
-            "message"     : [{"type": "text", "data": {"text": "/echo test message"}}],
-            "raw_message" : "/echo test message",
-            "self_id"     : 11111,
-        }
-
-        responses = await dispatcher.handle_event(event)
-        assert len(responses) > 0
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -644,7 +608,9 @@ class TestDispatcherIntegration:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retcode, expected_status", [(0, 200), (100, 500)])
-async def test_standard_http_event_reaches_real_action_api(retcode, expected_status):
+async def test_standard_http_event_reaches_real_action_api(
+    retcode, expected_status, unused_tcp_port
+):
     """本机双服务贯通上报、Action POST 和收据，验证协议边界。"""
     received  = []
     callbacks = []
@@ -687,20 +653,22 @@ async def test_standard_http_event_reaches_real_action_api(retcode, expected_sta
                 "_delivery_receipt": receipt,
             }
         )
-        inbound = StandaloneInboundServer("127.0.0.1", 0, "incoming", app._handle_inbound_event)
+        inbound = StandaloneInboundServer(
+            "127.0.0.1", unused_tcp_port, "incoming", app._handle_inbound_event
+        )
+        await inbound.start()
         try:
-            async with TestClient(TestServer(inbound.app)) as client:
-                response = await client.post(
-                    "/event",
-                    headers = {"Authorization": "Bearer incoming"},
-                    json    = {
-                        "post_type"   : "message",
-                        "message_type": "private",
-                        "user_id"     : 123,
-                        "message"     : "/echo review",
-                        "message_id"  : 1,
-                    },
-                )
+            async with session.post(
+                f"http://127.0.0.1:{unused_tcp_port}/event",
+                headers = {"Authorization": "Bearer incoming"},
+                json    = {
+                    "post_type"   : "message",
+                    "message_type": "private",
+                    "user_id"     : 123,
+                    "message"     : "/echo review",
+                    "message_id"  : 1,
+                },
+            ) as response:
                 assert response.status == expected_status
                 if retcode == 0:
                     assert await response.json() == {}

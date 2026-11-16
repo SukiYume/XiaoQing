@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from .app_support import _parse_positive_ids
@@ -33,9 +33,42 @@ from .scheduler import ScheduledJobSpec
 if TYPE_CHECKING:
     from .app_identity import AppIdentityService
     from .plugin_manager import PluginManager
+    from .plugin_manager_support import LoadedPlugin
     from .scheduler import SchedulerManager
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_schedule_targets(
+    config: Mapping[str, Any],
+    plugin_name: str,
+    schedule_id: str,
+    manifest_group_ids: Sequence[int] | None,
+) -> tuple[tuple[int, ...], str]:
+    """One schedule's target groups and the config field they came from.
+
+    Most specific first: the deployment's
+    ``config.plugins.<plugin>.schedules.<schedule id>.group_ids``, then the manifest's
+    ``group_ids``, then ``default_group_ids``. Real group IDs therefore live only in the
+    private config; manifests in the repository carry none. An explicit empty list in the
+    deployment config is an override too: the schedule runs without group targets. Invalid
+    IDs raise ``TypeError`` / ``ValueError``.
+    """
+
+    plugins  = config.get("plugins")
+    section  = plugins.get(plugin_name) if isinstance(plugins, Mapping) else None
+    schedule = section.get("schedules") if isinstance(section, Mapping) else None
+    entry    = schedule.get(schedule_id) if schedule_id and isinstance(schedule, Mapping) else None
+    if isinstance(entry, Mapping) and "group_ids" in entry:
+        field_name = f"plugins.{plugin_name}.schedules.{schedule_id}.group_ids"
+        raw_groups = entry["group_ids"]
+    elif manifest_group_ids is not None:
+        field_name = f"{plugin_name} plugin.json schedule {schedule_id} group_ids"
+        raw_groups = list(manifest_group_ids)
+    else:
+        field_name = "default_group_ids"
+        raw_groups = list(config.get("default_group_ids", []))
+    return _parse_positive_ids(raw_groups, field_name=field_name), field_name
 
 
 class AppSchedulingMixin:
@@ -130,22 +163,6 @@ class AppSchedulingMixin:
 
         self.scheduler.replace_prefix(prefix, jobs)
 
-    def _schedule_group_override(self, plugin_name: str, schedule_id: str) -> Any | None:
-        """The deployment's target groups for one schedule, or ``None`` when not configured.
-
-        An explicit empty list is an override too: the schedule runs without group targets.
-        """
-
-        if not schedule_id:
-            return None
-        plugins  = self.config.get("plugins")
-        section  = plugins.get(plugin_name) if isinstance(plugins, Mapping) else None
-        schedule = section.get("schedules") if isinstance(section, Mapping) else None
-        entry    = schedule.get(schedule_id) if isinstance(schedule, Mapping) else None
-        if isinstance(entry, Mapping) and "group_ids" in entry:
-            return entry["group_ids"]
-        return None
-
     async def _run_job(
         self,
         handler,
@@ -153,38 +170,22 @@ class AppSchedulingMixin:
         group_ids: tuple[int, ...] | list[int] | None = None,
         *,
         delivery: ScheduleDeliveryMode = "broadcast",
-        loaded_plugin: Any | None      = None,
-        schedule_id: str               = "",
+        loaded_plugin: LoadedPlugin,
+        schedule_id: str = "",
     ) -> None:
         """Execute one schedule under the Core-owned delivery contract.
 
-        Target groups resolve at run time, most specific first: the deployment's
-        ``config.plugins.<plugin>.schedules.<schedule id>.group_ids``, then the
-        manifest's ``group_ids``, then ``default_group_ids``. Real group IDs therefore
-        live only in the private config; manifests in the repository carry none.
+        Target groups resolve at run time through :func:`resolve_schedule_targets`.
         """
         if self._stopping:
             logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
             return
         parsed_target_groups: tuple[int, ...] = ()
         if delivery != "silent":
-            override   = self._schedule_group_override(plugin_name, schedule_id)
-            field_name = (
-                f"plugins.{plugin_name}.schedules.{schedule_id}.group_ids"
-                if override is not None
-                else f"{plugin_name} plugin.json schedule {schedule_id} group_ids"
-                if group_ids is not None
-                else "default_group_ids"
-            )
-            raw_target_groups = (
-                override
-                if override is not None
-                else group_ids
-                if group_ids is not None
-                else list(self.config.get("default_group_ids", []))
-            )
             try:
-                parsed_target_groups = _parse_positive_ids(raw_target_groups, field_name=field_name)
+                parsed_target_groups, _source = resolve_schedule_targets(
+                    self.config, plugin_name, schedule_id, group_ids
+                )
             except (TypeError, ValueError) as exc:
                 logger.error(
                     "Scheduled job skipped for %s because group IDs are invalid: %s",
@@ -201,11 +202,8 @@ class AppSchedulingMixin:
         )
         context = self.plugin_manager.build_context(plugin_name, principal=principal)
         try:
-            loaded = (
-                loaded_plugin if loaded_plugin is not None else self.plugin_manager.get(plugin_name)
-            )
             result = await invoke_loaded_plugin(
-                loaded, functools.partial(call_plugin_callback, handler, context)
+                loaded_plugin, functools.partial(call_plugin_callback, handler, context)
             )
 
             if delivery == "targeted":

@@ -12,26 +12,65 @@ import pytest
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.exporter import ExporterService
 from plugins.pendo.web.api.items import aggregate_items, list_items
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    _single_user_shanghai_settings,
-    _with_scheduled_delivery_contract,
-)
+from tests.helpers.pendo_test_support import ROOT, read_scheduled_delivery
 
 
 class TestPendoFinanceSummaries:
-    def test_weekly_finance_summary_sends_on_sunday_evening(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("sender_name", "now_utc", "task_name", "marker_name", "dates", "period_args"),
+        [
+            pytest.param(
+                "send_weekly_finance_summaries",
+                (2030, 1, 6, 13, 0),
+                "weekly_finance_summary",
+                "last_weekly_finance_summary_date",
+                ("2029-12-31", "2030-01-06", "2029-12-30", "2030-01-07"),
+                ("2030-W01", "2030-01-06", "12/31 - 01/06", "📆 本周财务总结"),
+                id="weekly-sunday-evening",
+            ),
+            pytest.param(
+                "send_month_end_finance_summaries",
+                (2030, 3, 31, 13, 0),
+                "month_end_finance_summary",
+                "last_month_end_finance_summary_date",
+                ("2030-03-01", "2030-03-31", "2030-02-28", "2030-04-01"),
+                ("2030-03", "2030-03-31", "2030/03/01 - 2030/03/31", "🧾 月底财务总结"),
+                id="month-end-evening",
+            ),
+        ],
+    )
+    def test_finance_summary_sends_at_period_end_evening(
+        self, db, monkeypatch, sender_name, now_utc, task_name, marker_name, dates, period_args
+    ):
         from datetime import datetime
 
         from plugins.pendo.commands import scheduled as scheduled_module
+        from plugins.pendo.utils.settings_utils import parse_custom_settings
 
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 1, 6, 13, 0, tzinfo=UTC)
+                base = datetime(*now_utc, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
+
+        period_key, period_end, period_label, period_title = period_args
+        titles = ("区间首日支出", "区间末日支出", "区间前一天支出", "区间后一天支出")
+        for index, (title, ledger_date) in enumerate(zip(titles, dates, strict=True)):
+            db.insert_item(
+                {
+                    "id"              : f"summary-item-{index}",
+                    "owner_id"        : "1001",
+                    "type"            : "ledger",
+                    "title"           : title,
+                    "amount_cents"    : 1234 + index,
+                    "transaction_type": "expense",
+                    "ledger_category" : "餐饮",
+                    "ledger_date"     : ledger_date,
+                }
+            )
+        db.update_user_settings("1001", {"timezone": "Asia/Shanghai"})
 
         actions = []
 
@@ -39,112 +78,25 @@ class TestPendoFinanceSummaries:
             actions.append(action)
             return True
 
-        async def fake_get_active_user_ids(_db):
-            return ["1001"]
-
-        generate_calls = []
-
-        async def fake_generate_summary(*_args, **_kwargs):
-            generate_calls.append(_args)
-            return "weekly-summary"
-
         monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-        monkeypatch.setattr(
-            scheduled_module, "get_user_settings_bundle_map", _single_user_shanghai_settings
-        )
-        monkeypatch.setattr(
-            scheduled_module, "_generate_finance_summary_content", fake_generate_summary
-        )
-        monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
 
-        db     = _with_scheduled_delivery_contract(SimpleNamespace())
         result = asyncio.run(
-            scheduled_module.send_weekly_finance_summaries(
-                SimpleNamespace(send_action=send_action), db
-            )
+            getattr(scheduled_module, sender_name)(SimpleNamespace(send_action=send_action), db)
         )
 
         assert result == []
         assert len(actions) == 1
         assert actions[0]["params"]["user_id"] == 1001
-        assert "weekly-summary" in actions[0]["params"]["message"][0]["data"]["text"]
-        assert generate_calls == [
-            (
-                db,
-                "1001",
-                scheduled_module._FinancePeriod(
-                    "2030-W01",
-                    "2029-12-31",
-                    "2030-01-06",
-                    "12/31 - 01/06",
-                    "📆 本周财务总结",
-                ),
-            )
-        ]
-
-    def test_month_end_finance_summary_sends_on_last_day_evening(self, monkeypatch):
-        from datetime import datetime
-
-        from plugins.pendo.commands import scheduled as scheduled_module
-
-        class _FixedDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                base = datetime(2030, 3, 31, 13, 0, tzinfo=UTC)
-                if tz is None:
-                    return base.replace(tzinfo=None)
-                return base.astimezone(tz)
-
-        actions = []
-
-        async def send_action(action):
-            actions.append(action)
-            return True
-
-        async def fake_get_active_user_ids(_db):
-            return ["1001"]
-
-        generate_calls = []
-
-        async def fake_generate_summary(*_args, **_kwargs):
-            generate_calls.append(_args)
-            return "month-summary"
-
-        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
-        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
-        monkeypatch.setattr(
-            scheduled_module, "get_user_settings_bundle_map", _single_user_shanghai_settings
-        )
-        monkeypatch.setattr(
-            scheduled_module, "_generate_finance_summary_content", fake_generate_summary
-        )
-        monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
-
-        db     = _with_scheduled_delivery_contract(SimpleNamespace())
-        result = asyncio.run(
-            scheduled_module.send_month_end_finance_summaries(
-                SimpleNamespace(send_action=send_action), db
-            )
-        )
-
-        assert result == []
-        assert len(actions) == 1
-        assert actions[0]["params"]["user_id"] == 1001
-        assert "month-summary" in actions[0]["params"]["message"][0]["data"]["text"]
-        assert generate_calls == [
-            (
-                db,
-                "1001",
-                scheduled_module._FinancePeriod(
-                    "2030-03",
-                    "2030-03-01",
-                    "2030-03-31",
-                    "2030/03/01 - 2030/03/31",
-                    "🧾 月底财务总结",
-                ),
-            )
-        ]
+        text = actions[0]["params"]["message"][0]["data"]["text"]
+        assert period_title in text
+        assert period_label in text
+        # 区间首日、末日两笔计入（12.34 + 12.35），区间前后一天的两笔不计入。
+        assert "共 2 笔流水" in text
+        assert "支出: ¥24.69" in text
+        assert parse_custom_settings(db.get_user_settings("1001"))[marker_name] == period_end
+        outbox = read_scheduled_delivery(db, task_name, "1001", period_key)
+        assert outbox is not None
+        assert outbox["state"] == "sent"
 
     def test_finance_summary_uses_amount_cents_and_ledger_date_range(self):
         import shutil

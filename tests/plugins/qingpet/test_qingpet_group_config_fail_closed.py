@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
-import os
 import sqlite3
-import tempfile
+import threading
 
 import pytest
 
@@ -15,21 +13,15 @@ from tests.helpers.assertions import text_segments_text
 GROUP_ID = 97531
 
 
-@pytest.fixture
-def config_db():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
-        db_path = file.name
-    database = Database(db_path)
+def _configure(database: Database) -> Database:
     assert database.update_group_config_field(GROUP_ID, "enabled", False)
     assert database.update_group_config_field(GROUP_ID, "trade_enabled", True)
-    try:
-        yield database, db_path
-    finally:
-        database.cleanup()
-        os.unlink(db_path)
-        backup_path = db_path + ".pre-migration.bak"
-        if os.path.exists(backup_path):
-            os.unlink(backup_path)
+    return database
+
+
+@pytest.fixture
+def config_db(qingpet_db: Database) -> Database:
+    return _configure(qingpet_db)
 
 
 def _row(database: Database) -> tuple:
@@ -58,7 +50,7 @@ def _row(database: Database) -> tuple:
     ],
 )
 def test_existing_corrupt_config_never_falls_back_or_overwrites_row(config_db, column: str, value):
-    database, _db_path = config_db
+    database = config_db
     database._get_connection().execute(
         f"UPDATE group_configs SET {column} = ? WHERE group_id = ?", (value, GROUP_ID)
     )
@@ -72,7 +64,7 @@ def test_existing_corrupt_config_never_falls_back_or_overwrites_row(config_db, c
 
 
 def test_missing_required_column_is_rejected(config_db):
-    database, _db_path = config_db
+    database    = config_db
     partial_row = (
         database._get_connection()
         .execute("SELECT group_id, enabled FROM group_configs WHERE group_id = ?", (GROUP_ID,))
@@ -85,18 +77,31 @@ def test_missing_required_column_is_rejected(config_db):
 
 
 def test_connection_failure_raises_stable_config_error_without_default(config_db, monkeypatch):
-    database, db_path = config_db
-    before = _row(database)
+    database                      = config_db
+    before                        = _row(database)
+    failures: list[BaseException] = []
 
-    def fail_connection():
+    def fail_connect(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(database, "_get_connection", fail_connection)
-    with pytest.raises(GroupConfigReadError) as error:
-        database.get_group_config(GROUP_ID)
+    def read_from_new_thread() -> None:
+        # 连接按线程缓存；新线程要重新建连接，建连接这一步在这里失败。
+        try:
+            database.get_group_config(GROUP_ID)
+        except BaseException as exc:
+            failures.append(exc)
 
-    assert error.value.group_id == GROUP_ID
-    verification = sqlite3.connect(db_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", fail_connect)
+        worker = threading.Thread(target=read_from_new_thread)
+        worker.start()
+        worker.join()
+
+    assert len(failures) == 1
+    error = failures[0]
+    assert isinstance(error, GroupConfigReadError)
+    assert error.group_id == GROUP_ID
+    verification = sqlite3.connect(database.db_path)
     try:
         persisted = verification.execute(
             """SELECT group_id, enabled, economy_multiplier, decay_multiplier,
@@ -110,7 +115,7 @@ def test_connection_failure_raises_stable_config_error_without_default(config_db
 
 
 def test_only_a_truly_missing_row_creates_product_default(config_db):
-    database, _db_path = config_db
+    database      = config_db
     missing_group = GROUP_ID + 1
     assert (
         database._get_connection()
@@ -131,27 +136,20 @@ def test_only_a_truly_missing_row_creates_product_default(config_db):
     assert row is not None and row["enabled"] == 1
 
 
-def test_main_route_fails_closed_and_admin_gets_repair_guidance(config_db):
-    database, _db_path = config_db
+@pytest.mark.asyncio
+async def test_main_route_fails_closed_and_admin_gets_repair_guidance(qingpet_runtime):
+    context, database = qingpet_runtime
+    _configure(database)
     database._get_connection().execute(
         "UPDATE group_configs SET sensitive_words = ? WHERE group_id = ?",
         ("not-json", GROUP_ID),
     )
     database._get_connection().commit()
-    before                    = _row(database)
-    original_db               = qingpet_main._db_instance
-    original_router           = qingpet_main._router
-    qingpet_main._db_instance = database
-    qingpet_main._router      = None
-    event                     = {"user_id": "ordinary-user", "group_id": GROUP_ID}
-    try:
-        ordinary   = text_segments_text(asyncio.run(qingpet_main.handle("pet", "状态", event, None)))
-        management = text_segments_text(
-            asyncio.run(qingpet_main.handle("pet", "管理 配置", event, None))
-        )
-    finally:
-        qingpet_main._db_instance = original_db
-        qingpet_main._router      = original_router
+    before = _row(database)
+    event  = {"user_id": "ordinary-user", "group_id": GROUP_ID}
+
+    ordinary   = text_segments_text(await qingpet_main.handle("pet", "状态", event, context))
+    management = text_segments_text(await qingpet_main.handle("pet", "管理 配置", event, context))
 
     assert "安全停用" in ordinary
     assert "group_configs" in management

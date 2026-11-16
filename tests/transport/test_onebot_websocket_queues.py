@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import tests.helpers.onebot_test_support as _fixture_support
-from tests.helpers.onebot_test_support import (
-    OneBotWsClient,
-    _QueuedOneBotEvent,
-)
+from core.onebot import _QueuedOneBotEvent
+from tests.helpers.onebot_test_support import OneBotWsClient
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
 
@@ -106,9 +104,9 @@ class TestOneBotWebSocketQueues:
         assert handled == [{"user_id": 1}]
 
     @pytest.mark.asyncio
-    async def test_drain_queue_does_not_suppress_an_unexpected_handler_failure(self, monkeypatch):
+    async def test_drain_queue_does_not_suppress_a_handler_cancellation(self):
         client                                   = OneBotWsClient("ws://localhost:3000", "")
-        key                                      = "user:unhandled-error"
+        key                                      = "user:handler-cancelled"
         queue: asyncio.Queue[_QueuedOneBotEvent] = asyncio.Queue()
         queue.put_nowait(
             _QueuedOneBotEvent(
@@ -118,10 +116,9 @@ class TestOneBotWebSocketQueues:
         )
         client._message_queues[key] = queue
 
-        async def fail_handler(*_args, **_kwargs):
-            raise RuntimeError("handler exploded")
+        async def cancelled_handler(_event):
+            # 处理器里的取消不会被事件处理的异常隔离吞掉，必须原样传出 drainer。
+            raise asyncio.CancelledError
 
-        monkeypatch.setattr(client, "_handle_event_safely", fail_handler)
-
-        with pytest.raises(RuntimeError, match="handler exploded"):
-            await client._drain_queue(key, AsyncMock())
+        with pytest.raises(asyncio.CancelledError):
+            await client._drain_queue(key, cancelled_handler)

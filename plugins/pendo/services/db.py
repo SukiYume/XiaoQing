@@ -3431,7 +3431,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         return settings
 
-    def update_user_settings(self, user_id: str, settings: dict[str, Any]) -> bool:
+    def update_user_settings(self, user_id: str, settings: dict[str, Any]) -> None:
         # 进程内锁覆盖 SQLite 取得写锁前的短窗口；BEGIN IMMEDIATE 同时串行化
         # 其他进程的设置更新，防止两个 JSON patch 互相覆盖。
         with self._settings_lock, self.transaction(immediate=True) as conn:
@@ -3506,7 +3506,6 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     )
 
         self.cache_invalidate(self._cache_key("settings", user_id))
-        return True
 
     # ==================== 日志操作 ====================
 

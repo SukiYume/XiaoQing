@@ -20,6 +20,8 @@ from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import ChatRuntime, ChatRuntimeState
 from plugins.xiaoqing_chat.store_binding import bind_all_stores
+from tests.helpers.reply_checker_test_support import checker_verdict
+from tests.helpers.xiaoqing_chat_test_support import ScriptedChatModel
 
 MODEL = {
     "secrets": {},
@@ -159,6 +161,10 @@ async def _mine(state, text: str, items: list[dict]) -> None:
             messages=[StoredMessage(role="user", name="用户", content=text, ts=time.time())],
             **MODEL,
         )
+
+
+def _gateway_response(payload) -> dict:
+    return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
 
 
 def _record(state, term: str) -> JargonRecord:
@@ -350,15 +356,19 @@ async def test_empty_expression_result_still_mines_jargon(state, tmp_path):
     for index in range(10):
         state.memory_store.append("g1", role="user", name="用户", content=f"新梗样本 {index}")
     context = SimpleNamespace(data_dir=tmp_path, logger=MagicMock())
+    no_expressions = _gateway_response([])
+    one_meme       = _gateway_response(
+        [{"term": "新梗样本", "is_jargon": True, "meaning": "测试用的词", "evidence": "新梗样本 3"}]
+    )
     with (
         patch(
-            "plugins.xiaoqing_chat.expression.bw_message_recorder.learn_from_messages",
-            new=AsyncMock(return_value=[]),
-        ),
+            "plugins.xiaoqing_chat.expression.bw_expression_learner.chat_completions_raw_with_profile",
+            new=AsyncMock(return_value=(no_expressions, "test")),
+        ) as learn_call,
         patch(
-            "plugins.xiaoqing_chat.expression.bw_message_recorder.mine_jargon",
-            new=AsyncMock(return_value=1),
-        ) as mine,
+            "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_profile",
+            new=AsyncMock(return_value=(one_meme, "test")),
+        ) as mine_call,
     ):
         changed = await extract_and_learn(
             context              = context,
@@ -374,22 +384,26 @@ async def test_empty_expression_result_still_mines_jargon(state, tmp_path):
             max_store            = 2000,
             **MODEL,
         )
+    learn_call.assert_awaited_once()
+    mine_call.assert_awaited_once()
     assert changed == 1
-    mine.assert_awaited_once()
+    assert _record(state, "新梗样本").meaning == "测试用的词"
     assert state.bw_recorder.get_last_time("g1") > 0
 
 
 @pytest.mark.asyncio
 async def test_reset_during_expression_review_drops_new_learned_record(state, tmp_path):
     started, release = asyncio.Event(), asyncio.Event()
+    approved = _gateway_response({"checked": True, "rejected": False, "reason": "approved"})
 
     async def review(**kwargs):
         started.set()
         await release.wait()
-        return True, False, "approved", "", ""
+        return approved, "test"
 
+    # 屏障放在审核表达的那次模型调用上：重置发生在审核进行当中。
     with patch(
-        "plugins.xiaoqing_chat.expression.bw_expression_learner.single_expression_check",
+        "plugins.xiaoqing_chat.expression.bw_expression_learner.chat_completions_raw_with_profile",
         side_effect=review,
     ):
         task = asyncio.create_task(
@@ -417,32 +431,31 @@ async def test_reset_during_expression_review_drops_new_learned_record(state, tm
 
 @pytest.mark.asyncio
 async def test_profile_question_uses_semantic_checker_for_natural_boundary():
-    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    remote = AsyncMock(return_value=ReplyCheckResult(True, "自然保留私人资料", False))
-    with patch("plugins.xiaoqing_chat.llm.reply_checker._llm_check", remote):
-        result = await check_reply(
-            secrets                          = {"_ai": object()},
-            bot_name                         = "小青",
-            reply                            = "学校这些就先不说啦，聊番我可以。",
-            goal                             = "自然聊天",
-            current_text                     = "小青，你在哪所大学？",
-            policy_text                      = "",
-            grounding_text                   = XiaoQingChatConfig().personality.card.facts("小青"),
-            history                          = [],
-            chat_history_text                = "用户：小青，你在哪所大学？",
-            enable_llm_checker               = True,
-            max_repeat_compare               = 3,
-            similarity_threshold             = 0.9,
-            max_assistant_in_row             = 5,
-            timeout_seconds                  = 1,
-            max_retry                        = 0,
-            retry_interval_seconds           = 0,
-            allow_low_stakes_persona_fiction = True,
-        )
+    model = ScriptedChatModel(checker=checker_verdict(reason="自然保留私人资料"))
+    result = await check_reply(
+        secrets                          = {"_ai": model},
+        bot_name                         = "小青",
+        reply                            = "学校这些就先不说啦，聊番我可以。",
+        goal                             = "自然聊天",
+        current_text                     = "小青，你在哪所大学？",
+        policy_text                      = "",
+        grounding_text                   = XiaoQingChatConfig().personality.card.facts("小青"),
+        history                          = [],
+        chat_history_text                = "用户：小青，你在哪所大学？",
+        enable_llm_checker               = True,
+        max_repeat_compare               = 3,
+        similarity_threshold             = 0.9,
+        max_assistant_in_row             = 5,
+        timeout_seconds                  = 1,
+        max_retry                        = 0,
+        retry_interval_seconds           = 0,
+        allow_low_stakes_persona_fiction = True,
+    )
     assert result.suitable
-    remote.assert_awaited_once()
+    assert len(model.calls_of("checker")) == 1
+    assert not model.unscripted
 
 
 def test_only_confirmed_group_meanings_count_as_already_explained(state, tmp_path):

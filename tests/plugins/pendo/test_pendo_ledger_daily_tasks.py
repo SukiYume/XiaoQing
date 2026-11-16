@@ -6,10 +6,9 @@ import asyncio
 import json
 import shutil
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,15 +16,15 @@ from tests.helpers.pendo_review_test_support import (
     Database,
     TaskHandler,
     ThreadPoolExecutor,
-    ZoneInfo,
-    _make_temp_db,
+    make_temp_db,
 )
+from tests.helpers.pendo_test_support import freeze_pendo_clock
 
 
 def test_ledger_cli_edit_recomputes_amount_cents_when_amount_changes():
     from plugins.pendo.handlers.ledger import LedgerHandler
 
-    temp_dir, db = _make_temp_db("pendo_review_ledger_amount_edit")
+    temp_dir, db = make_temp_db("pendo_review_ledger_amount_edit")
     owner_id = "u-ledger-cli"
 
     try:
@@ -135,9 +134,7 @@ def test_ledger_explicit_type_preserves_a_description_named_transfer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(db) -> None:
     from plugins.pendo.handlers.ledger import LedgerHandler
 
     class _Session(dict):
@@ -152,12 +149,10 @@ async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
             self.end_calls += 1
             return True
 
-    handler     = LedgerHandler(SimpleNamespace())
+    handler     = LedgerHandler(db)
     unavailable = await handler.start_add_session("u-scoped", SimpleNamespace())
     assert unavailable == {"status": "error", "message": "❌ 无法创建记账会话，请稍后重试"}
 
-    save_item = AsyncMock(return_value={"status": "success", "message": "saved"})
-    monkeypatch.setattr(handler, "_save_ledger_item", save_item)
     context = _Context()
     session = _Session(
         {
@@ -176,13 +171,13 @@ async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
 
     result = await handler.handle_session_step("u-scoped", "0", session, context)
 
-    assert result == {"status": "success", "message": "saved"}
+    assert result["status"] == "success"
     assert context.end_calls == 1
-    save_item.assert_awaited_once()
-    saved_user, saved_data, saved_group = save_item.await_args.args
-    assert saved_user == "u-scoped"
-    assert "owner_id" not in saved_data
-    assert saved_group == 42
+    saved = db.get_item(result["item_id"], "u-scoped")
+    assert saved is not None
+    assert saved.title == "午饭"
+    assert saved.context == {"group_id": 42}
+    assert db.get_items("u-spoofed", filters={"type": "ledger"}) == []
 
     corrupt_context = _Context()
     corrupt         = await handler.handle_session_step(
@@ -197,6 +192,7 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from plugins.pendo.handlers.ledger import LedgerHandler
+    from plugins.pendo.utils import time_utils
 
     db       = Database(str(tmp_path / "pendo-ledger-user-clock.db"))
     owner_id = "u-ledger-clock"
@@ -224,10 +220,8 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
                 }
             )
 
-        monkeypatch.setattr(
-            "plugins.pendo.utils.time_utils.now_in_timezone",
-            lambda _owner_id, _db: datetime(2030, 1, 1, 0, 30, 0),
-        )
+        # 用户（默认 Asia/Shanghai）此刻是 2030-01-01 00:30，服务器 UTC 还在 2029-12-31。
+        freeze_pendo_clock(monkeypatch, datetime(2029, 12, 31, 16, 30, tzinfo=UTC), time_utils)
         handler = LedgerHandler(db)
 
         listing         = await handler.list_ledger(owner_id, "month all", SimpleNamespace())
@@ -254,7 +248,7 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
 def test_ledger_type_switch_clears_transfer_fields_and_rejects_ambiguous_edits() -> None:
     from plugins.pendo.handlers.ledger import LedgerHandler
 
-    temp_dir, db = _make_temp_db("pendo_review_ledger_type_switch")
+    temp_dir, db = make_temp_db("pendo_review_ledger_type_switch")
     owner_id = "u-ledger-switch"
     item_id  = "ledger-transfer"
     try:
@@ -312,7 +306,7 @@ def test_ledger_type_switch_clears_transfer_fields_and_rejects_ambiguous_edits()
 
 
 def test_daily_briefing_orders_urgent_tasks_first():
-    temp_dir, db = _make_temp_db("pendo_review_briefing_priority")
+    temp_dir, db = make_temp_db("pendo_review_briefing_priority")
     owner_id = "u-briefing-priority"
 
     try:
@@ -360,7 +354,7 @@ def test_daily_briefing_orders_urgent_tasks_first():
 
 
 def test_daily_briefing_resolves_mixed_iso_values_in_user_timezone():
-    temp_dir, db = _make_temp_db("pendo_review_briefing_mixed_timezones")
+    temp_dir, db = make_temp_db("pendo_review_briefing_mixed_timezones")
     owner_id = "u-briefing-mixed-timezones"
 
     try:
@@ -400,7 +394,7 @@ def test_daily_briefing_resolves_mixed_iso_values_in_user_timezone():
 
 
 def test_daily_briefing_excludes_cancelled_tasks():
-    temp_dir, db = _make_temp_db("pendo_review_briefing_cancelled")
+    temp_dir, db = make_temp_db("pendo_review_briefing_cancelled")
     owner_id = "u-briefing-cancelled"
 
     try:
@@ -449,7 +443,7 @@ def test_daily_briefing_excludes_cancelled_tasks():
 
 
 def test_daily_migration_updates_plan_date_and_invalidates_task_cache():
-    temp_dir, db = _make_temp_db("pendo_review_task_migration_cache")
+    temp_dir, db = make_temp_db("pendo_review_task_migration_cache")
     owner_id = "u-task-migration-cache"
 
     try:
@@ -513,7 +507,7 @@ def test_daily_migration_updates_plan_date_and_invalidates_task_cache():
 def test_daily_migration_rechecks_business_state_and_rolls_back_marker_with_audit_failure(
     monkeypatch,
 ):
-    temp_dir, db = _make_temp_db("pendo_review_task_migration_atomic")
+    temp_dir, db = make_temp_db("pendo_review_task_migration_atomic")
     owner_id = "u-task-migration-atomic"
     try:
         for item_id, status, plan_date, deleted in (
@@ -564,7 +558,7 @@ def test_daily_migration_rechecks_business_state_and_rolls_back_marker_with_audi
 
 
 def test_daily_migration_is_atomic_across_database_instances():
-    temp_dir, db1 = _make_temp_db("pendo_review_task_migration_instances")
+    temp_dir, db1 = make_temp_db("pendo_review_task_migration_instances")
     db2      = Database(db1.db_path)
     owner_id = "u-task-migration-instances"
     try:
@@ -613,8 +607,8 @@ def test_daily_migration_is_atomic_across_database_instances():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_task_parser_uses_user_timezone_for_default_plan_date(monkeypatch):
-    from plugins.pendo.handlers import task as task_module
+def test_task_parser_uses_user_timezone_for_default_plan_date(monkeypatch, db):
+    from plugins.pendo.utils import time_utils
     from plugins.pendo.utils import validators as validators_module
 
     class _ServerDatetime(datetime):
@@ -623,23 +617,23 @@ def test_task_parser_uses_user_timezone_for_default_plan_date(monkeypatch):
             base = cls(2030, 1, 1, 10, 0, 0)
             return base if tz is None else base.replace(tzinfo=tz)
 
+    db.update_user_settings("u-la", {"timezone": "America/Los_Angeles"})
     monkeypatch.setattr(validators_module, "datetime", _ServerDatetime)
-    monkeypatch.setattr(
-        task_module,
-        "now_in_timezone",
-        lambda user_id, db: datetime(2030, 1, 1, 21, 0, 0, tzinfo=ZoneInfo("America/Los_Angeles")),
+    # 洛杉矶此刻是 2030-01-01 21:00（已过 20 点，默认计划日顺延到次日）；服务器本地仍是上午。
+    freeze_pendo_clock(monkeypatch, datetime(2030, 1, 2, 5, 0, tzinfo=UTC), time_utils)
+
+    result = asyncio.run(
+        TaskHandler(db=db).add_task("u-la", "Write weekly recap", SimpleNamespace())
     )
 
-    handler = TaskHandler(db=SimpleNamespace())
-
-    parsed = handler._parse_task_text("Write weekly recap", "u-la")
-
-    assert parsed["category"] == "未分类"
-    assert parsed["plan_date"] == "2030-01-02"
+    assert result["status"] == "success"
+    parsed = db.get_item(result["item_id"], "u-la")
+    assert parsed.category == "未分类"
+    assert parsed.plan_date == "2030-01-02"
 
 
 def test_task_today_shortcut_uses_user_timezone(monkeypatch, db):
-    from plugins.pendo.handlers import task as task_module
+    from plugins.pendo.utils import time_utils
 
     db.update_user_settings("u-la", {"timezone": "America/Los_Angeles"})
     for key, title, day in [
@@ -656,18 +650,15 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch, db):
                 "plan_date": day,
             }
         )
-    monkeypatch.setattr(
-        task_module,
-        "now_in_timezone",
-        lambda user_id, db: datetime(2030, 1, 1, 23, 30, tzinfo=ZoneInfo("America/Los_Angeles")),
-    )
+    # 洛杉矶此刻是 2030-01-01 23:30，服务器 UTC 已是 01-02。
+    freeze_pendo_clock(monkeypatch, datetime(2030, 1, 2, 7, 30, tzinfo=UTC), time_utils)
     result = asyncio.run(TaskHandler(db).list_tasks("u-la", "today", SimpleNamespace()))
     assert "LA today" in result["message"]
     assert "Server tomorrow" not in result["message"]
 
 
 def test_todo_edit_only_updates_explicit_fields_and_accepts_24_hour_deadline():
-    temp_dir, db = _make_temp_db("pendo_review_todo_edit_partial")
+    temp_dir, db = make_temp_db("pendo_review_todo_edit_partial")
     owner_id = "u-todo-edit"
 
     try:
@@ -707,7 +698,7 @@ def test_todo_edit_only_updates_explicit_fields_and_accepts_24_hour_deadline():
 
 
 def test_todo_edit_title_phrase_updates_title_only():
-    temp_dir, db = _make_temp_db("pendo_review_todo_title_phrase")
+    temp_dir, db = make_temp_db("pendo_review_todo_title_phrase")
     owner_id = "u-todo-title-phrase"
 
     try:
@@ -748,7 +739,7 @@ def test_todo_edit_title_phrase_updates_title_only():
 
 
 def test_todo_edit_quoted_title_keeps_hash_literal_before_metadata():
-    temp_dir, db = _make_temp_db("pendo_review_todo_quoted_title")
+    temp_dir, db = make_temp_db("pendo_review_todo_quoted_title")
     owner_id = "u-todo-quoted-title"
 
     try:
@@ -785,7 +776,7 @@ def test_todo_edit_quoted_title_keeps_hash_literal_before_metadata():
 
 
 def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
-    temp_dir, db = _make_temp_db("pendo_review_todo_edit_semantics")
+    temp_dir, db = make_temp_db("pendo_review_todo_edit_semantics")
     owner_id = "u-todo-edit-semantics"
 
     def insert_task(item_id: str):
@@ -832,7 +823,7 @@ def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
 
 
 def test_todo_edit_keeps_title_when_only_reminder_changes():
-    temp_dir, db = _make_temp_db("pendo_review_todo_edit_reminder")
+    temp_dir, db = make_temp_db("pendo_review_todo_edit_reminder")
     owner_id = "u-todo-reminder"
 
     try:
