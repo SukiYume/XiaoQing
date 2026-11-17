@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from tests.helpers.filesystem_faults import fail_replace_onto
 from tests.helpers.qingssh_test_support import (
     FakeChannel,
@@ -511,7 +512,7 @@ async def test_download_file_removes_partial_temporary_file_on_failure(tmp_path)
     )
 
     assert success is False
-    assert "XQ-PLUGIN-UNEXPECTED" in message
+    assert PUBLIC_ERROR_PREFIX in message
     assert "req-qingssh-download" in message
     assert "DOWNLOAD_PRIVATE_CANARY" not in message
     assert "download.part" not in message

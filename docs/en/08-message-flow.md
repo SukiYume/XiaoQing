@@ -344,7 +344,20 @@ Administrator commands, permitted business commands, and active sessions continu
 
 ## 🩺 13. Observation and troubleshooting
 
-Each event turn has a request ID. Check logs in this order:
+Each event turn has a request ID. It is the second bracketed column on every line of `logs/xiaoqing.log`, for example `[3f9a1c2e]`.
+The ID is created when the event comes in: for active WebSocket when the client receives the event, for inbound HTTP once per request, and for inbound WebSocket once per frame.
+From receipt through plugin handling and reply sends to receipt settlement, Core and plugin lines for the same message carry the same ID, so searching for it follows the whole turn.
+Handling failures (`ws.handler.failed` / `ws.handler.fatal`), `ws.queue.full` for the oldest event dropped from a full queue, and the receipt rollback of an inbound result that was never sent (returned after its handling was cancelled, discarded, or caught by shutdown) are each logged under their own event's ID.
+Inbound scheduler workers and the active WebSocket's per-sender queue drainers handle many events in turn and carry no ID of their own.
+A command run on someone's behalf appends `.command.<operation-id>` to the ID of the turn that started it. Each scheduled-task run has its own ID. Lines outside any request show `-`.
+
+Receipt lines of the two entry paths:
+
+- Active WebSocket logs one DEBUG `ws.event.received` (`core.onebot`) per event it receives; action-response frames are not logged.
+- The inbound HTTP listener logs one `inbound.http.access` (`core.server`) per request, with `method` (standard methods, otherwise `OTHER`), `status`, `route` (the matched route pattern, omitted when nothing matched), and `elapsed_s`. Status below 400 is DEBUG; 400 and above is WARNING. For `POST /event` the line carries that event's request ID; other routes show `-`. The request path, query string, headers, user agent, and peer address are not recorded, and aiohttp's own access log is not written.
+
+Turn the DEBUG receipt lines on in `logging.levels`, for example `{"core.onebot": "DEBUG", "core.server": "DEBUG"}`.
+Check logs in this order:
 
 1. Inbound or active WebSocket receipt
 2. Token and event-model validation
@@ -372,6 +385,7 @@ Each event turn has a request ID. Check logs in this order:
 | Plugin generations and execution | `core/plugin_generation.py`, `core/plugin_runtime.py`, `core/plugin_execution.py` |
 | Outbound receipts | `core/delivery.py`, `core/app_delivery.py` |
 | Configuration revision | `core/config.py`, `core/app_config_apply.py` |
+| Logging and request-ID scopes | `core/log.py` |
 
 ## 🧭 Next steps
 

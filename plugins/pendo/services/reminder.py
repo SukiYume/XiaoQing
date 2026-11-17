@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, cast
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 from ..models.item import get_item_type_value
 from ..utils.formatters import ItemFormatter
@@ -24,7 +26,7 @@ from ..utils.time_utils import (
 if TYPE_CHECKING:
     from .db import Database
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class ReminderService:
@@ -66,7 +68,7 @@ class ReminderService:
             try:
                 messages.extend(self._collect_item_reminders(item))
             except Exception as exc:
-                logger.warning("处理提醒条目失败 error_type=%s", type(exc).__name__)
+                log.warning(LogEvent("reminder.item_failed", error=exc))
         return messages
 
     def _prune_reminder_history(self) -> None:
@@ -80,7 +82,7 @@ class ReminderService:
                 before=current - timedelta(days=PendoConfig.REMINDER_LOG_RETENTION_DAYS)
             )
         except Exception as exc:
-            logger.warning("清理提醒历史失败 error_type=%s", type(exc).__name__)
+            log.error(LogEvent("reminder.history_prune_failed", error=exc))
             return
         self._last_history_prune_day = current.date()
 
@@ -96,7 +98,7 @@ class ReminderService:
         if not remind_times:
             return []
         current_time = self._current_user_time(item.owner_id)
-        log_map = {str(log["remind_time"]): log for log in self.db.get_reminder_logs(item.id)}
+        log_map = {str(row["remind_time"]): row for row in self.db.get_reminder_logs(item.id)}
         messages: list[dict[str, Any]] = []
         for remind_time in remind_times:
             try:
@@ -108,7 +110,7 @@ class ReminderService:
                     settings,
                 )
             except Exception as exc:
-                logger.warning("处理提醒点失败 error_type=%s", type(exc).__name__)
+                log.warning(LogEvent("reminder.point_failed", error=exc))
                 continue
             if delivery is not None:
                 messages.append(delivery)
@@ -119,7 +121,7 @@ class ReminderService:
         item: Any,
         remind_time: str,
         current_time: datetime,
-        log: dict[str, Any] | None,
+        reminder_log: dict[str, Any] | None,
         settings: dict[str, Any],
     ) -> dict[str, Any] | None:
         """原子领取一个首次提醒，并在静默时段延迟或生成投递消息。"""
@@ -129,11 +131,11 @@ class ReminderService:
         # 已领取的提醒在进程中断后仍进入恢复窗口，租约负责阻止并发投递。
         # 未尝试的历史提醒继续使用较短的首次检查窗口。
         overdue_seconds   = (current_time - scheduled_time).total_seconds()
-        failure_count     = log.get("failure_count", 0) if log else 0
+        failure_count     = reminder_log.get("failure_count", 0) if reminder_log else 0
         is_delivery_retry = (type(failure_count) is int and failure_count > 0) or bool(
-            log and log.get("state") == "claimed"
+            reminder_log and reminder_log.get("state") == "claimed"
         )
-        if log and log.get("confirmed_at"):
+        if reminder_log and reminder_log.get("confirmed_at"):
             return None
         # 已入队的提醒由数据库按上次检查时刻判定是否过期（过期的已标成 confirmed）；
         # 这里只拦没有队列行的旧数据和超过保鲜期的重试。
@@ -141,7 +143,7 @@ class ReminderService:
             PendoConfig.REMINDER_STALE_AFTER_SECONDS
             if is_delivery_retry
             else PendoConfig.REMINDER_CATCH_UP_SECONDS
-            if log
+            if reminder_log
             else PendoConfig.REMINDER_CHECK_WINDOW_SECONDS
         )
         if overdue_seconds > allowed_overdue_seconds:
@@ -191,14 +193,14 @@ class ReminderService:
         try:
             logs = self.db.get_unconfirmed_sent_reminders()
         except Exception as exc:
-            logger.warning("读取未确认提醒失败 error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("reminder.unconfirmed_read_failed", error=exc))
             return []
 
-        for log in logs:
+        for reminder_log in logs:
             try:
-                delivery = self._build_repeat_delivery(log, current_time)
+                delivery = self._build_repeat_delivery(reminder_log, current_time)
             except Exception as exc:
-                logger.warning("处理重复提醒失败 error_type=%s", type(exc).__name__)
+                log.warning(LogEvent("reminder.repeat_failed", error=exc))
                 continue
             if delivery is not None:
                 messages.append(delivery)
@@ -206,13 +208,13 @@ class ReminderService:
 
     def _build_repeat_delivery(
         self,
-        log: dict[str, Any],
+        reminder_log: dict[str, Any],
         current_time: datetime | None,
     ) -> dict[str, Any] | None:
         """检查一个未确认提醒，必要时领取下一次重复投递。"""
-        item_id      = str(log["item_id"])
-        remind_time  = str(log["remind_time"])
-        repeat_count = int(log["repeat_count"])
+        item_id      = str(reminder_log["item_id"])
+        remind_time  = str(reminder_log["remind_time"])
+        repeat_count = int(reminder_log["repeat_count"])
         item         = self.db.get_item(item_id)
         if not item or not self._is_active_reminder_item(item):
             return None
@@ -221,7 +223,7 @@ class ReminderService:
         if not parse_custom_settings(settings).get("reminder_enabled", True):
             return None
         user_now = current_time or self._current_user_time(item.owner_id)
-        if not self._repeat_is_due(log, item, user_now, settings):
+        if not self._repeat_is_due(reminder_log, item, user_now, settings):
             return None
 
         claim_token = self.db.claim_reminder_repeat(
@@ -255,32 +257,32 @@ class ReminderService:
 
     def _repeat_is_due(
         self,
-        log: dict[str, Any],
+        reminder_log: dict[str, Any],
         item: Any,
         user_now: datetime,
         settings: dict[str, Any],
     ) -> bool:
         """判断重复间隔、最大次数和静默时段是否允许本次投递。"""
-        repeat_count = int(log["repeat_count"])
-        last_sent_at = self._parse_user_time(str(log["last_sent_at"]), item.owner_id)
+        repeat_count = int(reminder_log["repeat_count"])
+        last_sent_at = self._parse_user_time(str(reminder_log["last_sent_at"]), item.owner_id)
         # 持续时间在 UTC 时间轴上计算：同一 ZoneInfo 的 datetime 相减按钟面差，
         # 夏令时回拨或跳时会得到负值或错误间隔。本地时间只用于静默时段判断。
         seconds_since_last = user_now.timestamp() - last_sent_at.timestamp()
         if repeat_count >= PendoConfig.REMINDER_MAX_REPEATS + 1:
             if seconds_since_last >= PendoConfig.REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS:
                 self.db.confirm_reminder(
-                    str(log["item_id"]),
+                    str(reminder_log["item_id"]),
                     user_action = "auto_confirmed",
-                    remind_time = str(log["remind_time"]),
+                    remind_time = str(reminder_log["remind_time"]),
                 )
             return False
         # 服务长期离线后，不应把数月或数年前的“未确认”提醒重新复活。
         # 一天内仍保持原有的 5 分钟重复节奏，超过保鲜期才自动结束历史提醒。
         if seconds_since_last >= PendoConfig.REMINDER_STALE_AFTER_SECONDS:
             self.db.confirm_reminder(
-                str(log["item_id"]),
+                str(reminder_log["item_id"]),
                 user_action = "auto_confirmed",
-                remind_time = str(log["remind_time"]),
+                remind_time = str(reminder_log["remind_time"]),
             )
             return False
         if seconds_since_last < PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS:
@@ -315,7 +317,7 @@ class ReminderService:
             try:
                 event_time = self._parse_user_time(str(start_time), item.owner_id)
             except (TypeError, ValueError):
-                logger.warning("提醒条目开始时间无效")
+                log.warning(LogEvent("reminder.start_time_invalid"))
             else:
                 if self._is_in_quiet_hours(item.owner_id, event_time, settings=settings):
                     return False
@@ -407,7 +409,7 @@ class ReminderService:
                     else item_start + default_duration
                 )
             except (TypeError, ValueError):
-                logger.warning("跳过时间格式无效的已有日程")
+                log.warning(LogEvent("event.skipped", reason_code="invalid_time"))
                 continue
             candidates.append((item_start, item_end, item))
 
@@ -544,10 +546,7 @@ class ReminderService:
                 ),
             )
         except Exception as exc:
-            logger.warning(
-                "读取日程集合失败 error_type=%s",
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("event_collection.read_failed", error=exc))
             return None
 
     def _format_reminder_slot(
@@ -634,7 +633,7 @@ class ReminderService:
             return start_minutes <= current < end_minutes
         except Exception as exc:
             # 设置异常不能阻塞整个提醒调度；记录异常类型后按“非静默”处理。
-            logger.warning("读取静默时段失败 error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("quiet_hours.read_failed", error=exc))
             return False
 
     def _next_quiet_hours_end(
@@ -654,7 +653,7 @@ class ReminderService:
                 ),
             )
         except Exception as exc:
-            logger.warning("读取静默结束时间失败 error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("quiet_hours_end.read_failed", error=exc))
             end_minutes = None
         if end_minutes is None:
             return current_time + timedelta(minutes=1)

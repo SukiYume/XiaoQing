@@ -17,11 +17,12 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from core.interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from tests.helpers.arxiv_filter_test_support import (
     ArxivWorld,
     install_fake_encoder,
@@ -72,7 +73,6 @@ def mock_context(temp_plugin_dir):
             self.data_dir   = plugin_dir / "data"
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self.config = {}
-            self.logger = MagicMock()
             self.principal = PluginPrincipal(kind="lifecycle")
             self.capabilities = PluginCapabilities()
             self.state: dict  = {}
@@ -301,7 +301,7 @@ class TestHandle:
 
         assert result is not None
         result_text = str(result)
-        assert "XQ-PLUGIN-UNEXPECTED" in result_text
+        assert PUBLIC_ERROR_PREFIX in result_text
 
 
 # ============================================================
@@ -380,7 +380,7 @@ class TestRunFilter:
 
         assert result.succeeded is False
         assert result.outcome == "inference_error"
-        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+        assert PUBLIC_ERROR_PREFIX in str(result)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -408,7 +408,7 @@ class TestRunFilter:
         assert result is not None
         assert result.outcome == outcome
         result_text = str(result)
-        assert "XQ-PLUGIN-UNEXPECTED" in result_text
+        assert PUBLIC_ERROR_PREFIX in result_text
 
 
 # ============================================================
@@ -501,7 +501,7 @@ class TestCheckArxivUpdate:
 
         result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
 
-        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+        assert PUBLIC_ERROR_PREFIX in str(result)
         assert (
             arxiv_filter._should_send_today(
                 mock_context.data_dir,

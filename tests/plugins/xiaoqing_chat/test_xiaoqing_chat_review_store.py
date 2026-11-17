@@ -226,8 +226,6 @@ def test_structural_corruption_recovers_valid_backup(tmp_path, primary):
             raise ValueError("invalid schema")
         return (value, False)
 
-    result = _load_json_document(
-        path, description="test", default_factory=dict, normalize=normalize
-    )
+    result = _load_json_document(path, document="test", default_factory=dict, normalize=normalize)
     assert result["goal"] == "keep"
     assert path.read_bytes() == backup.read_bytes() == original

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,12 +20,14 @@ from core.image_validation import (
     ImageValidationError,
     validate_image_bytes,
 )
+from core.log import LogEvent
 
 from ..chat_runtime import optional_capability
-from ..logging_utils import log_step
 
 if TYPE_CHECKING:
     from ..runtime_state import ChatRuntime
+
+log = logging.getLogger(__name__)
 
 _MAX_TEXT_CHARS       = 500
 _MAX_RECENT_ITEMS     = 8
@@ -314,42 +317,24 @@ async def fetch_online_life(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "reply.online_life.error",
-            fields  = {"error_type": type(exc).__name__},
-        )
+        log.info(LogEvent("reply.online_life.error", chat_id=chat_id, error=exc))
         return EMPTY_ONLINE_LIFE
     if online.verified_terms and state is not None and chat_id:
-        await _confirm_verified(context, runtime, state, chat_id, online.verified_terms)
+        await _confirm_verified(context, state, chat_id, online.verified_terms)
     return online
 
 
 async def _confirm_verified(
-    context: Any, runtime: ChatRuntime, state: Any, chat_id: str, rows: Sequence[tuple[str, str]]
+    context: Any, state: Any, chat_id: str, rows: Sequence[tuple[str, str]]
 ) -> None:
     """回写黑话库失败只记日志，不影响这一轮拿到的网上生活。"""
 
     try:
         changed = await asyncio.to_thread(confirm_jargon, state, context.data_dir, chat_id, rows)
     except Exception as exc:
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "reply.online_life.jargon_confirm_error",
-            fields  = {"error_type": type(exc).__name__},
-        )
+        log.info(LogEvent("reply.online_life.jargon_confirm_error", chat_id=chat_id, error=exc))
         return
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "reply.online_life.jargon_confirmed",
-        fields  = {"count": changed},
-    )
+    log.info(LogEvent("reply.online_life.jargon_confirmed", chat_id=chat_id, count=changed))
 
 
 # ───────────────────────────── 梗图同步 ─────────────────────────────
@@ -457,25 +442,13 @@ async def _apply_page(context: Any, runtime: ChatRuntime, page: dict[str, Any]) 
                 )
             )
         except Exception as exc:
-            log_step(
-                context,
-                runtime,
-                chat_id = "",
-                step    = "life.memes.import_error",
-                fields  = {"error_type": type(exc).__name__},
-            )
+            log.info(LogEvent("life.memes.import_error", error=exc))
     for sha in page.get("revoked", []) if isinstance(page.get("revoked"), list) else []:
         if isinstance(sha, str):
             try:
                 changed += bool(await run_media_blocking(remove_external_emoji, context, sha))
             except Exception as exc:
-                log_step(
-                    context,
-                    runtime,
-                    chat_id = "",
-                    step    = "life.memes.remove_error",
-                    fields  = {"error_type": type(exc).__name__},
-                )
+                log.info(LogEvent("life.memes.remove_error", error=exc))
     return changed
 
 
@@ -505,11 +478,5 @@ async def sync_life_memes(context: Any, runtime: ChatRuntime) -> int:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        log_step(
-            context,
-            runtime,
-            chat_id = "",
-            step    = "life.memes.sync_error",
-            fields  = {"error_type": type(exc).__name__},
-        )
+        log.info(LogEvent("life.memes.sync_error", error=exc))
     return changed

@@ -5,16 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+
 from core.args import parse
 from core.bounded_http import (
     JSON_MIME_POLICY,
     BodyLimits,
+    BoundedHttpError,
     HttpStatusError,
     JsonLimits,
     aiohttp_request_bounded,
@@ -31,6 +35,7 @@ from core.durable_fanout import (
 )
 from core.interfaces import PluginContextProtocol
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 from core.plugin_base import (
     Segments,
     bounded_external_text,
@@ -39,7 +44,9 @@ from core.plugin_base import (
     segments,
     write_json,
 )
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
+
+log = logging.getLogger(__name__)
 
 # 官方公共目录重建期间，这个旧 JSON 端点可能暂时不可用；目前没有等价的实时归档接口。
 CHIME_API_URL    = "https://catalog.chime-frb.ca/repeaters"
@@ -238,7 +245,7 @@ async def fetch_chime_repeaters(
         if not force_refresh and (cached := _cached_catalog(state, loop.time())) is not None:
             return cached
         try:
-            context.logger.info("正在请求 CHIME 重复暴目录")
+            log.debug(LogEvent("catalog.fetch.start"))
             response = await aiohttp_request_bounded(
                 context.http_session,
                 "POST",
@@ -249,7 +256,7 @@ async def fetch_chime_repeaters(
             )
             data = parse_bounded_json(response, limits=_CHIME_JSON_LIMITS)
             if not isinstance(data, dict):
-                context.logger.error("CHIME 目录响应格式错误：顶层不是对象")
+                log.warning(LogEvent("catalog.invalid", reason_code="not_object"))
                 return None
             if state is not None:
                 state[_CHIME_CACHE_KEY] = {
@@ -257,29 +264,30 @@ async def fetch_chime_repeaters(
                     # 从请求成功时起计算完整 TTL，慢请求不会吞掉缓存寿命。
                     "expires_at": loop.time() + _CHIME_CACHE_TTL_SECONDS,
                 }
-            context.logger.info("成功获取 CHIME 数据，共 %d 个重复暴条目", len(data))
+            log.info(LogEvent("catalog.fetched", entry_count=len(data)))
             return data
         except HttpStatusError as exc:
-            context.logger.warning("CHIME 目录请求失败：HTTP %s", exc.status)
+            log.warning(LogEvent("catalog.http_error", status=exc.status))
         except TimeoutError:
-            context.logger.warning("CHIME 目录请求超时")
+            log.warning(LogEvent("catalog.timeout"))
+        except (aiohttp.ClientError, BoundedHttpError) as exc:
+            log.warning(LogEvent("catalog.fetch_failed", error=exc))
         except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = context.logger,
-                component = "chime.fetch",
-            )
+            log_public_error(context, exc, component="chime.fetch")
         return None
 
 
-def parse_frb_data(
-    data: dict[str, Any],
-    context: PluginContextProtocol,
-) -> list[FRBData]:
+def parse_frb_data(data: dict[str, Any]) -> list[FRBData]:
     """一次性解析整个响应；规范化名称冲突时拒绝整批数据。"""
     if len(data) > _MAX_FRB_RECORDS:
-        context.logger.error("CHIME 目录条目数超过安全上限")
+        log.warning(
+            LogEvent(
+                "catalog.rejected",
+                reason_code = "too_many_entries",
+                entry_count = len(data),
+                limit       = _MAX_FRB_RECORDS,
+            )
+        )
         return []
 
     parsed    : list[FRBData] = []
@@ -291,13 +299,13 @@ def parse_frb_data(
             invalid_count += 1
             continue
         if frb.name in seen_names:
-            context.logger.error("CHIME 目录含规范化后重名的 FRB，拒绝本批数据")
+            log.warning(LogEvent("catalog.rejected", reason_code="duplicate_name"))
             return []
         seen_names.add(frb.name)
         parsed.append(frb)
 
     if invalid_count:
-        context.logger.debug("CHIME 目录中有 %d 条记录未通过字段校验", invalid_count)
+        log.debug(LogEvent("catalog.entries_invalid", invalid_count=invalid_count))
     return parsed
 
 
@@ -339,22 +347,16 @@ def save_history(context: PluginContextProtocol, mapping: object) -> bool:
     try:
         history = _validate_history(mapping)
         write_json(_history_path(context), history)
-        context.logger.debug("CHIME 历史记录已保存：%d 条", len(history))
+        log.debug(LogEvent("history.saved", entry_count=len(history)))
         return True
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.save_history",
-        )
+        log_public_error(context, exc, component="chime.save_history")
         return False
 
 
 def find_updates(
     frb_list: list[FRBData],
     old_mapping: dict[str, str],
-    context: PluginContextProtocol,
 ) -> tuple[list[FRBData], list[FRBData]]:
     """只把新增源或严格晚于基线的观测视为更新。"""
     new_repeaters: list[FRBData] = []
@@ -373,12 +375,16 @@ def find_updates(
         elif frb.observed_at < old_observed_at:
             regressed += 1
 
-    if new_repeaters:
-        context.logger.info("CHIME 检测到 %d 个新重复暴", len(new_repeaters))
-    if new_pulses:
-        context.logger.info("CHIME 检测到 %d 个新脉冲", len(new_pulses))
+    if new_repeaters or new_pulses:
+        log.info(
+            LogEvent(
+                "updates.found",
+                new_repeaters = len(new_repeaters),
+                new_pulses    = len(new_pulses),
+            )
+        )
     if regressed:
-        context.logger.warning("CHIME 响应中有 %d 个时间戳早于本地基线，已忽略", regressed)
+        log.warning(LogEvent("timestamps.regressed", regressed_count=regressed))
     return new_repeaters, new_pulses
 
 
@@ -493,7 +499,7 @@ async def handle(
         data = await fetch_chime_repeaters(context)
         if not data:
             return segments("❌ 无法获取 CHIME FRB 数据，请稍后重试")
-        frb_list = parse_frb_data(data, context)
+        frb_list = parse_frb_data(data)
         if not frb_list:
             return segments("❌ 未能解析到有效的 FRB 数据")
 
@@ -502,7 +508,7 @@ async def handle(
             return direct_response
 
         old_mapping = await to_thread_owned(load_history, context)
-        new_repeaters, new_pulses = find_updates(frb_list, old_mapping, context)
+        new_repeaters, new_pulses = find_updates(frb_list, old_mapping)
         if new_repeaters or new_pulses:
             return segments(format_update_message(new_repeaters, new_pulses, is_scheduled=False))
 
@@ -518,12 +524,7 @@ async def handle(
             )
         )
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.handle",
-        )
+        return public_error_response(context, exc, component="chime.handle")
 
 
 async def _deliver_pending(
@@ -535,7 +536,7 @@ async def _deliver_pending(
     for target in pending.pending_targets():
         action = build_action(pending.payload, None, target.target_id)
         if action is None:
-            context.logger.error("CHIME 通知无法构造目标动作")
+            log.error(LogEvent("fanout.action_unbuilt"))
             continue
 
         # 确认状态在线程里落盘；回执回调等到真实写完才返回，事件循环不被逐目标写盘阻塞。
@@ -552,38 +553,26 @@ async def _deliver_pending(
             await send_with_receipt(context.send_action, action, receipt)
         except Exception as exc:
             # 发送器异常可能携带远端正文或完整 action，只记录异常类型。
-            context.logger.error("CHIME 通知发送异常：%s", type(exc).__name__)
+            log.error(LogEvent("target.send_failed", error=exc))
             await receipt.record(False)
         if receipt.callback_error is not None:
-            public_error_message(
-                context,
-                receipt.callback_error,
-                logger    = context.logger,
-                component = "chime.delivery_ack",
-            )
+            log_public_error(context, receipt.callback_error, component="chime.delivery_ack")
             return False
         if not receipt.resolved or receipt.outcome is False:
-            context.logger.warning("CHIME 通知发送失败，目标保留待重试")
+            log.warning(LogEvent("target.delivery_failed", retained=True))
             continue
         if receipt.outcome is None:
-            context.logger.warning(
-                "CHIME 通知投递结果未知；按 at-most-once 策略确认目标以避免重复公告"
-            )
+            log.warning(LogEvent("target.delivery_unknown", policy="at-most-once"))
 
     if not pending.complete:
         return False
     if not await to_thread_owned(save_history, context, pending.commit.get("history")):
-        context.logger.warning("CHIME 历史提交失败，已完成的通知仍保留")
+        log.warning(LogEvent("history.commit_failed"))
         return False
     try:
         await to_thread_owned(clear_pending, path)
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.delivery_clear",
-        )
+        log_public_error(context, exc, component="chime.delivery_clear")
         return False
     return True
 
@@ -594,28 +583,18 @@ async def scheduled_check(context: PluginContextProtocol) -> Segments:
         try:
             return await _scheduled_check_locked(context)
         except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = context.logger,
-                component = "chime.scheduled",
-            )
+            log_public_error(context, exc, component="chime.scheduled")
             return []
 
 
 async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
-    context.logger.info("CHIME 定时检查开始")
+    log.debug(LogEvent("scheduled.start"))
 
     # 有未完成 outbox 时只重试投递，不重新请求目录或生成另一份通知。
     try:
         pending = await to_thread_owned(load_pending, _fanout_path(context))
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.load_delivery_state",
-        )
+        log_public_error(context, exc, component="chime.load_delivery_state")
         return []
     if pending is not None:
         await _deliver_pending(context, pending)
@@ -623,39 +602,30 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
 
     data = await fetch_chime_repeaters(context, force_refresh=True)
     if not data:
-        context.logger.warning("CHIME 定时检查未获取到数据")
+        # 请求失败的原因已在 fetch_chime_repeaters 记过；空目录是上游可预期的状态。
+        log.info(LogEvent("scheduled.no_data"))
         return []
-    frb_list = parse_frb_data(data, context)
+    frb_list = parse_frb_data(data)
     if not frb_list:
-        context.logger.warning("CHIME 定时检查未解析到有效数据")
+        log.warning(LogEvent("scheduled.no_valid_data"))
         return []
     # 手动查询不与定时投递共用发送锁；目录读取是只读的，最多观察到已提交历史
     # 之前的快照，不会改变 outbox 的提交顺序。
     try:
         old_mapping = await to_thread_owned(load_history, context)
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.load_history",
-        )
+        log_public_error(context, exc, component="chime.load_history")
         return []
 
-    new_repeaters, new_pulses = find_updates(frb_list, old_mapping, context)
+    new_repeaters, new_pulses = find_updates(frb_list, old_mapping)
     new_mapping = merge_history(old_mapping, frb_list)
     if not new_repeaters and not new_pulses:
-        context.logger.info("CHIME 定时检查没有新数据")
+        log.info(LogEvent("scheduled.no_updates"))
         return []
 
-    context.logger.info(
-        "CHIME 定时检查发现更新：新重复暴 %d 个，新脉冲 %d 个",
-        len(new_repeaters),
-        len(new_pulses),
-    )
     targets = default_group_targets(context)
     if not targets:
-        context.logger.warning("CHIME 通知没有可用目标群，历史记录保持不变")
+        log.warning(LogEvent("scheduled.no_targets", history_kept=True))
         return []
 
     message = format_update_message(new_repeaters, new_pulses, is_scheduled=True)
@@ -677,10 +647,5 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
         )
         await _deliver_pending(context, pending)
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chime.delivery_state",
-        )
+        log_public_error(context, exc, component="chime.delivery_state")
     return []

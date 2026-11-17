@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -107,7 +108,7 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(
 
 @pytest.mark.asyncio
 async def test_smalltalk_sends_nothing_when_the_model_gives_no_reply_text(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
@@ -121,11 +122,11 @@ async def test_smalltalk_sends_nothing_when_the_model_gives_no_reply_text(
     assert result == []
     assert len(model.calls_of("reply")) >= 1
     # 没有草稿不是故障：处理器没有记错误。
-    mock_context.logger.error.assert_not_called()
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
     await settle_chat_background(mock_context, model)
 
 
-def test_context_grounding_failure_reports_unavailable_reply(mock_context) -> None:
+def test_context_grounding_failure_reports_unavailable_reply() -> None:
     from types import SimpleNamespace
 
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
@@ -140,10 +141,8 @@ def test_context_grounding_failure_reports_unavailable_reply(mock_context) -> No
         history    = [],
         bot_name   = "小青",
         chat_id    = "group:1",
-        context    = mock_context,
         runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
                     max_repeat_compare   = 8,
                     similarity_threshold = 0.92,
@@ -184,18 +183,15 @@ _NOTICE_MARKER = (
     ],
     ids=["shared", "asked", "unreadable"],
 )
-def test_media_rejection_fallback_never_contradicts_the_reading(
-    mock_context, readable, text, expected
-):
+def test_media_rejection_fallback_never_contradicts_the_reading(readable, text, expected):
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
     from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
     plan = reply_plan(
-        forced  = True,
-        text    = text,
-        context = mock_context,
+        forced = True,
+        text   = text,
         runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
         event={
             "message"                 : [{"type": "image", "data": {}}],
@@ -220,7 +216,7 @@ def test_media_rejection_fallback_never_contradicts_the_reading(
     assert "没看清" not in draft.text
 
 
-def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock_context):
+def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread():
     """只发了一张已读出的通知截图，上下文依据检查拒绝候选时，兜底说“看到了”。
 
     图已经读出来，兜底不能说“没跟上你们说的是哪件事”。
@@ -231,9 +227,8 @@ def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock
     from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
     plan = reply_plan(
-        forced  = True,
-        text    = "[图片：网页通知截图，文字内容是“现面向在读研究生招聘冬季学期课程助教”]",
-        context = mock_context,
+        forced = True,
+        text   = "[图片：网页通知截图，文字内容是“现面向在读研究生招聘冬季学期课程助教”]",
         runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
         event={
             "message"                 : [{"type": "image", "data": {}}],

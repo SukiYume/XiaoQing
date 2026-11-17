@@ -36,6 +36,7 @@ from typing import Any
 
 from .constants import PLUGIN_INIT_TIMEOUT_SECONDS
 from .exceptions import PluginLifecycleFatalError, PluginLoadError
+from .log import LogEvent, log_scope
 from .models import (
     PluginManifest,
 )
@@ -320,10 +321,12 @@ class PluginWatcherMixin:
         except PluginPathError as exc:
             if transaction is not None and transaction.import_attempted:
                 transaction.uncertain_external_code = True
-            logger.warning("Plugin %s path revalidation failed: %s", definition.name, exc)
+            logger.warning(
+                LogEvent("plugin.revalidate.path_failed", plugin=definition.name, error=exc)
+            )
             return False
         except Exception as exc:
-            logger.warning("Plugin %s revalidation failed: %s", definition.name, exc)
+            logger.warning(LogEvent("plugin.revalidate.failed", plugin=definition.name, error=exc))
             return False
 
     async def _definition_is_current_async(
@@ -364,10 +367,11 @@ class PluginWatcherMixin:
     def _log_watch_error(
         self,
         bucket: str,
-        message: str,
+        name: str,
         exc: BaseException,
         *,
         level: int = logging.WARNING,
+        **fields: object,
     ) -> None:
         """Rate-limit recurring watcher failures without losing recovery context."""
 
@@ -379,30 +383,25 @@ class PluginWatcherMixin:
             self._watch_error_suppressed[bucket] = self._watch_error_suppressed.get(bucket, 0) + 1
             return
 
-        suppressed = self._watch_error_suppressed.pop(bucket, 0)
+        suppressed                            = self._watch_error_suppressed.pop(bucket, 0)
         self._watch_error_next_log_at[bucket] = now + _WATCH_ERROR_LOG_INTERVAL_SECONDS
-        suffix = f" ({suppressed} similar failure(s) suppressed)" if suppressed else ""
-        logger.log(level, "%s: %s%s", message, exc, suffix)
+        logger.log(level, LogEvent(name, error=exc, suppressed=suppressed or None, **fields))
 
     def _log_manifest_issue(
         self,
         bucket: str,
         level: int,
-        message: str,
-        *args: object,
+        name: str,
+        *,
         exc: BaseException,
+        **fields: object,
     ) -> None:
         """Use bounded buckets only while a long-lived watch pass is reading."""
 
         if _WATCH_MANIFEST_LOG_OWNER.get() is self:
-            self._log_watch_error(
-                f"manifest-{bucket}",
-                message % args,
-                exc,
-                level=level,
-            )
+            self._log_watch_error(f"manifest-{bucket}", name, exc, level=level, **fields)
             return
-        logger.log(level, message, *args)
+        logger.log(level, LogEvent(name, error=exc, **fields))
 
     def _load_definition_for_watch(
         self,
@@ -487,17 +486,18 @@ class PluginWatcherMixin:
 
         scan = await asyncio.to_thread(self._scan_plugin_directories)
         for failed_path, exc in scan.errors:
-            target = str(failed_path) if failed_path is not None else str(self.plugins_dir)
             self._log_watch_error(
                 "root-scan" if failed_path is None else "path-stat",
-                f"Plugin watcher could not inspect {target}; retrying next interval",
+                "plugin.watch.inspect_failed",
                 exc,
+                plugin=failed_path.name if failed_path is not None else None,
             )
         if scan.error_count > len(scan.errors):
             self._log_watch_error(
                 "path-stat",
-                "Plugin watcher omitted additional path metadata failures",
-                OSError(f"{scan.error_count - len(scan.errors)} additional failure(s)"),
+                "plugin.watch.omitted_failures",
+                OSError("additional path metadata failures"),
+                count=scan.error_count - len(scan.errors),
             )
 
         plugin_dirs   = scan.directories
@@ -512,12 +512,12 @@ class PluginWatcherMixin:
                         self.router.clear_plugin(existing_name)
                         self._log_watch_error(
                             "quarantined-deleted-plugin",
-                            f"Keeping quarantined plugin {existing_name} after directory "
-                            "removal; explicit operator cleanup or restart is required",
+                            "plugin.watch.quarantined_deleted",
                             RuntimeError("quarantined generation is still owned"),
+                            plugin=existing_name,
                         )
                         continue
-                    logger.info("Detected deleted plugin %s", existing_name)
+                    logger.info(LogEvent("plugin.watch.deleted", plugin=existing_name))
                     await self._unload_plugin_once(existing_name)
                 except asyncio.CancelledError:
                     raise
@@ -526,14 +526,14 @@ class PluginWatcherMixin:
                         raise
                     self._log_watch_error(
                         "deleted-plugin",
-                        f"Plugin watcher could not retire deleted plugin {existing_name}; "
-                        "retrying next interval",
+                        "plugin.watch.retire_failed",
                         exc,
+                        plugin=existing_name,
                     )
         elif self._plugin_runtime_names() - current_names:
             self._log_watch_error(
                 "root-scan",
-                "Plugin watcher skipped deletion reconciliation after an incomplete root scan",
+                "plugin.watch.root_scan_incomplete",
                 OSError("plugin directory snapshot is incomplete"),
             )
 
@@ -547,8 +547,9 @@ class PluginWatcherMixin:
                     raise
                 self._log_watch_error(
                     "plugin-path",
-                    f"Plugin watcher skipped {plugin_dir.name}; retrying next interval",
+                    "plugin.watch.skipped",
                     exc,
+                    plugin=plugin_dir.name,
                 )
 
     async def _reconcile_plugin_path(self, plugin_dir: Path) -> None:
@@ -557,10 +558,7 @@ class PluginWatcherMixin:
         directory_name = plugin_dir.name
         if directory_name in self._quarantined_plugins:
             self.router.clear_plugin(directory_name)
-            logger.debug(
-                "Skipping all automatic lifecycle changes for quarantined plugin %s",
-                directory_name,
-            )
+            logger.debug(LogEvent("plugin.watch.skip_quarantined", plugin=directory_name))
             return
         try:
             definition = await asyncio.to_thread(self._load_definition_for_watch, plugin_dir)
@@ -577,31 +575,34 @@ class PluginWatcherMixin:
                 raise
             self._log_watch_error(
                 "plugin-definition",
-                f"Plugin {directory_name} definition evaluation failed; "
-                "retired fail-closed and retrying next interval",
+                "plugin.watch.definition_failed",
                 exc,
+                plugin=directory_name,
             )
             return
         if isinstance(definition, _ManifestRejection):
             if definition.bucket in {"dependency", "read"}:
                 logger.warning(
-                    "Plugin %s manifest check is transient (%s); keeping the current "
-                    "generation and retrying next interval",
-                    directory_name,
-                    definition.bucket,
+                    LogEvent(
+                        "plugin.watch.manifest_transient",
+                        plugin = directory_name,
+                        bucket = definition.bucket,
+                    )
                 )
                 return
             if self._has_plugin_runtime(directory_name):
                 logger.warning(
-                    "Unloading plugin %s because its manifest is rejected (%s)",
-                    directory_name,
-                    definition.bucket,
+                    LogEvent(
+                        "plugin.watch.manifest_rejected",
+                        plugin = directory_name,
+                        bucket = definition.bucket,
+                    )
                 )
                 await self._unload_plugin_once(directory_name)
             return
         if not definition.enabled:
             if self._has_plugin_runtime(definition.name):
-                logger.info("Detected disabled plugin %s", definition.name)
+                logger.info(LogEvent("plugin.watch.disabled", plugin=definition.name))
                 await self._unload_plugin_once(definition.name)
             return
 
@@ -622,31 +623,35 @@ class PluginWatcherMixin:
             if transient_io and existing is not None and definition == existing.definition:
                 self._log_watch_error(
                     "plugin-entry",
-                    f"Cannot inspect plugin entry for {definition.name}; retrying next interval",
+                    "plugin.watch.entry_inspect_failed",
                     exc,
+                    plugin=definition.name,
                 )
                 return
             if existing is not None and definition != existing.definition:
                 logger.error(
-                    "Plugin %s authorization changed but its replacement entry "
-                    "could not be inspected; retiring the old generation: %s",
-                    definition.name,
-                    exc,
+                    LogEvent(
+                        "plugin.retire_unauthorized",
+                        plugin = definition.name,
+                        stage  = "entry",
+                        error  = exc,
+                    )
                 )
             else:
                 self._log_watch_error(
                     "plugin-entry",
-                    f"Plugin {definition.name} manifest entry is unsafe or unavailable: "
-                    f"{definition.entry}",
+                    "plugin.watch.entry_unsafe",
                     exc,
-                    level=logging.ERROR,
+                    level  = logging.ERROR,
+                    plugin = definition.name,
+                    entry  = definition.entry,
                 )
             if existing is not None:
                 await self._unload_plugin_once(definition.name)
             return
 
         if definition.name in self._quarantined_plugins:
-            logger.debug("Skipping automatic reload of quarantined plugin %s", definition.name)
+            logger.debug(LogEvent("plugin.watch.skip_reload_quarantined", plugin=definition.name))
             return
 
         existing = self._plugins.get(definition.name)
@@ -659,9 +664,7 @@ class PluginWatcherMixin:
                 )
             except (OSError, PluginPathError) as exc:
                 logger.error(
-                    "Cannot prepare data directory for plugin %s: %s",
-                    definition.name,
-                    exc,
+                    LogEvent("plugin.watch.data_dir_failed", plugin=definition.name, error=exc)
                 )
                 return
         try:
@@ -685,18 +688,20 @@ class PluginWatcherMixin:
                 raise
             if existing is not None and definition != existing.definition:
                 logger.error(
-                    "Plugin %s authorization changed but its replacement "
-                    "fingerprint failed; retiring the old generation: %s",
-                    definition.name,
-                    exc,
+                    LogEvent(
+                        "plugin.retire_unauthorized",
+                        plugin = definition.name,
+                        stage  = "fingerprint",
+                        error  = exc,
+                    )
                 )
                 await self._unload_plugin_once(definition.name)
             else:
                 self._log_watch_error(
                     "plugin-fingerprint",
-                    f"Cannot fingerprint unchanged plugin {definition.name}; "
-                    "retrying next interval",
+                    "plugin.watch.fingerprint_failed",
                     exc,
+                    plugin=definition.name,
                 )
             return
         if not existing:
@@ -705,7 +710,7 @@ class PluginWatcherMixin:
             mtime,
             existing.mtime,
         ):
-            logger.info("Detected changes in plugin %s", definition.name)
+            logger.info(LogEvent("plugin.watch.changed", plugin=definition.name))
             await self._reload_plugin_once(
                 definition.name,
                 authorization=_ReloadAuthorization(
@@ -730,23 +735,14 @@ class PluginWatcherMixin:
         """Load one newly discovered plugin through the async transaction path."""
 
         if not _validate_plugin_name(plugin_dir.name):
-            logger.warning(
-                "Skipping plugin with invalid name '%s': must be a lowercase ASCII "
-                "Python identifier",
-                plugin_dir.name,
-            )
+            logger.warning(LogEvent("plugin.watch.invalid_name", directory=plugin_dir.name))
             return
         if definition.name in self._quarantined_plugins:
-            logger.warning(
-                "Refusing to load quarantined plugin %s; explicit operator cleanup or "
-                "restart is required",
-                definition.name,
-            )
+            logger.warning(LogEvent("plugin.watch.refuse_quarantined", plugin=definition.name))
             return
         if self._has_plugin_runtime(definition.name):
             logger.warning(
-                "Refusing to create a second runtime generation for plugin %s",
-                definition.name,
+                LogEvent("plugin.watch.refuse_second_generation", plugin=definition.name)
             )
             return
         authorization = _ReloadAuthorization(
@@ -773,7 +769,9 @@ class PluginWatcherMixin:
                 self._release_plugin_namespace(definition.name)
             if not isinstance(exc, Exception):
                 raise
-            logger.error("Plugin %s failed during load: %s", definition.name, exc, exc_info=True)
+            logger.error(
+                LogEvent("plugin.load.failed", plugin=definition.name, error=exc), exc_info=True
+            )
 
     def _register_watch_waiter(
         self,
@@ -832,11 +830,7 @@ class PluginWatcherMixin:
                     # failures must remain visible to the application supervisor.
                     raise
                 except Exception as exc:
-                    self._log_watch_error(
-                        "round",
-                        "Plugin watcher reconciliation failed; retrying next interval",
-                        exc,
-                    )
+                    self._log_watch_error("round", "plugin.watch.round_failed", exc)
         finally:
             self._unregister_watch_waiter(waiter_id)
 
@@ -867,29 +861,27 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "missing",
                 logging.WARNING,
-                "Missing plugin.json in %s",
-                plugin_dir,
-                exc=exc,
+                "plugin.manifest.missing",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("missing")
         except PluginPathError as exc:
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
-                "Invalid plugin.json path in %s: %s",
-                plugin_dir,
-                exc,
-                exc=exc,
+                "plugin.manifest.invalid_path",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("invalid")
         except OSError as exc:
             self._log_manifest_issue(
                 "read",
                 logging.ERROR,
-                "Cannot read plugin.json in %s: %s",
-                plugin_dir,
-                exc,
-                exc=exc,
+                "plugin.manifest.read_failed",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("read")
         try:
@@ -913,10 +905,9 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "read",
                 logging.ERROR,
-                "Cannot read a stable plugin.json in %s: %s",
-                plugin_dir,
-                exc,
-                exc=exc,
+                "plugin.manifest.unstable",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("read")
         if len(payload) > _MAX_PLUGIN_MANIFEST_BYTES:
@@ -924,10 +915,10 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
-                "Invalid plugin.json in %s: manifest exceeds %d bytes",
-                plugin_dir,
-                _MAX_PLUGIN_MANIFEST_BYTES,
-                exc=error,
+                "plugin.manifest.too_large",
+                exc       = error,
+                plugin    = plugin_dir.name,
+                max_bytes = _MAX_PLUGIN_MANIFEST_BYTES,
             )
             return _ManifestRejection("invalid")
         try:
@@ -938,10 +929,9 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
-                "Invalid plugin.json in %s: %s",
-                plugin_dir,
-                exc,
-                exc=exc,
+                "plugin.manifest.parse_failed",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("invalid")
 
@@ -951,10 +941,9 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
-                "Invalid plugin.json in %s: %s",
-                plugin_dir,
-                exc,
-                exc=exc,
+                "plugin.manifest.invalid",
+                exc    = exc,
+                plugin = plugin_dir.name,
             )
             return _ManifestRejection("invalid")
 
@@ -965,10 +954,9 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "dependency",
                 logging.ERROR,
-                "Cannot validate dependencies for plugin %s: %s",
-                manifest.name,
-                exc,
-                exc=exc,
+                "plugin.manifest.dependency_check_failed",
+                exc    = exc,
+                plugin = manifest.name,
             )
             return _ManifestRejection("dependency")
 
@@ -977,11 +965,10 @@ class PluginWatcherMixin:
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
-                "Invalid plugin.json in %s: name must match directory name (name=%s dir=%s)",
-                plugin_dir,
-                manifest.name,
-                plugin_dir.name,
-                exc=error,
+                "plugin.manifest.name_mismatch",
+                exc           = error,
+                plugin        = plugin_dir.name,
+                manifest_name = manifest.name,
             )
             return _ManifestRejection("invalid")
 
@@ -1025,19 +1012,19 @@ class PluginWatcherMixin:
                 self._log_manifest_issue(
                     "dependency",
                     logging.ERROR,
-                    "Plugin %s requires Python dependency %s, but it is not importable",
-                    manifest.name,
-                    dependency.name,
-                    exc=ModuleNotFoundError(dependency.name),
+                    "plugin.manifest.dependency_missing",
+                    exc        = ModuleNotFoundError(dependency.name),
+                    plugin     = manifest.name,
+                    dependency = dependency.name,
                 )
                 return False
             self._log_manifest_issue(
                 "optional-dependency",
                 logging.INFO,
-                "Plugin %s optional Python dependency %s is unavailable",
-                manifest.name,
-                dependency.name,
-                exc=ModuleNotFoundError(dependency.name),
+                "plugin.manifest.optional_dependency_missing",
+                exc        = ModuleNotFoundError(dependency.name),
+                plugin     = manifest.name,
+                dependency = dependency.name,
             )
         return True
 
@@ -1280,7 +1267,8 @@ class PluginWatcherMixin:
         source_finder._on_execution_started = mark_execution_started
 
         with source_finder.transaction_guard():
-            module = importlib.import_module(full_module_name)
+            with log_scope(None):
+                module = importlib.import_module(full_module_name)
             if not isinstance(module, ModuleType):
                 raise PluginPathError("plugin entry import returned a non-module object")
             transaction.module = module
@@ -1321,13 +1309,14 @@ class PluginWatcherMixin:
         accepts_context = callback_accepts_positional_context(init_func)
 
         async def run_init() -> None:
-            if accepts_context:
-                await call_plugin_callback(
-                    init_func,
-                    self.build_context(definition.name, definition=definition),
-                )
-            else:
-                await call_plugin_callback(init_func)
+            with log_scope(None):
+                if accepts_context:
+                    await call_plugin_callback(
+                        init_func,
+                        self.build_context(definition.name, definition=definition),
+                    )
+                else:
+                    await call_plugin_callback(init_func)
 
         return asyncio.create_task(
             self._capture_lifecycle(
@@ -1387,7 +1376,7 @@ class PluginWatcherMixin:
         execution_gate: PluginExecutionGate | None = None,
     ) -> list[CommandSpec]:
         if not hasattr(module, "handle"):
-            logger.warning("Plugin %s missing handle()", definition.name)
+            logger.warning(LogEvent("plugin.load.missing_handle", plugin=definition.name))
             return []
         gate = execution_gate or self._execution_gate_for(definition)
         return [

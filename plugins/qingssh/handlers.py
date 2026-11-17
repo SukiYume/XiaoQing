@@ -1,13 +1,10 @@
 """处理 QingSSH 的连接、配置和状态等一次性命令。"""
 
-import logging
 from contextlib import suppress
 from pathlib import Path
 
 from core.args import tokenize
 from core.interfaces import COMMAND_RUNNER_EVENT_KEY
-from core.sensitive_audit import safe_request_id as audit_request_id
-from core.sensitive_audit import summarize_sensitive
 
 from .config import ADD_SERVER_TIMEOUT, SESSION_TIMEOUT, SessionKeys, SessionState
 from .message_formatter import (
@@ -19,8 +16,6 @@ from .message_formatter import (
 from .ssh_manager import PARAMIKO_AVAILABLE, SSHManager, has_jump_host, ssh_config_path
 from .types import Context, MessageSegments, OneBotEvent, segments
 from .validators import validate_hostname, validate_port, validate_server_name, validate_username
-
-logger = logging.getLogger(__name__)
 
 
 def _show_ssh_help(manager: SSHManager) -> MessageSegments:
@@ -103,19 +98,6 @@ async def _connect_to_server(
         with suppress(Exception):
             manager.disconnect(user_id, group_id, server_name)
         raise
-
-    target_audit = summarize_sensitive(
-        "\0".join((server_name, str(server["host"]), str(server["username"])))
-    )
-    logger.info(
-        "SSH audit operation=connect status=success request_id=%s "
-        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-        audit_request_id(context),
-        target_audit.kind,
-        target_audit.length,
-        target_audit.byte_length,
-        target_audit.fingerprint,
-    )
 
     return segments(
         format_section(

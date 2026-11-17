@@ -13,11 +13,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from core.log import LogEvent
+
 from ..safety import clean_text
 from . import baike, deep, wiki
 from .base import Fetcher, SourceError, SourceItem
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def keywords(value: Any, limit: int) -> str:
@@ -83,7 +85,7 @@ async def read(
                 items.append(entry)
         except SourceError as exc:
             errors += 1
-            logger.info("xiaoqing_life step=source name=baike failed reason=%s", exc.reason)
+            log.warning(LogEvent("source.failed", source="baike", reason_code=exc.reason))
     if wiki_on and concept.strip():
         try:
             pages = await wiki.read(fetch, concept, blocked)
@@ -92,7 +94,7 @@ async def read(
             items += pages
         except SourceError as exc:
             errors += 1
-            logger.info("xiaoqing_life step=source name=wiki failed reason=%s", exc.reason)
+            log.warning(LogEvent("source.failed", source="wiki", reason_code=exc.reason))
     fresh = [i for i in items if i.item_id not in seen][:limit]
     return Found(
         items=[

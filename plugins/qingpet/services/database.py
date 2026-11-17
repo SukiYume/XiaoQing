@@ -7,6 +7,8 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
+from core.log import LogEvent
+
 from .database_actions import AtomicActionRepositoryMixin
 from .database_community import CommunityRepositoryMixin
 from .database_identity import IdentityRepositoryMixin
@@ -14,7 +16,7 @@ from .database_scheduler import SchedulerRepositoryMixin
 from .database_schema import CURRENT_SCHEMA_VERSION, initialize_schema
 from .database_support import _DAILY_COIN_LIMIT
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class Database(
@@ -79,11 +81,7 @@ class Database(
             try:
                 conn.close()
             except sqlite3.Error as exc:
-                logger.error(
-                    "Failed to close QingPet SQLite connection thread=%s error_type=%s",
-                    thread_id,
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("connection.close_failed", thread_id=thread_id, error=exc))
                 failures.append(exc)
         if hasattr(self._local, "conn"):
             self._local.conn = None

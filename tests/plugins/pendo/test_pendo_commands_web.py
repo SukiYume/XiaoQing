@@ -290,7 +290,6 @@ class TestSessions:
             plugin_name = "pendo"
 
         class _Context:
-            logger   = pendo_main.logger
             metrics  = None
             data_dir = tmp_path / "pendo-data"
 

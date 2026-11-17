@@ -21,11 +21,13 @@ from .delivery import (
     SENSITIVE_ACTION_KEY,
     DeliveryReceipt,
     attach_receipt,
+    message_length,
     receipt_from_action,
 )
 from .dispatcher import Dispatcher
 from .inbound_backlog import InboundBacklog
 from .interfaces import ACTION_BYPASS_SINK_KEY, ACTION_RESULT_MESSAGE_ID_KEY, EVENT_SOURCE_KEY
+from .log import LogEvent
 from .onebot import (
     OneBotActionCancelledAfterCommit,
     OneBotActionOutcomeUnknown,
@@ -47,28 +49,6 @@ logger = logging.getLogger(__name__)
 
 _MESSAGE_ACTIONS   = ("send_group_msg", "send_private_msg")
 _SOURCE_PLUGIN_KEY = "_source_plugin"
-
-
-def _message_length(message: Any) -> int:
-    """Return the unbounded logical length used by delivery metrics and logs."""
-
-    if isinstance(message, str):
-        return len(message)
-    if not isinstance(message, list):
-        return 0
-    length = 0
-    for segment in message:
-        if not isinstance(segment, Mapping):
-            length += 1
-            continue
-        if segment.get("type") != "text":
-            length += 1
-            continue
-        raw_data = segment.get("data")
-        data     = raw_data if isinstance(raw_data, Mapping) else {}
-        text     = data.get("text", "")
-        length += len(text) if isinstance(text, str) else len(str(text))
-    return length
 
 
 class AppDeliveryMixin:
@@ -111,12 +91,12 @@ class AppDeliveryMixin:
         # 获取 default 群列表
         default_groups = self.config.get("default_group_ids", [])
         if not default_groups:
-            logger.info("No default groups configured, skipping connect notification")
+            logger.info(LogEvent("connect_notice.skip.no_groups"))
             return
         try:
             parsed_groups = _parse_positive_ids(default_groups, field_name="default_group_ids")
         except (TypeError, ValueError) as exc:
-            logger.error("Connect notification skipped: invalid default_group_ids: %s", exc)
+            logger.error(LogEvent("connect_notice.skip.invalid_groups", error=exc))
             return
 
         # 发送上线通知（可通过 config 配置）
@@ -132,7 +112,7 @@ class AppDeliveryMixin:
             and self._last_connect_notification_ts > 0
             and now - self._last_connect_notification_ts < min_interval
         ):
-            logger.info("Connect notification suppressed by min interval")
+            logger.info(LogEvent("connect_notice.skip.min_interval"))
             return
         self._last_connect_notification_ts = now
         message                            = [text(connect_msg)]
@@ -158,7 +138,7 @@ class AppDeliveryMixin:
     async def _process_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """处理事件并返回 action（通用逻辑）"""
         if self._stopping:
-            logger.debug("Dropping event while XiaoQing is stopping")
+            logger.debug(LogEvent("event.drop.stopping"))
             return None
         result  = await self.dispatcher.handle_event(event)
         receipt = getattr(result, "delivery_receipt", None)
@@ -237,9 +217,7 @@ class AppDeliveryMixin:
                 response = await ws_client.request_action(action)
             except OneBotActionOutcomeUnknown:
                 logger.warning(
-                    "OneBot WS action %s was committed but its outcome is unknown; "
-                    "HTTP fallback is suppressed",
-                    action_name,
+                    LogEvent("request.outcome_unknown", transport="ws", action=action_name)
                 )
                 return None
             if response is not None:
@@ -350,7 +328,7 @@ class AppDeliveryMixin:
                 service_name  = "core.observe_outgoing_action",
             )
         except RuntimeError as exc:
-            logger.debug("Outgoing action observer unavailable: %s", exc)
+            logger.debug(LogEvent("observer.unavailable", error=exc))
             return
 
         raw_params             = action.get("params")
@@ -378,9 +356,9 @@ class AppDeliveryMixin:
 
             await invoke_loaded_plugin(loaded, run_observer)
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable):
-            logger.debug("Outgoing action observer skipped during plugin unload")
+            logger.debug(LogEvent("observer.skip.unload"))
         except Exception as exc:
-            logger.debug("Outgoing action observer failed: %s", exc, exc_info=True)
+            logger.debug(LogEvent("observer.failed", error=exc), exc_info=True)
 
     def _maybe_split_action(self, action: dict[str, Any]) -> list[dict[str, Any]]:
         """将包含过长文本的 action 拆分为多个 action"""
@@ -413,31 +391,25 @@ class AppDeliveryMixin:
                     new_action[key] = action[key]
             results.append(new_action)
 
-        logger.debug(
-            "Split long message into %d chunks (action=%s)",
-            len(results),
-            act_name,
-        )
+        logger.debug(LogEvent("send.split", chunks=len(results), action=act_name))
         return results
 
     async def _send_single_action(
         self, action: dict[str, Any], wait_ws_seconds: float = 0.0
     ) -> bool | None:
-        try:
-            act = str(action.get("action", "") or "")
-            if act in _MESSAGE_ACTIONS:
-                params = action.get("params") or {}
-                if isinstance(params, dict):
-                    logger.info(
-                        "Sending: action=%s group=%s user=%s message_length=%s",
-                        act,
-                        params.get("group_id") or "-",
-                        params.get("user_id") or "-",
-                        _message_length(params.get("message")),
+        act = str(action.get("action", "") or "")
+        if act in _MESSAGE_ACTIONS:
+            params = action.get("params") or {}
+            if isinstance(params, dict):
+                logger.info(
+                    LogEvent(
+                        "send.start",
+                        action         = act,
+                        group_id       = params.get("group_id") or None,
+                        user_id        = params.get("user_id") or None,
+                        message_length = message_length(params.get("message")),
                     )
-        except (KeyError, TypeError, ValueError) as exc:
-            # 日志记录失败不影响消息发送，仅记录调试信息
-            logger.debug("Failed to generate message preview: %s", exc)
+                )
         bypass_sink = bool(action.get(ACTION_BYPASS_SINK_KEY, False))
         sink        = current_action_sink.get()
         if not bypass_sink and sink is not None and getattr(sink, "is_active", True):
@@ -449,15 +421,10 @@ class AppDeliveryMixin:
             )
             return True
 
-        # 敏感标记留给 OneBot 传输决定日志里不写正文，由它们在序列化时去掉；
-        # 入站 WebSocket 广播直接序列化整个动作，给它的副本不带标记。
         delivery_action = {
             key: value
             for key, value in action.items()
-            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY}
-        }
-        wire_action = {
-            key: value for key, value in delivery_action.items() if key != SENSITIVE_ACTION_KEY
+            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY, SENSITIVE_ACTION_KEY}
         }
 
         def copy_delivery_result() -> None:
@@ -473,10 +440,7 @@ class AppDeliveryMixin:
             try:
                 sent = await ws_client.send_action(delivery_action)
             except OneBotActionOutcomeUnknown:
-                logger.warning(
-                    "OneBot WS action was committed but its outcome is unknown; "
-                    "delivery fallback is suppressed"
-                )
+                logger.warning(LogEvent("send.outcome_unknown", transport="ws"))
                 return None
             if sent:
                 copy_delivery_result()
@@ -485,29 +449,32 @@ class AppDeliveryMixin:
         # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
         if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
             try:
-                broadcast_result = await self.inbound_manager.broadcast(wire_action)
+                broadcast_result = await self.inbound_manager.broadcast(delivery_action)
             except Exception as exc:
-                logger.warning("Inbound WebSocket broadcast failed; trying fallback: %s", exc)
+                logger.warning(LogEvent("broadcast.failed", error=exc))
             else:
                 if isinstance(broadcast_result, BroadcastResult) and broadcast_result.delivered:
                     return True
                 if not isinstance(broadcast_result, BroadcastResult):
                     logger.error(
-                        "Inbound manager returned an invalid broadcast result: %r",
-                        type(broadcast_result).__name__,
+                        LogEvent(
+                            "broadcast.invalid_result",
+                            result_type=type(broadcast_result).__name__,
+                        )
                     )
                 else:
+                    # 有客户端超时时投递结果未知，不再兜底；否则没有客户端收到，继续兜底。
                     logger.warning(
-                        "Inbound WebSocket delivered to no clients "
-                        "(targets=%d failures=%d timeouts=%d); trying fallback",
-                        broadcast_result.target_count,
-                        broadcast_result.failure_count,
-                        broadcast_result.timeout_count,
+                        LogEvent(
+                            "broadcast.outcome_unknown"
+                            if broadcast_result.timeout_count
+                            else "broadcast.no_clients",
+                            targets  = broadcast_result.target_count,
+                            failures = broadcast_result.failure_count,
+                            timeouts = broadcast_result.timeout_count,
+                        )
                     )
                     if broadcast_result.timeout_count:
-                        logger.warning(
-                            "Inbound WebSocket delivery outcome is unknown; fallback is suppressed"
-                        )
                         return None
 
         if wait_ws_seconds > 0:
@@ -522,10 +489,7 @@ class AppDeliveryMixin:
                     try:
                         sent = await candidate.send_action(delivery_action)
                     except OneBotActionOutcomeUnknown:
-                        logger.warning(
-                            "OneBot WS action was committed but its outcome is unknown; "
-                            "retry and HTTP fallback are suppressed"
-                        )
+                        logger.warning(LogEvent("send.outcome_unknown", transport="ws"))
                         return None
                     if sent:
                         copy_delivery_result()
@@ -540,13 +504,11 @@ class AppDeliveryMixin:
             )
             copy_delivery_result()
             if http_sent is None:
-                logger.warning("OneBot HTTP action outcome is unknown")
+                logger.warning(LogEvent("send.outcome_unknown", transport="http"))
                 return None
-            if http_sent is False:
-                logger.warning("Action was rejected or not acknowledged by OneBot HTTP")
             return http_sent
 
-        logger.debug("Action dropped: no available sender (ws/http)")
+        logger.debug(LogEvent("send.drop.no_sender"))
         return False
 
     async def _collect_actions_for_event(
@@ -599,7 +561,7 @@ class AppDeliveryMixin:
         async with self._event_dedupe_lock.get():
             self._prune_expired_event_ids(now)
             if key in self._recent_event_ids:
-                logger.info("Dropped duplicate inbound OneBot event %r", key)
+                logger.info(LogEvent("inbound.drop.duplicate", message_id=event.get("message_id")))
                 return False
             capacity = max(1, MAX_INBOUND_EVENT_DEDUP_KEYS)
             while len(self._recent_event_ids) >= capacity:
@@ -648,21 +610,25 @@ class AppDeliveryMixin:
         *,
         source_client: OneBotWsClient | None = None,
     ) -> None:
-        """处理来自 OneBot 上游的事件，并拒绝已撤权连接的迟到消息。"""
+        """处理来自 OneBot 上游的事件，并拒绝已撤权连接的迟到消息。
+
+        request id 的作用域由 WebSocket 客户端收到事件时开好，这里和回复发送都沿用它。
+        """
         if not self._onebot_credentials_are_trusted():
-            logger.warning("Dropped upstream OneBot event while credentials are revoked")
+            logger.warning(LogEvent("inbound.drop.credentials_revoked"))
             return
         if source_client is not None and not self._ws_transport_is_trusted(source_client):
-            logger.warning("Dropped upstream OneBot event from a stale or quarantined client")
+            logger.warning(LogEvent("inbound.drop.stale_client"))
             return
         actions = await self._collect_actions_for_event(event, default_source="upstream_ws")
-        if not actions:
-            return
         for action in actions:
             await self._send_action(action)
 
     async def _handle_inbound_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        """接收事件；标准 HTTP 模式通过真实 action API 确认每个回复。"""
+        """接收事件；标准 HTTP 模式通过真实 action API 确认每个回复。
+
+        request id 的作用域由入站服务器按事件开好，这里和回复发送都沿用它。
+        """
         actions = await self._collect_actions_for_event(event, default_source="inbound_http")
         if event.get(EVENT_SOURCE_KEY) == "inbound_http" and event.get("_http_action_delivery"):
             for index, action in enumerate(actions):

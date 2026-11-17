@@ -18,9 +18,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from core.log import LogEvent
+
 from .shared import InferenceParams, model_artifact_fingerprint, remember_model
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 transformers                       = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification
@@ -138,14 +140,16 @@ def run_transformers_inference(
         if "Abstract" not in data.columns:
             raise ValueError("title_abstract input requires an 'Abstract' column")
         abstracts = data["Abstract"].fillna("").astype(str).tolist()
-        logger.info(
-            "input_mode=%s: 使用标题+摘要推理 (%d/%d 篇有摘要)",
-            params.input_mode,
-            sum(1 for a in abstracts if a),
-            len(abstracts),
+        log.info(
+            LogEvent(
+                "inference.input",
+                input_kind    = params.input_mode,
+                with_abstract = sum(1 for a in abstracts if a),
+                total         = len(abstracts),
+            )
         )
     else:
-        logger.info("input_mode=%s: 仅使用标题推理", params.input_mode)
+        log.info(LogEvent("inference.input", input_kind=params.input_mode))
 
     ds = TitleAbstractDataset(titles, tokenizer, abstracts=abstracts, max_len=params.max_len)
     loader = DataLoader(

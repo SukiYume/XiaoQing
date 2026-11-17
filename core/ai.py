@@ -33,6 +33,7 @@ from .bounded_http import (
     parse_bounded_json,
 )
 from .config import materialize_snapshot_value
+from .log import LogEvent
 
 logger = logging.getLogger(__name__)
 T      = TypeVar("T")
@@ -544,10 +545,13 @@ def _model_targets(
             if pinned_model is not None:
                 raise AIConfigError(f"pinned model {profile_name} is unavailable: missing API key")
             logger.debug(
-                "AI model skipped plugin=%s route=%s profile=%s reason=missing_api_key",
-                route.plugin,
-                route.name,
-                profile_name,
+                LogEvent(
+                    "ai.model.skipped",
+                    plugin      = route.plugin,
+                    route       = route.name,
+                    profile     = profile_name,
+                    reason_code = "missing_api_key",
+                )
             )
             continue
         targets.append(target)
@@ -766,17 +770,18 @@ async def _request_target(
     }
     payload = _request_payload(target, route, options)
     logger.debug(
-        "AI request settings plugin=%s route=%s profile=%s temperature=%s top_p=%s "
-        "max_tokens=%s timeout_seconds=%s max_retry=%s retry_interval_seconds=%s",
-        route.plugin,
-        route.name,
-        target.name,
-        payload.get("temperature"),
-        payload.get("top_p"),
-        payload.get("max_completion_tokens", payload.get("max_tokens")),
-        options.timeout_seconds,
-        options.max_retry,
-        options.retry_interval_seconds,
+        LogEvent(
+            "ai.request.settings",
+            plugin=route.plugin,
+            route=route.name,
+            profile=target.name,
+            temperature=payload.get("temperature"),
+            top_p=payload.get("top_p"),
+            max_tokens=payload.get("max_completion_tokens", payload.get("max_tokens")),
+            timeout_seconds=options.timeout_seconds,
+            max_retry=options.max_retry,
+            retry_interval_seconds=options.retry_interval_seconds,
+        )
     )
     request_kwargs: dict[str, Any] = {
         "json"   : payload,
@@ -848,12 +853,14 @@ async def _complete_route(
             if not has_fallback or exc.category not in route.fallback_on:
                 raise
             logger.warning(
-                "AI route fallback plugin=%s route=%s from_profile=%s to_profile=%s reason=%s",
-                route.plugin,
-                route.name,
-                target.name,
-                targets[index + 1].name,
-                exc.category,
+                LogEvent(
+                    "ai.route.fallback",
+                    plugin       = route.plugin,
+                    route        = route.name,
+                    from_profile = target.name,
+                    to_profile   = targets[index + 1].name,
+                    reason_code  = exc.category,
+                )
             )
     raise last_error or AIRequestError("route_failed")
 
@@ -944,10 +951,12 @@ async def complete_configured_route(
         ),
     )
     logger.debug(
-        "AI route budget plugin=%s route=%s total_timeout_seconds=%s",
-        route.plugin,
-        route.name,
-        effective_total_timeout,
+        LogEvent(
+            "ai.route.budget",
+            plugin                = route.plugin,
+            route                 = route.name,
+            total_timeout_seconds = effective_total_timeout,
+        )
     )
     try:
         return await asyncio.wait_for(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import threading
 import time
@@ -18,6 +19,7 @@ from core.onebot import (
     _jittered_reconnect_delay,
     _UnsupportedWebSocketAuthentication,
 )
+from tests.helpers.assertions import logged_events, logged_records
 from tests.helpers.onebot_test_support import (
     CLEANUP_INTERVAL_SECONDS,
     ConnectContext,
@@ -451,6 +453,43 @@ class TestOneBotWebSocketLifecycle:
         await client.stop()
 
         assert delays == [5.0, 10.0, 5.0, 10.0]
+
+    @pytest.mark.asyncio
+    async def test_repeated_connection_failures_warn_once_and_report_the_count_on_reconnect(
+        self, monkeypatch, caplog
+    ):
+        client = OneBotWsClient(
+            "ws://localhost:3000", "", queue_cleanup_interval=CLEANUP_INTERVAL_SECONDS
+        )
+        attempts = iter(
+            (RuntimeError("down"), RuntimeError("down"), RuntimeError("down"), "closed")
+        )
+
+        def connect(uri):
+            outcome = next(attempts)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return ConnectContext(EndingSocket())
+
+        async def stop_after_fourth_wait(_delay: float) -> None:
+            if len(delays) == 4:
+                client._running = False
+
+        monkeypatch.setattr("websockets.connect", connect)
+        monkeypatch.setattr(random, "random", lambda: 0.5)
+        delays = record_reconnect_waits(monkeypatch, stop_after_fourth_wait)
+
+        with caplog.at_level(logging.DEBUG, logger="core.onebot"):
+            await client.connect_and_listen(AsyncMock())
+            await client.stop()
+
+        failures = [
+            (record.levelno, record.msg.fields["failures"])
+            for record in logged_records(caplog, "ws.reconnect")
+        ]
+        assert failures == [(logging.WARNING, 1), (logging.DEBUG, 2), (logging.DEBUG, 3)]
+        (connected,) = logged_events(caplog, "ws.connected")
+        assert connected.fields["failures"] == 3
 
     @pytest.mark.asyncio
     async def test_cross_thread_auth_rotation_wakes_current_backoff(self, monkeypatch):

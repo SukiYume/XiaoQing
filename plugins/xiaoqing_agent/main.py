@@ -14,6 +14,7 @@ from dataclasses import asdict
 from typing import Any
 
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.message import sender_display_name
 from core.plugin_base import segments
 from core.public_errors import public_error_response
@@ -25,7 +26,7 @@ from .runtime import AgentRuntime
 from .tasks import Actor, AgentTask, ChatRef
 from .triage import MAX_TASK_ID, TRIAGE_ACTIONS, TriageDecision, service_list, triage_turn
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _RUNTIME_KEY = "xiaoqing_agent.runtime"
 _ROOT_CODE   = "xiaoqing_agent.agent"
@@ -67,7 +68,7 @@ async def init(context: PluginContextProtocol) -> None:
     runtime     = get_runtime(context)
     interrupted = await runtime.store.mark_interrupted()
     if interrupted:
-        logger.info("xiaoqing_agent marked %d unfinished task(s) as interrupted", interrupted)
+        log.info(LogEvent("tasks.interrupted", count=interrupted))
 
 
 async def shutdown(context: PluginContextProtocol) -> None:
@@ -232,7 +233,7 @@ async def handle_turn(
             context, config, runtime, chat, turn, text, history, decision, persona, recent
         )
     except Exception as exc:
-        logger.warning("xiaoqing_agent turn fell back to chat error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("turn.fallback", error=exc))
         return None
 
 
@@ -261,12 +262,14 @@ async def _triage(
         + len(_string_list(turn.get("image_files"), _MAX_IMAGES)),
         initiator=chat.user_id,
     )
-    logger.info(
-        "xiaoqing_agent triage chat=%s action=%s running=%d elapsed=%.2fs",
-        chat.key,
-        decision.action,
-        len(running),
-        time.perf_counter() - started,
+    log.info(
+        LogEvent(
+            "triage",
+            chat      = chat.key,
+            action    = decision.action,
+            running   = len(running),
+            elapsed_s = round(time.perf_counter() - started, 2),
+        )
     )
     return decision
 
@@ -399,9 +402,4 @@ async def handle(
             return runtime.command_reply(task, message) if task is not None else message
         return segments(f"未知子命令: {action}\n\n{HELP_TEXT}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "xiaoqing_agent.handle",
-        )
+        return public_error_response(context, exc, component="xiaoqing_agent.handle")

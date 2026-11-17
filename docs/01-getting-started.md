@@ -59,7 +59,7 @@ cp config/secrets.json.example config/secrets.json
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
-  "log_level": "INFO",
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5},
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -205,8 +205,10 @@ Inbound 默认绑定 loopback。
 python main.py
 ```
 
+默认配置下，日志同时输出到控制台和 `logs/xiaoqing.log`。
 成功启动的日志包含以下信息：
 
+- `日志系统初始化完成` 一行，带生效的级别、日志目录和保留份数
 - 配置 revision 发布完成
 - 插件加载列表
 - Inbound Server 或主动 WebSocket 状态
@@ -223,6 +225,9 @@ scripts/run-bot.vbs
 ```
 
 该启动链从当前 `PATH` 调用 Python，并从 `config/config.json` 读取 NapCat 账号与可选 MKL threading 配置。
+它把 Bot 的标准输出和标准错误分别写入 `logs/bot-monitor.log` 与 `logs/bot-monitor-error.log`。
+生产配置在 `logging` 中设 `"console": false`，读到配置之后日志只写进 `logs/xiaoqing.log`。
+这两个文件里留下的是：读到配置之前写到控制台的日志（`config.json` 无效、日志目录建不了时的诊断都在 `bot-monitor.log` 里），日志出口写不出去时的 `log.output_failed`（在 `bot-monitor-error.log` 里），以及直接打印到标准输出、标准错误的内容。
 
 同步脚本、启动参数和部署目录的说明见 `scripts/` 中对应文件的注释与帮助输出。
 
@@ -231,6 +236,7 @@ Windows 生产环境重启流程：
 1. 双击 `scripts/stop-bot.vbs`。
 2. 等待监控器、Bot 与 NapCat 已停止的完成提示。
 3. 双击 `scripts/run-bot.vbs` 启动新进程。
+4. 在 `logs/xiaoqing.log` 里找到新的 `日志系统初始化完成` 一行，确认新进程已经启动。
 
 停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。
 重复双击返回同一完成结果。
@@ -316,14 +322,24 @@ UAT 被强制终止时，报告目录 `runtime/config/secrets.json` 里的密钥
 
 ## 🩺 常见问题
 
+### 启动后立即退出
+
+1. 看控制台输出，Windows 生产启动链下是 `logs/bot-monitor.log`；读到配置之前日志只写控制台，`logs/xiaoqing.log` 里没有这几行。
+2. `config.source.missing source=config`：运行目录下没有 `config/config.json`，按上文从 `.example` 复制一份。
+3. `config.source.invalid source=config`：带 `error.lineno`、`error.colno` 时是 JSON 语法错误，按行列号修改；带 `field_errors` 时，后面每条 `config.field.invalid` 给出出错的字段路径 `field` 和错误类型 `error_type`。
+4. 最后一行 `process.failed` 是退出的原因；它的 `error.at` 指向 `core/log.py` 时，检查运行目录下的 `logs/` 能否创建和写入。
+5. Windows 生产启动链的监控器会按退避间隔反复重启 Bot，改好配置后等下一次重启，或按上文的重启流程手动重启。
+
+事件含义见 [配置详解的启动时读不到有效配置](06-configuration.md#启动时读不到有效配置)。
+
 ### 服务消息响应排查
 
 1. 确认 OneBot 与 XiaoQing 进程均处于运行状态。
 2. 核对 Inbound URL 或主动 WebSocket URI。
 3. 核对上报的 Authorization Bearer 请求头与 `inbound_token`，并核对回复通道的 `onebot_token`。
-4. 在日志中查找连接状态、错误码和 request ID。
+4. 在 `logs/xiaoqing.log` 中查找连接状态和 request ID；回复是 `操作失败：…` 时，按它带的 request ID 找到对应的 `public_error` 行和这一轮的其他日志。
 5. 收到 secret 待确认通知时，核对字段路径并发送 `/reload`。
-6. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，检查 secrets 来源是否缺失、损坏，或与 `config.json` 同时发生了变化；然后停止服务，保存完整的两个配置文件，再重新启动，由启动读取确认新的凭据 revision。
+6. 日志同时出现 `config.source.invalid source=secrets status=inconsistent` 和 `ws.client.stopped` 时，检查 secrets 来源是否缺失、损坏，或与 `config.json` 同时发生了变化；然后停止服务，保存完整的两个配置文件，再重新启动，由启动读取确认新的凭据 revision。
 
 ### 群聊命令响应排查
 
@@ -356,7 +372,7 @@ UAT 被强制终止时，报告目录 `runtime/config/secrets.json` 里的密钥
 1. 核对 `config.ai.providers`、`config.ai.models` 与插件 route 的引用。
 2. 核对 `secrets.ai.providers.<provider>.api_key`。
 3. 检查代理、网络、配额和 provider 状态。
-4. 结合插件日志中的 route、profile 和错误码定位请求。
+4. 结合插件日志中的 route、profile 和 `public_error` 的 `reason_code`（模型服务的错误类别）定位请求。
 
 ---
 

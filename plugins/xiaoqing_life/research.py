@@ -16,6 +16,8 @@ from datetime import datetime
 from functools import partial
 from typing import Any
 
+from core.log import LogEvent
+
 from . import activity, fetching, reinforce
 from . import digest as digest_mod
 from . import methods as methods_mod
@@ -30,7 +32,7 @@ from .sources.base import Fetcher, SourceError, SourceItem
 from .sources.reference import keywords
 from .stores import LifeStore, reserve_llm_call
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 ACTIONS          = ("search", "deep_read", "lookup", "stop")
 MAX_FINDINGS     = 3
@@ -434,8 +436,8 @@ def _log_action(
 ) -> None:
     thread = thread_ops.get_thread(s.threads, thread_id)
     if thread is not None:
-        log: list[dict[str, Any]] = thread.setdefault("actions", [])
-        log.append(
+        actions: list[dict[str, Any]] = thread.setdefault("actions", [])
+        actions.append(
             {
                 "round" : round_no,
                 "action": action.action,
@@ -444,7 +446,7 @@ def _log_action(
                 "at"    : now,
             }
         )
-        del log[:-MAX_ACTION_LOG]
+        del actions[:-MAX_ACTION_LOG]
     reinforce.update_preference(s.state, PREF_KIND, action.action, value)
 
 
@@ -646,7 +648,7 @@ async def _material(ctx: _Context, action: Next, deps: Any) -> tuple[list[Source
     try:
         return [await _deep_item(ctx, target)], ""
     except SourceError as exc:
-        logger.info("xiaoqing_life step=source name=bili_deep failed reason=%s", exc.reason)
+        log.warning(LogEvent("source.failed", source="bili_deep", reason_code=exc.reason))
         return [], "all_sources_failed"
 
 
@@ -695,7 +697,7 @@ async def _round(
     try:
         text = await deps.complete(REASONING_ROUTE, messages)
     except Exception as exc:
-        logger.info("xiaoqing_life step=research model_failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("research.model_failed", error=exc))
         return "model_failed"
     raw = digest_mod.extract_json(text or "")
     if raw is None:
@@ -706,13 +708,15 @@ async def _round(
     stop   = await _commit_round(
         ctx, deps, decision, thread_id, round_no, action, items, result, r_span, tally
     )
-    logger.info(
-        "xiaoqing_life step=research round=%d action=%s status=%s findings=%d items=%d",
-        round_no,
-        action.action,
-        result.status,
-        len(result.findings),
-        len(items),
+    log.info(
+        LogEvent(
+            "research.round",
+            round    = round_no,
+            action   = action.action,
+            status   = result.status,
+            findings = len(result.findings),
+            items    = len(items),
+        )
     )
     return _Step(stop, result.next)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 
 import tests.helpers.config_test_support as _fixture_support
 from core.config import _validate_runtime_config
+from tests.helpers.assertions import logged_events
 from tests.helpers.config_test_support import (
     ConfigLoadError,
     ConfigManager,
@@ -142,12 +144,17 @@ class TestConfigManagerReload:
             ("inbound_ws_uri", "wss://127.0.0.1:12000/ws"),
             ("inbound_http_base", "http://0.0.0.0:12000"),
             ("inbound_trusted_tls_proxy", "true"),
+            ("logging", {"level": "TRACE"}),
+            ("logging", {"colour": True}),
+            ("logging", {"keep_days": 0}),
+            ("logging", "INFO"),
         ],
     )
     def test_reload_rejects_invalid_runtime_field_before_replacing_snapshot(
         self,
         config_manager: ConfigManager,
         config_file: Path,
+        caplog: pytest.LogCaptureFixture,
         field: str,
         value: Any,
     ):
@@ -156,10 +163,15 @@ class TestConfigManagerReload:
         candidate[field] = value
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
-        with pytest.raises(ConfigLoadError, match="Invalid runtime configuration"):
-            config_manager.reload()
+        with caplog.at_level(logging.ERROR, logger="core.config"):
+            with pytest.raises(ConfigLoadError, match="Invalid runtime configuration"):
+                config_manager.reload()
 
         assert config_manager.config == original
+        # 日志按字段路径和错误类型码说明哪里不对，路径的第一段就是出错的配置项。
+        invalid = logged_events(caplog, "config.field.invalid")
+        assert {event.fields["field"].split(".")[0] for event in invalid} == {field}
+        assert all(event.fields["error_type"] for event in invalid)
 
     @pytest.mark.parametrize(
         ("http_base", "ws_uri"),
@@ -270,6 +282,7 @@ class TestConfigManagerReload:
         self,
         config_manager: ConfigManager,
         config_file: Path,
+        caplog: pytest.LogCaptureFixture,
     ):
         original                      = config_manager.config
         candidate                     = config_manager.snapshot().mutable_config()
@@ -277,10 +290,13 @@ class TestConfigManagerReload:
         candidate["onebot_ws_uri"]    = ""
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
-        with pytest.raises(ConfigLoadError, match="onebot_ws_uri"):
-            config_manager.reload()
+        with caplog.at_level(logging.ERROR, logger="core.config"):
+            with pytest.raises(ConfigLoadError, match="onebot_ws_uri"):
+                config_manager.reload()
 
         assert config_manager.config == original
+        (invalid,) = logged_events(caplog, "config.field.invalid")
+        assert invalid.fields["field"] == "onebot_ws_uri"
 
     def test_reload_rejects_invalid_plugin_execution_before_replacing_snapshot(
         self,

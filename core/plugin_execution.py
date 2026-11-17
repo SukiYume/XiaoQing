@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeVar, cast
 
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
+from .log import LogEvent
 
 PluginConcurrency = Literal["parallel", "sequential"]
 T                 = TypeVar("T")
@@ -743,9 +744,9 @@ class PluginSyncBroker:
         waited = time.monotonic() - started
         if not drained:
             logger.warning(
-                "Plugin sync broker close left running callbacks: running=%d waited=%.2fs",
-                pending,
-                waited,
+                LogEvent(
+                    "plugin.sync_broker.close_pending", running=pending, waited_s=round(waited, 2)
+                )
             )
         return PluginSyncBrokerDrainResult(
             drained           = drained,
@@ -1068,9 +1069,11 @@ class PluginExecutionGate:
             await asyncio.sleep(0)
             self._mark_unfinished_child(task)
             logger.warning(
-                "Plugin callback timed out: plugin=%s timeout=%.1fs",
-                self.plugin_name,
-                self._policy.timeout_seconds or 0.0,
+                LogEvent(
+                    "plugin.callback.timeout",
+                    plugin    = self.plugin_name,
+                    timeout_s = round(self._policy.timeout_seconds or 0.0, 1),
+                )
             )
             raise PluginExecutionTimeout("plugin callback timed out") from exc
         except asyncio.CancelledError:
@@ -1236,11 +1239,13 @@ class PluginExecutionGate:
                 self._discard_sync_future(future)
         if not drained:
             logger.warning(
-                "Plugin gate close left quarantined work: plugin=%s async=%d sync=%d waited=%.2fs",
-                self.plugin_name,
-                pending_async_count,
-                pending_sync_count,
-                waited,
+                LogEvent(
+                    "plugin.gate.close_pending",
+                    plugin        = self.plugin_name,
+                    pending_async = pending_async_count,
+                    pending_sync  = pending_sync_count,
+                    waited_s      = round(waited, 2),
+                )
             )
         return PluginExecutionDrainResult(
             drained                = drained,

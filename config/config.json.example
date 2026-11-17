@@ -35,13 +35,7 @@
         "inbound_ws_max_workers": 8,
         "inbound_ws_broadcast_timeout_seconds": 5.0,
         "timezone": "Asia/Shanghai",
-        "log_level": "INFO",
-        "log_to_file": true,
-        "log_to_console": true,
-        "log_use_color": true,
-        "log_max_size_mb": 10,
-        "log_backup_count": 5,
-        "log_rotation": "time",
+        "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5},
         "ai": {
                 "providers": {
                         "openai":   {"api_base": "https://api.openai.com/v1", "proxy": "", "max_tokens_field": "max_completion_tokens"},

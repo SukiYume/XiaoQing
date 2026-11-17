@@ -12,14 +12,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from core.delivery import ScheduledDelivery
+from core.log import LogEvent
 from core.plugin_base import segments
 
 from ..chat_runtime import ai_route_context, configured_bot_name
 from ..llm.prompt_builder import build_dialogue_prompt
-from ..logging_utils import log_step
 from ..memory import client as memory_client
 from ..persona import SCOPE_CHAT
 from ..utils.wall_clock import describe_now, local_datetime
@@ -35,6 +36,8 @@ from .proactive import (
     share_block,
 )
 from .self_timeline import self_timeline_block
+
+log = logging.getLogger(__name__)
 
 _PRIVATE_DRAFT_INSTRUCTION = """这是一次主动找朋友说话的机会，不是对方在跟你说话。你们是私聊。
 材料里是你最近真的刷到、也许对方会感兴趣的事，对方之前提过、时间已经过了的事，或者你们好几天没聊了。像想到对方时随手发的一两句就好，没人回也成立。
@@ -118,22 +121,20 @@ async def consider_private(
     record  = state.proactive_state.get(key)
     today   = day_key(local_datetime(now))
     if record.count_on(today) >= cfg.private_max_per_day:
-        log_skip(context, runtime, key, "private_daily_cap")
+        log_skip(key, "private_daily_cap")
         return None
     if now - record.last_ts < cfg.private_min_interval_hours * 3600.0:
-        log_skip(
-            context, runtime, key, "private_interval", minutes_since=(now - record.last_ts) / 60
-        )
+        log_skip(key, "private_interval", minutes_since=(now - record.last_ts) / 60)
         return None
     if now - record.last_attempt_ts < cfg.retry_after_skip_minutes * 60.0:
-        log_skip(context, runtime, key, "private_recent_attempt")
+        log_skip(key, "private_recent_attempt")
         return None
     history = list(await state.memory_store.get_recent_async(chat_id, max_items=40))
     if friend_spoke_recently(history, now=now, quiet_minutes=cfg.private_quiet_minutes):
-        log_skip(context, runtime, key, "private_friend_active")
+        log_skip(key, "private_friend_active")
         return None
     if unanswered(history, record.last_ts):
-        log_skip(context, runtime, key, "private_unanswered")
+        log_skip(key, "private_unanswered")
         return None
 
     life     = runtime.cfg.life
@@ -156,7 +157,7 @@ async def consider_private(
     quiet_days = days_since_last_chat(history, now=now)
     missing = cfg.private_miss_after_days > 0 and quiet_days >= cfg.private_miss_after_days
     if not candidates and loop is None and not missing:
-        log_skip(context, runtime, key, "private_no_material")
+        log_skip(key, "private_no_material")
         return None
 
     bot_name = configured_bot_name(context)
@@ -186,11 +187,10 @@ async def consider_private(
 
     secrets = ai_route_context(context, chat_id=chat_id)
     if secrets.get("_ai") is None:
-        log_skip(context, runtime, key, "ai_unavailable")
+        log_skip(key, "ai_unavailable")
         return None
     await asyncio.to_thread(state.proactive_state.record_attempt, key, ts=now)
     done = await draft_through_judge(
-        context,
         runtime,
         chat_id      = key,
         secrets      = secrets,
@@ -202,7 +202,7 @@ async def consider_private(
     if done is None:
         return None
     draft, raw_draft = done
-    log_step(context, runtime, chat_id=key, step="proactive.send", fields={"text": draft})
+    log.info(LogEvent("proactive.send", chat_id=key, text=draft))
     receipt = build_receipt(
         context,
         runtime,

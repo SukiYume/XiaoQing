@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import BinaryIO
 
 from core.atomic_store import AtomicJsonStore
-from core.sensitive_audit import audit_error_type, summarize_sensitive
+from core.log import LogEvent
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # Minecraft 玩家名：日志事件正则与 /mc tell 校验共用。
 PLAYER_NAME_PATTERN = r"[A-Za-z0-9_]{1,16}"
 
 
-class LogEventType(str, Enum):
+class PlayerEventType(str, Enum):
     """插件会转发的日志事件类型。"""
 
     CHAT        = "chat"
@@ -31,10 +31,10 @@ class LogEventType(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class LogEvent:
+class PlayerEvent:
     """已解析且与原始日志行解耦的最小事件。"""
 
-    event_type: LogEventType
+    event_type: PlayerEventType
     player    : str
     message   : str | None = None
 
@@ -43,7 +43,7 @@ class LogEvent:
 class LogBatch:
     """一次有界轮询的事件、丢弃统计和待提交游标。"""
 
-    events        : list[LogEvent]
+    events        : list[PlayerEvent]
     matched_total : int        = 0
     dropped_events: int        = 0
     skipped_bytes : int        = 0
@@ -116,10 +116,7 @@ class LogMonitor:
             return position
         except Exception as exc:
             # 状态损坏时从当前文件末尾恢复，避免重放整份历史日志造成洪泛。
-            logger.error(
-                "Minecraft cursor state rejected error_type=%s",
-                audit_error_type(exc),
-            )
+            log.error(LogEvent("log_monitor.cursor_rejected", error=exc))
             return current_size
 
     def _persist_position(self, position: int, file_identity: str) -> None:
@@ -136,7 +133,6 @@ class LogMonitor:
     def initialize(self) -> bool:
         """读取文件身份；无历史游标时从末尾开始，不回放旧日志。"""
 
-        path_audit = summarize_sensitive(str(self.log_path))
         try:
             with self.log_path.open("rb") as file:
                 stat = os.fstat(file.fileno())
@@ -148,36 +144,20 @@ class LogMonitor:
             self._last_position = stat.st_size if saved_position is None else saved_position
             self._file_identity = file_identity
             self._initialized   = True
-            logger.info(
-                "sensitive_audit operation=minecraft.log_monitor status=initialized "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-                "position=%d",
-                path_audit.kind,
-                path_audit.length,
-                path_audit.byte_length,
-                path_audit.fingerprint,
-                self._last_position,
+            log.info(
+                LogEvent(
+                    "log_monitor",
+                    status   = "initialized",
+                    payload  = str(self.log_path),
+                    position = self._last_position,
+                )
             )
             return True
         except FileNotFoundError:
-            logger.warning(
-                "sensitive_audit operation=minecraft.log_monitor status=missing "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-                path_audit.kind,
-                path_audit.length,
-                path_audit.byte_length,
-                path_audit.fingerprint,
-            )
+            log.warning(LogEvent("log_monitor", status="missing", payload=str(self.log_path)))
         except Exception as exc:
-            logger.error(
-                "sensitive_audit operation=minecraft.log_monitor status=failed "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-                "error_type=%s",
-                path_audit.kind,
-                path_audit.length,
-                path_audit.byte_length,
-                path_audit.fingerprint,
-                audit_error_type(exc),
+            log.error(
+                LogEvent("log_monitor", status="failed", payload=str(self.log_path), error=exc)
             )
         self._initialized = False
         return False
@@ -210,10 +190,7 @@ class LogMonitor:
             return read_position, 0, 0
         read_start    = current_size - self.MAX_READ_BYTES
         skipped_lines = self._count_skipped_lines(file, read_position, read_start)
-        logger.warning(
-            "Minecraft 日志积压超过 %d 字节，仅处理最新 tail",
-            self.MAX_READ_BYTES,
-        )
+        log.warning(LogEvent("log_monitor.backlog_truncated", max_bytes=self.MAX_READ_BYTES))
         return read_start, read_start - read_position, skipped_lines
 
     @staticmethod
@@ -252,7 +229,7 @@ class LogMonitor:
             rotated = current_identity != self._file_identity or current_size < cursor_before
             read_position = 0 if rotated else cursor_before
             if rotated:
-                logger.info("检测到日志文件轮换，重新开始监控")
+                log.info(LogEvent("log_monitor.rotated"))
             if current_size == read_position:
                 return _ReadWindow(
                     b"",
@@ -301,17 +278,7 @@ class LogMonitor:
             events, matched_total = self._parse_events(window.content)
         except Exception as exc:
             self._initialized = False
-            path_audit        = summarize_sensitive(str(self.log_path))
-            logger.error(
-                "sensitive_audit operation=minecraft.log_poll status=failed "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-                "error_type=%s",
-                path_audit.kind,
-                path_audit.length,
-                path_audit.byte_length,
-                path_audit.fingerprint,
-                audit_error_type(exc),
-            )
+            log.error(LogEvent("log_poll", status="failed", payload=str(self.log_path), error=exc))
             return LogBatch(events=[])
 
         return LogBatch(
@@ -349,8 +316,8 @@ class LogMonitor:
         self._initialized   = True
         return True
 
-    def _parse_events(self, content: bytes) -> tuple[list[LogEvent], int]:
-        retained: deque[LogEvent] = deque(maxlen=self.MAX_EVENTS_PER_CHECK)
+    def _parse_events(self, content: bytes) -> tuple[list[PlayerEvent], int]:
+        retained: deque[PlayerEvent] = deque(maxlen=self.MAX_EVENTS_PER_CHECK)
         matched_total = 0
         for line in content.decode("utf-8", errors="replace").splitlines():
             event = self._parse_line(line)
@@ -359,7 +326,7 @@ class LogMonitor:
                 retained.append(event)
         return list(retained), matched_total
 
-    def _parse_line(self, line: str) -> LogEvent | None:
+    def _parse_line(self, line: str) -> PlayerEvent | None:
         prefix = self.LOG_PREFIX_PATTERN.fullmatch(line)
         if prefix is None:
             return None
@@ -367,27 +334,27 @@ class LogMonitor:
 
         match = self.CHAT_PATTERN.fullmatch(body)
         if match is not None:
-            return LogEvent(LogEventType.CHAT, match.group("player"), match.group("message"))
+            return PlayerEvent(PlayerEventType.CHAT, match.group("player"), match.group("message"))
 
         match = self.PRESENCE_PATTERN.fullmatch(body)
         if match is not None:
             event_type = (
-                LogEventType.JOIN if match.group("action") == "joined" else LogEventType.LEAVE
+                PlayerEventType.JOIN if match.group("action") == "joined" else PlayerEventType.LEAVE
             )
-            return LogEvent(event_type, match.group("player"))
+            return PlayerEvent(event_type, match.group("player"))
 
         match = self.ADVANCEMENT_PATTERN.fullmatch(body)
         if match is not None:
-            return LogEvent(
-                LogEventType.ADVANCEMENT,
+            return PlayerEvent(
+                PlayerEventType.ADVANCEMENT,
                 match.group("player"),
                 match.group("message"),
             )
 
         match = self.DEATH_PATTERN.fullmatch(body)
         if match is not None:
-            return LogEvent(LogEventType.DEATH, match.group("player"), match.group("message"))
+            return PlayerEvent(PlayerEventType.DEATH, match.group("player"), match.group("message"))
         return None
 
 
-__all__ = ["LogBatch", "LogEvent", "LogEventType", "LogMonitor"]
+__all__ = ["LogBatch", "LogMonitor", "PlayerEvent", "PlayerEventType"]

@@ -649,13 +649,13 @@
       ],
       "steps": [
         {"id":"timeline","code":"adnmb.adnmb.-t","message":"/adnmb -t","expect_any":[" - "],"captures":{"adnmb_thread_id":"(?:^|\\n)\\s*([0-9]{8})\\s+-"}},
-        {"id":"thread","code":"adnmb.adnmb.-c","message":"/adnmb -c {{adnmb_thread_id}}","expect_all":["{{adnmb_thread_id}}"],"reject_any":["不存在","XQ-PLUGIN-UNEXPECTED"],"captures":{"adnmb_reply_id":"(?:^|\\n)\\s*(?!{{adnmb_thread_id}}\\s+-)([0-9]{8})\\s+-"}},
-        {"id":"reply","code":"adnmb.adnmb.-r","message":"/adnmb -r {{adnmb_reply_id}}","expect_all":["{{adnmb_reply_id}}"],"reject_any":["不存在","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"thread","code":"adnmb.adnmb.-c","message":"/adnmb -c {{adnmb_thread_id}}","expect_all":["{{adnmb_thread_id}}"],"reject_any":["不存在"],"captures":{"adnmb_reply_id":"(?:^|\\n)\\s*(?!{{adnmb_thread_id}}\\s+-)([0-9]{8})\\s+-"}},
+        {"id":"reply","code":"adnmb.adnmb.-r","message":"/adnmb -r {{adnmb_reply_id}}","expect_all":["{{adnmb_reply_id}}"],"reject_any":["不存在"]},
         {"id":"invalid_add","code":"adnmb.adnmb.-a","message":"/adnmb -a","expect_all":["请指定要订阅的串号"]},
-        {"id":"add","code":"adnmb.adnmb.-a","message":"/adnmb -a {{adnmb_thread_id}}","expect_all":["订阅结果"],"expect_any":["成功"],"reject_any":["不存在","失败","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"add","code":"adnmb.adnmb.-a","message":"/adnmb -a {{adnmb_thread_id}}","expect_all":["订阅结果"],"expect_any":["成功"],"reject_any":["不存在","失败"]},
         {"id":"list","code":"adnmb.adnmb.-d","message":"/adnmb -d","expect_all":["{{adnmb_thread_id}}"]},
         {"id":"delete_alias","code":"adnmb.adnmb.-e","message":"/adnmb --delfeed {{adnmb_thread_id}}","expect_all":["取消订阅成功"],"cleanup":true},
-        {"id":"absent","code":"adnmb.adnmb.-d","message":"/adnmb -d","expect_any":["暂无订阅","列表为空"],"reject_any":["{{adnmb_thread_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"adnmb.adnmb.-d","message":"/adnmb -d","expect_any":["暂无订阅","列表为空"],"reject_any":["{{adnmb_thread_id}}"],"cleanup":true}
       ]
     },
     {
@@ -675,7 +675,7 @@
         {"id":"view","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_all":["MATRIX-{{run_id}}","#3366ff"]},
         {"id":"duplicate_alias","code":"color.color.add","message":"/color --write MATRIX-{{run_id}} #3366FF","expect_any":["已经定义","已存在"]},
         {"id":"delete_alias","code":"color.color.delete","message":"/color --delete MATRIX-{{run_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_any":["没有收录","没有"],"reject_any":["#3366ff","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_any":["没有收录","没有"],"reject_any":["#3366ff"],"cleanup":true}
       ]
     },
     {
@@ -699,14 +699,14 @@
         "flickr.flickr.help"
       ],
       "steps": [
-        {"id":"interesting","code":"flickr.flickr","message":"/flickr","expect_all":["📷","第 1/","https://www.flickr.com/photos/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"more_two","code":"flickr.flickr.more","message":"/flickr more 2","expect_all":["第 2/","第 3/"],"reject_any":["当前没有","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"current_info","code":"flickr.flickr.info","message":"/flickr info","expect_all":["📷","https://www.flickr.com/photos/"],"reject_any":["当前没有","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"search_any_license","code":"flickr.flickr.search","message":"/flickr search astronomy --sort interesting --license any","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"search_alias_cc","code":"flickr.flickr.search","message":"/弗里克 搜索 星云 --license cc","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"commons","code":"flickr.flickr.commons","message":"/flickr commons astronomy","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"public_user","code":"flickr.flickr.user","message":"/flickr user 34419668@N08","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
-        {"id":"public_album","code":"flickr.flickr.album","message":"/flickr album 34419668@N08 72177720315281797","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"interesting","code":"flickr.flickr","message":"/flickr","expect_all":["📷","第 1/","https://www.flickr.com/photos/"],"reject_any":["暂时不可用"]},
+        {"id":"more_two","code":"flickr.flickr.more","message":"/flickr more 2","expect_all":["第 2/","第 3/"],"reject_any":["当前没有"]},
+        {"id":"current_info","code":"flickr.flickr.info","message":"/flickr info","expect_all":["📷","https://www.flickr.com/photos/"],"reject_any":["当前没有"]},
+        {"id":"search_any_license","code":"flickr.flickr.search","message":"/flickr search astronomy --sort interesting --license any","expect_all":["📷","第 1/"],"reject_any":["暂时不可用"]},
+        {"id":"search_alias_cc","code":"flickr.flickr.search","message":"/弗里克 搜索 星云 --license cc","expect_all":["📷","第 1/"],"reject_any":["暂时不可用"]},
+        {"id":"commons","code":"flickr.flickr.commons","message":"/flickr commons astronomy","expect_all":["📷","第 1/"],"reject_any":["暂时不可用"]},
+        {"id":"public_user","code":"flickr.flickr.user","message":"/flickr user 34419668@N08","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用"]},
+        {"id":"public_album","code":"flickr.flickr.album","message":"/flickr album 34419668@N08 72177720315281797","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用"]},
         {"id":"help_alias","code":"flickr.flickr.help","message":"/flicker help","expect_all":["Flickr 公共摄影","/flickr search","license any|cc|public-domain"]},
         {"id":"invalid_search","code":"flickr.flickr.search","message":"/flickr search","expect_all":["请提供搜索关键词"]},
         {"id":"invalid_more_low","code":"flickr.flickr.more","message":"/flickr more 0","expect_all":["1 到 5"]},
@@ -754,7 +754,7 @@
         {"id":"topic_clear_idempotent","code":"ads_paper.paper.topics.clear","message":"/paper topics clear","expect_all":["已清空"],"reject_any":["失败"],"cleanup":true},
         {"id":"writing_delete","code":"ads_paper.paper.writing.del","message":"/paper writing del matrix-{{run_id}} 1","expect_all":["已删除"],"cleanup":true},
         {"id":"note_delete","code":"ads_paper.paper.note.del","message":"/paper note del matrix-{{run_id}} 1","expect_all":["已删除论文"],"cleanup":true},
-        {"id":"note_absent","code":"ads_paper.paper.note","message":"/paper note matrix-{{run_id}}","expect_all":["暂无笔记"],"reject_any":["笔记-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"note_absent","code":"ads_paper.paper.note","message":"/paper note matrix-{{run_id}}","expect_all":["暂无笔记"],"reject_any":["笔记-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -879,14 +879,14 @@
         {"id":"invalid_edit","code":"pendo.pendo.todo.edit","message":"/pendo todo edit {{todo_id}} plan:not-a-date","expect_any":["无效","无法","错误"]},
         {"id":"unchanged_after_invalid","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_all":["TODO-{{run_id}}","2037-01-10","MATRIX","初始"]},
         {"id":"edit","code":"pendo.pendo.todo.edit","message":"/pendo todo edit {{todo_id}} TODO-EDIT-{{run_id}} plan:2037-01-11 deadline:2037-01-11T19:00 remind:2037-01-11T18:00 cat:MATRIX_EDIT p:1 #已改","expect_all":["已更新待办"]},
-        {"id":"view_edited","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_all":["TODO-EDIT-{{run_id}}","2037-01-11","MATRIX_EDIT","已改"],"reject_any":["TODO-{{run_id}}\n","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"view_edited","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_all":["TODO-EDIT-{{run_id}}","2037-01-11","MATRIX_EDIT","已改"],"reject_any":["TODO-{{run_id}}\n"]},
         {"id":"done","code":"pendo.pendo.todo.done","message":"/pendo todo done {{todo_id}}","expect_all":["已完成"]},
         {"id":"done_idempotent","code":"pendo.pendo.todo.done","message":"/pendo todo done {{todo_id}}","expect_all":["已是完成"]},
         {"id":"undone","code":"pendo.pendo.todo.undone","message":"/pendo todo undone {{todo_id}}","expect_all":["重新打开"]},
         {"id":"cancel","code":"pendo.pendo.todo.cancel","message":"/pendo todo cancel {{todo_id}}","expect_all":["已取消"]},
         {"id":"list","code":"pendo.pendo.todo.list","message":"/pendo todo list 2037-01-11 cat:MATRIX_EDIT all","expect_all":["TODO-EDIT-{{run_id}}","{{todo_id}}"]},
         {"id":"delete","code":"pendo.pendo.todo.delete","message":"/pendo todo delete {{todo_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_any":["找不到","不存在"],"reject_any":["TODO-EDIT-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_any":["找不到","不存在"],"reject_any":["TODO-EDIT-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -923,7 +923,7 @@
         {"id":"list","code":"pendo.pendo.note.list","message":"/pendo note list cat:MATRIX_EDIT #已改 all","expect_all":["NOTE-EDIT-{{run_id}}","{{note_id}}"]},
         {"id":"delete_note","code":"pendo.pendo.note.delete","message":"/pendo note delete {{note_id}}","expect_all":["已删除"],"cleanup":true},
         {"id":"delete_target","code":"pendo.pendo.note.delete","message":"/pendo note delete {{target_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.note.view","message":"/pendo note view {{note_id}}","expect_any":["找不到","不存在"],"reject_any":["NOTE-EDIT-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.note.view","message":"/pendo note view {{note_id}}","expect_any":["找不到","不存在"],"reject_any":["NOTE-EDIT-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -942,9 +942,9 @@
         {"id":"create","code":"pendo.pendo.diary.add","message":"/pendo diary add 2037-03-12 DIARY-{{run_id}} weather:晴 location:MATRIX_LAB mood:happy score:8 tags:矩阵,测试 favorite:true","expect_all":["已记录","2037-03-12","MATRIX_LAB"],"captures":{"diary_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view_id","code":"pendo.pendo.diary.view","message":"/pendo diary view {{diary_id}}","expect_all":["DIARY-{{run_id}}","happy","8/10","晴","MATRIX_LAB","收藏"]},
         {"id":"view_date","code":"pendo.pendo.diary.view","message":"/pendo diary view 2037-03-12","expect_all":["DIARY-{{run_id}}","{{diary_id}}"]},
-        {"id":"list","code":"pendo.pendo.diary.list","message":"/pendo diary list 2037-03 mood:happy #矩阵","expect_all":["DIARY-{{run_id}}","{{diary_id}}"],"reject_any":["BAD-{{run_id}}","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"list","code":"pendo.pendo.diary.list","message":"/pendo diary list 2037-03 mood:happy #矩阵","expect_all":["DIARY-{{run_id}}","{{diary_id}}"],"reject_any":["BAD-{{run_id}}"]},
         {"id":"delete","code":"pendo.pendo.diary.delete","message":"/pendo diary delete {{diary_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.diary.view","message":"/pendo diary view {{diary_id}}","expect_any":["找不到","没有找到"],"reject_any":["DIARY-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.diary.view","message":"/pendo diary view {{diary_id}}","expect_any":["找不到","没有找到"],"reject_any":["DIARY-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -969,17 +969,17 @@
       "steps": [
         {"id":"create_expense","code":"pendo.pendo.ledger.add","message":"/pendo ledger add 35.50 EXPENSE-{{run_id}} type:expense cat:餐饮 account:微信 merchant:食堂 date:2037-04-02 remark:午餐 currency:CNY","expect_all":["记账成功","支出","35.50","餐饮","微信","食堂"],"captures":{"ledger_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"invalid_to","code":"pendo.pendo.ledger.edit","message":"/pendo ledger edit {{ledger_id}} to:银行卡","expect_all":["只有转账账目"]},
-        {"id":"unchanged_expense","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["支出","35.50","餐饮","微信","EXPENSE-{{run_id}}"],"reject_any":["银行卡","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"unchanged_expense","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["支出","35.50","餐饮","微信","EXPENSE-{{run_id}}"],"reject_any":["银行卡"]},
         {"id":"edit_transfer","code":"pendo.pendo.ledger.edit","message":"/pendo ledger edit {{ledger_id}} amount:99.99 title:TRANSFER-{{run_id}} cat:转账 type:transfer account:微信 to:银行卡 merchant:本人 date:2037-04-03 remark:全字段 currency:CNY","expect_all":["已更新账目","99.99","转账","银行卡"]},
         {"id":"view_transfer","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["转账","99.99","微信 → 银行卡","TRANSFER-{{run_id}}","本人","全字段"]},
         {"id":"edit_income","code":"pendo.pendo.ledger.edit","message":"/pendo ledger edit {{ledger_id}} type:income cat:工资 account:银行卡 merchant:单位","expect_all":["已更新账目","收入","工资"]},
-        {"id":"view_income","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["收入","99.99","工资","银行卡","单位"],"reject_any":["微信 → 银行卡","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"view_income","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["收入","99.99","工资","银行卡","单位"],"reject_any":["微信 → 银行卡"]},
         {"id":"list","code":"pendo.pendo.ledger.list","message":"/pendo ledger list 2037-04 type:income account:银行卡","expect_all":["{{ledger_id}}","TRANSFER-{{run_id}}"]},
         {"id":"summary","code":"pendo.pendo.ledger.summary","message":"/pendo ledger summary 2037-04","expect_all":["99.99"],"expect_any":["收入","汇总"]},
         {"id":"quick_create","code":"pendo.pendo.ledger.quick","message":"/pendo ledger quick 1.23 QUICK-{{run_id}} type:expense cat:测试 account:现金 date:2037-04-04","expect_all":["记账成功","1.23","QUICK-{{run_id}}"],"captures":{"quick_ledger_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"quick_delete","code":"pendo.pendo.ledger.delete","message":"/pendo ledger delete {{quick_ledger_id}}","expect_all":["已删除"],"cleanup":true},
         {"id":"delete","code":"pendo.pendo.ledger.delete","message":"/pendo ledger delete {{ledger_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_any":["找不到","不存在"],"reject_any":["TRANSFER-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_any":["找不到","不存在"],"reject_any":["TRANSFER-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -1022,7 +1022,7 @@
         {"id":"delete_future_reminders","code":"pendo.pendo.event.reminders.delete","message":"/pendo event reminders delete {{single_event_id}} future","expect_any":["已删除","提醒"]},
         {"id":"verify_all_fields","code":"pendo.pendo.event.view","message":"/pendo event view {{single_event_id}}","expect_all":["SINGLE-EDIT-{{run_id}}","MATRIX_ROOM2","发布","新议程","线上同步","2037-05-02"]},
         {"id":"delete","code":"pendo.pendo.event.delete","message":"/pendo event delete {{single_event_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.event.view","message":"/pendo event view {{single_event_id}}","expect_any":["找不到","不存在"],"reject_any":["SINGLE-EDIT-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.event.view","message":"/pendo event view {{single_event_id}}","expect_any":["找不到","不存在"],"reject_any":["SINGLE-EDIT-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -1059,7 +1059,7 @@
         {"id":"category_filter","code":"pendo.pendo.event.list","message":"/pendo event list 2037-06 cat:发布","expect_all":["RECUR-EDIT-{{run_id}}"]},
         {"id":"verify_collection_fields","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_all":["RECUR-EDIT-{{run_id}}","MATRIX_RECUR_ROOM","发布","集合备注"]},
         {"id":"delete_collection","code":"pendo.pendo.event.delete","message":"/pendo event delete {{recurring_collection_id}}","expect_all":["已删除日程集合"],"cleanup":true},
-        {"id":"absent","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_any":["找不到","不存在"],"reject_any":["RECUR-EDIT-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_any":["找不到","不存在"],"reject_any":["RECUR-EDIT-{{run_id}}"],"cleanup":true}
       ]
     },
     {
@@ -1097,8 +1097,8 @@
         {"id":"category_filter","code":"pendo.pendo.event.list","message":"/pendo event list 2037-07 cat:发布","expect_all":["MULTI-EDIT-{{run_id}}"]},
         {"id":"view_collection_edited","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_collection_id}}","expect_all":["MULTI-EDIT-{{run_id}}","MATRIX_HQ2","发布","集合备注"]},
         {"id":"delete_collection","code":"pendo.pendo.event.delete","message":"/pendo event delete {{multi_collection_id}}","expect_all":["已删除日程集合"],"cleanup":true},
-        {"id":"first_absent","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_first_id}}","expect_any":["找不到","不存在"],"reject_any":["提审","XQ-PLUGIN-UNEXPECTED"],"cleanup":true},
-        {"id":"last_absent","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_last_id}}","expect_any":["找不到","不存在"],"reject_any":["全量","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"first_absent","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_first_id}}","expect_any":["找不到","不存在"],"reject_any":["提审"],"cleanup":true},
+        {"id":"last_absent","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_last_id}}","expect_any":["找不到","不存在"],"reject_any":["全量"],"cleanup":true}
       ]
     },
     {
@@ -1216,7 +1216,7 @@
         {"id":"invalid_duplicate","code":"smalltalk.qa","message":"/记忆 问题{{run_id}} 回答{{run_id}}","expect_any":["已存在","重复","不能","已经知道"]},
         {"id":"still_one","code":"smalltalk.qa_list","message":"/对话 问题{{run_id}}","expect_all":["问题{{run_id}}","回答{{run_id}}"]},
         {"id":"remove","code":"smalltalk.qa_remove","message":"/删除对话 问题{{run_id}} 回答{{run_id}}","expect_any":["已删除","删除成功"],"cleanup":true},
-        {"id":"absent","code":"smalltalk.qa_list","message":"/对话 问题{{run_id}}","expect_any":["没有","未找到","暂无"],"reject_any":["回答{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"absent","code":"smalltalk.qa_list","message":"/对话 问题{{run_id}}","expect_any":["没有","未找到","暂无"],"reject_any":["回答{{run_id}}"],"cleanup":true}
       ]
     },
     {

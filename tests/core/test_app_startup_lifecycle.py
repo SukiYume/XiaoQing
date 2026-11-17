@@ -17,6 +17,7 @@ from tests.helpers.app_test_support import (
     ClientSession,
     XiaoQingApp,
 )
+from tests.helpers.assertions import logged_events
 
 temp_app_root = _fixture_support.temp_app_root
 
@@ -209,7 +210,8 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
     assert app._lifecycle_state.value == "new"
     assert app.http_session is None
     assert app.scheduler.scheduler is None
-    assert "startup ownership did not stabilize" in caplog.text
+    (unstable,) = logged_events(caplog, "startup.ownership_unstable")
+    assert unstable.fields["attempts"] == expected_attempts
     session.close.assert_awaited_once()
 
 
@@ -765,8 +767,8 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
             revision = 2,
         )
     )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # 监视任务收到取消后要收尾几轮事件循环才结束，轮数随平台和 Python 版本不同。
+    await asyncio.wait({watch_task}, timeout=5.0)
 
     assert watch_task.cancelled()
     assert app._plugin_watch_task is None

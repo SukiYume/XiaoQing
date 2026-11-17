@@ -16,6 +16,7 @@ from core.app_delivery import AppDeliveryMixin
 from core.delivery import SENSITIVE_ACTION_KEY, send_sensitive_private
 from core.onebot import OneBotHttpSender, OneBotWsClient
 from core.server import BroadcastResult
+from tests.helpers.assertions import logged_events
 from tests.helpers.onebot_test_support import wait_for_ws_action_request
 
 _CODE = "XQ-LOGIN-7F3K9Q"
@@ -46,8 +47,12 @@ def _message() -> list[dict[str, Any]]:
     return [{"type": "text", "data": {"text": f"登录 Code：{_CODE}"}}]
 
 
-def _logged(caplog: pytest.LogCaptureFixture) -> str:
-    return "\n".join(record.getMessage() for record in caplog.records)
+def _assert_sent_without_the_code(caplog: pytest.LogCaptureFixture) -> None:
+    """传输层记了发送成功，只带正文长度；登录 Code 不在任何日志里。"""
+
+    (done,) = logged_events(caplog, "send.done")
+    assert done.fields["message_length"] == len(_message()[0]["data"]["text"])
+    assert _CODE not in "\n".join(record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -69,8 +74,7 @@ async def test_http_delivery_keeps_the_code_out_of_logs(caplog):
     assert result is True
     assert received[0]["message"][0]["data"]["text"].endswith(_CODE)
     assert SENSITIVE_ACTION_KEY not in received[0]
-    assert "Sent send_private_msg" in _logged(caplog)
-    assert _CODE not in _logged(caplog)
+    _assert_sent_without_the_code(caplog)
 
 
 @pytest.mark.asyncio
@@ -92,8 +96,7 @@ async def test_ws_delivery_keeps_the_code_out_of_logs_and_off_the_wire(caplog):
 
     assert SENSITIVE_ACTION_KEY not in frame
     assert frame["params"]["message"][0]["data"]["text"].endswith(_CODE)
-    assert "Sent send_private_msg" in _logged(caplog)
-    assert _CODE not in _logged(caplog)
+    _assert_sent_without_the_code(caplog)
 
 
 @pytest.mark.asyncio

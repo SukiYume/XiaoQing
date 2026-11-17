@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
@@ -25,8 +24,6 @@ from .safety import (
     similar,
 )
 from .stores import LifeStore, new_id
-
-logger = logging.getLogger(__name__)
 
 WORK_ON = "work_on"
 

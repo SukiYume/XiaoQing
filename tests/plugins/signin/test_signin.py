@@ -1,13 +1,13 @@
 """Signin 的路由、配置、传输和第三方响应契约测试。"""
 
 import json
-import logging
 from collections.abc import Mapping
 from unittest.mock import Mock
 
 import pytest
 
 from core.config import ConfigSnapshot
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.signin import main as signin
 from plugins.signin import yingshi
 from tests.helpers.assertions import text_segments_text
@@ -21,7 +21,6 @@ ROOT = REPOSITORY_ROOT
 class _Context:
     def __init__(self, *, configured: bool = True, with_http: bool = True) -> None:
         self.request_id   = "signin-test-request"
-        self.logger       = logging.getLogger("test.signin")
         self.raw_session  = QueuedAiohttpSession()
         self.http_session = self.raw_session if with_http else None
         platform_config   = (
@@ -227,7 +226,7 @@ async def test_query_response_requires_json_object(context: _Context) -> None:
 
     result = await yingshi.yingshi_sign(context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in text_segments_text(result)
+    assert PUBLIC_ERROR_PREFIX in text_segments_text(result)
     assert len(context.raw_session.requests) == 1
 
 
@@ -438,7 +437,7 @@ async def test_unexpected_error_uses_public_error_boundary(context: _Context) ->
     result = await yingshi.yingshi_sign(context)
 
     text = text_segments_text(result)
-    assert "XQ-PLUGIN-UNEXPECTED" in text
+    assert PUBLIC_ERROR_PREFIX in text
     assert "private upstream detail" not in text
 
 

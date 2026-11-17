@@ -592,7 +592,6 @@ async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
             SimpleNamespace(
                 capabilities=SimpleNamespace(ai=AI()),
                 secrets    = {"plugins": {"ads_paper": {"ads_token": "token"}}},
-                logger     = SimpleNamespace(),
                 request_id = None,
             )
         ),

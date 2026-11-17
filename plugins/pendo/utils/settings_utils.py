@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 
 if TYPE_CHECKING:
     from ..services.db import Database
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 DEFAULT_SETTINGS_JSON: Final[dict[str, bool]] = {
@@ -110,7 +112,7 @@ def parse_custom_settings(settings: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_settings, dict):
         return normalize_settings_json(raw_settings)
     if raw_settings not in (None, ""):
-        logger.warning("Unexpected settings_json type: %s", type(raw_settings).__name__)
+        log.warning(LogEvent("settings.unexpected_type", value_type=type(raw_settings).__name__))
     return normalize_settings_json({})
 
 
@@ -176,10 +178,7 @@ def resolve_default_category(
     try:
         settings = db.get_user_settings(user_id)
     except Exception as exc:
-        logger.warning(
-            "Failed to load default category error_type=%s",
-            type(exc).__name__,
-        )
+        log.warning(LogEvent("settings.default_category_failed", error=exc))
         return fallback
 
     category = str(settings.get("default_category") or "").strip()

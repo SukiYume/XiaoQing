@@ -1,7 +1,6 @@
 # 验证后台任务登记、异常观察和关闭回收。
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,8 +19,8 @@ from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
     ],
 )
 async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
-    state = get_state()
-    context = SimpleNamespace(logger=MagicMock())
+    state   = get_state()
+    context = SimpleNamespace()
     gate    = asyncio.Event()
     started = 0
 
@@ -48,9 +47,9 @@ async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
 async def test_background_task_registry_rejects_work_above_global_capacity():
     state    = get_state()
     capacity = ChatRuntimeState._MAX_BACKGROUND_TASKS
-    context = SimpleNamespace(logger=MagicMock())
-    gate    = asyncio.Event()
-    started = 0
+    context  = SimpleNamespace()
+    gate     = asyncio.Event()
+    started  = 0
 
     async def blocked_job() -> None:
         nonlocal started

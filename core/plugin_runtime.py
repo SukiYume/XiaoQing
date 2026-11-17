@@ -13,12 +13,14 @@ if TYPE_CHECKING:
 import asyncio
 import logging
 import math
+import re
 import time
 from collections.abc import Callable, Mapping
 from types import MappingProxyType, ModuleType
 from typing import Any, cast
 
 from .exceptions import PluginLoadError
+from .log import LogEvent
 from .plugin_execution import (
     DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
     DEFAULT_SYNC_WORKERS,
@@ -38,6 +40,12 @@ from .plugin_manager_support import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _reason_code(reason: str) -> str:
+    """Fixed developer-written reason text as a log token: ``gate close failed (OSError)`` -> ``gate_close_failed_OSError``."""
+
+    return re.sub(r"[^A-Za-z0-9]+", "_", reason).strip("_")
 
 
 class PluginRuntimeMixin:
@@ -61,10 +69,11 @@ class PluginRuntimeMixin:
         def _log_watch_error(
             self,
             bucket: str,
-            message: str,
+            name: str,
             exc: BaseException,
             *,
             level: int = logging.WARNING,
+            **fields: object,
         ) -> None:
             raise NotImplementedError
 
@@ -121,8 +130,9 @@ class PluginRuntimeMixin:
         if parsed is None:
             self._log_watch_error(
                 "poll-interval",
-                "Ignoring invalid plugin watcher poll interval",
-                ValueError(repr(poll_interval)),
+                "plugin.watch.invalid_poll_interval",
+                ValueError("invalid poll interval"),
+                value=poll_interval,
             )
             return False
         with self._watch_waiters_lock:
@@ -286,7 +296,7 @@ class PluginRuntimeMixin:
             try:
                 handler(name)
             except Exception as exc:
-                logger.warning("Plugin change handler failed: plugin=%s error=%s", name, exc)
+                logger.warning(LogEvent("plugin.change_handler.failed", plugin=name, error=exc))
 
     def list_plugins(self) -> list[str]:
         return sorted(self._plugins.keys())
@@ -318,12 +328,14 @@ class PluginRuntimeMixin:
         self.router.clear_plugin(name)
         self._quarantined_plugins.add(name)
         logger.warning(
-            "Plugin %s quarantined during %s: async=%d sync=%d waited=%.2fs",
-            name,
-            phase,
-            result.pending_async_tasks,
-            result.pending_sync_callbacks,
-            result.waited_seconds,
+            LogEvent(
+                "plugin.quarantined",
+                plugin        = name,
+                phase         = _reason_code(phase),
+                pending_async = result.pending_async_tasks,
+                pending_sync  = result.pending_sync_callbacks,
+                waited_s      = round(result.waited_seconds, 2),
+            )
         )
         self._notify_change(name)
 
@@ -343,7 +355,14 @@ class PluginRuntimeMixin:
         self._execution_gates[name] = gate
         self.router.clear_plugin(name)
         self._quarantined_plugins.add(name)
-        logger.warning("Plugin %s quarantined during %s: %s", name, phase, reason)
+        logger.warning(
+            LogEvent(
+                "plugin.quarantined",
+                plugin      = name,
+                phase       = _reason_code(phase),
+                reason_code = _reason_code(reason),
+            )
+        )
         self._notify_change(name)
 
     def _quarantine_gate_without_module(
@@ -361,7 +380,14 @@ class PluginRuntimeMixin:
         self._execution_gates[name] = gate
         self.router.clear_plugin(name)
         self._quarantined_plugins.add(name)
-        logger.warning("Plugin %s quarantined during %s: %s", name, phase, reason)
+        logger.warning(
+            LogEvent(
+                "plugin.quarantined",
+                plugin      = name,
+                phase       = _reason_code(phase),
+                reason_code = _reason_code(reason),
+            )
+        )
         self._notify_change(name)
 
     def _quarantine_gate_result(

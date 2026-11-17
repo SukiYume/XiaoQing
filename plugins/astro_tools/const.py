@@ -84,6 +84,4 @@ def handle_const(args: str, context: PluginContextProtocol) -> str:
         available_names = sorted((*const_map, *_CONST_ALIASES))
         return f"未找到常数: {args}\n\n可用常数: {', '.join(available_names)}"
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.const"
-        )
+        return public_error_message(context, exc, component="astro_tools.const")

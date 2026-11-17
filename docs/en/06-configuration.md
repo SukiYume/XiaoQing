@@ -26,6 +26,35 @@ Plugins read their namespaces through scoped contexts.
 Top-level `ai` in `config.json` holds the common model registry. Top-level `plugins` holds public plugin namespaces.
 The matching `ai` and `plugins` objects in `secrets.json` hold credentials.
 
+### No valid configuration at startup
+
+The process reads `config/config.json` for the first time at startup.
+If the file is missing, not valid JSON, unreadable, or fails validation, the process does not start: it logs the cause and exits with code 1. The same happens when `logs/` under the runtime directory cannot be created.
+The configured log outputs are not in place yet, so these diagnostics go only to the console (standard output), not to `logs/xiaoqing.log`:
+
+| Event | Meaning |
+|---|---|
+| `config.source.missing source=config` | The file does not exist |
+| `config.source.invalid source=config status=… error=…` | `status` is `invalid` when the content is invalid (not valid JSON, larger than 8 MiB, or failing validation) and `unavailable` when the file cannot be read or keeps changing while it is read. A JSON syntax error carries its line and column as `error.lineno` and `error.colno`; a validation failure carries the number of failing fields as `field_errors` |
+| `config.field.invalid source=config field=<field path> error_type=<error type>` | One line per failing field on a validation failure, at most 20. `error_type` is the pydantic error type, for example `string_type` or `greater_than_equal` |
+| `process.failed error=… error.at=…` | The last line, logged by the process entry at CRITICAL with a traceback |
+
+For example, with `bot_name` written as a number and `ws_queue_size` as `0` (excerpt):
+
+```text
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.source.invalid source=config status=invalid error=ConfigLoadError error.at=core/config.py:232 error.cause=ValidationError field_errors=2
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.field.invalid source=config field=bot_name error_type=string_type
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.field.invalid source=config field=ws_queue_size error_type=greater_than_equal
+2026-11-17 09:30:12 [CRITICAL] [-] __main__: process.failed error=ConfigLoadError error.at=core/app.py:98
+```
+
+Configuration values, addresses, and exception messages are not printed.
+Problems with `secrets.json` are logged as the same events (`source=secrets`). They do not stop startup; credentials follow the fail-closed rules in [configuration live reload](#️-configuration-live-reload).
+
+Under the Windows production chain these lines are in `logs/bot-monitor.log`.
+After the Bot exits, the monitor starts it again with a backoff (10 seconds at first, doubling each time, at most 300 seconds), so the lines repeat until the configuration is fixed.
+The monitor also reads `config.json` when it starts itself; if the file is missing or not a JSON object, the monitor stops with an error and does not start the Bot.
+
 ## ⚙️ Core settings
 
 ### Bot and commands
@@ -183,20 +212,92 @@ Plugin reload waits up to `drain_timeout_seconds` for current-generation cleanup
 
 ## ⚙️ Logging settings
 
-| Field | Type | Example | Description |
-|---|---|---|---|
-| `log_level` | string | `"INFO"` | Root level. Common values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
-| `log_to_file` | boolean | `true` | Write `logs/xiaoqing.log` and `logs/xiaoqing_error.log`. |
-| `log_to_console` | boolean | `true` | Console output |
-| `log_use_color` | boolean | `true` | ANSI colors in interactive terminals |
-| `log_max_size_mb` | number | `10` | Main and error log per-file threshold in `size` mode |
-| `log_backup_count` | integer | `5` | Kept rotated-file count |
-| `log_rotation` | `time` / `size` | `"time"` | Main log rotation at midnight or by size |
+Logging settings live in the top-level `logging` object:
 
-The error log records `ERROR` and higher levels and rotates by size.
-Plugin loggers automatically attach plugin names and request IDs.
-Core and plugins use summaries or redacted values for tokens, cookies, authorization headers, and keys.
-The process creates log handlers during startup. Restart the main process after changes to these fields.
+```json
+{
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5}
+}
+```
+
+| Field | Type | Default and range | Description |
+|---|---|---|---|
+| `level` | string | `"INFO"`; `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | Level of Core, plugins, scripts, and the process entry; for third-party libraries see [levels](#levels) below |
+| `levels` | object | `{}` | Per-logger levels by logger name, with the same values as `level` |
+| `console` | boolean | `true` | Write to standard output |
+| `file` | boolean | `true` | Write `logs/xiaoqing.log`; with `console` also off, nothing is logged |
+| `keep_days` | integer | `5`, `1..365` | Number of rotated history files kept |
+
+Other fields inside `logging`, level names that are not uppercase, and out-of-range `keep_days` values fail configuration validation.
+The process creates log handlers at startup, so restart the main process after changing these fields. The startup line `日志系统初始化完成 level=… dir=… keep_days=…` shows the settings in effect.
+Before the configuration is read, the process entry writes only to the console, at `INFO`, in the same line format; once the configuration is read, the outputs set in this section take over.
+
+`logs/xiaoqing.log` under the runtime directory is the only log file. It rotates at midnight and keeps `keep_days` history files. Records at `ERROR` and above are in the same file.
+The console colors lines by level when standard output is a terminal, and prints without color when it is redirected to a file or pipe.
+The Windows production chain saves the Bot's standard output as `logs/bot-monitor.log`, so production settings use `"console": false` to write each record once. The few lines written to the console before the configuration is read (such as the diagnostics for [no valid configuration at startup](#no-valid-configuration-at-startup)) are only in `bot-monitor.log`.
+
+### Levels
+
+`level` governs the project's own loggers: `core`, `plugins`, `scripts`, and the process entry (`main`, `__main__`).
+Every other logger belongs to a third-party library and is at `WARNING`, or at `level` when `level` is stricter than `WARNING`.
+`levels` sets a level per logger name, for project and third-party loggers alike, in either direction.
+Keys are logger names: `core.<module>` for Core modules, `plugins.<plugin>.<module>` for plugin modules, and the library's own logger name for a third-party library. A prefix covers every module below it.
+For example, `{"plugins.xiaoqing_chat": "WARNING", "core.ai": "DEBUG"}` keeps only warnings and errors from the chat plugin and turns on DEBUG logs for AI call settings; `{"websockets": "DEBUG"}` turns on the websockets library's own DEBUG logs.
+
+### Log lines
+
+Each line in the file reads:
+
+```text
+2026-11-16 09:30:12 [INFO] [3f9a1c2e] plugins.hello.main (main.py:42): fetch.done status=ok items=3
+```
+
+Console lines omit `(file:line)`.
+The second bracket is the request ID. Each message, each command run on someone's behalf, and each scheduled-task run has its own; lines outside any request show `-`.
+The message part is the event name followed by fields, rendered by the rules in [logs and metrics in the plugin guide](03-plugin-development.md#logs-and-metrics): identifiers and labels stay readable, body text keeps only length and fingerprint, credentials are redacted, and exceptions keep their type, location, and status-like attributes but not their message.
+Newlines and control characters in messages are escaped as `\n`, `\r`, and `\xNN`. Messages longer than 4000 characters are truncated with a note of how many characters were cut.
+
+Records from third-party libraries do not go through `LogEvent`.
+The line keeps the message template written in the library's code and fills in the formatting arguments after replacing them by the same field rules: numbers and dates as they are, exceptions as their type name, containers such as lists and dicts as `[N items]`, and text and other objects as length and fingerprint.
+Positional arguments have no key, so even text that looks like an identifier keeps only length and fingerprint; `%(name)s` arguments follow the key rules.
+For example, APScheduler skipping a run writes:
+
+```text
+2026-11-17 09:30:12 [WARNING] [-] apscheduler.scheduler: Execution of job "<45ch #25c1a32c>" skipped: maximum number of running instances reached (1)
+```
+
+When the replaced arguments do not fit the template (for example `%d` meeting fingerprinted text), the message is the template followed by ` <arguments do not match the format>`. A library message written without arguments appears as is.
+
+A record with an exception is followed by a traceback.
+Each exception in the chain gets one block with at most its innermost 48 frames as `file:line in function`, preceded by a `…(+N earlier frames)` line when outer frames were dropped. The block ends with the exception type and its status-like attributes, for example `core.ai.AIRequestError (status=504)`.
+Files are given relative to the project, the third-party package, or the standard library, without machine directories.
+Exception messages may carry body text or credentials, so they are not logged; a traceback stays within 8000 characters.
+
+### Uncaught exceptions and output failures
+
+Exceptions that the interpreter and the event loop would print directly are logged as events, with `error=…` fields and the traceback above:
+
+| Event | Logger and level | Source |
+|---|---|---|
+| `process.uncaught` | `core.log`, CRITICAL | An exception not caught in the main thread |
+| `thread.uncaught thread=<thread name>` | `core.log`, ERROR | An exception not caught in another thread |
+| `process.unraisable` | `core.log`, ERROR | An exception that cannot propagate, such as one in a destructor or during garbage collection |
+| `asyncio.unhandled kind=<kind> task=<task name>` | `asyncio`, ERROR | An exception nobody handled in the event loop. `kind` is `task_exception`, `future_exception`, `callback_exception`, `pending_task_destroyed`, `unclosed_resource`, or `other`; without an exception there is no `error` |
+
+Thread and task names that are not simple identifiers are left out.
+When startup or the run ends with an exception, the process entry logs one CRITICAL `process.failed` and exits with code 1.
+
+When a log output cannot be written (for example a full disk or a file held by another process), one diagnostic line goes to standard error, without the record's content.
+This is the line for a midnight rotation blocked on Windows:
+
+```text
+2026-11-17 00:00:03 [ERROR] [-] core.log: log.output_failed handler=file stage=rollover error=PermissionError error.at=core/log.py:703 error.errno=13 error.winerror=32
+```
+
+`handler` is `console` or `file`; `stage` is `write` or `rollover`.
+The first failure of an output at a stage is written immediately, then at most one line per minute, with the number held back in between as `suppressed`.
+After a failed rotation, records keep going to the current file and the next record tries the rotation again.
+The Windows production chain saves standard error as `logs/bot-monitor-error.log`.
 
 ## 🧠 AI/VLM registry
 
@@ -307,7 +408,7 @@ XiaoQing Chat loads a typed snapshot of these routes. Replies use `chat`; planni
 
 `plugins/xiaoqing_chat/config/xiaoqing_config.json` manages persona, memory and participation behavior. Sampling values, token limits, foreground/background request timeouts and retries, planner request timeouts, checker budgets and vision request settings belong to the corresponding routes. Deep-chat mode uses chat-route sampling, and route order defines the default model. The behavior file rejects these AI fields and a nested `ai` registry with an error that points to the main configuration.
 
-DEBUG logs record resolved routes, models and request settings. These records contain parameter metadata; keys and message content remain private.
+DEBUG logs from `core.ai` (`ai.request.settings`) record resolved routes, models and request settings. These records contain parameter metadata; keys and message content remain private. To see only these, set `{"core.ai": "DEBUG"}` in `logging.levels`.
 
 ### Provider secret
 
@@ -594,10 +695,10 @@ Publication sequence:
 | Public plugin configuration and private credentials | Plugin reads after confirmed revision publication |
 | Schedule target groups (`plugins.<plugin>.schedules`) | Next run after confirmed revision publication |
 | Valid external single-file `secrets.json` candidate | Administrator checks private field summary, then sends `/reload` |
-| `data_root`, logging, `napcat_account`, `mkl_threading_layer` | Main-process or production-chain restart |
+| `data_root`, `logging`, `napcat_account`, `mkl_threading_layer` | Main-process or production-chain restart |
 | Plugin source, manifest, `watch_files` | `/reload`, plugin watcher, or process restart in restart-only environments |
 
-Invalid public configuration keeps the last known good snapshot.
+When the configuration is read again during operation, invalid public configuration keeps the last known good snapshot. The first read at startup has no snapshot to keep; see [no valid configuration at startup](#no-valid-configuration-at-startup).
 Missing, damaged, unreadable, or unconfirmed secret sources immediately enter fail-closed state.
 Core revokes network credentials and runtime administrator views.
 Administrator private-chat `/set_secret` applies to existing secret paths. Core writes under a lock and publishes the revision.
@@ -641,6 +742,7 @@ A later `/reload` tries the switch to the declared listener again.
 - Administrators check field summaries and send `/reload` for valid single-file secret replacements.
 - Public configuration changes and two-source replacements occur during shutdown windows.
 - `data_root`, log directories, and backup directories have explicit owners.
+- Under the Windows production chain, `logging.console` is `false`.
 - `plugin_execution` gives long-task plugins suitable budgets.
 - Pendo Web Cookie Secure matches the HTTPS deployment.
 - `python scripts/run_full_uat.py --plan-only` and full UAT complete before production startup.

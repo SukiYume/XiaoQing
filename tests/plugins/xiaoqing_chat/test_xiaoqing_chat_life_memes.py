@@ -7,6 +7,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,6 +28,7 @@ from plugins.xiaoqing_chat.media.marker_resolver import (
     resolve_marker,
 )
 from plugins.xiaoqing_chat.media.markers import build_marker
+from tests.helpers.assertions import logged_events
 from tests.helpers.settings_snapshot import settings_snapshot
 from tests.helpers.xiaoqing_chat_media_test_support import make_media_runtime, write_png
 
@@ -262,7 +264,8 @@ async def test_sync_fetches_further_pages_while_full_and_ignores_bad_items(mock_
 
 
 @pytest.mark.asyncio
-async def test_sync_is_silent_when_disabled_missing_or_failing(mock_context) -> None:
+async def test_sync_is_silent_when_disabled_missing_or_failing(mock_context, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     runtime                            = make_media_runtime()
     runtime.cfg.life.enable_life_memes = False
     life                               = FakeLife(_page([_png(70)]))
@@ -275,8 +278,10 @@ async def test_sync_is_silent_when_disabled_missing_or_failing(mock_context) -> 
     failing = FakeLife(RuntimeError("SECRET_TEXT"))
     context = _context_with(mock_context, failing)
     assert await sync_life_memes(context, runtime) == 0
-    logged = " ".join(str(c) for c in context.logger.info.call_args_list)
-    assert "life.memes.sync_error" in logged and "SECRET_TEXT" not in logged
+    assert [event.fields["error"] for event in logged_events(caplog, "life.memes.sync_error")] == [
+        "RuntimeError"
+    ]
+    assert "SECRET_TEXT" not in caplog.text
     assert await sync_life_memes(_context_with(mock_context, FakeLife(None)), runtime) == 0
 
 

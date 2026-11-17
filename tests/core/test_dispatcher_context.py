@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 import tests.helpers.dispatcher_test_support as _fixture_support
+from tests.helpers.assertions import logged_events
 from tests.helpers.dispatcher_test_support import (
     BlockingConcurrencyProbe,
     CommandSpec,
@@ -323,11 +324,16 @@ class TestProcessEventLinearFlow:
 
     @pytest.mark.asyncio
     async def test_unknown_command_hint_for_slash_prefix(
-        self, dispatcher, mock_router, event_template
+        self, dispatcher, mock_router, event_template, caplog
     ):
         mock_router.resolve.return_value = None
-        result = await dispatcher.handle_event(event_template(message="/未知命令"))
+        caplog.set_level(logging.INFO)
+        result = await dispatcher.handle_event(event_template(message="/未知命令 参数"))
         assert result and "未知命令" in result[0]["data"]["text"]
+        (unknown,) = logged_events(caplog, "command.unknown")
+        # 日志只留命令词的长度和指纹，不留原文
+        assert unknown.fields["command"].startswith("<4ch #")
+        assert "未知命令" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_group_at_mention_triggers_has_prefix(
@@ -633,8 +639,9 @@ class TestProcessEventLinearFlow:
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
         assert result is None
-        assert "XQ-PLUGIN-UNEXPECTED" in log_text
+        [logged] = logged_events(caplog, "public_error")
+        assert logged.fields["component"] == "dispatcher.provider"
+        assert logged.fields["category"] == "internal"
         assert canary not in log_text
         assert "user:password" not in log_text
         assert "C:\\private" not in log_text
-        assert all(record.exc_info is None for record in caplog.records)

@@ -51,7 +51,6 @@ STATE_MODELS = frozenset(
         "external_session",
     }
 )
-PUBLIC_ERROR_CODE            = "XQ-PLUGIN-UNEXPECTED"
 MAX_PERSISTED_RESPONSE_CHARS = 2_000
 WS_ACTION_SETTLE_SECONDS     = 0.15
 
@@ -524,7 +523,7 @@ def _build_scenario_step(
         label=f"动态场景 {scenario_id}.{step_id}.expect_any",
     )
     reject_any = _string_tuple(
-        raw_step.get("reject_any", [PUBLIC_ERROR_CODE]),
+        raw_step.get("reject_any", []),
         label=f"动态场景 {scenario_id}.{step_id}.reject_any",
     )
     if not expect_all and not expect_any:
@@ -1185,6 +1184,14 @@ def _persisted_response(
     }
 
 
+def _is_public_error(text: str) -> bool:
+    """回复里有 Core 的公开错误（插件意外异常）：它总以 ``PUBLIC_ERROR_PREFIX`` 开头。"""
+
+    from core.public_errors import PUBLIC_ERROR_PREFIX
+
+    return PUBLIC_ERROR_PREFIX in text
+
+
 def evaluate_response(
     case: MatrixCase,
     response: EventResponse,
@@ -1195,7 +1202,7 @@ def evaluate_response(
     failure: str | None = _transport_failure(response)
     semantic_strength   = "observable_reply"
     if failure is None:
-        if PUBLIC_ERROR_CODE in text:
+        if _is_public_error(text):
             failure = "unhandled_plugin_exception"
         elif case.kind == "invalid" and (case.invalid_expect_any or case.invalid_reject_any):
             semantic_strength = "strict_invalid_assertion"
@@ -1350,6 +1357,8 @@ def _scenario_step_result(
     details : list[str]      = []
     captured: dict[str, str] = {}
     if failure is None:
+        if _is_public_error(text):
+            details.append("unhandled_plugin_exception")
         for expected in step.expect_all:
             rendered = _render_scenario_template(expected, values)
             if rendered not in text:

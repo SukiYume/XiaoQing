@@ -7,7 +7,6 @@ import base64
 import binascii
 import hashlib
 import json
-import logging
 import os
 import re
 import time
@@ -28,8 +27,6 @@ from .config import AgentConfig
 from .prompts import HIDDEN_CAPABILITY_PLUGINS, command_allowed
 from .shells import ShellSpec
 from .tasks import AgentTask, Outcome
-
-logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[["ToolEnv", dict[str, Any]], Awaitable["ToolResult"]]
 

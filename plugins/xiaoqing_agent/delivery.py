@@ -11,11 +11,12 @@ from typing import Any
 
 from core.delivery import merge_delivery_outcomes
 from core.interfaces import ACTION_BYPASS_SINK_KEY
+from core.log import LogEvent
 from core.plugin_base import build_action, image, record, text
 
 from .tasks import ChatRef, Outcome
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 每发完一部分就回报一次：这次发送带出了哪些附件、结果如何。
 PartReport = Callable[[list[Path], "bool | None"], Awaitable[None]]
@@ -100,7 +101,7 @@ async def _dispatch(context: Any, action: dict[str, Any], what: str) -> bool | N
     try:
         sent = await context.send_action(action)
     except Exception as exc:
-        logger.warning("xiaoqing_agent %s failed error_type=%s", what, type(exc).__name__)
+        log.warning(LogEvent(f"{what}.failed", error=exc))
         return False
     return sent if isinstance(sent, bool) else None
 
@@ -109,7 +110,7 @@ async def send_message(context: Any, chat: ChatRef, message: list[dict[str, Any]
     action = build_action(message, chat.user_id, chat.group_id)
     if action is None:
         return False
-    return await _dispatch(context, action, "message delivery")
+    return await _dispatch(context, action, "message_delivery")
 
 
 async def upload_file(context: Any, chat: ChatRef, path: Path) -> bool | None:
@@ -118,7 +119,7 @@ async def upload_file(context: Any, chat: ChatRef, path: Path) -> bool | None:
         action = {"action": "upload_group_file", "params": {"group_id": chat.group_id, **params}}
     else:
         action = {"action": "upload_private_file", "params": {"user_id": chat.user_id, **params}}
-    return await _dispatch(context, action, "file upload")
+    return await _dispatch(context, action, "file_upload")
 
 
 async def upload_each(

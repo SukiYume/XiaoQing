@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Protocol, TypeVar
 
-from aiohttp import ContentTypeError, WSCloseCode, web
+from aiohttp import ContentTypeError, WSCloseCode, hdrs, web
+from aiohttp.abc import AbstractAccessLogger
 from pydantic import ValidationError
 
 from .auth import verify_bearer_token
@@ -47,6 +48,7 @@ from .lifecycle import (
 from .lifecycle import (
     run_owned_operation as _run_owned_cleanup,
 )
+from .log import LogEvent, current_request_id, log_scope, new_request_id
 from .message import ValidatedInboundEvent
 from .models import OneBotEvent
 from .version import VERSION
@@ -93,6 +95,43 @@ async def _finalize_http_action_response(
         raise
     await _resolve_delivery_actions(actions, delivered=True)
     return response
+
+
+# POST /event 的 request id 记在请求上：访问日志在处理器的作用域退出之后才写。
+_REQUEST_ID_KEY = web.RequestKey("xiaoqing_request_id", str)
+
+
+def _matched_route(request: web.BaseRequest) -> str | None:
+    """请求命中的路由模板；没有命中路由、或请求行没能解析时为 None。"""
+
+    # 请求行没能解析时 aiohttp 不做路由，这时读 ``match_info`` 会触发它的内部断言。
+    match_info = getattr(request, "_match_info", None)
+    resource   = None if match_info is None else match_info.route.resource
+    return None if resource is None else resource.canonical
+
+
+class _InboundAccessLogger(AbstractAccessLogger):
+    """入站监听器的访问日志：只记方法、状态码、命中的路由模板和耗时。
+
+    aiohttp 默认的访问日志把请求行（含查询串）、Referer 和 User-Agent 原样写成字符串；这里不记
+    路径、查询串、请求头和对端地址。1xx～3xx 记 DEBUG（接纳的事件另有分发日志），4xx/5xx 记
+    WARNING。请求在某个 request id 下处理过时，这一行带同一个 id。
+    """
+
+    def log(self, request: web.BaseRequest, response: web.StreamResponse, time: float) -> None:
+        status = response.status
+        self.logger.log(
+            logging.WARNING if status >= 400 else logging.DEBUG,
+            LogEvent(
+                "inbound.http.access",
+                # 方法名由客户端发来，只有标准方法原样记。
+                method    = request.method if request.method in hdrs.METH_ALL else "OTHER",
+                status    = status,
+                route     = _matched_route(request),
+                elapsed_s = round(time, 3),
+            ),
+            extra={"request_id": request.get(_REQUEST_ID_KEY)},
+        )
 
 
 class InboundLifecycleFatalError(RuntimeError):
@@ -227,12 +266,16 @@ async def _gather_broadcast_tasks(tasks: list[asyncio.Task[T]]) -> list[T]:
 
 @dataclass(eq=False, slots=True)
 class _InboundEventTicket:
-    """One event admitted at a precise dispatcher sequence number."""
+    """One event admitted at a precise dispatcher sequence number.
+
+    ``request_id`` 是这条事件的日志作用域：处理、发回结果和结算回执都在它下面。
+    """
 
     sequence      : int
     key           : str
     payload       : dict[str, Any]
     result        : asyncio.Future[list[dict[str, Any]]]
+    request_id    : str
     auth_guard    : Callable[[], bool] | None                     = None
     started       : bool                                          = False
     finished      : bool                                          = False
@@ -305,12 +348,15 @@ class _InboundEventDispatcher:
         # 被丢弃的已完成结果仍带着回执；结算任务由调度器持有，关闭时一并等待。
         self._settlements: set[asyncio.Task[Any]] = set()
 
-    def _settle_dropped(self, actions: list[dict[str, Any]]) -> None:
+    def _settle_dropped(self, ticket: _InboundEventTicket, actions: list[dict[str, Any]]) -> None:
+        """回滚一张票据不会再发出的动作；不管由谁丢弃，结算都记在这张票据的 request id 下。"""
+
         if not actions:
             return
-        task = asyncio.get_running_loop().create_task(
-            _resolve_delivery_actions(actions, delivered=False)
-        )
+        with log_scope(ticket.request_id):
+            task = asyncio.get_running_loop().create_task(
+                _resolve_delivery_actions(actions, delivered=False)
+            )
         self._settlements.add(task)
         task.add_done_callback(self._settlements.discard)
 
@@ -377,19 +423,22 @@ class _InboundEventDispatcher:
         key                                          = self._event_key(payload, sequence)
         result: asyncio.Future[list[dict[str, Any]]] = loop.create_future()
         ticket                                       = _InboundEventTicket(
-            sequence   = sequence,
-            key        = key,
-            payload    = payload,
-            result     = result,
+            sequence = sequence,
+            key      = key,
+            payload  = payload,
+            result   = result,
+            # HTTP 上报在请求作用域里登记，沿用它的 id；WebSocket 帧各取一个新的。
+            request_id = current_request_id() or new_request_id(),
             auth_guard = auth_guard,
         )
         lane = self._lanes.setdefault(key, _InboundEventLane())
         lane.pending.append(ticket)
         if self._on_admit is not None:
-            try:
-                self._on_admit(payload)
-            except Exception:
-                logger.exception("Inbound event admission observer failed")
+            with log_scope(ticket.request_id):
+                try:
+                    self._on_admit(payload)
+                except Exception:
+                    logger.exception(LogEvent("inbound.observer.failed"))
         self._inflight += 1
         assert self._drained is not None
         self._drained.clear()
@@ -449,7 +498,7 @@ class _InboundEventDispatcher:
                 return
             if error is None:
                 # 处理器已经完成、结果不会再发出：回滚这些动作带着的业务预留。
-                self._settle_dropped(ticket.result.result())
+                self._settle_dropped(ticket, ticket.result.result())
 
     def _cancel_if_result_cancelled(
         self,
@@ -482,11 +531,13 @@ class _InboundEventDispatcher:
             return
         self._workers = {task for task in self._workers if not task.done()}
         desired       = min(self._max_workers, len(self._workers) + ready.qsize())
-        while len(self._workers) < desired:
-            task = asyncio.create_task(self._worker_loop())
-            self._worker_starts += 1
-            self._workers.add(task)
-            task.add_done_callback(self._worker_done)
+        # worker 依次执行多张票据，自己和它的完成回调都不带登记时那张票据的 request id。
+        with log_scope(None):
+            while len(self._workers) < desired:
+                task = asyncio.create_task(self._worker_loop())
+                self._worker_starts += 1
+                self._workers.add(task)
+                task.add_done_callback(self._worker_done)
 
     def _worker_done(self, task: asyncio.Task[None]) -> None:
         self._workers.discard(task)
@@ -497,11 +548,7 @@ class _InboundEventDispatcher:
         except BaseException as exc:
             # No handler failure should reach this boundary.  If dispatcher
             # bookkeeping itself fails, keep servicing other admitted lanes.
-            logger.critical(
-                "Inbound dispatcher worker failed unexpectedly: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            logger.critical(LogEvent("inbound.worker.fatal", error=exc))
         if (
             self._ready_keys is not None
             and not self._ready_keys.empty()
@@ -537,7 +584,9 @@ class _InboundEventDispatcher:
                     continue
                 lane.running   = ticket
                 ticket.started = True
-                await self._execute_ticket(ticket)
+                # 鉴权检查、处理器（子任务继承作用域）和丢弃结果的回滚都记在这张票据的 id 下。
+                with log_scope(ticket.request_id):
+                    await self._execute_ticket(ticket)
             finally:
                 ready.task_done()
 
@@ -557,7 +606,7 @@ class _InboundEventDispatcher:
                     )
                     return
 
-            operation = asyncio.create_task(self._capture_handler_outcome(ticket.payload))
+            operation             = asyncio.create_task(self._capture_handler_outcome(ticket))
             ticket.operation_task = operation
             try:
                 outcome = await operation
@@ -590,7 +639,7 @@ class _InboundEventDispatcher:
                 ticket.result.set_result(actions)
             else:
                 # 处理器吞掉取消后仍返回了动作：结果已被取消，没有人会发送它们。
-                self._settle_dropped(actions)
+                self._settle_dropped(ticket, actions)
         finally:
             ticket.operation_task = None
             ticket.finished       = True
@@ -608,12 +657,12 @@ class _InboundEventDispatcher:
 
     async def _capture_handler_outcome(
         self,
-        payload: dict[str, Any],
+        ticket: _InboundEventTicket,
     ) -> _InboundHandlerOutcome:
         """Invoke even a malformed handler without leaking fatal task outcomes."""
 
         try:
-            awaitable = self._handler(payload)
+            awaitable = self._handler(ticket.payload)
             actions   = await awaitable
         except asyncio.CancelledError as exc:
             task = asyncio.current_task()
@@ -903,7 +952,7 @@ class InboundServer:
                 # The generation swap already makes every old socket invisible
                 # to admission and broadcast.  If its owning loop closed in the
                 # scheduling race there is no safe callback target left.
-                logger.debug("Inbound auth rotation raced with event-loop shutdown")
+                logger.debug(LogEvent("inbound.auth_rotation.raced"))
 
     def _schedule_ws_close(
         self,
@@ -918,7 +967,7 @@ class InboundServer:
             # embedder calls from another thread, generation checks still
             # revoke subsequent frames. Physical close happens on the next
             # socket activity or server shutdown.
-            logger.warning("Unable to schedule revoked WebSocket close outside the event loop")
+            logger.warning(LogEvent("inbound.ws_close.schedule_failed"))
             return
 
         async def close_socket() -> None:
@@ -927,7 +976,7 @@ class InboundServer:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.debug("Closing revoked WebSocket failed: %s", exc)
+                logger.debug(LogEvent("inbound.ws_close.failed", error=exc))
             except BaseException as exc:
                 raise _OwnedCleanupFatalError(exc) from None
 
@@ -941,9 +990,9 @@ class InboundServer:
             except asyncio.CancelledError:
                 pass
             except _OwnedCleanupFatalError as exc:
-                logger.error("Fatal failure while closing a revoked WebSocket: %s", exc)
+                logger.error(LogEvent("inbound.ws_close.fatal", error=exc))
             except Exception as exc:
-                logger.debug("Closing revoked WebSocket task failed: %s", exc)
+                logger.debug(LogEvent("inbound.ws_close.task_failed", error=exc))
 
         task.add_done_callback(discard)
 
@@ -976,31 +1025,23 @@ class InboundServer:
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            logger.warning("WebSocket inbound response timed out")
+            logger.warning(LogEvent("inbound.ws_response.timeout"))
             self._schedule_ws_close(ws, reason=b"inbound response timed out")
             return False
         except Exception as exc:
-            logger.warning("WebSocket inbound response failed: %s", exc)
+            logger.warning(LogEvent("inbound.ws_response.failed", error=exc))
             self._schedule_ws_close(ws, reason=b"inbound response failed")
             return False
         except BaseException as exc:
-            logger.critical(
-                "Fatal WebSocket response failure was isolated: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            logger.critical(LogEvent("inbound.ws_response.fatal", error=exc))
             self._schedule_ws_close(ws, reason=b"inbound response failed")
             return False
         if outcome.error is not None:
             outcome_error = outcome.error
             if isinstance(outcome_error, Exception):
-                logger.warning("WebSocket inbound response failed: %s", outcome_error)
+                logger.warning(LogEvent("inbound.ws_response.failed", error=outcome_error))
             else:
-                logger.critical(
-                    "Fatal WebSocket response failure was isolated: %s: %s",
-                    type(outcome_error).__name__,
-                    outcome_error,
-                )
+                logger.critical(LogEvent("inbound.ws_response.fatal", error=outcome_error))
             self._schedule_ws_close(ws, reason=b"inbound response failed")
             return False
         return True
@@ -1022,7 +1063,7 @@ class InboundServer:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
-            logger.debug("Closing WebSocket inline failed: %s", exc)
+            logger.debug(LogEvent("inbound.ws_close.inline_failed", error=exc))
 
     @staticmethod
     async def _capture_ws_send(
@@ -1124,37 +1165,25 @@ class InboundServer:
             try:
                 response["plugins_loaded"] = self._get_plugins_count()
             except Exception as exc:
-                logger.warning("Plugins count unavailable: %s", exc)
+                logger.warning(LogEvent("inbound.health.plugins_unavailable", error=exc))
             except BaseException as exc:
-                logger.critical(
-                    "Fatal plugins-count provider failure was isolated: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
+                logger.critical(LogEvent("inbound.health.plugins_fatal", error=exc))
 
         if self._get_sessions_count:
             try:
                 response["active_sessions"] = self._get_sessions_count()
             except Exception as exc:
-                logger.warning("Sessions count unavailable: %s", exc)
+                logger.warning(LogEvent("inbound.health.sessions_unavailable", error=exc))
             except BaseException as exc:
-                logger.critical(
-                    "Fatal sessions-count provider failure was isolated: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
+                logger.critical(LogEvent("inbound.health.sessions_fatal", error=exc))
 
         if self._get_pending_jobs:
             try:
                 response["pending_jobs"] = self._get_pending_jobs()
             except Exception as exc:
-                logger.warning("Pending jobs count unavailable: %s", exc)
+                logger.warning(LogEvent("inbound.health.jobs_unavailable", error=exc))
             except BaseException as exc:
-                logger.critical(
-                    "Fatal pending-jobs provider failure was isolated: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
+                logger.critical(LogEvent("inbound.health.jobs_fatal", error=exc))
 
         return web.json_response(response)
 
@@ -1173,15 +1202,11 @@ class InboundServer:
         try:
             metrics_data = self._get_metrics()
             return web.json_response(metrics_data)
-        except Exception as exc:
-            logger.exception("Failed to get metrics: %s", exc)
+        except Exception:
+            logger.exception(LogEvent("inbound.metrics.failed"))
             return web.json_response({"error": "Metrics unavailable"}, status=500)
         except BaseException as exc:
-            logger.critical(
-                "Fatal metrics provider failure was isolated: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            logger.critical(LogEvent("inbound.metrics.fatal", error=exc))
             return web.json_response({"error": "Metrics unavailable"}, status=500)
 
     def _format_uptime(self, seconds: float) -> str:
@@ -1212,76 +1237,76 @@ class InboundServer:
 
     async def post_event(self, request: web.Request) -> web.Response:
         """处理 HTTP POST 事件"""
-        auth_state = self._auth_state
-        if not self._accepting_events:
-            return web.json_response({"status": "shutting_down"}, status=503)
-        if not self._authorized(request, auth_state):
-            return self._unauthorized_response()
-
-        content_type = request.headers.get("Content-Type", "")
-        media_type   = content_type.partition(";")[0].strip().lower()
-        if media_type != "application/json" and not (
-            media_type.startswith("application/") and media_type.endswith("+json")
-        ):
-            return web.json_response({"error": "Unsupported Content-Type"}, status=415)
-
-        self._request_count += 1
-        try:
-            payload = await request.json()
-        except json.JSONDecodeError as exc:
-            logger.warning("Invalid JSON payload: %s", exc)
-            return web.json_response({"error": "Invalid JSON"}, status=400)
-        except ContentTypeError:
-            return web.json_response({"error": "Unsupported Content-Type"}, status=415)
-        if not isinstance(payload, dict):
-            return web.json_response({"error": "Payload must be a JSON object"}, status=400)
-        normalized, validation_error = self._validate_payload(payload)
-        if validation_error is not None:
-            message, status = validation_error
-            return web.json_response({"error": message}, status=status)
-        if not self._auth_is_current(auth_state):
-            return self._unauthorized_response()
-        try:
-            assert normalized is not None
-            normalized[EVENT_SOURCE_KEY] = "inbound_http"
-            # 只有显式请求 action-envelope 的开发验收客户端接收动作列表。
-            # 标准 HTTP 上报由应用通过 action API 投递，响应正文仅确认接收。
-            normalized["_http_action_delivery"] = (
-                request.headers.get("X-XiaoQing-Response-Mode", "onebot") != "actions"
-            )
-            # 上报方断开连接时不取消这件事：标准 OneBot 上报的回复经 action API 发出，这个 POST
-            # 只确认收到，NapCat 等超时断开时这条消息照样要处理。
-            actions = await self._invoke_handler(
-                normalized,
-                auth_generation=auth_state,
-            )
-            if not self._auth_is_current(auth_state):
-                await _resolve_delivery_actions(actions, delivered=False)
+        # 处理、写出响应和结算回执都在同一个 request id 下，访问日志从请求上取它。
+        request_id               = new_request_id()
+        request[_REQUEST_ID_KEY] = request_id
+        with log_scope(request_id):
+            auth_state = self._auth_state
+            if not self._accepting_events:
+                return web.json_response({"status": "shutting_down"}, status=503)
+            if not self._authorized(request, auth_state):
                 return self._unauthorized_response()
-        except asyncio.CancelledError:
-            raise
-        except InboundEventRevoked:
-            return self._unauthorized_response()
-        except InboundEventOverloaded as exc:
-            logger.warning("HTTP inbound event rejected by bounded dispatcher: %s", exc)
-            return web.json_response({"error": "Inbound event queue overloaded"}, status=503)
-        except InboundEventUnavailable:
-            return web.json_response({"status": "shutting_down"}, status=503)
-        except Exception as exc:
-            logger.exception("HTTP event handler error: %s", exc)
-            return web.json_response({"error": "Event handler unavailable"}, status=500)
-        except BaseException as exc:
-            logger.critical(
-                "Fatal HTTP event handler failure was isolated: %s: %s",
-                type(exc).__name__,
-                exc,
+
+            content_type = request.headers.get("Content-Type", "")
+            media_type   = content_type.partition(";")[0].strip().lower()
+            if media_type != "application/json" and not (
+                media_type.startswith("application/") and media_type.endswith("+json")
+            ):
+                return web.json_response({"error": "Unsupported Content-Type"}, status=415)
+
+            self._request_count += 1
+            try:
+                payload = await request.json()
+            except json.JSONDecodeError as exc:
+                logger.warning(LogEvent("inbound.http.invalid_json", error=exc))
+                return web.json_response({"error": "Invalid JSON"}, status=400)
+            except ContentTypeError:
+                return web.json_response({"error": "Unsupported Content-Type"}, status=415)
+            if not isinstance(payload, dict):
+                return web.json_response({"error": "Payload must be a JSON object"}, status=400)
+            normalized, validation_error = self._validate_payload(payload)
+            if validation_error is not None:
+                message, status = validation_error
+                return web.json_response({"error": message}, status=status)
+            if not self._auth_is_current(auth_state):
+                return self._unauthorized_response()
+            try:
+                assert normalized is not None
+                normalized[EVENT_SOURCE_KEY] = "inbound_http"
+                # 只有显式请求 action-envelope 的开发验收客户端接收动作列表。
+                # 标准 HTTP 上报由应用通过 action API 投递，响应正文仅确认接收。
+                normalized["_http_action_delivery"] = (
+                    request.headers.get("X-XiaoQing-Response-Mode", "onebot") != "actions"
+                )
+                # 上报方断开连接时不取消这件事：标准 OneBot 上报的回复经 action API 发出，这个 POST
+                # 只确认收到，NapCat 等超时断开时这条消息照样要处理。
+                actions = await self._invoke_handler(
+                    normalized,
+                    auth_generation=auth_state,
+                )
+                if not self._auth_is_current(auth_state):
+                    await _resolve_delivery_actions(actions, delivered=False)
+                    return self._unauthorized_response()
+            except asyncio.CancelledError:
+                raise
+            except InboundEventRevoked:
+                return self._unauthorized_response()
+            except InboundEventOverloaded as exc:
+                logger.warning(LogEvent("inbound.http.rejected", error=exc))
+                return web.json_response({"error": "Inbound event queue overloaded"}, status=503)
+            except InboundEventUnavailable:
+                return web.json_response({"status": "shutting_down"}, status=503)
+            except Exception:
+                logger.exception(LogEvent("inbound.http.handler_failed"))
+                return web.json_response({"error": "Event handler unavailable"}, status=500)
+            except BaseException as exc:
+                logger.critical(LogEvent("inbound.http.handler_fatal", error=exc))
+                return web.json_response({"error": "Event handler unavailable"}, status=500)
+            return await _finalize_http_action_response(
+                request,
+                actions,
+                standard_onebot=bool(normalized.get("_http_action_delivery")),
             )
-            return web.json_response({"error": "Event handler unavailable"}, status=500)
-        return await _finalize_http_action_response(
-            request,
-            actions,
-            standard_onebot=bool(normalized.get("_http_action_delivery")),
-        )
 
     async def ws_handler(self, request: web.Request) -> web.StreamResponse:
         """处理 WebSocket 连接"""
@@ -1437,8 +1462,9 @@ class InboundServer:
                     raise outcome.error
             except TimeoutError:
                 logger.warning(
-                    "Broadcast timed out for one client after %.3fs",
-                    self._ws_broadcast_timeout_seconds,
+                    LogEvent(
+                        "inbound.broadcast.timeout", timeout_s=self._ws_broadcast_timeout_seconds
+                    )
                 )
                 drop_socket(ws)
                 return "timeout"
@@ -1449,7 +1475,7 @@ class InboundServer:
                 drop_socket(ws)
                 raise _BroadcastFatalError(exc) from exc
             except Exception as exc:
-                logger.warning("Broadcast failed for one client: %s", exc)
+                logger.warning(LogEvent("inbound.broadcast.client_failed", error=exc))
                 drop_socket(ws)
                 return "failure"
             except BaseException as exc:
@@ -1501,51 +1527,48 @@ class InboundServer:
     ) -> None:
         """等一个已经登记进分发器的 WebSocket 事件处理完，把结果发回这条连接。"""
 
-        if not self._accepting_events or not self._auth_is_current(auth_generation):
-            self._event_dispatcher.discard(ticket)
-            return
-        try:
-            actions = await self._await_admitted_event(ticket)
-            if not self._auth_is_current(auth_generation):
-                await _resolve_delivery_actions(actions, delivered=False)
+        with log_scope(ticket.request_id):
+            if not self._accepting_events or not self._auth_is_current(auth_generation):
+                self._event_dispatcher.discard(ticket)
                 return
-            unresolved = 0
             try:
-                for index, action in enumerate(actions):
-                    sent = await self._send_ws_json_bounded(ws, strip_receipt(action))
-                    await asyncio.shield(resolve_action_handoff(action, delivered=sent))
-                    unresolved = index + 1
-                    if not sent:
-                        await _resolve_delivery_actions(actions[index + 1 :], delivered=False)
-                        return
-            except BaseException as exc:
-                if unresolved < len(actions):
-                    # 正在发送的动作被取消时可能已写出：记为未知；序列化等失败确定没发。
-                    current = None if isinstance(exc, asyncio.CancelledError) else False
-                    await asyncio.shield(
-                        resolve_action_handoff(actions[unresolved], delivered=current)
-                    )
-                    await _resolve_delivery_actions(actions[unresolved + 1 :], delivered=False)
+                actions = await self._await_admitted_event(ticket)
+                if not self._auth_is_current(auth_generation):
+                    await _resolve_delivery_actions(actions, delivered=False)
+                    return
+                unresolved = 0
+                try:
+                    for index, action in enumerate(actions):
+                        sent = await self._send_ws_json_bounded(ws, strip_receipt(action))
+                        await asyncio.shield(resolve_action_handoff(action, delivered=sent))
+                        unresolved = index + 1
+                        if not sent:
+                            await _resolve_delivery_actions(actions[index + 1 :], delivered=False)
+                            return
+                except BaseException as exc:
+                    if unresolved < len(actions):
+                        # 正在发送的动作被取消时可能已写出：记为未知；序列化等失败确定没发。
+                        current = None if isinstance(exc, asyncio.CancelledError) else False
+                        await asyncio.shield(
+                            resolve_action_handoff(actions[unresolved], delivered=current)
+                        )
+                        await _resolve_delivery_actions(actions[unresolved + 1 :], delivered=False)
+                    raise
+            except asyncio.CancelledError:
                 raise
-        except asyncio.CancelledError:
-            raise
-        except InboundEventRevoked:
-            return
-        except InboundEventOverloaded as exc:
-            logger.warning("WebSocket inbound event rejected by bounded dispatcher: %s", exc)
-            await self._send_ws_json_bounded(ws, {"error": "Inbound event queue overloaded"})
-        except InboundEventUnavailable:
-            return
-        except Exception as exc:
-            logger.exception("WebSocket event handler error: %s", exc)
-        except BaseException as exc:
-            # Worker tasks are fire-and-forget.  A raw SystemExit or similar
-            # must never escape the worker and terminate the event loop.
-            logger.critical(
-                "Fatal WebSocket event handler failure was isolated: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            except InboundEventRevoked:
+                return
+            except InboundEventOverloaded as exc:
+                logger.warning(LogEvent("inbound.ws.rejected", error=exc))
+                await self._send_ws_json_bounded(ws, {"error": "Inbound event queue overloaded"})
+            except InboundEventUnavailable:
+                return
+            except Exception:
+                logger.exception(LogEvent("inbound.ws.handler_failed"))
+            except BaseException as exc:
+                # Worker tasks are fire-and-forget.  A raw SystemExit or similar
+                # must never escape the worker and terminate the event loop.
+                logger.critical(LogEvent("inbound.ws.handler_fatal", error=exc))
 
     def _ensure_ws_workers(self) -> None:
         if not self.enable_ws or self._ws_event_queue is None:
@@ -1622,8 +1645,9 @@ class InboundServer:
                     "non-loopback inbound server bind is plaintext and requires "
                     "trusted_tls_proxy=true"
                 )
-        self._accepting_events   = False
-        runner                   = web.AppRunner(self.app)
+        self._accepting_events = False
+        # 不用 aiohttp 默认的访问日志：它把请求行和请求头原样写成字符串。
+        runner = web.AppRunner(self.app, access_log_class=_InboundAccessLogger, access_log=logger)
         site: web.TCPSite | None = None
         self._runner             = runner
         try:
@@ -1641,15 +1665,13 @@ class InboundServer:
                         await site.stop()
                     except BaseException as cleanup_exc:
                         site_failed = True
-                        logger.exception(
-                            "Failed to stop partially started inbound site", exc_info=cleanup_exc
-                        )
+                        logger.exception(LogEvent("inbound.site.stop_failed"), exc_info=cleanup_exc)
                 try:
                     await runner.cleanup()
                 except BaseException as cleanup_exc:
                     runner_failed = True
                     logger.exception(
-                        "Failed to clean partially started inbound runner", exc_info=cleanup_exc
+                        LogEvent("inbound.runner.cleanup_failed"), exc_info=cleanup_exc
                     )
                 self._site             = site if site_failed else None
                 self._runner           = runner if runner_failed else None
@@ -1662,11 +1684,12 @@ class InboundServer:
         self._running          = True
         self._accepting_events = accept_events
         logger.info(
-            "Inbound server listening on %s:%s (http=%s ws=%s)",
-            self.host,
-            self.port,
-            self.enable_http,
-            self.enable_ws,
+            LogEvent(
+                "inbound.listening",
+                port = self.port,
+                http = self.enable_http,
+                ws   = self.enable_ws,
+            )
         )
 
     def commit_admission(self) -> None:
@@ -1838,9 +1861,7 @@ class InboundServer:
 
         if caller_cancel is not None:
             if errors:
-                logger.error(
-                    "Inbound cleanup also encountered errors during cancellation: %r", errors
-                )
+                logger.error(LogEvent("inbound.cleanup.cancel_errors", count=len(errors)))
             raise caller_cancel from None
         if errors:
             summary = "; ".join(f"{name}: {type(exc).__name__}: {exc}" for name, exc in errors)
@@ -2064,10 +2085,7 @@ class InboundManager:
             "metrics"       : None,
         }
         if trusted_tls_proxy:
-            logger.warning(
-                "Inbound non-loopback listeners rely on an explicitly trusted TLS proxy; "
-                "direct plaintext access must be blocked"
-            )
+            logger.warning(LogEvent("inbound.listener.non_loopback"))
 
     @staticmethod
     def config_key_from_config(
@@ -2114,9 +2132,9 @@ class InboundManager:
         )
         if spec is None:
             if not bool(config.get("enable_inbound_server", True)):
-                logger.info("Inbound server disabled")
+                logger.info(LogEvent("inbound.disabled", reason_code="config"))
             else:
-                logger.info("Inbound server disabled (inbound_http_base/inbound_ws_uri are empty)")
+                logger.info(LogEvent("inbound.disabled", reason_code="no_listener_configured"))
             return None
         return cls(
             inbound_http_base            = spec.inbound_http_base,
@@ -2148,7 +2166,7 @@ class InboundManager:
                     raise
                 raise _BroadcastFatalError(exc) from exc
             except Exception as exc:
-                logger.warning("Unable to inspect inbound broadcast targets: %s", exc)
+                logger.warning(LogEvent("inbound.broadcast.targets_unavailable", error=exc))
                 target_count = 0
             except BaseException as exc:
                 raise _BroadcastFatalError(exc) from exc
@@ -2166,7 +2184,7 @@ class InboundManager:
                     raise
                 raise _BroadcastFatalError(exc) from exc
             except Exception as exc:
-                logger.warning("Inbound server broadcast failed: %s", exc)
+                logger.warning(LogEvent("inbound.broadcast.failed", error=exc))
                 return BroadcastResult(
                     target_count  = target_count,
                     failure_count = target_count,
@@ -2175,8 +2193,7 @@ class InboundManager:
                 raise _BroadcastFatalError(exc) from exc
             if not isinstance(result, BroadcastResult):
                 logger.error(
-                    "Inbound server returned an invalid broadcast result: %r",
-                    type(result).__name__,
+                    LogEvent("inbound.broadcast.invalid_result", result_type=type(result).__name__)
                 )
                 return BroadcastResult(
                     target_count  = target_count,
@@ -2330,9 +2347,7 @@ class InboundManager:
             try:
                 await _await_cleanup_task(cleanup_task, deferred_cancellation)
             except BaseException as cleanup_exc:
-                logger.exception(
-                    "Failed to roll back partially started inbound manager", exc_info=cleanup_exc
-                )
+                logger.exception(LogEvent("inbound.manager.rollback_failed"), exc_info=cleanup_exc)
             raise
         self._running = True
 
@@ -2427,7 +2442,7 @@ class InboundManager:
             except BaseException as exc:
                 errors.append(exc)
                 failed_servers.append(server)
-                logger.exception("Failed to stop one inbound server", exc_info=exc)
+                logger.exception(LogEvent("inbound.server.stop_failed"), exc_info=exc)
         if dispatcher is not None:
             try:
                 await dispatcher.stop()
@@ -2441,7 +2456,7 @@ class InboundManager:
             except BaseException as exc:
                 errors.append(exc)
                 dispatcher_failed = True
-                logger.exception("Failed to stop shared inbound event dispatcher", exc_info=exc)
+                logger.exception(LogEvent("inbound.dispatcher.stop_failed"), exc_info=exc)
         restored_servers: list[InboundServer] = []
         with self._auth_lock:
             if original_http is not None and any(
@@ -2462,10 +2477,7 @@ class InboundManager:
                     server.update_token(restored_token)
                 except BaseException as exc:
                     errors.append(exc)
-                    logger.exception(
-                        "Failed to restore current auth on a partially stopped inbound server",
-                        exc_info=exc,
-                    )
+                    logger.exception(LogEvent("inbound.auth_restore.failed"), exc_info=exc)
         # A partially stopped child still points at this shared generation.
         # Retain manager ownership until every child and the dispatcher itself
         # converge, so retry cannot create a second dispatcher alongside it.
@@ -2475,10 +2487,7 @@ class InboundManager:
             self._event_dispatcher = None
         if caller_cancel is not None:
             if errors:
-                logger.error(
-                    "Inbound manager cleanup also encountered errors during cancellation: %r",
-                    errors,
-                )
+                logger.error(LogEvent("inbound.manager.cleanup_errors", count=len(errors)))
             raise caller_cancel from None
         if errors:
             summary = "; ".join(f"{type(exc).__name__}: {exc}" for exc in errors)

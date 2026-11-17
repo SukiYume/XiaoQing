@@ -122,6 +122,4 @@ def handle_convert(args: str, context: PluginContextProtocol) -> str:
                 f"❌ 无法在 {from_unit_str} 和 {to_unit_str} 之间转换\n这两个单位的物理量纲不兼容"
             )
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.convert"
-        )
+        return public_error_message(context, exc, component="astro_tools.convert")

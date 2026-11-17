@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from core.log import LogEvent
 
 from ..config.config import PersonalityConfig
 from ..llm.gateway import ai_disabled, chat_completions_raw_with_profile, extract_response_content
@@ -22,7 +23,7 @@ from ..memory.memory import StoredMessage, is_conversation_reply
 from ..utils.text import clip_text
 from .pfc_utils import get_items_from_json
 
-_logger = logging.getLogger("plugin.xiaoqing_chat")
+log = logging.getLogger(__name__)
 
 _ALLOWED_PLANNER_ACTIONS = frozenset(
     {
@@ -36,18 +37,6 @@ _ALLOWED_PLANNER_ACTIONS = frozenset(
         "wait",
     }
 )
-
-
-def _log_planner_step(fields: dict[str, Any]) -> None:
-    """规划不依赖日志可用性；日志边界失败时只跳过本条观测。"""
-
-    try:
-        _logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps(fields, ensure_ascii=False),
-        )
-    except Exception:
-        return
 
 
 # 两种规划场景共用的上下文与输出格式；差异只在开头的场景说明和决策指导。
@@ -341,33 +330,30 @@ async def plan_next_action(
             messages = [{"role": "user", "content": prompt}],
             **llm.as_kwargs(),
         )
-        _log_planner_step(
-            {
-                "step"        : "pfc.planner.ok",
-                "elapsed_s"   : round(time.monotonic() - t0, 3),
-                "model"       : model,
-                "endpoint"    : used_profile,
-                "prompt_chars": len(prompt),
-            }
+        log.info(
+            LogEvent(
+                "pfc.planner.ok",
+                elapsed_s    = round(time.monotonic() - t0, 3),
+                model        = model,
+                endpoint     = used_profile,
+                prompt_chars = len(prompt),
+            )
         )
     except TimeoutError:
-        _log_planner_step(
-            {
-                "step"        : "pfc.planner.timeout",
-                "timeout_s"   : float(llm.timeout_seconds),
-                "model"       : model,
-                "prompt_chars": len(prompt),
-            }
+        log.info(
+            LogEvent(
+                "pfc.planner.timeout",
+                timeout_s    = float(llm.timeout_seconds),
+                model        = model,
+                prompt_chars = len(prompt),
+            )
         )
         return PFCPlan(action=fallback_action, reason="planner_timeout")
     except Exception as exc:
-        _log_planner_step(
-            {
-                "step"      : "pfc.planner.error",
-                "error_type": type(exc).__name__,
-                "timeout_s" : float(llm.timeout_seconds),
-                "model"     : model,
-            }
+        log.info(
+            LogEvent(
+                "pfc.planner.error", error=exc, timeout_s=float(llm.timeout_seconds), model=model
+            )
         )
         return PFCPlan(action=fallback_action, reason="planner_failed")
     return _parse_plan(extract_response_content(resp), fallback_action)

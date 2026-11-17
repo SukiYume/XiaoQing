@@ -18,9 +18,10 @@ from core.image_validation import (
     validate_image_bytes,
     validate_image_path,
 )
+from core.log import LogEvent
 from core.plugin_base import Event, Segments, run_sync, segments
 from core.plugin_base import image as image_segment
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 from core.safe_http import (
     BROWSER_USER_AGENT,
     SafeHttpError,
@@ -37,7 +38,7 @@ class Context(Protocol):
     data_dir: Path
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # ──────────────────── 资源上限 ────────────────────
 
@@ -188,8 +189,8 @@ def _validated_cached_preview(
         except (ImageValidationError, OSError, ValueError):
             try:
                 path.unlink(missing_ok=True)
-            except OSError:
-                logger.debug("损坏的 URL 预览缓存暂时无法删除")
+            except OSError as exc:
+                log.error(LogEvent("cache.corrupt_unlink_failed", error=exc))
     return None
 
 
@@ -232,15 +233,10 @@ async def _cache_preview_image(
         image_path = await run_sync(cache.put, f"{digest}{extension}", fetched.body)
         return str(image_path) if image_path is not None else None
     except (SafeHttpError, UnsafeUrlError, ValueError) as exc:
-        logger.debug("URL 预览图片被安全拒绝: error_type=%s", type(exc).__name__)
+        log.debug(LogEvent("image.rejected", error=exc))
         return None
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "url_parser.preview_image",
-        )
+        log_public_error(context, exc, component="url_parser.preview_image")
         return None
 
 
@@ -263,7 +259,7 @@ async def _build_preview(url: str, context: Context) -> Segments:
         else None
     )
     if not title and not description and image_path is None:
-        logger.debug("URL 未提取到预览内容: host=%s", urlsplit(url).hostname or "")
+        log.debug(LogEvent("preview.empty", host=urlsplit(url).hostname))
         return []
 
     lines = [f"🔗 {title or '网页预览'}"]
@@ -274,11 +270,7 @@ async def _build_preview(url: str, context: Context) -> Segments:
     if image_path is not None:
         response.append(image_segment(image_path))
 
-    logger.info(
-        "URL 解析成功: host=%s title_length=%d",
-        urlsplit(url).hostname or "",
-        len(title),
-    )
+    log.info(LogEvent("preview.done", host=urlsplit(url).hostname, title_length=len(title)))
     return response
 
 
@@ -295,15 +287,10 @@ async def handle_url(url: str, event: Event, context: Context) -> Segments:
         async with _PREVIEW_SEMAPHORE:
             return await _build_preview(url, context)
     except (SafeHttpError, UnsafeUrlError) as exc:
-        logger.debug("URL 页面请求被安全拒绝: error_type=%s", type(exc).__name__)
+        log.debug(LogEvent("page.rejected", error=exc))
         return []
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "url_parser.handle_url",
-        )
+        log_public_error(context, exc, component="url_parser.handle_url")
         return []
 
 

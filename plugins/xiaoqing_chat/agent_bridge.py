@@ -7,6 +7,7 @@ agent 能用哪些工具由发起人自己的权限决定。能力缺失或 agen
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Callable, Coroutine
@@ -15,6 +16,7 @@ from typing import Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments
 from core.interfaces import COMMAND_RUNNER_EVENT_KEY
+from core.log import LogEvent
 from core.message import extract_text, sender_display_name
 
 from .attention_gate import reply_message_ids
@@ -24,7 +26,6 @@ from .follow_ups import burst_text, carry_attention, sender_has_follow_up
 from .handler_context import HandlerContext
 from .life.self_timeline import self_timeline_block
 from .llm.decorations import tame_decorations
-from .logging_utils import log_step
 from .media.marker_resolver import COMMON_QQ_FACE_LABELS
 from .memory import client as memory_client
 from .memory.local_ids import allocate_local_id
@@ -34,6 +35,8 @@ from .post_reply_tasks import spawn_life_extraction
 from .smalltalk_models import PreparedSmalltalkTurn
 from .task_scheduler import schedule_action_history_flush, schedule_memory_persist
 from .turn_generation import ensure_user_message_recorded
+
+log = logging.getLogger(__name__)
 
 AGENT_PLUGIN = "xiaoqing_agent"
 # agent 交付的结果就是小青说的话：写进聊天记录时太长就截短，不像其他插件的长输出那样整条跳过。
@@ -191,10 +194,7 @@ async def _report_delivery(context: Any, task_id: str, delivered: bool | None) -
     try:
         await agent.report_delivery(task_id, delivered)
     except Exception as exc:
-        context.logger.info(
-            "xiaoqing_chat agent delivery report failed error_type=%s",
-            type(exc).__name__,
-        )
+        log.warning(LogEvent("smalltalk.agent.delivery_report_failed", error=exc))
 
 
 def _agent_reply_receipt(
@@ -208,12 +208,10 @@ def _agent_reply_receipt(
         await _report_delivery(context, task_id, True)
 
     async def rollback() -> None:
-        log_step(
-            context,
-            hctx.runtime,
-            chat_id = hctx.chat_id,
-            step    = "smalltalk.agent.delivery_failed",
-            fields  = {"reply_chars": len(reply_text)},
+        log.info(
+            LogEvent(
+                "smalltalk.agent.delivery_failed", chat_id=hctx.chat_id, reply_chars=len(reply_text)
+            )
         )
         await _report_delivery(context, task_id, False)
 
@@ -247,19 +245,6 @@ class _AgentPlan:
     turn    : dict[str, Any]
     decision: Any
     started : float
-
-
-def _log_agent_step(context: Any, hctx: HandlerContext, step: str, **fields: Any) -> None:
-    log_step(context, hctx.runtime, chat_id=hctx.chat_id, step=step, fields=fields)
-
-
-def _fall_back_to_chat(context: Any, exc: Exception) -> None:
-    """agent 这一路任何一步出错都回到普通聊天，只记下错误类型。"""
-
-    context.logger.info(
-        "xiaoqing_chat agent bridge fell back to chat error_type=%s",
-        type(exc).__name__,
-    )
 
 
 async def _agent_recent_self(hctx: HandlerContext) -> str:
@@ -321,13 +306,13 @@ async def _decide(
             timeout=_AGENT_DECIDE_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        _fall_back_to_chat(context, exc)
+        log.warning(LogEvent("smalltalk.agent.fallback_to_chat", error=exc))
         return None
     elapsed_ms = round((time.monotonic() - started) * 1000)
     if not isinstance(result, dict) or not result.get("handled"):
-        _log_agent_step(context, hctx, "smalltalk.agent.declined", elapsed_ms=elapsed_ms)
+        log.info(LogEvent("smalltalk.agent.declined", chat_id=hctx.chat_id, elapsed_ms=elapsed_ms))
         return None
-    _log_agent_step(context, hctx, "smalltalk.agent.decided", elapsed_ms=elapsed_ms)
+    log.info(LogEvent("smalltalk.agent.decided", chat_id=hctx.chat_id, elapsed_ms=elapsed_ms))
     return _AgentPlan(turn, result.get("decision"), started)
 
 
@@ -370,7 +355,7 @@ async def _act(
             timeout=_AGENT_TURN_TIMEOUT_SECONDS,
         )
     except Exception as exc:
-        _fall_back_to_chat(context, exc)
+        log.warning(LogEvent("smalltalk.agent.fallback_to_chat", error=exc))
         return None
     message = result.get("segments") if isinstance(result, dict) else None
     if not isinstance(result, dict) or not result.get("handled") or not isinstance(message, list):
@@ -387,16 +372,19 @@ async def _act(
         # 她要问的话对方已经在下一条里说了（“帮我记一笔”“18 块 麻辣烫”）：这句追问不发，
         # 下一条接在同一个办事会话后面，直接办完。
         carry_attention(event)
-        _log_agent_step(context, hctx, "smalltalk.agent.question_withheld", task_id=task_id)
+        log.info(
+            LogEvent("smalltalk.agent.question_withheld", chat_id=hctx.chat_id, task_id=task_id)
+        )
         await _report_delivery(context, task_id, None)
         return []
-    _log_agent_step(
-        context,
-        hctx,
-        "smalltalk.agent.handled",
-        task_id     = task_id,
-        reply_chars = len(reply_text),
-        elapsed_ms  = round((time.monotonic() - plan.started) * 1000),
+    log.info(
+        LogEvent(
+            "smalltalk.agent.handled",
+            chat_id     = hctx.chat_id,
+            task_id     = task_id,
+            reply_chars = len(reply_text),
+            elapsed_ms  = round((time.monotonic() - plan.started) * 1000),
+        )
     )
     if not message:
         return []

@@ -115,6 +115,4 @@ def handle_coord(args: str, context: PluginContextProtocol) -> str:
             "- 黄道: /astro coord ecliptic 90 23.5"
         )
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.coord"
-        )
+        return public_error_message(context, exc, component="astro_tools.coord")

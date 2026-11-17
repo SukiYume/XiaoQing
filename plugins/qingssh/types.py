@@ -25,11 +25,6 @@ class Context(Protocol):
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
-    @property
-    def logger(self) -> Any:
-        """日志记录器"""
-        ...
-
     async def create_session(
         self,
         initial_data: dict[str, Any],

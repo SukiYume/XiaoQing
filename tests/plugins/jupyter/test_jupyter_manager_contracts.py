@@ -530,7 +530,7 @@ async def test_execute_contains_invalid_message_id_and_submit_failure(tmp_path: 
     manager._kc = SimpleNamespace(execute=lambda _code: 123)  # noqa: SLF001
     result = await manager.execute("print(1)")
     assert result.success is False
-    assert result.error == "执行失败，请稍后重试"
+    assert isinstance(result.failure, RuntimeError)
     assert manager.is_running is False
     await asyncio.sleep(0)  # 让关闭内核时取消的空闲监视器收尾。
 
@@ -540,7 +540,8 @@ async def test_execute_contains_invalid_message_id_and_submit_failure(tmp_path: 
     )
     result = await manager.execute("print(2)")
     assert result.success is False
-    assert "private submit detail" not in result.error
+    assert isinstance(result.failure, RuntimeError)
+    assert "private submit detail" not in result.format_output()
     assert manager.is_running is False
     await asyncio.sleep(0)
 

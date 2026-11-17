@@ -6,7 +6,7 @@ Pendo Plugin - 个人时间与信息管理中枢
 1. 插件生命周期管理（init/cleanup）
 2. 命令入口路由（handle）
 3. 定时任务入口（scheduled_*）
-4. 辅助函数（_get_logger, _get_database等）
+4. 辅助函数（_get_database等）
 
 具体功能实现已拆分到:
 - commands/ - 命令处理模块
@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.models import PluginManifest
 from core.plugin_base import run_sync, segments
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 from core.router import (
     CommandCatalogNode,
     build_command_catalog_node,
@@ -72,7 +73,7 @@ from .utils.error_handlers import error_result, handle_command_errors, success_r
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
-logger                 = logging.getLogger(__name__)
+log                    = logging.getLogger(__name__)
 _runtime_service       = PendoRuntimeService()
 TRIGGER_SUBCOMMAND_MAP = {
     "日程": "event",
@@ -147,8 +148,7 @@ def init(context: PluginContextProtocol) -> None:
         db              = _runtime_service.open_database(context, Database)
         database_opened = True
         _register_config_reload_hook(context)
-        log = _get_logger(context)
-        log.info("Pendo plugin initialized, database at %s", _runtime_service.database_path)
+        log.info(LogEvent("plugin.initialized"))
 
         if PendoConfig.runtime().web_enabled:
             _start_web_server(db)
@@ -156,19 +156,17 @@ def init(context: PluginContextProtocol) -> None:
         try:
             _runtime_service.unsubscribe_config()
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = getattr(context, "logger", None) or logger,
-                component = "pendo.init.config_subscription_rollback",
+                component="pendo.init.config_subscription_rollback",
             )
         if database_opened:
             for failure in _runtime_service.close_databases():
-                public_error_message(
+                log_public_error(
                     context,
                     failure.error,
-                    logger    = getattr(context, "logger", None) or logger,
-                    component = f"pendo.init.{failure.component}_rollback",
+                    component=f"pendo.init.{failure.component}_rollback",
                 )
         if runtime_state.get("lifecycle_service") is _runtime_service:
             runtime_state.pop("lifecycle_service", None)
@@ -203,27 +201,23 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     runtime_service = _get_runtime_service(context)
 
     if stop_web and not _stop_web_server():
-        _get_logger(context).warning(
-            "Pendo Web remains active; database and runtime resources retained"
-        )
+        log.warning(LogEvent("web.still_active", resources_retained=True))
         return
 
     try:
         runtime_service.unsubscribe_config()
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = getattr(context, "logger", None) or logger,
-            component = "pendo.cleanup.config_subscription",
+            component="pendo.cleanup.config_subscription",
         )
 
     for failure in runtime_service.close_databases():
-        public_error_message(
+        log_public_error(
             context,
             failure.error,
-            logger    = getattr(context, "logger", None) or logger,
-            component = f"pendo.cleanup.{failure.component}",
+            component=f"pendo.cleanup.{failure.component}",
         )
 
     try:
@@ -231,15 +225,13 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         runtime_state = get_plugin_runtime_state(context, create=False)
         runtime_state.clear()
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = getattr(context, "logger", None) or logger,
-            component = "pendo.cleanup.runtime_state",
+            component="pendo.cleanup.runtime_state",
         )
 
-    log = _get_logger(context)
-    log.info("Pendo plugin cleanup completed")
+    log.info(LogEvent("plugin.cleanup_done"))
 
 
 def cleanup(context=None) -> None:
@@ -250,9 +242,7 @@ def cleanup(context=None) -> None:
 async def shutdown(context=None) -> None:
     """插件异步卸载钩子，供应用在 Ctrl+C 时优雅关闭。"""
     if not await _stop_web_server_async():
-        _get_logger(context).warning(
-            "Pendo Web remains active; database and runtime resources retained"
-        )
+        log.warning(LogEvent("web.still_active", resources_retained=True))
         return
     _cleanup_resources(context, stop_web=False)
 
@@ -282,7 +272,6 @@ async def handle(
     Returns:
         消息列表
     """
-    log         = _get_logger(context)
     user_id     = str(event.get("user_id", ""))
     group_id    = event.get("group_id")
     raw_message = event.get("raw_message") or f"{command} {args}".strip()
@@ -295,7 +284,7 @@ async def handle(
             await safe_end_session(context)
 
     # 2. 解析并路由命令
-    return await _handle_command_routing(user_id, route_args, context, group_id, log)
+    return await _handle_command_routing(user_id, route_args, context, group_id)
 
 
 def _is_explicit_pendo_command(raw_message: str) -> bool:
@@ -368,11 +357,7 @@ async def handle_session(
     try:
         return await _handle_active_session(user_id, text, context, session)
     except MissingRequiredFieldException as exc:
-        _get_logger(context).warning(
-            "Pendo session business error error_code=%s error_type=%s",
-            exc.error_code,
-            type(exc).__name__,
-        )
+        log.info(LogEvent("session.business_error", error_code=exc.error_code, error=exc))
         return segments(exc.get_user_message())
 
 
@@ -419,7 +404,7 @@ async def _handle_active_session(
 
 
 async def _handle_command_routing(
-    user_id: str, args: str, context, group_id: int | None = None, log=None
+    user_id: str, args: str, context, group_id: int | None = None
 ) -> list[dict[str, Any]]:
     """处理命令路由
 
@@ -428,13 +413,10 @@ async def _handle_command_routing(
         args: 命令参数
         context: 上下文对象
         group_id: 群组ID（可选）
-        log: 日志记录器
 
     Returns:
         消息列表
     """
-    log = log or logger
-
     router = _build_command_router(context, group_id)
 
     catalog_root = getattr(router, "root", None) or _catalog_root(context)
@@ -482,95 +464,84 @@ def _split_subcommand_preserve_rest(args: str) -> tuple[str, str]:
 
 async def scheduled(context) -> list[dict[str, Any]]:
     """定时任务入口 - 每分钟执行一次，只处理提醒"""
-    log = _get_logger(context)
 
     async def run() -> list[dict[str, Any]]:
         services = _get_services(context)
         return await check_reminders(context, services["db"], services["reminder_service"])
 
-    return await _run_scheduled_task(context, "reminders", run, log)
+    return await _run_scheduled_task(context, "reminders", run)
 
 
 async def scheduled_daily_briefing(context) -> list[dict[str, Any]]:
     """每日简报定时任务 - 每分钟检查用户本地时间"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     result = await _run_scheduled_task(
-        context, "daily_briefings", lambda: send_daily_briefings(context, db), log
+        context, "daily_briefings", lambda: send_daily_briefings(context, db)
     )
     return result
 
 
 async def scheduled_diary_reminder(context) -> list[dict[str, Any]]:
     """日记提醒定时任务 - 每分钟检查用户本地时间"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     result = await _run_scheduled_task(
-        context, "diary_reminders", lambda: check_diary_reminders(context, db), log
+        context, "diary_reminders", lambda: check_diary_reminders(context, db)
     )
     return result
 
 
 async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
     """待办迁移定时任务 - 每小时 :05 检查，用户本地日期跨天后顺延昨日未完成的待办"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     result = await _run_scheduled_task(
-        context, "migrate_todos", lambda: migrate_undone_todos(context, db), log
+        context, "migrate_todos", lambda: migrate_undone_todos(context, db)
     )
     return result
 
 
 async def scheduled_prune_operation_logs(context) -> None:
     """Daily operation-log privacy retention task."""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
     await _run_scheduled_task(
-        context, "prune_operation_logs", lambda: prune_operation_logs(context, db), log
+        context, "prune_operation_logs", lambda: prune_operation_logs(context, db)
     )
 
 
 async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
     """每周财务总结定时任务。"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     result = await _run_scheduled_task(
         context,
         "weekly_finance_summary",
         lambda: send_weekly_finance_summaries(context, db),
-        log,
     )
     return result
 
 
 async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
     """月底财务总结定时任务。"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     result = await _run_scheduled_task(
         context,
         "month_end_finance_summary",
         lambda: send_month_end_finance_summaries(context, db),
-        log,
     )
     return result
 
 
 async def scheduled_cleanup_demo_data(context) -> None:
     """Pendo Web demo 数据清理定时任务。"""
-    log = _get_logger(context)
-    db  = _get_database(context)
+    db = _get_database(context)
 
     await _run_scheduled_task(
         context,
         "cleanup_demo_data",
         lambda: cleanup_expired_demo_data(context, db),
-        log,
     )
 
 
@@ -578,7 +549,6 @@ async def _run_scheduled_task(
     context,
     task_name: str,
     task_func: Callable[[], Any],
-    log: logging.Logger,
 ) -> list[dict[str, Any]]:
     """运行单个定时任务并记录指标
 
@@ -591,7 +561,6 @@ async def _run_scheduled_task(
         context: 上下文对象
         task_name: 任务名称
         task_func: 任务函数
-        log: 日志记录器
 
     Returns:
         任务产生的消息列表
@@ -603,17 +572,16 @@ async def _run_scheduled_task(
         return result if result else []
     except asyncio.CancelledError:
         await _record_metric(context, f"scheduled.{task_name}", time.perf_counter() - start)
-        log.info("Scheduled task '%s' cancelled during shutdown", task_name)
+        log.info(LogEvent("scheduled_task.cancelled", task=task_name))
         return []
     except Exception as exc:
         await _record_metric(
             context, f"scheduled.{task_name}", time.perf_counter() - start, is_error=True
         )
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = f"pendo.scheduled.{task_name}",
+            component=f"pendo.scheduled.{task_name}",
         )
         return []
 
@@ -1126,12 +1094,6 @@ def _show_help(subcommand: str = "") -> str:
         return f"❌ 未知命令: {subcommand}\n\n使用 /pendo help 查看所有命令"
 
     return _show_help_overview()
-
-
-def _get_logger(context: PluginContextProtocol | None) -> logging.Logger:
-    if context is not None:
-        return cast(logging.Logger, context.logger)
-    return logger
 
 
 async def _record_metric(

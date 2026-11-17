@@ -20,11 +20,10 @@ from core.args import parse_int
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.interfaces import ACTION_BYPASS_SINK_KEY
 from core.lifecycle import DeferredCancellation, await_owned_task
+from core.log import LogEvent
 from core.plugin_base import build_action, image
 from core.plugin_base import text as text_segment
-from core.sensitive_audit import audit_error_type, summarize_sensitive
-from core.sensitive_audit import safe_audit_id as audit_id
-from core.sensitive_audit import safe_request_id as audit_request_id
+from core.public_errors import public_error_message
 
 from .config import (
     CANCEL_KEYWORDS,
@@ -55,7 +54,7 @@ from .validators import (
     validate_username,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _SessionJobKey = tuple[Any, Any]
 
@@ -426,10 +425,7 @@ async def close_session(context: Context, session: Session) -> None:
                     server_name,
                 )
             except Exception as exc:
-                logger.warning(
-                    "SSH close remote stop failed error_type=%s",
-                    audit_error_type(exc),
-                )
+                log.error(LogEvent("close.remote_stop_failed", error=exc))
         manager.disconnect(str(context.current_user_id), str(context.current_group_id), server_name)
 
 
@@ -789,20 +785,9 @@ async def _handle_connected_session(
     session.set(SessionKeys.STATE, SessionState.EXECUTING)
     session.set(SessionKeys.COMMAND_COUNT, command_count + 1)
 
-    # 只记录不可逆的审计摘要；原始命令仍完整交给可信管理员和 SSH 后端。
-    command_audit = summarize_sensitive(actual_command)
-    job_id        = _new_job_id()
-    request_id    = audit_request_id(context)
-    logger.info(
-        "SSH audit operation=command status=started request_id=%s job_id=%s "
-        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-        request_id,
-        job_id,
-        command_audit.kind,
-        command_audit.length,
-        command_audit.byte_length,
-        command_audit.fingerprint,
-    )
+    # 日志只含长度与指纹；原始命令仍完整交给可信管理员和 SSH 后端。
+    job_id = _new_job_id()
+    log.info(LogEvent("command", status="started", job_id=job_id, payload=actual_command))
 
     # 这里仍处于父会话事务中；子任务的第一次
     # update_session 会等待该事务提交，然后核验这个 job_id。
@@ -821,10 +806,9 @@ async def _handle_connected_session(
         target_user_id,
         target_group_id,
         output_policy,
-        is_cd      = is_cd,
-        job_key    = job_key,
-        job_id     = job_id,
-        request_id = request_id,
+        is_cd   = is_cd,
+        job_key = job_key,
+        job_id  = job_id,
     )
     try:
         task = asyncio.create_task(background, name=f"qingssh-command-{job_id[:12]}")
@@ -857,8 +841,7 @@ async def _run_background_command(
     *,
     job_key: _SessionJobKey,
     job_id: str,
-    is_cd: bool            = False,
-    request_id: str | None = None,
+    is_cd: bool = False,
 ) -> None:
     """核验会话代次后执行命令、投影输出，并用 CAS 提交最终状态。"""
 
@@ -866,9 +849,6 @@ async def _run_background_command(
     relay: SSHOutputRelay | None = None
     relay_finished               = False
     resolved_cwd: str | None     = None
-    command_audit                = summarize_sensitive(command)
-    audit_job_id                 = audit_id(job_id)
-    request_id                   = audit_id(request_id)
 
     async def send_text(content: str) -> None:
         action = build_action(segments(content), user_id, group_id)
@@ -938,86 +918,59 @@ async def _run_background_command(
 
         summary: SSHOutputSummary = await relay.finish(result_msg)
         relay_finished            = True
-        logger.info(
-            "SSH audit operation=command status=completed request_id=%s job_id=%s "
-            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-            "exit_code=%d output_chars=%d output_bytes=%d",
-            request_id,
-            audit_job_id,
-            command_audit.kind,
-            command_audit.length,
-            command_audit.byte_length,
-            command_audit.fingerprint,
-            exit_code,
-            summary.total_chars,
-            summary.total_bytes,
+        log.info(
+            LogEvent(
+                "command",
+                status       = "completed",
+                job_id       = job_id,
+                payload      = command,
+                exit_code    = exit_code,
+                output_chars = summary.total_chars,
+                output_bytes = summary.total_bytes,
+            )
         )
         if summary.delivery_errors:
-            logger.warning(
-                "SSH QQ projection status=failed job_id=%s attempts=%s failures=%s",
-                audit_job_id,
-                summary.actions_attempted,
-                summary.delivery_errors,
+            log.warning(
+                LogEvent(
+                    "projection.failed",
+                    job_id   = job_id,
+                    attempts = summary.actions_attempted,
+                    failures = summary.delivery_errors,
+                )
             )
         if summary.qq_truncated:
-            archive_created = summary.archive_path is not None
-            logger.info(
-                "SSH output projection status=truncated job_id=%s chars=%s bytes=%s "
-                "archive_created=%s",
-                audit_job_id,
-                summary.total_chars,
-                summary.total_bytes,
-                archive_created,
+            log.info(
+                LogEvent(
+                    "projection.truncated",
+                    job_id          = job_id,
+                    chars           = summary.total_chars,
+                    bytes           = summary.total_bytes,
+                    archive_created = summary.archive_path is not None,
+                )
             )
     except asyncio.CancelledError:
-        logger.info(
-            "SSH audit operation=command status=cancelled request_id=%s job_id=%s "
-            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-            request_id,
-            audit_job_id,
-            command_audit.kind,
-            command_audit.length,
-            command_audit.byte_length,
-            command_audit.fingerprint,
-        )
+        log.info(LogEvent("command", status="cancelled", job_id=job_id, payload=command))
         await abort_relay()
         raise
     except Exception as exc:
-        logger.error(
-            "SSH audit operation=command status=failed request_id=%s job_id=%s "
-            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-            "error_type=%s",
-            request_id,
-            audit_job_id,
-            command_audit.kind,
-            command_audit.length,
-            command_audit.byte_length,
-            command_audit.fingerprint,
-            audit_error_type(exc),
-        )
+        log.error(LogEvent("command", status="failed", job_id=job_id, payload=command, error=exc))
         if relay is not None:
             try:
-                await relay.finish("❌ 命令执行出错，请查看日志")
+                await relay.finish(
+                    public_error_message(manager.context, exc, component="qingssh.command")
+                )
                 relay_finished = True
             except asyncio.CancelledError:
                 await abort_relay()
                 raise
             except Exception as finalize_exc:
-                logger.error(
-                    "SSH error projection finalization failed job_id=%s error_type=%s",
-                    audit_job_id,
-                    audit_error_type(finalize_exc),
-                )
+                log.error(LogEvent("projection.finalize_failed", job_id=job_id, error=finalize_exc))
     finally:
         if relay is not None and not relay_finished:
             try:
                 await abort_relay()
             except Exception as cleanup_exc:
-                logger.error(
-                    "SSH output relay cleanup failed job_id=%s error_type=%s",
-                    audit_job_id,
-                    audit_error_type(cleanup_exc),
-                )
+                log.error(LogEvent("relay.cleanup_failed", job_id=job_id, error=cleanup_exc))
         try:
             await _commit_job_result_resilient(
                 update_session,
@@ -1028,7 +981,7 @@ async def _run_background_command(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.debug("SSH session CAS cleanup failed error_type=%s", audit_error_type(exc))
+            log.debug(LogEvent("session_cas.cleanup_failed", error=exc))
         finally:
             registered   = _COMMAND_JOBS.get(job_id)
             current_task = asyncio.current_task()

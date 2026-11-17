@@ -15,6 +15,7 @@ import pytest
 
 from core.bounded_http import BoundedHttpResponse
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.safe_http import SafeHttpResponse
 from plugins.github import main as github
 from tests.helpers.http import AiohttpResponse, QueuedAiohttpSession
@@ -192,7 +193,7 @@ async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace
 async def test_proxy_requires_http_session(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["github"]["proxy"] = "http://proxy.example:8080"
     result                                        = await github._fetch_trending("daily", context)
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)
 
 
 @pytest.mark.asyncio
@@ -202,7 +203,7 @@ async def test_invalid_proxy_returns_actionable_configuration_error(
     context.secrets["plugins"]["github"]["proxy"] = "ftp://proxy.example"
     result                                        = await github.handle("github", "", {}, context)
     assert "代理" in str(result)
-    assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
+    assert PUBLIC_ERROR_PREFIX not in str(result)
 
 
 @pytest.mark.asyncio
@@ -233,7 +234,7 @@ async def test_fetch_errors_are_bounded_for_manual_and_scheduled_paths(
         "fetch_public_html",
         new=AsyncMock(side_effect=aiohttp.ClientError("network detail")),
     ):
-        assert "XQ-PLUGIN-UNEXPECTED" in str(await github.scheduled(context))
+        assert PUBLIC_ERROR_PREFIX in str(await github.scheduled(context))
 
 
 @pytest.mark.asyncio
@@ -243,7 +244,7 @@ async def test_private_fetch_rejects_invalid_range_without_network(
     fetch = AsyncMock(return_value=_safe_html(SAMPLE_TRENDING_HTML))
     with patch.object(github, "fetch_public_html", new=fetch):
         result = await github._fetch_trending("yearly", context)
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)
     fetch.assert_not_awaited()
 
 

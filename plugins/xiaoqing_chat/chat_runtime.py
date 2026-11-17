@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from core.log import LogEvent
 from core.plugin_base import resolve_bot_name
 
 from .config.config import XiaoQingChatConfig, behavior_config_path, load_xiaoqing_chat_config
@@ -15,6 +17,8 @@ from .persona import persona_card_path
 from .runtime_state import ChatRuntime
 from .runtime_state import get_state as _state
 from .utils.wall_clock import configure_wall_clock
+
+log = logging.getLogger(__name__)
 
 
 def _mtime_ns(path: Path) -> int:
@@ -61,9 +65,7 @@ def load_runtime(context: Any) -> ChatRuntime:
         return cached
 
     try:
-        cfg = load_xiaoqing_chat_config(
-            context_config=settings.config, plugin_dir=plugin_dir, logger=context.logger
-        )
+        cfg = load_xiaoqing_chat_config(context_config=settings.config, plugin_dir=plugin_dir)
         # ban_regex 在配置校验时已经确认都能编译。
         runtime = ChatRuntime(cfg=cfg, compiled_ban_regex=[re.compile(p) for p in cfg.ban_regex])
         from .memory.knowledge_base import ensure_knowledge_index
@@ -77,9 +79,7 @@ def load_runtime(context: Any) -> ChatRuntime:
     except Exception as exc:
         if cached is None:
             raise
-        context.logger.warning(
-            "xiaoqing_chat config reload retained previous version: %s", type(exc).__name__
-        )
+        log.error(LogEvent("config.reload_retained_previous", error=exc))
         return cached
     state.set_runtime(
         config_key, runtime, (config_mtime, _persona_mtime(plugin_dir, cfg)), settings.revision

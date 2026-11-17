@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
 from core.bounded_http import ResponseFormatError
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.signin import yingshi
 from plugins.twitter import main as twitter
 from plugins.wolframalpha import main as wolframalpha
@@ -31,7 +31,6 @@ async def test_twitter_uses_get_and_rejects_wrong_json_mime() -> None:
         SimpleNamespace(
             http_session = session,
             secrets      = {"plugins": {"twitter": {"user_id": "123456789"}}},
-            logger       = MagicMock(),
         )
     )
 
@@ -67,13 +66,10 @@ async def test_wolfram_get_redirect_is_rejected_and_closed() -> None:
         headers = {"Location": "https://example.com/elsewhere"},
     )
     session = QueuedAiohttpSession(response)
-    context = SimpleNamespace(
-        http_session = session,
-        logger       = MagicMock(),
-    )
+    context = SimpleNamespace(http_session=session)
 
     result = await wolframalpha._get_answer("1+1", "appid", context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
+    assert PUBLIC_ERROR_PREFIX in result[0]["data"]["text"]
     assert [call[0] for call in session.requests] == ["GET"]
     assert response.closed is True

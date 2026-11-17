@@ -6,17 +6,20 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from core.bounded_file_cache import FileCacheLimits
+from core.bounded_http import ResponseFormatError
 from core.safe_http import SafeHttpResponse
 from plugins.twitter import main as twitter
+from tests.helpers.assertions import logged_events
 from tests.helpers.http import AiohttpBodyStream, QueuedAiohttpSession
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import image_bytes as _image_bytes
@@ -213,7 +216,6 @@ def context(tmp_path: Path) -> SimpleNamespace:
             current_user_id  = 123,
             current_group_id = 456,
             send_action      = AsyncMock(),
-            logger           = MagicMock(),
         )
     )
 
@@ -501,11 +503,11 @@ def test_image_validation_uses_actual_content_format(
 
 
 def test_image_validation_rejects_invalid_unsupported_and_oversized_images() -> None:
-    with pytest.raises(ValueError, match="valid supported image"):
+    with pytest.raises(ResponseFormatError, match="valid supported image"):
         twitter._detect_image_extension(b"not an image")
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ResponseFormatError, match="unsupported"):
         twitter._detect_image_extension(_image_bytes("GIF"))
-    with pytest.raises(ValueError, match="dimensions"):
+    with pytest.raises(ResponseFormatError, match="dimensions"):
         twitter._detect_image_extension(_oversized_png())
 
 
@@ -1100,24 +1102,29 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
 async def test_manual_fetch_reports_remote_http_failure(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     context.http_session = _TwitterSession(_json_response({"private": "detail"}, status=403))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
 
-    result = await twitter.handle("tw_fetch", "", {}, context)
-    assert "已开始后台抓取" in result[0]["data"]["text"]
+    with caplog.at_level(logging.WARNING):
+        result = await twitter.handle("tw_fetch", "", {}, context)
+        assert "已开始后台抓取" in result[0]["data"]["text"]
 
-    notification = twitter._MANUAL_NOTIFICATION_TASK
-    assert notification is not None
-    await asyncio.wait_for(notification, timeout=1.0)
+        notification = twitter._MANUAL_NOTIFICATION_TASK
+        assert notification is not None
+        await asyncio.wait_for(notification, timeout=1.0)
     action  = context.send_action.await_args.args[0]
     message = action["params"]["message"][0]["data"]["text"]
 
     assert "抓取失败" in message
     assert "HTTP 403" in message
     assert "抓取完成" not in message
+    # 远端 HTTP 错误是上游故障：记 WARNING，不走 ERROR 级的 public_error。
+    assert logged_events(caplog, "fetch.failed")
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 @pytest.mark.asyncio

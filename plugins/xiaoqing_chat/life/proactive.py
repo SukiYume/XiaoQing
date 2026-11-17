@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import re
 import time
@@ -28,13 +29,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from core.delivery import DeliveryReceipt, ScheduledDelivery
+from core.log import LogEvent
 from core.plugin_base import segments
 
 from ..chat_runtime import ai_route_context, configured_bot_name, llm_call_config, load_runtime
 from ..llm.gateway import LLMError, chat_completions
 from ..llm.local_checks import heuristic_check
 from ..llm.prompt_builder import build_dialogue_prompt
-from ..logging_utils import log_step
 from ..memory import client as memory_client
 from ..memory.local_ids import allocate_local_id
 from ..message_parts import build_text_message_parts, render_stored_message
@@ -51,6 +52,8 @@ from .proactive_state import ProactiveRecord
 from .push_log import look_at_images
 from .schedule import parse_clock, routine_slot_now, state_text
 from .self_timeline import self_timeline_block
+
+log = logging.getLogger(__name__)
 
 _NOTICE_WINDOW_SECONDS = 6 * 3600.0
 _NOTICE_CHARS          = 1200
@@ -293,14 +296,13 @@ def build_receipt(
         )
 
     async def rollback() -> None:
-        log_step(context, runtime, chat_id=chat_id, step="proactive.delivery_failed", fields={})
+        log.info(LogEvent("proactive.delivery_failed", chat_id=chat_id))
 
     receipt = DeliveryReceipt(expected_actions=1, commit=commit, rollback=rollback, unknown=commit)
     return receipt
 
 
 async def draft_through_judge(
-    context: Any,
     runtime: Any,
     *,
     chat_id: str,
@@ -329,10 +331,10 @@ async def draft_through_judge(
             )
             draft = parse_draft(raw)
         except LLMError:
-            log_skip(context, runtime, chat_id, "draft_failed")
+            log_skip(chat_id, "draft_failed")
             return None
         if not draft:
-            log_skip(context, runtime, chat_id, "model_skip")
+            log_skip(chat_id, "model_skip")
             return None
         if heuristic_check(
             reply                = draft,
@@ -341,7 +343,7 @@ async def draft_through_judge(
             similarity_threshold = check.similarity_threshold,
             max_assistant_in_row = check.max_assistant_in_row,
         ):
-            log_skip(context, runtime, chat_id, "local_check")
+            log_skip(chat_id, "local_check")
             return None
         if not runtime.cfg.proactive.enable_persona_judge:
             return draft, raw
@@ -362,19 +364,20 @@ async def draft_through_judge(
         if not reason:
             break
         retry = f"\n\n你刚才想发：{draft}\n发之前自己看了一遍，觉得不行：{reason}\n改掉这一点重说，或者换一件事说。"
-    log_skip(context, runtime, chat_id, "judge")
+    log_skip(chat_id, "judge")
     return None
 
 
-def log_skip(context: Any, runtime: Any, chat_id: str, code: str, **numbers: float) -> None:
+def log_skip(chat_id: str | None, code: str, **numbers: float) -> None:
     """记一次没开口及原因，排查“她怎么一直不说话”时能直接看到卡在哪一步。"""
 
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "proactive.skip",
-        fields  = {"reason_code": code, **{key: round(value, 1) for key, value in numbers.items()}},
+    log.info(
+        LogEvent(
+            "proactive.skip",
+            chat_id     = chat_id,
+            reason_code = code,
+            **{key: round(value, 1) for key, value in numbers.items()},
+        )
     )
 
 
@@ -394,35 +397,35 @@ async def _consider_group(
     record  = state.proactive_state.get(chat_id)
     today   = day_key(local_datetime(now))
     if record.count_on(today) >= cfg.max_per_group_per_day:
-        log_skip(context, runtime, chat_id, "daily_cap")
+        log_skip(chat_id, "daily_cap")
         return None
     if now - record.last_ts < cfg.min_interval_hours * 3600.0:
-        log_skip(context, runtime, chat_id, "interval", minutes_since=(now - record.last_ts) / 60)
+        log_skip(chat_id, "interval", minutes_since=(now - record.last_ts) / 60)
         return None
     if now - record.last_attempt_ts < cfg.retry_after_skip_minutes * 60.0:
         # 刚试过一次没发出去：群里情况没变时再问一遍模型也只是同样的结论。
-        log_skip(context, runtime, chat_id, "recent_attempt")
+        log_skip(chat_id, "recent_attempt")
         return None
     history = list(await state.memory_store.get_recent_async(chat_id, max_items=_HISTORY_ITEMS))
     if not history:
-        log_skip(context, runtime, chat_id, "no_history")
+        log_skip(chat_id, "no_history")
         return None
     last = history[-1]
     idle = now - float(last.ts or 0.0)
     if idle < cfg.min_group_idle_minutes * 60.0:
-        log_skip(context, runtime, chat_id, "not_idle", idle_minutes=idle / 60)
+        log_skip(chat_id, "not_idle", idle_minutes=idle / 60)
         return None
     if idle > cfg.max_group_dormant_hours * 3600.0:
-        log_skip(context, runtime, chat_id, "dormant", idle_minutes=idle / 60)
+        log_skip(chat_id, "dormant", idle_minutes=idle / 60)
         return None
     # Agent 交付也算自己的末句；通用聊天轮次和推送材料分类保持各自语义。
     if last.role == "assistant" and last.source_plugin in _OWN_SOURCES | {"xiaoqing_agent"}:
         # 最后一句是她自己说的，没人接；再开口就成了自言自语。
-        log_skip(context, runtime, chat_id, "own_last_word")
+        log_skip(chat_id, "own_last_word")
         return None
     secrets = ai_route_context(context, chat_id=chat_id)
     if secrets.get("_ai") is None:
-        log_skip(context, runtime, chat_id, "ai_unavailable")
+        log_skip(chat_id, "ai_unavailable")
         return None
 
     bot_name = configured_bot_name(context)
@@ -473,7 +476,6 @@ async def _consider_group(
     )
     await asyncio.to_thread(state.proactive_state.record_attempt, chat_id, ts=now)
     done = await draft_through_judge(
-        context,
         runtime,
         chat_id      = chat_id,
         secrets      = secrets,
@@ -485,7 +487,7 @@ async def _consider_group(
     if done is None:
         return None
     draft, raw_draft = done
-    log_step(context, runtime, chat_id=chat_id, step="proactive.send", fields={"text": draft})
+    log.info(LogEvent("proactive.send", chat_id=chat_id, text=draft))
     receipt = build_receipt(
         context,
         runtime,
@@ -511,23 +513,23 @@ async def run_proactive(context: Any) -> list[ScheduledDelivery]:
     if not within_active_hours(
         cfg.active_hours_start, cfg.active_hours_end, moment.hour * 60 + moment.minute
     ):
-        log_skip(context, runtime, "", "outside_active_hours")
+        log_skip(None, "outside_active_hours")
         return []
     try:
         slot = routine_slot_now(runtime.cfg.personality.card, moment)
     except ValueError:
         slot = None
     if slot is not None and slot.availability == "asleep":
-        log_skip(context, runtime, "", "asleep")
+        log_skip(None, "asleep")
         return []
     if slot is not None and slot.availability == "busy" and random.random() < 0.5:
-        log_skip(context, runtime, "", "busy")
+        log_skip(None, "busy")
         return []
     life_text = state_text(slot) if runtime.cfg.life.enable_schedule_state else ""
     state     = bound_state(context)
     groups    = _target_groups(context, cfg.group_ids)
     if not groups:
-        log_skip(context, runtime, "", "no_target_group")
+        log_skip(None, "no_target_group")
     deliveries: list[ScheduledDelivery] = []
     for group_id in groups:
         delivery = await _consider_group(

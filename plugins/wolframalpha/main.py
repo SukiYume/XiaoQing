@@ -27,8 +27,9 @@ from core.bounded_http import (
     validate_bounded_xml,
 )
 from core.interfaces import PluginSettingsSnapshot
+from core.log import LogEvent
 from core.plugin_base import Event, Segments, has_control_characters, segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import public_error_response
 
 QueryMode = Literal["simple", "step", "complete"]
 
@@ -41,7 +42,7 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 WA_RESULT_URL = "https://api.wolframalpha.com/v1/result"
 WA_QUERY_URL  = "https://api.wolframalpha.com/v2/query"
@@ -177,34 +178,19 @@ async def _get_answer(
         )
         return segments(f"🔢 {question}\n\n{result}")
     except HttpStatusError as exc:
-        logger.error("WolframAlpha API 返回非成功状态：%d", exc.status)
+        log.warning(LogEvent("query.http_error", status=exc.status, mode=mode))
         return segments(f"❌ 查询失败（HTTP {exc.status}）")
     except TimeoutError:
-        logger.error("WolframAlpha 查询超时")
+        log.warning(LogEvent("query.timeout", mode=mode))
         return segments("❌ 查询超时，请稍后重试")
     except aiohttp.ClientError as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "wolframalpha.network",
-        )
+        log.warning(LogEvent("query.network_error", error=exc, mode=mode))
         return segments("❌ 网络错误，请稍后重试")
     except ResponseFormatError as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "wolframalpha.response",
-        )
+        log.warning(LogEvent("query.response_invalid", error=exc, mode=mode))
         return segments("❌ 服务返回格式异常，请稍后重试")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "wolframalpha.query",
-        )
+        return public_error_response(context, exc, component="wolframalpha.query")
 
 
 async def _query_step(question: str, appid: str, session: Any) -> str:
@@ -257,7 +243,7 @@ async def _query_complete(question: str, appid: str, session: Any) -> str:
     query_result = payload.get("queryresult")
     pods         = query_result.get("pods") if isinstance(query_result, Mapping) else None
     if not isinstance(pods, list):
-        logger.error("WolframAlpha 完整结果缺少 pods 列表")
+        log.warning(LogEvent("query.pods_missing", mode="complete"))
         return "结果解析失败"
 
     results: list[str] = []
@@ -349,9 +335,4 @@ async def handle(
             )
         return await _get_answer(question, appid, context, mode=mode)
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "wolframalpha.handle",
-        )
+        return public_error_response(context, exc, component="wolframalpha.handle")

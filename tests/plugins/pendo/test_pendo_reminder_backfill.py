@@ -20,7 +20,7 @@ from tests.helpers.pendo_test_support import (
 def reminder_context(db, tmp_path):
     """真实服务集合（共用测试数据库）；发出的私聊动作记录在 ``sent``，一律回执成功。"""
 
-    with pendo_service_context(db, tmp_path, "test.pendo.reminders") as context:
+    with pendo_service_context(db, tmp_path) as context:
         context.sent = attach_action_recorder(context)
         yield context
 

@@ -32,8 +32,8 @@ def test_initial_reminder_outside_check_window_is_not_backfilled():
         item,
         remind_at.isoformat(timespec="seconds"),
         current,
-        log      = None,
-        settings = {},
+        reminder_log = None,
+        settings     = {},
     )
 
     assert delivery is None
@@ -53,8 +53,8 @@ def test_failed_initial_reminder_can_retry_after_normal_check_window():
         item,
         "2030-01-01T12:00:00+00:00",
         current,
-        log      = {"failure_count": 1, "confirmed_at": None},
-        settings = {},
+        reminder_log = {"failure_count": 1, "confirmed_at": None},
+        settings     = {},
     )
 
     assert delivery is not None

@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from aiohttp import WSCloseCode, WSMsgType
 
+import tests.helpers.app_test_support as _app_support
 import tests.helpers.server_test_support as _fixture_support
+from core.delivery import DeliveryReceipt, attach_receipt
+from core.log import LogEvent, current_request_id, log_scope
 from core.server import _InboundEventDispatcher
+from tests.helpers.app_test_support import LoggedLines
 from tests.helpers.server_test_support import (
     ClientSession,
     InboundManager,
@@ -26,8 +32,10 @@ from tests.helpers.server_test_support import (
     web,
 )
 
-mock_handler  = _fixture_support.mock_handler
-sample_server = _fixture_support.sample_server
+mock_handler    = _fixture_support.mock_handler
+sample_server   = _fixture_support.sample_server
+restore_logging = _app_support.restore_logging
+logged_lines    = _app_support.logged_lines
 
 
 async def _post_marker(session: ClientSession, marker: str, *, token: str = "token"):
@@ -258,6 +266,64 @@ async def test_long_same_key_lane_does_not_spawn_worker_per_event():
     assert inflight_count(dispatcher) == 0
     assert lane_count(dispatcher) == 0
     await dispatcher.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_one_worker_runs_each_ticket_and_rolls_back_dropped_results_under_its_id(
+    logged_lines: LoggedLines,
+):
+    probe_log                        = logging.getLogger("plugins.probe")
+    late_entered                     = asyncio.Event()
+    guard_ids: dict[str, str | None] = {}
+
+    async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
+        label = event["label"]
+        if label == "late":
+            late_entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                pass  # 吞掉取消、照样交回回复：结果已被取消，没有人会发送它。
+
+        def rolled_back() -> None:
+            probe_log.info(LogEvent("probe.rolled_back", label=label))
+
+        receipt = DeliveryReceipt(
+            expected_actions=1, commit=lambda: None, rollback=rolled_back, unknown=rolled_back
+        )
+        return [attach_receipt({"action": "send_private_msg", "params": {}}, receipt)]
+
+    def guard(label: str) -> Callable[[], bool]:
+        def authorized() -> bool:
+            guard_ids[label] = current_request_id()
+            return True
+
+        return authorized
+
+    labels = ("first", "late", "done")
+    dispatcher = _InboundEventDispatcher(handler, max_workers=1, queue_size=4)
+    await dispatcher.start()
+    # 三条请求在各自的作用域里登记，由第一条登记时启动的同一个 worker 依次执行。
+    tickets = {}
+    for user_id, label in enumerate(labels, start=1):
+        with log_scope(f"request-{label}"):
+            tickets[label] = dispatcher.admit(
+                {"user_id": user_id, "label": label}, auth_guard=guard(label)
+            )
+    await dispatcher.wait(tickets["first"])
+    await asyncio.wait_for(late_entered.wait(), 5)
+    dispatcher.cancel(tickets["late"])
+    await wait_until(tickets["done"].result.done)
+    # 另一条请求丢弃一个已经完成的结果。
+    with log_scope("request-other"):
+        dispatcher.discard(tickets["done"])
+    await dispatcher.stop()
+
+    assert dispatcher._worker_starts == 1
+    assert guard_ids == {label: f"request-{label}" for label in labels}
+    assert logged_lines.request_id_of("probe.rolled_back label=late") == "request-late"
+    assert logged_lines.request_id_of("probe.rolled_back label=done") == "request-done"
 
 
 @pytest.mark.asyncio

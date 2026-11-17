@@ -33,6 +33,7 @@ from plugins.xiaoqing_life.sources.base import (
 )
 from plugins.xiaoqing_life.stores import LifeStore
 from plugins.xiaoqing_life.turn_context import episode_line
+from tests.helpers.assertions import logged_records
 from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
 from tests.helpers.xiaoqing_life_test_support import (
     FakeAI,
@@ -1090,7 +1091,10 @@ async def test_login_succeeds_with_credentials_only_in_repeated_headers(
     )
 
 
-async def test_poll_codes_expired_unknown_and_timeout(tmp_path: Path) -> None:
+async def test_poll_codes_expired_unknown_and_timeout(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_life")
     expired = Env(tmp_path / "a", _generate(), _poll(86101), _poll(86038))
     await expired.login.start(expired.context, expired.event())
     await expired.finish()
@@ -1115,6 +1119,19 @@ async def test_poll_codes_expired_unknown_and_timeout(tmp_path: Path) -> None:
     polls = len(slow.session.requests) - 1
     assert 85 <= polls <= 92  # 180 秒 / 2 秒一次
     assert slow.ticks[0] >= 180
+
+    # 没扫码（二维码过期、等到超时）是预期结局，记 INFO；接口给出意外结果才是告警。
+    outcomes = [
+        (record.levelno, record.msg.name, record.msg.fields["reason_code"])
+        for record in logged_records(caplog)
+        if record.msg.name.startswith("bili_login.")
+    ]
+    assert outcomes == [
+        (logging.INFO, "bili_login.not_scanned", "qr_expired"),
+        (logging.WARNING, "bili_login.failed", "poll_unexpected"),
+        (logging.WARNING, "bili_login.failed", "poll_rejected"),
+        (logging.INFO, "bili_login.not_scanned", "timeout"),
+    ]
 
 
 async def test_qr_generate_with_bad_host_or_failed_send_gives_up(

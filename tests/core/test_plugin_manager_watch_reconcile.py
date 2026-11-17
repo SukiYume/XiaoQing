@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
+from tests.helpers.assertions import logged_events
 from tests.helpers.plugin_manager_test_support import (
     HOOKED_PLUGIN_SOURCE,
     FatalLifecycleError,
@@ -183,12 +184,7 @@ async def test_watch_rate_limits_repeated_round_failures_and_recovers(
     try:
         await wait_until(lambda: len(rounds) > 5)
         assert watcher.done() is False
-        failures = [
-            record
-            for record in caplog.records
-            if "reconciliation failed; retrying next interval" in record.getMessage()
-        ]
-        assert len(failures) == 1
+        assert len(logged_events(caplog, "plugin.watch.round_failed")) == 1
     finally:
         watcher.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -306,7 +302,8 @@ async def test_reconcile_deleted_plugin_failure_does_not_block_siblings_and_stay
 
     # 被隔离的一代不会被自动重试退役，等运维处理。
     assert manager._plugins["a_broken"] is broken
-    assert "Keeping quarantined plugin a_broken after directory removal" in caplog.text
+    (kept,) = logged_events(caplog, "plugin.watch.quarantined_deleted")
+    assert kept.fields["plugin"] == "a_broken"
 
 
 @pytest.mark.asyncio
@@ -353,20 +350,20 @@ async def test_watcher_manifest_errors_are_rate_limited_but_manual_loads_are_not
     plugin_dir.mkdir()
     if manifest_state == "invalid":
         (plugin_dir / "plugin.json").write_text("{invalid", encoding="utf-8")
-    expected = "Missing plugin.json" if manifest_state == "missing" else "Invalid plugin.json"
+    expected = (
+        "plugin.manifest.missing" if manifest_state == "missing" else "plugin.manifest.parse_failed"
+    )
     caplog.set_level("WARNING", logger="core.plugin_manager")
 
     for _ in range(5):
         await manager.reconcile_plugins()
 
-    watcher_messages = [record for record in caplog.records if expected in record.getMessage()]
-    assert len(watcher_messages) == 1
+    assert len(logged_events(caplog, expected)) == 1
 
     caplog.clear()
     manager._load_definition(plugin_dir)
     manager._load_definition(plugin_dir)
-    manual_messages = [record for record in caplog.records if expected in record.getMessage()]
-    assert len(manual_messages) == 2
+    assert len(logged_events(caplog, expected)) == 2
 
 
 @pytest.mark.asyncio

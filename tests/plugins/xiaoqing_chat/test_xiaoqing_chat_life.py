@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from plugins.xiaoqing_chat.message_parts import render_stored_message
 from plugins.xiaoqing_chat.persona import PersonaCard
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, reset_global_state
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness, put_history
 from tests.helpers.xiaoqing_chat_test_support import (
     ScriptedChatModel,
@@ -435,19 +437,17 @@ async def _consider(mock_context, tmp_path, history, *, settle=True, life=None, 
     return (deliveries[0] if deliveries else None), model
 
 
-def _logged(context) -> str:
-    return " ".join(str(call) for call in context.logger.info.call_args_list)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["", "xiaoqing_chat", "xiaoqing_agent"])
-async def test_proactive_stops_after_own_reply(mock_context, tmp_path, source) -> None:
+async def test_proactive_stops_after_own_reply(mock_context, tmp_path, caplog, source) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     delivery, model = await _consider(
         mock_context, tmp_path, [bot_message("任务完成了", ts=_hours_ago(2), source=source)]
     )
     assert delivery is None
     assert model.calls == []
-    assert '"reason_code": "own_last_word"' in _logged(mock_context)
+    skipped = [event.fields.get("reason_code") for event in logged_events(caplog, "proactive.skip")]
+    assert "own_last_word" in skipped
 
 
 @pytest.mark.asyncio

@@ -75,9 +75,7 @@ def test_onebot_event_timestamp_accepts_old_seconds_but_rejects_future_or_boolea
 
 
 @pytest.mark.asyncio
-async def test_idle_boundary_clears_transient_state_once_without_clearing_memory(
-    tmp_path,
-) -> None:
+async def test_idle_boundary_clears_transient_state_once_without_clearing_memory() -> None:
     from plugins.xiaoqing_chat.handlers import _maybe_reset_idle_conversation
 
     old_ts       = 1_700_000_000.0
@@ -100,28 +98,12 @@ async def test_idle_boundary_clears_transient_state_once_without_clearing_memory
         clear_transient_chat_state=MagicMock(),
     )
     runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            memory=SimpleNamespace(conversation_idle_gap_seconds=1800),
-            debug=SimpleNamespace(log_steps=False),
-        )
+        cfg=SimpleNamespace(memory=SimpleNamespace(conversation_idle_gap_seconds=1800))
     )
-    context = SimpleNamespace(data_dir=tmp_path, logger=MagicMock())
     event = {"_xc_user_recorded_local_id": "current"}
 
-    gap = await _maybe_reset_idle_conversation(
-        event,
-        context,
-        runtime,
-        state,
-        chat_id="g1",
-    )
-    repeated_gap = await _maybe_reset_idle_conversation(
-        event,
-        context,
-        runtime,
-        state,
-        chat_id="g1",
-    )
+    gap = await _maybe_reset_idle_conversation(event, runtime, state, chat_id="g1")
+    repeated_gap = await _maybe_reset_idle_conversation(event, runtime, state, chat_id="g1")
 
     assert gap == pytest.approx(3 * 86400)
     assert repeated_gap == 0.0

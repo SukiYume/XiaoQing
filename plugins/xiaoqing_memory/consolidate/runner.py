@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +20,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.ai import first_json_object
+from core.log import LogEvent
 
 from .. import topics as topics_mod
 from ..config import MemoryConfig
@@ -29,7 +31,7 @@ from ..store import MemoryStore
 from . import extract, pages, prune, verify
 from .common import Complete, today_line
 
-logger = logging.getLogger("plugins.xiaoqing_memory")
+log = logging.getLogger(__name__)
 
 # 同一批消息连着这么多次整理都读不出模型的输出，就放过这一批：不然这个范围之后的消息永远整理不到。
 _UNPARSED_TRIES = 3
@@ -127,11 +129,7 @@ async def extract_scope(
             raw = await deps.complete(messages)
         except Exception as exc:
             counters.add("extract.failed")
-            logger.warning(
-                "xiaoqing_memory step=extract.failed scope=%s error_type=%s",
-                scope,
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("extract.failed", scope=scope, error=exc))
             break
         if store.generation(scope) != generation:
             counters.add("extract.reset")
@@ -141,12 +139,7 @@ async def extract_scope(
             # 读不出对象和“这一批没有要记的”（空对象）是两回事：前者这一批不算整理过。
             counters.add("extract.unparsed")
             tries = _unparsed_tries(store, scope, batch) + 1
-            logger.warning(
-                "xiaoqing_memory step=extract.unparsed scope=%s events=%d tries=%d",
-                scope,
-                len(batch),
-                tries,
-            )
+            log.warning(LogEvent("extract.unparsed", scope=scope, events=len(batch), tries=tries))
             if tries < _UNPARSED_TRIES:
                 store.update_scope(scope, unparsed={"first_seq": batch[0].seq, "tries": tries})
                 break
@@ -184,14 +177,16 @@ async def extract_scope(
         counters.add("notes.superseded", len(result.superseded))
         counters.add("topics.heard", len(result.topics))
         counters.add("extract.rejected", sum(result.rejected.values()))
-        logger.info(
-            "xiaoqing_memory step=extract scope=%s events=%d added=%d touched=%d superseded=%d rejected=%s",
-            scope,
-            len(batch),
-            len(result.added),
-            len(result.touched),
-            len(result.superseded),
-            dict(result.rejected),
+        log.info(
+            LogEvent(
+                "extract",
+                scope      = scope,
+                events     = len(batch),
+                added      = len(result.added),
+                touched    = len(result.touched),
+                superseded = len(result.superseded),
+                rejected   = dict(result.rejected),
+            )
         )
     return counters
 
@@ -249,9 +244,7 @@ async def rewrite_page(
                 counters.add(f"pages.invalid.{reason}")
         except Exception as exc:
             counters.add("pages.failed")
-            logger.warning(
-                "xiaoqing_memory step=page.failed scope=%s error_type=%s", scope, type(exc).__name__
-            )
+            log.warning(LogEvent("page.failed", scope=scope, error=exc))
     if page is None:
         cited = old.note_ids() if old else set()
         fresh = [note for note in notes if note.status == "active" and note.id not in cited]
@@ -268,12 +261,14 @@ async def rewrite_page(
         return counters
     page = written
     counters.add("pages.rewritten" if rewritten else "pages.appended")
-    logger.info(
-        "xiaoqing_memory step=page scope=%s subject=%s chars=%d lines=%d",
-        scope,
-        subject.split(":", 1)[0],
-        page.char_count(),
-        len(page.lines()),
+    log.info(
+        LogEvent(
+            "page",
+            scope   = scope,
+            subject = subject.split(":", 1)[0],
+            chars   = page.char_count(),
+            lines   = len(page.lines()),
+        )
     )
     return counters
 
@@ -354,7 +349,7 @@ async def verify_lines(
             raw = await deps.complete(verify.build_messages(deps.bot_name, batch, deps.zone))
         except Exception as exc:
             counters.add("verify.failed")
-            logger.warning("xiaoqing_memory step=verify.failed error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("verify.failed", error=exc))
             break
         verdicts = verify.parse(raw, batch)
         counters.merge(verify.verdict_counts(verdicts))
@@ -384,11 +379,7 @@ async def verify_lines(
                     changed.append(note)
                 store.put_consolidated(scope, changed)
                 store.put_page(applied.page)
-        logger.info(
-            "xiaoqing_memory step=verify lines=%d verdicts=%s",
-            len(batch),
-            [v for _, v, _ in verdicts],
-        )
+        log.info(LogEvent("verify", lines=len(batch), verdicts=Counter(v for _, v, _ in verdicts)))
     return counters
 
 
@@ -480,5 +471,5 @@ async def nightly_pass(
         store.save_state()
     if counters:
         store.bump(day, dict(counters), save=True)
-        logger.info("xiaoqing_memory step=consolidate.summary counters=%s", dict(counters))
+        log.info(LogEvent("consolidate.summary", counters=dict(counters)))
     return counters

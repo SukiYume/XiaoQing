@@ -12,10 +12,13 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from core.log import LogEvent
 
 from ..constants import MEDIA_SUMMARY_MAX_CHARS
 from ..llm.gateway import (
@@ -53,7 +56,9 @@ from .models import (
     ResolvedMedia,
 )
 from .render_cache import write_render_cache_entry
-from .settings import MEDIA_ANALYSIS_PROMPT_VERSION, media_config, media_log
+from .settings import MEDIA_ANALYSIS_PROMPT_VERSION, media_config
+
+log = logging.getLogger(__name__)
 
 # 文字为主的截图要逐句转写，输出预算按一千字上下的转写留足；被截断的输出整份作废重试。
 # 提示词里给转写定的篇幅，低于摘要上限，留出画面描述的位置。
@@ -115,8 +120,6 @@ def _media_request_failure_reason(exc: Exception) -> str:
 
 def _log_media_provider_fallback(
     *,
-    context,
-    runtime,
     from_provider: Mapping[str, Any],
     to_provider: Mapping[str, Any],
     max_tokens: int,
@@ -124,18 +127,15 @@ def _log_media_provider_fallback(
 ) -> None:
     """审计服务商切换，但不记录凭据或媒体字节。"""
 
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.provider_fallback",
-        fields = {
-            "from_provider": from_provider.get("_provider_name", ""),
-            "to_provider"  : to_provider.get("_provider_name", ""),
-            "to_model"     : to_provider.get("model", ""),
-            "to_max_tokens": max_tokens,
-            "reason"       : reason or "request_failed",
-        },
-        level="warning",
+    log.warning(
+        LogEvent(
+            "media.analyze.provider_fallback",
+            from_provider = from_provider.get("_provider_name", ""),
+            to_provider   = to_provider.get("_provider_name", ""),
+            to_model      = to_provider.get("model", ""),
+            to_max_tokens = max_tokens,
+            reason_code   = reason or "request_failed",
+        )
     )
 
 
@@ -647,13 +647,10 @@ async def _refine_committed_emoji(
 
     media_hash = resolved.media_hash[:12]
 
-    def log(step: str, fields: dict[str, Any], level: str = "info") -> None:
-        media_log(
-            context,
-            runtime,
-            step   = f"media.analyze.refine.background.{step}",
-            fields = {"media_hash": media_hash, **fields},
-            level  = level,
+    def emit(level: int, step: str, **fields: object) -> None:
+        log.log(
+            level,
+            LogEvent(f"media.analyze.refine.background.{step}", media_hash=media_hash, **fields),
         )
 
     detail = MediaAnalysisDraft(
@@ -672,10 +669,10 @@ async def _refine_committed_emoji(
             timeout=timeout,
         )
     except TimeoutError:
-        log("timeout", {"timeout_seconds": f"{timeout:.3f}"}, "warning")
+        emit(logging.WARNING, "timeout", timeout_seconds=f"{timeout:.3f}")
         return
     except Exception as exc:
-        log("fail", {"error_type": type(exc).__name__}, "warning")
+        emit(logging.WARNING, "fail", error=exc)
         return
 
     refined_rendered, used_summary_fallback, quality = _finalize_media_analysis(
@@ -688,14 +685,15 @@ async def _refine_committed_emoji(
         resolved              = resolved,
     )
     if semantic_reason:
-        log(
+        emit(
+            logging.WARNING,
             "skip",
-            {"reason_code": semantic_reason, "description": refined_rendered.description},
-            "warning",
+            reason_code = semantic_reason,
+            description = refined_rendered.description,
         )
         return
     if _rendered_quality(refined_rendered) <= _rendered_quality(rendered) + 0.05:
-        log("skip", {"reason_code": "quality_not_improved", "quality": quality})
+        emit(logging.INFO, "skip", reason_code="quality_not_improved", quality=quality)
         return
 
     await run_media_blocking(
@@ -707,17 +705,16 @@ async def _refine_committed_emoji(
         quality        = quality,
         prompt_version = MEDIA_ANALYSIS_PROMPT_VERSION,
     )
-    log(
+    emit(
+        logging.INFO,
         "ok",
-        {
-            "provider"    : provider.get("_provider_name", ""),
-            "model"       : provider.get("model", ""),
-            "max_tokens"  : provider.get("_effective_max_tokens", ""),
-            "description" : refined_rendered.description,
-            "emotion_tags": "，".join(refined_rendered.emotion_tags),
-            "marker"      : refined_rendered.marker,
-            "quality"     : quality,
-        },
+        provider     = provider.get("_provider_name", ""),
+        model        = provider.get("model", ""),
+        max_tokens   = provider.get("_effective_max_tokens", ""),
+        description  = refined_rendered.description,
+        emotion_tags = "，".join(refined_rendered.emotion_tags),
+        marker       = refined_rendered.marker,
+        quality      = quality,
     )
 
 
@@ -737,12 +734,7 @@ def schedule_background_emoji_refine(
     if rendered.kind != "emoji" or not cfg.enable_emoji_refine_background:
         return
     timeout = float(cfg.emoji_refine_timeout_seconds)
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.refine.background.spawn",
-        fields = {"media_hash": resolved.media_hash[:12]},
-    )
+    log.info(LogEvent("media.analyze.refine.background.spawn", media_hash=resolved.media_hash[:12]))
     spawn_bg_task(
         context,
         _refine_committed_emoji(
@@ -764,15 +756,13 @@ def _resolve_media_analysis_candidates(
     candidates      = _resolve_media_llm_secret_candidates(context)
     primary_secrets = candidates[0]
     if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
-        media_log(
-            context,
-            runtime,
-            step   = "media.analyze.skip",
-            fields = {
-                "reason"      : "vision_not_configured",
-                "media_hash"  : resolved.media_hash[:12],
-                "segment_type": resolved.segment_type,
-            },
+        log.info(
+            LogEvent(
+                "media.analyze.skip",
+                reason_code  = "vision_not_configured",
+                media_hash   = resolved.media_hash[:12],
+                segment_type = resolved.segment_type,
+            )
         )
         return None
 
@@ -780,17 +770,14 @@ def _resolve_media_analysis_candidates(
     if complete_candidates:
         return cfg, complete_candidates
 
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.skip",
-        fields = {
-            "reason"        : "vision_route_unavailable",
-            "provider"      : primary_secrets.get("_provider_name", ""),
-            "provider_scope": primary_secrets.get("_provider_scope", ""),
-            "media_hash"    : resolved.media_hash[:12],
-        },
-        level="warning",
+    log.warning(
+        LogEvent(
+            "media.analyze.skip",
+            reason_code    = "vision_route_unavailable",
+            provider       = primary_secrets.get("_provider_name", ""),
+            provider_scope = primary_secrets.get("_provider_scope", ""),
+            media_hash     = resolved.media_hash[:12],
+        )
     )
     return None
 
@@ -840,8 +827,6 @@ def _build_media_analysis_prompt(
 async def _prepare_media_analysis_request(
     resolved: ResolvedMedia,
     *,
-    context,
-    runtime,
     cfg,
     prefer_emoji: bool,
 ) -> _PreparedMediaAnalysisRequest | None:
@@ -853,17 +838,14 @@ async def _prepare_media_analysis_request(
         max_bytes=int(cfg.max_analyze_bytes),
     )
     if prepared is None:
-        media_log(
-            context,
-            runtime,
-            step   = "media.analyze.skip",
-            fields = {
-                "reason"    : "media_too_large",
-                "bytes"     : payload_size,
-                "limit"     : int(cfg.max_analyze_bytes),
-                "media_hash": resolved.media_hash[:12],
-            },
-            level="warning",
+        log.warning(
+            LogEvent(
+                "media.analyze.skip",
+                reason_code = "media_too_large",
+                bytes       = payload_size,
+                limit       = int(cfg.max_analyze_bytes),
+                media_hash  = resolved.media_hash[:12],
+            )
         )
         return None
 
@@ -886,8 +868,6 @@ async def _prepare_media_analysis_request(
 
 def _log_media_analysis_start(
     *,
-    context,
-    runtime,
     resolved: ResolvedMedia,
     prepared: PreparedMediaForLLM,
     provider_secrets: Mapping[str, Any],
@@ -897,57 +877,49 @@ def _log_media_analysis_start(
 ) -> None:
     """记录有界请求元数据，同时排除载荷和凭据。"""
 
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.start",
-        fields = {
-            "provider"            : provider_secrets.get("_provider_name", ""),
-            "provider_scope"      : provider_secrets.get("_provider_scope", ""),
-            "model"               : provider_secrets.get("model", ""),
-            "max_tokens"          : attempt_base_max_tokens,
-            "media_hash"          : resolved.media_hash[:12],
-            "segment_type"        : resolved.segment_type,
-            "source_mime"         : prepared.source_mime_type,
-            "llm_mime"            : prepared.mime_type,
-            "transcoded"          : prepared.transcoded,
-            "animated"            : prepared.is_animated,
-            "frame_strategy"      : prepared.frame_strategy,
-            "frame_count"         : prepared.frame_count,
-            "prefer_emoji"        : prefer_emoji,
-            "semantic_attempt"    : semantic_attempt,
-            "semantic_retry_limit": _MEDIA_SEMANTIC_RETRY_LIMIT,
-        },
+    log.info(
+        LogEvent(
+            "media.analyze.start",
+            provider             = provider_secrets.get("_provider_name", ""),
+            provider_scope       = provider_secrets.get("_provider_scope", ""),
+            model                = provider_secrets.get("model", ""),
+            max_tokens           = attempt_base_max_tokens,
+            media_hash           = resolved.media_hash[:12],
+            segment_type         = resolved.segment_type,
+            source_mime          = prepared.source_mime_type,
+            llm_mime             = prepared.mime_type,
+            transcoded           = prepared.transcoded,
+            animated             = prepared.is_animated,
+            frame_strategy       = prepared.frame_strategy,
+            frame_count          = prepared.frame_count,
+            prefer_emoji         = prefer_emoji,
+            semantic_attempt     = semantic_attempt,
+            semantic_retry_limit = _MEDIA_SEMANTIC_RETRY_LIMIT,
+        )
     )
 
 
 def _log_media_analysis_exception(
     exc: Exception,
     *,
-    context,
-    runtime,
     resolved: ResolvedMedia,
     provider_secrets: Mapping[str, Any],
 ) -> None:
     """记录清洗后的失败标识，绝不记录异常正文或服务商密钥。"""
 
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.fail",
-        fields = {
-            "provider"  : provider_secrets.get("_provider_name", ""),
-            "model"     : provider_secrets.get("model", ""),
-            "media_hash": resolved.media_hash[:12],
-            "error_type": type(exc).__name__,
-        },
-        level="warning",
+    log.warning(
+        LogEvent(
+            "media.analyze.fail",
+            provider   = provider_secrets.get("_provider_name", ""),
+            model      = provider_secrets.get("model", ""),
+            media_hash = resolved.media_hash[:12],
+            error      = exc,
+        )
     )
 
 
 async def _run_media_analysis_attempt(
     *,
-    context,
     runtime,
     resolved: ResolvedMedia,
     request: _PreparedMediaAnalysisRequest,
@@ -959,8 +931,6 @@ async def _run_media_analysis_attempt(
     """调用一个服务商一次，并规范化其原始响应。"""
 
     _log_media_analysis_start(
-        context                 = context,
-        runtime                 = runtime,
         resolved                = resolved,
         prepared                = request.prepared,
         provider_secrets        = provider_secrets,
@@ -979,25 +949,23 @@ async def _run_media_analysis_attempt(
         resolved     = resolved,
         prefer_emoji = prefer_emoji,
     )
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.detail.ok",
-        fields = {
-            "provider"     : llm_result.used_secrets.get("_provider_name", ""),
-            "model"        : llm_result.used_secrets.get("model", ""),
-            "max_tokens"   : llm_result.used_secrets.get("_effective_max_tokens", ""),
-            "used_path"    : llm_result.used_path,
-            "finish_reason": llm_result.finish_reason,
-            "raw_chars"    : llm_result.raw_chars,
-            "media_hash"   : resolved.media_hash[:12],
-            "kind"         : detail.kind,
-            "description"  : detail.description,
-            "visible_text" : detail.visible_text,
-            "emotion_tags" : "，".join(detail.emotion_tags),
-            "parsed_json"  : detail.parsed_json,
-            "raw_output"   : detail.raw_output,
-        },
+    log.info(
+        LogEvent(
+            "media.analyze.detail.ok",
+            provider           = llm_result.used_secrets.get("_provider_name", ""),
+            model              = llm_result.used_secrets.get("model", ""),
+            max_tokens         = llm_result.used_secrets.get("_effective_max_tokens", ""),
+            used_profile       = llm_result.used_path,
+            finish_reason_code = llm_result.finish_reason,
+            raw_chars          = llm_result.raw_chars,
+            media_hash         = resolved.media_hash[:12],
+            kind               = detail.kind,
+            description        = detail.description,
+            visible_text       = detail.visible_text,
+            emotion_tags       = "，".join(detail.emotion_tags),
+            parsed_json        = detail.parsed_json,
+            raw_output         = detail.raw_output,
+        )
     )
     rendered, used_summary_fallback, quality = _finalize_media_analysis(
         detail   = detail,
@@ -1019,8 +987,6 @@ def _log_invalid_media_analysis(
     semantic_reason: str,
     semantic_attempt: int,
     will_retry: bool,
-    context,
-    runtime,
     resolved: ResolvedMedia,
 ) -> None:
     """记录语义拒绝，以及有界重试是否继续。"""
@@ -1035,22 +1001,19 @@ def _log_invalid_media_analysis(
         "description"         : attempt.rendered.description,
         "quality"             : attempt.quality,
     }
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.semantic.invalid",
-        fields = fields,
-        level  = "warning",
-    )
+    log.warning(LogEvent("media.analyze.semantic.invalid", **fields))
     if will_retry:
-        media_log(
-            context,
-            runtime,
-            step   = "media.analyze.provider_retry",
-            fields = {
-                key: value for key, value in fields.items() if key not in {"description", "quality"}
-            },
-            level="warning",
+        log.warning(
+            LogEvent(
+                "media.analyze.provider_retry",
+                **(
+                    {
+                        key: value
+                        for key, value in fields.items()
+                        if key not in {"description", "quality"}
+                    }
+                ),
+            )
         )
 
 
@@ -1058,24 +1021,19 @@ def _log_terminal_semantic_failure(
     attempt: _MediaAnalysisAttempt,
     *,
     semantic_reason: str,
-    context,
-    runtime,
     resolved: ResolvedMedia,
 ) -> None:
     """记录语义重试耗尽，但不持久化原始输出。"""
 
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.fail",
-        fields = {
-            "provider"   : attempt.llm_result.used_secrets.get("_provider_name", ""),
-            "model"      : attempt.llm_result.used_secrets.get("model", ""),
-            "media_hash" : resolved.media_hash[:12],
-            "error_type" : "semantic_validation_failed",
-            "reason_code": semantic_reason,
-        },
-        level="warning",
+    log.warning(
+        LogEvent(
+            "media.analyze.fail",
+            provider    = attempt.llm_result.used_secrets.get("_provider_name", ""),
+            model       = attempt.llm_result.used_secrets.get("model", ""),
+            media_hash  = resolved.media_hash[:12],
+            error_type  = "semantic_validation_failed",
+            reason_code = semantic_reason,
+        )
     )
 
 
@@ -1111,27 +1069,25 @@ async def _commit_media_analysis_attempt(
             )
 
     llm_result = attempt.llm_result
-    media_log(
-        context,
-        runtime,
-        step   = "media.analyze.ok",
-        fields = {
-            "provider"             : llm_result.used_secrets.get("_provider_name", ""),
-            "model"                : llm_result.used_secrets.get("model", ""),
-            "max_tokens"           : llm_result.used_secrets.get("_effective_max_tokens", ""),
-            "used_path"            : llm_result.used_path,
-            "finish_reason"        : llm_result.finish_reason,
-            "raw_chars"            : llm_result.raw_chars,
-            "media_hash"           : resolved.media_hash[:12],
-            "kind"                 : rendered.kind,
-            "description"          : rendered.description,
-            "detail_description"   : attempt.detail.description,
-            "visible_text"         : attempt.detail.visible_text,
-            "used_summary_fallback": attempt.used_summary_fallback,
-            "marker"               : rendered.marker,
-            "cultural_hint"        : cultural_hint,
-            "quality"              : attempt.quality,
-        },
+    log.info(
+        LogEvent(
+            "media.analyze.ok",
+            provider              = llm_result.used_secrets.get("_provider_name", ""),
+            model                 = llm_result.used_secrets.get("model", ""),
+            max_tokens            = llm_result.used_secrets.get("_effective_max_tokens", ""),
+            used_profile          = llm_result.used_path,
+            finish_reason_code    = llm_result.finish_reason,
+            raw_chars             = llm_result.raw_chars,
+            media_hash            = resolved.media_hash[:12],
+            kind                  = rendered.kind,
+            description           = rendered.description,
+            detail_description    = attempt.detail.description,
+            visible_text          = attempt.detail.visible_text,
+            used_summary_fallback = attempt.used_summary_fallback,
+            marker                = rendered.marker,
+            cultural_hint         = cultural_hint,
+            quality               = attempt.quality,
+        )
     )
     return rendered
 
@@ -1156,7 +1112,6 @@ async def _analyze_media_with_provider(
         )
         try:
             attempt = await _run_media_analysis_attempt(
-                context                 = context,
                 runtime                 = runtime,
                 resolved                = resolved,
                 request                 = request,
@@ -1170,8 +1125,6 @@ async def _analyze_media_with_provider(
                 return _MediaProviderOutcome(fallback_reason=_media_request_failure_reason(exc))
             _log_media_analysis_exception(
                 exc,
-                context          = context,
-                runtime          = runtime,
                 resolved         = resolved,
                 provider_secrets = provider_secrets,
             )
@@ -1200,8 +1153,6 @@ async def _analyze_media_with_provider(
             semantic_reason  = semantic_reason,
             semantic_attempt = semantic_attempt,
             will_retry       = will_retry,
-            context          = context,
-            runtime          = runtime,
             resolved         = resolved,
         )
         if will_retry:
@@ -1212,8 +1163,6 @@ async def _analyze_media_with_provider(
         _log_terminal_semantic_failure(
             attempt,
             semantic_reason = semantic_reason,
-            context         = context,
-            runtime         = runtime,
             resolved        = resolved,
         )
         return _MediaProviderOutcome()
@@ -1241,8 +1190,6 @@ async def analyze_media_with_llm(
 
     request = await _prepare_media_analysis_request(
         resolved,
-        context      = context,
-        runtime      = runtime,
         cfg          = cfg,
         prefer_emoji = prefer_emoji,
     )
@@ -1254,8 +1201,6 @@ async def analyze_media_with_llm(
     for index, provider_secrets in enumerate(complete_candidates):
         if previous_provider is not None:
             _log_media_provider_fallback(
-                context       = context,
-                runtime       = runtime,
                 from_provider = previous_provider,
                 to_provider   = provider_secrets,
                 max_tokens    = _media_detail_base_max_tokens_for_reason(
@@ -1358,27 +1303,17 @@ async def _extract_cultural_hint(
             timeout=timeout,
         )
     except TimeoutError:
-        media_log(
-            context,
-            runtime,
-            step   = "media.cultural_hint.timeout",
-            fields = {
-                "media_hash"     : resolved.media_hash[:12],
-                "timeout_seconds": f"{timeout:.3f}",
-            },
-            level="warning",
+        log.warning(
+            LogEvent(
+                "media.cultural_hint.timeout",
+                media_hash      = resolved.media_hash[:12],
+                timeout_seconds = f"{timeout:.3f}",
+            )
         )
         return ""
     except Exception as exc:
-        media_log(
-            context,
-            runtime,
-            step   = "media.cultural_hint.fail",
-            fields = {
-                "media_hash": resolved.media_hash[:12],
-                "error_type": type(exc).__name__,
-            },
-            level="warning",
+        log.warning(
+            LogEvent("media.cultural_hint.fail", media_hash=resolved.media_hash[:12], error=exc)
         )
         return ""
 
@@ -1390,15 +1325,13 @@ async def _extract_cultural_hint(
     refusal_tokens = ("不知道", "不确定", "无法", "无内容", "无梗", "需要更多")
     if any(token in hint for token in refusal_tokens):
         return ""
-    media_log(
-        context,
-        runtime,
-        step   = "media.cultural_hint.ok",
-        fields = {
-            "provider"  : used_secrets.get("_provider_name", ""),
-            "model"     : used_secrets.get("model", ""),
-            "media_hash": resolved.media_hash[:12],
-            "hint"      : hint,
-        },
+    log.info(
+        LogEvent(
+            "media.cultural_hint.ok",
+            provider   = used_secrets.get("_provider_name", ""),
+            model      = used_secrets.get("model", ""),
+            media_hash = resolved.media_hash[:12],
+            hint       = hint,
+        )
     )
     return hint

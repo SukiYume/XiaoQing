@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import threading
 from collections.abc import Callable, Mapping
 from functools import lru_cache
@@ -11,10 +12,13 @@ from pathlib import Path
 from typing import Any, TypedDict, TypeVar, cast
 
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, load_json, run_sync, write_json
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from .convert import STORED_HEX_PATTERN, hex_to_rgb, validate_cmyk, validate_rgb
+
+log = logging.getLogger(__name__)
 
 MAX_CUSTOM_COLORS_PER_SCOPE  = 200
 MAX_CUSTOM_COLOR_FILE_BYTES  = 256 * 1024
@@ -173,17 +177,17 @@ def load_colors(context: PluginContextProtocol) -> list[ColorRecord]:
     try:
         builtin = _load_builtin_colors(context)
         colors.extend(builtin)
-        context.logger.debug("加载内置颜色库: count=%d", len(builtin))
+        log.debug(LogEvent("builtin.loaded", count=len(builtin)))
     except Exception as exc:
-        public_error_message(context, exc, logger=context.logger, component="color.load_builtin")
+        log_public_error(context, exc, component="color.load_builtin")
         return []
 
     try:
         custom = load_custom_colors(context)
         colors.extend(custom)
-        context.logger.debug("加载自定义颜色: count=%d", len(custom))
+        log.debug(LogEvent("custom.loaded", count=len(custom)))
     except Exception as exc:
-        public_error_message(context, exc, logger=context.logger, component="color.load_custom")
+        log_public_error(context, exc, component="color.load_custom")
     return colors
 
 

@@ -204,7 +204,7 @@ python main.py
 
 ### 出故障时
 
-聊天模型全部失败或内部出错时，聊天里不出现错误码。顺口接话的轮次安静结束；私聊或被点名时回一句“我这边卡了 消息半天发不出去”这样的话，同一会话十分钟内只说一次。诊断信息（`public_error`，带 `request_id`）照常写进日志。
+聊天模型全部失败或内部出错时，聊天里不出现 `操作失败：…` 这样的错误说明。顺口接话的轮次安静结束；私聊或被点名时回一句“我这边卡了 消息半天发不出去”这样的话，同一会话十分钟内只说一次。诊断信息照常写进日志：一条 `public_error`，带失败类别、异常类型和出错位置，request ID 列是这一轮的 ID。
 
 ---
 
@@ -565,7 +565,6 @@ python main.py
 | `humanize.apply_to_forced` | `false` | 私聊直接回复是否加首条延迟 |
 | `humanize.interbubble_applies_to_forced` | `true` | 私聊直接回复时气泡之间也停顿 |
 | `humanize.*` | 见 `xiaoqing_config.json` | 其余打字延迟与气泡间隔 |
-| `debug.show_reply_prompt` / `log_steps` | `false` / `true` | 输出完整提示词 / 逐步骤日志 |
 
 ### 生活连续性
 
@@ -642,7 +641,7 @@ data/xiaoqing_chat/
 
 所有 JSON 通过 Core 原子存储写入并保留 `.bak` 备份，读取时校验结构和字段类型。主文件损坏时从有效备份恢复。
 
-**隐私边界**：远程模型会收到当前消息，以及对应功能需要的历史、记忆、规划结果和图片。部署者按 provider 条款管理数据用途、保留与删除。运行日志只记录长度、指纹、profile、决策原因和脱敏后的错误类别，QQ 号、群号、URL 和正文按 `logging_utils.py` 的规则脱敏。
+**隐私边界**：远程模型会收到当前消息，以及对应功能需要的历史、记忆、规划结果和图片。部署者按 provider 条款管理数据用途、保留与删除。运行日志按 Core 的统一规则记录（见 [插件开发指南的日志与指标](../../docs/03-plugin-development.md#日志与指标)）：QQ 号、群号、`chat_id` 和 profile、原因码这类标签明文，消息正文、回复、提示词和 URL 只记长度和指纹，错误只记异常类型。
 
 ---
 
@@ -660,23 +659,24 @@ python -m scripts.chat_eval run --driver live --set life # 真实 main.py 端到
 
 ## 🩺 排障
 
-日志中每一步都以 `xiaoqing_chat step=<步骤名>` 记录（`debug.log_steps`），按步骤名搜索最快。
+每一步在日志里记一行 INFO：logger 是所在模块 `plugins.xiaoqing_chat.<模块>`，消息以步骤名开头，后跟 `k=v` 字段，例如 `smalltalk.no_reply chat_id=g123456 reason_code=probability …`。按步骤名搜索最快。
+每轮发给模型的提示词按消息另记 DEBUG 级的 `reply.prompt`，只有角色、序号和正文的长度与指纹；要看时在 `logging.levels` 里把 `plugins.xiaoqing_chat.reply_generator` 设为 `DEBUG`。
 
 ### 群里很少说话 / 说太多
 
 1. 确认 `plugins.smalltalk_provider` 是 `xiaoqing_chat`，当前群没有被 `/闭嘴`。
 2. `/xc config` 查看频控与概率。
-3. 搜索 `smalltalk.no_reply`：`reason` 为 `min_interval`、`max_replies_per_minute`、`continuous_cooldown`、`low_information` 表示被硬限制拦下，`probability` 表示没掷中，日志同时给出概率、掷值和沉默轮数。
+3. 搜索 `smalltalk.no_reply`：`reason_code` 为 `min_interval`、`max_replies_per_minute`、`continuous_cooldown`、`low_information` 表示被硬限制拦下，`probability` 表示没掷中，日志同时给出概率、掷值和沉默轮数。
 4. 搜索 `smalltalk.pfc.done` 查看规划器选择的动作。`smalltalk.generation_limited` 表示配额不足，`limit=chat_superseded` 表示排队时被同会话更新的消息顶替。
 5. 回复太多时调低 `reply_probability_base`、`active_topic_reply_probability`，或调高 `min_reply_interval_seconds`。
 
 ### 被叫了却没回
 
-1. 搜索 `attention` 相关步骤，确认召唤原因（名字、`@`、引用、代词）。
+1. 搜索 `smalltalk.recv`，从 `mentioned`、`direct_mentioned`、`called_by_name`、`reply_to_bot`、`forced` 和 `force_reason_code` 确认召唤原因（名字、`@`、引用、代词）。
 2. 搜索 `reply.check`：`exhausted` 步骤表示重写耗尽后改用了兜底句。
 3. 审查模型不可用时，`always` 模式会回复 `等我一下，脑子突然卡壳了`。检查 `checker` 路由。
-4. 搜索 `smalltalk.yield_to_follow_up` 和 `smalltalk.stale.drop`（`reason=sender_continued`）：对方后面还有消息排着，这一条让给了后面的轮次，由最后一条统一回复。
-5. 搜索 `public_error`（`component` 为 `xiaoqing_chat.smalltalk`）：这一轮出了故障（聊天里的表现见上文“出故障时”），按日志里的异常类型和 `request_id` 排查。
+4. 搜索 `smalltalk.yield_to_follow_up` 和 `smalltalk.stale.drop`（`reason_code=sender_continued`）：对方后面还有消息排着，这一条让给了后面的轮次，由最后一条统一回复。
+5. 搜索 `public_error`（`component` 为 `xiaoqing_chat.smalltalk`）：这一轮出了故障（聊天里的表现见上文“出故障时”），按这一行的 `category`、`error`（异常类型）、`error.at`（出错位置）和 request ID 列排查，同一个 ID 能找到这一轮的其他步骤。
 
 ### 看不懂图
 
@@ -697,7 +697,7 @@ python -m scripts.chat_eval run --driver live --set life # 真实 main.py 端到
 1. `/xc stats` 查看当前会话统计。
 2. 确认事件中的 `group_id`、`user_id` 和引用的 `message_id`。
 3. 检查数据目录中对应文件和 `.bak` 备份。
-4. 在测试会话中执行 `/xc reset`（群里需 `/xc reset confirm`）。
+4. 在测试会话中执行 `/xc reset`（群里需 `/xc reset confirm`）。每次重置在日志里记一行 `session.reset`，带范围、`chat_id`、群号和操作人 QQ 号。
 
 ---
 

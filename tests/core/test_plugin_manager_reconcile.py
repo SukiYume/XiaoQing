@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
+from tests.helpers.assertions import logged_events
 from tests.helpers.plugin_manager_test_support import (
     DEMO_COMMAND,
     HOOKED_PLUGIN_SOURCE,
@@ -411,7 +412,8 @@ async def test_direct_reload_refuses_quarantined_generation(
     await manager.reload_plugin("demo")
 
     assert manager._plugins["demo"] is plugin
-    assert "Refusing to reload quarantined plugin demo" in caplog.text
+    (refused,) = logged_events(caplog, "plugin.reload.refused_quarantined")
+    assert refused.fields["plugin"] == "demo"
     assert len(PROBE.log("import")) == 1
 
 

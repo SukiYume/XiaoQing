@@ -26,6 +26,7 @@ from typing import Any
 from weakref import WeakValueDictionary
 
 from core.atomic_store import AtomicJsonStore
+from core.log import LogEvent
 
 from ..chat_runtime import optional_capability
 from ..life.open_loops import OpenLoop
@@ -34,7 +35,7 @@ from ..message_parts import render_stored_message
 from .memory import StoredMessage, is_conversation_reply
 from .person_profile import get_profile_generation
 
-logger = logging.getLogger("plugin.xiaoqing_chat")
+log = logging.getLogger(__name__)
 
 RECALL_TIMEOUT   = 1.5
 RECORD_TIMEOUT   = 8.0
@@ -200,11 +201,11 @@ async def _call(
     try:
         result = await asyncio.wait_for(getattr(service, method)(payload), timeout=timeout)
     except Exception as exc:
-        logger.info("xiaoqing_chat memory.%s unavailable error_type=%s", method, type(exc).__name__)
+        log.warning(LogEvent("memory.unavailable", method=method, error=exc))
         return None
     if not isinstance(result, dict) or result.get("error"):
         if isinstance(result, dict):
-            logger.info("xiaoqing_chat memory.%s refused reason=%s", method, result.get("error"))
+            log.warning(LogEvent("memory.refused", method=method, reason_code=result.get("error")))
         return None
     return result
 
@@ -272,7 +273,7 @@ async def _migrate(context: Any, box: Outbox, data_dir: Path, chat_id: str) -> b
             return False
     await asyncio.to_thread(box.mark_migrated, chat_id, len(imports))
     if imports:
-        logger.info("xiaoqing_chat memory.migrated chat=%s ops=%d", chat_id[:1], len(imports))
+        log.info(LogEvent("memory.migrated", chat_id=chat_id, ops=len(imports)))
     return True
 
 

@@ -13,12 +13,13 @@ import pytest
 from core.interfaces import DeliveryTarget, PluginContextProtocol
 from plugins.minecraft import main as mc_main
 from plugins.minecraft.connection import ConnectionManager, McConnection
-from plugins.minecraft.log_monitor import LogBatch, LogEventType, LogMonitor
+from plugins.minecraft.log_monitor import LogBatch, LogMonitor, PlayerEventType
 from plugins.minecraft.rcon import (
     RconCommandResult,
     RconConnectResult,
     RconErrorKind,
 )
+from tests.helpers.assertions import public_error_reply
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import settings_snapshot
 
@@ -369,7 +370,7 @@ class TestMinecraftConfiguration:
         monkeypatch.setattr(mc_main, "RconClient", explode)
         result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
         text   = result[0]["data"]["text"]
-        assert text == "❌ RCON 连接初始化失败"
+        assert public_error_reply(text)["request_id"] == "mc-test-request"
         assert "SECRET" not in text
         assert reset_minecraft_runtime.get_connection(PRIVATE_TARGET) is None
 
@@ -596,7 +597,6 @@ class TestMinecraftCommands:
     async def test_command_success_empty_failure_and_target_isolation(
         self,
         reset_minecraft_runtime: ConnectionManager,
-        tmp_path: Path,
     ) -> None:
         private_client = _FakeRconClient("private", 25575, "p")
         group_client   = _FakeRconClient("group", 25576, "p")
@@ -608,16 +608,15 @@ class TestMinecraftCommands:
         await reset_minecraft_runtime.replace_connection(
             _connection(GROUP_TARGET, client=group_client)
         )
-        context = _context(tmp_path)
 
-        private = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
-        empty = await mc_main._handle_mc_command("save-all", GROUP_TARGET, context)
+        private                       = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
+        empty                         = await mc_main._handle_mc_command("save-all", GROUP_TARGET)
         private_client.command_result = RconCommandResult(
             False,
             error_kind    = RconErrorKind.TIMEOUT,
             error_message = "RCON 操作超时，未收到完整响应",
         )
-        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
 
         assert "players: 3" in private[0]["data"]["text"]
         assert "空响应" in empty[0]["data"]["text"]
@@ -629,24 +628,21 @@ class TestMinecraftCommands:
     async def test_command_requires_connection_client_and_nonempty_input(
         self,
         reset_minecraft_runtime: ConnectionManager,
-        tmp_path: Path,
     ) -> None:
-        context = _context(tmp_path)
-        missing = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        missing = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET))
-        closed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        closed = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
         client = _FakeRconClient("private", 25575, "p")
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
-        empty = await mc_main._handle_mc_command("   ", PRIVATE_TARGET, context)
+        empty = await mc_main._handle_mc_command("   ", PRIVATE_TARGET)
         assert "未连接" in missing[0]["data"]["text"]
         assert "已关闭" in closed[0]["data"]["text"]
         assert "请提供" in empty[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_missing_disconnect_and_status_are_explicit(self, tmp_path: Path) -> None:
-        context      = _context(tmp_path)
-        disconnected = await mc_main._handle_disconnect(PRIVATE_TARGET, context)
-        status       = mc_main._handle_status_command(PRIVATE_TARGET, context)
+    async def test_missing_disconnect_and_status_are_explicit(self) -> None:
+        disconnected = await mc_main._handle_disconnect(PRIVATE_TARGET)
+        status       = mc_main._handle_status_command(PRIVATE_TARGET)
         assert "当前无连接" in disconnected[0]["data"]["text"]
         assert "未连接到任何服务器" in status[0]["data"]["text"]
 
@@ -654,7 +650,6 @@ class TestMinecraftCommands:
     async def test_command_exception_is_fixed_and_cancellation_propagates(
         self,
         reset_minecraft_runtime: ConnectionManager,
-        tmp_path: Path,
     ) -> None:
         class ExplodingClient:
             async def command(self, _command: str) -> RconCommandResult:
@@ -663,7 +658,7 @@ class TestMinecraftCommands:
         await reset_minecraft_runtime.replace_connection(
             _connection(PRIVATE_TARGET, client=cast(Any, ExplodingClient()))
         )
-        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
         assert failed[0]["data"]["text"] == "❌ RCON 命令执行失败，请重新连接后重试"
 
         class CancelledClient:
@@ -674,13 +669,12 @@ class TestMinecraftCommands:
             _connection(PRIVATE_TARGET, client=cast(Any, CancelledClient()))
         )
         with pytest.raises(asyncio.CancelledError):
-            await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+            await mc_main._handle_mc_command("list", PRIVATE_TARGET)
 
     @pytest.mark.asyncio
     async def test_response_strips_controls_and_obeys_dual_budget(
         self,
         reset_minecraft_runtime: ConnectionManager,
-        tmp_path: Path,
     ) -> None:
         client                = _FakeRconClient("private", 25575, "p")
         client.command_result = RconCommandResult(
@@ -689,7 +683,7 @@ class TestMinecraftCommands:
         )
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
 
-        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
         text   = result[0]["data"]["text"]
 
         assert "\x1b" not in text and "\x00" not in text
@@ -701,7 +695,6 @@ class TestMinecraftCommands:
     async def test_truncated_rcon_response_is_labeled(
         self,
         reset_minecraft_runtime: ConnectionManager,
-        tmp_path: Path,
     ) -> None:
         client                = _FakeRconClient("private", 25575, "p")
         client.command_result = RconCommandResult(
@@ -711,7 +704,7 @@ class TestMinecraftCommands:
         )
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
 
-        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET)
 
         assert "响应可能不完整" in result[0]["data"]["text"]
 
@@ -723,7 +716,7 @@ class TestMinecraftCommands:
         )
         result = await mc_main.handle("mc", "connect default", {"user_id": 1}, context)
         text   = result[0]["data"]["text"]
-        assert "处理 Minecraft 请求失败" in text
+        assert public_error_reply(text)["request_id"] == "mc-test-request"
         assert "TOP-SECRET-INTERNAL" not in text
 
     @pytest.mark.asyncio
@@ -839,11 +832,11 @@ class TestLogMonitor:
         batch = monitor.check_updates()
 
         assert [event.event_type for event in batch.events] == [
-            LogEventType.CHAT,
-            LogEventType.JOIN,
-            LogEventType.LEAVE,
-            LogEventType.DEATH,
-            LogEventType.ADVANCEMENT,
+            PlayerEventType.CHAT,
+            PlayerEventType.JOIN,
+            PlayerEventType.LEAVE,
+            PlayerEventType.DEATH,
+            PlayerEventType.ADVANCEMENT,
         ]
         assert batch.events[3].message == "was slain by Zombie"
         assert not hasattr(batch.events[0], "raw_line")

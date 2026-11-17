@@ -2,14 +2,12 @@
 
 import json
 import logging
-import re
+
+from core.log import LogEvent
 
 from ..utils.constants import DAILY_LIMITS
 
-logger = logging.getLogger(__name__)
-
-_SAFE_OPERATION_RE  = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
-_SAFE_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
+log = logging.getLogger(__name__)
 
 _DAILY_COIN_LIMIT = int(DAILY_LIMITS["coins"])
 
@@ -33,14 +31,6 @@ def _adjust_item_count(items: dict[str, int], item_id: str, delta: int) -> None:
 
 
 def _log_database_failure(operation: str, exc: BaseException) -> None:
-    """仅记录稳定的操作名和异常类型，避免数据库内容进入日志。"""
+    """仅记录操作名和异常类型，避免数据库内容进入日志。"""
 
-    safe_operation = operation if _SAFE_OPERATION_RE.fullmatch(operation) else "unknown"
-    error_type     = type(exc).__name__
-    if not _SAFE_ERROR_TYPE_RE.fullmatch(error_type):
-        error_type = "Exception"
-    logger.error(
-        "QingPet database operation failed operation=%s error_type=%s",
-        safe_operation,
-        error_type,
-    )
+    log.error(LogEvent("database.failed", operation=operation, error=exc))

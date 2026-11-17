@@ -19,6 +19,7 @@ import pytest
 from bs4 import BeautifulSoup
 from PIL import Image
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.safe_http import SafeHttpError, UnsafeUrlError
 from plugins.apod import main as apod
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -61,7 +62,7 @@ def science_html(media=SCIENCE_IMAGE, heading="h2", credit_label="Credit:"):
 @pytest.mark.parametrize("heading", ["h1", "h2"])
 def test_science_title_and_explanation(mock_context, heading):
     soup = BeautifulSoup(science_html(heading=heading), "html.parser")
-    assert apod._extract_title(soup, mock_context) == "The Complete Sharpless Catalog"
+    assert apod._extract_title(soup) == "The Complete Sharpless Catalog"
     assert (
         apod.get_explanation(soup, mock_context)
         == "Explanation: Today’s image contains 313 objects."
@@ -186,7 +187,6 @@ def mock_context(temp_data_dir):
             self.data_dir         = data_dir
             self.config           = {"plugins": {"apod": {}}}
             self.http_session     = None
-            self.logger           = MagicMock()
             self.current_user_id  = 12345
             self.current_group_id = 123456789
             self.send_action      = AsyncMock()
@@ -359,7 +359,7 @@ class TestTitleExtraction:
         from bs4 import BeautifulSoup
 
         soup  = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
-        title = apod._extract_title(soup, MagicMock())
+        title = apod._extract_title(soup)
         assert "Galaxy Center" in title or "Astronomy" in title
 
     def test_extract_title_no_center(self):
@@ -367,7 +367,7 @@ class TestTitleExtraction:
         from bs4 import BeautifulSoup
 
         soup  = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, "html.parser")
-        title = apod._extract_title(soup, MagicMock())
+        title = apod._extract_title(soup)
         assert title == "Page Title"
 
     def test_extract_title_fallback(self):
@@ -375,7 +375,7 @@ class TestTitleExtraction:
         from bs4 import BeautifulSoup
 
         soup  = BeautifulSoup("<html><body></body></html>", "html.parser")
-        title = apod._extract_title(soup, MagicMock())
+        title = apod._extract_title(soup)
         assert title == apod.DEFAULT_FALLBACK_TITLE
 
 
@@ -540,7 +540,7 @@ class TestImageExtraction:
         assert "图片暂时下载失败" in message
         assert "https://science.nasa.gov/apod/image/apod260201.jpg" in message
         assert "The Galaxy Center" in message
-        assert "XQ-PLUGIN-UNEXPECTED" not in message
+        assert PUBLIC_ERROR_PREFIX not in message
 
 
 # ============================================================
@@ -661,7 +661,7 @@ class TestHandleCommands:
                 "data": {"text": "❌ APOD 网络安全检查失败，请检查 DNS、代理或 allowed_hosts 配置"},
             }
         ]
-        assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
+        assert PUBLIC_ERROR_PREFIX not in str(result)
 
     @pytest.mark.asyncio
     async def test_handle_unsupported_format(self, mock_context, mock_event, monkeypatch):

@@ -405,9 +405,6 @@ class TestPluginContextMethods:
         assert "help" in plugins
         assert "choice" in plugins
 
-    def test_logger_proxies_missing_methods(self, sample_context: PluginContext):
-        sample_context.logger.critical("critical message")
-
     @pytest.mark.asyncio
     async def test_session_helpers_use_snapshots_and_non_touching_exists(
         self,

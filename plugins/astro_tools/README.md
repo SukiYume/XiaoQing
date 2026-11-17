@@ -71,7 +71,7 @@ SIMBAD 请求采用客户端 timeout 与总 deadline。输入数值、坐标、�
 2. 使用 `/astro time now` 验证 Astropy。
 3. 使用 `/astro redshift 0.5` 验证 SciPy 宇宙学积分。
 4. 使用 `/astro obj M31` 验证 SIMBAD 网络。
-5. 检查日志中的解析字段、单位错误和外部请求状态。
+5. 输入错误、单位错误和 SIMBAD 超时只回复给用户，不写日志；其他 SIMBAD 请求失败和意外错误回复 `操作失败：…`（原因、异常类型、出错位置和 request ID），日志里对应一条 `public_error`，带组件名、失败类别、异常类型和位置，不带异常消息。
 
 ---
 

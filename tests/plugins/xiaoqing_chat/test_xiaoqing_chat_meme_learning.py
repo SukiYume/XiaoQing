@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -355,7 +355,7 @@ def test_unconfirmed_meaning_is_a_marked_guess_and_never_a_transfer_candidate(st
 async def test_empty_expression_result_still_mines_jargon(state, tmp_path):
     for index in range(10):
         state.memory_store.append("g1", role="user", name="用户", content=f"新梗样本 {index}")
-    context = SimpleNamespace(data_dir=tmp_path, logger=MagicMock())
+    context = SimpleNamespace(data_dir=tmp_path)
     no_expressions = _gateway_response([])
     one_meme       = _gateway_response(
         [{"term": "新梗样本", "is_jargon": True, "meaning": "测试用的词", "evidence": "新梗样本 3"}]

@@ -16,6 +16,7 @@ import pytest
 from core.bounded_file_cache import FileCacheLimits
 from core.safe_http import BROWSER_USER_AGENT, SafeHttpError, SafeHttpResponse, UnsafeUrlError
 from plugins.url_parser import main as url_parser
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import image_bytes as _image_bytes
 
@@ -86,7 +87,6 @@ def context(tmp_path: Path) -> SimpleNamespace:
         http_session = None,
         request_id   = "req-url-preview",
         secrets      = {"plugins": {"url_parser": {}}},
-        logger       = MagicMock(),
     )
 
 
@@ -221,9 +221,9 @@ def test_cached_preview_cleanup_failure_is_best_effort(
     corrupted.write_bytes(b"not an image")
 
     monkeypatch.setattr(Path, "unlink", MagicMock(side_effect=OSError("locked")))
-    with caplog.at_level("DEBUG", logger=url_parser.__name__):
+    with caplog.at_level("DEBUG", url_parser.__name__):
         assert url_parser._validated_cached_preview(cache, (corrupted.name,)) is None
-    assert "暂时无法删除" in caplog.text
+    assert logged_events(caplog, "cache.corrupt_unlink_failed")
 
 
 @pytest.mark.asyncio
@@ -358,7 +358,8 @@ async def test_unexpected_page_failure_uses_public_error_boundary(
     with caplog.at_level("ERROR"):
         result = await url_parser.handle_url("https://example.com", {}, context)
     assert result == []
-    assert "url_parser.handle_url" in "\n".join(record.getMessage() for record in caplog.records)
+    [public_error] = logged_events(caplog, "public_error")
+    assert public_error.fields["component"] == "url_parser.handle_url"
 
 
 @pytest.mark.asyncio
@@ -398,7 +399,8 @@ async def test_invalid_or_unexpected_optional_image_keeps_text_preview(
     with caplog.at_level("ERROR"):
         result = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1 and result[0]["type"] == "text"
-    assert "url_parser.preview_image" in "\n".join(record.getMessage() for record in caplog.records)
+    [public_error] = logged_events(caplog, "public_error")
+    assert public_error.fields["component"] == "url_parser.preview_image"
 
 
 @pytest.mark.asyncio

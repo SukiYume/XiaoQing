@@ -246,7 +246,7 @@ Restart restores configured models.
 - Other group messages first pass the hard limits (minimum interval, per-minute cap, consecutive cooldown, low-information messages) and then a roll against the base probability. The probability is higher when she and the current topic were both active in the last 5 minutes; the Heartflow soft score and consecutive silence compensate further. A message that directly follows her own reply skips the roll and goes to the planner. A busy or sleeping routine multiplies the probability by a routine factor; the suppression eases when she has stayed silent through several messages and falls to at most half.
 - Turns that pass go to the PFC planner, which selects reply, new topic, wait, observe, rethink goal, knowledge lookup, or topic completion. Invitations, questions, sharing, and banter addressed to the whole group, as well as pronouns that point to her, follow-up messages, and messages naming other members, are judged by the planner from context. Unaddressed group messages stay in chat and never go to the agent.
 - Global, conversation, user-concurrency, and daily-user quotas apply before generation.
-- A failed turn sends no error code to the chat. Unaddressed turns stay silent. Private or addressed turns get one short in-character line, at most once per conversation in ten minutes. Details go to the log.
+- A failed turn sends no error explanation such as `操作失败：…` to the chat. Unaddressed turns stay silent. Private or addressed turns get one short in-character line, at most once per conversation in ten minutes. Details go to the `public_error` log line.
 
 **Persona**
 

@@ -2,7 +2,6 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -55,7 +54,7 @@ async def _pfc_state_on_disk(data_dir) -> list[dict]:
     ids=["action-history", "pfc-state", "media-registry"],
 )
 async def test_debounced_flush_replaces_pending_task(tmp_path, kind, dirty, on_disk, persisted):
-    context = SimpleNamespace(logger=MagicMock(), data_dir=tmp_path)
+    context = SimpleNamespace(data_dir=tmp_path)
     state = bound_state(context)
     runtime = SimpleNamespace(cfg=SimpleNamespace(io_persist_debounce_seconds=0.01))
     dirty(state)

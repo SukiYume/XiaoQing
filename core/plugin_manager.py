@@ -20,6 +20,7 @@ from typing import Any, cast
 from .constants import DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
 from .interfaces import PluginContextProtocol, PluginPrincipal
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
+from .log import LogEvent
 from .plugin_data import PluginDataMixin
 from .plugin_execution import (
     DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
@@ -47,7 +48,7 @@ from .plugin_manager_support import (
     _release_process_import_paths,
     _SourceOnlyPluginFinder,
 )
-from .plugin_runtime import PluginRuntimeMixin
+from .plugin_runtime import PluginRuntimeMixin, _reason_code
 from .plugin_watcher import PluginWatcherMixin
 from .router import CommandRouter
 
@@ -75,8 +76,10 @@ class PluginManager(
         self._hot_reload_unavailable_reason = import_barrier.reason
         if not import_barrier.available:
             logger.warning(
-                "Plugin hot reload is unavailable; plugin changes require a process restart: %s",
-                import_barrier.reason or "module import barrier capability probe failed",
+                LogEvent(
+                    "plugin.hot_reload.unavailable",
+                    reason_code=_reason_code(import_barrier.reason or "capability probe failed"),
+                )
             )
         self.plugins_dir     = plugins_dir
         configured_data_root = (
@@ -146,10 +149,6 @@ class PluginManager(
 
         return self._hot_reload_supported
 
-    @property
-    def hot_reload_unavailable_reason(self) -> str | None:
-        return self._hot_reload_unavailable_reason
-
     def _require_hot_reload(self) -> None:
         if self._hot_reload_supported:
             return
@@ -200,7 +199,7 @@ class PluginManager(
             _release_process_import_paths,
             self._import_path_lease_keys,
         )
-        logger.debug("Leased plugin import roots project=%s package=%s", project_root, package_path)
+        logger.debug(LogEvent("plugin.import_roots.leased"))
 
     def _release_import_paths(self) -> None:
         """Idempotently release this manager's process-global import path leases."""
@@ -474,7 +473,13 @@ class PluginManager(
         with _PLUGIN_IMPORT_LOCK:
             self._detach_owned_generation_locked(plugin_name)
         self.router.clear_plugin(plugin_name)
-        logger.error("Plugin %s import generation was compromised: %s", plugin_name, reason)
+        logger.error(
+            LogEvent(
+                "plugin.import_generation.compromised",
+                plugin      = plugin_name,
+                reason_code = _reason_code(reason),
+            )
+        )
 
     def _freeze_source_generation(self, plugin_name: str) -> None:
         """Revoke all future imports while retaining restart-only evidence."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, Mock
@@ -13,6 +14,7 @@ import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.planning.action_history import ActionRecord
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, get_state
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events, public_error_reply
 from tests.helpers.xiaoqing_chat_test_support import (
     ScriptedChatModel,
     ack_reply_delivery,
@@ -29,11 +31,12 @@ sample_group_event = _fixture_support.sample_group_event
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_xiaoqing_chat_init(mock_context):
+async def test_xiaoqing_chat_init(mock_context, caplog):
     """Test plugin initialization"""
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     # Should not raise
     await xiaoqing_chat.init(mock_context)
-    mock_context.logger.info.assert_called()
+    assert logged_events(caplog, "plugin.init.done")
 
 
 @pytest.mark.plugin
@@ -128,11 +131,8 @@ async def test_xiaoqing_chat_handle_exception(mock_context, sample_group_event):
         context = mock_context,
     )
 
-    # Should return error message
-    from core.public_errors import PUBLIC_ERROR_CODE
-
     assert result.command_outcome.state == "error"
-    assert PUBLIC_ERROR_CODE in result[0]["data"]["text"]
+    assert public_error_reply(result[0]["data"]["text"])["type_name"] == "Exception"
     assert "Test error" not in result[0]["data"]["text"]
 
 
@@ -229,13 +229,14 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_shutdown(mock_context):
+async def test_shutdown(mock_context, caplog):
     """Test plugin shutdown"""
     from plugins.xiaoqing_chat.main import shutdown
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     # Should not raise
     await shutdown(mock_context)
-    mock_context.logger.info.assert_called()
+    assert logged_events(caplog, "plugin.shutdown.done")
 
 
 @pytest.mark.plugin

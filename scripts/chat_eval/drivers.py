@@ -17,6 +17,7 @@ import contextvars
 import copy
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -34,6 +35,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.clock import DEFAULT_CONFIG_TIMEZONE
+from core.log import LogEvent
 
 from .scenarios import BOT_ID, BOT_NAME, Suite, user_id
 
@@ -44,6 +46,9 @@ BEHAVIOR_FILE   = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "xiaoq
 PERSONA_FILE    = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "config" / "persona.md"
 ZONE            = ZoneInfo(DEFAULT_CONFIG_TIMEZONE)
 NAPCAT_PORT     = 11990
+CHAT_LOGGER     = "plugins.xiaoqing_chat"
+# 机器人日志里她主动开口的那一行：``<logger>: proactive.send <字段>``，事件名后面是空格或行尾。
+_PROACTIVE_SEND_RE = re.compile(rb": proactive\.send(?=[ \r\n]|$)", re.MULTILINE)
 # 评测用的时区；为空时用配置文件里的。小青按这个时区的钟点过作息，见 ``set_timezone``。
 _timezone_override = ""
 # 只有这几种准备需要改行为配置，端到端驱动把这些剧本放到最后逐个跑。
@@ -113,15 +118,6 @@ def redact_secrets(text: str) -> str:
     return text[:800]
 
 
-class _NullLogger:
-    """进程内驱动逐轮换上自己的记录器；没换的上下文（梗图同步、记忆桥、生活桥）日志直接丢弃。"""
-
-    def debug(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    info = warning = error = exception = debug
-
-
 def make_ai_service(
     session: Any, config: dict[str, Any], secrets: dict[str, Any], plugin_name: str
 ) -> Any:
@@ -178,7 +174,6 @@ def make_plugin_context(
         data_dir         = data_dir,
         http_session     = session,
         send_action      = send_action,
-        logger           = _NullLogger(),
         current_user_id  = user_id,
         current_group_id = group_id,
         request_id       = request_id,
@@ -568,7 +563,6 @@ def make_life_bridge(config: dict[str, Any], life_dir: Path) -> LifeBridge:
         data_dir              = life_dir,
         state                 = {},
         get_settings_snapshot = lambda: snapshot,
-        logger                = _NullLogger(),
         http_session          = None,
         capabilities=SimpleNamespace(ai=None),
     )
@@ -740,44 +734,32 @@ def suite_group(suite_index: int, episode: int) -> int:
 # ── 进程内驱动 ──────────────────────────────────────────────────────────
 
 
-class _RowLogger:
-    """把插件的 step 日志和告警记进当前轮次。"""
+class _RowLogHandler(logging.Handler):
+    """把聊天插件这一轮记下的 ``LogEvent`` 分类记进当前轮次：步骤、读图结果、告警。
 
-    def __init__(self, row: dict[str, Any]) -> None:
-        self.row = row
+    只收 ``current_row`` 指向本轮的记录：前几轮留下的后台任务带着它们自己那一轮的值，
+    这时记的日志不算进本轮。
+    """
 
-    def _write(self, level: str, message: Any, *args: Any, **_kwargs: Any) -> None:
-        rendered = str(message) % args if args else str(message)
-        if "step=" in rendered:
-            try:
-                self.row["steps"].append(json.loads(rendered.split("step=", 1)[1]))
-            except (ValueError, TypeError):
-                self.row["steps"].append({"log": redact_secrets(rendered)[:2000]})
-        elif " media={" in rendered:
+    def __init__(
+        self, row: dict[str, Any], current_row: contextvars.ContextVar[dict[str, Any] | None]
+    ) -> None:
+        super().__init__(logging.INFO)
+        self.row         = row
+        self.current_row = current_row
+
+    def emit(self, record: logging.LogRecord) -> None:
+        event = record.msg
+        if not isinstance(event, LogEvent) or self.current_row.get() is not self.row:
+            return
+        entry = {"step": event.name, **event.fields}
+        if event.name.startswith("media."):
             # 读图结果单独记下，排查回复和图上内容对不上时用。
-            try:
-                self.row.setdefault("media_logs", []).append(
-                    json.loads(rendered.split(" media=", 1)[1])
-                )
-            except (ValueError, TypeError):
-                pass
-        elif level in {"warning", "error", "exception"}:
-            self.row["errors"].append({"level": level, "message": redact_secrets(rendered)[:1000]})
-
-    def debug(self, *a: Any, **k: Any) -> None:
-        self._write("debug", *a, **k)
-
-    def info(self, *a: Any, **k: Any) -> None:
-        self._write("info", *a, **k)
-
-    def warning(self, *a: Any, **k: Any) -> None:
-        self._write("warning", *a, **k)
-
-    def error(self, *a: Any, **k: Any) -> None:
-        self._write("error", *a, **k)
-
-    def exception(self, *a: Any, **k: Any) -> None:
-        self._write("exception", *a, **k)
+            self.row.setdefault("media_logs", []).append(entry)
+        elif record.levelno >= logging.WARNING:
+            self.row["errors"].append({"level": record.levelname.lower(), **entry})
+        else:
+            self.row["steps"].append(entry)
 
 
 async def run_inproc_suite(
@@ -831,8 +813,12 @@ async def run_inproc_suite(
         return result
 
     reply_generator.check_reply = capture_check
-    contexts: list[Any]         = []
-    index                       = 0
+    # 和生产一样记 INFO 级的步骤日志；每轮由 ``_RowLogHandler`` 收进这一轮的记录。
+    chat_logger       = logging.getLogger(CHAT_LOGGER)
+    chat_logger_level = chat_logger.level
+    chat_logger.setLevel(logging.INFO)
+    contexts: list[Any] = []
+    index               = 0
     async with aiohttp.ClientSession() as session:
         memory = make_memory_bridge(session, config, secrets, memory_dir)
         try:
@@ -960,9 +946,8 @@ async def run_inproc_suite(
                             "xiaoqing_chat", f"g{group}" if group else f"u{event['user_id']}"
                         ),
                     )
-                    context.logger = _RowLogger(row)
-                    started        = time.monotonic()
-                    original_send  = context.send_action
+                    started       = time.monotonic()
+                    original_send = context.send_action
 
                     async def capture_send(
                         action, *, _send=original_send, _row=row, _start=started
@@ -978,6 +963,8 @@ async def run_inproc_suite(
                     context.send_action = capture_send
                     previous_gate = state.get_reply_gate_decision(f"g{group}") if group else None
                     raw = event["raw_message"]
+                    row_logs = _RowLogHandler(row, current_row)
+                    chat_logger.addHandler(row_logs)
                     try:
                         await chat.observe_message(raw, event, context)
                         result = await respond(chat, raw, event, context)
@@ -1012,6 +999,8 @@ async def run_inproc_suite(
                             "message": redact_secrets(str(exc))[:1000],
                         }
                         row["reply_segments"] = []
+                    finally:
+                        chat_logger.removeHandler(row_logs)
                     row["seconds"] = round(time.monotonic() - started, 3)
                     gate           = state.get_reply_gate_decision(f"g{group}") if group else None
                     row["gate"]    = (
@@ -1024,6 +1013,7 @@ async def run_inproc_suite(
                 await chat.shutdown(contexts[-1])
             await memory.close()
             reply_generator.check_reply = original_check
+            chat_logger.setLevel(chat_logger_level)
     return output
 
 
@@ -1210,9 +1200,7 @@ class LiveBot:
         config.update(
             {
                 "data_root"            : str(self.data),
-                "log_to_file"          : False,
-                "log_to_console"       : True,
-                "log_use_color"        : False,
+                "logging"              : {"console": True, "file": False},
                 "enable_ws_client"     : True,
                 "onebot_ws_uri"        : f"ws://127.0.0.1:{NAPCAT_PORT}/ws",
                 "enable_inbound_server": False,
@@ -1389,7 +1377,7 @@ class LiveBot:
 
     def _proactive_sends(self) -> int:
         log = self.out_dir / "bot.log"
-        return log.read_bytes().count(b'"step": "proactive.send"') if log.is_file() else 0
+        return len(_PROACTIVE_SEND_RE.findall(log.read_bytes())) if log.is_file() else 0
 
     async def _await_proactive(
         self, target: tuple[str, int], *, wait: float

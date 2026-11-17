@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
+import aiohttp
 import requests
 from bs4 import BeautifulSoup
 
@@ -27,6 +28,7 @@ from core.bounded_http import (
     JSON_MIME_POLICY,
     NO_REDIRECTS,
     BodyLimits,
+    BoundedHttpError,
     JsonLimits,
     MimePolicy,
     ResponseFormatError,
@@ -49,6 +51,7 @@ from core.image_validation import (
     validate_image_bytes,
 )
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 from core.plugin_base import (
     Segments,
     bounded_external_text,
@@ -61,7 +64,7 @@ from core.plugin_base import (
     text,
     write_json,
 )
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 from core.safe_http import (
     BROWSER_USER_AGENT,
     SafeHttpError,
@@ -70,7 +73,16 @@ from core.safe_http import (
     split_https_url_on_hosts,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+# 微博或图片源不可达、超时，或返回了不合格的内容：属于上游故障。
+_UPSTREAM_ERRORS = (
+    requests.RequestException,
+    aiohttp.ClientError,
+    TimeoutError,
+    BoundedHttpError,
+    SafeHttpError,
+)
 
 # 用户参数和微博字段都来自不可信输入；在进入解析器前先施加独立硬上限。
 MAX_ARGUMENT_CHARS      = 64
@@ -359,7 +371,7 @@ def _load_since(context: _EarthquakeContext) -> str:
         marker.unlink(missing_ok=True)
         return recovered
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError, TypeError) as exc:
-        public_error_message(context, exc, logger=logger, component="earthquake.load_state")
+        log_public_error(context, exc, component="earthquake.load_state")
         write_json(marker, {"reason": "active cursor corrupt"})
         # 原子改名移走损坏文件；不读它的内容（损坏文件可能任意大），名字用随机后缀。
         quarantine_corrupt_file(path, suffix=f".corrupt-{uuid.uuid4().hex[:16]}")
@@ -394,7 +406,7 @@ def _close_session(session: object) -> None:
         try:
             close()
         except Exception as exc:
-            logger.debug("Weibo visitor session close failed: error_type=%s", type(exc).__name__)
+            log.debug(LogEvent("weibo.session_close_failed", error=exc))
 
 
 def _get_cached_session(context: _EarthquakeContext) -> tuple[requests.Session, bool]:
@@ -500,6 +512,22 @@ def _iter_mblogs(cards: object) -> list[dict[str, Any]]:
     return mblogs
 
 
+def _report_failure(context: _EarthquakeContext, exc: BaseException, component: str) -> None:
+    """上游故障是已处理的降级，记 WARNING；其余异常按意外错误走 public_error。"""
+
+    if isinstance(exc, _UPSTREAM_ERRORS):
+        log.warning(
+            LogEvent(
+                "upstream.failed",
+                component = component,
+                status    = getattr(exc, "status", None),
+                error     = exc,
+            )
+        )
+    else:
+        log_public_error(context, exc, component=component)
+
+
 def _bootstrap_session(session: requests.Session, context: _EarthquakeContext) -> bool:
     """尽力建立访客 Cookie；失败不降低后续索引响应的边界校验。"""
 
@@ -530,7 +558,7 @@ def _bootstrap_session(session: requests.Session, context: _EarthquakeContext) -
         )
     except Exception as exc:
         succeeded = False
-        public_error_message(context, exc, logger=logger, component="earthquake.bootstrap")
+        _report_failure(context, exc, "earthquake.bootstrap")
 
     try:
         response = requests_request_bounded(
@@ -550,7 +578,7 @@ def _bootstrap_session(session: requests.Session, context: _EarthquakeContext) -
         )
     except Exception as exc:
         succeeded = False
-        public_error_message(context, exc, logger=logger, component="earthquake.bootstrap")
+        _report_failure(context, exc, "earthquake.bootstrap")
     if succeeded:
         context.state.pop(_BOOTSTRAP_FAILURES_STATE_KEY, None)
     else:
@@ -558,10 +586,12 @@ def _bootstrap_session(session: requests.Session, context: _EarthquakeContext) -
         failures = failures + 1 if type(failures) is int and failures >= 0 else 1
         context.state[_BOOTSTRAP_FAILURES_STATE_KEY] = failures
         if failures >= _BOOTSTRAP_FAILURE_ESCALATION:
-            logger.error(
-                "Weibo visitor bootstrap has failed consecutively: failures=%s threshold=%s",
-                failures,
-                _BOOTSTRAP_FAILURE_ESCALATION,
+            log.error(
+                LogEvent(
+                    "weibo.bootstrap.failing",
+                    failures  = failures,
+                    threshold = _BOOTSTRAP_FAILURE_ESCALATION,
+                )
             )
     return succeeded
 
@@ -658,7 +688,7 @@ def _prepare_mblog(mblog: Mapping[str, Any]) -> _PreparedCard | None:
     try:
         clean_text = _extract_clean_text(raw_text)
     except (ResponseFormatError, ResponseLimitError):
-        logger.warning("Skipped malformed earthquake card: event_id_valid=true")
+        log.warning(LogEvent("card.malformed"))
         return None
     if not clean_text or any(marker not in clean_text for marker in _EARTHQUAKE_MARKERS):
         return None
@@ -701,10 +731,7 @@ def _select_earthquakes(
         if prepared.magnitude is not None and prepared.magnitude >= _MIN_PUSH_MAGNITUDE:
             selected.append(prepared)
         else:
-            logger.info(
-                "Skipped earthquake below push threshold: magnitude=%s",
-                f"{prepared.magnitude:.1f}" if prepared.magnitude is not None else "unknown",
-            )
+            log.info(LogEvent("card.below_threshold", magnitude=prepared.magnitude))
     return _FetchBatch(tuple(selected), str(newest_seen))
 
 
@@ -835,12 +862,7 @@ async def _render_cards(
         try:
             return await _download_figure(context, prepared.figure_url)
         except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "earthquake.download_image",
-            )
+            _report_failure(context, exc, "earthquake.download_image")
             return None
 
     figure_paths = await gather_bounded(
@@ -852,10 +874,12 @@ async def _render_cards(
         output.append(text(prepared.clean_text))
         if file_path is not None:
             output.append(image(str(file_path)))
-        logger.info(
-            "Earthquake notification prepared: magnitude=%s text_chars=%d",
-            f"{prepared.magnitude:.1f}" if prepared.magnitude is not None else "unknown",
-            len(prepared.clean_text),
+        log.info(
+            LogEvent(
+                "notification.prepared",
+                magnitude   = prepared.magnitude,
+                text_length = len(prepared.clean_text),
+            )
         )
     return output
 
@@ -882,7 +906,7 @@ async def handle(
     except EarthquakeCommandError as exc:
         return segments(str(exc))
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="earthquake.handle")
+        return public_error_response(context, exc, component="earthquake.handle")
 
 
 async def _record_scan_progress(
@@ -911,14 +935,9 @@ async def _fetch_earthquake_news(context: _EarthquakeContext, force: bool = Fals
         batch = await run_sync(_fetch_batch, context, since_id=since_id, force=force)
     except Exception as exc:
         if not force:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "earthquake.fetch_scheduled",
-            )
+            _report_failure(context, exc, "earthquake.fetch_scheduled")
             return []
-        return public_error_response(context, exc, logger=logger, component="earthquake.fetch")
+        return public_error_response(context, exc, component="earthquake.fetch")
 
     if not force:
         await _record_scan_progress(
@@ -967,7 +986,7 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
         group_id = target.target_id if target.kind == "group" else None
         action   = build_action(pending.payload, user_id, group_id)
         if action is None:
-            logger.error("Earthquake fanout could not build target action")
+            log.error(LogEvent("fanout.action_unbuilt"))
             continue
 
         confirm_target = partial(to_thread_owned, mark_delivered, path, pending, target)
@@ -982,22 +1001,19 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
         try:
             await send_with_receipt(context.send_action, action, receipt)
         except Exception as exc:
-            public_error_message(context, exc, logger=logger, component="earthquake.delivery")
+            log_public_error(context, exc, component="earthquake.delivery")
             await receipt.record(False)
         if receipt.callback_error is not None:
-            public_error_message(
+            log_public_error(
                 context,
                 receipt.callback_error,
-                logger    = logger,
-                component = "earthquake.delivery_ack",
+                component="earthquake.delivery_ack",
             )
             return False
         if not receipt.resolved or receipt.outcome is False:
-            logger.warning("Earthquake target delivery failed; retained for retry")
+            log.warning(LogEvent("target.delivery_failed", retained=True))
         elif receipt.outcome is None:
-            logger.warning(
-                "Earthquake target outcome unknown; acknowledged under at-most-once policy"
-            )
+            log.warning(LogEvent("target.delivery_unknown", policy="at-most-once"))
 
     if not pending.complete:
         return False
@@ -1015,7 +1031,7 @@ async def scheduled(context: _EarthquakeContext) -> Segments:
         try:
             return await _scheduled_locked(context)
         except Exception as exc:
-            public_error_message(context, exc, logger=logger, component="earthquake.scheduled")
+            log_public_error(context, exc, component="earthquake.scheduled")
             return []
 
 
@@ -1030,22 +1046,20 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
     try:
         pending = await asyncio.to_thread(load_pending, _fanout_path(context))
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "earthquake.load_delivery_state",
+            component="earthquake.load_delivery_state",
         )
         return []
     if pending is not None:
         try:
             await _deliver_pending(context, pending)
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = logger,
-                component = "earthquake.delivery_state",
+                component="earthquake.delivery_state",
             )
         return []
 
@@ -1060,10 +1074,10 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
 
     targets = default_group_targets(context)
     if not targets:
-        logger.warning("Earthquake notification has no configured target group; cursor retained")
+        log.warning(LogEvent("notification.no_target", cursor_retained=True))
         return []
     if not isinstance(pending_since, str):
-        logger.error("Earthquake notification has no durable cursor candidate")
+        log.error(LogEvent("notification.no_cursor"))
         return []
     try:
         pending = await asyncio.to_thread(
@@ -1076,10 +1090,9 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
         )
         await _deliver_pending(context, pending)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "earthquake.delivery_state",
+            component="earthquake.delivery_state",
         )
     return []

@@ -12,6 +12,7 @@ from datetime import date as calendar_date
 from typing import Any
 
 from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import (
     build_action,
     has_control_characters,
@@ -29,7 +30,7 @@ from .manager import (
 )
 from .paths import normalize_cwd
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 ARXIV_SUMMARY_SOURCE        = "arxiv_filter"
 ARXIV_SUMMARY_KIND          = "arxiv_daily_summary"
@@ -169,12 +170,7 @@ class ArxivSummaryAddon:
             if delivery_targets is not None
             else targets_from_ids(user_id, group_id)
         )
-        logger.info(
-            "arXiv summary request: label=%s date=%s links=%d",
-            label,
-            date,
-            len(normalized_links),
-        )
+        log.info(LogEvent("summary.request", label=label, date=date, links=len(normalized_links)))
         replay_message  : str | None = None
         inflight_message: str | None = None
         disk_usage_bytes             = await self.manager._measure_disk_usage_bytes(
@@ -241,24 +237,28 @@ class ArxivSummaryAddon:
                     except RuntimeError as exc:
                         return str(exc)
                     if init_job is not None:
-                        logger.info(
-                            "arXiv summary queued with init: label=%s date=%s init_job=%s summary_job=%s links=%d",
-                            label,
-                            date,
-                            init_job.job_id,
-                            job.job_id,
-                            len(normalized_links),
+                        log.info(
+                            LogEvent(
+                                "summary.queued_with_init",
+                                label       = label,
+                                date        = date,
+                                init_job_id = init_job.job_id,
+                                job_id      = job.job_id,
+                                links       = len(normalized_links),
+                            )
                         )
                         return (
                             f"已投递 {date} arXiv 初始化和总结任务: "
                             f"{label} #{init_job.job_id} -> #{job.job_id}"
                         )
-                    logger.info(
-                        "arXiv summary queued: label=%s date=%s job=%s links=%d",
-                        label,
-                        date,
-                        job.job_id,
-                        len(normalized_links),
+                    log.info(
+                        LogEvent(
+                            "summary.queued",
+                            label  = label,
+                            date   = date,
+                            job_id = job.job_id,
+                            links  = len(normalized_links),
+                        )
                     )
                     return f"已投递 {date} arXiv 总结任务: {label} #{job.job_id}"
 
@@ -276,7 +276,7 @@ class ArxivSummaryAddon:
             return f"{date} arXiv 总结任务已在队列或运行中。"
         # 成功文案只对应实际回执：明确失败与结果未知分别如实说明。
         if sent is False:
-            logger.warning("arXiv summary replay delivery failed: label=%s date=%s", label, date)
+            log.warning(LogEvent("summary.replay_failed", label=label, date=date))
             return f"{date} arXiv 历史总结重发失败，请稍后重试。"
         if sent is None:
             return f"{date} arXiv 历史总结已提交发送，是否送达未确认。"

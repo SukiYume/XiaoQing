@@ -14,8 +14,10 @@ import pytest
 
 from core.bounded_file_cache import FileCacheLimits
 from core.bounded_http import BoundedHttpResponse, HttpStatusError
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.safe_http import MAX_PROXY_URL_CHARS
 from plugins.voice import main as voice
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -37,7 +39,6 @@ def _context(tmp_path: Path, config: object = VALID_CONFIG) -> SimpleNamespace:
         SimpleNamespace(
             data_dir     = tmp_path / "voice-data",
             http_session = object(),
-            logger       = MagicMock(),
             secrets      = {"plugins": {"voice": config}},
         )
     )
@@ -224,7 +225,7 @@ def test_cached_audio_handles_read_and_cleanup_failures(caplog) -> None:
     corrupt.unlink.side_effect                                             = OSError("locked")
     cache.get_any.return_value                                             = corrupt
     assert voice._get_cached_audio(cache, "entry.mp3") is None
-    assert "无法移除" in caplog.text
+    assert logged_events(caplog, "cache.corrupt_unlink_failed")
 
 
 @pytest.mark.asyncio
@@ -379,7 +380,7 @@ async def test_handle_returns_public_error_on_unexpected_failure(tmp_path: Path)
 
     context.get_settings_snapshot = broken_settings
     result                        = await voice.handle("tts", "hello", {}, context)
-    assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
+    assert PUBLIC_ERROR_PREFIX in result[0]["data"]["text"]
     assert "private detail" not in result[0]["data"]["text"]
 
 

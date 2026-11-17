@@ -8,6 +8,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import re
 import secrets
@@ -16,9 +17,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.delivery import ScheduledDelivery
+from core.log import LogEvent
 from core.models import PluginManifest
 from core.plugin_base import run_sync, segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_message, public_error_response
 from core.router import (
     CommandCatalogNode,
     CommandInvocation,
@@ -86,6 +88,8 @@ from .utils.constants import ANTI_SPAM_CONFIG, GROUP_RATE_LIMIT, PET_ACTION_LABE
 from .utils.formatters import rank_label
 from .utils.router import CommandRouter
 from .utils.time import business_date, business_week
+
+log = logging.getLogger(__name__)
 
 # ──────────────────── 运行期共享实例 ─────────────────────
 
@@ -246,7 +250,6 @@ async def _open_database_owned(db_path: str) -> Database:
 async def init(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
 
-    log                       = context.logger
     database: Database | None = None
 
     try:
@@ -269,16 +272,15 @@ async def init(context) -> None:
 
         # 进程跨午夜停机时午夜任务不会补跑：启动时按业务日期补一次每日结算。
         try:
-            await asyncio.to_thread(partial(_settle_daily_reset, database, log, scheduled=False))
+            await asyncio.to_thread(partial(_settle_daily_reset, database, scheduled=False))
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = log,
-                component = "qingpet.init.daily_reset",
+                component="qingpet.init.daily_reset",
             )
 
-        log.info("Qingpet plugin initialized successfully")
+        log.info(LogEvent("plugin.initialized"))
     except Exception as exc:
         if database is not None:
             await asyncio.to_thread(database.cleanup)
@@ -286,17 +288,15 @@ async def init(context) -> None:
         _pet_service    = None
         _social_service = None
         _router         = None
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.init",
+            component="qingpet.init",
         )
 
 
-async def cleanup(context) -> None:
+async def cleanup() -> None:
     global _db_instance, _pet_service, _social_service, _router
-    log = context.logger
 
     database        = _db_instance
     _db_instance    = None
@@ -305,7 +305,7 @@ async def cleanup(context) -> None:
     _router         = None
     if database is not None:
         await asyncio.to_thread(database.cleanup)
-    log.info("Qingpet plugin cleaned up")
+    log.info(LogEvent("plugin.cleaned_up"))
 
 
 # ──────────────────── 反脚本 & 群级限流中间件 ────────────────────
@@ -725,8 +725,7 @@ def _execute_qingpet_command(
         return public_error_message(
             context,
             exc,
-            logger    = context.logger,
-            component = "qingpet.command",
+            component="qingpet.command",
         )
 
 
@@ -735,7 +734,6 @@ async def handle(
 ) -> list[dict[str, Any]]:
     """把根命令交给隔离线程执行，并统一规范化插件输出。"""
 
-    log          = context.logger
     raw_group_id = event.get("group_id")
     try:
         group_id = int(raw_group_id) if raw_group_id is not None else 0
@@ -766,8 +764,7 @@ async def handle(
             public_error_response(
                 context,
                 exc,
-                logger    = log,
-                component = "qingpet.handle",
+                component="qingpet.handle",
             ),
         )
     return _normalize_plugin_output(result)
@@ -830,7 +827,6 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
     定时衰减任务（每分钟执行）。
     复用初始化阶段的 PetService，确保定时任务与命令共享同一数据库状态。
     """
-    log = context.logger
 
     if _db_instance is None or _pet_service is None:
         return []
@@ -859,38 +855,35 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
             if alert_msg:
                 messages.append(ScheduledDelivery.group(pet.group_id, segments(alert_msg)))
 
-        log.info("Decay applied to %s pets", len(pets))
+        log.info(LogEvent("decay.applied", pets=len(pets)))
         db.cleanup_old_timestamps()
         return messages
 
     try:
         return await asyncio.to_thread(_run_job)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.schedule.decay",
+            component="qingpet.schedule.decay",
         )
         return []
 
 
 async def scheduled_trade_expiry(context) -> None:
     """独立结算已到期交易托管；数据库 claim 使重复/并发执行保持幂等。"""
-    log = context.logger
     if _db_instance is None:
         return
 
     try:
         settled = await asyncio.to_thread(_db_instance.settle_expired_trade_listings)
         if settled:
-            log.info("Expired trade listings settled count=%s", settled)
+            log.info(LogEvent("trade_expiry.settled", count=settled))
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.schedule.trade_expiry",
+            component="qingpet.schedule.trade_expiry",
         )
         # 存储失败交给调度器记录为失败，不能当作“本轮没有过期交易”。
         raise
@@ -898,7 +891,6 @@ async def scheduled_trade_expiry(context) -> None:
 
 async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
     """在展示会截止后结算有效票；事务 claim 保证并发调度只奖励一次。"""
-    log = context.logger
     if _db_instance is None or _social_service is None:
         return []
     db             = _db_instance
@@ -915,16 +907,15 @@ async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
     try:
         return await asyncio.to_thread(_run_job)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.schedule.pet_show_settlement",
+            component="qingpet.schedule.pet_show_settlement",
         )
         return []
 
 
-def _settle_daily_reset(db: Database, log: Any, *, scheduled: bool = True) -> None:
+def _settle_daily_reset(db: Database, *, scheduled: bool = True) -> None:
     """按业务日期结算每日重置；午夜任务和启动补结算共用，同一天只结算一次。
 
     启动补结算只处理已有结算记录的群：从未结算过的群没有可比较的日期，等午夜任务。
@@ -944,10 +935,10 @@ def _settle_daily_reset(db: Database, log: Any, *, scheduled: bool = True) -> No
             continue
         reset_count += result.users_reset
         age_count += result.pets_aged
-    log.info("Daily reset completed users=%s pets=%s", reset_count, age_count)
+    log.info(LogEvent("daily_reset.done", users=reset_count, pets=age_count))
 
     db.cleanup_expired_titles()
-    log.info("Expired titles cleaned up")
+    log.info(LogEvent("titles.expired_cleaned"))
 
 
 async def scheduled_daily_reset(context) -> None:
@@ -955,20 +946,18 @@ async def scheduled_daily_reset(context) -> None:
     每日重置（每天00:00）。
     按群原子重置每日状态、递增宠物年龄并登记调度完成状态。
     """
-    log = context.logger
 
     if _db_instance is None:
         return
     db = _db_instance
 
     try:
-        await asyncio.to_thread(_settle_daily_reset, db, log)
+        await asyncio.to_thread(_settle_daily_reset, db)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.schedule.daily_reset",
+            component="qingpet.schedule.daily_reset",
         )
 
 
@@ -977,7 +966,6 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
     每周活动结算。
     数据库事务负责排行奖励和称号；展示会由独立调度任务结算。
     """
-    log = context.logger
 
     if _db_instance is None:
         return []
@@ -1011,16 +999,15 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
 
                 messages.append(ScheduledDelivery.group(group_id, segments("\n".join(lines))))
 
-        log.info("Weekly activity settled groups=%s", settled_groups)
+        log.info(LogEvent("weekly_activity.settled", groups=settled_groups))
         return messages
 
     try:
         return await asyncio.to_thread(_run_job)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "qingpet.schedule.weekly_activity",
+            component="qingpet.schedule.weekly_activity",
         )
         return []

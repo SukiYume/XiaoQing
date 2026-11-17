@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from plugins.chat import main as chat
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -137,7 +139,6 @@ class TestChatPlugin:
                 }
             }
         }
-        context.logger     = MagicMock()
         context.plugin_dir = ROOT / "plugins" / "chat"
         context.data_dir   = tmp_path / "data"
         context.config     = {"timezone": "Asia/Shanghai", "plugins": {"chat": {}}}
@@ -319,7 +320,7 @@ class TestChatPlugin:
         assert valid is False
         assert field in error
 
-    def test_extract_answer_multiple_messages(self, mock_context):
+    def test_extract_answer_multiple_messages(self):
         """测试从多条消息中提取答案"""
         data = {
             "messages": [
@@ -328,7 +329,7 @@ class TestChatPlugin:
                 {"type": "other", "content": "其他"},
             ]
         }
-        answer = chat.extract_answer(data, mock_context)
+        answer = chat.extract_answer(data)
         assert answer == "答案"
 
     @pytest.mark.parametrize(
@@ -341,10 +342,10 @@ class TestChatPlugin:
         ],
         ids=["no-answer", "non-dict-response", "non-list-messages", "blank-answer"],
     )
-    def test_extract_answer_returns_none_without_usable_answer(self, mock_context, data):
-        assert chat.extract_answer(data, mock_context) is None
+    def test_extract_answer_returns_none_without_usable_answer(self, data):
+        assert chat.extract_answer(data) is None
 
-    def test_extract_answer_skips_malformed_answer_and_uses_next_text(self, mock_context):
+    def test_extract_answer_skips_malformed_answer_and_uses_next_text(self):
         data = {
             "messages": [
                 {"type": "answer", "content": {"unexpected": "object"}},
@@ -352,7 +353,7 @@ class TestChatPlugin:
             ]
         }
 
-        assert chat.extract_answer(data, mock_context) == "可用答案"
+        assert chat.extract_answer(data) == "可用答案"
 
     @pytest.mark.asyncio
     async def test_call_coze_api_with_proxy(self, mock_context):
@@ -445,21 +446,24 @@ class TestChatPlugin:
         assert 0 < second_timeout < first_timeout <= chat.REQUEST_TIMEOUT
 
     @pytest.mark.asyncio
-    async def test_call_coze_api_rejects_business_error_without_logging_message(self, mock_context):
+    async def test_call_coze_api_rejects_business_error_without_logging_message(
+        self, mock_context, caplog
+    ):
         mock_context.http_session = _BoundedJsonSession(
             {"code": 4000, "msg": "REMOTE_CANARY_SHOULD_NOT_BE_LOGGED"}
         )
 
-        result = await chat.call_coze_api(
-            "测试问题",
-            {"token": "test_token", "bot_id": "test_bot"},
-            mock_context,
-        )
+        with caplog.at_level(logging.DEBUG):
+            result = await chat.call_coze_api(
+                "测试问题",
+                {"token": "test_token", "bot_id": "test_bot"},
+                mock_context,
+            )
 
         assert result is None
-        serialized_logs = repr(mock_context.logger.method_calls)
-        assert "REMOTE_CANARY_SHOULD_NOT_BE_LOGGED" not in serialized_logs
-        assert "4000" in serialized_logs
+        assert "REMOTE_CANARY_SHOULD_NOT_BE_LOGGED" not in caplog.text
+        [business_error] = logged_events(caplog, "coze.business_error")
+        assert business_error.fields["code"] == 4000
 
     @pytest.mark.asyncio
     async def test_call_coze_api_rejects_non_object_json(self, mock_context):

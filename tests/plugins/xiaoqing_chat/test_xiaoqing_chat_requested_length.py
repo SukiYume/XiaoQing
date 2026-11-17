@@ -145,7 +145,6 @@ def test_a_length_retry_asks_for_the_length_not_for_shorter_replies():
         text    = "小青，帮我写个800字的检讨书",
         runtime = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(max_regen=1),
             )
         ),

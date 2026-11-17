@@ -1304,7 +1304,7 @@ class TaskHandler(DbOpsMixin):
             parsed = self._parse_task_text(parse_content, user_id, apply_defaults=False)
             updates = self._build_task_edit_updates(parsed, title_directive)
             # 字段归一化会校验日期等显式参数，也属于用户输入错误边界。
-            # 留在这里可避免 ValueError 被外层兜底包装成内部错误码。
+            # 留在这里可避免 ValueError 被外层兜底当成插件内部错误回复。
             fields = set(updates)
             merged = {**task.to_dict(), **updates}
             if "remind_times" in fields and "reminder_rules" not in fields:

@@ -1,6 +1,6 @@
 # 验证任务创建失败时回收已申请的状态和资源。
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -21,8 +21,8 @@ def _reject_task_creation(captured):
 
 
 def test_spawn_background_task_closes_coroutine_when_create_task_fails():
-    state = get_state()
-    context = SimpleNamespace(logger=MagicMock())
+    state    = get_state()
+    context  = SimpleNamespace()
     captured = []
     coro     = _never_started()
     try:
@@ -65,7 +65,7 @@ def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule)
             io_persist_debounce_seconds=0.0,
         )
     )
-    context = SimpleNamespace(logger=MagicMock())
+    context  = SimpleNamespace()
     captured = []
     task_scheduler._action_flush_tasks.clear()
     task_scheduler._media_registry_flush_tasks.clear()

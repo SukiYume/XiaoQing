@@ -7,11 +7,12 @@ import logging
 import re
 
 from core.interfaces import PluginContextProtocol
-from core.public_errors import public_error_message
+from core.log import LogEvent
+from core.public_errors import log_public_error
 
 from .utils import ARXIV_ABS_URL_PREFIX
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _ARXIV_ABS_LINK_RE = re.compile(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?")
 
@@ -30,11 +31,6 @@ def schedule_codex_summary_from_filter_result(
     filter_text: str,
 ) -> asyncio.Task[None] | None:
     links = extract_arxiv_links(filter_text)
-    logger.info(
-        "arXiv Codex summary sidecar extracted %d links for %s",
-        len(links),
-        date,
-    )
     return schedule_codex_summary(
         context,
         date  = date,
@@ -49,16 +45,20 @@ def schedule_codex_summary(
     links: list[str],
 ) -> asyncio.Task[None] | None:
     if not links:
-        logger.info("skip Codex arXiv summary enqueue for %s: no links", date)
+        log.info(LogEvent("codex_summary.skip", reason_code="no_links", date=date))
         return None
 
     async def _runner() -> None:
         try:
-            logger.info(
-                "enqueue Codex arXiv summary sidecar: date=%s links=%d targets=%d",
-                date,
-                len(links),
-                len(tuple(getattr(getattr(context, "principal", None), "delivery_targets", ()))),
+            log.info(
+                LogEvent(
+                    "codex_summary.enqueue",
+                    date    = date,
+                    links   = len(links),
+                    targets = len(
+                        tuple(getattr(getattr(context, "principal", None), "delivery_targets", ()))
+                    ),
+                )
             )
             capabilities = getattr(context, "capabilities", None)
             service      = (
@@ -67,19 +67,16 @@ def schedule_codex_summary(
                 else None
             )
             if service is None:
-                logger.info("skip Codex arXiv summary enqueue: capability unavailable")
+                log.warning(LogEvent("codex_summary.skip", reason_code="capability_unavailable"))
                 return
-            result = await service.enqueue_or_replay(
-                date  = date,
-                links = links,
-            )
-            logger.info("Codex arXiv summary sidecar enqueue result: %s", result)
+            # 返回值是给用户看的中文结果；新任务的任务号由 codex 插件的 summary.queued 记录。
+            await service.enqueue_or_replay(date=date, links=links)
+            log.info(LogEvent("codex_summary.enqueued"))
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = logger,
-                component = "arxiv_filter.codex_enqueue",
+                component="arxiv_filter.codex_enqueue",
             )
 
     try:
@@ -90,10 +87,9 @@ def schedule_codex_summary(
         task.add_done_callback(tasks.discard)
         return task
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "arxiv_filter.codex_schedule",
+            component="arxiv_filter.codex_schedule",
         )
         return None

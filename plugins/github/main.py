@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 import stat
 import threading
@@ -40,8 +39,6 @@ from core.safe_http import (
     fetch_public_html,
     validated_proxy_url,
 )
-
-logger = logging.getLogger(__name__)
 
 TimeRange      = Literal["daily", "weekly", "monthly"]
 RepositoryData = dict[str, str]
@@ -190,7 +187,7 @@ async def handle(
     except GitHubCommandError as exc:
         return segments(str(exc))
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="github.handle")
+        return public_error_response(context, exc, component="github.handle")
 
 
 async def scheduled(context: _GitHubContext) -> Segments:
@@ -273,7 +270,7 @@ async def _fetch_trending(time_range: str, context: _GitHubContext) -> Segments:
     except GitHubCommandError as exc:
         return segments(str(exc))
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="github.fetch")
+        return public_error_response(context, exc, component="github.fetch")
 
 
 def _clean_element_text(element: Tag | None, *, fallback: str, max_chars: int) -> str:

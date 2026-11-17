@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -11,12 +12,15 @@ from typing import cast
 
 from core.args import quote_token
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, image, segments, text
 from core.public_errors import public_error_response
 
 from .convert import STORED_HEX_PATTERN, hex_to_rgb
 from .data_manager import context_dir
 from .image_gen import generate_color_image
+
+log = logging.getLogger(__name__)
 
 MAX_STELLAR_FILE_BYTES = 64 * 1024
 MAX_STELLAR_ROWS       = 512
@@ -98,7 +102,7 @@ def load_stellar_colors(context: PluginContextProtocol) -> tuple[StellarColor, .
     path = context_dir(context, "plugin_dir") / "stellar_colors.txt"
     info = path.stat()
     rows = _load_stellar_rows_cached(str(path), info.st_mtime_ns, info.st_size)
-    context.logger.debug("加载恒星颜色数据: count=%d", len(rows))
+    log.debug(LogEvent("stellar.loaded", count=len(rows)))
     return rows
 
 
@@ -156,7 +160,7 @@ async def query_stellar_color(
             f"RGB：{', '.join(str(channel) for channel in rgb)}{sample_note}"
         )
         image_path = await generate_color_image(selected.spectral_type, rgb, image_dir, context)
-        context.logger.info("查询恒星颜色: matches=%d", len(matches))
+        log.info(LogEvent("stellar.query", matches=len(matches)))
         result = [text(info)]
         if image_path:
             result.append(image(image_path))
@@ -166,9 +170,7 @@ async def query_stellar_color(
     except Exception as exc:
         return cast(
             Segments,
-            public_error_response(
-                context, exc, logger=context.logger, component="color.stellar.query"
-            ),
+            public_error_response(context, exc, component="color.stellar.query"),
         )
 
 
@@ -213,11 +215,13 @@ def list_spectral_types(
         suffix = f"\n\n第 {page}/{total_pages} 页"
         if navigation:
             suffix += "\n" + "\n".join(navigation)
-        context.logger.info(
-            "列出光谱型: keyword_chars=%d page=%d count=%d",
-            len(normalized),
-            page,
-            len(matches),
+        log.info(
+            LogEvent(
+                "stellar.list",
+                keyword_chars = len(normalized),
+                page          = page,
+                count         = len(matches),
+            )
         )
         return cast(Segments, segments(f"{title}\n{', '.join(displayed)}{suffix}"))
     except ValueError as exc:
@@ -225,7 +229,5 @@ def list_spectral_types(
     except Exception as exc:
         return cast(
             Segments,
-            public_error_response(
-                context, exc, logger=context.logger, component="color.stellar.list"
-            ),
+            public_error_response(context, exc, component="color.stellar.list"),
         )

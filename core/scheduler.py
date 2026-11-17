@@ -22,6 +22,7 @@ from apscheduler.schedulers.base import STATE_STOPPED
 from apscheduler.triggers.cron import CronTrigger
 
 from .clock import DEFAULT_CONFIG_TIMEZONE
+from .log import LogEvent
 
 logger = logging.getLogger(__name__)
 
@@ -228,11 +229,7 @@ class AsyncIOSchedulerDrain:
         except BaseException as exc:
             # Event notification owns no resources.  Observer failures after
             # teardown must not resurrect a dead scheduler generation.
-            logger.error(
-                "Scheduler shutdown notification failed: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+            logger.error(LogEvent("scheduler.shutdown_notification.failed", error=exc))
         self.pending_executor_cleanup.clear()
         self.pending_jobstore_cleanup.clear()
         self.pending_job_futures.clear()
@@ -402,10 +399,10 @@ class SchedulerManager:
         if not capability.available:
             if not self._public_fallback_logged:
                 logger.warning(
-                    "APScheduler %s private job drain is unavailable; using public "
-                    "shutdown semantics: %s",
-                    capability.apscheduler_version,
-                    capability.reason or "capability probe failed",
+                    LogEvent(
+                        "scheduler.drain.unavailable",
+                        apscheduler_version=capability.apscheduler_version,
+                    )
                 )
                 self._public_fallback_logged = True
             return None
@@ -578,7 +575,7 @@ class SchedulerManager:
                             f"failed: {type(rollback_error).__name__}: {rollback_error}"
                         ) from replacement_error
                 raise
-        logger.info("Scheduled job %s (%s)", job_id, description or job_id)
+        logger.info(LogEvent("scheduler.job.scheduled", job_id=job_id))
 
     def replace_prefix(
         self,
@@ -639,11 +636,7 @@ class SchedulerManager:
                     ) from replacement_error
                 raise
 
-        logger.info(
-            "Replaced %d scheduled job(s) under prefix %s",
-            len(prepared),
-            prefix,
-        )
+        logger.info(LogEvent("scheduler.jobs.replaced", count=len(prepared), prefix=prefix))
 
     @staticmethod
     def _prepare_job(scheduler: AsyncIOScheduler, spec: ScheduledJobSpec) -> _PreparedJob:

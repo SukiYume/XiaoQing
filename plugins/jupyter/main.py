@@ -13,9 +13,9 @@ from typing import Any, Literal
 
 from core.interfaces import PluginContextProtocol
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, image_url, segments, text
-from core.sensitive_audit import log_sensitive_operation as log_sensitive_audit
-from core.sensitive_audit import safe_request_id as context_request_id
+from core.public_errors import public_error_message, public_error_response
 from core.session import Session
 
 from . import jupyter_manager
@@ -38,7 +38,7 @@ from .jupyter_models import ExecutionResult, truncate_with_suffix
 # 保留稳定的测试/扩展接缝；依赖可用状态始终从模块属性实时读取。
 JupyterKernelManager = jupyter_manager.JupyterKernelManager
 
-logger         = logging.getLogger(__name__)
+log            = logging.getLogger(__name__)
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 PLUGIN_NAME               = "jupyter"
@@ -221,19 +221,15 @@ def _dependencies_available() -> bool:
     return bool(jupyter_manager.JUPYTER_AVAILABLE and jupyter_manager.KernelManager is not None)
 
 
-def init(context: PluginContextProtocol | None = None) -> None:
+def init() -> None:
     """在插件代加载时探测可选依赖，不启动任何内核。"""
 
     global _DEPENDENCY_PROBED
     _DEPENDENCY_PROBED = False
     available          = _dependencies_available()
-    log_sensitive_audit(
-        logger,
-        "jupyter.init",
-        request_id = context_request_id(context),
-        status     = "available" if available else "unavailable",
-        error_type = "-" if available else "ImportError",
-        level      = logging.INFO if available else logging.WARNING,
+    log.log(
+        logging.INFO if available else logging.WARNING,
+        LogEvent("init", status="available" if available else "unavailable"),
     )
 
 
@@ -280,37 +276,43 @@ def _build_result_segments(
 
 async def _audited_execute(
     context: PluginContextProtocol, operation: str, code: str, timeout: float
-) -> Any:
-    """在用户自己的内核中执行代码，前后各写一条安全审计；异常时返回 None，正文只记录异常类型。"""
+) -> ExecutionResult | str:
+    """在用户自己的内核中执行代码，前后各写一条安全审计。
 
-    job_id     = uuid.uuid4().hex
-    request_id = context_request_id(context)
+    执行器自身出错时结果的 ``error`` 换成公开错误说明；拿不到执行结果时直接返回这段说明。
+    """
+
+    job_id = uuid.uuid4().hex
     try:
         manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-        log_sensitive_audit(
-            logger, operation, request_id=request_id, job_id=job_id, status="started", payload=code
-        )
+        log.info(LogEvent(operation, job_id=job_id, status="started", payload=code))
         result = await manager.execute(code, timeout=timeout, audit_id=job_id)
-        log_sensitive_audit(
-            logger,
-            operation,
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "succeeded" if result.success else "failed",
-            payload    = code,
-        )
+        if result.failure is not None:
+            log.error(
+                LogEvent(
+                    operation,
+                    job_id  = job_id,
+                    status  = "error",
+                    payload = code,
+                    error   = result.failure,
+                )
+            )
+            result.error = public_error_message(
+                context, result.failure, component=f"jupyter.{operation}"
+            )
+        else:
+            log.info(
+                LogEvent(
+                    operation,
+                    job_id  = job_id,
+                    status  = "succeeded" if result.success else "failed",
+                    payload = code,
+                )
+            )
         return result
     except Exception as exc:
-        log_sensitive_audit(
-            logger,
-            operation,
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "error",
-            payload    = code,
-            exc        = exc,
-        )
-        return None
+        log.error(LogEvent(operation, job_id=job_id, status="error", payload=code, error=exc))
+        return public_error_message(context, exc, component=f"jupyter.{operation}")
 
 
 async def _handle_execute(args: str, context: PluginContextProtocol) -> Segments:
@@ -319,15 +321,16 @@ async def _handle_execute(args: str, context: PluginContextProtocol) -> Segments
     code, timeout = extract_code_and_timeout(args)
     if not code.strip():
         return segments("请输入要执行的代码\n用法: /py print('hello')\n输入 /py help 查看帮助")
-    result = await _audited_execute(context, "jupyter.execute", code, timeout)
-    return segments("❌ 执行失败，请稍后重试") if result is None else _build_result_segments(result)
+    result = await _audited_execute(context, "execute", code, timeout)
+    if isinstance(result, str):
+        return segments(result)
+    return _build_result_segments(result)
 
 
 async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -> Segments:
     """执行已经过严格解析的内核状态或生命周期操作。"""
 
-    job_id     = uuid.uuid4().hex
-    request_id = context_request_id(context)
+    job_id = uuid.uuid4().hex
     try:
         manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
         if action == "status":
@@ -335,13 +338,7 @@ async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -
             marker = "🟢" if status["running"] else "⚫"
             return segments(f"{marker} {status['message']}")
 
-        log_sensitive_audit(
-            logger,
-            f"jupyter.kernel.{action}",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "started",
-        )
+        log.info(LogEvent(f"kernel.{action}", job_id=job_id, status="started"))
         if action in {"start", "restart"}:
             try:
                 # 取消时也等启动线程收敛：内核起来了就必须有空闲监视器，不能留下无人回收的内核。
@@ -355,26 +352,20 @@ async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -
         else:
             await to_thread_owned(manager.shutdown_kernel)
             success_text = "⚫ 内核已关闭"
-        log_sensitive_audit(
-            logger,
-            f"jupyter.kernel.{action}",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "succeeded",
-        )
+        log.info(LogEvent(f"kernel.{action}", job_id=job_id, status="succeeded"))
         return segments(success_text)
     except Exception as exc:
-        log_sensitive_audit(
-            logger,
-            f"jupyter.kernel.{action}",
-            request_id = request_id,
-            job_id     = job_id,
-            status     = "quarantined" if action == "shutdown" else "error",
-            exc        = exc,
+        log.error(
+            LogEvent(
+                f"kernel.{action}",
+                job_id = job_id,
+                status = "quarantined" if action == "shutdown" else "error",
+                error  = exc,
+            )
         )
         if action == "shutdown":
             return segments("⚠️ 内核关闭状态无法确认，实例已隔离")
-        return segments("❌ 内核操作失败，请稍后重试")
+        return public_error_response(context, exc, component=f"jupyter.kernel.{action}")
 
 
 def _repl_line_within_limits(line: str) -> bool:
@@ -442,16 +433,9 @@ async def _start_repl_session(context: PluginContextProtocol) -> Segments:
             return segments(OTHER_SESSION_TEXT)
         try:
             state = _load_repl_state(existing)
-        except InvalidReplState:
+        except InvalidReplState as exc:
             await context.end_session()
-            log_sensitive_audit(
-                logger,
-                "jupyter.repl.state",
-                request_id = context_request_id(context),
-                status     = "discarded",
-                error_type = "InvalidReplState",
-                level      = logging.WARNING,
-            )
+            log.warning(LogEvent("repl.state", status="discarded", error=exc))
         else:
             tail = "\n".join(state.lines[-5:]) if state.lines else "（空）"
             return segments(
@@ -464,13 +448,7 @@ async def _start_repl_session(context: PluginContextProtocol) -> Segments:
         initial_data = {"code_buffer": [], "execution_count": 0},
         timeout      = REPL_SESSION_TIMEOUT,
     )
-    log_sensitive_audit(
-        logger,
-        "jupyter.repl.start",
-        request_id = context_request_id(context),
-        job_id     = uuid.uuid4().hex,
-        status     = "succeeded",
-    )
+    log.info(LogEvent("repl.start", job_id=uuid.uuid4().hex, status="succeeded"))
     return segments(
         "📝 Jupyter REPL 已启动\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -490,9 +468,9 @@ async def _execute_repl_buffer(
     if state.execution_count >= MAX_REPL_EXECUTIONS:
         return segments("⚠️ REPL 执行计数已达上限，请退出后重新启动")
 
-    result = await _audited_execute(context, "jupyter.repl.execute", state.code, DEFAULT_TIMEOUT)
-    if result is None:
-        return segments("❌ 执行失败，缓冲区已保留；请稍后重试")
+    result = await _audited_execute(context, "repl.execute", state.code, DEFAULT_TIMEOUT)
+    if isinstance(result, str):
+        return segments(f"{result}\n缓冲区已保留")
     if result.success:
         next_count = state.execution_count + 1
         session.set("code_buffer", [])
@@ -584,41 +562,17 @@ async def handle(
     except JupyterCommandError as exc:
         return segments(str(exc))
     except Exception as exc:
-        log_sensitive_audit(
-            logger,
-            "jupyter.handle",
-            request_id = context_request_id(context),
-            status     = "error",
-            exc        = exc,
-        )
-        return segments("处理请求失败，请稍后重试")
+        return public_error_response(context, exc, component="jupyter.handle")
 
 
-async def shutdown(context: PluginContextProtocol) -> None:
+async def shutdown() -> None:
     """插件卸载时等待所有空闲监视器与内核清理完成。"""
 
     try:
         if not _dependencies_available():
             return
-        request_id = context_request_id(context)
-        log_sensitive_audit(
-            logger,
-            "jupyter.shutdown",
-            request_id = request_id,
-            status     = "started",
-        )
+        log.info(LogEvent("shutdown", status="started"))
         await JupyterKernelManager.shutdown_all_async()
-        log_sensitive_audit(
-            logger,
-            "jupyter.shutdown",
-            request_id = request_id,
-            status     = "succeeded",
-        )
+        log.info(LogEvent("shutdown", status="succeeded"))
     except Exception as exc:
-        log_sensitive_audit(
-            logger,
-            "jupyter.shutdown",
-            request_id = context_request_id(context),
-            status     = "error",
-            exc        = exc,
-        )
+        log.error(LogEvent("shutdown", status="error", error=exc))

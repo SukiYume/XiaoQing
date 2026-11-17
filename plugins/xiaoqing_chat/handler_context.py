@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -13,8 +12,6 @@ from core.public_errors import public_error_response
 from .chat_event import event_chat_id
 from .chat_runtime import ai_route_context, configured_bot_name, load_runtime
 from .store_binding import bound_state
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime, ChatRuntimeState
@@ -78,8 +75,7 @@ def handle_errors(fn):
             return public_error_response(
                 context,
                 exc,
-                logger    = getattr(context, "logger", None),
-                component = f"xiaoqing_chat.handler.{fn.__name__}",
+                component=f"xiaoqing_chat.handler.{fn.__name__}",
             )
 
     return wrapper

@@ -1,14 +1,14 @@
-"""聊天生成、记忆组装、模型网关与公开错误边界。"""
+"""聊天生成、模型网关与公开错误边界。"""
 
-import logging
-import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_OPEN,
     ScriptedChatModel,
@@ -54,7 +54,7 @@ def _failing_model_script(call) -> str:
 
 @pytest.mark.asyncio
 async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_code(
-    mock_context, sample_private_event
+    mock_context, sample_private_event, caplog
 ) -> None:
     from plugins.xiaoqing_chat.handlers import _STALLED_REPLIES, handle_smalltalk
 
@@ -72,14 +72,16 @@ async def test_a_failed_private_turn_gets_one_in_character_line_and_no_error_cod
     assert first[0]["data"]["text"] in _STALLED_REPLIES
     # 故障还在持续：同一会话不再重复说，也不出现错误码和异常内容。
     assert second == []
-    assert "XQ-PLUGIN" not in str(first) and "internal" not in str(first)
+    assert PUBLIC_ERROR_PREFIX not in str(first) and "internal" not in str(first)
     # 诊断信息照常记进日志，供排查。
-    assert mock_context.logger.error.called
+    assert logged_events(caplog, "public_error")
     await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
-async def test_a_failed_group_interjection_is_silent(mock_context, sample_group_event) -> None:
+async def test_a_failed_group_interjection_is_silent(
+    mock_context, sample_group_event, caplog
+) -> None:
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
     # 概率放行了这句插话，规划器决定接话，生成时模型出了故障。
@@ -88,20 +90,20 @@ async def test_a_failed_group_interjection_is_silent(mock_context, sample_group_
 
     interjection = chat_message_event(sample_group_event, "今天好冷")
     assert await handle_smalltalk("今天好冷", interjection, mock_context) == []
-    assert mock_context.logger.error.called
+    assert logged_events(caplog, "public_error")
     # 被点名时才说一句“卡了”。
-    mock_context.logger.error.reset_mock()
+    caplog.clear()
     addressed = await handle_smalltalk(
         "小青在吗", chat_message_event(sample_group_event, "小青在吗", message_id=2), mock_context
     )
-    assert len(addressed) == 1 and "XQ-PLUGIN" not in str(addressed)
-    assert mock_context.logger.error.called
+    assert len(addressed) == 1 and PUBLIC_ERROR_PREFIX not in str(addressed)
+    assert logged_events(caplog, "public_error")
     await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
 async def test_an_invalid_deployment_config_ends_a_private_turn_in_the_stalled_line(
-    mock_context, sample_private_event
+    mock_context, sample_private_event, caplog
 ) -> None:
     from plugins.xiaoqing_chat.handlers import _STALLED_REPLIES, handle_smalltalk
 
@@ -115,8 +117,8 @@ async def test_an_invalid_deployment_config_ends_a_private_turn_in_the_stalled_l
 
     assert [segment["data"]["text"] for segment in reply] == [reply[0]["data"]["text"]]
     assert reply[0]["data"]["text"] in _STALLED_REPLIES
-    assert "max_replan" not in str(reply) and "XQ-PLUGIN" not in str(reply)
-    assert mock_context.logger.error.called
+    assert "max_replan" not in str(reply) and PUBLIC_ERROR_PREFIX not in str(reply)
+    assert logged_events(caplog, "public_error")
     assert not model.calls
 
 
@@ -130,24 +132,6 @@ def test_llm_call_config_contains_only_runtime_controls() -> None:
         "max_retry"             : 0,
         "retry_interval_seconds": 0.2,
     }
-
-
-def test_memory_db_save_logs_write_failures(tmp_path, monkeypatch, caplog) -> None:
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-
-    db = MemoryDB()
-    db.bind(tmp_path)
-    db.upsert_text(doc_id="doc-1", text="hello", meta={"type": "knowledge"})
-
-    def disk_full(*_args, **_kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(os, "replace", disk_full)
-    with caplog.at_level(logging.WARNING, logger="plugin.xiaoqing_chat"):
-        db.save()
-
-    assert db.is_dirty() is True
-    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -17,6 +18,7 @@ from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.planning.goal_state import GoalState
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_CLOSED,
     GROUP_GATE_OPEN,
@@ -586,17 +588,13 @@ class _UnavailableMemory:
         raise RuntimeError("memory service unavailable")
 
 
-def _reset_audit_calls(context) -> list:
-    return [
-        call for call in context.logger.info.call_args_list if "reset_audit" in str(call.args[0])
-    ]
-
-
 @pytest.mark.asyncio
 async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat import commands
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     chat_id = "g67890"
     state   = bound_state(mock_context)
@@ -611,21 +609,24 @@ async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(
     assert "会清空本群" in preview[0]["data"]["text"]
     assert "/xc 重置 确认" in preview[0]["data"]["text"]
     assert len(state.memory_store.get(chat_id)) == 1
-    assert _reset_audit_calls(mock_context) == []
+    assert logged_events(caplog, "session.reset") == []
 
     completed = await commands.handle_internal("重置", "确认", sample_group_event, mock_context)
     assert completed == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.memory_store.get(chat_id) == []
     assert state.get_stats(chat_id)["resets"] == 1
-    (audit,) = _reset_audit_calls(mock_context)
-    assert "group" in audit.args
+    (audit,) = logged_events(caplog, "session.reset")
+    assert audit.fields["scope"] == "group"
+    assert audit.fields["operator_user_id"] == sample_group_event["user_id"]
 
 
 @pytest.mark.asyncio
 async def test_private_reset_remains_limited_to_callers_private_scope(
-    mock_context, sample_private_event, sample_group_event
+    mock_context, sample_private_event, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat import commands
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     state = bound_state(mock_context)
     state.memory_store.append("u12345", role="user", name="Tester", content="私聊里说的")
@@ -637,8 +638,8 @@ async def test_private_reset_remains_limited_to_callers_private_scope(
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.memory_store.get("u12345") == []
     assert len(state.memory_store.get("g67890")) == 1
-    (audit,) = _reset_audit_calls(mock_context)
-    assert "private" in audit.args
+    (audit,) = logged_events(caplog, "session.reset")
+    assert audit.fields["scope"] == "private"
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1015,7 @@ async def test_pfc_requires_a_reply_action_before_generation(tmp_path, actions, 
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
 
     cfg = XiaoQingChatConfig()
-    context = SimpleNamespace(data_dir=tmp_path, logger=MagicMock())
+    context = SimpleNamespace(data_dir=tmp_path)
     generate = AsyncMock(return_value="回复")
     # 重新分析目标时，模型答“空数组”：所有目标都已失效。
     model = ScriptedChatModel(

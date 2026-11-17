@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -115,7 +114,6 @@ async def test_media_render_singleflight_lock_is_released_after_use(tmp_path: Pa
     image   = write_png(tmp_path / "fixture.png")
     context = SimpleNamespace(
         data_dir     = tmp_path / "data",
-        logger       = MagicMock(),
         capabilities = PluginCapabilities(),
     )
     loop = asyncio.get_running_loop()

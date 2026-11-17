@@ -1,6 +1,5 @@
 """Pendo 处理器与数据库测试的共享导入和辅助：临时数据库、会话上下文、处理器替身、批量日程数据。"""
 
-import logging
 import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +25,6 @@ class PendoSessionTestContext:
     plugin_name      = "pendo"
     current_user_id  = 1001
     current_group_id = None
-    logger           = logging.getLogger("test.pendo.session")
 
     def __init__(self, manager: SessionManager, services: dict[str, object]) -> None:
         self.session_manager   = manager
@@ -150,7 +148,6 @@ __all__ = (
     "pendo_session_services",
     "seed_event_batch_fixture",
     "datetime",
-    "logging",
     "sqlite3",
     "uuid",
 )

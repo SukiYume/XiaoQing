@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_OPEN,
@@ -56,9 +58,11 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
 )
 @pytest.mark.asyncio
 async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candidate(
-    mock_context, sample_group_event, candidate
+    mock_context, sample_group_event, candidate, caplog
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     text  = "请直接说明情况，别反问我。"
     model = ScriptedChatModel(
@@ -74,10 +78,7 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
     scripted_chat_context(
         mock_context,
         model,
-        {
-            "debug"      : {"log_steps": True},
-            "reply_check": {"llm_checker_mode": "always", "max_regen": 0},
-        },
+        {"reply_check": {"llm_checker_mode": "always", "max_regen": 0}},
     )
     event = chat_message_event(sample_group_event, text, _xc_command_forced=True)
 
@@ -85,9 +86,8 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 
     # 照发最后一稿；真实的出站整理会去掉句末的句号。
     assert result == [{"type": "text", "data": {"text": candidate.removesuffix("。")}}]
-    logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
     # 软问题不重写，直接照发并记一笔。
-    assert any('"step": "reply.check.soft_pass"' in payload for payload in logged_payloads)
+    assert logged_events(caplog, "reply.check.soft_pass")
     await settle_chat_background(mock_context, model)
 
 
@@ -112,13 +112,15 @@ def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
     assert draft.text != rejected.text
 
 
-def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock_context) -> None:
+def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(caplog) -> None:
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
     from plugins.xiaoqing_chat.reply_fallbacks import (
         PERSONA_GROUNDING_FALLBACKS,
         finish_rejected_candidate,
     )
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     plan = reply_plan(
         forced     = True,
@@ -127,10 +129,8 @@ def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock
         history    = [],
         bot_name   = "小青",
         chat_id    = "group:1",
-        context    = mock_context,
         runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=True),
                 reply_check=SimpleNamespace(
                     max_repeat_compare   = 8,
                     similarity_threshold = 0.92,
@@ -154,11 +154,10 @@ def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock
     assert draft is not None
     assert draft.text in PERSONA_GROUNDING_FALLBACKS
     assert rejected.text not in draft.text
-    logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
-    assert any("reply.check.exhausted.persona_grounding" in item for item in logged_payloads)
+    assert logged_events(caplog, "reply.check.exhausted.persona_grounding")
 
 
-def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_context) -> None:
+def test_finish_persona_grounding_identity_query_uses_only_known_name() -> None:
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
     from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
@@ -170,10 +169,8 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
         history    = [],
         bot_name   = "小青",
         chat_id    = "group:1",
-        context    = mock_context,
         runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
                     max_repeat_compare   = 8,
                     similarity_threshold = 0.92,
@@ -215,7 +212,6 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
     ids=("precise-profile", "self-intro"),
 )
 def test_finish_persona_grounding_uses_configured_persona_fallbacks(
-    mock_context,
     text,
     expected_fragment,
     includes_profile,
@@ -235,10 +231,8 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
         history            = [],
         bot_name           = "小青",
         chat_id            = "group:1",
-        context            = mock_context,
         runtime            = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
                     max_repeat_compare   = 8,
                     similarity_threshold = 0.92,
@@ -290,7 +284,7 @@ def test_checker_unavailable_persona_guard_uses_general_syntax(text, expected) -
     assert needs_persona_guard_when_checker_unavailable(text, bot_name="小青") is expected
 
 
-def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context) -> None:
+def test_persona_grounding_rejection_gets_one_targeted_regeneration() -> None:
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, ReplyAttemptState
     from plugins.xiaoqing_chat.reply_fallbacks import queue_reply_regeneration
@@ -298,11 +292,9 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
     plan = reply_plan(
         forced   = True,
         bot_name = "小青",
-        context  = mock_context,
         chat_id  = "group:1",
         runtime  = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(max_regen=1),
             )
         ),
@@ -330,17 +322,15 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
     assert "句首称呼" in attempt.extra_check_hint
 
 
-def test_soft_style_regeneration_keeps_fact_correction_out_of_the_request(mock_context) -> None:
+def test_soft_style_regeneration_keeps_fact_correction_out_of_the_request() -> None:
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, ReplyAttemptState
     from plugins.xiaoqing_chat.reply_fallbacks import queue_reply_regeneration
 
     plan = reply_plan(
-        context = mock_context,
         chat_id = "g1",
         runtime = SimpleNamespace(
             cfg=SimpleNamespace(
-                debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(max_regen=1),
             )
         ),
@@ -376,16 +366,14 @@ def test_postprocess_keeps_quoted_sentence_and_closing_quote_together() -> None:
     assert all(part != "”" for part in parts)
 
 
-def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan(mock_context) -> None:
+def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan() -> None:
     from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
     from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
     plan = reply_plan(
         forced  = False,
-        context = mock_context,
-        runtime=SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False))),
-        chat_id="group:1",
+        chat_id = "group:1",
     )
     rejected = RejectedCandidate(
         text   = "一条无依据的生活片段",

@@ -50,7 +50,6 @@ def _context(
             }
         ),
         capabilities=SimpleNamespace(ai=ai or FakeAI()),
-        logger=SimpleNamespace(info=print, warning=print, error=print, debug=print),
     )
 
 

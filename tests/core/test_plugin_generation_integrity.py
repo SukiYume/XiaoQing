@@ -13,6 +13,7 @@ import importlib
 import json
 import os
 import py_compile
+import re
 import subprocess
 import sys
 import threading
@@ -119,10 +120,11 @@ def test_plugin_manager_degrades_to_restart_only_when_import_barrier_is_unavaila
 
     assert os.path.abspath(tmp_path) in sys.path
     assert manager.hot_reload_supported is False
-    assert manager.hot_reload_unavailable_reason == coordinator.capability().reason
-    assert manager.hot_reload_unavailable_reason
+    reason = coordinator.capability().reason
+    assert reason
 
-    with pytest.raises(PluginPathError, match="restart the process"):
+    # 重载被拒绝时，错误里带着探测给出的原因。
+    with pytest.raises(PluginPathError, match=re.escape(reason)):
         asyncio.run(manager.reload_all_plugins())
 
 

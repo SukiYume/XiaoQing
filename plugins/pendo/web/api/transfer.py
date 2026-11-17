@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, Valida
 from starlette.concurrency import run_in_threadpool
 
 from core.async_keyed_lock import AsyncKeyedLockPool
+from core.log import LogEvent
 from core.plugin_base import has_control_characters
 
 from ...config import PendoConfig
@@ -50,7 +51,7 @@ from ..services.transfer_bundle import (
 from ..utils import parse_iso_date, preset_range
 
 router     = APIRouter()
-logger     = logging.getLogger(__name__)
+log        = logging.getLogger(__name__)
 JsonObject = dict[str, Any]
 _IMPORT_LOCK_POOL = AsyncKeyedLockPool(max_keys=2_048, max_key_length=256)
 
@@ -1165,7 +1166,7 @@ def _commit_import_plan(
                 status_code = 409,
                 detail      = "导入记录 ID 与现有数据冲突，请选择跳过或生成副本后重试",
             ) from exc
-        logger.error("Import transaction failed error_type=%s", type(exc).__name__)
+        log.error(LogEvent("import.transaction_failed", error=exc))
         raise HTTPException(
             status_code = 500,
             detail      = "导入事务失败，已全部回滚；请检查导入预检结果或稍后重试",

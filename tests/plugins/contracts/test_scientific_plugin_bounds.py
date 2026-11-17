@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import os
 import time
 from pathlib import Path
@@ -40,7 +39,7 @@ def test_mass_calculations_reject_non_positive_or_non_finite_values(
     calculation: str,
     value: str,
 ):
-    context = SimpleNamespace(logger=logging.getLogger("test.astro_tools"))
+    context = SimpleNamespace()
 
     result = formula._handle_calculation(f"{calculation} {value}", context)
 
@@ -50,7 +49,7 @@ def test_mass_calculations_reject_non_positive_or_non_finite_values(
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e9999"])
 @pytest.mark.asyncio
 async def test_redshift_rejects_every_non_finite_value(value: str):
-    context = SimpleNamespace(logger=logging.getLogger("test.astro_tools"))
+    context = SimpleNamespace()
 
     result = redshift.handle_redshift(value, context)
 
@@ -74,7 +73,6 @@ async def test_natural_step_and_cp_suffixes_remain_part_of_simple_question(
         SimpleNamespace(
             secrets      = {"plugins": {"wolframalpha": {"appid": "appid"}}},
             http_session = object(),
-            logger       = logging.getLogger("test.wolframalpha"),
         )
     )
 
@@ -112,10 +110,7 @@ async def test_all_wolfram_modes_share_two_request_concurrency_limit(
         return _response(b"simple", "text/plain")
 
     monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", request)
-    context = SimpleNamespace(
-        http_session = object(),
-        logger       = logging.getLogger("test.wolframalpha"),
-    )
+    context = SimpleNamespace(http_session=object())
     tasks = []
     for index in range(4):
         tasks.extend(
@@ -186,12 +181,7 @@ async def test_apod_image_cache_prunes_old_entries(
         )
 
     monkeypatch.setattr(apod, "fetch_public_bytes", fetch)
-    context = with_settings_reader(
-        SimpleNamespace(
-            config={"plugins": {"apod": {}}},
-            logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
-        )
-    )
+    context = with_settings_reader(SimpleNamespace(config={"plugins": {"apod": {}}}))
 
     downloaded = []
     started    = time.time() - 1000

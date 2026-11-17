@@ -16,12 +16,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, TypeVar, cast
 
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, head_tail_preview
 
 from .artifacts import IMAGE_EXTENSIONS, MAX_REFERENCED_PATH_CHARS
 from .config import MAX_INT64, CodexPluginConfig
 
-logger              = logging.getLogger(__name__)
+log                 = logging.getLogger(__name__)
 _T                  = TypeVar("_T")
 _USAGE_KEYS         = ("input_tokens", "cached_input_tokens", "output_tokens")
 MAX_THREAD_ID_CHARS = 512
@@ -373,10 +374,7 @@ async def _run_cleanup_cancellation_resistant(
     outcome = await _settle_owned_task(task)
     if outcome.cancellation is not None:
         if outcome.error is not None:
-            logger.warning(
-                "Codex resource cleanup also failed during cancellation: error_type=%s",
-                type(outcome.error).__name__,
-            )
+            log.error(LogEvent("resource_cleanup.failed", error=outcome.error))
         raise outcome.cancellation
     if outcome.error is not None:
         raise outcome.error
@@ -401,11 +399,7 @@ async def _remove_output_path_with_retry(
             last_error = exc
             if attempt + 1 < attempts:
                 await asyncio.sleep(delay_seconds * (attempt + 1))
-    logger.warning(
-        "Failed to remove Codex output after bounded retries: name=%s error_type=%s",
-        path.name,
-        type(last_error).__name__ if last_error is not None else "OSError",
-    )
+    log.error(LogEvent("output_remove.failed", file=path.name, error=last_error))
     return False
 
 
@@ -415,11 +409,7 @@ def _remove_partial_archive(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
-        logger.warning(
-            "Failed to roll back partial Codex archive: name=%s error_type=%s",
-            path.name,
-            type(exc).__name__,
-        )
+        log.error(LogEvent("archive_rollback.failed", file=path.name, error=exc))
 
 
 async def _capture_in_thread(
@@ -440,10 +430,7 @@ async def _capture_in_thread(
     except asyncio.CancelledError as cancellation:
         outcome = await _settle_owned_task(task)
         if outcome.error is not None:
-            logger.warning(
-                "Codex output capture failed while cancellation was settling: error_type=%s",
-                type(outcome.error).__name__,
-            )
+            log.warning(LogEvent("output_capture.failed", error=outcome.error))
         else:
             capture = outcome.result
             assert capture is not None
@@ -906,11 +893,7 @@ async def _drain_process_after_termination(
             timeout=max(0.01, timeout_seconds),
         )
     except Exception as exc:  # noqa: BLE001 - 即使读取失败，清理路径也必须关闭全部管道。
-        logger.warning(
-            "Codex process pipe drain failed: pid=%s error_type=%s",
-            getattr(process, "pid", None),
-            type(exc).__name__,
-        )
+        log.warning(LogEvent("pipe_drain.failed", pid=getattr(process, "pid", None), error=exc))
         _close_process_pipe_transports(process)
         return b"", b""
 
@@ -921,10 +904,8 @@ async def _terminate_and_drain_process(
     try:
         termination = await terminate_process_tree(process)
     except Exception as exc:  # noqa: BLE001 - 最终所有权兜底仍必须回收父进程。
-        logger.error(
-            "Codex process-tree helper failed; using parent fallback: pid=%s error_type=%s",
-            getattr(process, "pid", None),
-            type(exc).__name__,
+        log.error(
+            LogEvent("process_tree.helper_failed", pid=getattr(process, "pid", None), error=exc)
         )
         forced = False
         if getattr(process, "returncode", None) is None:
@@ -941,10 +922,13 @@ async def _terminate_and_drain_process(
             helper_error   = type(exc).__name__,
         )
     if not termination.tree_confirmed or not termination.parent_reaped:
-        logger.error(
-            "Codex process tree termination was not fully confirmed: pid=%s result=%s",
-            getattr(process, "pid", None),
-            termination,
+        log.error(
+            LogEvent(
+                "process_tree.unconfirmed",
+                pid            = getattr(process, "pid", None),
+                tree_confirmed = termination.tree_confirmed,
+                parent_reaped  = termination.parent_reaped,
+            )
         )
     try:
         stdout, stderr = await _drain_process_after_termination(process)
@@ -979,10 +963,13 @@ async def _settle_stream_tasks(
         if still_pending:
             termination = await terminate_process_tree(process)
             if not termination.tree_confirmed or not termination.parent_reaped:
-                logger.error(
-                    "Codex process left pipe tasks open after parent exit: pid=%s result=%s",
-                    getattr(process, "pid", None),
-                    termination,
+                log.error(
+                    LogEvent(
+                        "process_tree.pipe_tasks_open",
+                        pid            = getattr(process, "pid", None),
+                        tree_confirmed = termination.tree_confirmed,
+                        parent_reaped  = termination.parent_reaped,
+                    )
                 )
             _close_process_pipe_transports(process)
             for task in still_pending:
@@ -1007,10 +994,13 @@ async def _terminate_streaming_process(
             task.cancel()
     termination = await terminate_process_tree(process)
     if not termination.tree_confirmed or not termination.parent_reaped:
-        logger.error(
-            "Codex streaming process tree termination was not fully confirmed: pid=%s result=%s",
-            getattr(process, "pid", None),
-            termination,
+        log.error(
+            LogEvent(
+                "process_tree.stream_unconfirmed",
+                pid            = getattr(process, "pid", None),
+                tree_confirmed = termination.tree_confirmed,
+                parent_reaped  = termination.parent_reaped,
+            )
         )
     return await _settle_stream_tasks(process, tasks)
 
@@ -1163,10 +1153,10 @@ async def _run_streaming_io(
         try:
             await _run_cleanup_cancellation_resistant(_terminate_streaming_process(process, tasks))
         except BaseException as exc:
-            logger.warning(
-                "Codex streaming cancellation cleanup failed: pid=%s error_type=%s",
-                getattr(process, "pid", None),
-                type(exc).__name__,
+            log.error(
+                LogEvent(
+                    "stream.cancel_cleanup_failed", pid=getattr(process, "pid", None), error=exc
+                )
             )
         raise cancellation
     finally:
@@ -1252,13 +1242,15 @@ class CodexRunner:
         else:
             platform_kwargs = {"start_new_session": True}
         args = self._build_args(cwd, thread_id, output_path)
-        logger.info(
-            "Starting Codex CLI: label=%s thread=%s cwd_name=%s prompt_chars=%d prompt_lines=%d",
-            getattr(job, "label", "?"),
-            thread_id or "new",
-            cwd.name,
-            len(prompt_payload),
-            len(prompt_payload.splitlines()),
+        log.info(
+            LogEvent(
+                "cli.start",
+                label        = getattr(job, "label", "?"),
+                thread       = thread_id or "new",
+                cwd          = cwd,
+                prompt_chars = len(prompt_payload),
+                prompt_lines = len(prompt_payload.splitlines()),
+            )
         )
         try:
             return await asyncio.wait_for(
@@ -1293,11 +1285,13 @@ class CodexRunner:
                     _terminate_and_drain_process(process)
                 )
             except BaseException as cleanup_error:
-                logger.warning(
-                    "Codex %s handoff cleanup failed: pid=%s error_type=%s",
-                    stage,
-                    getattr(process, "pid", None),
-                    type(cleanup_error).__name__,
+                log.error(
+                    LogEvent(
+                        "handoff.cleanup_failed",
+                        stage = stage,
+                        pid   = getattr(process, "pid", None),
+                        error = cleanup_error,
+                    )
                 )
             else:
                 resources.process_cleanup_required = not (
@@ -1417,10 +1411,8 @@ class CodexRunner:
         except asyncio.CancelledError as exc:
             return exc
         except Exception as exc:  # 清理失败不能跳过后续文件回收。
-            logger.error(
-                "Final Codex process cleanup failed: pid=%s error_type=%s",
-                getattr(process, "pid", None),
-                type(exc).__name__,
+            log.error(
+                LogEvent("process_cleanup.failed", pid=getattr(process, "pid", None), error=exc)
             )
         return None
 
@@ -1435,15 +1427,13 @@ class CodexRunner:
         except asyncio.CancelledError as exc:
             return exc
         except Exception as exc:  # 同一轮仍要继续回收其他自有资源。
-            logger.warning(
-                "%s: name=%s error_type=%s",
-                (
-                    "Failed to discard orphan Codex archive"
-                    if orphan_archive
-                    else "Failed to finalize Codex transient output"
-                ),
-                path.name,
-                type(exc).__name__,
+            log.error(
+                LogEvent(
+                    "path_cleanup.failed",
+                    kind  = "orphan_archive" if orphan_archive else "transient_output",
+                    file  = path.name,
+                    error = exc,
+                )
             )
         return None
 

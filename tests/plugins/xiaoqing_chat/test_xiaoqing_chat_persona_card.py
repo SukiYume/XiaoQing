@@ -7,7 +7,6 @@ import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,6 +18,7 @@ from plugins.xiaoqing_chat.persona import (
     PersonaCard,
     bundled_persona_card,
 )
+from tests.helpers.assertions import logged_events
 from tests.helpers.settings_snapshot import with_settings_reader
 
 CARD = """<!-- 编辑说明，不交给模型 -->
@@ -172,10 +172,7 @@ def test_deployment_config_overrides_the_bundled_behavior_file(tmp_path: Path) -
 
     plugin_dir = _plugin_dir(
         tmp_path,
-        {
-            "proactive": {"enabled": False, "max_per_group_per_day": 5},
-            "debug"    : {"log_steps": False},
-        },
+        {"proactive": {"enabled": False, "max_per_group_per_day": 5}},
     )
     deployment = {
         "plugins": {
@@ -191,11 +188,11 @@ def test_deployment_config_overrides_the_bundled_behavior_file(tmp_path: Path) -
     assert cfg.proactive.private_user_ids == [12345]
     # 部署配置没写的字段照用文件里的（都不是代码默认值）。
     assert cfg.proactive.max_per_group_per_day == 5
-    assert cfg.debug.log_steps is False
 
 
-def test_old_persona_fields_are_reported_not_silently_used(tmp_path: Path) -> None:
-    logger     = MagicMock()
+def test_old_persona_fields_are_reported_not_silently_used(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     plugin_dir = _plugin_dir(
         tmp_path,
         {
@@ -203,12 +200,12 @@ def test_old_persona_fields_are_reported_not_silently_used(tmp_path: Path) -> No
             "brain_chat" : {"brain_identity": "旧深度人设"},
         },
     )
-    cfg = load_xiaoqing_chat_config(context_config={}, plugin_dir=plugin_dir, logger=logger)
+    cfg = load_xiaoqing_chat_config(context_config={}, plugin_dir=plugin_dir)
 
     assert "旧人设" not in cfg.personality.card.facts("小青")
-    message = logger.warning.call_args.args[0] % logger.warning.call_args.args[1:]
+    (retired,) = logged_events(caplog, "config.persona_keys_retired")
     for key in ("personality.identity", "personality.states", "brain_chat.brain_identity"):
-        assert key in message
+        assert key in str(retired.fields["keys"]).split("+")
 
 
 def test_editing_the_card_takes_effect_on_the_next_message(tmp_path: Path) -> None:
@@ -223,7 +220,6 @@ def test_editing_the_card_takes_effect_on_the_next_message(tmp_path: Path) -> No
             data_dir   = tmp_path / "data",
             config     = {},
             secrets    = {},
-            logger     = MagicMock(),
         )
     )
     first = chat_runtime.load_runtime(context)

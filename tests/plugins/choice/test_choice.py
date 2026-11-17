@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.choice import main as choice
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
@@ -16,11 +19,7 @@ ROOT = REPOSITORY_ROOT
 
 @pytest.fixture
 def context() -> SimpleNamespace:
-    return SimpleNamespace(
-        logger     = MagicMock(),
-        request_id = "test-choice",
-        secrets    = {},
-    )
+    return SimpleNamespace(request_id="test-choice", secrets={})
 
 
 class TestChoicePackageContract:
@@ -200,29 +199,37 @@ class TestFormatChoiceResult:
 class TestChoiceCommand:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("args", ["", "help", "帮助"])
-    async def test_help_is_local(self, args: str, context: SimpleNamespace) -> None:
+    async def test_help_is_local(
+        self, args: str, context: SimpleNamespace, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO)
         result = await choice.handle("choice", args, {}, context)
         assert "随机选择助手" in str(result)
-        context.logger.info.assert_not_called()
+        assert logged_events(caplog) == []
 
     @pytest.mark.asyncio
     async def test_default_choice_uses_original_weighted_pool(
         self,
         context: SimpleNamespace,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         rng                      = MagicMock()
         rng.choices.return_value = ["火锅"]
         rng.choice.return_value  = "🎲"
         monkeypatch.setattr(choice, "_RNG", rng)
+        caplog.set_level(logging.INFO)
 
         result = await choice.handle("choice", "午饭 火锅 火锅 日料", {}, context)
 
         assert "🎲 午饭：火锅" in str(result)
         rng.choices.assert_called_once_with(["火锅", "火锅", "日料"], k=1)
-        logged = "\n".join(str(call) for call in context.logger.mock_calls)
-        assert "午饭" not in logged
-        assert "火锅" not in logged
+        (made,) = logged_events(caplog, "choice.made")
+        assert made.fields["question_length"] == 2
+        assert made.fields["options"] == 3
+        assert made.fields["distinct"] == 2
+        assert "午饭" not in caplog.text
+        assert "火锅" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_non_unique_overdraw_keeps_requested_count(
@@ -271,10 +278,12 @@ class TestChoiceCommand:
         args: str,
         message: str,
         context: SimpleNamespace,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
+        caplog.set_level(logging.INFO)
         result = await choice.handle("choice", args, {}, context)
         assert message in str(result)
-        context.logger.info.assert_not_called()
+        assert logged_events(caplog) == []
 
     @pytest.mark.asyncio
     async def test_unexpected_random_failure_uses_public_error(
@@ -288,5 +297,5 @@ class TestChoiceCommand:
 
         result = await choice.handle("choice", "问题 A B", {}, context)
 
-        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+        assert PUBLIC_ERROR_PREFIX in str(result)
         assert "internal detail" not in str(result)

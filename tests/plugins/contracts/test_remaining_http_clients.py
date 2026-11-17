@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
 import pytest
@@ -220,7 +220,6 @@ async def test_apod_always_uses_pinned_public_fetch_for_configured_url(
             ).config,
             data_dir     = tmp_path,
             http_session = _ExplodingSession(),
-            logger       = MagicMock(),
         )
     )
 

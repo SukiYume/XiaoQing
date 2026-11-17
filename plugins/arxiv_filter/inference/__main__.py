@@ -95,7 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     args   = parser.parse_args(argv)
     _validate_args(parser, args)
     output = None if args.test_positive else _prepare_output(parser, args.output, force=args.force)
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    # 独立的命令行进程，不经过 Core 的 setup_logging；推理模块的进度日志直接打到 stderr。
+    logging.basicConfig(level=logging.INFO)
 
     # 推理后端依赖较重，参数和输出路径检查完才导入。
     from . import runner as inference

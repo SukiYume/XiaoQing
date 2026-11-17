@@ -17,6 +17,7 @@ from core.image_validation import (
     ImageValidationLimits,
     validate_image_bytes,
 )
+from core.log import LogEvent
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -26,7 +27,7 @@ from core.plugin_base import (
     segments,
     text,
 )
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 from core.safe_http import (
     BROWSER_USER_AGENT,
     SafeHttpError,
@@ -36,7 +37,7 @@ from core.safe_http import (
     split_https_url_on_hosts,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 HEADERS = {
     "user-agent": BROWSER_USER_AGENT,
@@ -164,7 +165,7 @@ async def _safe_download_image(
         fetched.body,
     )
     if target is None:
-        context.logger.warning("APOD 图片超过缓存总字节预算")
+        log.warning(LogEvent("image.cache_budget_exceeded"))
     return target
 
 
@@ -228,7 +229,7 @@ def _find_image_url(
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _extract_title(soup: BeautifulSoup | Tag, context: PluginContextProtocol) -> str:
+def _extract_title(soup: BeautifulSoup | Tag) -> str:
     """按 APOD 页面结构、通用 ``center``、HTML 标题依次提取标题。"""
     try:
         root = _content_root(soup)
@@ -253,7 +254,7 @@ def _extract_title(soup: BeautifulSoup | Tag, context: PluginContextProtocol) ->
             return str(soup.title.string).strip()
 
     except Exception as exc:
-        context.logger.debug("APOD title extraction fell back to default: %s", exc)
+        log.debug(LogEvent("title.fallback", error=exc))
 
     return DEFAULT_FALLBACK_TITLE
 
@@ -278,12 +279,7 @@ def get_explanation(
                 return _explanation_text(paragraph)
         return NO_EXPLANATION_TEXT
     except (AttributeError, IndexError) as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "apod.parse_explanation",
-        )
+        log_public_error(context, exc, component="apod.parse_explanation")
         return EXPLANATION_UNAVAILABLE
 
 
@@ -338,13 +334,13 @@ async def _render_image(
 ) -> Segments:
     """下载并校验图片；图片增强失败时保留标题、说明和原链接。"""
 
-    context.logger.info("发现图片: %s", image_url)
+    log.info(LogEvent("image.found", url=image_url))
     await run_sync(images_dir.mkdir, parents=True, exist_ok=True)
     try:
         image_path = await _safe_download_image(image_url, images_dir, context)
     except (SafeHttpError, TimeoutError, OSError, ValueError) as exc:
         # APOD 正文已经可用时，图片只是可选增强，不能把整条命令升级为内部错误。
-        context.logger.warning("APOD 图片下载或校验失败: %s", exc)
+        log.warning(LogEvent("image.download_failed", error=exc))
         image_path = None
     if image_path is None:
         return segments(
@@ -383,7 +379,7 @@ def _render_video(
     if source is None:
         return segments(f"[视频无法获取链接]\n\n{title}\n\n{explanation}\n\n原网址: {page_url}")
     video_url = _require_https_display_url(urljoin(base_url, source))
-    logger.info("发现 %s 视频: %s", element.name, video_url)
+    log.info(LogEvent("video.found", tag=element.name, url=video_url))
     return segments(f"{video_url}\n\n{title}\n\n{explanation}")
 
 
@@ -401,7 +397,7 @@ async def _render_page(
     root = _content_root(soup)
     if root is soup and soup.find("main") is not None:
         return segments(f"今天的 APOD 内容格式不支持，请直接访问: {page_url}")
-    title       = _extract_title(root, context)
+    title       = _extract_title(root)
     explanation = get_explanation(root, context) + "\n\n" + _page_details(root, page_url)
     media       = root.select_one(".media-detail-hero__media")
     if root is not soup and media is None:
@@ -458,7 +454,7 @@ async def handle(
             )
             return segments(f"未知命令: {visible_command}\n输入 /apod help 查看帮助")
 
-        logger.info("开始获取 APOD...")
+        log.debug(LogEvent("fetch.start"))
 
         # 配置只决定入口与额外域名；每次重定向仍由 safe_http 重新校验。
         configured_url = (
@@ -477,7 +473,7 @@ async def handle(
             allow_transparent_proxy_fake_dns = _allow_transparent_proxy_fake_dns(page_url),
         )
         if response is None or not response.body:
-            logger.error("APOD 页面获取失败")
+            log.warning(LogEvent("page.fetch_failed"))
             return segments("❌ 获取失败: 网络错误")
 
         encoding = (
@@ -496,10 +492,10 @@ async def handle(
         )
 
     except UnsafeUrlError as exc:
-        logger.warning("APOD 请求被网络安全策略拒绝: %s", exc)
+        log.warning(LogEvent("request.unsafe_url", error=exc))
         return segments("❌ APOD 网络安全检查失败，请检查 DNS、代理或 allowed_hosts 配置")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="apod.handle")
+        return public_error_response(context, exc, component="apod.handle")
 
 
 _HELP_TEXT = """

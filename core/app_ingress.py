@@ -32,6 +32,7 @@ from .lifecycle import (
 from .lifecycle import (
     unwrap_owned_failure as _unwrap_owned_failure,
 )
+from .log import LogEvent
 from .metrics import MetricsCollector
 from .onebot import (
     OneBotWsClient,
@@ -293,11 +294,7 @@ class AppIngressMixin:
             self.inbound_manager = None
             if all(current is not pending for pending in self._inbound_cleanup_pending):
                 self._inbound_cleanup_pending.append(current)
-            logger.error(
-                "Previous inbound listener is not restarted: the published configuration "
-                "no longer declares it, so it has no credentials. Fix the inbound settings "
-                "and reload to start a listener again."
-            )
+            logger.error(LogEvent("inbound.restart.skipped", reason_code="not_declared"))
             return
         await self._restore_inbound_manager(
             current,
@@ -334,11 +331,8 @@ class AppIngressMixin:
             await self._rollback_inbound_manager(current, candidate_error, deferred_cancellation)
         if token and self.inbound_manager is current:
             logger.error(
-                "New inbound listener could not start (%s: %s); the previous listener keeps "
-                "receiving at its old address with the current credentials. Fix the inbound "
-                "settings and reload to switch.",
-                type(candidate_error).__name__,
-                candidate_error,
+                LogEvent("inbound.restart.candidate_failed"),
+                exc_info=candidate_error,
             )
 
     async def _reconcile_inbound_manager_impl(
@@ -460,7 +454,7 @@ class AppIngressMixin:
                 self._inbound_cleanup_pending.append(manager)
             if self._lifecycle_state is _AppLifecycleState.STARTING:
                 self._inbound_cleanup_quarantine[id(manager)] = cleanup_error
-            logger.exception("Failed to clean an inbound candidate", exc_info=exc)
+            logger.exception(LogEvent("inbound.candidate.cleanup_failed"), exc_info=exc)
             return cast(BaseException, cleanup_error)
         self._inbound_cleanup_quarantine.pop(id(manager), None)
         self._inbound_cleanup_pending = [

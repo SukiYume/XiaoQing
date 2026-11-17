@@ -77,7 +77,6 @@ async def test_one_recall_per_turn_is_shared_by_planning_and_drafting(tmp_path) 
     memory        = _CountingMemory({"blocks": {"speaker": speaker_block}})
     runtime = SimpleNamespace(cfg=XiaoQingChatConfig())
     context = SimpleNamespace(
-        logger=SimpleNamespace(info=lambda *a, **k: None),
         capabilities=SimpleNamespace(memory=memory),
         data_dir=tmp_path,
     )

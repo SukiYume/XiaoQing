@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from core.durable_fanout import load_pending
 from plugins.chime import main as chime
+from tests.helpers.assertions import logged_events
 from tests.helpers.filesystem_faults import fail_replace_onto
 from tests.helpers.http import AiohttpResponse, QueuedAiohttpSession, aiohttp_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -26,7 +29,6 @@ def chime_context(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         data_dir     = data_dir,
         http_session = MagicMock(),
-        logger       = MagicMock(),
         request_id   = "test-chime",
     )
 
@@ -164,35 +166,34 @@ class TestChimePluginJson:
 class TestChimeParsingAndHistory:
     def test_parse_skips_invalid_records_without_logging_raw_name(
         self,
-        chime_context: SimpleNamespace,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         malicious_name       = "FRB-BAD\nSECRET"
         data                 = _payload()
         data[malicious_name] = _payload("FRB-BAD")["FRB-BAD"]
 
-        parsed = chime.parse_frb_data(data, chime_context)
+        with caplog.at_level(logging.DEBUG):
+            parsed = chime.parse_frb_data(data)
 
         assert [item.name for item in parsed] == ["FRB20260714A"]
-        logged = "\n".join(str(call) for call in chime_context.logger.mock_calls)
-        assert malicious_name not in logged
+        [skipped] = logged_events(caplog, "catalog.entries_invalid")
+        assert skipped.fields["invalid_count"] == 1
+        assert "SECRET" not in caplog.text
 
-    def test_parse_rejects_names_that_collide_after_normalization(
-        self,
-        chime_context: SimpleNamespace,
-    ) -> None:
+    def test_parse_rejects_names_that_collide_after_normalization(self) -> None:
         data = _payload("FRB20260714A")
         data.update(_payload("frb20260714a"))
 
-        assert chime.parse_frb_data(data, chime_context) == []
+        assert chime.parse_frb_data(data) == []
 
-    def test_parse_rejects_an_oversized_catalog(self, chime_context: SimpleNamespace) -> None:
+    def test_parse_rejects_an_oversized_catalog(self) -> None:
         catalog: dict[str, dict] = {}
         for index in range(5_000):
             catalog.update(_payload(f"FRB{index:05d}"))
-        assert len(chime.parse_frb_data(catalog, chime_context)) == 5_000
+        assert len(chime.parse_frb_data(catalog)) == 5_000
 
         catalog.update(_payload("FRB05000"))
-        assert chime.parse_frb_data(catalog, chime_context) == []
+        assert chime.parse_frb_data(catalog) == []
 
     def test_missing_history_is_empty_and_valid_history_round_trips(
         self,
@@ -247,10 +248,7 @@ class TestChimeParsingAndHistory:
         with pytest.raises(chime.ChimeHistoryError):
             chime.load_history(chime_context)
 
-    def test_find_updates_uses_chronology_and_merge_never_regresses(
-        self,
-        chime_context: SimpleNamespace,
-    ) -> None:
+    def test_find_updates_uses_chronology_and_merge_never_regresses(self) -> None:
         old = {
             "FRB-A"      : "2026-07-14T00:00:00",
             "FRB-B"      : "2026-07-14T00:00:00",
@@ -262,7 +260,7 @@ class TestChimeParsingAndHistory:
             _frb("FRB-NEW", "2026-07-14T12:00:00"),
         ]
 
-        new_repeaters, new_pulses = chime.find_updates(current, old, chime_context)
+        new_repeaters, new_pulses = chime.find_updates(current, old)
         merged = chime.merge_history(old, current)
 
         assert [item.name for item in new_repeaters] == ["FRB-NEW"]
@@ -274,14 +272,11 @@ class TestChimeParsingAndHistory:
             "FRB-NEW"    : "2026-07-14T12:00:00",
         }
 
-    def test_equivalent_timestamp_forms_do_not_trigger_an_update(
-        self,
-        chime_context: SimpleNamespace,
-    ) -> None:
+    def test_equivalent_timestamp_forms_do_not_trigger_an_update(self) -> None:
         old     = {"FRB-A": "2026-07-14 00:00:00"}
         current = [_frb("FRB-A", "2026-07-14T00:00:00Z")]
 
-        assert chime.find_updates(current, old, chime_context) == ([], [])
+        assert chime.find_updates(current, old) == ([], [])
         assert chime.merge_history(old, current) == old
 
     def test_merge_rejects_an_invalid_model(self) -> None:
@@ -313,12 +308,23 @@ async def test_fetch_rejects_non_object_json(chime_context: SimpleNamespace) -> 
 
 
 @pytest.mark.asyncio
-async def test_fetch_timeout_is_a_normal_unavailable_result(
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError(), aiohttp.ClientConnectionError("down")],
+    ids=["timeout", "network"],
+)
+async def test_fetch_upstream_failure_is_a_normal_unavailable_result(
     chime_context: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
 ) -> None:
-    chime_context.http_session = MagicMock(request=MagicMock(side_effect=TimeoutError))
+    chime_context.http_session = MagicMock(request=MagicMock(side_effect=failure))
 
-    assert await chime.fetch_chime_repeaters(chime_context) is None
+    with caplog.at_level(logging.WARNING):
+        assert await chime.fetch_chime_repeaters(chime_context) is None
+    # 上游超时或网络故障是已处理的降级：只有 WARNING，没有 public_error。
+    assert caplog.records
+    assert all(record.levelno == logging.WARNING for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -545,16 +551,19 @@ async def test_scheduled_chime_commits_history_only_after_delivery(
 async def test_scheduled_chime_uses_at_most_once_policy_for_unknown_delivery(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     chime_context.default_groups = lambda: [123]
     chime_context.send_action = AsyncMock(return_value=None)
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
 
-    await chime.scheduled_check(chime_context)
+    with caplog.at_level(logging.WARNING):
+        await chime.scheduled_check(chime_context)
 
     assert _read_history(chime_context) == {"FRB20260714A": "2026-07-14T00:00:00"}
     assert load_pending(chime_context.data_dir / "chime_delivery.json") is None
-    assert any("at-most-once" in str(call) for call in chime_context.logger.warning.call_args_list)
+    [unknown] = logged_events(caplog, "target.delivery_unknown")
+    assert unknown.fields["policy"] == "at-most-once"
 
 
 @pytest.mark.asyncio
@@ -611,13 +620,15 @@ async def test_scheduled_unavailable_or_invalid_catalog_stops_before_history(
     payload: object,
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # 历史文件是坏的：真去读它会在日志里留下错误记录。
     _history_path(chime_context).write_text("{broken", encoding="utf-8")
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=payload))
 
-    assert await chime.scheduled_check(chime_context) == []
-    chime_context.logger.error.assert_not_called()
+    with caplog.at_level(logging.DEBUG):
+        assert await chime.scheduled_check(chime_context) == []
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 @pytest.mark.asyncio
@@ -647,6 +658,7 @@ async def test_delivery_ack_persistence_failure_stops_fanout(
 @pytest.mark.asyncio
 async def test_delivery_exception_retains_target_without_logging_details(
     chime_context: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     secret                       = "must-not-appear"
     chime_context.default_groups = lambda: [101]
@@ -660,11 +672,13 @@ async def test_delivery_exception_retains_target_without_logging_details(
         commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
 
-    assert await chime._deliver_pending(chime_context, pending) is False
+    with caplog.at_level(logging.DEBUG):
+        assert await chime._deliver_pending(chime_context, pending) is False
     persisted = load_pending(path)
     assert persisted is not None
     assert persisted.delivered == set()
-    assert secret not in "\n".join(str(call) for call in chime_context.logger.mock_calls)
+    assert logged_events(caplog, "target.send_failed")
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

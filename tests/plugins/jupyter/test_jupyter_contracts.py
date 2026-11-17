@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.delivery import CommandOutcome
 from core.session import Session
 from plugins.jupyter import jupyter_manager as manager_module
 from plugins.jupyter import main as jupyter
@@ -431,7 +432,8 @@ async def test_top_level_handle_dependency_and_input_errors(
     monkeypatch.setattr(manager_module, "KernelManager", kernel_backend)
     assert "timeout" in _text(await jupyter.handle("jupyter", "-t nope", {}, context))
     assert "未知内核操作" in _text(await jupyter.handle("jupyter_kernel", "destroy", {}, context))
-    assert "处理请求失败" in _text(await jupyter.handle("jupyter", None, {}, context))
+    unexpected = await jupyter.handle("jupyter", None, {}, context)
+    assert getattr(unexpected, "command_outcome", None) == CommandOutcome("error")
 
 
 @pytest.mark.asyncio
@@ -453,16 +455,15 @@ async def test_shutdown_skips_missing_dependency_and_contains_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     kernel_backend: KernelBackend,
 ) -> None:
-    context = ReplContext(tmp_path)
     _remove_optional_dependency(monkeypatch)
-    assert await jupyter.shutdown(context) is None
+    assert await jupyter.shutdown() is None
     assert kernel_backend.kernels == []
 
     monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", True)
     monkeypatch.setattr(manager_module, "KernelManager", kernel_backend)
     JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
     kernel_backend.kernels[0].shutdown_fails = "private shutdown detail"
-    assert await jupyter.shutdown(context) is None
+    assert await jupyter.shutdown() is None
     assert kernel_backend.kernels[0].shutdown_calls == 1
 
 
@@ -473,7 +474,7 @@ async def test_shutdown_success_cleans_up_registered_kernels_once(
 ) -> None:
     JupyterKernelManager.get_instance(tmp_path, "user:1:group:2").start_kernel()
 
-    await jupyter.shutdown(ReplContext(tmp_path))
+    await jupyter.shutdown()
 
     kernel = kernel_backend.kernels[0]
     assert kernel.shutdown_calls == 1

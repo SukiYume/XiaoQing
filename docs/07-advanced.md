@@ -258,7 +258,7 @@ results = await gather_bounded(
 ```
 
 后台队列、HTTP 连接池、缓存、文件读取和输出均应设置容量或字节预算。
-过载场景返回插件公开错误，并保留 request ID。
+插件执行门拒绝或超时时，Core 回复是哪种状态并带上 request ID，例如 `⚠️ 插件繁忙，请稍后重试（request_id：3f9a1c2e）`；状态还有“执行超时”“正在重载或已卸载”“当前不可用”，会话中的插件写作“会话插件”。
 
 ---
 
@@ -307,8 +307,8 @@ SQLite 插件推荐：
 | 后台任务 | 状态机、取消、进程树回收和重启恢复 |
 | 生命周期 | 创建者回收资源，应用逆序关闭 |
 
-插件日志记录业务标识、阶段、上游状态和 request ID。
-用户回复使用稳定公开错误码。
+插件日志记录业务标识、阶段和上游状态，Core 给每行附上 request ID。
+未预期的异常经公开错误出口回复一行说明：原因（说明重试有没有用）、异常类型、出错位置和 request ID，异常消息不展示，见 [插件开发指南的错误处理](03-plugin-development.md#-错误处理)。
 
 ---
 
@@ -316,13 +316,24 @@ SQLite 插件推荐：
 
 ### DEBUG 日志
 
+`level` 设成 `DEBUG` 时，Core、插件和脚本的 DEBUG 日志都会写出，第三方库仍是 `WARNING`：
+
 ```json
 {
-  "log_level": "DEBUG",
-  "log_to_console": true,
-  "log_to_file": true
+  "logging": {"level": "DEBUG"}
 }
 ```
+
+只看某个模块、某个插件或某个第三方库时保持 `level`，在 `levels` 里按 logger 名单独打开：
+
+```json
+{
+  "logging": {"level": "INFO", "levels": {"plugins.pendo": "DEBUG", "websockets": "DEBUG"}}
+}
+```
+
+第三方库的行保留库代码里的消息模板，参数按字段规则换成数字、日期、异常类型名、`[N items]` 或长度加指纹；库代码自己拼好、不带参数的消息原样写出。
+修改后重启主进程，级别规则和行格式见 [配置详解的日志配置](06-configuration.md#️-日志配置)。
 
 ### 定点测试
 

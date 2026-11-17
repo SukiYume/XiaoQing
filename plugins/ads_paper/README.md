@@ -94,7 +94,7 @@ JSON 使用原子写入。某个数据文件解析异常时，插件保留源文
 1. 使用 `/paper search "fast radio burst"` 验证 ADS Token 与网络。
 2. 使用 `/paper cite 2401.12345` 验证 ID 解析与 BibTeX。
 3. 使用 `/paper summarize 2401.12345` 查看当前摘要 route。
-4. 检查日志中的 ADS 状态码、route profile、存储摘要和 request ID。
+4. 查看日志：ADS 的 HTTP 状态码在 `bibtex.fetch_failed` 的 `status` 或 `public_error` 的 `error.status` 里，route 与 profile 在 Core 的 `ai.request.settings`（DEBUG 级）和 `ai.route.fallback` 里，数据文件损坏时 `storage.corrupt` 带内容摘要；同一条命令的日志共用一个 request ID。
 5. 对 `.corrupt-*` 文件执行人工核验与数据恢复。
 
 ---

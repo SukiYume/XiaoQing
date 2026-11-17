@@ -7,19 +7,23 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Any
 
+from core.log import LogEvent
+
 from ..config.config import PersonalityConfig
 from ..llm.llm_config import LLMCallConfig
-from ..logging_utils import log_step
 from ..memory.memory import MemoryStore, StoredMessage
 from ..store_base import StoreBase
 from .bw_expression_learner import learn_from_messages, upsert_learned
 from .bw_expression_store import ExpressionStore
 from .bw_jargon_miner import mine_jargon
 from .bw_jargon_store import JargonStore
+
+log = logging.getLogger(__name__)
 
 
 class MessageRecorder(StoreBase):
@@ -151,7 +155,7 @@ async def extract_and_learn(
     """抽取一个冻结的消息窗口，并把表达、黑话和水位作为同轮结果推进。"""
 
     def step(name: str, fields: dict[str, Any] | None = None) -> None:
-        log_step(context, None, chat_id=chat_id, step=name, fields=fields)
+        log.info(LogEvent(name, chat_id=chat_id, **(fields or {})))
 
     t0 = time.monotonic()
     step("bw.learn.start")

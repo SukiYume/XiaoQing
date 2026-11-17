@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import tests.helpers.app_test_support as _app_support
 import tests.helpers.onebot_test_support as _fixture_support
+from core.log import LogEvent
 from core.onebot import _CONNECT_SIGNATURE_CACHE, _get_connect_signature
+from tests.helpers.app_test_support import LoggedLines
+from tests.helpers.assertions import logged_events
 from tests.helpers.onebot_test_support import (
     CLEANUP_INTERVAL_SECONDS,
     ConnectContext,
@@ -21,10 +27,98 @@ from tests.helpers.onebot_test_support import (
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
+restore_logging           = _app_support.restore_logging
+logged_lines              = _app_support.logged_lines
+
+
+class _FrameSocket:
+    """依次交出给定帧、然后正常结束的连接。"""
+
+    def __init__(self, *frames: str) -> None:
+        self._frames = iter(frames)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._frames)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
-async def test_connected_log_redacts_websocket_query_and_fragment(caplog):
+async def test_received_frames_are_logged_as_metadata_only(caplog):
+    canary  = "FRAME-CANARY-5e1a"
+    message = {
+        "post_type"   : "message",
+        "message_type": "group",
+        "group_id"    : 67890,
+        "message"     : [{"type": "text", "data": {"text": canary}}],
+    }
+    client = OneBotWsClient("ws://example.test/socket", "")
+
+    with caplog.at_level("DEBUG", logger="core.onebot"):
+        await client._listen(_FrameSocket(json.dumps(message), "not json"), AsyncMock())
+
+    (received,) = logged_events(caplog, "ws.event.received")
+    assert received.fields == {
+        "post_type"   : "message",
+        "message_type": "group",
+        "group_id"    : 67890,
+        "message_kind": "list",
+        "message_len" : 1,
+    }
+    assert len(logged_events(caplog, "ws.frame.non_json")) == 1
+    assert canary not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_each_received_event_keeps_its_own_id_through_a_handler_failure(
+    logged_lines: LoggedLines,
+):
+    logging.getLogger("core.onebot").setLevel(logging.DEBUG)
+    probe_log          = logging.getLogger("plugins.probe")
+    all_handled        = asyncio.Event()
+    handled: list[str] = []
+
+    class HandlerFatal(BaseException):
+        pass
+
+    async def handler(event: dict[str, Any]) -> None:
+        probe_log.info(LogEvent("probe.handled", label=event["label"]))
+        handled.append(event["label"])
+        if len(handled) == 3:
+            all_handled.set()
+        if event["label"] == "fatal":
+            raise HandlerFatal
+        raise RuntimeError("handler failed")
+
+    frames = [
+        # 没有发送者：在收到它的这一步里直接处理。
+        {"post_type": "notice", "label": "notice"},
+        # 同一发送者的两条：由同一个队列 drainer 依次处理。
+        {"post_type": "message", "user_id": 1, "label": "failed"},
+        {"post_type": "message", "user_id": 1, "label": "fatal"},
+    ]
+    client = OneBotWsClient("ws://example.test/socket", "")
+    await client._listen(_FrameSocket(*(json.dumps(frame) for frame in frames)), handler)
+    await asyncio.wait_for(all_handled.wait(), 5)
+    await client.stop()
+
+    handled_ids = logged_lines.request_ids_of("probe.handled")
+    assert logged_lines.request_ids_of("ws.event.received") == handled_ids
+    # 处理器抛出的异常记在处理它的那个事件的 id 下（ws.handler.failed / ws.handler.fatal）。
+    assert logged_lines.request_ids_of("ws.handler.") == handled_ids
+    assert len(set(handled_ids)) == len(frames)
+    assert "-" not in handled_ids
+
+
+@pytest.mark.asyncio
+async def test_connected_log_does_not_expose_the_websocket_url(caplog):
     client = OneBotWsClient(
         "ws://example.test/socket?access_token=super-secret#private-fragment",
         "",
@@ -33,9 +127,10 @@ async def test_connected_log_redacts_websocket_query_and_fragment(caplog):
     with caplog.at_level("INFO"):
         await client._listen(EndingSocket(), AsyncMock())
 
-    assert "ws://example.test/socket?<redacted>#<redacted>" in caplog.text
-    assert "super-secret" not in caplog.text
-    assert "private-fragment" not in caplog.text
+    (connected,) = logged_events(caplog, "ws.connected")
+    assert connected.fields["failures"] == 0
+    for hidden in ("example.test", "super-secret", "private-fragment"):
+        assert hidden not in caplog.text
 
 
 class TestOneBotWebSocketConfiguration:

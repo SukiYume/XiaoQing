@@ -241,9 +241,7 @@ def session_context(db, tmp_path):
     async def end_session() -> None:
         ended.append(True)
 
-    with pendo_service_context(
-        db, tmp_path, "test.pendo.catch_up", end_session=end_session, ended=ended
-    ) as context:
+    with pendo_service_context(db, tmp_path, end_session=end_session, ended=ended) as context:
         yield context
 
 

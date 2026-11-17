@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -179,8 +178,7 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             config  = config,
             principal=PluginPrincipal(kind="user", user_id=1, group_id=10, group_role="admin"),
             capabilities=PluginCapabilities(ai=provider_test_ai()),
-            logger     = MagicMock(),
-            request_id = "provider-a",
+            request_id="provider-a",
         )
     )
     context_b = with_settings_reader(
@@ -189,8 +187,7 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             config  = config,
             principal=PluginPrincipal(kind="user", user_id=2, group_id=20, group_role="owner"),
             capabilities=PluginCapabilities(ai=provider_test_ai()),
-            logger     = MagicMock(),
-            request_id = "provider-b",
+            request_id="provider-b",
         )
     )
 

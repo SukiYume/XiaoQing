@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -10,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 
 from ..llm.gateway import (
     LLMError,
@@ -18,14 +18,13 @@ from ..llm.gateway import (
     extract_response_content,
 )
 from ..llm.llm_config import LLMCallConfig
-from ..logging_utils import redacted_value, sanitize_log_fields
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_array, parse_first_json_object
 from .bw_jargon_store import JargonRecord, JargonStore
 from .expr_utils import render_dialogue
 
-_logger = logging.getLogger("plugin.xiaoqing_chat")
+log = logging.getLogger(__name__)
 
 _EXTRACT_PROMPT = """你是黑话/缩写挖掘器。你会从对话里抽取可能的黑话、缩写、简称、专有词。
 
@@ -75,33 +74,6 @@ _HEDGED_MEANING_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# 脱敏审计
-# ---------------------------------------------------------------------------
-
-
-def _log_jargon_step(
-    step: str,
-    *,
-    chat_id: str,
-    fields: dict[str, Any] | None = None,
-    warning: bool                 = False,
-) -> None:
-    payload = {"step": step, "chat_id": redacted_value(chat_id)}
-    if fields:
-        payload.update(sanitize_log_fields(fields))
-    try:
-        message = "xiaoqing_chat step=%s"
-        encoded = json.dumps(payload, ensure_ascii=False)
-        if warning:
-            _logger.warning(message, encoded)
-        else:
-            _logger.info(message, encoded)
-    except Exception:
-        # 审计日志不能反向中断黑话学习任务。
-        return
-
-
-# ---------------------------------------------------------------------------
 # 抽取、推断与持久化
 # ---------------------------------------------------------------------------
 
@@ -112,9 +84,7 @@ async def _extract_candidates(
     """让模型从对话里挑出疑似黑话；调用失败时返回 None。"""
 
     t0 = time.monotonic()
-    _log_jargon_step(
-        "jargon.extract.start", chat_id=chat_id, fields={"model": secrets.get("model", "")}
-    )
+    log.info(LogEvent("jargon.extract.start", chat_id=chat_id, model=secrets.get("model", "")))
     try:
         resp, _ = await chat_completions_raw_with_profile(
             route   = "reasoning",
@@ -123,18 +93,23 @@ async def _extract_candidates(
             **llm.as_kwargs(),
         )
     except LLMError as exc:
-        _log_jargon_step(
-            "jargon.extract.fail",
-            chat_id=chat_id,
-            fields={"error_type": type(exc).__name__, "elapsed_s": round(time.monotonic() - t0, 3)},
-            warning=True,
+        log.warning(
+            LogEvent(
+                "jargon.extract.fail",
+                chat_id   = chat_id,
+                error     = exc,
+                elapsed_s = round(time.monotonic() - t0, 3),
+            )
         )
         return None
     candidates = parse_first_json_array(extract_response_content(resp))
-    _log_jargon_step(
-        "jargon.extract.done",
-        chat_id = chat_id,
-        fields  = {"candidates": len(candidates), "elapsed_s": round(time.monotonic() - t0, 3)},
+    log.info(
+        LogEvent(
+            "jargon.extract.done",
+            chat_id    = chat_id,
+            candidates = len(candidates),
+            elapsed_s  = round(time.monotonic() - t0, 3),
+        )
     )
     return candidates
 
@@ -266,15 +241,14 @@ async def _infer_pending_meanings(
                 **llm.as_kwargs(),
             )
         except LLMError as exc:
-            _log_jargon_step(
-                "jargon.infer.fail",
-                chat_id = chat_id,
-                fields  = {
-                    "term"      : rec.content,
-                    "error_type": type(exc).__name__,
-                    "elapsed_s" : round(time.monotonic() - t0, 3),
-                },
-                warning=True,
+            log.warning(
+                LogEvent(
+                    "jargon.infer.fail",
+                    chat_id   = chat_id,
+                    term      = rec.content,
+                    error     = exc,
+                    elapsed_s = round(time.monotonic() - t0, 3),
+                )
             )
             continue
         payload = parse_first_json_object(extract_response_content(resp)) or {}
@@ -291,16 +265,16 @@ async def _infer_pending_meanings(
             and len(support) >= _MIN_INFER_CONTEXTS
             and _HEDGED_MEANING_RE.search(meaning) is None
         )
-        _log_jargon_step(
-            "jargon.infer.done",
-            chat_id = chat_id,
-            fields  = {
-                "term"     : rec.content,
-                "contexts" : len(contexts),
-                "support"  : len(support),
-                "confirmed": confirmed,
-                "elapsed_s": round(time.monotonic() - t0, 3),
-            },
+        log.info(
+            LogEvent(
+                "jargon.infer.done",
+                chat_id   = chat_id,
+                term      = rec.content,
+                contexts  = len(contexts),
+                support   = len(support),
+                confirmed = confirmed,
+                elapsed_s = round(time.monotonic() - t0, 3),
+            )
         )
         if confirmed:
             rec.meaning   = meaning

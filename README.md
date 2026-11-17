@@ -48,7 +48,7 @@ XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人�
 | 后台任务 | 插件通过主动发送能力回传长任务的文字、图片和文件结果 |
 | 定时任务 | Manifest 声明 cron、投递模式与群目标，Core 统一调度、校验和发送 |
 | 配置管理 | 配置快照、敏感配置保护、文件监视和运行时重载 |
-| 运行观测 | 日志、请求 ID、插件错误码和 `/metrics` 指标 |
+| 运行观测 | 日志、请求 ID、说明原因和出错位置的插件错误回复，以及 `/metrics` 指标 |
 
 架构与消息流详见 [系统架构](docs/02-architecture.md) 和 [消息处理流程](docs/08-message-flow.md)。
 
@@ -94,7 +94,7 @@ cp config/secrets.json.example config/secrets.json
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
-  "log_level": "INFO",
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5},
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -231,7 +231,7 @@ XiaoQing/
 - `config/config.json`：OneBot 地址、命令前缀、日志、AI 模型、插件设置和执行限制。
 - `config/secrets.json`：Inbound token、管理员 QQ、AI provider 密钥和第三方服务凭据。
 
-普通配置出错时继续使用最近一次有效的快照（last-known-good）；敏感配置缺失、损坏或与公开配置对不上时，Core 撤销凭据（fail-closed）。运行中修改配置有三种做法：
+启动时 `config.json` 缺失或无效，进程记下原因后以退出码 1 结束；运行中普通配置出错时继续使用最近一次有效的快照（last-known-good）；敏感配置缺失、损坏或与公开配置对不上时，Core 撤销凭据（fail-closed）。运行中修改配置有三种做法：
 
 - 修改已有密钥：管理员私聊发送 `/set_secret <路径> <值>`。
 - 外部工具改写 `secrets.json`：Core 私聊管理员列出变化的字段路径（不含值），核对后发送 `/reload` 应用。
@@ -292,9 +292,9 @@ python scripts/run_full_uat.py
 1. OneBot 进程和 XiaoQing 进程都在运行。
 2. Inbound URL 或主动 WebSocket URI 与双方配置一致。
 3. 上报请求的 Bearer token 与 `inbound_token` 一致，回复通道的 `onebot_token` 正确。
-4. 日志中的连接状态、错误码和 request ID。
+4. `logs/xiaoqing.log` 中的连接状态和 request ID；回复是 `操作失败：…` 时，按它带的 request ID 找对应的 `public_error` 行。
 
-群聊命令没有响应、普通聊天回复少、端口绑定、Pendo Web 登录、AI 调用异常和 secrets 待确认通知的处理，见 [快速开始的常见问题](docs/01-getting-started.md#-常见问题)。
+启动后立即退出、群聊命令没有响应、普通聊天回复少、端口绑定、Pendo Web 登录、AI 调用异常和 secrets 待确认通知的处理，见 [快速开始的常见问题](docs/01-getting-started.md#-常见问题)。
 
 ---
 

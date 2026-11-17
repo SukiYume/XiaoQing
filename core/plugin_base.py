@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 from .atomic_store import AtomicJsonStore, atomic_write_bytes, atomic_write_text
 from .constants import DEFAULT_BOT_NAME, MAX_MESSAGE_TEXT_LENGTH
 from .interfaces import PluginContextProtocol
+from .log import LogEvent
 from .plugin_execution import offload_plugin_sync
 
 # 类型别名
@@ -409,7 +410,7 @@ def load_json(
             AtomicJsonStore(path).read(fallback, raise_on_error=raise_on_error),
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        logger.error("Failed to parse JSON %s: %s", path, exc)
+        logger.error(LogEvent("json.parse_failed", file=path.name, error=exc))
         raise
 
 

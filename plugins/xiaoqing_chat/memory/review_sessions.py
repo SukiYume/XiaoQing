@@ -26,36 +26,34 @@ from core.atomic_store import (
     quarantine_corrupt_file,
 )
 from core.delivery import DeliveryReceipt, send_with_receipt
+from core.log import LogEvent
 from core.plugin_base import build_action, segments, text
 
 from ..store_base import StoreBase, delete_json_artifacts
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _empty_sessions_state() -> dict[str, Any]:
     return {"active": {}, "last_closed": {}}
 
 
-def _quarantine_corrupt_file(path: Path, *, description: str, error: BaseException) -> None:
+def _quarantine_corrupt_file(path: Path, *, document: str, error: BaseException) -> None:
     """保留无法恢复的损坏文件，避免后续正常写入直接覆盖原始证据。"""
 
     target = quarantine_corrupt_file(path)
     if target is None:
         # 外部维护进程可能恰好移除了文件；此时按文件缺失处理即可。
         return
-    _logger.error(
-        "XiaoQing Chat %s 数据损坏且无可用备份，已隔离为 %s error_type=%s",
-        description,
-        target.name,
-        type(error).__name__,
+    log.error(
+        LogEvent("review.store.quarantined", document=document, file=target.name, error=error)
     )
 
 
 def _load_json_document(
     path: Path,
     *,
-    description: str,
+    document: str,
     default_factory: Callable[[], dict[str, Any]],
     normalize: Callable[[Any], tuple[dict[str, Any], bool]],
 ) -> dict[str, Any]:
@@ -82,12 +80,12 @@ def _load_json_document(
             if candidate != path:
                 # 验证结构后直接恢复主文件，保持最后一个有效备份的字节不变。
                 atomic_write_bytes(path, payload)
-                _logger.warning("XiaoQing Chat %s 已从有效备份恢复", description)
+                log.warning(LogEvent("review.store.restored_from_backup", document=document))
             if repaired:
                 store.write(normalized)
             return normalized
         if primary_error is not None:
-            _quarantine_corrupt_file(path, description=description, error=primary_error)
+            _quarantine_corrupt_file(path, document=document, error=primary_error)
         return default
 
 
@@ -249,7 +247,7 @@ class ReviewStore(StoreBase):
                 return self._cache_sessions
             self._cache_sessions = _load_json_document(
                 path,
-                description     = "反思会话",
+                document        = "sessions",
                 default_factory = _empty_sessions_state,
                 normalize       = _normalize_sessions_state,
             )
@@ -278,7 +276,7 @@ class ReviewStore(StoreBase):
             if path:
                 payload = _load_json_document(
                     path,
-                    description     = "反思策略",
+                    document        = "policy",
                     default_factory = dict,
                     normalize       = _normalize_policy_document,
                 )

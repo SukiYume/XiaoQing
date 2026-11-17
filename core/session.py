@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, overload
 
 from .async_keyed_lock import AsyncKeyedLockPool
+from .log import LogEvent
 
 logger                  = logging.getLogger(__name__)
 T                       = TypeVar("T")
@@ -422,7 +423,7 @@ class SessionManager:
                 return None
             if session.is_expired():
                 del self._sessions[key]
-                logger.debug("Session expired and removed: user=%s, group=%s", key[0], key[1])
+                logger.debug(LogEvent("session.expired", user_id=key[0], group_id=key[1]))
                 return None
             return session
 
@@ -477,11 +478,13 @@ class SessionManager:
             async with self._lock:
                 self._sessions[key] = session
             logger.debug(
-                "Session created: user=%s, group=%s, plugin=%s, session_id=%s",
-                key[0],
-                key[1],
-                session.plugin_name,
-                session.session_id,
+                LogEvent(
+                    "session.created",
+                    user_id    = key[0],
+                    group_id   = key[1],
+                    plugin     = session.plugin_name,
+                    session_id = session.session_id,
+                )
             )
             return returned
 
@@ -689,7 +692,7 @@ class SessionManager:
                 if key not in self._sessions:
                     return False
                 del self._sessions[key]
-            logger.debug("Session deleted: user=%s, group=%s", key[0], key[1])
+            logger.debug(LogEvent("session.deleted", user_id=key[0], group_id=key[1]))
             return True
 
     async def exists(self, user_id: int, group_id: int | None) -> bool:
@@ -720,7 +723,7 @@ class SessionManager:
                         expired_keys.append(key)
 
         if expired_keys:
-            logger.debug("Cleaned up %d expired sessions", len(expired_keys))
+            logger.debug(LogEvent("session.cleanup", count=len(expired_keys)))
         return len(expired_keys)
 
     async def count(self) -> int:
@@ -748,9 +751,7 @@ class SessionManager:
 
         if keys_to_remove:
             logger.info(
-                "Cleared %d sessions for plugin '%s'",
-                len(keys_to_remove),
-                normalized_plugin,
+                LogEvent("session.cleared", count=len(keys_to_remove), plugin=normalized_plugin)
             )
         return len(keys_to_remove)
 

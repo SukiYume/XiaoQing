@@ -5,11 +5,12 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .interfaces import DeliveryTarget
+from .log import LogEvent
 from .message import validate_message_segments
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,28 @@ logger = logging.getLogger(__name__)
 DELIVERY_RECEIPT_KEY = "_delivery_receipt"
 SENSITIVE_ACTION_KEY = "_sensitive_action"
 DeliveryCallback     = Callable[[], Awaitable[None] | None]
+
+
+def message_length(message: Any) -> int:
+    """Return the unbounded logical length used by delivery metrics and logs."""
+
+    if isinstance(message, str):
+        return len(message)
+    if not isinstance(message, list):
+        return 0
+    length = 0
+    for segment in message:
+        if not isinstance(segment, Mapping):
+            length += 1
+            continue
+        if segment.get("type") != "text":
+            length += 1
+            continue
+        raw_data = segment.get("data")
+        data     = raw_data if isinstance(raw_data, Mapping) else {}
+        text     = data.get("text", "")
+        length += len(text) if isinstance(text, str) else len(str(text))
+    return length
 
 
 class DeliveryReceipt:
@@ -159,7 +182,7 @@ class DeliveryReceipt:
         except BaseException as exc:
             with self._lock:
                 self._callback_error = exc
-            logger.exception("Delivery receipt callback failed")
+            logger.exception(LogEvent("delivery.receipt_callback.failed"))
         else:
             if is_commit:
                 with self._lock:

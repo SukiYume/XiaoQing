@@ -16,6 +16,8 @@ from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
+from core.log import LogEvent
+
 from ..models.item import get_item_type_value
 from ..utils.currency import currency_label
 from ..utils.error_handlers import error_result, success_result
@@ -28,7 +30,7 @@ from ..utils.time_utils import (
 )
 from ..utils.tokens import shell_tokens
 
-logger                               = logging.getLogger(__name__)
+log                                  = logging.getLogger(__name__)
 _EXPORT_TIMEZONE: ContextVar[tzinfo] = ContextVar(
     "pendo_export_timezone", default=TimezoneHelper.DEFAULT_TZ
 )
@@ -710,7 +712,7 @@ class ExporterService:
         try:
             collection = self.db.get_event_collection(str(collection_id), cache_key[0])
         except Exception as exc:
-            logger.warning("读取导出日程集合失败 error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("export.collection_read_failed", error=exc))
             collection = None
         self._event_collection_cache[cache_key] = collection
         return collection
@@ -855,4 +857,4 @@ class ExporterService:
             )
         except Exception as exc:
             # 审计日志失败不应影响导出主流程
-            logger.warning("记录导出审计日志失败 error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("export.audit_failed", error=exc))

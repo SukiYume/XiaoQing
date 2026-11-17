@@ -5,17 +5,21 @@ AI 对话插件 (Coze API)
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+
 from core.async_keyed_lock import AsyncKeyedLockPool
 from core.atomic_store import AtomicJsonStore, keyed_path_lock
 from core.bounded_http import (
     JSON_MIME_POLICY,
     BodyLimits,
+    BoundedHttpError,
     HttpStatusError,
     JsonLimits,
     aiohttp_request_bounded,
@@ -23,8 +27,11 @@ from core.bounded_http import (
 )
 from core.interfaces import PluginContextProtocol
 from core.lifecycle import DeferredCancellation, await_owned_task
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, run_sync, segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
+
+log = logging.getLogger(__name__)
 
 # ============================================================
 # 常量配置
@@ -101,6 +108,7 @@ def _quota_limit(config: Mapping[str, Any], key: str, default: int) -> int:
 
     value = config.get(key, default)
     if type(value) is not int or not 1 <= value <= MAX_DAILY_QUOTA:
+        log.error(LogEvent("config.invalid", setting=key))
         raise ValueError(f"{key} 必须是 1 到 {MAX_DAILY_QUOTA} 的整数")
     return value
 
@@ -252,21 +260,27 @@ async def _reserve_quota(
     return _QuotaReservation(path, window, actor)
 
 
+def _invalid_config(setting: str, message: str) -> tuple[bool, str]:
+    log.error(LogEvent("config.invalid", setting=setting))
+    return False, message
+
+
 def validate_config(config: Mapping[str, Any]) -> tuple[bool, str | None]:
-    """验证密钥、Bot ID 和可选代理配置。"""
+    """验证密钥、Bot ID 和可选代理配置；不合格时记一条日志，并返回给用户看的说明。"""
 
     if not config:
+        log.warning(LogEvent("config.missing"))
         return False, "插件配置为空，请在 secrets.json 中配置 chat 插件"
 
     if _config_string(config.get("token")) is None:
-        return False, "token 必须是非空、无控制字符的字符串"
+        return _invalid_config("token", "token 必须是非空、无控制字符的字符串")
 
     if _config_string(config.get("bot_id")) is None:
-        return False, "bot_id 必须是非空、无控制字符的字符串"
+        return _invalid_config("bot_id", "bot_id 必须是非空、无控制字符的字符串")
 
     proxy = config.get("proxy", "")
     if _config_string(proxy, allow_empty=True) is None:
-        return False, "proxy 必须是无控制字符的字符串"
+        return _invalid_config("proxy", "proxy 必须是无控制字符的字符串")
 
     return True, None
 
@@ -297,7 +311,7 @@ async def _request_coze_json(
             request_kwargs = request_kwargs,
         )
     except HttpStatusError as exc:
-        context.logger.error("Coze API 返回 HTTP 错误: status=%s", exc.status)
+        log.warning(LogEvent("coze.http_error", status=exc.status))
         return None
 
     payload = parse_bounded_json(response, limits=_COZE_JSON_LIMITS)
@@ -307,7 +321,7 @@ async def _request_coze_json(
     code = payload.get("code", 0)
     if type(code) is not int or code != 0:
         safe_code = code if type(code) is int else "invalid"
-        context.logger.error("Coze API 返回业务错误: code=%s", safe_code)
+        log.warning(LogEvent("coze.business_error", code=safe_code))
         return None
     return payload
 
@@ -398,13 +412,10 @@ async def _cancel_chat(
             ),
             timeout=_CANCEL_TIMEOUT_SECONDS,
         )
+    except (aiohttp.ClientError, TimeoutError, BoundedHttpError) as exc:
+        log.warning(LogEvent("coze.cancel_failed", error=exc))
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chat.coze_cancel",
-        )
+        log_public_error(context, exc, component="chat.coze_cancel")
 
 
 async def _poll_coze_chat(
@@ -439,7 +450,7 @@ async def _poll_coze_chat(
             return None
         next_state = _chat_state(response)
         if next_state is None:
-            context.logger.error("Coze API 轮询响应缺少有效对话状态")
+            log.warning(LogEvent("coze.state_invalid", stage="poll"))
             return None
         chat_id, conversation_id, status = next_state
     return chat_id, conversation_id, status
@@ -471,7 +482,7 @@ async def _fetch_coze_messages(
         return None
     messages = response.get("data")
     if not isinstance(messages, list):
-        context.logger.error("Coze API 消息响应缺少列表数据")
+        log.warning(LogEvent("coze.messages_invalid"))
         return None
     return messages
 
@@ -484,9 +495,8 @@ async def call_coze_api(
 ) -> dict[str, Any] | None:
     """通过 Coze v3 创建对话、轮询完成状态并读取回答消息。"""
 
-    is_valid, error_message = validate_config(config)
+    is_valid, _ = validate_config(config)
     if not is_valid:
-        context.logger.error("Chat 插件配置无效: %s", error_message)
         return None
 
     token  = config["token"]
@@ -515,11 +525,10 @@ async def call_coze_api(
     base_request_kwargs: dict[str, Any] = {"timeout": REQUEST_TIMEOUT}
     if proxy:
         base_request_kwargs["proxy"] = proxy
-        context.logger.debug("使用已配置代理")
+        log.debug(LogEvent("coze.proxy_enabled"))
 
     state: tuple[str, str, str] | None = None
     try:
-        context.logger.info("调用 Coze API v3，查询长度: %d 字符", len(query))
         async with _API_SEMAPHORE:
             deadline = asyncio.get_running_loop().time() + REQUEST_TIMEOUT
             created  = await _request_coze_json_before_deadline(
@@ -535,7 +544,7 @@ async def call_coze_api(
 
             state = _chat_state(created)
             if state is None:
-                context.logger.error("Coze API 创建响应缺少有效对话状态")
+                log.warning(LogEvent("coze.state_invalid", stage="create"))
                 return None
             state = await _poll_coze_chat(
                 context,
@@ -549,7 +558,7 @@ async def call_coze_api(
             chat_id, conversation_id, status = state
 
             if status != "completed":
-                context.logger.error("Coze API 对话未完成: status=%s", status)
+                log.warning(LogEvent("coze.chat_incomplete", status=status))
                 return None
 
             messages = await _fetch_coze_messages(
@@ -562,11 +571,11 @@ async def call_coze_api(
             )
             if messages is None:
                 return None
-            context.logger.info("Coze API 调用成功，响应消息数: %d", len(messages))
+            log.info(LogEvent("coze.done", message_count=len(messages)))
             return {"messages": messages}
 
     except TimeoutError:
-        context.logger.error("Coze API 请求超时 (%ss)", REQUEST_TIMEOUT)
+        log.warning(LogEvent("coze.timeout", timeout_s=REQUEST_TIMEOUT))
         if state is not None and state[2] in _PENDING_CHAT_STATUSES:
             await _cancel_chat(
                 context,
@@ -589,26 +598,24 @@ async def call_coze_api(
                 )
             )
         raise
+    except (aiohttp.ClientError, BoundedHttpError) as exc:
+        log.warning(LogEvent("coze.request_failed", error=exc))
+        return None
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chat.coze_api",
-        )
+        log_public_error(context, exc, component="chat.coze_api")
         return None
 
 
-def extract_answer(data: object, context: PluginContextProtocol) -> str | None:
+def extract_answer(data: object) -> str | None:
     """返回第一条非空文本答案；忽略畸形或非答案消息。"""
 
     if not isinstance(data, Mapping):
-        context.logger.error("API 响应格式错误: expected=mapping actual=%s", type(data).__name__)
+        log.warning(LogEvent("answer.response_invalid", actual_type=type(data).__name__))
         return None
 
     messages = data.get("messages", [])
     if not isinstance(messages, list):
-        context.logger.error("messages 字段格式错误: actual=%s", type(messages).__name__)
+        log.warning(LogEvent("answer.messages_invalid", actual_type=type(messages).__name__))
         return None
 
     for message in messages:
@@ -616,11 +623,11 @@ def extract_answer(data: object, context: PluginContextProtocol) -> str | None:
             continue
         content = message.get("content")
         if isinstance(content, str) and (answer := content.strip()):
-            context.logger.debug("提取到答案，长度: %d 字符", len(answer))
+            log.debug(LogEvent("answer.extracted", answer_length=len(answer)))
             return answer
 
     # 不记录服务端提供的消息类型或正文，避免外部文本注入日志。
-    context.logger.warning("未找到有效文本答案，消息总数: %d", len(messages))
+    log.warning(LogEvent("answer.missing", message_count=len(messages)))
     return None
 
 
@@ -651,7 +658,7 @@ async def _answer_query(
     except ChatQuotaExceeded:
         return segments("❌ 今日 AI 对话额度已用完")
     except ChatQuotaStateError:
-        context.logger.error("Chat quota state is unavailable or invalid")
+        log.error(LogEvent("quota.state_invalid"))
         return segments("❌ 今日 AI 对话额度状态异常，请联系管理员")
 
     try:
@@ -659,7 +666,7 @@ async def _answer_query(
         if data is None:
             return segments("❌ AI 对话失败，请稍后重试")
 
-        answer = extract_answer(data, context)
+        answer = extract_answer(data)
         if answer is None:
             return segments("❌ 未能获取到有效回答")
 
@@ -681,7 +688,6 @@ async def _run_chat_query(
     config   = settings.plugin_secrets("chat")
     is_valid, error_msg = validate_config(config)
     if not is_valid:
-        context.logger.error("Chat 插件配置无效: %s", error_msg)
         return segments(f"❌ 配置错误: {error_msg}")
 
     quota_config = settings.plugin_config("chat")
@@ -697,10 +703,9 @@ async def _run_chat_query(
             DEFAULT_DAILY_GLOBAL_LIMIT,
         )
     except ValueError as exc:
-        context.logger.error("Chat 插件额度配置无效: %s", exc)
         return segments(f"❌ 配置错误: {exc}")
 
-    context.logger.info("Chat query accepted: length=%d 字符", len(query))
+    log.info(LogEvent("query.accepted", query_length=len(query)))
     return await _answer_query(
         query,
         event,
@@ -740,12 +745,7 @@ async def handle(
         return await _run_chat_query(query, event, context)
 
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "chat.handle",
-        )
+        return public_error_response(context, exc, component="chat.handle")
 
 
 async def reply(

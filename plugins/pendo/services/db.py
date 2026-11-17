@@ -15,6 +15,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 from ..core.exceptions import (
     AmbiguousIdentifierException,
@@ -57,7 +59,7 @@ from .db_schema import (
 )
 from .event_collection_mutations import restore_collection_edit, update_collection
 
-logger          = logging.getLogger(__name__)
+log             = logging.getLogger(__name__)
 _CACHE_MISS     = object()
 _SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 # ISO 文本里偏移不统一，全球合法偏移最多差 26 小时；SQL 用日期前缀粗筛时前后各放宽这么多，
@@ -193,7 +195,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self._cache_generation                           = 0
         self._cache_reads                                = threading.local()
 
-        logger.debug("Initializing database at %s", db_path)
+        log.debug(LogEvent("database.init"))
         self._init_database()
 
     # ==================== 连接管理 ====================
@@ -226,11 +228,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             try:
                 conn.close()
             except sqlite3.Error as exc:
-                logger.error(
-                    "Failed to close Pendo SQLite connection thread=%s error_type=%s",
-                    thread_id,
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("connection.close_failed", thread_id=thread_id, error=exc))
                 failures.append(exc)
 
         if hasattr(self._local, "conn"):
@@ -1521,10 +1519,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if item:
                 items.append(item)
         if len(items) < len(rows):
-            logger.warning(
-                "Pendo skipped undecodable items owner=%s skipped=%d",
-                owner_id,
-                len(rows) - len(items),
+            log.warning(
+                LogEvent("items.undecodable", owner_id=owner_id, skipped=len(rows) - len(items))
             )
         return items, len(rows)
 
@@ -2316,10 +2312,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 [*params, timezone_name, timezone_name],
             ).fetchall()
         except Exception as exc:
-            logger.warning(
-                "FTS search failed; falling back to LIKE error_type=%s",
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("search.fts_failed", fallback="like", error=exc))
             return []
         return [str(row[0]) for row in rows]
 
@@ -3753,7 +3746,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             try:
                 data["type"] = ItemType(data["type"])
             except (TypeError, ValueError):
-                logger.warning("Unknown item type while decoding Pendo row")
+                log.warning(LogEvent("row.unknown_item_type"))
                 return None
 
         for field in self._JSON_FIELDS:
@@ -3773,7 +3766,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             try:
                 data["status"] = TaskStatus(raw_status)
             except (TypeError, ValueError):
-                logger.warning("Unknown task status while decoding Pendo row")
+                log.warning(LogEvent("row.unknown_task_status"))
                 return None
 
         item_class    = ITEM_TYPE_CLASS_MAP.get(item_type, Item)
@@ -3782,7 +3775,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         try:
             return item_class(**filtered_data)
         except (TypeError, ValueError):
-            logger.warning("Invalid Pendo row for item type=%s", item_type.value)
+            log.warning(LogEvent("row.invalid", item_type=item_type.value))
             return None
 
     def _refresh_fts(self, item_id: str, conn: sqlite3.Connection | None = None) -> None:

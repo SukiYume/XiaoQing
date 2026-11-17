@@ -5,6 +5,8 @@ import logging
 import sqlite3
 from datetime import date, timedelta
 
+from core.log import LogEvent
+
 from ..utils.constants import WEEKLY_RANKING_REWARDS
 from . import database_clock
 from .database_repository_base import DatabaseRepositorySupport
@@ -17,7 +19,7 @@ from .database_types import (
     WeeklyRankingWinner,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 定时结算领取后的租约：进程中途退出时，超过这个时长其他进程可以重新领取。
 _SCHEDULER_LEASE_SECONDS = 300
@@ -455,10 +457,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
             _log_database_failure("get_group_economy_snapshot", exc)
             return empty_snapshot, unavailable
         if not reconciliation.consistent:
-            logger.warning(
-                "QingPet coin ledger reconciliation mismatch difference=%d",
-                reconciliation.difference,
-            )
+            log.error(LogEvent("ledger.mismatch", difference=reconciliation.difference))
         return snapshot, reconciliation
 
     def get_coins_ranking(self, group_id: int, limit: int = 10) -> list[dict]:

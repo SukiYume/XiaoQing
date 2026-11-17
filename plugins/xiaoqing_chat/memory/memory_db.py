@@ -14,10 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.log import LogEvent
+
 from ..store_base import LockedDirtyStateMixin
 from .vector_store import VectorDoc, VectorStore, write_vector_store_files
 
-_logger                      = logging.getLogger("plugin.xiaoqing_chat")
+log                          = logging.getLogger(__name__)
 _CONFIGURED_KNOWLEDGE_PREFIX = "kb:"
 
 
@@ -71,7 +73,7 @@ class MemoryDB(LockedDirtyStateMixin):
                     dir_path=vdb_dir, name="memory", docs=docs, dim=dim, matrix=mat
                 )
             except Exception as exc:
-                _logger.warning("xiaoqing_chat memory_db save failed: %s", type(exc).__name__)
+                log.warning(LogEvent("memory_db.save_failed", error=exc))
                 return
             with self._lock:
                 if self._dirty_version == save_version:

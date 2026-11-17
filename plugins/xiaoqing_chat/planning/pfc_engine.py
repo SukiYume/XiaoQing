@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.log import LogEvent
+
 from ..config.config import XiaoQingChatConfig
 from ..llm.llm_config import LLMCallConfig
-from ..logging_utils import log_step
 from ..memory import client as memory_client
 from ..memory.memory import (
     MemoryStore,
@@ -22,6 +24,8 @@ from .action_history import ActionHistoryStore
 from .pfc_action_planner import PFCPlan, decide_say_bye, plan_next_action
 from .pfc_goal_analyzer import analyze_goals
 from .pfc_state import PFCConversationState
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -248,30 +252,24 @@ def _planner_kwargs(session: _PFCSession) -> dict[str, Any]:
 
 async def _plan_pfc_action(session: _PFCSession) -> PFCPlan:
     started_at = time.monotonic()
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.plan.start",
-        fields  = {"history_items": len(session.history)},
+    log.info(
+        LogEvent("pfc.plan.start", chat_id=session.chat_id, history_items=len(session.history))
     )
     plan = await plan_next_action(
         goal_list      = session.state.goal_list,
         knowledge_list = session.state.knowledge_list,
         **_planner_kwargs(session),
     )
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.plan.done",
-        fields  = {
-            "elapsed_s"   : round(time.monotonic() - started_at, 3),
-            "action"      : plan.action,
-            "reason"      : plan.reason,
-            "thinking"    : plan.thinking[:100] if plan.thinking else "",
-            "wait_seconds": plan.wait_seconds,
-        },
+    log.info(
+        LogEvent(
+            "pfc.plan.done",
+            chat_id      = session.chat_id,
+            elapsed_s    = round(time.monotonic() - started_at, 3),
+            action       = plan.action,
+            reason       = plan.reason,
+            thinking     = plan.thinking[:100] if plan.thinking else "",
+            wait_seconds = plan.wait_seconds,
+        )
     )
     return plan
 
@@ -294,16 +292,14 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
         state.planner_fail_ts = failures
         if len(failures) >= max(1, threshold):
             state.planner_skip_until = session.now + max(0.0, backoff_seconds)
-            log_step(
-                session.context,
-                session.runtime_cfg,
-                chat_id = session.chat_id,
-                step    = "pfc.plan.backoff",
-                fields  = {
-                    "fails"    : len(failures),
-                    "window_s" : window_seconds,
-                    "backoff_s": backoff_seconds,
-                },
+            log.info(
+                LogEvent(
+                    "pfc.plan.backoff",
+                    chat_id   = session.chat_id,
+                    fails     = len(failures),
+                    window_s  = window_seconds,
+                    backoff_s = backoff_seconds,
+                )
             )
     elif state.planner_fail_ts or state.planner_skip_until:
         state.planner_fail_ts    = []
@@ -319,13 +315,7 @@ def _passive_pfc_result(
     after: str = "",
 ) -> PFCRunResult | None:
     if allow_block and action == "block_and_ignore":
-        log_step(
-            session.context,
-            session.runtime_cfg,
-            chat_id = session.chat_id,
-            step    = "pfc.block",
-            fields  = {"reason": plan.reason},
-        )
+        log.info(LogEvent("pfc.block", chat_id=session.chat_id, reason=plan.reason))
         return PFCRunResult(
             reply  = "",
             action = "wait",
@@ -341,24 +331,12 @@ def _passive_pfc_result(
     }
     if after:
         fields["after"] = after
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.no_reply",
-        fields  = fields,
-    )
+    log.info(LogEvent("pfc.no_reply", chat_id=session.chat_id, **fields))
     return _wait_run_result(plan, action)
 
 
 async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.rethink_goal.start",
-        fields  = {},
-    )
+    log.info(LogEvent("pfc.rethink_goal.start", chat_id=session.chat_id))
     session.state.goal_list = await analyze_goals(
         secrets             = session.secrets,
         bot_name            = session.bot_name,
@@ -368,12 +346,12 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
         action_history_text = session.action_summary,
         llm                 = session.planner_llm,
     )
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.rethink_goal.done",
-        fields  = {"goals": len(session.state.goal_list or [])},
+    log.info(
+        LogEvent(
+            "pfc.rethink_goal.done",
+            chat_id = session.chat_id,
+            goals   = len(session.state.goal_list or []),
+        )
     )
     top_goal                     = session.state.top_goal
     session.planner_goal_context = f"目标: {top_goal}" if top_goal else ""
@@ -381,13 +359,7 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
 
 
 async def _fetch_pfc_knowledge(session: _PFCSession, plan: PFCPlan) -> PFCPlan:
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.fetch_knowledge.start",
-        fields  = {},
-    )
+    log.info(LogEvent("pfc.fetch_knowledge.start", chat_id=session.chat_id))
     items = await memory_client.search(
         session.context,
         session.chat_id,
@@ -401,15 +373,13 @@ async def _fetch_pfc_knowledge(session: _PFCSession, plan: PFCPlan) -> PFCPlan:
     if memory:
         session.state.knowledge_list.append({"text": memory, "ts": time.time()})
         session.state.knowledge_list = session.state.knowledge_list[-10:]
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.fetch_knowledge.done",
-        fields  = {
-            "mem_chars"      : len(memory),
-            "knowledge_items": len(session.state.knowledge_list or []),
-        },
+    log.info(
+        LogEvent(
+            "pfc.fetch_knowledge.done",
+            chat_id         = session.chat_id,
+            mem_chars       = len(memory),
+            knowledge_items = len(session.state.knowledge_list or []),
+        )
     )
     return await _plan_pfc_action(session)
 
@@ -467,12 +437,12 @@ async def _finish_pfc_action(
 
 async def _skipped_planner_result(session: _PFCSession) -> PFCRunResult:
     """规划器连续失败后的冷却期：群聊安静等待，私聊直接回复。"""
-    log_step(
-        session.context,
-        session.runtime_cfg,
-        chat_id = session.chat_id,
-        step    = "pfc.plan.skip",
-        fields  = {"skip_left_s": round(float(session.state.planner_skip_until) - session.now, 2)},
+    log.info(
+        LogEvent(
+            "pfc.plan.skip",
+            chat_id     = session.chat_id,
+            skip_left_s = round(float(session.state.planner_skip_until) - session.now, 2),
+        )
     )
     if not session.is_private:
         return PFCRunResult(reply="", action="wait", reason="planner_skipped", ended=False)
@@ -510,7 +480,7 @@ async def run_pfc_once(
     """
     now = time.time()
     if state.ended:
-        log_step(context, runtime_cfg, chat_id=chat_id, step="pfc.ended", fields={})
+        log.info(LogEvent("pfc.ended", chat_id=chat_id))
         return PFCRunResult(
             reply  = "",
             action = "end_conversation",

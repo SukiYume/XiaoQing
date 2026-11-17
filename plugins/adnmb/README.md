@@ -62,7 +62,7 @@ ADNMB 插件展示 A 岛公开时间线、板块、串、回复和匿名订阅�
 
 1. 使用 `/adnmb -f` 验证 API 连接。
 2. 使用 `/adnmb -t` 验证时间线解析。
-3. 检查日志中的 HTTP 状态、内容类型和图片校验结果。
+3. 查看日志：API 请求失败时回复 `操作失败：…`，日志里对应一条 `public_error`，带失败类别 `category`、异常类型和出错位置（HTTP 错误另有状态码 `error.status`），不带异常消息；图片下载或校验失败记为 `image.download_rejected` / `image.download_failed`，带异常类型和位置；图片源没有返回成功响应时只带图片地址的指纹。
 4. 检查 `data/adnmb/images/` 的写入权限。
 
 ---

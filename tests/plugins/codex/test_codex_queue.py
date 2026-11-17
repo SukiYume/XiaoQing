@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import threading
 from pathlib import Path
@@ -10,7 +11,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import tests.helpers.app_test_support as _app_support
 import tests.helpers.codex_test_support as _fixture_support
+from core.log import log_scope
+from tests.helpers.assertions import logged_events, public_error_reply
 from tests.helpers.codex_test_support import (
     MAX_MESSAGE_TEXT_LENGTH,
     PNG_BYTES,
@@ -34,6 +38,8 @@ from tests.helpers.filesystem_faults import fail_replace_onto
 from tests.helpers.paths import REPOSITORY_ROOT
 
 reset_codex_manager = _fixture_support.reset_codex_manager
+restore_logging     = _app_support.restore_logging
+logged_lines        = _app_support.logged_lines
 
 
 def test_codex_manifest_restricts_every_command_to_admins() -> None:
@@ -104,10 +110,11 @@ def test_danger_full_access_emits_a_startup_warning(
     context                                       = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["sandbox"] = "danger-full-access"
 
-    with caplog.at_level("WARNING", logger="plugins.codex.manager"):
+    with caplog.at_level("WARNING"):
         install_fake_manager(context, FakeRunner())
 
-    assert "sandbox=danger-full-access" in caplog.text
+    [event] = logged_events(caplog, "config.dangerous_sandbox")
+    assert event.fields["sandbox"] == "danger-full-access"
 
 
 def test_default_cwd_is_not_created_before_allowed_root_validation(tmp_path: Path) -> None:
@@ -332,6 +339,34 @@ async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
     sent_text = str(context.actions)
     assert "[codex:aaa #1] 完成" in sent_text
     assert "[codex:aaa #2] 完成" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_worker_logs_each_job_under_the_request_that_queued_it(
+    tmp_path: Path,
+    logged_lines: _app_support.LoggedLines,
+) -> None:
+    context = FakeContext(tmp_path)
+    runner  = FakeRunner()
+    manager = install_fake_manager(context, runner)
+    event   = {"user_id": 1, "group_id": 2}
+
+    async def ask(request_id: str | None, text: str) -> None:
+        asker            = copy.copy(context)
+        asker.request_id = request_id
+        with log_scope(request_id):
+            await codex_main.handle("codex", text, event, asker)
+
+    await ask("req-a", "create aaa")
+    await ask("req-a", "aaa block first")  # worker 在这个请求里第一次启动
+    await wait_until(lambda: runner.started == ["aaa"])
+    await ask("req-b", "aaa second")
+    await ask(None, "aaa third")
+    runner.release.set()
+    await wait_manager_idle(manager)
+
+    assert logged_lines.request_ids_of("job.start") == ["req-a", "req-b", "-"]
+    assert logged_lines.request_ids_of("job.finish") == ["req-a", "req-b", "-"]
 
 
 @pytest.mark.asyncio
@@ -707,7 +742,8 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
     await asyncio.wait_for(wait_manager_idle(manager), timeout=2)
 
     assert job.status == "failed"
-    assert job.result is not None and "RuntimeError" in job.result.final_text
+    assert job.result is not None
+    assert public_error_reply(job.result.final_text)["type_name"] == "TimeoutError"
     assert "spawn timed out" not in job.result.final_text
     assert job.spawn_handoff.is_set() and job.finished_event.is_set()
     assert manager.running == {}

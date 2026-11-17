@@ -16,6 +16,7 @@ from typing import Any
 from core.clock import now_in_configured_timezone
 from core.delivery import DeliveryReceipt, DeliverySegments
 from core.lifecycle import DeferredCancellation, await_owned_task
+from core.log import LogEvent
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -24,7 +25,7 @@ from core.plugin_base import (
     run_sync,
     segments,
 )
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 
 from .codex_summary import schedule_codex_summary_from_filter_result
 from .utils import (
@@ -34,7 +35,7 @@ from .utils import (
     load_plugin_config,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -85,7 +86,7 @@ def _failure(
     """失败结果：记录日志并只向用户展示公开错误文本。"""
 
     return _filter_result(
-        public_error_response(context, exc, logger=logger, component=component),
+        public_error_response(context, exc, component=component),
         succeeded = False,
         outcome   = outcome,
     )
@@ -233,16 +234,15 @@ async def _latest_arxiv_source_date(context: PluginContextProtocol) -> str | Non
     try:
         raw_date = await run_sync(_check_arxiv_update_date)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "arxiv_filter.source_date",
+            component="arxiv_filter.source_date",
         )
         return None
     source_date = _normalize_source_date(raw_date)
     if raw_date is not None and source_date is None:
-        logger.warning("忽略无效的 arXiv 源列表日期")
+        log.warning(LogEvent("source_date.invalid"))
     return source_date
 
 
@@ -253,29 +253,23 @@ def _load_inference(
     global _inference_func
 
     if _inference_func is not None:
-        logger.debug("使用已缓存的推理函数")
+        log.debug(LogEvent("inference.cached"))
         return _inference_func
 
-    logger.info("开始加载推理模块")
+    log.info(LogEvent("inference.loading"))
 
     try:
         from .inference.runner import get_positive_arxiv_today_as_string
 
         _inference_func = get_positive_arxiv_today_as_string
-        logger.info("成功加载推理模块")
+        log.info(LogEvent("inference.loaded"))
         return _inference_func
+    except ImportError as exc:
+        # 缺少可选的推理依赖：功能不可用，用户回复里会提示安装。
+        log.warning(LogEvent("inference.load_failed", missing_dependencies=True, error=exc))
+        return None
     except Exception as exc:
-        if context is not None:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "arxiv_filter.load_inference",
-            )
-        else:
-            logger.error("加载推理模块失败: error_type=%s", type(exc).__name__)
-        if isinstance(exc, ImportError):
-            logger.error("请确保安装了所需依赖: torch, transformers")
+        log_public_error(context, exc, component="arxiv_filter.load_inference")
         return None
 
 
@@ -287,7 +281,7 @@ def init(context: PluginContextProtocol | None = None) -> None:
     _inference_func = None
     _FILTER_CACHE.clear()
     _MODEL_FINGERPRINT_CACHE.clear()
-    logger.info("arXiv Filter 插件已初始化")
+    log.info(LogEvent("plugin.initialized"))
 
 
 # ============================================================
@@ -325,7 +319,7 @@ async def handle(
         )
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="arxiv_filter.handle")
+        return public_error_response(context, exc, component="arxiv_filter.handle")
 
 
 async def shutdown(context: PluginContextProtocol) -> None:
@@ -395,7 +389,6 @@ async def _run_filter(
     # 加载推理函数
     inference = _load_inference(context=context)
     if inference is None:
-        logger.error("加载推理模块失败")
         return _filter_result(
             '⚠️ 无法加载 AI 模型或依赖，请检查模型配置；缺少依赖时请运行 pip install "xiaoqing[arxiv-ml]"。',
             succeeded = False,
@@ -403,10 +396,7 @@ async def _run_filter(
         )
 
     try:
-        logger.info(
-            "开始执行 arXiv 论文筛选，model_path_configured=%s",
-            bool(configured_model_path),
-        )
+        log.info(LogEvent("filter.start"))
         start_time = time.perf_counter()
         arxiv_text = await _cached_inference(
             inference,
@@ -415,15 +405,11 @@ async def _run_filter(
             source_date,
         )
         elapsed = time.perf_counter() - start_time
-        logger.info(
-            "arXiv 论文筛选完成，耗时 %.2f 秒，返回内容长度: %d 字符",
-            elapsed,
-            len(arxiv_text),
-        )
+        log.info(LogEvent("filter.done", elapsed_s=round(elapsed, 2), length=len(arxiv_text)))
 
         result_kind = _classify_inference_text(arxiv_text)
         if result_kind == "no_positive_predictions":
-            logger.info("今日没有符合条件的论文")
+            log.info(LogEvent("filter.no_positives"))
             return _filter_result(
                 f"📚 {_list_description(context, source_date)}，暂时没有发现感兴趣的论文。",
                 succeeded = True,
@@ -446,8 +432,6 @@ async def _run_filter(
                 "unknown_result",
             )
 
-        logger.debug("筛选结果预览: %s...", arxiv_text[:200])
-
     except FileNotFoundError as exc:
         return _failure(context, exc, "arxiv_filter.model_file", "model_file_error")
     except ImportError as exc:
@@ -459,7 +443,7 @@ async def _run_filter(
     header = f"📚 {_list_description(context, source_date)}，以下是你可能感兴趣的论文：\n"
     if allow_codex_sidecar:
         if source_date is None:
-            logger.warning("skip Codex arXiv summary: source list date could not be confirmed")
+            log.warning(LogEvent("codex_summary.skip", reason_code="source_date_unconfirmed"))
         else:
             try:
                 schedule_codex_summary_from_filter_result(
@@ -468,11 +452,10 @@ async def _run_filter(
                     filter_text = arxiv_text,
                 )
             except Exception as exc:
-                public_error_message(
+                log_public_error(
                     context,
                     exc,
-                    logger    = logger,
-                    component = "arxiv_filter.codex_sidecar",
+                    component="arxiv_filter.codex_sidecar",
                 )
     return _filter_result(header + arxiv_text, succeeded=True, outcome="papers")
 
@@ -558,7 +541,7 @@ def _save_update_status(data_dir: str | Path, status: Mapping[str, object]) -> N
             _get_status_file_path(data_dir), json.dumps(status, ensure_ascii=False, indent=2)
         )
     except Exception as exc:
-        logger.error("保存状态文件失败: error_type=%s", type(exc).__name__)
+        log.error(LogEvent("status_file.save_failed", error=exc))
         raise
 
 
@@ -650,7 +633,7 @@ async def _check_arxiv_update(
 ) -> Segments:
     """定时检查 arXiv 是否已更新到今天；is_final_check 为最后一次（12 点）检查，仍未更新时发停更通知。"""
     if _scheduled_without_delivery_targets(context):
-        logger.info("skip scheduled arXiv update check: no explicit delivery targets")
+        log.info(LogEvent("update_check.skip", reason_code="no_delivery_targets"))
         return []
 
     data_dir = Path(context.data_dir)
@@ -669,15 +652,14 @@ async def _check_arxiv_update(
             cancellation.raise_if_requested()
     except Exception as exc:
         # 状态不可信时采用 fail-closed：宁可漏掉一次自动播报，也不能重复群发。
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "arxiv_filter.claim_delivery",
+            component="arxiv_filter.claim_delivery",
         )
         return []
     if not claimed:
-        logger.info("今天已经发送过 arXiv 更新，跳过此次检查")
+        log.info(LogEvent("update_check.skip", reason_code="already_sent"))
         return []
 
     transferred = False
@@ -686,17 +668,16 @@ async def _check_arxiv_update(
             # 连同可选抓取依赖一起放到工作线程；测试或禁用路径无需提前导入。
             arxiv_date = await run_sync(_check_arxiv_update_date)
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = logger,
-                component = "arxiv_filter.check_date",
+                component="arxiv_filter.check_date",
             )
             return []
 
         # 如果 arXiv 已更新到今天
         if arxiv_date == today:
-            logger.info("检测到 arXiv 已更新到 %s，开始筛选论文...", today)
+            log.info(LogEvent("update_check.updated", date=today))
             try:
                 result = await _run_filter(
                     context,
@@ -710,14 +691,12 @@ async def _check_arxiv_update(
             if isinstance(result, FilterResult) and result.succeeded:
                 transferred = True
                 return _track_delivery(result, data_dir, today)
-            logger.warning("arXiv filter failed after update detection; keep retrying later today")
+            log.warning(LogEvent("update_check.filter_failed", retry_later=True))
             return result
 
         # 如果是最后一次检查且仍未更新
         if is_final_check:
-            logger.info(
-                "最后检查时间已到，arXiv 仍未更新（当前日期: %s），发送停更通知", arxiv_date
-            )
+            log.info(LogEvent("update_check.no_update_final", arxiv_date=arxiv_date))
             result = _filter_result(
                 f"📚 arXiv 今日（{today}）暂未更新，可能稍后更新或今日停更。",
                 succeeded = True,
@@ -727,7 +706,7 @@ async def _check_arxiv_update(
             return _track_delivery(result, data_dir, today)
 
         # 还不是最后检查，继续等待
-        logger.info("arXiv 尚未更新到今天（当前: %s，期望: %s），等待下次检查", arxiv_date, today)
+        log.info(LogEvent("update_check.waiting", arxiv_date=arxiv_date, expected=today))
         return []
     finally:
         if not transferred:

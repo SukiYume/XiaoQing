@@ -7,6 +7,7 @@ from typing import Any
 
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, segments
 from core.public_errors import public_error_response
 
@@ -69,7 +70,7 @@ async def handle(
                 include_c1                  = True,
             ):
                 return segments("回显文本不能包含不可显示的控制字符")
-            logger.info("Echo command accepted: length=%d", len(cleaned))
+            logger.info(LogEvent("echo.accepted", length=len(cleaned)))
             return segments(cleaned)
 
         if command in _HELLO_ALIASES:
@@ -79,4 +80,4 @@ async def handle(
 
         return segments("未知命令；请使用 /echo 或 /hello")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="echo.handle")
+        return public_error_response(context, exc, component="echo.handle")

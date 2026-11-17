@@ -34,7 +34,7 @@ See [architecture](02-architecture.md) for component relationships and the [API 
 | `args.py` | `ParsedArgs` token and option parsing |
 | `models.py` | OneBot, manifest, command, service, and configuration data models |
 | `auth.py` | Inbound Bearer credential parsing and constant-time comparison |
-| `public_errors.py` | Mapping from internal exceptions to public error codes and request IDs |
+| `public_errors.py` | Public replies and `public_error` log lines for unexpected plugin exceptions: a reason classified from the exception chain, with exception type, location, and request ID, without the exception message |
 
 Dispatcher follows this fixed sequence: processing gates, URL, Bot name, session, command, command fallback, and smalltalk.
 Router builds a read-only command catalog from validated manifests. It puts parse results in the plugin context.
@@ -109,7 +109,6 @@ For remote content, `safe_http.py` first resolves the target. Then `bounded_http
 |---|---|
 | `config.py` | JSON reads, source state, read-only snapshots, revisions, file watcher |
 | `ai.py` | Providers, model profiles, plugin routes, retries, fallback, total budgets |
-| `sensitive_audit.py` | Sensitive-field audit, summaries, redaction |
 | `atomic_store.py` | Atomic writes and recovery for JSON and byte data |
 | `private_files.py` | Files only the current OS user may read: tightened directory permissions and atomic 0600 writes for credential JSON |
 | `process_tree.py`, `windows_job.py` | External plugin commands use independent process trees: Windows Job objects or POSIX process groups. Standard output and standard error share one budget. Timeout and cancellation remove the whole tree. `/shell` and XiaoQing Agent share these modules. |
@@ -122,7 +121,7 @@ AI Service resolves providers, models, plugin routes, and credentials from the s
 
 | Module | Responsibility |
 |---|---|
-| `logging_config.py` | Console, file, color, rotation, log format |
+| `log.py` | `LogEvent` redaction (length plus a process-local HMAC fingerprint) and rendering, exception summaries and tracebacks without exception messages, redaction of third-party log arguments, request-ID scopes, the `logging` settings block and levels, console and `logs/xiaoqing.log` output, daily rotation, log format, output-failure diagnostics, and the outlets for uncaught and event-loop exceptions |
 | `metrics.py` | Message, plugin, error, latency, queue metrics |
 | `clock.py` | Current time in the configured timezone |
 | `constants.py` | Shared Core boundary constants |

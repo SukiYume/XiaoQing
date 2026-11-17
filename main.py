@@ -1,9 +1,12 @@
 import argparse
 import asyncio
+import logging
 import signal
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -99,11 +102,23 @@ async def main(root: Path | None = None) -> None:
 
 
 def cli(argv: Sequence[str] | None = None) -> None:
+    """进程入口：读配置之前先装好只写控制台的日志，启动或运行失败时记一条事件、以退出码 1 结束。
+
+    失败只按日志规则记异常类型、位置和安全回溯，不把异常消息（可能带配置里的地址、凭据）
+    印到标准输出或标准错误。
+    """
+
     args = _build_parser().parse_args(argv)
+    from core.log import LogEvent, bootstrap_logging
+
+    bootstrap_logging()
     try:
         asyncio.run(main(args.root))
     except KeyboardInterrupt:
         pass
+    except Exception as exc:
+        logger.critical(LogEvent("process.failed", error=exc), exc_info=exc)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

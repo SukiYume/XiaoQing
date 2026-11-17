@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 from ..models.item import ItemType
 from ..utils.identifiers import public_id
@@ -20,7 +22,7 @@ from ..utils.validators import ledger_amount_filter_to_cents
 if TYPE_CHECKING:
     from ..services.db import Database
 
-logger                            = logging.getLogger(__name__)
+log                               = logging.getLogger(__name__)
 _COLLECTION_PAYLOAD_FIELDS: Final = (
     "id",
     "version",
@@ -138,14 +140,11 @@ def item_to_dict(item: object) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         serializer = getattr(item, "to_dict", None)
         if not callable(serializer):
-            logger.warning("Pendo item serialization skipped for type=%s", type(item).__name__)
+            log.warning(LogEvent("item.serialization_skipped", value_type=type(item).__name__))
             return {}
         payload = serializer()
     if not isinstance(payload, Mapping):
-        logger.warning(
-            "Pendo item serializer returned non-mapping type=%s",
-            type(payload).__name__,
-        )
+        log.warning(LogEvent("item.serializer_non_mapping", value_type=type(payload).__name__))
         return {}
     result               = {str(key): value for key, value in payload.items()}
     result["display_id"] = public_id(result.get("id"))

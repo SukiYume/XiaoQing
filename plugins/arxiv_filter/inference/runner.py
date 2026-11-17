@@ -15,6 +15,8 @@ from typing import cast
 
 import pandas as pd
 
+from core.log import LogEvent
+
 from ..utils import (
     ARXIV_ABS_URL_PREFIX,
     NO_PAPERS_MARKER,
@@ -23,7 +25,7 @@ from ..utils import (
 )
 from .shared import InferenceParams, resolve_params
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -36,31 +38,29 @@ def _dispatch_inference(
     data: pd.DataFrame,
 ) -> tuple[list[float], list[int]]:
     """根据 params.model_type 调用对应的后端。"""
-    logger.info(
-        "推理参数: model=%s, type=%s, input_mode=%s, threshold=%.4f, batch=%d",
-        params.model_path,
-        params.model_type,
-        params.input_mode,
-        params.threshold,
-        params.batch_size,
+    log.info(
+        LogEvent(
+            "inference.params",
+            model_type = params.model_type,
+            input_kind = params.input_mode,
+            threshold  = round(params.threshold, 4),
+            batch_size = params.batch_size,
+        )
     )
 
     if params.model_type == "knn":
         from .knn_backend import run_knn_inference
 
-        logger.info("model_type=knn: 使用 k-NN 兴趣库推理")
         probabilities, predictions = run_knn_inference(params, data)
     elif params.model_type == "multi_interest":
         from .multi_interest_backend import run_multi_interest_inference
 
-        logger.info("model_type=multi_interest: 使用多兴趣模型推理")
         probabilities, predictions = run_multi_interest_inference(params, data)
     else:
         import torch
 
         from .transformers_backend import run_transformers_inference
 
-        logger.info("model_type=transformers: 使用 BERT 分类推理")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         probabilities, predictions = run_transformers_inference(params, data, device)
 

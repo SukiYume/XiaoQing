@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from core.clock import now_in_configured_timezone
+from core.log import LogEvent
 from core.plugin_base import resolve_bot_name
 
 from .config import LifeConfig
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 Availability = Literal["free", "busy", "asleep"]
 
@@ -61,7 +62,7 @@ def persona_card(context: Any) -> Any | None:
         )
         return config.personality.card
     except Exception as exc:
-        logger.debug("xiaoqing_life persona unavailable error_type=%s", type(exc).__name__)
+        log.debug(LogEvent("persona.unavailable", error=exc))
         return None
 
 
@@ -165,5 +166,5 @@ def availability(context: Any, cfg: LifeConfig, moment: datetime) -> Presence:
             if presence is not None:
                 return presence
         except Exception as exc:
-            logger.debug("xiaoqing_life routine unreadable error_type=%s", type(exc).__name__)
+            log.debug(LogEvent("routine.unreadable", error=exc))
     return _quiet_presence(cfg, moment)

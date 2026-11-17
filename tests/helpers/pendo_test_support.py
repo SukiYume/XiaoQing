@@ -1,6 +1,5 @@
 """Pendo 基础测试共享导入和私有 helper。"""
 
-import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -95,7 +94,6 @@ def freeze_pendo_reminder_clock(monkeypatch: pytest.MonkeyPatch, instant: dateti
 def pendo_service_context(
     db: Any,
     data_dir: Path,
-    logger_name: str,
     **attributes: Any,
 ) -> Iterator[SimpleNamespace]:
     """真实服务集合的运行上下文：把 ``db`` 装成 Pendo 数据库单例，退出时清掉。
@@ -107,7 +105,6 @@ def pendo_service_context(
     context = SimpleNamespace(
         state    = {},
         data_dir = data_dir,
-        logger   = logging.getLogger(logger_name),
         **attributes,
     )
     try:

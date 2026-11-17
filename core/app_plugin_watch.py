@@ -14,6 +14,7 @@ from .app_support import (
     _runtime_plugin_poll_interval,
 )
 from .constants import DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
+from .log import LogEvent
 from .plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ class AppPluginWatchMixin:
                 cancelled = True
             except BaseException as exc:
                 logger.error(
-                    "Plugin watcher restart supervisor failed",
+                    LogEvent("plugin.watch.restart_supervisor_failed"),
                     exc_info=(type(exc), exc, exc.__traceback__),
                 )
             if (
@@ -149,12 +150,12 @@ class AppPluginWatchMixin:
                 pass
             except BaseException as exc:
                 logger.error(
-                    "Plugin watcher task failed",
+                    LogEvent("plugin.watch.task_failed"),
                     exc_info=(type(exc), exc, exc.__traceback__),
                 )
             else:
                 if is_current_generation and self._plugin_watch_desired and not self._stopping:
-                    logger.warning("Plugin watcher exited unexpectedly; scheduling restart")
+                    logger.warning(LogEvent("plugin.watch.exited_unexpectedly"))
 
             # A done callback can be queued while configuration already starts
             # a newer generation.  It may consume/log its own outcome, but it
@@ -182,7 +183,7 @@ class AppPluginWatchMixin:
         poll_interval: float | None = None,
     ) -> None:
         if self._stopping:
-            logger.debug("Ignoring plugin watcher configuration while stopping")
+            logger.debug(LogEvent("plugin.watch.config.skip.stopping"))
             return
         self.plugin_manager.update_poll_interval(
             self._plugin_watch_poll_interval(config) if poll_interval is None else poll_interval

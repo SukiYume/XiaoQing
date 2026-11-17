@@ -34,7 +34,7 @@ class ReplyGateDecision:
 
     def as_log_fields(self) -> dict[str, object]:
         fields: dict[str, object] = {
-            "reason"                  : self.reason,
+            "reason_code"             : self.reason,
             "seconds_since_last_reply": round(self.seconds_since_last_reply, 3),
             "min_interval_seconds"    : round(self.min_interval_seconds, 3),
             "replies_last_minute"     : self.replies_last_minute,

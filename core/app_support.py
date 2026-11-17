@@ -17,6 +17,7 @@ from .constants import (
     DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS,
     DEFAULT_SESSION_TIMEOUT_SEC,
 )
+from .log import LogEvent
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +157,9 @@ def _onebot_credentials(snapshot: ConfigSnapshot) -> tuple[str, bool]:
     raw_token = trusted.get("onebot_token", "")
     if type(raw_token) is not str:
         logger.error(
-            "Invalid onebot_token type in a valid secrets snapshot: %s; outbound OneBot "
-            "transports are revoked",
-            type(raw_token).__name__,
+            LogEvent(
+                "secrets.token.invalid_type", value_type=type(raw_token).__name__, field="onebot"
+            )
         )
         return "", False
     return raw_token, True
@@ -170,9 +171,9 @@ def _inbound_token_from_secrets(secrets: Mapping[str, Any]) -> str:
     raw_token = secrets.get("inbound_token", "")
     if type(raw_token) is not str:
         logger.error(
-            "Invalid inbound_token type in a valid secrets snapshot: %s; inbound "
-            "authentication is revoked",
-            type(raw_token).__name__,
+            LogEvent(
+                "secrets.token.invalid_type", value_type=type(raw_token).__name__, field="inbound"
+            )
         )
         return ""
     return raw_token

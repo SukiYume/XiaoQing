@@ -1,15 +1,11 @@
 """影视飓风签到的命令路由与定时入口。"""
 
-import logging
-
 from core.args import parse
 from core.plugin_base import Event, Segments, bounded_external_text, segments
 from core.public_errors import public_error_response
 
 from . import yingshi
 from .types import Context
-
-logger = logging.getLogger(__name__)
 
 _HELP_ALIASES    = {"help", "帮助", "?"}
 _YINGSHI_ALIASES = {"yingshi", "yingshijufeng", "y"}
@@ -51,12 +47,7 @@ async def handle(
         )
         return segments(f"❓ 未知平台: {visible_target}\n\n{_HELP_TEXT}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "signin.handle",
-        )
+        return public_error_response(context, exc, component="signin.handle")
 
 
 async def scheduled_yingshi(context: Context) -> Segments:

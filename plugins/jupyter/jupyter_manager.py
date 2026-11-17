@@ -22,8 +22,7 @@ from core.image_validation import (
     ImageValidationLimits,
     validate_image_bytes,
 )
-from core.sensitive_audit import log_sensitive_operation as log_sensitive_audit
-from core.sensitive_audit import safe_audit_id
+from core.log import LogEvent, log_scope
 
 from .jupyter_config import (
     AUTO_SHUTDOWN_TIMEOUT,
@@ -39,7 +38,7 @@ from .jupyter_config import (
 )
 from .jupyter_models import ExecutionResult
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _ANSI_ESCAPE_PATTERN   = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
 _PNG_FORMAT_EXTENSIONS = {"PNG": ".png"}
@@ -250,12 +249,7 @@ class JupyterKernelManager:
         failures = [result for result in results if isinstance(result, BaseException)]
         if failures:
             for failure in failures:
-                log_sensitive_audit(
-                    logger,
-                    "jupyter.kernel.shutdown_all",
-                    status = "error",
-                    exc    = failure,
-                )
+                log.error(LogEvent("kernel.shutdown_all", status="error", error=failure))
             raise RuntimeError(f"{len(failures)} Jupyter kernel cleanup operation(s) failed")
 
     @property
@@ -485,12 +479,8 @@ class JupyterKernelManager:
         self._orphan_kc           = kc
         self._last_cleanup_report = report
         self._isolate_instance(self)
-        log_sensitive_audit(
-            logger,
-            "jupyter.kernel.cleanup",
-            status     = "quarantined",
-            error_type = "KernelCleanupIncomplete",
-            level      = logging.ERROR,
+        log.error(
+            LogEvent("kernel.cleanup", status="quarantined", reason_code="cleanup_incomplete")
         )
 
     async def _shutdown_if_expired(self) -> bool:
@@ -503,21 +493,19 @@ class JupyterKernelManager:
             idle_time = time.monotonic() - self._last_activity
             if idle_time <= AUTO_SHUTDOWN_TIMEOUT:
                 return False
-            log_sensitive_audit(
-                logger,
-                "jupyter.kernel.idle_shutdown",
-                status="started",
-            )
+            log.info(LogEvent("kernel.idle_shutdown", status="started"))
             await asyncio.to_thread(self.shutdown_kernel, False)
             return True
 
     async def _check_idleness_loop(self) -> None:
         """后台任务：检查空闲时间并自动关闭。"""
 
-        while await asyncio.to_thread(lambda: self.is_running):
-            await asyncio.sleep(CHECK_INTERVAL)
-            if await self._shutdown_if_expired():
-                break
+        # 监视器由某个请求首次启动，之后服务这个内核的所有请求，日志不属于任何一个。
+        with log_scope(None):
+            while await asyncio.to_thread(lambda: self.is_running):
+                await asyncio.sleep(CHECK_INTERVAL)
+                if await self._shutdown_if_expired():
+                    break
 
     def ensure_idle_monitor(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -762,12 +750,8 @@ except ImportError:
         try:
             return await self._wait_task_despite_cancellation(task), False
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                "jupyter.cancel.pending_operation",
-                status = "error",
-                job_id = audit_id,
-                exc    = exc,
+            log.error(
+                LogEvent("cancel.pending_operation", status="error", job_id=audit_id, error=exc)
             )
             return None, True
 
@@ -782,13 +766,7 @@ except ImportError:
         try:
             await asyncio.to_thread(self.shutdown_kernel)
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                operation,
-                status = "quarantined",
-                job_id = audit_id,
-                exc    = exc,
-            )
+            log.error(LogEvent(operation, status="quarantined", job_id=audit_id, error=exc))
 
     async def _cancel_execution_cleanup(
         self,
@@ -800,13 +778,7 @@ except ImportError:
             try:
                 await self._wait_task_despite_cancellation(state.recovery_task)
             except Exception as exc:
-                log_sensitive_audit(
-                    logger,
-                    "jupyter.cancel.recovery",
-                    status = "error",
-                    job_id = audit_id,
-                    exc    = exc,
-                )
+                log.error(LogEvent("cancel.recovery", status="error", job_id=audit_id, error=exc))
             return
 
         pending_value, pending_failed = await self._await_cancel_pending(
@@ -817,7 +789,7 @@ except ImportError:
             await self._shutdown_new_kernel_after_cancel(
                 state.kernel_was_running,
                 audit_id,
-                "jupyter.cancel.new_kernel_shutdown",
+                "cancel.new_kernel_shutdown",
             )
             return
         if state.pending_kind == "submit" and not pending_failed:
@@ -832,20 +804,14 @@ except ImportError:
             await self._shutdown_new_kernel_after_cancel(
                 state.kernel_was_running,
                 audit_id,
-                "jupyter.cancel.new_kernel_cleanup",
+                "cancel.new_kernel_cleanup",
             )
             return
 
         try:
             await self._interrupt_and_recover(state.msg_id, audit_id)
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                "jupyter.cancel.cleanup",
-                status = "error",
-                job_id = audit_id,
-                exc    = exc,
-            )
+            log.error(LogEvent("cancel.cleanup", status="error", job_id=audit_id, error=exc))
 
     @staticmethod
     def _set_output_limit(result: ExecutionResult, message: str) -> None:
@@ -983,13 +949,7 @@ except ImportError:
         try:
             await asyncio.to_thread(self.interrupt_kernel)
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                "jupyter.interrupt",
-                status = "error",
-                job_id = audit_id,
-                exc    = exc,
-            )
+            log.error(LogEvent("interrupt", status="error", job_id=audit_id, error=exc))
         return await self._recover_after_interrupt(msg_id, audit_id=audit_id)
 
     async def _run_recovery(self, state: _ExecutionState, audit_id: str) -> None:
@@ -1022,12 +982,8 @@ except ImportError:
             elif self.is_running:
                 await asyncio.to_thread(self.shutdown_kernel)
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                "jupyter.execute.containment",
-                status = "quarantined",
-                job_id = audit_id,
-                exc    = exc,
+            log.error(
+                LogEvent("execute.containment", status="quarantined", job_id=audit_id, error=exc)
             )
 
     async def _collect_execution_messages(
@@ -1083,10 +1039,8 @@ except ImportError:
         """执行代码，并在外部取消返回前收敛底层 kernel 工作。"""
         async with self._execute_lock:
             timeout  = self._normalize_timeout(timeout)
-            audit_id = safe_audit_id(audit_id)
-            if audit_id == "-":
-                audit_id = uuid.uuid4().hex
-            state = _ExecutionState(
+            audit_id = audit_id or uuid.uuid4().hex
+            state    = _ExecutionState(
                 kernel_was_running=await asyncio.to_thread(lambda: self.is_running)
             )
             result     = ExecutionResult()
@@ -1130,27 +1084,15 @@ except ImportError:
                 try:
                     await self._wait_task_despite_cancellation(cleanup_task)
                 except Exception as exc:
-                    log_sensitive_audit(
-                        logger,
-                        "jupyter.cancel.cleanup_task",
-                        status = "error",
-                        job_id = audit_id,
-                        exc    = exc,
+                    log.error(
+                        LogEvent("cancel.cleanup_task", status="error", job_id=audit_id, error=exc)
                     )
                 self._last_activity = time.monotonic()
                 raise
             except Exception as exc:
                 await self._contain_execution_failure(state, audit_id)
-                log_sensitive_audit(
-                    logger,
-                    "jupyter.execute",
-                    status  = "error",
-                    job_id  = audit_id,
-                    payload = code,
-                    exc     = exc,
-                )
-                result.error   = "执行失败，请稍后重试"
                 result.success = False
+                result.failure = exc
 
             self._last_activity   = time.monotonic()
             result.execution_time = time.monotonic() - started_at
@@ -1176,23 +1118,18 @@ except ImportError:
             await asyncio.to_thread(self.restart_kernel)
             return "restarted"
         except Exception as exc:
-            log_sensitive_audit(
-                logger,
-                "jupyter.interrupt.restart",
-                status = "error",
-                job_id = audit_id,
-                exc    = exc,
-            )
+            log.error(LogEvent("interrupt.restart", status="error", job_id=audit_id, error=exc))
             try:
                 await asyncio.to_thread(self.shutdown_kernel)
                 return "shutdown"
             except Exception as shutdown_exc:
-                log_sensitive_audit(
-                    logger,
-                    "jupyter.interrupt.shutdown",
-                    status = "quarantined",
-                    job_id = audit_id,
-                    exc    = shutdown_exc,
+                log.error(
+                    LogEvent(
+                        "interrupt.shutdown",
+                        status = "quarantined",
+                        job_id = audit_id,
+                        error  = shutdown_exc,
+                    )
                 )
                 return "quarantined"
 

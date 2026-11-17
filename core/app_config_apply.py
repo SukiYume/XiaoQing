@@ -21,6 +21,7 @@ from .app_support import (
 )
 from .config import ConfigSnapshot, ConfigSourceStatus, PendingSecretsChange
 from .interfaces import ACTION_BYPASS_SINK_KEY
+from .log import LogEvent
 from .onebot import OneBotHttpSender
 from .plugin_base import text
 from .server import InboundManager
@@ -169,7 +170,7 @@ class AppConfigApplyMixin:
 
         admin_ids = tuple(sorted(self.identity_service.admin_ids))
         if not admin_ids:
-            logger.warning("Valid external secrets candidate detected, but no active admin exists")
+            logger.warning(LogEvent("secrets.pending.no_admin"))
             return
         message = [text(_format_pending_secrets_notice(change))]
         for admin_id in admin_ids:
@@ -184,16 +185,11 @@ class AppConfigApplyMixin:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "Could not notify admin %d about pending secrets: %s",
-                    admin_id,
-                    exc,
+                    LogEvent("secrets.pending.notify_failed", admin_id=admin_id, error=exc)
                 )
                 continue
             if sent is not True:
-                logger.warning(
-                    "Pending secrets notification to admin %d was not confirmed",
-                    admin_id,
-                )
+                logger.warning(LogEvent("secrets.pending.unconfirmed", admin_id=admin_id))
 
     def _apply_security_snapshot(self, snapshot: ConfigSnapshot) -> None:
         with self._runtime_auth_lock:
@@ -210,9 +206,11 @@ class AppConfigApplyMixin:
 
         if snapshot.revision < self._security_revision:
             logger.debug(
-                "Ignoring stale security snapshot revision %d (latest=%d)",
-                snapshot.revision,
-                self._security_revision,
+                LogEvent(
+                    "config.security.stale",
+                    revision = snapshot.revision,
+                    latest   = self._security_revision,
+                )
             )
             return
 
@@ -228,9 +226,7 @@ class AppConfigApplyMixin:
                 new_security_generation = False
             elif self._security_conflict_revision == snapshot.revision:
                 logger.error(
-                    "Ignoring another conflicting security snapshot at revision %d; "
-                    "the revision remains fail-closed",
-                    snapshot.revision,
+                    LogEvent("config.security.conflict_ignored", revision=snapshot.revision)
                 )
                 if accepted is None:
                     return
@@ -238,9 +234,7 @@ class AppConfigApplyMixin:
                 new_security_generation = False
             else:
                 logger.critical(
-                    "Conflicting security snapshots share revision %d; revoking runtime "
-                    "credentials until a newer revision is published",
-                    snapshot.revision,
+                    LogEvent("config.security.conflict_revoked", revision=snapshot.revision)
                 )
                 baseline = accepted or snapshot
                 snapshot = ConfigSnapshot(
@@ -294,7 +288,7 @@ class AppConfigApplyMixin:
                     expected_trust     = holder_trusted,
                 )
             except BaseException as exc:
-                logger.exception("Could not synchronously rotate HTTP auth", exc_info=exc)
+                logger.exception(LogEvent("auth.rotate.failed", transport="http"), exc_info=exc)
                 # HTTP senders own no background resource.  Detaching the
                 # uncertain holder is the only safe publication after its
                 # update failed to apply the revocation.
@@ -325,7 +319,7 @@ class AppConfigApplyMixin:
                     expected_trust     = holder_trusted,
                 )
             except BaseException as exc:
-                logger.exception("Could not synchronously rotate WebSocket auth", exc_info=exc)
+                logger.exception(LogEvent("auth.rotate.failed", transport="ws"), exc_info=exc)
                 # Retain ownership so asynchronous reconciliation can stop the
                 # socket, but remove it from every send/receive trust boundary
                 # immediately.  Cancelling the listener is best-effort and is
@@ -340,9 +334,11 @@ class AppConfigApplyMixin:
                             ws_task.cancel()
                         except BaseException as cancel_error:
                             logger.error(
-                                "Could not cancel quarantined WebSocket listener after %s/%s",
-                                type(schedule_error).__name__,
-                                type(cancel_error).__name__,
+                                LogEvent(
+                                    "auth.ws_cancel.failed",
+                                    schedule_error = schedule_error,
+                                    cancel_error   = cancel_error,
+                                )
                             )
             else:
                 if self._ws_client_auth_quarantine is ws_client:
@@ -355,10 +351,7 @@ class AppConfigApplyMixin:
                 token  = inbound_token,
             )
         except BaseException as exc:
-            logger.warning(
-                "Invalid inbound configuration during synchronous auth rotation: %s",
-                exc,
-            )
+            logger.warning(LogEvent("config.inbound.invalid", error=exc))
         self._runtime_inbound_key = desired_inbound_key
         stand_in                  = self._inbound_stand_in
         if stand_in is not None and stand_in[1] != desired_inbound_key:
@@ -378,7 +371,7 @@ class AppConfigApplyMixin:
                     self._inbound_token_for_locked(manager, desired_inbound_key, inbound_token)
                 )
             except BaseException as exc:
-                logger.exception("Could not synchronously rotate inbound auth", exc_info=exc)
+                logger.exception(LogEvent("auth.rotate.failed", transport="inbound"), exc_info=exc)
 
     def _claim_config_apply_owner(
         self,
@@ -387,16 +380,20 @@ class AppConfigApplyMixin:
         with self._runtime_auth_lock:
             if snapshot.revision <= self._config_apply_revision:
                 logger.debug(
-                    "Ignoring duplicate or stale runtime-config snapshot revision %d (latest=%d)",
-                    snapshot.revision,
-                    self._config_apply_revision,
+                    LogEvent(
+                        "config.apply.stale",
+                        revision = snapshot.revision,
+                        latest   = self._config_apply_revision,
+                    )
                 )
                 return None
             if snapshot.revision < self._security_revision:
                 logger.debug(
-                    "Ignoring runtime-config snapshot revision %d behind security revision %d",
-                    snapshot.revision,
-                    self._security_revision,
+                    LogEvent(
+                        "config.apply.behind_security",
+                        revision          = snapshot.revision,
+                        security_revision = self._security_revision,
+                    )
                 )
                 return None
 
@@ -474,11 +471,7 @@ class AppConfigApplyMixin:
                 or self._security_snapshot is None
                 or snapshot != self._security_snapshot
             ):
-                logger.error(
-                    "Ignoring runtime configuration snapshot revision %d because its "
-                    "security publication was not accepted",
-                    snapshot.revision,
-                )
+                logger.error(LogEvent("config.apply.security_rejected", revision=snapshot.revision))
                 return
         owner = self._claim_config_apply_owner(snapshot)
         if owner is None:
@@ -486,7 +479,7 @@ class AppConfigApplyMixin:
         if not self._owns_config_apply(owner):
             return
         if self._stopping:
-            logger.debug("Ignoring configuration update while stopping")
+            logger.debug(LogEvent("config.apply.skip.stopping"))
             return
         config = snapshot.config
 
@@ -538,14 +531,14 @@ class AppConfigApplyMixin:
             except asyncio.CancelledError:
                 pass
             except BaseException as exc:
-                logger.exception("Runtime configuration apply failed", exc_info=exc)
+                logger.exception(LogEvent("config.apply.failed"), exc_info=exc)
 
         task.add_done_callback(config_apply_done)
 
     def reload_config(self) -> None:
         """重新加载配置并应用变更"""
         if self._stopping:
-            logger.debug("Ignoring configuration reload while stopping")
+            logger.debug(LogEvent("config.reload.skip.stopping"))
             return
         try:
             self.config_manager.reload(notify=True)
@@ -557,10 +550,7 @@ class AppConfigApplyMixin:
             try:
                 self._apply_config(snapshot)
             except BaseException as apply_error:
-                logger.exception(
-                    "Unable to apply fail-closed configuration snapshot",
-                    exc_info=apply_error,
-                )
+                logger.exception(LogEvent("config.fail_closed.apply_failed"), exc_info=apply_error)
             raise
 
     async def _apply_runtime_config(

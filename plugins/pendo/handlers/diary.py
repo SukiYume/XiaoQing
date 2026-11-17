@@ -1,13 +1,12 @@
 """日记命令、模板会话、结构化元数据和情绪降级处理。"""
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 
 from core.plugin_base import run_sync
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from ..config import DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG, PendoConfig
 from ..core.types import CommandMessage, PendoContext, SessionData
@@ -25,8 +24,6 @@ from ..utils.time_utils import (
     parse_diary_range,
 )
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..services.db import Database
@@ -828,11 +825,10 @@ class DiaryHandler(DbOpsMixin):
                 return await self.ai_parser.analyze_diary_mood(content, user_id)
             except Exception as exc:
                 context = getattr(self.ai_parser, "context", None)
-                public_error_message(
+                log_public_error(
                     context,
                     exc,
-                    logger    = getattr(context, "logger", None) or logger,
-                    component = "pendo.diary.mood_fallback",
+                    component="pendo.diary.mood_fallback",
                 )
 
         return cast(tuple[str | None, int | None], analyze_diary_mood_rule(content))

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from types import SimpleNamespace
 
 import pytest
@@ -38,9 +37,7 @@ def test_shutdown_store_flushers_persist_all_dirty_conversations(tmp_path) -> No
 
 
 def _shutdown_context(tmp_path) -> SimpleNamespace:
-    return SimpleNamespace(
-        logger=logging.getLogger("test.xiaoqing_chat.shutdown"), data_dir=tmp_path
-    )
+    return SimpleNamespace(data_dir=tmp_path)
 
 
 @pytest.mark.asyncio

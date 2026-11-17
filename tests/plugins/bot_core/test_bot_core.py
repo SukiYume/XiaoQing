@@ -10,8 +10,10 @@ import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
 from core.models import PluginCommandManifest
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.router import CommandCatalogNode, CommandRouter, CommandSpec
 from plugins.bot_core import main as bot_core
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
@@ -612,7 +614,11 @@ class TestSetSecretCommand:
             )
 
         assert "CANARY-secret" not in caplog.text
-        assert "<redacted>" in caplog.text
+        (command_log,) = logged_events(caplog, "command.run")
+        assert dict(command_log.fields) == {
+            "command_name": "set_secret",
+            "args_length" : len("plugins.signin.yingshijufeng.sid CANARY-secret"),
+        }
 
     @pytest.mark.asyncio
     async def test_set_secret_path_matches_core_hyphen_contract(self, mock_context):
@@ -643,7 +649,7 @@ class TestSetSecretCommand:
         result = await bot_core.handle("set_secret", "plugins.test.value secret", {}, mock_context)
 
         assert "全局管理员" in str(result)
-        assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
+        assert PUBLIC_ERROR_PREFIX not in str(result)
 
 
 # ============================================================
@@ -674,13 +680,19 @@ class TestGetSecretCommand:
         assert "plugins" in result_text.lower() or "signin" in result_text
 
     @pytest.mark.asyncio
-    async def test_get_secret_nonexistent(self, mock_context):
-        """测试查看不存在的路径"""
-        result = await bot_core.handle("get_secret", "nonexistent.path.xyz", {}, mock_context)
+    async def test_get_secret_nonexistent(self, mock_context, caplog):
+        """查看不存在的路径：回复说不存在；没对上配置项的路径可能是贴错位置的密钥，不进日志。"""
+        pasted_secret = "sk-PASTED-CANARY-7f3"
+        caplog.set_level(logging.DEBUG, logger=bot_core.logger.name)
+
+        result = await bot_core.handle("get_secret", pasted_secret, {}, mock_context)
+
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
         assert "不存在" in result_text or "❌" in result_text
+        assert logged_events(caplog, "secret.get.missing")
+        assert pasted_secret not in caplog.text
 
     @pytest.mark.asyncio
     async def test_get_secret_invalid_dict(self, mock_context):
@@ -728,7 +740,7 @@ class TestGetSecretCommand:
         result = await bot_core.handle("get_secret", "plugins", {}, mock_context)
 
         assert "全局管理员" in str(result)
-        assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
+        assert PUBLIC_ERROR_PREFIX not in str(result)
 
 
 # ============================================================
@@ -782,7 +794,7 @@ class TestMetricsCommand:
         result = await bot_core.handle("metrics", "", {}, SimpleNamespace(metrics=metrics))
         result_text = str(result)
 
-        assert "XQ-PLUGIN-UNEXPECTED" not in result_text
+        assert PUBLIC_ERROR_PREFIX not in result_text
         assert "成功率: n/a" in result_text
         assert "bad name: n/a" in result_text
 

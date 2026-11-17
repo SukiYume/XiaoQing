@@ -18,6 +18,7 @@ from typing import Any
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.image_validation import ImageValidationLimits, validate_image_bytes
+from core.log import LogEvent
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -42,7 +43,7 @@ from .client import (
     split_web_url,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 SESSION_TTL_SECONDS = 15 * 60
 MAX_SESSIONS        = 512
@@ -469,7 +470,7 @@ async def _render_photo(
     try:
         path = await _download_photo(photo, context)
     except (SafeHttpError, UnsafeUrlError, OSError, TimeoutError, ValueError) as exc:
-        context.logger.warning("Flickr image fallback: %s", type(exc).__name__)
+        log.warning(LogEvent("image.fallback", error=exc))
         return [text(f"{caption}\n⚠️ 图片下载暂时失败，可打开原图页查看")]
     return [image(str(path)), text(caption)]
 
@@ -700,13 +701,8 @@ async def handle(
         return [text("❌ Flickr 暂时不可用，请稍后再试")]
     except FlickrError:
         return [text("❌ Flickr 暂时不可用，请稍后再试")]
-    except Exception as exc:  # noqa: BLE001 - 公共入口必须转成带 request_id 的稳定错误
-        return public_error_response(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "flickr.handle",
-        )
+    except Exception as exc:  # noqa: BLE001 - 公共入口必须转成带 request_id 的公开错误
+        return public_error_response(context, exc, component="flickr.handle")
 
 
 async def shutdown(context: PluginContextProtocol) -> None:

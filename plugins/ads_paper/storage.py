@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any, ClassVar
 from weakref import WeakValueDictionary
 
+from core.log import LogEvent
 from core.plugin_base import atomic_write_bytes, atomic_write_text
 
 from .bibtex import BibTeXParseError, citation_entries
 from .constants import DATE_FORMAT, DATETIME_FORMAT
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _reject_json_constant(value: str) -> None:
@@ -101,29 +102,28 @@ class PaperStorage:
                 self._validate_document(path, value)
                 return value
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                digest     = hashlib.sha256(payload).hexdigest()[:12]
-                quarantine = path.with_name(f"{path.name}.corrupt-{digest}")
+                digest                           = hashlib.sha256(payload).hexdigest()[:12]
+                quarantine                       = path.with_name(f"{path.name}.corrupt-{digest}")
+                quarantine_error: OSError | None = None
                 try:
                     if not quarantine.exists():
                         atomic_write_bytes(quarantine, payload)
                 except OSError as quarantine_exc:
-                    logger.error(
-                        "Paper storage quarantine failed: error_type=%s",
-                        type(quarantine_exc).__name__,
+                    quarantine_error = quarantine_exc
+                # 原文件保持只读直到人工修复；隔离副本没写成时一并记在这一行。
+                log.error(
+                    LogEvent(
+                        "storage.corrupt",
+                        error            = exc,
+                        digest           = digest,
+                        quarantine_error = quarantine_error,
                     )
-                logger.error(
-                    "Paper storage is corrupt and read-only until repaired: error_type=%s digest=%s",
-                    type(exc).__name__,
-                    digest,
                 )
                 raise PaperStorageCorruptionError(
                     "paper storage is corrupt; original preserved for explicit recovery"
                 ) from exc
             except OSError as exc:
-                logger.error(
-                    "Paper storage load failed: error_type=%s",
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("storage.load_failed", error=exc))
                 raise
 
     def _save_json(self, path: Path, data: dict[str, Any]) -> None:
@@ -137,10 +137,7 @@ class PaperStorage:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
             except Exception as exc:
-                logger.error(
-                    "Paper storage save failed: error_type=%s",
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("storage.save_failed", error=exc))
                 raise
 
     def _add_text_record(self, path: Path, key: str, content: str, user_id: int) -> None:
@@ -273,7 +270,7 @@ class PaperStorage:
                 existing_entries = citation_entries(existing)
                 new_entries      = citation_entries(bibtex)
             except BibTeXParseError:
-                logger.error("BibTeX storage parse failed; existing file was not modified")
+                log.error(LogEvent("bibtex.parse_failed", file_modified=False))
                 raise
             existing_keys = {entry.citation_key for entry in existing_entries}
             new_keys      = {entry.citation_key for entry in new_entries}

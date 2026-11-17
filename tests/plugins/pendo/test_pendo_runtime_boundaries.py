@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.pendo.utils import db_ops
+from tests.helpers.assertions import logged_events
 from tests.helpers.pendo_test_support import (
     PluginCapabilities,
     attach_action_recorder,
@@ -23,7 +24,7 @@ from tests.helpers.sqlite_test_support import trace_sql_statements
 def pendo_context(db, tmp_path):
     """真实服务集合（共用测试数据库）；私聊动作记录在 ``sent``，一律回执成功。"""
 
-    with pendo_service_context(db, tmp_path, "test.pendo.runtime_boundaries") as context:
+    with pendo_service_context(db, tmp_path) as context:
         context.sent = attach_action_recorder(context)
         yield context
 
@@ -133,10 +134,9 @@ class TestPendoRuntimeBoundaries:
             config         = initial_snapshot.config,
             config_manager = None,
             capabilities=PluginCapabilities(config_subscription=subscription),
-            state    = {},
-            data_dir = tmp_path / "plugin-data" / "pendo",
-            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
-            get_settings_snapshot=lambda: current_settings["value"],
+            state                 = {},
+            data_dir              = tmp_path / "plugin-data" / "pendo",
+            get_settings_snapshot = lambda: current_settings["value"],
         )
 
         # Web 监听是边界：不真的启动 uvicorn，只记录启动时已发布的端点。
@@ -435,7 +435,6 @@ class TestPendoRuntimeBoundaries:
 
         context = SimpleNamespace(
             state={"pendo_runtime": {"services": {"x": 1}, "router": object()}},
-            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
 
         pendo_main.cleanup(context)
@@ -455,7 +454,6 @@ class TestPendoRuntimeBoundaries:
 
         context = SimpleNamespace(
             state={},
-            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
 
         pendo_main.cleanup(context)
@@ -598,7 +596,6 @@ class TestPendoRuntimeBoundaries:
                     "lifecycle_service": runtime_service,
                 }
             },
-            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
 
         asyncio.run(pendo_main.shutdown(context))
@@ -626,7 +623,6 @@ class TestPendoRuntimeBoundaries:
         runtime = {"services": {"ready": True}, "lifecycle_service": service}
         context = SimpleNamespace(
             state={"pendo_runtime": runtime},
-            logger=SimpleNamespace(warning=lambda *args: None, info=lambda *args: None),
         )
 
         def cleanup():
@@ -645,12 +641,10 @@ class TestPendoRuntimeBoundaries:
         assert service.database is None
         assert runtime == {}
 
-    def test_run_scheduled_task_swallows_cancelled_error(self):
+    def test_run_scheduled_task_swallows_cancelled_error(self, caplog):
         from plugins.pendo import main as pendo_main
 
-        metrics     : list[tuple[str, float, bool]] = []
-        log_messages: list[str]                     = []
-        log = SimpleNamespace(info=lambda msg, *args: log_messages.append(msg % args))
+        metrics: list[tuple[str, float, bool]] = []
 
         class _Metrics:
             async def record_plugin_execution(self, plugin, name, duration, *, is_error=False):
@@ -662,14 +656,17 @@ class TestPendoRuntimeBoundaries:
         async def cancelled_task():
             raise asyncio.CancelledError()
 
-        result = asyncio.run(
-            pendo_main._run_scheduled_task(context, "daily_briefings", cancelled_task, log)
-        )
+        with caplog.at_level("INFO"):
+            result = asyncio.run(
+                pendo_main._run_scheduled_task(context, "daily_briefings", cancelled_task)
+            )
 
         assert result == []
         assert metrics and metrics[0][0] == "scheduled.daily_briefings"
         assert metrics[0][2] is False
-        assert any("cancelled during shutdown" in message for message in log_messages)
+        assert [
+            event.fields["task"] for event in logged_events(caplog, "scheduled_task.cancelled")
+        ] == ["daily_briefings"]
 
     def test_task_status_pagination_page_two_spans_categories(self, db):
         from plugins.pendo.handlers.task import TaskHandler

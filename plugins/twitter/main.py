@@ -20,17 +20,21 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+import aiohttp
+
 from core.args import parse
 from core.atomic_store import atomic_write_text
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.bounded_http import (
     JSON_MIME_POLICY,
     BodyLimits,
+    BoundedHttpError,
     HttpStatusError,
     JsonLimits,
     MimePolicy,
     RedirectPolicy,
     ResponseFormatError,
+    ResponseLimitError,
     aiohttp_request_bounded,
     parse_bounded_json,
 )
@@ -42,16 +46,19 @@ from core.image_validation import (
     validate_image_path,
 )
 from core.interfaces import PluginSettingsSnapshot
+from core.log import LogEvent
 from core.plugin_base import build_action as _core_build_action
 from core.plugin_base import ensure_dir as _core_ensure_dir
 from core.plugin_base import gather_bounded
 from core.plugin_base import has_control_characters as _has_control_chars
 from core.plugin_base import image as _core_image
 from core.plugin_base import segments as _core_segments
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error, public_error_message
 from core.public_errors import public_error_response as _core_public_error_response
 from core.safe_http import (
     BROWSER_USER_AGENT,
+    SafeHttpError,
+    UnsafeUrlError,
     fetch_public_bytes,
     split_https_url_on_hosts,
     validated_proxy_url,
@@ -133,7 +140,16 @@ build_action = cast(
 ensure_dir            = cast(Callable[[Path], None], _core_ensure_dir)
 public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+# 接口或媒体源不可达、超时、跳转到白名单外，或返回的内容不合格：属于上游故障，记 WARNING。
+_UPSTREAM_ERRORS = (
+    aiohttp.ClientError,
+    TimeoutError,
+    BoundedHttpError,
+    SafeHttpError,
+    UnsafeUrlError,
+)
 
 MAX_PAGES_WITHOUT_NEW_IMAGES   = 2
 MAX_PAGES_TO_CHECK             = 50
@@ -578,7 +594,7 @@ async def _fetch_timeline(
 
         return tweets, next_cursor
     except HttpStatusError as exc:
-        logger.warning("Twitter API 返回 HTTP %s", exc.status)
+        log.warning(LogEvent("api.http_error", status=exc.status))
         raise TwitterFetchError(status=exc.status) from exc
     except Exception as exc:
         raise TwitterFetchError() from exc
@@ -637,7 +653,7 @@ def _detect_image_extension(payload: bytes) -> str:
             message = "Twitter image frame count exceeds the configured limit"
         else:
             message = "Twitter media response is not a valid supported image"
-        raise ValueError(message) from exc
+        raise ResponseFormatError(message) from exc
 
 
 def _validate_cached_image(path: Path) -> None:
@@ -685,19 +701,19 @@ async def _download_image(url: str, save_dir: Path, context: Context) -> bool | 
     """下载并原子写入图片；新增、已存在、失败分别返回真、假、空。"""
 
     if not _is_allowed_media_url(url):
-        logger.warning("拒绝下载非 Twitter 媒体地址")
+        log.warning(LogEvent("media.url_rejected"))
         return None
     original_url = _original_media_url(url)
 
     try:
         content = await _fetch_media_bytes(original_url, context)
         if content is None:
-            logger.warning("Twitter 媒体请求未返回成功响应")
+            log.warning(LogEvent("media.fetch_failed"))
             return None
         if not isinstance(content, bytes) or not content:
-            raise ValueError("Twitter image response is empty")
+            raise ResponseFormatError("Twitter image response is empty")
         if len(content) > MAX_IMAGE_BYTES:
-            raise ValueError("Twitter image exceeds the configured byte limit")
+            raise ResponseLimitError("Twitter image exceeds the configured byte limit")
 
         extension = await asyncio.to_thread(_detect_image_extension, content)
         filename  = f"{hashlib.sha256(content).hexdigest()}{extension}"
@@ -705,14 +721,16 @@ async def _download_image(url: str, save_dir: Path, context: Context) -> bool | 
         filepath, created = await asyncio.to_thread(cache.put_if_absent, filename, content)
         if filepath is None or not created:
             return False
-        logger.info("下载 Twitter 图片: %s", filename)
+        log.info(LogEvent("image.downloaded", filename=filename))
         return True
+    except _UPSTREAM_ERRORS as exc:
+        log.warning(LogEvent("media.fetch_failed", error=exc))
+        return None
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "twitter.download_image",
+            component="twitter.download_image",
         )
         return None
 
@@ -726,7 +744,7 @@ async def _fetch_twitter_images(context: Context) -> int:
         user_id        = _get_user_id(context)
         backfill_state = context.data_dir / BACKFILL_STATE_FILENAME
         incremental    = await asyncio.to_thread(_backfill_is_complete, backfill_state, user_id)
-        logger.info("Twitter: 开始%s抓取", "增量" if incremental else "首次全量")
+        log.info(LogEvent("fetch.start", mode="incremental" if incremental else "full"))
 
         cursor      : str | None = None
         seen_cursors: set[str]   = set()
@@ -737,7 +755,7 @@ async def _fetch_twitter_images(context: Context) -> int:
         consecutive_empty        = 0
 
         for page_number in range(1, _get_max_pages(context) + 1):
-            logger.info("Twitter: 检查第 %s 页", page_number)
+            log.info(LogEvent("fetch.page", page=page_number))
             tweets, next_cursor = await _fetch_timeline(context, cursor)
             if not tweets:
                 break
@@ -765,7 +783,9 @@ async def _fetch_twitter_images(context: Context) -> int:
                 consecutive_empty += 1
 
             if incremental and consecutive_empty >= MAX_PAGES_WITHOUT_NEW_IMAGES:
-                logger.info("连续 %s 页没有新图片，停止抓取", consecutive_empty)
+                log.info(
+                    LogEvent("fetch.stop", reason_code="no_new_images", pages=consecutive_empty)
+                )
                 break
             if not next_cursor or next_cursor in seen_cursors:
                 break
@@ -775,15 +795,13 @@ async def _fetch_twitter_images(context: Context) -> int:
         if total_attempted and total_failed == total_attempted:
             raise TwitterMediaFetchError(total_attempted)
         if total_failed:
-            logger.warning(
-                "Twitter: %s/%s 个媒体下载失败",
-                total_failed,
-                total_attempted,
+            log.warning(
+                LogEvent("media.download_failed", failed=total_failed, attempted=total_attempted)
             )
         if not incremental and total_failed == 0:
             await asyncio.to_thread(_write_backfill_state, backfill_state, user_id)
-            logger.info("Twitter: 首次全量回填完成")
-        logger.info("Twitter: 共下载 %s 张新图片", total_new)
+            log.info(LogEvent("backfill.done"))
+        log.info(LogEvent("fetch.done", new_images=total_new))
         return total_new
 
 
@@ -798,29 +816,22 @@ async def _run_background_fetch(context: Context) -> _FetchOutcome:
     except asyncio.CancelledError:
         raise
     except (TwitterConfigurationError, TwitterFetchError, TwitterMediaFetchError) as exc:
-        if isinstance(exc, TwitterConfigurationError):
-            component = "twitter.config"
-        elif isinstance(exc, TwitterMediaFetchError):
-            component = "twitter.fetch_media"
+        if isinstance(exc, TwitterFetchError) and not isinstance(exc.__cause__, _UPSTREAM_ERRORS):
+            # 时间线处理本身出错，不是上游故障：按意外错误记录清洗后的诊断。
+            log_public_error(context, exc, component="twitter.fetch_timeline")
         else:
-            component = "twitter.fetch_timeline"
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = component,
-        )
+            # 配置缺失和上游故障都是已处理的降级，用户收到对应的提示。
+            log.warning(LogEvent("fetch.failed", error=exc, cause=exc.__cause__))
         return _FetchOutcome(count=0, message=exc.user_message(), succeeded=False)
     except Exception as exc:
         message = public_error_message(
             context,
             exc,
-            logger    = logger,
-            component = "twitter.background_fetch",
+            component="twitter.background_fetch",
         )
         return _FetchOutcome(count=0, message=message, succeeded=False)
 
-    logger.info("Twitter 后台抓取完成: 新下载 %s 张图片", count)
+    log.info(LogEvent("background_fetch.done", new_images=count))
     if count == 0:
         save_dir     = _image_dir(context)
         cached_names = await asyncio.to_thread(_list_cached_image_names, save_dir)
@@ -850,7 +861,7 @@ def _clear_fetch_task(task: asyncio.Task[_FetchOutcome]) -> None:
     try:
         task.result()
     except Exception as exc:  # 防御：正常异常已在 _run_background_fetch 内转换。
-        logger.error("Twitter background fetch escaped error_type=%s", type(exc).__name__)
+        log.error(LogEvent("background_fetch.escaped", error=exc))
 
 
 def _get_or_start_fetch(context: Context) -> tuple[asyncio.Task[_FetchOutcome], bool]:
@@ -897,17 +908,16 @@ async def _send_manual_result(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "twitter.manual_fetch_delivery",
+            component="twitter.manual_fetch_delivery",
         )
         return
     if delivered is False:
-        logger.warning("Twitter 后台抓取结果未被 OneBot 确认")
+        log.warning(LogEvent("manual_result.not_acknowledged"))
     elif delivered is None:
-        logger.warning("Twitter 后台抓取结果已提交，但最终投递回执未知")
+        log.warning(LogEvent("manual_result.receipt_unknown"))
 
 
 def _clear_manual_notification(task: asyncio.Task[None]) -> None:
@@ -919,7 +929,7 @@ def _clear_manual_notification(task: asyncio.Task[None]) -> None:
     try:
         task.result()
     except Exception as exc:  # 防御：通知函数已处理普通发送异常。
-        logger.error("Twitter manual notification escaped error_type=%s", type(exc).__name__)
+        log.error(LogEvent("manual_notification.escaped", error=exc))
 
 
 def _start_manual_notification(
@@ -1036,7 +1046,7 @@ async def _get_random_image(context: Context) -> DeliverySegments | None:
         if not available:
             if reserved:
                 return None
-            logger.info("所有 Twitter 图片都已发送过，重置发送轮次")
+            log.info(LogEvent("images.round_reset"))
             available   = local_images.copy()
             reset_round = True
 
@@ -1053,8 +1063,8 @@ async def _get_random_image(context: Context) -> DeliverySegments | None:
                 except (ImageValidationError, OSError):
                     try:
                         await asyncio.to_thread(selected_path.unlink, missing_ok=True)
-                    except OSError:
-                        logger.debug("损坏的 Twitter 图片缓存暂时无法删除")
+                    except OSError as exc:
+                        log.error(LogEvent("cache.corrupt_unlink_failed", error=exc))
                     selected_path = None
             available.remove(selected_name)
         if selected_path is None or selected_name is None:
@@ -1147,8 +1157,7 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger    = logger,
-            component = "twitter.handle",
+            component="twitter.handle",
         )
 
 
@@ -1157,6 +1166,6 @@ async def scheduled_fetch(context: Context) -> None:
 
     _task, started = _get_or_start_fetch(context)
     if started:
-        logger.info("Twitter 定时后台抓取已启动")
+        log.info(LogEvent("scheduled_fetch.started"))
     else:
-        logger.info("Twitter 已有抓取任务运行，跳过重复定时启动")
+        log.info(LogEvent("scheduled_fetch.skipped", reason_code="already_running"))

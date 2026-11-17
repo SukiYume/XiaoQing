@@ -355,7 +355,19 @@ Listener、token、管理员状态与插件 Context 按 revision 发布。
 
 ## 🩺 13. 观测与排障
 
-每轮事件关联 request ID。
+每轮事件关联一个 request ID，它是 `logs/xiaoqing.log` 每行的第二个方括号列，例如 `[3f9a1c2e]`。
+ID 在事件进入时生成：主动 WebSocket 在客户端收到事件时，入站 HTTP 每个请求一个，入站 WebSocket 每帧一个。
+同一条消息从接收、插件处理、回复发送到回执结算，Core 和插件的各行带同一个 ID，按它搜索就能串起整轮处理。
+处理失败的 `ws.handler.failed` / `ws.handler.fatal`、队列满时丢掉最旧事件的 `ws.queue.full`，以及入站事件的结果没能发出（处理被取消后才返回、被丢弃或遇上停机）时回执的回滚，都记在各自事件的 ID 下。
+入站调度的 worker 和主动 WebSocket 按发送者排队的 drainer 依次处理多个事件，自己不带 ID。
+代为执行的命令在发起那一轮的 ID 后加 `.command.<操作 ID>`；每次定时任务运行另有一个 ID；不属于任何请求的行是 `-`。
+
+两个入口的接收记录：
+
+- 主动 WebSocket 收到的每个事件记一条 DEBUG 级的 `ws.event.received`（`core.onebot`），Action 的响应帧不记。
+- 入站 HTTP 监听器每个请求记一条 `inbound.http.access`（`core.server`），字段是 `method`（标准方法，其他写 `OTHER`）、`status`、`route`（命中的路由模板，没有命中时省略）和 `elapsed_s`；状态码小于 400 记 DEBUG，400 及以上记 WARNING。`POST /event` 的这一行带这个事件的 request ID，其他路由是 `-`。请求路径、查询串、请求头、User-Agent 和对端地址不记，aiohttp 自带的访问日志不写。
+
+DEBUG 级的接收记录要在 `logging.levels` 里打开，例如 `{"core.onebot": "DEBUG", "core.server": "DEBUG"}`。
 建议按以下顺序检查日志：
 
 1. Inbound 或主动 WebSocket 接收记录
@@ -386,6 +398,7 @@ Listener、token、管理员状态与插件 Context 按 revision 发布。
 | 插件代与执行 | `core/plugin_generation.py`, `core/plugin_runtime.py`, `core/plugin_execution.py` |
 | 出站回执 | `core/delivery.py`, `core/app_delivery.py` |
 | 配置 revision | `core/config.py`, `core/app_config_apply.py` |
+| 日志与 request ID 作用域 | `core/log.py` |
 
 ---
 

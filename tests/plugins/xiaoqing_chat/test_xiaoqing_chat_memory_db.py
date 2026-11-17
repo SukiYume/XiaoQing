@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -66,7 +65,9 @@ def test_memory_db_save_keeps_dirty_when_shared_write_fails(
         db.save()
 
     assert db.is_dirty() is True
-    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    assert [
+        (record.levelno, record.msg.name, record.msg.fields["error"]) for record in caplog.records
+    ] == [(logging.WARNING, "memory_db.save_failed", "OSError")]
 
 
 def test_memory_db_save_keeps_dirty_when_new_write_happens_during_save(
@@ -336,7 +337,6 @@ def _runtime_context(plugin_dir: Path, data_dir: Path, config: dict, revision: i
         plugin_dir = plugin_dir,
         data_dir   = data_dir,
         get_settings_snapshot=lambda: settings_snapshot(config=config, revision=revision),
-        logger=MagicMock(),
     )
 
 

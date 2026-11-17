@@ -17,6 +17,7 @@ from core.interfaces import (
     PluginContextProtocol,
     SecretAdminCapability,
 )
+from core.log import LogEvent
 from core.plugin_base import build_action, run_sync, segments
 from core.public_errors import public_error_response
 from core.router import CommandCatalogNode, resolve_catalog_invocation
@@ -77,7 +78,7 @@ def mask_secret(value: Any) -> str:
             return f"{{<{len(value)} keys>}}"
         return "[hidden]"
     except Exception as exc:
-        logger.error("遮罩密钥失败 error_type=%s", type(exc).__name__)
+        logger.error(LogEvent("mask_secret.failed", error=exc))
         return "[error]"
 
 
@@ -131,10 +132,13 @@ async def handle(
 ) -> list[dict[str, Any]]:
     """命令处理入口"""
     try:
-        logged_args = (
-            "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
+        logger.info(
+            LogEvent(
+                "command.run",
+                command_name = command,
+                args_length  = len(args),
+            )
         )
-        logger.info("核心命令: %s, 参数: %s", command, logged_args)
 
         usage = _NO_ARGUMENT_USAGE.get(command)
         if usage is not None and args.strip():
@@ -164,11 +168,11 @@ async def handle(
         if command == "metrics":
             return await _handle_metrics(context)
 
-        logger.warning("未知命令: %s", command)
+        logger.warning(LogEvent("command.unknown", command_name=command))
         return segments("❌ 未知命令")
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.handle")
+        return public_error_response(context, exc, component="bot_core.handle")
 
 
 # ============================================================
@@ -185,7 +189,7 @@ def _handle_help(
     try:
         catalog = context.get_command_catalog()
         if not catalog:
-            logger.warning("查询帮助信息为空")
+            logger.warning(LogEvent("help.empty"))
             return segments("❌ 暂无命令")
 
         output_format, query, page = _parse_help_request(keyword)
@@ -244,11 +248,11 @@ def _handle_help(
         )
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.help")
+        return public_error_response(context, exc, component="bot_core.help")
 
 
 def _help_not_found(query: str) -> list[dict[str, Any]]:
-    logger.info("未找到关键词 %r 相关的命令", query)
+    logger.info(LogEvent("help.not_found", query=query))
     return segments(
         f"❌ 未找到与“{query}”相关的命令\n查看插件：/help <插件名>\n搜索功能：/help search <关键词>"
     )
@@ -792,7 +796,7 @@ async def _deliver_reload_completion(
 
     action = build_action(segments(message), user_id, group_id)
     if action is None:
-        logger.error("插件重载结果无法投递：缺少有效会话目标")
+        logger.error(LogEvent("reload.notify.no_target"))
         return
 
     # 完成回调继承了原事件的 ContextVar。显式绕过事件收集器，确保后台结果
@@ -803,13 +807,13 @@ async def _deliver_reload_completion(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error("插件重载结果发送失败: error_type=%s", type(exc).__name__)
+        logger.error(LogEvent("reload.notify.send_failed", error=exc))
         return
 
     if delivered is False:
-        logger.warning("插件重载结果未被 OneBot 确认")
+        logger.warning(LogEvent("reload.notify.unconfirmed"))
     elif delivered is None:
-        logger.warning("插件重载结果已提交，但最终投递回执未知")
+        logger.warning(LogEvent("reload.notify.receipt_unknown"))
 
 
 def _consume_reload_delivery_task(task: asyncio.Task[None]) -> None:
@@ -820,7 +824,7 @@ def _consume_reload_delivery_task(task: asyncio.Task[None]) -> None:
     try:
         task.result()
     except Exception as exc:  # 防御：普通发送异常已在协程内记录。
-        logger.error("插件重载通知任务异常退出: error_type=%s", type(exc).__name__)
+        logger.error(LogEvent("reload.notify.task_failed", error=exc))
 
 
 def _register_reload_completion_notification(
@@ -832,7 +836,7 @@ def _register_reload_completion_notification(
     """为一个 Core 重载任务登记至多一个跨插件代完成通知。"""
 
     if not isinstance(reload_task, asyncio.Future):
-        logger.error("插件重载任务不支持完成通知: type=%s", type(reload_task).__name__)
+        logger.error(LogEvent("reload.notify.unsupported", task_type=type(reload_task).__name__))
         return False
     if getattr(reload_task, _RELOAD_NOTIFICATION_MARKER, False):
         return True
@@ -840,7 +844,7 @@ def _register_reload_completion_notification(
     try:
         setattr(reload_task, _RELOAD_NOTIFICATION_MARKER, True)
     except Exception as exc:
-        logger.error("插件重载任务无法登记完成通知: error_type=%s", type(exc).__name__)
+        logger.error(LogEvent("reload.notify.register_failed", error=exc))
         return False
 
     principal = context.principal
@@ -849,14 +853,14 @@ def _register_reload_completion_notification(
 
     def on_reload_done(done_task: asyncio.Future[Any]) -> None:
         if done_task.cancelled():
-            logger.info("插件重载任务已取消，不发送完成通知")
+            logger.info(LogEvent("reload.task.cancelled"))
             return
         try:
             # Core 的重载任务以 bool 报告最终结果。
             succeeded = done_task.result() is True
         except BaseException as exc:
             succeeded = False
-            logger.error("插件重载任务异常结束: error_type=%s", type(exc).__name__)
+            logger.error(LogEvent("reload.task.failed", error=exc))
 
         elapsed_seconds = max(0.0, time.monotonic() - started_at)
         delivery        = _deliver_reload_completion(
@@ -873,7 +877,7 @@ def _register_reload_completion_notification(
             )
         except (RuntimeError, TypeError) as exc:
             delivery.close()
-            logger.error("无法创建插件重载通知任务: error_type=%s", type(exc).__name__)
+            logger.error(LogEvent("reload.notify.create_failed", error=exc))
             return
         delivery_task.add_done_callback(_consume_reload_delivery_task)
 
@@ -884,7 +888,7 @@ def _register_reload_completion_notification(
 async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]:
     """重载配置，并在后台启动全量插件重载。"""
     try:
-        logger.info("开始重载配置和插件")
+        logger.info(LogEvent("reload.start"))
         await run_sync(context.reload_config)
 
         # reload_plugins() 的契约是创建并返回后台任务。这里不能等待该任务：
@@ -893,7 +897,7 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         started_at  = time.monotonic()
         reload_task = context.reload_plugins()
         if reload_task is None:
-            logger.warning("配置已重载，但插件后台重载未启动")
+            logger.warning(LogEvent("reload.plugins_not_started"))
             return DeliverySegments(
                 segments("⚠️ 配置已重载，但插件重载未启动"),
                 outcome=CommandOutcome("incomplete"),
@@ -905,19 +909,19 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
             started_at = started_at,
         )
         if not notification_ready:
-            logger.warning("配置已重载，但插件重载完成通知未登记")
+            logger.warning(LogEvent("reload.notify.unregistered"))
             return DeliverySegments(
                 segments("⚠️ 配置已重载，插件正在后台重载，但完成通知不可用"),
                 outcome=CommandOutcome("accepted"),
             )
 
-        logger.info("配置已重载，插件后台重载已启动")
+        logger.info(LogEvent("reload.started"))
         return DeliverySegments(
             segments("✅ 配置已重载，插件正在后台重载，完成后通知"),
             outcome=CommandOutcome("accepted"),
         )
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.reload")
+        return public_error_response(context, exc, component="bot_core.reload")
 
 
 def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
@@ -925,15 +929,15 @@ def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
     try:
         plugins = context.list_plugins()
         if not plugins:
-            logger.warning("插件列表为空")
+            logger.warning(LogEvent("plugins.empty"))
             return segments("❌ 暂无插件")
 
         header = f"🔌 已加载插件 ({len(plugins)}):\n"
         body   = "\n".join(f"  • {name}" for name in plugins)
-        logger.info("显示插件列表: %d 个", len(plugins))
+        logger.info(LogEvent("plugins.list", count=len(plugins)))
         return segments(header + body)
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.plugins")
+        return public_error_response(context, exc, component="bot_core.plugins")
 
 
 def _handle_mute(
@@ -947,7 +951,7 @@ def _handle_mute(
 
         # 私聊不支持静音
         if group_id is None:
-            logger.info("私聊不支持静音命令")
+            logger.info(LogEvent("mute.skip.private"))
             return segments("❌ 私聊不支持此命令")
 
         # 只有空参数使用默认值；畸形、非有限或非正数不能静默变成 10 分钟。
@@ -963,7 +967,9 @@ def _handle_mute(
 
         # 限制最大时长
         if duration > MAX_MUTE_MINUTES:
-            logger.warning("静音时长超过限制: %s > %s", duration, MAX_MUTE_MINUTES)
+            logger.warning(
+                LogEvent("mute.too_long", minutes=duration, max_minutes=MAX_MUTE_MINUTES)
+            )
             return segments(f"❌ 静音时长过长，最多支持 {MAX_MUTE_MINUTES // 60} 小时")
 
         # 执行静音
@@ -971,11 +977,11 @@ def _handle_mute(
 
         time_str = f"{duration / 60:g} 小时" if duration >= 60 else f"{duration:g} 分钟"
 
-        logger.info("群 %s 设置静音: %s 分钟", group_id, duration)
+        logger.info(LogEvent("mute.set", group_id=group_id, minutes=duration))
         return segments(f"🤐 好的，我会安静 {time_str}")
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.mute")
+        return public_error_response(context, exc, component="bot_core.mute")
 
 
 def _handle_unmute(
@@ -987,22 +993,24 @@ def _handle_unmute(
         group_id = event.get("group_id")
 
         if group_id is None:
-            logger.info("私聊不支持说话命令")
+            logger.info(LogEvent("unmute.skip.private"))
             return segments("❌ 私聊不支持此命令")
 
         # 检查是否在静音中
         remaining = context.get_mute_remaining(group_id)
         if remaining <= 0:
-            logger.info("群 %s 未在静音中", group_id)
+            logger.info(LogEvent("unmute.not_muted", group_id=group_id))
             return segments("😊 我本来就没闭嘴啊~")
 
         # 解除静音
         context.unmute_group(group_id)
-        logger.info("群 %s 解除静音，剩余 %.1f 分钟", group_id, remaining)
+        logger.info(
+            LogEvent("unmute.done", group_id=group_id, remaining_minutes=round(remaining, 1))
+        )
         return segments("😊 好的，我又可以说话啦！")
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.unmute")
+        return public_error_response(context, exc, component="bot_core.unmute")
 
 
 async def _handle_set_secret(
@@ -1036,27 +1044,27 @@ async def _handle_set_secret(
 
         capability = _secret_admin_capability(context)
         if capability is None:
-            logger.warning("全局密钥更新被拒绝：管理能力不可用")
+            logger.warning(LogEvent("secret.set.denied"))
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
         await run_sync(capability.set, path, parsed_value)
 
         masked_value = mask_secret(parsed_value)
-        logger.info("已更新配置: %s = %s", path, masked_value)
+        logger.info(LogEvent("secret.set.done", config_name=path))
         return segments(f"✅ 已更新 {path}\n新值: {masked_value}")
     except KeyError:
-        # 路径不存在
-        logger.warning("配置路径不存在: %s", path)
+        # 路径不存在。没对上任何配置项的路径是未经核对的输入（可能是贴错位置的密钥），不进日志。
+        logger.warning(LogEvent("secret.set.missing"))
         return segments("❌ 配置路径不存在\n\n💡 提示: 使用 /get_secret 查看现有配置路径")
     except ValueError:
-        # 路径类型错误
-        logger.warning("配置路径类型错误: %s", path)
+        # 路径类型错误；理由同上，路径不进日志。
+        logger.warning(LogEvent("secret.set.type_error"))
         return segments("❌ 配置路径或值格式错误")
     except PermissionError:
-        logger.warning("全局密钥更新在提交前失去授权")
+        logger.warning(LogEvent("secret.set.unauthorized"))
         return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.set_secret")
+        return public_error_response(context, exc, component="bot_core.set_secret")
 
 
 def _handle_get_secret(
@@ -1080,7 +1088,7 @@ def _handle_get_secret(
 
         capability = _secret_admin_capability(context)
         if capability is None:
-            logger.warning("全局密钥读取被拒绝：管理能力不可用")
+            logger.warning(LogEvent("secret.get.denied"))
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
         current = capability.get(path)
@@ -1089,21 +1097,21 @@ def _handle_get_secret(
             keys_list = [str(key) for key in current]
             hidden    = len(keys_list) - MAX_DISPLAYED_SECRET_KEYS
             suffix    = f", ... 还有 {hidden} 个" if hidden > 0 else ""
-            logger.info("查询配置目录: %s, %d 个键", path, len(keys_list))
+            logger.info(LogEvent("secret.get.dir", config_name=path, keys=len(keys_list)))
             return segments(
                 f"🔑 {path} 包含以下键:\n  {', '.join(keys_list[:MAX_DISPLAYED_SECRET_KEYS])}{suffix}"
             )
 
-        logger.info("查询配置值: %s", path)
+        logger.info(LogEvent("secret.get.value", config_name=path))
         return segments(f"🔑 {path} = {mask_secret(current)}")
     except KeyError:
-        logger.info("配置路径不存在: %s", path)
+        logger.info(LogEvent("secret.get.missing"))
         return segments(f"❌ 路径 {path} 不存在")
     except PermissionError:
-        logger.warning("全局密钥读取在返回前失去授权")
+        logger.warning(LogEvent("secret.get.unauthorized"))
         return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.get_secret")
+        return public_error_response(context, exc, component="bot_core.get_secret")
 
 
 async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]]:
@@ -1111,12 +1119,12 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
     try:
         metrics = getattr(context, "metrics", None)
         if metrics is None:
-            logger.warning("Metrics 未启用")
+            logger.warning(LogEvent("metrics.disabled"))
             return segments("❌ Metrics 未启用")
 
         summary = await metrics.get_summary()
         if not isinstance(summary, Mapping) or not summary:
-            logger.warning("无法获取 Metrics 数据")
+            logger.warning(LogEvent("metrics.unavailable"))
             return segments("❌ 无法获取 Metrics 数据")
 
         raw_global_stats = summary.get("global", {})
@@ -1157,11 +1165,11 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
             if slow_lines:
                 lines.extend((METRICS_SEPARATOR, "⚠️ 最慢插件:", *slow_lines))
 
-        logger.info("查询运行指标")
+        logger.info(LogEvent("metrics.shown"))
         return segments("\n".join(lines))
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="bot_core.metrics")
+        return public_error_response(context, exc, component="bot_core.metrics")
 
 
 def _parse_duration(text: str) -> float | None:

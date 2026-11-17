@@ -74,7 +74,7 @@ HTML、图片字节、MIME、尺寸和像素均有校验限制。缓存名由图
 
 1. 使用 `/apod` 验证页面抓取。
 2. 检查 `allowed_hosts` 与最终媒体主机。
-3. 检查日志中的 DNS、安全策略、HTTP 状态、重定向、MIME 和图片解码结果。
+3. 查看日志：`request.unsafe_url` 表示 DNS、`allowed_hosts` 或重定向校验未通过，`page.fetch_failed` 表示页面没有返回成功响应，`image.download_failed` 的异常类型对应图片下载、MIME 或解码失败。日志不记 URL 和 HTTP 状态码。
 4. 检查 `data/apod/` 写入权限与缓存容量。
 
 ---

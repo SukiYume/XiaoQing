@@ -24,9 +24,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from core.log import LogEvent
+
 from ..utils import load_plugin_config
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _PLUGIN_DIR                 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CONTENT_HASH_LIMIT_BYTES   = 1024 * 1024
@@ -352,7 +354,7 @@ def resolve_model_path(model_path: str | None = None) -> str:
 
     resolved = _join_plugin_path(configured)
     if configured_value is not None and not os.path.isdir(resolved):
-        logger.error("Configured model path is unavailable: model.path")
+        log.error(LogEvent("model.path_unavailable"))
     return resolved
 
 
@@ -370,7 +372,7 @@ def load_training_config(model_path: str) -> dict[str, Any]:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError("training_config.json must contain a JSON object")
-    logger.info("Loaded training config from %s", cfg_file)
+    log.info(LogEvent("training_config.loaded"))
     return payload
 
 

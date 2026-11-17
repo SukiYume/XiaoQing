@@ -19,13 +19,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 from ..core.exceptions import AmbiguousIdentifierException, PendoException
 from ..services.db import Database
 from .api import create_api_router
 from .deps import set_db
 
-logger = logging.getLogger("pendo.web")
+log = logging.getLogger(__name__)
 
 _app       : FastAPI | None          = None
 _server    : uvicorn.Server | None   = None
@@ -148,10 +150,7 @@ def _run_server(server: uvicorn.Server, host: str, port: int) -> None:
         server.run()
     except BaseException as exc:
         _last_error = _format_start_error(host, port, exc)
-        logger.error(
-            "Pendo Web UI crashed during startup error_type=%s",
-            type(exc).__name__,
-        )
+        log.error(LogEvent("web.crashed", error=exc))
 
 
 def _validated_timeout(value: float, *, field_name: str) -> float:
@@ -201,12 +200,12 @@ def start(db: Database) -> bool:
                 "请在 TLS 反向代理后设置 "
                 "plugins.pendo.web_session_cookie_secure=true。"
             )
-            logger.error(_last_error)
+            log.error(LogEvent("web.start_refused", reason_code="insecure_non_loopback_bind"))
             return False
 
         _last_error = None
         _app        = create_app(db)
-        config = uvicorn.Config(_app, host=host, port=port, log_level="warning")
+        config = uvicorn.Config(_app, host=host, port=port, log_level="warning", log_config=None)
         server = uvicorn.Server(config)
         thread = threading.Thread(
             target = _run_server,
@@ -227,14 +226,20 @@ def start(db: Database) -> bool:
         # 不能清空全局引用后让它在后台继续完成启动。
         for _ in range(20):
             if getattr(server, "started", False):
-                logger.info("Pendo Web UI started on http://%s:%d", host, port)
+                log.info(LogEvent("web.started", host=host, port=port))
                 return True
             if not thread.is_alive():
                 break
             time.sleep(0.05)
 
         _last_error = _last_error or f"Web UI 未能在 {host}:{port} 上完成启动"
-        logger.warning("Pendo Web UI startup failed: %s", _last_error)
+        log.warning(
+            LogEvent(
+                "web.start_failed",
+                reason_code = "start_timeout" if thread.is_alive() else "thread_exited",
+                port        = port,
+            )
+        )
         stopped = not thread.is_alive() or _request_thread_stop(server, thread, timeout=1.0)
         if stopped:
             _reset_state()
@@ -254,15 +259,17 @@ def stop(timeout: float = 5.0) -> bool:
             return False
 
         if not _request_thread_stop(_server, _thread, timeout=normalized_timeout):
-            logger.warning(
-                "Pendo Web UI did not stop within %.1fs",
-                normalized_timeout + min(1.0, normalized_timeout),
+            log.warning(
+                LogEvent(
+                    "web.stop_timeout",
+                    timeout_s=round(normalized_timeout + min(1.0, normalized_timeout), 1),
+                )
             )
             return False
 
         _reset_state()
         _last_error = None
-        logger.info("Pendo Web UI stopped")
+        log.info(LogEvent("web.stopped"))
         return True
 
 

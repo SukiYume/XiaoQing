@@ -10,12 +10,14 @@ import aiohttp
 from core.bounded_http import (
     JSON_MIME_POLICY,
     BodyLimits,
+    BoundedHttpError,
     JsonLimits,
     MimePolicy,
     aiohttp_request_bounded,
     parse_bounded_json,
 )
-from core.public_errors import public_error_message
+from core.log import LogEvent
+from core.public_errors import log_public_error
 
 from .constants import (
     ADS_BIBCODE_PATTERN,
@@ -29,7 +31,7 @@ from .constants import (
     DEFAULT_MAX_RESULTS,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _ADS_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 _ADS_BODY_LIMITS = BodyLimits(
@@ -201,13 +203,13 @@ class ADSClient:
                 return None
             bibtex = data.get("export", "")
             return bibtex.strip() if isinstance(bibtex, str) and bibtex else None
-        except Exception as exc:
-            public_error_message(
-                self.context,
-                exc,
-                logger    = logger,
-                component = "ads_paper.bibtex",
+        except (aiohttp.ClientError, TimeoutError, BoundedHttpError) as exc:
+            log.warning(
+                LogEvent("bibtex.fetch_failed", status=getattr(exc, "status", None), error=exc)
             )
+            return None
+        except Exception as exc:
+            log_public_error(self.context, exc, component="ads_paper.bibtex")
             return None
 
     async def get_paper_by_bibcode(self, bibcode: str) -> dict[str, Any] | None:

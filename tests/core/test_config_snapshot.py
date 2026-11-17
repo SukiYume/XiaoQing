@@ -11,6 +11,7 @@ import pytest
 
 import tests.helpers.config_test_support as _fixture_support
 from core.config import _check_secrets_file_permissions
+from tests.helpers.assertions import logged_events
 from tests.helpers.config_test_support import (
     ConfigManager,
     ConfigSnapshot,
@@ -160,8 +161,9 @@ class TestCheckSecretsFilePermissions:
         with caplog.at_level(logging.INFO):
             _check_secrets_file_permissions(test_file)
 
-        # 应该记录 info 级别日志（消息中包含 "Running on Windows"）
-        assert any("Running on Windows" in record.message for record in caplog.records)
+        # 应该记录 INFO 级别事件，说明 Windows 上跳过了权限位检查
+        (skipped,) = logged_events(caplog, "config.secrets_permissions.skipped")
+        assert skipped.fields["platform"] == "windows"
 
 
 class TestConfigHotReload:

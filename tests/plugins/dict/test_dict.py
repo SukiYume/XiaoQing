@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
 from core.plugin_base import has_control_characters
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.dict import main as dict_main
-from tests.helpers.assertions import text_segments_text
+from tests.helpers.assertions import logged_events, text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT       = REPOSITORY_ROOT
@@ -21,14 +22,14 @@ PLUGIN_DIR = ROOT / "plugins" / "dict"
 
 @pytest.fixture
 def context() -> SimpleNamespace:
-    return SimpleNamespace(plugin_dir=PLUGIN_DIR, logger=MagicMock(), request_id="dict-test")
+    return SimpleNamespace(plugin_dir=PLUGIN_DIR, request_id="dict-test")
 
 
 @pytest.fixture
 def empty_context(temp_data_dir: Path) -> SimpleNamespace:
     """插件目录里没有词典资源：任何真正去读词典的命令都会得到资源错误。"""
 
-    return SimpleNamespace(plugin_dir=temp_data_dir, logger=MagicMock(), request_id="dict-test")
+    return SimpleNamespace(plugin_dir=temp_data_dir, request_id="dict-test")
 
 
 @pytest.mark.asyncio
@@ -253,24 +254,27 @@ async def test_public_query_api_validates_exact_types(
 
 @pytest.mark.asyncio
 async def test_public_query_api_hides_missing_context_details() -> None:
-    context = SimpleNamespace(logger=MagicMock(), request_id="dict-missing-context")
+    context = SimpleNamespace(request_id="dict-missing-context")
 
     result = await dict_main.query_astrodict("galaxy", context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in result
+    assert PUBLIC_ERROR_PREFIX in result
     assert "dict-missing-context" in result
     assert "dictionary plugin directory" not in result
 
 
 @pytest.mark.asyncio
-async def test_logs_do_not_include_query_text(context: SimpleNamespace) -> None:
+async def test_logs_do_not_include_query_text(
+    context: SimpleNamespace, caplog: pytest.LogCaptureFixture
+) -> None:
     canary = "DICT-PRIVATE-CANARY-2d84f7"
+    caplog.set_level(logging.INFO)
 
     await dict_main.handle("dict", canary, {}, context)
 
-    assert canary not in repr(context.logger.mock_calls)
-    (query_log,) = context.logger.info.call_args_list
-    assert len(canary) in query_log.args  # 只记查询的长度
+    assert canary not in caplog.text
+    (query_log,) = logged_events(caplog, "dict.query")
+    assert query_log.fields["query_length"] == len(canary)  # 只记查询的长度
 
 
 def test_manifest_and_every_packaged_row_are_consistent() -> None:

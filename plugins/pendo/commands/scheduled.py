@@ -10,8 +10,9 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from core.delivery import DeliveryReceipt, send_with_receipt
+from core.log import LogEvent
 from core.plugin_base import build_action, run_sync, segments
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from ..config import PendoConfig
 from ..models.item import EventItem, Item, ItemType, LedgerItem, TaskItem
@@ -30,7 +31,7 @@ from ..utils.time_utils import (
     parse_hhmm_to_minutes,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 JsonObject        = dict[str, Any]
 ActionList        = list[JsonObject]
@@ -279,31 +280,23 @@ async def _deliver_reminder(
         await send_with_receipt(context.send_action, action, receipt)
     except Exception as exc:
         await receipt.record(False)
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "pendo.scheduled.reminder_delivery",
+            component="pendo.scheduled.reminder_delivery",
         )
         return
     if receipt.callback_error is not None:
-        public_error_message(
+        log_public_error(
             context,
             receipt.callback_error,
-            logger    = logger,
-            component = "pendo.scheduled.reminder_settlement",
+            component="pendo.scheduled.reminder_settlement",
         )
         return
     if receipt.outcome is False:
-        logger.warning(
-            "提醒未被 OneBot 确认，保留待重试状态 item=%s",
-            delivery.item_id,
-        )
+        log.warning(LogEvent("reminder.not_acknowledged", item_id=delivery.item_id))
     elif receipt.outcome is None:
-        logger.warning(
-            "提醒投递结果未知，保留当前租约直至过期 item=%s",
-            delivery.item_id,
-        )
+        log.warning(LogEvent("reminder.outcome_unknown", item_id=delivery.item_id))
 
 
 async def check_reminders(
@@ -393,9 +386,9 @@ async def _deliver_daily_briefing(
         run, "daily_briefing", user_id, period_key, "last_daily_briefing_date", period_key, compose
     )
     if delivered is True:
-        logger.info("Sent daily briefing to user %s", user_id)
+        log.info(LogEvent("briefing.sent", user_id=user_id))
     elif delivered is False:
-        logger.warning("Daily briefing was not delivery-confirmed for user %s", user_id)
+        log.warning(LogEvent("briefing.not_confirmed", user_id=user_id))
 
 
 async def _active_user_bundles(db: Database) -> tuple[list[str], dict[str, SettingsBundle]]:
@@ -428,11 +421,10 @@ async def _run_for_active_users(
         else:
             user_ids, bundles = await _get_active_user_ids(db), {}
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = f"pendo.scheduled.{component}",
+            component=f"pendo.scheduled.{component}",
         )
         return run.messages
 
@@ -440,11 +432,10 @@ async def _run_for_active_users(
         try:
             await deliver(run, user_id, bundles[user_id] if load_settings else {})
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = logger,
-                component = f"pendo.scheduled.{component}_user",
+                component=f"pendo.scheduled.{component}_user",
             )
     return run.messages
 
@@ -510,10 +501,12 @@ async def prune_operation_logs(_context: object, db: Database) -> ActionList:
     """执行审计日志保留策略，并记录本轮清理数量。"""
 
     result = cast(dict[str, int], await run_sync(db.prune_operation_logs))
-    logger.info(
-        "Pendo operation-log retention finished: deleted=%s redacted=%s",
-        result["deleted"],
-        result["redacted"],
+    log.info(
+        LogEvent(
+            "operation_log.retention_done",
+            deleted  = result["deleted"],
+            redacted = result["redacted"],
+        )
     )
     return []
 
@@ -633,13 +626,12 @@ async def cleanup_expired_demo_data(context: object, db: Database) -> ActionList
     try:
         cleaned = await run_sync(purge_expired_demo_users, db)
         if cleaned:
-            logger.info("Cleaned up %s expired Pendo Web demo users", cleaned)
+            log.info(LogEvent("demo_users.cleaned", count=cleaned))
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = logger,
-            component = "pendo.scheduled.demo_cleanup",
+            component="pendo.scheduled.demo_cleanup",
         )
     return []
 
@@ -666,7 +658,9 @@ def _build_private_action(
     try:
         numeric_user_id = int(str(user_id))
     except (TypeError, ValueError):
-        logger.debug("Skipping scheduled private message for non-numeric owner_id=%s", user_id)
+        log.debug(
+            LogEvent("private_message.skip", reason_code="non_numeric_owner", owner_id=user_id)
+        )
         return None
     action = build_action(segments(message), numeric_user_id, None)
     if action is not None and delivery_key:
@@ -822,10 +816,7 @@ async def _send_claimed_private(
     if receipt.callback_error is not None:
         raise receipt.callback_error
     if receipt.outcome is None:
-        logger.warning(
-            "Scheduled Pendo delivery outcome unknown; claim retained task=%s",
-            claim.task_name,
-        )
+        log.warning(LogEvent("delivery.outcome_unknown", task=claim.task_name, claim_retained=True))
         return False
     return receipt.committed
 
@@ -1201,12 +1192,14 @@ async def migrate_undone_todos(context: object, db: Database) -> ActionList:
                 f"📋 已将昨天的 {migrated_count} 个未完成待办迁移到今天"
                 "\n\n💡 使用 /pendo todo list today 查看",
             )
-        logger.info(
-            "Migrated %s undone todos for user %s from %s to %s",
-            migrated_count,
-            user_id,
-            yesterday,
-            today,
+        log.info(
+            LogEvent(
+                "todos.migrated",
+                count     = migrated_count,
+                user_id   = user_id,
+                from_date = yesterday,
+                to_date   = today,
+            )
         )
 
     return await _run_for_active_users(context, db, "todo_migration", migrate, load_settings=False)

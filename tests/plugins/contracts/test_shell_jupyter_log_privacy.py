@@ -9,12 +9,15 @@ import pytest
 import pytest_asyncio
 
 from core.process_tree import ProcessResult
-from core.sensitive_audit import summarize_sensitive
-from plugins.jupyter import jupyter_manager as manager_module
 from plugins.jupyter import main as jupyter_main
 from plugins.jupyter.jupyter_manager import JupyterKernelManager
 from plugins.shell import main as shell_main
-from tests.helpers.assertions import text_segments_text
+from tests.helpers.assertions import (
+    logged_events,
+    public_error_reply,
+    redacted_field,
+    text_segments_text,
+)
 from tests.helpers.jupyter_test_support import (
     FakeKernel,
     FakeKernelClient,
@@ -25,11 +28,6 @@ from tests.helpers.settings_snapshot import with_settings_reader
 COMMAND_CANARY = "SHELL_TOKEN_CANARY"
 CODE_CANARY    = "JUPYTER_CODE_CANARY"
 ERROR_CANARY   = "PRIVATE_EXCEPTION_CANARY"
-
-
-def _messages(caplog: pytest.LogCaptureFixture, *logger_names: str) -> str:
-    selected = set(logger_names)
-    return "\n".join(record.getMessage() for record in caplog.records if record.name in selected)
 
 
 @pytest.mark.asyncio
@@ -50,7 +48,7 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
         )
     )
 
-    with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+    with caplog.at_level(logging.INFO):
         response = await shell_main.handle(
             "shell",
             command,
@@ -58,9 +56,9 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
             context,
         )
 
-    logged  = _messages(caplog, shell_main.logger.name)
-    summary = summarize_sensitive(command)
-    argv    = run.await_args.args[0]
+    logged = caplog.text
+    events = logged_events(caplog, "execute")
+    argv   = run.await_args.args[0]
     assert argv[0] == "python"
     assert f"--token={COMMAND_CANARY}" in argv
     assert run.await_args.kwargs["timeout"] == 17
@@ -69,12 +67,8 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
     assert COMMAND_CANARY not in logged
     assert "operator-script.py" not in logged
     assert "PRIVATE_USER_ID" not in logged
-    assert f"payload_length={summary.length}" in logged
-    assert f"payload_bytes={summary.byte_length}" in logged
-    assert f"payload_fingerprint={summary.fingerprint}" in logged
-    assert "request_id=req-shell" in logged
-    assert "status=started" in logged
-    assert "status=succeeded" in logged
+    assert [event.fields["status"] for event in events] == ["started", "succeeded"]
+    assert all(event.fields["payload"] == redacted_field(command) for event in events)
 
 
 @pytest.mark.asyncio
@@ -96,19 +90,18 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
         )
     )
 
-    with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+    with caplog.at_level(logging.INFO):
         response = await shell_main.handle("shell", command, {}, context)
 
-    logged      = _messages(caplog, shell_main.logger.name)
+    logged      = "\n".join(record.getMessage() for record in caplog.records)
     public_text = text_segments_text(response)
-    assert "XQ-PLUGIN-UNEXPECTED" in public_text
-    assert "req-shell-error" in public_text
+    assert public_error_reply(public_text)["request_id"] == "req-shell-error"
     assert detail not in public_text
     assert ERROR_CANARY not in public_text
     assert ERROR_CANARY not in logged
     assert "shell-error.txt" not in logged
-    assert "error_type=RuntimeError" in logged
-    assert "status=error" in logged
+    [failed] = [e for e in logged_events(caplog, "execute") if e.fields["status"] == "error"]
+    assert failed.fields["error"] == "RuntimeError"
 
 
 @pytest_asyncio.fixture
@@ -144,22 +137,18 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
         request_id       = "req-jupyter",
     )
 
-    with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
+    with caplog.at_level(logging.INFO):
         response = await jupyter_main._handle_execute(code, context)
 
-    logged  = _messages(caplog, jupyter_main.logger.name)
-    summary = summarize_sensitive(code)
+    logged = caplog.text
+    events = logged_events(caplog, "execute")
     assert kernel_client.executed[-1] == code
     assert "ok" in text_segments_text(response)
     assert code not in logged
     assert CODE_CANARY not in logged
     assert "analysis.ipynb" not in logged
-    assert f"payload_length={summary.length}" in logged
-    assert f"payload_bytes={summary.byte_length}" in logged
-    assert f"payload_fingerprint={summary.fingerprint}" in logged
-    assert "request_id=req-jupyter" in logged
-    assert "status=started" in logged
-    assert "status=succeeded" in logged
+    assert [event.fields["status"] for event in events] == ["started", "succeeded"]
+    assert all(event.fields["payload"] == redacted_field(code) for event in events)
 
 
 @pytest.mark.asyncio
@@ -178,16 +167,22 @@ async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
         request_id       = "req-jupyter-error",
     )
 
-    with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
+    with caplog.at_level(logging.INFO):
         response = await jupyter_main._handle_execute(code, context)
 
-    logged      = _messages(caplog, jupyter_main.logger.name, manager_module.logger.name)
+    logged      = "\n".join(record.getMessage() for record in caplog.records)
     public_text = text_segments_text(response)
-    assert "执行失败，请稍后重试" in public_text
+    assert public_error_reply(public_text)["request_id"] == "req-jupyter-error"
     assert detail not in public_text
     assert ERROR_CANARY not in public_text
     assert CODE_CANARY not in logged
     assert ERROR_CANARY not in logged
     assert "kernel.json" not in logged
-    assert "error_type=RuntimeError" in logged
-    assert "status=error" in logged
+    # 执行器异常留一条终态审计（异常类型和代码指纹），回复里的说明另记一条 public_error。
+    events = logged_events(caplog, "execute")
+    assert [event.fields["status"] for event in events] == ["started", "error"]
+    assert events[-1].fields["error"] == "RuntimeError"
+    assert events[-1].fields["payload"] == redacted_field(code)
+    assert [event.fields["component"] for event in logged_events(caplog, "public_error")] == [
+        "jupyter.execute"
+    ]

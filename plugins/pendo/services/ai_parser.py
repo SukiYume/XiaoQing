@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from dateutil import parser
 
-from core.ai import declare_route_defaults, first_json_object
+from core.ai import AIRequestError, declare_route_defaults, first_json_object
 from core.args import chinese_number, parse_int
-from core.public_errors import public_error_message
+from core.log import LogEvent
+from core.public_errors import log_public_error
 
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.settings_utils import parse_custom_settings
@@ -31,7 +32,7 @@ from .rule_parser import RuleParser
 if TYPE_CHECKING:
     from .db import Database
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 日程解析和日记情绪分析共用 parse 这一条模型路由；主配置里只需要给 parse 指定模型。
 declare_route_defaults(
@@ -267,18 +268,13 @@ class AIParser:
     def _record_degraded_error(self, exc: BaseException, *, component: str) -> None:
         """记录可降级故障，同时避免把原始异常文本暴露到日志。"""
         if self.context is not None:
-            public_error_message(
+            log_public_error(
                 self.context,
                 exc,
-                logger    = logger,
-                component = component,
+                component=component,
             )
             return
-        logger.warning(
-            "%s degraded error_type=%s",
-            component,
-            type(exc).__name__,
-        )
+        log.warning(LogEvent("ai_parser.degraded", component=component, error=exc))
 
     def has_sensitive_data_consent(self, user_id: str) -> bool:
         """返回用户是否明确允许把日记内容交给外部 AI 分析。"""
@@ -303,6 +299,10 @@ class AIParser:
                 messages,
             )
             return result.content or None
+        except AIRequestError as exc:
+            # 模型网关超时或出错：调用方降级到规则解析。
+            log.warning(LogEvent("llm.failed", reason_code=exc.category, status=exc.status))
+            return None
         except Exception as exc:
             self._record_degraded_error(exc, component="pendo.ai_parser.llm")
             return None
@@ -358,7 +358,7 @@ class AIParser:
         # 检查速率限制
         allowed, wait_seconds = self._rate_limiter.check_rate_limit(user_id)
         if not allowed:
-            logger.warning("用户 %s 超过AI解析速率限制，等待 %s 秒", user_id, wait_seconds)
+            log.warning(LogEvent("ai_parse.rate_limited", user_id=user_id, wait_s=wait_seconds))
             return self._fallback_event_result(source_text, user_id, partial=partial)
 
         try:
@@ -387,7 +387,7 @@ class AIParser:
             # 来源由实际执行路径决定，不能接受模型自行声明为规则解析结果。
             parsed["parse_source"] = "ai"
 
-            logger.info("AI event parse completed: user=%s fields=%s", user_id, sorted(parsed))
+            log.info(LogEvent("ai_parse.done", user_id=user_id, field_count=len(parsed)))
 
             return self.build_event_result(parsed, source_text, user_id, partial=partial)
 
@@ -398,15 +398,18 @@ class AIParser:
     async def analyze_diary_mood(self, text: str, user_id: str) -> tuple[str | None, int | None]:
         """使用 AI 分析日记主情绪，失败时降级到规则情绪分析。"""
         if not self.has_sensitive_data_consent(user_id):
-            logger.info(
-                "AI diary analysis skipped: user=%s has not consented (chars=%d)",
-                user_id,
-                len(text),
+            log.info(
+                LogEvent(
+                    "diary_mood.skipped",
+                    reason_code = "no_consent",
+                    user_id     = user_id,
+                    length      = len(text),
+                )
             )
             return analyze_diary_mood_rule(text)
         allowed, wait_seconds = self._rate_limiter.check_rate_limit(user_id)
         if not allowed:
-            logger.warning("用户 %s 超过AI情绪分析速率限制，等待 %s 秒", user_id, wait_seconds)
+            log.warning(LogEvent("diary_mood.rate_limited", user_id=user_id, wait_s=wait_seconds))
             return analyze_diary_mood_rule(text)
 
         try:
@@ -653,7 +656,7 @@ class AIParser:
             if rules:
                 result["reminder_rules"] = rules
             else:
-                logger.warning("Pendo reminder offsets invalid: count=%d", len(offsets))
+                log.warning(LogEvent("reminder_offsets.invalid", count=len(offsets)))
 
     def build_remind_times_from_offsets(
         self,

@@ -232,7 +232,6 @@ split_message_segments(
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
-| `logger` | logger adapter | 自动附加 request ID 的插件日志器 |
 | `http_session` | `aiohttp.ClientSession \| None` | 应用拥有的共享 HTTP Session |
 | `send_action` | async callable | 主动发送 OneBot Action，并返回投递结果 |
 | `metrics` | `MetricsCollector \| None` | 运行指标 |
@@ -505,6 +504,51 @@ command_access(node, principal, *, is_bot_admin=None) -> str | None
 | `CommandOutcome(state, next_command="", result_text="", has_more=None, page=None, confirmation_command="")` | 命令的执行状态与机器可读结果，经 `DeliverySegments` 的 `outcome` 带出。`state` 取 `completed`、`accepted`（后台已接收，完成通知由原插件负责）、`error`、`incomplete`；`next_command` 指向下一页；`has_more` 为 `None` 表示分页完整性未知，`False` 表示末页；`page` 是当前页码；`confirmation_command` 是用户明确同意待确认操作后可原样续执行的命令 |
 | `merge_delivery_outcomes(outcomes)` | 把几部分各自的送达结果合成一个：任一部分明确失败为 `False`，全部明确送达为 `True`，其余为 `None` |
 | `await send_with_receipt(send_action, action, receipt)` | 主动发送一条带回执的 Action，并确保结果恰好结算一次 |
+
+---
+
+## 📌 日志（`core.log`）
+
+插件用 `logging.getLogger(__name__)` 取 logger，用 `LogEvent` 构造每条日志；字段规则、request ID 和级别约定见 [插件开发指南的日志与指标](03-plugin-development.md#日志与指标)。
+
+| 接口 | 说明 |
+|---|---|
+| `LogEvent(name, /, **fields)` | 一条已脱敏、已渲染的事件，作为 logger 方法的消息传入：`log.info(LogEvent("reply.done", chat_id=1))` |
+| `event.name` | 事件名 |
+| `event.fields` | `Mapping[str, object]`，脱敏、展开后的字段值，供测试读取 |
+| `str(event)` / `repr(event)` | 渲染后的文本 `name k1=v1 k2=v2`，不含原始值 |
+| `log_scope(request_id)` | 上下文管理器：块内的日志带上 `request_id`，传 `None` 表示清空，退出时恢复进入前的值。插件只在常驻循环里使用 |
+| `current_request_id()` | 当前作用域的 request ID，不在任何作用域内时为 `None` |
+| `new_request_id()` | 新的 8 位十六进制 request ID。Core 为每条入站消息（连同它的回复发送）和每次定时任务运行各生成一个，插件不需要调用 |
+| `summarize_exception(exc)` | 返回 `ExceptionSummary`：异常里能安全写出去的部分，不含异常消息 |
+| `ExceptionSummary(type_name, location, cause, details)` | `type_name` 类型名；`location` 出错位置 `文件:行`（规则同字段 `error.at`），没有回溯时为 `None`；`cause` 异常链最里层的类型名或 `None`；`details` 状态码一类的属性（`status`、`errno`、`winerror`、`returncode`、`lineno`、`colno`、`sqlite`、`module`）。作为 `LogEvent` 的字段值时和异常本身渲染成一样的字段 |
+| `exception_chain(exc)` | `exc` 和它的 `__cause__` / 未抑制的 `__context__`，从外到里的列表，最多 8 个 |
+
+`LoggingSettings`、`setup_logging()`、`bootstrap_logging()` 和 `asyncio_exception_handler()` 属于进程启动流程，插件不调用：进程入口读配置之前调 `bootstrap_logging()`，只开控制台输出，并把未捕获异常的出口换成日志事件；`XiaoQingApp` 读到配置后调 `setup_logging(settings, log_dir)` 换成配置的出口；`app.start()` 把 `asyncio_exception_handler` 装到事件循环上，没人处理的异常记成 `asyncio.unhandled`。
+配置字段见 [配置详解的日志配置](06-configuration.md#️-日志配置)。
+
+---
+
+## 📌 公开错误（`core.public_errors`）
+
+```python
+public_error_response(context, exc: BaseException, *, component: str) -> DeliverySegments
+public_error_message(context, exc: BaseException, *, component: str) -> str
+log_public_error(context, exc: BaseException, *, component: str) -> None
+PUBLIC_ERROR_PREFIX = "操作失败："
+```
+
+| 接口 | 说明 |
+|---|---|
+| `public_error_message()` | 记一条 ERROR 级的 `public_error` 日志，返回一行说明 `操作失败：<原因>（<异常类型> @ <位置>；request_id：…）`，用于插件自己组织回复的场合 |
+| `public_error_response()` | 同上，返回只有这一段文字的消息段，带 `CommandOutcome("error")` |
+| `log_public_error()` | 只记日志、不返回说明，用于失败不该打扰用户的地方：后台任务、静默降级 |
+| `PUBLIC_ERROR_PREFIX` | 每条公开错误说明的开头；只拿到回复文字的一方（例如命令矩阵）靠它认出公开错误 |
+
+原因按异常链分类，类别、各类的说法和日志字段见 [插件开发指南的错误处理](03-plugin-development.md#-错误处理)；异常消息不进回复，也不进日志。
+`component` 是写进日志的稳定组件名，例如 `hello.handle`。
+日志记在 `plugins.<插件名>` logger 上，`context` 没有合法插件名时记在 `core.public_errors` 上。
+request ID 取 `context.request_id`，它不合规时取当前日志作用域的 ID，再没有就新生成一个；回复和日志带同一个 ID。
 
 ---
 

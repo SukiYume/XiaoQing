@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
+from tests.helpers.assertions import logged_events
 from tests.helpers.plugin_manager_test_support import (
     DEMO_COMMAND,
     HOOKED_PLUGIN_SOURCE,
@@ -44,9 +45,10 @@ async def test_shutdown_timeout_log_includes_budget_and_deadline(
     with caplog.at_level("WARNING", logger="core.plugin_manager"):
         await manager.unload_plugin("demo", drain_timeout_seconds=0.05)
 
-    assert "Plugin demo shutdown timed out" in caplog.text
-    assert "shutdown_timeout=" in caplog.text
-    assert "deadline_remaining=" in caplog.text
+    (timed_out,) = logged_events(caplog, "plugin.shutdown.timeout")
+    assert timed_out.fields["plugin"] == "demo"
+    assert timed_out.fields["timeout_s"] > 0
+    assert timed_out.fields["remaining_s"] is not None
     assert "demo" in manager._quarantined_plugins
 
 
@@ -89,9 +91,10 @@ async def test_shutdown_elapsed_deadline_is_logged_before_callback_is_started(
         await manager.unload_plugin("demo", drain_timeout_seconds=0)
 
     assert PROBE.log("shutdown") == []
-    assert "Plugin demo shutdown skipped: deadline already elapsed" in caplog.text
-    assert "shutdown_timeout=0.000s" in caplog.text
-    assert "deadline_remaining=0.000s" in caplog.text
+    (skipped,) = logged_events(caplog, "plugin.shutdown.skipped")
+    assert skipped.fields["plugin"] == "demo"
+    assert skipped.fields["timeout_s"] == 0
+    assert skipped.fields["remaining_s"] == 0
     assert "demo" in manager._quarantined_plugins
 
 

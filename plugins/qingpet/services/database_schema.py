@@ -4,7 +4,9 @@ import logging
 import re
 import sqlite3
 
-logger = logging.getLogger(__name__)
+from core.log import LogEvent
+
+log = logging.getLogger(__name__)
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -448,7 +450,14 @@ def _safe_add_column(
     col_type: str,
 ) -> None:
     if not _IDENTIFIER_RE.match(table) or not _IDENTIFIER_RE.match(column):
-        logger.warning("Skip adding column with invalid identifier: %s.%s", table, column)
+        log.warning(
+            LogEvent(
+                "schema.column_skipped",
+                reason_code = "invalid_identifier",
+                table       = table,
+                column      = column,
+            )
+        )
         return
 
     existing_columns = {

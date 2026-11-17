@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from core.log import LogEvent
+
 from . import activity, fetching
 from . import digest as digest_mod
 from .config import REASONING_ROUTE, LifeConfig
@@ -35,7 +37,7 @@ from .works import (
     with_note_episodes,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 _SYSTEM = """{persona}
@@ -178,7 +180,7 @@ async def run(
     try:
         text = await deps.complete(REASONING_ROUTE, messages)
     except Exception as exc:
-        logger.info("xiaoqing_life step=work_on model_failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("work_on.model_failed", error=exc))
         return await activity.record_failure(store, "model_failed", decision, span, deps)
     raw = digest_mod.extract_json(text or "")
     if raw is None:

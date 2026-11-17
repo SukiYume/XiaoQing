@@ -1,7 +1,6 @@
 """通过有赞接口执行影视飓风签到。"""
 
 import json
-import logging
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -18,8 +17,6 @@ from core.plugin_base import Segments, bounded_external_text, segments
 from core.public_errors import public_error_response
 
 from .types import Context
-
-logger = logging.getLogger(__name__)
 
 BASE_URL         = "https://h5.youzan.com"
 _RESPONSE_LIMITS = BodyLimits(
@@ -241,9 +238,4 @@ async def yingshi_sign(context: Context) -> Segments:
         prefix = "✅" if ok else "❌"
         return segments(f"{prefix} 影视签到\n{message}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "signin.yingshi",
-        )
+        return public_error_response(context, exc, component="signin.yingshi")

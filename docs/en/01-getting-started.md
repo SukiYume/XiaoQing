@@ -51,7 +51,7 @@ Check these fields in `config/config.json` before the first startup:
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
-  "log_level": "INFO",
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5},
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -192,8 +192,10 @@ Start the OneBot implementation. Then start XiaoQing from the project root:
 python main.py
 ```
 
+With the default settings, logs go to the console and to `logs/xiaoqing.log`.
 Successful startup logs contain these items:
 
+- A `日志系统初始化完成` line with the level, log directory, and retention count in effect
 - Published configuration revision
 - Loaded plugin list
 - Inbound Server or active WebSocket status
@@ -211,6 +213,9 @@ scripts/run-bot.vbs
 
 The chain calls Python from the current `PATH`.
 It reads the NapCat account and optional MKL threading configuration from `config/config.json`.
+It writes the Bot's standard output and standard error to `logs/bot-monitor.log` and `logs/bot-monitor-error.log`.
+Production settings set `"console": false` in `logging`, so once the configuration is read, logs go only to `logs/xiaoqing.log`.
+These two files then hold the log lines written to the console before the configuration is read (the diagnostics for an invalid `config.json` or a logs directory that cannot be created are in `bot-monitor.log`), `log.output_failed` lines when a log output cannot be written (in `bot-monitor-error.log`), and text printed directly to standard output or standard error.
 Comments and help output in `scripts/` describe the synchronization script, startup arguments, and deployment directories.
 
 Use this restart procedure for Windows production:
@@ -218,6 +223,7 @@ Use this restart procedure for Windows production:
 1. Double-click `scripts/stop-bot.vbs`.
 2. Wait for the completion message that confirms the monitor, Bot, and NapCat have stopped.
 3. Double-click `scripts/run-bot.vbs` to start new processes.
+4. Find the new `日志系统初始化完成` line in `logs/xiaoqing.log` to confirm that the new process has started.
 
 The stop entry point identifies this deployment with a repository-level mutex and absolute command paths.
 It stops this repository's PowerShell monitor, Python log pump, `main.py`, and specified NapCat process tree.
@@ -300,15 +306,25 @@ If UAT is killed, the secrets copy in `runtime/config/secrets.json` under the re
 
 ## 🩺 Troubleshooting
 
+### Process exits right after start
+
+1. Read the console output, which is `logs/bot-monitor.log` under the Windows production chain. Before the configuration is read, logs go only to the console, so `logs/xiaoqing.log` does not have these lines.
+2. `config.source.missing source=config`: there is no `config/config.json` under the runtime directory. Copy it from `.example` as described above.
+3. `config.source.invalid source=config`: with `error.lineno` and `error.colno` it is a JSON syntax error at that line and column; with `field_errors`, each following `config.field.invalid` gives the failing field path `field` and the error type `error_type`.
+4. The last line, `process.failed`, is the reason for the exit. When its `error.at` points into `core/log.py`, check that `logs/` under the runtime directory can be created and written.
+5. The Windows production chain's monitor keeps restarting the Bot with a backoff. After fixing the configuration, wait for the next restart or restart by hand with the procedure above.
+
+See [no valid configuration at startup in the configuration chapter](06-configuration.md#no-valid-configuration-at-startup) for the events.
+
 ### Service message response
 
 1. Confirm that OneBot and XiaoQing processes are running.
 2. Check the inbound URL or active WebSocket URI.
 3. Check the report's Authorization Bearer header against `inbound_token`.
 4. Check `onebot_token` for the reply channel.
-5. Find connection status, error codes, and request IDs in the logs.
+5. Find connection status and request IDs in `logs/xiaoqing.log`. When a reply reads `操作失败：…`, use the request ID it carries to find the matching `public_error` line and the rest of that turn's logs.
 6. When a secret confirmation notification arrives, check its field paths and send `/reload`.
-7. If logs contain both `secrets source is inconsistent` and `WebSocket client stopped`, check for a missing or damaged secrets source or a simultaneous change to `config.json`, then stop the service.
+7. If logs contain both `config.source.invalid source=secrets status=inconsistent` and `ws.client.stopped`, check for a missing or damaged secrets source or a simultaneous change to `config.json`, then stop the service.
 8. Save both complete configuration files, then restart the service so that startup confirms the new credential revision.
 
 ### Group command response
@@ -343,7 +359,7 @@ If UAT is killed, the secrets copy in `runtime/config/secrets.json` under the re
 1. Compare `config.ai.providers`, `config.ai.models`, and the plugin route references.
 2. Check `secrets.ai.providers.<provider>.api_key`.
 3. Check the proxy, network, quota, and provider status.
-4. Use the route, profile, and error code in the plugin log to locate the request.
+4. Use the route, profile, and the `reason_code` (the model service's error category) of `public_error` in the plugin log to locate the request.
 
 ## 🧭 Next steps
 

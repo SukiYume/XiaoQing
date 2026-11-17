@@ -37,6 +37,7 @@ from .lifecycle import DeferredCancellation as _DeferredCancellation
 from .lifecycle import OwnedTaskFatalError as _OwnedTaskFatalError
 from .lifecycle import await_owned_task as _await_owned_task
 from .lifecycle import run_owned_operation as _run_owned_operation
+from .log import LogEvent, asyncio_exception_handler
 from .onebot import OneBotHttpSender
 from .server import InboundManager
 
@@ -205,11 +206,12 @@ class AppLifecycleMixin:
             or elapsed >= _STARTUP_OWNERSHIP_TIMEOUT_SECONDS
         ):
             logger.error(
-                "Application startup ownership did not stabilize after %d attempt(s) "
-                "and %.3fs; last_reason=%s",
-                attempt,
-                elapsed,
-                reason,
+                LogEvent(
+                    "startup.ownership_unstable",
+                    attempts    = attempt,
+                    elapsed_s   = round(elapsed, 3),
+                    reason_code = reason,
+                )
             )
             raise RuntimeError("startup authentication ownership did not stabilize")
 
@@ -222,6 +224,9 @@ class AppLifecycleMixin:
 
     async def start(self) -> None:
         """Start one runtime generation, rolling it back completely on failure."""
+        # 这个事件循环上没人取的任务异常、回调异常和未关闭的资源交给日志系统记录：
+        # asyncio 自带的处理器会把异常消息拼进日志。
+        asyncio.get_running_loop().set_exception_handler(asyncio_exception_handler)
         async with self._lifecycle_lock.get():
             if self._stopping:
                 raise RuntimeError(
@@ -257,14 +262,12 @@ class AppLifecycleMixin:
                     rollback_errors.append(
                         f"rollback task: {type(cleanup_exc).__name__}: {cleanup_exc}"
                     )
-                    logger.exception("Application startup rollback failed", exc_info=cleanup_exc)
+                    logger.exception(LogEvent("startup.rollback.failed"), exc_info=cleanup_exc)
                 self._last_shutdown_errors = tuple(rollback_errors)
                 if rollback_errors:
                     self._lifecycle_state = _AppLifecycleState.FAILED
                     logger.error(
-                        "Application startup rollback left %d cleanup error(s): %s",
-                        len(rollback_errors),
-                        "; ".join(rollback_errors),
+                        LogEvent("startup.rollback.incomplete", errors=len(rollback_errors))
                     )
                 else:
                     self._lifecycle_state = _AppLifecycleState.NEW
@@ -428,21 +431,17 @@ class AppLifecycleMixin:
             if self._lifecycle_state is _AppLifecycleState.STOPPED:
                 return
             self._lifecycle_state = _AppLifecycleState.STOPPING
-            logger.info("Shutting down XiaoQing...")
+            logger.info(LogEvent("shutdown.start"))
             errors: list[str] = []
             await self._cleanup_runtime(errors)
 
             self._last_shutdown_errors = tuple(errors)
             if errors:
                 self._lifecycle_state = _AppLifecycleState.FAILED
-                logger.warning(
-                    "XiaoQing shutdown remains incomplete with %d cleanup error(s): %s",
-                    len(errors),
-                    "; ".join(errors),
-                )
+                logger.error(LogEvent("shutdown.incomplete", errors=len(errors)))
             else:
                 self._lifecycle_state = _AppLifecycleState.STOPPED
-                logger.info("XiaoQing shutdown complete")
+                logger.info(LogEvent("shutdown.done"))
 
     async def _cleanup_runtime(self, errors: list[str]) -> None:
         """Release resources in dependency order and retain blocked downstream owners."""
@@ -476,7 +475,13 @@ class AppLifecycleMixin:
                 + ", ".join(live_control_tasks)
             )
             errors.append(message)
-            logger.warning(message)
+            logger.warning(
+                LogEvent(
+                    "shutdown.deferred",
+                    stage = "control_plane",
+                    tasks = "+".join(label.replace(" ", "_") for label in live_control_tasks),
+                )
+            )
             return
 
         # 2. Stop every ingress path and its in-flight work before removing
@@ -499,7 +504,7 @@ class AppLifecycleMixin:
         if not all((inbound_stopped, ws_client_stopped, ws_listener_stopped)):
             message = "scheduler, plugin and HTTP cleanup deferred until ingress shutdown converges"
             errors.append(message)
-            logger.warning(message)
+            logger.warning(LogEvent("shutdown.deferred", stage="ingress"))
             return
 
         # 3. 先停止调度，之后再卸载可能被任务引用的插件。若旧任务仍在
@@ -512,14 +517,14 @@ class AppLifecycleMixin:
         if not scheduler_stopped:
             message = "plugin and HTTP cleanup deferred until scheduler shutdown converges"
             errors.append(message)
-            logger.warning(message)
+            logger.warning(LogEvent("shutdown.deferred", stage="scheduler"))
             return
 
         plugins_unloaded = await self._unload_plugins_for_shutdown(errors)
         if not plugins_unloaded:
             message = "HTTP cleanup deferred until plugin shutdown converges"
             errors.append(message)
-            logger.warning(message)
+            logger.warning(LogEvent("shutdown.deferred", stage="plugins"))
             return
 
         # 4. 最后释放共享连接。引用先清空，防止并发回调继续复用半关闭对象。
@@ -564,7 +569,7 @@ class AppLifecycleMixin:
             await operation()
         except BaseException as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            logger.exception("Shutdown step %s failed", name)
+            logger.exception(LogEvent("shutdown.step.failed", step=name.replace(" ", "_")))
             return False
         return True
 
@@ -613,7 +618,7 @@ class AppLifecycleMixin:
                 summary = "; ".join(f"{type(exc).__name__}: {exc}" for _, exc in failed)
                 raise RuntimeError(f"inbound cleanup failed: {summary}") from failed[0][1]
             if managers:
-                logger.info("Inbound server stopped")
+                logger.info(LogEvent("inbound.stopped"))
         finally:
             lock.release()
 
@@ -625,7 +630,7 @@ class AppLifecycleMixin:
             self.ws_client = None
         if self._ws_client_auth_quarantine is client:
             self._ws_client_auth_quarantine = None
-        logger.info("WebSocket client stopped")
+        logger.info(LogEvent("ws.client.stopped"))
 
     async def _stop_ws_client(self, *, owner: _ConfigApplyOwner | None = None) -> None:
         if not self._owns_config_apply(owner):
@@ -647,7 +652,7 @@ class AppLifecycleMixin:
                 self.ws_client            = client
                 raise ApplicationLifecycleFatalError(exc.original) from None
             except BaseException as exc:
-                logger.warning("Earlier WebSocket client stop attempt failed: %s", exc)
+                logger.warning(LogEvent("ws.client.stop_failed", error=exc))
             else:
                 if not self._owns_config_apply(owner):
                     return
@@ -694,7 +699,7 @@ class AppLifecycleMixin:
 
     async def _stop_scheduler(self) -> None:
         await self.scheduler.shutdown_async(wait=True)
-        logger.info("Scheduler stopped")
+        logger.info(LogEvent("scheduler.stopped"))
 
     async def _unload_plugins_for_shutdown(self, errors: list[str]) -> bool:
         budget   = self._plugin_shutdown_budget_seconds()
@@ -703,7 +708,7 @@ class AppLifecycleMixin:
             plugin_names = self.plugin_manager.list_runtime_plugins()
         except BaseException as exc:
             errors.append(f"plugin list: {type(exc).__name__}: {exc}")
-            logger.exception("Could not enumerate plugins during shutdown")
+            logger.exception(LogEvent("shutdown.plugins.list_failed"))
             return False
 
         for index, name in enumerate(plugin_names):
@@ -714,7 +719,13 @@ class AppLifecycleMixin:
                     f"remaining plugins: {', '.join(plugin_names[index:])}"
                 )
                 errors.append(message)
-                logger.warning(message)
+                logger.warning(
+                    LogEvent(
+                        "shutdown.plugins.budget_exhausted",
+                        budget_s  = round(budget, 3),
+                        remaining = len(plugin_names) - index,
+                    )
+                )
                 break
             await self._run_shutdown_step(
                 f"plugin {name}",
@@ -729,21 +740,28 @@ class AppLifecycleMixin:
             remaining_plugins = self.plugin_manager.list_runtime_plugins()
         except BaseException as exc:
             errors.append(f"plugin post-drain list: {type(exc).__name__}: {exc}")
-            logger.exception("Could not enumerate plugins after shutdown")
+            logger.exception(LogEvent("shutdown.plugins.recheck_failed"))
             return False
         if remaining_plugins:
             message = "plugin drain incomplete; quarantined callbacks still running: " + ", ".join(
                 remaining_plugins
             )
             errors.append(message)
-            logger.warning(message)
+            logger.warning(
+                LogEvent(
+                    "shutdown.plugins.drain_incomplete",
+                    remaining="+".join(remaining_plugins),
+                )
+            )
             return False
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             message = f"plugin sync broker close exceeded shared {budget:.3f}s budget"
             errors.append(message)
-            logger.warning(message)
+            logger.warning(
+                LogEvent("shutdown.plugins.broker_budget_exceeded", budget_s=round(budget, 3))
+            )
             return False
         broker_closed = await self._run_shutdown_step(
             "plugin sync broker",
@@ -752,7 +770,7 @@ class AppLifecycleMixin:
         )
         if not broker_closed:
             return False
-        logger.info("All plugins unloaded and sync broker drained (%d total)", len(plugin_names))
+        logger.info(LogEvent("shutdown.plugins.done", total=len(plugin_names)))
         return True
 
     def _plugin_shutdown_budget_seconds(self) -> float:
@@ -815,7 +833,7 @@ class AppLifecycleMixin:
                 raise
             self.http_session = None
             self.http_sender  = None
-            logger.info("HTTP session closed")
+            logger.info(LogEvent("http_session.closed"))
         else:
             self.http_sender = None
 
@@ -919,7 +937,7 @@ class AppLifecycleMixin:
         if not task:
             return
         if task is asyncio.current_task():
-            logger.warning("Skipped cancelling current task %s during shutdown", attr_name)
+            logger.warning(LogEvent("shutdown.task.skip_current", task=attr_name))
             raise RuntimeError(f"cannot synchronously stop current task {attr_name}")
         task.cancel()
         _done, pending = await asyncio.wait(
@@ -944,5 +962,5 @@ class AppLifecycleMixin:
             try:
                 await self.session_manager.cleanup_expired()
             except Exception as exc:
-                logger.warning("Session cleanup failed: %s", exc)
+                logger.warning(LogEvent("sessions.cleanup.failed", error=exc))
             await asyncio.sleep(60)

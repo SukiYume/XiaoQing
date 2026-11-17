@@ -54,6 +54,7 @@ class FakeContext:
         self.current_user_id               = None
         self.current_group_id              = None
         self.plugin_name                   = "codex"
+        self.request_id: str | None        = None
         self.actions: list[dict[str, Any]] = []
         self.default_cwd                   = tmp_path / "default-cwd"
         self.config                        = {

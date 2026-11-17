@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -28,6 +28,7 @@ from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
 from plugins.xiaoqing_chat.reply_plan import prepare_reply_generation
 from plugins.xiaoqing_chat.store_binding import bound_state
 from plugins.xiaoqing_chat.utils import wall_clock
+from tests.helpers.assertions import logged_events
 from tests.helpers.settings_snapshot import settings_snapshot
 
 COMPARED_FIELDS = (
@@ -91,7 +92,6 @@ def _context(
         plugin_dir   = plugin_dir,
         data_dir     = tmp_path / "data",
         request_id   = "req-1",
-        logger       = MagicMock(),
         get_settings_snapshot=lambda: settings_snapshot(config=config, revision=revision),
     )
 
@@ -181,11 +181,14 @@ async def baseline(tmp_path: Path) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_missing_capability_leaves_the_reply_context_unchanged(baseline, tmp_path) -> None:
+async def test_missing_capability_leaves_the_reply_context_unchanged(
+    baseline, tmp_path, caplog
+) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     assert _fields(await _prepare(_context(tmp_path, with_attribute=False))) == baseline
-    context = _context(tmp_path, None)
-    await _prepare(context)
-    assert not any("online_life" in str(call) for call in context.logger.info.call_args_list)
+    await _prepare(_context(tmp_path, None))
+    assert logged_events(caplog, "reply.generate.start")
+    assert not [event for event in logged_events(caplog) if "online_life" in event.name]
 
 
 @pytest.mark.asyncio
@@ -197,17 +200,18 @@ async def test_disabled_switch_never_calls_the_capability(baseline, tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_timeout_leaves_the_reply_context_unchanged_and_logs_only_the_error_type(
-    baseline, tmp_path
+    baseline, tmp_path, caplog
 ) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     capability = Capability({"life_lines": "迟到的内容"}, delay=2.0)
     context = _context(tmp_path, capability, online_life_timeout_seconds=0.05)
     started = time.monotonic()
     plan    = await _prepare(context)
     assert time.monotonic() - started < 1.0
     assert _fields(plan) == baseline
-    logged = [str(call.args) for call in context.logger.info.call_args_list]
-    assert any("reply.online_life.error" in line and "TimeoutError" in line for line in logged)
-    assert not any("迟到的内容" in line for line in logged)
+    (error,) = logged_events(caplog, "reply.online_life.error")
+    assert error.fields["error"] == "TimeoutError"
+    assert "迟到的内容" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -224,15 +228,19 @@ async def test_timeout_leaves_the_reply_context_unchanged_and_logs_only_the_erro
     ],
 )
 async def test_errors_and_malformed_results_leave_the_reply_context_unchanged(
-    baseline, capability, tmp_path
+    baseline, capability, tmp_path, caplog
 ) -> None:
-    context = _context(tmp_path, capability)
-    assert _fields(await _prepare(context)) == baseline
-    assert not any("SECRET_ERROR_TEXT" in str(call) for call in context.logger.info.call_args_list)
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
+    assert _fields(await _prepare(_context(tmp_path, capability))) == baseline
+    assert logged_events(caplog, "reply.generate.start")
+    assert "SECRET_ERROR_TEXT" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_content_is_merged_into_life_jargon_and_expression_blocks(baseline, tmp_path) -> None:
+async def test_content_is_merged_into_life_jargon_and_expression_blocks(
+    baseline, tmp_path, caplog
+) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     capability = Capability(
         {
             "version"        : 1,
@@ -251,9 +259,9 @@ async def test_content_is_merged_into_life_jargon_and_expression_blocks(baseline
         == baseline["jargon_explanation"] + "\n" + capability.result["slang_notes"]
     )
     assert plan.expression_block == "当想夸可爱时：X基础，Y不基础"
-    logged = [str(call.args) for call in context.logger.info.call_args_list]
-    assert any('"step": "reply.online_life"' in line and '"episodes": 1' in line for line in logged)
-    assert not any("猫猫的一天" in line for line in logged)
+    (online,) = logged_events(caplog, "reply.online_life")
+    assert online.fields["episodes"] == 1
+    assert "猫猫的一天" not in caplog.text
 
 
 @pytest.mark.asyncio

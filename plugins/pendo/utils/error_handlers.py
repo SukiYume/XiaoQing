@@ -9,11 +9,12 @@ from typing import Any, TypeVar, cast, overload
 
 from pydantic import ValidationError
 
+from core.log import LogEvent
 from core.public_errors import public_error_message
 
 from ..core.exceptions import PendoException
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 _command_error_depth: ContextVar[int] = ContextVar("pendo_command_error_depth", default=0)
 _AsyncCallable = TypeVar("_AsyncCallable", bound=Callable[..., Awaitable[Any]])
 
@@ -74,8 +75,11 @@ def handle_command_errors(
     自动处理命令执行中的异常，提供一致的错误响应格式。
 
     处理两类异常：
-    1. PendoException: 业务异常，返回用户友好的错误消息
-    2. Exception: 未预期异常，生成错误ID并记录完整堆栈
+    1. PendoException: 业务异常，记一条 INFO 并返回用户友好的错误消息
+    2. Exception: 未预期异常，交给 ``core.public_errors`` 记录并返回说明原因、类型、位置和
+       request id 的公开消息
+
+    嵌套装饰时只有最外层处理，同一个异常只记一次。
 
     Args:
         func: 要装饰的异步函数
@@ -103,14 +107,7 @@ def handle_command_errors(
             except PendoException as exc:
                 if parent_depth:
                     raise
-                context    = _context_from_call(target, args, kwargs)
-                request_id = str(getattr(context, "request_id", "") or "-")
-                logger.warning(
-                    "Pendo business error error_code=%s error_type=%s",
-                    exc.error_code,
-                    type(exc).__name__,
-                    extra={"request_id": request_id},
-                )
+                log.info(LogEvent("command.business_error", error_code=exc.error_code, error=exc))
                 if return_segments:
                     return [{"type": "text", "data": {"text": exc.get_user_message()}}]
                 return error_result(exc.get_user_message(), error_code=exc.error_code)
@@ -118,12 +115,10 @@ def handle_command_errors(
                 if parent_depth:
                     raise
                 context = _context_from_call(target, args, kwargs)
-                log     = getattr(context, "logger", None) or logger
                 message = public_error_message(
                     context,
                     exc,
-                    logger    = log,
-                    component = f"pendo.{target.__name__}",
+                    component=f"pendo.{target.__name__}",
                 )
                 if return_segments:
                     return [{"type": "text", "data": {"text": message}}]

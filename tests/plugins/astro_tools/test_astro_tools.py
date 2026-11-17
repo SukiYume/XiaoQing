@@ -2,12 +2,12 @@
 astro_tools 插件单元测试
 """
 
-import logging
 import threading
 from types import SimpleNamespace
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.astro_tools import const as astro_const
 from plugins.astro_tools import convert as astro_convert
 from plugins.astro_tools import coord as astro_coord
@@ -53,12 +53,6 @@ def mock_context():
         def __init__(self):
             self.plugin_dir = ROOT / "plugins" / "astro_tools"
             self.data_dir   = self.plugin_dir / "data"
-            self.logger     = self._create_logger()
-
-        def _create_logger(self):
-            import logging
-
-            return logging.getLogger("test")
 
     return MockContext()
 
@@ -198,7 +192,7 @@ class TestAstroToolsConvert:
         result = astro_convert.handle_convert(args, mock_context)
 
         assert result.startswith("📐 单位转换")
-        assert "XQ-PLUGIN-UNEXPECTED" not in result
+        assert PUBLIC_ERROR_PREFIX not in result
 
     @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e9999"])
     @pytest.mark.asyncio
@@ -382,15 +376,13 @@ class TestAstroToolsErrorHandling:
 def test_astro_units_preserve_case(source, target, expected):
     from plugins.astro_tools.convert import handle_convert
 
-    output = handle_convert(
-        f"1 {source} {target}", SimpleNamespace(logger=logging.getLogger(__name__))
-    )
+    output = handle_convert(f"1 {source} {target}", SimpleNamespace())
     assert f"= {expected} {target}" in output
 
 
 def test_luminosity_uses_complete_empirical_coefficients():
     from plugins.astro_tools.formula import _handle_calculation
 
-    context = SimpleNamespace(logger=logging.getLogger(__name__))
+    context = SimpleNamespace()
     assert "5.000e+04" in _handle_calculation("luminosity 20", context)
     assert "5.357e+04" in _handle_calculation("luminosity 19.99", context)

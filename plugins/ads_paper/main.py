@@ -4,6 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core.log import LogEvent
 from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_response
 
@@ -11,7 +12,7 @@ from . import ai_commands, note_commands, paper_commands
 from .ads_client import ADSClient
 from .storage import PaperStorage
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 需要 ADS Token 的远程子命令
 _REMOTE_COMMANDS = frozenset(
@@ -24,7 +25,10 @@ def _get_ads_token(context: PluginContextProtocol) -> str:
     token = context.get_settings_snapshot().plugin_secrets("ads_paper").get("ads_token", "")
     if isinstance(token, str) and token:
         return token
-    logger.warning("ADS Token 配置必须是字符串" if token else "未配置 ADS Token")
+    if token:
+        log.error(LogEvent("config.invalid", setting="ads_token", reason_code="not_string"))
+    else:
+        log.warning(LogEvent("config.missing", setting="ads_token"))
     return ""
 
 
@@ -56,7 +60,6 @@ async def handle(
 ) -> Segments:
     """处理 ``/paper`` 命令；本地功能不依赖 ADS Token。"""
     try:
-        logger.info("收到 ADS Paper 命令: %s %s", command, args)
         command_parts = args.strip().split(maxsplit=1)
         if not command_parts:
             return segments(_HELP_TEXT)
@@ -93,7 +96,6 @@ async def handle(
 
         token = _get_ads_token(context)
         if not token:
-            logger.error("ADS Token 未配置")
             return segments(
                 '❌ 未配置 ADS Token\n请在 secrets.json 中配置:\n  "plugins": {"ads_paper": {"ads_token": "your-token"}}'
             )
@@ -115,7 +117,7 @@ async def handle(
         return await remote_handlers[subcommand]()
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="ads_paper.handle")
+        return public_error_response(context, exc, component="ads_paper.handle")
 
 
 _HELP_TEXT = (

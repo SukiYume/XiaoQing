@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -12,7 +13,9 @@ from unittest.mock import patch
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.log import LogEvent
 from plugins.xiaoqing_chat.llm import reply_checker as checker
+from tests.helpers.assertions import logged_events
 from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_OPEN,
@@ -20,7 +23,6 @@ from tests.helpers.xiaoqing_chat_test_support import (
     ScriptedChatModel,
     ack_reply_delivery,
     chat_message_event,
-    logged_steps,
     plan_answer,
     scripted_chat_context,
     settle_chat_background,
@@ -374,10 +376,11 @@ def _watched_clock():
     ids=["nothing-spent", "partly-spent", "already-over"],
 )
 async def test_presend_delay_counts_time_already_spent(
-    mock_context, sample_group_event, spent, expected
+    mock_context, sample_group_event, caplog, spent, expected
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     started = time.monotonic()
     with _watched_clock() as (sleeps, spend):
 
@@ -397,14 +400,14 @@ async def test_presend_delay_counts_time_already_spent(
 
     assert result == [{"type": "text", "data": {"text": "在追"}}]
     await ack_reply_delivery(result)
-    done = next(step for step in logged_steps(mock_context) if step["step"] == "smalltalk.done")
+    (done,) = logged_events(caplog, "smalltalk.done")
     if expected == 0.0:
         assert sleeps == []
-        assert "send_wait_s" not in done["timings"]
+        assert "timings.send_wait_s" not in done.fields
     else:
         (waited,) = sleeps
         assert expected - real_elapsed - 0.01 <= waited <= expected + 0.01
-        assert done["timings"]["send_wait_s"] == pytest.approx(waited, abs=0.01)
+        assert done.fields["timings.send_wait_s"] == pytest.approx(waited, abs=0.01)
     await settle_chat_background(mock_context, model)
 
 
@@ -472,12 +475,8 @@ async def test_routine_slows_direct_replies_but_not_commands(
     await settle_chat_background(mock_context, model)
 
 
-def test_timings_record_each_stage_and_survive_log_sanitizing():
-    from plugins.xiaoqing_chat.logging_utils import (
-        accumulate_timing,
-        append_timing,
-        sanitize_log_fields,
-    )
+def test_timings_record_each_stage_and_stay_visible_in_the_log():
+    from plugins.xiaoqing_chat.timing import accumulate_timing, append_timing
 
     timings: dict[str, Any] = {}
     accumulate_timing(timings, "context_check_s", 0.4)
@@ -488,11 +487,14 @@ def test_timings_record_each_stage_and_survive_log_sanitizing():
     append_timing(timings, "check", {"s": 1.2, "ok": True, "reason_code": None})
 
     assert timings["context_check_s"] == 0.75
-    assert sanitize_log_fields({"timings": timings})["timings"] == {
-        "context_check_s": 0.75,
-        "gen_s"          : {"1": 3.1, "2": 2.8},
-        "check"          : {
-            "1": {"s": 1.9, "ok": False, "reason_code": "persona_grounding"},
-            "2": {"s": 1.2, "ok": True},
-        },
+    # 每一次都按编号展开成单独的字段，日志里逐次可见。
+    assert dict(LogEvent("smalltalk.done", timings=timings).fields) == {
+        "timings.context_check_s"    : 0.75,
+        "timings.gen_s.1"            : 3.1,
+        "timings.gen_s.2"            : 2.8,
+        "timings.check.1.s"          : 1.9,
+        "timings.check.1.ok"         : False,
+        "timings.check.1.reason_code": "persona_grounding",
+        "timings.check.2.s"          : 1.2,
+        "timings.check.2.ok"         : True,
     }

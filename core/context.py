@@ -4,7 +4,6 @@
 避免插件直接接触应用内部对象或其他插件的配置与密钥。
 """
 
-import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,36 +97,6 @@ if TYPE_CHECKING:
     from .session import Session, SessionManager
 
 
-### 插件日志器：每条日志自动带上当前请求的 request_id
-class _RequestLogger:
-    def __init__(self, base_logger: logging.Logger, request_id: str | None) -> None:
-        self._base_logger = base_logger
-        self._request_id  = request_id
-
-    def _with_request_id(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        extra               = dict(kwargs.get("extra", {}))
-        extra["request_id"] = self._request_id
-        return {**kwargs, "extra": extra}
-
-    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._base_logger.debug(msg, *args, **self._with_request_id(kwargs))
-
-    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._base_logger.info(msg, *args, **self._with_request_id(kwargs))
-
-    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._base_logger.warning(msg, *args, **self._with_request_id(kwargs))
-
-    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._base_logger.error(msg, *args, **self._with_request_id(kwargs))
-
-    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._base_logger.exception(msg, *args, **self._with_request_id(kwargs))
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._base_logger, name)
-
-
 @dataclass
 class PluginContext:
     config             : Mapping[str, Any]
@@ -165,16 +134,11 @@ class PluginContext:
     # 代为执行命令时发起人本人的原话（按先后）；只有命令执行器发起的调用才有。
     request_texts: tuple[str, ...] = ()
     state        : dict[str, Any] = field(default_factory=dict)
-    logger       : Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Enforce the least-privilege view for every construction path.
         self.config  = _scoped_plugin_config(self.plugin_name, self.config)
         self.secrets = _scoped_plugin_secrets(self.plugin_name, self.secrets)
-        self.logger  = _RequestLogger(
-            logging.getLogger(f"plugin.{self.plugin_name}"),
-            self.request_id,
-        )
 
     def default_groups(self) -> list[int]:
         """返回当前调用应使用的群发目标。

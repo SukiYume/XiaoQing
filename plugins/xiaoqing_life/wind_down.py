@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from core.log import LogEvent
+
 from . import chat_topics as chat_topics_mod
 from . import dossier, knowledge, stats
 from . import methods as methods_mod
@@ -23,7 +25,7 @@ from .digest import extract_json
 from .safety import clean_text, is_blocked
 from .stores import LifeStore, done_today, mark_done, new_id, reserve_llm_call
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 JOURNAL_KEEP_DAYS = 56
 MAX_LEARNINGS     = 100
@@ -498,7 +500,7 @@ async def run_wind_down(
     try:
         text = await complete(REASONING_ROUTE, messages)
     except Exception as exc:
-        logger.info("xiaoqing_life step=wind_down model_failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("wind_down.model_failed", error=exc))
         return WindDownResult("failed", "model_failed")
     raw = extract_json(text or "")
     if raw is None:

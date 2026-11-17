@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from core.args import tokenize
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, segments
 from core.public_errors import public_error_response
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 PLUGIN_NAME             = "guess_number"
 SESSION_TIMEOUT_SECONDS = 180.0
@@ -258,7 +259,7 @@ async def _start_game(
                 state = _load_game_state(existing)
             except InvalidGameState:
                 await context.end_session()
-                logger.warning("Discarded invalid guess_number session before starting a game")
+                log.warning(LogEvent("session.discarded_invalid", stage="start"))
             else:
                 return segments(
                     "🎮 你已经有一个进行中的游戏！\n"
@@ -282,12 +283,14 @@ async def _start_game(
         },
         timeout=SESSION_TIMEOUT_SECONDS,
     )
-    logger.info(
-        "Game started: difficulty=%s, range=%d-%d, max_attempts=%d",
-        difficulty.key,
-        difficulty.minimum,
-        difficulty.maximum,
-        difficulty.max_attempts,
+    log.info(
+        LogEvent(
+            "game.started",
+            difficulty   = difficulty.key,
+            minimum      = difficulty.minimum,
+            maximum      = difficulty.maximum,
+            max_attempts = difficulty.max_attempts,
+        )
     )
     return segments(
         "🎮 猜数字游戏开始！\n"
@@ -313,7 +316,7 @@ async def _handle_status(context: _GuessNumberContext) -> Segments:
         state = _load_game_state(session)
     except InvalidGameState:
         await context.end_session()
-        logger.warning("Discarded invalid guess_number session during status query")
+        log.warning(LogEvent("session.discarded_invalid", stage="status"))
         return segments(INVALID_STATE_TEXT)
     return segments(_format_status(state))
 
@@ -341,7 +344,7 @@ async def handle(
     except GuessNumberCommandError as exc:
         return segments(str(exc))
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="guess_number.handle")
+        return public_error_response(context, exc, component="guess_number.handle")
 
 
 def _parse_session_input(
@@ -388,7 +391,7 @@ async def handle_session(
         state = _load_game_state(session)
     except InvalidGameState:
         await context.end_session()
-        logger.warning("Discarded invalid guess_number session during continuation")
+        log.warning(LogEvent("session.discarded_invalid", stage="continuation"))
         return segments(INVALID_STATE_TEXT)
 
     parsed = _parse_session_input(text)
@@ -412,7 +415,7 @@ async def handle_session(
     history   = (*state.history, guess)
     if guess == state.target:
         await context.end_session()
-        logger.info("Game won: difficulty=%s, attempts=%d", state.difficulty.key, attempts)
+        log.info(LogEvent("game.won", difficulty=state.difficulty.key, attempts=attempts))
         return segments(
             "🎉 恭喜你猜对了！\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -424,7 +427,7 @@ async def handle_session(
         )
     if remaining == 0:
         await context.end_session()
-        logger.info("Game lost: difficulty=%s", state.difficulty.key)
+        log.info(LogEvent("game.lost", difficulty=state.difficulty.key))
         return segments(
             "😢 游戏结束，次数用尽！\n"
             "━━━━━━━━━━━━━━━━━━\n"

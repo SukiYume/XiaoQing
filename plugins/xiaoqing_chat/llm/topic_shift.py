@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+from core.log import LogEvent
 from core.plugin_base import resolve_bot_name
 
 from ..memory.memory import StoredMessage
@@ -18,6 +20,8 @@ from .gateway import (
 )
 from .llm_config import LLMCallConfig
 from .prompt_builder import build_dialogue_prompt
+
+log = logging.getLogger(__name__)
 
 # 发送前确认不能拖太久：这段时间里群里还在继续说。
 _TOPIC_CHECK_TIMEOUT_SECONDS = 6.0
@@ -50,7 +54,7 @@ async def reply_should_be_withheld(
     after: Sequence[StoredMessage],
     reply: str,
     llm: LLMCallConfig,
-    log: Any = None,
+    chat_id: str,
 ) -> bool:
     """请规划路由判断是否取消投递；返回 True 即取消。复核不可用或调用失败时一律取消，不发出这条回复。"""
 
@@ -78,18 +82,17 @@ async def reply_should_be_withheld(
             **request.as_kwargs(),
         )
     except Exception as exc:
-        if log is not None:
-            log("smalltalk.context_check.error", {"error_type": type(exc).__name__})
+        log.info(LogEvent("smalltalk.context_check.error", chat_id=chat_id, error=exc))
         return True
     parsed  = parse_first_json_object(extract_response_content(response)) or {}
     changed = strict_json_bool(parsed.get("withhold_reply")) is not False
-    if log is not None:
-        log(
+    log.info(
+        LogEvent(
             "smalltalk.context_check",
-            {
-                "changed"  : changed,
-                "after"    : len(after),
-                "elapsed_s": round(time.monotonic() - started, 3),
-            },
+            chat_id   = chat_id,
+            changed   = changed,
+            after     = len(after),
+            elapsed_s = round(time.monotonic() - started, 3),
         )
+    )
     return changed

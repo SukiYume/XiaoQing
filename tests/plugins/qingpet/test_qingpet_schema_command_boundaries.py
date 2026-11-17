@@ -32,7 +32,7 @@ from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import DAILY_LIMITS, PetStage, PetStatus
-from tests.helpers.assertions import text_segments_text
+from tests.helpers.assertions import logged_events, text_segments_text
 from tests.helpers.qingpet_test_support import fail_updates_to
 
 
@@ -198,8 +198,10 @@ def test_database_failure_log_omits_exception_text_path_and_query_data(
 
     assert results == [None]
     log_text = "\n".join(record.getMessage() for record in caplog.records)
-    assert "operation=get_user" in log_text
-    assert "error_type=RuntimeError" in log_text
+    failures = logged_events(caplog, "database.failed")
+    assert [(item.fields["operation"], item.fields["error"]) for item in failures] == [
+        ("get_user", "RuntimeError")
+    ]
     assert sensitive not in log_text
     assert "private-user" not in log_text
     assert "qingpet.db" not in log_text

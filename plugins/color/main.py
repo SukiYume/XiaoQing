@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int, quote_token, tokenize
 from core.delivery import CommandOutcome, DeliverySegments
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, image, run_sync, segments, text
 from core.public_errors import public_error_response
 from core.router import resolve_context_command_invocation
@@ -20,7 +21,7 @@ from core.router import resolve_context_command_invocation
 from . import convert, data_manager, image_gen, query, stellar
 from .data_manager import ColorRecord
 
-logger      = logging.getLogger(__name__)
+log         = logging.getLogger(__name__)
 ColorAction = Literal[
     "help",
     "auto",
@@ -434,7 +435,7 @@ def _format_color_page(
 
 
 def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Segments:
-    logger.info("浏览颜色目录: page=%d count=%d", request.page, len(colors))
+    log.info(LogEvent("catalog.browse", page=request.page, count=len(colors)))
     return _format_color_page(
         colors,
         title        = "颜色目录",
@@ -445,11 +446,13 @@ def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Seg
 
 def _handle_keyword(request: ColorRequest, colors: Sequence[ColorRecord]) -> Segments:
     matches = query.find_by_keyword(colors, request.value)
-    logger.info(
-        "颜色关键词查询: query_chars=%d page=%d count=%d",
-        len(request.value),
-        request.page,
-        len(matches),
+    log.info(
+        LogEvent(
+            "keyword.query",
+            query_chars = len(request.value),
+            page        = request.page,
+            count       = len(matches),
+        )
     )
     return _format_color_page(
         matches,
@@ -465,7 +468,7 @@ async def _handle_name(
     context: PluginContextProtocol,
 ) -> Segments:
     color = query.find_by_name(colors, request.value)
-    logger.info("颜色名称查询: found=%s", color is not None)
+    log.info(LogEvent("name.query", found=color is not None))
     if color is None:
         matches = query.find_by_keyword(colors, request.value)
         if matches:
@@ -521,7 +524,7 @@ async def _handle_rgb(
 ) -> Segments:
     rgb = _parse_channels(request.value, label="RGB", count=3, maximum=convert.RGB_MAX)
     exact = query.find_by_rgb(colors, rgb)
-    logger.info("RGB 查询: exact=%s", exact is not None)
+    log.info(LogEvent("rgb.query", exact=exact is not None))
     if exact is not None:
         return await _found_color_response(exact, picture=request.picture, context=context)
     return await _nearest_color_response(
@@ -544,7 +547,7 @@ async def _handle_hex(
         raise ColorInputError(str(exc)) from exc
     normalized = convert.rgb_to_hex(rgb)
     color      = query.find_by_hex(colors, normalized)
-    logger.info("HEX 查询: exact=%s", color is not None)
+    log.info(LogEvent("hex.query", exact=color is not None))
     if color is not None:
         return await _found_color_response(color, picture=request.picture, context=context)
     return await _nearest_color_response(
@@ -563,7 +566,7 @@ async def _handle_cmyk(
 ) -> Segments:
     cmyk = _parse_channels(request.value, label="CMYK", count=4, maximum=convert.CMYK_MAX)
     exact = query.find_by_cmyk(colors, cmyk)
-    logger.info("CMYK 查询: exact=%s", exact is not None)
+    log.info(LogEvent("cmyk.query", exact=exact is not None))
     if exact is not None:
         return await _found_color_response(exact, picture=request.picture, context=context)
     rgb = convert.cmyk_to_rgb(cmyk)
@@ -609,11 +612,13 @@ async def _handle_auto(
 
     exact_pinyin = query.find_by_pinyin(colors, value)
     matches      = exact_pinyin or query.find_by_keyword(colors, value)
-    logger.info(
-        "自动颜色查询: query_chars=%d page=%d matches=%d",
-        len(value),
-        request.page,
-        len(matches),
+    log.info(
+        LogEvent(
+            "auto.query",
+            query_chars = len(value),
+            page        = request.page,
+            matches     = len(matches),
+        )
     )
     if not matches:
         return DeliverySegments(segments(f"没有找到“{value}”"), outcome=CommandOutcome("completed"))
@@ -698,7 +703,7 @@ async def _add_custom_color(
     if outcome == "full":
         return segments("❌ 当前会话的自定义颜色数量已达上限")
 
-    logger.info("添加自定义颜色: rgb_channels=3")
+    log.info(LogEvent("custom.added"))
     image_path = await image_gen.generate_color_image(
         name,
         new_color["RGB"],
@@ -719,7 +724,7 @@ async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Seg
 
     if not await data_manager.mutate_custom_colors_async(context, remove):
         return segments(f"❌ 自定义颜色中没有「{name}」")
-    logger.info("删除自定义颜色: removed=true")
+    log.info(LogEvent("custom.deleted"))
     return segments(f"✅ 颜色「{name}」已删除")
 
 
@@ -734,7 +739,7 @@ async def _handle_palette_request(
         return await _handle_auto(request, colors, context)
     if request.action == "random":
         selected = colors[secrets.randbelow(len(colors))]
-        logger.info("随机颜色: palette_count=%d", len(colors))
+        log.info(LogEvent("random.pick", palette_count=len(colors)))
         return await _found_color_response(selected, picture=request.picture, context=context)
     if request.action == "name":
         return await _handle_name(request, colors, context)
@@ -763,11 +768,13 @@ async def handle(
 
     try:
         request = _parse_request(args)
-        logger.info(
-            "颜色命令: action=%s picture=%s page=%d",
-            request.action,
-            request.picture,
-            request.page,
+        log.info(
+            LogEvent(
+                "command.parsed",
+                action  = request.action,
+                picture = request.picture,
+                page    = request.page,
+            )
         )
         if request.action == "help":
             return segments(HELP_TEXT)
@@ -791,5 +798,5 @@ async def handle(
     except Exception as exc:
         return cast(
             Segments,
-            public_error_response(context, exc, logger=logger, component="color.handle"),
+            public_error_response(context, exc, component="color.handle"),
         )

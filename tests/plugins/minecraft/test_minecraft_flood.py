@@ -13,19 +13,19 @@ import pytest
 from core.interfaces import DeliveryTarget
 from plugins.minecraft import main as mc_main
 from plugins.minecraft.connection import ConnectionManager, McConnection
-from plugins.minecraft.log_monitor import LogBatch, LogEvent, LogEventType
+from plugins.minecraft.log_monitor import LogBatch, PlayerEvent, PlayerEventType
 
 
-def _event(index: int, *, message: str | None = None) -> LogEvent:
-    return LogEvent(
-        LogEventType.CHAT,
+def _event(index: int, *, message: str | None = None) -> PlayerEvent:
+    return PlayerEvent(
+        PlayerEventType.CHAT,
         f"Player{index % 100}",
         message if message is not None else f"message-{index}",
     )
 
 
 def _batch(
-    events: list[LogEvent],
+    events: list[PlayerEvent],
     *,
     cursor: int               = 0,
     matched_total: int | None = None,
@@ -473,12 +473,12 @@ def test_token_bucket_refill_take_and_refund_are_bounded() -> None:
 @pytest.mark.parametrize(
     "event, marker",
     [
-        (LogEvent(LogEventType.CHAT, "A", "hi"), "[MC] A: hi"),
-        (LogEvent(LogEventType.JOIN, "A"), "加入了游戏"),
-        (LogEvent(LogEventType.LEAVE, "A"), "离开了游戏"),
-        (LogEvent(LogEventType.DEATH, "A", "fell"), "💀 A fell"),
-        (LogEvent(LogEventType.ADVANCEMENT, "A", "Stone Age"), "获得成就"),
+        (PlayerEvent(PlayerEventType.CHAT, "A", "hi"), "[MC] A: hi"),
+        (PlayerEvent(PlayerEventType.JOIN, "A"), "加入了游戏"),
+        (PlayerEvent(PlayerEventType.LEAVE, "A"), "离开了游戏"),
+        (PlayerEvent(PlayerEventType.DEATH, "A", "fell"), "💀 A fell"),
+        (PlayerEvent(PlayerEventType.ADVANCEMENT, "A", "Stone Age"), "获得成就"),
     ],
 )
-def test_event_formatting_covers_every_event_type(event: LogEvent, marker: str) -> None:
+def test_event_formatting_covers_every_event_type(event: PlayerEvent, marker: str) -> None:
     assert marker in mc_main._format_event_message(event)

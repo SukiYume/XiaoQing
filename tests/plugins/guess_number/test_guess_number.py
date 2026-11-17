@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from core.context import PluginContext
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.session import Session, SessionManager
 from plugins.guess_number import main as guess_number
 
@@ -568,7 +569,7 @@ async def test_handle_redacts_unexpected_start_failure(
         new=AsyncMock(side_effect=RuntimeError("internal secret")),
     ):
         response = await guess_number.handle("猜数字", "", event, context)
-    assert "XQ-PLUGIN-UNEXPECTED" in _text(response)
+    assert PUBLIC_ERROR_PREFIX in _text(response)
     assert "internal secret" not in _text(response)
 
 

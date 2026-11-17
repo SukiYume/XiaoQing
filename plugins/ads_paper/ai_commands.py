@@ -1,7 +1,6 @@
 """AI 摘要、每日推荐与个人 BibTeX 文献库命令。"""
 
 import asyncio
-import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -14,8 +13,6 @@ from .bibtex import citation_entries
 from .constants import DEFAULT_DAILY_PAPERS, MAX_REFERENCE_TITLE_DISPLAY_LENGTH
 from .paper_commands import paper_list_text, resolve_bibcode_arg, resolve_paper_arg
 from .storage import PaperStorage
-
-logger = logging.getLogger(__name__)
 
 # 论文摘要：主配置里只需要给 summary 指定模型。
 declare_route_defaults(
@@ -107,12 +104,7 @@ async def cmd_summarize(
 
         return segments(f"📄 论文: {title}\n\n🤖 AI 摘要:\n{summary}")
     except Exception as exc:
-        error_message = public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "ads_paper.summarize",
-        )
+        error_message = public_error_message(context, exc, component="ads_paper.summarize")
         lines = [
             f"📄 论文: {title}\n",
             f"📝 原始摘要:\n{abstract}\n",
@@ -176,12 +168,7 @@ async def cmd_ref_add(
 
         return segments(f"✅ 已添加到文献库\n\n📎 BibTeX:\n\n{bibtex}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "ads_paper.ref_add",
-        )
+        return public_error_response(context, exc, component="ads_paper.ref_add")
 
 
 async def cmd_refs(
@@ -213,9 +200,4 @@ async def cmd_refs(
 
         return segments("\n".join(lines))
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "ads_paper.refs",
-        )
+        return public_error_response(context, exc, component="ads_paper.refs")

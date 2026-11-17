@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from core.public_errors import public_error_message
+from core.log import LogEvent
+from core.public_errors import log_public_error
 
 from ..config import PendoRuntimeSettings
 from ..utils.db_ops import (
@@ -21,7 +22,7 @@ from ..utils.db_ops import (
 if TYPE_CHECKING:
     from .db import Database
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class _WebBackend(Protocol):
@@ -88,11 +89,10 @@ class PendoRuntimeService:
             try:
                 database.cleanup()
             except Exception as cleanup_exc:
-                public_error_message(
+                log_public_error(
                     None,
                     cleanup_exc,
-                    logger    = logger,
-                    component = "pendo.runtime.database_candidate_cleanup",
+                    component="pendo.runtime.database_candidate_cleanup",
                 )
             raise
         return database
@@ -155,15 +155,15 @@ class PendoRuntimeService:
             if web_server.is_running():
                 stopped = web_server.stop()
                 if not stopped and web_server.is_running():
-                    logger.warning("Pendo Web UI is still running; skip restart")
+                    log.warning(LogEvent("web.restart_skipped", reason_code="still_running"))
                     return False
 
             started = web_server.start(db)
             if not started:
-                logger.warning("Failed to auto-start web UI")
+                log.warning(LogEvent("web.autostart_failed"))
             return bool(started)
         except Exception as exc:
-            public_error_message(None, exc, logger=logger, component="pendo.web.start")
+            log_public_error(None, exc, component="pendo.web.start")
             return False
 
     def stop_web(self) -> bool:
@@ -173,7 +173,7 @@ class PendoRuntimeService:
                 return True
             return not backend.is_managed_running()
         except Exception as exc:
-            public_error_message(None, exc, logger=logger, component="pendo.web.stop")
+            log_public_error(None, exc, component="pendo.web.stop")
             return False
 
     def reconfigure_web(

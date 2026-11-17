@@ -7,7 +7,7 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -162,7 +162,6 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
         SimpleNamespace(
             data_dir     = tmp_path,
             http_session = object(),
-            logger       = MagicMock(),
             secrets      = {
                 "plugins": {
                     "twitter": {
@@ -188,7 +187,6 @@ def _voice_context(tmp_path: Path) -> SimpleNamespace:
         SimpleNamespace(
             data_dir     = tmp_path / "voice-data",
             http_session = object(),
-            logger       = MagicMock(),
             secrets      = {
                 "plugins": {
                     "voice": {

@@ -10,7 +10,6 @@ import threading
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -23,7 +22,7 @@ from plugins.color import image_gen as color_image_gen
 from plugins.color import main as color_main
 from plugins.color import query as color_query
 from plugins.color import stellar as color_stellar
-from tests.helpers.assertions import text_segments_text
+from tests.helpers.assertions import logged_events, text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
@@ -257,7 +256,6 @@ class TestColorDataManager:
             plugin_dir      = plugin_dir,
             data_dir        = data_dir,
             current_user_id = 42,
-            logger          = MagicMock(),
         )
 
         assert [color["name"] for color in color_data.load_colors(context)] == ["胭脂"]
@@ -275,7 +273,6 @@ class TestColorDataManager:
             data_dir         = tmp_path,
             current_group_id = 1001,
             current_user_id  = 42,
-            logger           = MagicMock(),
         )
 
         colors = color_data.load_colors(context)
@@ -293,7 +290,6 @@ class TestColorDataManager:
             data_dir         = tmp_path / "data",
             current_group_id = 1001,
             current_user_id  = 42,
-            logger           = MagicMock(),
         )
         color_data.mutate_custom_colors(
             context,
@@ -323,7 +319,7 @@ class TestColorDataManager:
 
     @pytest.mark.parametrize("group_id", ["../escape", 0, -5, True, 2**63])
     def test_invalid_scope_id_never_reaches_a_file_path_and_keeps_the_bundled_palette(
-        self, tmp_path, group_id
+        self, tmp_path, group_id, caplog
     ):
         data_dir = tmp_path / "invalid"
         context  = SimpleNamespace(
@@ -331,7 +327,6 @@ class TestColorDataManager:
             data_dir         = data_dir,
             current_group_id = group_id,
             current_user_id  = 42,
-            logger           = MagicMock(),
         )
         # 同一个插件目录、合格的群号、没有自定义色：得到的就是内置色库。
         bundled = color_data.load_colors(
@@ -342,12 +337,13 @@ class TestColorDataManager:
 
         with pytest.raises(ValueError, match="positive 64-bit integer"):
             color_data.load_custom_colors(context)
-        colors = color_data.load_colors(context)
+        with caplog.at_level(logging.ERROR):
+            colors = color_data.load_colors(context)
 
         # 身份编号不合格时，自定义色不读不写任何文件，内置色库照常可用，失败记进日志。
         assert colors and colors == bundled
         assert not data_dir.exists() or not list(data_dir.iterdir())
-        assert context.logger.method_calls
+        assert logged_events(caplog, "public_error")
 
     def test_noop_mutation_does_not_create_or_rewrite_scope_file(self, tmp_path):
         context = SimpleNamespace(
@@ -428,7 +424,6 @@ class TestColorHandle:
             data_dir            = tmp_path,
             current_group_id    = 1001,
             current_user_id     = 42,
-            logger              = MagicMock(),
             get_command_catalog = lambda: (COLOR_ROOT,),
         )
 
@@ -480,7 +475,7 @@ class TestColorHandle:
     @pytest.mark.asyncio
     async def test_query_text_is_not_logged(self, tmp_path, caplog):
         canary = "private-color-canary"
-        with caplog.at_level(logging.INFO, logger="plugins.color.main"):
+        with caplog.at_level(logging.DEBUG, "plugins.color"):
             result = await color_main.handle(
                 "color",
                 f"-n {canary}",
@@ -489,6 +484,7 @@ class TestColorHandle:
             )
 
         assert canary in text_segments_text(result)
+        assert logged_events(caplog, "name.query")
         assert canary not in caplog.text
 
     @pytest.mark.asyncio
@@ -674,7 +670,6 @@ class TestStellarColorData:
         context = SimpleNamespace(
             plugin_dir = ROOT / "plugins" / "color",
             data_dir   = tmp_path,
-            logger     = MagicMock(),
         )
 
         rows = color_stellar.load_stellar_colors(context)
@@ -688,7 +683,6 @@ class TestStellarColorData:
         context = SimpleNamespace(
             plugin_dir = ROOT / "plugins" / "color",
             data_dir   = tmp_path,
-            logger     = MagicMock(),
         )
 
         result   = color_stellar.list_spectral_types("", context)
@@ -703,7 +697,6 @@ class TestStellarColorData:
         context = SimpleNamespace(
             plugin_dir = ROOT / "plugins" / "color",
             data_dir   = tmp_path,
-            logger     = MagicMock(),
         )
 
         second = text_segments_text(color_stellar.list_spectral_types("", context, page=2))
@@ -718,7 +711,6 @@ class TestStellarColorData:
         context = SimpleNamespace(
             plugin_dir = ROOT / "plugins" / "color",
             data_dir   = tmp_path,
-            logger     = MagicMock(),
         )
 
         result   = await color_stellar.query_stellar_color("m6v", context, tmp_path / "images")
@@ -735,7 +727,7 @@ class TestStellarColorData:
             "SpT Teff log(g) RGB Hex\nM6V nope 5.0 1,0,0 #ffffff\n",
             encoding="utf-8",
         )
-        context = SimpleNamespace(plugin_dir=plugin_dir, logger=MagicMock())
+        context = SimpleNamespace(plugin_dir=plugin_dir)
 
         with pytest.raises(ValueError, match="numeric value"):
             color_stellar.load_stellar_colors(context)
@@ -770,7 +762,6 @@ def _color_context(tmp_path: Path) -> SimpleNamespace:
         current_group_id    = 1001,
         current_user_id     = 42,
         data_dir            = tmp_path / "color-data",
-        logger              = MagicMock(),
         plugin_dir          = ROOT / "plugins" / "color",
         get_command_catalog = lambda: (COLOR_ROOT,),
     )
@@ -829,7 +820,7 @@ async def test_color_image_cache_is_content_addressed_and_lru_bounded(monkeypatc
         "IMAGE_CACHE_LIMITS",
         FileCacheLimits(max_entries=2, max_bytes=100, ttl_seconds=60),
     )
-    context = SimpleNamespace(logger=MagicMock())
+    context    = SimpleNamespace()
     output_dir = tmp_path / "images"
     first      = await color_image_gen.generate_color_image("first", [1, 2, 3], output_dir, context)
     await color_image_gen.generate_color_image("second", [4, 5, 6], output_dir, context)

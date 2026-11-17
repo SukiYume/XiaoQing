@@ -87,6 +87,7 @@ class TestOneBotWebSocketQueues:
                     _QueuedOneBotEvent(
                         event      = {"user_id": 1},
                         auth_state = client._endpoint_auth,
+                        request_id = "request-1",
                     )
                 )
                 raise TimeoutError()
@@ -112,6 +113,7 @@ class TestOneBotWebSocketQueues:
             _QueuedOneBotEvent(
                 event      = {"user_id": 1},
                 auth_state = client._endpoint_auth,
+                request_id = "request-1",
             )
         )
         client._message_queues[key] = queue

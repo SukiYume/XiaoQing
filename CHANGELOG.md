@@ -6,6 +6,54 @@
 - `X.Y.Z — 日期`：正式版本，版本号与 `pyproject.toml` 一致。
 - 仅有日期的条目：4.1.0 之前及版本之间按日期记录的变化。
 
+## 5.4.0 — 2026-11-17
+
+### 升级须知
+
+- **日志配置改成一个 `logging` 块，旧的 7 个 `log_*` 键不再读取**：写法是 `"logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5}`。对照：`log_level` → `level`，`log_to_console` → `console`，`log_to_file` → `file`，`log_backup_count` → `keep_days`；`log_use_color`、`log_max_size_mb`、`log_rotation` 没有对应项（见下面“去掉按大小轮转和颜色开关”）。旧键留在配置里不报错，被静默忽略，没迁移的设置会回到默认值：例如原来写着 `"log_level": "DEBUG"` 或 `"log_to_console": false`，升级后是 INFO、照常输出到控制台，所以要手动迁移。`logging` 块里出现其他字段、级别名不是大写或 `keep_days` 超出 1～365 时，配置校验报错。新增的 `levels` 按 logger 名单独设级别，例如 `{"plugins.xiaoqing_chat": "WARNING", "core.ai": "DEBUG"}`。日志设置在启动时生效，改完要重启。
+- **`level` 只管项目自己的代码，第三方库默认 WARNING**：5.3.1 的 `log_level` 是根级别，各个库都跟着它（只有 apscheduler 固定 WARNING），`"log_level": "DEBUG"` 会把 aiohttp、websockets 等库的 DEBUG 日志一起打开，默认的 INFO 下库的 INFO 行也照常写出。现在 `level` 只管 `core`、`plugins`、`scripts` 和进程入口；其他 logger 一律 WARNING，`level` 比 WARNING 更严时跟着更严。`"level": "DEBUG"` 只打开 Core 和插件的 DEBUG，库的要在 `levels` 里按名字单独写，例如 `{"websockets": "DEBUG"}`；`levels` 对项目和库的 logger 都能调高或调低。
+- **只剩一个日志文件，错误日志不再单独写**：`logs/xiaoqing_error.log` 取消，ERROR 记录和其他记录一起写进 `logs/xiaoqing.log`。这个文件每天午夜轮转、保留 `keep_days` 份，错误历史也只保留这么多天（原来错误日志按大小轮转，保留期和主日志分开）。已有的 `xiaoqing_error.log*` 不再更新，可以手动删掉。
+- **去掉按大小轮转和颜色开关**：主日志只按天轮转，`log_rotation: "size"` 和 `log_max_size_mb` 没有替代。控制台颜色只在标准输出是终端时启用，不再有开关。
+- **生产环境建议关掉控制台输出**：Windows 启动链把 Bot 的标准输出写进 `logs/bot-monitor.log`，控制台开着时每条日志在那里再写一份。生产配置设 `"console": false` 后，`bot-monitor.log` 只剩读到配置之前写到控制台的几行（例如配置无效时的诊断）和直接打印到标准输出的内容，`bot-monitor-error.log` 只剩日志出口写不出去时的 `log.output_failed` 和直接打印到标准错误的内容；未捕获的异常也记进日志（见下面“未捕获的异常记成事件”）。
+- **`config.json` 缺失或无效时不再启动**：5.3.1 首次读取 `config/config.json` 时文件缺失、不是合法 JSON、读不了或校验失败，记一条警告或错误后照样启动，用的是空配置（所有设置取默认值）。现在进程不启动：先写出原因——`config.source.missing`，或 `config.source.invalid status=… error=…`（JSON 语法错误带 `error.lineno`、`error.colno`，校验失败带 `field_errors`，并按字段各记一条 `config.field.invalid field=… error_type=…`，最多 20 条）——最后一条 CRITICAL 级的 `process.failed`，以退出码 1 结束；日志目录建不了时同样如此。这几行在配置读到之前写出，只到控制台，Windows 启动链下在 `logs/bot-monitor.log`；监控器按退避间隔反复重启 Bot，配置改好之前这几行反复出现。运行中重新读取配置时照旧沿用 last-known-good 快照。
+- **插件意外错误的回复说出原因、异常类型和位置，错误码去掉**：
+  - 回复：5.3.1 一律是 `操作失败，请稍后重试（错误码：XQ-PLUGIN-UNEXPECTED；request_id：…）`，看不出出了什么错、重试有没有用。现在是一行 `操作失败：<原因>（<异常类型> @ <位置>；request_id：…）`，例如 `操作失败：上游服务返回 HTTP 503，请稍后重试（HttpStatusError @ plugins/hello/main.py:6；request_id：3f9a1c2e）`、`操作失败：插件内部错误，重试无效，请联系管理员（KeyError @ plugins/hello/main.py:16；request_id：3f9a1c2e）`。原因按异常链从外到里第一个能分类的异常定：请求超时、网络连接失败、上游 HTTP 状态（408、425、429 和 5xx 说稍后重试，其他状态说重试无效）、上游数据无法解析、模型服务（按 AI 网关的错误类别细分）、缺少依赖、数据库（忙或被锁时说稍后重试）、文件或系统操作，其余算插件内部错误；只转述下层错误的 `SafeHttpError`、`ResponseTransportError` 让位给它下面能分类的异常。类型和位置取决定分类的那一环，位置是回溯里最深一帧插件代码，没有回溯时只写类型。异常消息不进回复。
+  - 日志：一条 ERROR 级的 `public_error component=… category=… error=…`，模型错误另带 `reason_code`（AI 网关的错误类别），`error` 展开成类型、位置、异常链最里层的类型和状态码，后面附回溯，request ID 和回复里的相同。5.3.1 的 `error_code`、`exception_type`、`exception_message`、`causes`、`traceback`、`chain_truncated`、`secret_scan_complete` 字段去掉，异常消息不再写进日志。
+  - 接口：`public_error_response`、`public_error_message` 去掉 `logger=` 参数，还传会报 `TypeError`；日志记在 `plugins.<插件名>` logger 上。`PUBLIC_ERROR_CODE`、`PUBLIC_ERROR_TEXT` 删除；按文字认公开错误的脚本改认开头的 `PUBLIC_ERROR_PREFIX`（`操作失败：`），命令矩阵已经这样认。新增 `log_public_error(context, exc, *, component)`，只记日志、不回复，用于后台任务和静默降级。
+  - 插件执行门拒绝或超时时，回复说出是哪种状态：5.3.1 一律是 `⚠️ 插件暂时不可用，请稍后重试`（会话里是“会话插件”），现在是 `⚠️ 插件执行超时，请稍后重试（request_id：…）`，状态还有“正在重载或已卸载”“繁忙”“当前不可用”，request ID 和同时记下的那条 WARNING 相同。这是普通回复，不是公开错误。
+  - 几个插件兜底意外错误的地方改用公开错误：jupyter 的入口、内核启动与重启、执行器故障（5.3.1 分别是“处理请求失败，请稍后重试”“❌ 内核操作失败，请稍后重试”“❌ 执行失败，请稍后重试”，REPL 里是“❌ 执行失败，缓冲区已保留；请稍后重试”；现在 REPL 里是公开错误后面接一行“缓冲区已保留”）；minecraft 的入口和 RCON 连接（5.3.1 是 `❌ 处理 Minecraft 请求失败，请稍后重试`、`❌ RCON 连接初始化失败`）；qingssh 的入口和后台命令（5.3.1 是“处理请求时出错，请查看日志”“❌ 命令执行出错，请查看日志”）；codex 任务执行失败（5.3.1 是 `Codex 执行异常（类型名）。`）；xiaoqing_memory 后台整理失败的私聊通知（“整理没做完”后接公开错误，5.3.1 只有类型名）；xiaoqing_agent 任务记下的错误是公开错误说明，不再存异常原文。入口的公开错误回复带 `CommandOutcome("error")`。
+- **插件写日志的接口变了**：
+  - `PluginContext.logger` 删除，插件一律 `log = logging.getLogger(__name__)`，再 `log.info(LogEvent("事件名", 字段=值))`（`from core.log import LogEvent`）。写法和字段规则见插件开发手册的“日志与指标”。
+  - `core.sensitive_audit` 整个删除（`log_sensitive_operation`、`summarize_sensitive`、`safe_request_id` 等）。敏感操作直接用 `LogEvent`，原文放进 `payload=`，只留长度和指纹；指纹由 `core.log` 生成。
+  - `core.logging_config` 换成 `core.log`：`setup_logging()` 改为接收 `LoggingSettings` 和日志目录，不再返回 `LogManager`。
+- **xiaoqing_chat 的 `debug` 配置删除**：`debug.log_steps`、`debug.show_reply_prompt`、`debug.log_latency` 不再读取，留在配置里会被忽略。步骤日志固定记 INFO，没有开关；提示词改为 DEBUG 级的 `reply.prompt`，按消息记角色、序号和正文的长度与指纹，不再能输出完整提示词；`log_latency` 记的耗时和 `smalltalk.done` 的 `elapsed_s` 重复，去掉。
+- **日志格式变了，按旧文字搜索的脚本要跟着改**：
+  - 每行固定带 request ID 列，原来的 `[request_id=…]` 改为 `[…]`，不属于任何请求的行是 `[-]`。
+  - 消息从各写各的句子改为“事件名 + 字段”，例如 `send.done transport=WS action=send_group_msg target_id=123456 message_length=42`。
+  - logger 名改为模块名：插件原来经 `context.logger` 记在 `plugin.<插件名>` 下，现在是 `plugins.<插件名>.<模块>`。
+  - 常用的旧串：`xiaoqing_chat step=<步骤>` 现在直接以步骤名开头（步骤名没变），原因字段 `reason=` 改为 `reason_code=`；聊天重置审计 `reset_audit` 改为 `session.reset`；`xiaoqing_life step=<步骤>` 改为 `decision`、`session`、`wind_down`、`research.round`、`source.failed`、`daily_summary` 等事件，`daily_summary` 的计数在 `counts.<项>` 下；`xiaoqing_agent model call` 改为 `model.call`，耗时键是 `elapsed_s`。
+  - 确认重启时找的“日志系统初始化完成”还在，原来的几行合成一行 `日志系统初始化完成 level=… dir=… keep_days=…`。
+- **发送成功的日志不再带正文预览；标识明文，正文只记长度和指纹**：OneBot 发送成功原来记一段截短、打码的消息预览（5.3.1 起敏感私聊记 `[sensitive]`），现在一律是 `send.done`，只记 `message_length`。整个日志按同一套规则记录：QQ 号、群号、`chat_id`、`message_id` 明文（xiaoqing_chat 原来把它们脱敏）；消息正文、回复、提示词、命令、路径、URL、主机名、昵称只记长度和指纹，例如 `<17ch #5948c5c6>`，指纹在同一进程里稳定、重启后更换；凭据键下的值脱敏；数字、日期照写；异常记类型名、位置（`error.at`）、异常链最里层的类型（`error.cause`）和状态码一类的属性（`error.status`、`error.errno` 等），不记异常消息，同样的摘要可以用 `core.log.summarize_exception()` 取到。
+- **Pendo Web 的 uvicorn 日志进主日志**：原来 uvicorn 按自带的日志配置直接写到标准输出和标准错误，`logs/xiaoqing.log` 里看不到；现在它不再自己配置日志，WARNING 及以上的记录按统一格式写进主日志。
+- **定时任务每次运行带 request ID**：每次运行生成一个 8 位 ID，这次运行的日志和插件拿到的 `context.request_id` 都是它；原来定时任务里的日志没有 request ID。
+
+### 改进与修复
+
+- **插件日志的文件名和行号指向调用处**：原来经 `context.logger` 记的行，文件里的 `(文件名:行号)` 一律是 `context.py` 里转发的那一行；现在是插件里写日志的位置。
+- **`.log()` 这类调用不再丢 request ID**：原来 `context.logger` 只给 `debug`、`info`、`warning`、`error`、`exception` 补 request ID，`log()`、`critical()` 等其他方法直接转给底层 logger，记下的行没有 ID。现在 request ID 由日志系统按当前作用域补上，和调用方式无关。
+- **同一条消息的 Core 行和插件行带同一个 ID**：原来 Core 把 request ID 手写在消息开头（`[…] Received: …`），ID 列是 `-`，只有插件行的 ID 列有值。现在 ID 在消息进入时生成，从收到、解析、插件处理到回复发送（`send.start`、`send.done`）和回执结算，Core 和插件的每一行都在 ID 列带同一个 ID，消息里不再重复。三条入口各自生成：主动 WebSocket 在客户端收到事件时，`ws.event.received`（Action 的响应帧不记这一行）、处理器的日志、回复发送和处理失败的 `ws.handler.failed` / `ws.handler.fatal` 都带它，队列满时丢掉最旧事件的 `ws.queue.full` 记在被丢那个事件的 ID 下；入站 HTTP 按请求，响应写完、回执结算完之前都在这个 ID 下，访问记录 `inbound.http.access` 也带它；入站 WebSocket 每帧一个，随事件交给处理它的 worker。没能发出的入站结果（处理被取消后才返回、被别的请求丢弃、遇上停机）在它自己的 ID 下回滚回执。入站调度的 worker 和主动 WebSocket 按发送者排队的 drainer 依次处理多个事件，自己不带 ID。经 agent 代为执行的命令带 `<原 ID>.command.<操作 ID>`，没给操作 ID 时是 8 位十六进制（原来是 12 位）。插件的加载、初始化、卸载和关闭在没有 ID 的作用域里运行，`/reload` 时插件启动的后台任务不会继承这条命令的 ID；Codex 的任务 worker 和 Jupyter 的空闲监控也不再沿用启动它们的那条请求的 ID，Codex 的每个任务按发起它的请求 ID 记。
+- **未知命令不再整串记录**：原来 `Unknown command: '…'` 记下用户打的整个命令词；现在 `command.unknown` 只记截断后命令词的长度和指纹。
+- **日志里的换行会被转义，长消息会被截断**：原来消息里的换行会让一条记录占好几行，外部文本能借此伪造看起来独立的日志行；现在换行和控制字符转义成 `\n`、`\r`、`\xNN`，超过 4000 个字符的消息截断并注明多出的字符数。
+- **异常回溯不再带异常消息**：原来 `logger.exception()` 和带 `exc_info` 的记录在行后附上标准回溯，异常消息原样写出，里面的正文、路径或凭据都会落盘，文件路径带着本机目录，换行和长度也不受上面的限制。现在异常链上每个异常一段，每段最多留最里面的 48 帧，写成 `文件:行 in 函数`（项目内、第三方包内或标准库内的相对路径），省掉外层帧时注明 `…(+N earlier frames)`；段末的类型行带状态码一类的属性，例如 `core.ai.AIRequestError (status=504)`；整段不超过 8000 个字符。别的 handler 已缓存在记录上的标准回溯也会重新渲染。
+- **第三方库日志的参数按字段规则写出**：原来库的日志按库自己拼好的样子写出，参数里的 URL、请求头、对端地址和报文原样落盘。现在行里保留库代码里的消息模板，参数按 `LogEvent` 的字段规则换掉再填进去：数字和日期原样，异常写类型名，容器写 `[N items]`，文本和其他对象只记长度和指纹（位置参数没有键名，看起来像标识的文本也不例外），例如 `apscheduler.scheduler: Execution of job "<45ch #25c1a32c>" skipped: maximum number of running instances reached (1)`。参数填不进模板时写模板加 ` <arguments do not match the format>`；库自己拼好、不带参数的消息照原样写。
+- **入站 HTTP 的访问记录只留方法、状态码、路由和耗时**：原来由 aiohttp 自带的访问日志每个请求记一行 INFO，带对端地址、完整请求行（含查询串）、Referer 和 User-Agent。现在入站监听器在 `core.server` 上记 `inbound.http.access`：`method`（非标准方法写 `OTHER`）、`status`、命中的路由模板 `route`（没有命中时省略）和 `elapsed_s`；状态码小于 400 记 DEBUG，400 及以上记 WARNING；`POST /event` 这一行带该事件的 request ID，其他路由是 `-`。aiohttp 的 `aiohttp.access` 行不再写。
+- **未捕获的异常记成事件**：原来主线程、其他线程里没捕获的异常和析构时忽略的异常由解释器打印到标准错误，带异常消息和标准回溯，不进日志文件；事件循环里没人处理的异常由 asyncio 的默认处理器记一条消息，拼进 `repr(task)` 和异常消息。现在分别记成 `core.log` 上的 `process.uncaught`（CRITICAL）、`thread.uncaught thread=…`、`process.unraisable` 和 `asyncio` logger 上的 `asyncio.unhandled kind=… task=…`，`kind` 是 `task_exception`、`future_exception`、`callback_exception`、`pending_task_destroyed`、`unclosed_resource` 或 `other`，都附上面的回溯；进程入口以异常结束时记 `process.failed`，退出码 1。进程入口在读配置之前就装好只写控制台的日志，这段时间里的记录也是同样的格式。
+- **日志写不出去时只写一行诊断，午夜轮转被挡住时不再丢日志**：原来出口写不出去时，标准库在标准错误打印 `--- Logging error ---`、回溯和这条记录的消息与参数，每条记录一次；Windows 上午夜轮转遇到文件被别的进程打开着，那条记录丢掉，之后每条记录都再试轮转、再丢掉，直到文件被放开。现在在标准错误写一行 `log.output_failed handler=console|file stage=write|rollover error=…`，同一出口同一阶段第一次立即写，之后每分钟最多一行并带上压下的次数 `suppressed`；轮转失败时记录照常写进当前文件，下一条记录再试轮转。
+- **`console`、`file` 都关时不再往标准错误输出**：原来两个出口都关后根 logger 没有 handler，WARNING 及以上由标准库的兜底 handler 写到标准错误，不带统一格式和 request ID；现在读到配置之后不输出任何日志。
+- **OneBot 重连连续失败只在第一次记 WARNING**：原来主动 WebSocket 每次重连失败都记一条 WARNING，连不上时日志里全是这一行；现在连续失败的第一次是 WARNING，之后降到 DEBUG，重连成功时 INFO 级的 `ws.connected` 带上这期间的失败次数 `failures`。
+- **发送被拒不再记两行**：OneBot HTTP 拒绝或没确认一条 Action 时，传输层已经带 retcode 记过一次，投递层又记一行 `Action was rejected or not acknowledged by OneBot HTTP`；去掉后一行。
+- **插件不再各带一套日志工具**：xiaoqing_chat 的 `logging_utils.py`（`log_step` 和几个脱敏函数）删除，耗时累计移到 `timing.py`；媒体模块的 `media_log` 删除；写死的 logger 名（`plugin.xiaoqing_chat`、`pendo.web`、`plugins.xiaoqing_memory`）改为模块名。
+
 ## 5.3.1 — 2026-11-16
 
 ### 升级须知

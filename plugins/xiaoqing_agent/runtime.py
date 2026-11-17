@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments, merge_delivery_outcomes
+from core.log import LogEvent
+from core.public_errors import public_error_message
 
 from . import receipts
 from .config import AgentConfig
@@ -41,7 +43,7 @@ from .tasks import (
 )
 from .tools import Tool, ToolEnv, build_tools, catalog_lines
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 硬超时在任务预算之外再留一点收尾时间，只兜住卡死的模型或工具调用。
 _HARD_TIMEOUT_GRACE         = 120.0
@@ -200,12 +202,14 @@ class AgentRuntime:
         )
         self._active.add(task.runner)
         task.runner.add_done_callback(partial(self._forget, task))
-        logger.info(
-            "xiaoqing_agent task started task=%s chat=%s source=%s request_chars=%d",
-            task_id,
-            chat.key,
-            source,
-            len(task.request_text),
+        log.info(
+            LogEvent(
+                "task.started",
+                task          = task_id,
+                chat          = chat.key,
+                source        = source,
+                request_chars = len(task.request_text),
+            )
         )
         return task
 
@@ -326,9 +330,8 @@ class AgentRuntime:
             task.error  = "任务超时"
             outcome = Outcome("这件事超时了，没能做完。", status="failed")
         except Exception as exc:
-            logger.exception("xiaoqing_agent task crashed task=%s", task.task_id)
             task.status = "failed"
-            task.error  = f"{type(exc).__name__}: {str(exc)[:300]}"
+            task.error = public_error_message(context, exc, component="xiaoqing_agent.task")
             outcome = Outcome("执行时出了点问题，任务没能做完。", status="failed")
         finally:
             task.finished_at = time.time()
@@ -346,16 +349,18 @@ class AgentRuntime:
                     await asyncio.shield(
                         record_task(context, task, env.user_updates, transcript[start:], outcome)
                     )
-            logger.info(
-                "xiaoqing_agent task finished task=%s status=%s steps=%d elapsed=%.1fs"
-                " model_calls=%d model_s=%.1f tool_s=%.1f",
-                task.task_id,
-                task.status,
-                task.steps,
-                task.elapsed,
-                env.model_calls if env else 0,
-                env.model_seconds if env else 0.0,
-                env.tool_seconds if env else 0.0,
+            log.log(
+                logging.WARNING if task.status == "failed" else logging.INFO,
+                LogEvent(
+                    "task.finished",
+                    task        = task.task_id,
+                    status      = task.status,
+                    steps       = task.steps,
+                    elapsed_s   = round(task.elapsed, 1),
+                    model_calls = env.model_calls if env else 0,
+                    model_s     = round(env.model_seconds, 1) if env else 0.0,
+                    tool_s      = round(env.tool_seconds, 1) if env else 0.0,
+                ),
             )
         if outcome is not None:
             if task.notes:
@@ -395,11 +400,7 @@ class AgentRuntime:
         try:
             await self.sessions.append(task.chat, session, turn, max_turns=config.session_max_turns)
         except Exception as exc:
-            logger.warning(
-                "xiaoqing_agent session save failed task=%s error_type=%s",
-                task.task_id,
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("session.save.failed", task=task.task_id, error=exc))
 
     def _forget(self, task: AgentTask, runner: asyncio.Task[None]) -> None:
         """任务协程结束后总是注销；还没开始就被取消的任务不会进入 ``_run`` 的收尾。"""
@@ -416,11 +417,7 @@ class AgentRuntime:
             if messages:
                 await self.store.save_transcript(task, messages)
         except Exception as exc:
-            logger.warning(
-                "xiaoqing_agent task persistence failed task=%s error_type=%s",
-                task.task_id,
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("task.persist.failed", task=task.task_id, error=exc))
 
     # ──────────────────── 交付 ────────────────────
 
@@ -454,7 +451,7 @@ class AgentRuntime:
         result        = report.result
         task.delivery = {True: "sent", False: "failed", None: "unknown"}[result]
         if result is False:
-            logger.warning("xiaoqing_agent result delivery failed task=%s", task.task_id)
+            log.warning(LogEvent("result.delivery.failed", task=task.task_id))
         await self._persist(task, [])
 
     def _track(self, coroutine: Coroutine[Any, Any, None]) -> None:
@@ -576,7 +573,7 @@ class AgentRuntime:
         # 回复里内嵌的命令图片和回复一起发出，按同一个结果结算。
         await receipts.settle(task.held_receipts, task.inline_files, delivered)
         if delivered is False:
-            logger.warning("xiaoqing_agent inline reply was not delivered task=%s", task_id)
+            log.warning(LogEvent("inline_reply.not_delivered", task=task_id))
         task.inline_parts["message"] = delivered
         self._apply_inline_delivery(task)
         await self._persist(task, [])
@@ -745,7 +742,7 @@ class AgentRuntime:
             results = await upload_each(context, chat, uploads)
         except Exception as exc:
             # 发到一半出错，哪些附件已经发出去说不准。
-            logger.warning("xiaoqing_agent resend upload failed error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("resend_upload.failed", error=exc))
             results = [(path, None) for path in uploads]
         for _path, sent in results:
             await resend.record(sent)
@@ -767,9 +764,10 @@ class AgentRuntime:
             if stuck:
                 # 被取消的发送在各自的 finally 里结算回执，给它们一次收尾的机会。
                 await asyncio.wait(stuck, timeout=_STOP_WAIT_SECONDS)
-                logger.warning(
-                    "xiaoqing_agent shutdown left %d task(s) still unwinding",
-                    sum(1 for item in stuck if not item.done()),
+                log.warning(
+                    LogEvent(
+                        "shutdown.unwinding", count=sum(1 for item in stuck if not item.done())
+                    )
                 )
         await self._abandon_reports()
 

@@ -20,6 +20,7 @@ from core.clock import now_in_configured_timezone
 from core.dispatcher import AdjustableSemaphore
 from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
 from core.lifecycle import LazyAsyncLock, to_thread_owned
+from core.log import LogEvent, log_scope
 from core.plugin_base import (
     build_action,
     has_control_characters,
@@ -27,6 +28,7 @@ from core.plugin_base import (
     segments,
     split_message_segments,
 )
+from core.public_errors import public_error_message
 
 from .artifacts import (
     ArtifactLimits,
@@ -49,7 +51,7 @@ from .runner import (
     terminate_process_tree,
 )
 
-logger                  = logging.getLogger(__name__)
+log                     = logging.getLogger(__name__)
 SESSION_STATE_VERSION   = 1
 MAX_SESSION_STATE_BYTES = 8 * 1024 * 1024
 MAX_PERSISTED_SESSIONS  = 10_000
@@ -66,10 +68,8 @@ def _convergence_timeout_seconds(config: CodexPluginConfig) -> int:
 
 def _warn_dangerous_config(config: CodexPluginConfig) -> None:
     if config.sandbox == "danger-full-access":
-        logger.warning(
-            "Codex sandbox=danger-full-access grants the CLI unrestricted local filesystem "
-            "and process authority; use only with a trusted administrator configuration"
-        )
+        # 该沙箱模式让 CLI 拥有不受限的本机文件系统与进程权限，只应配合可信管理员配置使用。
+        log.warning(LogEvent("config.dangerous_sandbox", sandbox=config.sandbox))
 
 
 def _public_path_name(value: str | Path) -> str:
@@ -248,10 +248,12 @@ class CodexQueueManager:
                 and current_revision is not None
                 and settings_revision < current_revision
             ):
-                logger.info(
-                    "Ignoring stale Codex settings revision: incoming=%d current=%d",
-                    settings_revision,
-                    current_revision,
+                log.info(
+                    LogEvent(
+                        "settings.stale_ignored",
+                        incoming_revision = settings_revision,
+                        current_revision  = current_revision,
+                    )
                 )
                 return False
             if (
@@ -332,12 +334,9 @@ class CodexQueueManager:
         try:
             shutil.copy2(source, target)
         except OSError as exc:
-            logger.warning(
-                "Failed to quarantine Codex session state error_type=%s",
-                type(exc).__name__,
-            )
+            log.error(LogEvent("state_quarantine.failed", error=exc))
             return None
-        logger.warning("Quarantined invalid Codex session state name=%s", target.name)
+        log.error(LogEvent("state_quarantine.done", file=target.name))
         return target
 
     def _decode_state(self, data: Any) -> tuple[dict[str, CodexSession], bool, bool]:
@@ -610,11 +609,7 @@ class CodexQueueManager:
             elif path.is_dir():
                 shutil.rmtree(path)
         except (OSError, ValueError) as exc:
-            logger.warning(
-                "Failed to prune Codex lifecycle path name=%s error_type=%s",
-                path.name,
-                type(exc).__name__,
-            )
+            log.error(LogEvent("prune.failed", file=path.name, error=exc))
 
     def _prune_expired_children(self, root: Path, cutoff: float) -> None:
         try:
@@ -770,25 +765,21 @@ class CodexQueueManager:
                 try:
                     self._save()
                 except Exception as rollback_exc:
-                    logger.error(
-                        "Codex enqueue rollback persistence failed: label=%s error_type=%s",
-                        session.label,
-                        type(rollback_exc).__name__,
+                    log.error(
+                        LogEvent("enqueue.rollback_failed", label=session.label, error=rollback_exc)
                     )
-            logger.error(
-                "Codex enqueue persistence failed: label=%s error_type=%s",
-                session.label,
-                type(exc).__name__,
-            )
+            log.error(LogEvent("enqueue.persist_failed", label=session.label, error=exc))
             raise RuntimeError("Codex 任务保存失败，未加入执行队列。") from exc
 
-        logger.info(
-            "Codex job queued: label=%s job_id=%s queue_ahead=%s metadata_keys=%s prompt_chars=%d",
-            session.label,
-            job.job_id,
-            tasks_ahead,
-            sorted(str(key)[:64] for key in job.metadata)[:16],
-            len(prompt),
+        log.info(
+            LogEvent(
+                "job.queued",
+                label        = session.label,
+                job_id       = job.job_id,
+                queue_ahead  = tasks_ahead,
+                metadata     = job.metadata,
+                prompt_chars = len(prompt),
+            )
         )
         return job, tasks_ahead
 
@@ -1033,11 +1024,12 @@ class CodexQueueManager:
     @staticmethod
     def _failed_execution_result(
         session: CodexSession,
+        job: RuntimeJob,
         exc: BaseException,
     ) -> CodexRunResult:
         return synthetic_result(
             session.thread_id,
-            f"Codex 执行异常（{type(exc).__name__}）。",
+            public_error_message(job.context, exc, component="codex.job"),
             exit_code=1,
         )
 
@@ -1160,13 +1152,15 @@ class CodexQueueManager:
             if start is None:
                 raise RuntimeError("Codex execution plan is missing")
 
-            logger.info(
-                "Codex job started: label=%s job_id=%s cwd_name=%s metadata_keys=%s prompt_chars=%d",
-                label,
-                job.job_id,
-                start.cwd.name,
-                sorted(str(key)[:64] for key in job.metadata)[:16],
-                len(job.prompt),
+            log.info(
+                LogEvent(
+                    "job.start",
+                    label        = label,
+                    job_id       = job.job_id,
+                    cwd          = start.cwd,
+                    metadata     = job.metadata,
+                    prompt_chars = len(job.prompt),
+                )
             )
 
             async def process_handoff(
@@ -1192,13 +1186,8 @@ class CodexQueueManager:
         except asyncio.CancelledError:
             return await self._settle_cancelled_execution(session, job)
         except Exception as exc:  # 单个任务失败不能终止同标签的后续队列。
-            logger.error(
-                "Codex job execution failed: label=%s job_id=%s error_type=%s",
-                label,
-                job.job_id,
-                type(exc).__name__,
-            )
-            return self._failed_execution_result(session, exc)
+            log.error(LogEvent("job.execute_failed", label=label, job_id=job.job_id, error=exc))
+            return self._failed_execution_result(session, job, exc)
         finally:
             if slot_acquired:
                 self.global_sem.release()
@@ -1215,10 +1204,7 @@ class CodexQueueManager:
             try:
                 await asyncio.shield(terminate_process_tree(process))
             except Exception as exc:  # 取消收尾仍要返回统一取消结果。
-                logger.warning(
-                    "Codex worker cancellation cleanup failed: error_type=%s",
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("cancel.cleanup_failed", error=exc))
         return self._cancelled_result(session, "Codex worker 已取消任务。")
 
     async def _commit_job_result(
@@ -1279,11 +1265,8 @@ class CodexQueueManager:
                 job.artifact_scan_truncated = collection.scan_truncated
                 self._append_artifact_notice(result, job)
         except Exception as exc:  # 制品失败不能阻断文本结果和后续任务。
-            logger.error(
-                "Codex artifact collection failed: label=%s job_id=%s error_type=%s",
-                label,
-                job.job_id,
-                type(exc).__name__,
+            log.error(
+                LogEvent("artifacts.collect_failed", label=label, job_id=job.job_id, error=exc)
             )
             job.artifact_dropped_count += 1
             reason                            = f"collector_error:{type(exc).__name__}"
@@ -1310,24 +1293,21 @@ class CodexQueueManager:
             else "done"
         )
         job.result = result
-        logger.info(
-            "Codex job finished: label=%s job_id=%s status=%s exit_code=%s timed_out=%s",
-            label,
-            job.job_id,
-            job.status,
-            result.exit_code,
-            result.timed_out,
+        log.info(
+            LogEvent(
+                "job.finish",
+                label     = label,
+                job_id    = job.job_id,
+                status    = job.status,
+                exit_code = result.exit_code,
+                timed_out = result.timed_out,
+            )
         )
         try:
             try:
                 await self._commit_job_result(label, job, result)
             except Exception as exc:
-                logger.error(
-                    "Codex job state commit failed: label=%s job_id=%s error_type=%s",
-                    label,
-                    job.job_id,
-                    type(exc).__name__,
-                )
+                log.error(LogEvent("job.commit_failed", label=label, job_id=job.job_id, error=exc))
             # 图片归档会遍历、复制、完整解码并 fsync；放进工作线程，完成后才继续发布结果。
             await to_thread_owned(
                 self._collect_job_artifacts, label, session, job, result, artifact_dir
@@ -1336,34 +1316,33 @@ class CodexQueueManager:
                 try:
                     self._append_job_history(job, result)
                 except Exception as exc:
-                    logger.error(
-                        "Codex job history write failed: label=%s job_id=%s error_type=%s",
-                        label,
-                        job.job_id,
-                        type(exc).__name__,
+                    log.error(
+                        LogEvent("job.history_failed", label=label, job_id=job.job_id, error=exc)
                     )
         finally:
             job.spawn_handoff.set()
             job.finished_event.set()
 
     async def _worker(self, label: str) -> None:
-        while claimed := await self._claim_next_job(label):
-            job, session = claimed
-            artifact_dir = self._job_artifact_path(label, job.job_id)
-            try:
-                artifact_dir = self._job_artifact_dir(label, job.job_id)
-                result       = await self._execute_job(label, session, job, artifact_dir)
-            except Exception as exc:  # claim 后的本地准备失败也必须进入统一终态。
-                logger.error(
-                    "Codex claimed job preparation failed: label=%s job_id=%s error_type=%s",
-                    label,
-                    job.job_id,
-                    type(exc).__name__,
-                )
-                result = self._failed_execution_result(session, exc)
-            await self._finalize_job(label, session, job, result, artifact_dir)
-            if label not in self.tombstones and not self.shutting_down:
-                await self._send_job_result(session, job, result)
+        # worker 由某个请求首次启动，之后服务这个标签的所有任务：自身日志不属于任何请求，
+        # 处理每个任务时带上发起该任务的请求 id。
+        with log_scope(None):
+            while claimed := await self._claim_next_job(label):
+                job, session = claimed
+                with log_scope(job.context.request_id):
+                    await self._run_claimed_job(label, session, job)
+
+    async def _run_claimed_job(self, label: str, session: CodexSession, job: RuntimeJob) -> None:
+        artifact_dir = self._job_artifact_path(label, job.job_id)
+        try:
+            artifact_dir = self._job_artifact_dir(label, job.job_id)
+            result       = await self._execute_job(label, session, job, artifact_dir)
+        except Exception as exc:  # claim 后的本地准备失败也必须进入统一终态。
+            log.error(LogEvent("job.prepare_failed", label=label, job_id=job.job_id, error=exc))
+            result = self._failed_execution_result(session, job, exc)
+        await self._finalize_job(label, session, job, result, artifact_dir)
+        if label not in self.tombstones and not self.shutting_down:
+            await self._send_job_result(session, job, result)
 
     def _append_artifact_notice(self, result: CodexRunResult, job: RuntimeJob) -> None:
         config             = job.execution_config or self.config
@@ -1512,11 +1491,13 @@ class CodexQueueManager:
                         sent = await job.context.send_action(action)
                         if sent is False:
                             # 明确失败写进会话历史，后续可以查询或重发；不再静默当成已投递。
-                            logger.warning(
-                                "Codex result delivery rejected: label=%s job_id=%s target_kind=%s",
-                                job.label,
-                                job.job_id,
-                                target.kind,
+                            log.warning(
+                                LogEvent(
+                                    "delivery.rejected",
+                                    label       = job.label,
+                                    job_id      = job.job_id,
+                                    target_kind = target.kind,
+                                )
                             )
                             self._append_history(
                                 job.label,
@@ -1527,13 +1508,14 @@ class CodexQueueManager:
                                 },
                             )
                     except Exception as exc:  # 一个目标失败不能阻断其他目标和后续队列。
-                        logger.error(
-                            "Codex result delivery failed: label=%s job_id=%s target_kind=%s "
-                            "error_type=%s",
-                            job.label,
-                            job.job_id,
-                            target.kind,
-                            type(exc).__name__,
+                        log.error(
+                            LogEvent(
+                                "delivery.failed",
+                                label       = job.label,
+                                job_id      = job.job_id,
+                                target_kind = target.kind,
+                                error       = exc,
+                            )
                         )
 
     async def list_sessions(self) -> str:
@@ -1609,10 +1591,8 @@ class CodexQueueManager:
                     timeout=config.spawn_timeout_seconds + 1,
                 )
             except TimeoutError:
-                logger.error(
-                    "Codex spawn handoff did not converge during cancellation: label=%s job_id=%s",
-                    job.label,
-                    job.job_id,
+                log.error(
+                    LogEvent("cancel.spawn_handoff_timeout", label=job.label, job_id=job.job_id)
                 )
 
         async with self.lock:
@@ -1624,19 +1604,18 @@ class CodexQueueManager:
                     not getattr(termination, "tree_confirmed", False)
                     or not getattr(termination, "parent_reaped", False)
                 ):
-                    logger.error(
-                        "Codex cancellation could not confirm full process-tree cleanup: "
-                        "label=%s job_id=%s result=%s",
-                        job.label,
-                        job.job_id,
-                        termination,
+                    log.error(
+                        LogEvent(
+                            "cancel.tree_unconfirmed",
+                            label          = job.label,
+                            job_id         = job.job_id,
+                            tree_confirmed = getattr(termination, "tree_confirmed", False),
+                            parent_reaped  = getattr(termination, "parent_reaped", False),
+                        )
                     )
             except Exception as exc:  # 终止失败后仍需等待工作进程完成收尾。
-                logger.warning(
-                    "Codex process cancellation failed: label=%s job_id=%s error=%s",
-                    job.label,
-                    job.job_id,
-                    exc,
+                log.error(
+                    LogEvent("cancel.process_failed", label=job.label, job_id=job.job_id, error=exc)
                 )
 
         try:
@@ -1755,7 +1734,7 @@ class CodexQueueManager:
                         timeout=_convergence_timeout_seconds(self.config),
                     )
                 except TimeoutError:
-                    logger.error("Codex workers did not converge during shutdown")
+                    log.error(LogEvent("shutdown.workers_not_converged"))
                     for task in pending:
                         if not task.done():
                             task.cancel()

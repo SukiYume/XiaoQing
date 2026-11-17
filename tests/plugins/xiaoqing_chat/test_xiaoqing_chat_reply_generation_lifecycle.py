@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 from contextlib import suppress
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +11,7 @@ import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_OPEN,
     ScriptedChatModel,
@@ -28,9 +29,11 @@ sample_group_event = _fixture_support.sample_group_event
 
 @pytest.mark.asyncio
 async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply="这条回复需要检查")
     scripted_chat_context(
@@ -50,11 +53,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(
         )
 
     assert result == [{"type": "text", "data": {"text": "这条回复需要检查"}}]
-    steps = [
-        json.loads(call.args[1])["step"]
-        for call in mock_context.logger.info.call_args_list
-        if call.args and str(call.args[0]).startswith("xiaoqing_chat step=")
-    ]
+    steps = [event.name for event in logged_events(caplog)]
     assert "reply.check.error" in steps
     assert "reply.check.timeout" not in steps
     await ack_reply_delivery(result)

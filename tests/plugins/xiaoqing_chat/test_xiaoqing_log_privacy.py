@@ -1,188 +1,54 @@
+"""一整轮对话的日志里只有步骤、标签和长度：消息、回复和提示词正文都不进日志。
+
+字段的脱敏规则由 ``tests/core/test_logging.py`` 覆盖；这里只看聊天插件实际交给日志的内容。
+"""
+
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-from plugins.xiaoqing_chat.logging_utils import log_step, sanitize_log_fields
-from plugins.xiaoqing_chat.reply_generator import _log_prompt_audit_metadata
+from tests.helpers.assertions import logged_events, logged_records
+from tests.helpers.xiaoqing_chat_test_support import (
+    ScriptedChatModel,
+    ack_reply_delivery,
+    chat_message_event,
+    plan_answer,
+    scripted_chat_context,
+    settle_chat_background,
+)
 
 mock_context = _fixture_support.mock_context
 
-CANARY = "XIAOQING_PRIVATE_PROMPT_CANARY"
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    [
-        "system_prompt",
-        "user_prompt",
-        "history",
-        "dialogue",
-        "model_response",
-        "raw_output",
-        "current_text",
-        "message",
-        "goal",
-        "reason",
-        "hint",
-        "description",
-        "marker",
-        "term",
-        "emotion_tags",
-        "chat_id",
-        "user_id",
-        "group_id",
-        "operator_user_id",
-    ],
-)
-def test_sensitive_chat_log_fields_are_fingerprinted_not_truncated(field_name: str) -> None:
-    sanitized = sanitize_log_fields({field_name: CANARY})
-    serialized = json.dumps(sanitized, ensure_ascii=False)
-
-    assert CANARY not in serialized
-    assert "fingerprint=hmac-sha256:" in serialized
-    assert "length=" in serialized
-
-
-def test_sensitive_nested_chat_log_fields_are_fingerprinted() -> None:
-    sanitized = sanitize_log_fields(
-        {
-            "status" : "ok",
-            "payload": {
-                "role"   : "user",
-                "content": CANARY,
-            },
-        }
-    )
-    serialized = json.dumps(sanitized, ensure_ascii=False)
-
-    assert sanitized["status"] == "ok"
-    assert sanitized["payload"]["role"] == "user"
-    assert CANARY not in serialized
-    assert "fingerprint=hmac-sha256:" in serialized
-
-
-def test_model_reason_that_looks_like_a_status_token_is_still_fingerprinted() -> None:
-    sanitized = sanitize_log_fields({"reason": "private", "reason_code": "parse_failed"})
-
-    assert sanitized["reason"] != "private"
-    assert "fingerprint=hmac-sha256:" in sanitized["reason"]
-    assert sanitized["reason_code"] == "parse_failed"
-
-
-def test_log_step_keeps_stage_and_correlation_but_never_payload(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.step"))
-    runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=True)))
-
-    with caplog.at_level(logging.INFO):
-        log_step(
-            context,
-            runtime,
-            chat_id = "private-chat-id",
-            step    = "reply.debug",
-            fields  = {
-                "status"    : "prepared",
-                "request_id": "req-step",
-                "task_id"   : "task-step",
-                "role"      : "system",
-                "prompt"    : CANARY,
-                "history"   : CANARY,
-                "response"  : CANARY,
-            },
-        )
-
-    logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert "reply.debug" in logged
-    assert "prepared" in logged
-    assert "req-step" in logged
-    assert "task-step" in logged
-    assert "system" in logged
-    assert CANARY not in logged
-    assert logged.count("fingerprint=hmac-sha256:") >= 4
-
-
-def test_prompt_debug_metadata_preserves_roles_and_correlation_without_content(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.prompt"))
-    messages = [
-        ChatMessage(role="system", content=f"system {CANARY}"),
-        ChatMessage(role="user", content=f"user {CANARY}"),
-    ]
-
-    with caplog.at_level(logging.INFO):
-        _log_prompt_audit_metadata(context, messages, request_id="req-prompt")
-
-    logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert CANARY not in logged
-    assert "operation=reply_prompt" in logged
-    assert "status=prepared" in logged
-    assert "request_id=req-prompt" in logged
-    assert "role=system" in logged
-    assert "role=user" in logged
-    assert logged.count("fingerprint=hmac-sha256:") == 2
-
-
-def test_prompt_debug_rejects_malicious_request_id(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    malicious_request_id = f"req\nAuthorization: Bearer {CANARY}"
-    context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing.bad-request"))
-
-    with caplog.at_level(logging.INFO):
-        _log_prompt_audit_metadata(
-            context,
-            [ChatMessage(role="user", content="safe prompt")],
-            request_id=malicious_request_id,
-        )
-
-    logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert "request_id=-" in logged
-    assert malicious_request_id not in logged
-    assert CANARY not in logged
-
-
-def test_log_step_rejects_malicious_correlation_ids() -> None:
-    fields = sanitize_log_fields(
-        {
-            "request_id": f"req\n{CANARY}",
-            "task_id"   : "task-ok_1",
-            "job_id"    : "x" * 65,
-        }
-    )
-
-    assert fields == {"request_id": "-", "task_id": "task-ok_1", "job_id": "-"}
+MESSAGE_CANARY = "XIAOQING_PRIVATE_MESSAGE_CANARY"
+REPLY_CANARY   = "XIAOQING_PRIVATE_REPLY_CANARY"
 
 
 @pytest.mark.asyncio
-async def test_reset_audit_fingerprints_all_actor_identifiers(
-    mock_context,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+async def test_a_turn_logs_its_steps_and_prompt_roles_but_no_conversation_text(
+    mock_context, sample_private_event, caplog
 ) -> None:
-    from plugins.xiaoqing_chat import commands
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    event = {
-        "message_type": "group",
-        "group_id"    : f"group-{CANARY}",
-        "user_id"     : f"operator-{CANARY}",
-    }
-    mock_context.data_dir = tmp_path
-    mock_context.logger   = logging.getLogger("test.xiaoqing.reset-audit")
+    caplog.set_level(logging.DEBUG, logger="plugins.xiaoqing_chat")
+    model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply=f"记下了 {REPLY_CANARY}")
+    scripted_chat_context(mock_context, model)
+    text = f"帮我记一下 {MESSAGE_CANARY}"
 
-    with caplog.at_level(logging.INFO):
-        result = await commands.handle_internal("重置", "确认", event, mock_context)
+    result = await handle_smalltalk(
+        text, chat_message_event(sample_private_event, text), mock_context
+    )
+    await ack_reply_delivery(result)
+    await settle_chat_background(mock_context, model)
 
+    assert REPLY_CANARY in str(result)
+    assert logged_events(caplog, "smalltalk.recv") and logged_events(caplog, "smalltalk.done")
+    # 提示词只在调试级记每条消息的角色和长度。
+    prompts = logged_records(caplog, "reply.prompt")
+    assert {record.levelno for record in prompts} == {logging.DEBUG}
+    assert {"system", "user"} <= {record.msg.fields["role"] for record in prompts}
     logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
-    assert CANARY not in logged
-    assert "scope=group" in logged
-    assert logged.count("fingerprint=hmac-sha256:") == 3
+    assert MESSAGE_CANARY not in logged
+    assert REPLY_CANARY not in logged

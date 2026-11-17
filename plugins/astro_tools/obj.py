@@ -453,9 +453,4 @@ async def handle_obj(args: str, context: PluginContextProtocol) -> str:
     except TimeoutError:
         return "SIMBAD 查询超时，请稍后再试。"
     except Exception as exc:
-        return public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "astro_tools.obj",
-        )
+        return public_error_message(context, exc, component="astro_tools.obj")

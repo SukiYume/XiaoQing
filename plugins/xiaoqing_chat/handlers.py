@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import random
 import re
 import time
@@ -11,9 +12,10 @@ from typing import Any, cast
 
 from core.delivery import SENSITIVE_ACTION_KEY
 from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
+from core.log import LogEvent
 from core.message import extract_text
 from core.plugin_base import segments
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from .agent_bridge import (
     AGENT_PLUGIN,
@@ -67,7 +69,6 @@ from .life.push_log import Push, image_paths
 from .life.schedule import routine_factor, routine_slot_now
 from .life.schedule import state_text as routine_state_text
 from .llm.check_result import ReplyRejected
-from .logging_utils import log_step
 from .media.event_media import build_effective_user_text
 from .memory import client as memory_client
 from .memory.local_ids import allocate_local_id
@@ -91,6 +92,8 @@ from .task_scheduler import (
 from .turn_delivery import finalize_smalltalk_turn
 from .turn_generation import ensure_user_message_recorded, generate_smalltalk_turn
 from .utils.wall_clock import local_datetime
+
+log = logging.getLogger(__name__)
 
 # 会话状态、重置与长空档判定
 
@@ -174,12 +177,12 @@ _last_stalled_notice: dict[str, float] = {}
 
 
 def _reply_after_failure(context, exc: Exception, event: dict[str, Any]) -> list[dict[str, Any]]:
-    """闲聊这一轮出了故障：记诊断日志，聊天里不出现错误码。
+    """闲聊这一轮出了故障：记 ``public_error`` 日志，聊天里不出现错误说明。
 
     她只是顺口接话时就当没接上；私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次。
     """
 
-    public_error_message(context, exc, logger=context.logger, component="xiaoqing_chat.smalltalk")
+    log_public_error(context, exc, component="xiaoqing_chat.smalltalk")
     if not (event.get(_FORCED_EVENT_KEY) or is_private_event(event)):
         return []
     chat_id = event_chat_id(event)
@@ -222,7 +225,6 @@ def _external_headline(text: str) -> str:
 
 async def _maybe_reset_idle_conversation(
     event: dict[str, Any],
-    context,
     runtime,
     state,
     *,
@@ -249,15 +251,13 @@ async def _maybe_reset_idle_conversation(
         return 0.0
 
     await reset_transient_conversation_state(state, chat_id)
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "smalltalk.context.reset_idle",
-        fields  = {
-            "idle_seconds"     : round(idle_gap, 3),
-            "threshold_seconds": round(threshold, 3),
-        },
+    log.info(
+        LogEvent(
+            "smalltalk.context.reset_idle",
+            chat_id           = chat_id,
+            idle_seconds      = round(idle_gap, 3),
+            threshold_seconds = round(threshold, 3),
+        )
     )
     return idle_gap
 
@@ -276,7 +276,7 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     Args:
         clean_text: 清理后的用户消息文本
         event: OneBot 事件字典，包含消息元数据
-        context: 插件上下文，包含 logger、config、data_dir 等
+        context: 插件上下文，包含 config、data_dir 等
 
     Returns:
         要发送的消息段字典列表，如果不应发送回复则返回空列表
@@ -288,10 +288,8 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
         max_replan = runtime.cfg.reply_check.max_replan
         hctx = HandlerContext.from_event(event, context, runtime=runtime)
     except Exception as exc:
-        context.logger.debug(
-            "xiaoqing_chat failed to prepare handler context error_type=%s",
-            type(exc).__name__,
-        )
+        # 这一轮接着会在同一处失败，由 _reply_after_failure 记 public_error；这里只留排障细节。
+        log.debug(LogEvent("smalltalk.handler_context.failed", error=exc))
         hctx = None
     total_attempts = max_replan + 1
 
@@ -316,20 +314,11 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
                 if hctx is not None:
                     schedule_action_history_flush(context, hctx.runtime, chat_id=chat_id)
             except Exception as history_exc:
-                context.logger.debug(
-                    "xiaoqing_chat failed to record rejected reply error_type=%s",
-                    type(history_exc).__name__,
-                )
+                log.warning(LogEvent("smalltalk.reply_rejected.record_failed", error=history_exc))
             if attempt < max_replan:
-                context.logger.info(
-                    "XiaoQing Chat 回复被拒绝，触发重规划重试 rejection_type=%s",
-                    type(exc).__name__,
-                )
+                log.info(LogEvent("smalltalk.reply_rejected.replan", error=exc))
                 continue
-            context.logger.warning(
-                "XiaoQing Chat 回复被拒绝(已耗尽重试) rejection_type=%s",
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("smalltalk.reply_rejected.exhausted", error=exc))
             return []
         except Exception as exc:
             return _reply_after_failure(context, exc, event)
@@ -427,11 +416,10 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
         async with chat_lock(chat_id):
             await ensure_user_message_recorded(text, event, context, runtime, state=state)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = context.logger,
-            component = "xiaoqing_chat.observe_message",
+            component="xiaoqing_chat.observe_message",
         )
         return []
     return []
@@ -543,12 +531,13 @@ async def observe_outgoing_action(
                 ),
             )
             schedule_action_history_flush(context, runtime, chat_id=chat_id)
-            log_step(
-                context,
-                runtime,
-                chat_id = chat_id,
-                step    = "smalltalk.memory.append_external_bot",
-                fields  = {"local_id": local_id, "source_plugin": str(source_plugin or "").strip()},
+            log.info(
+                LogEvent(
+                    "smalltalk.memory.append_external_bot",
+                    chat_id       = chat_id,
+                    local_id      = local_id,
+                    source_plugin = str(source_plugin or "").strip(),
+                )
             )
             history = (
                 list(await state.memory_store.get_recent_async(chat_id, max_items=12))
@@ -568,11 +557,10 @@ async def observe_outgoing_action(
                 source  = "agent",
             )
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = context.logger,
-            component = "xiaoqing_chat.observe_outgoing",
+            component="xiaoqing_chat.observe_outgoing",
         )
         return []
     return []
@@ -591,7 +579,7 @@ def _retry_pending_forgets(context) -> None:
         spawn_bg_task(context, memory_client.retry_forgets(context), name="memory_forget_retry:all")
 
 
-async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: HandlerContext):
+async def _resolve_attention(text: str, event: dict[str, Any], hctx: HandlerContext):
     """判断本轮是否在叫机器人、是否必须回复，并记录接收日志。"""
 
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
@@ -621,32 +609,30 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
         attention = dataclasses.replace(
             attention, mentioned=True, forced=True, force_reason="continued"
         )
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "smalltalk.recv",
-        fields  = {
-            "is_private"        : is_private,
-            "mentioned"         : attention.mentioned,
-            "direct_mentioned"  : direct_mentioned,
-            "called_by_name"    : called_by_name,
-            "reply_to_bot"      : attention.reply_to_bot,
-            "forced"            : attention.forced,
-            "force_reason"      : attention.force_reason,
-            "continued"         : continued,
-            "brain_chat_enabled": brain_chat_enabled,
-            "msg_id"            : event.get("message_id"),
-            "user_id"           : event.get("user_id"),
-            "group_id"          : event.get("group_id"),
-            "text"              : text,
-            "new_emoji_count"   : max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
-        },
+    log.info(
+        LogEvent(
+            "smalltalk.recv",
+            chat_id            = chat_id,
+            is_private         = is_private,
+            mentioned          = attention.mentioned,
+            direct_mentioned   = direct_mentioned,
+            called_by_name     = called_by_name,
+            reply_to_bot       = attention.reply_to_bot,
+            forced             = attention.forced,
+            force_reason_code  = attention.force_reason,
+            continued          = continued,
+            brain_chat_enabled = brain_chat_enabled,
+            msg_id             = event.get("message_id"),
+            user_id            = event.get("user_id"),
+            group_id           = event.get("group_id"),
+            text               = text,
+            new_emoji_count    = max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
+        )
     )
     return attention, is_private
 
 
-async def _update_observed_goal(context, hctx: HandlerContext, text: str, *, forced: bool) -> None:
+async def _update_observed_goal(hctx: HandlerContext, text: str, *, forced: bool) -> None:
     """记录本轮观察到的会话目标；规划器已有目标或本轮信息量太低时保持原目标。"""
 
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
@@ -662,19 +648,17 @@ async def _update_observed_goal(context, hctx: HandlerContext, text: str, *, for
         goal = derive_goal(text)
     if goal:
         await state.goal_store.set_async(chat_id, goal=goal, source=source)
-        log_step(
-            context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": goal}
-        )
+        log.info(LogEvent("smalltalk.goal.set", chat_id=chat_id, goal=goal))
     elif preserve:
-        log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.keep", fields={})
+        log.info(LogEvent("smalltalk.goal.keep", chat_id=chat_id))
 
 
-async def _log_reply_gate_skip(context, hctx: HandlerContext, text: str) -> None:
+async def _log_reply_gate_skip(hctx: HandlerContext, text: str) -> None:
     decision = hctx.state.get_reply_gate_decision(hctx.chat_id)
     fields   = decision.as_log_fields() if decision is not None else {}
-    fields.setdefault("reason", "reply_gate")
+    fields.setdefault("reason_code", "reply_gate")
     fields["text"] = text
-    log_step(context, hctx.runtime, chat_id=hctx.chat_id, step="smalltalk.no_reply", fields=fields)
+    log.info(LogEvent("smalltalk.no_reply", chat_id=hctx.chat_id, **fields))
     await hctx.state.heartflow.on_no_reply_async(chat_id=hctx.chat_id)
 
 
@@ -704,7 +688,7 @@ def _spawn_expression_reflection(context, hctx: HandlerContext) -> None:
         )
 
     spawn_bg_task(context, _run_reflection(), name=f"reflection:{chat_id}")
-    log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
+    log.info(LogEvent("smalltalk.reflection.spawn", chat_id=chat_id))
 
 
 async def _private_closing_settled(text: str, event: dict[str, Any], hctx: HandlerContext) -> bool:
@@ -804,24 +788,18 @@ async def _prepare_smalltalk_turn(
         runtime = runtime,
     )
     if is_ignored_text(text, runtime):
-        log_step(context, runtime, chat_id=chat_id, step="smalltalk.ignore", fields={"text": text})
+        log.info(LogEvent("smalltalk.ignore", chat_id=chat_id, text=text))
         return None
 
     async with chat_lock(chat_id):
-        await _maybe_reset_idle_conversation(event, context, runtime, state, chat_id=chat_id)
+        await _maybe_reset_idle_conversation(event, runtime, state, chat_id=chat_id)
 
     _retry_pending_forgets(context)
 
-    attention, is_private = await _resolve_attention(text, event, context, hctx)
+    attention, is_private = await _resolve_attention(text, event, hctx)
     event[_FORCED_EVENT_KEY] = attention.forced
     if is_private and await _private_closing_settled(text, event, hctx):
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "smalltalk.closing_silence",
-            fields  = {"text": text},
-        )
+        log.info(LogEvent("smalltalk.closing_silence", chat_id=chat_id, text=text))
         return None
     routine_factor = _apply_routine(event, hctx)
     spawn_daily_life(context, runtime, state, hctx.secrets, bot_name=hctx.bot_name)
@@ -838,9 +816,9 @@ async def _prepare_smalltalk_turn(
     # 先用上一轮状态完成回复门控，再记录本轮观察到的新目标。这样当前消息不会先把
     # 自己标成“活跃话题”，同时即使本轮不回复，后续仍能看到真正的新话题。
     if runtime.cfg.goal.enable_goal:
-        await _update_observed_goal(context, hctx, text, forced=attention.forced)
+        await _update_observed_goal(hctx, text, forced=attention.forced)
     if not reply_gate_allowed:
-        await _log_reply_gate_skip(context, hctx, text)
+        await _log_reply_gate_skip(hctx, text)
         return None
     if runtime.cfg.reflection.enable_expression_reflection:
         _spawn_expression_reflection(context, hctx)
@@ -877,12 +855,13 @@ async def _yields_to_follow_up(
     if prepared.forced:
         carry_attention(event)
     carry_text(event, prepared.text)
-    log_step(
-        context,
-        hctx.runtime,
-        chat_id = hctx.chat_id,
-        step    = "smalltalk.yield_to_follow_up",
-        fields  = {"phase": "before_generation", "forced": prepared.forced},
+    log.info(
+        LogEvent(
+            "smalltalk.yield_to_follow_up",
+            chat_id = hctx.chat_id,
+            phase   = "before_generation",
+            forced  = prepared.forced,
+        )
     )
     return True
 
@@ -959,12 +938,13 @@ async def _reply_with_chat(
                 started_at=started_at,
             )
     except GenerationLimitExceeded as exc:
-        log_step(
-            context,
-            runtime,
-            chat_id = hctx.chat_id,
-            step    = "smalltalk.generation_limited",
-            fields  = {"limit": str(exc), "forced": prepared.forced},
+        log.info(
+            LogEvent(
+                "smalltalk.generation_limited",
+                chat_id = hctx.chat_id,
+                limit   = str(exc),
+                forced  = prepared.forced,
+            )
         )
         # 被同会话更新的消息顶替时由新一轮接手，不再发忙碌提示。
         if not prepared.forced or str(exc) == CHAT_SUPERSEDED:

@@ -11,6 +11,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
+from core.log import LogEvent
+
 from ..safety import is_blocked
 from . import subtitle
 from .base import (
@@ -24,7 +26,7 @@ from .base import (
 )
 from .bilibili import bvid_of
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 MAX_DESC_CHARS    = 800
 MAX_DESC_SEGMENTS = 4
@@ -132,7 +134,7 @@ async def deep_read(
             lines, partial = await subtitle.read(fetch, bvid, item.cid, blocked)
             found += lines
         except SourceError as exc:
-            logger.info("xiaoqing_life step=source name=bili_subtitle failed reason=%s", exc.reason)
+            log.warning(LogEvent("source.failed", source="bili_subtitle", reason_code=exc.reason))
     kept = [p for p in found if not is_blocked(p.text, blocked)]
     return replace(
         item,

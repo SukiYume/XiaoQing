@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 from plugins.xiaoqing_life.config import LifeConfig, parse_life_config
@@ -143,7 +142,6 @@ def make_context(
         data_dir     = tmp_path / "data",
         plugin_dir   = tmp_path / "plugin",
         state        = {},
-        logger       = MagicMock(),
         http_session = session,
         request_id   = "req-1",
         capabilities=SimpleNamespace(ai=ai or FakeAI()),

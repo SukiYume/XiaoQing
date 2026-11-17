@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,14 +12,13 @@ from core.interfaces import DeliveryTarget
 from plugins.chime import main as chime
 from plugins.earthquake import main as earthquake
 from plugins.minecraft import main as minecraft
-from plugins.minecraft.log_monitor import LogBatch, LogEvent, LogEventType, LogMonitor
+from plugins.minecraft.log_monitor import LogBatch, LogMonitor, PlayerEvent, PlayerEventType
 from tests.helpers.earthquake_test_support import serve_weibo, weibo_card
 
 
 def _chime_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
     return SimpleNamespace(
         data_dir       = tmp_path,
-        logger         = MagicMock(),
         default_groups = lambda: groups,
         send_action    = AsyncMock(),
     )
@@ -185,9 +184,9 @@ async def test_earthquake_partial_fanout_retries_only_unacknowledged_group(
     assert load_pending(tmp_path / "earthquake_delivery.json") is None
 
 
-def _mc_event(index: int = 1) -> LogEvent:
-    return LogEvent(
-        event_type = LogEventType.CHAT,
+def _mc_event(index: int = 1) -> PlayerEvent:
+    return PlayerEvent(
+        event_type = PlayerEventType.CHAT,
         player     = f"Player{index}",
         message    = f"message-{index}",
     )

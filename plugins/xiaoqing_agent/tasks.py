@@ -16,12 +16,13 @@ from typing import Any, TypeVar
 from core.atomic_store import keyed_path_lock, quarantine_corrupt_file
 from core.delivery import merge_delivery_outcomes
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 from core.plugin_base import atomic_write_text
 
 from .receipts import HeldReceipt
 
-_logger = logging.getLogger(__name__)
-_T      = TypeVar("_T")
+log = logging.getLogger(__name__)
+_T  = TypeVar("_T")
 
 # 每个会话保留的任务记录数，以及全局保留的完整执行记录数。
 MAX_RECORDS_PER_CHAT = 30
@@ -258,11 +259,7 @@ class TaskStore:
         target = quarantine_corrupt_file(path)
         if target is None:
             return
-        _logger.error(
-            "agent 任务记录损坏，已隔离为 %s error_type=%s",
-            target.name,
-            type(error).__name__,
-        )
+        log.error(LogEvent("task_store.quarantined", file=target.name, error=error))
 
     @staticmethod
     def _write(path: Path, records: list[dict[str, Any]]) -> None:

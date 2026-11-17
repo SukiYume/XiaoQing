@@ -20,6 +20,8 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
+from core.log import LogEvent
+
 from .shared import (
     InferenceParams,
     encode_normalized,
@@ -31,7 +33,7 @@ from .shared import (
     validated_columns,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _MODEL_CACHE: dict[tuple[str, str, int, int], "KNNInferenceModel"] = {}
 
@@ -121,7 +123,8 @@ class KNNInferenceModel:
             expected_dim = self.embed_dim,
             name         = "pos_embeddings",
         )
-        logger.info("Loaded pos_embeddings: %s", self.pos_embeddings.shape)
+        rows, dim = self.pos_embeddings.shape
+        log.info(LogEvent("embeddings.loaded", kind="pos", rows=rows, dim=dim))
 
         neg_path = self.model_dir / "neg_embeddings.npy"
         if neg_path.exists():
@@ -130,10 +133,11 @@ class KNNInferenceModel:
                 expected_dim = self.embed_dim,
                 name         = "neg_embeddings",
             )
-            logger.info("Loaded neg_embeddings: %s", self.neg_embeddings.shape)
+            rows, dim = self.neg_embeddings.shape
+            log.info(LogEvent("embeddings.loaded", kind="neg", rows=rows, dim=dim))
         else:
             self.neg_embeddings = None
-            logger.info("neg_embeddings.npy not found; running without negative penalty.")
+            log.info(LogEvent("embeddings.neg_missing"))
 
         # ── 加载编码器 ──────────────────────────────────────────────────
         self.encoder = load_sentence_encoder(self.encoder_name, max_len)

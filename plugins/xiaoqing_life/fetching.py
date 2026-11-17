@@ -10,6 +10,8 @@ import math
 from dataclasses import replace
 from typing import Any
 
+from core.log import LogEvent
+
 from . import reinforce
 from .config import LifeConfig
 from .days import DAY
@@ -20,7 +22,7 @@ from .sources import bilibili, deep, hotlists, watch
 from .sources.base import Fetcher, SourceError, SourceItem
 from .stores import LifeStore
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 COMMENT_ITEMS = 3
@@ -57,7 +59,7 @@ async def hot_items(
             failures += 1
             if outcomes is not None:
                 outcomes[name] = False
-            logger.info("xiaoqing_life step=source name=%s failed reason=%s", name, exc.reason)
+            log.warning(LogEvent("source.failed", source=name, reason_code=exc.reason))
             continue
         if outcomes is not None:
             outcomes[name] = True
@@ -74,7 +76,7 @@ async def search_items(
     except SourceError as exc:
         if outcomes is not None:
             outcomes["bili_search"] = False
-        logger.info("xiaoqing_life step=source name=bili_search failed reason=%s", exc.reason)
+        log.warning(LogEvent("source.failed", source="bili_search", reason_code=exc.reason))
         return [], 1
     if outcomes is not None:
         outcomes["bili_search"] = True
@@ -173,7 +175,7 @@ async def with_comments(
             page, position, cfg.blocked_keywords, cfg.max_comments_per_item
         )
     except SourceError as exc:
-        logger.info("xiaoqing_life step=source name=bili_comments failed reason=%s", exc.reason)
+        log.warning(LogEvent("source.failed", source="bili_comments", reason_code=exc.reason))
         return item, None
     return replace(item, comments=comments), page
 

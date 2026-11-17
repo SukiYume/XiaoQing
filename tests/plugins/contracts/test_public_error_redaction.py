@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pandas as pd
 import pytest
 
+import tests.helpers.app_test_support as _fixture_support
 from plugins.adnmb import adapi as adnmb_api
 from plugins.adnmb import main as adnmb
 from plugins.ads_paper import ads_client
@@ -52,13 +53,27 @@ from plugins.url_parser import main as url_parser
 from plugins.voice import main as voice
 from plugins.wolframalpha import main as wolframalpha
 from plugins.xiaoqing_chat import main as xiaoqing_chat
-
-CANARY          = "SECRET_CANARY"
-SENSITIVE_ERROR = (
-    f"Authorization: Bearer {CANARY} "
-    f"https://user:password@example.test/api?token={CANARY} "
-    rf"C:\Users\user\{CANARY}.txt"
+from tests.helpers.app_test_support import LoggedLines
+from tests.helpers.assertions import (
+    logged_events,
+    logged_records,
+    public_error_reply,
+    text_segments_text,
 )
+
+restore_logging = _fixture_support.restore_logging
+logged_lines    = _fixture_support.logged_lines
+
+CANARY = "SECRET_CANARY"
+# 异常消息里的探针：用户原话、几种凭据写法、URL、Windows 和 POSIX 路径。
+SENSITIVE_ERROR = (
+    f"用户原话 {CANARY} "
+    f"Authorization: Bearer {CANARY} token={CANARY} Cookie: session={CANARY} "
+    f'{{"api_key": "{CANARY}"}} '
+    f"https://user:password@example.test/api?token={CANARY} "
+    rf"C:\Users\user\{CANARY}.txt /home/user/{CANARY}"
+)
+_FORBIDDEN = (CANARY, "Authorization", "Cookie", "user:password", "C:\\Users\\user", "/home/user")
 
 
 class _LeakingDatabase:
@@ -86,7 +101,6 @@ class _PublicContext:
         plugin_dir: Path,
         data_dir: Path,
         secrets: dict,
-        logger: logging.Logger,
         plugin_secrets: dict | None = None,
         failing: tuple[str, ...]    = (),
     ) -> None:
@@ -94,7 +108,6 @@ class _PublicContext:
         self._plugin_dir      = plugin_dir
         self._data_dir        = data_dir
         self.secrets          = secrets
-        self.logger           = logger
         self._plugin_secrets  = plugin_secrets or {}
         self._failing         = failing
         self.http_session     = object()
@@ -308,33 +321,34 @@ _PUBLIC_CASES = [
 ]
 
 
+def _reply_text(response: object) -> str:
+    if isinstance(response, str):
+        return response
+    assert isinstance(response, list)
+    return text_segments_text(response)
+
+
 def _assert_public_error_is_redacted(
     response: object,
-    caplog: pytest.LogCaptureFixture,
+    logged_lines: LoggedLines,
     request_id: str,
 ) -> None:
+    """回复是一条公开错误：类型、插件里的出错位置和这一轮的 request id；回复和日志文件里
+    都没有异常消息里的任何探针。"""
+
     serialized_response = json.dumps(response, ensure_ascii=False)
-    serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
-    assert "XQ-PLUGIN-UNEXPECTED" in serialized_response
-    assert request_id in serialized_response
-    assert request_id in serialized_logs
-    assert "RuntimeError" in serialized_logs
-    for forbidden in (
-        CANARY,
-        "Authorization",
-        "Bearer",
-        "user:password",
-        "C:\\Users\\user",
-    ):
+    log_text = "\n".join(logged_lines.lines())
+    for forbidden in _FORBIDDEN:
         assert forbidden not in serialized_response
-    for forbidden in (
-        CANARY,
-        "user:password",
-        "C:\\Users\\user",
-    ):
-        assert forbidden not in serialized_logs
-    assert "<redacted-credential>" in serialized_logs
-    assert all(record.exc_info is None for record in caplog.records)
+        assert forbidden not in log_text
+    reply = public_error_reply(_reply_text(response))
+    assert reply["type_name"] == "RuntimeError"
+    assert reply["location"].startswith(("plugins/", "core/"))
+    assert reply["request_id"] == request_id
+    # 同一轮里尽力而为的步骤也可能各记一条；每条都带这一轮的 request id。
+    request_ids = logged_lines.request_ids_of("public_error")
+    assert request_ids and set(request_ids) == {request_id}
+    assert f"category=internal error=RuntimeError error.at={reply['location']}" in log_text
 
 
 @pytest.mark.asyncio
@@ -343,7 +357,7 @@ async def test_public_plugin_unexpected_errors_never_echo_internal_details(
     case: _PublicCase,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    logged_lines: LoggedLines,
 ) -> None:
     request_id = "req-canary"
     context    = _PublicContext(
@@ -351,7 +365,6 @@ async def test_public_plugin_unexpected_errors_never_echo_internal_details(
         plugin_dir     = tmp_path,
         data_dir       = tmp_path,
         secrets        = {"plugins": {case.module.__name__: {"token": CANARY}}},
-        logger         = logging.getLogger(f"test.{case.module.__name__}"),
         plugin_secrets = case.plugin_secrets,
         failing        = case.failing,
     )
@@ -359,17 +372,16 @@ async def test_public_plugin_unexpected_errors_never_echo_internal_details(
         monkeypatch.setattr(*case.boundary)
     event = _FailingEvent({"user_id": 1}) if case.failing_event else {"user_id": 1}
 
-    with caplog.at_level(logging.ERROR):
-        response = await case.module.handle(case.command, case.args, event, context)
+    response = await case.module.handle(case.command, case.args, event, context)
 
-    _assert_public_error_is_redacted(response, caplog, request_id)
+    _assert_public_error_is_redacted(response, logged_lines, request_id)
 
 
 @pytest.mark.asyncio
 async def test_arxiv_public_unexpected_error_never_echoes_internal_details(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    logged_lines: LoggedLines,
 ) -> None:
     module_name = "plugins.arxiv_filter.arxiv_today"
     monkeypatch.setitem(sys.modules, "feedparser", ModuleType("feedparser"))
@@ -379,31 +391,28 @@ async def test_arxiv_public_unexpected_error_never_echoes_internal_details(
         plugin_dir = tmp_path,
         data_dir   = tmp_path,
         secrets    = {"plugins": {"arxiv_filter": {"token": CANARY}}},
-        logger     = logging.getLogger("test.arxiv_filter"),
     )
     try:
         arxiv_today = importlib.import_module(module_name)
         monkeypatch.setattr(arxiv_today, "requests_request_bounded", _leaking_sync)
 
-        with caplog.at_level(logging.ERROR):
-            response = await arxiv_filter.handle("arxiv", "", {"user_id": 1}, context)
+        response = await arxiv_filter.handle("arxiv", "", {"user_id": 1}, context)
     finally:
         sys.modules.pop(module_name, None)
 
-    _assert_public_error_is_redacted(response, caplog, "req-canary")
+    _assert_public_error_is_redacted(response, logged_lines, "req-canary")
 
 
 @pytest.mark.asyncio
 async def test_url_parser_unexpected_error_is_redacted_even_without_a_reply(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    logged_lines: LoggedLines,
 ) -> None:
     request_id = "req-url-parser"
     context    = SimpleNamespace(
         request_id   = request_id,
         secrets      = {"plugins": {"url_parser": {"token": CANARY}}},
-        logger       = logging.getLogger("test.url_parser"),
         data_dir     = tmp_path,
         http_session = object(),
     )
@@ -413,15 +422,13 @@ async def test_url_parser_unexpected_error_is_redacted_even_without_a_reply(
         AsyncMock(side_effect=RuntimeError(SENSITIVE_ERROR)),
     )
 
-    with caplog.at_level(logging.ERROR):
-        response = await url_parser.handle_url("https://example.test", {}, context)
+    response = await url_parser.handle_url("https://example.test", {}, context)
 
-    serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
+    log_text = "\n".join(logged_lines.lines())
     assert response == []
-    assert request_id in serialized_logs
-    assert CANARY not in serialized_logs
-    assert "user:password" not in serialized_logs
-    assert all(record.exc_info is None for record in caplog.records)
+    assert logged_lines.request_id_of("public_error") == request_id
+    for forbidden in _FORBIDDEN:
+        assert forbidden not in log_text
 
 
 def test_arxiv_internal_inference_failure_propagates_to_the_public_boundary(
@@ -464,7 +471,6 @@ async def test_nested_pendo_error_decorators_emit_one_safe_record(
     context = SimpleNamespace(
         request_id = "req-pendo-nested",
         secrets    = {"token": CANARY},
-        logger     = logging.getLogger("test.pendo.nested"),
     )
 
     @handle_command_errors
@@ -479,11 +485,11 @@ async def test_nested_pendo_error_decorators_emit_one_safe_record(
         result = await outer(context=context)
 
     assert result["status"] == "error"
-    assert "XQ-PLUGIN-UNEXPECTED" in result["message"]
-    public_records = [record for record in caplog.records if "public_error" in record.getMessage()]
-    assert len(public_records) == 1
-    assert CANARY not in public_records[0].getMessage()
-    assert public_records[0].exc_info is None
+    assert public_error_reply(result["message"])["request_id"] == "req-pendo-nested"
+    assert CANARY not in result["message"]
+    [public_record] = logged_records(caplog, "public_error")
+    assert public_record.msg.fields["component"] == "pendo.outer"
+    assert CANARY not in public_record.getMessage()
 
 
 def test_pendo_reminder_terminal_failure_propagates_without_raw_log(
@@ -552,7 +558,6 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
             }
         },
         capabilities=SimpleNamespace(ai=AI()),
-        logger=logging.getLogger("test.pendo.ai"),
     )
     parser = AIParser(context=context)
 
@@ -560,10 +565,10 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
         assert await parser._call_llm([{"role": "user", "content": "hello"}]) is None
 
     serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
-    assert "RuntimeError" in serialized_logs
+    [degraded] = logged_events(caplog, "public_error")
+    assert degraded.fields["component"] == "pendo.ai_parser.llm"
+    assert degraded.fields["error"] == "RuntimeError"
     assert CANARY not in serialized_logs
-    assert "<redacted-credential>" in serialized_logs
-    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_unique_constraint_detection_uses_error_code_not_message() -> None:

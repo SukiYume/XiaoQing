@@ -1,7 +1,6 @@
 # ruff: noqa: I001  # Keep imports separate for the source-based plugin loader.
 """天文工具插件：时间、坐标、单位、红移、公式、天体与常数查询。"""
 
-import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -22,8 +21,6 @@ from . import formula
 from . import obj
 from . import redshift
 from . import time as astro_time
-
-logger = logging.getLogger(__name__)
 
 # 本地计算子命令依赖 astropy 的同步计算，统一放进线程 bulkhead；obj 查询 SIMBAD，本身是异步的
 _SYNC_HANDLERS: dict[str, Callable[[str, PluginContextProtocol], str]] = {
@@ -80,7 +77,7 @@ async def handle(
         return segments(await run_sync(_SYNC_HANDLERS[subcommand], subcommand_args, context))
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="astro_tools.handle")
+        return public_error_response(context, exc, component="astro_tools.handle")
 
 
 def _show_help(subcommand: str | None = None) -> str:

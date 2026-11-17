@@ -23,10 +23,11 @@ from core.bounded_http import (
     RedirectPolicy,
     requests_request_bounded,
 )
+from core.log import LogEvent
 
 from .utils import load_plugin_config
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 空结果的列定义（避免魔法字面量重复）
 _EMPTY_COLUMNS  = ["arXiv ID", "Title", "Abstract"]
@@ -85,10 +86,7 @@ def _get_request_params(
     verify = True
     if proxies and not use_ssl_verify:
         verify = False
-        logger.warning(
-            "arXiv TLS certificate verification is disabled for the configured proxy; "
-            "use only with a trusted inspection proxy"
-        )
+        log.warning(LogEvent("page.tls_verify_disabled", proxy_configured=True))
 
     timeout = arxiv_config.get("timeout", 30)
     if (
@@ -144,10 +142,7 @@ def _fetch_arxiv_page(
             },
         )
     except (requests.RequestException, BoundedHttpError) as err:
-        logger.error(
-            "Error fetching arXiv page error_type=%s",
-            type(err).__name__,
-        )
+        log.warning(LogEvent("page.fetch_failed", error=err))
         return None
 
     return BeautifulSoup(response.body, "html.parser")
@@ -171,7 +166,7 @@ def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
 
     dl_element = soup.find("dl")
     if not dl_element:
-        logger.error("No <dl> element found on the page.")
+        log.warning(LogEvent("page.no_listing"))
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
     records = []
@@ -207,11 +202,11 @@ def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
         records.append({"arXiv ID": arxiv_id, "Title": title, "Abstract": abstract})
 
     if not records:
-        logger.warning("No articles found.")
+        log.warning(LogEvent("articles.none"))
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
     data = pd.DataFrame.from_records(records, columns=_EMPTY_COLUMNS)
-    logger.info("Found %d articles for today.", len(data))
+    log.info(LogEvent("articles.found", count=len(data)))
 
     return data
 
@@ -248,9 +243,9 @@ def check_arxiv_update_date(url: str | None = None) -> str | None:
                         raise ValueError("unsupported arXiv month name")
                     date_obj = datetime(int(year), month, int(day))
                     date_str = date_obj.strftime("%Y-%m-%d")
-                    logger.info("Found arXiv update date: %s", date_str)
+                    log.info(LogEvent("update_date.found", date=date_str))
                     return date_str
                 except ValueError:
                     pass  # 月份名无法解析，继续查找其他 h3
-    logger.warning("Could not find arXiv update date in page")
+    log.warning(LogEvent("update_date.missing"))
     return None

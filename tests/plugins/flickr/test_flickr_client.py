@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -73,7 +73,6 @@ def context(tmp_path: Path) -> SimpleNamespace:
             config       = {},
             secrets      = {"plugins": {"flickr": {"api_key": "test-api-key"}}},
             http_session = None,
-            logger       = MagicMock(),
             state        = {},
         )
     )

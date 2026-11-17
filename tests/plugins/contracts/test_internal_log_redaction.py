@@ -22,6 +22,7 @@ from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
 from plugins.xiaoqing_chat.planning.action_history import ActionRecord
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 
 CANARY          = "INTERNAL_LOG_SECRET"
 SENSITIVE_ERROR = (
@@ -75,7 +76,7 @@ def test_arxiv_internal_request_error_logs_only_type(
             Mock(side_effect=arxiv_today.requests.RequestException(SENSITIVE_ERROR)),
         )
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             result = arxiv_today._fetch_arxiv_page(
                 "https://arxiv.org/list/astro-ph/new",
                 {"arxiv": {"timeout": 1, "use_ssl_verify": True}},
@@ -131,14 +132,13 @@ async def test_xiaoqing_memory_failure_logs_only_the_error_type(
 
 
 @pytest.mark.asyncio
-async def test_xiaoqing_shutdown_failures_use_correlated_public_log(
+async def test_xiaoqing_shutdown_failures_use_the_public_error_log(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
     context = SimpleNamespace(
         data_dir   = tmp_path,
-        logger     = logging.getLogger("test.xiaoqing.shutdown"),
         request_id = "req-shutdown",
         secrets    = {"token": CANARY},
     )
@@ -168,10 +168,9 @@ async def test_xiaoqing_shutdown_failures_use_correlated_public_log(
         await xiaoqing_chat.shutdown(context)
 
     logged = _log_text(caplog)
-    assert "req-shutdown" in logged
+    assert [event.fields["category"] for event in logged_events(caplog, "public_error")] == ["io"]
     assert "OSError" in logged
     assert CANARY not in logged
-    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.asyncio

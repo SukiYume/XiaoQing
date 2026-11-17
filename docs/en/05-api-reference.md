@@ -231,7 +231,6 @@ This function splits long messages at text boundaries and keeps mixed-segment or
 
 | Property | Type | Description |
 |---|---|---|
-| `logger` | logger adapter | Plugin logger that automatically attaches the request ID |
 | `http_session` | `aiohttp.ClientSession \| None` | Shared HTTP session owned by the application |
 | `send_action` | async callable | Send a proactive OneBot action and return its delivery result |
 | `metrics` | `MetricsCollector \| None` | Runtime metrics |
@@ -507,6 +506,47 @@ Command execution, session continuation, Core-issued derived capabilities, and t
 | `CommandOutcome(state, next_command="", result_text="", has_more=None, page=None, confirmation_command="")` | Execution state and machine-readable result of a command, carried by the `outcome` of `DeliverySegments`. `state` is `completed`, `accepted` (the background task is accepted and the owning plugin announces completion), `error`, or `incomplete`. `next_command` points to the next page. `has_more` is `None` when pagination completeness is unknown and `False` on the last page. `page` is the current page number. `confirmation_command` is the command that continues a pending operation unchanged once the user explicitly agrees. |
 | `merge_delivery_outcomes(outcomes)` | Combine the delivery results of several parts into one: `False` if any part definitely failed, `True` if all were definitely delivered, otherwise `None`. |
 | `await send_with_receipt(send_action, action, receipt)` | Proactively send one action with a receipt and settle its result exactly once. |
+
+## 📌 Logging (`core.log`)
+
+Plugins get a logger with `logging.getLogger(__name__)` and build each record with `LogEvent`. See [logs and metrics in the plugin guide](03-plugin-development.md#logs-and-metrics) for field rules, request IDs, and level conventions.
+
+| Interface | Description |
+|---|---|
+| `LogEvent(name, /, **fields)` | One redacted, rendered event, passed as the message of a logger call: `log.info(LogEvent("reply.done", chat_id=1))` |
+| `event.name` | Event name |
+| `event.fields` | `Mapping[str, object]` of redacted, flattened field values, for tests |
+| `str(event)` / `repr(event)` | Rendered text `name k1=v1 k2=v2`, without original values |
+| `log_scope(request_id)` | Context manager: records inside the block carry `request_id`; `None` clears it; the previous value returns on exit. Plugins use it only in long-running loops. |
+| `current_request_id()` | Request ID of the current scope, or `None` outside any scope |
+| `new_request_id()` | A new 8-character hexadecimal request ID. Core creates one for each inbound message (covering its reply sends) and for each scheduled run; plugins do not call it |
+| `summarize_exception(exc)` | Return an `ExceptionSummary`: the parts of an exception that are safe to write, without its message |
+| `ExceptionSummary(type_name, location, cause, details)` | `type_name` is the type name; `location` is `file:line` (same rule as the `error.at` field), or `None` without a traceback; `cause` is the innermost type name of the exception chain or `None`; `details` holds status-like attributes (`status`, `errno`, `winerror`, `returncode`, `lineno`, `colno`, `sqlite`, `module`). As a `LogEvent` field value it renders the same fields as the exception itself |
+| `exception_chain(exc)` | List of `exc` and its `__cause__` / unsuppressed `__context__`, outermost first, at most 8 |
+
+`LoggingSettings`, `setup_logging()`, `bootstrap_logging()`, and `asyncio_exception_handler()` belong to process startup; plugins do not call them. The process entry calls `bootstrap_logging()` before reading the configuration: it writes only to the console and turns uncaught exceptions into log events. `XiaoQingApp` calls `setup_logging(settings, log_dir)` after reading the configuration to switch to the configured outputs. `app.start()` installs `asyncio_exception_handler` on the event loop, which logs unhandled exceptions as `asyncio.unhandled`.
+See [logging settings](06-configuration.md#️-logging-settings) for the fields.
+
+## 📌 Public errors (`core.public_errors`)
+
+```python
+public_error_response(context, exc: BaseException, *, component: str) -> DeliverySegments
+public_error_message(context, exc: BaseException, *, component: str) -> str
+log_public_error(context, exc: BaseException, *, component: str) -> None
+PUBLIC_ERROR_PREFIX = "操作失败："
+```
+
+| Interface | Description |
+|---|---|
+| `public_error_message()` | Log one ERROR-level `public_error` line and return one line of explanation, `操作失败：<reason>（<exception type> @ <location>；request_id：…）`, for plugins that compose their own reply |
+| `public_error_response()` | The same, returned as segments holding only that text, with `CommandOutcome("error")` |
+| `log_public_error()` | Log only and return no explanation, for failures that should not disturb the user: background work and silent degradation |
+| `PUBLIC_ERROR_PREFIX` | The start of every public error explanation; a consumer that sees only the reply text (such as the command matrix) recognizes public errors by it |
+
+The reason comes from classifying the exception chain. See [error handling in the plugin guide](03-plugin-development.md#-error-handling) for the categories, what each one says, and the log fields. The exception message reaches neither the reply nor the log.
+`component` is the stable component name written to the log, for example `hello.handle`.
+The line is logged on the `plugins.<plugin>` logger, or on `core.public_errors` when `context` has no valid plugin name.
+The request ID is `context.request_id`; when that is malformed, the current log scope's ID, otherwise a new one. The reply and the log carry the same ID.
 
 ## 🌐 Session API
 

@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -179,7 +178,6 @@ def _voice_context(tmp_path: Path, session: _Session) -> SimpleNamespace:
             },
             data_dir     = tmp_path,
             http_session = session,
-            logger       = MagicMock(),
         )
     )
 
@@ -273,7 +271,7 @@ async def test_chat_preserves_proxy_and_parses_chunked_json() -> None:
             compressed=True,
         ),
     )
-    context = SimpleNamespace(http_session=session, logger=MagicMock())
+    context = SimpleNamespace(http_session=session)
 
     result = await chat.call_coze_api(
         "question",
@@ -342,7 +340,7 @@ async def test_non_success_bodies_are_never_read_or_logged(tmp_path: Path) -> No
     assert ERROR_CANARY.decode() not in str(error.value)
 
     chat_response = _error_response(401)
-    chat_context = SimpleNamespace(http_session=_Session(chat_response), logger=MagicMock())
+    chat_context = SimpleNamespace(http_session=_Session(chat_response))
     assert (
         await chat.call_coze_api("question", {"token": "token", "bot_id": "bot"}, chat_context)
         is None

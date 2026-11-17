@@ -251,7 +251,7 @@ results = await gather_bounded(
 ```
 
 Set capacity or byte budgets for background queues, HTTP pools, caches, file reads, and output.
-Overload returns a public plugin error with the request ID.
+When the plugin execution gate refuses or times out, Core replies with the state and the request ID, for example `⚠️ 插件繁忙，请稍后重试（request_id：3f9a1c2e）` ("busy"). The other states are 执行超时 (timed out), 正在重载或已卸载 (reloading or unloaded), and 当前不可用 (unavailable); for a session's plugin the reply says 会话插件.
 
 ## 💾 Caches and persistent state
 
@@ -296,20 +296,31 @@ SQLite plugins should use:
 | Background tasks | State machine, cancellation, process-tree cleanup, restart recovery |
 | Lifecycle | Creators clean up resources. The application closes in reverse order. |
 
-Plugin logs record business identifiers, stages, upstream states, and request IDs.
-User replies use stable public error codes.
+Plugin logs record business identifiers, stages, and upstream states; Core adds the request ID to every line.
+An unexpected exception goes through the public error exit, which replies with one line: the reason (saying whether a retry helps), the exception type, the location, and the request ID, without the exception message. See [error handling in the plugin guide](03-plugin-development.md#-error-handling).
 
 ## ✅ Debugging and verification
 
 ### DEBUG logs
 
+With `level` set to `DEBUG`, Core, plugins, and scripts write their DEBUG logs; third-party libraries stay at `WARNING`:
+
 ```json
 {
-  "log_level": "DEBUG",
-  "log_to_console": true,
-  "log_to_file": true
+  "logging": {"level": "DEBUG"}
 }
 ```
+
+To look at one module, one plugin, or one third-party library, keep `level` and turn that logger name on in `levels`:
+
+```json
+{
+  "logging": {"level": "INFO", "levels": {"plugins.pendo": "DEBUG", "websockets": "DEBUG"}}
+}
+```
+
+Third-party lines keep the message template from the library's code, with arguments replaced by the field rules: numbers, dates, exception type names, `[N items]`, or length and fingerprint. A message the library assembles itself, without arguments, appears as is.
+Restart the main process after the change. See [logging settings](06-configuration.md#️-logging-settings) for the level rules and the line format.
 
 ### Targeted tests
 

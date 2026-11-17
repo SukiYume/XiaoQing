@@ -10,11 +10,12 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any, Final, Protocol, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.log import LogEvent
 from core.plugin_base import run_sync
 
 from ..config import PendoConfig
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 CN_WEEKDAYS: Final[tuple[str, ...]] = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -61,10 +62,7 @@ class TimezoneHelper:
                 tz_str   = settings.get("timezone", PendoConfig.DEFAULT_TIMEZONE)
                 return ZoneInfo(tz_str)
             except Exception as exc:
-                logger.warning(
-                    "Failed to get user timezone error_type=%s",
-                    type(exc).__name__,
-                )
+                log.warning(LogEvent("timezone.load_failed", error=exc))
         return TimezoneHelper.DEFAULT_TZ
 
     @staticmethod

@@ -8,8 +8,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from core.interfaces import COMMAND_RUNNER_EVENT_KEY
+from core.log import LogEvent
 from core.plugin_base import segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 from core.router import (
     CommandCatalogNode,
     CommandInvocation,
@@ -43,7 +44,7 @@ from .name_call import call_bot_name_only  # noqa: F401 - Core 在只喊名字�
 from .runtime_state import get_state as _state
 from .store_binding import bound_state
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 CommandResponse = list[dict[str, Any]]
 CommandHandler  = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse]]
@@ -93,8 +94,7 @@ async def init(context=None) -> None:
 
         state = bound_state(context)
         await run_media_blocking(state.media_store.load)
-        log = context.logger
-        log.info("XiaoQing Chat plugin initialized")
+        log.info(LogEvent("plugin.init.done"))
 
 
 def _route_subcommand(args: str, raw_args: str, context) -> tuple[str, str] | str:
@@ -164,16 +164,10 @@ async def handle(
         return await handle_smalltalk(text, event, context)
 
     except Exception as exc:
-        log = context.logger
-        return public_error_response(
-            context,
-            exc,
-            logger    = log,
-            component = "xiaoqing_chat.handle",
-        )
+        return public_error_response(context, exc, component="xiaoqing_chat.handle")
 
 
-async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -> None:
+async def _flush_shutdown_state(context: Any, state: Any) -> None:
     """把所有可能仍在防抖窗口内的数据完整落盘。"""
     flushers = (
         ("memory_store", state.memory_store.persist_all),
@@ -185,30 +179,27 @@ async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -
         try:
             await asyncio.to_thread(flush)
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = log,
-                component = f"xiaoqing_chat.shutdown.{component}",
+                component=f"xiaoqing_chat.shutdown.{component}",
             )
 
     try:
         if state.memory_db.is_dirty():
             await asyncio.to_thread(state.memory_db.save)
     except Exception as exc:
-        public_error_message(
+        log_public_error(
             context,
             exc,
-            logger    = log,
-            component = "xiaoqing_chat.shutdown.memory_db",
+            component="xiaoqing_chat.shutdown.memory_db",
         )
 
 
 async def shutdown(context) -> None:
     """停止新后台工作，完整落盘，再取消后台任务并做最终落盘。"""
 
-    log = context.logger
-    log.info("XiaoQing Chat plugin shutting down")
+    log.info(LogEvent("plugin.shutdown.start"))
     state = _state()
     state.stop_accepting_background_tasks()
 
@@ -216,9 +207,9 @@ async def shutdown(context) -> None:
     pending = state.background_tasks()
 
     # 必须在取消任务前保存：防抖写入本身也可能位于 pending 集合中。
-    await _flush_shutdown_state(context, state, log)
+    await _flush_shutdown_state(context, state)
     if pending:
-        log.warning("XiaoQing Chat: cancelling %d unfinished tasks", len(pending))
+        log.warning(LogEvent("plugin.shutdown.cancel_tasks", count=len(pending)))
         for task in pending:
             task.cancel()
         _done, pending = await asyncio.wait(pending, timeout=2.0)
@@ -226,9 +217,9 @@ async def shutdown(context) -> None:
             # 清理任务仍持有旧模块状态时，生命周期调用必须向上报告失败。
             raise TimeoutError(f"XiaoQing Chat shutdown: {len(pending)} tasks still running")
         # 任务的 finally 块可能在取消过程中产生最后一批状态变更。
-        await _flush_shutdown_state(context, state, log)
+        await _flush_shutdown_state(context, state)
 
-    log.info("XiaoQing Chat plugin shutdown complete")
+    log.info(LogEvent("plugin.shutdown.done"))
 
 
 async def scheduled_daily_life(context) -> None:
@@ -248,7 +239,7 @@ async def scheduled_daily_life(context) -> None:
             online_life=await probe_online_life(context, runtime),
         )
     except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.daily_life")
+        log_public_error(context, exc, component="xiaoqing_chat.daily_life")
 
 
 async def scheduled_life_memes(context) -> None:
@@ -260,7 +251,7 @@ async def scheduled_life_memes(context) -> None:
             return
         await sync_life_memes(context, runtime)
     except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.life_memes")
+        log_public_error(context, exc, component="xiaoqing_chat.life_memes")
 
 
 async def scheduled_memory_sync(context) -> None:
@@ -271,9 +262,9 @@ async def scheduled_memory_sync(context) -> None:
             context, bound_state(context), bot_name=configured_bot_name(context)
         )
         if pushed:
-            logger.info("xiaoqing_chat memory.sync chats=%d", pushed)
+            log.info(LogEvent("memory.sync.done", chats=pushed))
     except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.memory_sync")
+        log_public_error(context, exc, component="xiaoqing_chat.memory_sync")
 
 
 async def scheduled_proactive(context) -> list[Any]:
@@ -282,5 +273,5 @@ async def scheduled_proactive(context) -> list[Any]:
     try:
         return await run_proactive(context)
     except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="xiaoqing_chat.proactive")
+        log_public_error(context, exc, component="xiaoqing_chat.proactive")
         return []

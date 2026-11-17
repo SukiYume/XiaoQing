@@ -600,14 +600,120 @@ group_ids = context.default_groups()
 
 ### 日志与指标
 
+插件用标准库 logger 加 `core.log.LogEvent` 写日志，`PluginContext` 不提供日志器：
+
 ```python
-context.logger.info("处理完成")
+import logging
+
+from core.log import LogEvent
+
+log = logging.getLogger(__name__)
+
+log.info(LogEvent("reply.done", chat_id=chat_id, elapsed_s=1.23, reply=text))
+log.warning(LogEvent("fetch.failed", source="baike", error=exc))
+log.info(LogEvent("cache.cleared"))
 ```
 
-插件日志器自动附加 request ID。
-日志字段使用有界标识、计数、状态和耗时。
-token、Cookie、授权头与用户敏感正文使用摘要或脱敏值。
-Core 已对插件入口的调用次数、耗时、错误和取消进行统一计量。
+logger 名就是模块名，形如 `plugins.<插件名>.<模块>`，[日志配置](06-configuration.md#️-日志配置)的 `levels` 按这个名字或它的前缀 `plugins.<插件名>` 设级别。
+`LogEvent(name, **fields)` 在构造时完成脱敏和渲染，日志行的消息部分是事件名加字段，例如 `reply.done chat_id=123 elapsed_s=1.23 reply="<17ch #5948c5c6>"`。
+字段按传入顺序输出，值里有空格、引号或 `=` 时加 JSON 引号，没有字段时只输出事件名。
+对象里只留脱敏后的结果，`str()`、`repr()` 和格式化失败时的兜底输出都拿不到原始值。
+
+事件名用 ASCII 小写，按 `<领域>.<动作>[.<结果>]` 点分，例如 `reply.done`、`fetch.failed`、`proactive.skip`。
+事件名不带插件名，日志行里的 logger 名已经说明来源。
+
+字段的值按下表输出，从上到下取第一条符合的：
+
+| 值 | 输出 |
+|---|---|
+| `None` | 省略该字段 |
+| 布尔 | `true` / `false` |
+| 数字：整数、浮点数和其他数值类型（`IntEnum`、`Decimal`、`Fraction`、numpy 标量） | 普通数字，例如 `count=3`、`ratio=0.25` |
+| `date`、`datetime`、`time` | ISO 文本，例如 `day=2026-11-17` |
+| 异常实例或 `core.log.ExceptionSummary` | 展开成类型、位置和状态码等几个字段，见下文 |
+| `dict` | 逐项展开，键写成 `parent.child` |
+| 列表、元组、集合 | `[N items]` |
+| 字节 | 长度和指纹 |
+| 凭据键或正文键下的字符串 | 长度和指纹 |
+| 其他键下整串符合 `[A-Za-z0-9_.:/@+-]{1,128}` 的字符串 | 原样 |
+| 其他字符串（含空格、中文、控制字符或超过 128 个字符）和其他对象（`Path`、自定义对象等） | 长度和指纹；`Path` 的指纹和 `str(path)` 的相同 |
+
+键名按整串判断，展开后的键也一样：
+
+- 凭据键：按 `_` 和 `.` 拆开后，任一部分是 `token`、`secret`、`password`、`passwd`、`cookie`、`auth`、`authorization`、`credential`、`apikey` 或 `key`。
+- 正文键：按 `.` 拆成段，任一段是正文段，整个键就是正文键，所以正文键下展开的每一项都脱敏（`payload.file_name` 跟着 `payload`）。正文段是：整段为 `name`、`nickname`、`sender_name`、`user_name`、`display_name` 或 `card`；或者这段不以 `_id`、`_code`、`_count`、`_kind`、`_type`、`_status`、`_name` 结尾，且按 `_` 拆开后任一部分是 `text`、`content`、`message`、`msg`、`history`、`dialogue`、`reply`、`prompt`、`response`、`raw`、`output`、`input`、`thinking`、`reason`、`goal`、`hint`、`description`、`marker`、`term`、`emotion`、`summary`、`evidence`、`path`、`url`、`uri`、`host`、`payload`、`command`、`cmd`、`query`、`title`、`preview`、`body` 或 `detail`。所以 `reason_code`、`command_name`、`message_type` 按普通键处理。
+
+脱敏后的值写成 `<17ch #5948c5c6>`（17 个字符的文本）或 `<10B #5948c5c6>`（10 字节）；它和 `[N items]` 都含空格，在日志行里带 JSON 引号，`fields` 里的值不带引号。
+指纹是进程随机密钥下的 HMAC 前 8 位十六进制：同一进程里同一个值的指纹相同，可以用来关联；重启后密钥更换，跨重启无法关联。
+
+异常写成下面几个字段（以键 `error` 为例），异常消息不写：
+
+- `error`：类型名。
+- `error.at`：出错位置 `文件:行`。取回溯里最深一帧插件代码（`plugins/`）；没有插件代码时取最深一帧项目内其他代码（`core/`、`scripts/`、`main.py`），再没有时取最深一帧真实文件；异常没有回溯时省略。
+- `error.cause`：`__cause__` / `__context__` 链最里层那个异常的类型名；没有链或链被抑制（`raise … from None`）时省略。
+- 状态码一类的属性，异常带着时才有：`error.status`（HTTP 状态码，也从 `response.status_code`、`response.status` 读）、`error.errno`、`error.winerror`、`error.returncode`、`error.lineno`、`error.colno`、`error.sqlite`（SQLite 错误名）、`error.module`（导入失败的模块名）。
+
+例如 `fetch.failed source=baike error=AIRequestError error.at=plugins/hello/main.py:31 error.cause=ConnectionResetError error.status=504`。
+`core.log.summarize_exception(exc)` 返回同样内容的 `ExceptionSummary`，把它作为字段值时渲染成一样的字段。
+
+按这些规则写字段：
+
+- QQ 号、群号、`chat_id`、`message_id`、`job_id` 等标识直接传入，明文可见。
+- `status=ok`、`route=chat`、`plugin=pendo` 这类标签取不含空格的 ASCII 值，明文可见。
+- 消息正文、回复、提示词、命令、路径、URL、主机名、昵称等自由文本放在正文键下，只留长度和指纹。
+- 程序生成的原因写 `reason_code=`；`reason` 是正文键，值会被脱敏。
+- 异常写 `error=exc`，留下类型、位置、异常链最里层的类型和状态码一类的属性，异常消息不进日志。
+- token、Cookie、授权头不写进日志；确实需要关联时放在凭据键下。
+
+request ID 由 Core 设置，插件不在消息或字段里写它。
+Core 在消息进入时生成 ID（主动 WebSocket 在客户端收到事件时，入站 HTTP 每个请求一个，入站 WebSocket 每帧一个），另给每条经 `command_runner` 代为执行的命令和每次定时任务运行各设一个。
+Core 收到消息、插件处理、回复发送和处理失败的日志行都在 request ID 列带同一个 ID；`asyncio.create_task`、`asyncio.to_thread` 和 `run_sync()` 复制上下文，后台任务沿用发起它的请求的 ID。
+插件生命周期钩子（`init`、`shutdown`）在没有 request ID 的作用域里调用。
+
+常驻循环在某个请求里第一次启动，之后服务多个请求（例如按队列运行任务的 worker）。
+它在入口处用 `log_scope(None)` 清掉启动它的那个请求的 ID，处理每个单元时用该单元记下的 request ID 另开作用域：
+
+```python
+from core.log import log_scope
+
+
+async def _worker(self) -> None:
+    with log_scope(None):
+        while job := await self._next_job():
+            with log_scope(job.request_id):
+                await self._run(job)
+```
+
+Core 的入站调度 worker 和主动 WebSocket 按发送者排队的 drainer 也是这样：自己不带 ID，每个事件在它自己的 ID 下处理。
+
+级别约定：
+
+| 级别 | 用途 |
+|---|---|
+| `DEBUG` | 排障细节：原始帧、传输层细节、可选的诊断明细 |
+| `INFO` | 一件事做完或状态变化：收到消息、命令完成、一次定时任务结束、连接建立；xiaoqing_chat 的步骤日志 |
+| `WARNING` | 已处理的降级：兜底、上游超时或网络错误、坏数据被跳过、配置缺失导致功能不可用 |
+| `ERROR` | 需要人处理：数据损坏、配置无效、清理失败、真正意外的异常（公开错误出口）；网络和上游故障不算 |
+
+同一件事在一个调用点只记一行。
+
+测试用 `caplog` 读日志。
+`tests/helpers/assertions.py` 的 `logged_events(caplog, name)` 按记录顺序返回事件，断言读 `fields` 里脱敏后的值；需要真实日志文件时用 `tests/helpers/app_test_support.py` 的 `logged_lines` fixture。
+
+```python
+import logging
+
+from tests.helpers.assertions import logged_events
+
+
+async def test_timeout_is_logged(caplog):
+    caplog.set_level(logging.WARNING, logger="plugins.hello")
+    ...
+    (failed,) = logged_events(caplog, "fetch.failed")
+    assert failed.fields["error"] == "TimeoutError"
+```
+
+Core 统一计量插件入口的调用次数、耗时、错误和取消。
 
 ### 插件代内状态
 
@@ -982,18 +1088,18 @@ Core 按插件规范名核验 capability 申请。
 2. 外部服务错误返回插件级降级消息。
 3. 数据完整性错误记录结构化上下文并保护原状态。
 4. 取消信号沿协程传播到资源所有者。
-5. 入口异常由 Core 转换为公开错误码与 request ID。
+5. 入口抛出的未预期异常由 Core 转换成公开错误回复。
 
 ```python
 try:
     payload = await fetch_data()
-except TimeoutError:
-    context.logger.warning("上游请求超时")
+except TimeoutError as exc:
+    log.warning(LogEvent("fetch.failed", source="upstream", error=exc))
     return segments("服务响应超时，请稍后重试")
 ```
 
 预期输入与业务异常使用固定、清晰的插件提示。
-未预期异常通过统一公开错误出口记录有界诊断并返回稳定错误码：
+未预期异常交给统一的公开错误出口，它记一条诊断日志，回复一行说明：
 
 ```python
 from core.public_errors import public_error_response
@@ -1001,17 +1107,40 @@ from core.public_errors import public_error_response
 try:
     return await perform_operation()
 except Exception as exc:
-    return public_error_response(
-        context,
-        exc,
-        logger=context.logger,
-        component="hello.handle",
-    )
+    return public_error_response(context, exc, component="hello.handle")
 ```
 
-Shell、Jupyter、Codex 和远端管理等敏感操作使用 `core.sensitive_audit.log_sensitive_operation()`。
-命令正文、代码、路径和异常正文作为 `payload` 生成长度与 HMAC 指纹。
-日志字段保留稳定 operation、status、request ID、job ID、返回码和异常类型。
+回复写成 `操作失败：<原因>（<异常类型> @ <位置>；request_id：…）`，例如：
+
+```text
+操作失败：请求超时，请稍后重试（TimeoutError @ plugins/hello/main.py:4；request_id：3f9a1c2e）
+操作失败：上游服务返回 HTTP 404，重试无效（HttpStatusError @ plugins/hello/main.py:8；request_id：3f9a1c2e）
+操作失败：插件内部错误，重试无效，请联系管理员（KeyError @ plugins/hello/main.py:16；request_id：3f9a1c2e）
+```
+
+原因按异常链从外到里第一个能分类的异常定，异常类型和位置也取那一环；位置的规则同日志字段 `error.at`，没有回溯时只写类型。
+`SafeHttpError`、`ResponseTransportError` 只转述下层错误，链里更深处有能分类的异常时让位给它。
+一个异常按下表从上到下取第一条符合的类别：
+
+| 类别（日志 `category`） | 异常 | 回复里的原因 |
+|---|---|---|
+| `model` | AI 网关的 `AIError` | 按 `AIRequestError.category` 细分，例如模型服务超时、限流、鉴权失败、模型不可用，并说明重试有没有用；`AIConfigError` 是模型配置无效 |
+| `timeout` | `TimeoutError`、`requests` 的 `Timeout`、`subprocess.TimeoutExpired` | 请求超时，请稍后重试 |
+| `bad_response` | JSON 解析失败、有界 HTTP 的响应格式、大小和重定向错误、`SafeHttpError`、aiohttp 的 `ContentTypeError`、`requests` 的 JSON、解压和重定向错误 | 上游返回的数据无法解析，可稍后重试 |
+| `upstream_status` | `HttpStatusError`、aiohttp 的 `ClientResponseError`、`requests` 和 `urllib` 的 `HTTPError` | 上游服务返回 HTTP <状态码>；408、425、429 和 5xx 说请稍后重试，其他状态说重试无效 |
+| `network` | `ConnectionError`、`ResponseTransportError`、aiohttp 的 `ClientError`、`requests` 的 `RequestException`、`URLError`、DNS 和 SSL 错误、paramiko 的连接错误 | 网络连接失败，请稍后重试 |
+| `dependency` | `ImportError` | 缺少依赖 <模块名>，请联系管理员 |
+| `database` | `sqlite3.Error` | `SQLITE_BUSY`、`SQLITE_LOCKED` 时数据库正忙，请稍后重试；其余数据库操作失败，请联系管理员 |
+| `io` | 其他 `OSError`、`subprocess.SubprocessError` | 文件或系统操作失败，请联系管理员 |
+| `internal` | 其余异常 | 插件内部错误，重试无效，请联系管理员 |
+
+`public_error_response()` 与 `public_error_message()` 都在 `plugins.<插件名>` logger 上记一条 ERROR 级的 `public_error`，字段是 `component`、`category`、模型错误时的 `reason_code`（`AIRequestError.category`）和 `error=exc`，后面附回溯；request ID 与回复里的相同。
+日志的 `error` 是传进来的那个异常，按 [日志与指标](#日志与指标) 的规则展开；回复里的类型和位置取决定分类的那一环，两者可能不同。
+异常消息不进回复，也不进日志。
+失败不该打扰用户时（后台任务、静默降级），用 `log_public_error()` 只记这条日志、不回复。
+
+Shell、Jupyter、Codex 和远端管理等敏感操作同样用 `LogEvent` 记录，例如 `log.info(LogEvent("execute", status="started", payload=command))`。
+命令正文、代码和路径放进 `payload`，只留长度和指纹；`status`、`job_id`、返回码照常可见；异常用 `error=exc`，留下类型、位置和状态码一类的属性，并记 ERROR 级。
 
 ---
 

@@ -7,12 +7,12 @@ import logging
 from dataclasses import dataclass
 
 from core.interfaces import DeliveryTarget
-from core.sensitive_audit import audit_error_type
+from core.log import LogEvent
 
 from .log_monitor import LogMonitor
 from .rcon import RconClient
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -87,11 +87,7 @@ class ConnectionManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error(
-                "Minecraft connection cleanup status=failed operation=%s error_type=%s",
-                operation,
-                audit_error_type(exc),
-            )
+            log.error(LogEvent("connection.cleanup_failed", operation=operation, error=exc))
 
 
 __all__ = ["ConnectionManager", "McConnection"]

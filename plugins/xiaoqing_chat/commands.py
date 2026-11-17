@@ -7,20 +7,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from core.log import LogEvent
 from core.plugin_base import segments
 
 from .chat_event import event_chat_id
 from .chat_runtime import ai_route_context, chat_lock
 from .handler_context import HandlerContext, handle_errors
-from .logging_utils import redacted_value
 from .memory import client as memory_client
 from .memory.person_profile import clear_profiles_and_memory
 from .memory.review_sessions import apply_review_answer, render_session_prompt
 from .runtime_state import get_state
+
+log = logging.getLogger(__name__)
 
 
 async def _clear_stores(chat_id: str, *stores) -> None:
@@ -116,12 +119,14 @@ async def handle_internal(
         async with chat_lock(chat_id):
             memory_cleared = await reset_chat_session(state, chat_id, hctx.data_dir, context)
         state.inc_stats(chat_id, "resets")
-        context.logger.info(
-            "XiaoQing Chat reset_audit scope=%s chat_id=%s group_id=%s operator_user_id=%s",
-            "group" if is_group_reset else "private",
-            redacted_value(chat_id),
-            redacted_value(event.get("group_id")),
-            redacted_value(event.get("user_id")),
+        log.info(
+            LogEvent(
+                "session.reset",
+                scope            = "group" if is_group_reset else "private",
+                chat_id          = chat_id,
+                group_id         = event.get("group_id"),
+                operator_user_id = event.get("user_id"),
+            )
         )
         if not memory_cleared:
             return segments(

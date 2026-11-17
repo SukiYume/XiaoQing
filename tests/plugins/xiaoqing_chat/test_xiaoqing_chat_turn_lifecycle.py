@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Sequence
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -15,6 +16,7 @@ from plugins.xiaoqing_chat.chat_runtime import chat_lock
 from plugins.xiaoqing_chat.memory.memory import MAX_CACHED_MESSAGES_PER_CHAT
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState, PFCStateStore
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_OPEN,
@@ -22,7 +24,6 @@ from tests.helpers.xiaoqing_chat_test_support import (
     ack_reply_delivery,
     chat_message_event,
     goals_answer,
-    logged_steps,
     plan_answer,
     scripted_chat_context,
     settle_chat_background,
@@ -34,7 +35,6 @@ sample_group_event = _fixture_support.sample_group_event
 _GROUP_CHAT = "g67890"
 _PASS       = '{"withhold_reply": false}'
 _WITHHOLD   = '{"withhold_reply": true}'
-_LOG_STEPS  = {"debug": {"log_steps": True}}
 # 群里被她接话的那一句，以及她的回复。
 _TARGET_TEXT = "那个车是不是换了"
 _REPLY_TEXT  = "对，应该是换车底了"
@@ -127,7 +127,7 @@ async def _reply_with_later(
 
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    scripted_chat_context(context, model, GROUP_GATE_OPEN, _LOG_STEPS)
+    scripted_chat_context(context, model, GROUP_GATE_OPEN)
     target = await _target_with_later(context, event, later, before=before)
     return await handle_smalltalk(_TARGET_TEXT, target, context)
 
@@ -216,10 +216,11 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
     ],
 )
 async def test_smalltalk_stale_generation_is_dropped_before_commit(
-    mock_context, sample_group_event, later, newer_messages
+    mock_context, sample_group_event, caplog, later, newer_messages
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     state = bound_state(mock_context)
 
     async def reply(_call) -> str:
@@ -232,7 +233,7 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
         return "planner-ok"
 
     model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply=reply)
-    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN, _LOG_STEPS)
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
     (await state.pfc_state_store.get_async(_GROUP_CHAT)).planner_fail_ts = [time.time() - 10]
 
     result = await handle_smalltalk(
@@ -246,19 +247,19 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
     # 规划状态没有写回（失败记录还在），也没有落盘。
     assert state.pfc_state_store.get(_GROUP_CHAT).planner_fail_ts
     # 记录里找不到那句时没有“后来几条”可数。
-    assert [
-        step.get("newer_messages") for step in logged_steps(mock_context, "smalltalk.stale.drop")
-    ] == [newer_messages]
+    drops = logged_events(caplog, "smalltalk.stale.drop")
+    assert [drop.fields.get("newer_messages") for drop in drops] == [newer_messages]
     await settle_chat_background(mock_context, model)
     assert not (mock_context.data_dir / "pfc_state" / f"{_GROUP_CHAT}.json").exists()
 
 
 @pytest.mark.asyncio
 async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     lock    = chat_lock(_GROUP_CHAT)
     planned = asyncio.Event()
 
@@ -269,7 +270,7 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
         return plan_answer("wait", "later")
 
     model = ScriptedChatModel(plan=plan)
-    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN, _LOG_STEPS)
+    scripted_chat_context(mock_context, model, GROUP_GATE_OPEN)
     state = bound_state(mock_context)
     (await state.pfc_state_store.get_async(_GROUP_CHAT)).planner_fail_ts = [time.time() - 10]
 
@@ -290,7 +291,7 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
     assert state.pfc_state_store.get(_GROUP_CHAT).planner_fail_ts == []
     assert (await state.heartflow.get_async(_GROUP_CHAT)).no_reply_streak == 1
     assert (await _flushed_pfc_state(mock_context)).planner_fail_ts == []
-    assert logged_steps(mock_context, "smalltalk.no_reply")
+    assert logged_events(caplog, "smalltalk.no_reply")
     await settle_chat_background(mock_context, model)
 
 
@@ -449,16 +450,17 @@ def test_split_history_counts_every_visible_message_after_the_target():
     ],
 )
 async def test_reply_is_kept_until_the_target_leaves_the_last_15_messages(
-    mock_context, sample_group_event, later, dropped
+    mock_context, sample_group_event, caplog, later, dropped
 ):
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     model  = _delivery_model()
     result = await _reply_with_later(mock_context, sample_group_event, model, _later_texts(later))
 
-    drops = logged_steps(mock_context, "smalltalk.stale.drop")
+    drops = logged_events(caplog, "smalltalk.stale.drop")
     assert bool(drops) is dropped
     if dropped:
         assert result == []
-        assert drops[-1]["newer_messages"] == later
+        assert drops[-1].fields["newer_messages"] == later
     else:
         assert [seg["data"]["text"] for seg in result if seg["type"] == "text"] == [_REPLY_TEXT]
         await ack_reply_delivery(result)
@@ -609,10 +611,11 @@ async def test_late_receipt_does_not_roll_back_a_newer_turns_planner_state(tmp_p
 
 @pytest.mark.asyncio
 async def test_reply_is_dropped_after_session_reset_even_without_new_messages(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat.memory.person_profile import clear_profiles_and_memory
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     state = bound_state(mock_context)
 
     def reply(_call) -> str:
@@ -625,7 +628,7 @@ async def test_reply_is_dropped_after_session_reset_even_without_new_messages(
 
     assert result == []
     assert [m.role for m in await state.memory_store.get_async(_GROUP_CHAT)] == ["user"]
-    assert logged_steps(mock_context, "smalltalk.stale.drop")
+    assert logged_events(caplog, "smalltalk.stale.drop")
     await settle_chat_background(mock_context, model)
 
 
@@ -685,8 +688,9 @@ async def test_topic_is_only_checked_when_far_or_someone_changes_the_subject(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changed", [True, False])
 async def test_reply_is_dropped_when_the_group_moved_to_another_topic(
-    mock_context, sample_group_event, changed
+    mock_context, sample_group_event, caplog, changed
 ):
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     model = _delivery_model(reasoning=_WITHHOLD if changed else _PASS)
     later  = _later_texts(6)
     result = await _reply_with_later(
@@ -698,7 +702,7 @@ async def test_reply_is_dropped_when_the_group_moved_to_another_topic(
     assert "901 换车底了" in review.text and _TARGET_TEXT in review.text
     assert _REPLY_TEXT in review.text
     assert all(text in review.text for text in later)
-    assert bool(logged_steps(mock_context, "smalltalk.stale.drop")) is changed
+    assert bool(logged_events(caplog, "smalltalk.stale.drop")) is changed
     assert bool(result) is not changed
     if result:
         await ack_reply_delivery(result)
@@ -805,8 +809,9 @@ async def test_finalization_refreshes_topic_snapshot_before_delivery(
 
 @pytest.mark.asyncio
 async def test_finalization_stops_after_two_outdated_topic_snapshots(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     reviews = 0
 
     async def review(_call) -> str:
@@ -822,16 +827,17 @@ async def test_finalization_stops_after_two_outdated_topic_snapshots(
     # 每次复核期间又来了新消息：复核两次仍跟不上，这一轮就不发了。
     assert result == []
     assert reviews == 2
-    assert logged_steps(mock_context, "smalltalk.stale.drop")
+    assert logged_events(caplog, "smalltalk.stale.drop")
     await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio
 async def test_reply_is_dropped_when_its_target_scrolled_out_during_the_typing_wait(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, caplog
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     real_sleep = asyncio.sleep
     waited     = []
 
@@ -848,7 +854,6 @@ async def test_reply_is_dropped_when_its_target_scrolled_out_during_the_typing_w
         mock_context,
         model,
         GROUP_GATE_OPEN,
-        _LOG_STEPS,
         {"humanize": {"enable_typing_delay": True, "read_base_seconds": 3.0, "jitter_ratio": 0.0}},
     )
     target = await _target_with_later(mock_context, sample_group_event, _later_texts(5))
@@ -860,8 +865,8 @@ async def test_reply_is_dropped_when_its_target_scrolled_out_during_the_typing_w
     assert result == []
     # 目标已经不在记录里，没有“后来几条”可数，也不再请模型复核话题。
     assert model.calls_of("reasoning") == []
-    (drop,) = logged_steps(mock_context, "smalltalk.stale.drop")
-    assert drop.get("newer_messages") is None
+    (drop,) = logged_events(caplog, "smalltalk.stale.drop")
+    assert "newer_messages" not in drop.fields
     await settle_chat_background(mock_context, model)
 
 
@@ -966,6 +971,7 @@ async def test_reply_should_be_withheld_reads_the_planner_verdict(monkeypatch, c
         after    = [_stored("m2", "对了，明天谁去图书馆")],
         reply    = "我猜是换车底了",
         llm=LLMCallConfig(timeout_seconds=30.0, total_timeout_seconds=60.0, max_retry=2),
+        chat_id=_GROUP_CHAT,
     )
 
     assert changed is expected
@@ -978,23 +984,25 @@ async def test_reply_should_be_withheld_reads_the_planner_verdict(monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_context_review_withholds_reply_when_model_is_unavailable(monkeypatch):
+async def test_context_review_withholds_reply_when_model_is_unavailable(monkeypatch, caplog):
     from plugins.xiaoqing_chat.llm import topic_shift
     from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
 
     async def failing_chat(**_kwargs):
         raise TimeoutError
 
     monkeypatch.setattr(topic_shift, "chat_completions_raw_with_profile", failing_chat)
-    log    = Mock()
     kwargs = {
         "bot_name": "小青",
         "before"  : [_stored("m1", "901 换车底了")],
         "after"   : [_stored("m2", "对了，明天考试")],
         "reply"   : "真的假的",
         "llm"     : LLMCallConfig(),
-        "log"     : log,
+        "chat_id" : _GROUP_CHAT,
     }
     assert await topic_shift.reply_should_be_withheld(secrets={}, **kwargs)
-    assert log.call_args.args[0] == "smalltalk.context_check.error"
+    (error,) = logged_events(caplog, "smalltalk.context_check.error")
+    assert error.fields["error"] == "TimeoutError"
     assert await topic_shift.reply_should_be_withheld(secrets={"_ai": None}, **kwargs)

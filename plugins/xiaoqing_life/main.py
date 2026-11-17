@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
@@ -36,7 +37,7 @@ from .sources.base import BoundedFetcher
 from .stores import LifeStore, roll_day
 from .wind_down import run_wind_down
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _RUNTIME_KEY  = "xiaoqing_life.runtime"
 _DISABLED_TIP = "网上生活没有开启：把 config.plugins.xiaoqing_life.enabled 设为 true 后再试。"
@@ -149,14 +150,17 @@ async def _run_wind_down(context: Any, runtime: LifeRuntime, cfg: LifeConfig) ->
         moment_line  = line,
         reasoning_ok = deps.reasoning_ok,
     )
-    logger.info(
-        "xiaoqing_life step=wind_down status=%s reason=%s diary=%s weekly=%s done=%d dropped=%d",
-        result.status,
-        result.reason,
-        result.diary,
-        result.weekly,
-        result.done,
-        result.dropped,
+    log.log(
+        logging.WARNING if result.status == "failed" else logging.INFO,
+        LogEvent(
+            "wind_down",
+            status      = result.status,
+            reason_code = result.reason or None,
+            diary       = result.diary,
+            weekly      = result.weekly,
+            done        = result.done,
+            dropped     = result.dropped,
+        ),
     )
     if result.status == "failed":
         stamp = moment.timestamp()
@@ -175,15 +179,13 @@ async def _run_guarded(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning("xiaoqing_life session crashed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("session.crashed", error=exc))
         try:
             await runtime.store.mutate(
                 lambda s: s.state.__setitem__("last_failure_at", runtime.clock(context).timestamp())
             )
         except Exception as inner:
-            logger.warning(
-                "xiaoqing_life failure record failed error_type=%s", type(inner).__name__
-            )
+            log.warning(LogEvent("failure_record.failed", error=inner))
 
 
 async def _remind_login(context: Any, runtime: LifeRuntime) -> None:
@@ -192,7 +194,7 @@ async def _remind_login(context: Any, runtime: LifeRuntime) -> None:
     try:
         await runtime.login.remind_if_invalid(context)
     except Exception as exc:
-        logger.info("xiaoqing_life step=bili_login remind_failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("bili_login.remind_failed", error=exc))
 
 
 def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool) -> Decision:
@@ -201,10 +203,8 @@ def _decide(context: Any, runtime: LifeRuntime, cfg: LifeConfig, *, manual: bool
     presence = persona_bridge.availability(context, cfg, moment)
     previous, today = str(store.state.get("day") or ""), day_key(moment)
     if previous and previous != today:
-        logger.info(
-            "xiaoqing_life step=daily_summary day=%s %s",
-            previous,
-            stats.summary(store.state, previous),
+        log.info(
+            LogEvent("daily_summary", day=previous, counts=stats.day_counts(store.state, previous))
         )
     roll_day(store.state, today)
     seed_interests(store.interests, cfg.seed_interests, moment.timestamp())
@@ -236,12 +236,10 @@ async def _tick(context: Any, *, manual: bool) -> Decision:
         await runtime.store.mutate(
             lambda s: s.state.__setitem__("last_decision", decision.record(at))
         )
-        logger.info(
-            "xiaoqing_life step=decision choice=%s reason=%s", decision.choice, decision.reason
-        )
+        log.info(LogEvent("decision", choice=decision.choice, reason_code=decision.reason))
         return decision
     # 同步登记任务，避免两次检查同时通过门控而重复出发；决策由会话开始时写入状态。
-    logger.info("xiaoqing_life step=decision choice=%s reason=%s", decision.choice, decision.reason)
+    log.info(LogEvent("decision", choice=decision.choice, reason_code=decision.reason))
     task = runtime.spawn(_run_guarded(context, runtime, cfg, decision))
     if task is not None:
         runtime.task = task
@@ -254,7 +252,7 @@ async def scheduled_tick(context: PluginContextProtocol) -> None:
     try:
         await _tick(context, manual=False)
     except Exception as exc:
-        logger.warning("xiaoqing_life tick failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("tick.failed", error=exc))
     try:
         cfg = load_life_config(context)
         if cfg.enabled:
@@ -267,7 +265,7 @@ async def scheduled_tick(context: PluginContextProtocol) -> None:
                 settled=not runtime.running,
             )
     except Exception as exc:
-        logger.warning("xiaoqing_life memory publish failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("memory_publish.failed", error=exc))
 
 
 # ───────────────────────────── 聊天侧服务 ─────────────────────────────
@@ -297,7 +295,7 @@ async def turn_context(
             runtime.spawn(runtime.store.flush())
         return response
     except Exception as exc:
-        logger.warning("xiaoqing_life turn_context failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("turn_context.failed", error=exc))
         return None
 
 
@@ -319,7 +317,7 @@ async def export_memes(
             runtime.spawn(runtime.store.flush())
         return page
     except Exception as exc:
-        logger.warning("xiaoqing_life export_memes failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("export_memes.failed", error=exc))
         return None
 
 
@@ -407,4 +405,4 @@ async def handle(
             return segments(await commands.forget_term(store, rest))
         return segments(f"未知子命令。\n\n{commands.HELP_TEXT}")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="xiaoqing_life.handle")
+        return public_error_response(context, exc, component="xiaoqing_life.handle")

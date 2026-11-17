@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
 
 from core.bounded_http import BoundedHttpResponse, HttpStatusError, ResponseFormatError
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.wolframalpha import main as wolframalpha
+from tests.helpers.assertions import logged_events
 from tests.helpers.http import bounded_json_response
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -25,7 +27,6 @@ def _context(appid: object = "TEST-APPID") -> SimpleNamespace:
         SimpleNamespace(
             secrets      = {"plugins": {"wolframalpha": {"appid": appid}}},
             http_session = object(),
-            logger       = MagicMock(),
         )
     )
 
@@ -260,7 +261,7 @@ async def test_handle_returns_public_error_for_unexpected_failure() -> None:
 
     context.get_settings_snapshot = broken_settings
     result                        = await wolframalpha.handle("alpha", "1+1", {}, context)
-    assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
+    assert PUBLIC_ERROR_PREFIX in result[0]["data"]["text"]
     assert "private settings detail" not in result[0]["data"]["text"]
 
 
@@ -332,27 +333,34 @@ async def test_answer_rejects_missing_http_session() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exception", "marker"),
+    ("exception", "marker", "event", "level"),
     [
-        (HttpStatusError(429), "HTTP 429"),
-        (TimeoutError(), "查询超时"),
-        (aiohttp.ClientError("network"), "网络错误"),
-        (ResponseFormatError("bad response"), "格式异常"),
-        (RuntimeError("unexpected"), "XQ-PLUGIN-UNEXPECTED"),
+        (HttpStatusError(429), "HTTP 429", "query.http_error", logging.WARNING),
+        (TimeoutError(), "查询超时", "query.timeout", logging.WARNING),
+        (aiohttp.ClientError("network"), "网络错误", "query.network_error", logging.WARNING),
+        (ResponseFormatError("bad"), "格式异常", "query.response_invalid", logging.WARNING),
+        (RuntimeError("unexpected"), PUBLIC_ERROR_PREFIX, "public_error", logging.ERROR),
     ],
     ids=["http", "timeout", "network", "format", "unexpected"],
 )
 async def test_answer_maps_failures_to_stable_public_messages(
     monkeypatch,
+    caplog,
     exception: Exception,
     marker: str,
+    event: str,
+    level: int,
 ) -> None:
     async def fail(*_args, **_kwargs):
         raise exception
 
     monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", fail)
-    result = await wolframalpha._get_answer("1+1", "APPID", _context())
+    with caplog.at_level(logging.WARNING):
+        result = await wolframalpha._get_answer("1+1", "APPID", _context())
     assert marker in result[0]["data"]["text"]
+    # 上游故障是已处理的降级，记 WARNING；只有意外异常才走 ERROR 级的 public_error。
+    assert logged_events(caplog, event)
+    assert max(record.levelno for record in caplog.records) == level
     if detail := str(exception):
         assert detail not in result[0]["data"]["text"]
 

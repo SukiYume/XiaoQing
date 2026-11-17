@@ -9,7 +9,16 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 import tests.helpers.dispatcher_test_support as _fixture_support
+from core.delivery import CommandOutcome
+from core.plugin_execution import (
+    PluginExecutionClosed,
+    PluginExecutionOverloaded,
+    PluginExecutionTimeout,
+    PluginExecutionUnavailable,
+)
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.router import CommandCatalogNode
+from tests.helpers.assertions import logged_events, public_error_reply
 from tests.helpers.dispatcher_test_support import (
     CommandSpec,
     Dispatcher,
@@ -177,9 +186,54 @@ class TestExecuteCommand:
             sample_message_context,
         )
 
-        assert result == [{"type": "text", "data": {"text": "⚠️ 插件暂时不可用，请稍后重试"}}]
+        assert result is not None
+        (segment,) = result
+        assert sample_message_context.request_id in segment["data"]["text"]
+        assert PUBLIC_ERROR_PREFIX not in segment["data"]["text"]
         old_handler.assert_not_awaited()
         assert new_gate.drained is True
+
+    @pytest.mark.asyncio
+    async def test_execution_refusals_name_the_state_and_carry_the_request_id(
+        self,
+        dispatcher: Dispatcher,
+        sample_message_context: MessageContext,
+        mock_plugin_registry: MagicMock,
+        mock_session_manager: MagicMock,
+    ) -> None:
+        """执行门的几种拒绝是预期状态：各说各的状态，带 request id，不当成公开错误。"""
+
+        refusals = (
+            PluginExecutionTimeout("timed out"),
+            PluginExecutionClosed("unloading"),
+            PluginExecutionOverloaded("queue full"),
+            PluginExecutionUnavailable("circuit open"),
+        )
+        command_texts: list[str]              = []
+        session_texts: list[str]              = []
+        mock_session_manager.get.return_value = SimpleNamespace(
+            plugin_name="busy", session_id="busy-1"
+        )
+        for refusal in refusals:
+            spec = CommandSpec.from_manifest(
+                "busy",
+                {"name": "work", "triggers": ["work"], "help": "work"},
+                AsyncMock(side_effect=refusal),
+            )
+            mock_plugin_registry.get.return_value = SimpleNamespace(
+                module=SimpleNamespace(handle_session=AsyncMock(side_effect=refusal)),
+                execution_gate=None,
+            )
+            command = await dispatcher._execute_command((spec, ""), sample_message_context)
+            session = await dispatcher._try_handle_session(sample_message_context)
+            assert command is not None and session is not None
+            command_texts.extend(segment["data"]["text"] for segment in command)
+            session_texts.extend(segment["data"]["text"] for segment in session)
+
+        texts = command_texts + session_texts
+        assert len(set(texts)) == len(texts) == 2 * len(refusals)
+        assert all(sample_message_context.request_id in text for text in texts)
+        assert not any(PUBLIC_ERROR_PREFIX in text for text in texts)
 
     @pytest.mark.asyncio
     async def test_unexpected_command_error_uses_redacted_public_response(
@@ -207,15 +261,18 @@ class TestExecuteCommand:
             result = await dispatcher._execute_command((spec, ""), sample_message_context)
 
         assert result is not None
+        assert getattr(result, "command_outcome", None) == CommandOutcome("error")
         response_text = result[0]["data"]["text"]
         log_text      = "\n".join(record.getMessage() for record in caplog.records)
-        assert "XQ-PLUGIN-UNEXPECTED" in response_text
-        assert sample_message_context.request_id in response_text
-        assert sample_message_context.request_id in log_text
-        assert "RuntimeError" in log_text
+        assert public_error_reply(response_text)["request_id"] == sample_message_context.request_id
+        assert {record.request_id for record in caplog.records} == {
+            sample_message_context.request_id
+        }
+        [logged] = logged_events(caplog, "public_error")
+        assert logged.fields["component"] == "dispatcher.command.public_demo.demo"
+        assert logged.fields["error"] == "RuntimeError"
         assert canary not in response_text
         assert canary not in log_text
-        assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -251,8 +308,7 @@ async def test_unexpected_session_error_is_redacted_and_closes_session(
     assert result is not None
     response_text = result[0]["data"]["text"]
     log_text      = "\n".join(record.getMessage() for record in caplog.records)
-    assert "XQ-PLUGIN-UNEXPECTED" in response_text
-    assert sample_message_context.request_id in response_text
+    assert public_error_reply(response_text)["request_id"] == sample_message_context.request_id
     assert canary not in response_text
     assert canary not in log_text
     mock_session_manager.delete.assert_awaited_once_with(

@@ -45,7 +45,6 @@ class _ScopedContext:
         self.current_user_id  = user_id
         self.current_group_id = group_id
         self.config           = {"plugins": {"smalltalk": {"voice_probability": 0}}}
-        self.logger           = MagicMock()
         self.chat_reply       = MagicMock()
         self.chat_reply.reply = AsyncMock(
             return_value=smalltalk.segments("provider response"),

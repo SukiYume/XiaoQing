@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -10,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.process_tree import ProcessResult
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.shell import config as shell_config
 from plugins.shell import main as shell_main
-from tests.helpers.assertions import text_segments_text
+from tests.helpers.assertions import logged_events, text_segments_text
 from tests.helpers.asyncio_tools import run_with_subprocess_loop
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -35,12 +35,7 @@ GIT_BASH_PATH = r"C:\Program Files\Git\bin\bash.exe"
 def _audit_statuses(caplog: pytest.LogCaptureFixture) -> list[str]:
     """/shell 写下的审计日志里的状态，按先后顺序。"""
 
-    return [
-        match.group(1)
-        for record in caplog.records
-        if record.name == shell_main.logger.name
-        and (match := re.search(r"status=(\w+)", record.getMessage()))
-    ]
+    return [str(event.fields["status"]) for event in logged_events(caplog, "execute")]
 
 
 @pytest.fixture
@@ -56,7 +51,6 @@ def mock_context():
             }
         }
     }
-    context.logger = MagicMock()
     return with_settings_reader(context)
 
 
@@ -452,14 +446,14 @@ class TestShellHandle:
         monkeypatch.setattr(shell_main, "run_process", run)
         monkeypatch.setattr(shell_main.sys, "platform", "win32")
 
-        with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+        with caplog.at_level(logging.INFO):
             result = await shell_main.handle("shell", "ls", mock_event, mock_context)
 
         rendered = text_segments_text(result)
         assert "找不到可执行命令 'ls'" in rendered
         assert "启用列表只控制允许执行的入口" in rendered
         assert "/shell cmd /c dir" in rendered
-        assert "XQ-PLUGIN-UNEXPECTED" not in rendered
+        assert PUBLIC_ERROR_PREFIX not in rendered
         run.assert_awaited_once()
         assert run.await_args.args[0] == ["ls"]
         assert run.await_args.kwargs["timeout"] == 30
@@ -500,7 +494,7 @@ class TestShellHandle:
         run = AsyncMock()
         monkeypatch.setattr(shell_main, "run_process", run)
 
-        with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
+        with caplog.at_level(logging.INFO):
             result = await shell_main.handle("shell", "ls", mock_event, mock_context)
 
         rendered = text_segments_text(result)

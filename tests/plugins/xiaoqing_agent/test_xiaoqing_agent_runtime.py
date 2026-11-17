@@ -16,6 +16,7 @@ from core.router import build_command_catalog_node
 from plugins.xiaoqing_agent.config import AgentConfig
 from plugins.xiaoqing_agent.runtime import AgentRuntime
 from plugins.xiaoqing_agent.tasks import Actor, AgentTask, ChatRef, Outcome, TaskStore
+from tests.helpers.assertions import public_error_reply
 from tests.helpers.xiaoqing_agent_test_support import (
     ADMIN_ID,
     GROUP_ID,
@@ -530,7 +531,9 @@ async def test_crashing_loop_is_reported_not_raised(tmp_path: Path) -> None:
     task = runtime.start(context, CONFIG, CHAT, request_text="g", source="chat", admin=True)
     await wait_until(lambda: task.runner.done() and context.actions)
     assert task.status == "failed"
-    assert task.error.startswith("KeyError")
+    # 任务记录里是公开错误说明：类型和位置，不带异常消息。
+    assert public_error_reply(task.error)["type_name"] == "KeyError"
+    assert "boom" not in task.error
     assert "出了点问题" in sent_texts(context)[0]
 
 

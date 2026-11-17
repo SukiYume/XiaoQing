@@ -121,9 +121,10 @@ class TestOneBotWebSocketActions:
             assert not worker.is_alive()
             return handler_body()
 
-        await client._handle_event_safely(
+        # 没有发送者的事件不进队列，在收到它的这一步里直接交给处理器。
+        await client._dispatch_event(
             rotating_handler,
-            {"post_type": "message", "user_id": 1},
+            {"post_type": "notice"},
             auth_state=old_state,
         )
 

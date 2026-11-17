@@ -83,7 +83,7 @@ xiaoqing_chat
 | `runtime_state.py` | 插件级存储、会话状态、后台任务、生成配额与模型覆盖 |
 | `task_scheduler.py` | 后台任务登记、防抖刷盘（聊天记录落盘后推给统一记忆） |
 | `store_base.py` / `store_binding.py` | JSON store 公共协议。把全部 store 绑定到 `context.data_dir` |
-| `logging_utils.py` | `log_step` 结构化日志与脱敏 |
+| `timing.py` | 一轮对话各阶段的耗时累计（`accumulate_timing`、`append_timing`） |
 | `constants.py` | 跨模块稳定边界常量 |
 
 ### `llm/`：模型调用与审查
@@ -458,7 +458,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 |---|---|
 | `config/config.json` → `bot_name` | 角色名字 |
 | `config/config.json` → `plugins.xiaoqing_chat` | AI route、模型别名。也可写行为字段 |
-| `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人设开关、调试（与上一项逐层合并，config 优先） |
+| `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人设开关（与上一项逐层合并，config 优先） |
 | `plugins/xiaoqing_chat/config/persona.md`（或 `personality.persona_file`） | 人设卡：人物事实、说话方式、回复示例、心境 |
 | `config/secrets.json` | Provider API Key |
 
@@ -470,17 +470,17 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ## 🔐 错误与日志
 
-模块内的解析、类型转换和文件操作捕获具体异常。AI provider、动态 capability、媒体解码、后台任务和生命周期属于隔离边界，统一记录脱敏错误类别并返回受控降级结果。闲聊轮次里没预料到的异常（包括聊天模型整条链失败）由 `handlers._reply_after_failure` 收口：经 `public_error_message` 记一条诊断日志，聊天里不发错误码；没人叫她的轮次不出声，私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次。
+模块内的解析、类型转换和文件操作捕获具体异常。AI provider、动态 capability、媒体解码、后台任务和生命周期属于隔离边界，统一记录脱敏错误类别并返回受控降级结果。闲聊轮次里没预料到的异常（包括聊天模型整条链失败）由 `handlers._reply_after_failure` 收口：经 `log_public_error` 记一条 `public_error` 日志，聊天里不出现“操作失败：…”那样的错误说明；没人叫她的轮次不出声，私聊或被点名时回一句“卡了”，同一会话十分钟内只说一次。
 
-`logging_utils.log_step` 以 `xiaoqing_chat step=<步骤>` 输出结构化字段，QQ 号、群号、URL、profile 和自由文本按规则脱敏。主要步骤：
+每个模块用 `logging.getLogger(__name__)` 取 logger。流程中的每一步记一条 INFO 级的 `LogEvent(<步骤名>, chat_id=…, …)`，没有开关；读图失败、换服务商、agent 退回普通聊天这类降级记 WARNING。字段按 Core 的统一规则脱敏：QQ 号、群号、`chat_id`、profile 和原因码这类标签明文，消息正文、回复、提示词和 URL 只记长度和指纹，异常记类型、位置和状态码一类的属性，不记异常消息。发给模型的提示词按消息记 DEBUG 级的 `reply.prompt`（角色、序号、正文长度与指纹）。各阶段耗时由 `timing.py` 累计进本轮记录，在 `smalltalk.done` 里展开成 `timings.<阶段>` 字段，`elapsed_s` 是整轮耗时。主要步骤：
 
 | 步骤 | 含义 |
 |---|---|
 | `smalltalk.recv` | 收到消息，带召唤判定字段 |
-| `smalltalk.no_reply` | 门控未通过，带原因、概率、掷值 |
+| `smalltalk.no_reply` | 门控未通过，带 `reason_code`、概率、掷值 |
 | `smalltalk.ignore` / `smalltalk.closing_silence` | 屏蔽词 / 私聊已经收过尾 |
 | `smalltalk.yield_to_follow_up` | 同一个人后面还排着消息，这一条不回 |
-| `smalltalk.stale.drop` | 生成好的回复不发：目标过期、话题已变，或对方又发来了消息（`reason=sender_continued`） |
+| `smalltalk.stale.drop` | 生成好的回复不发：目标过期、话题已变，或对方又发来了消息（`reason_code=sender_continued`） |
 | `smalltalk.agent.decided` / `declined` / `handled` / `question_withheld` | agent 判断接手 / 不接手 / 已交回当轮回复 / 反问被收回 |
 | `smalltalk.generation_limited` | 生成配额不足 |
 | `smalltalk.forced_direct` / `smalltalk.pfc.done` / `smalltalk.planner.disabled` | 三条生成路径 |

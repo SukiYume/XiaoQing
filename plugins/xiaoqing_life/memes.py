@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_store import atomic_write_bytes
+from core.log import LogEvent
 
 from .config import LifeConfig
 from .days import DAY
@@ -28,7 +29,7 @@ from .safety import clean_text, is_blocked, is_profane
 from .sources.base import SourceItem
 from .stores import LifeStore, reserve_llm_call
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 MEME_DIR = "memes"
 TOMBSTONE_KEEP_DAYS = 30
@@ -284,7 +285,7 @@ async def collect(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.info("xiaoqing_life step=meme failed error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("meme.failed", error=exc))
     return added
 
 
@@ -313,7 +314,7 @@ async def _collect_one(
     raw     = extract_json(text or "")
     verdict = parse_verdict(raw, cfg.blocked_keywords) if raw else None
     if verdict is None:
-        logger.info("xiaoqing_life step=meme rejected sha=%s", sha[:8])
+        log.info(LogEvent("meme.rejected", sha=sha[:8]))
         return 0
     stamp = now()
     path  = meme_path(store, sha, ext)

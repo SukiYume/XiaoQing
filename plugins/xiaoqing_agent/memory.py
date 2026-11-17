@@ -16,9 +16,11 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from core.log import LogEvent
+
 from .tasks import AgentTask, Outcome
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 RECALL_TIMEOUT    = 1.5
 RECORD_TIMEOUT    = 5.0
@@ -57,7 +59,7 @@ async def recall_for_session(context: Any, task: AgentTask) -> str:
     try:
         result = await asyncio.wait_for(service.recall(payload), timeout=RECALL_TIMEOUT)
     except Exception as exc:
-        logger.info("xiaoqing_agent memory recall skipped error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("memory.recall.skipped", error=exc))
         return ""
     blocks = result.get("blocks") if isinstance(result, dict) else None
     if not isinstance(blocks, dict):
@@ -151,4 +153,4 @@ async def record_task(
     try:
         await asyncio.wait_for(service.record(payload), timeout=RECORD_TIMEOUT)
     except Exception as exc:
-        logger.info("xiaoqing_agent memory record skipped error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("memory.record.skipped", error=exc))

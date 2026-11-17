@@ -186,9 +186,5 @@
         "private_min_interval_hours": 20,
         "private_quiet_minutes": 30,
         "private_miss_after_days": 3
-    },
-    "debug": {
-        "show_reply_prompt": false,
-        "log_steps": true
     }
 }

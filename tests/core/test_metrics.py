@@ -6,6 +6,7 @@ import logging
 import pytest
 
 from core.metrics import ExecutionStats, MetricsCollector
+from tests.helpers.assertions import logged_events
 
 
 @pytest.mark.unit
@@ -62,7 +63,9 @@ async def test_collector_logs_slow_calls(caplog):
     collector = MetricsCollector(slow_threshold=0.5)
     with caplog.at_level(logging.WARNING, logger="core.metrics"):
         await collector.record_plugin_execution("plugin", "cmd", 1.0)
-    assert "Slow plugin execution: plugin.cmd" in caplog.text
+    (slow,) = logged_events(caplog, "plugin.slow")
+    assert slow.fields["plugin"] == "plugin"
+    assert slow.fields["command_name"] == "cmd"
 
 
 @pytest.mark.asyncio

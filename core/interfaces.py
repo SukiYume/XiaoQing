@@ -434,7 +434,6 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     plugin_name       : str
     plugin_dir        : Path
     data_dir          : Path
-    logger            : Any
     metrics           : Any
     request_id        : str | None
     command_invocation: CommandInvocation | None

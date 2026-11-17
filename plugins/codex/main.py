@@ -223,7 +223,7 @@ async def handle(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    # 未预期异常统一交给 Dispatcher 生成脱敏公开错误，插件入口不重复包装。
+    # 未预期异常统一交给 Dispatcher 生成公开错误回复，插件入口不重复包装。
     del command
     raw = (args or "").strip()
     if not raw or raw.lower() in _HELP_WORDS:

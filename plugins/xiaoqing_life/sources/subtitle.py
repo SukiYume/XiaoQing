@@ -15,6 +15,8 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+from core.log import LogEvent
+
 from ..safety import clean_text, is_blocked
 from .base import (
     PASSAGE_CHARS,
@@ -28,7 +30,7 @@ from .base import (
 )
 from .bilibili import API, REFERER
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 官方前端 JS 里的字符重排表，取前 32 位为 mixin key。
 MIXIN = (
@@ -193,7 +195,7 @@ async def read(
         return [], False
     url = normalize_url(track.get("subtitle_url"))
     if url is None:
-        logger.info("xiaoqing_life step=source name=bili_subtitle skipped reason=bad_host")
+        log.warning(LogEvent("source.skipped", source="bili_subtitle", reason_code="bad_host"))
         return [], False
     document = as_dict(await fetch.get_public_json(url))
     return split_subtitle(document.get("body"), blocked)

@@ -18,8 +18,10 @@ from core.bounded_http import (
     ResponseLimitError,
 )
 from core.durable_fanout import load_pending
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from core.safe_http import BROWSER_USER_AGENT, SafeHttpResponse
 from plugins.earthquake import main as earthquake
+from tests.helpers.assertions import logged_events
 from tests.helpers.earthquake_test_support import EARTHQUAKE_TEXT, serve_weibo, weibo_card
 
 
@@ -34,15 +36,11 @@ def _image_bytes(
     return buffer.getvalue()
 
 
-def _reported(caplog: pytest.LogCaptureFixture, component: str) -> int:
-    """记录到日志里的 public_error 条数（按组件名）。"""
+def _reported(caplog: pytest.LogCaptureFixture, event_name: str, component: str) -> int:
+    """日志里某个组件的 ``event_name`` 事件条数：上游故障是 upstream.failed，意外错误是 public_error。"""
 
     return sum(
-        1
-        for record in caplog.records
-        if record.name == earthquake.logger.name
-        and record.getMessage().startswith("public_error ")
-        and f'"component":"{component}"' in record.getMessage()
+        1 for event in logged_events(caplog, event_name) if event.fields["component"] == component
     )
 
 
@@ -137,7 +135,7 @@ async def test_bootstrap_failures_are_logged_but_index_is_still_attempted(
 
     assert "4.5级地震" in str(result)
     assert len(weibo.calls) == 3
-    assert _reported(caplog, "earthquake.bootstrap") == 2
+    assert _reported(caplog, "upstream.failed", "earthquake.bootstrap") == 2
     await earthquake.shutdown(context)
     assert len(closed_sessions) == 1
 
@@ -150,12 +148,12 @@ async def test_repeated_bootstrap_failures_are_escalated(
 ) -> None:
     weibo = serve_weibo(monkeypatch, error=requests.RequestException("visitor unavailable"))
 
-    with caplog.at_level("ERROR", logger="plugins.earthquake.main"):
+    with caplog.at_level("ERROR"):
         for _ in range(3):
             assert await earthquake.scheduled(context) == []
 
     assert context.state["earthquake_bootstrap_failures"] == 3
-    assert "failed consecutively" in caplog.text
+    assert logged_events(caplog, "weibo.bootstrap.failing")
     # 索引请求失败后会话被标记为需要重新引导，每次扫描都重新走一遍访客引导。
     assert [call[0] for call in weibo.calls] == ["POST", "GET", "GET"] * 3
     await earthquake.shutdown(context)
@@ -175,7 +173,7 @@ async def test_index_failure_closes_session_and_returns_stable_error(
 
     result = await earthquake._fetch_earthquake_news(context, force=True)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)
     await earthquake.shutdown(context)
     assert len(closed_sessions) == 1
 
@@ -696,7 +694,7 @@ async def test_image_failure_keeps_already_appended_text(
     assert len(result) == 1
     assert result[0]["type"] == "text"
     assert "5.0级地震" in result[0]["data"]["text"]
-    assert _reported(caplog, "earthquake.download_image") == 1
+    assert _reported(caplog, "upstream.failed", "earthquake.download_image") == 1
     assert not [path for path in context.data_dir.rglob("*") if path.is_file()]
 
 
@@ -715,7 +713,7 @@ async def test_scheduled_api_failure_is_not_broadcast_and_keeps_cursor(
     assert result == []
     context.send_action.assert_not_awaited()
     assert earthquake._load_since(context) == "42"
-    assert _reported(caplog, "earthquake.fetch_scheduled") == 1
+    assert _reported(caplog, "upstream.failed", "earthquake.fetch_scheduled") == 1
 
 
 @pytest.mark.asyncio
@@ -734,7 +732,7 @@ async def test_scheduled_corrupt_cursor_fails_closed_without_raising(
     assert result == [] and again == []
     context.send_action.assert_not_awaited()
     assert weibo.calls == []
-    assert _reported(caplog, "earthquake.fetch_scheduled") >= 1
+    assert _reported(caplog, "public_error", "earthquake.fetch_scheduled") >= 1
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
-# 验证主入口启动、信号处理和运行期资源收口。
+# 验证主入口启动、启动失败的诊断、信号处理和运行期资源收口。
+import json
 import signal
 import sys
 from pathlib import Path
@@ -8,6 +9,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 import main as entrypoint
+import tests.helpers.app_test_support as _app_support
+from tests.helpers.app_test_support import console_lines, event_fields
+
+restore_logging = _app_support.restore_logging
+
+_VALUE_CANARY = "VALUE-CANARY"
+_ROOT_CANARY  = "ROOT-CANARY"
 
 
 @pytest.fixture
@@ -56,7 +64,7 @@ async def test_main_reports_incomplete_shutdown(
 
 @pytest.mark.parametrize("given", [None, "deploy"])
 def test_cli_runs_the_app_in_the_runtime_root_with_the_installed_plugins(
-    monkeypatch, tmp_path, given
+    monkeypatch, tmp_path, restore_logging, given
 ) -> None:
     """配置、数据和日志在运行目录；插件代码总从 plugins 包所在的目录加载。"""
     from core import app as app_module
@@ -85,6 +93,104 @@ def test_cli_runs_the_app_in_the_runtime_root_with_the_installed_plugins(
     checkout = Path(entrypoint.__file__).resolve().parent
     expected = checkout if given is None else (tmp_path / given).resolve()
     assert built == [(expected, checkout / "plugins")]
+
+
+@pytest.mark.parametrize(
+    ("config", "logs_dir_taken", "diagnostics", "process_error"),
+    [
+        pytest.param(
+            None,
+            False,
+            {
+                "config.source.missing": {"source": "config"},
+                "config.loaded"        : {"config_status": "missing"},
+            },
+            "ConfigLoadError",
+            id="config-missing",
+        ),
+        pytest.param(
+            '{"onebot_http_base": "http://private.internal/?token=' + _VALUE_CANARY,
+            False,
+            {
+                "config.source.invalid": {
+                    "source"      : "config",
+                    "error"       : "JSONDecodeError",
+                    "error.lineno": "1",
+                },
+                "config.loaded": {"config_status": "invalid"},
+            },
+            "ConfigLoadError",
+            id="invalid-json",
+        ),
+        pytest.param(
+            json.dumps({"onebot_http_base": f"invalid://private.internal/?token={_VALUE_CANARY}"}),
+            False,
+            {
+                "config.field.invalid": {
+                    "source"    : "config",
+                    "field"     : "onebot_http_base",
+                    "error_type": "value_error",
+                }
+            },
+            "ConfigLoadError",
+            id="schema-error",
+        ),
+        pytest.param(
+            json.dumps({"logging": {"level": _VALUE_CANARY}}),
+            False,
+            {
+                "config.field.invalid": {
+                    "source"    : "config",
+                    "field"     : "logging.level",
+                    "error_type": "literal_error",
+                }
+            },
+            "ConfigLoadError",
+            id="logging-block-invalid",
+        ),
+        pytest.param(
+            json.dumps({"enable_ws_client": False}),
+            True,
+            {},
+            "FileExistsError",
+            id="logs-dir-cannot-be-created",
+        ),
+    ],
+)
+def test_a_failed_start_exits_non_zero_with_a_diagnostic_and_no_raw_values(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    restore_logging,
+    config,
+    logs_dir_taken,
+    diagnostics,
+    process_error,
+) -> None:
+    """配置读不了、校验不过、日志目录建不了：标准输出上有按日志规则写的诊断，退出码非零。"""
+
+    root = tmp_path / _ROOT_CANARY
+    (root / "config").mkdir(parents=True)
+    (root / "config" / "secrets.json").write_text("{}", encoding="utf-8")
+    if config is not None:
+        (root / "config" / "config.json").write_text(config, encoding="utf-8")
+    if logs_dir_taken:
+        (root / "logs").write_text("", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+
+    with pytest.raises(SystemExit) as exited:
+        entrypoint.cli(["--root", str(root)])
+
+    output = capsys.readouterr()
+    events = [event_fields(line["message"]) for line in console_lines(output.out)]
+    assert exited.value.code == 1
+    for name, expected in {**diagnostics, "process.failed": {"error": process_error}}.items():
+        assert any(
+            logged == name and {key: fields.get(key) for key in expected} == expected
+            for logged, fields in events
+        ), (name, events)
+    for leaked in (_VALUE_CANARY, "private.internal", _ROOT_CANARY):
+        assert leaked not in output.out + output.err
 
 
 def test_default_root_outside_a_checkout_is_the_working_directory(monkeypatch, tmp_path) -> None:

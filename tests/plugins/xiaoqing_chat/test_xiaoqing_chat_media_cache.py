@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import sys
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from plugins.xiaoqing_chat.media.event_media_analysis import _load_and_prepare_media_for_llm
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_media_test_support import (
     PNG_BYTES,
     VISION_GATEWAY,
@@ -823,9 +825,11 @@ async def test_emoji_library_reuses_file_fingerprints_after_index_only_update(mo
     event_loop_thread       = threading.get_ident()
     stat_threads: list[int] = []
     real_stat               = Path.stat
+    resolved_image          = image_path.resolve()
 
     def observed_stat(self: Path, *args, **kwargs):
-        if self == image_path.resolve():
+        # 只数读取大小和修改时间的那些 stat：Python 3.11 的 ``Path.resolve()`` 内部也会调一次。
+        if self == resolved_image and sys._getframe(1).f_code.co_name != "resolve":
             stat_threads.append(threading.get_ident())
         return real_stat(self, *args, **kwargs)
 
@@ -934,7 +938,9 @@ async def test_render_local_media_file_retries_failed_analysis_on_next_send(mock
 
 
 @pytest.mark.asyncio
-async def test_render_event_media_text_falls_back_in_configured_provider_order(mock_context):
+async def test_render_event_media_text_falls_back_in_configured_provider_order(
+    mock_context, caplog
+):
     runtime             = make_media_runtime()
     vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
     vision["default"]   = "glm-4.6v-flash"
@@ -1023,9 +1029,5 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
         "glm-4.6v",
         "glm-4v-flash",
     ]
-    warning_lines = "\n".join(
-        str(call.args[1]) if len(call.args) > 1 else ""
-        for call in mock_context.logger.warning.call_args_list
-    )
-    assert '"step": "media.analyze.provider_fallback"' in warning_lines
-    assert '"to_provider": "glm-4v-flash"' in warning_lines
+    fallbacks = logged_events(caplog, "media.analyze.provider_fallback")
+    assert "glm-4v-flash" in [event.fields["to_provider"] for event in fallbacks]

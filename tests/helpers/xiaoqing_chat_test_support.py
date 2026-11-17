@@ -27,6 +27,7 @@ from plugins.xiaoqing_chat.reply_draft import ReplyDraft
 from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState, reset_global_state
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 from tests.helpers.xiaoqing_chat_memory_test_support import MemoryHarness, put_history
@@ -180,7 +181,6 @@ def mock_context(tmp_path: Path):
     context.current_group_id = 67890
     context.request_id       = "test-request-123"
     context.state            = {}
-    context.logger           = MagicMock()
     context.session_manager  = None
     # 统一记忆在场并确认清空：重置的回复才是“已重置”。
     context.capabilities.memory = _EmptyMemory()
@@ -506,17 +506,6 @@ def bot_message(text: str, ts: float, *, source: str = "xiaoqing_chat") -> Store
     return StoredMessage(role="assistant", name="小青", ts=ts, content=text, source_plugin=source)
 
 
-def logged_steps(context, step: str | None = None) -> list[dict[str, Any]]:
-    """开了 ``debug.log_steps`` 之后，日志里记下的步骤（按记录先后）；给 ``step`` 就只要这一步。"""
-
-    payloads = [
-        json.loads(call.args[1])
-        for call in context.logger.info.call_args_list
-        if len(call.args) == 2 and call.args[0] == "xiaoqing_chat step=%s"
-    ]
-    return payloads if step is None else [item for item in payloads if item.get("step") == step]
-
-
 async def settle_chat_background(context, model: ScriptedChatModel | None = None) -> None:
     """用插件自己的关闭流程收尾：后台落盘和任务都结束；再检查剧本模型有没有收到没写剧本的调用。"""
 
@@ -583,9 +572,7 @@ def no_swallowed_errors(caplog):
     """定时任务的处理函数会吞掉异常只记日志；没有预期中的失败时，不能让异常悄悄把测试变成“没开口”。"""
 
     yield
-    swallowed = [
-        str(record.msg) for record in caplog.records if str(record.msg).startswith("public_error")
-    ]
+    swallowed = [str(event) for event in logged_events(caplog, "public_error")]
     assert not swallowed, swallowed
 
 

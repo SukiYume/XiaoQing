@@ -415,8 +415,9 @@ class RuntimeRoot:
         config = _read_json_object(CONFIG_PATH, label="运行配置")
         config.update(
             {
-                "data_root"  : str(self.path / "data"),
-                "log_to_file": False,
+                "data_root": str(self.path / "data"),
+                # 关停是否干净靠读服务输出里 Core 的 shutdown.done 判断，所以控制台必须开着。
+                "logging": {**(config.get("logging") or {}), "console": True, "file": False},
                 # 命令矩阵需要本地入站端口；UAT 不连接生产 NapCat，也不在测试期间监听源码变化。
                 "enable_inbound_server": True,
                 "enable_ws_client"     : False,
@@ -711,7 +712,8 @@ class ServiceController:
         combined = f"{stdout_text}\n{stderr_text}"
         host, port = _endpoint_host_port(self.endpoint)
         released = _wait_for_port_release(host, port, timeout=10)
-        graceful = "XiaoQing shutdown complete" in combined
+        # 只认 Core 生命周期这一行：插件关停时也会记自己的 shutdown.done。
+        graceful = "core.app_lifecycle: shutdown.done" in combined
         passed   = not timed_out and not signal_error and exit_code == 0 and graceful and released
         detail   = (
             f"signal={'CTRL_BREAK_EVENT' if os.name == 'nt' else 'SIGINT'}, "

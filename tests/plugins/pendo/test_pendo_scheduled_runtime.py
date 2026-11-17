@@ -24,7 +24,7 @@ from tests.helpers.pendo_test_support import (
 def pendo_context(db, tmp_path):
     """真实服务集合（共用测试数据库）；没有 ``send_action``，定时任务把动作原样返回。"""
 
-    with pendo_service_context(db, tmp_path, "test.pendo.scheduled") as context:
+    with pendo_service_context(db, tmp_path) as context:
         yield context
 
 

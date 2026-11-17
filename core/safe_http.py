@@ -21,7 +21,7 @@ import socket
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import ParamSpec, TypeVar, cast
-from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
+from urllib.parse import SplitResult, urljoin, urlsplit
 
 import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
@@ -67,35 +67,6 @@ class UnsafeUrlError(ValueError):
 
 class SafeHttpError(RuntimeError):
     """Raised when a remote response exceeds the safe client limits."""
-
-
-def redact_url_for_log(value: str, *, max_length: int = 256) -> str:
-    """Return a bounded URL diagnostic without credentials, query or fragment."""
-
-    if type(max_length) is not int or max_length <= 0:
-        raise ValueError("max_length must be a positive integer")
-    try:
-        parsed   = urlsplit(str(value or "").strip())
-        hostname = parsed.hostname
-        if not parsed.scheme or not hostname:
-            return "<redacted-url>"
-        host     = f"[{hostname}]" if ":" in hostname else hostname
-        port     = parsed.port
-        netloc   = host if port is None else f"{host}:{port}"
-        redacted = urlunsplit(
-            (
-                parsed.scheme,
-                netloc,
-                parsed.path,
-                "<redacted>" if parsed.query else "",
-                "<redacted>" if parsed.fragment else "",
-            )
-        )
-    except (TypeError, ValueError):
-        return "<redacted-url>"
-    if len(redacted) <= max_length:
-        return redacted
-    return redacted[: max_length - 1] + "…"
 
 
 def validated_proxy_url(value: object, *, allow_path: bool = False) -> str:

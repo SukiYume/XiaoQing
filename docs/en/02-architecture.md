@@ -191,13 +191,14 @@ Core issues a narrow context to each plugin. Main capabilities include:
 
 - Public configuration and secret snapshots for the current plugin
 - A private data directory and generation-local runtime state
-- Logs, metrics, and an HTTP session
+- Metrics and an HTTP session
 - Session API
 - Proactive delivery and receipts
 - AI routes
 - Declared service calls
 - Scheduling and mute-state queries
 
+Logging does not go through the context: plugins log with a standard-library logger and `core.log.LogEvent`, and Core's logging system handles request IDs, redaction, format, and levels.
 The context expresses permissions through capability objects. Core keeps ownership of sensitive state.
 Plugins receive scoped views for their own tasks.
 Core issues derived capabilities from the corresponding command's manifest declaration.
@@ -241,7 +242,7 @@ Embedded services follow these ownership rules:
 
 - The plugin lifecycle owns service startup and shutdown.
 - The plugin data directory owns databases and persistent files.
-- Core context supplies logs, configuration, secrets, and delivery capabilities.
+- Core context supplies configuration, secrets, and delivery capabilities.
 - Internal service modules separate the database, authentication, API, tasks, and frontend resources.
 
 ## 🧠 The XiaoQing runtime
@@ -325,8 +326,8 @@ Core scheduler ── xiaoqing_memory.tick (every 30 min) ──► consolidatio
 
 ### Startup
 
-1. Read and validate configuration snapshots.
-2. Initialize logging, HTTP, metrics, and session services.
+1. The process entry starts console-only logging, then reads and validates configuration snapshots; a missing or invalid `config.json` ends the process with exit code 1.
+2. Switch to the configured log outputs and initialize HTTP, metrics, and session services.
 3. Load plugins and publish contexts, services, and the command catalog.
 4. Publish plugin schedules.
 5. Start inbound and active WebSocket connections.

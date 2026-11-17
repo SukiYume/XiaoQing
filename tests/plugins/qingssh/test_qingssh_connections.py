@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
+from tests.helpers.assertions import logged_events
 from tests.helpers.qingssh_test_support import (
     EXIT_CODE_TIMEOUT,
     FakeChannel,
@@ -138,7 +141,7 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
     ok, message = await manager.connect("10001", "20001", "srv")
 
     assert ok is False
-    assert "XQ-PLUGIN-UNEXPECTED" in message
+    assert PUBLIC_ERROR_PREFIX in message
     assert "req-qingssh-connect" in message
     assert "SSH_PRIVATE_CANARY" not in message
     assert "id_ed25519" not in message
@@ -154,13 +157,11 @@ async def test_manager_request_context_is_task_local(tmp_path):
         state      = state,
         data_dir   = tmp_path,
         plugin_dir = tmp_path,
-        logger     = Mock(),
     )
     second = SimpleNamespace(
         state      = state,
         data_dir   = tmp_path,
         plugin_dir = tmp_path,
-        logger     = Mock(),
     )
 
     manager = await ssh_manager_module.get_manager(first)
@@ -227,7 +228,7 @@ async def test_stream_failure_uses_correlated_public_error(tmp_path):
 
     public_text = "".join(output)
     assert exit_code == ssh_manager_module.EXIT_CODE_ERROR
-    assert "XQ-PLUGIN-UNEXPECTED" in public_text
+    assert PUBLIC_ERROR_PREFIX in public_text
     assert "req-qingssh-stream" in public_text
     assert canary not in public_text
     assert "stream.sock" not in public_text
@@ -374,7 +375,7 @@ class _DialClient:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unreadable", [False, True])
 async def test_connect_trusts_the_local_known_hosts_and_survives_an_unreadable_file(
-    monkeypatch, tmp_path, unreadable
+    monkeypatch, tmp_path, caplog, unreadable
 ):
     known_hosts = tmp_path / "home" / ".ssh" / "known_hosts"
     known_hosts.parent.mkdir(parents=True)
@@ -383,19 +384,19 @@ async def test_connect_trusts_the_local_known_hosts_and_survives_an_unreadable_f
     client = _DialClient(
         ssh_manager_module.paramiko.SSHException(f"{canary} {known_hosts}") if unreadable else None
     )
-    context = with_settings_reader(Mock(config={}, logger=Mock()))
+    context = with_settings_reader(Mock(config={}))
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["srv"] = {"host": "srv.internal", "port": 22, "username": "root"}
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: client)
 
-    result = await manager.connect("u1", "g1", "srv")
+    with caplog.at_level(logging.WARNING):
+        result = await manager.connect("u1", "g1", "srv")
 
     # 本机 known_hosts 交给第三方库校验主机指纹；读不了只记警告，连接照常建立，日志里没有路径。
     assert result[0] is True
     assert client.loaded_paths == [str(known_hosts)]
-    warnings = [str(call.args[0]) for call in context.logger.warning.call_args_list]
-    assert any("known_hosts" in line for line in warnings) is unreadable
-    assert canary not in "".join(warnings) and str(known_hosts) not in "".join(warnings)
+    assert bool(logged_events(caplog, "known_hosts.load_failed")) is unreadable
+    assert canary not in caplog.text and str(known_hosts) not in caplog.text
     manager.close_all()
 
 
@@ -477,7 +478,7 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
     ok, message = await manager.connect("u1", "g1", "srv")
 
     assert ok is False
-    assert "XQ-PLUGIN-UNEXPECTED" in message
+    assert PUBLIC_ERROR_PREFIX in message
     assert "req-qingssh-jump" in message
     assert "jump channel failed" not in message
     assert target_client.closed is True

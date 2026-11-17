@@ -35,6 +35,7 @@ from core.bounded_http import (
     parse_bounded_json,
 )
 from core.delivery import send_sensitive_private
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, qr_image, requester_user_id, segments
 from core.private_files import protect_directory as protect_directory
 from core.private_files import write_private_json
@@ -42,7 +43,7 @@ from core.safe_http import BROWSER_USER_AGENT
 
 from .safety import clean_text
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 SECRET_DIR        = "secrets"
 SECRET_FILE       = "bilibili.json"
@@ -60,6 +61,8 @@ UNAME_CHARS       = 40
 _COOKIE_URL_HOSTS = frozenset({"passport.biligame.com"})
 _FINGERPRINT_RE   = re.compile(r"[A-Za-z0-9_%.\-+/|]+={0,2}")
 _KEY_RE           = re.compile(r"[A-Za-z0-9_\-]{8,128}")
+# 没扫码等到超时、二维码过期是可预期的结局，不算故障。
+_UNSCANNED = frozenset({"timeout", "qr_expired"})
 _LIMITS = BodyLimits(max_wire_bytes=256 * 1024, max_decoded_bytes=256 * 1024)
 _JSON = JsonLimits(max_bytes=256 * 1024, max_depth=16, max_nodes=20_000, max_string_chars=65_536)
 _MIME = MimePolicy(
@@ -412,7 +415,7 @@ class BiliLogin:
             try:
                 return await self._begin(context, owner)
             except LoginError as exc:
-                logger.info("xiaoqing_life step=bili_login start_failed reason=%s", exc)
+                log.warning(LogEvent("bili_login.start_failed", error=exc, reason_code=str(exc)))
                 return MSG_NO_QR_LIB if str(exc) == "qrcode_missing" else MSG_RETRY
 
     async def _begin(self, context: Any, owner: int) -> str:
@@ -484,10 +487,7 @@ class BiliLogin:
             try:
                 await fetcher.get_json(f"{API}/x/web-interface/nav")
             except Exception as exc:
-                logger.info(
-                    "xiaoqing_life step=bili_login status_check_failed error_type=%s",
-                    type(exc).__name__,
-                )
+                log.warning(LogEvent("bili_login.status_check_failed", error=exc))
                 return f"B站：已保存登录（{info['uname']}），这会儿确认不了是否有效（网络问题）"
         if self.credential.invalid:
             return LINE_INVALID
@@ -532,10 +532,13 @@ class BiliLogin:
         except asyncio.CancelledError:
             raise
         except LoginError as exc:
-            logger.info("xiaoqing_life step=bili_login failed reason=%s", exc)
+            if str(exc) in _UNSCANNED:
+                log.info(LogEvent("bili_login.not_scanned", reason_code=str(exc)))
+            else:
+                log.warning(LogEvent("bili_login.failed", error=exc, reason_code=str(exc)))
             await send_sensitive_private(context, owner, segments(MSG_RETRY))
         except Exception as exc:
-            logger.info("xiaoqing_life step=bili_login failed error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("bili_login.failed", error=exc))
             await send_sensitive_private(context, owner, segments(MSG_RETRY))
         finally:
             if self.pending is pending:
@@ -594,7 +597,7 @@ class BiliLogin:
         await asyncio.to_thread(write_private_json, self.credential.path, document)
         self.credential.mark_valid()
         await self.record(True)
-        logger.info("xiaoqing_life step=bili_login saved")
+        log.info(LogEvent("bili_login.saved"))
         await send_sensitive_private(
             context, owner, segments(MSG_DONE.format(uname=uname or "已确认"))
         )

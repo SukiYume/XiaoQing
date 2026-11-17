@@ -7,20 +7,23 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments
+from core.log import LogEvent
 from core.plugin_base import segments
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from .chat_runtime import chat_lock, configured_bot_name, load_runtime
 from .constants import DEFAULT_BOT_NAME_ONLY_REPLIES
 from .follow_ups import carry_attention, sender_has_follow_up
-from .logging_utils import log_step
 from .message_parts import build_text_message_parts
 from .store_binding import bound_state
 from .turn_delivery import record_bot_reply
+
+log = logging.getLogger(__name__)
 
 # 应完这一声，同一个人这么久以内说的下一句算在接着跟她说。
 NAME_CALL_FOLLOW_SECONDS = 60.0
@@ -87,15 +90,11 @@ async def call_bot_name_only(context: Any) -> list[dict[str, Any]]:
         chat_id = f"g{event['group_id']}" if event["group_id"] else f"u{event['user_id']}"
         carry_attention(event, seconds=NAME_CALL_FOLLOW_SECONDS)
         if sender_has_follow_up(event, context):
-            log_step(context, runtime, chat_id=chat_id, step="smalltalk.name_call.yield", fields={})
+            log.info(LogEvent("smalltalk.name_call.yield", chat_id=chat_id))
             return []
         text = _pick(replies, chat_id)
-        log_step(
-            context, runtime, chat_id=chat_id, step="smalltalk.name_call", fields={"text": text}
-        )
+        log.info(LogEvent("smalltalk.name_call", chat_id=chat_id, text=text))
         return DeliverySegments(segments(text), _receipt(context, runtime, chat_id, text))
     except Exception as exc:
-        public_error_message(
-            context, exc, logger=context.logger, component="xiaoqing_chat.name_call"
-        )
+        log_public_error(context, exc, component="xiaoqing_chat.name_call")
         return segments(random.choice(DEFAULT_BOT_NAME_ONLY_REPLIES))

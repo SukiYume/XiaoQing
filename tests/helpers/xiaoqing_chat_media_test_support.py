@@ -182,7 +182,6 @@ def mock_context(tmp_path: Path):
     context.http_session = AsyncMock()
     context.capabilities = PluginCapabilities(ai=_vision_ai_service())
     context.send_action = AsyncMock()
-    context.logger      = MagicMock()
     return with_settings_reader(context)
 
 

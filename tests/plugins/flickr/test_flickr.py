@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.flickr import main as flickr
 from plugins.flickr.client import FlickrPhoto
 from tests.helpers.http import aiohttp_json_response
@@ -116,7 +117,6 @@ def context(tmp_path: Path) -> SimpleNamespace:
             http_session     = None,
             current_user_id  = 123,
             current_group_id = 456,
-            logger           = MagicMock(),
             state            = {},
             request_id       = "flickr-test-request",
         )
@@ -408,7 +408,7 @@ async def test_unexpected_error_uses_public_redacted_response(
     result = await flickr.handle("flickr", "", {}, context)
 
     serialized = json.dumps(result, ensure_ascii=False)
-    assert "XQ-PLUGIN-UNEXPECTED" in serialized
+    assert PUBLIC_ERROR_PREFIX in serialized
     assert "flickr-test-request" in serialized
     assert "secret-canary-key" not in serialized
     assert "C:\\private" not in serialized

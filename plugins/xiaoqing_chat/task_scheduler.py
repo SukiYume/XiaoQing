@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
 
-from core.public_errors import public_error_message
+from core.log import LogEvent
+from core.public_errors import log_public_error
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
@@ -14,6 +16,8 @@ if TYPE_CHECKING:
 from .chat_runtime import configured_bot_name
 from .memory.client import push_pending
 from .runtime_state import get_state as _state
+
+log = logging.getLogger(__name__)
 
 _SINGLEFLIGHT_BG_TASK_KINDS = frozenset(
     {
@@ -54,7 +58,7 @@ def create_task_safely(coro: Any) -> asyncio.Task[Any] | None:
         raise
 
 
-def _cancel_pending_task(context: Any, task: asyncio.Task[Any] | None, *, kind: str) -> None:
+def _cancel_pending_task(task: asyncio.Task[Any] | None, *, kind: str) -> None:
     """尽力取消旧防抖任务；异常只记录类型，不能阻止新任务接管。"""
 
     if task is None or task.done():
@@ -62,11 +66,7 @@ def _cancel_pending_task(context: Any, task: asyncio.Task[Any] | None, *, kind: 
     try:
         task.cancel()
     except Exception as exc:
-        context.logger.debug(
-            "xiaoqing_chat failed to cancel task kind=%s error_type=%s",
-            kind,
-            type(exc).__name__,
-        )
+        log.warning(LogEvent("task.cancel_failed", kind=kind, error=exc))
 
 
 def _track_bg_task(
@@ -86,11 +86,10 @@ def _track_bg_task(
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context,
                 exc,
-                logger    = context.logger,
-                component = f"xiaoqing_chat.bg_task.{name}",
+                component=f"xiaoqing_chat.bg_task.{name}",
             )
 
     task.add_done_callback(_done)
@@ -103,10 +102,7 @@ def spawn_bg_task(context: Any, coro, *, name: str) -> None:
     singleflight_key = _singleflight_key(name)
     if not state.can_add_bg_task(key=singleflight_key):
         _close_awaitable(coro)
-        context.logger.debug(
-            "xiaoqing_chat background task dropped kind=%s",
-            str(name or "").partition(":")[0] or "unknown",
-        )
+        log.debug(LogEvent("task.dropped", kind=str(name or "").partition(":")[0] or "unknown"))
         return
     task = create_task_safely(coro)
     if task is None:
@@ -142,7 +138,7 @@ def _schedule_debounced(
     """
 
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    _cancel_pending_task(context, registry.get(key), kind=kind)
+    _cancel_pending_task(registry.get(key), kind=kind)
 
     async def _run() -> None:
         if delay:

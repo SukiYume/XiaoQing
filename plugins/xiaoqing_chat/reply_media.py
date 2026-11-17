@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
+
+from core.log import LogEvent
 
 from .media.emoji_library import mark_emoji_used_by_hash
 from .media.event_media import render_event_media
@@ -27,15 +30,7 @@ from .task_scheduler import schedule_media_registry_flush
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime, ChatRuntimeState
 
-
-def _log_media_bookkeeping_failure(context: Any, operation: str, exc: Exception) -> None:
-    """媒体旁路统计失败只记类型，不泄露路径或消息内容。"""
-
-    context.logger.debug(
-        "xiaoqing_chat media bookkeeping failed operation=%s error_type=%s",
-        operation,
-        type(exc).__name__,
-    )
+log = logging.getLogger(__name__)
 
 
 def _first_media_part(
@@ -115,7 +110,7 @@ async def event_media_items_for_memory(
     try:
         rendered_items = await render_event_media(event, context=context, runtime=runtime)
     except Exception as exc:
-        _log_media_bookkeeping_failure(context, "render_for_memory", exc)
+        log.warning(LogEvent("media.bookkeeping.failed", operation="render_for_memory", error=exc))
         return []
     return _serialize_rendered_media_items(rendered_items)
 
@@ -144,7 +139,9 @@ def sync_message_parts_to_registry(
         try:
             schedule_media_registry_flush(context, runtime)
         except Exception as exc:
-            _log_media_bookkeeping_failure(context, "schedule_registry_flush", exc)
+            log.warning(
+                LogEvent("media.bookkeeping.failed", operation="schedule_registry_flush", error=exc)
+            )
     return cast(
         tuple[dict[str, Any], ...],
         replace_message_media_parts(
@@ -220,7 +217,9 @@ def mark_reply_media_used(context, reply_parts) -> None:
             try:
                 mark_emoji_used_by_hash(context, str(part.get("media_hash", "") or ""))
             except Exception as exc:
-                _log_media_bookkeeping_failure(context, "mark_emoji_hash", exc)
+                log.warning(
+                    LogEvent("media.bookkeeping.failed", operation="mark_emoji_hash", error=exc)
+                )
         elif part["kind"] == "qq_face":
             try:
                 mark_qq_face_used_by_id(
@@ -229,4 +228,6 @@ def mark_reply_media_used(context, reply_parts) -> None:
                     label=str(part.get("label", "") or ""),
                 )
             except Exception as exc:
-                _log_media_bookkeeping_failure(context, "mark_qq_face_id", exc)
+                log.warning(
+                    LogEvent("media.bookkeeping.failed", operation="mark_qq_face_id", error=exc)
+                )

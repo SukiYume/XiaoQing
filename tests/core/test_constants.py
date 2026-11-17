@@ -18,7 +18,6 @@ def test_runtime_defaults_are_bounded() -> None:
         constants.DEFAULT_INBOUND_WS_MAX_WORKERS,
         constants.DEFAULT_INBOUND_WS_QUEUE_SIZE,
         constants.DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
-        constants.DEFAULT_LOG_TRUNCATE_LEN,
         constants.DEFAULT_HTTP_TIMEOUT_SECONDS,
         constants.DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
         constants.DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS,
@@ -73,8 +72,5 @@ def test_plugin_name_pattern_accepts_only_namespace_safe_names() -> None:
 
 
 @pytest.mark.unit
-def test_message_limits_are_ordered() -> None:
-    """短文本阈值必须小于平台单条消息上限。"""
-
-    assert 0 < constants.MAX_SHORT_TEXT_LENGTH < constants.MAX_MESSAGE_TEXT_LENGTH
+def test_message_split_delay_is_not_negative() -> None:
     assert constants.MESSAGE_SPLIT_DELAY >= 0

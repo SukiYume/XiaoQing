@@ -17,12 +17,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
+from core.log import LogEvent
 from core.plugin_base import atomic_write_text
 
 from .tasks import CHAT_KEY_RE, ChatRef, run_locked
 
-logger = logging.getLogger(__name__)
-_T     = TypeVar("_T")
+log = logging.getLogger(__name__)
+_T  = TypeVar("_T")
 
 # 整个会话（全部轮次的消息）保存的字符上限；执行时更早的工具输出另由上下文压缩处理。
 _MAX_SESSION_CHARS = 200_000
@@ -130,7 +131,7 @@ class SessionStore:
         except FileNotFoundError:
             return None, 0
         except ValueError:
-            logger.warning("xiaoqing_agent session unreadable, starting fresh path=%s", path.name)
+            log.warning(LogEvent("session.unreadable", file=path.name))
             return None, 0
         revision = data.get("revision") if isinstance(data, dict) else None
         revision = revision if type(revision) is int and revision >= 0 else 0
@@ -147,7 +148,7 @@ class SessionStore:
                 revision   = revision,
             )
         except (KeyError, TypeError, ValueError):
-            logger.warning("xiaoqing_agent session malformed, starting fresh path=%s", path.name)
+            log.warning(LogEvent("session.malformed", file=path.name))
             return None, revision
         return session, revision
 
@@ -212,10 +213,7 @@ class SessionStore:
             elif revision == base.revision:
                 previous = base.turns
             else:
-                logger.info(
-                    "xiaoqing_agent session changed since the task started; turn not saved path=%s",
-                    path.name,
-                )
+                log.info(LogEvent("session.turn_not_saved", file=path.name))
                 return
             turns = [*previous, turn][-max_turns:]
             while len(turns) > 1 and sum(_size(item) for item in turns) > _MAX_SESSION_CHARS:

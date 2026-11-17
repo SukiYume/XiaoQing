@@ -16,10 +16,11 @@ from typing import Any, Protocol, cast
 from core.args import parse
 from core.interfaces import PluginSettingsSnapshot
 from core.lifecycle import DeferredCancellation, await_owned_task
+from core.log import LogEvent
 from core.plugin_base import Event, Segments, run_sync, segments
 from core.plugin_base import load_json as _load_json
 from core.plugin_base import write_json as _write_json
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 
 
 class _ChatReplyProvider(Protocol):
@@ -286,12 +287,7 @@ async def _record_qa_audit(context: Context, operation: str, question: str) -> N
                 lambda: setattr(snapshot, "entries", entries),
             )
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "smalltalk.qa_audit",
-        )
+        log_public_error(context, exc, component="smalltalk.qa_audit")
 
 
 async def _commit_snapshot(write: Callable[[], None], publish: Callable[[], None]) -> None:
@@ -452,12 +448,7 @@ async def handle(
             return await _list_qa(context, args)
         return await _remove_qa(context, args)
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "smalltalk.handle",
-        )
+        return public_error_response(context, exc, component="smalltalk.handle")
 
 
 # ──────────────────── Chat 与 Voice provider ────────────────────
@@ -471,11 +462,11 @@ def _voice_probability(context: Context) -> float:
     if value is _MISSING:
         return DEFAULT_VOICE_PROBABILITY
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        logger.warning("Invalid smalltalk voice_probability; voice conversion disabled")
+        logger.warning(LogEvent("voice.invalid_probability", reason_code="type"))
         return 0.0
     probability = float(value)
     if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
-        logger.warning("Invalid smalltalk voice_probability; voice conversion disabled")
+        logger.warning(LogEvent("voice.invalid_probability", reason_code="range"))
         return 0.0
     return probability
 
@@ -518,7 +509,7 @@ async def _maybe_convert_to_voice(
     capabilities = getattr(context, "capabilities", None)
     provider     = getattr(capabilities, "voice_synthesis", None)
     if provider is None:
-        logger.debug("Voice synthesis provider unavailable")
+        logger.debug(LogEvent("voice.provider_unavailable"))
         return reply
     text_content = _voice_text(reply)
     if text_content is None:
@@ -526,15 +517,10 @@ async def _maybe_convert_to_voice(
     try:
         voice_reply = _coerce_segments(await provider.synthesize_text(text_content))
         if voice_reply:
-            logger.info("Converted smalltalk response to voice")
+            logger.info(LogEvent("voice.converted"))
             return voice_reply
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "smalltalk.voice",
-        )
+        log_public_error(context, exc, component="smalltalk.voice")
     return reply
 
 
@@ -555,12 +541,7 @@ async def _call_chat_api(text_content: str, context: Context) -> Segments:
             raise RuntimeError("chat reply provider returned invalid segments")
         return reply
     except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger    = logger,
-            component = "smalltalk.chat",
-        )
+        log_public_error(context, exc, component="smalltalk.chat")
         return segments("暂时无法回复，请稍后再试~")
 
 

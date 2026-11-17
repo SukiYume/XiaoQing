@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,7 +29,7 @@ async def qingpet_runtime(tmp_path: Path):
     from plugins.qingpet import main as qingpet_main
     from plugins.qingpet.services.database import Database
 
-    context = SimpleNamespace(data_dir=tmp_path, logger=logging.getLogger("test.qingpet"))
+    context = SimpleNamespace(data_dir=tmp_path)
     await qingpet_main.init(context)
     assert qingpet_main._db_instance is not None
     database = Database(str(tmp_path / "qingpet" / "qingpet.db"))
@@ -38,4 +37,4 @@ async def qingpet_runtime(tmp_path: Path):
         yield context, database
     finally:
         database.cleanup()
-        await qingpet_main.cleanup(context)
+        await qingpet_main.cleanup()

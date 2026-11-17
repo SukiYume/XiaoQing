@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from core.log import LogEvent
 from core.plugin_base import run_sync
 
 from ..core.exceptions import (
@@ -20,7 +21,7 @@ from .identifiers import public_id
 if TYPE_CHECKING:
     from ..services.db import Database
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # 插件进程只维护一个数据库实例；运行时上下文和 Handler 共用该所有权入口。
 _db_singleton: Database | None = None
@@ -326,12 +327,7 @@ class DbOpsMixin:
             },
         )
 
-        logger.info(
-            "Updated item %s with action %s",
-            item_id,
-            action,
-            extra={"user_id": owner_id, "item_id": item_id, "action": action},
-        )
+        log.info(LogEvent("item.updated", user_id=owner_id, item_id=item_id, action=action))
 
     async def _db_soft_delete_with_log(
         self, item_id: str, owner_id: str, item_type: str = "unknown"
@@ -357,10 +353,8 @@ class DbOpsMixin:
             },
         )
 
-        logger.info(
-            "Soft deleted item %s",
-            item_id,
-            extra={"user_id": owner_id, "item_id": item_id, "item_type": item_type},
+        log.info(
+            LogEvent("item.soft_deleted", user_id=owner_id, item_id=item_id, item_type=item_type)
         )
 
     async def _db_batch_soft_delete_with_log(
@@ -424,10 +418,6 @@ class DbOpsMixin:
             ),
         )
 
-        logger.info(
-            "Created item %s",
-            item_id,
-            extra={"user_id": owner_id, "item_id": item_id, "item_type": item_type},
-        )
+        log.info(LogEvent("item.created", user_id=owner_id, item_id=item_id, item_type=item_type))
 
         return item_id

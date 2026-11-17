@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from core.sensitive_audit import summarize_sensitive
+from core.log import LogEvent
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
@@ -34,7 +35,6 @@ from .llm.prompt_builder import (
     build_recent_media_block,
 )
 from .llm.reply_checker import TurnReadingCache, check_reply
-from .logging_utils import append_timing, log_step, safe_correlation_id
 from .media.marker_resolver import (
     COMMON_QQ_FACE_LABELS,
     ResolvedMarker,
@@ -68,6 +68,9 @@ from .reply_plan import (
     prepare_reply_generation,
     with_requested_length_room,
 )
+from .timing import append_timing
+
+log = logging.getLogger(__name__)
 
 # 这些软问题仍要重写：没照对方明说的要求做（比如篇幅），或者读图结论有出入。
 _REWRITE_SOFT_CODES = frozenset({"instruction_following", "media_grounding", "checker_unavailable"})
@@ -131,34 +134,17 @@ def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
 # 提示词审计日志与生成
 
 
-def _log_prompt_audit_metadata(
-    context: Any,
-    messages: list[ChatMessage],
-    *,
-    request_id: str,
-) -> None:
-    """保留提示词调试指标，但不写入提示词正文。"""
+def _log_prompt_audit_metadata(messages: list[ChatMessage]) -> None:
+    """调试级：每条提示词消息只记角色、长度和指纹，不写入提示词正文。"""
 
-    safe_request_id = safe_correlation_id(request_id)
+    if not log.isEnabledFor(logging.DEBUG):
+        return
     for index, message in enumerate(messages):
-        content = message.content if isinstance(message.content, str) else ""
-        summary = summarize_sensitive(content)
-        role    = (
+        role = (
             message.role if message.role in {"system", "user", "assistant", "tool"} else "unknown"
         )
-        try:
-            context.logger.info(
-                "xiaoqing_chat sensitive_audit operation=reply_prompt status=prepared "
-                "request_id=%s role=%s role_index=%d length=%d bytes=%d fingerprint=%s",
-                safe_request_id,
-                role,
-                index,
-                summary.length,
-                summary.byte_length,
-                summary.fingerprint,
-            )
-        except Exception:
-            return
+        content = message.content if isinstance(message.content, str) else ""
+        log.debug(LogEvent("reply.prompt", role=role, role_index=index, content=content))
 
 
 # 上下文准备与单次候选请求
@@ -242,8 +228,7 @@ def _build_attempt_messages(
     )
     if attempt.extra_check_hint:
         messages.append(ChatMessage(role="user", content=attempt.extra_check_hint))
-    if plan.runtime.cfg.debug.show_reply_prompt:
-        _log_prompt_audit_metadata(plan.context, messages, request_id=plan.request_id)
+    _log_prompt_audit_metadata(messages)
     plan.state.inc_stats(plan.chat_id, "calls")
     return [{"role": message.role, "content": message.content} for message in messages]
 
@@ -268,19 +253,17 @@ async def _request_reply_candidate(
         route_name = "reasoning"
         foreground = with_requested_length_room(plan.runtime.cfg.llm_config("reasoning"), plan.text)
         request_max_tokens = foreground.max_tokens
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.llm.start",
-        fields  = {
-            "model"     : plan.model,
-            "route"     : route_name,
-            "messages"  : len(payload_messages),
-            "timeout_s" : foreground.timeout_seconds,
-            "max_retry" : foreground.max_retry,
-            "max_tokens": request_max_tokens,
-        },
+    log.info(
+        LogEvent(
+            "reply.llm.start",
+            chat_id    = plan.chat_id,
+            model      = plan.model,
+            route      = route_name,
+            messages   = len(payload_messages),
+            timeout_s  = foreground.timeout_seconds,
+            max_retry  = foreground.max_retry,
+            max_tokens = request_max_tokens,
+        )
     )
     started_at = time.monotonic()
     raw, used_profile = await chat_completions_with_profile(
@@ -297,24 +280,16 @@ async def _request_reply_candidate(
     )
     raw = tame_decorations(raw, _recent_reply_texts(plan), COMMON_QQ_FACE_LABELS)
     if _is_turn_stale(plan.chat_id, plan.event):
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = "reply.stale.abort",
-            fields  = {},
-        )
+        log.info(LogEvent("reply.stale.abort", chat_id=plan.chat_id))
         return None
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.llm.ok",
-        fields  = {
-            "elapsed_s"   : round(time.monotonic() - started_at, 3),
-            "used_profile": used_profile,
-            "raw_chars"   : len(raw or ""),
-        },
+    log.info(
+        LogEvent(
+            "reply.llm.ok",
+            chat_id      = plan.chat_id,
+            elapsed_s    = round(time.monotonic() - started_at, 3),
+            used_profile = used_profile,
+            raw_chars    = len(raw or ""),
+        )
     )
     return raw
 
@@ -365,12 +340,14 @@ def _precheck_candidate(
         result = narrated_motive_check(reply=raw_draft.text, current_text=plan.text)
     if result is None or result.suitable:
         return None
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.checker.skip",
-        fields  = {"stage": "pre_heuristic", "action": "reject", "reason": result.reason},
+    log.info(
+        LogEvent(
+            "reply.checker.skip",
+            chat_id = plan.chat_id,
+            stage   = "pre_heuristic",
+            action  = "reject",
+            reason  = result.reason,
+        )
     )
     return RejectedCandidate(
         text                        = raw_draft.text,
@@ -389,12 +366,13 @@ async def _resolve_candidate_draft(
     resolved_marker: ResolvedMarker | None = None
     marker_text                            = raw
     if parsed_marker is not None:
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = "reply.marker.parsed",
-            fields  = {"kind": parsed_marker.kind, "hint": parsed_marker.hint},
+        log.info(
+            LogEvent(
+                "reply.marker.parsed",
+                chat_id = plan.chat_id,
+                kind    = parsed_marker.kind,
+                hint    = parsed_marker.hint,
+            )
         )
         marker_text = strip_outbound_marker_residue(strip_marker(raw, parsed_marker.raw_span))
         miss_reason = ""
@@ -413,16 +391,14 @@ async def _resolve_candidate_draft(
             if resolved_marker is None:
                 miss_reason = "candidate_not_found"
         if resolved_marker is None:
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.marker.miss",
-                fields  = {
-                    "kind"  : parsed_marker.kind,
-                    "hint"  : parsed_marker.hint,
-                    "reason": miss_reason,
-                },
+            log.info(
+                LogEvent(
+                    "reply.marker.miss",
+                    chat_id     = plan.chat_id,
+                    kind        = parsed_marker.kind,
+                    hint        = parsed_marker.hint,
+                    reason_code = miss_reason,
+                )
             )
         else:
             entry_id = (
@@ -430,27 +406,27 @@ async def _resolve_candidate_draft(
                 or str(getattr(resolved_marker.entry, "face_id", "") or "")
                 or str(getattr(resolved_marker.entry, "media_key", "") or "")
             )
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.marker.resolved",
-                fields  = {
-                    "kind"    : resolved_marker.kind,
-                    "hint"    : resolved_marker.hint,
-                    "entry_id": entry_id,
-                },
+            log.info(
+                LogEvent(
+                    "reply.marker.resolved",
+                    chat_id  = plan.chat_id,
+                    kind     = resolved_marker.kind,
+                    hint     = resolved_marker.hint,
+                    entry_id = entry_id,
+                )
             )
     else:
         cleaned_marker_text = strip_outbound_marker_residue(raw)
         if cleaned_marker_text != raw:
             marker_text = cleaned_marker_text
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.marker.miss",
-                fields  = {"kind": "", "hint": "", "reason": "parse_failed"},
+            log.info(
+                LogEvent(
+                    "reply.marker.miss",
+                    chat_id     = plan.chat_id,
+                    kind        = "",
+                    hint        = "",
+                    reason_code = "parse_failed",
+                )
             )
 
     parts = _split_reply_text(plan, marker_text)
@@ -545,18 +521,10 @@ async def _run_checker(
             timeout=timeout + 0.25,
         )
     except TimeoutError:
-        log_step(
-            plan.context, plan.runtime, chat_id=plan.chat_id, step="reply.check.timeout", fields={}
-        )
+        log.info(LogEvent("reply.check.timeout", chat_id=plan.chat_id))
         return checker_unavailable("回复检查暂不可用")
     except Exception as exc:
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = "reply.check.error",
-            fields  = {"error_type": type(exc).__name__},
-        )
+        log.info(LogEvent("reply.check.error", chat_id=plan.chat_id, error=exc))
         return checker_unavailable("reply_checker unavailable")
 
 
@@ -598,30 +566,24 @@ async def _check_candidate_draft(
     cfg = plan.runtime.cfg.reply_check
     if not cfg.enable_reply_checker:
         return None
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.check.start",
-        fields  = {"llm_checker": cfg.enable_llm_checker},
+    log.info(
+        LogEvent("reply.check.start", chat_id=plan.chat_id, llm_checker=cfg.enable_llm_checker)
     )
     check = _apply_unavailable_policy(
         plan, await _run_checker(plan, draft, trimmed_history, memory_block, turn_reading)
     )
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.check.result",
-        fields  = {
-            "suitable"           : bool(check.suitable),
-            "need_replan"        : bool(check.need_replan),
-            "severity"           : check.severity,
-            "failure_code"       : check.failure_code,
-            "persona_claim_count": check.persona_claim_count,
-            "context_claim_count": check.context_claim_count,
-            "reason"             : check.reason,
-        },
+    log.info(
+        LogEvent(
+            "reply.check.result",
+            chat_id             = plan.chat_id,
+            suitable            = bool(check.suitable),
+            need_replan         = bool(check.need_replan),
+            severity            = check.severity,
+            failure_code        = check.failure_code,
+            persona_claim_count = check.persona_claim_count,
+            context_claim_count = check.context_claim_count,
+            reason              = check.reason,
+        )
     )
     if check.suitable:
         return None
@@ -642,12 +604,13 @@ async def _check_candidate_draft(
         and deterministic_ok
     ):
         # 软问题是口味上的挑剔（措辞、细节出入、两项审查分歧），照发不重写，免得把人味磨平。
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = "reply.check.soft_pass",
-            fields  = {"failure_code": check.failure_code, "reason": check.reason},
+        log.info(
+            LogEvent(
+                "reply.check.soft_pass",
+                chat_id      = plan.chat_id,
+                failure_code = check.failure_code,
+                reason       = check.reason,
+            )
         )
         return None
     return RejectedCandidate(
@@ -668,13 +631,7 @@ def _shrink_context_after(
     """请求过大时把历史减半，返回是否应当重试。"""
     if str(exc) != "request_too_large" or attempt.max_items <= 2:
         return False
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = "reply.llm.too_large",
-        fields  = {"max_items": attempt.max_items},
-    )
+    log.info(LogEvent("reply.llm.too_large", chat_id=plan.chat_id, max_items=attempt.max_items))
     attempt.max_items = max(2, attempt.max_items // 2)
     return True
 
@@ -759,7 +716,7 @@ async def _generate_checked_draft(
 ) -> ReplyDraft | None:
     while True:
         if _is_turn_stale(plan.chat_id, plan.event):
-            log_step(plan.context, plan.runtime, chat_id=plan.chat_id, step="reply.stale.abort")
+            log.info(LogEvent("reply.stale.abort", chat_id=plan.chat_id))
             return None
         trimmed_history = plan.history[-attempt.max_items :] if attempt.max_items > 0 else []
         _prefetch_turn_reading(plan, attempt, trimmed_history)
@@ -773,13 +730,7 @@ async def _generate_checked_draft(
         except LLMError as exc:
             if _shrink_context_after(exc, plan, attempt):
                 continue
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.llm.error",
-                fields  = {"error_type": type(exc).__name__},
-            )
+            log.info(LogEvent("reply.llm.error", chat_id=plan.chat_id, error=exc))
             raise
         append_timing(attempt.timings, "gen_s", round(time.monotonic() - generation_started, 3))
         if candidate is None:
@@ -798,15 +749,13 @@ async def _generate_checked_draft(
                 plan, draft, trimmed_history, memory_block, attempt.turn_reading
             )
             if rejected is not None and (trimmed := trim_unsupported_bubbles(rejected)):
-                log_step(
-                    plan.context,
-                    plan.runtime,
-                    chat_id = plan.chat_id,
-                    step    = "reply.check.trimmed",
-                    fields  = {
-                        "failure_code": rejected.result.failure_code,
-                        "dropped"     : len(draft.text_parts) - len(trimmed.text_parts),
-                    },
+                log.info(
+                    LogEvent(
+                        "reply.check.trimmed",
+                        chat_id      = plan.chat_id,
+                        failure_code = rejected.result.failure_code,
+                        dropped      = len(draft.text_parts) - len(trimmed.text_parts),
+                    )
                 )
                 draft, rejected = trimmed, None
             append_timing(
@@ -820,15 +769,13 @@ async def _generate_checked_draft(
             )
             regen_step = "reply.check.regen"
             if rejected is None:
-                log_step(
-                    plan.context,
-                    plan.runtime,
-                    chat_id = plan.chat_id,
-                    step    = "reply.generate.done",
-                    fields  = {
-                        "elapsed_s"  : round(time.monotonic() - plan.started_at, 3),
-                        "reply_chars": len(draft.text),
-                    },
+                log.info(
+                    LogEvent(
+                        "reply.generate.done",
+                        chat_id     = plan.chat_id,
+                        elapsed_s   = round(time.monotonic() - plan.started_at, 3),
+                        reply_chars = len(draft.text),
+                    )
                 )
                 return draft
         if queue_reply_regeneration(plan, attempt, rejected, step=regen_step):

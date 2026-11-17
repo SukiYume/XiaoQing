@@ -198,13 +198,14 @@ Core 为每个插件签发窄 Context。
 
 - 当前插件的公开配置与 secret 快照
 - 私有数据目录与插件代内 runtime 状态
-- 日志、指标和 HTTP Session
+- 指标和 HTTP Session
 - Session API
 - 主动发送与回执
 - AI route
 - 声明式服务调用
 - 调度与静音查询
 
+日志不经过 Context：插件用标准库 logger 加 `core.log.LogEvent` 记录，request ID、脱敏、格式和级别由 Core 的日志系统负责。
 Context 通过 capability 对象表达权限。
 敏感状态保留在 Core 所有权内，插件获得完成自身任务所需的作用域视图。
 派生能力跟随对应命令的 Manifest 声明签发，并在每次调用时按当前配置复核：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`。
@@ -249,7 +250,7 @@ Pendo 使用该模式管理 FastAPI、SQLite、前端资源、提醒调度和聊
 
 - 插件生命周期拥有服务启动与停止。
 - 插件数据目录拥有数据库与持久文件。
-- Core Context 提供日志、配置、密钥和发送能力。
+- Core Context 提供配置、密钥和发送能力。
 - 服务内部按数据库、认证、API、任务和前端资源划分模块。
 
 ---
@@ -324,8 +325,8 @@ Core scheduler ── xiaoqing_memory.tick（每 30 分钟）──► 夜间或
 
 ### 启动
 
-1. 读取并校验配置快照。
-2. 初始化日志、HTTP、指标与会话服务。
+1. 进程入口开只写控制台的日志，读取并校验配置快照；`config.json` 缺失或无效时以退出码 1 结束。
+2. 按配置换上日志出口，初始化 HTTP、指标与会话服务。
 3. 加载插件并发布 Context、服务和命令目录。
 4. 发布插件排程。
 5. 启动 Inbound 与主动 WebSocket。

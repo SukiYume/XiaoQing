@@ -25,6 +25,7 @@ from typing import Any, cast
 
 from .constants import PLUGIN_INIT_TIMEOUT_SECONDS
 from .exceptions import PluginLifecycleFatalError, PluginLoadError
+from .log import LogEvent, log_scope
 from .plugin_execution import (
     PluginCallbackFatalError,
     PluginExecutionGate,
@@ -671,11 +672,7 @@ class PluginGenerationMixin:
                 gate.close_admission()
             self.router.clear_plugin(name)
             self._quarantined_plugins.add(name)
-            logger.error(
-                "Plugin %s has an incomplete import generation and cannot be "
-                "safely forgotten before process restart",
-                name,
-            )
+            logger.error(LogEvent("plugin.unload.incomplete_generation", plugin=name))
             return
 
         plugin = self._plugins.get(name)
@@ -763,7 +760,7 @@ class PluginGenerationMixin:
         )
         self._forget_plugin_generation(name, clear_marks=True, release_namespace=True)
 
-        logger.info("Unloaded plugin %s", name)
+        logger.info(LogEvent("plugin.unloaded", plugin=name))
         self._notify_change(name)
 
     async def reload_plugin(self, name: str) -> None:
@@ -809,17 +806,15 @@ class PluginGenerationMixin:
         async with self._lifecycle_lock.get():
             if self._quarantined_plugins:
                 logger.error(
-                    "Plugin reload refused while runtime quarantine is non-empty: %s",
-                    ", ".join(sorted(self._quarantined_plugins)),
+                    LogEvent(
+                        "plugin.reload.refused_quarantine",
+                        plugins="+".join(sorted(self._quarantined_plugins)),
+                    )
                 )
                 return False
             for name in self.list_plugins():
                 if name in self._quarantined_plugins:
-                    logger.error(
-                        "Plugin reload stopped: %s is quarantined and requires "
-                        "explicit operator cleanup or restart",
-                        name,
-                    )
+                    logger.error(LogEvent("plugin.reload.stopped_quarantined", plugin=name))
                     return False
                 if before_reload is not None:
                     await before_reload(name)
@@ -827,7 +822,7 @@ class PluginGenerationMixin:
                     return False
                 await self._reload_plugin_once(name)
                 if name in self._quarantined_plugins:
-                    logger.error("Plugin reload stopped after %s entered quarantine", name)
+                    logger.error(LogEvent("plugin.reload.stopped_new_quarantine", plugin=name))
                     return False
 
             await self._reconcile_plugins_once()
@@ -853,26 +848,25 @@ class PluginGenerationMixin:
                 self._raise_preferred_lifecycle_error(exc, cleanup_error)
             if self._is_fatal_base_exception(exc):
                 raise
-            logger.error("Plugin %s definition load failed: %s", name, exc)
+            logger.error(LogEvent("plugin.reload.definition_failed", plugin=name, error=exc))
             return None
         if not isinstance(definition, PluginDefinition):
             bucket = getattr(definition, "bucket", "invalid")
             if bucket in {"dependency", "read"}:
-                logger.warning(
-                    "Plugin reload deferred for %s because manifest check is transient (%s)",
-                    name,
-                    bucket,
-                )
+                logger.warning(LogEvent("plugin.reload.deferred", plugin=name, bucket=bucket))
                 return None
             logger.warning(
-                "Plugin reload rejected for %s: manifest rejected (%s)",
-                name,
-                bucket,
+                LogEvent(
+                    "plugin.reload.rejected",
+                    plugin      = name,
+                    reason_code = "manifest_rejected",
+                    bucket      = bucket,
+                )
             )
             await self._unload_plugin_once(name)
             return None
         if not definition.enabled:
-            logger.warning("Plugin reload rejected for %s: definition is disabled", name)
+            logger.warning(LogEvent("plugin.reload.rejected", plugin=name, reason_code="disabled"))
             await self._unload_plugin_once(name)
             return None
 
@@ -895,18 +889,13 @@ class PluginGenerationMixin:
                 raise
             if definition_changed:
                 logger.error(
-                    "Plugin %s authorization changed but the replacement fingerprint "
-                    "failed; retiring the no-longer-authorized generation: %s",
-                    name,
-                    exc,
+                    LogEvent(
+                        "plugin.retire_unauthorized", plugin=name, stage="fingerprint", error=exc
+                    )
                 )
                 await self._unload_plugin_once(name)
             else:
-                logger.warning(
-                    "Plugin %s reload fingerprint failed; keeping unchanged old instance: %s",
-                    name,
-                    exc,
-                )
+                logger.warning(LogEvent("plugin.reload.fingerprint_failed", plugin=name, error=exc))
             return None
 
         return _ReloadAuthorization(
@@ -1194,11 +1183,7 @@ class PluginGenerationMixin:
         """Reload one generation while the caller owns the lifecycle lock."""
 
         if name in self._quarantined_plugins:
-            logger.warning(
-                "Refusing to reload quarantined plugin %s; explicit operator cleanup or "
-                "restart is required",
-                name,
-            )
+            logger.warning(LogEvent("plugin.reload.refused_quarantined", plugin=name))
             return
         old_plugin = self._plugins.get(name)
         if old_plugin is None:
@@ -1228,9 +1213,7 @@ class PluginGenerationMixin:
             return
 
         logger.info(
-            "Reloaded canonical plugin %s version %s",
-            name,
-            authorization.definition.version,
+            LogEvent("plugin.reloaded", plugin=name, version=authorization.definition.version)
         )
 
     def _retain_retired_plugin_quarantine(
@@ -1299,10 +1282,12 @@ class PluginGenerationMixin:
                 reason = str(restore_collision),
             )
             logger.error(
-                "Plugin %s old generation was not restored because canonical cache slots "
-                "were occupied: %s",
-                name,
-                restore_collision,
+                LogEvent(
+                    "plugin.reload.restore_collision",
+                    plugin = name,
+                    stage  = "restore",
+                    error  = restore_collision,
+                )
             )
             return False
         state.clear()
@@ -1351,9 +1336,12 @@ class PluginGenerationMixin:
                     reason         = str(restore_collision),
                 )
                 logger.error(
-                    "Plugin %s old generation cache restore collided before recovery init: %s",
-                    name,
-                    restore_collision,
+                    LogEvent(
+                        "plugin.reload.restore_collision",
+                        plugin = name,
+                        stage  = "recovery_init",
+                        error  = restore_collision,
+                    )
                 )
                 return False
 
@@ -1415,9 +1403,7 @@ class PluginGenerationMixin:
                 self._restart_required_plugins.add(name)
                 self._unregister_services_owned_by(name)
                 logger.error(
-                    "Plugin %s old generation recovery did not drain; retained in quarantine: %s",
-                    name,
-                    restore_exc,
+                    LogEvent("plugin.reload.recovery_incomplete", plugin=name, error=restore_exc)
                 )
                 if isinstance(
                     restore_exc,
@@ -1446,23 +1432,14 @@ class PluginGenerationMixin:
                     modules=modules,
                     reason=f"old generation restore failed ({type(restore_exc).__name__})",
                 )
-            logger.error(
-                "Plugin %s candidate failed and old generation could not be restored; "
-                "quarantined: %s",
-                name,
-                restore_exc,
-            )
+            logger.error(LogEvent("plugin.reload.restore_failed", plugin=name, error=restore_exc))
             if isinstance(restore_exc, asyncio.CancelledError) or self._is_fatal_base_exception(
                 restore_exc
             ):
                 raise
             return False
 
-        logger.error(
-            "Plugin %s canonical reload failed; restored old instance: %s",
-            name,
-            original_error,
-        )
+        logger.error(LogEvent("plugin.reload.failed_restored", plugin=name, error=original_error))
         return True
 
     async def _load_canonical_candidate(
@@ -1524,10 +1501,11 @@ class PluginGenerationMixin:
         )
 
         async def run_init() -> None:
-            if callback_accepts_positional_context(init_func):
-                await call_plugin_callback(init_func, context)
-            else:
-                await call_plugin_callback(init_func)
+            with log_scope(None):
+                if callback_accepts_positional_context(init_func):
+                    await call_plugin_callback(init_func, context)
+                else:
+                    await call_plugin_callback(init_func)
 
         try:
             outcome = await self._capture_lifecycle(
@@ -1582,10 +1560,11 @@ class PluginGenerationMixin:
                     )
 
                 async def run_shutdown() -> None:
-                    if context is None:
-                        await call_plugin_callback(shutdown)
-                    else:
-                        await call_plugin_callback(shutdown, context)
+                    with log_scope(None):
+                        if context is None:
+                            await call_plugin_callback(shutdown)
+                        else:
+                            await call_plugin_callback(shutdown, context)
 
                 # shutdown 没有单独的上限，和 init 共用同一个单次回调时限。
                 shutdown_timeout                 = PLUGIN_INIT_TIMEOUT_SECONDS
@@ -1598,11 +1577,12 @@ class PluginGenerationMixin:
                     )
                 if shutdown_timeout <= 0:
                     logger.warning(
-                        "Plugin %s shutdown skipped: deadline already elapsed "
-                        "(shutdown_timeout=%.3fs, deadline_remaining=%.3fs)",
-                        name,
-                        shutdown_timeout,
-                        deadline_remaining or 0.0,
+                        LogEvent(
+                            "plugin.shutdown.skipped",
+                            plugin      = name,
+                            timeout_s   = round(shutdown_timeout, 3),
+                            remaining_s = round(deadline_remaining or 0.0, 3),
+                        )
                     )
                     return False
                 try:
@@ -1617,11 +1597,12 @@ class PluginGenerationMixin:
                         else max(0.0, shutdown_deadline - time.monotonic())
                     )
                     logger.warning(
-                        "Plugin %s shutdown timed out "
-                        "(shutdown_timeout=%.3fs, deadline_remaining=%s)",
-                        name,
-                        shutdown_timeout,
-                        "not-set" if remaining is None else f"{remaining:.3f}s",
+                        LogEvent(
+                            "plugin.shutdown.timeout",
+                            plugin      = name,
+                            timeout_s   = round(shutdown_timeout, 3),
+                            remaining_s = None if remaining is None else round(remaining, 3),
+                        )
                     )
                     return False
                 success = True
@@ -1629,7 +1610,7 @@ class PluginGenerationMixin:
             except PluginCallbackFatalError as exc:
                 raise exc.original from exc
             except Exception as exc:
-                logger.warning("Plugin %s shutdown error: %s", name, exc)
+                logger.warning(LogEvent("plugin.shutdown.failed", plugin=name, error=exc))
                 return False
             finally:
                 if fallback_data is not None:
@@ -1769,11 +1750,12 @@ class PluginGenerationMixin:
                 self._plugins[definition.name] = previous_plugin
             raise
         logger.info(
-            "Loaded plugin name=%s version=%s author=%s description=%s",
-            definition.name,
-            definition.version,
-            definition.author or "-",
-            definition.description or "-",
+            LogEvent(
+                "plugin.loaded",
+                plugin  = definition.name,
+                version = definition.version,
+                author  = definition.author or None,
+            )
         )
         self._notify_change(definition.name)
         return loaded

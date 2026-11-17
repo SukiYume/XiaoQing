@@ -18,6 +18,7 @@ from core.bounded_http import (
     ResponseTransportError,
 )
 from plugins.astro_tools import obj
+from tests.helpers.assertions import logged_events, public_error_reply
 
 _COLUMN_NAMES = ("ra", "dec", "otype", "V", "sp_type")
 _VALID_ROW    = (10.6847083, 41.26875, "Galaxy", 3.44, "SA(s)b")
@@ -304,19 +305,22 @@ async def test_simbad_transport_error_is_public_and_does_not_log_raw_details(
     def fail(*_args: Any, **_kwargs: Any) -> None:
         raise requests.ConnectTimeout(f"request to {raw_endpoint} api_key={raw_secret}")
 
-    logger  = logging.getLogger("test.simbad")
     context = SimpleNamespace(
-        logger     = logger,
         request_id = "simbad-request",
         secrets    = {"plugins": {"astro_tools": {"api_key": raw_secret}}},
     )
     monkeypatch.setattr(requests, "request", fail)
 
-    with caplog.at_level(logging.ERROR, logger=logger.name):
+    with caplog.at_level(logging.DEBUG):
         result = await obj.handle_obj("M31", context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in result
+    # 连接超时：回复说是超时，类型是 requests 的 ConnectTimeout。
+    assert public_error_reply(result)["type_name"] == "ConnectTimeout"
     assert raw_endpoint not in result
     assert raw_secret not in result
-    assert raw_endpoint not in caplog.text
-    assert raw_secret not in caplog.text
+    assert [event.fields["category"] for event in logged_events(caplog, "public_error")] == [
+        "timeout"
+    ]
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert raw_endpoint not in log_text
+    assert raw_secret not in log_text

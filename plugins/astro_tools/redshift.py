@@ -80,6 +80,4 @@ def handle_redshift(args: str, context: PluginContextProtocol) -> str:
 
         return "\n".join((*result_lines, "", context_note))
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.redshift"
-        )
+        return public_error_message(context, exc, component="astro_tools.redshift")

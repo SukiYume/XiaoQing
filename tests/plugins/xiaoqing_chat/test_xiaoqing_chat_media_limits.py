@@ -157,9 +157,7 @@ async def test_generation_limiter_applies_to_every_admitted_request():
 @pytest.mark.asyncio
 async def test_media_count_and_resource_limits_are_hard(tmp_path: Path):
     runtime = _runtime(max_media_per_message=2)
-    context = SimpleNamespace(
-        data_dir=tmp_path, logger=SimpleNamespace(info=lambda *_a, **_k: None)
-    )
+    context = SimpleNamespace(data_dir=tmp_path)
     event = {
         "message": [
             {"type": "face", "data": {"id": str(index), "raw": {"text": f"[f{index}]"}}}

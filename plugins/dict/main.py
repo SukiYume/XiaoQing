@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import stat
 from dataclasses import dataclass
@@ -13,8 +14,11 @@ from typing import Any, Literal, NamedTuple, cast
 
 from core.args import quote_token, tokenize
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import Segments, has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
+
+logger = logging.getLogger(__name__)
 
 MAX_ARGUMENT_CHARS        = 512
 MAX_QUERY_CHARS           = 256
@@ -555,12 +559,7 @@ async def query_astrodict(
     except ValueError as exc:
         return f"❌ {exc}"
     except Exception as exc:
-        return public_error_message(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "dict.search",
-        )
+        return public_error_message(context, exc, component="dict.search")
 
 
 async def handle(
@@ -576,12 +575,14 @@ async def handle(
         request = _parse_request(args)
         if request.action == "help":
             return segments(HELP_TEXT)
-        context.logger.info(
-            "天文词典查询: query_chars=%d exact=%s page=%d page_size=%d",
-            len(request.query),
-            request.exact_match,
-            request.page,
-            request.max_results,
+        logger.info(
+            LogEvent(
+                "dict.query",
+                query_length = len(request.query),
+                exact        = request.exact_match,
+                page         = request.page,
+                page_size    = request.max_results,
+            )
         )
         result = await query_astrodict(
             request.query,
@@ -594,9 +595,4 @@ async def handle(
     except ValueError as exc:
         return segments(f"❌ {exc}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "dict.handle",
-        )
+        return public_error_response(context, exc, component="dict.handle")

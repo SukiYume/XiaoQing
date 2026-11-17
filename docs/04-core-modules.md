@@ -38,7 +38,7 @@
 | `args.py` | `ParsedArgs` token 与选项解析 |
 | `models.py` | OneBot、Manifest、命令、服务和配置数据模型 |
 | `auth.py` | Inbound Bearer 凭据解析与恒定时间比较 |
-| `public_errors.py` | 内部异常到公开错误码和 request ID 的映射 |
+| `public_errors.py` | 插件意外异常的公开回复和 `public_error` 日志：按异常链分类出原因，带异常类型、位置和 request ID，不含异常消息 |
 
 Dispatcher 的固定流程为：处理门控、URL、Bot 名称、会话、命令、命令兜底、闲聊。
 Router 从已验证 Manifest 构建只读命令目录，并把解析结果放入插件 Context。
@@ -124,7 +124,6 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。
 |---|---|
 | `config.py` | JSON 读取、来源状态、只读快照、revision 和文件 watcher |
 | `ai.py` | Provider、模型 profile、插件 route、重试、fallback 和总预算 |
-| `sensitive_audit.py` | 敏感字段审计、摘要和脱敏 |
 | `atomic_store.py` | JSON 与字节数据的原子写入和恢复 |
 | `private_files.py` | 只给本机当前用户看的文件：目录权限收紧、凭据 JSON 以 0600 原子写入 |
 | `process_tree.py`、`windows_job.py` | 插件执行外部命令：独立进程树（Windows Job 对象 / POSIX 进程组）、stdout 与 stderr 共享输出预算、超时与取消时整树回收。`/shell` 和小青 agent 共用 |
@@ -140,7 +139,7 @@ AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据�
 
 | 模块 | 职责 |
 |---|---|
-| `logging_config.py` | 控制台、文件、颜色、轮转和日志格式 |
+| `log.py` | `LogEvent` 事件脱敏（长度加进程内 HMAC 指纹）与渲染、异常摘要与不带异常消息的回溯、第三方库日志参数的脱敏、request ID 作用域、`logging` 配置块与级别、控制台与 `logs/xiaoqing.log` 输出、按天轮转和日志格式、出口故障诊断，以及未捕获异常和事件循环异常的出口 |
 | `metrics.py` | 消息、插件、错误、延迟和队列指标 |
 | `clock.py` | 按配置时区取当前时间 |
 | `constants.py` | Core 共享边界常量 |

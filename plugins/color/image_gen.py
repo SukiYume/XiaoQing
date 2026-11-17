@@ -13,8 +13,9 @@ from typing import Any, cast
 
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, run_sync
-from core.public_errors import public_error_message
+from core.public_errors import log_public_error
 
 from .convert import validate_rgb
 from .data_manager import MAX_COLOR_NAME_CHARS
@@ -33,7 +34,7 @@ _CJK_FONT_FAMILIES   = (
     "Microsoft YaHei",
     "SimHei",
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -55,7 +56,7 @@ def _find_cjk_font(font_manager: Any) -> Any | None:
         except (OSError, ValueError):
             continue
         return font_manager.FontProperties(fname=path)
-    logger.debug("未找到已知 CJK 字体，颜色名使用 matplotlib 默认字体")
+    log.debug(LogEvent("font.cjk_missing", fallback="matplotlib-default"))
     return None
 
 
@@ -109,9 +110,7 @@ async def generate_color_image(
     """生成内容寻址色卡；依赖缺失或生成失败时返回 ``None``。"""
 
     if not MATPLOTLIB_AVAILABLE:
-        context.logger.warning(
-            "图片生成失败：缺少 matplotlib 或 numpy 依赖；安装依赖后请执行 /reload"
-        )
+        log.warning(LogEvent("image.dependency_missing", packages="matplotlib+numpy"))
         return None
 
     try:
@@ -127,10 +126,10 @@ async def generate_color_image(
         payload    = await run_sync(_render_color_image, cleaned_name, cleaned_rgb)
         image_path = await run_sync(cache.put, filename, payload)
         if image_path is None:
-            context.logger.warning("颜色图片超过缓存总字节预算")
+            log.warning(LogEvent("image.cache_budget_exceeded"))
             return None
-        context.logger.debug("生成颜色图片: bytes=%d", len(payload))
+        log.debug(LogEvent("image.generated", bytes=len(payload)))
         return str(image_path)
     except Exception as exc:
-        public_error_message(context, exc, logger=context.logger, component="color.generate_image")
+        log_public_error(context, exc, component="color.generate_image")
         return None

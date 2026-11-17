@@ -19,13 +19,15 @@ from core.async_keyed_lock import AsyncKeyedLockPool
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.bounded_http import (
     BodyLimits,
+    BoundedHttpError,
     HttpStatusError,
     MimePolicy,
     aiohttp_request_bounded,
 )
 from core.interfaces import PluginSettingsSnapshot
+from core.log import LogEvent
 from core.plugin_base import Event, Segments, has_control_characters, record, segments
-from core.public_errors import public_error_message, public_error_response
+from core.public_errors import log_public_error, public_error_response
 from core.safe_http import validated_proxy_url
 
 
@@ -38,7 +40,7 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 DEFAULT_REGION     = "southeastasia"
 DEFAULT_VOICE_NAME = "zh-CN-XiaomoNeural"
@@ -205,8 +207,8 @@ def _get_cached_audio(cache: BoundedFileCache, filename: str) -> Path | None:
         return path
     try:
         path.unlink(missing_ok=True)
-    except OSError:
-        logger.warning("无法移除损坏的 TTS 缓存文件")
+    except OSError as exc:
+        log.error(LogEvent("cache.corrupt_unlink_failed", error=exc))
     return None
 
 
@@ -224,12 +226,12 @@ async def text_to_speech(text: str, context: Context) -> str | None:
 
     normalized_text = text.strip() if type(text) is str else ""
     if not normalized_text or len(normalized_text) > MAX_TTS_TEXT_LENGTH:
-        logger.warning("Azure TTS 文本为空或超过长度上限")
+        log.warning(LogEvent("tts.text_rejected", text_length=len(normalized_text)))
         return None
 
     settings = _get_settings(context)
     if settings is None:
-        logger.warning("Azure TTS 未配置 subscription_key")
+        log.warning(LogEvent("config.missing", setting="subscription_key"))
         return None
 
     try:
@@ -283,12 +285,12 @@ async def text_to_speech(text: str, context: Context) -> str | None:
                         accept_encoding = "identity",
                     )
                 except HttpStatusError as exc:
-                    logger.error("Azure TTS API 返回非成功状态：%s", exc.status)
+                    log.warning(LogEvent("azure.http_error", status=exc.status))
                     return None
 
             content = response.body
             if not _looks_like_mp3(content):
-                logger.error("Azure TTS 返回了无效的 MP3 内容")
+                log.warning(LogEvent("azure.audio_invalid", bytes=len(content)))
                 return None
             output_file, _created = await asyncio.to_thread(
                 cache.put_if_absent,
@@ -296,12 +298,15 @@ async def text_to_speech(text: str, context: Context) -> str | None:
                 content,
             )
             if output_file is None:
-                logger.error("Azure TTS 音频超过缓存预算")
+                log.warning(LogEvent("audio.cache_budget_exceeded", bytes=len(content)))
                 return None
-            logger.info("Azure TTS 合成完成：bytes=%d", len(content))
+            log.info(LogEvent("tts.done", bytes=len(content)))
             return str(output_file.resolve())
+    except (aiohttp.ClientError, TimeoutError, BoundedHttpError) as exc:
+        log.warning(LogEvent("azure.request_failed", error=exc))
+        return None
     except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="voice.tts")
+        log_public_error(context, exc, component="voice.tts")
         return None
 
 
@@ -337,7 +342,7 @@ async def handle(
             return segments("语音合成失败")
         return [record(audio_path)]
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="voice.handle")
+        return public_error_response(context, exc, component="voice.handle")
 
 
 async def convert_text_to_voice(text: str, context: Context) -> Segments | None:

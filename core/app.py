@@ -37,15 +37,16 @@ from .app_support import (
     _runtime_timezone,
     _trusted_secrets,
 )
-from .config import ConfigManager, ConfigSnapshot
+from .config import ConfigManager, ConfigSnapshot, ConfigSourceStatus
 from .dispatcher import AdjustableSemaphore, Dispatcher
+from .exceptions import ConfigLoadError
 from .inbound_backlog import InboundBacklog
 from .interfaces import (
     PluginPrincipal,
     PluginSettingsSnapshot,
 )
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
-from .logging_config import setup_logging
+from .log import LogEvent, LoggingSettings, setup_logging
 from .metrics import MetricsCollector
 from .onebot import (
     OneBotHttpSender,
@@ -86,16 +87,23 @@ class XiaoQingApp(
         # 装成 wheel 后由入口传入安装位置。
         self.root: Path = root
 
-        # 加载配置
+        # 加载配置。首次读取没有可沿用的有效配置：缺失、损坏、读不了都不启动，
+        # 具体原因（校验失败时是字段路径和错误类型）ConfigManager 已经记进日志。
         self.config_manager: ConfigManager = ConfigManager(
             root / "config" / "config.json",
             root / "config" / "secrets.json",
         )
+        config_status = self.config_manager.snapshot().config_status
+        if config_status is not ConfigSourceStatus.VALID:
+            raise ConfigLoadError(f"config.json is {config_status.value}")
         self._plugin_settings_cache: dict[tuple[str, int], PluginSettingsSnapshot] = {}
         self._plugin_settings_cache_revision: int | None                           = None
 
-        # 初始化日志系统
-        setup_logging(self.config_manager.config, log_dir=root / "logs")
+        # 按配置换上日志出口；日志目录建不了时异常抛出，进程入口先装的控制台出口仍在
+        setup_logging(
+            LoggingSettings.model_validate(self.config_manager.config.get("logging", {})),
+            root / "logs",
+        )
 
         # HTTP 会话（共享）
         self.http_session: aiohttp.ClientSession | None = None
@@ -265,17 +273,13 @@ class XiaoQingApp(
         如需等待重载完成，请检查 _reload_task 或监听日志。
         """
         if self._stopping:
-            logger.debug("Ignoring plugin reload while stopping")
+            logger.debug(LogEvent("plugin.reload.skip.stopping"))
             return None
         if not bool(getattr(self.plugin_manager, "hot_reload_supported", True)):
-            reason = getattr(self.plugin_manager, "hot_reload_unavailable_reason", None)
-            logger.error(
-                "Plugin reload is unavailable; restart the process to apply plugin changes: %s",
-                reason or "module import barrier capability probe failed",
-            )
+            logger.error(LogEvent("plugin.reload.unavailable"))
             return None
         if self._reload_task and not self._reload_task.done():
-            logger.info("Plugin reload already in progress")
+            logger.info(LogEvent("plugin.reload.in_progress"))
             return self._reload_task
         self._reload_task = asyncio.create_task(
             _run_background_operation(self._reload_plugins_async_with_logging)
@@ -288,15 +292,15 @@ class XiaoQingApp(
             async with self._reload_lock.get():
                 if self._stopping:
                     return False
-                logger.info("Starting plugin reload...")
+                logger.info(LogEvent("plugin.reload.start"))
                 completed = await self.plugin_manager.reload_all_plugins(
                     before_reload=self.session_manager.clear_plugin_sessions,
                 )
                 if not completed:
-                    logger.error("Plugin reload stopped because a generation is quarantined")
+                    logger.error(LogEvent("plugin.reload.stopped_quarantined"))
                     return False
-                logger.info("Plugin reload completed successfully")
+                logger.info(LogEvent("plugin.reload.done"))
                 return True
-        except Exception as exc:
-            logger.exception("Plugin reload failed: %s", exc)
+        except Exception:
+            logger.exception(LogEvent("plugin.reload.failed"))
             return False

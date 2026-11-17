@@ -22,6 +22,7 @@ from plugins.codex.runner import (
     _FinalOutputCapture,
     _remove_output_path_with_retry,
 )
+from tests.helpers.assertions import logged_events
 from tests.helpers.codex_fakes import CallbackStreamingProcess
 from tests.helpers.codex_test_support import confirmed_termination, install_termination_probe
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -534,10 +535,11 @@ async def test_unlink_retries_permission_error_and_logs_only_bounded_metadata(
         original_unlink(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", always_locked)
-    with caplog.at_level("WARNING", logger="plugins.codex.runner"):
+    with caplog.at_level("WARNING"):
         assert await _remove_output_path_with_retry(failed, attempts=2, delay_seconds=0) is False
-    assert "name=codex-last-stuck.txt" in caplog.text
-    assert "error_type=PermissionError" in caplog.text
+    [event] = logged_events(caplog, "output_remove.failed")
+    assert event.fields["file"] == "codex-last-stuck.txt"
+    assert event.fields["error"] == "PermissionError"
     assert "full path and secret" not in caplog.text
 
 

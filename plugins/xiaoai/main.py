@@ -10,6 +10,7 @@ import time
 from typing import Any, cast
 
 from core.delivery import DeliveryReceipt, ScheduledDelivery
+from core.log import LogEvent
 from core.plugin_base import has_control_characters, segments
 
 from . import home, login
@@ -17,7 +18,7 @@ from .auth import token_identity
 from .client import AuthRequired, BridgeError, read_json, reserve_request, services, write_json
 from .feeding import reject_unchecked_forwarding
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 HELP = """🏠 小爱 · 家庭助手
 ━━━━━━━━━━━━
@@ -233,7 +234,7 @@ async def handle(
     except BridgeError as exc:
         return segments(str(exc))
     except Exception as exc:
-        logger.warning("xiaoai request failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("request.failed", error=exc))
         return segments(
             "小爱请求未能完成。请核对设备状态，并运行 /小爱 检查；可发送 /小爱 登录 重新授权。"
         )

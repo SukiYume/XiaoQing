@@ -22,9 +22,9 @@ from typing import Any, TypedDict, TypeVar, cast
 
 from core.args import parse_int
 from core.lifecycle import DeferredCancellation, await_owned_task
+from core.log import LogEvent
 from core.plugin_base import atomic_write_text
 from core.public_errors import public_error_message
-from core.sensitive_audit import audit_error_type, log_sensitive_operation
 
 from .config import (
     COMMAND_TIMEOUT,
@@ -49,7 +49,7 @@ except ImportError:
     paramiko           = cast(Any, None)
     SSHConfig          = cast(Any, None)
 
-logger                                           = logging.getLogger(__name__)
+log                                              = logging.getLogger(__name__)
 _CURRENT_REQUEST_CONTEXT: ContextVar[Any | None] = ContextVar(
     "qingssh_current_request_context",
     default=None,
@@ -431,79 +431,22 @@ class SSHManager:
 
         return _CURRENT_REQUEST_CONTEXT.get() or self._base_context
 
-    def _log(self, level: str, message: str) -> None:
-        """
-        辅助方法：记录日志（如果上下文有 logger）
-
-        Args:
-            level: 日志级别 (debug, info, warning, error)
-            message: 日志消息
-        """
-        if self.context and hasattr(self.context, "logger"):
-            logger     = self.context.logger
-            log_method = getattr(logger, level, None)
-            if log_method and callable(log_method):
-                log_method(message)
-
-    def _log_sensitive(
-        self,
-        level: str,
-        *,
-        operation: str,
-        status: str,
-        value: str,
-        exc: BaseException | None = None,
-    ) -> None:
-        context_logger = getattr(self.context, "logger", None)
-        target_logger  = (
-            cast(logging.Logger, context_logger)
-            if callable(getattr(context_logger, "log", None))
-            else logger
-        )
-        log_sensitive_operation(
-            target_logger,
-            operation,
-            request_id = getattr(self.context, "request_id", None),
-            status     = status,
-            payload    = value,
-            exc        = exc,
-            level      = getattr(logging, level.upper(), logging.INFO),
-        )
-
     def _unexpected_error_message(self, exc: BaseException, *, component: str) -> str:
-        """记录可关联诊断，只向会话返回稳定的公开错误。"""
+        """记 ``public_error`` 日志，返回给会话的公开错误说明。"""
 
-        context_logger  = getattr(self.context, "logger", None)
-        selected_logger = (
-            context_logger if callable(getattr(context_logger, "error", None)) else logger
-        )
-        return cast(
-            str,
-            public_error_message(
-                self.context,
-                exc,
-                logger    = selected_logger,
-                component = component,
-            ),
-        )
+        return cast(str, public_error_message(self.context, exc, component=component))
 
     def _load_host_keys(self, client: "paramiko.SSHClient", known_hosts_path: Path) -> None:
         try:
             client.load_system_host_keys()
         except Exception as exc:
-            self._log(
-                "warning",
-                f"SSH host key load status=failed error_type={audit_error_type(exc)}",
-            )
+            log.warning(LogEvent("host_keys.load_failed", error=exc))
 
         if known_hosts_path.exists():
             try:
                 client.load_host_keys(str(known_hosts_path))
             except Exception as exc:
-                self._log(
-                    "warning",
-                    f"SSH known_hosts load status=failed error_type={audit_error_type(exc)}",
-                )
+                log.warning(LogEvent("known_hosts.load_failed", error=exc))
 
     # ──────────────────── 初始化与持久化配置 ────────────────────
 
@@ -556,16 +499,13 @@ class SSHManager:
             return
         delete_secret = getattr(self.context, "delete_secret", None)
         if not callable(delete_secret):
-            self._log("error", "SSH secret rollback unavailable")
+            log.error(LogEvent("secret_rollback.unavailable"))
             return
         for password_ref in refs:
             try:
                 await _finish_blocking_call(delete_secret, password_ref)
             except Exception as exc:
-                self._log(
-                    "error",
-                    f"SSH secret rollback status=failed error_type={audit_error_type(exc)}",
-                )
+                log.error(LogEvent("secret_rollback.failed", error=exc))
 
     async def _load_servers(self) -> None:
         """加载配置，并把旧版明文密码事务式迁移到插件密钥存储。"""
@@ -622,10 +562,7 @@ class SSHManager:
                 raise
             except Exception as exc:
                 await self._rollback_secret_refs(created_refs)
-                self._log(
-                    "error",
-                    f"SSH server config load status=failed error_type={audit_error_type(exc)}",
-                )
+                log.error(LogEvent("servers.load_failed", error=exc))
                 self.servers              = {}
                 self._servers_load_failed = True
 
@@ -644,10 +581,7 @@ class SSHManager:
             config.parse(StringIO(text))
             self._ssh_config = config
         except Exception as exc:
-            self._log(
-                "warning",
-                f"SSH config load status=failed error_type={audit_error_type(exc)}",
-            )
+            log.warning(LogEvent("ssh_config.load_failed", error=exc))
 
     # ──────────────────── OpenSSH config 导入 ────────────────────
 
@@ -700,13 +634,7 @@ class SSHManager:
                 "proxyjump"   : proxyjump,
             }
         except Exception as exc:
-            self._log_sensitive(
-                "warning",
-                operation = "qingssh.config_lookup",
-                status    = "failed",
-                value     = host,
-                exc       = exc,
-            )
+            log.error(LogEvent("config_lookup", status="failed", payload=host, error=exc))
         return None
 
     def _build_imported_server(
@@ -849,11 +777,8 @@ class SSHManager:
                     await self._rollback_secret_refs(created_refs)
                 raise
 
-        self._log_sensitive(
-            "info",
-            operation = "qingssh.server_add",
-            status    = "success",
-            value     = "\0".join((name, host, str(port))),
+        log.info(
+            LogEvent("server_add", status="success", payload="\0".join((name, host, str(port))))
         )
         if cancellation_requested:
             raise asyncio.CancelledError
@@ -878,10 +803,7 @@ class SSHManager:
                 _, secret_cancelled = await _finish_blocking_call(delete_secret, password_ref)
                 cancellation_requested = cancellation_requested or secret_cancelled
             except Exception as exc:
-                self._log(
-                    "warning",
-                    f"SSH secret delete status=failed error_type={audit_error_type(exc)}",
-                )
+                log.error(LogEvent("secret_delete.failed", error=exc))
         for key in list(self.connections):
             if self.parse_connection_key(key)[2] == name:
                 self._disconnect_key(key, send_interrupt=True)
@@ -941,10 +863,7 @@ class SSHManager:
         try:
             jump_client.close()
         except Exception as exc:
-            self._log(
-                "warning",
-                f"SSH jump client close status=failed error_type={audit_error_type(exc)}",
-            )
+            log.error(LogEvent("jump_client.close_failed", error=exc))
 
     def _disconnect_key(self, key: str, *, send_interrupt: bool) -> bool:
         active  = self.active_channels.pop(key, None)
@@ -959,13 +878,7 @@ class SSHManager:
         try:
             client.close()
         except Exception as exc:
-            self._log_sensitive(
-                "warning",
-                operation = "qingssh.disconnect",
-                status    = "failed",
-                value     = key,
-                exc       = exc,
-            )
+            log.error(LogEvent("disconnect", status="failed", payload=key, error=exc))
         finally:
             self._close_jump_client(client)
             self.connections.pop(key, None)
@@ -1164,12 +1077,7 @@ class SSHManager:
         if resources.client is None:
             raise RuntimeError("target SSH client was not created")
         resources.client._jump_client = resources.jump_client
-        self._log_sensitive(
-            "info",
-            operation = "qingssh.jump_connect",
-            status    = "success",
-            value     = jump_host_name,
-        )
+        log.info(LogEvent("jump_connect", status="success", payload=jump_host_name))
 
     def _cleanup_connection_resources(self, resources: _ConnectionResources) -> None:
         """关闭失败或取消的连接流程尚未移交给注册表的全部资源。"""
@@ -1184,10 +1092,7 @@ class SSHManager:
             try:
                 resources.jump_client.close()
             except Exception as exc:
-                self._log(
-                    "warning",
-                    f"SSH jump client close status=failed error_type={audit_error_type(exc)}",
-                )
+                log.error(LogEvent("jump_client.close_failed", error=exc))
 
     async def _install_connection(self, key: str, client: Any) -> None:
         """原子发布新客户端，再回收同一隔离键下的旧客户端。"""
@@ -1200,29 +1105,11 @@ class SSHManager:
         try:
             await asyncio.to_thread(old_client.close)
         except Exception as exc:
-            self._log_sensitive(
-                "warning",
-                operation = "qingssh.connect_replace",
-                status    = "old_close_failed",
-                value     = key,
-                exc       = exc,
+            log.error(
+                LogEvent("connect_replace", status="old_close_failed", payload=key, error=exc)
             )
         finally:
             self._close_jump_client(old_client)
-
-    def _log_connection_failure(
-        self,
-        *,
-        audit_value: str,
-        exc: BaseException,
-    ) -> None:
-        self._log_sensitive(
-            "error",
-            operation = "qingssh.connect",
-            status    = "failed",
-            value     = audit_value,
-            exc       = exc,
-        )
 
     @staticmethod
     def _authentication_failure_message(server: dict[str, Any]) -> str:
@@ -1268,24 +1155,14 @@ class SSHManager:
                 resources,
                 known_hosts_path=known_hosts_path,
             )
-            self._log_sensitive(
-                "info",
-                operation = "qingssh.connect",
-                status    = "started",
-                value     = audit_value,
-            )
+            log.info(LogEvent("connect", status="started", payload=audit_value))
             await asyncio.wait_for(
                 _owned_blocking_call(resources.client.connect, **connect_kwargs),
                 timeout=CONNECT_TIMEOUT + 5,
             )
             await self._install_connection(key, resources.client)
             resources.installed = True
-            self._log_sensitive(
-                "info",
-                operation = "qingssh.connect",
-                status    = "success",
-                value     = audit_value,
-            )
+            log.info(LogEvent("connect", status="success", payload=audit_value))
             return True, f"✅ 成功连接到 {name} ({server['host']})"
         except UnsupportedProxyCommand:
             return (
@@ -1295,16 +1172,16 @@ class SSHManager:
         except SSHConfigurationError as exc:
             return False, f"❌ 服务器配置无效: {exc}"
         except paramiko.AuthenticationException as exc:
-            self._log_connection_failure(audit_value=audit_value, exc=exc)
+            log.warning(LogEvent("connect", status="failed", payload=audit_value, error=exc))
             return False, self._authentication_failure_message(server)
         except paramiko.SSHException as exc:
-            self._log_connection_failure(audit_value=audit_value, exc=exc)
+            log.warning(LogEvent("connect", status="failed", payload=audit_value, error=exc))
             return False, self._ssh_failure_message(exc)
         except asyncio.CancelledError as exc:
-            self._log_connection_failure(audit_value=audit_value, exc=exc)
+            log.warning(LogEvent("connect", status="failed", payload=audit_value, error=exc))
             raise
         except Exception as exc:
-            self._log_connection_failure(audit_value=audit_value, exc=exc)
+            log.warning(LogEvent("connect", status="failed", payload=audit_value, error=exc))
             return False, self._unexpected_error_message(exc, component="qingssh.connect")
         finally:
             if not resources.installed:
@@ -1454,7 +1331,7 @@ class SSHManager:
                     if channel.exit_status_ready() or not getattr(channel, "active", True):
                         return True
                 except Exception as exc:
-                    errors.append(f"channel status error_type={audit_error_type(exc)}")
+                    errors.append(f"channel status error_type={type(exc).__name__}")
                     return False
                 await asyncio.sleep(0.1)
             return False
@@ -1473,7 +1350,7 @@ class SSHManager:
                             timeout=5,
                         )
                     except Exception as exc:
-                        errors.append(f"{signal_name} error_type={audit_error_type(exc)}")
+                        errors.append(f"{signal_name} error_type={type(exc).__name__}")
                         continue
                     if await wait_for_remote_exit():
                         remote_confirmed = True
@@ -1488,12 +1365,7 @@ class SSHManager:
 
         error = "; ".join(errors) or None
         if not remote_confirmed:
-            self._log_sensitive(
-                "warning",
-                operation = "qingssh.terminate",
-                status    = "remote_unknown",
-                value     = key,
-            )
+            log.warning(LogEvent("terminate", status="remote_unknown", payload=key))
         return CommandTerminationResult(
             found            = True,
             local_cleaned    = local_cleaned,
@@ -1550,13 +1422,7 @@ class SSHManager:
                 # 重复取消也不能打断远端收尾；下面的 raise 重新抛出原取消。
                 await await_owned_task(cleanup, DeferredCancellation())
             except Exception as exc:
-                self._log_sensitive(
-                    "error",
-                    operation = "qingssh.cancel_cleanup",
-                    status    = "failed",
-                    value     = key,
-                    exc       = exc,
-                )
+                log.error(LogEvent("cancel_cleanup", status="failed", payload=key, error=exc))
             raise
 
     async def _execute_command_stream_impl(
@@ -1674,13 +1540,7 @@ class SSHManager:
                     component="qingssh.execute_stream",
                 )
             )
-            self._log_sensitive(
-                "error",
-                operation = "qingssh.execute_stream",
-                status    = "failed",
-                value     = command,
-                exc       = exc,
-            )
+            log.error(LogEvent("execute_stream", status="failed", payload=command, error=exc))
             return int(EXIT_CODE_ERROR)
         finally:
             if not keep_registered and self.active_channels.get(key) is active_record:
@@ -1689,12 +1549,8 @@ class SSHManager:
                 try:
                     await asyncio.to_thread(channel.close)
                 except Exception as exc:
-                    self._log_sensitive(
-                        "warning",
-                        operation = "qingssh.command_channel_close",
-                        status    = "failed",
-                        value     = key,
-                        exc       = exc,
+                    log.error(
+                        LogEvent("command_channel_close", status="failed", payload=key, error=exc)
                     )
 
     async def execute_command(
@@ -1815,10 +1671,7 @@ class SSHManager:
                 try:
                     await _owned_blocking_call(sftp.close)
                 except Exception as exc:
-                    self._log(
-                        "warning",
-                        f"SFTP close status=failed error_type={audit_error_type(exc)}",
-                    )
+                    log.error(LogEvent("sftp.close_failed", error=exc))
 
     async def download_file(
         self,
@@ -1861,12 +1714,13 @@ class SSHManager:
         except PermissionError:
             return False, f"❌ 权限不足，无法访问: {remote_path}"
         except Exception as exc:
-            self._log_sensitive(
-                "error",
-                operation = "qingssh.download",
-                status    = "failed",
-                value     = "\0".join((remote_path, local_path)),
-                exc       = exc,
+            log.error(
+                LogEvent(
+                    "download",
+                    status  = "failed",
+                    payload = "\0".join((remote_path, local_path)),
+                    error   = exc,
+                )
             )
             return False, self._unexpected_error_message(
                 exc,
@@ -1907,12 +1761,13 @@ class SSHManager:
                 # showimg 的后续页永久不可达。下载和 QQ 发送仍由上层按每页五张控制。
                 return True, files
         except Exception as exc:
-            self._log_sensitive(
-                "error",
-                operation = "qingssh.list_files",
-                status    = "failed",
-                value     = "\0".join((remote_dir, pattern)),
-                exc       = exc,
+            log.warning(
+                LogEvent(
+                    "list_files",
+                    status  = "failed",
+                    payload = "\0".join((remote_dir, pattern)),
+                    error   = exc,
+                )
             )
             return False, []
 
@@ -1921,11 +1776,7 @@ class SSHManager:
     def close_all(self) -> None:
         """关闭全部连接和命令通道，供卸载或重启流程调用。"""
 
-        if self.context and hasattr(self.context, "logger"):
-            self.context.logger.info(
-                "Closing all SSH connections (%d active)",
-                len(self.connections),
-            )
+        log.info(LogEvent("connections.close_all", count=len(self.connections)))
 
         for key in set(self.connections) | set(self.active_channels):
             self._disconnect_key(key, send_interrupt=False)
@@ -1943,8 +1794,8 @@ class SSHManager:
 async def get_manager(context: Any) -> SSHManager:
     """获取上下文共享的管理器，并在并发初始化前先发布唯一实例。"""
 
-    # ContextVar 跟随当前事件循环任务，因此长命令会持续保留其发起请求 ID；
-    # 其他请求复用同一管理器时不会覆盖该审计上下文。
+    # ContextVar 跟随当前事件循环任务：长命令的公开错误回复、密钥读写和配置快照始终用
+    # 发起它的请求上下文，其他请求复用同一管理器时不会覆盖。
     _CURRENT_REQUEST_CONTEXT.set(context)
 
     state = getattr(context, "state", None)
@@ -1955,8 +1806,8 @@ async def get_manager(context: Any) -> SSHManager:
     if isinstance(existing, SSHManager):
         await existing.initialize()
         return existing
-    if existing is not None and hasattr(context, "logger"):
-        context.logger.warning("Replacing invalid QingSSH manager state")
+    if existing is not None:
+        log.warning(LogEvent("manager.replace_invalid"))
 
     manager = SSHManager(Path(context.data_dir), context=context)
     state["ssh_manager"] = manager
@@ -1967,6 +1818,5 @@ async def get_manager(context: Any) -> SSHManager:
             state.pop("ssh_manager", None)
         raise
 
-    if hasattr(context, "logger"):
-        context.logger.info("SSH manager initialized")
+    log.info(LogEvent("manager.initialized"))
     return manager

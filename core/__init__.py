@@ -22,6 +22,6 @@ XiaoQing 核心模块
 - process_tree / windows_job: 外部命令的进程树归属与回收
 
 基础
-- auth / lifecycle / sensitive_audit: Bearer 校验、取消与致命异常处理、敏感日志指纹
-- clock / constants / exceptions / models / version / logging_config / metrics: 时钟、常量、异常、数据模型、版本、日志与性能统计
+- auth / lifecycle: Bearer 校验、取消与致命异常处理
+- clock / constants / exceptions / models / version / log / metrics: 时钟、常量、异常、数据模型、版本、日志与性能统计
 """

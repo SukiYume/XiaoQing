@@ -8,13 +8,15 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
+from core.log import LogEvent
+
 from ..config import PendoConfig
 from ..models.item import EventItem
 from ..utils.time_utils import TimezoneHelper, resolve_source_wall_time
 from ..utils.validators import normalize_event_fields, with_start_time_reminder_rule
 from .event_support import event_display_timezone, format_event_edit_datetime
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class EventEditAIParserProtocol(Protocol):
@@ -147,10 +149,7 @@ class EventEditingMixin:
                 fallback_text = changes,
             )
         except Exception as exc:
-            logger.warning(
-                "AI解析失败，降级到规则解析 error_type=%s",
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("ai_parse.fallback", error=exc))
             parsed = self.ai_parser.parse_natural_language(changes, current_event.owner_id)
         return parsed
 

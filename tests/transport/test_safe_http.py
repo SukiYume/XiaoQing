@@ -12,18 +12,6 @@ import pytest
 from core import safe_http
 
 
-def test_redact_url_for_log_removes_credentials_query_and_fragment() -> None:
-    redacted = safe_http.redact_url_for_log(
-        "https://user:password@example.com:8443/path?token=secret#private"
-    )
-
-    assert redacted == "https://example.com:8443/path?<redacted>#<redacted>"
-    assert "user" not in redacted
-    assert "password" not in redacted
-    assert "secret" not in redacted
-    assert "private" not in redacted
-
-
 @pytest.mark.parametrize(
     "proxy",
     [

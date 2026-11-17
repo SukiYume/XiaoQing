@@ -19,6 +19,7 @@ from .interfaces import (
     PluginPrincipal,
     ScheduleDeliveryMode,
 )
+from .log import LogEvent, log_scope, new_request_id
 from .models import PluginScheduleManifest
 from .plugin_base import build_action, segments
 from .plugin_execution import (
@@ -102,10 +103,10 @@ class AppSchedulingMixin:
     def _reschedule(self, plugin_name: str) -> None:
         """Validate and transactionally replace plugin schedules."""
         if self._stopping:
-            logger.debug("Skipping schedule update for %s while stopping", plugin_name)
+            logger.debug(LogEvent("schedule.update.skip.stopping", plugin=plugin_name))
             return
         if self._defer_plugin_schedule_updates and plugin_name != "startup":
-            logger.debug("Deferring schedule update for %s during startup", plugin_name)
+            logger.debug(LogEvent("schedule.update.deferred", plugin=plugin_name))
             return
         if plugin_name == "startup":
             prefix         = "plugin."
@@ -116,7 +117,7 @@ class AppSchedulingMixin:
             target_plugins = [loaded] if loaded else []
         if self.config.get("enable_plugin_schedules", True) is False:
             # 隔离运行（例如 UAT）关闭全部插件定时任务：不触达真实账号，也不向生产群投递。
-            logger.info("Plugin schedules disabled by config: %s", plugin_name)
+            logger.info(LogEvent("schedule.disabled", plugin=plugin_name))
             target_plugins = []
 
         jobs: list[ScheduledJobSpec] = []
@@ -126,9 +127,11 @@ class AppSchedulingMixin:
                     entry = PluginScheduleManifest.model_validate(raw_entry)
                     if not entry.enabled:
                         logger.info(
-                            "Manifest-disabled schedule skipped: plugin=%s id=%s",
-                            loaded.definition.name,
-                            entry.id or entry.handler,
+                            LogEvent(
+                                "schedule.skip.manifest_disabled",
+                                plugin      = loaded.definition.name,
+                                schedule_id = entry.id or entry.handler,
+                            )
                         )
                         continue
                     handler = getattr(loaded.module, entry.handler, None)
@@ -178,73 +181,82 @@ class AppSchedulingMixin:
         Target groups resolve at run time through :func:`resolve_schedule_targets`.
         """
         if self._stopping:
-            logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
+            logger.debug(LogEvent("schedule.run.skip.stopping", plugin=plugin_name))
             return
-        parsed_target_groups: tuple[int, ...] = ()
-        if delivery != "silent":
-            try:
-                parsed_target_groups, _source = resolve_schedule_targets(
-                    self.config, plugin_name, schedule_id, group_ids
-                )
-            except (TypeError, ValueError) as exc:
-                logger.error(
-                    "Scheduled job skipped for %s because group IDs are invalid: %s",
-                    plugin_name,
-                    exc,
-                )
-                return
-        delivery_targets = tuple(DeliveryTarget("group", value) for value in parsed_target_groups)
-        principal        = self.identity_service.issue(
-            kind              = "scheduled_system",
-            is_private        = False,
-            delivery_targets  = delivery_targets,
-            schedule_delivery = delivery,
-        )
-        context = self.plugin_manager.build_context(plugin_name, principal=principal)
-        try:
-            result = await invoke_loaded_plugin(
-                loaded_plugin, functools.partial(call_plugin_callback, handler, context)
+        request_id = new_request_id()
+        with log_scope(request_id):
+            logger.debug(
+                LogEvent("schedule.run.start", plugin=plugin_name, schedule_id=schedule_id or None)
             )
-
-            if delivery == "targeted":
-                await self._deliver_targeted_schedule_result(result, plugin_name, principal)
-                return
-
-            receipt = getattr(result, "delivery_receipt", None)
-            receipt = receipt if isinstance(receipt, DeliveryReceipt) else None
-            if delivery == "silent" and result not in (None, []):
-                logger.warning(
-                    "Silent schedule result ignored: plugin=%s result_type=%s",
-                    plugin_name,
-                    type(result).__name__,
+            parsed_target_groups: tuple[int, ...] = ()
+            if delivery != "silent":
+                try:
+                    parsed_target_groups, _source = resolve_schedule_targets(
+                        self.config, plugin_name, schedule_id, group_ids
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.error(
+                        LogEvent("schedule.run.skip.invalid_groups", plugin=plugin_name, error=exc)
+                    )
+                    return
+            delivery_targets = tuple(
+                DeliveryTarget("group", value) for value in parsed_target_groups
+            )
+            principal = self.identity_service.issue(
+                kind              = "scheduled_system",
+                is_private        = False,
+                delivery_targets  = delivery_targets,
+                schedule_delivery = delivery,
+            )
+            context = self.plugin_manager.build_context(
+                plugin_name, request_id=request_id, principal=principal
+            )
+            try:
+                result = await invoke_loaded_plugin(
+                    loaded_plugin, functools.partial(call_plugin_callback, handler, context)
                 )
 
-            # 静默任务不投递；广播任务向每个目标群各发一条
-            actions: list[dict[str, Any]] = []
-            segs                          = segments(result) if delivery != "silent" else []
-            for target in principal.delivery_targets if segs else ():
-                action = build_action(segs, target.user_id, target.group_id)
-                if action:
-                    actions.append(self._tag_action_source(action, plugin_name))
+                if delivery == "targeted":
+                    await self._deliver_targeted_schedule_result(result, plugin_name, principal)
+                    return
 
-            # 没有可发送内容时回执按“未投递”结算
-            if not actions:
+                receipt = getattr(result, "delivery_receipt", None)
+                receipt = receipt if isinstance(receipt, DeliveryReceipt) else None
+                if delivery == "silent" and result not in (None, []):
+                    logger.warning(
+                        LogEvent(
+                            "schedule.run.silent_result_ignored",
+                            plugin      = plugin_name,
+                            result_type = type(result).__name__,
+                        )
+                    )
+
+                # 静默任务不投递；广播任务向每个目标群各发一条
+                actions: list[dict[str, Any]] = []
+                segs                          = segments(result) if delivery != "silent" else []
+                for target in principal.delivery_targets if segs else ():
+                    action = build_action(segs, target.user_id, target.group_id)
+                    if action:
+                        actions.append(self._tag_action_source(action, plugin_name))
+
+                # 没有可发送内容时回执按“未投递”结算
+                if not actions:
+                    if receipt is not None:
+                        await receipt.record(False)
+                    return
+
                 if receipt is not None:
-                    await receipt.record(False)
-                return
+                    receipt.add_expected_actions(len(actions) - 1)
+                    actions = [attach_receipt(action, receipt) for action in actions]
+                for action in actions:
+                    await self._send_action(action)
 
-            if receipt is not None:
-                receipt.add_expected_actions(len(actions) - 1)
-                actions = [attach_receipt(action, receipt) for action in actions]
-            for action in actions:
-                await self._send_action(action)
-
-        except asyncio.CancelledError:
-            logger.info("Scheduled job cancelled during shutdown: %s", plugin_name)
-        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable):
-            logger.debug("Scheduled job skipped during plugin unload: %s", plugin_name)
-        except Exception as exc:
-            logger.exception("Scheduled job failed: %s", exc)
+            except asyncio.CancelledError:
+                logger.info(LogEvent("schedule.run.cancelled", plugin=plugin_name))
+            except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable):
+                logger.debug(LogEvent("schedule.run.skip.unload", plugin=plugin_name))
+            except Exception:
+                logger.exception(LogEvent("schedule.run.failed", plugin=plugin_name))
 
     async def _deliver_targeted_schedule_result(
         self,
@@ -264,9 +276,11 @@ class AppSchedulingMixin:
             deliveries = tuple(result)
         else:
             logger.error(
-                "Targeted schedule returned an invalid result: plugin=%s result_type=%s",
-                plugin_name,
-                type(result).__name__,
+                LogEvent(
+                    "schedule.targeted.invalid_result",
+                    plugin      = plugin_name,
+                    result_type = type(result).__name__,
+                )
             )
             return
 
@@ -281,10 +295,7 @@ class AppSchedulingMixin:
                     delivery.target.kind == "group"
                     and delivery.target.target_id not in allowed_groups
                 ):
-                    logger.warning(
-                        "Targeted schedule group rejected by manifest policy: plugin=%s",
-                        plugin_name,
-                    )
+                    logger.warning(LogEvent("schedule.targeted.group_rejected", plugin=plugin_name))
                     if delivery.receipt is not None:
                         await delivery.receipt.record(False)
                     continue

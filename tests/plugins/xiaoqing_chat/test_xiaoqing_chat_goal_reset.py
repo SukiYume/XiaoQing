@@ -12,6 +12,7 @@ import pytest
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from plugins.xiaoqing_chat.store_binding import bound_state
+from tests.helpers.assertions import logged_events, public_error_reply
 from tests.helpers.xiaoqing_chat_test_support import (
     GROUP_GATE_CLOSED,
     GROUP_GATE_OPEN,
@@ -236,12 +237,8 @@ async def test_smalltalk_commit_leaves_the_session_goal_alone_when_goals_are_off
 
 
 @pytest.mark.asyncio
-async def test_handle_errors_uses_keyword_context_for_logging():
-    context = SimpleNamespace(
-        logger     = MagicMock(),
-        request_id = "req-xc-handler",
-        secrets    = {},
-    )
+async def test_handle_errors_uses_keyword_context_for_logging(caplog):
+    context = SimpleNamespace(request_id="req-xc-handler", secrets={})
 
     @handle_errors
     async def failing_handler(*, context=None):
@@ -249,11 +246,9 @@ async def test_handle_errors_uses_keyword_context_for_logging():
 
     result = await failing_handler(context=context)
 
-    context.logger.error.assert_called_once()
-    context.logger.exception.assert_not_called()
+    assert len(logged_events(caplog, "public_error")) == 1
     text = result[0]["data"]["text"]
-    assert "XQ-PLUGIN-UNEXPECTED" in text
-    assert "req-xc-handler" in text
+    assert public_error_reply(text)["request_id"] == "req-xc-handler"
     assert "boom" not in text
 
 

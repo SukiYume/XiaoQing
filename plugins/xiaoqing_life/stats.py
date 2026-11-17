@@ -1,6 +1,6 @@
 """每天的运行计数：上了几次网、各活动的结果、研究、小课题、核实、查词，以及交给聊天的内容。
 
-排查时不用再挨个翻 JSON：跨日时记一行 ``xiaoqing_life step=daily_summary``，``/life stats`` 看最近 7 天。
+排查时不用再挨个翻 JSON：跨日时记一条 ``daily_summary`` 日志事件，``/life stats`` 看最近 7 天。
 只记数，不记内容；日子按 ``days.day_key``。
 """
 
@@ -43,11 +43,17 @@ def record_session(
     bump(state, day, counts)
 
 
+def day_counts(state: dict[str, Any], day: str) -> dict[str, float]:
+    """这一天的计数，按键排序；没有记录给空字典。"""
+
+    row = state.get("stats", {}).get(day) or {}
+    return dict(sorted(row.items()))
+
+
 def summary(state: dict[str, Any], day: str) -> str:
     """``key=value`` 一行，按键排序；没有记录给空串。"""
 
-    row = state.get("stats", {}).get(day) or {}
-    return " ".join(f"{key}={_fmt(value)}" for key, value in sorted(row.items()))
+    return " ".join(f"{key}={_fmt(value)}" for key, value in day_counts(state, day).items())
 
 
 def _fmt(value: float) -> str:

@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.ai import AIError
+from core.log import LogEvent
 
 from .tasks import Outcome
 from .tools import Tool, ToolEnv, execute_tool, settled_status
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 AGENT_ROUTE = "agent"
 # 模型既不调用工具也不说话时，最多提醒几次。
@@ -231,16 +232,17 @@ async def complete(
     usage = result.response.get("usage") if isinstance(result.response, dict) else None
     usage = usage if isinstance(usage, dict) else {}
     # 每次调用一行：分得清慢在模型本身（输出长、没命中缓存）还是调用次数多。
-    logger.info(
-        "xiaoqing_agent model call task=%s n=%d model=%s elapsed=%.2fs"
-        " prompt_tokens=%s cached_tokens=%s completion_tokens=%s",
-        env.task.task_id,
-        env.model_calls,
-        getattr(result, "model", ""),
-        elapsed,
-        usage.get("prompt_tokens"),
-        (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
-        usage.get("completion_tokens"),
+    log.info(
+        LogEvent(
+            "model.call",
+            task              = env.task.task_id,
+            n                 = env.model_calls,
+            model             = getattr(result, "model", "") or None,
+            elapsed_s         = round(elapsed, 2),
+            prompt_tokens     = usage.get("prompt_tokens"),
+            cached_tokens     = (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+            completion_tokens = usage.get("completion_tokens"),
+        )
     )
     return response_message(result.response)
 
@@ -307,11 +309,7 @@ async def run_agent_loop(
         try:
             message = await complete(env, messages, tools)
         except (AIError, RuntimeError) as exc:
-            logger.warning(
-                "xiaoqing_agent model call failed task=%s error_type=%s",
-                task.task_id,
-                type(exc).__name__,
-            )
+            log.warning(LogEvent("model.call.failed", task=task.task_id, error=exc))
             task.error = f"模型调用失败: {type(exc).__name__}"
             return Outcome("模型这会儿调不通，任务没能做完，稍后再试试吧。", status="failed")
 

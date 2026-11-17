@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import weakref
 from pathlib import Path
 from typing import Any, cast
 
+from core.log import LogEvent
 from core.message import iter_message_segments
 
 from ..chat_event import mention_text_segments
@@ -56,13 +58,15 @@ from .render_cache import (
     rendered_media_from_cache,
     write_render_cache_entry,
 )
-from .settings import media_config, media_log
+from .settings import media_config
 from .sources import hash_media_bytes, resolve_segment_media
+
+log = logging.getLogger(__name__)
 
 _MEDIA_RENDER_LOCKS_BY_LOOP: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def _event_media_log_fields(event: dict[str, Any] | None) -> dict[str, Any]:
+def _event_id_fields(event: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(event, dict):
         return {}
     return {
@@ -72,15 +76,13 @@ def _event_media_log_fields(event: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _log_resolved_media(
-    context, runtime, resolved: ResolvedMedia, *, event: dict[str, Any] | None = None
-) -> None:
-    fields = _event_media_log_fields(event)
+def _log_resolved_media(resolved: ResolvedMedia, *, event: dict[str, Any] | None = None) -> None:
+    fields = _event_id_fields(event)
     fields.update(
         {
             "media_hash"  : resolved.media_hash[:12],
             "segment_type": resolved.segment_type,
-            "source_name" : resolved.source_name,
+            "source_hint" : resolved.source_name,
             "mime_type"   : resolved.mime_type,
             "animated"    : resolved.is_animated,
             "width"       : resolved.width,
@@ -88,7 +90,7 @@ def _log_resolved_media(
             "cached_path" : resolved.cached_path,
         }
     )
-    media_log(context, runtime, step="media.resolve.ok", fields=fields)
+    log.info(LogEvent("media.resolve.ok", **fields))
 
 
 async def _render_resolved_media(
@@ -120,7 +122,6 @@ def _reusable_cached_render(
     resolved: ResolvedMedia,
     *,
     context,
-    runtime,
     prefer_emoji: bool,
     summary_hint: str,
 ) -> RenderedMedia | None:
@@ -142,31 +143,27 @@ def _reusable_cached_render(
         context      = context,
     )
     if not refresh:
-        media_log(
-            context,
-            runtime,
-            step   = "media.cache.hit",
-            fields = {
-                "media_hash"             : resolved.media_hash[:12],
-                "analysis_source"        : source or "unknown",
-                "analysis_quality"       : quality,
-                "analysis_prompt_version": prompt_version,
-                "marker"                 : cached_rendered.marker,
-            },
+        log.info(
+            LogEvent(
+                "media.cache.hit",
+                media_hash              = resolved.media_hash[:12],
+                analysis_source         = source or "unknown",
+                analysis_quality        = quality,
+                analysis_prompt_version = prompt_version,
+                marker                  = cached_rendered.marker,
+            )
         )
         return cached_rendered
-    media_log(
-        context,
-        runtime,
-        step   = "media.cache.refresh",
-        fields = {
-            "media_hash"           : resolved.media_hash[:12],
-            "cached_source"        : source or "unknown",
-            "cached_quality"       : quality,
-            "cached_prompt_version": prompt_version,
-            "cached_marker"        : cached_rendered.marker,
-            "summary_hint"         : summary_hint,
-        },
+    log.info(
+        LogEvent(
+            "media.cache.refresh",
+            media_hash            = resolved.media_hash[:12],
+            cached_source         = source or "unknown",
+            cached_quality        = quality,
+            cached_prompt_version = prompt_version,
+            cached_marker         = cached_rendered.marker,
+            summary_hint          = summary_hint,
+        )
     )
     return None
 
@@ -196,7 +193,6 @@ async def _render_resolved_media_locked(
             cached,
             resolved,
             context      = context,
-            runtime      = runtime,
             prefer_emoji = prefer_emoji,
             summary_hint = summary_hint,
         )
@@ -219,17 +215,14 @@ async def _render_resolved_media_locked(
             summary_hint = summary_hint,
             prefer_emoji = prefer_emoji,
         )
-        media_log(
-            context,
-            runtime,
-            step   = "media.render.fallback",
-            fields = {
-                "media_hash"  : resolved.media_hash[:12],
-                "segment_type": resolved.segment_type,
-                "summary_hint": summary_hint,
-                "marker"      : rendered.marker,
-            },
-            level="warning",
+        log.warning(
+            LogEvent(
+                "media.render.fallback",
+                media_hash   = resolved.media_hash[:12],
+                segment_type = resolved.segment_type,
+                summary_hint = summary_hint,
+                marker       = rendered.marker,
+            )
         )
     rendered_quality = (
         "generic"
@@ -594,7 +587,7 @@ def _compose_effective_user_parts(
     )
 
 
-def _render_face_with_observation(segment: dict[str, Any], *, context, runtime) -> RenderedMedia:
+def _render_face_with_observation(segment: dict[str, Any], *, context) -> RenderedMedia:
     rendered = _render_face_segment(segment)
     try:
         record_face_observation(
@@ -602,39 +595,28 @@ def _render_face_with_observation(segment: dict[str, Any], *, context, runtime) 
         )
     except Exception as exc:
         # 内置表情观察索引属于附属能力，失败不能阻断当前消息渲染。
-        media_log(
-            context,
-            runtime,
-            step   = "media.face_observation.fail",
-            fields = {"error_type": type(exc).__name__},
-            level  = "warning",
-        )
+        log.warning(LogEvent("media.face_observation.fail", error=exc))
     return rendered
 
 
 def _render_unresolvable_segment(
-    segment: dict[str, Any], exc: Exception, log_fields: dict[str, Any], *, context, runtime
+    segment: dict[str, Any], exc: Exception, log_fields: dict[str, Any]
 ) -> RenderedMedia:
     """下载或解码失败时只保留摘要占位，让本轮仍知道对方发了什么类型的媒体。"""
-    media_log(
-        context,
-        runtime,
-        step   = "media.resolve.fail",
-        fields = {**log_fields, "error_type": type(exc).__name__},
-        level  = "warning",
-    )
+    log.warning(LogEvent("media.resolve.fail", **log_fields, error=exc))
     rendered = _render_summary_only_media(
         _segment_failure_summary_hint(segment),
         segment_type = log_fields["segment_type"],
         prefer_emoji = log_fields["prefer_emoji"],
     )
-    media_log(
-        context,
-        runtime,
-        step   = "media.summary_only",
-        fields = {key: log_fields[key] for key in log_fields if key != "prefer_emoji"}
-        | {"marker": rendered.marker},
-        level="warning",
+    log.warning(
+        LogEvent(
+            "media.summary_only",
+            **(
+                {key: log_fields[key] for key in log_fields if key != "prefer_emoji"}
+                | {"marker": rendered.marker}
+            ),
+        )
     )
     return rendered
 
@@ -661,17 +643,13 @@ async def _collected_new_emoji(
         )
     except Exception as exc:
         # 收不进来也不影响这一轮回复，但要留下痕迹：此前失败是静默的，生产上看不出偷没偷到图。
-        fields               = _event_media_log_fields(event)
-        fields["error_type"] = type(exc).__name__
-        media_log(
-            context, runtime, step="media.emoji.collect_error", fields=fields, level="warning"
-        )
+        log.warning(LogEvent("media.emoji.collect_error", **_event_id_fields(event), error=exc))
         return False
     if collected is None:
         return False
-    fields = _event_media_log_fields(event)
+    fields = _event_id_fields(event)
     fields.update({"media_hash": rendered.media_hash[:12], "new": bool(collected[1])})
-    media_log(context, runtime, step="media.emoji.collect", fields=fields)
+    log.info(LogEvent("media.emoji.collect", **fields))
     return bool(collected[1])
 
 
@@ -701,17 +679,15 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
         summary_hint = segment_summary_hint(segment)
         prefer_emoji = segment_prefers_emoji(segment)
         log_fields   = {
-            **_event_media_log_fields(event),
+            **_event_id_fields(event),
             "segment_type": segment_type,
             "summary_hint": summary_hint,
             "prefer_emoji": prefer_emoji,
         }
-        media_log(context, runtime, step="media.segment", fields=log_fields)
+        log.info(LogEvent("media.segment", **log_fields))
         if segment_type == "face":
             rendered_items.append(
-                await run_media_blocking(
-                    _render_face_with_observation, segment, context=context, runtime=runtime
-                )
+                await run_media_blocking(_render_face_with_observation, segment, context=context)
             )
             continue
         try:
@@ -726,15 +702,11 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 event             = event,
             )
         except Exception as exc:
-            rendered_items.append(
-                _render_unresolvable_segment(
-                    segment, exc, log_fields, context=context, runtime=runtime
-                )
-            )
+            rendered_items.append(_render_unresolvable_segment(segment, exc, log_fields))
             continue
         if resolved is None:
             continue
-        _log_resolved_media(context, runtime, resolved, event=event)
+        _log_resolved_media(resolved, event=event)
         rendered = await _render_resolved_media(
             resolved,
             context      = context,

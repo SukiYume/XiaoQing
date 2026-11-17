@@ -34,6 +34,7 @@ from pydantic import (
     StrictBool,
     StrictStr,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -41,7 +42,8 @@ from pydantic import (
 from .atomic_store import MISSING_ETAG, keyed_path_lock
 from .constants import VALID_PLUGIN_NAME_PATTERN
 from .exceptions import ConfigLoadError
-from .inbound_policy import validate_inbound_listener
+from .inbound_policy import InboundTransport, validate_inbound_listener
+from .log import LogEvent, LoggingSettings, exception_chain, log_scope
 
 ConfigCallback         = Callable[["ConfigSnapshot"], Any]
 SecurityConfigCallback = Callable[["ConfigSnapshot"], None]
@@ -56,6 +58,7 @@ _REQUIRED_STABLE_SOURCE_READS    = 3
 _MAX_STABLE_SOURCE_READS         = 6
 _CONFIG_CALLBACK_TIMEOUT_SECONDS = 5.0
 _MAX_PENDING_SECRET_CHANGE_PATHS = 30
+_MAX_LOGGED_FIELD_ERRORS         = 20
 
 logger = logging.getLogger(__name__)
 
@@ -142,17 +145,18 @@ class _RuntimeConfigSchema(BaseModel):
     ws_queue_size                       : int | None = Field(default=None, ge=1, le=10000)
     inbound_ws_max_workers              : int | None = Field(default=None, ge=1, le=128)
     inbound_ws_broadcast_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
-    timezone                            : str | None                          = None
-    enable_ws_client                    : bool | None                         = None
-    enable_inbound_server               : bool | None                         = None
-    enable_plugin_schedules             : StrictBool | None                   = None
-    inbound_trusted_tls_proxy           : StrictBool | None                   = None
-    onebot_ws_uri                       : str | None                          = None
+    timezone                            : str | None        = None
+    enable_ws_client                    : bool | None       = None
+    enable_inbound_server               : bool | None       = None
+    enable_plugin_schedules             : StrictBool | None = None
+    inbound_trusted_tls_proxy           : StrictBool | None = None
+    onebot_ws_uri                       : str | None = Field(default=None, validate_default=True)
     onebot_http_base                    : str | None                          = None
     inbound_ws_uri                      : str | None                          = None
     inbound_http_base                   : str | None                          = None
     plugin_execution                    : _PluginExecutionConfigSchema | None = None
     command_prefixes                    : list[StrictStr] | None              = None
+    logging                             : LoggingSettings | None              = None
 
     @field_validator("command_prefixes")
     @classmethod
@@ -190,9 +194,14 @@ class _RuntimeConfigSchema(BaseModel):
             raise ValueError("must be a valid IANA timezone") from exc
         return value
 
+    # 涉及两个字段的检查也写成字段校验，错误才带着字段路径（模型级错误没有路径）。
+    # 字段按声明顺序校验，``info.data`` 里已经有前面声明、校验通过的字段。
+
     @field_validator("onebot_ws_uri")
     @classmethod
-    def _validate_ws_uri(cls, value: str | None) -> str | None:
+    def _validate_ws_uri(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if info.data.get("enable_ws_client") is True and not value:
+            raise ValueError("required when enable_ws_client is true")
         return _validate_absolute_url(value, ("ws", "wss"))
 
     @field_validator("onebot_http_base")
@@ -200,22 +209,16 @@ class _RuntimeConfigSchema(BaseModel):
     def _validate_http_uri(cls, value: str | None) -> str | None:
         return _validate_absolute_url(value, ("http", "https"))
 
-    @model_validator(mode="after")
-    def _validate_enabled_ws_client(self) -> "_RuntimeConfigSchema":
-        if self.enable_ws_client is True and not self.onebot_ws_uri:
-            raise ValueError("onebot_ws_uri is required when enable_ws_client is true")
-        trusted_tls_proxy = self.inbound_trusted_tls_proxy is True
+    @field_validator("inbound_http_base", "inbound_ws_uri")
+    @classmethod
+    def _validate_inbound_listener(cls, value: str | None, info: ValidationInfo) -> str | None:
+        transport: InboundTransport = "http" if info.field_name == "inbound_http_base" else "ws"
         validate_inbound_listener(
-            self.inbound_http_base,
-            "http",
-            trusted_tls_proxy=trusted_tls_proxy,
+            value,
+            transport,
+            trusted_tls_proxy=info.data.get("inbound_trusted_tls_proxy") is True,
         )
-        validate_inbound_listener(
-            self.inbound_ws_uri,
-            "ws",
-            trusted_tls_proxy=trusted_tls_proxy,
-        )
-        return self
+        return value
 
 
 def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -227,6 +230,22 @@ def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
         )
     except ValidationError as exc:
         raise ConfigLoadError(f"Invalid runtime configuration: {exc}") from exc
+
+
+def _field_errors(error: BaseException | None) -> list[tuple[str, str]]:
+    """校验失败的 ``(字段路径, pydantic 错误类型码)``；输入值和错误消息不取。"""
+
+    if error is None:
+        return []
+    for item in exception_chain(error):
+        if isinstance(item, ValidationError):
+            return [
+                (".".join(str(part) for part in detail["loc"]) or "-", detail["type"])
+                for detail in item.errors(
+                    include_url=False, include_context=False, include_input=False
+                )
+            ]
+    return []
 
 
 def _validate_config_tree(value: Any) -> None:
@@ -333,7 +352,7 @@ def _check_secrets_file_permissions(path: Path) -> None:
     if platform.system() == "Windows":
         # Windows 使用 ACL，标准 Unix 权限检查不适用
         # 记录提醒，建议用户手动检查
-        logger.info("Running on Windows: please ensure %s has appropriate permissions", path)
+        logger.info(LogEvent("config.secrets_permissions.skipped", platform="windows"))
         return
 
     try:
@@ -345,13 +364,11 @@ def _check_secrets_file_permissions(path: Path) -> None:
         others_readable = bool(mode & stat.S_IROTH)
 
         if group_readable or others_readable:
-            logger.warning(
-                "Security: %s is readable by group or others. Consider: chmod 600 %s", path, path
-            )
+            logger.warning(LogEvent("config.secrets_permissions.too_open"))
         else:
-            logger.debug("Secrets file permissions OK: %s", path)
+            logger.debug(LogEvent("config.secrets_permissions.ok"))
     except OSError as exc:
-        logger.warning("Could not check file permissions for %s: %s", path, exc)
+        logger.warning(LogEvent("config.secrets_permissions.check_failed", error=exc))
 
 
 class ConfigSourceStatus(str, Enum):
@@ -602,7 +619,7 @@ class ConfigManager:
                 bump_revision = False,
                 notify        = False,
             )
-        self._log_loaded_sources(config_read, published_secrets, "Config loaded")
+        self._log_loaded_sources(config_read, published_secrets, "config.loaded")
 
     def _load_sources_locked(
         self,
@@ -634,11 +651,17 @@ class ConfigManager:
         return config_read, published_secrets, snapshot, notification
 
     def _log_loaded_sources(
-        self, config_read: _SourceRead, secrets_read: _SourceRead, message: str
+        self, config_read: _SourceRead, secrets_read: _SourceRead, event_name: str
     ) -> None:
         self._log_source_problem("config", config_read)
         self._log_source_problem("secrets", secrets_read)
-        logger.info(message)
+        logger.info(
+            LogEvent(
+                event_name,
+                config_status  = config_read.status.value,
+                secrets_status = secrets_read.status.value,
+            )
+        )
         _check_secrets_file_permissions(self.secrets_path)
 
     @property
@@ -682,7 +705,7 @@ class ConfigManager:
             )
         if notification is not None:
             self._start_notification_consumer()
-        self._log_loaded_sources(config_read, published_secrets, "Config reloaded")
+        self._log_loaded_sources(config_read, published_secrets, "config.reloaded")
         if config_read.status in {
             ConfigSourceStatus.INVALID,
             ConfigSourceStatus.UNAVAILABLE,
@@ -988,7 +1011,7 @@ class ConfigManager:
             self._start_notification_consumer()
         if failure is not None:
             raise failure
-        logger.info("Secrets transaction committed at revision %d", snapshot.revision)
+        logger.info(LogEvent("config.secrets.committed", revision=snapshot.revision))
         return result
 
     def update_secret(self, path: str, value: Any) -> None:
@@ -1186,8 +1209,8 @@ class ConfigManager:
                     if asyncio.iscoroutine(result):
                         result.close()
                     raise TypeError("security config callback must be synchronous")
-            except BaseException as exc:
-                logger.exception("Security config callback failed: %s", exc)
+            except BaseException:
+                logger.exception(LogEvent("config.callback.security_failed"))
 
     async def _dispatch_pending_secrets_change(self, change: PendingSecretsChange) -> None:
         """通知控制面合法候选；慢通知受与普通配置回调相同的时限约束。"""
@@ -1203,11 +1226,11 @@ class ConfigManager:
                         timeout=self._callback_timeout_seconds,
                     )
             except TimeoutError:
-                logger.warning("Pending secrets callback timed out")
+                logger.warning(LogEvent("config.callback.pending_secrets_timeout"))
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:
-                logger.exception("Pending secrets callback failed: %s", exc)
+            except BaseException:
+                logger.exception(LogEvent("config.callback.pending_secrets_failed"))
 
     def snapshot(self) -> ConfigSnapshot:
         with self._lock:
@@ -1238,7 +1261,7 @@ class ConfigManager:
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
-                logger.exception("Config watcher iteration failed", exc_info=exc)
+                logger.exception(LogEvent("config.watch.failed"), exc_info=exc)
                 self._fail_closed_watch_error(exc)
 
     async def _watch_reconcile_once(self) -> None:
@@ -1323,10 +1346,7 @@ class ConfigManager:
 
         if pending_external_change:
             if pending_candidate_changed:
-                logger.warning(
-                    "External secrets change is pending explicit reload confirmation; "
-                    "the active trusted credentials remain in service"
-                )
+                logger.warning(LogEvent("config.secrets.pending_external"))
             if pending_notice is not None:
                 await self._dispatch_pending_secrets_change(pending_notice)
             _check_secrets_file_permissions(self.secrets_path)
@@ -1440,7 +1460,7 @@ class ConfigManager:
         except asyncio.CancelledError:
             pass
         except BaseException:
-            logger.exception("Config notification consumer failed")
+            logger.exception(LogEvent("config.notification.consumer_failed"))
 
     def _next_notification(self) -> _ConfigNotification | None:
         with self._lock:
@@ -1465,11 +1485,11 @@ class ConfigManager:
         """回调失败只记日志，不影响后续回调和配置发布。"""
 
         if isinstance(exc, TimeoutError):
-            logger.warning("Config callback timed out at revision %d", revision)
+            logger.warning(LogEvent("config.callback.timeout", revision=revision))
         elif isinstance(exc, asyncio.CancelledError):
-            logger.warning("Config callback cancelled at revision %d", revision)
+            logger.warning(LogEvent("config.callback.cancelled", revision=revision))
         else:
-            logger.error("Config callback failed: %s", exc, exc_info=exc)
+            logger.error(LogEvent("config.callback.failed", revision=revision), exc_info=exc)
 
     def _run_notification_sync(self, notification: _ConfigNotification) -> None:
         for callback in notification.callbacks:
@@ -1481,32 +1501,39 @@ class ConfigManager:
                 self._log_callback_error(notification.revision, exc)
 
     def _drain_notifications_sync(self) -> None:
-        while True:
-            notification = self._next_notification()
-            if notification is None:
-                return
-            try:
-                self._run_notification_sync(notification)
-            finally:
-                self._complete_notification(notification)
+        # 和异步消费者一样不带触发者的 request id，见 _drain_notifications_async。
+        with log_scope(None):
+            while True:
+                notification = self._next_notification()
+                if notification is None:
+                    return
+                try:
+                    self._run_notification_sync(notification)
+                finally:
+                    self._complete_notification(notification)
 
     async def _drain_notifications_async(self) -> None:
-        with self._lock:
-            self._callback_loop = asyncio.get_running_loop()
-        while True:
-            notification = self._next_notification()
-            if notification is None:
-                return
-            try:
-                for callback in notification.callbacks:
-                    try:
-                        result = callback(notification.snapshot)
-                        if inspect.isawaitable(result):
-                            await asyncio.wait_for(result, timeout=self._callback_timeout_seconds)
-                    except BaseException as exc:
-                        self._log_callback_error(notification.revision, exc)
-            finally:
-                self._complete_notification(notification)
+        # 消费者从触发它的那次调用复制上下文（例如 /reload 在线程里重载配置），之后还要处理别的
+        # 通知；回调据此重启的 WebSocket、入站服务和插件监视都是常驻任务，不能带那条命令的 id。
+        with log_scope(None):
+            with self._lock:
+                self._callback_loop = asyncio.get_running_loop()
+            while True:
+                notification = self._next_notification()
+                if notification is None:
+                    return
+                try:
+                    for callback in notification.callbacks:
+                        try:
+                            result = callback(notification.snapshot)
+                            if inspect.isawaitable(result):
+                                await asyncio.wait_for(
+                                    result, timeout=self._callback_timeout_seconds
+                                )
+                        except BaseException as exc:
+                            self._log_callback_error(notification.revision, exc)
+                finally:
+                    self._complete_notification(notification)
 
     def _cached_parsed_source(
         self,
@@ -1814,9 +1841,25 @@ class ConfigManager:
         if source.status is ConfigSourceStatus.VALID:
             return
         if source.status is ConfigSourceStatus.MISSING:
-            logger.warning("%s source is missing", name)
+            logger.warning(LogEvent("config.source.missing", source=name))
             return
-        logger.error("%s source is %s: %s", name, source.status.value, source.error)
+        error = source.error
+        # ``ConfigLoadError(路径, 原异常)`` 的原异常更说明问题：JSON 语法错误带行列号，读文件失败带 errno。
+        reported     = error.original if error is not None and error.original is not None else error
+        field_errors = _field_errors(error)
+        logger.error(
+            LogEvent(
+                "config.source.invalid",
+                source       = name,
+                status       = source.status.value,
+                error        = reported,
+                field_errors = len(field_errors) or None,
+            )
+        )
+        for field, error_type in field_errors[:_MAX_LOGGED_FIELD_ERRORS]:
+            logger.error(
+                LogEvent("config.field.invalid", source=name, field=field, error_type=error_type)
+            )
 
 
 __all__ = [

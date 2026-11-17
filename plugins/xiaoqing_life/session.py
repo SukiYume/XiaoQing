@@ -11,6 +11,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from core.log import LogEvent
+
 from . import activity, fetching, reinforce, research, stats, work_on
 from . import chat_topics as chat_topics_mod
 from . import digest as digest_mod
@@ -34,7 +36,7 @@ from .sources.base import SourceError, SourceItem
 from .stores import LifeStore, record_lookup_misses, reserve_llm_call, roll_day
 from .works import liked_episode
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 # ───────────────────────────── 浏览 ─────────────────────────────
@@ -152,7 +154,7 @@ async def _digest(
     try:
         text = await deps.complete(REASONING_ROUTE, messages)
     except Exception as exc:
-        logger.info("xiaoqing_life step=digest model_failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("digest.model_failed", error=exc))
         return None, "model_failed"
     raw = digest_mod.extract_json(text or "")
     if raw is None:
@@ -297,7 +299,7 @@ async def _lookup_terms(
             entry = await baike.lookup(deps.fetch, term, cfg.blocked_keywords)
         except SourceError as exc:
             errors += 1
-            logger.info("xiaoqing_life step=source name=baike failed reason=%s", exc.reason)
+            log.warning(LogEvent("source.failed", source="baike", reason_code=exc.reason))
             continue
         settled.append(term)
         if entry is not None:
@@ -357,13 +359,16 @@ async def run_session(
             s.state, day, decision.choice, outcome.status, outcome.reason, outcome
         )
     )
-    logger.info(
-        "xiaoqing_life step=session choice=%s status=%s reason=%s items=%d episodes=%d terms=%d",
-        decision.choice,
-        outcome.status,
-        outcome.reason,
-        outcome.items,
-        outcome.episodes,
-        outcome.terms,
+    log.log(
+        logging.WARNING if outcome.status == "failed" else logging.INFO,
+        LogEvent(
+            "session",
+            choice      = decision.choice,
+            status      = outcome.status,
+            reason_code = outcome.reason or None,
+            items       = outcome.items,
+            episodes    = outcome.episodes,
+            terms       = outcome.terms,
+        ),
     )
     return outcome

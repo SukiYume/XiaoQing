@@ -10,7 +10,6 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -50,7 +49,6 @@ def _chat_context(
             },
             http_session = object(),
             data_dir     = data_dir,
-            logger       = MagicMock(),
             secrets      = {
                 "plugins": {
                     "chat": {

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from tests.helpers.assertions import logged_events
 from tests.helpers.pendo_review_test_support import (
     Database,
     EventHandler,
@@ -890,9 +891,9 @@ def test_web_data_helpers_normalize_public_shapes(caplog: pytest.LogCaptureFixtu
     }
     assert item_to_dict(SimpleNamespace(to_dict="not-callable")) == {}
     assert item_to_dict(SimpleNamespace(to_dict=lambda: ["not", "a", "mapping"])) == {}
-    assert [record.getMessage() for record in caplog.records] == [
-        "Pendo item serialization skipped for type=SimpleNamespace",
-        "Pendo item serializer returned non-mapping type=list",
+    assert [(event.name, event.fields["value_type"]) for event in logged_events(caplog)] == [
+        ("item.serialization_skipped", "SimpleNamespace"),
+        ("item.serializer_non_mapping", "list"),
     ]
 
 

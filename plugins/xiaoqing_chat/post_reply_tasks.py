@@ -5,16 +5,18 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
+
+from core.log import LogEvent
 
 from .chat_runtime import llm_call_config
 from .constants import EXPRESSION_LEARN_MIN_INTERVAL, EXPRESSION_LEARN_MIN_MESSAGES
 from .expression.bw_message_recorder import extract_and_learn
 from .life.extract import extract_life_records
 from .life.open_loops import mentions as reply_mentions_loop
-from .logging_utils import log_step
 from .memory import client as memory_client
 from .memory.person_profile import session_is_current
 from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
@@ -23,6 +25,8 @@ from .task_scheduler import spawn_bg_task
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
+
+log = logging.getLogger(__name__)
 
 
 async def _maybe_push_strategy_review(hctx: HandlerContext) -> None:
@@ -161,9 +165,7 @@ async def spawn_post_reply_tasks(
             ),
             name=f"expression_learn:{chat_id}",
         )
-        log_step(
-            context, runtime, chat_id=chat_id, step="smalltalk.expression_learn.spawn", fields={}
-        )
+        log.info(LogEvent("smalltalk.expression_learn.spawn", chat_id=chat_id))
 
     if runtime.cfg.reflection.enable_review_sessions:
         await _maybe_push_strategy_review(hctx)

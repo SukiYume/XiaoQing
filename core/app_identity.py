@@ -10,6 +10,7 @@ from typing import Any
 
 from .app_support import _parse_positive_ids
 from .interfaces import DeliveryTarget, PluginPrincipal, ScheduleDeliveryMode
+from .log import LogEvent
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class AppIdentityService:
                 _parse_positive_ids(secrets.get("admin_user_ids", []), field_name="admin_user_ids")
             )
         except (TypeError, ValueError):
-            logger.warning("Invalid admin_user_ids in secrets")
+            logger.warning(LogEvent("identity.admin_ids.invalid"))
             replacement = set()
         self._admin_ids.clear()
         self._admin_ids.update(replacement)

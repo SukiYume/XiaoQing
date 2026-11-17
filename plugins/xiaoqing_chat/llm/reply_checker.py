@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging as _logging
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -12,6 +12,7 @@ from string import Template
 from typing import Any
 
 from core.ai import AIError as LLMError
+from core.log import LogEvent
 from core.plugin_base import resolve_bot_name
 
 from ..memory.memory import StoredMessage
@@ -65,7 +66,7 @@ from .media_evidence import (
 )
 from .postprocess import split_sentences
 
-_log = _logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1232,7 +1233,7 @@ async def check_reply(
                 secrets=secrets, check_input=check_input, request_policy=request_policy
             )
         except Exception as exc:
-            _log.warning("reply_checker LLM call failed: %s", type(exc).__name__)
+            log.warning(LogEvent("reply.checker.llm_failed", error=exc))
             return checker_unavailable(
                 "semantic checker unavailable" if semantic else "reply_checker unavailable"
             )

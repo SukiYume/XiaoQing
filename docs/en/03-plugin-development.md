@@ -595,13 +595,119 @@ Command and lifecycle calls return global `default_group_ids`.
 
 ### Logs and metrics
 
+Plugins log through a standard-library logger and `core.log.LogEvent`. `PluginContext` has no logger:
+
 ```python
-context.logger.info("处理完成")
+import logging
+
+from core.log import LogEvent
+
+log = logging.getLogger(__name__)
+
+log.info(LogEvent("reply.done", chat_id=chat_id, elapsed_s=1.23, reply=text))
+log.warning(LogEvent("fetch.failed", source="baike", error=exc))
+log.info(LogEvent("cache.cleared"))
 ```
 
-Plugin loggers automatically attach the request ID.
-Log fields use bounded identifiers, counts, states, and durations.
-Use summaries or redacted values for tokens, cookies, authorization headers, and sensitive user text.
+The logger name is the module name, such as `plugins.<plugin>.<module>`. The `levels` map in the [logging settings](06-configuration.md#️-logging-settings) sets levels by this name or by its prefix `plugins.<plugin>`.
+`LogEvent(name, **fields)` redacts and renders at construction. The message part of the line is the event name followed by the fields, for example `reply.done chat_id=123 elapsed_s=1.23 reply="<17ch #5948c5c6>"`.
+Fields appear in the order given. A value that contains a space, a quote, or `=` is JSON-quoted. An event without fields prints only its name.
+The object keeps only the redacted result, so `str()`, `repr()`, and the fallback output after a formatting failure never see the original values.
+
+Event names are lowercase ASCII, dot-separated as `<area>.<action>[.<result>]`, for example `reply.done`, `fetch.failed`, or `proactive.skip`.
+Event names carry no plugin prefix; the logger name on the line already shows the source.
+
+Field values are rendered by the first matching row:
+
+| Value | Output |
+|---|---|
+| `None` | Field omitted |
+| Bool | `true` / `false` |
+| Number: int, float, and other numeric types (`IntEnum`, `Decimal`, `Fraction`, numpy scalars) | A plain number, for example `count=3` or `ratio=0.25` |
+| `date`, `datetime`, `time` | ISO text, for example `day=2026-11-17` |
+| Exception instance or `core.log.ExceptionSummary` | Several fields for type, location, status, and so on; see below |
+| `dict` | Flattened, with keys written as `parent.child` |
+| List, tuple, set | `[N items]` |
+| Bytes | Length and fingerprint |
+| String under a credential key or a body key | Length and fingerprint |
+| String under any other key that fully matches `[A-Za-z0-9_.:/@+-]{1,128}` | As is |
+| Any other string (with spaces, Chinese, control characters, or more than 128 characters) and other objects (`Path`, custom objects) | Length and fingerprint; a `Path` has the same fingerprint as `str(path)` |
+
+Keys are judged as whole strings, flattened keys included:
+
+- Credential key: after splitting on `_` and `.`, any part is `token`, `secret`, `password`, `passwd`, `cookie`, `auth`, `authorization`, `credential`, `apikey`, or `key`.
+- Body key: split on `.` into segments; if any segment is a body segment, the whole key is a body key, so every item flattened under a body key is redacted (`payload.file_name` follows `payload`). A body segment is exactly `name`, `nickname`, `sender_name`, `user_name`, `display_name`, or `card`; or it does not end in `_id`, `_code`, `_count`, `_kind`, `_type`, `_status`, or `_name`, and after splitting on `_` any part is `text`, `content`, `message`, `msg`, `history`, `dialogue`, `reply`, `prompt`, `response`, `raw`, `output`, `input`, `thinking`, `reason`, `goal`, `hint`, `description`, `marker`, `term`, `emotion`, `summary`, `evidence`, `path`, `url`, `uri`, `host`, `payload`, `command`, `cmd`, `query`, `title`, `preview`, `body`, or `detail`. So `reason_code`, `command_name`, and `message_type` are ordinary keys.
+
+A redacted value reads `<17ch #5948c5c6>` (text of 17 characters) or `<10B #5948c5c6>` (10 bytes). It and `[N items]` contain a space, so the log line JSON-quotes them, while `fields` holds them unquoted.
+The fingerprint is the first 8 hex digits of an HMAC under a process-random key. Within one process the same value has the same fingerprint, so lines can be correlated; the key changes on restart, so fingerprints do not correlate across restarts.
+
+An exception is written as the following fields (shown for the key `error`); its message is not written:
+
+- `error`: the type name.
+- `error.at`: the location `file:line`. It is the deepest frame of plugin code (`plugins/`) in the traceback; without plugin frames, the deepest frame of other project code (`core/`, `scripts/`, `main.py`); otherwise the deepest real file. It is omitted when the exception has no traceback.
+- `error.cause`: the type name of the innermost exception in the `__cause__` / `__context__` chain. It is omitted when there is no chain or the chain is suppressed (`raise … from None`).
+- Status-like attributes, present only when the exception carries them: `error.status` (HTTP status, also read from `response.status_code` or `response.status`), `error.errno`, `error.winerror`, `error.returncode`, `error.lineno`, `error.colno`, `error.sqlite` (SQLite error name), and `error.module` (the module that failed to import).
+
+For example: `fetch.failed source=baike error=AIRequestError error.at=plugins/hello/main.py:31 error.cause=ConnectionResetError error.status=504`.
+`core.log.summarize_exception(exc)` returns the same content as an `ExceptionSummary`, which renders as the same fields when passed as a field value.
+
+Write fields with these rules in mind:
+
+- Pass QQ IDs, group IDs, `chat_id`, `message_id`, `job_id`, and other identifiers directly. They stay readable.
+- Use space-free ASCII values for labels such as `status=ok`, `route=chat`, or `plugin=pendo`. They stay readable.
+- Put free text such as message bodies, replies, prompts, commands, paths, URLs, host names, and nicknames under body keys. Only length and fingerprint remain.
+- Write program-generated reasons as `reason_code=`. `reason` is a body key, so its value is redacted.
+- Write exceptions as `error=exc`. The type, location, innermost type of the exception chain, and status-like attributes remain; exception messages stay out of the log.
+- Keep tokens, cookies, and authorization headers out of logs. When correlation is needed, put them under a credential key.
+
+Core sets the request ID; plugins do not write it in messages or fields.
+Core creates the ID when a message comes in (for active WebSocket when the client receives the event, for inbound HTTP once per request, for inbound WebSocket once per frame), and sets one for each command run through `command_runner` and each scheduled-task run.
+Core's receipt line, plugin handling, reply sends, and handling failures all carry the same ID in the request-ID column. `asyncio.create_task`, `asyncio.to_thread`, and `run_sync()` copy the context, so background work keeps the ID of the request that started it.
+Core calls plugin lifecycle hooks (`init`, `shutdown`) in a scope without a request ID.
+
+A long-running loop starts during one request and then serves many requests, such as a worker that runs queued jobs.
+It clears the starting request's ID with `log_scope(None)` at its entry and opens a scope with each unit's recorded request ID while handling that unit:
+
+```python
+from core.log import log_scope
+
+
+async def _worker(self) -> None:
+    with log_scope(None):
+        while job := await self._next_job():
+            with log_scope(job.request_id):
+                await self._run(job)
+```
+
+Core's inbound scheduler workers and the active WebSocket's per-sender queue drainers work the same way: they carry no ID of their own and handle each event under that event's ID.
+
+Level conventions:
+
+| Level | Use |
+|---|---|
+| `DEBUG` | Troubleshooting detail: raw frames, transport detail, optional diagnostics |
+| `INFO` | Something finished or changed state: message received, command done, scheduled run finished, connection established; xiaoqing_chat step logs |
+| `WARNING` | A handled degradation: fallback, upstream timeout or network error, bad data skipped, missing configuration that disables a feature |
+| `ERROR` | Needs a person: corrupted data, invalid configuration, failed cleanup, a truly unexpected exception (the public error exit). Network and upstream failures do not count. |
+
+Log one line per event at one call site.
+
+Tests read logs with `caplog`.
+`logged_events(caplog, name)` in `tests/helpers/assertions.py` returns events in record order, and assertions read the redacted values in `fields`. Tests that need a real log file use the `logged_lines` fixture in `tests/helpers/app_test_support.py`.
+
+```python
+import logging
+
+from tests.helpers.assertions import logged_events
+
+
+async def test_timeout_is_logged(caplog):
+    caplog.set_level(logging.WARNING, logger="plugins.hello")
+    ...
+    (failed,) = logged_events(caplog, "fetch.failed")
+    assert failed.fields["error"] == "TimeoutError"
+```
+
 Core measures plugin-entry call counts, durations, errors, and cancellations centrally.
 
 ### Generation-local state
@@ -992,18 +1098,18 @@ Handle errors at their boundaries:
 2. Return a plugin-level reduced-service message for external service errors.
 3. Log structured context for data-integrity errors and protect the original state.
 4. Propagate cancellation through coroutines to the resource owner.
-5. Let Core convert entry-point exceptions to public error codes and request IDs.
+5. Let Core turn unexpected exceptions raised by an entry point into public error replies.
 
 ```python
 try:
     payload = await fetch_data()
-except TimeoutError:
-    context.logger.warning("上游请求超时")
+except TimeoutError as exc:
+    log.warning(LogEvent("fetch.failed", source="upstream", error=exc))
     return segments("服务响应超时，请稍后重试")
 ```
 
 Use fixed, clear plugin messages for expected input and business errors.
-For unexpected exceptions, the common public error exit logs bounded diagnostics and returns a stable error code:
+Hand unexpected exceptions to the common public error exit, which logs one diagnostic line and replies with one line of explanation:
 
 ```python
 from core.public_errors import public_error_response
@@ -1011,17 +1117,41 @@ from core.public_errors import public_error_response
 try:
     return await perform_operation()
 except Exception as exc:
-    return public_error_response(
-        context,
-        exc,
-        logger=context.logger,
-        component="hello.handle",
-    )
+    return public_error_response(context, exc, component="hello.handle")
 ```
 
-Sensitive operations, such as Shell, Jupyter, Codex, and remote management, use `core.sensitive_audit.log_sensitive_operation()`.
-Command text, code, paths, and exception text enter `payload` to generate length and HMAC fingerprints.
-Logs keep stable operation, status, request ID, job ID, return code, and exception type fields.
+The reply reads `操作失败：<reason>（<exception type> @ <location>；request_id：…）`, for example:
+
+```text
+操作失败：请求超时，请稍后重试（TimeoutError @ plugins/hello/main.py:4；request_id：3f9a1c2e）
+操作失败：上游服务返回 HTTP 404，重试无效（HttpStatusError @ plugins/hello/main.py:8；request_id：3f9a1c2e）
+操作失败：插件内部错误，重试无效，请联系管理员（KeyError @ plugins/hello/main.py:16；request_id：3f9a1c2e）
+```
+
+The reason comes from the first classifiable exception in the chain, outermost first, and the exception type and location come from that same link. The location follows the rule of the `error.at` log field; without a traceback only the type is shown.
+`SafeHttpError` and `ResponseTransportError` only relay a lower error, so they give way to a classifiable exception deeper in the chain.
+An exception takes the first matching category in this table:
+
+| Category (log `category`) | Exceptions | Reason in the reply |
+|---|---|---|
+| `model` | The AI gateway's `AIError` | Depends on `AIRequestError.category`, for example model timeout, rate limit, authentication failure, or model unavailable, each saying whether a retry helps; `AIConfigError` means the model configuration is invalid |
+| `timeout` | `TimeoutError`, `requests` `Timeout`, `subprocess.TimeoutExpired` | Request timed out; retry later |
+| `bad_response` | JSON parse failures, bounded-HTTP response format, size, and redirect errors, `SafeHttpError`, aiohttp `ContentTypeError`, `requests` JSON, decoding, and redirect errors | The upstream data cannot be parsed; a retry later may help |
+| `upstream_status` | `HttpStatusError`, aiohttp `ClientResponseError`, `requests` and `urllib` `HTTPError` | The upstream service returned HTTP <status>; 408, 425, 429, and 5xx say retry later, other statuses say a retry will not help |
+| `network` | `ConnectionError`, `ResponseTransportError`, aiohttp `ClientError`, `requests` `RequestException`, `URLError`, DNS and SSL errors, paramiko connection errors | Network connection failed; retry later |
+| `dependency` | `ImportError` | Missing dependency <module>; contact the administrator |
+| `database` | `sqlite3.Error` | With `SQLITE_BUSY` or `SQLITE_LOCKED` the database is busy, retry later; otherwise the database operation failed, contact the administrator |
+| `io` | Other `OSError`, `subprocess.SubprocessError` | File or system operation failed; contact the administrator |
+| `internal` | Any other exception | Internal plugin error; a retry will not help, contact the administrator |
+
+The replies are in Chinese; the table paraphrases them.
+`public_error_response()` and `public_error_message()` both log one ERROR-level `public_error` on the `plugins.<plugin>` logger, with `component`, `category`, `reason_code` (`AIRequestError.category`) for model errors, and `error=exc`, followed by the traceback. The request ID matches the reply.
+The log's `error` is the exception passed in, expanded by the rules in [logs and metrics](#logs-and-metrics); the reply's type and location come from the deciding link, so the two can differ.
+The exception message reaches neither the reply nor the log.
+When a failure should not disturb the user (background work, silent degradation), `log_public_error()` writes only this log line and sends no reply.
+
+Sensitive operations, such as Shell, Jupyter, Codex, and remote management, also log with `LogEvent`, for example `log.info(LogEvent("execute", status="started", payload=command))`.
+Command text, code, and paths go in `payload`, which keeps only length and fingerprint. `status`, `job_id`, and return codes stay readable. Exceptions go in `error=exc`, which keeps the type, location, and status-like attributes, at ERROR level.
 
 ## ✅ Documentation and test contracts
 

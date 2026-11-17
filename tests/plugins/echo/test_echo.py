@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.echo import main as echo
 
 
@@ -144,4 +145,4 @@ async def test_invalid_runtime_types_use_public_error_boundary(
     event_value: object,
 ) -> None:
     result = await echo.handle(command, args, event_value, context)  # type: ignore[arg-type]
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)

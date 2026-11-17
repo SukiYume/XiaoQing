@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -57,7 +56,7 @@ async def trade_runtime(monkeypatch, tmp_path: Path):
     """经插件自己的 init 打开真实数据库；测试另开一个句柄读写同一个库文件。"""
 
     monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
-    context = SimpleNamespace(data_dir=tmp_path, logger=logging.getLogger("test.qingpet"))
+    context = SimpleNamespace(data_dir=tmp_path)
     await qingpet_main.init(context)
     assert qingpet_main._db_instance is not None
     database = Database(str(tmp_path / "qingpet" / "qingpet.db"))
@@ -65,7 +64,7 @@ async def trade_runtime(monkeypatch, tmp_path: Path):
         yield context, database, _seed_listing(database)
     finally:
         database.cleanup()
-        await qingpet_main.cleanup(context)
+        await qingpet_main.cleanup()
 
 
 def _set_expiry(database: Database, listing_id: int, expires_at: datetime) -> None:

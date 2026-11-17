@@ -8,10 +8,10 @@ import struct
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
+from core.log import LogEvent
 from core.plugin_base import has_control_characters
-from core.sensitive_audit import audit_error_type
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # Minecraft 按最多 4096 个 Java 字符拆分响应；UTF-8 最坏需要四倍字节空间。
 RCON_MAX_CHUNK_UNITS            = 4096
@@ -249,12 +249,9 @@ class RconClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "RCON close status=failed error_type=%s",
-                    audit_error_type(exc),
-                )
+                log.error(LogEvent("rcon.close_failed", error=exc))
         if was_open:
-            logger.info("RCON disconnected")
+            log.info(LogEvent("rcon.disconnected"))
 
     async def command(self, cmd: str) -> RconCommandResult:
         """执行管理员命令；输入、响应和失败均受固定边界约束。"""

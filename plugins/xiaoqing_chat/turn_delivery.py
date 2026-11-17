@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any
 
 from core.delivery import DeliveryReceipt, DeliverySegments, send_with_receipt
 from core.interfaces import ACTION_BYPASS_SINK_KEY, EVENT_SOURCE_KEY
+from core.log import LogEvent
 from core.plugin_base import build_action, segments
+from core.public_errors import log_public_error
 
 from .brain_chat import (
     maybe_add_mode_indicator,
@@ -22,7 +24,6 @@ from .chat_runtime import chat_lock
 from .follow_ups import carry_attention, carry_text, sender_has_follow_up
 from .frequency_control import record_reply_frequency
 from .llm.topic_shift import reply_should_be_withheld
-from .logging_utils import accumulate_timing, log_step
 from .memory.local_ids import (
     DIRECT_REPLY_RECENT_MESSAGES,
     allocate_local_id,
@@ -49,6 +50,7 @@ from .task_scheduler import (
     schedule_pfc_state_flush,
     spawn_bg_task,
 )
+from .timing import accumulate_timing
 from .turn_generation import commit_planner_snapshot
 
 if TYPE_CHECKING:
@@ -58,7 +60,7 @@ if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _jittered(value: float, ratio: float) -> float:
@@ -168,13 +170,7 @@ async def record_bot_reply(
         message_ids = message_ids,
     )
     schedule_memory_persist(context, runtime, chat_id=chat_id)
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "smalltalk.memory.append_bot",
-        fields  = {"local_id": assistant_local_id},
-    )
+    log.info(LogEvent("smalltalk.memory.append_bot", chat_id=chat_id, local_id=assistant_local_id))
     history_snapshot: list[Any] = await state.memory_store.get_async(chat_id)
     record_reply_frequency(chat_id, runtime, state, forced=forced)
     await state.heartflow.on_bot_reply_async(chat_id=chat_id)
@@ -234,17 +230,15 @@ def _drop_stale_generated_turn(
         reason = stale_reason(split[1])
     if not reason:
         return False
-    log_step(
-        finalization.context,
-        finalization.hctx.runtime,
-        chat_id = finalization.hctx.chat_id,
-        step    = "smalltalk.stale.drop",
-        fields  = {
-            "phase"         : phase,
-            "reason"        : reason,
-            "local_id"      : generated.local_id,
-            "newer_messages": None if split is None else len(split[1]),
-        },
+    log.info(
+        LogEvent(
+            "smalltalk.stale.drop",
+            chat_id        = finalization.hctx.chat_id,
+            phase          = phase,
+            reason_code    = reason,
+            local_id       = generated.local_id,
+            newer_messages = None if split is None else len(split[1]),
+        )
     )
     return True
 
@@ -274,9 +268,6 @@ async def _drop_if_context_changed(
         return False
     hctx = finalization.hctx
 
-    def log(step: str, fields: dict[str, Any]) -> None:
-        log_step(finalization.context, hctx.runtime, chat_id=hctx.chat_id, step=step, fields=fields)
-
     check_started = time.monotonic()
     changed       = await reply_should_be_withheld(
         secrets  = hctx.secrets,
@@ -285,16 +276,20 @@ async def _drop_if_context_changed(
         after    = after,
         reply    = display_reply_text(finalization.generated),
         llm      = hctx.runtime.cfg.llm_config("reasoning"),
-        log      = log,
+        chat_id  = hctx.chat_id,
     )
     accumulate_timing(
         finalization.generated.timings, "context_check_s", time.monotonic() - check_started
     )
     finalization.checked_users = users
     if changed:
-        log(
-            "smalltalk.stale.drop",
-            {"phase": "context_changed", "local_id": finalization.generated.local_id},
+        log.info(
+            LogEvent(
+                "smalltalk.stale.drop",
+                chat_id  = hctx.chat_id,
+                phase    = "context_changed",
+                local_id = finalization.generated.local_id,
+            )
         )
     return changed
 
@@ -308,16 +303,14 @@ def _yield_to_follow_up(finalization: _SmalltalkFinalization, *, phase: str) -> 
     if finalization.prepared.forced:
         carry_attention(event)
     carry_text(event, finalization.prepared.text)
-    log_step(
-        finalization.context,
-        finalization.hctx.runtime,
-        chat_id = finalization.hctx.chat_id,
-        step    = "smalltalk.stale.drop",
-        fields  = {
-            "phase"   : phase,
-            "reason"  : "sender_continued",
-            "local_id": finalization.generated.local_id,
-        },
+    log.info(
+        LogEvent(
+            "smalltalk.stale.drop",
+            chat_id     = finalization.hctx.chat_id,
+            phase       = phase,
+            reason_code = "sender_continued",
+            local_id    = finalization.generated.local_id,
+        )
     )
     return True
 
@@ -343,16 +336,14 @@ async def _confirm_delivery_context(finalization: _SmalltalkFinalization, *, pha
             if current_users == checked_users:
                 return True
     # 两次复核都有新消息：持续活跃的群聊先结束这轮，避免反复等待和按过期判断投递。
-    log_step(
-        finalization.context,
-        finalization.hctx.runtime,
-        chat_id = finalization.hctx.chat_id,
-        step    = "smalltalk.stale.drop",
-        fields  = {
-            "phase"   : "topic_check",
-            "reason"  : "topic_snapshot_outdated",
-            "local_id": finalization.generated.local_id,
-        },
+    log.info(
+        LogEvent(
+            "smalltalk.stale.drop",
+            chat_id     = finalization.hctx.chat_id,
+            phase       = "topic_check",
+            reason_code = "topic_snapshot_outdated",
+            local_id    = finalization.generated.local_id,
+        )
     )
     return False
 
@@ -432,17 +423,15 @@ async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[
                 chat_id=finalization.hctx.chat_id
             )
             action = str(generated.pfc_result.action or "no_reply").strip() or "no_reply"
-            log_step(
-                finalization.context,
-                finalization.hctx.runtime,
-                chat_id = finalization.hctx.chat_id,
-                step    = "smalltalk.no_reply",
-                fields  = {
-                    "reason"    : "pfc_no_reply",
-                    "action"    : action,
-                    "pfc_reason": generated.pfc_result.reason,
-                    "source"    : generated.reply_source,
-                },
+            log.info(
+                LogEvent(
+                    "smalltalk.no_reply",
+                    chat_id     = finalization.hctx.chat_id,
+                    reason_code = "pfc_no_reply",
+                    action      = action,
+                    pfc_reason  = generated.pfc_result.reason,
+                    source      = generated.reply_source,
+                )
             )
             reasoning = _pfc_reasoning(generated.pfc_result)
             finalization.hctx.state.action_history.append(
@@ -582,25 +571,15 @@ async def _commit_smalltalk_delivery(
         ),
         name=f"reply_media_used:{finalization.hctx.chat_id}",
     )
-    if finalization.hctx.runtime.cfg.debug.log_latency:
-        log_step(
-            finalization.context,
-            finalization.hctx.runtime,
-            chat_id = finalization.hctx.chat_id,
-            step    = "smalltalk.latency",
-            fields  = {"latency_s": round(time.monotonic() - finalization.started_at, 3)},
+    log.info(
+        LogEvent(
+            "smalltalk.done",
+            chat_id     = finalization.hctx.chat_id,
+            elapsed_s   = round(time.monotonic() - finalization.started_at, 3),
+            reply_chars = len(display_reply_text(finalization.generated)),
+            reply       = display_reply_text(finalization.generated),
+            timings     = finalization.generated.timings,
         )
-    log_step(
-        finalization.context,
-        finalization.hctx.runtime,
-        chat_id = finalization.hctx.chat_id,
-        step    = "smalltalk.done",
-        fields  = {
-            "elapsed_s"  : round(time.monotonic() - finalization.started_at, 3),
-            "reply_chars": len(display_reply_text(finalization.generated)),
-            "reply"      : display_reply_text(finalization.generated),
-            "timings"    : finalization.generated.timings,
-        },
     )
 
 
@@ -609,12 +588,13 @@ async def _rollback_smalltalk_delivery(
     *,
     batch_count: int,
 ) -> None:
-    log_step(
-        finalization.context,
-        finalization.hctx.runtime,
-        chat_id = finalization.hctx.chat_id,
-        step    = "smalltalk.delivery.rollback",
-        fields  = {"local_id": finalization.generated.local_id, "batches": batch_count},
+    log.info(
+        LogEvent(
+            "smalltalk.delivery.rollback",
+            chat_id  = finalization.hctx.chat_id,
+            local_id = finalization.generated.local_id,
+            batches  = batch_count,
+        )
     )
 
 
@@ -678,9 +658,11 @@ class _ReplyBubbles:
         self._closed = True
         try:
             await self._maybe_settle()
-        except Exception:
+        except Exception as exc:
             # 这里没有回执兜底：和回执回调失败一样只记日志，不打断本轮处理。
-            logger.exception("xiaoqing_chat reply settlement failed")
+            log_public_error(
+                self._finalization.context, exc, component="xiaoqing_chat.reply_settlement"
+            )
 
     def _seen(self) -> list[int]:
         """确认发出或结果未知（可能已被看到）的气泡，按发送顺序。"""
@@ -719,16 +701,14 @@ class _ReplyBubbles:
             )
         else:
             parts = _sent_bubble_parts([payload.batch_parts[index] for index in seen])
-            log_step(
-                self._finalization.context,
-                self._finalization.hctx.runtime,
-                chat_id = self._finalization.hctx.chat_id,
-                step    = "smalltalk.delivery.partial",
-                fields  = {
-                    "local_id": self._finalization.generated.local_id,
-                    "sent"    : len(seen),
-                    "batches" : len(self._batches),
-                },
+            log.info(
+                LogEvent(
+                    "smalltalk.delivery.partial",
+                    chat_id  = self._finalization.hctx.chat_id,
+                    local_id = self._finalization.generated.local_id,
+                    sent     = len(seen),
+                    batches  = len(self._batches),
+                )
             )
         await _commit_smalltalk_delivery(self._finalization, parts, message_ids)
 
@@ -759,17 +739,15 @@ async def _apply_smalltalk_presend_delay(
     elapsed = max(0.0, time.monotonic() - finalization.started_at)
     delay   = max(0.0, target - elapsed)
     if delay > 0:
-        log_step(
-            finalization.context,
-            finalization.hctx.runtime,
-            chat_id = finalization.hctx.chat_id,
-            step    = "smalltalk.humanize.delay",
-            fields  = {
-                "phase"    : "pre_send",
-                "delay_s"  : round(delay, 3),
-                "target_s" : round(target, 3),
-                "elapsed_s": round(elapsed, 3),
-            },
+        log.info(
+            LogEvent(
+                "smalltalk.humanize.delay",
+                chat_id   = finalization.hctx.chat_id,
+                phase     = "pre_send",
+                delay_s   = round(delay, 3),
+                target_s  = round(target, 3),
+                elapsed_s = round(elapsed, 3),
+            )
         )
         await asyncio.sleep(delay)
         accumulate_timing(finalization.generated.timings, "send_wait_s", delay)

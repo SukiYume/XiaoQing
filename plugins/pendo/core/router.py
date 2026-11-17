@@ -5,11 +5,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
+from core.log import LogEvent
 from core.router import CommandCatalogNode
 
 from .types import CommandMessage
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 CommandHandler = Callable[[str, str, Any], Awaitable[CommandMessage]]
 
@@ -45,7 +46,7 @@ class CommandRouter:
         self.help_provider = help_provider
         self.commands      = self._build_command_registry(root, handlers)
         self.alias_map     = self._build_alias_map()
-        logger.info("CommandRouter initialized with %s commands", len(self.commands))
+        log.info(LogEvent("router.initialized", commands=len(self.commands)))
 
     def _build_command_registry(
         self,
@@ -85,13 +86,13 @@ class CommandRouter:
         """执行命令；未知命令只返回固定帮助提示。"""
         command_name = self.alias_map.get(subcommand.lower())
         if command_name is None:
-            logger.info("Unknown command: %s", subcommand)
+            log.info(LogEvent("command.unknown", text=subcommand))
             return {
                 "status"    : "error",
                 "message"   : f"❓ 未知命令: {subcommand}\n\n请使用 /pendo help 查看所有可用命令",
                 "error_code": None,
             }
-        logger.info("Routing command: %s for user %s", command_name, user_id)
+        log.info(LogEvent("command.route", command_name=command_name, user_id=user_id))
         return await self.commands[command_name].handler(user_id, args, context)
 
     async def _handle_help(

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
+
+from core.log import LogEvent
 
 from .brain_chat import (
     get_brain_chat_max_context,
@@ -16,7 +19,6 @@ from .chat_event import event_chat_id, event_sender_name
 from .chat_runtime import chat_lock
 from .constants import DEFAULT_FALLBACK_IDLE_REPLIES
 from .llm.check_result import ReplyRejected
-from .logging_utils import accumulate_timing, log_step
 from .memory.local_ids import allocate_local_id
 from .memory.memory import active_conversation_suffix
 from .memory.person_profile import get_profile_generation, session_is_current
@@ -35,11 +37,14 @@ from .task_scheduler import (
     schedule_memory_persist,
     schedule_pfc_state_flush,
 )
+from .timing import accumulate_timing
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
     from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
+
+log = logging.getLogger(__name__)
 
 
 def _fallback_idle_reply(runtime: ChatRuntime) -> str:
@@ -102,11 +107,6 @@ class _TurnGenerator:
             hctx.runtime, prepared.brain_chat_active, history_len=len(recent_history)
         )
 
-    def log(self, step: str, fields: dict[str, Any]) -> None:
-        log_step(
-            self.context, self.hctx.runtime, chat_id=self.hctx.chat_id, step=step, fields=fields
-        )
-
     async def draft(
         self,
         *,
@@ -162,7 +162,13 @@ class _TurnGenerator:
     async def run_forced(self) -> None:
         force_reason                = self.prepared.force_reason
         self.generated.reply_source = "forced"
-        self.log("smalltalk.forced_direct", {"force_reason": force_reason})
+        log.info(
+            LogEvent(
+                "smalltalk.forced_direct",
+                chat_id           = self.hctx.chat_id,
+                force_reason_code = force_reason,
+            )
+        )
         # 没有经过规划器，就没有“心里的盘算”可交给生成：空着，提示词里不出现这一块。
         await self.draft_or_idle(forced=True, reasoning="", plan_reasoning="")
 
@@ -201,23 +207,28 @@ class _TurnGenerator:
         # 配额，别人的新消息进来也会被挡掉。下一条消息自然会触发新一轮判断。
         generated.pfc_result = result
         generated.reply      = (result.reply or "").strip()
-        self.log(
-            "smalltalk.pfc.done",
-            {
-                "action"      : result.action,
-                "ended"       : bool(result.ended),
-                "reason"      : result.reason,
-                "wait_seconds": float(result.wait_seconds),
-                "reply_chars" : len(generated.reply),
-            },
+        log.info(
+            LogEvent(
+                "smalltalk.pfc.done",
+                chat_id      = self.hctx.chat_id,
+                action       = result.action,
+                ended        = bool(result.ended),
+                reason       = result.reason,
+                wait_seconds = float(result.wait_seconds),
+                reply_chars  = len(generated.reply),
+            )
         )
 
     async def run_direct(self) -> None:
         prepared                    = self.prepared
         self.generated.reply_source = "direct"
-        self.log(
-            "smalltalk.planner.disabled",
-            {"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
+        log.info(
+            LogEvent(
+                "smalltalk.planner.disabled",
+                chat_id    = self.hctx.chat_id,
+                is_private = prepared.is_private,
+                brain_chat = prepared.brain_chat_active,
+            )
         )
         await self.draft_or_idle(forced=False, reasoning="", plan_reasoning="")
         self.generated.pfc_result = PFCRunResult(
@@ -365,13 +376,7 @@ async def ensure_user_message_recorded(
     )
     schedule_memory_persist(context, runtime, chat_id=chat_id)
     await state.heartflow.on_user_message_async(chat_id=chat_id)
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "smalltalk.memory.append_user",
-        fields  = {"local_id": local_id},
-    )
+    log.info(LogEvent("smalltalk.memory.append_user", chat_id=chat_id, local_id=local_id))
     event["_xc_user_recorded"]          = True
     event["_xc_user_recorded_local_id"] = local_id
     return local_id

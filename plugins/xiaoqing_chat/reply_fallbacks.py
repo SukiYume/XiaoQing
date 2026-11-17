@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
+
+from core.log import LogEvent
 
 from .llm.check_result import ReplyRejected
 from .llm.local_checks import (
@@ -14,7 +17,6 @@ from .llm.media_evidence import (
     event_has_current_image,
     event_media_all_unreadable,
 )
-from .logging_utils import log_step
 from .persona import persona_subject_pattern
 from .reply_draft import RejectedCandidate, ReplyAttemptState, ReplyDraft, build_reply_draft
 from .reply_plan import (
@@ -23,6 +25,8 @@ from .reply_plan import (
     heuristic_check_with_config,
     needs_persona_guard_when_checker_unavailable,
 )
+
+log = logging.getLogger(__name__)
 
 _KNOWN_NAME_QUERY_RE = re.compile(r"你(?:到底|究竟)?(?:是)?(?:谁|哪位)")
 
@@ -200,13 +204,7 @@ def queue_reply_regeneration(
         f"请修正上面指出的具体问题。{correction}"
         + ("" if follows_request else "回复集中于最新话题，给其他群友留出接话空间。")
     ).strip()
-    log_step(
-        plan.context,
-        plan.runtime,
-        chat_id = plan.chat_id,
-        step    = step,
-        fields  = {"regen_used": attempt.regen_used},
-    )
+    log.info(LogEvent(step, chat_id=plan.chat_id, regen_used=attempt.regen_used))
     return True
 
 
@@ -342,12 +340,12 @@ def finish_rejected_candidate(
         if result.failure_code == "checker_unavailable" or not result.need_replan:
             return None
         if result.failure_code in _SILENT_FAILURE_CODES:
-            log_step(
-                plan.context,
-                plan.runtime,
-                chat_id = plan.chat_id,
-                step    = "reply.check.exhausted.proactive_silence",
-                fields  = {"failure_code": result.failure_code},
+            log.info(
+                LogEvent(
+                    "reply.check.exhausted.proactive_silence",
+                    chat_id      = plan.chat_id,
+                    failure_code = result.failure_code,
+                )
             )
             return None
         raise ReplyRejected(result.reason or "回复被检查拒绝")
@@ -355,15 +353,13 @@ def finish_rejected_candidate(
     if result.failure_code == "checker_unavailable":
         return _fallback_draft(rejected, NOT_READY_FALLBACK)
     if rejected.allow_after_regen_exhausted and rejected.draft is not None:
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = "reply.check.exhausted.accept",
-            fields  = {
-                "reply_chars": len(rejected.draft.text),
-                "need_replan": bool(result.need_replan),
-            },
+        log.info(
+            LogEvent(
+                "reply.check.exhausted.accept",
+                chat_id     = plan.chat_id,
+                reply_chars = len(rejected.draft.text),
+                need_replan = bool(result.need_replan),
+            )
         )
         return rejected.draft
 
@@ -374,12 +370,13 @@ def finish_rejected_candidate(
         fallback = _fallback_draft(rejected, text)
         if fallback is None:
             continue
-        log_step(
-            plan.context,
-            plan.runtime,
-            chat_id = plan.chat_id,
-            step    = step,
-            fields  = {"reply_chars": len(fallback.text), "failure_code": result.failure_code},
+        log.info(
+            LogEvent(
+                step,
+                chat_id      = plan.chat_id,
+                reply_chars  = len(fallback.text),
+                failure_code = result.failure_code,
+            )
         )
         return fallback
     # 明确点名或私聊不能因为审查耗尽而整轮无响应。极端情况下只确认在场，

@@ -183,7 +183,7 @@ plugins/arxiv_filter/
 2. 使用推理 CLI 的 `--test-positive` 检查模型加载。
 3. 核对模型路径、`training_config.json`、权重和 tokenizer。
 4. 通过 `/codex status astro-ph` 查看摘要任务。
-5. 检查日志中的源日期、论文集合摘要、模型后端和 Codex job ID。
+5. 查看日志：`update_date.found` 与 `update_check.*` 带源列表日期，`inference.params` 带模型后端，Codex 插件的 `summary.queued` 带摘要任务号。
 
 ---
 

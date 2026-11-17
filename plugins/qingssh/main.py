@@ -4,8 +4,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core.log import LogEvent
+from core.public_errors import public_error_response
 from core.router import resolve_context_command_invocation
-from core.sensitive_audit import audit_error_type
 
 from . import session_handlers
 from .config import COMMAND_TIMEOUT, MAX_HISTORY_LENGTH, SESSION_TIMEOUT, SessionKeys
@@ -22,7 +23,7 @@ from .handlers import (
 from .ssh_manager import SSHManager, get_manager
 from .types import Context, MessageSegments, OneBotEvent, Session, segments
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 CommandHandler = Callable[
     [str, OneBotEvent, Context, SSHManager],
@@ -83,8 +84,7 @@ async def handle(command: str, args: str, event: OneBotEvent, context: Context) 
 
         return segments("❓ 未知命令")
     except Exception as exc:
-        logger.error("QingSSH handle failed error_type=%s", audit_error_type(exc))
-        return segments("处理请求时出错，请查看日志")
+        return public_error_response(context, exc, component="qingssh.handle")
 
 
 def _show_help() -> str:
@@ -174,7 +174,7 @@ async def shutdown(context: Context) -> None:
     try:
         await session_handlers.shutdown_tasks()
     except Exception as exc:
-        logger.error("SSH job cleanup failed error_type=%s", audit_error_type(exc))
+        log.error(LogEvent("job_cleanup.failed", error=exc))
 
     state   = getattr(context, "state", None)
     manager = state.get("ssh_manager") if isinstance(state, dict) else None
@@ -182,9 +182,9 @@ async def shutdown(context: Context) -> None:
         return
     try:
         await manager.shutdown()
-        logger.info("SSH plugin cleaned up successfully")
+        log.info(LogEvent("shutdown.done"))
     except Exception as exc:
-        logger.error("SSH plugin cleanup failed error_type=%s", audit_error_type(exc))
+        log.error(LogEvent("shutdown.failed", error=exc))
 
 
 async def cleanup_orphans(context: Context) -> None:
@@ -217,11 +217,8 @@ async def cleanup_orphans(context: Context) -> None:
                 if manager.disconnect(user_id, group_id, server_name):
                     count += 1
             except Exception as exc:
-                logger.warning(
-                    "SSH orphan cleanup failed error_type=%s",
-                    audit_error_type(exc),
-                )
+                log.error(LogEvent("orphan_cleanup.failed", error=exc))
         if count:
-            logger.info("Cleaned up %d orphan SSH connections", count)
+            log.info(LogEvent("orphan_cleanup.done", count=count))
     except Exception as exc:
-        logger.error("SSH orphan scan failed error_type=%s", audit_error_type(exc))
+        log.error(LogEvent("orphan_scan.failed", error=exc))

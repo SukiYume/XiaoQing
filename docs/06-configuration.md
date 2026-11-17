@@ -29,6 +29,35 @@ Core 将两个文件组合成带 revision 的只读设置快照。
 `config.json` 顶层 `ai` 对象维护统一模型注册表，顶层 `plugins` 对象维护插件公开命名空间。
 `secrets.json` 使用同名 `ai` 与 `plugins` 对象保存对应凭据。
 
+### 启动时读不到有效配置
+
+进程启动时第一次读取 `config/config.json`。
+文件缺失、不是合法 JSON、读不了或校验失败时进程不启动，记下原因后以退出码 1 结束；运行目录下的 `logs/` 建不了时同样如此。
+这时配置里的日志出口还没换上，诊断只写到控制台（标准输出），`logs/xiaoqing.log` 里没有：
+
+| 事件 | 含义 |
+|---|---|
+| `config.source.missing source=config` | 文件不存在 |
+| `config.source.invalid source=config status=… error=…` | `status` 为 `invalid` 时内容无效（不是合法 JSON、超过 8 MiB 或校验失败），为 `unavailable` 时读不了或读取期间一直在变；JSON 语法错误带出错的行列号 `error.lineno`、`error.colno`，校验失败带出错字段数 `field_errors` |
+| `config.field.invalid source=config field=<字段路径> error_type=<错误类型>` | 校验失败时每个出错字段一条，最多 20 条；`error_type` 是 pydantic 的错误类型，例如 `string_type`、`greater_than_equal` |
+| `process.failed error=… error.at=…` | 进程入口记的最后一行，CRITICAL 级，附回溯 |
+
+例如 `bot_name` 写成数字、`ws_queue_size` 写成 `0` 时（节选）：
+
+```text
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.source.invalid source=config status=invalid error=ConfigLoadError error.at=core/config.py:232 error.cause=ValidationError field_errors=2
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.field.invalid source=config field=bot_name error_type=string_type
+2026-11-17 09:30:12 [ERROR] [-] core.config: config.field.invalid source=config field=ws_queue_size error_type=greater_than_equal
+2026-11-17 09:30:12 [CRITICAL] [-] __main__: process.failed error=ConfigLoadError error.at=core/app.py:98
+```
+
+配置里的值、地址和异常消息都不打印。
+`secrets.json` 的问题记成同样的事件（`source=secrets`），不阻止启动，凭据按 [配置热重载](#️-配置热重载) 里的 fail-closed 规则处理。
+
+Windows 生产启动链下这些行在 `logs/bot-monitor.log` 里。
+Bot 退出后监控器按退避间隔重新启动它（10 秒起，每次翻倍，最长 300 秒），配置改好之前这些行反复出现。
+监控器自己启动时也读取 `config.json`，文件缺失或不是 JSON 对象时监控器报错退出，不启动 Bot。
+
 ---
 
 ## ⚙️ Core 配置
@@ -184,20 +213,92 @@ JSON `null` 会触发配置校验错误。
 
 ## ⚙️ 日志配置
 
-| 字段 | 类型 | 示例值 | 说明 |
-|---|---|---|---|
-| `log_level` | string | `"INFO"` | 根日志级别，常用值为 `DEBUG`、`INFO`、`WARNING`、`ERROR` |
-| `log_to_file` | boolean | `true` | 写入 `logs/xiaoqing.log` 与 `logs/xiaoqing_error.log` |
-| `log_to_console` | boolean | `true` | 控制台输出 |
-| `log_use_color` | boolean | `true` | 交互终端 ANSI 颜色 |
-| `log_max_size_mb` | number | `10` | `size` 模式主日志与错误日志的单文件阈值 |
-| `log_backup_count` | integer | `5` | 轮转文件保留数 |
-| `log_rotation` | `time` / `size` | `"time"` | 主日志每日午夜轮转，或按大小轮转 |
+日志设置集中在顶层 `logging` 对象：
 
-错误日志固定记录 `ERROR` 及以上并按大小轮转。
-插件日志器自动附加插件名和 request ID。
-Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或脱敏值。
-日志 handler 在进程启动阶段创建，修改本节字段后重启主进程。
+```json
+{
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5}
+}
+```
+
+| 字段 | 类型 | 默认值与范围 | 说明 |
+|---|---|---|---|
+| `level` | string | `"INFO"`；`DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | Core、插件、脚本和进程入口的日志级别；第三方库见下文 [级别](#级别) |
+| `levels` | object | `{}` | 按 logger 名单独设级别，取值同 `level` |
+| `console` | boolean | `true` | 输出到标准输出 |
+| `file` | boolean | `true` | 写入 `logs/xiaoqing.log`；和 `console` 都关时不输出任何日志 |
+| `keep_days` | integer | `5`，`1..365` | 轮转后保留的历史文件份数 |
+
+`logging` 对象里出现其他字段、级别名不是大写或 `keep_days` 越界时，配置校验报错。
+日志 handler 在进程启动时创建，修改本节字段后重启主进程；启动日志里 `日志系统初始化完成 level=… dir=… keep_days=…` 这一行显示生效的设置。
+读到配置之前，进程入口只开控制台输出，级别 `INFO`，行格式相同；读到配置后换成本节设置的出口。
+
+日志只有 `logs/xiaoqing.log` 一个文件，位于运行目录下，每天午夜轮转，保留 `keep_days` 份历史文件，`ERROR` 及以上的记录也在其中。
+控制台在标准输出是终端时按级别着色，重定向到文件或管道时不着色。
+Windows 生产启动链把 Bot 的标准输出另存为 `logs/bot-monitor.log`，生产配置设 `"console": false`，同一条日志只写一份；读到配置之前写到控制台的几行（例如 [启动时读不到有效配置](#启动时读不到有效配置) 的诊断）只在 `bot-monitor.log` 里。
+
+### 级别
+
+`level` 管项目自己的 logger：`core`、`plugins`、`scripts` 和进程入口（`main`、`__main__`）。
+其他 logger 都属于第三方库，级别是 `WARNING`；`level` 比 `WARNING` 更严时跟着 `level`。
+`levels` 按 logger 名单独设级别，项目的和第三方库的都能调高或调低。
+键是 logger 名：Core 模块是 `core.<模块>`，插件模块是 `plugins.<插件名>.<模块>`，第三方库用库自己的 logger 名，写前缀就作用于其下所有模块。
+例如 `{"plugins.xiaoqing_chat": "WARNING", "core.ai": "DEBUG"}` 只看聊天插件的警告和错误，同时打开 AI 调用参数的 DEBUG 日志；`{"websockets": "DEBUG"}` 打开 websockets 库自己的 DEBUG 日志。
+
+### 日志行
+
+文件里的每行是：
+
+```text
+2026-11-16 09:30:12 [INFO] [3f9a1c2e] plugins.hello.main (main.py:42): fetch.done status=ok items=3
+```
+
+控制台的行不带 `(文件名:行号)`。
+第二个方括号是 request ID：每条消息、每条代为执行的命令和每次定时任务运行各有一个，不属于任何请求的行是 `-`。
+消息部分是事件名加字段，字段按 [插件开发指南的日志与指标](03-plugin-development.md#日志与指标) 的规则输出：标识和标签明文，正文只记长度和指纹，凭据脱敏，异常记类型、位置和状态码一类的属性，不记异常消息。
+消息里的换行和控制字符转义成 `\n`、`\r`、`\xNN`，超过 4000 个字符的消息截断并注明多出的字符数。
+
+第三方库的记录不经过 `LogEvent`。
+行里保留库代码写的消息模板，格式化参数按同一套字段规则换掉再填进去：数字和日期原样，异常写类型名，列表、字典等容器写 `[N items]`，文本和其他对象只记长度和指纹。
+位置参数没有键名，看起来像标识的文本也只记长度和指纹；`%(name)s` 形式的参数按键名规则处理。
+例如 APScheduler 跳过一次执行时写：
+
+```text
+2026-11-17 09:30:12 [WARNING] [-] apscheduler.scheduler: Execution of job "<45ch #25c1a32c>" skipped: maximum number of running instances reached (1)
+```
+
+换掉的参数填不进模板时（例如 `%d` 遇到换成指纹的文本），消息是模板加 ` <arguments do not match the format>`；库代码没带参数的消息原样写出。
+
+带异常的记录在行后附回溯。
+异常链上每个异常一段，每段最多保留最里面的 48 帧，写成 `文件:行 in 函数`，省掉了更外层的帧时先写一行 `…(+N earlier frames)`；段末一行是异常类型，带状态码一类的属性，例如 `core.ai.AIRequestError (status=504)`。
+文件写成项目内、第三方包内或标准库内的相对路径，不带本机目录。
+异常消息可能带正文或凭据，不写进日志；整段回溯不超过 8000 个字符。
+
+### 未捕获的异常与出口故障
+
+解释器和事件循环默认直接打印的异常也记成事件，带 `error=…` 字段和上面的回溯：
+
+| 事件 | logger 与级别 | 来源 |
+|---|---|---|
+| `process.uncaught` | `core.log`，CRITICAL | 主线程里没有捕获的异常 |
+| `thread.uncaught thread=<线程名>` | `core.log`，ERROR | 其他线程里没有捕获的异常 |
+| `process.unraisable` | `core.log`，ERROR | 析构函数、垃圾回收等处无法向外抛出的异常 |
+| `asyncio.unhandled kind=<种类> task=<任务名>` | `asyncio`，ERROR | 事件循环里没人处理的异常；`kind` 是 `task_exception`、`future_exception`、`callback_exception`、`pending_task_destroyed`、`unclosed_resource` 或 `other`，没有异常时不带 `error` |
+
+线程名、任务名不是简单标识时不记。
+进程入口在启动或运行以异常结束时记一条 CRITICAL 级的 `process.failed`，然后以退出码 1 结束。
+
+日志出口写不出去时（例如磁盘满、文件被别的进程占着），在标准错误写一行诊断，不带记录内容。
+下面是 Windows 上午夜轮转被挡住时的一行：
+
+```text
+2026-11-17 00:00:03 [ERROR] [-] core.log: log.output_failed handler=file stage=rollover error=PermissionError error.at=core/log.py:703 error.errno=13 error.winerror=32
+```
+
+`handler` 是 `console` 或 `file`，`stage` 是 `write` 或 `rollover`。
+同一出口同一阶段第一次失败立即写，之后每分钟最多一行，带上这期间压下的次数 `suppressed`。
+轮转失败时记录照常写进当前文件，下一条记录再试轮转。
+Windows 生产启动链把标准错误另存为 `logs/bot-monitor-error.log`。
 
 ---
 
@@ -310,7 +411,7 @@ XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回
 
 `plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。`temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算和视觉请求参数都属于对应的 route，深度聊天的采样参数沿用聊天路由，默认模型由路由顺序决定。行为文件中出现这些 AI 字段或 `ai` 注册表时，加载报错并指出主配置位置。
 
-DEBUG 日志记录最终采用的路由、模型、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
+`core.ai` 的 DEBUG 日志（`ai.request.settings`）记录最终采用的路由、模型、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。只看这部分时在 `logging.levels` 里写 `{"core.ai": "DEBUG"}`。
 
 ### Provider secret
 
@@ -591,10 +692,10 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 | 插件公开配置与私有凭据 | 已确认 revision 发布后由插件读取 |
 | 定时任务目标群（`plugins.<插件名>.schedules`） | 已确认 revision 发布后由下一次执行读取 |
 | 有效的外部 `secrets.json` 单文件候选 | 管理员核对私聊字段摘要后执行 `/reload` |
-| `data_root`、日志字段、`napcat_account`、`mkl_threading_layer` | 重启主进程或生产启动链 |
+| `data_root`、`logging`、`napcat_account`、`mkl_threading_layer` | 重启主进程或生产启动链 |
 | 插件源码、Manifest 与 `watch_files` | `/reload`、插件 watcher 或 restart-only 环境的进程重启 |
 
-普通配置校验异常时继续使用 last-known-good 快照。
+运行中重新读取时，普通配置校验失败继续使用 last-known-good 快照；启动时的第一次读取没有可沿用的快照，见 [启动时读不到有效配置](#启动时读不到有效配置)。
 敏感来源缺失、损坏、不可读或与新公开配置尚未确认配对时立即进入 fail-closed 状态，撤销网络凭据与运行时管理员视图。
 管理员私聊中的 `/set_secret` 适用于已有 secret 路径，由 Core 完成持锁写入和 revision 发布。
 
@@ -631,6 +732,7 @@ Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。
 - 定时任务目标群、服务器地址等部署设置位于 config，仓库文件与发布版本一致。
 - 有效的 secrets 单文件替换由管理员核对字段摘要并执行 `/reload`；公开配置变更与双来源替换安排在停服窗口内。
 - `data_root`、日志目录和备份目录具有明确所有权。
+- Windows 生产启动链下 `logging.console` 为 `false`。
 - `plugin_execution` 为长任务插件配置合适预算。
 - Pendo Web Cookie Secure 与 HTTPS 部署保持一致。
 - 正式启动前完成 `python scripts/run_full_uat.py --plan-only` 和完整 UAT。

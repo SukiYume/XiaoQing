@@ -15,6 +15,7 @@ from core.bounded_http import (
     HttpStatusError,
 )
 from tests.helpers.arxiv_filter_test_support import RequestsResponse
+from tests.helpers.assertions import logged_events
 
 _ARXIV_TODAY       = "plugins.arxiv_filter.arxiv_today"
 _STEP2             = "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
@@ -191,14 +192,14 @@ def test_disabled_proxy_tls_verification_is_explicitly_logged(
 ) -> None:
     module = load_with_feedparser(_ARXIV_TODAY, lambda _body: None)
 
-    with caplog.at_level("WARNING", logger=module.logger.name):
+    with caplog.at_level("WARNING"):
         proxies, verify, _timeout = module._get_request_params(
             {"arxiv": {"proxy": "http://proxy.invalid", "use_ssl_verify": False}}
         )
 
     assert proxies == {"http": "http://proxy.invalid", "https": "http://proxy.invalid"}
     assert verify is False
-    assert "TLS certificate verification is disabled" in caplog.text
+    assert logged_events(caplog, "page.tls_verify_disabled")
 
 
 def test_step2_preserves_paging_and_validates_xml_before_feedparser(

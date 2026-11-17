@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,10 +12,13 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from core.ai import declare_route_defaults, resolve_route_config
+from core.log import LogEvent
 
 from ..constants import DEFAULT_BOT_NAME_ONLY_REPLIES, DEFAULT_FALLBACK_IDLE_REPLIES
 from ..llm.llm_config import LLMCallConfig
 from ..persona import PersonaCard, bundled_persona_card, load_persona_card, persona_card_path
+
+log = logging.getLogger(__name__)
 
 # 四条 route 各自的调用参数；主配置里只需要给每条 route 指定模型，要改时才在那边写同名字段。
 declare_route_defaults(
@@ -105,12 +109,6 @@ def _validated_regex_pattern(value: str) -> str:
     except re.error as exc:
         raise ValueError("invalid regex pattern") from exc
     return pattern
-
-
-class DebugConfig(BaseModel):
-    show_reply_prompt: bool = False
-    log_latency      : bool = False
-    log_steps        : bool = True
 
 
 class ResponseSplitterConfig(BaseModel):
@@ -527,7 +525,6 @@ class XiaoQingChatConfig(BaseModel):
     humanize        : HumanizeConfig = Field(default_factory=HumanizeConfig)
     life            : LifeConfig = Field(default_factory=LifeConfig)
     proactive       : ProactiveConfig = Field(default_factory=ProactiveConfig)
-    debug           : DebugConfig = Field(default_factory=DebugConfig)
 
     @field_validator("ban_regex")
     @classmethod
@@ -608,7 +605,6 @@ def load_xiaoqing_chat_config(
     *,
     context_config: Mapping[str, Any] | None,
     plugin_dir: Path,
-    logger: Any = None,
 ) -> XiaoQingChatConfig:
     """合并插件自带的行为文件和部署配置，再读入配置指向的人设卡。
 
@@ -633,12 +629,8 @@ def load_xiaoqing_chat_config(
     data = _merge_config_mappings(data, deployment)
 
     retired = _retired_persona_keys(data)
-    if retired and logger is not None:
-        logger.warning(
-            "xiaoqing_chat 人设已移到人设卡（personality.persona_file，默认 config/persona.md），"
-            "这些配置不再生效：%s",
-            "、".join(retired),
-        )
+    if retired:
+        log.warning(LogEvent("config.persona_keys_retired", keys="+".join(retired)))
     personality             = dict(data.get("personality") or {})
     persona_file            = str(personality.get("persona_file") or "")
     personality["card"]     = load_persona_card(persona_card_path(plugin_dir, persona_file))

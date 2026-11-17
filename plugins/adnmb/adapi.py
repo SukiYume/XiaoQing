@@ -27,10 +27,11 @@ from core.image_validation import (
     validate_image_bytes,
     validate_image_path,
 )
+from core.log import LogEvent
 from core.plugin_base import bounded_external_text
 from core.safe_http import SafeHttpError, fetch_public_bytes
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 API_HOST  = "https://www.nmbxd1.com"
 IMAGE_CDN = "https://image.nmb.best"
@@ -289,8 +290,8 @@ class AdnmbClient:
             except (ImageValidationError, OSError):
                 try:
                     await asyncio.to_thread(cached_path.unlink, missing_ok=True)
-                except OSError:
-                    logger.debug("Invalid ADNMB image cache could not be removed")
+                except OSError as exc:
+                    log.error(LogEvent("cache.corrupt_unlink_failed", error=exc))
 
         try:
             fetched = await fetch_public_bytes(
@@ -302,7 +303,7 @@ class AdnmbClient:
                 allowed_schemes               = {"https"},
             )
             if fetched is None:
-                logger.warning("Image download failed: %s", url)
+                log.warning(LogEvent("image.download_failed", url=url))
                 return None
 
             content_type = (
@@ -327,8 +328,8 @@ class AdnmbClient:
                 await asyncio.to_thread(self._image_cache.put, filename, fetched.body),
             )
         except (SafeHttpError, ValueError) as exc:
-            logger.warning("Image download rejected error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("image.download_rejected", error=exc))
         except Exception as exc:
-            logger.warning("Image download error error_type=%s", type(exc).__name__)
+            log.warning(LogEvent("image.download_failed", error=exc))
 
         return None

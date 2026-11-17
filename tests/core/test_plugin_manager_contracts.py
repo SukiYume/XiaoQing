@@ -10,6 +10,7 @@ import pytest
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from core.plugin_manager_support import PluginDefinition
 from core.plugin_watcher import _ManifestRejection
+from tests.helpers.assertions import logged_events
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.plugin_manager_test_support import (
     CommandRouter,
@@ -61,8 +62,10 @@ def test_notify_change_warning_identifies_the_plugin(tmp_path: Path, caplog):
 
     manager._notify_change("demo")
 
-    assert "plugin=demo" in caplog.text
-    assert "broken callback" in caplog.text
+    (failed,) = logged_events(caplog, "plugin.change_handler.failed")
+    assert failed.fields["plugin"] == "demo"
+    assert failed.fields["error"] == "RuntimeError"
+    assert "broken callback" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -268,7 +271,8 @@ def test_load_definition_rejects_invalid_manifest(tmp_path: Path, caplog, manife
     rejection = manager._load_definition(plugin_dir)
     assert isinstance(rejection, _ManifestRejection)
     assert rejection.bucket == "invalid"
-    assert "Invalid plugin.json" in caplog.text
+    (rejected,) = logged_events(caplog, "plugin.manifest.invalid")
+    assert rejected.fields["plugin"] == "demo"
 
 
 @pytest.mark.parametrize(
@@ -429,7 +433,8 @@ def test_load_definition_rejects_missing_required_python_dependency(tmp_path: Pa
     rejection = manager._load_definition(plugin_dir)
     assert isinstance(rejection, _ManifestRejection)
     assert rejection.bucket == "dependency"
-    assert "requires Python dependency missing_xiaoqing_dependency" in caplog.text
+    (missing,) = logged_events(caplog, "plugin.manifest.dependency_missing")
+    assert missing.fields["dependency"] == "missing_xiaoqing_dependency"
 
 
 def test_dependency_probe_never_imports_plugin_parent_package(tmp_path: Path) -> None:
@@ -479,7 +484,8 @@ def test_load_definition_allows_missing_optional_python_dependency(tmp_path: Pat
 
     assert definition is not None
     assert definition.dependencies == ["missing_xiaoqing_dependency"]
-    assert "optional Python dependency missing_xiaoqing_dependency is unavailable" in caplog.text
+    (missing,) = logged_events(caplog, "plugin.manifest.optional_dependency_missing")
+    assert missing.fields["dependency"] == "missing_xiaoqing_dependency"
 
 
 def test_all_active_plugin_manifests_validate_against_the_strict_schema():

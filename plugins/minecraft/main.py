@@ -17,6 +17,7 @@ from core.args import parse
 from core.delivery import DeliveryReceipt, send_with_receipt
 from core.interfaces import DeliveryTarget, PluginContextProtocol
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 from core.message import sender_display_name
 from core.plugin_base import (
     Segments,
@@ -25,11 +26,10 @@ from core.plugin_base import (
     run_sync,
     segments,
 )
-from core.sensitive_audit import audit_error_type, summarize_sensitive
-from core.sensitive_audit import safe_request_id as audit_request_id
+from core.public_errors import public_error_response
 
 from .connection import ConnectionManager, McConnection
-from .log_monitor import PLAYER_NAME_PATTERN, LogBatch, LogEvent, LogEventType, LogMonitor
+from .log_monitor import PLAYER_NAME_PATTERN, LogBatch, LogMonitor, PlayerEvent, PlayerEventType
 from .rcon import (
     RCON_MAX_OUTBOUND_PAYLOAD_BYTES,
     RconClient,
@@ -38,7 +38,7 @@ from .rcon import (
     is_valid_rcon_port,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 # QQ 投递与日志洪泛边界。
 MC_MAX_EVENTS_PER_CONNECTION      = 12
@@ -114,7 +114,7 @@ async def shutdown(_context: PluginContextProtocol | None) -> None:
         await _manager.cleanup_all()
         _event_buckets.clear()
         _delivery_cursor = 0
-    logger.info("Minecraft plugin shutdown completed")
+    log.info(LogEvent("shutdown.done"))
 
 
 def _show_help() -> str:
@@ -239,7 +239,7 @@ def _create_log_monitor(
             else context.plugin_dir / configured_path
         )
         if not log_path.is_file():
-            logger.warning("Minecraft log monitor unavailable reason=not_file")
+            log.warning(LogEvent("log_monitor.unavailable", reason_code="not_file"))
             return None
 
         resolved_path = log_path.resolve(strict=True)
@@ -254,10 +254,7 @@ def _create_log_monitor(
         )
         return monitor if monitor.initialize() else None
     except Exception as exc:
-        logger.warning(
-            "Minecraft log monitor unavailable error_type=%s",
-            audit_error_type(exc),
-        )
+        log.warning(LogEvent("log_monitor.unavailable", error=exc))
         return None
 
 
@@ -274,8 +271,7 @@ async def handle(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error("Minecraft handle failed error_type=%s", audit_error_type(exc))
-        return segments("❌ 处理 Minecraft 请求失败，请稍后重试")
+        return public_error_response(context, exc, component="minecraft.handle")
 
 
 async def _dispatch_command(
@@ -296,7 +292,7 @@ async def _dispatch_command(
     if normalized_command in {"mcdisconnect", "mc断开"}:
         if args.strip():
             return segments("用法: /mcdisconnect")
-        return await _handle_disconnect(target, context)
+        return await _handle_disconnect(target)
     return segments("未知命令")
 
 
@@ -321,25 +317,25 @@ async def _dispatch_mc_command(
     if subcommand in {"disconnect", "断开"}:
         if len(parsed) != 1 or parsed.options:
             return segments("用法: /mc disconnect")
-        return await _handle_disconnect(target, context)
+        return await _handle_disconnect(target)
     if subcommand in {"status", "状态"}:
         if len(parsed) != 1 or parsed.options:
             return segments("用法: /mc status")
-        return _handle_status_command(target, context)
+        return _handle_status_command(target)
     if subcommand == "list":
         if len(parsed) != 1 or parsed.options:
             return segments("用法: /mc list")
-        return await _handle_mc_command("list", target, context)
+        return await _handle_mc_command("list", target)
     if subcommand == "say":
-        return await _handle_say(args, event, target, context)
+        return await _handle_say(args, event, target)
     if subcommand == "tell":
-        return await _handle_tell(args, event, target, context)
+        return await _handle_tell(args, event, target)
     if subcommand in {"run", "执行"}:
         # 谁能执行由 plugin.json 里 run 的声明决定，Core 在调用插件前就检查过了。
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2:
             return segments("用法: /mc run <服务器命令>")
-        return await _handle_mc_command(parts[1], target, context)
+        return await _handle_mc_command(parts[1], target)
     return segments(
         "❓ 没有这个用法。聊天用 /mc say、/mc tell，服务器命令用 /mc run <命令>；/mc help 查看全部"
     )
@@ -375,12 +371,7 @@ def _chat_component(event: dict[str, Any], message: str, *, whisper: bool = Fals
     )
 
 
-async def _handle_say(
-    args: str,
-    event: dict[str, Any],
-    target: DeliveryTarget,
-    context: PluginContextProtocol,
-) -> Segments:
+async def _handle_say(args: str, event: dict[str, Any], target: DeliveryTarget) -> Segments:
     parts = args.strip().split(maxsplit=1)
     message = _chat_text(
         parts[1] if len(parts) > 1 else "",
@@ -392,17 +383,11 @@ async def _handle_say(
     return await _handle_mc_command(
         f"tellraw @a {_chat_component(event, message)}",
         target,
-        context,
         empty_reply="✅ 已发到游戏",
     )
 
 
-async def _handle_tell(
-    args: str,
-    event: dict[str, Any],
-    target: DeliveryTarget,
-    context: PluginContextProtocol,
-) -> Segments:
+async def _handle_tell(args: str, event: dict[str, Any], target: DeliveryTarget) -> Segments:
     parts = args.strip().split(maxsplit=2)
     player  = parts[1] if len(parts) > 1 else ""
     message = _chat_text(
@@ -415,7 +400,6 @@ async def _handle_tell(
     return await _handle_mc_command(
         f"tellraw {player} {_chat_component(event, message, whisper=True)}",
         target,
-        context,
         empty_reply=f"✅ 已悄悄发给 {player}",
     )
 
@@ -433,17 +417,8 @@ async def _handle_connect(
     except _MinecraftConfigError as exc:
         return segments(f"❌ {exc}")
 
-    target_audit = summarize_sensitive("\0".join((server.host, str(server.port), server.log_file)))
-    request_id   = audit_request_id(context)
-    logger.info(
-        "sensitive_audit operation=minecraft.connect request_id=%s status=started "
-        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-        request_id,
-        target_audit.kind,
-        target_audit.length,
-        target_audit.byte_length,
-        target_audit.fingerprint,
-    )
+    target_payload = "\0".join((server.host, str(server.port), server.log_file))
+    log.info(LogEvent("connect", status="started", payload=target_payload))
 
     try:
         client         = RconClient(server.host, server.port, server.password)
@@ -451,17 +426,17 @@ async def _handle_connect(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error(
-            "Minecraft connect status=failed request_id=%s error_type=%s",
-            request_id,
-            audit_error_type(exc),
-        )
-        return segments("❌ RCON 连接初始化失败")
+        log.error(LogEvent("connect", status="failed", payload=target_payload, error=exc))
+        return public_error_response(context, exc, component="minecraft.connect")
     if not connect_result.success:
-        logger.warning(
-            "Minecraft connect status=failed request_id=%s error_kind=%s",
-            request_id,
-            connect_result.error_kind.value if connect_result.error_kind else "unknown",
+        error_kind = connect_result.error_kind
+        log.warning(
+            LogEvent(
+                "connect",
+                status     = "failed",
+                payload    = target_payload,
+                error_kind = error_kind.value if error_kind else "unknown",
+            )
         )
         return segments(f"❌ {connect_result.error_message}")
 
@@ -476,15 +451,7 @@ async def _handle_connect(
             log_monitor = monitor,
         )
     )
-    logger.info(
-        "sensitive_audit operation=minecraft.connect request_id=%s status=success "
-        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-        request_id,
-        target_audit.kind,
-        target_audit.length,
-        target_audit.byte_length,
-        target_audit.fingerprint,
-    )
+    log.info(LogEvent("connect", status="success", payload=target_payload))
 
     if monitor is not None:
         log_status = "✅ 已启用"
@@ -522,24 +489,17 @@ def _schedule_reaches(context: PluginContextProtocol, conn: McConnection) -> boo
     return conn.target in tuple(getattr(principal, "delivery_targets", ()))
 
 
-async def _handle_disconnect(
-    target: DeliveryTarget,
-    context: PluginContextProtocol,
-) -> Segments:
+async def _handle_disconnect(target: DeliveryTarget) -> Segments:
     disconnected = await _manager.disconnect_connection(target)
     if disconnected is None:
         return segments("❌ 当前无连接")
-    logger.info(
-        "Minecraft audit operation=disconnect request_id=%s status=success",
-        audit_request_id(context),
-    )
+    log.info(LogEvent("disconnect", status="success"))
     return segments("✅ 已断开连接")
 
 
 async def _handle_mc_command(
     args: str,
     target: DeliveryTarget,
-    context: PluginContextProtocol,
     *,
     empty_reply: str = "✅ 命令执行成功（空响应）",
 ) -> Segments:
@@ -552,55 +512,26 @@ async def _handle_mc_command(
     command = args.strip()
     if not command:
         return segments("❌ 请提供要执行的命令")
-    command_audit = summarize_sensitive(command)
-    request_id    = audit_request_id(context)
     try:
         result = await conn.rcon_client.command(command)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error(
-            "sensitive_audit operation=minecraft.command request_id=%s status=failed "
-            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-            "error_type=%s",
-            request_id,
-            command_audit.kind,
-            command_audit.length,
-            command_audit.byte_length,
-            command_audit.fingerprint,
-            audit_error_type(exc),
-        )
+        log.error(LogEvent("command", status="failed", payload=command, error=exc))
         return segments("❌ RCON 命令执行失败，请重新连接后重试")
 
     if not result.success:
-        logger.warning(
-            "sensitive_audit operation=minecraft.command request_id=%s status=failed "
-            "error_kind=%s payload_kind=%s payload_length=%d payload_bytes=%d "
-            "payload_fingerprint=%s",
-            request_id,
-            result.error_kind.value if result.error_kind else "unknown",
-            command_audit.kind,
-            command_audit.length,
-            command_audit.byte_length,
-            command_audit.fingerprint,
+        log.warning(
+            LogEvent(
+                "command",
+                status     = "failed",
+                payload    = command,
+                error_kind = result.error_kind.value if result.error_kind else "unknown",
+            )
         )
         return segments(f"❌ {result.error_message}")
 
-    response_audit = summarize_sensitive(result.response)
-    logger.info(
-        "sensitive_audit operation=minecraft.command request_id=%s status=success "
-        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-        "response_kind=%s response_length=%d response_bytes=%d response_fingerprint=%s",
-        request_id,
-        command_audit.kind,
-        command_audit.length,
-        command_audit.byte_length,
-        command_audit.fingerprint,
-        response_audit.kind,
-        response_audit.length,
-        response_audit.byte_length,
-        response_audit.fingerprint,
-    )
+    log.info(LogEvent("command", status="success", payload=command, response=result.response))
     if not result.response:
         return segments(empty_reply)
     truncation_warning = "\n⚠️ 响应可能不完整（续包等待超时）" if result.truncated else ""
@@ -614,18 +545,12 @@ async def _handle_mc_command(
     return segments(f"📤 {response}{truncation_warning}")
 
 
-def _handle_status_command(
-    target: DeliveryTarget,
-    context: PluginContextProtocol,
-) -> Segments:
+def _handle_status_command(target: DeliveryTarget) -> Segments:
     conn = _manager.get_connection(target)
     if conn is None:
         return segments("❌ 未连接到任何服务器")
     log_status = "✅ 正常" if conn.log_monitor is not None else "未启用"
-    logger.debug(
-        "Minecraft audit operation=status request_id=%s status=success",
-        audit_request_id(context),
-    )
+    log.debug(LogEvent("status", status="success"))
     return segments(f"📊 连接状态\n服务器: {conn.host}:{conn.port}\n日志监控: {log_status}")
 
 
@@ -644,7 +569,7 @@ def _message_fits_budget(message: str) -> bool:
     )
 
 
-def _format_event_message(event: LogEvent) -> str:
+def _format_event_message(event: PlayerEvent) -> str:
     player = bounded_external_text(
         event.player,
         max_chars = 16,
@@ -659,13 +584,13 @@ def _format_event_message(event: LogEvent) -> str:
         suffix    = "…",
         strip     = False,
     )
-    if event.event_type is LogEventType.CHAT:
+    if event.event_type is PlayerEventType.CHAT:
         return f"🎮 [MC] {player}: {message}"
-    if event.event_type is LogEventType.JOIN:
+    if event.event_type is PlayerEventType.JOIN:
         return f"🎮 {player} 加入了游戏"
-    if event.event_type is LogEventType.LEAVE:
+    if event.event_type is PlayerEventType.LEAVE:
         return f"🎮 {player} 离开了游戏"
-    if event.event_type is LogEventType.DEATH:
+    if event.event_type is PlayerEventType.DEATH:
         return f"💀 {player} {message}"
     return f"🏆 {player} 获得成就 [{message}]"
 
@@ -718,31 +643,20 @@ async def _send_mc_action(
         )
     except TimeoutError:
         await receipt.record(None)
-        logger.warning(
-            "Minecraft log delivery status=unknown reason=timeout target_type=%s",
-            conn.target.kind,
+        log.warning(
+            LogEvent("log_delivery.unknown", reason_code="timeout", target_type=conn.target.kind)
         )
         return
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         await receipt.record(False)
-        logger.error(
-            "Minecraft log delivery status=failed target_type=%s error_type=%s",
-            conn.target.kind,
-            audit_error_type(exc),
-        )
+        log.error(LogEvent("log_delivery.failed", target_type=conn.target.kind, error=exc))
         return
     if outcome is False:
-        logger.warning(
-            "Minecraft log delivery status=rejected target_type=%s",
-            conn.target.kind,
-        )
+        log.warning(LogEvent("log_delivery.rejected", target_type=conn.target.kind))
     elif outcome is None:
-        logger.warning(
-            "Minecraft log delivery status=unknown target_type=%s",
-            conn.target.kind,
-        )
+        log.warning(LogEvent("log_delivery.unknown", target_type=conn.target.kind))
 
 
 def _commit_log_batch(conn: McConnection, batch: LogBatch) -> bool:
@@ -751,13 +665,10 @@ def _commit_log_batch(conn: McConnection, batch: LogBatch) -> bool:
     try:
         committed = conn.log_monitor.commit(batch)
     except Exception as exc:
-        logger.error(
-            "Minecraft log cursor commit status=failed error_type=%s",
-            audit_error_type(exc),
-        )
+        log.error(LogEvent("log_cursor.commit_failed", error=exc))
         return False
     if not committed:
-        logger.error("Minecraft log cursor commit status=rejected reason=stale_batch")
+        log.error(LogEvent("log_cursor.commit_rejected", reason_code="stale_batch"))
     return bool(committed)
 
 
@@ -769,10 +680,7 @@ async def _poll_connection(conn: McConnection) -> tuple[McConnection, LogBatch] 
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.error(
-            "Minecraft log polling status=failed error_type=%s",
-            audit_error_type(exc),
-        )
+        log.error(LogEvent("poll.failed", error=exc))
         return None
     if batch.events or batch.dropped_events or batch.skipped_bytes:
         return conn, batch
@@ -787,11 +695,7 @@ async def _deliver_log_batch(
     batch: LogBatch,
 ) -> None:
     message, event_total, granted = _batch_message(conn, batch, now=time.monotonic())
-    logger.info(
-        "Minecraft log delivery status=started target_type=%s event_count=%d",
-        conn.target.kind,
-        event_total,
-    )
+    log.info(LogEvent("log_delivery.start", target_type=conn.target.kind, event_count=event_total))
 
     async def commit_cursor() -> None:
         if not await to_thread_owned(_commit_log_batch, conn, batch):
@@ -837,7 +741,7 @@ async def scheduled(context: PluginContextProtocol) -> None:
     """并发轮询日志，按轮转顺序选择至多五个独立目标进行投递。"""
 
     if _schedule_lock.locked():
-        logger.warning("Minecraft log schedule status=skipped reason=previous_tick_running")
+        log.warning(LogEvent("log_schedule.skipped", reason_code="previous_tick_running"))
         return
     async with _schedule_lock:
         await _run_scheduled(context)

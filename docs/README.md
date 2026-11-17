@@ -22,7 +22,6 @@
 | [08 - 消息流程](08-message-flow.md) | OneBot 事件从接收到回复的完整路径 | 排障人员、框架维护者 |
 | [09 - 插件使用手册](09-plugins.md) | 34 个内置插件的用途、命令、配置与数据，命令入口速查和定时任务总表 | 用户、管理员 |
 | [Pendo Scriptable 小组件](pendo-scriptable-widget.md) | iPhone 小组件鉴权、脚本和设置步骤 | Pendo 用户 |
-| [小青人物形象设计册](character-design/README.md) | 三视图、表情、服装配饰、动作参考与 Live2D 制作交接 | 画师、建模师、内容创作者 |
 | [更新记录](../CHANGELOG.md) | 各版本的功能变化、影响范围和验证结果 | 用户、维护者 |
 
 ---

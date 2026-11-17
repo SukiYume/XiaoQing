@@ -13,6 +13,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from xml.etree import ElementTree
 
+from core.log import LogEvent
+
 from ..safety import clean_text, is_blocked, is_profane, normalize_for_match
 from .base import (
     TEXT_CHARS,
@@ -28,7 +30,7 @@ from .base import (
 from .bilibili import API, REFERER, bvid_of
 from .subtitle import format_at
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 MAX_DANMAKU_REFS  = 20
 MAX_DANMAKU_CHARS = 40
@@ -146,12 +148,12 @@ async def watch(
                 cid        = cid,
             )
     except SourceError as exc:
-        logger.info("xiaoqing_life step=source name=bili_view failed reason=%s", exc.reason)
+        log.warning(LogEvent("source.failed", source="bili_view", reason_code=exc.reason))
     try:
         tags = await _tags(fetch, bvid)
         updated = replace(updated, tags=tuple(dict.fromkeys((*updated.tags, *tags)))[:8])
     except SourceError as exc:
-        logger.info("xiaoqing_life step=source name=bili_tags failed reason=%s", exc.reason)
+        log.warning(LogEvent("source.failed", source="bili_tags", reason_code=exc.reason))
     if cid:
         try:
             body = await fetch.get_xml(
@@ -160,5 +162,5 @@ async def watch(
             danmaku, dense = process_danmaku(parse_danmaku_xml(body), item_index, blocked)
             updated = replace(updated, danmaku=danmaku, dense_moment=dense)
         except SourceError as exc:
-            logger.info("xiaoqing_life step=source name=bili_danmaku failed reason=%s", exc.reason)
+            log.warning(LogEvent("source.failed", source="bili_danmaku", reason_code=exc.reason))
     return updated

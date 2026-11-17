@@ -9,11 +9,13 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from core.log import LogEvent
+
 from ..models.item import ItemType
 from ..utils.time_utils import TimezoneHelper, utc_now_iso
 from ..utils.validators import EVENT_ROLES
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _ADD_COLUMN_NAME = re.compile(
     r"\bADD\s+COLUMN\s+(?:\"(?P<double>[^\"]+)\"|`(?P<backtick>[^`]+)`|"
@@ -358,7 +360,7 @@ def reminder_fire_at_utc(remind_time: str, timezone_name: str) -> str | None:
         user_timezone = ZoneInfo(timezone_name)
         parsed        = cast(datetime, TimezoneHelper.parse(remind_time, user_timezone))
     except (KeyError, TypeError, ValueError):
-        logger.warning("Invalid reminder schedule")
+        log.warning(LogEvent("reminder_schedule.invalid"))
         return None
     return parsed.astimezone(UTC).isoformat()
 

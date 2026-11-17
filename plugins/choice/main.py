@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import Any
 
 from core.args import tokenize
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import Segments, segments
 from core.public_errors import public_error_response
+
+logger = logging.getLogger(__name__)
 
 MIN_OPTIONS        = 2
 MAX_OPTIONS        = 50
@@ -167,24 +171,21 @@ async def handle(
 
         choices        = make_choice(options, choice_count, unique)
         distinct_count = len(dict.fromkeys(options))
-        context.logger.info(
-            "随机选择：问题长度=%d，候选位置=%d，不同选项=%d，选择数=%d，去重=%s",
-            len(question),
-            len(options),
-            distinct_count,
-            choice_count,
-            unique,
+        logger.info(
+            LogEvent(
+                "choice.made",
+                question_length = len(question),
+                options         = len(options),
+                distinct        = distinct_count,
+                count           = choice_count,
+                unique          = unique,
+            )
         )
         total_options = distinct_count if unique else len(options)
         result        = format_choice_result(question, choices, total_options)
-        context.logger.debug("随机选择完成：结果数=%d", len(choices))
+        logger.debug(LogEvent("choice.done", results=len(choices)))
         return segments(result)
     except ChoiceArgumentError as exc:
         return segments(f"❌ {exc}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger    = context.logger,
-            component = "choice.handle",
-        )
+        return public_error_response(context, exc, component="choice.handle")

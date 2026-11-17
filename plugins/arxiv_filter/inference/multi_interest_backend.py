@@ -6,7 +6,6 @@
 输出：(probs: list[float], preds: list[int])
 """
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,8 +26,6 @@ from .shared import (
     run_cached_embedding_model,
     validated_columns,
 )
-
-logger = logging.getLogger(__name__)
 
 _MODEL_CACHE: dict[tuple[str, str, int, int], "MultiInterestInferenceModel"] = {}
 

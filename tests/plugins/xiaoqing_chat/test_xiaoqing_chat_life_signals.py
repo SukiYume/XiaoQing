@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -18,6 +18,7 @@ from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonRecord, Jargo
 from plugins.xiaoqing_chat.life import online
 from plugins.xiaoqing_chat.media import event_media
 from plugins.xiaoqing_chat.media.models import RenderedMedia
+from tests.helpers.assertions import logged_events
 from tests.helpers.xiaoqing_chat_media_test_support import make_media_runtime
 
 NOW = time.time()
@@ -81,7 +82,6 @@ async def test_fetch_online_life_sends_group_topics_and_jargon(tmp_path: Path) -
         capabilities=SimpleNamespace(life_context=capability),
         data_dir   = tmp_path,
         request_id = "r",
-        logger     = MagicMock(),
     )
     runtime = SimpleNamespace(cfg=XiaoQingChatConfig())
     await online.fetch_online_life(
@@ -126,15 +126,16 @@ def _received_emoji(path: Path, color: str, *, striped: bool = False) -> Rendere
 
 @pytest.mark.asyncio
 async def test_collected_emoji_is_logged_and_failures_are_not_silent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO, logger="plugins.xiaoqing_chat")
     runtime = make_media_runtime(enable_auto_collect_inbound_emoji=True)
-    context = SimpleNamespace(logger=MagicMock(), data_dir=tmp_path)
+    context = SimpleNamespace(data_dir=tmp_path)
     event    = {"message_id": 1, "group_id": 2, "user_id": 3}
     received = _received_emoji(tmp_path / "red.png", "red")
     assert await event_media._collected_new_emoji(received, event, context=context, runtime=runtime)
-    logged = context.logger.info.call_args[0][1]
-    assert '"media.emoji.collect"' in logged and '"new": true' in logged
+    (collected,) = logged_events(caplog, "media.emoji.collect")
+    assert collected.fields["new"] is True
 
     def boom(*_: Any, **__: Any) -> Any:
         raise OSError("disk")
@@ -145,8 +146,8 @@ async def test_collected_emoji_is_logged_and_failures_are_not_silent(
     assert not await event_media._collected_new_emoji(
         failing, event, context=context, runtime=runtime
     )
-    warned = context.logger.warning.call_args[0][1]
-    assert '"media.emoji.collect_error"' in warned and "OSError" in warned
+    (warned,) = logged_events(caplog, "media.emoji.collect_error")
+    assert warned.fields["error"] == "OSError"
 
 
 def test_terms_life_verified_become_confirmed_group_jargon(tmp_path: Path) -> None:

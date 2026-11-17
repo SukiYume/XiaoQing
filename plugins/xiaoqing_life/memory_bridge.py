@@ -13,11 +13,13 @@ import asyncio
 import logging
 from typing import Any
 
+from core.log import LogEvent
+
 from .config import LifeConfig
 from .stores import LifeStore
 from .turn_context import diary_key
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 CURSOR_KEY     = "memory_cursor"
 _CHUNK         = 40
@@ -147,14 +149,12 @@ async def publish(
                 timeout=_TIMEOUT,
             )
         except Exception as exc:
-            logger.info(
-                "xiaoqing_life step=memory_publish.skipped error_type=%s", type(exc).__name__
-            )
+            log.warning(LogEvent("memory_publish.skipped", error=exc))
             return 0
         if not isinstance(result, dict) or result.get("error"):
             return 0
     if settled:
         await store.mutate(lambda s: s.state.__setitem__(CURSOR_KEY, now))
     if ops:
-        logger.info("xiaoqing_life step=memory_publish items=%d", len(ops))
+        log.info(LogEvent("memory_publish", items=len(ops)))
     return len(ops)

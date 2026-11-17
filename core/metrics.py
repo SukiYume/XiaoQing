@@ -7,6 +7,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from .log import LogEvent
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +108,12 @@ class MetricsCollector:
                 stats.record(duration, self._slow_threshold, is_error, is_cancelled)
         if duration > self._slow_threshold:
             logger.warning(
-                "Slow plugin execution: %s.%s took %.2fs", plugin_name, command_name, duration
+                LogEvent(
+                    "plugin.slow",
+                    plugin       = plugin_name,
+                    command_name = command_name,
+                    duration_s   = round(duration, 2),
+                )
             )
 
     def summary_snapshot(self) -> dict[str, Any]:

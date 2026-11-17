@@ -49,7 +49,7 @@ Install reviewed first-party plugins or other trusted plugins.
 | Background tasks | Plugins use proactive-send capabilities to return text, images, and files from long tasks. |
 | Scheduled tasks | Manifests declare cron expressions, delivery modes, and target groups. Core schedules, validates, and sends results. |
 | Settings | Snapshots, secret protection, file watchers, and runtime reloads manage settings. |
-| Runtime observation | Logs, request IDs, plugin error codes, and `/metrics` supply runtime information. |
+| Runtime observation | Logs, request IDs, plugin error replies that state the reason and location, and `/metrics` supply runtime information. |
 
 See [Architecture](docs/en/02-architecture.md) and [Message flow](docs/en/08-message-flow.md).
 
@@ -93,7 +93,7 @@ Edit the copied `config/config.json` and check these fields:
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
-  "log_level": "INFO",
+  "logging": {"level": "INFO", "levels": {}, "console": true, "file": true, "keep_days": 5},
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -226,7 +226,7 @@ Settings use two files:
 - `config/config.json` contains OneBot addresses, command prefixes, logging, AI models, plugin settings, and execution limits.
 - `config/secrets.json` contains the Inbound token, administrator QQ IDs, AI provider keys, and external credentials.
 
-When ordinary settings are invalid, Core keeps the last known valid snapshot. When secrets are missing, damaged, or inconsistent with the public settings, Core revokes credentials (fail-closed). There are three ways to change settings during operation:
+If `config.json` is missing or invalid at startup, the process logs the cause and exits with code 1. When ordinary settings become invalid during operation, Core keeps the last known valid snapshot. When secrets are missing, damaged, or inconsistent with the public settings, Core revokes credentials (fail-closed). There are three ways to change settings during operation:
 
 - Change an existing secret: an administrator sends `/set_secret <path> <value>` in private chat.
 - An external tool rewrites `secrets.json`: Core privately lists the changed field paths (without values) to administrators, who examine them and send `/reload` to apply.
@@ -282,9 +282,9 @@ When the Bot does not respond, examine these items first:
 1. The OneBot and XiaoQing processes are running.
 2. The Inbound URL or active WebSocket URI matches the settings on both sides.
 3. The reporter's Bearer token equals `inbound_token`, and `onebot_token` is correct for the reply channel.
-4. Connection state, error codes, and request IDs in the logs.
+4. Connection state and request IDs in `logs/xiaoqing.log`. When a reply reads `操作失败：…`, find the matching `public_error` line by the request ID it carries.
 
-See [Troubleshooting in Getting started](docs/en/01-getting-started.md#-troubleshooting) for unresponsive group commands, few ordinary chat replies, port binding, Pendo Web login, failed AI calls, and secret-candidate notifications.
+See [Troubleshooting in Getting started](docs/en/01-getting-started.md#-troubleshooting) for a process that exits right after start, unresponsive group commands, few ordinary chat replies, port binding, Pendo Web login, failed AI calls, and secret-candidate notifications.
 
 ## License
 

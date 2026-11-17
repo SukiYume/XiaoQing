@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +11,6 @@ from typing import Any
 import pytest
 
 from core.interfaces import DeliveryTarget
-from core.sensitive_audit import summarize_sensitive
 from plugins.minecraft import main as minecraft
 from plugins.minecraft.log_monitor import LogMonitor
 from plugins.minecraft.rcon import RconCommandResult
@@ -20,14 +18,13 @@ from plugins.qingssh import session_handlers as qingssh_session_handlers
 from plugins.qingssh.config import SessionKeys
 from plugins.qingssh.output_relay import SSHOutputPolicy
 from plugins.qingssh.ssh_manager import SSHManager
+from tests.helpers.assertions import logged_events, public_error_reply, redacted_field
 
-COMMAND_CANARY       = "printf COMMAND_SECRET && token=TOKEN_SECRET"
-OUTPUT_CANARY        = "REMOTE_RESPONSE_SECRET"
-HOST_CANARY          = "private-host.internal"
-PATH_CANARY          = "C:/private/PATH_SECRET/latest.log"
-ERROR_CANARY         = "EXCEPTION_SECRET"
-MALICIOUS_REQUEST_ID = "safe\nREQUEST_SECRET"
-_FINGERPRINT_RE      = re.compile(r"hmac-sha256:[0-9a-f]{24}")
+COMMAND_CANARY = "printf COMMAND_SECRET && token=TOKEN_SECRET"
+OUTPUT_CANARY  = "REMOTE_RESPONSE_SECRET"
+HOST_CANARY    = "private-host.internal"
+PATH_CANARY    = "C:/private/PATH_SECRET/latest.log"
+ERROR_CANARY   = "EXCEPTION_SECRET"
 
 
 class _Session:
@@ -83,12 +80,6 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
         actions.append(action)
         return True
 
-    context = SimpleNamespace(
-        request_id       = MALICIOUS_REQUEST_ID,
-        send_action      = _send_action,
-        current_user_id  = 1,
-        current_group_id = None,
-    )
     policy = SSHOutputPolicy(
         command_timeout_seconds  = 0,
         qq_send_interval_seconds = 0,
@@ -107,7 +98,7 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
         task = asyncio.create_task(
             qingssh_session_handlers._run_background_command(
                 update_session,
-                context.send_action,
+                _send_action,
                 _Manager(),
                 HOST_CANARY,
                 COMMAND_CANARY,
@@ -116,9 +107,8 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
                 1,
                 None,
                 policy,
-                job_key    = job_key,
-                job_id     = job_id,
-                request_id = MALICIOUS_REQUEST_ID,
+                job_key = job_key,
+                job_id  = job_id,
             )
         )
         qingssh_session_handlers._register_job(
@@ -133,18 +123,11 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
 
     assert command_seen == [COMMAND_CANARY]
     assert OUTPUT_CANARY in _action_texts(actions)
-    logs = "\n".join(record.getMessage() for record in caplog.records)
-    for secret in (
-        COMMAND_CANARY,
-        OUTPUT_CANARY,
-        HOST_CANARY,
-        "REQUEST_SECRET",
-    ):
-        assert secret not in logs
-    assert summarize_sensitive(COMMAND_CANARY).fingerprint in logs
-    assert f"payload_length={len(COMMAND_CANARY)}" in logs
-    assert "request_id=-" in logs
-    assert _FINGERPRINT_RE.search(logs)
+    for secret in (COMMAND_CANARY, OUTPUT_CANARY, HOST_CANARY):
+        assert secret not in caplog.text
+    [completed] = logged_events(caplog, "command")
+    assert completed.fields["status"] == "completed"
+    assert completed.fields["payload"] == redacted_field(COMMAND_CANARY)
     assert all(record.exc_info is None for record in caplog.records)
 
 
@@ -155,7 +138,6 @@ async def test_qingssh_path_and_exception_are_fingerprinted_not_logged(
 ) -> None:
     context = SimpleNamespace(
         request_id = "req-ssh-path",
-        logger     = logging.getLogger("test.qingssh.manager"),
         secrets    = {"plugins": {"qingssh": {"password": ERROR_CANARY}}},
     )
     manager = SSHManager(tmp_path, context=context)
@@ -182,14 +164,14 @@ async def test_qingssh_path_and_exception_are_fingerprinted_not_logged(
 
     assert success is False
     assert ERROR_CANARY not in admin_message
-    assert "XQ-PLUGIN-UNEXPECTED" in admin_message
+    assert public_error_reply(admin_message)["request_id"] == "req-ssh-path"
     logs = "\n".join(record.getMessage() for record in caplog.records)
     assert ERROR_CANARY not in logs
     assert PATH_CANARY not in logs
     assert local_path not in logs
-    assert summarize_sensitive("\0".join((PATH_CANARY, local_path))).fingerprint in logs
-    assert "error_type=RuntimeError" in logs
-    assert all(record.exc_info is None for record in caplog.records)
+    [failed] = logged_events(caplog, "download")
+    assert failed.fields["payload"] == redacted_field("\0".join((PATH_CANARY, local_path)))
+    assert failed.fields["error"] == "RuntimeError"
 
 
 @pytest.mark.asyncio
@@ -217,30 +199,18 @@ async def test_minecraft_command_response_and_host_stay_out_of_logs(
         )
     )
     monkeypatch.setattr(minecraft, "_manager", manager)
-    context = SimpleNamespace(request_id=MALICIOUS_REQUEST_ID)
 
     with caplog.at_level(logging.INFO):
-        response = await minecraft._handle_mc_command(
-            COMMAND_CANARY,
-            target,
-            context,
-        )
+        response = await minecraft._handle_mc_command(COMMAND_CANARY, target)
 
     assert rcon.commands == [COMMAND_CANARY]
     assert OUTPUT_CANARY in str(response)
-    logs = "\n".join(record.getMessage() for record in caplog.records)
-    for secret in (
-        COMMAND_CANARY,
-        OUTPUT_CANARY,
-        HOST_CANARY,
-        PATH_CANARY,
-        "RCON_PASSWORD_SECRET",
-        "REQUEST_SECRET",
-    ):
-        assert secret not in logs
-    assert summarize_sensitive(COMMAND_CANARY).fingerprint in logs
-    assert f"payload_length={len(COMMAND_CANARY)}" in logs
-    assert "request_id=-" in logs
+    for secret in (COMMAND_CANARY, OUTPUT_CANARY, HOST_CANARY, PATH_CANARY, "RCON_PASSWORD_SECRET"):
+        assert secret not in caplog.text
+    [done] = logged_events(caplog, "command")
+    assert done.fields["status"] == "success"
+    assert done.fields["payload"] == redacted_field(COMMAND_CANARY)
+    assert done.fields["response"] == redacted_field(OUTPUT_CANARY)
     assert all(record.exc_info is None for record in caplog.records)
 
 
@@ -253,8 +223,10 @@ def test_minecraft_log_path_is_fingerprinted_not_logged(
     with caplog.at_level(logging.WARNING):
         assert LogMonitor(str(missing_path)).initialize() is False
 
-    logs = "\n".join(record.getMessage() for record in caplog.records)
+    logs = caplog.text
     assert str(missing_path) not in logs
     assert "PATH_SECRET" not in logs
-    assert summarize_sensitive(str(missing_path)).fingerprint in logs
+    [missing] = logged_events(caplog, "log_monitor")
+    assert missing.fields["status"] == "missing"
+    assert missing.fields["payload"] == redacted_field(str(missing_path))
     assert all(record.exc_info is None for record in caplog.records)

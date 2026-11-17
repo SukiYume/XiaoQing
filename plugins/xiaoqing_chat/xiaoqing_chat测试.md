@@ -466,7 +466,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 - 私聊、群管理员、群主和 Bot 管理员能力。
 - 跨群 memory、review、expression、jargon 和媒体访问。
 - 插件 AI route 与 provider 凭据边界。
-- 日志中的 token、API Key、URL 查询、用户文本和标识符脱敏。
+- 日志中的 token、API Key、URL、用户文本、回复和提示词只留长度和指纹；QQ 号、群号、chat_id 等标识明文记录。
 
 ### 并发
 

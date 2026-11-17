@@ -7,7 +7,6 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,7 +29,6 @@ def _context(tmp_path: Path) -> SimpleNamespace:
             plugin_dir = plugin_dir,
             data_dir   = data_dir,
             config     = {},
-            logger     = MagicMock(),
             principal=PluginPrincipal(kind="lifecycle"),
             capabilities=PluginCapabilities(),
         )

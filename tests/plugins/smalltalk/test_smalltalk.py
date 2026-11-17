@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.smalltalk import main as smalltalk
 from tests.helpers.assertions import text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -32,7 +32,6 @@ class _Context:
         self.current_user_id  = user_id
         self.current_group_id = group_id
         self.request_id       = "smalltalk-test-request"
-        self.logger           = logging.getLogger("test.smalltalk")
         self.config: object   = {"plugins": {"smalltalk": {"voice_probability": 0.0}}}
         self.chat_reply       = SimpleNamespace(
             reply=AsyncMock(return_value=smalltalk.segments("provider response"))
@@ -460,7 +459,7 @@ async def test_main_qa_write_failure_uses_public_error_boundary(
     result = await smalltalk.handle("qa", "问题 回答", event, context)
 
     text = text_segments_text(result)
-    assert "XQ-PLUGIN-UNEXPECTED" in text
+    assert PUBLIC_ERROR_PREFIX in text
     assert qa_file.name not in text
     assert str(context.data_dir) not in text
 
@@ -487,7 +486,7 @@ async def test_handle_exception_uses_public_error_boundary(
     result = await smalltalk.handle("qa", "问题 回答", event, _FailingActorContext(tmp_path))
 
     text = text_segments_text(result)
-    assert "XQ-PLUGIN-UNEXPECTED" in text
+    assert PUBLIC_ERROR_PREFIX in text
     assert "private parser detail" not in text
 
 

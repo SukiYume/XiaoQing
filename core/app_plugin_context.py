@@ -38,6 +38,7 @@ from .interfaces import (
     PluginPrincipal,
     PluginSettingsSnapshot,
 )
+from .log import LogEvent
 from .plugin_execution import call_plugin_callback, invoke_loaded_plugin
 from .router import command_access
 
@@ -196,11 +197,12 @@ class AppPluginContextMixin:
                 principal, action
             ):
                 logger.warning(
-                    "Scheduled plugin action rejected by Core delivery policy: "
-                    "plugin=%s mode=%s action=%s",
-                    plugin_name,
-                    principal.schedule_delivery or "broadcast",
-                    action.get("action") if isinstance(action, Mapping) else None,
+                    LogEvent(
+                        "schedule.action_rejected",
+                        plugin = plugin_name,
+                        mode   = principal.schedule_delivery or "broadcast",
+                        action = action.get("action") if isinstance(action, Mapping) else None,
+                    )
                 )
                 return False
             return await self._send_action(

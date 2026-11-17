@@ -9,7 +9,6 @@ import json
 import logging
 import math
 import random
-import re
 import threading
 import time
 import uuid
@@ -29,13 +28,12 @@ from .bounded_http import (
 from .constants import (
     DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS,
     DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
-    MAX_SHORT_TEXT_LENGTH,
 )
-from .delivery import SENSITIVE_ACTION_KEY
+from .delivery import message_length
 from .interfaces import ACTION_RESULT_MESSAGE_ID_KEY
 from .lifecycle import FatalErrorCarrier as _FatalErrorCarrier
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
-from .safe_http import redact_url_for_log
+from .log import LogEvent, log_scope, new_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +79,11 @@ class _ConnectionAttemptResult:
 
 @dataclass(frozen=True, slots=True)
 class _QueuedOneBotEvent:
-    """One event together with the connection generation that admitted it."""
+    """一个上报事件，连同接纳它的连接代次和收到时为它取的 request id。"""
 
     event     : dict[str, Any]
     auth_state: _EndpointAuthState
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,21 +114,6 @@ _ONEBOT_JSON_MIME_POLICY = MimePolicy(
 )
 _ONEBOT_SUCCESS_STATUSES = range(200, 300)
 
-_SENSITIVE_KEYS = {"token", "appid", "api_key", "secret", "password", "authorization"}
-
-# 预编译敏感信息匹配模式（避免每次调用都重新编译）
-# 认证头整体遮盖：“Authorization: Bearer xxx” 的凭据在认证类型之后，只遮第一个片段会漏掉令牌。
-_SENSITIVE_PATTERNS = [
-    re.compile(
-        r"(authorization\s*[:=]\s*)((?:bearer|basic|token|digest)\s+[^\s,;\"']+|[^\s,;\"']+)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"(\bbearer\s+)([^\s,;\"']+)", re.IGNORECASE),
-    *(
-        re.compile(rf"({key}\s*[:=]\s*)([^\s,;]+)", re.IGNORECASE)
-        for key in _SENSITIVE_KEYS - {"authorization"}
-    ),
-]
 _CONNECT_SIGNATURE_CACHE: dict[Any, tuple[Any, frozenset[str]]] = {}
 _ONEBOT_WS_SHUTDOWN_TIMEOUT_SECONDS                             = 5.0
 _ONEBOT_WS_RECONNECT_INITIAL_SECONDS                            = 5.0
@@ -160,49 +144,6 @@ async def _run_onebot_child(operation_factory: Callable[[], Awaitable[Any]]) -> 
         raise
     except BaseException as exc:
         raise _OneBotChildFatalError(exc) from None
-
-
-def _mask_sensitive_text(text: str) -> str:
-    masked = text
-    for pattern in _SENSITIVE_PATTERNS:
-        masked = pattern.sub(r"\1********", masked)
-    return masked
-
-
-def _extract_message_preview(message: Any, max_len: int = MAX_SHORT_TEXT_LENGTH) -> str:
-    """Return a bounded, redacted preview without raising on malformed input."""
-    if not message:
-        return "(empty)"
-    if isinstance(message, str):
-        text = _mask_sensitive_text(message)
-        return text[:max_len] + ("..." if len(text) > max_len else "")
-    if not isinstance(message, list):
-        return "[invalid-message]"
-
-    parts: list[str] = []
-    for seg in message:
-        if not isinstance(seg, Mapping):
-            parts.append("[invalid-segment]")
-            continue
-        seg_type = str(seg.get("type", "") or "")
-        raw_data = seg.get("data", {})
-        data     = raw_data if isinstance(raw_data, Mapping) else {}
-        if seg_type == "text":
-            parts.append(_mask_sensitive_text(str(data.get("text", "") or "")))
-        elif seg_type == "emoji":
-            parts.append("[表情包]")
-        elif seg_type == "image":
-            subtype = str(data.get("sub_type", "") or "").strip().lower()
-            parts.append("[表情包]" if subtype == "emoji" else "[图片]")
-        elif seg_type == "at":
-            parts.append(f"[@{data.get('qq', '')}]")
-        else:
-            parts.append(f"[{seg_type or 'unknown'}]")
-
-    text = "".join(parts)
-    if len(text) > max_len:
-        text = text[:max_len] + "..."
-    return text
 
 
 def _normalize_segment_for_onebot(seg: dict[str, Any]) -> dict[str, Any]:
@@ -247,8 +188,7 @@ def _normalize_action_for_onebot(action: dict[str, Any]) -> dict[str, Any]:
         params["message"] = [_normalize_segment_for_onebot(segment) for segment in message]
     elif message is not None and not isinstance(message, str):
         raise TypeError("OneBot message must be text or a segment list")
-    # 敏感标记只给本进程的日志决策用，不上线。
-    normalized = {key: value for key, value in action.items() if key != SENSITIVE_ACTION_KEY}
+    normalized           = dict(action)
     normalized["action"] = action_name.strip()
     normalized["params"] = params
     return normalized
@@ -282,40 +222,39 @@ def _finalize_onebot_action(
         if message_id not in (None, ""):
             action[ACTION_RESULT_MESSAGE_ID_KEY] = message_id
         logger.info(
-            "[%s] Sent %s to %s: %s",
-            transport,
-            action_name,
-            target,
-            "[sensitive]"
-            if action.get(SENSITIVE_ACTION_KEY)
-            else _extract_message_preview(message),
+            LogEvent(
+                "send.done",
+                transport      = transport,
+                action         = action_name,
+                target_id      = target,
+                message_length = message_length(message),
+            )
         )
         return True
     if response is not None:
         logger.warning(
-            "[%s] OneBot rejected %s to %s (status=%r retcode=%r)",
-            transport,
-            action_name,
-            target,
-            response.get("status"),
-            response.get("retcode"),
+            LogEvent(
+                "send.rejected",
+                transport = transport,
+                action    = action_name,
+                target_id = target,
+                status    = response.get("status"),
+                retcode   = response.get("retcode"),
+            )
         )
     return False
 
 
-def _summarize_event(event: dict[str, Any]) -> str:
-    post_type    = event.get("post_type")
-    message_type = event.get("message_type")
-    user_id      = event.get("user_id")
-    group_id     = event.get("group_id")
-    message      = event.get("message")
-    message_kind = type(message).__name__
-    message_len  = len(message) if isinstance(message, list) else None
-    return (
-        f"post_type={post_type} message_type={message_type} "
-        f"user_id={user_id} group_id={group_id} "
-        f"message_kind={message_kind} message_len={message_len}"
-    )
+def _summarize_event(event: dict[str, Any]) -> dict[str, Any]:
+    message = event.get("message")
+    return {
+        "post_type"   : event.get("post_type"),
+        "message_type": event.get("message_type"),
+        "user_id"     : event.get("user_id"),
+        "group_id"    : event.get("group_id"),
+        "message_kind": type(message).__name__,
+        "message_len" : len(message) if isinstance(message, list) else None,
+    }
 
 
 def _get_connect_signature(websockets_module) -> frozenset[str]:
@@ -472,7 +411,7 @@ class OneBotHttpSender(_EndpointAuthHolder):
             response = parse_bounded_json(bounded_response, limits=_ONEBOT_JSON_LIMITS)
             return response if isinstance(response, dict) else None
         except Exception as exc:
-            logger.warning("[HTTP] OneBot request failed error_type=%s", type(exc).__name__)
+            logger.warning(LogEvent("http.request.failed", error=exc))
             return None
 
     async def send_action(self, action: dict[str, Any]) -> bool | None:
@@ -525,6 +464,7 @@ class OneBotWsClient(_EndpointAuthHolder):
         )
         self._auth_state_lock = threading.RLock()
         self._connected_auth_generation: int | None = None
+        self._reconnect_failures = 0
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
         self._running = False
@@ -593,11 +533,11 @@ class OneBotWsClient(_EndpointAuthHolder):
             try:
                 done.result()
             except asyncio.CancelledError:
-                logger.warning("OneBot WebSocket close task was cancelled before convergence")
+                logger.warning(LogEvent("ws.close.cancelled"))
             except BaseException as exc:
                 # Retrieve the failure immediately to avoid an orphaned task,
                 # but retain ownership so stop or a later rotation can retry.
-                logger.warning("OneBot WebSocket close failed: %s", exc)
+                logger.warning(LogEvent("ws.close.failed", error=exc))
             else:
                 self._ws_close_tasks.pop(key, None)
                 with self._auth_state_lock:
@@ -645,10 +585,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                 pass
             else:
                 if was_quarantined and error is not None:
-                    logger.warning(
-                        "Quarantined OneBot connection attempt ended with %s",
-                        type(error).__name__,
-                    )
+                    logger.warning(LogEvent("ws.attempt.quarantined_ended", error=error))
 
         task.add_done_callback(observe_attempt)
 
@@ -710,16 +647,10 @@ class OneBotWsClient(_EndpointAuthHolder):
                 except asyncio.CancelledError:
                     pass
                 except BaseException as exc:
-                    logger.warning(
-                        "Revoked OneBot connection attempt ended with %s",
-                        type(exc).__name__,
-                    )
+                    logger.warning(LogEvent("ws.attempt.revoked_ended", error=exc))
             else:
                 self._quarantined_connection_attempt_tasks.add(attempt_task)
-                logger.error(
-                    "Revoked OneBot connection attempt ignored cancellation; "
-                    "it remains quarantined for bounded shutdown"
-                )
+                logger.error(LogEvent("ws.attempt.cancel_ignored"))
             return _ConnectionAttemptResult(0.0)
         except asyncio.CancelledError:
             if not attempt_task.done():
@@ -808,7 +739,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                     if self._ws is ws and self._endpoint_auth is not previous_state:
                         self._ws                        = None
                         self._connected_auth_generation = None
-                logger.debug("OneBot auth rotation raced with event-loop shutdown")
+                logger.debug(LogEvent("ws.auth_rotation.raced"))
 
     def _connected_target(self) -> tuple[Any, _EndpointAuthState] | None:
         """Snapshot an internally current connection, then inspect it without the auth lock."""
@@ -837,7 +768,7 @@ class OneBotWsClient(_EndpointAuthHolder):
             if isinstance(state_name, str) and state_name.upper() in {"CLOSING", "CLOSED"}:
                 return None
         except Exception as exc:
-            logger.debug("Unable to inspect OneBot WebSocket state: %s", exc)
+            logger.debug(LogEvent("ws.state.inspect_failed", error=exc))
             return None
         return ws, auth_state
 
@@ -901,13 +832,10 @@ class OneBotWsClient(_EndpointAuthHolder):
                 raise OneBotActionCancelledAfterCommit(*exc.args) from exc
             raise
         except TimeoutError as exc:
-            logger.warning(
-                "[WS] Timed out waiting for OneBot response to %s",
-                action_name,
-            )
+            logger.warning(LogEvent("ws.action.timeout", action=action_name))
             raise OneBotActionOutcomeUnknown(action_name) from exc
         except Exception as exc:
-            logger.warning("[WS] Send failed: %s", exc)
+            logger.warning(LogEvent("ws.send.failed", error=exc))
             with self._auth_state_lock:
                 if commit is not None and self._ws is commit.ws:
                     self._ws = None
@@ -1036,7 +964,7 @@ class OneBotWsClient(_EndpointAuthHolder):
             try:
                 _select_connect_header_parameter(websockets_module, endpoint_auth.token)
             except _UnsupportedWebSocketAuthentication as exc:
-                logger.error("OneBot WebSocket client refused unsafe authentication: %s", exc)
+                logger.error(LogEvent("ws.auth.refused", error=exc))
                 raise
         self._reap_successful_ws_close_tasks()
         previous_cleanup = self._cleanup_task
@@ -1103,7 +1031,7 @@ class OneBotWsClient(_EndpointAuthHolder):
             return _ONEBOT_WS_RECONNECT_INITIAL_SECONDS
         except _UnsupportedWebSocketAuthentication as exc:
             # 连接器不兼容时重试不会变得安全，也绝不能降级为匿名连接。
-            logger.error("OneBot WebSocket client refused unsafe authentication: %s", exc)
+            logger.error(LogEvent("ws.auth.refused", error=exc))
             raise
         except Exception as exc:
             failure = exc
@@ -1121,12 +1049,24 @@ class OneBotWsClient(_EndpointAuthHolder):
         delay = _jittered_reconnect_delay(retry_base, random.random())
         if failure is None:
             logger.info(
-                "OneBot WS disconnected after %.3fs; reconnecting in %.2fs",
-                connected_duration or 0.0,
-                delay,
+                LogEvent(
+                    "ws.disconnected",
+                    connected_s = round(connected_duration or 0.0, 3),
+                    delay_s     = round(delay, 2),
+                )
             )
         else:
-            logger.warning("OneBot WS error: %s; reconnecting in %.2fs", failure, delay)
+            # 连续失败只在第一次升到 WARNING，之后降到 DEBUG；连上时 INFO 带上失败次数。
+            self._reconnect_failures += 1
+            logger.log(
+                logging.WARNING if self._reconnect_failures == 1 else logging.DEBUG,
+                LogEvent(
+                    "ws.reconnect",
+                    error    = failure,
+                    failures = self._reconnect_failures,
+                    delay_s  = round(delay, 2),
+                ),
+            )
         with self._auth_state_lock:
             self._ws                        = None
             self._connected_auth_generation = None
@@ -1148,15 +1088,9 @@ class OneBotWsClient(_EndpointAuthHolder):
                     _ONEBOT_WS_ROTATION_CANCEL_GRACE_SECONDS
                 )
                 if attempt_errors:
-                    logger.warning(
-                        "%d OneBot connection attempt(s) failed while listener exited",
-                        len(attempt_errors),
-                    )
+                    logger.warning(LogEvent("ws.attempts.failed", count=len(attempt_errors)))
                 if attempt_pending:
-                    logger.error(
-                        "%d OneBot connection attempt(s) remain quarantined after listener exit",
-                        len(attempt_pending),
-                    )
+                    logger.error(LogEvent("ws.attempts.quarantined", count=len(attempt_pending)))
             finally:
                 # 重复取消可能打断连接尝试的排空；队列清理所有权仍必须先收敛。
                 if self._cleanup_task is cleanup_task:
@@ -1167,10 +1101,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                     except asyncio.CancelledError:
                         pass
                     except BaseException as exc:
-                        logger.error(
-                            "OneBot queue cleanup failed while the listener exited: %s",
-                            exc,
-                        )
+                        logger.error(LogEvent("ws.cleanup.failed", error=exc))
                     finally:
                         if self._cleanup_task is cleanup_task:
                             self._cleanup_task = None
@@ -1214,7 +1145,8 @@ class OneBotWsClient(_EndpointAuthHolder):
             async with websockets.connect(endpoint_auth.endpoint, **connect_kwargs) as ws:
                 return await self._listen(ws, handler, auth_state=endpoint_auth)
         except Exception as exc:
-            logger.error("WebSocket connection failed (%s)", type(exc).__name__)
+            # 重连循环会按连续失败次数记录这次失败；这里只留传输层细节。
+            logger.debug(LogEvent("ws.connect.failed", error=exc))
             raise
 
     async def _listen(
@@ -1238,7 +1170,8 @@ class OneBotWsClient(_EndpointAuthHolder):
         if stale_auth:
             await ws.close()
             return _ConnectionAttemptResult(0.0)
-        logger.info("Connected to OneBot WS: %s", redact_url_for_log(self.ws_uri))
+        logger.info(LogEvent("ws.connected", failures=self._reconnect_failures))
+        self._reconnect_failures = 0
 
         # 上线通知可能等待 echo；读循环必须与回调同时运行才能消费回执。
         async def notify_connected() -> None:
@@ -1246,7 +1179,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                 if self._on_connect:
                     await self._on_connect()
             except Exception as exc:
-                logger.warning("on_connect callback error: %s", exc)
+                logger.warning(LogEvent("ws.on_connect.failed", error=exc))
 
         connect_task = asyncio.create_task(notify_connected(), name="onebot-on-connect")
 
@@ -1260,19 +1193,20 @@ class OneBotWsClient(_EndpointAuthHolder):
                     break
                 try:
                     raw_len = len(raw) if hasattr(raw, "__len__") else None
-                    logger.debug("[WS] Raw frame type=%s size=%s", type(raw).__name__, raw_len)
+                    logger.debug(
+                        LogEvent("ws.frame.raw", frame_type=type(raw).__name__, size=raw_len)
+                    )
                     event = json.loads(raw)
-                    logger.debug("[WS] Event received: %s", _summarize_event(event))
                     if self._resolve_action_response(event, auth_state=auth_state):
                         continue
                     await self._dispatch_event(handler, event, auth_state=auth_state)
                 except json.JSONDecodeError:
-                    logger.debug("[WS] Non-JSON frame received")
+                    logger.debug(LogEvent("ws.frame.non_json"))
                     continue
-                except Exception as exc:
-                    logger.exception("Event parse error: %s", exc)
-        except ConnectionClosedOK as exc:
-            logger.debug("WebSocket connection closed normally: %s", exc)
+                except Exception:
+                    logger.exception(LogEvent("ws.event.parse_failed"))
+        except ConnectionClosedOK:
+            logger.debug(LogEvent("ws.closed.normal"))
         except ConnectionClosed as exc:
             disconnect_error = exc
         except Exception as exc:
@@ -1298,32 +1232,27 @@ class OneBotWsClient(_EndpointAuthHolder):
     async def _handle_event_safely(
         self,
         handler: Callable[[dict[str, Any]], Awaitable[None]],
-        event: dict[str, Any],
-        *,
-        auth_state: _EndpointAuthState,
+        queued: _QueuedOneBotEvent,
     ) -> None:
-        """安全地处理事件（捕获异常，避免影响其他消息）"""
-        try:
-            # The auth-generation check is the admission/rotation linearization
-            # point.  The plugin handler is external code and must run after
-            # releasing the threading lock, otherwise an update-thread join can
-            # deadlock.
-            with self._auth_state_lock:
-                admitted = auth_state is self._endpoint_auth
-            if not admitted:
-                logger.debug("Dropping OneBot event from a revoked auth generation")
-                return
-            await handler(event)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Event handler error: %s", exc)
-        except BaseException as exc:
-            logger.critical(
-                "Fatal OneBot event handler failure was isolated: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+        """在事件自己的 request id 下处理它；处理器的异常记下后隔离，不影响其他消息。"""
+        with log_scope(queued.request_id):
+            try:
+                # The auth-generation check is the admission/rotation linearization
+                # point.  The plugin handler is external code and must run after
+                # releasing the threading lock, otherwise an update-thread join can
+                # deadlock.
+                with self._auth_state_lock:
+                    admitted = queued.auth_state is self._endpoint_auth
+                if not admitted:
+                    logger.debug(LogEvent("ws.event.drop.revoked_auth"))
+                    return
+                await handler(queued.event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(LogEvent("ws.handler.failed"))
+            except BaseException as exc:
+                logger.critical(LogEvent("ws.handler.fatal", error=exc))
 
     def _get_queue_key(self, event: dict[str, Any]) -> str | None:
         user_id = event.get("user_id")
@@ -1341,45 +1270,57 @@ class OneBotWsClient(_EndpointAuthHolder):
         *,
         auth_state: _EndpointAuthState | None = None,
     ) -> None:
-        if not self._accepting_events:
-            logger.debug("Dropping OneBot event while client is stopping")
-            return
+        """上报事件从这里进入：收到时取 request id，处理、回复发送和处理失败的日志都带它。"""
         if auth_state is None:
             with self._auth_state_lock:
                 auth_state = self._endpoint_auth
-        key = self._get_queue_key(event)
-        if not key:
-            async with self._pending_semaphore:
-                await self._handle_event_safely(handler, event, auth_state=auth_state)
-            return
+        queued = _QueuedOneBotEvent(event, auth_state, new_request_id())
+        with log_scope(queued.request_id):
+            logger.debug(LogEvent("ws.event.received", **_summarize_event(event)))
+            if not self._accepting_events:
+                logger.debug(LogEvent("ws.event.drop.stopping"))
+                return
+            key = self._get_queue_key(event)
+            if not key:
+                async with self._pending_semaphore:
+                    await self._handle_event_safely(handler, queued)
+                return
 
-        queue = self._message_queues.get(key)
-        if queue is None:
-            queue = asyncio.Queue(maxsize=self._queue_size)
-            self._message_queues[key] = queue
-        if self._on_event_queued is not None:
-            try:
-                self._on_event_queued(event)
-            except Exception:
-                logger.exception("OneBot event queue observer failed")
+            queue = self._message_queues.get(key)
+            if queue is None:
+                queue = asyncio.Queue(maxsize=self._queue_size)
+                self._message_queues[key] = queue
+            if self._on_event_queued is not None:
+                try:
+                    self._on_event_queued(event)
+                except Exception:
+                    logger.exception(LogEvent("ws.queue_observer.failed"))
 
-        self._queue_last_activity[key] = time.time()
-        # 如果队列已满，丢弃最旧的消息
-        if queue.full():
+            self._queue_last_activity[key] = time.time()
+            # 如果队列已满，丢弃最旧的消息；这一行记在被丢弃的那个事件的 id 下。
+            if queue.full():
+                try:
+                    dropped = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                else:
+                    with log_scope(dropped.request_id):
+                        logger.warning(LogEvent("ws.queue.full", queue=key))
             try:
-                queue.get_nowait()  # 丢弃最旧的消息
-                logger.warning("Queue full for %s, dropped oldest event", key)
-            except asyncio.QueueEmpty:
-                pass
-        try:
-            await asyncio.wait_for(
-                queue.put(_QueuedOneBotEvent(event=event, auth_state=auth_state)),
-                timeout=1.0,
-            )
-        except TimeoutError:
-            logger.warning("Queue put timeout for %s, dropping event", key)
-        task = self._queue_tasks.get(key)
-        if task is None or task.done():
+                await asyncio.wait_for(queue.put(queued), timeout=1.0)
+            except TimeoutError:
+                logger.warning(LogEvent("ws.queue.put_timeout", queue=key))
+            task = self._queue_tasks.get(key)
+            if task is None or task.done():
+                self._start_queue_drainer(key, handler)
+
+    def _start_queue_drainer(
+        self,
+        key: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        # drainer 依次处理同一发送者的多个事件，自己不带启动它的那个事件的 request id。
+        with log_scope(None):
             self._queue_tasks[key] = asyncio.create_task(self._drain_queue(key, handler))
 
     async def _drain_queue(
@@ -1398,14 +1339,8 @@ class OneBotWsClient(_EndpointAuthHolder):
                 # 在当前任务内计时，避免 Python 3.11 的 wait_for 在取到事件的同轮吞掉取消。
                 async with asyncio.timeout(1.0):
                     queued = await queue.get()
-                event      = queued.event
-                auth_state = queued.auth_state
                 async with self._pending_semaphore:
-                    await self._handle_event_safely(
-                        handler,
-                        event,
-                        auth_state=auth_state,
-                    )
+                    await self._handle_event_safely(handler, queued)
                 # 标记任务为活跃
                 self._queue_last_activity[key] = time.time()
         except TimeoutError:
@@ -1417,7 +1352,7 @@ class OneBotWsClient(_EndpointAuthHolder):
                 if queue.empty():
                     self._queue_tasks.pop(key, None)
                 elif self._accepting_events:
-                    self._queue_tasks[key] = asyncio.create_task(self._drain_queue(key, handler))
+                    self._start_queue_drainer(key, handler)
                 else:
                     self._queue_tasks.pop(key, None)
 
@@ -1667,4 +1602,4 @@ class OneBotWsClient(_EndpointAuthHolder):
             self._message_queues.pop(key, None)
             self._queue_tasks.pop(key, None)
             self._queue_last_activity.pop(key, None)
-            logger.debug("Cleaned up inactive queue: %s", key)
+            logger.debug(LogEvent("ws.queue.cleaned", queue=key))

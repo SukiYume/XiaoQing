@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.pendo.handlers.diary import DiaryHandler
 from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.handlers.ledger import LedgerHandler
@@ -95,7 +96,7 @@ async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(
     assert invalid["status"] == "error"
     assert "参数无效" in invalid["message"]
     assert "YYYY-MM-DD" in invalid["message"]
-    assert "XQ-PLUGIN-UNEXPECTED" not in invalid["message"]
+    assert PUBLIC_ERROR_PREFIX not in invalid["message"]
     assert _snapshot(db.get_item(task_id, owner)) == before_invalid
 
     edited = await handler.handle(

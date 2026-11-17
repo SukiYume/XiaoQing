@@ -10,6 +10,7 @@ import pytest
 from core.plugin_manager import PluginManager
 from core.plugin_watcher import _MAX_PLUGIN_MANIFEST_BYTES, _ManifestRejection
 from core.router import CommandRouter
+from tests.helpers.assertions import logged_events
 
 _MAX_MANIFEST_BYTES = _MAX_PLUGIN_MANIFEST_BYTES
 
@@ -140,7 +141,8 @@ def test_oversized_manifest_is_rejected_after_at_most_one_mib_plus_one_byte(
     assert definition.bucket == "invalid"
     assert modes == ["rb"]
     assert read_limits == [_MAX_MANIFEST_BYTES + 1]
-    assert f"manifest exceeds {_MAX_MANIFEST_BYTES} bytes" in caplog.text
+    (too_large,) = logged_events(caplog, "plugin.manifest.too_large")
+    assert too_large.fields["max_bytes"] == _MAX_MANIFEST_BYTES
 
 
 def test_manifest_descriptor_identity_rejects_resolver_open_aba(
@@ -156,7 +158,7 @@ def test_manifest_descriptor_identity_rejects_resolver_open_aba(
 
     assert isinstance(definition, _ManifestRejection)
     assert definition.bucket == "read"
-    assert "Cannot read a stable plugin.json" in caplog.text
+    assert len(logged_events(caplog, "plugin.manifest.unstable")) == 1
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["version"] == "1.0.0"
 
 
@@ -174,9 +176,4 @@ def test_manifest_aba_keeps_watcher_rate_limit_and_manual_logging_semantics(
         manager._load_definition(plugin_dir)
         manager._load_definition(plugin_dir)
 
-    stable_errors = [
-        record
-        for record in caplog.records
-        if "Cannot read a stable plugin.json" in record.getMessage()
-    ]
-    assert len(stable_errors) == 3
+    assert len(logged_events(caplog, "plugin.manifest.unstable")) == 3

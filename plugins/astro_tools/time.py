@@ -80,6 +80,4 @@ def handle_time(args: str, context: PluginContextProtocol) -> str:
     except ValueError:
         return "时间格式错误，请检查输入。\n\n支持的格式:\n- ISO: 2026-01-30 或 2026-01-30T12:00:00\n- JD: 2460419.5 (使用 'jd' 子命令)\n- MJD: 60419.5 (使用 'mjd' 子命令)\n- Unix时间戳: 1706616000 或 unix 1706616000"
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.time"
-        )
+        return public_error_message(context, exc, component="astro_tools.time")

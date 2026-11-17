@@ -205,9 +205,7 @@ def _handle_calculation(args: str, context: PluginContextProtocol) -> str:
     except OverflowError:
         return "质量超出可计算范围"
     except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.formula"
-        )
+        return public_error_message(context, exc, component="astro_tools.formula")
 
 
 def _get_formula_list() -> str:

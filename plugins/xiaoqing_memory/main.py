@@ -10,14 +10,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Coroutine, Mapping
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.clock import now_in_configured_timezone
 from core.interfaces import PluginContextProtocol
+from core.log import LogEvent
 from core.plugin_base import build_action, resolve_bot_name, segments
-from core.public_errors import public_error_response
+from core.public_errors import public_error_message, public_error_response
 
 from . import commands
 from .config import MemoryConfig, load_memory_config, route_configured
@@ -37,7 +39,7 @@ from .scopes import SELF_SUBJECT, ScopeError, caller_of, request_scope, valid_sc
 from .search import search as search_records
 from .store import MemoryStore
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _RUNTIME_KEY  = "xiaoqing_memory.runtime"
 _DISABLED_TIP = "统一记忆没有开启：把 config.plugins.xiaoqing_memory.enabled 设为 true 后再试。"
@@ -139,8 +141,13 @@ async def _serve(
         try:
             scope = request_scope(payload, caller)
         except ScopeError as exc:
-            logger.warning(
-                "xiaoqing_memory step=%s.rejected caller=%s reason=%s", name, caller.name, exc
+            log.warning(
+                LogEvent(
+                    f"{name}.rejected",
+                    caller      = caller.name or None,
+                    error       = exc,
+                    reason_code = str(exc),
+                )
             )
             return {"version": 1, "error": str(exc)}
         runtime                = get_runtime(context)
@@ -148,15 +155,12 @@ async def _serve(
         result: dict[str, Any] = await work(runtime, cfg, payload, caller, scope)
         elapsed                = time.monotonic() - started
         if elapsed > 0.2:
-            logger.info(
-                "xiaoqing_memory step=%s.slow caller=%s elapsed_ms=%d",
-                name,
-                caller.name,
-                elapsed * 1000,
+            log.info(
+                LogEvent(f"{name}.slow", caller=caller.name or None, elapsed_ms=int(elapsed * 1000))
             )
         return result
     except Exception as exc:
-        logger.warning("xiaoqing_memory %s failed error_type=%s", name, type(exc).__name__)
+        log.warning(LogEvent(f"{name}.failed", error=exc))
         return None
 
 
@@ -178,11 +182,13 @@ async def record(payload: dict[str, Any], context: PluginContextProtocol) -> dic
             },
         )
         if result["rejected"]:
-            logger.info(
-                "xiaoqing_memory step=record.rejected caller=%s scope=%s reasons=%s",
-                caller.name,
-                scope,
-                [item["reason"] for item in result["rejected"]][:8],
+            log.info(
+                LogEvent(
+                    "record.rejected",
+                    caller  = caller.name or None,
+                    scope   = scope,
+                    reasons = Counter(str(item["reason"]) for item in result["rejected"]),
+                )
             )
         return result
 
@@ -225,8 +231,14 @@ async def forget(payload: dict[str, Any], context: PluginContextProtocol) -> dic
     ) -> dict[str, Any]:
         async with runtime.store.locks.hold(f"write:{scope}"):
             result = await asyncio.to_thread(forget_records, runtime.store, data, scope=scope)
-        logger.info(
-            "xiaoqing_memory step=forget caller=%s scope=%s result=%s", caller.name, scope, result
+        log.info(
+            LogEvent(
+                "forget",
+                caller     = caller.name or None,
+                scope      = scope,
+                removed    = result.get("removed"),
+                generation = result.get("generation"),
+            )
         )
         return result
 
@@ -244,7 +256,7 @@ async def _consolidate_guarded(context: Any, runtime: MemoryRuntime, cfg: Memory
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning("xiaoqing_memory consolidate failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("consolidate.failed", error=exc))
 
 
 async def scheduled_tick(context: PluginContextProtocol) -> None:
@@ -258,7 +270,7 @@ async def scheduled_tick(context: PluginContextProtocol) -> None:
             return
         runtime.task = runtime.spawn(_consolidate_guarded(context, runtime, cfg))
     except Exception as exc:
-        logger.warning("xiaoqing_memory tick failed error_type=%s", type(exc).__name__)
+        log.warning(LogEvent("tick.failed", error=exc))
 
 
 # ───────────────────────────── /mem ─────────────────────────────
@@ -323,7 +335,8 @@ def _in_background(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            text = f"整理没做完：{type(exc).__name__}"
+            failure = public_error_message(context, exc, component="xiaoqing_memory.background")
+            text = f"整理没做完\n{failure}"
         action = build_action(segments(text), int(user_id), None) if user_id else None
         if action is not None:
             await context.send_action(action)
@@ -413,6 +426,4 @@ async def handle(
             )
         return segments(commands.HELP_TEXT)
     except Exception as exc:
-        return public_error_response(
-            context, exc, logger=logger, component="xiaoqing_memory.command"
-        )
+        return public_error_response(context, exc, component="xiaoqing_memory.command")

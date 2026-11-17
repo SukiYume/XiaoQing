@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from core.log import LogEvent
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
@@ -34,7 +37,6 @@ from .llm.communication_constraints import requested_char_count
 from .llm.decorations import RECENT_WINDOW, has_decoration
 from .llm.llm_config import LLMCallConfig
 from .llm.local_checks import heuristic_check
-from .logging_utils import log_step
 from .media.marker_resolver import (
     build_media_candidates_block,
 )
@@ -44,6 +46,8 @@ from .memory.review_sessions import build_policy_block
 from .message_parts import render_stored_message
 from .planning.planned_action import PlannedAction
 from .utils.wall_clock import local_datetime
+
+log = logging.getLogger(__name__)
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
 
@@ -310,18 +314,16 @@ async def recall_for_reply(
         followup_hours = float(life.open_loop_followup_hours),
         self_limit     = int(life.self_timeline_max_injected),
     )
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "reply.memory.recall",
-        fields  = {
-            "elapsed_s": round(time.monotonic() - started, 3),
-            "available": recalled.available,
-            "chars"    : {name: len(value) for name, value in recalled.blocks.items() if value},
-            "self"     : len(recalled.self_entries) + len(recalled.stories),
-            "due"      : recalled.due[1] if recalled.due else "",
-        },
+    log.info(
+        LogEvent(
+            "reply.memory.recall",
+            chat_id   = chat_id,
+            elapsed_s = round(time.monotonic() - started, 3),
+            available = recalled.available,
+            chars     = {name: len(value) for name, value in recalled.blocks.items() if value},
+            self      = len(recalled.self_entries) + len(recalled.stories),
+            due       = recalled.due[1] if recalled.due else "",
+        )
     )
     event[RECALLED_KEY] = recalled
     return recalled
@@ -404,21 +406,19 @@ def _merge_online_life(
     return life_block, jargon_explanation, expression_block
 
 
-def _log_online_life(context: Any, runtime: ChatRuntime, chat_id: str, online: OnlineLife) -> None:
+def _log_online_life(chat_id: str, online: OnlineLife) -> None:
     if online is EMPTY_ONLINE_LIFE or online.empty:
         return
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "reply.online_life",
-        fields  = {
-            "life_chars"      : len(online.life_lines),
-            "slang_chars"     : len(online.slang_notes),
-            "expression_chars": len(online.expression_hint),
-            "episodes"        : online.episode_count,
-            "term_hits"       : online.term_count,
-        },
+    log.info(
+        LogEvent(
+            "reply.online_life",
+            chat_id          = chat_id,
+            life_chars       = len(online.life_lines),
+            slang_chars      = len(online.slang_notes),
+            expression_chars = len(online.expression_hint),
+            episodes         = online.episode_count,
+            term_hits        = online.term_count,
+        )
     )
 
 
@@ -445,18 +445,16 @@ async def prepare_reply_generation(
 
     history, earlier_history = await _load_reply_history(runtime, state, chat_id, max_context_size)
     started_at = time.monotonic()
-    log_step(
-        context,
-        runtime,
-        chat_id = chat_id,
-        step    = "reply.generate.start",
-        fields  = {
-            "forced"       : forced,
-            "brain_chat"   : is_brain_chat,
-            "think_level"  : action.think_level,
-            "history_items": len(history),
-            "text"         : text,
-        },
+    log.info(
+        LogEvent(
+            "reply.generate.start",
+            chat_id       = chat_id,
+            forced        = forced,
+            brain_chat    = is_brain_chat,
+            think_level   = action.think_level,
+            history_items = len(history),
+            text          = text,
+        )
     )
 
     resolved_secrets = dict(secrets or ai_route_context(context, chat_id=chat_id))
@@ -491,21 +489,9 @@ async def prepare_reply_generation(
         text     = text,
     )
     if knowledge_block:
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "reply.knowledge.query",
-            fields  = {"kb_hits": len(knowledge_block)},
-        )
+        log.info(LogEvent("reply.knowledge.query", chat_id=chat_id, kb_hits=len(knowledge_block)))
     if expression_block:
-        log_step(
-            context,
-            runtime,
-            chat_id = chat_id,
-            step    = "reply.expression.pick",
-            fields  = {"picked": len(expression_block)},
-        )
+        log.info(LogEvent("reply.expression.pick", chat_id=chat_id, picked=len(expression_block)))
     keyword_rules, regex_rules = _select_reaction_rules(runtime, text)
     online = await fetch_online_life(
         context,
@@ -530,7 +516,7 @@ async def prepare_reply_generation(
     life_block, jargon_explanation, expression_block = _merge_online_life(
         online, life_block, jargon_explanation, expression_block
     )
-    _log_online_life(context, runtime, chat_id, online)
+    _log_online_life(chat_id, online)
 
     merged_reasoning = _merge_planner_reasoning(action.reasoning, plan_reasoning)
     goal_state       = await state.goal_store.get_async(chat_id)

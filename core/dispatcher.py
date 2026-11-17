@@ -25,7 +25,6 @@ import math
 import random
 import re
 import time
-import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -46,6 +45,7 @@ from .interfaces import (
     PluginRegistry,
     command_request_texts,
 )
+from .log import LogEvent, current_request_id, log_scope, new_request_id
 from .message import (
     ValidatedInboundEvent,
     compile_bot_name_pattern,
@@ -57,19 +57,20 @@ from .metrics import MetricsCollector
 from .models import OneBotEvent
 from .plugin_execution import (
     PluginExecutionClosed,
+    PluginExecutionOverloaded,
     PluginExecutionTimeout,
     PluginExecutionUnavailable,
     call_plugin_callback,
     invoke_loaded_plugin,
 )
-from .public_errors import public_error_message, public_error_response
+from .public_errors import log_public_error, public_error_response
 from .router import (
     CommandCatalogNode,
     CommandRouter,
     command_access,
     resolve_catalog_invocation,
 )
-from .safe_http import UnsafeUrlError, redact_url_for_log, validate_public_url
+from .safe_http import UnsafeUrlError, validate_public_url
 
 if TYPE_CHECKING:
     from .session import Session, SessionManager
@@ -237,6 +238,23 @@ def _refusal_text(node: CommandCatalogNode, refusal: str, *, is_private: bool, r
     return "权限不足"
 
 
+def _execution_refusal_reply(
+    exc: BaseException, request_id: str, *, subject: str
+) -> list[dict[str, Any]]:
+    """插件执行门拒绝或超时时的回复：说是哪种状态，带上这一轮的 request id，对得上那条 WARNING。"""
+
+    if isinstance(exc, PluginExecutionTimeout):
+        state = "执行超时"
+    elif isinstance(exc, PluginExecutionClosed):
+        state = "正在重载或已卸载"
+    elif isinstance(exc, PluginExecutionOverloaded):
+        state = "繁忙"
+    else:
+        state = "当前不可用"
+    text = f"⚠️ {subject}{state}，请稍后重试（request_id：{request_id}）"
+    return [{"type": "text", "data": {"text": text}}]
+
+
 @dataclass
 class MessageContext:
     """消息上下文，封装消息相关的所有信息"""
@@ -309,10 +327,12 @@ class MessageParser:
         is_empty = not text and not message_scan.has_media and not message_scan.is_at_me
         if is_empty and not allow_empty_session_input:
             logger.debug(
-                "Drop empty message: post_type=%s message_type=%s message_kind=%s",
-                event.get("post_type"),
-                event.get("message_type"),
-                type(event.get("message")).__name__,
+                LogEvent(
+                    "message.drop.empty",
+                    post_type    = event.get("post_type"),
+                    message_type = event.get("message_type"),
+                    message_kind = type(event.get("message")).__name__,
+                )
             )
             return None
 
@@ -331,7 +351,8 @@ class MessageParser:
         )
 
         return MessageContext(
-            request_id         = str(uuid.uuid4())[:8],
+            # 收到消息时 Core 已为处理和回复发送开了作用域，沿用它的 id；没有作用域时新取一个。
+            request_id         = current_request_id() or new_request_id(),
             text               = text,
             clean_text         = parsed.clean_text,
             user_id            = user_id,
@@ -421,9 +442,11 @@ class Dispatcher:
         """
         if event.get("post_type") != "message":
             logger.debug(
-                "Drop non-message event: post_type=%s message_type=%s",
-                event.get("post_type"),
-                event.get("message_type"),
+                LogEvent(
+                    "event.drop.non_message",
+                    post_type    = event.get("post_type"),
+                    message_type = event.get("message_type"),
+                )
             )
             return []
 
@@ -444,7 +467,7 @@ class Dispatcher:
         try:
             validated = OneBotEvent.model_validate(event)
         except ValidationError as exc:
-            logger.warning("Invalid OneBot event: %s", exc)
+            logger.warning(LogEvent("event.invalid", error=exc))
             return None
         return ValidatedInboundEvent(validated.model_dump())
 
@@ -474,13 +497,13 @@ class Dispatcher:
         self._prune_expired_mutes(now)
         unmute_time                  = now + duration * constants.SECONDS_PER_MINUTE
         self._muted_groups[group_id] = unmute_time
-        logger.info("Group %s muted for %.1f minutes", group_id, duration)
+        logger.info(LogEvent("group.muted", group_id=group_id, minutes=round(duration, 1)))
 
     def unmute_group(self, group_id: int) -> bool:
         """解除群静音"""
         if group_id in self._muted_groups:
             del self._muted_groups[group_id]
-            logger.info("Group %s unmuted", group_id)
+            logger.info(LogEvent("group.unmuted", group_id=group_id))
             return True
         return False
 
@@ -515,7 +538,7 @@ class Dispatcher:
         ]
         for group_id in expired:
             del self._muted_groups[group_id]
-            logger.info("Group %s mute expired", group_id)
+            logger.info(LogEvent("group.mute_expired", group_id=group_id))
 
     # ============================================================
     # 核心处理流程
@@ -530,15 +553,21 @@ class Dispatcher:
         ctx = self.parser.parse(event, allow_empty_session_input=True)
         if ctx is None:
             return []
+        with log_scope(ctx.request_id):
+            return await self._route_message(ctx)
+
+    async def _route_message(self, ctx: MessageContext) -> list[dict[str, Any]]:
+        """Run steps A-G for one parsed message inside its log scope."""
 
         logger.info(
-            "[%s] Received: user=%s, group=%s, text_length=%s, command_prefix=%s, url_only=%s",
-            ctx.request_id,
-            ctx.user_id,
-            ctx.group_id,
-            len(ctx.text),
-            ctx.has_command_prefix,
-            ctx.is_url_only,
+            LogEvent(
+                "message.received",
+                user_id        = ctx.user_id,
+                group_id       = ctx.group_id,
+                text_length    = len(ctx.text),
+                command_prefix = ctx.has_command_prefix,
+                url_only       = ctx.is_url_only,
+            )
         )
 
         # Step A: process gate
@@ -558,7 +587,7 @@ class Dispatcher:
                 ctx.cached_session = session
 
         if ctx.is_empty and ctx.cached_session is None:
-            logger.debug("[%s] Empty message has no active session", ctx.request_id)
+            logger.debug(LogEvent("message.drop.no_session"))
             return []
 
         # Resolve commands before observation so command bodies never become
@@ -589,14 +618,10 @@ class Dispatcher:
         if observation_skip_reason is None:
             await self._observe_message(ctx)
         else:
-            logger.info(
-                "[%s] Observer skipped sensitive input category=%s",
-                ctx.request_id,
-                observation_skip_reason,
-            )
+            logger.info(LogEvent("observe.skipped", category=observation_skip_reason))
 
         if not should_process and ctx.is_url_only:
-            logger.debug("[%s] URL skipped by group process gate", ctx.request_id)
+            logger.debug(LogEvent("url.skip.gate"))
             return []
 
         if not should_process and self._allow_plain_group_smalltalk(ctx):
@@ -609,17 +634,17 @@ class Dispatcher:
         # mute gates so URL messages cannot create an unauthorised network path.
         if ctx.is_url_only:
             if self.is_muted(ctx.group_id):
-                logger.debug("[%s] Group muted; skip URL parser", ctx.request_id)
+                logger.debug(LogEvent("url.skip.muted"))
                 return []
             url = ctx.clean_text.strip()
             if self._is_blocked_url_target(url):
-                logger.warning("[%s] Blocked suspicious URL", ctx.request_id)
+                logger.warning(LogEvent("url.blocked"))
                 return []
             return await self._invoke_url_parser(ctx, url) or []
 
         # Step C: only bot_name
         if ctx.is_only_bot_name:
-            logger.info("[%s] Handling bot name only", ctx.request_id)
+            logger.info(LogEvent("bot_name_only.handle"))
             return await self._handle_bot_name_only(ctx)
 
         # Step D: session continuation. Active sessions are modal: their input
@@ -646,7 +671,7 @@ class Dispatcher:
         if self._is_unknown_command(ctx, resolved):
             cmd_name = ctx.clean_text.split()[0]
             safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=_UNKNOWN_COMMAND_PREVIEW_CHARS)
-            logger.info("[%s] Unknown command: '%s'", ctx.request_id, cmd_name)
+            logger.info(LogEvent("command.unknown", command=safe_cmd))
             return [
                 {
                     "type": "text",
@@ -661,10 +686,10 @@ class Dispatcher:
         """群静音时不闲聊，否则交给闲聊提供者。"""
 
         if self.is_muted(ctx.group_id):
-            logger.debug("[%s] Group muted; skip smalltalk", ctx.request_id)
+            logger.debug(LogEvent("smalltalk.skip.muted"))
             return []
         provider = self._get_smalltalk_provider()
-        logger.info("[%s] Handling as smalltalk (provider=%s)", ctx.request_id, provider)
+        logger.info(LogEvent("smalltalk.handle", provider=provider))
         return await self._handle_smalltalk(ctx)
 
     # ============================================================
@@ -744,11 +769,12 @@ class Dispatcher:
         """
         spec, args = resolved
         logger.info(
-            "[%s] Command matched: %s.%s (args_length=%s)",
-            ctx.request_id,
-            spec.plugin,
-            spec.name,
-            len(args),
+            LogEvent(
+                "command.matched",
+                plugin       = spec.plugin,
+                command_name = spec.name,
+                args_length  = len(args),
+            )
         )
 
         context = self._build_event_context(spec.plugin, ctx)
@@ -761,12 +787,7 @@ class Dispatcher:
         context.command_invocation = invocation
         refusal                    = command_access(invocation.node, context.principal)
         if refusal is not None:
-            logger.warning(
-                "[%s] Command refused: %s reason=%s",
-                ctx.request_id,
-                invocation.node.code,
-                refusal,
-            )
+            logger.info(LogEvent("command.refused", node=invocation.node.code, reason_code=refusal))
             text = _refusal_text(
                 invocation.node,
                 refusal,
@@ -785,7 +806,7 @@ class Dispatcher:
             # through a newer generation's open gate (or without a gate after
             # unload).  The spec itself therefore owns admission.
             result = await invoke_loaded_plugin(spec, run_handler)
-            logger.info("[%s] Command completed", ctx.request_id)
+            logger.info(LogEvent("command.done"))
             if self.metrics:
                 await self.metrics.record_plugin_execution(
                     spec.plugin,
@@ -795,8 +816,8 @@ class Dispatcher:
                 )
             return result
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
-            logger.info("[%s] Command unavailable: %s", ctx.request_id, exc)
-            return [{"type": "text", "data": {"text": "⚠️ 插件暂时不可用，请稍后重试"}}]
+            logger.warning(LogEvent("command.unavailable", error=exc))
+            return _execution_refusal_reply(exc, ctx.request_id, subject="插件")
         except Exception as exc:
             if self.metrics:
                 await self.metrics.record_plugin_execution(
@@ -808,8 +829,7 @@ class Dispatcher:
             return public_error_response(
                 context,
                 exc,
-                logger    = logger,
-                component = f"dispatcher.command.{spec.plugin}.{spec.name}",
+                component=f"dispatcher.command.{spec.plugin}.{spec.name}",
             )
 
     async def run_command_text(
@@ -881,7 +901,7 @@ class Dispatcher:
         if group_id is not None:
             event["group_id"] = group_id
         ctx = MessageContext(
-            request_id=f"{request_id or 'core'}.command.{operation_id or uuid.uuid4().hex[:12]}",
+            request_id=f"{request_id or 'core'}.command.{operation_id or new_request_id()}",
             text=raw_text,
             clean_text=text,
             user_id=user_id,
@@ -900,15 +920,13 @@ class Dispatcher:
         from .session import SessionManager
 
         sandbox = SessionManager()
-        result = await self._execute_command(resolved, ctx, session_manager=sandbox) or []
-        opened = await sandbox.peek(user_id, group_id)
+        with log_scope(ctx.request_id):
+            result = await self._execute_command(resolved, ctx, session_manager=sandbox) or []
+            opened = await sandbox.peek(user_id, group_id)
+            if opened is not None:
+                logger.info(LogEvent("command_runner.session_discarded", plugin=opened.plugin_name))
+                await self._close_runner_session(opened, ctx, sandbox)
         if opened is not None:
-            logger.info(
-                "[%s] Interactive session from command runner discarded: plugin=%s",
-                ctx.request_id,
-                opened.plugin_name,
-            )
-            await self._close_runner_session(opened, ctx, sandbox)
             note = {
                 "type": "text",
                 "data": {
@@ -964,7 +982,7 @@ class Dispatcher:
         try:
             await invoke_loaded_plugin(plugin, run_close)
         except Exception as exc:
-            public_error_message(context, exc, logger=logger, component=component)
+            log_public_error(context, exc, component=component)
         await sandbox.delete(user_id, ctx.group_id)
 
     async def _close_plugin_session(
@@ -984,7 +1002,7 @@ class Dispatcher:
         try:
             await call_plugin_callback(hook, event, context, session)
         except Exception as exc:
-            public_error_message(context, exc, logger=logger, component=component)
+            log_public_error(context, exc, component=component)
 
     # ============================================================
     # 会话处理
@@ -1057,11 +1075,7 @@ class Dispatcher:
                 ):
                     raise _SessionGenerationChanged
 
-                logger.info(
-                    "[%s] Session active: plugin=%s",
-                    ctx.request_id,
-                    _expected_plugin_name,
-                )
+                logger.info(LogEvent("session.active", plugin=_expected_plugin_name))
 
                 if not self._session_still_usable(
                     _expected_plugin_name,
@@ -1069,11 +1083,12 @@ class Dispatcher:
                 ):
                     await close_plugin_session(session)
                     await session_manager.delete(user_id, ctx.group_id)
-                    logger.warning(
-                        "[%s] Closed session the user can no longer use plugin=%s context=%s",
-                        ctx.request_id,
-                        _expected_plugin_name,
-                        "private" if ctx.is_private else "group",
+                    logger.info(
+                        LogEvent(
+                            "session.closed_no_access",
+                            plugin  = _expected_plugin_name,
+                            context = "private" if ctx.is_private else "group",
+                        )
                     )
                     return [
                         {
@@ -1087,7 +1102,7 @@ class Dispatcher:
                 if ctx.text.strip().lower() in constants.EXIT_COMMANDS_SET:
                     await close_plugin_session(session)
                     await session_manager.delete(user_id, ctx.group_id)
-                    logger.info("[%s] Session exited by user", ctx.request_id)
+                    logger.info(LogEvent("session.exited"))
                     return [{"type": "text", "data": {"text": "已退出当前对话"}}]
 
                 if _plugin and hasattr(_plugin.module, "handle_session"):
@@ -1119,8 +1134,8 @@ class Dispatcher:
                 PluginExecutionTimeout,
                 PluginExecutionUnavailable,
             ) as exc:
-                logger.info("[%s] Session unavailable: %s", ctx.request_id, exc)
-                return [{"type": "text", "data": {"text": "⚠️ 会话插件暂时不可用，请稍后重试"}}]
+                logger.warning(LogEvent("session.unavailable", error=exc))
+                return _execution_refusal_reply(exc, ctx.request_id, subject="会话插件")
             except Exception as exc:
                 # The exception must escape SessionManager.update() first so
                 # its isolated working copy is discarded.  Turning it into a
@@ -1129,8 +1144,7 @@ class Dispatcher:
                 response = public_error_response(
                     context,
                     exc,
-                    logger    = logger,
-                    component = f"dispatcher.session.{expected_plugin_name}",
+                    component=f"dispatcher.session.{expected_plugin_name}",
                 )
 
                 run_cleanup, run_delete_without_hook = _build_failed_session_transactions(
@@ -1162,7 +1176,7 @@ class Dispatcher:
                 return response
             if result is None or isinstance(result, list):
                 return result
-            logger.warning("[%s] Session handler returned an invalid result", ctx.request_id)
+            logger.warning(LogEvent("session.invalid_result"))
             return None
         return None
 
@@ -1180,7 +1194,7 @@ class Dispatcher:
         if not plugin or not hasattr(plugin.module, "handle_url"):
             return None
 
-        logger.info("[%s] URL detected: %s", ctx.request_id, redact_url_for_log(url))
+        logger.info(LogEvent("url.detected", url=url))
         context = self._build_event_context("url_parser", ctx)
 
         try:
@@ -1190,17 +1204,12 @@ class Dispatcher:
 
             result = await invoke_loaded_plugin(plugin, run_url_parser)
             if result:
-                logger.info("[%s] URL handled", ctx.request_id)
+                logger.info(LogEvent("url.handled"))
                 return result
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
-            logger.info("[%s] URL parser unavailable: %s", ctx.request_id, exc)
+            logger.warning(LogEvent("url.unavailable", error=exc))
         except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger    = logger,
-                component = "dispatcher.url_parser",
-            )
+            log_public_error(context, exc, component="dispatcher.url_parser")
 
         return None
 
@@ -1288,7 +1297,7 @@ class Dispatcher:
         default_response: str | None = None,
     ) -> list[dict[str, Any]]:
         provider = self._get_smalltalk_provider()
-        logger.debug("%s: provider=%s", method_name, provider)
+        logger.debug(LogEvent("provider.dispatch", method=method_name, provider=provider))
 
         result = await self._call_provider(provider, method_name, ctx, args)
         if result is not None:
@@ -1304,7 +1313,7 @@ class Dispatcher:
         if default_response:
             return [{"type": "text", "data": {"text": default_response}}]
 
-        logger.debug("No %s handler available", method_name)
+        logger.debug(LogEvent("provider.none", method=method_name))
         return []
 
     async def _call_provider(
@@ -1330,19 +1339,15 @@ class Dispatcher:
             result = await invoke_loaded_plugin(plugin, run_provider)
             return result if result else []
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
-            logger.info(
-                "%s unavailable for plugin %s error_type=%s",
-                method_name,
-                provider,
-                type(exc).__name__,
+            logger.warning(
+                LogEvent("provider.unavailable", method=method_name, plugin=provider, error=exc)
             )
             return None
         except Exception as exc:
-            public_error_message(
+            log_public_error(
                 context or ctx,
                 exc,
-                logger    = logger,
-                component = ("dispatcher.fallback_provider" if fallback else "dispatcher.provider"),
+                component=("dispatcher.fallback_provider" if fallback else "dispatcher.provider"),
             )
             return None
 
@@ -1367,8 +1372,8 @@ class Dispatcher:
         return self._get_smalltalk_provider() == "xiaoqing_chat"
 
     @staticmethod
-    def _truncate_text(text: str, max_len: int = constants.DEFAULT_LOG_TRUNCATE_LEN) -> str:
-        """截断文本用于日志显示"""
+    def _truncate_text(text: str, max_len: int) -> str:
+        """把过长的文本截短后用于回复里的回显。"""
         if len(text) > max_len:
             return text[:max_len] + "..."
         return text

@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from core.interfaces import PluginSettingsSnapshot
+from core.log import LogEvent
 from core.plugin_base import Segments, head_tail_preview, segments
 from core.process_tree import run_process
 from core.public_errors import public_error_response
-from core.sensitive_audit import log_sensitive_operation, safe_request_id
 
 from .config import (
     DANGEROUS_PATTERNS,
@@ -32,7 +32,7 @@ from .config import (
     UNSUPPORTED_SHELL_BUILTINS,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -60,26 +60,7 @@ class ShellContext(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-# ──────────────────── 配置与审计 ────────────────────
-
-
-def _log_command_audit(
-    context: object,
-    command_text: str,
-    *,
-    status: str,
-    return_code: int | None   = None,
-    exc: BaseException | None = None,
-) -> None:
-    log_sensitive_operation(
-        logger,
-        "shell.execute",
-        request_id  = safe_request_id(context),
-        status      = status,
-        return_code = return_code,
-        payload     = command_text,
-        exc         = exc,
-    )
+# ──────────────────── 配置 ────────────────────
 
 
 def _get_config(context: ShellContext) -> Mapping[str, Any]:
@@ -442,12 +423,12 @@ async def handle(
         if execution_args is None:
             return segments(_terminal_error_message(terminal_error or "未知配置错误"))
 
-        _log_command_audit(context, cmd_line, status="started")
+        log.info(LogEvent("execute", status="started", payload=cmd_line))
         timeout = _get_timeout(context)
         try:
             code, stdout, stderr = await _execute_command(execution_args, timeout)
         except FileNotFoundError:
-            _log_command_audit(context, cmd_line, status="unavailable")
+            log.warning(LogEvent("execute", status="unavailable", payload=cmd_line))
             if terminal.backend == _TERMINAL_GIT_BASH:
                 return segments(_terminal_error_message("配置的 Git Bash 可执行文件已不可用"))
             return segments(_command_not_found_message(cmd_args[0]))
@@ -467,23 +448,20 @@ async def handle(
 
         status = "✅" if code == 0 else "❌"
         header = f"{status} 返回码: {code}\n"
-        _log_command_audit(
-            context,
-            cmd_line,
-            status      = "succeeded" if code == 0 else "failed",
-            return_code = code,
+        log.info(
+            LogEvent(
+                "execute",
+                status      = "succeeded" if code == 0 else "failed",
+                return_code = code,
+                payload     = cmd_line,
+            )
         )
         return segments(header + "\n".join(output_parts))
 
     except Exception as exc:
         command_text = args if isinstance(args, str) else ""
-        _log_command_audit(context, command_text, status="error", exc=exc)
-        return public_error_response(
-            context,
-            exc,
-            logger    = logger,
-            component = "shell.handle",
-        )
+        log.error(LogEvent("execute", status="error", payload=command_text, error=exc))
+        return public_error_response(context, exc, component="shell.handle")
 
 
 def _show_help(context: ShellContext) -> str:

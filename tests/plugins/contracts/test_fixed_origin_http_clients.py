@@ -1,7 +1,6 @@
 # 验证固定来源的 HTTP 客户端共用有界请求接口。
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +9,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from core.bounded_http import HttpStatusError, ResponseFormatError, ResponseLimitError
+from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.adnmb import adapi
 from plugins.adnmb.adapi import AdnmbClient
 from plugins.ads_paper.ads_client import ADSClient
@@ -76,7 +76,6 @@ def _context(tmp_path: Path, session: _Session, *, proxy: str = "") -> SimpleNam
     return with_settings_reader(
         SimpleNamespace(
             http_session = session,
-            logger       = logging.getLogger("test.fixed_origin"),
             data_dir     = tmp_path,
             secrets      = {"plugins": {"github": {"proxy": proxy}}},
         )
@@ -287,7 +286,7 @@ async def test_github_proxy_rejects_wrong_mime_before_reading(tmp_path: Path) ->
 
     result = await github.scheduled(context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)
     assert response.content.iterations == 0
 
 
@@ -332,7 +331,7 @@ async def test_github_proxy_rejects_cross_origin_redirect_before_request(
 
     result = await github.scheduled(context)
 
-    assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    assert PUBLIC_ERROR_PREFIX in str(result)
     assert len(session.calls) == 1
     assert redirect.content.iterations == 0
 

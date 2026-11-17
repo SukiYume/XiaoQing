@@ -19,7 +19,6 @@ This directory contains the XiaoQingBot project manual. Read the topics in this 
 | [08 - Message flow](08-message-flow.md) | The complete path from a OneBot event to a reply | Troubleshooters and framework maintainers |
 | [09 - Plugin manual](09-plugins.md) | Purpose, commands, configuration, and data for the 34 built-in plugins, plus the command and scheduled-task indexes | Users and administrators |
 | [Pendo Scriptable widget](pendo-scriptable-widget.md) | Authentication, script, and setup for the iPhone widget | Pendo users |
-| [XiaoQing character design book (Chinese)](../character-design/README.md) | Turnaround, expressions, outfit and accessories, pose references, and the Live2D production handoff | Illustrators, modelers, and content creators |
 | [Changelog (Chinese)](../../CHANGELOG.md) | Version changes, affected functions, and verification results | Users and maintainers |
 
 ## 📌 Reading sequences

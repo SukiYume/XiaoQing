@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int
+from core.log import LogEvent
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -45,7 +46,7 @@ from core.public_errors import public_error_response
 
 from .adapi import AdnmbClient, Post, Thread
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 MAX_CACHED_CLIENTS      = 128
 CLIENT_IDLE_TTL_SECONDS = 60 * 60
@@ -363,7 +364,6 @@ async def handle(
 ) -> Segments:
     """命令处理入口"""
     try:
-        logger.info("收到 ADnmb 命令: %s %s", command, args)
         parsed = parse(args)
 
         selected_action, request_error = _request_error(parsed)
@@ -396,9 +396,8 @@ async def handle(
 
         # 时间线
         if selected_action == "t":
-            logger.info("获取时间线，页码: %s", page)
             threads = await client.get_timeline(page)
-            logger.info("获取到 %s 个串", len(threads))
+            log.info(LogEvent("timeline.fetched", page=page, thread_count=len(threads)))
             return await format_threads(threads, client, show_replies=False)
 
         # 板块列表
@@ -414,23 +413,29 @@ async def handle(
         # 板块内容
         if selected_action == "m":
             forum_name = option_values["m"]
-            logger.info("获取板块: %s，页码: %s", forum_name, page)
-            threads = await client.get_forum(forum_name, page)
+            threads    = await client.get_forum(forum_name, page)
+            log.info(
+                LogEvent("forum.fetched", query=forum_name, page=page, thread_count=len(threads))
+            )
             if not threads:
-                logger.warning("板块 %s 不存在或无内容", forum_name)
                 return segments("该板块不存在或暂无内容")
-            logger.info("获取到 %s 个串", len(threads))
             return await format_threads(threads, client, show_replies=False)
 
         # 串内容
         if selected_action == "c":
             thread_id = option_values["c"]
-            logger.info("获取串: %s，页码: %s", thread_id, page)
-            thread = await client.get_thread(thread_id, page)
+            thread    = await client.get_thread(thread_id, page)
+            log.info(
+                LogEvent(
+                    "thread.fetched",
+                    thread_id   = thread_id,
+                    page        = page,
+                    found       = bool(thread),
+                    reply_count = len(thread.replies) if thread else None,
+                )
+            )
             if not thread:
-                logger.warning("串 %s 不存在", thread_id)
                 return segments("该串不存在")
-            logger.info("获取到串，回复数: %s", len(thread.replies))
             return await format_threads(
                 [thread], client, show_replies=True, replies_per_thread=None
             )
@@ -459,7 +464,7 @@ async def handle(
         return segments(_HELP_TEXT)
 
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="adnmb.handle")
+        return public_error_response(context, exc, component="adnmb.handle")
 
 
 _HELP_TEXT = """A岛匿名版 (adnmb) v2.0.0
