@@ -333,6 +333,27 @@ async def test_transient_network_failures_produce_no_login_alert(environment):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [TimeoutError(), client.ClientRejected()])
+async def test_health_check_records_failure_and_recovery(environment, caplog, failure):
+    env = environment
+    client.write_json(env.context.data_dir / "token.json", env.token)
+    client.write_json(
+        env.context.data_dir / "speaker.json", {"region": "cn", "notify_user_id": 100}
+    )
+    caplog.set_level("INFO")
+    env.xiaomi.device_error = failure
+    assert await main.scheduled_auth(env.context) == []
+    assert "cloud.health.failed" in caplog.text
+    assert type(failure).__name__ in caplog.text
+    assert not login.runtime(env.context).manager.status()
+    env.xiaomi.device_error = None
+    assert await main.scheduled_auth(env.context) == []
+    assert "cloud.health.recovered" in caplog.text
+    assert not env.context.state.get("xiaoai_health_failed")
+    env.context.send_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_selection_expiring_during_directory_setup_preserves_binding(
     environment, monkeypatch
 ):

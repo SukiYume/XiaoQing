@@ -232,6 +232,7 @@ async def handle(
     except FileNotFoundError:
         return segments("请私聊发送 /小爱 登录，用米家 App 扫码完成授权。")
     except BridgeError as exc:
+        log.warning(LogEvent("request.rejected", error=exc))
         return segments(str(exc))
     except Exception as exc:
         log.warning(LogEvent("request.failed", error=exc))
@@ -264,8 +265,12 @@ async def scheduled_auth(context: Any) -> list[ScheduledDelivery]:
                 io, mina = services(context.http_session, token, profile["region"], manager.refresh)
                 await io.device_list("full")
                 await mina.device_list()
-            except AuthRequired:
-                pass  # TokenManager 已持久记录需要重新授权的账号。
+            except AuthRequired as exc:
+                context.state["xiaoai_health_failed"] = True
+                log.warning(LogEvent("cloud.health.failed", reason_code="auth_required", error=exc))
+            else:
+                if context.state.pop("xiaoai_health_failed", False):
+                    log.info(LogEvent("cloud.health.recovered"))
             status = manager.status()
             if (
                 not status.get("needs_login")
@@ -296,6 +301,10 @@ async def scheduled_auth(context: Any) -> list[ScheduledDelivery]:
                     receipt=receipt,
                 )
             ]
-    except Exception:
-        # 网络波动保持现有授权，等待下一轮检查；异常正文可能包含上游凭据。
+    except FileNotFoundError:
+        # 尚未绑定的部署保持安静。
+        return []
+    except Exception as exc:
+        context.state["xiaoai_health_failed"] = True
+        log.warning(LogEvent("cloud.health.failed", error=exc))
         return []

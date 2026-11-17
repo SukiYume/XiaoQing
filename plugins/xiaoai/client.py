@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -15,10 +16,15 @@ from core.bounded_http import (
     BodyLimits,
     HttpStatusError,
     JsonLimits,
+    ResponseFormatError,
     aiohttp_request_bounded,
     parse_bounded_json,
 )
+from core.log import LogEvent
 from core.private_files import write_private_json as write_json
+
+log               = logging.getLogger(__name__)
+MIHOME_USER_AGENT = "APP/com.xiaomi.mihome APPV/11.3.203"
 
 
 class BridgeError(Exception):
@@ -30,6 +36,13 @@ class AuthRequired(BridgeError):
 
     def __init__(self) -> None:
         super().__init__("小米登录已失效，请私聊发送 /小爱 登录 扫码重新授权。")
+
+
+class ClientRejected(BridgeError):
+    """小米拒绝了请求使用的客户端。"""
+
+    def __init__(self) -> None:
+        super().__init__("小米云拒绝了当前客户端（错误码 -127），需要更新米家接口适配。")
 
 
 Refresh   = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -131,11 +144,42 @@ async def request_json(session: Any, method: str, url: str, **kwargs: Any) -> An
         limits=BodyLimits(max_wire_bytes=8_000_000, max_decoded_bytes=16_000_000),
         headers=kwargs.pop("headers", None),
         request_kwargs={"timeout": aiohttp.ClientTimeout(total=15), **kwargs},
+        success_statuses={200, *range(400, 600)},
     )
-    return parse_bounded_json(
-        response,
-        limits=JsonLimits(max_bytes=16_000_000, max_nodes=2_000_000, max_string_chars=12_000_000),
-    )
+    try:
+        result = parse_bounded_json(
+            response,
+            limits=JsonLimits(
+                max_bytes=16_000_000, max_nodes=2_000_000, max_string_chars=12_000_000
+            ),
+        )
+    except ResponseFormatError:
+        if response.status == 200:
+            raise
+        result = None
+    code = result.get("code") if isinstance(result, dict) else None
+    code = code if type(code) is int else None
+    if code == -127 or response.status != 200:
+        reason = (
+            "client_rejected"
+            if code == -127
+            else "rate_limited"
+            if response.status == 429
+            else "http_error"
+        )
+        log.warning(
+            LogEvent(
+                "cloud.request.rejected",
+                service_name  = urlsplit(url).hostname,
+                http_status   = response.status,
+                upstream_code = code,
+                reason_code   = reason,
+            )
+        )
+        if code == -127:
+            raise ClientRejected()
+        raise HttpStatusError(response.status)
+    return result
 
 
 class TokenAccount:
@@ -201,6 +245,8 @@ class TokenAccount:
             raise AuthRequired()
         cookies = {"userId": str(self.token["userId"]), "serviceToken": service[1]}
         content = data(self.token, cookies) if callable(data) else data
+        if sid == "xiaomiio":
+            headers = {**headers, "User-Agent": MIHOME_USER_AGENT}
         try:
             result = await request_json(
                 self.session,
@@ -214,8 +260,9 @@ class TokenAccount:
             if exc.status == 401:
                 raise AuthRequired() from None
             if exc.status == 429:
-                # 限流不是登录问题：照实说，别让人去重新授权。
-                raise BridgeError("米家云端请求太频繁，被暂时限流了，过几分钟再试。") from None
+                raise BridgeError(
+                    "米家云端暂时限流，请稍后再试；持续失败时请查看诊断日志。"
+                ) from None
             raise
         if isinstance(result, dict):
             message = str(result.get("message", "")).lower()
@@ -224,8 +271,30 @@ class TokenAccount:
                 or "auth err" in message
                 or message in {"invalid signature", "servicetoken_expired", "未登录"}
             ):
+                log.warning(
+                    LogEvent(
+                        "cloud.request.rejected",
+                        service_name  = sid,
+                        http_status   = 200,
+                        upstream_code = result.get("code")
+                        if type(result.get("code")) is int
+                        else None,
+                        reason_code="auth_required",
+                    )
+                )
                 raise AuthRequired()
         if not isinstance(result, dict) or result.get("code") != 0:
+            log.warning(
+                LogEvent(
+                    "cloud.request.rejected",
+                    service_name  = sid,
+                    http_status   = 200,
+                    upstream_code = result.get("code")
+                    if isinstance(result, dict) and type(result.get("code")) is int
+                    else None,
+                    reason_code="api_error",
+                )
+            )
             raise BridgeError("小米云请求失败，请稍后运行 /小爱 检查；可通过 /小爱 登录 重新授权。")
         return result
 

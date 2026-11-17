@@ -12,6 +12,7 @@ import pytest
 from plugins.xiaoai import auth, client
 from tests.helpers.http import (
     AiohttpResponse,
+    QueuedAiohttpSession,
     aiohttp_json_response,
     mocked_aiohttp,
 )
@@ -271,6 +272,83 @@ async def test_cloud_rate_limit_is_reported_as_such_not_as_a_login_problem(monke
     with pytest.raises(client.BridgeError, match="限流") as exc:
         await account.mi_request("xiaomiio", "https://api.io.mi.com/app/home/device_list", {}, {})
     assert not isinstance(exc.value, client.AuthRequired)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 429])
+async def test_client_withdraw_preserves_cause_without_refresh_or_secret_logging(status, caplog):
+    session = QueuedAiohttpSession(
+        aiohttp_json_response(
+            {"code": -127, "message": "client withdraw", "description": "private-pass"},
+            status     = status,
+            media_type = "text/plain",
+        )
+    )
+    refresh = AsyncMock()
+    account = client.TokenAccount(session, credentials(), refresh)
+    with pytest.raises(client.ClientRejected, match="-127") as error:
+        await account.mi_request("xiaomiio", "https://api.io.mi.com/app/home/device_list", {}, {})
+    assert len(session.requests) == 1
+    refresh.assert_not_awaited()
+    assert "过几分钟" not in str(error.value)
+    assert "upstream_code=-127" in caplog.text
+    assert "reason_code=client_rejected" in caplog.text
+    assert f"http_status={status}" in caplog.text
+    assert "private-pass" not in caplog.text
+    assert "old-io" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sid", ["xiaomiio", "micoapi"])
+async def test_cloud_client_identity_matches_login_and_preserves_speaker_headers(sid):
+    session = QueuedAiohttpSession(aiohttp_json_response({"code": 0, "result": {}}))
+    headers = {"User-Agent": "old-client", "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2"}
+    account = client.TokenAccount(session, credentials())
+    url     = (
+        "https://api.io.mi.com/app/home/device_list"
+        if sid == "xiaomiio"
+        else "https://api2.mina.mi.com/admin/v2/device_list"
+    )
+    await account.mi_request(sid, url, None, headers)
+    sent = session.requests[0][2]["headers"]
+    assert sent["User-Agent"] == (auth.USER_AGENT if sid == "xiaomiio" else "old-client")
+    assert sent["x-xiaomi-protocal-flag-cli"] == "PROTOCAL-HTTP2"
+    assert headers["User-Agent"] == "old-client"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", [b'{"code":429,"message":"private-pass"}', b"<html>private-pass</html>"]
+)
+async def test_actual_rate_limit_is_logged_and_never_replayed(body, caplog):
+    session = QueuedAiohttpSession(AiohttpResponse(body, status=429, media_type="text/plain"))
+    refresh = AsyncMock()
+    account = client.TokenAccount(session, credentials(), refresh)
+    with pytest.raises(client.BridgeError, match="限流"):
+        await account.mi_request("xiaomiio", "https://api.io.mi.com/app/miotspec/action", {}, {})
+    assert len(session.requests) == 1
+    refresh.assert_not_awaited()
+    assert "reason_code=rate_limited" in caplog.text
+    assert "private-pass" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_http_auth_failure_with_non_json_body_still_refreshes_once(caplog):
+    session = QueuedAiohttpSession(
+        AiohttpResponse(b"private-pass", status=401, media_type="text/plain"),
+        aiohttp_json_response({"code": 0, "result": {}}),
+    )
+    refresh = AsyncMock(return_value=credentials())
+    await client.TokenAccount(session, credentials(), refresh).mi_request(
+        "xiaomiio",
+        "https://api.io.mi.com/app/home/device_list",
+        {},
+        {},
+    )
+    refresh.assert_awaited_once()
+    assert len(session.requests) == 2
+    assert "http_status=401" in caplog.text
+    assert "private-pass" not in caplog.text
 
 
 @pytest.mark.asyncio

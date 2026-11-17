@@ -22,10 +22,17 @@ from core.bounded_http import (
     read_aiohttp_response,
 )
 
-from .client import AuthRequired, BridgeError, is_plain_https, read_json, write_json
+from .client import (
+    MIHOME_USER_AGENT,
+    AuthRequired,
+    BridgeError,
+    is_plain_https,
+    read_json,
+    write_json,
+)
 
 ACCOUNT     = "https://account.xiaomi.com"
-USER_AGENT  = "APP/com.xiaomi.mihome APPV/11.3.203"
+USER_AGENT  = MIHOME_USER_AGENT
 SERVICES    = ("xiaomiio", "micoapi")
 RENEW_AFTER = 6 * 60 * 60
 
