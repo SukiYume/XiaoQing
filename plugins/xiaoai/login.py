@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.delivery import send_sensitive_private
+from core.log import LogEvent
 from core.plugin_base import bounded_external_text, qr_image, requester_user_id, segments
 from core.private_files import protect_directory
 
@@ -24,6 +26,7 @@ from .client import (
 )
 
 REGIONS = {"cn", "de", "i2", "ru", "sg", "us"}
+log     = logging.getLogger(__name__)
 
 
 def label(value: Any) -> str:
@@ -160,8 +163,10 @@ class LoginRuntime:
                     context, pending.owner, segments("音箱选择已过期，请重新发送 /小爱 登录。")
                 )
         except BridgeError as exc:
+            log.warning(LogEvent("login.wait.failed", error=exc))
             await send_sensitive_private(context, pending.owner, segments(str(exc)))
-        except Exception:
+        except Exception as exc:
+            log.warning(LogEvent("login.wait.failed", error=exc))
             await send_sensitive_private(
                 context, pending.owner, segments("本次扫码登录未完成，请稍后重新发送 /小爱 登录。")
             )

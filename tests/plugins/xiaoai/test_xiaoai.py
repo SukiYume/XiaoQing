@@ -190,13 +190,16 @@ async def test_duplicate_text_allows_new_message_at_twenty_seconds(env, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_ambiguous_and_never_retried(env):
+async def test_timeout_is_ambiguous_and_never_retried(env, caplog):
     context, cloud = env
     cloud.action_outcome = TimeoutError("password token secret")
     result               = await main.execute(context, "打开台灯", {})
     assert "待确认" in result and "secret" not in result
     assert "重复保护" in await main.execute(context, "打开台灯", {})
     assert len(cloud.actions) == 1
+    assert "speaker.submit.unconfirmed" in caplog.text
+    assert "TimeoutError" in caplog.text
+    assert "password token secret" not in caplog.text
 
 
 @pytest.mark.asyncio

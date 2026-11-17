@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from copy import deepcopy
 from typing import Any
 
 from core.atomic_store import keyed_path_lock
 from core.lifecycle import to_thread_owned
+from core.log import LogEvent
 
 from .client import SPEC_ROOT, BridgeError, fetch_spec, request_json, write_json
 from .feeding import adapt
@@ -25,6 +27,7 @@ from .presentation import (
 )
 
 MAX_CACHE_BYTES = 4_000_000
+log             = logging.getLogger(__name__)
 
 
 def label(item: dict[str, Any]) -> str:
@@ -126,8 +129,10 @@ async def discover(
                     spec = await fetch_spec(context.http_session, model, instances)
                 specs[model] = {"urn": spec["type"], "capabilities": normalize_spec(spec)}
             except BridgeError as exc:
+                log.warning(LogEvent("spec.fetch.failed", error=exc))
                 specs[model] = {"capabilities": {}, "error": str(exc)}
-            except Exception:
+            except Exception as exc:
+                log.warning(LogEvent("spec.fetch.failed", error=exc))
                 specs[model] = {"capabilities": {}, "error": "规格读取失败，可用“刷新设备”重试"}
 
         await asyncio.gather(*(fetch(model) for model in sorted(missing)))

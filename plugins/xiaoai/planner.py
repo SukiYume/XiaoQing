@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from core.ai import AIError, declare_route_defaults, first_json_object
+from core.log import LogEvent
 
 from .catalog import capabilities, resolve_device
 from .client import BridgeError
+
+log = logging.getLogger(__name__)
 
 # 自然语言解析：输出是一份结构化操作，要稳；总时长留在一次命令的执行预算之内。
 declare_route_defaults(
@@ -44,7 +48,8 @@ async def _json(context: Any, system: str, payload: dict[str, Any]) -> dict[str,
         if value is None:
             raise ValueError("object required")
         return value
-    except (AIError, ValueError, TypeError):
+    except (AIError, ValueError, TypeError) as exc:
+        log.warning(LogEvent("plan.failed", error=exc))
         raise BridgeError(
             "自然语言解析暂未完成，请稍后重试，或使用“设备”“能力”“调用”命令。"
         ) from None

@@ -184,7 +184,7 @@ async def test_canonical_operation_duplicate_and_message_guard(env):
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_and_timeout_stop_following_actions(env):
+async def test_partial_failure_and_timeout_stop_following_actions(env, caplog):
     ctx, io, cat, _, _ = env
     io.miot_action.side_effect = TimeoutError("secret-token")
     p = plan("action", "a2.1", args=[10])
@@ -193,6 +193,20 @@ async def test_partial_failure_and_timeout_stop_following_actions(env):
     assert "待确认" in result and "secret" not in result
     assert "重复保护" in await operations.execute_plan(ctx, io, cat, p, {})
     io.miot_action.assert_awaited_once()
+    assert "device.operation.failed" in caplog.text
+    assert "TimeoutError" in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_readback_failure_is_logged_after_single_submission(env, caplog):
+    ctx, io, cat, _, _ = env
+    io.miot_request.side_effect = TimeoutError("secret-readback")
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "状态读取未完成" in result
+    io.miot_set_props.assert_awaited_once()
+    assert "device.readback.failed" in caplog.text
+    assert "secret-readback" not in caplog.text
 
 
 @pytest.mark.asyncio

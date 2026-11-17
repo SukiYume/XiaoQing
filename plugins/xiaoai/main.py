@@ -135,16 +135,18 @@ async def execute(context: Any, text: str, event: dict[str, Any], *, check: bool
         baseline_ok = True
     except AuthRequired:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning(LogEvent("speaker.baseline.failed", error=exc))
     since_ms = int(time.time() * 1000)
     spec     = profile["directive"]
     values   = [text if kind == "text" else profile.get("silent", True) for kind in spec["inputs"]]
     try:
         code = await io.miot_action(profile["did"], (spec["siid"], spec["aiid"]), values)
     except BridgeError as exc:
+        log.warning(LogEvent("speaker.submit.unconfirmed", error=exc))
         return f"本次指令提交结果待确认。{exc}"
-    except Exception:
+    except Exception as exc:
+        log.warning(LogEvent("speaker.submit.unconfirmed", error=exc))
         return "指令提交结果待确认。请核对设备实际状态；本次请求已保留重复保护记录。"
     if code != 0:
         return "小米云返回动作失败。请检查音箱状态和文字执行能力；本次请求已保留记录。"
@@ -158,9 +160,10 @@ async def execute(context: Any, text: str, event: dict[str, Any], *, check: bool
                     if answer:
                         return f"小爱回复：{answer}\n（音箱应答；设备实际状态以设备回报为准。）"
         except AuthRequired as exc:
+            log.warning(LogEvent("speaker.answer.failed", error=exc))
             return f"指令已提交，小爱回答暂未取得。{exc}"
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(LogEvent("speaker.answer.failed", error=exc))
     return "指令已提交给小爱。本次暂未取得可匹配的文字回答，设备执行结果待确认。"
 
 
@@ -205,7 +208,8 @@ async def handle(
                     "needs_login"
                 ):
                     return segments(str(AuthRequired()))
-            except Exception:
+            except Exception as exc:
+                log.warning(LogEvent("local.status.failed", error=exc))
                 return segments("本地配置读取失败，请发送 /小爱 登录 重新配置。")
         return segments(
             "本地配置已就绪，自动续期已启用；发送 /小爱 检查 核验云端。" if ready else HELP
