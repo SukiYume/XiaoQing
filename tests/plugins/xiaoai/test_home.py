@@ -939,9 +939,13 @@ async def test_cancel_during_confirmation_preserves_single_submission(env, caplo
 
 
 @pytest.mark.asyncio
-async def test_confirmation_validates_property_identity_and_value(env, caplog):
+@pytest.mark.parametrize(
+    "field,value",
+    [("value", "secret-invalid-value"), ("did", "other-device"), ("siid", 99), ("piid", 99)],
+)
+async def test_confirmation_validates_property_identity_and_value(env, caplog, field, value):
     ctx, io, cat, _, _ = env
-    io.miot_request.return_value[0]["value"] = "secret-invalid-value"
+    io.miot_request.return_value[0][field] = value
     result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
     assert "结果待确认" in result
     assert "reason_code=read_failed" in caplog.text
