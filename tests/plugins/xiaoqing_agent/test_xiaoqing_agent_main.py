@@ -912,7 +912,9 @@ async def test_admin_sends_her_to_look_at_another_group_and_speak_there(tmp_path
     context   = FakeAgentContext(
         data_root / "xiaoqing_agent", catalog=chat_roots, command_runner=runner
     )
-    context.ai.script = [
+    # 数据目录可以配到运行目录之外：配置和日志仍按运行目录给出。
+    context.runtime_root = tmp_path / "run"
+    context.ai.script    = [
         ai_response(json.dumps({"action": "task", "plugins": ["xiaoqing_chat"]})),
         ai_response("", [tool_call("xiaoqing_command", {"commands": [look]})]),
         ai_response("", [tool_call("xiaoqing_command", {"commands": [say]})]),
@@ -927,8 +929,11 @@ async def test_admin_sends_her_to_look_at_another_group_and_speak_there(tmp_path
     assert "/qq <" in triage_prompt and "/xc" not in triage_prompt
     _route, messages, _kwargs = context.ai.calls[1]
     system, request = messages[0]["content"], messages[1]["content"]
-    # 管理员办事时她知道自己的代码、数据在哪；这一轮拿到的命令说明只有 /qq。
+    # 管理员办事时她知道自己的代码、数据、配置和日志在哪；这一轮拿到的命令说明只有 /qq。
     assert str(REPOSITORY_ROOT) in system and str(data_root) in system
+    run_root = tmp_path / "run"
+    assert str(run_root / "config" / "config.json") in system
+    assert str(run_root / "logs" / "xiaoqing.log") in system
     assert "/qq say <" in request and "/xc" not in request
     await _shutdown(context)
 

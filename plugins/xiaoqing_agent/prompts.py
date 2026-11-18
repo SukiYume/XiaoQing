@@ -62,17 +62,16 @@ def _read_stage_prompt(stage: str) -> str:
 def self_description(context: PluginContextProtocol) -> str:
     """Bot 管理员办事时附在运行环境后面的自述：她自己的代码、配置、数据和日志在哪。
 
-    数据目录取这个插件实际拿到的位置，配置和日志在它上一级的运行目录里。
+    数据目录取这个插件实际拿到的位置（``data_root`` 可以把它配到别处），配置和日志在运行目录里。
     """
 
-    data_root = Path(context.data_dir).parent
-    run_root  = data_root.parent
+    run_root = Path(context.runtime_root)
     return _read_stage_prompt("自述").format(
         version = VERSION,
         code    = _CODE_ROOT,
         docs    = _CODE_ROOT / "docs",
         config  = run_root / "config" / "config.json",
-        data    = data_root,
+        data    = Path(context.data_dir).parent,
         log     = run_root / "logs" / "xiaoqing.log",
     )
 

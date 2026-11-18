@@ -106,6 +106,7 @@ class FakeAgentContext:
     ) -> None:
         self.plugin_name                   = "xiaoqing_agent"
         self.data_dir                      = data_dir
+        self.runtime_root                  = data_dir.parent.parent
         self.state: dict                   = {}
         self.current_user_id               = user_id
         self.current_group_id              = group_id
