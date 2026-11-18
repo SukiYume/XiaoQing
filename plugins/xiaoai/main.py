@@ -222,6 +222,8 @@ async def handle(
     lock = _lock(context)
     if lock.locked():
         return segments("上一条小爱请求正在处理，请稍后再试。")
+    started = time.monotonic()
+    outcome = "returned"
     try:
         async with lock, asyncio.timeout(120):
             if not explicit:
@@ -233,15 +235,29 @@ async def handle(
                     await execute(context, text, event, check=text == "检查" and not explicit)
                 )
             return segments(await home.handle(context, text, event))
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
     except FileNotFoundError:
+        outcome = "not_configured"
         return segments("请私聊发送 /小爱 登录，用米家 App 扫码完成授权。")
     except BridgeError as exc:
+        outcome = "rejected"
         log.warning(LogEvent("request.rejected", error=exc))
         return segments(str(exc))
     except Exception as exc:
+        outcome = "failed"
         log.warning(LogEvent("request.failed", error=exc))
         return segments(
             "小爱请求未能完成。请核对设备状态，并运行 /小爱 检查；可发送 /小爱 登录 重新授权。"
+        )
+    finally:
+        log.info(
+            LogEvent(
+                "request.completed",
+                reason_code = outcome,
+                duration_s  = round(time.monotonic() - started, 3),
+            )
         )
 
 

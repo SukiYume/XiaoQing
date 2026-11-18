@@ -77,7 +77,16 @@ def env(tmp_path, monkeypatch):
         miot_set_props=AsyncMock(return_value=[0]),
         miot_action=AsyncMock(return_value=0),
         miot_request=AsyncMock(
-            return_value=[{"did": "123", "siid": 2, "piid": 2, "value": 100, "code": 0}]
+            return_value=[
+                {
+                    "did"       : "123",
+                    "siid"      : 2,
+                    "piid"      : 2,
+                    "value"     : 100,
+                    "code"      : 0,
+                    "updateTime": time.time(),
+                }
+            ]
         ),
         device_list=AsyncMock(
             return_value=[{"did": "123", "name": "台灯", "model": model, "isOnline": True}]
@@ -599,7 +608,10 @@ class _Cloud:
         return self._reply({"code": 0, "result": {"list": self.devices}})
 
     def _prop_get(self, _url, **kwargs):
-        result = [{**item, "value": 100, "code": 0} for item in self._params(kwargs)]
+        result = [
+            {**item, "value": 100, "code": 0, "updateTime": time.time()}
+            for item in self._params(kwargs)
+        ]
         return self._reply({"code": 0, "result": result})
 
     def _prop_set(self, _url, **kwargs):
@@ -839,3 +851,204 @@ async def test_delegated_call_checks_amount_against_initiator_words(structured):
     ctx.request_texts = ("出一份粮", "改成两份")
     result            = await home.handle(ctx, "调用 " + json.dumps(call), {})
     assert "已提交 2 份" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,cap_id", [(30, "p2.2"), (False, "p2.1")])
+async def test_delayed_fresh_report_confirms_without_replaying_write(
+    env, monkeypatch, caplog, target, cap_id
+):
+    ctx, io, cat, _, _ = env
+    monkeypatch.setattr(operations.time, "time", lambda: 1800000000.75)
+    caplog.set_level("INFO")
+    piid                        = int(cap_id.split(".")[1])
+    base                        = {"did": "123", "siid": 2, "piid": piid, "code": 0}
+    old                         = 50 if type(target) is int else True
+    io.miot_request.side_effect = [
+        [base | {"value": old, "updateTime": 1799990000}],
+        [base | {"value": target, "updateTime": 1799999990}],
+        [base | {"value": target, "updateTime": 1800000000}],
+    ]
+    request = plan(value=target, capability=cap_id)
+    request["operations"].append(plan("action", "a2.2", args=[])["operations"][0])
+    result = await operations.execute_plan(ctx, io, cat, request, {})
+    assert "状态已核对" in result
+    io.miot_set_props.assert_awaited_once()
+    io.miot_action.assert_awaited_once()
+    assert io.miot_request.await_count == 3
+    assert "reason_code=stale_report" in caplog.text
+    assert "reason_code=matched" in caplog.text
+    assert "device.operation.submitted" in caplog.text
+    assert "台灯" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stamp,reason",
+    [
+        (1799999000, "stale_report"),
+        (None, "timestamp_unverified"),
+        (float("nan"), "timestamp_unverified"),
+        (1800000030, "timestamp_unverified"),
+    ],
+)
+async def test_matching_value_without_fresh_report_remains_pending(
+    env, monkeypatch, caplog, stamp, reason
+):
+    ctx, io, cat, _, _ = env
+    monkeypatch.setattr(operations.time, "time", lambda: 1800000000.75)
+    io.miot_request.return_value[0]["updateTime"] = stamp
+    request = plan(value=100)
+    request["operations"].append(plan("action", "a2.2", args=[])["operations"][0])
+    result = await operations.execute_plan(ctx, io, cat, request, {})
+    assert "结果待确认" in result and "状态已核对" not in result
+    assert "指令已提交" in result
+    io.miot_set_props.assert_awaited_once()
+    io.miot_action.assert_not_awaited()
+    assert io.miot_request.await_count == len(operations.CONFIRM_DELAYS)
+    assert f"reason_code={reason}" in caplog.text
+    assert "device.confirmation.completed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_confirmation_deadline_bounds_hung_read(env, monkeypatch, caplog):
+    ctx, io, cat, _, _ = env
+    monkeypatch.setattr(operations, "CONFIRM_TIMEOUT_SECONDS", 0.01)
+
+    async def hanging(*args):
+        await asyncio.Event().wait()
+
+    io.miot_request.side_effect = hanging
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "确认等待已超时" in result
+    io.miot_set_props.assert_awaited_once()
+    assert "reason_code=timeout" in caplog.text
+    assert "duration_s=" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_confirmation_preserves_single_submission(env, caplog):
+    ctx, io, cat, _, _ = env
+    caplog.set_level("INFO")
+    io.miot_request.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "device.confirmation.cancelled" in caplog.text
+    assert "重复保护" in await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    io.miot_set_props.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_validates_property_identity_and_value(env, caplog):
+    ctx, io, cat, _, _ = env
+    io.miot_request.return_value[0]["value"] = "secret-invalid-value"
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "结果待确认" in result
+    assert "reason_code=read_failed" in caplog.text
+    assert "secret-invalid-value" not in caplog.text
+    io.miot_set_props.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["走廊风扇", "书房插座", "办公照明"])
+async def test_preloaded_named_device_uses_one_model_call(env, name, caplog):
+    ctx, _, cat, ai, _ = env
+    caplog.set_level("INFO")
+    cat["devices"]["d1"]["name"] = name
+    ai.complete.return_value = SimpleNamespace(content=json.dumps(plan(value=30)))
+    assert await planner.plan(ctx, name + "设为30", cat, {}) == plan(value=30)
+    ai.complete.assert_awaited_once()
+    payload = json.loads(ai.complete.call_args.args[1][1]["content"])
+    assert set(payload["prefetched"]) == {"d1"}
+    assert "stage=combined" in caplog.text and "duration_s=" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_preloaded_plan_can_expand_to_multiple_devices(env):
+    ctx, _, cat, ai, _ = env
+    cat["devices"]["d2"] = cat["devices"]["d1"] | {"name": "客厅照明", "did": "456"}
+    request = plan(value=30)
+    request["operations"].append(plan(value=40, device="d2")["operations"][0])
+    ai.complete.side_effect = [
+        SimpleNamespace(content=json.dumps({"devices": ["d1", "d2"]})),
+        SimpleNamespace(content=json.dumps(request)),
+    ]
+    assert await planner.plan(ctx, "台灯调到30，客厅的灯调到40", cat, {}) == request
+    first = json.loads(ai.complete.call_args_list[0].args[1][1]["content"])
+    assert set(first["devices"]) == {"d1", "d2"}
+    assert set(first["prefetched"]) == {"d1"}
+    second = json.loads(ai.complete.call_args_list[1].args[1][1]["content"])
+    assert set(second["devices"]) == {"d1", "d2"}
+
+
+@pytest.mark.asyncio
+async def test_single_pass_plan_cannot_use_unloaded_schema(env):
+    ctx, _, cat, ai, _ = env
+    cat["devices"]["d2"] = cat["devices"]["d1"] | {"name": "其他设备", "did": "456"}
+    ai.complete.return_value = SimpleNamespace(content=json.dumps(plan(value=100, device="d2")))
+    with pytest.raises(client.BridgeError, match="选择范围外"):
+        await planner.plan(ctx, "台灯设为100", cat, {})
+
+
+@pytest.mark.asyncio
+async def test_large_catalog_retains_two_phase_planning(env, monkeypatch):
+    ctx, _, cat, ai, _ = env
+    monkeypatch.setattr(planner, "PREFETCH_MAX_CHARS", 1)
+    ai.complete.side_effect = [
+        SimpleNamespace(content=json.dumps({"devices": ["d1"]})),
+        SimpleNamespace(content=json.dumps(plan(value=100))),
+    ]
+    assert await planner.plan(ctx, "台灯调到100", cat, {}) == plan(value=100)
+    first = json.loads(ai.complete.call_args_list[0].args[1][1]["content"])
+    assert first["prefetched"] == {}
+    assert ai.complete.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_single_pass_http_flow_waits_for_fresh_state(env, monkeypatch, caplog):
+    ctx, _, _, ai, spec = env
+    caplog.set_level("INFO")
+    client.write_json(ctx.data_dir / "speaker.json", {"account_id": "u", "region": "cn"})
+    client.write_json(ctx.data_dir / "token.json", _token("u"))
+    devices = [{"did": "123", "name": "办公照明", "model": "test.device", "isOnline": True}]
+    reads   = []
+
+    def report(cloud, _url, **kwargs):
+        params = cloud._params(kwargs)
+        reads.append(params)
+        stamp = time.time() if len(reads) > 1 else time.time() - 3600
+        return cloud._reply(
+            {
+                "code"  : 0,
+                "result": [{**p, "value": 30, "code": 0, "updateTime": stamp} for p in params],
+            }
+        )
+
+    monkeypatch.setattr(_Cloud, "_prop_get", report)
+    ai.complete.return_value = SimpleNamespace(content=json.dumps(plan(value=30, device=LAMP)))
+    async with aiohttp.ClientSession() as session:
+        with mocked_aiohttp() as mocked:
+            ctx.http_session = session
+            cloud            = _Cloud(mocked, devices, {"test.device": spec})
+            result           = str(await main.handle("xiaoai", "办公照明调到30", {}, ctx))
+    assert "状态已核对" in result
+    assert len(cloud.writes) == 1 and len(reads) == 2
+    ai.complete.assert_awaited_once()
+    for event in (
+        "device.discovery.completed",
+        "plan.model.completed",
+        "device.operation.submitted",
+        "device.confirmation.completed",
+        "request.completed",
+    ):
+        assert event in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_write_rejection_logs_code_and_stops(env, caplog):
+    ctx, io, cat, _, _ = env
+    io.miot_set_props.return_value = [-704042011]
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "设备返回失败" in result
+    assert "upstream_code=-704042011" in caplog.text
+    io.miot_request.assert_not_awaited()

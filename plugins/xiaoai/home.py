@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
+
+from core.log import LogEvent
 
 from . import catalog, login, planner, weather
 from .client import BridgeError, read_json, services, write_json
 from .feeding import MAX_REQUEST_GRAMS, PORTION_MODELS, food_out_actions
 from .operations import execute_plan, validate_value
+
+log = logging.getLogger(__name__)
 
 
 def preferences(context: Any, account: str) -> dict[str, Any]:
@@ -101,8 +107,16 @@ async def handle(context: Any, text: str, event: dict[str, Any]) -> str:
     if text == "天气" or text.startswith("天气 "):
         return await weather.lookup(context, text[2:].strip() or settings.get("weather_city", ""))
     io, _ = services(context.http_session, token, profile["region"], manager.refresh)
-    devices = await catalog.discover(
+    discovery_started = time.monotonic()
+    devices           = await catalog.discover(
         context, io, account, profile["region"], refresh=text == "刷新设备"
+    )
+    log.info(
+        LogEvent(
+            "device.discovery.completed",
+            device_count = len(devices["devices"]),
+            duration_s   = round(time.monotonic() - discovery_started, 3),
+        )
     )
     devices["feeding_grams"] = settings.get("feeding_grams", {})
     saved                    = save_preference(context, settings, text, devices)

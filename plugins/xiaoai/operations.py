@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -19,8 +20,10 @@ from .feeding import check_requested_amount, reject_unchecked_forwarding, wire_a
 from .infrared import voice_action
 from .presentation import display_value
 
-MAX_OPERATIONS = 12
-log            = logging.getLogger(__name__)
+MAX_OPERATIONS          = 12
+CONFIRM_TIMEOUT_SECONDS = 6.0
+CONFIRM_DELAYS          = (0.0, 0.5, 1.0, 1.5, 2.0)
+log                     = logging.getLogger(__name__)
 
 
 def validate_value(schema: dict[str, Any], value: Any) -> None:
@@ -130,7 +133,16 @@ async def read_property(io: Any, device: dict[str, Any], cap: dict[str, Any]) ->
         or item.get("piid", cap["iid"]) != cap["iid"]
     ):
         raise BridgeError("设备属性响应身份不匹配。")
-    return {"value": item["value"], "updated_at": item.get("updateTime")}
+    validate_value(cap, item["value"])
+    stamp = item.get("updateTime")
+    if (
+        not isinstance(stamp, (int, float))
+        or isinstance(stamp, bool)
+        or not math.isfinite(stamp)
+        or not 0 < stamp <= time.time() + 1
+    ):
+        stamp = None
+    return {"value": item["value"], "updated_at": stamp}
 
 
 def format_read(
@@ -180,20 +192,34 @@ async def execute_plan(
     if not reserve_request(context, event, "device-requests.json", digests):
         return "本次设备动作已被重复保护拦截；相同操作间隔需满 20 秒，请核对上次执行结果。"
     lines = ["🏠 设备反馈", "━━━━━━━━━━━━"]
-    for item in items:
+    for index, item in enumerate(items, 1):
         op, device, cap = item["operation"], item["device"], item["cap"]
-        title = f"{device['name']} · {cap['name']}"
+        title   = f"{device['name']} · {cap['name']}"
+        started = time.monotonic()
         try:
             if op["op"] == "read":
                 lines.append(
                     format_read(context, device, cap, await read_property(io, device, cap))
                 )
+                log.info(
+                    LogEvent(
+                        "device.read.completed",
+                        operation_index = index,
+                        duration_s      = round(time.monotonic() - started, 3),
+                    )
+                )
                 continue
+            submitted_at = time.time()
             if op["op"] == "set":
                 codes = await io.miot_set_props(
                     device["did"], [(cap["siid"], cap["iid"], op["value"])]
                 )
-                success = codes == [0]
+                success      = codes == [0]
+                failure_code = (
+                    codes[0]
+                    if isinstance(codes, list) and len(codes) == 1 and type(codes[0]) is int
+                    else None
+                )
             else:
                 if cap.get("transport") == "speaker_silent":
                     assert profile is not None
@@ -204,15 +230,40 @@ async def execute_plan(
                         (cap["siid"], cap["iid"]),
                         item["wire_args"] if item["wire_args"] is not None else op["args"],
                     )
-                success = type(code) is int and code == 0
+                success      = type(code) is int and code == 0
+                failure_code = code if type(code) is int else None
             if not success:
+                log.warning(
+                    LogEvent(
+                        "device.operation.rejected",
+                        operation_index = index,
+                        operation       = op["op"],
+                        upstream_code   = failure_code,
+                        duration_s      = round(time.monotonic() - started, 3),
+                    )
+                )
                 lines.append(f"{title}：设备返回失败，后续操作已停止。")
                 break
+            log.info(
+                LogEvent(
+                    "device.operation.submitted",
+                    operation_index = index,
+                    operation       = op["op"],
+                    duration_s      = round(time.monotonic() - started, 3),
+                )
+            )
             submitted = f"• {title}：指令已提交。"
             if item["wire_args"] is not None:
                 submitted = f"✓ {device['name']}：已提交 {item['wire_args'][0]} 份，按设置估算约 {op['args'][0]} 克。"
             lines.append(submitted)
             if device["model"].startswith("miir."):
+                log.info(
+                    LogEvent(
+                        "device.confirmation.unavailable",
+                        operation_index = index,
+                        reason_code     = "infrared",
+                    )
+                )
                 lines.append(
                     "小爱静默转发已提交，红外执行效果待确认。"
                     if cap.get("transport") == "speaker_silent"
@@ -220,23 +271,124 @@ async def execute_plan(
                 )
                 continue
             if op["op"] == "set" and "read" in cap["access"]:
-                await asyncio.sleep(0.3)
+                confirmation_started = time.monotonic()
+                result               = None
+                reason               = "timeout"
+                attempts             = 0
                 try:
-                    result    = await read_property(io, device, cap)
-                    lines[-1] = format_read(context, device, cap, result)
-                    if result["value"] != op["value"]:
-                        lines.append("回报值尚未达到目标，后续操作已停止，请核对设备状态。")
-                        break
+                    async with asyncio.timeout(CONFIRM_TIMEOUT_SECONDS):
+                        for delay in CONFIRM_DELAYS:
+                            if delay:
+                                await asyncio.sleep(delay)
+                            attempts += 1
+                            result = await read_property(io, device, cap)
+                            stamp  = result["updated_at"]
+                            now    = time.time()
+                            if stamp is None:
+                                reason = "timestamp_unverified"
+                            elif stamp < math.floor(submitted_at):
+                                reason = "stale_report"
+                            elif result["value"] != op["value"]:
+                                reason = "value_mismatch"
+                            else:
+                                reason = "matched"
+                            log.info(
+                                LogEvent(
+                                    "device.confirmation.observed",
+                                    operation_index = index,
+                                    attempt         = attempts,
+                                    reason_code     = reason,
+                                    report_age_s    = round(now - stamp, 3)
+                                    if stamp is not None
+                                    else None,
+                                )
+                            )
+                            if reason == "matched":
+                                break
+                except asyncio.CancelledError:
+                    log.info(
+                        LogEvent(
+                            "device.confirmation.cancelled",
+                            operation_index = index,
+                            attempts        = attempts,
+                            duration_s      = round(time.monotonic() - confirmation_started, 3),
+                        )
+                    )
+                    raise
+                except TimeoutError as exc:
+                    reason = "timeout"
+                    log.warning(
+                        LogEvent("device.readback.failed", operation_index=index, error=exc)
+                    )
                 except Exception as exc:
-                    log.warning(LogEvent("device.readback.failed", error=exc))
-                    lines.append("提交后的状态读取未完成，后续操作已停止。")
+                    reason = "read_failed"
+                    log.warning(
+                        LogEvent("device.readback.failed", operation_index=index, error=exc)
+                    )
+                log.log(
+                    logging.INFO if reason == "matched" else logging.WARNING,
+                    LogEvent(
+                        "device.confirmation.completed",
+                        operation_index = index,
+                        reason_code     = reason,
+                        attempts        = attempts,
+                        duration_s      = round(time.monotonic() - confirmation_started, 3),
+                    ),
+                )
+                if result is not None:
+                    lines.append(format_read(context, device, cap, result))
+                if reason == "matched":
+                    lines.append("✓ 状态已核对，提交后的回报与目标一致。")
+                else:
+                    detail = {
+                        "stale_report"        : "云端仍返回本次提交前的旧状态",
+                        "timestamp_unverified": "云端回报时间无法核验",
+                        "value_mismatch"      : "回报值尚未达到目标",
+                        "timeout"             : "提交后的状态读取未完成，确认等待已超时",
+                        "read_failed"         : "提交后的状态读取未完成",
+                    }[reason]
+                    lines.append(f"{detail}；指令已提交，执行结果待确认，后续操作已停止。")
                     break
             elif op["op"] == "action":
+                log.info(
+                    LogEvent(
+                        "device.confirmation.unavailable",
+                        operation_index = index,
+                        reason_code     = "action_receipt_only",
+                    )
+                )
                 lines.append(
                     "设备状态：待确认；当前回报仅确认已接收指令，动作完成情况需设备事件或现场确认。"
                 )
+            else:
+                log.info(
+                    LogEvent(
+                        "device.confirmation.unavailable",
+                        operation_index = index,
+                        reason_code     = "write_only",
+                    )
+                )
+                lines.append("该属性仅支持写入，执行结果待设备事件或现场确认。")
+        except asyncio.CancelledError:
+            log.info(
+                LogEvent(
+                    "device.operation.cancelled",
+                    operation_index = index,
+                    operation       = op["op"],
+                    duration_s      = round(time.monotonic() - started, 3),
+                )
+            )
+            raise
         except Exception as exc:
-            log.warning(LogEvent("device.operation.failed", operation=op["op"], error=exc))
+            log.warning(
+                LogEvent(
+                    "device.operation.failed",
+                    operation_index = index,
+                    operation       = op["op"],
+                    duration_s      = round(time.monotonic() - started, 3),
+                    error           = exc,
+                )
+            )
             lines.append(f"{title}：本次结果待确认，后续操作已停止；动作保持单次提交。")
             break
     return "\n".join(lines)
