@@ -431,6 +431,15 @@ GROUP_SCENARIOS: dict[str, list[dict[str, Any]]] = {
             tag    = "smalltalk",
             note   = "自然回答，有当天的小细节",
         ),
+        t(
+            "阿禾",
+            "小青，刚刷到这个",
+            media  = "g09.png",
+            expect = "reply",
+            tag    = "own_site",
+            note   = "截图是她自己的个人小站“小青观测站”的生活直播间，画面里的像素小人和对话框里说话的小青"
+            "都是她本人；以本人身份接话，不把图里的小青当成另一个人",
+        ),
         t("阿柚", "晚安各位", pace=6, tag="natural_exit", note="可简短道别或沉默"),
     ],
     # 被调侃、认亲、起外号、被夸、被怀疑是机器人：看语气像不像群友而不是客服
@@ -2680,6 +2689,10 @@ NOTICE_EXAM_LINES = (
     "教务处  2026年10月20日",
 )
 
+# 观测站直播间截图里的台词和状态栏，取自物理教室场景。
+STATION_LINE   = "把白纸挪过来，光谱落在书封上都看不清。"
+STATION_STATUS = "上课或做大物实验 · 日常作息"
+
 MEDIA_TRUTH = {
     "g07.png": "网页通知截图《"
     + NOTICE_TA_TITLE
@@ -2692,6 +2705,8 @@ MEDIA_TRUTH = {
     "g02.png": "一碗拉面：叉烧、两个半颗蛋、葱花、海苔；文字“深夜拉面 38元”。",
     "g03.png": "表情包：一个得意的圆脸表情，上方文字“你说得对”，下方文字“但是我不听”。",
     "g04.png": "下周安排表：周一 组会10:00；周三 晚8点 团建 KTV；周五 交周报。",
+    "g09.png": "小青自己的个人小站“小青观测站”的生活直播间截图：LIVE · 物理教室，画面里是灰紫色短发、"
+    + f"蓝眼睛的像素小人；对话框署名小青，台词“{STATION_LINE}”；状态栏“{STATION_STATUS}”。",
     "m03.png": "表情包：橙色卡通猫瘫坐在蓝色垫子上；文字为我只是坐一下、一坐就是半小时。",
     "q01.png": "英文海报：BUBBLE TEA / BUY 1 GET 1 FREE / TODAY ONLY，右下角一个棕色圆点。",
     "q02.png": f"英文海报：LIBRARY CLOSED / {LIBRARY_CLOSURE_LINE} / MAINTENANCE。",
@@ -2810,6 +2825,35 @@ def prepare_fixtures(directory: Path) -> None:
     d.line((270, 350, 283, 360, 296, 350), fill="#554333", width=5)
     d.text((175, 575), "一坐就是半小时", font=font(48), fill="#313638")
     image.save(directory / "m03.png")
+
+    # 观测站直播间截图：站名、场景标签、像素小人、署名小青的对话框和状态栏，考她认不认得自己的小站。
+    image = Image.new("RGB", (1100, 760), "#12142b")
+    d     = ImageDraw.Draw(image)
+    d.rectangle((0, 0, 1100, 70), fill="#1b1e3d")
+    d.text((40, 16), "小青观测站", font=font(32), fill="#f3d27a")
+    d.text((560, 22), "直播间   日记   足迹   旅行   图鉴   统计", font=font(22), fill="#aab0d6")
+    d.text((40, 92), "LIVE CHANNEL", font=font(20), fill="#7fd1c4")
+    d.text((40, 120), "生活直播间", font=font(44), fill="#ffffff")
+    d.rectangle((40, 190, 1060, 530), fill="#2a3158", outline="#5d67a8", width=4)
+    d.rectangle((40, 190, 300, 232), fill="#d94f6b")
+    d.text((56, 196), "LIVE · 物理教室", font=font(24), fill="#ffffff")
+    d.rectangle((90, 430, 1010, 450), fill="#7a5a3c")
+    d.rectangle((470, 250, 610, 300), fill="#9a90b4")
+    d.rectangle((455, 290, 485, 390), fill="#9a90b4")
+    d.rectangle((485, 300, 610, 390), fill="#f6dcc8")
+    d.rectangle((510, 330, 530, 350), fill="#3f7fd9")
+    d.rectangle((565, 330, 585, 350), fill="#3f7fd9")
+    d.rectangle((600, 360, 612, 372), fill="#f3d27a")
+    d.rectangle((470, 390, 625, 430), fill="#3d5a9a")
+    d.polygon([(720, 430), (770, 340), (820, 430)], fill="#cfe9f5", outline="#ffffff")
+    for i, colour in enumerate(("#e5484d", "#f3a53a", "#f3e24a", "#4fb86a", "#3f7fd9", "#8a5cd6")):
+        d.line((795, 385, 960, 360 + i * 12), fill=colour, width=5)
+    d.rectangle((40, 550, 1060, 680), fill="#1b1e3d", outline="#5d67a8", width=4)
+    d.rectangle((60, 570, 150, 660), fill="#9a90b4", outline="#f3d27a", width=3)
+    d.text((180, 566), "小青", font=font(28), fill="#f3d27a")
+    d.text((180, 612), STATION_LINE, font=font(30), fill="#ffffff")
+    d.text((40, 704), STATION_STATUS, font=font(24), fill="#aab0d6")
+    image.save(directory / "g09.png")
 
     # 质量探针的英文海报：不依赖系统中文字体。
     for name, poster in (
