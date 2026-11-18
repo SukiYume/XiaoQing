@@ -7,6 +7,7 @@
 
 import logging
 import math
+import mimetypes
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,10 @@ from .api import create_api_router
 from .deps import set_db
 
 log = logging.getLogger(__name__)
+
+# Python 3.13 之前的标准库类型表不认识 WebP 和 WOFF2；登记后静态文件带着正确的类型送出。
+for _media_type, _suffix in (("image/webp", ".webp"), ("font/woff2", ".woff2")):
+    mimetypes.add_type(_media_type, _suffix)
 
 _app       : FastAPI | None          = None
 _server    : uvicorn.Server | None   = None

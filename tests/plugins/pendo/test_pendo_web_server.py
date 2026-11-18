@@ -98,3 +98,10 @@ def test_get_url_brackets_ipv6_loopback() -> None:
     web_server.PendoConfig.configure({"web_host": "::1", "web_port": 8765})
 
     assert web_server.get_url() == "http://[::1]:8765"
+
+
+def test_static_images_and_fonts_carry_their_media_types(client) -> None:
+    """登录页的夜景图和像素字体带着正确的类型送出，不依赖解释器自带的类型表认不认识它们。"""
+
+    assert client.get("/assets/diary-desk.webp").headers["content-type"] == "image/webp"
+    assert client.get("/assets/fusion-pixel.woff2").headers["content-type"] == "font/woff2"

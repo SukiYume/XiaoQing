@@ -20,6 +20,8 @@ from .stores import life_data_directory, read_collection
 from .travel import travel_entries
 
 SITE = Path(__file__).with_name("site")
+# Python 3.13 之前的标准库类型表不认识 WebP 和 WOFF2，查不到时 aiohttp 按 application/octet-stream 送出。
+ASSET_TYPES = {".webp": "image/webp", ".woff2": "font/woff2"}
 DEFAULT_WEB_PORT = 12002
 CHAT = SITE.parent.parent / "xiaoqing_chat"
 PAGES = ("", "live", "diary", "timeline", "travel", "research", "gallery", "stats", "guide")
@@ -179,8 +181,18 @@ def archive(root: Path, moment: datetime | None = None) -> dict:
     }
 
 
+@web.middleware
+async def _asset_content_type(request: web.Request, handler: Any) -> web.StreamResponse:
+    """图片和字体按扩展名带上类型；文件响应已有类型时 aiohttp 不再自己猜。"""
+    response: web.StreamResponse = await handler(request)
+    content_type                 = ASSET_TYPES.get(Path(request.path).suffix)
+    if content_type and isinstance(response, web.FileResponse):
+        response.content_type = content_type
+    return response
+
+
 def create_app(root: Path) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_asset_content_type])
 
     async def page(request: web.Request) -> web.FileResponse:
         return web.FileResponse(SITE / "index.html")
