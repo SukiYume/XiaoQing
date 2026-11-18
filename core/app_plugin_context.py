@@ -30,6 +30,7 @@ from .capabilities import (
     OneBotMediaService,
     SecretAdminService,
     SSHAgentCommandService,
+    TravelPostcardsService,
     VoiceSynthesisService,
 )
 from .context import PluginContext, _scoped_plugin_config, _scoped_plugin_secrets
@@ -94,6 +95,7 @@ class AppPluginContextMixin:
     """集中管理插件可见配置、身份能力和声明式跨插件服务。"""
 
     if TYPE_CHECKING:
+        root                           : Path
         config_manager                 : ConfigManager
         identity_service               : AppIdentityService
         http_session                   : aiohttp.ClientSession | None
@@ -224,6 +226,7 @@ class AppPluginContextMixin:
             plugin_name=plugin_name,
             plugin_dir=plugin_dir,
             data_dir=data_dir,
+            runtime_root=self.root,
             http_session=self.http_session,
             send_action=send_action,
             reload_config=self.reload_config,
@@ -574,6 +577,14 @@ class AppPluginContextMixin:
                 ),
             )
 
+        travel_postcards = None
+        if is_system and "codex.travel_postcards" in uses_services:
+            travel_postcards = TravelPostcardsService(
+                self._declared_service_caller(
+                    plugin_name, principal, request_id, "codex.travel_postcards"
+                )
+            )
+
         voice_synthesis = None
         chat_reply      = None
         if "voice.synthesize_text" in uses_services:
@@ -651,6 +662,7 @@ class AppPluginContextMixin:
             inbound_backlog     = inbound_backlog,
             config_subscription = config_subscription,
             codex_arxiv_summary = codex_arxiv_summary,
+            travel_postcards    = travel_postcards,
             voice_synthesis     = voice_synthesis,
             chat_reply          = chat_reply,
             ai                  = AIService(complete_ai_route, list_ai_models),

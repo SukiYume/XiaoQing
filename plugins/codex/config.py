@@ -24,6 +24,7 @@ APPROVAL_POLICY_VALUES = frozenset({"untrusted", "on-failure", "on-request", "ne
 @dataclass(frozen=True)
 class CodexPluginConfig:
     codex_bin                : str
+    travel_model             : str
     default_cwd              : str
     allowed_cwd_roots        : tuple[str, ...]
     max_parallel_jobs        : int
@@ -178,7 +179,8 @@ def load_plugin_config_snapshot(
     )
 
     return CodexPluginConfig(
-        codex_bin               = _clean_string(raw.get("codex_bin"), "codex"),
+        codex_bin=_clean_string(raw.get("codex_bin"), "codex"),
+        travel_model=_clean_string(raw.get("travel_model"), "", max_chars=128),
         default_cwd             = default_cwd,
         allowed_cwd_roots       = allowed_roots,
         max_parallel_jobs       = _bounded_int(raw, "max_parallel_jobs", 2, 1, 64),

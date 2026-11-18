@@ -15,6 +15,11 @@
             "required_capability": "codex_arxiv_summary"
         },
         {
+            "name": "codex.travel_postcards",
+            "callback": "travel_postcards_service",
+            "callers": ["xiaoqing_life"]
+        },
+        {
             "name": "codex.agent_task",
             "callback": "agent_task_service",
             "callers": [

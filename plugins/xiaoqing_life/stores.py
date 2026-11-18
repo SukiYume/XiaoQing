@@ -19,6 +19,36 @@ from .days import DAY
 
 T = TypeVar("T")
 
+
+def read_collection(path: Path, expected: type):
+    """主文件与同代备份均只读。新装时返回空集合，损坏时让网页显示读取失败。"""
+    broken = False
+    for candidate in (path, path.with_suffix(".json.bak")):
+        try:
+            value = json.loads(candidate.read_bytes())
+        except FileNotFoundError:
+            continue
+        except (UnicodeError, ValueError):
+            broken = True
+            continue
+        if isinstance(value, expected):
+            return value
+        broken = True
+    if broken:
+        raise ValueError("invalid life collection")
+    return expected()
+
+
+def life_data_directory(root: Path, config: dict | None = None) -> Path:
+    """独立网页和收录命令与插件宿主使用相同的数据目录。"""
+    if config is None:
+        config = read_collection(root / "config/config.json", dict)
+    configured = config.get("data_root")
+    # PluginManager 以插件源码的项目目录为相对路径基准。
+    base = Path(__file__).resolve().parents[2] / configured if configured else root / "data"
+    return base / "xiaoqing_life"
+
+
 # 文件名 -> 工厂（空值）。类型也用来校验读回的内容。
 _COLLECTIONS: dict[str, Callable[[], Any]] = {
     "episodes"   : list,

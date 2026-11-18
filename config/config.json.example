@@ -93,7 +93,9 @@
                         }
                 },
                 "xiaoqing_life": {
+                        "web_port": 12002,
                         "enabled": false,
+                        "travel_enabled": true,
                         "max_llm_calls_per_day": 30,
                         "research_max_rounds": 3,
                         "max_deep_reads_per_session": 1,
@@ -146,6 +148,7 @@
                         "archive_retention_files": 20
                 },
                 "codex": {
+                        "travel_model": "",
                         "max_parallel_jobs": 2,
                         "per_session_queue_limit": 10,
                         "spawn_timeout_seconds": 30,

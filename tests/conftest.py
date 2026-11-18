@@ -297,6 +297,7 @@ def mock_context_factory():
             plugin_name         = name,
             plugin_dir          = plugin_dir,
             data_dir            = data_dir,
+            runtime_root        = data_dir.parent.parent,
             http_session        = None,
             send_action         = lambda x: None,
             reload_config       = lambda: None,

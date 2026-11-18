@@ -193,7 +193,7 @@ python main.py
 |---|---|---|
 | `xiaoqing_chat` | 拟人聊天：判断接话时机和对象，读图片和表情包，回复发出前经过审查 | [使用说明](plugins/xiaoqing_chat/README.md)、[架构](plugins/xiaoqing_chat/ARCHITECTURE.md) |
 | `xiaoqing_agent` | 有人叫小青做事时调用命令和工具，权限跟随发起人；默认关闭 | [使用说明](plugins/xiaoqing_agent/README.md) |
-| `xiaoqing_life` | 小青自己的网上生活：按兴趣上网，记下带来源的经历供聊天取用；默认关闭 | [使用说明](plugins/xiaoqing_life/README.md)、[架构](plugins/xiaoqing_life/ARCHITECTURE.md) |
+| `xiaoqing_life` | 按兴趣上网和写日记，给聊天提供素材。生活模拟默认关闭，像素观测站随主程序启停 | [使用说明](plugins/xiaoqing_life/README.md)、[观测站入口](plugins/xiaoqing_life/README.md#小青观测站)、[架构](plugins/xiaoqing_life/ARCHITECTURE.md) |
 | `xiaoqing_memory` | 统一记忆：聊天、办事和网上生活写进来，每晚整理成关于每个人、每个群和她自己的页面 | [使用说明](plugins/xiaoqing_memory/README.md)、[架构](plugins/xiaoqing_memory/ARCHITECTURE.md)、[设计](plugins/xiaoqing_memory/DESIGN.md) |
 | `pendo` | 日程、待办、笔记、日记、账本和提醒，带 Web 控制台与 Scriptable 小组件 | [使用说明](plugins/pendo/README.md)、[架构](plugins/pendo/ARCHITECTURE.md)、[Scriptable 小组件](docs/pendo-scriptable-widget.md) |
 | `codex` | 管理本机 Codex CLI 的后台会话和任务队列，结果主动发回 | [使用说明](plugins/codex/README.md) |

@@ -347,6 +347,19 @@ class CodexAgentTaskService:
 
 
 @dataclass(frozen=True)
+class TravelPostcardsService:
+    """xiaoqing_life → codex：提交一次旅行明信片的绘图任务并等到它结束。"""
+
+    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+
+    async def __call__(self, prompt: str, references: tuple[str, ...]) -> dict[str, Any]:
+        result = await _invoke_settled(self._invoke, {"prompt": prompt, "references": references})
+        if not isinstance(result, dict):
+            raise TypeError("travel postcards result must be a mapping")
+        return result
+
+
+@dataclass(frozen=True)
 class SSHAgentCommandService:
     """xiaoqing_agent → qingssh：列出服务器或执行一次性远端命令。"""
 

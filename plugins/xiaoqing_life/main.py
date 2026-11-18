@@ -13,6 +13,8 @@ from collections.abc import Callable, Coroutine
 from datetime import datetime
 from typing import Any
 
+from aiohttp import web
+
 from core.interfaces import PluginContextProtocol
 from core.log import LogEvent
 from core.plugin_base import segments
@@ -35,6 +37,8 @@ from .planner import REST, WIND_DOWN, Decision, decide
 from .session import SessionDeps, run_session
 from .sources.base import BoundedFetcher
 from .stores import LifeStore, roll_day
+from .travel import TRAVEL_ZONE, generate_travel_day
+from .website import DEFAULT_WEB_PORT, create_app, web_port
 from .wind_down import run_wind_down
 
 log = logging.getLogger(__name__)
@@ -47,12 +51,14 @@ class LifeRuntime:
     """进程内状态：存储、唯一的上网任务、已登记的后台任务。"""
 
     def __init__(self, store: LifeStore) -> None:
-        self.store                           = store
-        self.credential                      = bili_auth.BiliCredential(store.data_dir)
-        self.rng                             = random.Random()
-        self.task: asyncio.Task[None] | None = None
-        self.closing                         = False
-        self._bg: set[asyncio.Task[Any]]     = set()
+        self.store                                  = store
+        self.credential                             = bili_auth.BiliCredential(store.data_dir)
+        self.rng                                    = random.Random()
+        self.task: asyncio.Task[None] | None        = None
+        self.travel_task: asyncio.Task[None] | None = None
+        self.web_runner: web.AppRunner | None       = None
+        self.closing                                = False
+        self._bg: set[asyncio.Task[Any]]            = set()
         # 测试里可换成固定时钟。
         self.clock: Callable[[Any], datetime] = persona_bridge.now
         self.login = bili_auth.BiliLogin(self.credential, store, self.spawn)
@@ -76,6 +82,9 @@ class LifeRuntime:
 
     async def shutdown(self) -> None:
         self.closing = True
+        if self.web_runner is not None:
+            await self.web_runner.cleanup()
+            self.web_runner = None
         await self.login.close()
         pending = [t for t in (self.task, *self._bg) if t is not None and not t.done()]
         for task in pending:
@@ -97,7 +106,26 @@ def get_runtime(context: Any) -> LifeRuntime:
 
 
 async def init(context: PluginContextProtocol) -> None:
-    get_runtime(context)
+    previous = context.state.get(_RUNTIME_KEY)
+    if isinstance(previous, LifeRuntime) and previous.closing:
+        del context.state[_RUNTIME_KEY]
+    runtime = get_runtime(context)
+    if runtime.web_runner is not None:
+        return
+    options = context.get_settings_snapshot().plugin_config("xiaoqing_life")
+    port    = options.get("web_port", DEFAULT_WEB_PORT)
+    runner = web.AppRunner(create_app(context.runtime_root), shutdown_timeout=5)
+    try:
+        port = web_port(port)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", port).start()
+        runtime.web_runner = runner
+        log.info(LogEvent("web.started", host="127.0.0.1", port=port))
+    except (OSError, ValueError) as exc:
+        log.error(LogEvent("web.start_failed", port=port, error=exc))
+    finally:
+        if runtime.web_runner is None:
+            await runner.cleanup()
 
 
 async def shutdown(context: PluginContextProtocol) -> None:
@@ -244,6 +272,18 @@ async def _tick(context: Any, *, manual: bool) -> Decision:
     if task is not None:
         runtime.task = task
     return decision
+
+
+async def scheduled_travel(context: PluginContextProtocol) -> None:
+    """在独立后台任务里等待 Codex，留出上网和聊天的执行通道。"""
+    cfg = load_life_config(context)
+    if not cfg.enabled or not cfg.travel_enabled:
+        return
+    runtime = get_runtime(context)
+    if runtime.closing or (runtime.travel_task is not None and not runtime.travel_task.done()):
+        return
+    day                 = runtime.clock(context).astimezone(TRAVEL_ZONE).date()
+    runtime.travel_task = runtime.spawn(generate_travel_day(context, day))
 
 
 async def scheduled_tick(context: PluginContextProtocol) -> None:

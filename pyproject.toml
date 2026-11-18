@@ -221,6 +221,7 @@ packages = [
 "plugins.pendo.web.services" = ["assets/*.zip"]
 "plugins.xiaoqing_chat.config" = ["xiaoqing_config.json", "persona.md", "agent.md"]
 "plugins.xiaoqing_chat.media" = ["qq_face_builtin_catalog.json"]
+"plugins.xiaoqing_life" = ["site/index.html", "site/assets/*.css", "site/assets/*.js", "site/assets/*.webp", "site/assets/live/*.webp", "site/assets/travel/*/*.webp", "site/assets/travel/*/entry.json", "site/assets/*.woff2", "site/assets/FONT-LICENSE.txt"]
 
 # ============================================================
 # 工具配置

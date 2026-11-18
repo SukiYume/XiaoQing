@@ -104,6 +104,7 @@ class PluginContext:
     plugin_name        : str
     plugin_dir         : Path
     data_dir           : Path
+    runtime_root       : Path
     http_session       : aiohttp.ClientSession | None
     send_action        : SendAction
     reload_config      : Callable[[], Any]

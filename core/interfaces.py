@@ -300,6 +300,12 @@ class CodexAgentTaskCapability(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class TravelPostcardsCapability(Protocol):
+    """xiaoqing_life 的定时任务请 Codex 画当天的旅行明信片，等任务结束取回文本与图片。"""
+
+    async def __call__(self, prompt: str, references: tuple[str, ...]) -> dict[str, Any]: ...
+
+
 class SSHAgentCommandCapability(Protocol):
     """xiaoqing_agent 列出 QingSSH 服务器，或在其中一台上执行一次性命令。"""
 
@@ -387,6 +393,7 @@ class PluginCapabilities:
     life_context       : LifeContextCapability | None       = None
     memory             : MemoryCapability | None            = None
     codex_agent        : CodexAgentTaskCapability | None    = None
+    travel_postcards   : TravelPostcardsCapability | None   = None
     ssh_agent          : SSHAgentCommandCapability | None   = None
     command_runner     : CommandRunnerCapability | None     = None
     local_tools        : LocalToolsCapability | None        = None
@@ -434,6 +441,7 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     plugin_name       : str
     plugin_dir        : Path
     data_dir          : Path
+    runtime_root      : Path
     metrics           : Any
     request_id        : str | None
     command_invocation: CommandInvocation | None

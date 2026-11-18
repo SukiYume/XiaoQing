@@ -96,6 +96,7 @@ def _default_sources() -> dict[str, bool]:
 @dataclass(frozen=True, slots=True)
 class LifeConfig:
     enabled                : bool = False
+    travel_enabled         : bool = True
     sources                : Mapping[str, bool] = field(default_factory=_default_sources)
     seed_interests         : tuple[str, ...] = DEFAULT_SEED_INTERESTS
     max_sessions_per_day   : int             = 5
@@ -253,8 +254,9 @@ def parse_life_config(raw: Any) -> LifeConfig:
     o = raw if isinstance(raw, Mapping) else {}
     d = LifeConfig()
     return LifeConfig(
-        enabled = config_bool(o.get("enabled"), d.enabled),
-        sources = _sources(o.get("sources")),
+        enabled        = config_bool(o.get("enabled"), d.enabled),
+        travel_enabled = config_bool(o.get("travel_enabled"), d.travel_enabled),
+        sources        = _sources(o.get("sources")),
         seed_interests=_words(o.get("seed_interests"), d.seed_interests, limit=60),
         activity_affinity = _affinity(o.get("activity_affinity")),
         session_minutes   = _session_minutes(o.get("session_minutes")),

@@ -102,6 +102,7 @@ def _real_context(tmp_path: Path, manager: SessionManager) -> PluginContext:
         plugin_name         = guess_number.PLUGIN_NAME,
         plugin_dir          = tmp_path,
         data_dir            = tmp_path / "data",
+        runtime_root        = tmp_path,
         http_session        = None,
         send_action         = AsyncMock(),
         reload_config       = lambda: None,

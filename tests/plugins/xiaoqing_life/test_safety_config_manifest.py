@@ -33,12 +33,17 @@ def test_manifest_loads_through_the_real_pydantic_model() -> None:
     assert manifest.name == "xiaoqing_life"
     assert {s.name for s in manifest.services} == {"life.turn_context", "life.export_memes"}
     assert all(s.callers == ["xiaoqing_chat"] for s in manifest.services)
-    schedule = manifest.schedule[0]
+    schedules = {s.id: s for s in manifest.schedule}
+    schedule  = schedules["xiaoqing_life.tick"]
     assert schedule.delivery == "silent" and schedule.cron == {"minute": "*/15"}
+    travel = schedules["xiaoqing_life.travel"]
+    assert travel.delivery == "silent"
+    assert travel.cron == {"hour": "9-23", "minute": 0, "timezone": "America/Los_Angeles"}
+    assert "codex.travel_postcards" in manifest.uses_services
     life = manifest.commands[0]
     assert life.permission == "bot_admin"
     assert {sub.permission for sub in life.subcommands} == {"bot_admin"}
-    callbacks = {s.callback for s in manifest.services} | {schedule.handler}
+    callbacks = {s.callback for s in manifest.services} | {s.handler for s in manifest.schedule}
     assert all(
         callable(getattr(life_main, name)) for name in callbacks | {"handle", "init", "shutdown"}
     )

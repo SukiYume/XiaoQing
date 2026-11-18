@@ -874,8 +874,12 @@ class CodexQueueManager:
         user_id: int | None,
         group_id: int | None,
         context: PluginContextProtocol,
+        source: str                                         = "xiaoqing_agent",
+        input_images: tuple[str, ...]                       = (),
+        model: str                                          = "",
+        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> dict[str, Any]:
-        """为 xiaoqing_agent 执行一次 Codex 任务并等待结束；结果交还调用方，不直接投递。
+        """为调用插件执行一次 Codex 任务，完成后将文本与图片交还调用方。
 
         会话不存在时按 ``cwd_text`` 创建，已存在时沿用原工作目录和 Codex thread。
         等待超时或调用方取消时同步取消该任务，避免后台残留无人认领的执行。
@@ -913,10 +917,16 @@ class CodexQueueManager:
                 job, _tasks_ahead = self._enqueue_job_locked(
                     session,
                     prompt,
-                    user_id          = user_id,
-                    group_id         = group_id,
-                    context          = context,
-                    metadata         = {"source": "xiaoqing_agent", "suppress_delivery": True},
+                    user_id  = user_id,
+                    group_id = group_id,
+                    context  = context,
+                    metadata = {
+                        "source"           : source,
+                        "suppress_delivery": True,
+                        **({"model": model} if model else {}),
+                        **({"input_images": input_images} if input_images else {}),
+                    },
+                    delivery_targets = delivery_targets,
                     disk_usage_bytes = disk_usage_bytes,
                 )
             except RuntimeError as exc:
@@ -947,7 +957,11 @@ class CodexQueueManager:
                 if result is not None and result.exit_code not in (0, None)
                 else ""
             ),
-            "images": [artifact.absolute_path for artifact in job.image_artifacts],
+            "images"        : [artifact.absolute_path for artifact in job.image_artifacts],
+            "images_by_name": {
+                Path(artifact.original_path).name: artifact.absolute_path
+                for artifact in job.image_artifacts
+            },
         }
 
     async def _cancel_agent_job(self, label: str, job: RuntimeJob) -> None:

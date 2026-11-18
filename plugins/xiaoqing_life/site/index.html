@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#15182c">
+  <base href="./">
+  <link rel="preload" data-href="assets/fusion-pixel.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" data-href="assets/station.css">
+  <script>
+    // A dated diary entry sits one directory below the station's other pages.
+    if (/\/diary\/[^/]+$/.test(location.pathname)) document.querySelector("base").href = "../";
+    for (const link of document.querySelectorAll("link[data-href]")) link.href = link.dataset.href;
+  </script>
+  <title>小青观测站</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23ffd98a' d='M7 0h2v4h2v2h3v1h2v2h-4v2h-2v3H9v2H7v-4H5v-2H2V9H0V7h4V5h2V2h1z'/%3E%3C/svg%3E">
+  <script type="module">import "./assets/station.js";</script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到正文</a>
+  <header class="top"><div class="bar wrap">
+    <a class="brand" href="./"><span class="star" aria-hidden="true"></span>小青观测站</a>
+    <nav aria-label="站内导航">
+      <a href="./">首页</a><a href="live">直播间</a><a href="diary">日记</a>
+      <a href="timeline">足迹</a><a href="travel">旅行</a><a href="research">研究手帐</a><a href="gallery">图鉴</a>
+      <a href="stats">统计</a><a href="guide">指南</a>
+    </nav>
+  </div></header>
+  <main id="main" tabindex="-1"><noscript>请开启 JavaScript 来看小青的校园日常。</noscript></main>
+  <footer><div class="wrap"><span class="brand"><span class="star" aria-hidden="true"></span>小青观测站</span><span>快逃科学技术研究院 · 天文社</span><a href="guide">观测指南 ↗</a></div></footer>
+</body>
+</html>

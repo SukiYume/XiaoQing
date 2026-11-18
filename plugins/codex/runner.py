@@ -1202,14 +1202,23 @@ class CodexRunner:
         cwd: Path,
         thread_id: str | None,
         output_path: Path,
+        input_images: tuple[str, ...] = (),
+        artifact_dir: Path | None     = None,
+        model: str                    = "",
     ) -> list[str]:
         args = self._base_args(cwd)
+        args.append("exec")
+        if input_images and artifact_dir is not None and self.config.sandbox == "workspace-write":
+            args.extend(["--add-dir", str(artifact_dir.resolve())])
         if thread_id:
-            args.extend(["exec", "resume", thread_id, "--json"])
-        else:
-            args.extend(["exec", "--json"])
+            args.extend(["resume", thread_id])
+        args.append("--json")
+        if model:
+            args.extend(["--model", model])
         if self.config.skip_git_repo_check:
             args.append("--skip-git-repo-check")
+        for reference in input_images:
+            args.extend(["--image", reference])
         args.extend(["-o", str(output_path), "-"])
         return args
 
@@ -1235,13 +1244,22 @@ class CodexRunner:
         thread_id: str | None,
         output_path: Path,
         job: Any,
+        artifact_dir: Path | None = None,
     ) -> asyncio.subprocess.Process:
         platform_kwargs: dict[str, Any]
         if sys.platform == "win32":
             platform_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         else:
             platform_kwargs = {"start_new_session": True}
-        args = self._build_args(cwd, thread_id, output_path)
+        metadata = getattr(job, "metadata", {})
+        args     = self._build_args(
+            cwd,
+            thread_id,
+            output_path,
+            metadata.get("input_images", ()),
+            artifact_dir,
+            metadata.get("model", ""),
+        )
         log.info(
             LogEvent(
                 "cli.start",
@@ -1483,6 +1501,7 @@ class CodexRunner:
                 thread_id      = thread_id,
                 output_path    = resources.output_path,
                 job            = job,
+                artifact_dir   = artifact_dir,
             )
             process                            = resources.process
             resources.process_cleanup_required = True

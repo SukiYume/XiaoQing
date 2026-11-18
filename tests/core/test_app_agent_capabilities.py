@@ -807,6 +807,7 @@ def test_shipped_manifests_declare_the_agent_bridges() -> None:
     assert agent.capabilities == ["command_runner", "local_tools"]
     assert [service.name for service in load("codex").services] == [
         "codex.enqueue_arxiv_summary",
+        "codex.travel_postcards",
         "codex.agent_task",
     ]
     assert [service.name for service in load("qingssh").services] == ["qingssh.agent_command"]

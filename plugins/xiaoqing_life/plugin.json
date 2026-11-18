@@ -6,7 +6,8 @@
   "entry": "main.py",
   "concurrency": "parallel",
   "uses_services": [
-    "memory.record"
+    "memory.record",
+    "codex.travel_postcards"
   ],
   "services": [
     {
@@ -319,6 +320,13 @@
   ],
   "schedule": [
     {
+      "id": "xiaoqing_life.travel",
+      "handler": "scheduled_travel",
+      "delivery": "silent",
+      "cron": {"hour": "9-23", "minute": 0, "timezone": "America/Los_Angeles"},
+      "description": "每天上午九点生成旅行明信片，当天缺图时在后续整点补做"
+    },
+    {
       "id": "xiaoqing_life.tick",
       "handler": "scheduled_tick",
       "delivery": "silent",
@@ -337,7 +345,7 @@
     {
       "name": "PIL",
       "required": false,
-      "description": "梗图下载后的格式与像素校验；缺失时不收梗图，其余功能照常"
+      "description": "梗图的格式与像素校验，以及旅行插画的 WebP 编码"
     }
   ]
 }

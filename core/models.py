@@ -415,6 +415,7 @@ PluginServiceName = Literal[
     "agent.handle_turn",
     "agent.report_delivery",
     "codex.agent_task",
+    "codex.travel_postcards",
     "qingssh.agent_command",
     "life.turn_context",
     "life.export_memes",
@@ -487,10 +488,11 @@ _SERVICE_CONTRACTS: dict[
         None,
     ),
     # 小青 agent 的桥：聊天把一轮交给 agent 并回报当轮回复是否发出，agent 再借用 Codex 与 SSH。
-    "agent.handle_turn"    : ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
-    "agent.report_delivery": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
-    "codex.agent_task"     : ("codex", frozenset({"xiaoqing_agent"}), None),
-    "qingssh.agent_command": ("qingssh", frozenset({"xiaoqing_agent"}), None),
+    "agent.handle_turn"     : ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
+    "agent.report_delivery" : ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
+    "codex.agent_task"      : ("codex", frozenset({"xiaoqing_agent"}), None),
+    "codex.travel_postcards": ("codex", frozenset({"xiaoqing_life"}), None),
+    "qingssh.agent_command" : ("qingssh", frozenset({"xiaoqing_agent"}), None),
     # 小青的网上生活：聊天每轮取用相关经历与用语，并定期导入收集到的梗图。
     "life.turn_context": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),
     "life.export_memes": ("xiaoqing_life", frozenset({"xiaoqing_chat"}), None),

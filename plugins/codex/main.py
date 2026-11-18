@@ -61,6 +61,24 @@ async def enqueue_arxiv_summary_service(
     )
 
 
+async def travel_postcards_service(request: dict, context: PluginContextProtocol) -> asyncio.Task:
+    """在专用会话生成旅行图，成品交回生活插件收录。"""
+    manager = await get_manager(context)
+    return manager.start_agent_task(
+        "life-travel",
+        request["prompt"],
+        cwd_text         = None,
+        timeout_seconds  = 1800,
+        user_id          = None,
+        group_id         = None,
+        context          = context,
+        source           = "xiaoqing_life",
+        input_images     = request["references"],
+        delivery_targets = (),
+        model            = manager.config.travel_model,
+    )
+
+
 async def agent_task_service(
     request: dict[str, Any],
     context: PluginContextProtocol,
