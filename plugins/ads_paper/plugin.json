@@ -15,14 +15,14 @@
             "subcommands": [
                 {
                     "name": "search",
-                    "help": "按 SciX 检索式检索论文，返回命中总数和本页结果（标题、作者、年份、期刊、类型、被引、Bibcode、链接）。检索式用 SciX 语法：多个条件空格相连表示同时满足，可用 AND、OR、NOT 和括号；裸词在标题、摘要、关键词里匹配，引号内按整句短语匹配。字段：title:、abs:（标题+摘要+关键词）、full:（全文）、author:\"姓, 名\"（^ 开头限第一作者）、year:2020-2024、bibstem:期刊缩写、property:refereed、doctype:article、collection:astronomy|planetary|heliophysics|earthscience、object:\"M31\"、uat:\"主题词\"。算子：citations(…)、references(…)、similar(…)、reviews(…)、trending(…)、useful(…)。限定期刊要写 bibstem:缩写，缩写用 /paper journal 查。选项：--rows 1-25（默认 10）、--page 页码、--sort relevance|citations|date|reads（默认 relevance）、--abs 每篇附摘要节选、--hl 附摘要和正文里命中引号短语的原句片段。",
+                    "help": "按 SciX 检索式检索论文，返回命中总数和本页结果（标题、作者、年份、期刊、类型、被引、Bibcode、链接）。检索式用 SciX 语法：多个条件空格相连表示同时满足，可用 AND、OR、NOT 和括号；裸词在标题、摘要、关键词里匹配，引号内按整句短语匹配。字段：title:、abs:（标题+摘要+关键词）、full:（全文）、author:\"姓, 名\"（^ 开头限第一作者）、year:2020-2024、bibstem:期刊缩写、property:refereed、doctype:article、collection:astronomy|planetary|heliophysics|earthscience、object:\"M31\"、uat:\"主题词\"。算子：citations(…)、references(…)、similar(…)、reviews(…)、trending(…)、useful(…)。限定期刊要写 bibstem:缩写，缩写用 /paper journal 查。选项：--rows 1-25（默认 10）、--page 页码、--sort relevance|citations|date|reads（默认 relevance）、--abs 每篇附摘要节选、--hl 附摘要和正文里命中引号短语的原句片段；带 --abs 或 --hl 时每页最多 10 篇，其余用 --page 翻页。",
                     "usage": "/paper search <SciX 检索式> [--rows N] [--page N] [--sort 排序] [--abs] [--hl]",
-                    "examples": ["/paper search abs:\"fast radio burst\" year:2023-2025 property:refereed --sort citations", "/paper search bibstem:NatAs collection:planetary --rows 20 --abs", "/paper search full:\"subglacial water\" bibstem:NatAs --hl"],
-                    "invalid_examples": ["/paper search", "/paper search mars --rows 99"]
+                    "examples": ["/paper search abs:\"fast radio burst\" year:2023-2025 property:refereed --sort citations", "/paper search bibstem:NatAs collection:planetary --abs --page 2", "/paper search full:\"subglacial water\" bibstem:NatAs --hl"],
+                    "invalid_examples": ["/paper search", "/paper search mars --rows 99", "/paper search mars --rows 20 --abs"]
                 },
                 {
                     "name": "author",
-                    "help": "按作者检索 SciX 论文，默认按发表时间倒序，返回命中总数和本页结果。参数为作者名，写成“姓, 名”最准，^ 开头限第一作者。选项与 search 相同：--rows、--page、--sort、--abs、--hl。",
+                    "help": "按作者检索 SciX 论文，默认按发表时间倒序，返回命中总数和本页结果。参数为作者名，写成“姓, 名”最准，^ 开头限第一作者。选项与 search 相同：--rows、--page、--sort、--abs、--hl，带 --abs 或 --hl 时每页最多 10 篇。",
                     "usage": "/paper author <作者> [--rows N] [--page N] [--sort 排序] [--abs] [--hl]",
                     "examples": ["/paper author Einstein", "/paper author ^Zhang, Bing --sort citations"],
                     "invalid_examples": ["/paper author"]

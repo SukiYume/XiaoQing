@@ -77,7 +77,7 @@ ADS Paper 通过 [SciX](https://scixplorer.org/)（NASA ADS 的继任服务）�
 
 | 选项 | 作用 |
 |---|---|
-| `--rows N` | 每页篇数，1–25，默认 10 |
+| `--rows N` | 每页篇数，1–25，默认 10；带 `--abs` 或 `--hl` 时每页最多 10 篇，其余用 `--page` 翻页 |
 | `--page N` | 页码，最深到第 2000 条 |
 | `--sort relevance\|citations\|date\|reads` | 排序；`search` 默认 `relevance`，`author` 默认 `date` |
 | `--abs` | 每篇附 400 字以内的摘要节选 |

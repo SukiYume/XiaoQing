@@ -14,6 +14,7 @@ from .constants import (
     ABSTRACT_EXCERPT_CHARS,
     DEFAULT_SEARCH_ROWS,
     JOURNAL_ROWS,
+    MAX_DETAILED_ROWS,
     MAX_HIGHLIGHT_SNIPPETS,
     MAX_PAPER_IDS,
     MAX_SEARCH_ROWS,
@@ -155,8 +156,15 @@ def parse_list_options(args: str, default_sort: str) -> tuple[str, ListOptions |
     rest, raw, error = split_options(args, _LIST_VALUE_OPTION, _LIST_FLAGS)
     if error:
         return "", None, error
-    rows, error = _bounded_int(raw.get("rows", str(DEFAULT_SEARCH_ROWS)), "rows", MAX_SEARCH_ROWS)
+    detailed = "abs" in raw or "hl" in raw
+    rows, error = _bounded_int(
+        raw.get("rows", str(DEFAULT_SEARCH_ROWS)),
+        "rows",
+        MAX_DETAILED_ROWS if detailed else MAX_SEARCH_ROWS,
+    )
     if error:
+        if detailed:
+            error += f"（带 --abs 或 --hl 时每页最多 {MAX_DETAILED_ROWS} 篇，其余用 --page 翻页）"
         return "", None, error
     last_page = MAX_SEARCH_START // rows + 1
     page, error = _bounded_int(raw.get("page", "1"), "page", last_page)

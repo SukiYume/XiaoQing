@@ -202,6 +202,8 @@ async def test_next_page_command_keeps_the_options_of_the_current_page(tmp_path:
     "args",
     [
         "search mars --rows 99",
+        "search mars --rows 20 --abs",
+        "search mars --rows 11 --hl",
         "search mars --rows many",
         "search mars --rows",
         "search mars --page 0",

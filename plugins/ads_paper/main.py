@@ -167,7 +167,7 @@ _HELP_TEXT = (
     "  /paper cite <ID>... [--format 格式] - 导出 BibTeX 等引用\n"
     "  /paper summarize <ID>          - AI 中文摘要\n"
     "  选项: --rows 1-25  --page N  --sort relevance|citations|date|reads\n"
-    "        --abs 附摘要节选  --hl 附标题/摘要/正文中的命中片段\n"
+    "        --abs 附摘要节选  --hl 附摘要和正文中的命中片段（带这两项时每页最多 10 篇）\n"
     "  ID: Bibcode、arXiv ID、DOI，或 SciX/ADS/arXiv/doi.org 链接\n\n"
     "🧭 检索式（SciX 语法，多个条件空格相连即同时满足）:\n"
     '  title:"…" abs:"…" full:"…"     标题 / 标题摘要关键词 / 全文\n'
@@ -200,7 +200,7 @@ _HELP_TEXT = (
     "  /paper refs                 - 查看文献库\n\n"
     "💡 示例:\n"
     '  /paper search abs:"fast radio burst" year:2023-2025 property:refereed --sort citations\n'
-    "  /paper search bibstem:NatAs collection:planetary --rows 20 --abs\n"
+    "  /paper search bibstem:NatAs collection:planetary --abs --page 2\n"
     "  /paper stats bibstem:NatAs collection:planetary\n"
     "  /paper abstract 2018NatAs...2..206B 2301.04191\n"
     "  /paper cite 2401.12345 --format aastex"

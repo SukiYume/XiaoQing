@@ -3,7 +3,9 @@
 # 检索：每页条数与可翻到的最深位置
 DEFAULT_SEARCH_ROWS = 10
 MAX_SEARCH_ROWS     = 25
-MAX_SEARCH_START    = 2000
+# 带摘要节选或命中片段时每篇多出几百字：一页控制在 agent 单次能读完的一万字以内。
+MAX_DETAILED_ROWS = 10
+MAX_SEARCH_START  = 2000
 
 # 一条命令可带的论文标识数量
 MAX_PAPER_IDS = 8
