@@ -10,57 +10,41 @@ const NAV_SECTIONS = [
             {
                 path: 'dashboard',
                 label: '总览',
-                icon: '📊',
-                color: 'var(--color-dashboard)',
                 hint: '今日状态',
             },
             {
                 path: 'events',
                 label: '日程',
-                icon: '🗓️',
-                color: 'var(--color-events)',
                 hint: '安排与提醒',
             },
             {
                 path: 'tasks',
                 label: '待办',
-                icon: '✅',
-                color: 'var(--color-tasks)',
                 hint: '执行清单',
             },
             {
                 path: 'ledger',
                 label: '记账',
-                icon: '💰',
-                color: 'var(--color-ledger)',
                 hint: '收支脉搏',
             },
             {
                 path: 'notes',
                 label: '笔记',
-                icon: '📝',
-                color: 'var(--color-notes)',
                 hint: '知识沉淀',
             },
             {
                 path: 'diary',
                 label: '日记',
-                icon: '📔',
-                color: 'var(--color-diary)',
                 hint: '月度书写',
             },
             {
                 path: 'search',
                 label: '搜索',
-                icon: '🔍',
-                color: 'var(--color-search)',
                 hint: '跨模块检索',
             },
             {
                 path: 'stats',
                 label: '统计',
-                icon: '📈',
-                color: 'var(--color-stats)',
                 hint: '整体分析',
             },
         ],
@@ -71,8 +55,6 @@ const NAV_SECTIONS = [
             {
                 path: 'settings',
                 label: '设置',
-                icon: '⚙️',
-                color: 'var(--color-text-secondary)',
                 hint: '偏好与安全',
             },
         ],
@@ -86,14 +68,12 @@ function createNavItem(item) {
     link.className = 'nav-item';
     link.dataset.path = item.path;
     link.dataset.module = item.path;
-    link.style.setProperty('--nav-accent', item.color);
 
     const iconShell = document.createElement('span');
     iconShell.className = 'nav-icon-shell';
     const icon = document.createElement('span');
     icon.className = 'nav-icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.textContent = item.icon;
     iconShell.appendChild(icon);
 
     const copy = document.createElement('span');
@@ -125,7 +105,7 @@ export function renderSidebar(container) {
     sidebar.setAttribute('aria-label', '主要导航');
     sidebar.innerHTML = `
         <div class="sidebar-logo">
-            <span class="sidebar-logo-icon" aria-hidden="true">📋</span>
+            <span class="star" aria-hidden="true"></span>
             <div class="sidebar-logo-copy">
                 <span class="sidebar-logo-text">Pendo</span>
                 <span class="sidebar-logo-subtitle">个人管理台</span>
@@ -224,9 +204,10 @@ export function renderSidebar(container) {
 
     onRouteChange((path) => {
         sidebar.querySelectorAll('.nav-item').forEach((link) => {
-            const active = link.dataset.path === path;
+            const currentPage = link.dataset.path === path;
+            const active = currentPage || (path === 'transfer' && link.dataset.path === 'settings');
             link.classList.toggle('active', active);
-            if (active) link.setAttribute('aria-current', 'page');
+            if (active) link.setAttribute('aria-current', currentPage ? 'page' : 'location');
             else link.removeAttribute('aria-current');
         });
         setMobileOpen(false);

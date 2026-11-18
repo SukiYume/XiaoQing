@@ -1,0 +1,251 @@
+/* 账本页的布局与专属组件。 */
+
+.ledger-page {
+    width: 100%;
+    min-width: 0;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 26px 24px 36px;
+    box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+    .ledger-page { padding: 20px 16px 30px; }
+}
+
+.ledger-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; margin-bottom: 18px; }
+.ledger-page-header { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.ledger-section-stack { container: ledger-content / inline-size; display: flex; flex-direction: column; gap: 18px; }
+.ledger-analysis-body { display: grid; gap: 16px; }
+
+/* 汇总卡片 */
+.ledger-summary-cards { display: flex; flex-wrap: wrap; gap: 14px; }
+.ledger-summary-card { flex: 1 1 max-content; min-width: calc((100% - 42px) / 4); max-width: 100%; padding: 18px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 14px; row-gap: 0; }
+@container ledger-content (max-width: 1100px) {
+    .ledger-summary-card { min-width: calc((100% - 14px) / 2); }
+}
+.ledger-summary-value { grid-column: 2; grid-row: 1; font-size: clamp(24px, 2.5vw, 31px); line-height: 1.2; min-width: 0; max-width: 100%; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; font-variant-numeric: tabular-nums; }
+.ledger-amount-income { color: var(--color-success); }
+.ledger-amount-expense { color: var(--color-ledger); }
+.ledger-amount-transfer { color: var(--text); }
+.ledger-summary-label { grid-column: 2; grid-row: 2; font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 6px; }
+.ledger-controls-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+@container ledger-content (min-width: 996px) {
+    .ledger-controls-grid { grid-template-columns: 490px minmax(0, 1fr); }
+}
+@container ledger-content (max-width: 655px) {
+    .ledger-controls-grid { grid-template-columns: 1fr; }
+}
+.ledger-panel { min-width: 0; overflow: visible; }
+.ledger-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 16px 0; }
+.ledger-panel-head h3 { margin: 0; font-size: 16px; line-height: 1.6; font-weight: 780; color: var(--cream); }
+.ledger-panel-head p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.ledger-panel-body { padding: 14px 16px 16px; }
+.ledger-compose-toggle { padding: 16px 16px 0; font-size: 16px; font-weight: 700; cursor: pointer; }
+#ledger-compose:not([open]) .ledger-compose-toggle { padding-bottom: 16px; }
+.ledger-compose-toggle:focus-visible { outline: 2px solid var(--color-ledger); outline-offset: 3px; }
+
+.ledger-insights-panel { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(320px, 0.92fr); gap: 14px; margin-bottom: 18px; }
+.ledger-insights-main,
+.ledger-insights-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ledger-insight-card { padding: 16px 18px; min-width: 0; overflow: hidden; }
+.ledger-insight-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.ledger-insight-card-head h3 { font-size: 15px; font-weight: 700; color: var(--cream); margin: 0; }
+.ledger-insight-card-head p { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+.ledger-insight-badge { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; background: var(--red-soft); color: var(--red); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.ledger-pulse-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.ledger-pulse-metric { padding: 10px 12px; }
+.ledger-pulse-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.ledger-pulse-metric strong { display: block; font-size: 18px; font-weight: 700; color: var(--cream); line-height: 1.2; }
+.ledger-pulse-metric small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.ledger-pulse-metric .is-up { color: var(--red); }
+.ledger-pulse-metric .is-down { color: var(--mint); }
+.ledger-insight-ring-wrap { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 12px; align-items: center; }
+.ledger-insight-svg { display: block; width: 100%; height: auto; }
+.ledger-insight-svg-ring { max-width: 188px; margin: 0 auto; }
+.ledger-insight-axis-labels text { fill: var(--faint); font-size: 10px; font-weight: 500; }
+.ledger-insight-y-label { fill: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: 0.01em; }
+.ledger-insight-svg-trend .ledger-insight-axis-labels text,
+.ledger-insight-svg-kline .ledger-insight-axis-labels text { font-size: 9px; font-weight: 500; letter-spacing: 0.01em; }
+.ledger-insight-svg-trend,
+.ledger-insight-svg-kline { transform: translateY(-2px); }
+.ledger-ring-center-value { fill: var(--red); font-size: 17px; }
+.ledger-ring-center-label { fill: var(--faint); font-size: 11px; }
+.ledger-insight-legend { display: flex; flex-direction: column; gap: 8px; }
+.ledger-insight-legend-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 12px; }
+.ledger-insight-legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.ledger-insight-legend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ledger-insight-legend-value { color: var(--red); font-weight: 700; }
+.ledger-hotspot-list { display: flex; flex-direction: column; gap: 10px; }
+.ledger-hotspot-row { padding: 10px 12px; }
+.ledger-hotspot-row-head { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.ledger-hotspot-rank { font-size: 11px; font-weight: 800; color: var(--red); letter-spacing: 0.04em; }
+.ledger-hotspot-name { min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-hotspot-amount { font-size: 13px; font-weight: 700; color: var(--red); }
+.ledger-hotspot-track { position: relative; height: 10px; overflow: hidden; }
+.ledger-hotspot-fill { height: 100%; background: var(--red); }
+.ledger-hotspot-meta { margin-top: 6px; font-size: 11px; color: var(--muted); }
+.ledger-insight-empty { min-height: 190px; display: flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1.7; }
+
+/* 快速记账 */
+.ledger-quick-add { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.ledger-quick-add > * { min-width: 0; }
+.ledger-qa-field { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.ledger-qa-label { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; }
+.ledger-quick-add input { box-sizing: border-box; font-size: 13px; height: 42px; border: 1px solid var(--red-line); width: 100%; padding: 0 14px; background: var(--raise); }
+.ledger-quick-add input:focus { border-color: var(--color-ledger); box-shadow: 0 0 0 2px var(--gold-line); outline: none; }
+.ledger-quick-add .pselect,
+.ledger-quick-add .pselect-trigger { width: 100%; }
+.ledger-qa-amount::-webkit-outer-spin-button,
+.ledger-qa-amount::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ledger-qa-amount { -moz-appearance: textfield; }
+.ledger-qa-action { min-width: 0; align-self: end; }
+.ledger-qa-submit { width: 100%; height: 42px; padding: 0 16px; font: 16px/1.2 var(--pixel); background: var(--gold); color: var(--ink); border: 2px solid #141522; box-shadow: inset 0 -3px var(--gold-deep), var(--shadow-hard-sm); cursor: pointer; transition: background .15s, transform .15s; }
+.ledger-qa-submit:hover { background: #ffe5a8; transform: translateY(-1px); }
+.ledger-qa-submit:disabled { opacity: 0.58; cursor: wait; transform: none; }
+
+/* 筛选栏 */
+.ledger-filter-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: flex-start; gap: 12px 16px; }
+.ledger-filter-item { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; min-width: 0; padding: 0; border: none; background: transparent; }
+.ledger-filter-item--amount .ledger-filter-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; width: 100%; }
+#content .ledger-filter-item--currency button { height: 42px; }
+.ledger-filter-bar label { font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; flex-shrink: 0; letter-spacing: 0.06em; text-transform: uppercase; }
+.ledger-filter-controls { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; width: 100%; }
+.ledger-filter-range { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; width: 100%; }
+.ledger-filter-range[hidden] { display: none; }
+.ledger-filter-range-sep { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.ledger-amount-separator { font-size: 12px; color: var(--muted); }
+.ledger-filter-bar .ledger-filter-date,
+.ledger-filter-bar .ledger-filter-transaction-type,
+.ledger-filter-bar .ledger-filter-account,
+.ledger-filter-bar .ledger-filter-category { width: 100%; flex: 0 0 auto; }
+.ledger-filter-item--date .pselect-trigger,
+.ledger-filter-item--transaction-type .pselect-trigger,
+.ledger-filter-item--account .pselect-trigger,
+.ledger-filter-item--category .pselect-trigger { width: 100%; }
+.ledger-amount-input,
+.ledger-custom-date-input { box-sizing: border-box; height: 42px !important; font-size: 13px; padding: 0 12px; border: 1px solid var(--red-line); background: var(--raise); color: var(--text); font-weight: 600; outline: none; transition: border-color .15s, background .15s, box-shadow .15s; }
+.ledger-filter-bar .ledger-amount-input { width: 100%; min-width: 0; flex: 1 1 auto; padding: 0 12px 0 14px; border-color: var(--line); background: var(--raise); font-weight: 500; }
+.ledger-amount-input::-webkit-outer-spin-button,
+.ledger-amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ledger-amount-input { -moz-appearance: textfield; }
+.ledger-filter-bar .ledger-custom-date-input { width: 100%; min-width: 105px; max-width: 100%; flex: 1 1 auto; font-weight: 400; border-color: var(--line); }
+.ledger-range-apply { height: 42px; padding: 0 14px; min-width: 64px; white-space: nowrap; border: 1px solid var(--red-line); background: var(--red-soft); color: var(--red); font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, transform .15s; justify-self: start; }
+.ledger-range-apply:hover { background: var(--red-soft); border-color: var(--red-line); }
+.ledger-range-apply:active { transform: translateY(1px); }
+.ledger-amount-input:hover,
+.ledger-custom-date-input:hover { border-color: var(--color-ledger); background: var(--red-soft); }
+.ledger-amount-input:focus,
+.ledger-custom-date-input:focus { border-color: var(--color-ledger); background: var(--red-soft); box-shadow: 0 0 0 2px var(--gold-line); }
+.ledger-amount-input::placeholder { color: var(--muted); }
+.ledger-filter-bar .ledger-amount-input:hover,
+.ledger-filter-bar .ledger-custom-date-input:hover { border-color: var(--line); background: var(--sunken); }
+.ledger-filter-bar .ledger-amount-input:focus,
+.ledger-filter-bar .ledger-custom-date-input:focus { border-color: var(--color-ledger); background: var(--raise); box-shadow: 0 0 0 2px var(--gold-line); }
+
+/* 共享下拉框 */
+.ledger-filter-bar .pselect-trigger { height: 42px; padding: 0 12px 0 14px; background: var(--raise); }
+.ledger-filter-bar .pselect-label { min-width: 0; }
+.ledger-filter-bar .pselect-panel { z-index: 1200; }
+.ledger-quick-add .pselect-trigger { height: 42px; padding: 0 10px 0 12px; font-weight: 600; background: var(--raise); }
+.ledger-quick-add .pselect-label { min-width: 0; }
+.ledger-quick-add .pselect-panel { z-index: 1200; }
+
+@media (max-width: 1200px) {
+    .ledger-quick-add { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ledger-qa-field--title { grid-column: 1 / -1; }
+    .ledger-insights-panel { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+    .ledger-hero { grid-template-columns: 1fr; }
+    .ledger-summary-cards { gap: 10px; }
+    .ledger-summary-card { min-width: calc((100% - 10px) / 2); padding: 12px; grid-template-columns: 24px minmax(0, 1fr); column-gap: 6px; row-gap: 8px; }
+    .ledger-summary-label { grid-row: 1; margin-top: 0; }
+    .ledger-summary-value { grid-column: 1 / -1; grid-row: 2; font-size: clamp(16px, 4.6vw, 22px); }
+    .ledger-quick-add { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .ledger-page-header { align-items: flex-start; }
+    .ledger-pulse-metrics { grid-template-columns: 1fr; }
+    .ledger-insight-ring-wrap { grid-template-columns: 1fr; }
+    .ledger-insight-svg-ring { max-width: min(200px, 52vw); }
+    .ledger-ring-center-value { font-size: 15px; }
+    .ledger-ring-center-label { font-size: 10px; }
+    .ledger-insight-y-label { font-size: clamp(14px, 4.2vw, 18px); }
+    .ledger-insight-svg-trend .ledger-insight-axis-labels text,
+    .ledger-insight-svg-kline .ledger-insight-axis-labels text { font-size: clamp(13px, 3.8vw, 17px); font-weight: 600; }
+    .ledger-filter-controls,
+    .ledger-filter-range { width: 100%; flex-wrap: wrap; }
+    .ledger-filter-item--amount .ledger-filter-controls { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; }
+    .ledger-filter-range { align-items: stretch; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); row-gap: 8px; }
+    .ledger-filter-bar .ledger-custom-date-input,
+    .ledger-filter-bar .ledger-amount-input { width: 100%; min-width: 0; flex: 1 1 100%; }
+    .ledger-range-apply { grid-column: 1 / -1; width: 100%; justify-self: stretch; }
+}
+
+@media (max-width: 560px) {
+    .ledger-qa-field--date,
+    .ledger-qa-action { grid-column: 1 / -1; }
+}
+
+/* 按日期分组的账目列表 */
+.ledger-date-group { margin-bottom: 12px; }
+.ledger-date-group-header { font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 0 4px; border-bottom: 1px solid var(--line); }
+.ledger-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.ledger-list-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.ledger-list-toolbar-copy { display: flex; flex-direction: column; gap: 2px; }
+.ledger-list-toolbar-copy strong { font-size: 14px; color: var(--cream); }
+.ledger-list-toolbar-copy span { font-size: 12px; color: var(--muted); }
+.ledger-sort-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px; background: var(--red-soft); border: 1px solid var(--red-line); }
+.ledger-sort-btn { height: 32px; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
+.ledger-row:last-child { border-bottom: none; }
+.ledger-row:hover { background: var(--color-hover, var(--sunken)); }
+.ledger-dir-icon { font-size: 16px; flex-shrink: 0; width: 22px; text-align: center; }
+.ledger-row-main { flex: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: transparent; text-align: left; font: inherit; cursor: pointer; }
+.ledger-row-main:disabled { cursor: default; }
+.ledger-row-title { display: block; max-width: 100%; font-size: 14px; font-weight: 500; color: var(--cream); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-row-meta { display: block; max-width: 100%; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-row-amount { font-size: 15px; font-weight: 700; flex-shrink: 0; min-width: 80px; text-align: right; }
+.ledger-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.ledger-category-badge { font-size: 11px; }
+.ledger-flat-list .ledger-row:last-child { border-bottom: none; }
+.ledger-empty { font-size: 14px; }
+.ledger-records-card { padding: 18px 20px 20px; }
+.ledger-pagination { margin-top: 16px; }
+.ledger-detail-shell { margin: -2px 0; }
+.ledger-detail-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.ledger-detail-amount { font-size: 28px; font-weight: 700; }
+.ledger-detail-type { font-size: 13px; padding: 2px 8px; font-weight: 600; }
+.ledger-detail-type.ledger-amount-transfer { background: var(--sunken); }
+.ledger-detail-type.ledger-amount-income { background: var(--mint-soft); }
+.ledger-detail-type.ledger-amount-expense { background: var(--red-soft); }
+.ledger-detail-rows { padding: 0 14px; background: var(--night); border: 1px solid var(--line); }
+.ledger-detail-row { display: flex; gap: 12px; padding: 12px 0; }
+.ledger-detail-row:not(:last-child) { border-bottom: 1px solid var(--line); }
+.ledger-detail-label { width: 56px; flex-shrink: 0; font-size: 12px; color: var(--muted); padding-top: 2px; }
+.ledger-detail-value { flex: 1; font-size: 14px; color: var(--text); word-break: break-word; line-height: 1.6; white-space: pre-wrap; }
+.ledger-modal-delete { margin-right: auto; }
+.ledger-qa-submit:focus-visible,
+.ledger-range-apply:focus-visible,
+.ledger-sort-btn:focus-visible,
+.ledger-row-main:focus-visible,
+.ledger-row-actions button:focus-visible { outline: 3px solid var(--red-line); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+    /* 保持原有紧凑横排，只让分类落到账户信息的视觉高度。 */
+    .ledger-row { gap: 8px; padding: 9px 0; }
+    .ledger-category-badge { flex-shrink: 0; transform: translateY(8px); white-space: nowrap; }
+    .ledger-row-amount { min-width: 72px; font-size: 14px; }
+    .ledger-row-actions { gap: 2px; }
+}
+
+/* 币种筛选的代码输入与切换按钮并排。 */
+.ledger-filter-item--currency .ledger-filter-controls { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; }
+.ledger-filter-item--currency #filter-currency { min-width: 0; width: 64px; height: 40px; flex: 1; }
+.ledger-filter-item--currency button { flex-shrink: 0; padding-inline: 10px; }
+.pendo-analysis .ledger-summary-cards { margin-top: 14px; }
+
+@media (max-width: 720px) {
+    .ledger-filter-panel .ledger-panel-body { padding: 12px; }
+    .ledger-filter-bar { gap: 12px 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ledger-filter-item { min-width: 0; }
+}

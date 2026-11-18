@@ -1,0 +1,127 @@
+/* 总览页的布局与专属组件。 */
+
+.dashboard-page {
+    width: 100%;
+    min-width: 0;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 26px 24px 32px;
+    box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+    .dashboard-page { padding: 20px 16px 28px; }
+}
+
+.dashboard-hero { display: grid; grid-template-columns: minmax(0, 1.2fr) auto; gap: 18px; align-items: end; margin-bottom: 18px; }
+.dashboard-hero-tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.dashboard-hero-tag { font-weight: 600; white-space: nowrap; }
+.dashboard-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.dashboard-summary-card { position: relative; overflow: hidden; padding: 16px 16px 14px; min-width: 0; }
+.dashboard-summary-card.events { --module: var(--color-events); }
+.dashboard-summary-card.tasks { --module: var(--color-tasks); }
+.dashboard-summary-card.ledger { --module: var(--color-ledger); }
+.dashboard-summary-card.diary { --module: var(--color-diary); }
+.dashboard-summary-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.dashboard-summary-pill { font-weight: 700; }
+.dashboard-summary-value { font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; overflow-wrap: anywhere; word-break: break-word; }
+.dashboard-summary-label { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; word-break: break-word; }
+.dashboard-summary-meta { margin-top: 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; word-break: break-word; }
+.dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr); gap: 16px; align-items: start; }
+.dashboard-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.dashboard-panel { overflow: hidden; }
+.dashboard-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
+.dashboard-panel-header h3 { margin: 0; font-size: 18px; font-weight: 750; color: var(--cream); }
+.dashboard-panel-title { display: flex; align-items: center; gap: 8px; font: 400 18px/1.3 var(--pixel); }
+.dashboard-panel-header p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.dashboard-link { color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; }
+.dashboard-link:hover { color: var(--text); }
+.dashboard-panel-body { padding: 16px 20px 20px; }
+.dashboard-agenda-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dashboard-agenda-section-label { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.dashboard-agenda-list { display: flex; flex-direction: column; gap: 10px; }
+.dashboard-event-card { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 12px; padding: 12px; }
+.dashboard-event-date { display: flex; flex-direction: column; justify-content: center; align-items: center; background: var(--violet-soft); color: var(--violet); font-family: var(--pixel); min-height: 58px; }
+.dashboard-event-date strong { font-size: 18px; line-height: 1; }
+.dashboard-event-date span { font-size: 11px; margin-top: 4px; }
+.dashboard-event-title { font-size: 14px; font-weight: 650; color: var(--cream); line-height: 1.4; }
+.dashboard-event-subtitle { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--cream); }
+.dashboard-event-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.dashboard-meta-pill { max-width: 100%; }
+.dashboard-meta-pill.location { white-space: normal; line-height: 1.45; align-items: flex-start; overflow-wrap: anywhere; }
+.dashboard-task-sections { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr); gap: 14px; }
+.dashboard-task-section { padding: 14px; }
+.dashboard-task-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.dashboard-task-section-head strong { font-size: 13px; color: var(--cream); }
+.dashboard-task-count { font-weight: 700; }
+.dashboard-task-list { display: flex; flex-direction: column; gap: 8px; }
+.dashboard-task-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; }
+.dashboard-task-item.is-completed { opacity: 0.72; background: var(--sunken); }
+.dashboard-task-item input[type="checkbox"] { width: 16px; height: 16px; margin-top: 3px; cursor: pointer; }
+.dashboard-task-complete-dot { width: 16px; height: 16px; margin-top: 4px; background: var(--mint-soft); }
+.dashboard-task-title { font-size: 14px; font-weight: 600; color: var(--cream); line-height: 1.4; }
+.dashboard-task-title.is-done { text-decoration: line-through; }
+.dashboard-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.dashboard-finance-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.dashboard-finance-metric { padding: 12px; min-width: 0; }
+.dashboard-finance-metric span { font-size: 12px; color: var(--muted); }
+.dashboard-finance-metric strong { display: block; margin-top: 8px; font-size: clamp(18px, 1.9vw, 22px); line-height: 1.1; font-weight: 800; overflow-wrap: anywhere; }
+.dashboard-chart-card { display: block; padding: 14px; color: inherit; text-decoration: none; cursor: pointer; }
+.dashboard-chart-card:focus-visible { outline: 2px solid var(--color-ledger); outline-offset: 3px; }
+.dashboard-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.dashboard-chart-head strong { font-size: 14px; color: var(--color-ledger); }
+.dashboard-chart-head span { font-size: 11px; color: var(--muted); }
+.dashboard-chart-container { display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 22px; height: 180px; min-width: 0; }
+.dashboard-chart-y-axis, .dashboard-chart-x-axis, .dashboard-chart-plot { position: relative; min-width: 0; }
+.dashboard-chart-y-axis { grid-column: 1; grid-row: 1; }
+.dashboard-chart-y-label { position: absolute; right: 8px; transform: translateY(50%); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.dashboard-chart-plot { grid-column: 2; grid-row: 1; }
+.dashboard-spending-chart { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.dashboard-chart-grid { stroke: var(--red-line); stroke-width: 1; stroke-dasharray: 4 6; vector-effect: non-scaling-stroke; }
+.dashboard-chart-area { fill: var(--red-soft); }
+.dashboard-chart-line { fill: none; stroke: var(--red); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.dashboard-chart-point { position: absolute; width: 6px; height: 6px; transform: translate(-50%, -50%); border: 2px solid var(--red); background: var(--raise); box-sizing: border-box; }
+.dashboard-chart-x-axis { grid-column: 2; grid-row: 2; }
+.dashboard-chart-x-label { position: absolute; top: 5px; transform: translateX(-50%); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.dashboard-ledger-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.dashboard-ledger-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; }
+.dashboard-ledger-item strong { display: block; font-size: 13px; color: var(--cream); }
+.dashboard-ledger-item span { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.dashboard-ledger-amount { font-size: 14px; font-weight: 800; text-align: right; }
+.dashboard-ledger-amount.income, .dashboard-finance-value.income, .dashboard-finance-value.positive { color: var(--color-success); }
+.dashboard-ledger-amount.expense, .dashboard-finance-value.expense, .dashboard-finance-value.negative { color: var(--color-ledger); }
+.dashboard-ledger-amount.transfer { color: var(--text); }
+.dashboard-ledger-empty { margin-top: 14px; }
+.dashboard-diary-panel { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 18px 20px; }
+.dashboard-diary-copy strong { display: block; font-size: 16px; color: var(--cream); }
+.dashboard-diary-copy p { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.dashboard-diary-link { margin-top: 12px; }
+.dashboard-diary-stat { min-width: 132px; padding: 12px 14px; text-align: center; }
+.dashboard-diary-stat strong { display: block; font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; color: var(--cream); overflow-wrap: anywhere; word-break: break-word; }
+.dashboard-diary-stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; word-break: break-word; }
+.dashboard-empty strong { display: block; font-size: 14px; color: var(--cream); }
+.dashboard-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+
+@media (max-width: 1200px) {
+    .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .dashboard-finance-top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .dashboard-finance-metric strong { font-size: clamp(16px, 2.3vw, 20px); }
+    .dashboard-event-card { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
+    .dashboard-event-title { font-size: 13px; }
+    .dashboard-meta-pill.location { width: 100%; }
+}
+
+@media (max-width: 720px) {
+    .dashboard-hero { grid-template-columns: 1fr; }
+    .dashboard-hero-tags { justify-content: flex-start; }
+    .dashboard-summary { grid-template-columns: 1fr; gap: 10px; }
+    .dashboard-summary-card { padding: 14px 14px 12px; }
+    .dashboard-summary-top { margin-bottom: 12px; }
+        .dashboard-summary-value { font-size: 24px; }
+    .dashboard-summary-label { margin-top: 5px; font-size: 12px; }
+    .dashboard-summary-meta { margin-top: 4px; font-size: 11px; }
+    .dashboard-agenda-grid, .dashboard-task-sections, .dashboard-finance-top { grid-template-columns: 1fr; }
+    .dashboard-diary-panel { grid-template-columns: 1fr; }
+    .dashboard-event-meta { gap: 5px; }
+}

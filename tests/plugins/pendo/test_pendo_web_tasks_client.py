@@ -145,18 +145,13 @@ const initCustomSelects = (root, handlers) => { globalThis.__selectHandlers = ha
             + "';",
         ),
         (
-            "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, "
-            "subscribeDataChanges } from '../utils/ui.js';",
-            r"""const BREAKPOINTS = { XL: '1200px', MOBILE: '720px' };
-const escapeHtml = (value) => String(value ?? '')
+            "import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';",
+            r"""const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
-const pageShellCss = () => '';
 const subscribeDataChanges = (type, refresh) => {
     globalThis.__subscriptions.push({ type, refresh });
     return () => { globalThis.__unsubscribeCount += 1; };

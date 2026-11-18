@@ -21,9 +21,8 @@ import {
     zonedInputToUtcIso,
 } from '../utils/timezone.js';
 import { createInstantMemory } from '../utils/timezone.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
+import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';
 
-const CSS_ID             = 'pendo-tasks-redesign-styles';
 const TODAY              = () => parseDate(todayInUserTimeZone());
 const ISO_DATE_RE        = /^\d{4}-\d{2}-\d{2}$/;
 const TASK_STATUSES      = new Set(['open', 'done', 'cancelled']);
@@ -39,18 +38,20 @@ const DEFAULT_FILTERS    = Object.freeze({
 });
 
 const STATUS_META = {
-    open: { label: '未完成', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
-    done: { label: '已完成', tone: '#16A34A', bg: 'rgba(34,197,94,0.12)' },
-    cancelled: { label: '已取消', tone: '#64748B', bg: 'rgba(148,163,184,0.14)' },
+    open: { label: '未完成', tone: 'var(--amber)', bg: 'var(--amber-soft)' },
+    done: { label: '已完成', tone: 'var(--mint)', bg: 'var(--mint-soft)' },
+    cancelled: { label: '已取消', tone: 'var(--faint)', bg: 'var(--sunken)' },
 };
 
 const PRIORITY_INFO = {
-    1: { icon: '🔴', label: '紧急', color: '#EF4444' },
-    2: { icon: '🟠', label: '高', color: '#F97316' },
-    3: { icon: '🟡', label: '中', color: '#EAB308' },
-    4: { icon: '🟢', label: '低', color: '#22C55E' },
-    5: { icon: '⚪', label: '最低', color: '#CBD5E1' },
+    1: { label: '紧急', color: 'var(--red)' },
+    2: { label: '高', color: 'var(--amber)' },
+    3: { label: '中', color: 'var(--gold)' },
+    4: { label: '低', color: 'var(--mint)' },
+    5: { label: '最低', color: 'var(--faint)' },
 };
+const priorityFlag = (priority) =>
+    `<span class="pixel-icon" data-icon="flag" style="color:${priority.color};" aria-hidden="true"></span>`;
 
 const TASK_FIELDS = [
     { name: 'title', label: '标题', type: 'text', required: true },
@@ -465,258 +466,6 @@ function deriveDisplayModel(tasks) {
     };
 }
 
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('tasks-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-        /* 页面头部与视图切换。 */
-        .tasks-hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
-            padding: 24px 26px; border-radius: 26px; margin-bottom: 18px;
-            background:
-                radial-gradient(circle at top right, rgba(16,185,129,0.18), transparent 32%),
-                radial-gradient(circle at bottom left, rgba(5,150,105,0.14), transparent 24%),
-                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(236,253,245,0.94));
-            border: 1px solid rgba(16,185,129,0.16);
-            box-shadow: 0 18px 40px rgba(15,23,42,0.05);
-        }
-        .tasks-hero h2 { margin: 0; font-size: 28px; font-weight: 800; color: var(--color-tasks); letter-spacing: -0.02em; }
-        .tasks-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
-        .tasks-hero-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-        .tasks-hero-tag {
-            display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px;
-            background: rgba(16,185,129,0.08); color: #047857; font-size: 12px; font-weight: 700;
-        }
-        .tasks-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
-        .tasks-view-toggle {
-            display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px;
-            background: rgba(255,255,255,0.88); border: 1px solid rgba(226,232,240,0.92);
-        }
-        .tasks-toggle-btn {
-            border: none; background: transparent; color: var(--color-text-secondary); cursor: pointer;
-            border-radius: 999px; padding: 9px 14px; font-size: 13px; font-weight: 700; transition: all 0.16s ease;
-        }
-        .tasks-toggle-btn.active { background: var(--color-tasks); color: #fff; box-shadow: 0 10px 24px rgba(16,185,129,0.24); }
-        /* 概览指标与计划分布。 */
-        .tasks-layout {
-            display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-            gap: 16px; margin-bottom: 18px;
-        }
-        .tasks-panel {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.92); border-radius: 20px;
-            box-shadow: 0 16px 34px rgba(15,23,42,0.04);
-        }
-        .tasks-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
-        .tasks-panel-head h3 { margin: 0; font-size: 18px; font-weight: 760; color: var(--color-text); letter-spacing: -0.02em; }
-        .tasks-panel-head p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .tasks-panel-body { padding: 16px 20px 20px; }
-        .tasks-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .tasks-stat-card {
-            padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.86);
-            border: 1px solid rgba(16,185,129,0.08);
-            min-width: 0;
-        }
-        .tasks-stat-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .tasks-stat-value {
-            margin-top: 8px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 800; color: var(--color-text); letter-spacing: -0.03em;
-            line-height: 1.04; overflow-wrap: anywhere; word-break: break-word;
-        }
-        .tasks-stat-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
-        .tasks-meter {
-            display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; align-items: end; margin-top: 18px;
-        }
-        .tasks-meter-bar { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-        .tasks-meter-stick {
-            width: 100%; min-height: 12px; border-radius: 999px 999px 12px 12px;
-            background: linear-gradient(180deg, rgba(16,185,129,0.92), rgba(5,150,105,0.45));
-        }
-        .tasks-meter-value { font-size: 11px; font-weight: 700; color: var(--color-text); }
-        .tasks-meter-label { font-size: 11px; color: var(--color-text-secondary); }
-        .tasks-category-list { display: flex; flex-direction: column; gap: 12px; }
-        .tasks-category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-        .tasks-category-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
-        .tasks-category-name { font-weight: 700; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .tasks-category-count { color: var(--color-text-secondary); font-weight: 700; }
-        .tasks-category-track { height: 10px; border-radius: 999px; background: rgba(226,232,240,0.7); overflow: hidden; }
-        .tasks-category-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(16,185,129,0.88), rgba(52,211,153,0.55)); }
-        /* 搜索及互斥筛选条件。 */
-        .tasks-filter-bar {
-            display: grid; grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(140px, 0.6fr));
-            gap: 12px; margin-bottom: 18px; padding: 16px 18px; border-radius: 22px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
-            border: 1px solid rgba(226,232,240,0.92); box-shadow: 0 14px 30px rgba(15,23,42,0.04);
-        }
-        .tasks-filter-field { display: flex; flex-direction: column; gap: 6px; }
-        .tasks-filter-field label { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
-        .tasks-filter-field input { width: 100%; height: 40px; border-radius: 14px; border: 1px solid rgba(203,213,225,0.92); padding: 0 14px; }
-        .tasks-filter-field--range { grid-column: span 2; }
-        .tasks-filter-range {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-            gap: 8px; align-items: center;
-        }
-        .tasks-filter-range span { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .tasks-filter-bar .pselect-trigger { height: 40px; padding: 0 14px; border-radius: 14px; background: rgba(255,255,255,0.92); }
-        .tasks-filter-bar .pselect-panel { border-radius: 16px; }
-        .tasks-filter-bar .pselect-label { min-width: 0; }
-        /* 执行列表。 */
-        .tasks-workspace {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.92); border-radius: 22px; box-shadow: 0 18px 34px rgba(15,23,42,0.04);
-            overflow: hidden;
-        }
-        .tasks-workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid rgba(226,232,240,0.75); }
-        .tasks-workspace-title { margin: 0; font-size: 18px; font-weight: 760; color: var(--color-text); }
-        .tasks-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .tasks-content { padding: 8px 20px 18px; }
-        .tasks-sections { display: flex; flex-direction: column; gap: 0; }
-        .tasks-section {
-            padding: 18px 0 20px; border-top: 1px solid rgba(226,232,240,0.78);
-            background: transparent;
-        }
-        .tasks-section:first-child { border-top: none; padding-top: 8px; }
-        .tasks-section-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
-        .tasks-section-title { font-size: 16px; font-weight: 760; color: var(--color-text); }
-        .tasks-section-meta { font-size: 12px; color: var(--color-text-secondary); }
-        .tasks-section-count {
-            font-size: 12px; font-weight: 760; color: var(--color-text-secondary);
-            white-space: nowrap;
-        }
-        .tasks-task-list { display: flex; flex-direction: column; gap: 0; }
-        .task-row {
-            display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
-            margin: 0 -8px; padding: 14px 8px; border-bottom: 1px solid rgba(226,232,240,0.66);
-            background: transparent;
-            transition: background 0.16s ease;
-        }
-        .task-row:last-child { border-bottom: none; }
-        .task-row:hover { background: linear-gradient(90deg, rgba(236,253,245,0.78), transparent 76%); }
-        .task-row-priority {
-            width: 8px; height: 34px; border-radius: 999px; margin-top: 2px;
-        }
-        .task-row-main { min-width: 0; }
-        .task-row-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
-        .task-row-title {
-            margin: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer;
-            font: inherit; font-size: 15px; font-weight: 760; color: var(--color-text);
-            min-width: 0; overflow-wrap: anywhere; word-break: break-word;
-        }
-        .task-row-note { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .task-row-meta {
-            display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 9px;
-            font-size: 12px; font-weight: 700; color: var(--color-text-secondary);
-        }
-        .task-row-meta span { display: inline-flex; align-items: center; min-width: 0; overflow-wrap: anywhere; }
-        .task-row-meta span:not(:last-child)::after {
-            content: ""; width: 3px; height: 3px; border-radius: 999px;
-            background: rgba(148,163,184,0.72); margin-left: 10px;
-        }
-        .task-pill {
-            display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
-            font-size: 12px; font-weight: 700; background: rgba(241,245,249,0.92); color: var(--color-text-secondary);
-            white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0;
-        }
-        .task-pill.status { color: var(--task-pill-color); background: var(--task-pill-bg); }
-        .task-status-badge {
-            display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px;
-            font-size: 12px; font-weight: 760; color: var(--task-pill-color); background: var(--task-pill-bg);
-            white-space: nowrap; flex-shrink: 0;
-        }
-        .task-row-actions { display: flex; gap: 8px; align-items: center; }
-        .task-action-btn {
-            border: 1px solid transparent; background: transparent; color: var(--color-text-secondary);
-            border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
-            transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
-        }
-        .task-action-btn:hover { background: rgba(241,245,249,0.9); border-color: rgba(203,213,225,0.8); }
-        .task-action-btn.primary { color: #047857; border-color: rgba(16,185,129,0.18); background: rgba(236,253,245,0.86); }
-        .tasks-empty {
-            padding: 28px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.82);
-            border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
-        }
-        /* 双栏看板。 */
-        .tasks-board { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 4px; }
-        .tasks-board-col {
-            min-width: 240px; border-radius: 18px; border: 1px solid rgba(226,232,240,0.92);
-            background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
-        }
-        .tasks-board-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid rgba(226,232,240,0.75); }
-        .tasks-board-title { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 760; color: var(--color-text); }
-        .tasks-board-dot { width: 10px; height: 10px; border-radius: 999px; }
-        .tasks-board-count { min-width: 24px; height: 24px; padding: 0 8px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: rgba(241,245,249,0.92); color: var(--color-text-secondary); font-size: 12px; font-weight: 700; }
-        .tasks-board-list { min-height: 160px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-        .tasks-board-list.drag-over { background: rgba(16,185,129,0.05); border-radius: 0 0 22px 22px; }
-        .tasks-board-card {
-            border: 1px solid rgba(226,232,240,0.86); border-radius: 14px; background: #fff; padding: 12px;
-            cursor: grab; transition: box-shadow 0.16s ease, transform 0.16s ease; position: relative;
-        }
-        .tasks-board-card:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15,23,42,0.08); }
-        .tasks-board-card.dragging { opacity: 0.44; }
-        .tasks-board-card-title {
-            display: block; width: 100%; margin: 0; padding: 0; border: 0; background: transparent;
-            text-align: left; cursor: pointer; font: inherit; font-size: 14px; font-weight: 760; color: var(--color-text);
-        }
-        .tasks-board-card p { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .tasks-board-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-        .tasks-board-add { padding: 0 12px 12px; }
-        .tasks-board-add button {
-            width: 100%; border: 1px dashed rgba(148,163,184,0.5); background: transparent; color: var(--color-text-secondary);
-            border-radius: 14px; padding: 10px 12px; cursor: pointer; font-weight: 700;
-        }
-        /* 模态框里的优先级选择器。 */
-        .priority-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .priority-btn {
-            width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
-            border-radius: 12px; border: 1px solid rgba(203,213,225,0.9); background: rgba(255,255,255,0.96);
-            cursor: pointer; font-size: 18px; opacity: 0.92; transform: scale(1);
-            transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
-        }
-        .priority-btn:hover { border-color: rgba(148,163,184,0.82); background: rgba(248,250,252,0.98); transform: translateY(-1px) scale(1.03); }
-        .priority-btn.active { opacity: 1; transform: scale(1.06); }
-        .priority-btn.priority-1.active { border-color: rgba(239,68,68,0.36); background: rgba(254,242,242,0.96); box-shadow: inset 0 0 0 1px rgba(239,68,68,0.12); }
-        .priority-btn.priority-2.active { border-color: rgba(249,115,22,0.36); background: rgba(255,247,237,0.96); box-shadow: inset 0 0 0 1px rgba(249,115,22,0.12); }
-        .priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38); background: rgba(254,252,232,0.98); box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14); }
-        .priority-btn.priority-4.active { border-color: rgba(34,197,94,0.36); background: rgba(240,253,244,0.98); box-shadow: inset 0 0 0 1px rgba(34,197,94,0.12); }
-        .priority-btn.priority-5.active { border-color: rgba(148,163,184,0.42); background: rgba(248,250,252,0.98); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.12); }
-        .tasks-toggle-btn:focus-visible,
-        .tasks-filter-field input:focus-visible,
-        .task-row-title:focus-visible,
-        .task-action-btn:focus-visible,
-        .tasks-board-card-title:focus-visible,
-        .tasks-board-add button:focus-visible,
-        .priority-btn:focus-visible {
-            outline: 3px solid rgba(16,185,129,0.28);
-            outline-offset: 2px;
-        }
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .tasks-layout { grid-template-columns: 1fr; }
-            .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .tasks-filter-field--range { grid-column: span 2; }
-            .tasks-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .tasks-hero { grid-template-columns: 1fr; }
-            .tasks-hero-actions { justify-content: flex-start; }
-            .tasks-layout { gap: 14px; }
-            .tasks-stat-grid { grid-template-columns: 1fr; }
-            .tasks-filter-bar { grid-template-columns: 1fr; }
-            .tasks-filter-field--range { grid-column: span 1; }
-            .tasks-workspace-head { align-items: start; }
-            .task-row { grid-template-columns: auto minmax(0, 1fr); }
-            .task-row-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
-            .tasks-board { grid-template-columns: 1fr; }
-        `,
-        )}
-    `,
-    );
-}
-
 async function fetchOverview() {
     const res = await api.get('/stats/tasks/overview', { today: isoDate(TODAY()) });
     return normalizeOverview(res?.data);
@@ -734,7 +483,8 @@ function renderHero(model) {
     return `
         <section class="tasks-hero pendo-page-header">
             <div>
-                <h2>✅ 待办</h2>
+                <span class="eyebrow"><i></i>QUEST LOG</span>
+                <h2>待办</h2>
                 <p>${summary.active_count} 项待完成，${summary.focus_count} 项安排在今天或已逾期。</p>
             </div>
             <div class="tasks-hero-actions">
@@ -913,7 +663,6 @@ function taskRowHTML(task) {
     const pendingAttrs = pending ? ' disabled aria-busy="true"' : '';
     const content = task.content ? `<div class="task-row-note">${escapeHtml(task.content)}</div>` : '';
     const metaParts = [
-        `${priority.icon} ${priority.label}`,
         planKey ? formatPlanDate(planKey) : '',
         textCategory || (!planKey ? '未分类' : ''),
         scheduleText,
@@ -928,6 +677,7 @@ function taskRowHTML(task) {
                 </div>
                 ${content}
                 <div class="task-row-meta">
+                    <span>${priorityFlag(priority)}${priority.label}</span>
                     ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join('')}
                 </div>
             </div>
@@ -982,7 +732,7 @@ function boardCardHTML(task) {
             <button type="button" class="tasks-board-card-title" data-action="edit" data-id="${taskId}"${pendingAttrs}>${escapeHtml(task.title || '(无标题)')}</button>
             ${task.content ? `<p>${escapeHtml(task.content)}</p>` : ''}
             <div class="tasks-board-meta">
-                <span class="task-pill">${priority.icon} ${priority.label}</span>
+                <span class="task-pill">${priorityFlag(priority)}${priority.label}</span>
                 ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
                 ${textCategory ? `<span class="task-pill">${escapeHtml(textCategory)}</span>` : ''}
                 <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
@@ -992,8 +742,8 @@ function boardCardHTML(task) {
 
 function renderBoardView(model) {
     const columns = [
-        { key: 'open', label: '未完成', color: '#F59E0B' },
-        { key: 'closed', label: '已结束', color: '#16A34A' },
+        { key: 'open', label: '未完成', color: 'var(--amber)' },
+        { key: 'closed', label: '已结束', color: 'var(--mint)' },
     ];
     return `
         <div class="tasks-board">
@@ -1042,7 +792,6 @@ function renderWorkspace(model) {
 
 function renderPage() {
     if (!_container) return;
-    ensureStyles();
 
     if (_loading && !_overview) {
         _container.innerHTML = `<div class="tasks-shell" aria-busy="true"><div class="tasks-empty" role="status" aria-live="polite">正在加载待办...</div></div>`;
@@ -1108,7 +857,6 @@ export async function openTaskModal(existing = null) {
         showToast(`无法读取用户时区：${errorMessage(error)}`, 'error');
         return;
     }
-    ensureStyles();
     const task          = normalizeTask(existing);
     const isEdit        = Boolean(task);
     const instants      = createInstantMemory();

@@ -1,22 +1,23 @@
 /** Pendo Web 通用编辑表单的安全标记、取值和互斥按钮交互。 */
 
 import { initCustomSelects, renderCustomSelect } from './custom_select.js';
+import { moodIcon, pixelIcon } from '../utils/icons.js';
 import { escapeAttr, escapeHtml } from '../utils/ui.js';
 
 const PRIORITY_OPTIONS = [
-    { value: '1', label: '紧急', emoji: '🔴' },
-    { value: '2', label: '高优先', emoji: '🟠' },
-    { value: '3', label: '中优先', emoji: '🟡' },
-    { value: '4', label: '低优先', emoji: '🟢' },
-    { value: '5', label: '最低', emoji: '⚪' },
+    { value: '1', label: '紧急' },
+    { value: '2', label: '高优先' },
+    { value: '3', label: '中优先' },
+    { value: '4', label: '低优先' },
+    { value: '5', label: '最低' },
 ];
 
 const DEFAULT_MOOD_OPTIONS = [
-    { value: 'happy', label: '开心', emoji: '😊' },
-    { value: 'sad', label: '难过', emoji: '😢' },
-    { value: 'calm', label: '平静', emoji: '😌' },
-    { value: 'excited', label: '兴奋', emoji: '🤩' },
-    { value: 'angry', label: '生气', emoji: '😠' },
+    { value: 'happy', label: '开心' },
+    { value: 'sad', label: '难过' },
+    { value: 'calm', label: '平静' },
+    { value: 'excited', label: '兴奋' },
+    { value: 'angry', label: '生气' },
 ];
 
 export function buildFormHTML(fields) {
@@ -78,7 +79,7 @@ export function buildFormHTML(fields) {
                     input = `<div class="priority-selector" data-name="${name}" role="group" aria-labelledby="${labelId}">
                         ${PRIORITY_OPTIONS.map((option) => {
                             const active = selectedPriority === option.value;
-                            return `<button type="button" class="priority-btn priority-${option.value}${active ? ' active' : ''}" data-value="${option.value}" title="${option.label}" aria-label="${option.label}" aria-pressed="${active ? 'true' : 'false'}">${option.emoji}</button>`;
+                            return `<button type="button" class="priority-btn priority-${option.value}${active ? ' active' : ''}" data-value="${option.value}" title="${option.label}" aria-label="${option.label}" aria-pressed="${active ? 'true' : 'false'}">${pixelIcon('flag')}</button>`;
                         }).join('')}
                     </div>`;
                     labelForId = '';
@@ -88,19 +89,16 @@ export function buildFormHTML(fields) {
                     const rawMoodOptions =
                         Array.isArray(field.options) && field.options.length ? field.options : DEFAULT_MOOD_OPTIONS;
                     const moodOptions = rawMoodOptions.map((option) => ({
-                        value: String(option?.value ?? option?.id ?? option?.emoji ?? option ?? ''),
+                        value: String(option?.value ?? option?.id ?? option ?? ''),
                         label: String(option?.label ?? option?.value ?? option ?? ''),
-                        emoji: String(option?.emoji ?? option?.value ?? option ?? ''),
                     }));
                     const selectedMood      = String(value ?? '');
-                    const selectedMoodIndex = moodOptions.findIndex(
-                        (option) => selectedMood === option.value || selectedMood === option.emoji,
-                    );
+                    const selectedMoodIndex = moodOptions.findIndex((option) => selectedMood === option.value);
                     input = `<div class="mood-selector" data-name="${name}" role="group" aria-labelledby="${labelId}">
                         ${moodOptions
                             .map((option, optionIndex) => {
                                 const active = optionIndex === selectedMoodIndex;
-                                return `<button type="button" class="mood-btn${active ? ' active' : ''}" data-value="${escapeAttr(option.value)}" title="${escapeAttr(option.label)}" aria-label="${escapeAttr(option.label)}" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(option.emoji)}</button>`;
+                                return `<button type="button" class="mood-btn${active ? ' active' : ''}" data-value="${escapeAttr(option.value)}" title="${escapeAttr(option.label)}" aria-label="${escapeAttr(option.label)}" aria-pressed="${active ? 'true' : 'false'}">${moodIcon(option.value)}</button>`;
                             })
                             .join('')}
                     </div>`;

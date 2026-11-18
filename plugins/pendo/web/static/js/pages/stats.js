@@ -12,27 +12,23 @@ import {
     records as safeRecords,
 } from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
-import { bindEnterAction, BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { categoryColors, heatColor } from '../utils/palette.js';
+import { bindEnterAction, escapeHtml } from '../utils/ui.js';
 
-const CSS_ID     = 'pendo-stats-waterfall-styles';
-const RANGE_KEYS = new Set(RANGE_PRESET_OPTIONS.map((option) => option.key));
+const RANGE_KEYS   = new Set(RANGE_PRESET_OPTIONS.map((option) => option.key));
+const CHART_GROUPS = [
+    { id: 'events', label: '日程', cards: eventCards },
+    { id: 'tasks', label: '待办', cards: taskCards },
+    { id: 'ledger', label: '账本', cards: () => financeCards() + renderComparisonCard() },
+    { id: 'notes', label: '笔记', cards: noteCards },
+    { id: 'diary', label: '日记', cards: diaryCards },
+];
 const TASK_TONES = Object.freeze({
-    open: '#F59E0B',
-    done: '#166534',
-    cancelled: '#94a3b8',
-    created: '#FCD34D',
+    open: 'var(--amber)',
+    done: 'var(--mint)',
+    cancelled: 'var(--faint)',
+    created: 'var(--gold)',
 });
-const DEFAULT_MOOD_EMOJIS = {
-    happy: '😊',
-    sad: '😢',
-    calm: '😌',
-    excited: '🤩',
-    angry: '😠',
-    tired: '😴',
-    anxious: '😰',
-    grateful: '🙏',
-    neutral: '😐',
-};
 const DEFAULT_MOOD_LABELS = {
     happy: '开心',
     calm: '平静',
@@ -57,12 +53,12 @@ let _customDraftStart       = '';
 let _customDraftEnd         = '';
 let _heatmapData            = null;
 let _comparisonData         = null;
-let _moodEmojis             = { ...DEFAULT_MOOD_EMOJIS };
 let _moodLabels             = { ...DEFAULT_MOOD_LABELS };
 let _loadVersion            = 0;
 let _activeRequestSignature = '';
 let _dataSignature          = '';
 let _chartSequence          = 0;
+let _chartGroup             = 'all';
 
 // 当前金额始终绑定已加载数据的币种，切换筛选时保留旧数据的正确单位。
 function formatAmount(value) { return baseFormatAmount(value, _data?.ledger?.currency || _currency); }
@@ -83,10 +79,6 @@ function normalizeTextMap(value, defaults) {
 
 function responseData(response) {
     return isRecord(response?.data) ? response.data : {};
-}
-
-function userTodayKey() {
-    return todayRangeKey();
 }
 
 function formatCount(value) {
@@ -146,11 +138,6 @@ function sampleIndexes(length, maxPoints = 18) {
     return Array.from(picked).sort((a, b) => a - b);
 }
 
-function buildAxisTickLabels(labels, maxTicks = 6) {
-    const all = safeArray(labels).map(compactAxisLabel);
-    return sampleIndexes(all.length, maxTicks).map((index) => all[index]);
-}
-
 function buildRequestRangeValue(rangeKey = _range, range = deriveRangeDates()) {
     if (rangeKey === 'all') return 'all';
     return `${range.start}..${range.end}`;
@@ -160,7 +147,7 @@ function deriveRangeDates({
     rangeKey = _range,
     customStart = _customStart,
     customEnd = _customEnd,
-    today = userTodayKey(),
+    today = todayRangeKey(),
 } = {}) {
     if (rangeKey === 'all' && _resolvedRanges) {
         const ranges = Object.values(_resolvedRanges);
@@ -176,7 +163,7 @@ function deriveRangeDates({
 
 function currentRangeRequest() {
     const rangeKey = RANGE_KEYS.has(_range) ? _range : 'month';
-    const today    = userTodayKey();
+    const today    = todayRangeKey();
     const range    = deriveRangeDates({
         rangeKey,
         customStart: _customStart,
@@ -196,7 +183,7 @@ function isCurrentLoad(container, version) {
     return _container === container && _loadVersion === version;
 }
 
-function overviewReferenceDay(range, today = userTodayKey()) {
+function overviewReferenceDay(range, today = todayRangeKey()) {
     if (range?.start && range?.end && range.start <= today && today <= range.end) {
         return today;
     }
@@ -206,7 +193,7 @@ function overviewReferenceDay(range, today = userTodayKey()) {
 function resolveHeatmapYear(range = deriveRangeDates()) {
     const endDate = new Date(`${range.end}T00:00:00`);
     return Number.isNaN(endDate.getTime())
-        ? Number(userTodayKey().slice(0, 4))
+        ? Number(todayRangeKey().slice(0, 4))
         : endDate.getFullYear();
 }
 
@@ -250,22 +237,13 @@ function ledgerTrendSeries(ledger, range = deriveRangeDates()) {
     }));
 }
 
-function moodEmoji(mood) {
-    const normalized = String(mood || '')
-        .trim()
-        .toLowerCase();
-    if (!normalized || !Object.hasOwn(_moodEmojis, normalized)) return '';
-    return typeof _moodEmojis[normalized] === 'string' ? _moodEmojis[normalized] : '';
-}
-
 function formatMoodLabel(mood) {
     const normalized = String(mood || '').trim();
     if (!normalized) return '未记录';
-    const emoji = moodEmoji(normalized);
     const moodKey = normalized.toLowerCase();
     const configuredLabel = Object.hasOwn(_moodLabels, moodKey) ? _moodLabels[moodKey] : '';
     const label = typeof configuredLabel === 'string' && configuredLabel ? configuredLabel : normalized;
-    return emoji ? `${emoji} ${label}` : label;
+    return label;
 }
 
 function diaryCadenceSubtitle(granularity) {
@@ -354,12 +332,12 @@ function renderSparkline(labels, values, color, formatter) {
     const { line, area, points } = sparklinePath(
         compressed.values, 440, 168, 18, compressed.positions, compressed.span,
     );
-    const max                 = Math.max(...compressed.values, 1);
-    const footerLabels        = buildAxisTickLabels(compressed.labels, 6);
+    const max                 = Math.max(...compressed.values);
+    const tickIndexes         = sampleIndexes(points.length, 4);
     const visiblePointIndexes = sampleIndexes(compressed.values.length, 14);
     return `
         <div class="stats-chart-block">
-            <svg viewBox="0 0 440 168" class="stats-sparkline" role="img" aria-label="趋势图">
+            <svg viewBox="0 0 440 184" class="stats-sparkline" role="img" aria-label="趋势图">
                 <defs>
                     <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stop-color="${color}" stop-opacity="0.28"></stop>
@@ -373,7 +351,7 @@ function renderSparkline(labels, values, color, formatter) {
                         visiblePointIndexes.includes(index)
                             ? `
                     <g>
-                        <circle cx="${x}" cy="${y}" r="4" fill="${color}"></circle>
+                        <rect x="${x - 3}" y="${y - 3}" width="6" height="6" fill="${color}" stroke="var(--panel)"></rect>
                         <title>${escapeHtml(compressed.labels[index] || '')} · ${escapeHtml(formatter(compressed.values[index]))}</title>
                     </g>
                 `
@@ -383,14 +361,15 @@ function renderSparkline(labels, values, color, formatter) {
                 ${[0.25, 0.5, 0.75]
                     .map((ratio) => {
                         const y = 168 - 18 - ratio * (168 - 36);
-                        return `<line x1="18" y1="${y}" x2="422" y2="${y}" stroke="rgba(148,163,184,0.18)" stroke-dasharray="4 7"></line>`;
+                        return `<line x1="18" y1="${y}" x2="422" y2="${y}" stroke="var(--line)" stroke-dasharray="4 7"></line>`;
                     })
                     .join('')}
-                <text x="422" y="18" text-anchor="end" fill="#94a3b8" font-size="11">${escapeHtml(formatter(max))}</text>
+                <text x="18" y="12" fill="var(--muted)" font-size="12">${escapeHtml(formatter(max))}</text>
+                ${tickIndexes.map((index, position) => {
+                    const anchor = position === 0 ? 'start' : position === tickIndexes.length - 1 ? 'end' : 'middle';
+                    return `<text x="${points[index][0]}" y="176" text-anchor="${anchor}" fill="var(--muted)" font-size="13">${escapeHtml(compactAxisLabel(compressed.labels[index]))}</text>`;
+                }).join('')}
             </svg>
-            <div class="stats-sparkline-footer">
-                ${footerLabels.map((label) => `<span title="${escapeHtml(label)}">${escapeHtml(label)}</span>`).join('')}
-            </div>
         </div>
     `;
 }
@@ -462,7 +441,7 @@ function renderTreemap(items, valueKey, labelKey, colors, formatter) {
                     const shade = (0.14 + ratio * 0.2).toFixed(2);
                     // 等大的卡片里，色块面积按与最大类的比例填充，体量对比保持数值比例。
                     return `
-                    <div class="stats-treemap-tile" style="--stats-treemap-fill:${(ratio * 100).toFixed(2)}%; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.7)), rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);">
+                    <div class="stats-treemap-tile" style="--stats-treemap-fill:${(ratio * 100).toFixed(2)}%;">
                         <span class="stats-treemap-glow" style="background:${colors[index % colors.length]}; opacity:${shade};"></span>
                         <div class="stats-treemap-label">${escapeHtml(item[labelKey])}</div>
                         <div class="stats-treemap-value">${escapeHtml(formatter(item.__value))}</div>
@@ -591,7 +570,7 @@ function renderMatrixHeatmap(rows, xLabels, yLabels, color) {
                         const opacity = value ? 0.12 + (value / max) * 0.88 : 0.06;
                         return `
                         <div class="stats-matrix-cell" title="${escapeHtml(weekday)} · ${escapeHtml(slot)} · ${value} 个"
-                            style="background: rgba(${color}, ${opacity});">
+                            style="background:${heatColor(color, opacity)}; color:${opacity > 0.60 ? 'var(--ink)' : 'var(--text)'};">
                             <span>${value || ''}</span>
                         </div>
                     `;
@@ -630,14 +609,14 @@ function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel
     const total = normalized.reduce((sum, item) => sum + item.value, 0);
     if (!total) return '<div class="stats-empty-card">暂无数据</div>';
     const providedColors = safeArray(colors).filter((color) => typeof color === 'string' && color);
-    const palette        = providedColors.length ? providedColors : ['#94a3b8'];
+    const palette        = providedColors.length ? providedColors : ['var(--faint)'];
     let cursor           = 0;
     const outer          = 67;
     const inner          = 43;
     return `
         <div class="stats-donut-wrap">
             <svg viewBox="0 0 180 180" class="stats-donut">
-                <circle cx="90" cy="90" r="${outer}" fill="rgba(248,250,252,0.96)"></circle>
+                <circle cx="90" cy="90" r="${outer}" fill="var(--sunken)"></circle>
                 ${normalized
                     .map((item, index) => {
                         const angle = (item.value / total) * 360;
@@ -646,10 +625,10 @@ function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel
                                 : arcPath(90, 90, outer, inner, cursor, cursor + angle);
                         const color = palette[index % palette.length];
                         cursor += angle;
-                        return `<path d="${path}" fill="${color}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5"><title>${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(item.value))}</title></path>`;
+                        return `<path d="${path}" fill="${color}" fill-rule="evenodd" stroke="var(--panel)" stroke-width="1.5"><title>${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(item.value))}</title></path>`;
                     })
                     .join('')}
-                <circle cx="90" cy="90" r="${inner - 1}" fill="#fff"></circle>
+                <circle cx="90" cy="90" r="${inner - 1}" fill="var(--panel)"></circle>
                 <text x="90" y="86" text-anchor="middle" class="${donutCenterValueClass(centerValue)}">${escapeHtml(centerValue)}</text>
                 <text x="90" y="106" text-anchor="middle" class="stats-donut-center-label">${escapeHtml(centerLabel)}</text>
             </svg>
@@ -684,7 +663,7 @@ function renderHeatStrip(items, valueKey, labelKey, color, formatter = (value) =
                     const opacity = value ? 0.16 + (value / max) * 0.84 : 0.08;
                     return `
                     <div class="stats-heat-cell" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}"
-                        style="background:rgba(${color}, ${opacity});">
+                        style="background:${heatColor(color, opacity)}; color:${opacity > 0.60 ? 'var(--ink)' : 'var(--text)'};">
                         <span>${escapeHtml(item[labelKey])}</span>
                     </div>
                 `;
@@ -792,9 +771,9 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
                             if (!cell) return `<div class="stats-heatmap-cell empty"></div>`;
                             const highlighted = isHighlighted(cell.date);
                             const op = cellOpacity(cell.count);
-                            const background = cell.count ? `rgba(16,185,129,${op})` : 'rgba(226,232,240,0.52)';
+                            const background = cell.count ? heatColor('var(--gold)', op) : 'var(--raise)';
                             return `
-                            <div class="stats-heatmap-cell${highlighted ? ' in-range' : ''}"
+                            <div class="stats-heatmap-cell${highlighted ? ' in-range' : ''}" data-activity-date="${cell.date}"
                                 style="background:${background};"
                                 title="${escapeHtml(cell.date)} · 活动 ${cell.count}（记账${cell.ledger} 任务${cell.task} 日程${cell.event} 笔记${cell.note} 日记${cell.diary}）">
                             </div>
@@ -807,15 +786,20 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
             </div>
             <div class="stats-heatmap-footer">
                 <span class="stats-heatmap-legend-label">少</span>
-                <div class="stats-heatmap-legend-cell" style="background:rgba(226,232,240,0.52)"></div>
+                <div class="stats-heatmap-legend-cell" style="background:var(--raise)"></div>
                 ${[0.24, 0.4, 0.56, 0.72, 0.88, 1.0]
                     .map(
                         (op) =>
-                            `<div class="stats-heatmap-legend-cell" style="background:rgba(16,185,129,${op})"></div>`,
+                            `<div class="stats-heatmap-legend-cell" style="background:${heatColor('var(--gold)', op)}"></div>`,
                     )
                     .join('')}
                 <span class="stats-heatmap-legend-label">多</span>
             </div>
+        </div>
+        <div class="activity-detail">
+            <label for="activity-date">查看某一天</label>
+            <input id="activity-date" type="date" min="${normalizedDays[0].date}" max="${normalizedDays.at(-1).date}">
+            <output for="activity-date" aria-live="polite">点选方格或选择日期，查看当天各项记录。</output>
         </div>
     `;
 }
@@ -849,9 +833,9 @@ function renderComparisonBars(months) {
     return `
         <div class="stats-comparison">
             <div class="stats-chip-row">
-                <span class="stats-chip" style="border-left:3px solid #ef4444;">当月</span>
-                <span class="stats-chip" style="border-left:3px solid #f97316;">上月</span>
-                <span class="stats-chip" style="border-left:3px solid #94a3b8;">去年同月</span>
+                <span class="stats-chip" style="border-left:3px solid var(--red);">当月</span>
+                <span class="stats-chip" style="border-left:3px solid var(--amber);">上月</span>
+                <span class="stats-chip" style="border-left:3px solid var(--faint);">去年同月</span>
             </div>
             <div class="stats-comparison-table">
                 ${recent
@@ -860,9 +844,9 @@ function renderComparisonBars(months) {
                     <div class="stats-comparison-row">
                         <div class="stats-comparison-label">${escapeHtml(compactAxisLabel(m.month))}</div>
                         <div class="stats-comparison-series">
-                            ${renderComparisonMetric('当月', m.expense, maxExpense, '#ef4444')}
-                            ${renderComparisonMetric('上月', m.prev_expense, maxExpense, '#f97316')}
-                            ${renderComparisonMetric('去年同月', m.yoy_expense, maxExpense, '#94a3b8')}
+                            ${renderComparisonMetric('当月', m.expense, maxExpense, 'var(--red)')}
+                            ${renderComparisonMetric('上月', m.prev_expense, maxExpense, 'var(--amber)')}
+                            ${renderComparisonMetric('去年同月', m.yoy_expense, maxExpense, 'var(--faint)')}
                         </div>
                     </div>
                 `,
@@ -890,15 +874,13 @@ function generateInsights(data) {
     if (expenseTotal > 0) {
         const top = expenseByCategory[0];
         insights.push({
-            icon: '💰',
-            color: '#fef2f2',
+            module: 'ledger',
             text: `${rangeLabel()}支出 <strong>${formatAmount(expenseTotal)}</strong>，收入 <strong>${formatAmount(incomeTotal)}</strong>，结余 <strong>${formatAmount(incomeTotal - expenseTotal)}</strong>`,
         });
         if (top) {
             const pct = expenseTotal > 0 ? Math.round((nonNegativeNumber(top.total) / expenseTotal) * 100) : 0;
             insights.push({
-                icon: '🏷️',
-                color: '#fff7ed',
+                module: 'ledger',
                 text: `最大支出分类：<strong>${escapeHtml(top.category || '未分类')}</strong>，占比 ${pct}%（${formatAmount(top.total)}）`,
             });
         }
@@ -911,8 +893,7 @@ function generateInsights(data) {
         const active         = totals.open;
         const cancelled      = totals.cancelled;
         insights.push({
-            icon: '✅',
-            color: '#f0fdf4',
+            module: 'tasks',
             text:
                 completionBase > 0
                     ? `任务完成率 <strong>${rate}%</strong>（${doneCount}/${completionBase}），未完成 <strong>${active}</strong> 项${cancelled ? `，已取消 <strong>${cancelled}</strong> 项` : ''}`
@@ -926,8 +907,7 @@ function generateInsights(data) {
         const peakCount = nonNegativeNumber(peak?.count);
         if (peak && peakCount > 0) {
             insights.push({
-                icon: '📅',
-                color: '#eef2ff',
+                module: 'events',
                 text: `最活跃时段：<strong>${escapeHtml(peak.slot || '')}</strong>，共 ${formatCount(peakCount)} 个日程`,
             });
         }
@@ -937,16 +917,14 @@ function generateInsights(data) {
     const streak       = diarySummary.current_streak || 0;
     if (_range === 'month' && streak > 0) {
         insights.push({
-            icon: '📔',
-            color: '#fdf2f8',
+            module: 'diary',
             text: `日记连续书写 <strong>${streak}</strong> 天，累计 <strong>${formatCount(diarySummary.total_words || 0)}</strong> 字`,
         });
     }
 
     if (insights.length === 0) {
         insights.push({
-            icon: '📊',
-            color: '#f8fafc',
+            module: 'stats',
             text: '当前范围内暂无足够数据生成洞察，试试切换到更大的时间范围。',
         });
     }
@@ -957,8 +935,8 @@ function generateInsights(data) {
 function renderInsightCard(data) {
     const insights = generateInsights(data);
     return renderCard({
-        accent: '#4f46e5',
-        eyebrow: 'Insights',
+        accent: 'var(--color-stats)',
+        eyebrow: '摘要',
         title: '关键洞察',
         subtitle: `基于当前统计结果生成的摘要，默认按${rangeLabel()}解读。`,
         body: `
@@ -967,7 +945,7 @@ function renderInsightCard(data) {
                     .map(
                         (item) => `
                     <div class="stats-insight-item">
-                        <div class="stats-insight-icon" style="background:${item.color};">${item.icon}</div>
+                        <span class="stats-insight-icon pixel-icon" data-module="${item.module}" aria-hidden="true"></span>
                         <div class="stats-insight-text">${item.text}</div>
                     </div>
                 `,
@@ -1002,8 +980,8 @@ function renderFeaturedDeck() {
     return `
         <section class="stats-featured">
             ${renderCard({
-                accent: '#10b981',
-                eyebrow: 'Overview',
+                accent: 'var(--color-stats)',
+                eyebrow: '全年',
                 title: '全年活动',
                 subtitle: `${heatmapYear || ''}年全年活跃度概览，当前时间范围仅用于高亮，不改变底图统计。`,
                 classes: 'stats-card--full',
@@ -1022,8 +1000,7 @@ function renderComparisonCard() {
     const months = safeRecords(_comparisonData.months);
     if (!months.length) return '';
     return renderCard({
-        accent: '#f97316',
-        eyebrow: 'Finance',
+        accent: 'var(--color-ledger)',
         title: '同比 · 环比',
         subtitle: '固定展示近 6 个月支出对比，不随当前时间范围切换。',
         body: renderComparisonBars(months),
@@ -1065,7 +1042,7 @@ function renderMetricPairs(items) {
 }
 
 function renderCard({
-    accent = '#4f46e5',
+    accent = 'var(--color-stats)',
     eyebrow = '',
     title = '',
     subtitle = '',
@@ -1086,329 +1063,6 @@ function renderCard({
             ${footer ? `<div class="stats-card-footer">${footer}</div>` : ''}
         </article>
     `;
-}
-
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-
-        /* 页面头部与范围选择 */
-        .stats-stack { display: flex; flex-direction: column; gap: 18px; }
-        .stats-hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start;
-            padding: 24px 26px; border-radius: 30px;
-            background:
-                radial-gradient(circle at top right, rgba(99,102,241,0.18), transparent 30%),
-                radial-gradient(circle at bottom left, rgba(59,130,246,0.10), transparent 24%),
-                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(241,245,255,0.95));
-            border: 1px solid rgba(99,102,241,0.14);
-            box-shadow: 0 18px 42px rgba(79,70,229,0.06);
-        }
-        .stats-hero h2 { margin: 0; font-size: 32px; font-weight: 820; letter-spacing: -0.03em; color: #4338ca; }
-        .stats-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
-        .stats-hero-tags, .stats-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
-        .stats-hero-tags { margin-top: 14px; }
-        .stats-range-group { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; align-self: start; margin-top: 8px; }
-        .stats-chip, .stats-range-btn, .stats-date-field {
-            display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px;
-            border: 1px solid rgba(203,213,225,0.92); background: rgba(255,255,255,0.92); color: #475569; font-size: 12px; font-weight: 700;
-        }
-        .stats-range-btn { cursor: pointer; }
-        .stats-range-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; box-shadow: 0 10px 24px rgba(79,70,229,0.18); }
-        .stats-range-btn:focus-visible, .stats-date-field:focus-visible {
-            outline: 3px solid rgba(79,70,229,0.25); outline-offset: 2px; border-color: #6366f1;
-        }
-        .stats-custom-range {
-            display: inline-flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-            justify-content: flex-end;
-        }
-        .stats-date-field { font: inherit; min-width: 148px; }
-        .stats-custom-range .stats-date-field {
-            min-width: 0;
-            width: 140px;
-            padding: 0 12px;
-        }
-        .stats-range-sep {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--color-text-secondary);
-            flex: 0 0 auto;
-        }
-        .stats-custom-range .stats-apply-btn {
-            padding: 0 12px;
-            min-width: 64px;
-            justify-content: center;
-        }
-        /* 摘要、瀑布流与通用卡片 */
-        .stats-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
-        .stats-summary-card {
-            min-width: 0;
-            padding: 16px 16px 14px; border-radius: 22px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.88); box-shadow: 0 14px 30px rgba(15,23,42,0.04);
-        }
-        .stats-summary-label { font-size: 12px; font-weight: 800; color: var(--color-text-secondary); }
-        .stats-summary-value {
-            min-width: 0;
-            margin-top: 10px;
-            font-size: clamp(24px, 1.85vw, 30px);
-            line-height: 1.04;
-            letter-spacing: -0.03em;
-            font-weight: 820;
-            color: #0f172a;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-        }
-        .stats-summary-meta {
-            min-width: 0;
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--color-text-secondary);
-            overflow-wrap: anywhere;
-            word-break: break-word;
-        }
-        .stats-featured { display: flex; flex-direction: column; gap: 16px; }
-        .stats-wall { column-count: 3; column-gap: 16px; }
-        .stats-card {
-            --stats-accent: #4f46e5;
-            display: inline-block;
-            width: 100%;
-            break-inside: avoid;
-            margin-bottom: 16px;
-            padding: 18px; border-radius: 24px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.88); box-shadow: 0 16px 34px rgba(15,23,42,0.04);
-            position: relative; overflow: hidden;
-        }
-        .stats-featured .stats-card { margin-bottom: 0; }
-        .stats-card--full { width: 100%; }
-        .stats-card::before {
-            content: ''; position: absolute; inset: 0 auto auto 0; width: 100%; height: 4px;
-            background: linear-gradient(90deg, var(--stats-accent), transparent 80%); opacity: 0.9;
-        }
-        .stats-card-head h3 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: #111827; }
-        .stats-card-head p { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
-        .stats-card-eyebrow { margin-bottom: 8px; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--stats-accent); }
-        .stats-card-body { margin-top: 14px; }
-        .stats-card-footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(226,232,240,0.82); }
-        .stats-empty-card { padding: 28px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.82); border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary); }
-        /* 折线、柱状、条形与面积块 */
-        .stats-chart-block { display: flex; flex-direction: column; gap: 10px; }
-        .stats-sparkline { display: block; width: 100%; height: auto; }
-        .stats-sparkline-footer { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 8px; font-size: 10px; color: var(--color-text-secondary); }
-        .stats-sparkline-footer span { text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .stats-column-chart { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 10px; align-items: end; min-height: 184px; }
-        .stats-column-item { min-width: 0; display: grid; gap: 8px; justify-items: center; align-items: end; }
-        .stats-column-stage, .stats-histogram-stage, .stats-stacked-stage { position: relative; width: 100%; height: 124px; }
-        .stats-column-bar {
-            position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            display: block; width: 100%; max-width: 26px; min-height: 0; border-radius: 999px 999px 8px 8px;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
-        }
-        .stats-column-value {
-            width: 100%;
-            font-size: 11px;
-            font-weight: 700;
-            color: #0f172a;
-            text-align: center;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .stats-column-label { width: 100%; font-size: 10px; color: var(--color-text-secondary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .stats-bar-rows { display: flex; flex-direction: column; gap: 12px; }
-        .stats-bar-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 13px; }
-        .stats-bar-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #111827; font-weight: 700; }
-        .stats-bar-value { color: var(--color-text-secondary); font-weight: 700; flex-shrink: 0; }
-        .stats-bar-track { height: 10px; border-radius: 999px; background: rgba(226,232,240,0.72); overflow: hidden; }
-        .stats-bar-fill { display: block; height: 100%; border-radius: inherit; }
-        .stats-treemap { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .stats-treemap-tile {
-            position: relative; min-height: 108px; padding: 14px; border-radius: 18px; overflow: hidden;
-            border: 1px solid rgba(226,232,240,0.72);
-        }
-        .stats-treemap-glow {
-            position: absolute; left: 0; right: 0; bottom: 0; height: var(--stats-treemap-fill, 0%);
-        }
-        .stats-treemap-label, .stats-treemap-value { position: relative; z-index: 1; }
-        .stats-treemap-label { font-size: 12px; font-weight: 800; color: #475569; line-height: 1.5; }
-        .stats-treemap-value { margin-top: 12px; font-size: 22px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 820; color: #111827; }
-        .stats-stacked-columns {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)); gap: 10px; align-items: end; min-height: 220px;
-        }
-        .stats-stacked-item { min-width: 0; display: grid; gap: 8px; justify-items: center; align-items: end; }
-        .stats-stacked-track {
-            position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            width: 100%; max-width: 28px; min-height: 0; display: flex; flex-direction: column-reverse;
-            border-radius: 999px; overflow: hidden; background: rgba(226,232,240,0.7);
-        }
-        .stats-stacked-segment { display: block; width: 100%; }
-        .stats-stacked-total { font-size: 11px; font-weight: 800; color: #0f172a; }
-        .stats-stacked-label { width: 100%; font-size: 10px; color: var(--color-text-secondary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .stats-histogram {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); gap: 10px; align-items: end; min-height: 184px;
-        }
-        .stats-histogram-bin { min-width: 0; display: grid; gap: 8px; justify-items: center; align-items: end; }
-        .stats-histogram-bar {
-            position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            display: block; width: 100%; max-width: 52px; min-height: 0; border-radius: 12px 12px 4px 4px;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
-        }
-        .stats-histogram-value { font-size: 10px; font-weight: 800; color: #0f172a; }
-        .stats-histogram-label { width: 100%; font-size: 10px; color: var(--color-text-secondary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        /* 环图、热力图与比较图 */
-        .stats-donut-wrap { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; align-items: center; }
-        .stats-donut { width: 100%; height: auto; max-width: 180px; margin: 0 auto; }
-        .stats-donut path { transition: opacity 0.2s ease, transform 0.2s ease; transform-origin: 90px 90px; }
-        .stats-donut path:hover { opacity: 0.85; cursor: pointer; transform: scale(1.02); }
-        .stats-donut-center-value { font-size: 17px; font-weight: 700; fill: #7f1d1d; }
-        .stats-donut-center-value.small { font-size: 15px; }
-        .stats-donut-center-value.tiny { font-size: 13px; }
-        .stats-donut-center-label { font-size: 11px; fill: #94a3b8; }
-        .stats-donut-legend { display: flex; flex-direction: column; gap: 8px; }
-        .stats-donut-legend-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 12px; }
-        .stats-donut-legend-dot { width: 10px; height: 10px; border-radius: 50%; }
-        .stats-donut-legend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #111827; }
-        .stats-donut-legend-value { flex-shrink: 0; color: #334155; font-weight: 700; }
-        .stats-heat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(22px, 1fr)); gap: 6px; }
-        .stats-heat-cell { aspect-ratio: 1 / 1; min-height: 28px; border-radius: 10px; display: flex; align-items: flex-end; justify-content: center; padding: 4px; color: #475569; font-size: 9px; font-weight: 700; }
-        .stats-token-cloud { display: flex; flex-wrap: wrap; gap: 8px; }
-        .stats-token { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 700; }
-        .stats-token-1 { background: rgba(99,102,241,0.10); color: #4338ca; }
-        .stats-token-2 { background: rgba(59,130,246,0.10); color: #1d4ed8; }
-        .stats-token-3 { background: rgba(236,72,153,0.10); color: #be185d; }
-        .stats-token-4 { background: rgba(16,185,129,0.10); color: #047857; }
-        .stats-matrix {
-            display: grid; grid-template-columns: 44px repeat(6, minmax(0, 1fr)); gap: 8px; align-items: center;
-        }
-        .stats-matrix-corner { height: 20px; }
-        .stats-matrix-xlabel, .stats-matrix-ylabel { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); text-align: center; }
-        .stats-matrix-ylabel { text-align: left; padding-right: 4px; }
-        .stats-matrix-cell {
-            min-height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
-            border: 1px solid rgba(226,232,240,0.58); color: #0f172a; font-size: 11px; font-weight: 800;
-        }
-        .stats-matrix-cell span { opacity: 0.9; }
-        .stats-metric-pairs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .stats-metric-pair { padding: 12px 14px; border-radius: 16px; background: rgba(248,250,252,0.92); border: 1px solid rgba(226,232,240,0.8); }
-        .stats-metric-pair span { display: block; font-size: 11px; font-weight: 700; color: var(--color-text-secondary); margin-bottom: 6px; }
-        .stats-metric-pair strong { display: block; font-size: 20px; font-weight: 820; color: #0f172a; }
-        .stats-dual-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .stats-dual-card { padding: 14px; border-radius: 18px; background: rgba(248,250,252,0.92); border: 1px solid rgba(226,232,240,0.8); }
-        .stats-dual-label { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; }
-        .stats-dual-value { margin-top: 8px; font-size: 24px; font-weight: 820; line-height: 1.06; letter-spacing: -0.03em; }
-        .stats-dual-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
-        .stats-heatmap {
-            --stats-heatmap-cell-size: 16px;
-            --stats-heatmap-label-col: 28px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            width: 100%;
-            overflow-x: auto;
-        }
-        .stats-heatmap-months {
-            display: grid;
-            grid-template-columns: var(--stats-heatmap-label-col) repeat(var(--stats-heatmap-weeks), minmax(var(--stats-heatmap-cell-size), 1fr));
-            gap: 2px;
-            width: 100%;
-            min-width: var(--stats-heatmap-min-width);
-        }
-        .stats-heatmap-corner { width: var(--stats-heatmap-label-col); }
-        .stats-heatmap-month-label { font-size: 10px; color: var(--color-text-secondary); text-align: center; font-weight: 700; min-width: 16px; }
-        .stats-heatmap-grid {
-            display: grid;
-            grid-template-columns: var(--stats-heatmap-label-col) repeat(var(--stats-heatmap-weeks), minmax(var(--stats-heatmap-cell-size), 1fr));
-            grid-template-rows: repeat(7, auto);
-            gap: 2px;
-            width: 100%;
-            min-width: var(--stats-heatmap-min-width);
-        }
-        .stats-heatmap-ylabel { display: flex; align-items: center; justify-content: flex-end; font-size: 9px; color: var(--color-text-secondary); padding-right: 4px; font-weight: 700; }
-        .stats-heatmap-cell {
-            width: 100%;
-            height: auto;
-            aspect-ratio: 1 / 1;
-            border-radius: 3px;
-            min-width: 0;
-            min-height: 0;
-        }
-        .stats-heatmap-cell.empty { background: rgba(226,232,240,0.18); }
-        .stats-heatmap-cell.in-range {
-            box-shadow: inset 0 0 0 1px rgba(15,23,42,0.05), 0 0 0 1px rgba(255,255,255,0.32);
-            filter: saturate(1.02);
-        }
-        .stats-heatmap-footer { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
-        .stats-heatmap-legend-label { font-size: 10px; color: var(--color-text-secondary); font-weight: 700; }
-        .stats-heatmap-legend-cell { width: 12px; height: 12px; border-radius: 2px; }
-        .stats-comparison { display: flex; flex-direction: column; gap: 12px; }
-        .stats-comparison-table { display: flex; flex-direction: column; gap: 10px; }
-        .stats-comparison-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 12px; align-items: start; }
-        .stats-comparison-label { font-size: 12px; color: var(--color-text-secondary); font-weight: 800; text-align: right; line-height: 1.4; padding-top: 10px; }
-        .stats-comparison-series { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-        .stats-comparison-metric { padding: 10px 12px; border-radius: 16px; background: rgba(248,250,252,0.92); border: 1px solid rgba(226,232,240,0.82); }
-        .stats-comparison-metric-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 8px; }
-        .stats-comparison-metric-name { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); }
-        .stats-comparison-metric-head strong { font-size: 12px; font-weight: 800; color: #0f172a; white-space: nowrap; }
-        .stats-comparison-track { height: 8px; border-radius: 999px; background: rgba(226,232,240,0.72); overflow: hidden; }
-        .stats-comparison-fill { display: block; height: 100%; border-radius: inherit; }
-        .stats-insights { display: flex; flex-direction: column; gap: 10px; }
-        .stats-insight-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.7; color: #334155; }
-        .stats-insight-icon { flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-        .stats-insight-text strong { color: #0f172a; font-weight: 800; }
-        /* 响应式收敛 */
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .stats-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .stats-wall { column-count: 2; }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .stats-hero { grid-template-columns: 1fr; padding: 22px 20px; }
-            .stats-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .stats-wall { column-count: 2; }
-            .stats-donut-wrap { grid-template-columns: 1fr; gap: 10px; }
-            .stats-donut { max-width: min(200px, 52vw); }
-            .stats-donut-center-value { font-size: 16px; }
-            .stats-donut-center-value.small { font-size: 14px; }
-            .stats-donut-center-value.tiny { font-size: 12px; }
-            .stats-donut-center-label { font-size: 10px; }
-            .stats-donut-legend-item { font-size: 11px; }
-            .stats-date-field { min-width: 132px; }
-            .stats-range-group { margin-top: 0; }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.PHONE,
-            `
-            .stats-wall { column-count: 1; }
-            .stats-summary-grid, .stats-metric-pairs, .stats-dual-grid, .stats-treemap { grid-template-columns: 1fr; }
-            .stats-range-group, .stats-chip-row { align-items: stretch; }
-            .stats-chip-row { justify-content: flex-start; }
-            .stats-matrix { grid-template-columns: 36px repeat(6, minmax(0, 1fr)); gap: 6px; }
-            .stats-matrix-cell { min-height: 38px; border-radius: 12px; font-size: 10px; }
-            .stats-custom-range { flex-direction: column; align-items: stretch; }
-            .stats-range-sep { display: none; }
-            .stats-custom-range .stats-date-field,
-            .stats-custom-range .stats-apply-btn { width: 100%; }
-            .stats-column-stage, .stats-histogram-stage, .stats-stacked-stage { height: 112px; }
-            .stats-heatmap { --stats-heatmap-cell-size: 10px; --stats-heatmap-label-col: 18px; }
-            .stats-comparison-row { grid-template-columns: 1fr; gap: 8px; }
-            .stats-comparison-label { text-align: left; padding-top: 0; }
-            .stats-comparison-series { grid-template-columns: 1fr; }
-            .stats-insight-item { font-size: 12px; }
-        `,
-        )}
-    `,
-    );
 }
 
 // 数据请求：固定本次范围快照，全部时间的五个边界查询并行执行。
@@ -1469,7 +1123,6 @@ async function fetchAllData({ rangeKey, range, today, currency }) {
         },
         heatmapData: responseData(heatmapRes),
         comparisonData: responseData(comparisonRes),
-        moodEmojis: normalizeTextMap(moodData.mood_emojis, DEFAULT_MOOD_EMOJIS),
         moodLabels: normalizeTextMap(moodData.mood_labels, DEFAULT_MOOD_LABELS),
     };
 }
@@ -1493,20 +1146,19 @@ function financeCards() {
     const rhythmSeries = ledgerRhythmSeries(ledger, range).slice(-8);
     return [
         renderCard({
-            accent: '#ef4444',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '收支总览',
             subtitle: `按${rangeLabel()}汇总收入、支出与结余。`,
             body: `
                 <div class="stats-dual-grid">
                     <div class="stats-dual-card">
                         <div class="stats-dual-label">支出</div>
-                        <div class="stats-dual-value" style="color:#dc2626;">${formatAmount(expenseTotal)}</div>
+                        <div class="stats-dual-value" style="color:var(--color-ledger);">${formatAmount(expenseTotal)}</div>
                         <div class="stats-dual-meta">${topExpense ? `最高分类 ${escapeHtml(topExpense.category || '未分类')}` : '暂无支出分类'}</div>
                     </div>
                     <div class="stats-dual-card">
                         <div class="stats-dual-label">收入</div>
-                        <div class="stats-dual-value" style="color:#10b981;">${formatAmount(incomeTotal)}</div>
+                        <div class="stats-dual-value" style="color:var(--color-success);">${formatAmount(incomeTotal)}</div>
                         <div class="stats-dual-meta">${topIncome ? `主要来源 ${escapeHtml(topIncome.category || '未分类')}` : '暂无收入分类'}</div>
                     </div>
                 </div>`,
@@ -1516,73 +1168,66 @@ function financeCards() {
             ]),
         }),
         renderCard({
-            accent: '#e15241',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '支出走势',
             subtitle: `按${rangeLabel()}观察支出在时间轴上的波峰和低谷。`,
-            body: renderSparkline(trendLabels, expenseValues, '#ef4444', formatAmount),
+            body: renderSparkline(trendLabels, expenseValues, 'var(--color-ledger)', formatAmount),
         }),
         renderCard({
-            accent: '#10b981',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '收入走势',
             subtitle: `按${rangeLabel()}查看进账在时间轴上的分布。`,
-            body: renderSparkline(trendLabels, incomeValues, '#10b981', formatAmount),
+            body: renderSparkline(trendLabels, incomeValues, 'var(--color-success)', formatAmount),
         }),
         renderCard({
-            accent: '#f97316',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '支出分类',
             subtitle: `按${rangeLabel()}统计支出主要流向。`,
             body: renderDonut(
                 expenseByCategory,
                 'total',
                 'category',
-                ['#ef4444', '#f97316', '#f59e0b', '#fb7185', '#f43f5e', '#fdba74'],
+                categoryColors('red'),
                 formatAmount(expenseTotal),
                 '总支出',
                 formatAmount,
             ),
         }),
         renderCard({
-            accent: '#fb7185',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '支出分层',
             subtitle: `按${rangeLabel()}用面积块对比各支出分类体量。`,
             body: renderTreemap(
                 expenseTree,
                 'total',
                 'category',
-                ['#ef4444', '#f97316', '#fb7185', '#f59e0b', '#f43f5e', '#fdba74'],
+                categoryColors('red'),
                 formatAmount,
             ),
         }),
         renderCard({
-            accent: '#14b8a6',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '收入来源',
             subtitle: `按${rangeLabel()}查看收入主要来源。`,
-            body: renderBarRows(incomeByCategory.slice(0, 6), 'total', 'category', '#14b8a6', formatAmount),
+            body: renderBarRows(incomeByCategory.slice(0, 6), 'total', 'category', 'var(--color-success)', formatAmount),
         }),
         renderCard({
-            accent: '#f59e0b',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: '单笔金额分布',
             subtitle: `按${rangeLabel()}统计支出集中在哪些金额区间。`,
             body: renderHistogram(
                 safeRecords(ledger.expense_amount_histogram),
                 'count',
                 'bucket',
-                '#f59e0b',
+                'var(--amber)',
                 (value) => `${value} 笔`,
             ),
         }),
         renderCard({
-            accent: '#f59e0b',
-            eyebrow: 'Finance',
+            accent: 'var(--color-ledger)',
             title: `${rangeLabel()}节奏`,
             subtitle: `按${rangeLabel()}比较各时段收支量级。`,
-            body: renderColumnChart(rhythmSeries, 'total', 'label', '#f59e0b', formatMoneyCompact),
+            body: renderColumnChart(rhythmSeries, 'total', 'label', 'var(--amber)', formatMoneyCompact),
         }),
     ].join('');
 }
@@ -1605,8 +1250,7 @@ function taskCards() {
         .map((item) => ({ label: item.category || '未分类', count: item.count }));
     return [
         renderCard({
-            accent: '#10b981',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '任务状态',
             subtitle: `按${rangeLabel()}统一为未完成、已完成、已取消三种结果。`,
             body: renderDonut(
@@ -1620,14 +1264,13 @@ function taskCards() {
             ),
         }),
         renderCard({
-            accent: '#22c55e',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '完成节奏',
             subtitle: `${rangeLabel()}里真正完成的任务节奏。`,
             body: renderSparkline(
                 weekly.map((item) => item.week || ''),
                 weekly.map((item) => nonNegativeNumber(item.done)),
-                '#10b981',
+                'var(--color-success)',
                 (value) => `${value} 项`,
             ),
             footer: renderMetricPairs([
@@ -1636,8 +1279,7 @@ function taskCards() {
             ]),
         }),
         renderCard({
-            accent: '#16a34a',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '新增与收口',
             subtitle: `按${rangeLabel()}比较新建、完成和取消的周节奏。`,
             body: renderStackedColumns(
@@ -1657,38 +1299,35 @@ function taskCards() {
             ),
             footer: `
                 <div class="stats-chip-row">
-                    <span class="stats-chip">浅橙 = 新增</span>
-                    <span class="stats-chip">深绿 = 已完成</span>
-                    <span class="stats-chip">灰蓝 = 已取消</span>
+                    <span class="stats-chip">杏色 · 新增</span>
+                    <span class="stats-chip">松绿 · 已完成</span>
+                    <span class="stats-chip">灰色 · 已取消</span>
                 </div>
             `,
         }),
         renderCard({
-            accent: '#34d399',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '优先级分布',
             subtitle: `按${rangeLabel()}观察高优事项是否堆积。`,
             body: renderBarRows(
                 safeRecords(tasks.by_priority).map((item) => ({ ...item, label: `优先级 ${item.priority ?? '未设'}` })),
                 'count',
                 'label',
-                '#10b981',
+                'var(--color-success)',
                 (value) => `${value} 项`,
             ),
         }),
         renderCard({
-            accent: '#059669',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '计划分布',
             subtitle: `按${rangeLabel()}查看未完成任务主要分布在哪些日期桶。`,
-            body: renderColumnChart(planItems, 'count', 'label', '#059669', (value) => `${value}`),
+            body: renderColumnChart(planItems, 'count', 'label', 'var(--color-tasks)', (value) => `${value}`),
         }),
         renderCard({
-            accent: '#0f766e',
-            eyebrow: 'Tasks',
+            accent: 'var(--color-tasks)',
             title: '文字分类',
             subtitle: `按${rangeLabel()}查看未完成任务压在哪些非日期分类。`,
-            body: renderColumnChart(categoryItems, 'count', 'label', '#0f766e', (value) => `${value}`),
+            body: renderColumnChart(categoryItems, 'count', 'label', 'var(--color-tasks)', (value) => `${value}`),
         }),
     ].join('');
 }
@@ -1701,14 +1340,13 @@ function eventCards() {
     const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     return [
         renderCard({
-            accent: '#6366f1',
-            eyebrow: 'Events',
+            accent: 'var(--color-events)',
             title: '日程密度',
             subtitle: `按${rangeLabel()}查看安排数量随时间的变化。`,
             body: renderSparkline(
                 weekly.map((item) => item.week || ''),
                 weekly.map((item) => nonNegativeNumber(item.count)),
-                '#6366f1',
+                'var(--color-events)',
                 (value) => `${value} 个`,
             ),
             footer: renderMetricPairs([
@@ -1717,28 +1355,25 @@ function eventCards() {
             ]),
         }),
         renderCard({
-            accent: '#8b5cf6',
-            eyebrow: 'Events',
+            accent: 'var(--color-events)',
             title: '常见时段',
             subtitle: `按${rangeLabel()}看一天里哪些时段最常被安排占据。`,
             body: renderBarRows(
                 safeRecords(events.time_slots).map((item) => ({ ...item, label: item.slot })),
                 'count',
                 'label',
-                '#8b5cf6',
+                'var(--color-events)',
                 (value) => `${value} 个`,
             ),
         }),
         renderCard({
-            accent: '#7c3aed',
-            eyebrow: 'Events',
+            accent: 'var(--color-events)',
             title: '周内时段热力图',
             subtitle: `按${rangeLabel()}观察安排更容易扎堆在哪几天、哪几个时段。`,
-            body: renderMatrixHeatmap(safeRecords(events.weekday_slots), slotLabels, weekdayLabels, '124, 58, 237'),
+            body: renderMatrixHeatmap(safeRecords(events.weekday_slots), slotLabels, weekdayLabels, 'var(--color-events)'),
         }),
         renderCard({
-            accent: '#4f46e5',
-            eyebrow: 'Events',
+            accent: 'var(--color-events)',
             title: '日程分类',
             subtitle: `按${rangeLabel()}统计日程主题分布。`,
             body: renderDonut(
@@ -1746,7 +1381,7 @@ function eventCards() {
                     .map((item) => ({ ...item, category: item.category || '未分类' })),
                 'count',
                 'category',
-                ['#6366f1', '#8b5cf6', '#3b82f6', '#a855f7', '#818cf8', '#60a5fa'],
+                categoryColors('violet'),
                 formatCount(totalEvents),
                 '日程总数',
                 (value) => `${value} 个`,
@@ -1766,14 +1401,13 @@ function noteCards() {
     const cadenceItems = safeRecords(notes.cadence).map((item) => ({ label: item.label, count: item.count }));
     const cadenceBody =
         cadenceGranularity === 'day'
-            ? renderHeatStrip(cadenceItems, 'count', 'label', '59, 130, 246', (value) => `${value}`, {
+            ? renderHeatStrip(cadenceItems, 'count', 'label', 'var(--color-notes)', (value) => `${value}`, {
                   columns: Math.min(Math.max(cadenceItems.length, 1), 7),
               })
-            : renderColumnChart(cadenceItems, 'count', 'label', '#3b82f6', (value) => `${value}`);
+            : renderColumnChart(cadenceItems, 'count', 'label', 'var(--color-notes)', (value) => `${value}`);
     return [
         renderCard({
-            accent: '#3b82f6',
-            eyebrow: 'Notes',
+            accent: 'var(--color-notes)',
             title: '笔记节奏',
             subtitle: noteCadenceSubtitle(cadenceGranularity, rangeLabel()),
             body: cadenceBody,
@@ -1783,21 +1417,19 @@ function noteCards() {
             ]),
         }),
         renderCard({
-            accent: '#2563eb',
-            eyebrow: 'Notes',
+            accent: 'var(--color-notes)',
             title: '笔记分类',
             subtitle: `按${rangeLabel()}统计知识沉淀主题。`,
             body: renderBarRows(
                 categories.map((item) => ({ ...item, category: item.category || '未分类' })),
                 'count',
                 'category',
-                '#3b82f6',
+                'var(--color-notes)',
                 (value) => `${value} 条`,
             ),
         }),
         renderCard({
-            accent: '#0ea5e9',
-            eyebrow: 'Notes',
+            accent: 'var(--color-notes)',
             title: '高频标签',
             subtitle: `按${rangeLabel()}统计高频标签。`,
             body: renderTokenCloud(hotTags, (value) => `${value}`),
@@ -1826,35 +1458,33 @@ function diaryCards() {
                   cadenceItems.map((item) => ({ label: item.label, words: item.words })),
                   'words',
                   'label',
-                  '236, 72, 153',
+                  'var(--color-diary)',
                   formatWordCompact,
               )
             : renderColumnChart(
                   cadenceItems.map((item) => ({ label: item.label, words: item.words })),
                   'words',
                   'label',
-                  '#ec4899',
+                  'var(--color-diary)',
                   formatWordCompact,
               );
     return [
         renderCard({
-            accent: '#ec4899',
-            eyebrow: 'Diary',
+            accent: 'var(--color-diary)',
             title: '心情分布',
             subtitle: `${diaryRangeSentence()}常见情绪落点。`,
             body: renderDonut(
                 moodItems,
                 'count',
                 'label',
-                ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'],
+                categoryColors('pink'),
                 formatCount(summary.entry_count || 0),
                 `${rangeLabel()}篇数`,
                 (value) => `${value} 条`,
             ),
         }),
         renderCard({
-            accent: '#f43f5e',
-            eyebrow: 'Diary',
+            accent: 'var(--color-diary)',
             title: '书写密度',
             subtitle: diaryCadenceSubtitle(cadenceGranularity),
             body: densityBody,
@@ -1864,8 +1494,7 @@ function diaryCards() {
             ]),
         }),
         renderCard({
-            accent: '#e11d48',
-            eyebrow: 'Diary',
+            accent: 'var(--color-diary)',
             title: '模板与回看',
             subtitle: `${diaryRangeSentence()}常用模板和回看节奏。`,
             body: renderBarRows(
@@ -1874,7 +1503,7 @@ function diaryCards() {
                     .map((item) => ({ ...item, label: item.template_id || '手写' })),
                 'count',
                 'label',
-                '#ec4899',
+                'var(--color-diary)',
                 (value) => `${value} 次`,
             ),
             footer: renderMetricPairs([
@@ -1914,22 +1543,25 @@ function renderSummary() {
 
 function renderWall() {
     return `
-        ${renderFeaturedDeck()}
-        <section class="stats-wall">
+        <div class="chart-directory" role="group" aria-label="按模块浏览统计图">
+            ${[{ id: 'all', label: '全部图表' }, ...CHART_GROUPS].map(({ id, label }) =>
+                `<button type="button" data-chart-group="${id}" aria-pressed="${_chartGroup === id}"><span class="pixel-icon" data-module="${id === 'all' ? 'stats' : id}" aria-hidden="true"></span>${label}</button>`
+            ).join('')}
+        </div>
+        <div class="chart-overview" data-chart-section="all" ${_chartGroup === 'all' ? '' : 'hidden'}>
+            ${renderFeaturedDeck()}
             ${_data ? renderInsightCard(_data) : ''}
-            ${renderComparisonCard()}
-            ${financeCards()}
-            ${taskCards()}
-            ${eventCards()}
-            ${noteCards()}
-            ${diaryCards()}
-        </section>
+        </div>
+        ${CHART_GROUPS.map(({ id, label, cards }) => `
+            <section class="chart-section" data-chart-section="${id}" aria-labelledby="chart-title-${id}" ${_chartGroup === 'all' || _chartGroup === id ? '' : 'hidden'}>
+                <h3 id="chart-title-${id}"><span class="pixel-icon" data-module="${id}" aria-hidden="true"></span>${label}</h3>
+                <div class="stats-wall">${cards()}</div>
+            </section>`).join('')}
     `;
 }
 
 function renderPage() {
     if (!_container) return;
-    ensureStyles();
     if (_loading && _activeRequestSignature !== _dataSignature) {
         _container.innerHTML = `
             <div class="stats-shell" aria-busy="true">
@@ -1946,13 +1578,12 @@ function renderPage() {
             <div class="stats-stack">
                 <section class="stats-hero pendo-page-header">
                     <div>
-                        <h2>📊 统计</h2>
+                        <span class="eyebrow"><i></i>STATISTICS</span>
+                        <h2>统计</h2>
                         <p>按时间范围查看财务、任务、日程、笔记和日记的整体变化。</p>
                         <div class="stats-hero-tags">
                             <span class="stats-chip">${rangeLabel()}</span>
                             <span class="stats-chip">${rangeSummary}</span>
-                            <span class="stats-chip">按模块查看</span>
-                            <span class="stats-chip">笔记与日记同步更新</span>
                             ${_loading ? '<span class="stats-chip" role="status" aria-live="polite">正在更新...</span>' : ''}
                         </div>
                     </div>
@@ -1986,6 +1617,39 @@ function renderPage() {
 function attachListeners() {
     if (!_container) return;
     const container     = _container;
+    const activityDate = container.querySelector('#activity-date');
+    if (activityDate) {
+        const heatmap = container.querySelector('.stats-heatmap');
+        const detail = container.querySelector('.activity-detail output');
+        const selectDay = (cell) => {
+            heatmap.querySelector('.is-inspected')?.classList.remove('is-inspected');
+            cell?.classList.add('is-inspected');
+            detail.textContent = cell?.title || '请选择热力图中的日期。';
+        };
+        heatmap.addEventListener('click', (event) => {
+            const cell = event.target.closest('[data-activity-date]');
+            if (!cell) return;
+            activityDate.value = cell.dataset.activityDate;
+            selectDay(cell);
+        });
+        activityDate.onchange = () => {
+            const cell = heatmap.querySelector(`[data-activity-date="${activityDate.value}"]`);
+            selectDay(cell);
+            if (cell && heatmap.scrollWidth > heatmap.clientWidth) {
+                heatmap.scrollLeft += cell.getBoundingClientRect().left - heatmap.getBoundingClientRect().left - heatmap.clientWidth / 2;
+            }
+        };
+    }
+    const groupButtons = container.querySelectorAll('[data-chart-group]');
+    groupButtons.forEach((button) => {
+        button.onclick = () => {
+            _chartGroup = button.dataset.chartGroup;
+            groupButtons.forEach((tab) => tab.setAttribute('aria-pressed', String(tab === button)));
+            container.querySelectorAll('[data-chart-section]').forEach((section) => {
+                section.hidden = _chartGroup !== 'all' && section.dataset.chartSection !== _chartGroup;
+            });
+        };
+    });
     const currencyInput = container.querySelector('#stats-currency');
     const applyCurrency = async () => {
         if (!currencyInput || _container !== container) return;
@@ -2072,7 +1736,6 @@ async function loadAndRender() {
         _resolvedRanges = result.ranges;
         _heatmapData = result.heatmapData;
         _comparisonData = result.comparisonData;
-        _moodEmojis = result.moodEmojis;
         _moodLabels = result.moodLabels;
         _dataSignature = request.signature;
     } catch (error) {
@@ -2082,7 +1745,6 @@ async function loadAndRender() {
                 _resolvedRanges = null;
                 _heatmapData = null;
                 _comparisonData = null;
-                _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
                 _moodLabels = { ...DEFAULT_MOOD_LABELS };
                 _dataSignature = '';
             }
@@ -2109,6 +1771,7 @@ export async function render(container) {
 
     _loadVersion += 1;
     _container = container;
+    _chartGroup = 'all';
     _range = 'month';
     _loading = false;
     _activeRequestSignature = '';
@@ -2123,7 +1786,6 @@ export async function render(container) {
     _customEnd = initialRange.end;
     _customDraftStart = _customStart;
     _customDraftEnd = _customEnd;
-    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     _moodLabels = { ...DEFAULT_MOOD_LABELS };
     await loadAndRender();
 }
@@ -2144,6 +1806,5 @@ export function destroy() {
     _customDraftEnd = '';
     _heatmapData = null;
     _comparisonData = null;
-    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     _moodLabels = { ...DEFAULT_MOOD_LABELS };
 }

@@ -1,0 +1,68 @@
+/* 设置页的布局与专属组件。 */
+
+.settings-shell {
+    width: 100%;
+    min-width: 0;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 26px 24px 36px;
+    box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+    .settings-shell { padding: 20px 16px 30px; }
+}
+
+/* 页面骨架与头部 */
+.settings-stack { display: flex; flex-direction: column; gap: 18px; }
+.settings-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; }
+
+/* 摘要与内容布局 */
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(280px, 0.94fr); gap: 16px; }
+.settings-main-stack, .settings-side-stack { display: flex; flex-direction: column; gap: 16px; }
+.settings-panel { padding: 18px 20px 20px; }
+.settings-panel h3 { margin: 0; font-size: 18px; font-weight: 780; color: var(--cream); }
+.settings-panel p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+/* 表单与功能开关 */
+.settings-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.settings-field { display: flex; flex-direction: column; gap: 6px; }
+.settings-field label { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.settings-field input { width: 100%; height: 42px; border: 1px solid var(--line); background: var(--raise); padding: 0 14px; font-size: 14px; color: var(--text); box-sizing: border-box; }
+.settings-field input:focus { outline: none; border-color: var(--mint); box-shadow: 0 0 0 2px var(--gold-line); }
+.settings-field.full { grid-column: 1 / -1; }
+.settings-toggle-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.settings-toggle-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px; }
+.settings-toggle-title { font-size: 14px; font-weight: 760; color: var(--cream); }
+.settings-toggle-desc { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.settings-switch { position: relative; width: 46px; height: 28px; cursor: pointer; }
+.settings-switch input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.settings-slider { position: absolute; inset: 0; background: var(--line); cursor: pointer; transition: .2s ease; }
+.settings-slider::before { content: ''; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; background: var(--raise); transition: .2s ease; }
+.settings-switch input:focus-visible + .settings-slider { outline: 3px solid var(--mint-line); outline-offset: 3px; }
+.settings-switch input:checked + .settings-slider { background: var(--mint); }
+.settings-switch input:checked + .settings-slider::before { transform: translateX(18px); }
+
+/* 迁移、登录与保存区域 */
+.settings-callout-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; margin-top: 16px; padding: 16px; }
+.settings-callout-copy { min-width: 0; }
+.settings-callout-title { font-size: 15px; font-weight: 780; color: var(--cream); }
+.settings-callout-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.settings-info-block { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.settings-info-block code { font-family: monospace; background: var(--mint-soft); color: var(--gold); padding: 2px 6px; }
+.settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.settings-danger .btn { align-self: flex-start; }
+.settings-transfer-card { grid-template-columns: minmax(0, 1fr) auto; }
+.settings-transfer-btn { background: var(--raise); border-color: var(--gold-line); transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.settings-transfer-btn:hover { background: var(--sunken); border-color: var(--gold); transform: translateY(-1px); }
+
+/* 响应式收敛 */
+@media (max-width: 1200px) {
+    .settings-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+    .settings-hero { grid-template-columns: 1fr; }
+    .settings-form-grid { grid-template-columns: 1fr; }
+    .settings-callout-card { grid-template-columns: 1fr; }
+}

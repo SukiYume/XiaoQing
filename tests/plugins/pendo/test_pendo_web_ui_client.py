@@ -1,4 +1,4 @@
-"""Pendo Web UI 共享工具的转义、样式和数据订阅。"""
+"""Pendo Web UI 共享工具的转义和数据订阅。"""
 
 from __future__ import annotations
 
@@ -11,42 +11,7 @@ ROOT     : Final = REPOSITORY_ROOT
 UI_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "ui.js"
 
 UI_SETUP: Final = r"""
-    globalThis.__state = {
-        appended: [],
-        createCount: 0,
-        removeCount: 0,
-    };
-    globalThis.__elements = new Map();
-
-    class FakeStyleElement {
-        constructor() {
-            this.id = '';
-            this.tagName = 'STYLE';
-            this._textContent = '';
-            this.writeCount = 0;
-        }
-        get textContent() { return this._textContent; }
-        set textContent(value) {
-            this._textContent = value;
-            this.writeCount += 1;
-        }
-    }
-
-    globalThis.document = {
-        getElementById: (id) => __elements.get(id) || null,
-        createElement: (tagName) => {
-            assert.equal(tagName, 'style');
-            __state.createCount += 1;
-            return new FakeStyleElement();
-        },
-        head: {
-            appendChild(element) {
-                __state.appended.push(element);
-                __elements.set(element.id, element);
-                return element;
-            },
-        },
-    };
+    globalThis.__state = { removeCount: 0 };
 
     const listeners = new Map();
     globalThis.window = {
@@ -66,7 +31,7 @@ UI_SETUP: Final = r"""
 
 
 def _run_ui_client(script: str) -> None:
-    """在最小 DOM 与事件桩上导入真实 UI 工具模块。"""
+    """在事件桩上导入真实 UI 工具模块。"""
 
     assert_node_esm_contract(
         UI_CLIENT.read_text(encoding="utf-8"),
@@ -76,8 +41,8 @@ def _run_ui_client(script: str) -> None:
     )
 
 
-def test_ui_client_escapes_markup_and_builds_media_queries_and_page_shell() -> None:
-    """文本与属性共用安全转义，媒体查询与页面外壳样式按断点和参数生成。"""
+def test_ui_client_escapes_markup_for_text_and_attributes() -> None:
+    """文本与属性共用安全转义。"""
 
     _run_ui_client(
         r"""
@@ -85,51 +50,6 @@ def test_ui_client_escapes_markup_and_builds_media_queries_and_page_shell() -> N
         assert.equal(client.escapeHtml('&<>"\''), '&amp;&lt;&gt;&quot;&#39;');
         assert.equal(client.escapeHtml(0), '0');
         assert.equal(client.escapeAttr, client.escapeHtml);
-
-        assert.equal(
-            client.mediaMax('560px', '.x { display: none; }'),
-            '@media (max-width: 560px) { .x { display: none; } }',
-        );
-
-        const defaults = client.pageShellCss('demo');
-        assert.match(defaults, /\.demo \{/);
-        assert.match(defaults, /max-width: 1280px/);
-        assert.match(defaults, /padding: 26px 24px 36px/);
-        assert.ok(!defaults.includes('@media'));
-
-        const compact = client.pageShellCss('demo', {
-            padding: '1px', maxWidth: '900px', margin: '0', compactPadding: '2px',
-        });
-        assert.match(compact, /max-width: 900px/);
-        assert.match(compact, /margin: 0/);
-        assert.match(compact, /padding: 1px/);
-        assert.match(compact, /@media \(max-width: 720px\)/);
-        assert.match(compact, /\.demo \{ padding: 2px; \}/);
-        """
-    )
-
-
-def test_ui_client_injects_one_style_node_and_updates_only_changed_css() -> None:
-    """同一页面重复渲染不能累积样式节点或重复写入相同文本。"""
-
-    _run_ui_client(
-        r"""
-        client.injectStyles('page-css', '.page { color: red; }');
-        const style = __elements.get('page-css');
-        assert.ok(style);
-        assert.equal(style.textContent, '.page { color: red; }');
-        assert.equal(style.writeCount, 1);
-        assert.equal(__state.createCount, 1);
-        assert.equal(__state.appended.length, 1);
-
-        client.injectStyles('page-css', '.page { color: red; }');
-        assert.equal(style.writeCount, 1);
-        assert.equal(__state.appended.length, 1);
-
-        client.injectStyles('page-css', '.page { color: blue; }');
-        assert.equal(style.textContent, '.page { color: blue; }');
-        assert.equal(style.writeCount, 2);
-        assert.equal(__state.createCount, 1);
         """
     )
 

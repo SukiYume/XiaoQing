@@ -1,6 +1,7 @@
 /** Pendo Web 账目洞察面板的数据规范化和原生 SVG 图表。 */
 
 import { arrayValue as asArray, formatAmount, formatMoneyCompact } from '../utils/format.js';
+import { categoryColors } from '../utils/palette.js';
 import { escapeHtml } from '../utils/ui.js';
 
 const FOCUS_COPY = Object.freeze({
@@ -9,7 +10,7 @@ const FOCUS_COPY = Object.freeze({
     transfer: Object.freeze({ label: '转账', verb: '流转' }),
 });
 
-const CHART_PALETTE = Object.freeze(['#E15241', '#F48C58', '#F8B36D', '#F2C14E', '#D97757', '#D9DDE5']);
+const CHART_PALETTE = Object.freeze(categoryColors('red'));
 
 function toFiniteNumber(value, fallback = 0) {
     if (value == null || value === '') return fallback;
@@ -87,6 +88,12 @@ function normalizeCandle(item, index) {
     };
 }
 
+function renderMoneyAxis(ticks, left, currency) {
+    return ticks.map(({ value, y }) =>
+        `<text class="ledger-insight-y-label" x="${left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value, currency))}</text>`
+    ).join('');
+}
+
 function renderEmptyCard(title, subtitle, body) {
     return `
         <section class="ledger-insight-card">
@@ -127,20 +134,7 @@ function buildTrendSvg(points, currency) {
     const gridLines = ticks
         .map(
             ({ y }) =>
-                `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="rgba(239,68,68,0.10)" stroke-dasharray="4 6"/>`,
-        )
-        .join('');
-    const yLabels = ticks
-        .map(
-            ({ value, y }, index) => `
-                <g>
-                    ${
-                        index === ticks.length - 1
-                            ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)"/>`
-                            : ''
-                    }
-                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value, currency))}</text>
-                </g>`,
+                `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="var(--line)" stroke-dasharray="4 6"/>`,
         )
         .join('');
     const pointsHtml = coords
@@ -148,7 +142,7 @@ function buildTrendSvg(points, currency) {
             (point) => `
                 <g>
                     <title>${escapeHtml(point.label)} ${escapeHtml(formatAmount(point.total, currency))} · ${point.count} 笔</title>
-                    <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.7" fill="#fff" stroke="#E15241" stroke-width="1.45"/>
+                    <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.7" fill="var(--panel)" stroke="var(--color-ledger)" stroke-width="1.45"/>
                 </g>`,
         )
         .join('');
@@ -165,14 +159,14 @@ function buildTrendSvg(points, currency) {
         <svg class="ledger-insight-svg ledger-insight-svg-trend" viewBox="0 0 ${width} ${height}" aria-hidden="true">
             <defs>
                 <linearGradient id="ledgerTrendArea" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0%" stop-color="rgba(225,82,65,0.30)"/>
-                    <stop offset="100%" stop-color="rgba(225,82,65,0.02)"/>
+                    <stop offset="0%" stop-color="var(--color-ledger)" stop-opacity="0.3"/>
+                    <stop offset="100%" stop-color="var(--color-ledger)" stop-opacity="0.02"/>
                 </linearGradient>
             </defs>
             ${gridLines}
-            ${yLabels}
+            ${renderMoneyAxis(ticks, pad.left, currency)}
             <path d="${areaPath}" fill="url(#ledgerTrendArea)"></path>
-            <path d="${linePath}" fill="none" stroke="#E15241" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="${linePath}" fill="none" stroke="var(--color-ledger)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
             ${pointsHtml}
             <g class="ledger-insight-axis-labels">${labels}</g>
         </svg>`;
@@ -244,7 +238,7 @@ function buildRingSvg(categories, total, centerLabel, currency) {
                     : arcPath(cx, cy, outerRadius, innerRadius, startAngle, endAngle);
             startAngle = endAngle;
             return `
-                <path d="${path}" fill="${CHART_PALETTE[index % CHART_PALETTE.length]}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5">
+                <path d="${path}" fill="${CHART_PALETTE[index % CHART_PALETTE.length]}" fill-rule="evenodd" stroke="var(--panel)" stroke-width="1.5">
                     <title>${escapeHtml(item.category)} ${escapeHtml(formatAmount(item.total, currency))} · ${(share * 100).toFixed(1)}%</title>
                 </path>`;
         })
@@ -264,9 +258,9 @@ function buildRingSvg(categories, total, centerLabel, currency) {
     return `
         <div class="ledger-insight-ring-wrap">
             <svg class="ledger-insight-svg ledger-insight-svg-ring" viewBox="0 0 ${width} ${height}" aria-hidden="true">
-                <circle cx="${cx}" cy="${cy}" r="${outerRadius}" fill="rgba(225,82,65,0.06)"></circle>
+                <circle cx="${cx}" cy="${cy}" r="${outerRadius}" fill="var(--sunken)"></circle>
                 ${arcs}
-                <circle cx="${cx}" cy="${cy}" r="${innerRadius - 1}" fill="#fff"></circle>
+                <circle cx="${cx}" cy="${cy}" r="${innerRadius - 1}" fill="var(--panel)"></circle>
                 <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${escapeHtml(formatMoneyCompact(displayTotal, currency))}</text>
                 <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="ledger-ring-center-label">${escapeHtml(centerLabel)}</text>
             </svg>
@@ -332,20 +326,7 @@ function buildCandleSvg(candles, rangeKeys, currency) {
     const grid = ticks
         .map(
             ({ y }) =>
-                `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="rgba(15,23,42,0.06)"/>`,
-        )
-        .join('');
-    const yLabels = ticks
-        .map(
-            ({ value, y }, index) => `
-                <g>
-                    ${
-                        index === ticks.length - 1
-                            ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)"/>`
-                            : ''
-                    }
-                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value, currency))}</text>
-                </g>`,
+                `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="var(--line)"/>`,
         )
         .join('');
     const candlesHtml = candles
@@ -358,14 +339,12 @@ function buildCandleSvg(candles, rangeKeys, currency) {
             const bodyTop = Math.min(openY, closeY);
             const bodyHeight = Math.max(Math.abs(closeY - openY), 5);
             const isUp = item.close >= item.open;
-            const fill = isUp ? '#F3A46C' : '#D9684C';
-            const stroke = isUp ? '#E98A48' : '#C9573B';
-            const wickStroke = isUp ? 'rgba(233,138,72,0.75)' : 'rgba(201,87,59,0.80)';
+            const fill = isUp ? 'var(--amber)' : 'var(--red)';
             return `
                 <g>
                     <title>${escapeHtml(item.label)} 高:${escapeHtml(formatAmount(item.high, currency))} 低:${escapeHtml(formatAmount(item.low, currency))} 开:${escapeHtml(formatAmount(item.open, currency))} 收:${escapeHtml(formatAmount(item.close, currency))}</title>
-                    <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${wickStroke}" stroke-width="1.4" stroke-linecap="round"></line>
-                    <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" rx="${Math.min(3, candleWidth / 3).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="0.8" opacity="0.96"></rect>
+                    <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${fill}" stroke-width="1.4"></line>
+                    <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" fill="${fill}"></rect>
                 </g>`;
         })
         .join('');
@@ -382,7 +361,7 @@ function buildCandleSvg(candles, rangeKeys, currency) {
     return `
         <svg class="ledger-insight-svg ledger-insight-svg-kline" viewBox="0 0 ${width} ${height}" aria-hidden="true">
             ${grid}
-            ${yLabels}
+            ${renderMoneyAxis(ticks, pad.left, currency)}
             ${candlesHtml}
             <g class="ledger-insight-axis-labels">${labels}</g>
         </svg>`;

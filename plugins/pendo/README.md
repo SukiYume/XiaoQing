@@ -221,13 +221,15 @@ Authorization: Bearer <widget_token>
 | Notes | 笔记、分类、标签和关联 |
 | Diary | 日记时间线、心情和模板字段 |
 | Search | 跨模块搜索 |
-| Stats | 活跃度、任务、账本、日记和日程统计 |
+| Stats | 按日程、待办、账本、笔记和日记查看图表。点选全年热力图或输入日期，可查看当天各模块的记录数。 |
 | Settings | 用户设置和登录设备 |
 | Transfer | Bundle 导入导出、预览、冲突策略和日志 |
 
 手机端页面保持单列内容流。Events 与 Diary 月历使用七列紧凑视图。Ledger 明细保持横向紧凑排列，分类标签与账户信息对齐。详情弹窗的操作栏按两列换行，并在底部安全区内完整显示。
 
 Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于 `plugins/pendo/web/static/`。
+
+界面与 [小青观测站](../xiaoqing_life/README.md#小青观测站) 是同一套视觉：夜色底、Fusion Pixel 像素标题字、金色表示当前选择和主操作、方角与硬投影。管理台在这套视觉上使用带边框的窗口面板、读数卡和模块色标（日程紫、待办青、账本红、笔记蓝、日记粉），日记正文与置顶笔记写在米色纸页上。`css/app.css` 存放设计令牌、外壳和共用组件，每个页面另有一份 `css/<页面>.css` 只写自己的布局；图表配色由 `js/utils/palette.js` 从同一组色相令牌取值。界面里的图标（模块、时间地点标记、编辑删除、任务优先级旗标、心情和天气）都是 12×12 的像素图标，位图写在 `plugins/pendo/scripts/build_pixel_icons.py`，运行该脚本生成 `css/icons.css`。
 
 ---
 

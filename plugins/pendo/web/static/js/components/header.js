@@ -22,7 +22,7 @@ export function renderHeader(container) {
     const header = document.createElement('header');
     header.className = 'header';
     header.innerHTML = `
-        <button class="header-toggle" type="button" aria-label="打开导航菜单" aria-controls="pendo-sidebar" aria-expanded="false" title="菜单">☰</button>
+        <button class="header-toggle" type="button" aria-label="打开导航菜单" aria-controls="pendo-sidebar" aria-expanded="false" title="菜单"><span class="pixel-icon" data-icon="menu" aria-hidden="true"></span></button>
         <h2 class="header-title">总览</h2>
         <div class="header-actions">
             <div class="header-search">
@@ -34,7 +34,7 @@ export function renderHeader(container) {
                 </span>
                 <input id="header-search-input" name="global-search" type="text" placeholder="搜索..." class="header-search-input" aria-label="全局搜索">
             </div>
-            <button class="header-search-toggle" type="button" aria-label="打开搜索" title="搜索">⌕</button>
+            <button class="header-search-toggle" type="button" aria-label="打开搜索" title="搜索"><span class="pixel-icon" data-icon="search" aria-hidden="true"></span></button>
             <button class="btn btn-ghost header-logout" type="button" title="退出登录">退出</button>
         </div>
     `;

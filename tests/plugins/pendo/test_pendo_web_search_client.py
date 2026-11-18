@@ -114,18 +114,13 @@ const {{
             timezone_runtime,
         ),
         (
-            "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, "
-            "subscribeDataChanges } from '../utils/ui.js';",
-            """const BREAKPOINTS = { MOBILE: '720px' };
-const escapeHtml = (value) => String(value ?? '')
+            "import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';",
+            """const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
-const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
         ),
         (

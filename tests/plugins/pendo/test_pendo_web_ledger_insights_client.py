@@ -6,6 +6,7 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import palette_runtime
 
 ROOT                  : Final = REPOSITORY_ROOT
 LEDGER_INSIGHTS_CLIENT: Final = (
@@ -37,13 +38,19 @@ def _ledger_insights_source_for_test() -> str:
         "import { arrayValue as asArray, formatAmount, formatMoneyCompact } "
         "from '../utils/format.js';"
     )
-    ui_import = "import { escapeHtml } from '../utils/ui.js';"
+    palette_import = "import { categoryColors } from '../utils/palette.js';"
+    ui_import      = "import { escapeHtml } from '../utils/ui.js';"
     assert format_import in source
+    assert palette_import in source
     assert ui_import in source
-    return source.replace(
-        format_import,
-        "const { arrayValue: asArray, formatAmount, formatMoneyCompact } = globalThis.__format;",
-    ).replace(ui_import, "const { escapeHtml } = globalThis.__ui;")
+    return (
+        source.replace(
+            format_import,
+            "const { arrayValue: asArray, formatAmount, formatMoneyCompact } = globalThis.__format;",
+        )
+        .replace(palette_import, palette_runtime())
+        .replace(ui_import, "const { escapeHtml } = globalThis.__ui;")
+    )
 
 
 def _run_ledger_insights_client(script: str) -> None:

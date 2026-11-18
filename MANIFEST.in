@@ -9,7 +9,7 @@ include plugins/color/color.json
 include plugins/color/stellar_colors.txt
 recursive-include plugins/dict/assets *.txt manifest.json
 recursive-include plugins/pendo/web/scriptable *.js
-recursive-include plugins/pendo/web/static *.html *.svg *.css *.js
+recursive-include plugins/pendo/web/static *.html *.svg *.css *.js *.woff2 *.webp FONT-LICENSE.txt
 recursive-include plugins/pendo/web/services/assets *.zip
 include plugins/xiaoqing_chat/config/xiaoqing_config.json
 recursive-include plugins/xiaoqing_chat/config *.md

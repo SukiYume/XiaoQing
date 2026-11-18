@@ -80,16 +80,12 @@ const {{
         ("../utils/timezone.js", timezone_runtime),
         (
             "../utils/ui.js",
-            """const BREAKPOINTS = { XL: '1200px', MOBILE: '720px' };
-const escapeHtml = (value) => String(value ?? '')
+            """const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (_breakpoint, cssText) => cssText;
-const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
         ),
     )

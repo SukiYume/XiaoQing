@@ -124,6 +124,30 @@ _ADD_COLUMN_MIGRATIONS = (
     "ALTER TABLE event_collections ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
 )
 
+# 网页天气选项存过带装饰符号的取值，统一成聊天命令使用的纯文字。
+_DIARY_WEATHER_PLAIN_TEXT = {
+    "☀️ 晴": "晴",
+    "⛅ 多云": "多云",
+    "🌧️ 雨": "雨",
+    "❄️ 雪": "雪",
+    "🌫️ 雾": "雾",
+    "💨 风" : "风",
+}
+
+# 数据修正迁移和加列迁移记在同一张 schema_migrations 里，同样每个库只执行一次。
+# 版本号从 1001 起，与加列迁移各自往后追加，互不占用对方的序号。
+_DATA_MIGRATION_BASE = 1000
+_DATA_MIGRATIONS     = (
+    (
+        "diary-weather-plain-text",
+        "UPDATE items SET weather = CASE weather "
+        + " ".join(f"WHEN '{old}' THEN '{new}'" for old, new in _DIARY_WEATHER_PLAIN_TEXT.items())
+        + f" END WHERE type = '{ItemType.DIARY.value}' AND weather IN ("
+        + ", ".join(f"'{old}'" for old in _DIARY_WEATHER_PLAIN_TEXT)
+        + ")",
+    ),
+)
+
 _ITEM_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_owner_type ON items(owner_id, type, deleted)",
     f"CREATE INDEX IF NOT EXISTS idx_start_time ON items(start_time) WHERE type='{ItemType.EVENT.value}'",
@@ -272,8 +296,18 @@ def _create_core_schema(cursor: sqlite3.Cursor) -> None:
     """)
 
 
+def _record_migration(cursor: sqlite3.Cursor, version: int, name: str, sql: str) -> None:
+    cursor.execute(
+        """
+        INSERT INTO schema_migrations (version, name, sql, applied_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (version, name, sql, utc_now_iso()),
+    )
+
+
 def _apply_schema_migrations(cursor: sqlite3.Cursor) -> None:
-    """按版本记录逐条执行尚未应用的 ADD COLUMN 迁移。"""
+    """按版本记录逐条执行尚未应用的加列迁移和数据修正迁移。"""
 
     applied_versions = {
         int(row[0]) for row in cursor.execute("SELECT version FROM schema_migrations").fetchall()
@@ -282,18 +316,12 @@ def _apply_schema_migrations(cursor: sqlite3.Cursor) -> None:
         if version in applied_versions:
             continue
         _execute_add_column_migration(cursor, sql)
-        cursor.execute(
-            """
-            INSERT INTO schema_migrations (version, name, sql, applied_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                version,
-                f"add-column-{version:03d}",
-                sql,
-                utc_now_iso(),
-            ),
-        )
+        _record_migration(cursor, version, f"add-column-{version:03d}", sql)
+    for version, (name, sql) in enumerate(_DATA_MIGRATIONS, start=_DATA_MIGRATION_BASE + 1):
+        if version in applied_versions:
+            continue
+        cursor.execute(sql)
+        _record_migration(cursor, version, name, sql)
 
 
 def _create_item_indexes(cursor: sqlite3.Cursor) -> None:

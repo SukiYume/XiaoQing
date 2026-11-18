@@ -6,7 +6,7 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
-from tests.helpers.pendo_client_source import replace_js_source
+from tests.helpers.pendo_client_source import palette_runtime, replace_js_source
 
 ROOT        : Final = REPOSITORY_ROOT
 STATS_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js"
@@ -131,9 +131,9 @@ const derivePresetRange = (key, options = {}) => {
 };
 const fetchItemRangeBounds = (...args) => globalThis.__fetchItemRangeBounds(...args);""",
         ),
+        ("import { categoryColors, heatColor } from '../utils/palette.js';", palette_runtime()),
         (
-            "import { bindEnterAction, BREAKPOINTS, escapeHtml, injectStyles, mediaMax, "
-            "pageShellCss } from '../utils/ui.js';",
+            "import { bindEnterAction, escapeHtml } from '../utils/ui.js';",
             """const bindEnterAction = (element, action) => {
     if (!element || typeof action !== 'function') return;
     element.onkeydown = async (event) => {
@@ -143,16 +143,13 @@ const fetchItemRangeBounds = (...args) => globalThis.__fetchItemRangeBounds(...a
         }
     };
 };
-const BREAKPOINTS = { XL: '1200px', MOBILE: '720px', PHONE: '480px' };
 const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
-const pageShellCss = () => '';""",
+""",
         ),
     )
     for original, replacement in replacements:
@@ -163,7 +160,6 @@ const pageShellCss = () => '';""",
         + r"""
 export {
     attachListeners as __attachListeners,
-    buildAxisTickLabels,
     compressSeries,
     currentRangeRequest,
     diaryCadenceSubtitle,
@@ -201,7 +197,6 @@ export function __setStatsTestState(state = {}) {
     if ('customDraftEnd' in state) _customDraftEnd = state.customDraftEnd;
     if ('heatmapData' in state) _heatmapData = state.heatmapData;
     if ('comparisonData' in state) _comparisonData = state.comparisonData;
-    if ('moodEmojis' in state) _moodEmojis = state.moodEmojis;
     if ('moodLabels' in state) _moodLabels = state.moodLabels;
     if ('loadVersion' in state) _loadVersion = state.loadVersion;
     if ('activeRequestSignature' in state) _activeRequestSignature = state.activeRequestSignature;
@@ -219,7 +214,6 @@ export function __getStatsTestState() {
         customDraftEnd: _customDraftEnd,
         heatmapData: _heatmapData,
         comparisonData: _comparisonData,
-        moodEmojis: _moodEmojis,
         moodLabels: _moodLabels,
         loadVersion: _loadVersion,
         activeRequestSignature: _activeRequestSignature,
@@ -266,13 +260,12 @@ def test_stats_numeric_boundaries_and_sampling_are_finite() -> None:
 
         assert.deepEqual(client.sampleIndexes(20, 6), [0, 4, 8, 11, 15, 19]);
         assert.deepEqual(client.sampleIndexes(20, 1), [0]);
-        assert.deepEqual(
-            client.buildAxisTickLabels(
-                Array.from({ length: 20 }, (_, index) => `2026-05-${String(index + 1).padStart(2, '0')}`),
-                6,
-            ),
-            ['05/01', '05/05', '05/09', '05/12', '05/16', '05/20'],
-        );
+        const dates = Array.from({ length: 20 }, (_, i) => `2026-05-${String(i + 1).padStart(2, '0')}`);
+        const line = client.renderSparkline(dates, dates.map((_, i) => i), '#000', String);
+        const ticks = [...line.matchAll(/<text x="([^"]+)" y="176"[^>]*>([^<]+)<\/text>/g)];
+        assert.deepEqual(ticks.map((tick) => tick[2]), ['05/01', '05/07', '05/14', '05/20']);
+        assert.equal(Number(ticks[0][1]), 18);
+        assert.equal(Number(ticks.at(-1)[1]), 422);
         // 压缩结果带原始横坐标，折线按真实时间距离绘制。
         assert.deepEqual(client.compressSeries(['a', 'b', 'c'], [1, 9, 3], 2), {
             labels: ['a', 'c'], values: [1, 3], positions: [0, 2], span: 3,
@@ -339,6 +332,33 @@ def test_stats_charts_filter_malformed_rows_and_escape_content() -> None:
     )
 
 
+def test_stats_chart_directory_keeps_selection_on_data_refresh() -> None:
+    """图表目录在当前统计页刷新时保留所选模块。"""
+
+    _run_stats_client(
+        r"""
+        const ids = ['all', 'events', 'tasks', 'ledger', 'notes', 'diary'];
+        const tabs = ids.map((id) => __makeControl({
+            dataset: { chartGroup: id },
+            setAttribute(name, value) { this[name] = value; },
+        }));
+        const sections = ids.map((id) => ({ dataset: { chartSection: id } }));
+        const root = __makeRoot({ lists: {
+            '[data-chart-group]': tabs,
+            '[data-chart-section]': sections,
+        } });
+        await client.render(root);
+        tabs[3].onclick();
+        assert.deepEqual(sections.map((section) => section.hidden), [true, true, true, false, true, true]);
+        assert.deepEqual(tabs.map((tab) => tab['aria-pressed']), ids.map((id) => String(id === 'ledger')));
+        await client.__loadAndRender();
+        assert.match(root.innerHTML, /data-chart-group="ledger" aria-pressed="true"/);
+        tabs[0].onclick();
+        assert.ok(sections.every((section) => !section.hidden));
+        """
+    )
+
+
 def test_stats_activity_heatmap_keeps_zero_cells_neutral() -> None:
     """活动热力图应过滤非法日期，并把零活动与低强度活动明确区分。"""
 
@@ -350,8 +370,8 @@ def test_stats_activity_heatmap_keeps_zero_cells_neutral() -> None:
             { date: '2026-01-01', count: 0, ledger: Infinity },
             { date: '2026-01-02', count: 2, note: 2 },
         ], '2026-01-02', '2026-01-02');
-        assert.ok(html.includes('background:rgba(226,232,240,0.52)'));
-        assert.ok(html.includes('background:rgba(16,185,129,1)'));
+        assert.ok(html.includes('background:var(--raise)'));
+        assert.ok(html.includes('background:color-mix(in srgb, var(--gold) 100%, transparent)'));
         assert.ok(html.includes('stats-heatmap-cell in-range'));
         assert.ok(!html.includes('bad'));
         assert.ok(!html.includes('Infinity'));
@@ -367,7 +387,6 @@ def test_stats_diary_cards_use_word_density_moods_and_period_streak() -> None:
         r"""
         client.__setStatsTestState({
             range: 'year',
-            moodEmojis: { happy: '🙂' },
             moodLabels: { happy: '开心' },
             data: { diary: {
                 summary: {
@@ -384,10 +403,10 @@ def test_stats_diary_cards_use_word_density_moods_and_period_streak() -> None:
             } },
         });
         assert.equal(client.diaryCadenceSubtitle('year'), '今年里每年写了多少字。');
-        assert.equal(client.formatMoodLabel('happy'), '🙂 开心');
+        assert.equal(client.formatMoodLabel('happy'), '开心');
         const html = client.__diaryCards();
         assert.ok(html.includes('1.2k字'));
-        assert.ok(html.includes('🙂 开心'));
+        assert.ok(html.includes('开心'));
         assert.ok(html.includes('区间最长连续'));
         assert.ok(html.includes('>12<'));
         assert.ok(html.includes('&lt;模板&gt;'));
@@ -418,7 +437,6 @@ def test_stats_fetches_regular_range_with_declared_params_and_safe_moods() -> No
         assert.equal(__boundsCalls.length, 0);
         assert.deepEqual(result.data.ledger, {});
         assert.equal(result.data.tasks.marker, '/stats/tasks');
-        assert.equal(result.moodEmojis.happy, '😊');
         assert.equal(result.moodLabels.happy, '开心');
 
         const byPath = Object.fromEntries(__apiCalls.map((call) => [call.path, call.params]));

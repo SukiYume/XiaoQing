@@ -215,6 +215,9 @@ packages = [
     "static/*.html",
     "static/*.svg",
     "static/css/*.css",
+    "static/assets/*.webp",
+    "static/assets/*.woff2",
+    "static/assets/FONT-LICENSE.txt",
     "static/js/*.js",
     "static/js/*/*.js",
 ]

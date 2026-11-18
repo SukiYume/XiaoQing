@@ -38,6 +38,7 @@ ROUTER_SETUP: Final = r"""
         let children = [];
         const retry = { onclick: null };
         return {
+            dataset: {},
             get innerHTML() { return children.length ? children.map(child => child.innerHTML).join('') : html; },
             set innerHTML(value) { html = value; children = []; },
             replaceChildren(...nodes) { children = nodes; html = ''; },

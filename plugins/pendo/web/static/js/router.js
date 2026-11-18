@@ -63,6 +63,7 @@ async function loadRoute({ path, params }, navigationId) {
         currentLifecycle = lifecycle;
         const pageRoot = document.createElement('div');
         pageRoot.className = 'route-page';
+        pageRoot.dataset.module = path;
         contentEl.replaceChildren(pageRoot);
         await page.onRouteEnter?.(params);
         if (navigationId !== requestedNavigation) return;

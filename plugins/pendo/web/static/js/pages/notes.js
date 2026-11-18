@@ -15,10 +15,9 @@ import {
 } from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { formatZonedDateTime, formatZonedMonthDay } from '../utils/timezone.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
+import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';
 
 const PAGE_SIZE             = 18;
-const CSS_ID                = 'pendo-notes-styles';
 const RANGE_KEYS            = new Set(RANGE_PRESET_OPTIONS.map(({ key }) => key));
 const RANGE_LABELS          = new Map(RANGE_PRESET_OPTIONS.map(({ key, label }) => [key, label]));
 const CADENCE_GRANULARITIES = new Set(['day', 'week', 'month', 'year']);
@@ -362,346 +361,6 @@ function visualLevel(value, maximum = 1) {
     return Math.min(10, Math.max(0, Math.round((finiteNumber(value) / maximum) * 10)));
 }
 
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-
-        /* 页面头部、日期范围与摘要 */
-        .notes-hero {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 18px;
-            align-items: center;
-            padding: 24px 26px;
-            border-radius: 28px;
-            margin-bottom: 18px;
-            background:
-                radial-gradient(circle at top right, rgba(59,130,246,0.18), transparent 32%),
-                radial-gradient(circle at bottom left, rgba(14,165,233,0.12), transparent 24%),
-                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(239,246,255,0.95));
-            border: 1px solid rgba(59,130,246,0.14);
-            box-shadow: 0 18px 40px rgba(37,99,235,0.06);
-        }
-        .notes-hero h2 { margin: 0; font-size: 30px; font-weight: 820; letter-spacing: -0.03em; color: #1d4ed8; }
-        .notes-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
-        .notes-hero-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-        .notes-hero-tag {
-            display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px;
-            background: rgba(59,130,246,0.08); color: #1d4ed8; font-size: 12px; font-weight: 700;
-            white-space: nowrap; line-height: 1; flex-shrink: 0;
-        }
-        .notes-hero-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
-        .notes-stack { display: flex; flex-direction: column; gap: 18px; }
-        .notes-range-panel {
-            display: flex; flex-direction: column; gap: 12px; padding: 16px 18px;
-            border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
-            border: 1px solid rgba(59,130,246,0.12); box-shadow: 0 14px 30px rgba(37,99,235,0.04);
-        }
-        .notes-range-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-        .notes-range-btn {
-            height: 40px; padding: 0 18px; border-radius: 999px; border: 1px solid rgba(203,213,225,0.92);
-            background: rgba(255,255,255,0.92); color: #334155; font-size: 13px; font-weight: 800; cursor: pointer;
-            transition: background .16s ease, border-color .16s ease, transform .16s ease, color .16s ease;
-        }
-        .notes-range-btn:hover { transform: translateY(-1px); }
-        .notes-range-btn.active {
-            background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.28); color: #1d4ed8;
-        }
-        .notes-range-btn:focus-visible,
-        .notes-tag-chip:focus-visible,
-        .note-card:focus-visible {
-            outline: 3px solid rgba(59,130,246,0.26);
-            outline-offset: 2px;
-        }
-        .notes-custom-range { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-        .notes-date-field {
-            width: 100%; max-width: 220px; height: 40px; border-radius: 14px; border: 1px solid rgba(59,130,246,0.14);
-            background: rgba(255,255,255,0.92); padding: 0 14px; font-size: 13px; color: var(--color-text);
-        }
-        .notes-date-field:focus {
-            outline: none; border-color: var(--color-notes, #3B82F6); box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
-        }
-        .notes-range-sep { font-size: 13px; font-weight: 800; color: var(--color-text-secondary); }
-        .notes-range-meta { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; }
-        .notes-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-        .notes-summary-card {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
-            border: 1px solid rgba(59,130,246,0.12); border-radius: 22px; padding: 18px;
-            box-shadow: 0 14px 30px rgba(37,99,235,0.05);
-            min-width: 0;
-        }
-        .notes-summary-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .notes-summary-value {
-            margin-top: 10px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 820; line-height: 1.04; letter-spacing: -0.03em; color: #0f172a;
-            overflow-wrap: anywhere; word-break: break-word;
-        }
-        .notes-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
-
-        /* 概览图表与筛选区 */
-        .notes-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr); gap: 16px; align-items: start; }
-        .notes-layout-main,
-        .notes-layout-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-        .notes-panel {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.95));
-            border: 1px solid rgba(59,130,246,0.12); border-radius: 24px; box-shadow: 0 16px 34px rgba(37,99,235,0.05);
-            overflow: hidden;
-        }
-        .notes-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
-        .notes-panel-head h3 { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); letter-spacing: -0.02em; }
-        .notes-panel-head p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .notes-panel-body { padding: 16px 20px 20px; }
-        .notes-meter {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); gap: 8px; align-items: end;
-        }
-        .notes-meter-col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-        .notes-meter-value { font-size: 10px; font-weight: 700; color: var(--color-text); }
-        .notes-meter-track {
-            display: flex; align-items: flex-end; width: 100%; height: 50px; overflow: hidden;
-            border-radius: 999px 999px 10px 10px; background: rgba(191,219,254,0.34);
-        }
-        .notes-meter-stick {
-            width: 100%; height: var(--notes-level, 0%); min-height: 0; border-radius: inherit;
-            background: linear-gradient(180deg, rgba(59,130,246,0.9), rgba(14,165,233,0.46));
-        }
-        .notes-level-0 { --notes-level: 0%; }
-        .notes-level-1 { --notes-level: 10%; }
-        .notes-level-2 { --notes-level: 20%; }
-        .notes-level-3 { --notes-level: 30%; }
-        .notes-level-4 { --notes-level: 40%; }
-        .notes-level-5 { --notes-level: 50%; }
-        .notes-level-6 { --notes-level: 60%; }
-        .notes-level-7 { --notes-level: 70%; }
-        .notes-level-8 { --notes-level: 80%; }
-        .notes-level-9 { --notes-level: 90%; }
-        .notes-level-10 { --notes-level: 100%; }
-        .notes-meter-label { font-size: 10px; color: var(--color-text-secondary); }
-        .notes-cadence-panel .notes-panel-body { padding-top: 10px; padding-bottom: 16px; }
-        .notes-category-list { display: flex; flex-direction: column; gap: 12px; }
-        .notes-category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
-        .notes-category-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 6px; }
-        .notes-category-name { font-weight: 700; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .notes-category-count { color: var(--color-text-secondary); font-weight: 700; }
-        .notes-category-track { height: 10px; border-radius: 999px; background: rgba(191,219,254,0.42); overflow: hidden; }
-        .notes-category-fill {
-            width: var(--notes-level, 0%); height: 100%; border-radius: inherit;
-            background: linear-gradient(90deg, rgba(59,130,246,0.88), rgba(14,165,233,0.55));
-        }
-        .notes-tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
-        .notes-tag-chip {
-            display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px;
-            background: rgba(255,255,255,0.84); border: 1px solid rgba(59,130,246,0.12); color: #1d4ed8;
-            font-size: 12px; font-weight: 700; cursor: pointer;
-            white-space: nowrap; line-height: 1; flex-shrink: 0;
-        }
-        .notes-tag-chip:hover { background: rgba(219,234,254,0.8); }
-        .notes-filter-bar {
-            display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 0.46fr) auto; gap: 12px;
-            padding: 16px 18px; border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
-            border: 1px solid rgba(59,130,246,0.12); box-shadow: 0 14px 30px rgba(37,99,235,0.04);
-        }
-        .notes-filter-field { display: flex; flex-direction: column; gap: 6px; }
-        .notes-filter-field label { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.05em; text-transform: uppercase; }
-        .notes-filter-field input {
-            width: 100%; height: 40px; border-radius: 14px; border: 1px solid rgba(59,130,246,0.14); background: rgba(255,255,255,0.92);
-            padding: 0 14px; font-size: 13px; color: var(--color-text);
-        }
-        .notes-filter-field input:focus {
-            outline: none; border-color: var(--color-notes, #3B82F6); box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
-        }
-        .notes-filter-bar .pselect-trigger {
-            height: 40px;
-            padding: 0 14px;
-            border-radius: 14px;
-            background: rgba(255,255,255,0.92);
-        }
-        .notes-filter-bar .pselect:hover .pselect-trigger,
-        .notes-filter-bar .pselect.pselect-open .pselect-trigger {
-            background: rgba(255,255,255,0.97);
-        }
-        .notes-filter-actions { display: flex; align-items: flex-end; justify-content: flex-end; gap: 10px; }
-
-        /* 笔记工作区：焦点卡片与紧凑列表共用原生按钮交互 */
-        .notes-workspace {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.95));
-            border: 1px solid rgba(59,130,246,0.12); border-radius: 26px; box-shadow: 0 18px 34px rgba(37,99,235,0.05);
-            overflow: hidden;
-        }
-        .notes-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 18px 20px; border-bottom: 1px solid rgba(191,219,254,0.42); }
-        .notes-workspace-head > div { min-width: 0; flex: 1 1 220px; }
-        .notes-workspace-head > .note-tag { flex: 0 0 auto; margin-left: auto; }
-        .notes-workspace-title { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); }
-        .notes-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .notes-workspace-body { padding: 18px 20px 22px; display: flex; flex-direction: column; gap: 16px; }
-        .notes-collection { display: flex; flex-direction: column; gap: 14px; }
-        .note-card {
-            width: 100%; border: 0; appearance: none; text-align: left; color: inherit; font: inherit;
-            cursor: pointer;
-            transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
-        }
-        .note-card:hover { transform: translateY(-2px); border-color: rgba(59,130,246,0.24); box-shadow: 0 18px 32px rgba(37,99,235,0.08); }
-        .notes-spotlight {
-            display: grid; grid-template-columns: minmax(0, 1fr) minmax(148px, 0.28fr); gap: 18px;
-            padding: 22px; border-radius: 22px; border: 1px solid rgba(59,130,246,0.14);
-            background:
-                radial-gradient(circle at top right, rgba(59,130,246,0.16), transparent 34%),
-                linear-gradient(145deg, rgba(255,255,255,0.99), rgba(239,246,255,0.96));
-            box-shadow: 0 16px 30px rgba(37,99,235,0.05);
-            align-items: stretch;
-        }
-        .notes-spotlight-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-        .notes-spotlight-kicker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-        .notes-spotlight-label {
-            display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px;
-            background: rgba(29,78,216,0.10); color: #1d4ed8; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
-            white-space: nowrap; line-height: 1; flex-shrink: 0;
-        }
-        .notes-spotlight-title { display: block; margin: 0; font-size: 24px; font-weight: 820; line-height: 1.24; letter-spacing: -0.03em; color: var(--color-text); }
-        .notes-spotlight-preview {
-            font-size: 14px; line-height: 1.8; color: var(--color-text-secondary); word-break: break-word;
-            display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
-        }
-        .notes-spotlight-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-        .notes-spotlight-side {
-            display: flex; flex-direction: column; justify-content: space-between; gap: 14px;
-            padding-left: 18px; border-left: 1px solid rgba(191,219,254,0.56);
-        }
-        .notes-spotlight-stat {
-            display: block;
-            padding: 12px 14px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(191,219,254,0.54);
-        }
-        .notes-spotlight-stat-label { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
-        .notes-spotlight-stat-value { display: block; margin-top: 6px; font-size: 18px; font-weight: 760; color: var(--color-text); }
-        .notes-list-shell {
-            border: 1px solid rgba(59,130,246,0.10); border-radius: 20px; background: rgba(255,255,255,0.76);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
-            overflow: hidden;
-        }
-        .notes-list-head {
-            display: flex; align-items: center; justify-content: space-between; gap: 12px;
-            padding: 14px 16px; border-bottom: 1px solid rgba(191,219,254,0.42); background: rgba(248,250,252,0.85);
-        }
-        .notes-list-head > div { min-width: 0; }
-        .notes-list-title { margin: 0; font-size: 14px; font-weight: 780; color: var(--color-text); }
-        .notes-list-subtitle { margin: 4px 0 0; font-size: 12px; color: var(--color-text-secondary); }
-        .notes-list { display: flex; flex-direction: column; }
-        .note-row {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: flex-start;
-            padding: 16px; border-bottom: 1px solid rgba(226,232,240,0.82); border-radius: 0;
-            background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(248,250,252,0.78));
-        }
-        .note-row:last-child { border-bottom: none; }
-        .note-row-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-        .note-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        .note-row-title { margin: 0; font-size: 17px; font-weight: 760; line-height: 1.42; color: var(--color-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .note-row-preview {
-            font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); word-break: break-word;
-            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-        }
-        .note-row-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-        .note-row-side {
-            min-width: 96px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
-            text-align: right;
-        }
-        .note-row-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--color-text-secondary); }
-        .note-row-order {
-            display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 28px; padding: 0 10px;
-            border-radius: 999px; background: rgba(219,234,254,0.8); color: #1d4ed8; font-size: 11px; font-weight: 800;
-            white-space: nowrap; line-height: 1; flex-shrink: 0;
-        }
-        .note-card-category {
-            display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: rgba(59,130,246,0.10);
-            color: #1d4ed8; font-size: 11px; font-weight: 700; flex-shrink: 0;
-            white-space: nowrap; line-height: 1;
-        }
-        .note-tag {
-            display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px;
-            background: rgba(219,234,254,0.8); color: #1e40af; font-size: 11px; font-weight: 700;
-            white-space: nowrap; line-height: 1; flex-shrink: 0;
-        }
-        .note-tag-muted { opacity: 0.72; }
-        .note-muted { opacity: 0.45; }
-        .note-row-footer { display: none; }
-        .note-row-footer-sep { font-size: 10px; color: var(--color-text-secondary); opacity: 0.6; }
-        .note-row-footer-meta { font-size: 11px; color: var(--color-text-secondary); }
-        .notes-empty {
-            padding: 46px 18px; border-radius: 20px; text-align: center; background: rgba(248,250,252,0.82);
-            border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
-        }
-        .notes-pagination { margin-top: 18px; }
-        .note-view-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid rgba(226,232,240,0.8); margin-bottom: 14px; }
-        .note-view-content { word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
-        .note-view-content p { margin: 0 0 12px; }
-        .note-view-content h3, .note-view-content h4, .note-view-content h5 { margin: 18px 0 8px; line-height: 1.35; color: #0f172a; }
-        .note-view-content ul { margin: 0 0 12px 20px; padding: 0; }
-        .note-view-content li { margin: 4px 0; }
-        .note-view-content blockquote { margin: 0 0 12px; padding: 8px 12px; border-left: 3px solid rgba(59,130,246,0.42); background: rgba(239,246,255,0.7); color: #475569; border-radius: 10px; }
-        .note-view-content code { padding: 2px 5px; border-radius: 6px; background: rgba(15,23,42,0.06); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
-        .note-view-content pre { overflow-x: auto; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; }
-        .note-view-content pre code { padding: 0; background: transparent; color: inherit; }
-        .note-view-content a { color: #1d4ed8; overflow-wrap: anywhere; }
-        .note-reference-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(226,232,240,0.85); }
-        .note-reference-panel h4 { margin: 0 0 10px; font-size: 13px; font-weight: 800; color: var(--color-text); }
-        .note-reference-list { display: flex; flex-direction: column; gap: 8px; }
-        .note-reference-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 12px; background: rgba(248,250,252,0.92); border: 1px solid rgba(226,232,240,0.9); }
-        .note-reference-row span { font-size: 11px; font-weight: 800; color: #1d4ed8; }
-        .note-reference-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-        .note-reference-row code { color: var(--color-text-secondary); font-size: 11px; }
-        .note-view-secondary { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
-        .note-modal-delete { margin-right: auto; }
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .notes-layout { grid-template-columns: 1fr; }
-            .notes-spotlight { grid-template-columns: 1fr; }
-            .notes-spotlight-side { padding-left: 0; border-left: none; padding-top: 4px; }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
-            .notes-hero-actions { align-items: flex-start; }
-            .notes-summary-grid { grid-template-columns: 1fr; }
-            .notes-custom-range { flex-direction: column; align-items: stretch; }
-            .notes-date-field { max-width: none; }
-            .notes-range-sep { display: none; }
-            .notes-filter-bar { grid-template-columns: 1fr; }
-            .notes-filter-actions { justify-content: flex-start; }
-            .notes-workspace-head { padding: 14px 16px; }
-            .notes-workspace-body { padding: 12px; gap: 10px; }
-            .notes-spotlight { padding: 14px; gap: 10px; }
-            .notes-spotlight-title { font-size: 20px; }
-            .notes-spotlight-preview { font-size: 12px; line-height: 1.6; -webkit-line-clamp: 3; }
-            .notes-spotlight-tags { gap: 6px; }
-            .notes-spotlight-side {
-                display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 10px; padding-left: 0; border-left: none;
-            }
-            .notes-spotlight-stat { padding: 9px 10px; }
-            .note-row { grid-template-columns: 1fr; padding: 12px; gap: 0; }
-            .note-row-main { gap: 5px; }
-            .note-row-top { flex-direction: row; flex-wrap: wrap; gap: 8px; overflow: hidden; }
-            .note-row-title { font-size: 15px; max-width: 100%; }
-            .note-row-preview { font-size: 12px; line-height: 1.55; -webkit-line-clamp: 1; }
-            .note-row-cat-desktop { display: none; }
-            .note-row-tags { display: none; }
-            .note-row-side { display: none; }
-            .note-row-footer {
-                display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 6px;
-            }
-            .note-row-order, .note-card-category, .note-tag { height: 22px; padding: 0 7px; font-size: 10px; }
-            .notes-list-head { padding: 12px 14px; align-items: flex-start; flex-direction: column; }
-            .notes-meter { gap: 6px; }
-            .notes-cadence-panel .notes-panel-body { padding-bottom: 14px; }
-        `,
-        )}
-    `,
-    );
-}
-
 async function fetchOverview(range = _activeRange) {
     const params = {
         today: overviewReferenceDay(range),
@@ -746,7 +405,8 @@ function renderHero() {
     return `
         <section class="notes-hero pendo-page-header">
             <div>
-                <h2>📝 笔记</h2>
+                <span class="eyebrow"><i></i>NOTEBOOK</span>
+                <h2>笔记</h2>
                 <p>${escapeHtml(rangeLabel())} ${summary.total_count || 0} 条笔记，集中整理灵感、摘录和草稿。</p>
             </div>
             <div class="notes-hero-actions">
@@ -1046,7 +706,12 @@ function renderNoteRow(note, index) {
 
 function renderWorkspaceCollection() {
     if (!_items.length) {
-        return `<div class="notes-empty">当前筛选下没有笔记。试试清空标签或切换分类。</div>`;
+        return `<div class="notes-empty writing-empty">
+            <img src="assets/note-library.webp" width="448" height="252" loading="lazy" alt="" />
+            <div class="writing-prompt"><strong>小青的摘录夹</strong><p>${_filters.keyword || _filters.tag || _filters.category
+                ? '当前筛选下有 0 条笔记。可以重置筛选，看看其他笔记。'
+                : '这段时间的摘录夹还是空的。翻到想留的一句话，就记在这里。'}</p></div>
+        </div>`;
     }
     const [spotlight, ...rest] = _items;
     return `
@@ -1092,7 +757,6 @@ function renderWorkspace() {
 
 function renderPage() {
     if (!_container) return;
-    ensureStyles();
 
     if (_loading && !_overview) {
         _container.innerHTML = `
@@ -1225,7 +889,6 @@ async function confirmAndDeleteNote(note, cancelText, reopen) {
 }
 
 export function openNoteViewModal(rawNote) {
-    ensureStyles();
     const note = normalizeNote(rawNote);
     if (!note) {
         showToast('无法打开无效笔记', 'warning');
@@ -1267,7 +930,6 @@ export function openNoteViewModal(rawNote) {
 }
 
 function openNoteFormModal(existing = null) {
-    ensureStyles();
     const note = existing ? normalizeNote(existing) : null;
     if (existing && !note) {
         showToast('无法编辑无效笔记', 'warning');

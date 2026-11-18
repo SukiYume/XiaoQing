@@ -514,7 +514,8 @@ def test_schema_migrations_are_versioned_and_idempotent():
         assert [row["version"] for row in add_column_rows] == list(range(1, add_column_count + 1))
         assert all(row["name"].startswith("add-column-") for row in add_column_rows)
         assert all("ADD COLUMN" in row["sql"] for row in add_column_rows)
-        assert len(rows_before) == add_column_count
+        data_rows = rows_before[add_column_count:]
+        assert [row["version"] for row in data_rows] == [1001]
 
         db._init_database()
         rows_after = (
@@ -523,6 +524,56 @@ def test_schema_migrations_are_versioned_and_idempotent():
             .fetchall()
         )
         assert [tuple(row) for row in rows_after] == [tuple(row) for row in rows_before]
+
+        # 旧库里网页天气选项存下的带符号取值在迁移时改成纯文字，用户自己写的天气保持原样。
+        conn = db.get_connection()
+        conn.execute("DELETE FROM schema_migrations WHERE version = 1001")
+        conn.executemany(
+            "INSERT INTO items (id, type, created_at, updated_at, owner_id, weather) VALUES (?, ?, ?, ?, 'u1', ?)",
+            [
+                (
+                    "d-sunny",
+                    "diary",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                    "☀️ 晴",
+                ),
+                (
+                    "d-cloudy",
+                    "diary",
+                    "2026-01-02T00:00:00+00:00",
+                    "2026-01-02T00:00:00+00:00",
+                    "⛅ 多云",
+                ),
+                (
+                    "d-custom",
+                    "diary",
+                    "2026-01-03T00:00:00+00:00",
+                    "2026-01-03T00:00:00+00:00",
+                    "☀️ 大晴天",
+                ),
+                (
+                    "d-plain",
+                    "diary",
+                    "2026-01-04T00:00:00+00:00",
+                    "2026-01-04T00:00:00+00:00",
+                    "雨",
+                ),
+            ],
+        )
+        conn.commit()
+        db._init_database()
+        weather = dict(
+            db.get_connection()
+            .execute("SELECT id, weather FROM items WHERE id LIKE 'd-%'")
+            .fetchall()
+        )
+        assert weather == {
+            "d-sunny" : "晴",
+            "d-cloudy": "多云",
+            "d-custom": "☀️ 大晴天",
+            "d-plain" : "雨",
+        }
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)

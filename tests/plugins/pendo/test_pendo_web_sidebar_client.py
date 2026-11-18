@@ -188,7 +188,6 @@ def test_sidebar_builds_sectioned_native_navigation_and_tracks_current_route() -
         assert.equal(separators[0].getAttribute('role'), 'separator');
         assert.equal(links[0].href, '#/dashboard');
         assert.equal(links[0].dataset.module, 'dashboard');
-        assert.equal(links[0].style.values.get('--nav-accent'), 'var(--color-dashboard)');
         assert.equal(links[0].children[0].children[0].getAttribute('aria-hidden'), 'true');
         assert.equal(links[0].classList.contains('active'), true);
         assert.equal(links[0].getAttribute('aria-current'), 'page');
@@ -198,6 +197,9 @@ def test_sidebar_builds_sectioned_native_navigation_and_tracks_current_route() -
         assert.equal(links.at(-1).classList.contains('active'), true);
         assert.equal(links.at(-1).getAttribute('aria-current'), 'page');
         assert.equal(links[0].getAttribute('aria-current'), null);
+        __router.callbacks[0]('transfer');
+        assert.equal(links.filter((link) => link.classList.contains('active')).length, 1);
+        assert.equal(links.at(-1).getAttribute('aria-current'), 'location');
         assert.throws(() => client.renderSidebar(null), TypeError);
         """
     )

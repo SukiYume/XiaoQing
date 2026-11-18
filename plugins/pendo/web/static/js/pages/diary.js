@@ -24,16 +24,17 @@ import {
     zonedInputToUtcIso,
 } from '../utils/timezone.js';
 import { createInstantMemory } from '../utils/timezone.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
+import { moodIcon, pixelIcon, weatherIcon } from '../utils/icons.js';
+import { categoryColors } from '../utils/palette.js';
+import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-diary-redesign-styles';
-const WEATHER_OPTIONS = Object.freeze(['☀️ 晴', '⛅ 多云', '🌧️ 雨', '❄️ 雪', '🌫️ 雾', '💨 风']);
-const MOOD_SWATCHES = Object.freeze(['#EC4899', '#8B5CF6', '#3B82F6', '#F59E0B', '#10B981', '#F97316']);
-const DIARY_YEAR_START = 2000;
-const DIARY_YEAR_COUNT = 100;
-const DIARY_YEAR_END = DIARY_YEAR_START + DIARY_YEAR_COUNT - 1;
-const WEEK_NAMES = Object.freeze(['周日', '周一', '周二', '周三', '周四', '周五', '周六']);
-const CALENDAR_WEEKDAYS = Object.freeze(['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
+const WEATHER_OPTIONS     = Object.freeze(['晴', '多云', '雨', '雪', '雾', '风']);
+const MOOD_SWATCHES       = Object.freeze(categoryColors('pink'));
+const DIARY_YEAR_START    = 2000;
+const DIARY_YEAR_COUNT    = 100;
+const DIARY_YEAR_END      = DIARY_YEAR_START + DIARY_YEAR_COUNT - 1;
+const WEEK_NAMES          = Object.freeze(['周日', '周一', '周二', '周三', '周四', '周五', '周六']);
+const CALENDAR_WEEKDAYS   = Object.freeze(['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
 const DIARY_NAV_PREV_ICON = `
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
         <path d="M9.75 3.5 5.5 8l4.25 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -42,17 +43,6 @@ const DIARY_NAV_NEXT_ICON = `
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
         <path d="M6.25 3.5 10.5 8l-4.25 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`;
-const DEFAULT_MOOD_EMOJIS = {
-    happy: '😊',
-    sad: '😢',
-    calm: '😌',
-    excited: '🤩',
-    angry: '😠',
-    tired: '😴',
-    anxious: '😰',
-    grateful: '🙏',
-    neutral: '😐',
-};
 const DEFAULT_MOOD_LABELS = {
     happy: '开心',
     calm: '平静',
@@ -67,7 +57,6 @@ const DEFAULT_MOOD_LABELS = {
 const DEFAULT_MOOD_OPTIONS = Object.keys(DEFAULT_MOOD_LABELS).map((id) => ({
     value: id,
     label: DEFAULT_MOOD_LABELS[id],
-    emoji: DEFAULT_MOOD_EMOJIS[id],
 }));
 
 const DIARY_FIELDS = [
@@ -98,7 +87,6 @@ let _loading                = false;
 let _templates              = [];
 let _templatesLoaded        = false;
 let _unsubscribeDataChanges = null;
-let _moodEmojis             = { ...DEFAULT_MOOD_EMOJIS };
 let _moodLabels             = { ...DEFAULT_MOOD_LABELS };
 let _moodOptions            = [...DEFAULT_MOOD_OPTIONS];
 let _loadVersion            = 0;
@@ -174,20 +162,10 @@ function diaryWordCount(item) {
     return Array.from(String(item?.content || '').trim()).length;
 }
 
-function moodEmoji(mood) {
-    const normalized = String(mood || '')
-        .trim()
-        .toLowerCase();
-    return normalized && Object.hasOwn(_moodEmojis, normalized) ? String(_moodEmojis[normalized] || '') : '';
-}
-
-function moodBadgeText(mood) {
+function moodLabelText(mood) {
     const normalized = String(mood || '').trim();
-    if (!normalized) return '';
-    const emoji  = moodEmoji(normalized);
-    const moodId = normalized.toLowerCase();
-    const label  = Object.hasOwn(_moodLabels, moodId) ? _moodLabels[moodId] : normalized;
-    return emoji ? `${emoji} ${label}` : label;
+    const moodId     = normalized.toLowerCase();
+    return Object.hasOwn(_moodLabels, moodId) ? _moodLabels[moodId] : normalized;
 }
 
 function itemEntryTimestamp(item) {
@@ -393,11 +371,10 @@ async function loadTemplates() {
     }
 }
 
-async function loadMoodEmojis() {
+async function loadMoodOptions() {
     try {
         const res           = await api.get('/config/diary/moods');
         const data          = isRecord(res?.data) ? res.data : {};
-        const fetchedEmojis = isRecord(data.mood_emojis) ? data.mood_emojis : {};
         const fetchedLabels = isRecord(data.mood_labels) ? data.mood_labels : {};
         const fetchedMoods  = records(data.moods);
         const validMoodId   = (value) => {
@@ -407,12 +384,7 @@ async function loadMoodEmojis() {
             return /^[a-z0-9_-]+$/.test(id) && !['__proto__', 'constructor', 'prototype'].includes(id) ? id : '';
         };
 
-        const emojis = { ...DEFAULT_MOOD_EMOJIS };
         const labels = { ...DEFAULT_MOOD_LABELS };
-        for (const [rawId, emoji] of Object.entries(fetchedEmojis)) {
-            const id = validMoodId(rawId);
-            if (id) emojis[id] = String(emoji || '').trim();
-        }
         for (const [rawId, label] of Object.entries(fetchedLabels)) {
             const id = validMoodId(rawId);
             if (id) labels[id] = String(label || '').trim() || id;
@@ -421,29 +393,17 @@ async function loadMoodEmojis() {
         const configuredOptions = fetchedMoods
             .map((item) => {
                 const id = validMoodId(item.id);
-                return id
-                    ? {
-                          value: id,
-                          label: String(item.label || labels[id] || id),
-                          emoji: String(item.emoji || emojis[id] || id),
-                      }
-                    : null;
+                return id ? { value: id, label: String(item.label || labels[id] || id) } : null;
             })
             .filter((item) => item !== null);
-        _moodEmojis = emojis;
         _moodLabels = labels;
         _moodOptions = configuredOptions.length
             ? configuredOptions
-            : Object.keys(labels).map((id) => ({
-                  value: id,
-                  label: labels[id],
-                  emoji: emojis[id] || id,
-              }));
+            : Object.keys(labels).map((id) => ({ value: id, label: labels[id] }));
         return;
     } catch {
         // 配置接口临时不可用时继续使用与后端一致的内置选项。
     }
-    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     _moodLabels = { ...DEFAULT_MOOD_LABELS };
     _moodOptions = [...DEFAULT_MOOD_OPTIONS];
 }
@@ -472,242 +432,6 @@ function moodPalette(index) {
 }
 
 // 页面样式由页面入口或外部打开的日记模态框确保存在。
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('diary-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-        .diary-stack { display: flex; flex-direction: column; gap: 18px; }
-        .diary-hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
-            padding: 24px 26px; border-radius: 28px; margin-bottom: 18px;
-            background:
-                radial-gradient(circle at top right, rgba(236,72,153,0.18), transparent 30%),
-                radial-gradient(circle at bottom left, rgba(244,114,182,0.12), transparent 22%),
-                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(253,242,248,0.95));
-            border: 1px solid rgba(236,72,153,0.14); box-shadow: 0 18px 40px rgba(236,72,153,0.07);
-        }
-        .diary-hero h2 { margin: 0; font-size: 30px; font-weight: 820; letter-spacing: -0.03em; color: var(--color-diary, #EC4899); }
-        .diary-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
-        .diary-hero-tags, .diary-template-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-        .diary-hero-tag, .diary-template-chip {
-            display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px;
-            background: rgba(236,72,153,0.08); color: #be185d; font-size: 12px; font-weight: 700;
-        }
-        .diary-hero-actions { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-        .diary-hero-note {
-            display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 999px;
-            background: rgba(255,255,255,0.84); border: 1px solid rgba(236,72,153,0.12); color: #9d174d; font-size: 12px; font-weight: 700;
-        }
-        .diary-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-        .diary-summary-card, .diary-panel, .diary-workspace {
-            min-width: 0; overflow: hidden;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(253,242,248,0.95));
-            border: 1px solid rgba(236,72,153,0.12); border-radius: 24px; box-shadow: 0 16px 34px rgba(236,72,153,0.05);
-        }
-        .diary-summary-card { padding: 18px; min-width: 0; }
-        .diary-summary-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .diary-summary-value {
-            margin-top: 10px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 820; line-height: 1.04; color: #0f172a; letter-spacing: -0.03em;
-            overflow-wrap: anywhere; word-break: break-word;
-        }
-        .diary-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
-        .diary-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr); gap: 16px; min-width: 0; }
-        .diary-side-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-        .diary-panel-head, .diary-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
-        .diary-panel-head h3, .diary-workspace-title { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); letter-spacing: -0.02em; }
-        .diary-panel-head p, .diary-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); line-height: 1.7; }
-        .diary-panel-body, .diary-workspace-body { padding: 16px 20px 20px; }
-        .diary-month-nav {
-            position: relative;
-            display: inline-grid; grid-template-columns: 32px minmax(108px, auto) 32px; align-items: center; column-gap: 4px;
-            min-height: 42px; padding: 4px 6px;
-            border-radius: 999px; background: rgba(255,255,255,0.88); border: 1px solid rgba(236,72,153,0.14);
-        }
-        .diary-month-label {
-            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-        }
-        .diary-month-nav:focus-within {
-            box-shadow: 0 0 0 3px rgba(244,114,182,0.12);
-        }
-        .diary-month-nav button {
-            width: 32px; height: 32px; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; align-self: center;
-            border: none; background: transparent; border-radius: 999px; cursor: pointer;
-            color: var(--color-text-secondary); line-height: 1;
-        }
-        .diary-month-nav button svg {
-            width: 14px; height: 14px; display: block; flex: 0 0 auto;
-        }
-        .diary-month-nav button:hover { background: rgba(236,72,153,0.08); color: var(--color-diary, #EC4899); }
-        .diary-month-nav button:disabled { cursor: not-allowed; opacity: 0.35; background: transparent; }
-        .diary-month-nav input.diary-month-text {
-            width: 100%; min-width: 0; height: 32px; box-sizing: border-box;
-            margin: 0; padding: 0 8px; border: 0 !important; border-color: transparent !important; border-radius: 0; background: transparent !important;
-            text-align: center; font-size: 13px; font-weight: 800; color: var(--color-text);
-            box-shadow: none !important; outline: none; appearance: none; -webkit-appearance: none; caret-color: var(--color-diary, #EC4899);
-        }
-        .diary-month-nav input.diary-month-text::placeholder {
-            color: rgba(100,116,139,0.72);
-            font-weight: 700;
-        }
-        .diary-month-nav input.diary-month-text:hover {
-            color: #0f172a;
-        }
-        .diary-month-nav input.diary-month-text:focus {
-            background: transparent !important;
-            border-color: transparent !important;
-            box-shadow: none !important;
-        }
-        .mood-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .mood-btn {
-            width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center;
-            border-radius: 14px; border: 1px solid rgba(244,114,182,0.22); background: rgba(255,255,255,0.96);
-            cursor: pointer; font-size: 20px; opacity: 0.94; transform: scale(1);
-            transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
-        }
-        .mood-btn:hover { border-color: rgba(244,114,182,0.34); background: rgba(253,242,248,0.66); transform: translateY(-1px) scale(1.03); }
-        .mood-btn.active {
-            opacity: 1; background: rgba(253,242,248,0.94); transform: scale(1.06);
-            border-color: rgba(236,72,153,0.34); box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12);
-        }
-        .diary-calendar-weekdays, .diary-calendar-grid {
-            display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px;
-            width: 100%; min-width: 0;
-        }
-        .diary-calendar-weekdays { margin-bottom: 10px; }
-        .diary-calendar-weekdays span { text-align: center; font-size: 12px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; }
-        .diary-day {
-            min-height: 112px; border-radius: 20px; border: 1px solid rgba(236,72,153,0.10); background: rgba(255,255,255,0.92);
-            padding: 12px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
-            transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease; position: relative; min-width: 0;
-        }
-        .diary-day:hover { transform: translateY(-1px); border-color: rgba(236,72,153,0.24); box-shadow: 0 12px 24px rgba(236,72,153,0.08); }
-        .diary-day:focus-visible, .diary-recent-item:focus-visible, .diary-stream-item:focus-visible {
-            outline: 2px solid var(--color-diary, #EC4899); outline-offset: 3px;
-        }
-        .diary-day.is-selected { border-color: rgba(236,72,153,0.42); box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12), 0 16px 30px rgba(236,72,153,0.08); background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(253,242,248,0.9)); }
-        .diary-day.is-outside { opacity: 0.38; background: rgba(248,250,252,0.7); }
-        .diary-day.is-today { box-shadow: inset 0 0 0 1px rgba(244,114,182,0.32); }
-        .diary-day-top { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 28px; }
-        .diary-day-number { font-size: 18px; font-weight: 800; color: var(--color-text); }
-        .diary-day-body { display: flex; flex-direction: column; gap: 4px; min-height: 0; margin-top: 0; align-items: flex-start; text-align: left; }
-        .diary-day-mood { font-size: 18px; line-height: 1; }
-        .diary-day-copy {
-            font-size: 12px; line-height: 1.5; color: var(--color-text-secondary);
-            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; overflow-wrap: anywhere;
-        }
-        .diary-mood-list, .diary-recent-list, .diary-entry-stack, .diary-stream-list { display: flex; flex-direction: column; gap: 12px; }
-        .diary-mood-row { display: flex; flex-direction: column; gap: 6px; }
-        .diary-mood-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
-        .diary-mood-name { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--color-text); }
-        .diary-mood-dot { width: 10px; height: 10px; border-radius: 999px; }
-        .diary-mood-count { color: var(--color-text-secondary); font-weight: 700; }
-        .diary-mood-track { height: 10px; border-radius: 999px; background: rgba(251,207,232,0.4); overflow: hidden; }
-        .diary-mood-fill { display: block; height: 100%; border-radius: inherit; }
-        .diary-cadence {
-            display: grid; grid-auto-flow: column; grid-auto-columns: minmax(26px, 1fr);
-            gap: 8px; align-items: end; overflow-x: auto; padding: 2px 2px 8px;
-        }
-        .diary-cadence-col { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
-        .diary-cadence-value { font-size: 10px; font-weight: 700; color: var(--color-text); }
-        .diary-cadence-bar { width: 100%; min-height: 10px; border-radius: 999px 999px 12px 12px; background: linear-gradient(180deg, rgba(236,72,153,0.88), rgba(244,114,182,0.46)); }
-        .diary-cadence-label { font-size: 10px; color: var(--color-text-secondary); }
-        .diary-recent-item, .diary-stream-item {
-            border: 1px solid rgba(236,72,153,0.10); background: rgba(255,255,255,0.88); border-radius: 18px; padding: 12px 14px; text-align: left; cursor: pointer;
-        }
-        .diary-recent-item:hover, .diary-stream-item:hover { border-color: rgba(236,72,153,0.22); background: rgba(255,255,255,0.96); }
-        .diary-recent-top { display: flex; justify-content: space-between; gap: 8px; width: 100%; font-size: 12px; color: var(--color-text-secondary); }
-        .diary-recent-top strong { font-size: 13px; color: var(--color-text); }
-        .diary-recent-preview { margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); }
-        .diary-template-usage { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(251,207,232,0.54); }
-        .diary-mini-label { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 10px; }
-        .diary-entry-card { padding: 16px; border-radius: 20px; border: 1px solid rgba(236,72,153,0.12); background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(253,242,248,0.9)); box-shadow: 0 12px 26px rgba(236,72,153,0.04); }
-        .diary-entry-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
-        .diary-entry-title-row { display: flex; align-items: center; gap: 10px; }
-        .diary-entry-mood { font-size: 26px; line-height: 1; }
-        .diary-entry-head h4 { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); }
-        .diary-entry-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
-        .diary-entry-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .diary-entry-preview { margin-top: 14px; font-size: 14px; line-height: 1.8; color: var(--color-text); white-space: pre-wrap; word-break: break-word; }
-        .diary-empty-card { padding: 22px 18px; border-radius: 18px; text-align: center; background: rgba(255,255,255,0.82); border: 1px dashed rgba(244,114,182,0.26); color: var(--color-text-secondary); }
-        .diary-empty-large { padding: 40px 18px; }
-        .diary-empty-icon { font-size: 34px; margin-bottom: 10px; }
-        .diary-stream-item { display: flex; gap: 12px; align-items: flex-start; }
-        .diary-stream-date { width: 78px; flex-shrink: 0; font-size: 12px; font-weight: 800; color: #9d174d; padding-top: 2px; }
-        .diary-stream-main { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-        .diary-stream-main strong { font-size: 14px; color: var(--color-text); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .diary-stream-main span { font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .diary-stream-words { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); flex-shrink: 0; }
-        .diary-view-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(251,207,232,0.54); }
-        .diary-view-chip {
-            display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px;
-            background: rgba(236,72,153,0.08); color: #be185d; font-size: 12px; font-weight: 700;
-        }
-        .diary-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
-        .diary-template-select { margin-top: 2px; }
-        .diary-template-hint { font-size: 12px; color: var(--color-text-secondary); margin-top: 6px; padding: 8px 10px; background: rgba(251,207,232,0.28); border-radius: 14px; line-height: 1.6; white-space: pre-wrap; }
-        .diary-template-hint[hidden] { display: none; }
-        .diary-template-answer-stack { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-        .diary-template-answer label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 800; color: var(--color-text-secondary); }
-        .diary-template-answer textarea { min-height: 74px; }
-        .diary-template-answer-view { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-        .diary-template-answer-item { padding: 12px 14px; border-radius: 16px; background: rgba(253,242,248,0.72); border: 1px solid rgba(251,207,232,0.7); }
-        .diary-template-answer-item strong { display: block; font-size: 12px; color: #be185d; margin-bottom: 6px; }
-        .diary-template-answer-item p { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--color-text); line-height: 1.7; }
-        .form-checkbox { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 13px; font-weight: 700; }
-        .form-checkbox input { width: 16px; height: 16px; accent-color: var(--color-diary, #EC4899); }
-        .diary-delete-action { margin-right: auto; }
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .diary-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .diary-layout { grid-template-columns: minmax(0, 1fr); }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .diary-hero { grid-template-columns: 1fr; padding: 22px 20px; }
-            .diary-hero-actions { align-items: flex-start; }
-            .diary-summary-grid { grid-template-columns: 1fr; }
-            .diary-summary-card { padding: 14px 16px; border-radius: 20px; }
-            .diary-summary-value { margin-top: 6px; font-size: 22px; }
-            .diary-summary-meta { margin-top: 4px; font-size: 11px; }
-            .diary-panel-body { padding: 14px 12px 16px; min-width: 0; }
-            .diary-calendar-weekdays, .diary-calendar-grid { gap: 6px; }
-            .diary-day { width: 100%; max-width: 100%; min-height: 78px; padding: 6px 5px; border-radius: 16px; gap: 2px; }
-            .diary-day-top { min-height: 24px; }
-            .diary-day-number { font-size: 16px; }
-            .diary-day-body { width: 100%; gap: 4px; margin-top: 0; align-items: flex-start; text-align: left; }
-            /* 与日程月历一致，窄屏用色条表达“当天有内容”，正文仍保留在 aria-label 中。 */
-            .diary-day-copy {
-                display: block; width: calc(100% - 4px); height: 6px; flex: 0 0 6px;
-                border-radius: 999px; background: rgba(236,72,153,0.52);
-                color: transparent; font-size: 0; line-height: 0;
-            }
-            .diary-entry-head, .diary-workspace-head, .diary-panel-head { flex-direction: column; }
-            .diary-month-nav { align-self: stretch; grid-template-columns: 32px minmax(0, 1fr) 32px; width: 100%; }
-            .diary-stream-item { flex-direction: column; }
-            .diary-stream-date { width: auto; }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.PHONE,
-            `
-            .diary-calendar-weekdays, .diary-calendar-grid { gap: 4px; }
-            .diary-calendar-weekdays span { font-size: 10px; letter-spacing: 0; }
-            .diary-day { min-height: 62px; padding: 4px; border-radius: 14px; gap: 1px; }
-            .diary-day-top { min-height: 22px; }
-            .diary-day-number { font-size: 15px; }
-            .diary-day-body { gap: 2px; }
-            .diary-day-mood { font-size: 15px; }
-            .diary-day-copy { height: 5px; flex-basis: 5px; }
-        `,
-        )}
-    `,
-    );
-}
 
 // ---------- 页面区域渲染 ----------
 
@@ -719,7 +443,8 @@ function renderHero() {
     return `
         <section class="diary-hero pendo-page-header">
             <div>
-                <h2>📔 日记</h2>
+                <span class="eyebrow"><i></i>JOURNAL</span>
+                <h2>日记</h2>
                 <p>按月记录每天的心情、天气和当天见闻。</p>
                 <div class="diary-hero-tags">
                     <span class="diary-hero-tag">${monthLabel(_year, _month)}</span>
@@ -803,7 +528,7 @@ function renderCalendarPanel(entries) {
                             const meta = list.length > 1 ? '' : compactDiaryCellLabel(first);
                             const copy = meta ? `${metric} ${meta}` : metric;
                             const mood = first?.mood
-                                ? `<span class="diary-day-mood">${escapeHtml(moodEmoji(first.mood) || first.mood)}</span>`
+                                ? moodIcon(first.mood, 'diary-day-mood')
                                 : '';
                             const selected  = day.key === _selectedDate;
                             const ariaLabel = list.length
@@ -857,7 +582,7 @@ function renderMoodPanel() {
                             (item, index) => `
                         <div class="diary-mood-row">
                             <div class="diary-mood-top">
-                                <span class="diary-mood-name"><span class="diary-mood-dot" style="background:${moodPalette(index)};"></span>${escapeHtml(moodBadgeText(item.mood) || item.mood)}</span>
+                                <span class="diary-mood-name"><span class="diary-mood-dot" style="background:${moodPalette(index)};"></span>${moodIcon(item.mood)}${escapeHtml(moodLabelText(item.mood))}</span>
                                 <span class="diary-mood-count">${item.count} 条</span>
                             </div>
                             <div class="diary-mood-track"><span class="diary-mood-fill" style="width:${Math.round(item.share * 100)}%;background:${moodPalette(index)};"></span></div>
@@ -883,7 +608,7 @@ function renderCadencePanel() {
                             (item) => `
                         <div class="diary-cadence-col" title="${escapeHtml(`${item.date} · ${item.words} 字`)}">
                             <span class="diary-cadence-value">${formatWordMetric(item.words)}</span>
-                            <span class="diary-cadence-bar" style="height:${12 + (item.words / maxValue) * 64}px;"></span>
+                            <span class="diary-cadence-bar" style="height:${(item.words / maxValue) * 76}px;"></span>
                             <span class="diary-cadence-label">${escapeHtml(item.label)}</span>
                         </div>`,
                         )
@@ -910,7 +635,7 @@ function renderRecentPanel() {
                             .map(
                                 (item) => `
                             <button type="button" class="diary-recent-item" data-id="${escapeHtml(String(item.id))}" data-date="${escapeHtml(String(item.diary_date || ''))}">
-                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span></span>
+                                <span class="diary-recent-top"><strong>${item.mood ? moodIcon(item.mood) : pixelIcon('diary')}${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span></span>
                                 <span class="diary-recent-preview">${escapeHtml(item.content_preview || '点击查看详情')}</span>
                             </button>`,
                             )
@@ -946,11 +671,11 @@ function renderEntryCard(item) {
         <article class="diary-entry-card" data-id="${itemId}">
             <div class="diary-entry-head">
                 <div>
-                    <div class="diary-entry-title-row"><span class="diary-entry-mood">${escapeHtml(moodEmoji(item.mood) || '📖')}</span><h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
+                    <div class="diary-entry-title-row">${item.mood ? moodIcon(item.mood, 'diary-entry-mood') : pixelIcon('diary', 'diary-entry-mood')}<h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
                     <div class="diary-entry-meta">
                         <span>${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
-                        <span>${escapeHtml(item.weather || '未记录天气')}</span>
-                        ${item.location ? `<span>📍 ${escapeHtml(item.location)}</span>` : ''}
+                        <span>${weatherIcon(item.weather)}${escapeHtml(item.weather || '未记录天气')}</span>
+                        ${item.location ? `<span>${pixelIcon('pin')}${escapeHtml(item.location)}</span>` : ''}
                         <span>${diaryWordCount(item)} 字</span>
                         ${item.is_favorite ? '<span>收藏</span>' : ''}
                     </div>
@@ -982,9 +707,9 @@ function renderSelectedDay(entriesByDate) {
                     entries.length
                         ? `<div class="diary-entry-stack">${entries.map(renderEntryCard).join('')}</div>`
                         : `
-                    <div class="diary-empty-card diary-empty-large">
-                        <div class="diary-empty-icon">🌙</div>
-                        <div>这一天还没有留下文字。点右上角按钮，直接把片刻写下来。</div>
+                    <div class="diary-empty-card writing-empty">
+                        <img src="assets/diary-desk.webp" width="448" height="252" loading="lazy" alt="" />
+                        <div class="writing-prompt"><strong>小青的手帐</strong><p>窗边的灯亮了。今天哪一幕，你想留给明天的自己？</p></div>
                     </div>`
                 }
             </div>
@@ -1007,7 +732,7 @@ function renderMonthStream() {
                             <button type="button" class="diary-stream-item" data-id="${escapeHtml(String(item.id || ''))}">
                                 <span class="diary-stream-date">${escapeHtml(formatEntryTime(item))}</span>
                                 <span class="diary-stream-main">
-                                    <strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>
+                                    <strong>${item.mood ? moodIcon(item.mood) : pixelIcon('diary')}${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>
                                     <span>${escapeHtml(previewText(item.content, 70) || '点击查看详情')}</span>
                                 </span>
                                 <span class="diary-stream-words">${diaryWordCount(item)} 字</span>
@@ -1142,16 +867,15 @@ export function openDiaryViewModal(item) {
     if (!isRecord(item)) {
         throw new TypeError('查看日记需要有效的条目');
     }
-    ensureStyles();
     const moodScore = finiteNumber(item.mood_score);
     const bodyHTML  = `
         <div class="diary-view-meta">
-            <span class="diary-view-chip">📅 ${escapeHtml(item.diary_date)}</span>
-            <span class="diary-view-chip">🕒 ${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
-            ${item.mood ? `<span class="diary-view-chip">${escapeHtml(moodBadgeText(item.mood))}</span>` : ''}
+            <span class="diary-view-chip">${pixelIcon('events')}${escapeHtml(item.diary_date)}</span>
+            <span class="diary-view-chip">${pixelIcon('clock')}${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
+            ${item.mood ? `<span class="diary-view-chip">${moodIcon(item.mood)}${escapeHtml(moodLabelText(item.mood))}</span>` : ''}
             ${moodScore >= 1 && moodScore <= 10 ? `<span class="diary-view-chip">心情 ${moodScore}/10</span>` : ''}
-            ${item.weather ? `<span class="diary-view-chip">${escapeHtml(item.weather)}</span>` : ''}
-            ${item.location ? `<span class="diary-view-chip">📍 ${escapeHtml(item.location)}</span>` : ''}
+            ${item.weather ? `<span class="diary-view-chip">${weatherIcon(item.weather)}${escapeHtml(item.weather)}</span>` : ''}
+            ${item.location ? `<span class="diary-view-chip">${pixelIcon('pin')}${escapeHtml(item.location)}</span>` : ''}
             ${item.is_favorite ? '<span class="diary-view-chip">收藏</span>' : ''}
             <span class="diary-view-chip">${diaryWordCount(item)} 字</span>
         </div>
@@ -1182,7 +906,6 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
     _formOpening = true;
     try {
         const userTimeZone = await fetchUserTimeZone();
-        ensureStyles();
         const diary    = isRecord(existing) ? existing : null;
         const isEdit   = diary !== null;
         const formDate = diary?.diary_date || presetDate || _selectedDate || todayInUserTimeZone();
@@ -1527,7 +1250,6 @@ export function render(container) {
     const now = parseDate(todayInUserTimeZone());
     _year = now.getFullYear();
     _month = now.getMonth() + 1;
-    ensureStyles();
 
     _unsubscribeDataChanges = subscribeDataChanges('diary', () => {
         void loadAndRender();
@@ -1535,7 +1257,7 @@ export function render(container) {
     void loadAndRender();
 
     const lifecycleVersion = _lifecycleVersion;
-    void loadMoodEmojis().then(() => {
+    void loadMoodOptions().then(() => {
         if (_container === container && _lifecycleVersion === lifecycleVersion) renderPage();
     });
 }

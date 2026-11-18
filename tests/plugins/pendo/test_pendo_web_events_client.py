@@ -135,11 +135,7 @@ const todayRangeKey = () => '2026-03-15';""",
             """import {
     bindEnterAction,
     bindFormSubmit,
-    BREAKPOINTS,
     escapeHtml,
-    injectStyles,
-    mediaMax,
-    pageShellCss,
     subscribeDataChanges,
 } from '../utils/ui.js';""",
             """const bindEnterAction = (element, action) => {
@@ -158,18 +154,12 @@ const bindFormSubmit = (form, submitButton) => {
         submitButton.click();
     };
 };
-const BREAKPOINTS = {
-    XL: '1200px', MOBILE: '720px', PHONE: '560px',
-};
 const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (_breakpoint, cssText) => cssText;
-const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
         ),
     )

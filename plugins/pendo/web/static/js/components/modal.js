@@ -224,7 +224,7 @@ export function showConfirmModal(options = {}) {
         const iconClass = isDanger ? 'confirm-modal-icon-danger' : 'confirm-modal-icon-info';
         const bodyHTML  = `
             <div class="confirm-modal-body">
-                <div class="confirm-modal-icon ${iconClass}" aria-hidden="true">${isDanger ? '🗑️' : 'ℹ️'}</div>
+                <div class="confirm-modal-icon ${iconClass}" aria-hidden="true"><span class="pixel-icon" data-icon="${isDanger ? 'trash' : 'info'}" aria-hidden="true"></span></div>
                 <p class="confirm-modal-message">${escapeHtml(message)}</p>
             </div>`;
         const footerHTML = `

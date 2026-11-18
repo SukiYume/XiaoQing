@@ -6,6 +6,7 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import icons_runtime, palette_runtime
 from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
 ROOT: Final = REPOSITORY_ROOT
@@ -131,18 +132,18 @@ const initCustomSelects = () => {};""",
             format_runtime,
         ),
         (
-            "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, "
-            "subscribeDataChanges } from '../utils/ui.js';",
-            """const BREAKPOINTS = { XL: '1200px', MOBILE: '720px', PHONE: '560px' };
-const escapeHtml = (value) => String(value ?? '')
+            "import { moodIcon, pixelIcon, weatherIcon } from '../utils/icons.js';",
+            icons_runtime(),
+        ),
+        ("import { categoryColors } from '../utils/palette.js';", palette_runtime()),
+        (
+            "import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';",
+            """const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (_breakpoint, cssText) => cssText;
-const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
         ),
         (
@@ -320,7 +321,7 @@ def test_diary_renderers_escape_analytics_and_build_accessible_calendar() -> Non
         assert.match(calendar, /aria-label="2026年3月2日 · 周一，1 字"/);
         assert.match(calendar, /data-date="2026-03-02"[\s\S]*aria-pressed="true"/);
         assert.ok(calendar.includes('1 字 🙂'));
-        assert.ok(calendar.includes('&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;'));
+        assert.ok(calendar.includes('data-icon="mood-other"'));
         assert.ok(!calendar.includes('<script>'));
 
         const hero = client.renderHero();

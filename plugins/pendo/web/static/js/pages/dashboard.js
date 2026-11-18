@@ -17,9 +17,8 @@ import {
     zonedDateParts,
     zonedInstantEpoch,
 } from '../utils/timezone.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
+import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';
 
-const CSS_ID          = 'pendo-dashboard-styles';
 const PRIORITY_LABELS = Object.freeze({
     1: '紧急',
     2: '高优先',
@@ -33,220 +32,6 @@ let _unsubscribeDataChanges = null;
 let _loadVersion            = 0;
 
 // 页面样式集中注入一次，后续数据刷新只替换内容区域。
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('dashboard-page', { padding: '26px 24px 32px', compactPadding: '20px 16px 28px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-        .dashboard-hero {
-            display: grid; grid-template-columns: minmax(0, 1.2fr) auto; gap: 18px; align-items: end;
-            padding: 22px 24px; margin-bottom: 18px; border-radius: 24px;
-            background:
-                radial-gradient(circle at top right, rgba(99,102,241,0.16), transparent 34%),
-                radial-gradient(circle at bottom left, rgba(16,185,129,0.12), transparent 28%),
-                linear-gradient(145deg, rgba(255,255,255,0.95), rgba(248,250,252,0.92));
-            border: 1px solid rgba(99,102,241,0.14);
-            box-shadow: 0 18px 42px rgba(15,23,42,0.05);
-        }
-        .dashboard-hero h2 { margin: 0; font-size: 26px; font-weight: 800; color: var(--color-dashboard); letter-spacing: -0.02em; }
-        .dashboard-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.7; color: var(--color-text-secondary); max-width: 640px; }
-        .dashboard-hero-tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-        .dashboard-hero-tag {
-            padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.78);
-            border: 1px solid rgba(148,163,184,0.18); color: var(--color-text-secondary);
-            font-size: 12px; font-weight: 600; white-space: nowrap;
-        }
-        .dashboard-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
-        .dashboard-summary-card {
-            position: relative; overflow: hidden; padding: 16px 16px 14px; border-radius: 20px;
-            border: 1px solid rgba(226,232,240,0.92);
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
-            box-shadow: 0 12px 28px rgba(15,23,42,0.04);
-            min-width: 0;
-        }
-        .dashboard-summary-card::after {
-            content: ''; position: absolute; inset: auto -18px -30px auto; width: 96px; height: 96px;
-            border-radius: 50%; opacity: 0.18; background: currentColor; filter: blur(8px);
-        }
-        .dashboard-summary-card.events { color: #4F46E5; }
-        .dashboard-summary-card.tasks { color: #0F766E; }
-        .dashboard-summary-card.ledger { color: #DC2626; }
-        .dashboard-summary-card.diary { color: #7C3AED; }
-        .dashboard-summary-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-        .dashboard-summary-icon {
-            width: 40px; height: 40px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center;
-            font-size: 20px; background: rgba(255,255,255,0.72); border: 1px solid rgba(255,255,255,0.7);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
-        }
-        .dashboard-summary-pill {
-            padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
-            background: rgba(255,255,255,0.76); color: currentColor;
-        }
-        .dashboard-summary-value {
-            font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; font-weight: 800; letter-spacing: -0.03em; color: var(--color-text);
-            overflow-wrap: anywhere; word-break: break-word;
-        }
-        .dashboard-summary-label { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--color-text); overflow-wrap: anywhere; word-break: break-word; }
-        .dashboard-summary-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
-        .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr); gap: 16px; align-items: start; }
-        .dashboard-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-        .dashboard-panel {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
-            border: 1px solid rgba(226,232,240,0.92); border-radius: 22px;
-            box-shadow: 0 16px 34px rgba(15,23,42,0.04); overflow: hidden;
-        }
-        .dashboard-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
-        .dashboard-panel-header h3 { margin: 0; font-size: 18px; font-weight: 750; color: var(--color-text); letter-spacing: -0.02em; }
-        .dashboard-panel-title.events { color: var(--color-events); }
-        .dashboard-panel-title.tasks { color: var(--color-tasks); }
-        .dashboard-panel-title.ledger { color: var(--color-ledger); }
-        .dashboard-panel-header p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .dashboard-link { color: var(--color-text-secondary); font-size: 12px; font-weight: 600; text-decoration: none; }
-        .dashboard-link:hover { color: var(--color-text); }
-        .dashboard-panel-body { padding: 16px 20px 20px; }
-        .dashboard-agenda-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .dashboard-agenda-section-label { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .dashboard-agenda-list { display: flex; flex-direction: column; gap: 10px; }
-        .dashboard-event-card {
-            display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 12px; padding: 12px;
-            border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.92);
-        }
-        .dashboard-event-date {
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            border-radius: 14px; background: rgba(79,70,229,0.08); color: #4338CA; font-weight: 700; min-height: 58px;
-        }
-        .dashboard-event-date strong { font-size: 18px; line-height: 1; }
-        .dashboard-event-date span { font-size: 11px; margin-top: 4px; }
-        .dashboard-event-title { font-size: 14px; font-weight: 650; color: var(--color-text); line-height: 1.4; }
-        .dashboard-event-subtitle { margin-top: 5px; font-size: 12px; font-weight: 700; color: #6366F1; }
-        .dashboard-event-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--color-text-secondary); min-width: 0; }
-        .dashboard-meta-pill {
-            display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px; background: rgba(148,163,184,0.08);
-            max-width: 100%;
-        }
-        .dashboard-meta-pill.location { white-space: normal; line-height: 1.45; align-items: flex-start; overflow-wrap: anywhere; }
-        .dashboard-task-sections { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr); gap: 14px; }
-        .dashboard-task-section { padding: 14px; border-radius: 18px; background: rgba(255,255,255,0.78); border: 1px solid rgba(226,232,240,0.9); }
-        .dashboard-task-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-        .dashboard-task-section-head strong { font-size: 13px; color: var(--color-text); }
-        .dashboard-task-count { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); padding: 4px 8px; border-radius: 999px; background: rgba(148,163,184,0.08); }
-        .dashboard-task-list { display: flex; flex-direction: column; gap: 8px; }
-        .dashboard-task-item {
-            display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start;
-            padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(226,232,240,0.88);
-            background: linear-gradient(180deg, rgba(248,250,252,0.94), rgba(255,255,255,0.98));
-        }
-        .dashboard-task-item.is-completed { opacity: 0.72; background: rgba(248,250,252,0.85); }
-        .dashboard-task-item input[type="checkbox"] { width: 16px; height: 16px; margin-top: 3px; cursor: pointer; }
-        .dashboard-task-complete-dot { width: 16px; height: 16px; margin-top: 4px; border-radius: 999px; background: rgba(16,185,129,0.16); }
-        .dashboard-task-title { font-size: 14px; font-weight: 600; color: var(--color-text); line-height: 1.4; }
-        .dashboard-task-title.is-done { text-decoration: line-through; }
-        .dashboard-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--color-text-secondary); }
-        .dashboard-finance-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-        .dashboard-finance-metric { padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.88); min-width: 0; }
-        .dashboard-finance-metric span { font-size: 12px; color: var(--color-text-secondary); }
-        .dashboard-finance-metric strong {
-            display: block; margin-top: 8px; font-size: clamp(18px, 1.9vw, 22px); line-height: 1.1; font-weight: 800; letter-spacing: -0.03em;
-            overflow-wrap: anywhere;
-        }
-        .dashboard-chart-card {
-            display: block; padding: 14px; border-radius: 18px; color: inherit; text-decoration: none;
-            background: linear-gradient(180deg, rgba(254,242,242,0.92), rgba(255,255,255,0.98));
-            border: 1px solid rgba(239,68,68,0.12); cursor: pointer;
-        }
-        .dashboard-chart-card:focus-visible { outline: 2px solid var(--color-ledger); outline-offset: 3px; }
-        .dashboard-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-        .dashboard-chart-head strong { font-size: 14px; color: var(--color-ledger); }
-        .dashboard-chart-head span { font-size: 11px; color: var(--color-text-secondary); }
-        .dashboard-chart-container {
-            display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 22px;
-            height: 180px; min-width: 0;
-        }
-        .dashboard-chart-y-axis, .dashboard-chart-x-axis, .dashboard-chart-plot { position: relative; min-width: 0; }
-        .dashboard-chart-y-axis { grid-column: 1; grid-row: 1; }
-        .dashboard-chart-y-label {
-            position: absolute; right: 8px; transform: translateY(50%); font-size: 10px; color: #94A3B8; white-space: nowrap;
-        }
-        .dashboard-chart-plot { grid-column: 2; grid-row: 1; }
-        .dashboard-spending-chart { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-        .dashboard-chart-grid { stroke: rgba(239,68,68,0.12); stroke-width: 1; stroke-dasharray: 4 6; vector-effect: non-scaling-stroke; }
-        .dashboard-chart-area { fill: rgba(239,68,68,0.12); }
-        .dashboard-chart-line { fill: none; stroke: #DC2626; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-        .dashboard-chart-point {
-            position: absolute; width: 6px; height: 6px; transform: translate(-50%, -50%); border: 2px solid #DC2626;
-            border-radius: 999px; background: #fff; box-sizing: border-box;
-        }
-        .dashboard-chart-x-axis { grid-column: 2; grid-row: 2; }
-        .dashboard-chart-x-label {
-            position: absolute; top: 5px; transform: translateX(-50%); font-size: 10px; color: #94A3B8; white-space: nowrap;
-        }
-        .dashboard-ledger-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
-        .dashboard-ledger-item {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
-            padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,0.86); border: 1px solid rgba(226,232,240,0.86);
-        }
-        .dashboard-ledger-item strong { display: block; font-size: 13px; color: var(--color-text); }
-        .dashboard-ledger-item span { display: block; margin-top: 4px; font-size: 11px; color: var(--color-text-secondary); }
-        .dashboard-ledger-amount { font-size: 14px; font-weight: 800; text-align: right; }
-        .dashboard-ledger-amount.income, .dashboard-finance-value.income, .dashboard-finance-value.positive { color: var(--color-success); }
-        .dashboard-ledger-amount.expense, .dashboard-finance-value.expense, .dashboard-finance-value.negative { color: var(--color-ledger); }
-        .dashboard-ledger-amount.transfer { color: var(--color-text); }
-        .dashboard-ledger-empty { margin-top: 14px; }
-        .dashboard-diary-panel { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 18px 20px; }
-        .dashboard-diary-copy strong { display: block; font-size: 16px; color: var(--color-text); }
-        .dashboard-diary-copy p { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); }
-        .dashboard-diary-link { margin-top: 12px; }
-        .dashboard-diary-stat {
-            min-width: 132px; padding: 12px 14px; border-radius: 18px; text-align: center;
-            background: linear-gradient(180deg, rgba(124,58,237,0.10), rgba(255,255,255,0.9));
-            border: 1px solid rgba(124,58,237,0.14);
-        }
-        .dashboard-diary-stat strong {
-            display: block; font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; color: #7C3AED; letter-spacing: -0.03em;
-            overflow-wrap: anywhere; word-break: break-word;
-        }
-        .dashboard-diary-stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
-        .dashboard-empty {
-            padding: 28px 16px; border-radius: 18px; background: rgba(248,250,252,0.86);
-            border: 1px dashed rgba(148,163,184,0.28); text-align: center;
-        }
-        .dashboard-empty strong { display: block; font-size: 14px; color: var(--color-text); }
-        .dashboard-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .dashboard-grid { grid-template-columns: 1fr; }
-            .dashboard-finance-top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .dashboard-finance-metric strong { font-size: clamp(16px, 2.3vw, 20px); }
-            .dashboard-event-card { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
-            .dashboard-event-title { font-size: 13px; }
-            .dashboard-meta-pill.location { width: 100%; border-radius: 14px; }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .dashboard-hero { grid-template-columns: 1fr; }
-            .dashboard-hero-tags { justify-content: flex-start; }
-            .dashboard-summary { grid-template-columns: 1fr; gap: 10px; }
-            .dashboard-summary-card { padding: 14px 14px 12px; border-radius: 18px; }
-            .dashboard-summary-card::after { width: 72px; height: 72px; inset: auto -12px -24px auto; }
-            .dashboard-summary-top { margin-bottom: 12px; }
-            .dashboard-summary-icon { width: 34px; height: 34px; border-radius: 12px; font-size: 18px; }
-            .dashboard-summary-pill { padding: 4px 8px; font-size: 10px; }
-            .dashboard-summary-value { font-size: 24px; }
-            .dashboard-summary-label { margin-top: 5px; font-size: 12px; }
-            .dashboard-summary-meta { margin-top: 4px; font-size: 11px; }
-            .dashboard-agenda-grid, .dashboard-task-sections, .dashboard-finance-top { grid-template-columns: 1fr; }
-            .dashboard-diary-panel { grid-template-columns: 1fr; }
-            .dashboard-event-meta { gap: 5px; }
-            .dashboard-meta-pill { font-size: 11px; }
-        `,
-        )}
-    `,
-    );
-}
 
 // ---------- 接口边界与展示格式 ----------
 
@@ -308,9 +93,10 @@ function normalizeDashboardData(payload) {
 
 function buildHero(summary, monthSummary) {
     return `
-        <section class="dashboard-hero">
+        <section class="dashboard-hero pendo-page-header">
             <div>
-                <h2>📊 概览</h2>
+                <span class="eyebrow"><i></i>DASHBOARD</span>
+                <h2>概览</h2>
                 <p>集中查看最近的安排、任务和资金变化。</p>
             </div>
             <div class="dashboard-hero-tags">
@@ -325,7 +111,6 @@ function renderSummaryCards(summary) {
     const cards = [
         {
             tone: 'events',
-            icon: '📅',
             badge: '月视图',
             value: String(summary.events_month),
             label: '本月日程',
@@ -333,7 +118,6 @@ function renderSummaryCards(summary) {
         },
         {
             tone: 'tasks',
-            icon: '✅',
             badge: '进度',
             value: String(summary.tasks_pending),
             label: '进行中任务',
@@ -341,7 +125,6 @@ function renderSummaryCards(summary) {
         },
         {
             tone: 'ledger',
-            icon: '💸',
             badge: '财务',
             value: formatMoneyCompact(summary.ledger_month_expense),
             label: '本月支出',
@@ -349,7 +132,6 @@ function renderSummaryCards(summary) {
         },
         {
             tone: 'diary',
-            icon: '📖',
             badge: '记录',
             value: String(summary.diary_recent),
             label: '近 30 天日记',
@@ -363,7 +145,7 @@ function renderSummaryCards(summary) {
                     (card) => `
                 <article class="dashboard-summary-card ${card.tone}">
                     <div class="dashboard-summary-top">
-                        <span class="dashboard-summary-icon">${card.icon}</span>
+                        <span class="dashboard-summary-icon pixel-icon" data-module="${card.tone}" aria-hidden="true"></span>
                         <span class="dashboard-summary-pill">${card.badge}</span>
                     </div>
                     <div class="dashboard-summary-value">${card.value}</div>
@@ -409,8 +191,8 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
                                 <div class="dashboard-event-title">${escapeHtml(heading)}</div>
                                 ${event.display_subtitle && !isMultiNode ? `<div class="dashboard-event-subtitle">${escapeHtml(event.display_subtitle)}</div>` : ''}
                                 <div class="dashboard-event-meta">
-                                    <span class="dashboard-meta-pill">🕒 ${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
-                                    ${event.location ? `<span class="dashboard-meta-pill location">📍 ${escapeHtml(event.location)}</span>` : ''}
+                                    <span class="dashboard-meta-pill"><span class="pixel-icon" data-icon="clock" aria-hidden="true"></span>${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
+                                    ${event.location ? `<span class="dashboard-meta-pill location"><span class="pixel-icon" data-icon="pin" aria-hidden="true"></span>${escapeHtml(event.location)}</span>` : ''}
                                 </div>
                             </div>
                         </article>`;
@@ -450,7 +232,7 @@ function renderMonthlyAgenda(events) {
         <section class="dashboard-panel">
             <div class="dashboard-panel-header">
                 <div>
-                    <h3 class="dashboard-panel-title events">📅 本月日程</h3>
+                    <h3 class="dashboard-panel-title"><span class="pixel-icon" data-module="events" aria-hidden="true"></span>本月日程</h3>
                     <p>查看这个月的重要安排。</p>
                 </div>
                 <a class="dashboard-link" href="#/events">查看全部 →</a>
@@ -509,7 +291,7 @@ function renderTasksPanel({ active, completed }) {
         <section class="dashboard-panel">
             <div class="dashboard-panel-header">
                 <div>
-                    <h3 class="dashboard-panel-title tasks">✅ 任务进度</h3>
+                    <h3 class="dashboard-panel-title"><span class="pixel-icon" data-module="tasks" aria-hidden="true"></span>任务进度</h3>
                     <p>同时查看进行中的任务和最近完成项。</p>
                 </div>
                 <a class="dashboard-link" href="#/tasks">查看全部 →</a>
@@ -617,7 +399,7 @@ function renderFinancePanel(spendingTrend, monthSummary, recentLedger) {
         <section class="dashboard-panel">
             <div class="dashboard-panel-header">
                 <div>
-                    <h3 class="dashboard-panel-title ledger">💰 本月财务</h3>
+                    <h3 class="dashboard-panel-title"><span class="pixel-icon" data-module="ledger" aria-hidden="true"></span>本月财务</h3>
                     <p>人民币走势与各币种独立汇总。</p>
                 </div>
                 <a class="dashboard-link" href="#/ledger">查看账本 →</a>
@@ -659,7 +441,7 @@ function renderDiaryPanel(summary) {
         <section class="dashboard-panel">
             <div class="dashboard-diary-panel">
                 <div class="dashboard-diary-copy">
-                    <strong>📖 日记记录</strong>
+                    <strong class="dashboard-panel-title"><span class="pixel-icon" data-module="diary" aria-hidden="true"></span>日记记录</strong>
                     <p>近 30 天共写了 ${summary.diary_recent} 篇。</p>
                     <div class="dashboard-diary-link">
                         <a class="dashboard-link" href="#/diary">去写日记 →</a>
@@ -722,7 +504,7 @@ async function loadAndRender() {
             try {
                 await api.put(`/items/${encodeURIComponent(taskId)}`, { status: 'done' });
                 if (_container !== container) return;
-                showToast('任务已完成 ✅', 'success');
+                showToast('任务已完成', 'success');
                 await loadAndRender();
             } catch (error) {
                 if (_container !== container) return;
@@ -745,7 +527,6 @@ export function render(container) {
     _unsubscribeDataChanges?.();
     _loadVersion += 1;
     _container = container;
-    ensureStyles();
     _unsubscribeDataChanges = subscribeDataChanges(null, () => {
         void loadAndRender();
     });

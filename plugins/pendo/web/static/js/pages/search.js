@@ -10,22 +10,21 @@ import {
     textValue,
 } from '../utils/format.js';
 import { formatZonedDateTime } from '../utils/timezone.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
+import { escapeHtml, subscribeDataChanges } from '../utils/ui.js';
 import { openEventDetail } from './events.js';
 import { openTaskModal } from './tasks.js';
 import { openDetailModal as openLedgerDetailModal } from './ledger.js';
 import { openNoteViewModal } from './notes.js';
 import { openDiaryViewModal } from './diary.js';
 
-const CSS_ID    = 'pendo-search-redesign-styles';
 const PAGE_SIZE = 20;
 
 const TYPE_CONFIG = Object.freeze({
-    event: { label: '日程', icon: '📅' },
-    task: { label: '待办', icon: '✅' },
-    ledger: { label: '记账', icon: '💰' },
-    note: { label: '笔记', icon: '📝' },
-    diary: { label: '日记', icon: '📔' },
+    event: { label: '日程', module: 'events' },
+    task: { label: '待办', module: 'tasks' },
+    ledger: { label: '记账', module: 'ledger' },
+    note: { label: '笔记', module: 'notes' },
+    diary: { label: '日记', module: 'diary' },
 });
 
 const TYPE_ORDER        = Object.freeze(['event', 'task', 'ledger', 'note', 'diary']);
@@ -157,7 +156,7 @@ function itemMeta(item) {
     if (item.type === 'event') {
         return [
             item.start_time ? formatZonedDateTime(item.start_time, '') : '',
-            item.location || item.collection?.location ? `📍 ${item.location || item.collection.location}` : '',
+            item.location || item.collection?.location ? item.location || item.collection.location : '',
             item.category || item.collection?.category || '',
         ].filter(Boolean);
     }
@@ -233,138 +232,6 @@ function groupedResults() {
     );
 }
 
-function ensureStyles() {
-    injectStyles(
-        CSS_ID,
-        `
-        ${pageShellCss('search-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
-
-        /* 搜索头部与查询输入 */
-        .search-hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
-            padding: 24px 26px; border-radius: 28px; margin-bottom: 18px;
-            background:
-                radial-gradient(circle at top right, rgba(100,116,139,0.18), transparent 32%),
-                radial-gradient(circle at bottom left, rgba(148,163,184,0.12), transparent 22%),
-                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(148,163,184,0.16); box-shadow: 0 18px 40px rgba(15,23,42,0.05);
-        }
-        .search-hero h2 {
-            margin: 0; display: inline-flex; align-items: center; gap: 10px;
-            font-size: 30px; font-weight: 820; letter-spacing: -0.03em; color: #334155;
-        }
-        .search-hero-icon {
-            display: inline-flex; align-items: center; justify-content: center;
-            width: 40px; height: 40px; border-radius: 14px; flex: 0 0 auto;
-            background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(59,130,246,0.18));
-            font-size: 24px; line-height: 1;
-        }
-        .search-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
-        .search-hero-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-        .search-hero-tag {
-            display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px;
-            background: rgba(148,163,184,0.10); color: #475569; font-size: 12px; font-weight: 700;
-        }
-        .search-query-bar {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center;
-            padding: 16px 18px; margin-bottom: 16px; border-radius: 24px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(203,213,225,0.9); box-shadow: 0 14px 30px rgba(15,23,42,0.04);
-        }
-        .search-input-wrap { position: relative; }
-        .search-input-wrap .search-input {
-            width: 100%; height: 46px; box-sizing: border-box; padding: 0 16px 0 50px;
-            border-radius: 16px; border: 1px solid rgba(203,213,225,0.92); background: rgba(255,255,255,0.92);
-            font-size: 15px; color: var(--color-text);
-        }
-        .search-input-wrap .search-input:focus { outline: none; border-color: #64748B; box-shadow: 0 0 0 3px rgba(148,163,184,0.16); }
-        .search-input-icon {
-            position: absolute; left: 18px; top: 50%; transform: translateY(-50%);
-            width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
-            color: var(--color-text-tertiary); pointer-events: none;
-        }
-        .search-input-icon svg { width: 18px; height: 18px; display: block; }
-        .search-query-meta { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-        .search-pill {
-            display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px;
-            background: rgba(255,255,255,0.9); border: 1px solid rgba(203,213,225,0.9); color: #475569; font-size: 12px; font-weight: 700;
-        }
-        .search-filter-tabs, .search-chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-        .search-tab, .search-chip {
-            border: 1px solid rgba(203,213,225,0.9); background: rgba(255,255,255,0.9); color: #475569; cursor: pointer;
-            border-radius: 999px; padding: 9px 14px; font-size: 12px; font-weight: 700;
-        }
-        .search-tab.active, .search-chip.active { background: #475569; color: #fff; border-color: #475569; }
-        .search-chip.search-suggestion { background: rgba(241,245,249,0.9); }
-        .search-tab:focus-visible,
-        .search-chip:focus-visible,
-        .search-card:focus-visible {
-            outline: 3px solid rgba(100,116,139,0.24);
-            outline-offset: 2px;
-        }
-
-        /* 汇总、分组与结果卡片 */
-        .search-summary {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start;
-            padding: 16px 18px; margin-bottom: 16px; border-radius: 24px; background: rgba(255,255,255,0.92);
-            border: 1px solid rgba(203,213,225,0.85);
-        }
-        .search-summary h3 { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); }
-        .search-summary p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .search-results-stack { display: flex; flex-direction: column; gap: 16px; }
-        .search-group {
-            padding: 18px; border-radius: 24px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(203,213,225,0.88); box-shadow: 0 16px 34px rgba(15,23,42,0.04);
-        }
-        .search-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-        .search-group-title { display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 780; color: var(--color-text); }
-        .search-group-count { min-width: 28px; height: 28px; padding: 0 10px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: rgba(226,232,240,0.9); color: #475569; font-size: 12px; font-weight: 800; }
-        .search-card-list { display: flex; flex-direction: column; gap: 12px; }
-        .search-card {
-            display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
-            width: 100%; appearance: none; text-align: left; color: inherit; font: inherit;
-            padding: 14px; border-radius: 20px; border: 1px solid rgba(203,213,225,0.82); background: rgba(255,255,255,0.96);
-            cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
-        }
-        .search-card:hover { transform: translateY(-1px); border-color: rgba(100,116,139,0.28); box-shadow: 0 14px 28px rgba(15,23,42,0.06); }
-        .search-type-event { --search-type-color: #B45309; --search-type-soft: rgba(245,158,11,0.14); }
-        .search-type-task { --search-type-color: #047857; --search-type-soft: rgba(16,185,129,0.14); }
-        .search-type-ledger { --search-type-color: #DC2626; --search-type-soft: rgba(239,68,68,0.14); }
-        .search-type-note { --search-type-color: #2563EB; --search-type-soft: rgba(59,130,246,0.14); }
-        .search-type-diary { --search-type-color: #DB2777; --search-type-soft: rgba(236,72,153,0.14); }
-        .search-card-icon {
-            width: 42px; height: 42px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center;
-            background: var(--search-type-soft); color: var(--search-type-color); font-size: 18px;
-        }
-        .search-card-body { display: block; min-width: 0; }
-        .search-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .search-card-title { display: block; margin: 0; font-size: 15px; font-weight: 780; color: var(--color-text); }
-        .search-card-badge { padding: 4px 8px; border-radius: 999px; background: var(--search-type-color); font-size: 11px; font-weight: 700; color: #fff; }
-        .search-card-preview { display: block; margin-top: 6px; font-size: 13px; line-height: 1.65; color: var(--color-text-secondary); }
-        .search-card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-        .search-card-meta span {
-            display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px;
-            background: rgba(241,245,249,0.92); color: #475569; font-size: 12px; font-weight: 700;
-        }
-        .search-card-arrow { color: var(--color-text-tertiary); font-size: 16px; padding-top: 8px; }
-        .search-empty {
-            padding: 48px 18px; border-radius: 24px; text-align: center; background: rgba(255,255,255,0.92);
-            border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary);
-        }
-        .search-empty-icon { font-size: 40px; margin-bottom: 10px; }
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .search-hero, .search-query-bar, .search-summary { grid-template-columns: 1fr; }
-            .search-query-meta { justify-content: flex-start; }
-            .search-card { grid-template-columns: auto minmax(0, 1fr); }
-            .search-card-arrow { display: none; }
-        `,
-        )}
-    `,
-    );
-}
-
 function renderTabs() {
     return `<div class="search-filter-tabs" role="group" aria-label="结果类型">${FILTER_TABS.map((tab) => {
         const active = _activeType === tab.value;
@@ -416,7 +283,7 @@ function renderSummary() {
             </div>
             <div class="search-query-meta">
                 ${_total > PAGE_SIZE ? `<span class="search-pill">第 ${_page} / ${totalPages()} 页</span>` : ''}
-                ${activeTypes.map((type) => `<span class="search-pill">${TYPE_CONFIG[type].icon} ${TYPE_CONFIG[type].label} · ${counts[type]}</span>`).join('')}
+                ${activeTypes.map((type) => `<span class="search-pill"><span class="pixel-icon" data-module="${TYPE_CONFIG[type].module}" aria-hidden="true"></span>${TYPE_CONFIG[type].label} · ${counts[type]}</span>`).join('')}
             </div>
         </section>
     `;
@@ -430,7 +297,7 @@ function renderCard(item) {
     return `
         <button class="search-card search-type-${item.type}" type="button"
                 data-open-result="${escapeHtml(item.id)}" aria-label="${escapeHtml(`打开${cfg.label}：${title}`)}">
-            <span class="search-card-icon" aria-hidden="true">${cfg.icon}</span>
+            <span class="search-card-icon pixel-icon" data-module="${cfg.module}" aria-hidden="true"></span>
             <span class="search-card-body">
                 <span class="search-card-title-row">
                     <span class="search-card-title">${escapeHtml(title)}</span>
@@ -446,19 +313,19 @@ function renderCard(item) {
 
 function renderResults() {
     if (_loading)
-        return '<div class="search-empty" role="status"><div class="search-empty-icon">⏳</div><div>正在搜索...</div></div>';
+        return '<div class="search-empty" role="status"><span class="search-empty-icon pixel-icon" data-icon="hourglass" aria-hidden="true"></span><div>正在搜索...</div></div>';
     if (!_query.trim() && !_preset) {
-        return `<div class="search-empty"><div class="search-empty-icon">🔎</div><div>输入关键词开始检索，下面的建议可以直接点。</div></div>`;
+        return `<div class="search-empty"><span class="search-empty-icon pixel-icon" data-icon="search" aria-hidden="true"></span><div>输入关键词开始检索，下面的建议可以直接点。</div></div>`;
     }
     if (_hasSearched && !_results.length) {
-        return `<div class="search-empty"><div class="search-empty-icon">🧭</div><div>没有找到结果。试试换关键词、切类型，或先清空主题切片。</div></div>`;
+        return `<div class="search-empty"><span class="search-empty-icon pixel-icon" data-icon="compass" aria-hidden="true"></span><div>没有找到结果。试试换关键词、切类型，或先清空主题切片。</div></div>`;
     }
     return `<div class="search-results-stack">${groupedResults()
         .map(
             (group) => `
         <section class="search-group">
             <div class="search-group-head">
-                <div class="search-group-title">${TYPE_CONFIG[group.type].icon} ${TYPE_CONFIG[group.type].label}</div>
+                <div class="search-group-title"><span class="pixel-icon" data-module="${TYPE_CONFIG[group.type].module}" aria-hidden="true"></span>${TYPE_CONFIG[group.type].label}</div>
                 <span class="search-group-count">${group.items.length}</span>
             </div>
             <div class="search-card-list">${group.items.map(renderCard).join('')}</div>
@@ -469,14 +336,14 @@ function renderResults() {
 
 function renderPage() {
     if (!_container) return;
-    ensureStyles();
     const typeCounts  = resultCounts();
     const activeTypes = TYPE_ORDER.filter((type) => typeCounts[type]);
     _container.innerHTML = `
         <div class="search-shell">
             <section class="search-hero pendo-page-header">
                 <div>
-                    <h2><span class="search-hero-icon" aria-hidden="true">🔍</span><span>搜索</span></h2>
+                    <span class="eyebrow"><i></i>SEARCH</span>
+                    <h2>搜索</h2>
                     <p>在日程、待办、记账、笔记和日记中统一搜索。</p>
                     <div class="search-hero-tags">
                         <span class="search-hero-tag">${_activeType ? TYPE_CONFIG[_activeType].label : '全部类型'}</span>

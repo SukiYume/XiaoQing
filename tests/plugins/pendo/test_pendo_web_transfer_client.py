@@ -145,18 +145,14 @@ const isValidDateInput = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '
             timezone_runtime,
         ),
         (
-            "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } "
-            "from '../utils/ui.js';",
-            r"""const BREAKPOINTS = { XL: '1200px', MOBILE: '720px', PHONE: '480px' };
-const escapeHtml = (value) => String(value ?? '')
+            "import { escapeHtml } from '../utils/ui.js';",
+            r"""const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
-const pageShellCss = () => '';""",
+""",
         ),
     )
     for original, replacement in replacements:

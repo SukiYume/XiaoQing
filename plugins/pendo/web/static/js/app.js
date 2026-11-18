@@ -24,7 +24,7 @@ const BACK_TO_TOP_THEME = {
     diary: 'var(--color-diary)',
     search: 'var(--color-search)',
     stats: 'var(--color-stats)',
-    settings: 'var(--color-text-secondary)',
+    settings: 'var(--muted)',
     transfer: 'var(--color-dashboard)',
 };
 

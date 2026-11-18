@@ -328,7 +328,7 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 1. 在 `web/api/` 定义严格请求模型与路由。
 2. 从 `web/deps.py` 取得数据库和认证会话。
 3. 把复合用例放入 `web/services/` 或共享业务 service。
-4. 在 `web/static/js/pages/` 增加页面模块。
+4. 在 `web/static/js/pages/` 增加页面模块，在 `web/static/css/` 增加同名样式表并在 `index.html` 引入；颜色、边框和字体取 `css/app.css` 的令牌与共用组件。
 5. 添加 API、权限、租户隔离和浏览器行为测试。
 
 ---

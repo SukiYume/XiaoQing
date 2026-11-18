@@ -92,18 +92,14 @@ const errorMessage = (error, fallback = '未知错误') => textValue(error?.mess
             "const setUserTimeZone = (value) => { globalThis.__userTimeZone = value; return value; };",
         ),
         (
-            "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } "
-            "from '../utils/ui.js';",
-            """const BREAKPOINTS = { XL: '1200px', MOBILE: '720px' };
-const escapeHtml = (value) => String(value ?? '')
+            "import { escapeHtml } from '../utils/ui.js';",
+            """const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-const injectStyles = () => {};
-const mediaMax = (breakpoint, cssText) => `@media (max-width:${breakpoint}) {${cssText}}`;
-const pageShellCss = () => '';""",
+""",
         ),
     )
     for original, replacement in replacements:

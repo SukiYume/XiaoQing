@@ -6,6 +6,7 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import icons_runtime
 
 ROOT       : Final = REPOSITORY_ROOT
 FORM_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "form.js"
@@ -38,15 +39,21 @@ def _form_source_for_test() -> str:
 
     source = FORM_CLIENT.read_text(encoding="utf-8")
     custom_import = "import { initCustomSelects, renderCustomSelect } from './custom_select.js';"
+    icons_import  = "import { moodIcon, pixelIcon } from '../utils/icons.js';"
     ui_import     = "import { escapeAttr, escapeHtml } from '../utils/ui.js';"
     assert custom_import in source
+    assert icons_import in source
     assert ui_import in source
-    return source.replace(
-        custom_import,
-        "const { initCustomSelects, renderCustomSelect } = globalThis.__customSelect;",
-    ).replace(
-        ui_import,
-        "const { escapeAttr, escapeHtml } = globalThis.__ui;",
+    return (
+        source.replace(
+            custom_import,
+            "const { initCustomSelects, renderCustomSelect } = globalThis.__customSelect;",
+        )
+        .replace(icons_import, icons_runtime())
+        .replace(
+            ui_import,
+            "const { escapeAttr, escapeHtml } = globalThis.__ui;",
+        )
     )
 
 
@@ -91,8 +98,8 @@ def test_form_rendering_escapes_values_and_builds_accessible_single_choice_group
             {
                 type: 'mood', name: 'mood', label: '心情', value: 'same',
                 options: [
-                    { value: 'same', label: '首项', emoji: '<首>' },
-                    { value: 'same', label: '"><script>', emoji: '<次>' },
+                    { value: 'same', label: '首项' },
+                    { value: 'same', label: '"><script>' },
                 ],
             },
             { name: 'title', label: '标题', value: '"><script>bad()</script>' },
@@ -126,7 +133,7 @@ def test_form_rendering_escapes_values_and_builds_accessible_single_choice_group
         assert.match(html, /priority-selector[^>]+role="group"[^>]+aria-labelledby=/);
         assert.equal((html.match(/mood-btn active/g) || []).length, 1);
         assert.ok(html.includes('data-value="same" title="首项"'));
-        assert.ok(html.includes('&lt;首&gt;'));
+        assert.ok(html.includes('data-icon="mood-other"'));
         assert.ok(html.includes('&quot;&gt;&lt;script&gt;'));
         assert.ok(!html.includes('<script>'));
         assert.match(html, /mood-selector[^>]+role="group"[^>]+aria-labelledby=/);
