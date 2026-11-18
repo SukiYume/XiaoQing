@@ -108,7 +108,7 @@
 .priority-btn.active { opacity: 1; transform: scale(1.06); }
 .priority-btn.priority-1.active { border-color: var(--red-line); background: var(--red-soft); box-shadow: inset 0 0 0 1px var(--red-line); }
 .priority-btn.priority-2.active { border-color: var(--amber-line); background: var(--amber-soft); box-shadow: inset 0 0 0 1px var(--amber-line); }
-.priority-btn.priority-3.active { border-color: var(--amber-line); background: var(--gold-soft); box-shadow: inset 0 0 0 1px var(--amber-line); }
+.priority-btn.priority-3.active { border-color: var(--gold-line); background: var(--gold-soft); box-shadow: inset 0 0 0 1px var(--gold-line); }
 .priority-btn.priority-4.active { border-color: var(--mint-line); background: var(--mint-soft); box-shadow: inset 0 0 0 1px var(--mint-line); }
 .priority-btn.priority-5.active { border-color: var(--line); background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); }
 .tasks-toggle-btn:focus-visible,

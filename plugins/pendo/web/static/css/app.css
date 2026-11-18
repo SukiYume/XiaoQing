@@ -829,10 +829,11 @@ select {
 }
 
 /* 表单会按任务优先级动态拼接这些类名。 */
+/* 优先级色与待办列表的小旗一致：紧急红、高橙、中金、低绿、最低灰。 */
 .priority-1 { color: var(--red); font-weight: 700; }
 .priority-2 { color: var(--amber); font-weight: 700; }
-.priority-3 { color: var(--blue); font-weight: 700; }
-.priority-4 { color: var(--muted); }
+.priority-3 { color: var(--gold); font-weight: 700; }
+.priority-4 { color: var(--mint); }
 .priority-5 { color: var(--faint); }
 
 /* ============================================================
@@ -896,10 +897,11 @@ select {
     border-top: 3px solid var(--module, var(--gold));
 }
 
+/* 列表里带元素名的项包进 :where()，整条规则保持单个类的优先级，页面里按收支、正负着色的类才能盖过米色。 */
 :is(.dashboard-summary-value, .diary-summary-value, .stats-summary-value, .ledger-summary-value,
     .notes-summary-value, .tasks-stat-value, .transfer-summary-value, .dashboard-finance-value,
-    .notes-spotlight-stat-value, .stats-dual-value, .ledger-pulse-metric strong,
-    .stats-donut-center-value, .ledger-ring-center-value, .dashboard-diary-stat strong) {
+    .notes-spotlight-stat-value, .stats-dual-value, .ledger-pulse-metric :where(strong),
+    .stats-donut-center-value, .ledger-ring-center-value, .dashboard-diary-stat :where(strong)) {
     font-family: var(--pixel);
     font-weight: 400;
     color: var(--cream);
@@ -1045,7 +1047,7 @@ select {
 }
 
 :is(.stats-column-value, .stats-histogram-value, .stats-stacked-total, .stats-bar-value,
-    .notes-meter-value, .tasks-meter-value, .diary-cadence-value, .stats-comparison-metric-head strong) {
+    .notes-meter-value, .tasks-meter-value, .diary-cadence-value, .stats-comparison-metric-head :where(strong)) {
     font-family: var(--pixel);
     font-weight: 400;
     color: var(--cream);

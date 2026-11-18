@@ -245,19 +245,23 @@ function renderSummaryCards() {
     const balanceClass = balance >= 0 ? 'ledger-amount-income' : 'ledger-amount-expense';
     return `
         <div class="ledger-summary-cards">
-            <div class="ledger-summary-card">
+            <div class="ledger-summary-card income">
+                <span class="ledger-summary-icon" aria-hidden="true"><span class="pixel-icon" data-icon="income"></span></span>
                 <div class="ledger-summary-label">收入</div>
                 <div class="ledger-summary-value ledger-amount-income">${formatAmount(income)}</div>
             </div>
-            <div class="ledger-summary-card">
+            <div class="ledger-summary-card expense">
+                <span class="ledger-summary-icon" aria-hidden="true"><span class="pixel-icon" data-icon="expense"></span></span>
                 <div class="ledger-summary-label">支出</div>
                 <div class="ledger-summary-value ledger-amount-expense">${formatAmount(expense)}</div>
             </div>
-            <div class="ledger-summary-card">
+            <div class="ledger-summary-card balance">
+                <span class="ledger-summary-icon" aria-hidden="true"><span class="pixel-icon" data-icon="balance"></span></span>
                 <div class="ledger-summary-label">结余</div>
                 <div class="ledger-summary-value ${balanceClass}">${formatAmount(balance)}</div>
             </div>
-            <div class="ledger-summary-card">
+            <div class="ledger-summary-card transfer">
+                <span class="ledger-summary-icon" aria-hidden="true"><span class="pixel-icon" data-icon="transfer"></span></span>
                 <div class="ledger-summary-label">转账</div>
                 <div class="ledger-summary-value ledger-amount-transfer">${formatAmount(transfer)}</div>
             </div>

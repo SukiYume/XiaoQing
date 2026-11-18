@@ -24,6 +24,13 @@
 @container ledger-content (max-width: 1100px) {
     .ledger-summary-card { min-width: calc((100% - 14px) / 2); }
 }
+/* 图标方块按收支类型着色，四张卡不靠读数也能一眼分开。 */
+.ledger-summary-card.income { --summary-tone: var(--color-success); }
+.ledger-summary-card.expense { --summary-tone: var(--color-ledger); }
+.ledger-summary-card.balance { --summary-tone: var(--gold); }
+.ledger-summary-card.transfer { --summary-tone: var(--blue); }
+.ledger-summary-icon { grid-column: 1; grid-row: 1 / 3; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--summary-tone); background: color-mix(in srgb, var(--summary-tone) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--summary-tone) 32%, transparent); }
+.ledger-summary-icon .pixel-icon { width: 24px; height: 24px; }
 .ledger-summary-value { grid-column: 2; grid-row: 1; font-size: clamp(24px, 2.5vw, 31px); line-height: 1.2; min-width: 0; max-width: 100%; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; font-variant-numeric: tabular-nums; }
 .ledger-amount-income { color: var(--color-success); }
 .ledger-amount-expense { color: var(--color-ledger); }
@@ -161,6 +168,8 @@
     .ledger-hero { grid-template-columns: 1fr; }
     .ledger-summary-cards { gap: 10px; }
     .ledger-summary-card { min-width: calc((100% - 10px) / 2); padding: 12px; grid-template-columns: 24px minmax(0, 1fr); column-gap: 6px; row-gap: 8px; }
+    .ledger-summary-icon { grid-row: 1; width: 24px; height: 24px; }
+    .ledger-summary-icon .pixel-icon { width: 16px; height: 16px; }
     .ledger-summary-label { grid-row: 1; margin-top: 0; }
     .ledger-summary-value { grid-column: 1 / -1; grid-row: 2; font-size: clamp(16px, 4.6vw, 22px); }
     .ledger-quick-add { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

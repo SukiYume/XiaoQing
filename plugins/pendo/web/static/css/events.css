@@ -57,7 +57,8 @@
 .events-calendar-head:disabled { cursor: default; }
 .events-calendar-date { width: 28px; min-width: 28px; max-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; aspect-ratio: 1 / 1; font-size: 13px; font-weight: 700; color: var(--text); }
 .events-calendar-items { display: flex; flex-direction: column; gap: 3px; margin-top: auto; min-height: 0; overflow: hidden; }
-.events-calendar-chip { --events-calendar-chip-color: var(--violet); display: flex; width: 100%; text-align: left; border: none; cursor: pointer; align-items: center; gap: 6px; min-height: 20px; padding: 2px 4px 2px 0; background: transparent; color: var(--text); font-size: 11px; font-weight: 600; line-height: 1.25; overflow: hidden; }
+/* 事件类型色：单次琥珀、多节点紫、重复实例绿，日历条目、时间线圆点和类型标签三处一致。 */
+.events-calendar-chip { --events-calendar-chip-color: var(--amber); display: flex; width: 100%; text-align: left; border: none; cursor: pointer; align-items: center; gap: 6px; min-height: 20px; padding: 2px 4px 2px 0; background: transparent; color: var(--text); font-size: 11px; font-weight: 600; line-height: 1.25; overflow: hidden; }
 .events-calendar-chip::before { content: ''; flex: 0 0 auto; width: 6px; height: 6px; background: var(--events-calendar-chip-color); }
 .events-calendar-chip.multi_node { --events-calendar-chip-color: var(--violet); }
 .events-calendar-chip.recurring { --events-calendar-chip-color: var(--mint); }
@@ -78,7 +79,7 @@
 .events-timeline-track { position: relative; min-height: 100%; display: flex; justify-content: center; }
 .events-timeline-track::before { content: ''; position: absolute; left: 50%; top: 0; bottom: -8px; width: 2px; transform: translateX(-50%); background: var(--violet-soft); }
 .events-timeline-item:last-child .events-timeline-track::before { bottom: 14px; }
-.events-timeline-dot { position: relative; z-index: 1; width: 10px; height: 10px; margin-top: 12px; background: var(--color-events); box-shadow: 0 0 0 2px var(--gold-line); }
+.events-timeline-dot { position: relative; z-index: 1; width: 10px; height: 10px; margin-top: 12px; background: var(--amber); box-shadow: 0 0 0 2px var(--gold-line); }
 .events-timeline-dot.multi-node { background: var(--violet); box-shadow: 0 0 0 2px var(--gold-line); }
 .events-timeline-dot.recurring { background: var(--mint); box-shadow: 0 0 0 2px var(--gold-line); }
 .events-timeline-card { width: 100%; padding: 10px 12px; text-align: left; font: inherit; cursor: pointer; }
@@ -88,7 +89,7 @@
 .events-pill { font-weight: 700; }
 .events-pill.kind-multi-node { background: var(--violet-soft); color: var(--violet); }
 .events-pill.kind-recurring { background: var(--mint-soft); color: var(--mint); }
-.events-pill.kind-single { background: var(--violet-soft); color: var(--violet); }
+.events-pill.kind-single { background: var(--amber-soft); color: var(--amber); }
 .events-empty strong { display: block; font-size: 14px; color: var(--cream); }
 .events-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
 .events-detail-shell { display: flex; flex-direction: column; gap: 18px; }
@@ -111,7 +112,7 @@
 .events-reminder-toggle { min-width: 76px; }
 .events-reminder-toggle:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
 .events-status { padding: 5px 8px; font-size: 11px; font-weight: 800; background: var(--line); color: var(--muted); }
-.events-status.pending { background: var(--violet-soft); color: var(--violet); }
+.events-status.pending { background: var(--amber-soft); color: var(--amber); }
 .events-status.sent { background: var(--violet-soft); color: var(--violet); }
 .events-status.confirmed { background: var(--mint-soft); color: var(--mint); }
 .events-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

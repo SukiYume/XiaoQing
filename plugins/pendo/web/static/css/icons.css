@@ -39,6 +39,10 @@
     --icon-snow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M5 0h2v1h-2zM1 1h1v1h-1zM5 1h2v1h-2zM10 1h1v1h-1zM2 2h1v1h-1zM5 2h2v1h-2zM9 2h1v1h-1zM3 3h1v1h-1zM5 3h2v1h-2zM8 3h1v1h-1zM4 4h4v1h-4zM0 5h12v1h-12zM0 6h12v1h-12zM4 7h4v1h-4zM3 8h1v1h-1zM5 8h2v1h-2zM8 8h1v1h-1zM2 9h1v1h-1zM5 9h2v1h-2zM9 9h1v1h-1zM1 10h1v1h-1zM5 10h2v1h-2zM10 10h1v1h-1zM5 11h2v1h-2z'/%3E%3C/svg%3E");
     --icon-fog: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M2 1h8v1h-8zM1 3h10v1h-10zM0 5h11v1h-11zM1 7h11v1h-11zM2 9h8v1h-8z'/%3E%3C/svg%3E");
     --icon-wind: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M6 1h3v1h-3zM9 2h1v1h-1zM1 3h9v1h-9zM0 5h12v1h-12zM1 7h6v1h-6zM7 8h1v1h-1zM5 9h2v1h-2z'/%3E%3C/svg%3E");
+    --icon-income: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M7 1h4v1h-4zM9 2h2v1h-2zM8 3h1v1h-1zM10 3h1v1h-1zM7 4h1v1h-1zM10 4h1v1h-1zM2 5h1v1h-1zM6 5h1v1h-1zM1 6h1v1h-1zM3 6h1v1h-1zM5 6h1v1h-1zM0 7h1v1h-1zM4 7h1v1h-1zM0 10h12v1h-12z'/%3E%3C/svg%3E");
+    --icon-expense: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M0 1h1v1h-1zM4 1h1v1h-1zM1 2h1v1h-1zM3 2h1v1h-1zM5 2h1v1h-1zM2 3h1v1h-1zM6 3h1v1h-1zM7 4h1v1h-1zM10 4h1v1h-1zM8 5h1v1h-1zM10 5h1v1h-1zM9 6h2v1h-2zM7 7h4v1h-4zM0 10h12v1h-12z'/%3E%3C/svg%3E");
+    --icon-balance: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M3 0h6v1h-6zM4 1h1v1h-1zM7 1h1v1h-1zM5 2h2v1h-2zM3 3h2v1h-2zM7 3h2v1h-2zM2 4h1v1h-1zM9 4h1v1h-1zM1 5h1v1h-1zM5 5h2v1h-2zM10 5h1v1h-1zM1 6h1v1h-1zM4 6h1v1h-1zM10 6h1v1h-1zM1 7h1v1h-1zM5 7h2v1h-2zM10 7h1v1h-1zM1 8h1v1h-1zM7 8h1v1h-1zM10 8h1v1h-1zM1 9h1v1h-1zM5 9h2v1h-2zM10 9h1v1h-1zM2 10h1v1h-1zM9 10h1v1h-1zM3 11h6v1h-6z'/%3E%3C/svg%3E");
+    --icon-transfer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'%3E%3Cpath d='M8 1h1v1h-1zM8 2h2v1h-2zM1 3h10v1h-10zM8 4h2v1h-2zM8 5h1v1h-1zM3 6h1v1h-1zM2 7h2v1h-2zM1 8h10v1h-10zM2 9h2v1h-2zM3 10h1v1h-1z'/%3E%3C/svg%3E");
 }
 
 .pixel-icon {
@@ -87,3 +91,7 @@
 [data-icon='snow'] { --icon: var(--icon-snow); }
 [data-icon='fog'] { --icon: var(--icon-fog); }
 [data-icon='wind'] { --icon: var(--icon-wind); }
+[data-icon='income'] { --icon: var(--icon-income); }
+[data-icon='expense'] { --icon: var(--icon-expense); }
+[data-icon='balance'] { --icon: var(--icon-balance); }
+[data-icon='transfer'] { --icon: var(--icon-transfer); }
