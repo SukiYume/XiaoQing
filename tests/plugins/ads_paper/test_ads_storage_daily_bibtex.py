@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from plugins.ads_paper.ads_client import ADSClient
 from plugins.ads_paper.bibtex import BibTeXParseError, citation_entries, parse_bibtex_entries
+from plugins.ads_paper.scix_client import SciXClient
 from plugins.ads_paper.storage import PaperStorage, PaperStorageCorruptionError
 from tests.helpers.http import QueuedAiohttpSession, aiohttp_json_response
 
@@ -75,7 +75,8 @@ async def test_daily_uses_utc_entry_date_window_and_deterministic_order(tmp_path
         aiohttp_json_response(
             {
                 "response": {
-                    "docs": [
+                    "numFound": 4,
+                    "docs"    : [
                         {"bibcode": "B", "title": ["Today B"], "entdate": today.isoformat()},
                         {"bibcode": "OLD", "title": ["Old"], "entdate": yesterday.isoformat()},
                         {
@@ -85,13 +86,13 @@ async def test_daily_uses_utc_entry_date_window_and_deterministic_order(tmp_path
                             "date"   : "2021-01-01T00:00:00.000Z",
                         },
                         {"bibcode": "UNKNOWN", "title": ["Missing date"]},
-                    ]
+                    ],
                 }
             }
         )
     )
 
-    result = await ai_commands.cmd_daily(ADSClient("token", session), storage, 1)
+    result = await ai_commands.cmd_daily(SciXClient("token", session), storage, 1)
     text   = result[0]["data"]["text"]
 
     params = session.requests[0][2]["params"]

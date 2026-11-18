@@ -299,7 +299,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 |---|---|---|
 | `group` | `otaku` `addressee` `participation` `multimodal` `persona` `banter` `help` `daily` `notice` `regress` | 活人感、聊天对象、参与度、读图与表情、人设边界与认出自己的观测站截图、接梗、认真求助、日常、文字截图、计算与出站素材 |
 | `quality` | `quality_boundaries` `quality_scenarios` `quality_joining` | 人设与第三方边界、多人归属、话题转移、隔天新话题、读图与历史图、隔天关心面试、自主参与、私事不插话、长空档旧话题 |
-| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_agent_notes` `life_agent_events` `life_bursts` `life_name_call` `life_agent_plugins` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话、连着办几件小事不多问、作息影响节奏、冷群主动开口；几个剧本的专门检查见表后 |
+| `life` | `life_private` `life_group` `life_agent` `life_agent_ledger` `life_agent_errands` `life_agent_notes` `life_agent_events` `life_bursts` `life_name_call` `life_agent_plugins` `life_agent_papers` `life_routine` `life_proactive` | 近况前后一致、今天和昨天的生活、线下邀约、私聊收尾、未完话头、agent 承诺、写入前先核对原话、连着办几件小事不多问、作息影响节奏、冷群主动开口；几个剧本的专门检查见表后 |
 | `online_life` | `ol_self_page` `ol_recent_group` `ol_recent_private` `ol_yesterday` `ol_term` `ol_unrelated` `ol_link` `ol_plan` `ol_meme` `ol_like`，其中多数群聊版剧本另有名字带 `_p` 的私聊版 | 拿预置的网上经历接话不编造、昨天和今天分开、听得懂学过的词、无关闲聊不硬扯、要链接时只给刚提到的那条、打算不说成做完、她收的梗图进了表情库并在要表情时用上、兴趣快照不夸大 |
 | `memory` | `mem_recall` `mem_update` `mem_privacy` `mem_public_private` `mem_avoid` `mem_people` `mem_cross_group` `mem_rename` `mem_promise` `mem_legacy` `mem_avoid_private` `mem_group_joke` `mem_quiet` `mem_agent_prefs` | 预置几天前的对话、整理一次后再问（`consolidate()` 步骤），逐项检查见表后 |
 
@@ -309,6 +309,7 @@ python -m scripts.chat_eval calibrate                     # 只校准审查器�
 - `life_bursts`：一个人连着发几条时只回一次，一件事分两条说时直接办完。
 - `life_name_call`：只喊一声马上回一句短应答，接着说的事没再点名也交给 agent 办掉。
 - `life_agent_plugins`：颜色、天文工具、词典、地震、随机选择、GitHub、论文、CHIME、APOD 等查询类插件逐个替人用一遍，会话式和要管理员的说清做不了。
+- `life_agent_papers`：文献调研三连问，按期刊和方向比较发文量与被引、找高被引综述并读摘要后概括、导出上一条里第一篇的 BibTeX；链接指向 SciX 或 arXiv。
 
 `memory` 组预置几天前的对话，整理一次后再问：
 

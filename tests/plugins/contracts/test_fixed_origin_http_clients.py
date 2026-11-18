@@ -12,7 +12,7 @@ from core.bounded_http import HttpStatusError, ResponseFormatError, ResponseLimi
 from core.public_errors import PUBLIC_ERROR_PREFIX
 from plugins.adnmb import adapi
 from plugins.adnmb.adapi import AdnmbClient
-from plugins.ads_paper.ads_client import ADSClient
+from plugins.ads_paper.scix_client import SciXClient
 from plugins.chime import main as chime
 from plugins.github import main as github
 from tests.helpers.settings_snapshot import with_settings_reader
@@ -83,18 +83,16 @@ def _context(tmp_path: Path, session: _Session, *, proxy: str = "") -> SimpleNam
 
 
 @pytest.mark.asyncio
-async def test_ads_search_streams_bounded_json_and_preserves_timeout() -> None:
-    response = _Response(
-        b'{"response":{"docs":[{"bibcode":"2026Test"}]}}',
-        url="https://api.adsabs.harvard.edu/v1/search/query",
-    )
-    session = _Session(response)
+async def test_scix_search_streams_bounded_json_and_preserves_timeout() -> None:
+    response = _Response(b'{"response":{"numFound":1,"docs":[{"bibcode":"2026Test"}]}}')
+    session  = _Session(response)
 
-    result = await ADSClient("token", session).search_papers("frb")
+    result = await SciXClient("token", session).search("frb", rows=5, sort="score desc")
 
-    assert result == [{"bibcode": "2026Test"}]
+    assert result.docs == [{"bibcode": "2026Test"}]
     method, url, kwargs = session.calls[0]
     assert method == "GET"
+    assert urlsplit(url).netloc == "api.scixplorer.org"
     assert urlsplit(url).path == "/v1/search/query"
     assert kwargs["allow_redirects"] is False
     assert kwargs["auto_decompress"] is False
@@ -103,44 +101,34 @@ async def test_ads_search_streams_bounded_json_and_preserves_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ads_bibtex_accepts_only_its_bounded_legacy_text_json() -> None:
+async def test_scix_export_accepts_only_its_bounded_legacy_text_json() -> None:
     response = _Response(
         b'{"export":"  @article{bounded}  "}',
-        content_type = "text/plain; charset=utf-8",
-        url          = "https://api.adsabs.harvard.edu/v1/export/bibtex",
+        content_type="text/plain; charset=utf-8",
     )
     session = _Session(response)
 
-    result = await ADSClient("token", session).get_bibtex("bibcode")
+    result = await SciXClient("token", session).export(["bibcode"])
 
     assert result == "@article{bounded}"
     assert response.content.iterations == 1
 
 
 @pytest.mark.asyncio
-async def test_ads_rejects_wrong_mime_before_reading_body() -> None:
-    response = _Response(
-        b'{"response":{"docs":[]}}',
-        content_type = "text/html",
-        url          = "https://api.adsabs.harvard.edu/v1/search/query",
-    )
+async def test_scix_rejects_wrong_mime_before_reading_body() -> None:
+    response = _Response(b'{"response":{"numFound":0,"docs":[]}}', content_type="text/html")
 
     with pytest.raises(ResponseFormatError):
-        await ADSClient("token", _Session(response)).search_papers("frb")
+        await SciXClient("token", _Session(response)).search("frb", rows=5, sort="score desc")
     assert response.content.iterations == 0
 
 
 @pytest.mark.asyncio
-async def test_ads_huge_error_body_is_closed_without_being_read() -> None:
-    response = _Response(
-        b"must-not-be-read",
-        status         = 503,
-        content_length = 1_000_000_000,
-        url            = "https://api.adsabs.harvard.edu/v1/search/query",
-    )
+async def test_scix_huge_error_body_is_closed_without_being_read() -> None:
+    response = _Response(b"must-not-be-read", status=503, content_length=1_000_000_000)
 
     with pytest.raises(HttpStatusError):
-        await ADSClient("token", _Session(response)).search_papers("frb")
+        await SciXClient("token", _Session(response)).search("frb", rows=5, sort="score desc")
     assert response.content.iterations == 0
     assert response.close_calls >= 1
 

@@ -507,7 +507,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 
 | 路径 | 说明 |
 |---|---|
-| `plugins.ads_paper.ai.routes.summary` | ADS 论文 AI 摘要 route |
+| `plugins.ads_paper.ai.routes.summary` | `/paper summarize` 的论文 AI 摘要 route |
 | `plugins.xiaoqing_chat.ai.routes.chat` | 主回复 route |
 | `plugins.xiaoqing_chat.ai.routes.checker` | 回复检查 route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | 规划与推理 route |
@@ -655,7 +655,7 @@ Core 顶层敏感字段：
 | `plugins.chat` | `token`、`bot_id`、`proxy` | Coze API 凭据与代理 |
 | `plugins.twitter` | `user_id`、`headers.authorization`、`cookies`、`proxy`、`max_pages` | X/Twitter 抓取身份、会话和页数预算 |
 | `plugins.signin.yingshijufeng` | `app_id`、`kdt_id`、`access_token`、`sid` | 影视飓风有赞签到凭据 |
-| `plugins.ads_paper` | `ads_token` | NASA ADS API Token |
+| `plugins.ads_paper` | `ads_token` | SciX API Token（NASA ADS 的继任服务，原 ADS Token 继续有效） |
 
 QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间。
 字段 schema 位于对应插件 README。

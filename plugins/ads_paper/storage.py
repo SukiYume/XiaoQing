@@ -275,7 +275,7 @@ class PaperStorage:
             existing_keys = {entry.citation_key for entry in existing_entries}
             new_keys      = {entry.citation_key for entry in new_entries}
             if not new_entries or str(bibcode).strip() not in new_keys:
-                raise BibTeXParseError("ADS BibTeX export does not contain the requested bibcode")
+                raise BibTeXParseError("BibTeX export does not contain the requested bibcode")
             if existing_keys.intersection(new_keys):
                 return False
             separator = "\n\n" if existing.strip() else ""

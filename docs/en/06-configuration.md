@@ -508,7 +508,7 @@ See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, dem
 
 | Path | Description |
 |---|---|
-| `plugins.ads_paper.ai.routes.summary` | ADS paper AI-summary route |
+| `plugins.ads_paper.ai.routes.summary` | Paper AI-summary route of `/paper summarize` |
 | `plugins.xiaoqing_chat.ai.routes.chat` | Main reply route |
 | `plugins.xiaoqing_chat.ai.routes.checker` | Reply-checking route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | Planning and reasoning route |
@@ -660,7 +660,7 @@ Plugin fields in example secrets:
 | `plugins.chat` | `token`, `bot_id`, `proxy` | Coze API credentials and proxy |
 | `plugins.twitter` | `user_id`, `headers.authorization`, `cookies`, `proxy`, `max_pages` | X/Twitter identity, session, page budget |
 | `plugins.signin.yingshijufeng` | `app_id`, `kdt_id`, `access_token`, `sid` | Yingshijufeng Youzan sign-in credentials |
-| `plugins.ads_paper` | `ads_token` | NASA ADS API token |
+| `plugins.ads_paper` | `ads_token` | SciX API token (SciX succeeds NASA ADS; existing ADS tokens keep working) |
 
 QingSSH, Shell, and Codex administrator commands maintain their secret namespaces.
 Corresponding plugin READMEs define their schemas.

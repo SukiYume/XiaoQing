@@ -1,24 +1,27 @@
-"""ADS Paper 插件的显示、查询和标识符常量。"""
+"""ADS Paper 插件的查询上限、展示上限和日期格式。"""
 
-import re
+# 检索：每页条数与可翻到的最深位置
+DEFAULT_SEARCH_ROWS = 10
+MAX_SEARCH_ROWS     = 25
+MAX_SEARCH_START    = 2000
 
-# API 默认上限
-DEFAULT_MAX_RESULTS    = 5
-DEFAULT_MAX_AUTHORS    = 3
-DEFAULT_MAX_CITATIONS  = 10
-DEFAULT_MAX_REFERENCES = 10
-DEFAULT_DAILY_PAPERS   = 10
+# 一条命令可带的论文标识数量
+MAX_PAPER_IDS = 8
 
-# 显示上限
+# 列表与概览
+DEFAULT_MAX_AUTHORS  = 3
+DEFAULT_DAILY_PAPERS = 10
+NETWORK_PREVIEW_ROWS = 5
+RELATED_ROWS         = 8
+JOURNAL_ROWS         = 15
+STATS_FACET_ROWS     = 8
+STATS_YEAR_ROWS      = 40
+
+# 展示上限
 MAX_TITLE_DISPLAY_LENGTH           = 50
 MAX_REFERENCE_TITLE_DISPLAY_LENGTH = 60
-
-# 论文标识符模式
-ARXIV_URL_PATTERN        = re.compile(r"arxiv\.org/abs/([\w\-./]+?)(?:v\d+)?$")
-ARXIV_VERSION_PATTERN    = re.compile(r"v\d+$")
-ARXIV_NEW_FORMAT_PATTERN = re.compile(r"\b(\d{4}\.\d{4,5})\b")
-ARXIV_OLD_FORMAT_PATTERN = re.compile(r"\b([a-z\-]+/\d{7})\b")
-ADS_BIBCODE_PATTERN      = re.compile(r"\d{4}[A-Za-z0-9.&]{15}")
+ABSTRACT_EXCERPT_CHARS             = 400
+MAX_HIGHLIGHT_SNIPPETS             = 3
 
 # 本地日期格式
 DATE_FORMAT     = "%Y-%m-%d"

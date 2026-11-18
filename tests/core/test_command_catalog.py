@@ -115,6 +115,9 @@ def test_sensitive_command_surfaces_declare_their_boundaries() -> None:
     for code in (
         "ads_paper.paper.search",
         "ads_paper.paper.author",
+        "ads_paper.paper.abstract",
+        "ads_paper.paper.stats",
+        "ads_paper.paper.journal",
         "ads_paper.paper.cite",
         "ads_paper.paper.cite-network",
         "ads_paper.paper.related",

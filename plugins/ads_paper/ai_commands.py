@@ -8,10 +8,12 @@ from core.ai import declare_route_defaults
 from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_message, public_error_response
 
-from .ads_client import PAPER_LIST_FIELDS, ADSClient, escape_ads_term, paper_title
+from .abstract_sources import resolve_abstracts
 from .bibtex import citation_entries
 from .constants import DEFAULT_DAILY_PAPERS, MAX_REFERENCE_TITLE_DISPLAY_LENGTH
-from .paper_commands import paper_list_text, resolve_bibcode_arg, resolve_paper_arg
+from .formatting import paper_list_text, paper_title
+from .paper_commands import resolve_paper
+from .scix_client import PAPER_LIST_FIELDS, SciXClient, escape_query_term
 from .storage import PaperStorage
 
 # 论文摘要：主配置里只需要给 summary 指定模型。
@@ -45,9 +47,9 @@ def _paper_entry_date(paper: dict[str, Any]) -> date | None:
 
 
 def _daily_topic_query(topics: list[str], day: date) -> str:
-    """任一关键词命中且当天及以后进入 ADS 的论文。"""
+    """任一关键词命中且当天及以后进入 SciX 的论文。"""
 
-    quoted = [f'"{escaped}"' for topic in topics if (escaped := escape_ads_term(topic))]
+    quoted = [f'"{escaped}"' for topic in topics if (escaped := escape_query_term(topic))]
     return f"({' OR '.join(quoted)}) AND entdate:[{day.isoformat()} TO NOW]"
 
 
@@ -70,83 +72,83 @@ def _summary_messages(title: str, abstract: str) -> list[dict[str, Any]]:
 
 
 async def cmd_summarize(
-    client: ADSClient,
+    client: SciXClient,
     args: str,
     context: PluginContextProtocol,
 ) -> Segments:
     """通过 Core 的 ``summary`` route 生成摘要，不读取插件私有 AI 凭据。"""
 
-    _bibcode, paper, error = await resolve_paper_arg(client, args, "summarize")
+    paper, error = await resolve_paper(client, args, "summarize")
     if paper is None:
-        return error or []
+        return error
 
     title = paper_title(paper, default="")
-    raw_abstract = paper.get("abstract", "")
-    abstract     = raw_abstract.strip() if isinstance(raw_abstract, str) else ""
+    [abstract] = await resolve_abstracts(client.session, [paper])
+    if abstract is None:
+        return segments(
+            f"⚠️ 论文 '{title}' 没有可用的公开摘要："
+            "SciX 接口不提供这家出版商的摘要，arXiv 和 Europe PMC 也没有收录"
+        )
 
-    if not abstract:
-        return segments(f"⚠️ 论文 '{title}' 没有摘要")
-
-    ai = context.capabilities.ai
+    original = f"📝 摘要原文（来源：{abstract.source}）:\n{abstract.text}\n"
+    ai       = context.capabilities.ai
     if ai is None:
         lines = [
             f"📄 论文: {title}\n",
-            f"📝 摘要:\n{abstract}\n",
+            original,
             "💡 提示: 配置 AI summary route 后可生成 AI 摘要",
         ]
         return segments("\n".join(lines))
 
     try:
-        result  = await ai.complete("summary", _summary_messages(title, abstract))
+        result  = await ai.complete("summary", _summary_messages(title, abstract.text))
         summary = result.content
         if not summary:
             raise RuntimeError("AI summary response is empty")
 
-        return segments(f"📄 论文: {title}\n\n🤖 AI 摘要:\n{summary}")
+        return segments(
+            f"📄 论文: {title}\n\n🤖 AI 摘要（依据 {abstract.source} 的摘要原文）:\n{summary}"
+        )
     except Exception as exc:
         error_message = public_error_message(context, exc, component="ads_paper.summarize")
         lines = [
             f"📄 论文: {title}\n",
-            f"📝 原始摘要:\n{abstract}\n",
+            original,
             f"❌ AI 摘要生成失败\n{error_message}",
         ]
         return segments("\n".join(lines))
 
 
 async def cmd_daily(
-    client: ADSClient,
+    client: SciXClient,
     storage: PaperStorage,
     user_id: int,
 ) -> Segments:
-    """按用户主题查询并严格保留 UTC 当天进入 ADS 的论文。"""
+    """按用户主题查询并严格保留 UTC 当天进入 SciX 的论文。"""
 
     topics = await asyncio.to_thread(storage.get_topics, user_id)
     if not topics:
         return segments("🏷️ 请先添加研究兴趣关键词\n用法: /paper topics add <关键词>")
 
-    today  = _utc_today()
-    query  = _daily_topic_query(topics, today)
-    papers = await client.search_papers(
-        query,
-        max_results = DEFAULT_DAILY_PAPERS,
-        fields      = [*PAPER_LIST_FIELDS, "entdate"],
-        sort        = "entdate desc,bibcode asc",
+    today = _utc_today()
+    page  = await client.search(
+        _daily_topic_query(topics, today),
+        fields = [*PAPER_LIST_FIELDS, "entdate"],
+        rows   = DEFAULT_DAILY_PAPERS,
+        sort   = "entdate desc,bibcode asc",
     )
-    papers = [paper for paper in papers if _paper_entry_date(paper) == today]
+    papers = [paper for paper in page.docs if _paper_entry_date(paper) == today]
     # 日期已被上一步严格过滤为同一天，本地稳定排序只需 bibcode。
     papers.sort(key=lambda paper: str(paper.get("bibcode", "") or ""))
-    papers = papers[:DEFAULT_DAILY_PAPERS]
 
     if not papers:
         return segments(f"🔍 未找到与关键词 '{', '.join(topics)}' 相关的新论文")
 
-    return segments(
-        paper_list_text(client, papers, f"📚 今日推荐论文 (基于关键词: {', '.join(topics)})\n")
-    )
+    return segments(paper_list_text(papers, f"📚 今日推荐论文 (基于关键词: {', '.join(topics)})"))
 
 
 async def cmd_ref_add(
-    client: ADSClient,
+    client: SciXClient,
     args: str,
     storage: PaperStorage,
     context: PluginContextProtocol,
@@ -154,13 +156,14 @@ async def cmd_ref_add(
 ) -> Segments:
     """获取一篇论文的 BibTeX，并原子加入当前用户的文献库。"""
 
-    bibcode, error = await resolve_bibcode_arg(client, args, "ref_add")
-    if bibcode is None:
-        return error or []
+    paper, error = await resolve_paper(client, args, "ref_add")
+    if paper is None:
+        return error
+    bibcode = str(paper["bibcode"])
 
-    bibtex = await client.get_bibtex(bibcode)
+    bibtex = await client.export([bibcode])
     if not bibtex:
-        return segments(f"❌ 无法获取 BibTeX: {bibcode}")
+        return segments(f"❌ SciX 没有返回 BibTeX: {bibcode}")
 
     try:
         if not await asyncio.to_thread(storage.add_reference, user_id, bibcode, bibtex):

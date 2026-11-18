@@ -663,14 +663,17 @@ Backends support Transformers, KNN, and multi-interest.
 Production assets must include matching configuration, weights, and tokenizer.
 [arXiv Filter README (Chinese)](../../plugins/arxiv_filter/README.md) supplies the inference CLI and asset list.
 
-### `ads_paper`: ADS papers and research materials
+### `ads_paper`: SciX literature research and research materials
 
-ADS Paper combines NASA ADS search, citation networks, BibTeX, AI summaries, and personal research-material management under `/paper`.
+ADS Paper uses SciX, the successor to NASA ADS, to combine paper search, abstracts, statistics, citation networks, citation export, AI summaries, and personal research-material management under `/paper`.
 
 ```text
-/paper search <关键词>
-/paper author <作者>
-/paper cite <arXiv ID|URL|bibcode>
+/paper search <SciX 检索式> [--rows N] [--page N] [--sort 排序] [--abs] [--hl]
+/paper author <作者> [选项]
+/paper abstract <ID>...
+/paper stats <SciX 检索式>
+/paper journal <刊名或缩写>
+/paper cite <ID>... [--format 格式]
 /paper cite-network <ID>
 /paper related <ID>
 /paper summarize <ID>
@@ -683,14 +686,21 @@ ADS Paper combines NASA ADS search, citation networks, BibTeX, AI summaries, and
 /paper refs
 ```
 
-Search, citations, and related papers support groups and private chat.
+An `ID` is a bibcode, an arXiv identifier, a DOI, or a SciX, ADS, arXiv, or doi.org link.
+Search, abstracts, statistics, citations, and related papers support groups and private chat.
 Notes, ideas, topics, deadlines, daily recommendations, and personal libraries use private-user scope.
-`secrets.plugins.ads_paper.ads_token` supplies the ADS token.
+
+`search` and `stats` take a SciX query such as `bibstem:NatAs collection:planetary year:2020-2024 property:refereed`.
+`search` reports the total number of matches and pages through them; `--abs` adds an abstract excerpt and `--hl` adds the matching sentences from the abstract and body.
+`stats` reports the total, citation statistics, and the distribution by year, document type, journal, and keyword.
+`abstract` returns the original abstracts of up to 8 papers; an abstract the SciX API withholds comes from the arXiv preprint or Europe PMC, with its source labeled.
+
+`secrets.plugins.ads_paper.ads_token` supplies the SciX API token.
 Project providers and model profiles support the AI `summary` route.
 
 JSON data is in `data/ads_paper/`. Personal BibTeX files use `references_<user_id>.bib`.
 State writes use atomic files and isolation of damaged copies.
-[ADS Paper README (Chinese)](../../plugins/ads_paper/README.md) lists data files and query rules.
+[ADS Paper README (Chinese)](../../plugins/ads_paper/README.md) covers query syntax, list options, abstract sources, and data files.
 
 ### `astro_tools`: Astronomy calculations
 

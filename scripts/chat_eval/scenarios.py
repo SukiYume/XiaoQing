@@ -1584,6 +1584,46 @@ LIFE_SCENARIOS: dict[str, tuple[Episodes, str, tuple[str, ...], bool]] = {
         (),
         True,
     ),
+    # 文献调研：限定期刊和方向、看总量和分布、读摘要原文后再下判断，链接指向 SciX。
+    "life_agent_papers": (
+        (
+            (
+                t(
+                    "阿柚",
+                    "Nature Astronomy 上行星科学方向的论文是不是比别的方向松弛得多，你去查查",
+                    pace   = 0,
+                    expect = "reply",
+                    wait   = 300,
+                    forbid = ("adsabs.harvard.edu",),
+                    note   = "用期刊缩写限定 Nature Astronomy，给出行星科学方向的篇数、占比或被引这类"
+                    "统计，再读几篇论文的摘要；说清判断的依据和范围，不只凭标题猜内容，不说摘要取不到",
+                ),
+                t(
+                    "阿柚",
+                    "那这几年被引最高的快速射电暴综述是哪几篇，各讲了什么",
+                    pace       = 5,
+                    expect     = "reply",
+                    wait       = 300,
+                    expect_any = ("scixplorer.org", "arxiv.org"),
+                    forbid     = ("adsabs.harvard.edu",),
+                    note       = "检索综述、按被引排序，读过摘要再逐篇概括，给 SciX 或 arXiv 链接；不编论文",
+                ),
+                t(
+                    "阿柚",
+                    "第一篇的 BibTeX 发我",
+                    pace       = 5,
+                    expect     = "reply",
+                    wait       = 180,
+                    expect_any = ("@",),
+                    forbid     = ("？", "?"),
+                    note       = "“第一篇”指上一条回复里的第一篇综述：直接导出它的 BibTeX，不反问是哪篇",
+                ),
+            ),
+        ),
+        "private",
+        (),
+        True,
+    ),
     "life_routine": (
         (
             (

@@ -14,6 +14,15 @@
 - **Bot 管理员可以在私聊里让小青去别的会话办事，`xiaoqing_chat` 新增 `/qq`**：以前她办事只看得到、只发得回当前会话，私聊里说“去某个群看看新发的图，说句话”只能回答做不到。现在 `/qq`（仅 Bot 管理员、仅私聊）提供六条子命令：`look <g群号|uQQ号> [条数]` 看一个会话最近的聊天记录（读本机保存的近期历史，带时间、说话人和 QQ 号、消息 ID，图片显示她当时看到的识图描述，原图还在时附文件路径）；`say <g群号|uQQ号> <内容>` 以她的身份去那里说话，发出后带着消息 ID 记成她在那个会话里的发言；`groups`、`members <群号> [关键词]` 列出所在的群和群成员；`recall <消息ID>` 撤回；`call <动作名> [JSON 参数]` 调用其他 OneBot 动作并取回返回数据（发消息的动作不经它执行）。管理员自己可以直接发这些命令，agent 办事时走的也是它们。Core 新增 capability `onebot_actions`（只有 `xiaoqing_chat` 能申请）：带响应地调用 OneBot 动作，按 `/qq` 在 plugin.json 里的声明签发，每次调用复核。
 - **agent 给 Bot 管理员办事时了解自己**：系统提示的运行环境后面多一段自述（`plugins/xiaoqing_chat/config/agent.md` 的“自述”一节），写明她的代码目录和各部分对应的插件、配置和密钥文件、各插件的数据目录、日志文件和文档目录，路径按这次运行的实际位置填写。问她自己的状态和配置时，她去读这些文件回答。其他人的任务没有本机工具，提示里不带这一段。运行环境里原来那句“其他会话的文件与记录保持隔离”改为“发起人要你去看时才看”。
 - **agent 的命令清单按入口隐藏**：以前整个 `xiaoqing_chat` 插件不列给模型，现在只隐藏 `/agent` 自身和只接受真人消息的聊天入口 `/xc`，同一插件的 `/qq` 照常列出。
+- **`/paper` 改接 SciX，并补齐文献调研需要的命令**（ads_paper 2.0.0）：NASA ADS 已由 SciX 接替，插件的检索、导出和链接全部改到 SciX（`api.scixplorer.org`、`scixplorer.org/abs/…`）。配置不用动：凭据键仍是 `secrets.plugins.ads_paper.ads_token`，原 ADS Token 在 SciX 继续有效，数据目录仍是 `data/ads_paper/`。
+  - `search` 原来固定返回被引最高的 5 篇、不说总共命中多少；现在给出命中总数并分页，`--rows`（1–25，默认 10）、`--page`、`--sort relevance|citations|date|reads`（默认按相关度）可调，每篇多列出期刊、文献类型（会议摘要、预印本等）、是否同行评议和 DOI，合作组论文只列前三位作者和总人数。`--abs` 附摘要节选，`--hl` 附摘要和正文里的命中原句。`author` 接受同样的选项。还有后续页时回复末尾给出下一页命令，Agent 带 `all_pages` 时沿它取齐。
+  - 帮助和命令目录写明 SciX 检索式的字段与算子（`bibstem:`、`year:`、`property:refereed`、`collection:`、`citations(…)`、`similar(…)` 等）。新增 `/paper journal <刊名>` 查期刊缩写：刊名写进检索式只会当普通词匹配，限定期刊要用 `bibstem:`。
+  - 新增 `/paper abstract <ID>...`，一次给出最多 8 篇论文的完整信息与摘要原文。SciX 接口不返回 Springer Nature 各刊等出版商的摘要，原来 `/paper summarize` 对这些论文只回“没有摘要”；现在摘要依次取自 SciX、arXiv 预印本、Europe PMC，并标明来源，`summarize` 和 `--abs` 走同一顺序。后两处请求不带 SciX Token，失败时只是这篇没有摘要。
+  - 新增 `/paper stats <检索式>`：命中总数，被引合计、篇均与单篇最高，同行评议与开放获取篇数，以及按年份、文献类型、期刊、关键词的分布。
+  - 论文标识除 arXiv 编号和 Bibcode 外，还接受 DOI、`arXiv:` 前缀和 SciX、ADS、arXiv、doi.org 的链接；全部经 SciX 的 `identifier` 字段查询，预印本编号和曾用 bibcode 会落到已发表的记录上。`cite` 一次可导出多篇，`--format` 可选 `bibtex`、`aastex`、`mnras` 等 9 种格式。
+  - `cite-network` 原来把“本次展示的 5 篇”当参考文献数；现在给出被引和参考文献的真实总数，各列被引最多的 5 篇。`related` 原来用标题前三个词再搜一次，现在用 SciX 的 `similar(…)` 按摘要内容取 8 篇。
+  - SciX 返回 400（检索式解析不了）、401（Token 无效）、429（额度用完）时各有对应说明，不再统一回“上游服务返回 HTTP …”；这三种情况记 `scix.request_rejected`。BibTeX 导出失败原来只回“无法获取 BibTeX”并记 `bibtex.fetch_failed`，现在和其他请求一样走公开错误。
+  - 评测：新增端到端剧本 `life_agent_papers`，让 agent 做一次文献调研（按期刊和方向比较、找高被引综述并概括、导出 BibTeX）。
 
 - **米家客户端兼容修复**：设备请求与扫码登录共用客户端标识，修复旧标识被小米云以 `HTTP 429 / -127 / client withdraw` 拒绝的问题。错误响应保持有界解析，客户端拒绝、授权失败和限流分别记录脱敏状态码与原因分类；后台授权检查记录失败与恢复。设备动作保持单次提交。
 

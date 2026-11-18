@@ -18,8 +18,8 @@ import pytest
 import tests.helpers.app_test_support as _fixture_support
 from plugins.adnmb import adapi as adnmb_api
 from plugins.adnmb import main as adnmb
-from plugins.ads_paper import ads_client
 from plugins.ads_paper import main as ads_paper
+from plugins.ads_paper import scix_client
 from plugins.apod import main as apod
 from plugins.arxiv_filter import main as arxiv_filter
 from plugins.arxiv_filter.inference import knn_backend
@@ -296,7 +296,7 @@ _PUBLIC_CASES = [
             ads_paper,
             "paper",
             "search frb",
-            (ads_client, "aiohttp_request_bounded", _leaking_async),
+            (scix_client, "aiohttp_request_bounded", _leaking_async),
             plugin_secrets={"ads_paper": {"ads_token": "configured"}},
         ),
         id="ads_paper",

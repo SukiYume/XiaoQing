@@ -597,14 +597,17 @@ Codex 任务用“源列表日期 + 规范化论文链接集合”识别，同�
 生产模型资产需包含匹配的配置、权重与 tokenizer。
 [arXiv Filter README](../plugins/arxiv_filter/README.md) 提供推理 CLI 与资产清单。
 
-### `ads_paper`：ADS 论文与资料管理
+### `ads_paper`：SciX 文献调研与资料管理
 
-ADS Paper 将 NASA ADS 检索、引用网络、BibTeX、AI 摘要和个人科研资料管理整合到 `/paper`。
+ADS Paper 通过 SciX（NASA ADS 的继任服务）把论文检索、摘要、统计、引用网络、引用导出、AI 摘要和个人科研资料管理整合到 `/paper`。
 
 ```text
-/paper search <关键词>
-/paper author <作者>
-/paper cite <arXiv ID|URL|bibcode>
+/paper search <SciX 检索式> [--rows N] [--page N] [--sort 排序] [--abs] [--hl]
+/paper author <作者> [选项]
+/paper abstract <ID>...
+/paper stats <SciX 检索式>
+/paper journal <刊名或缩写>
+/paper cite <ID>... [--format 格式]
 /paper cite-network <ID>
 /paper related <ID>
 /paper summarize <ID>
@@ -617,14 +620,20 @@ ADS Paper 将 NASA ADS 检索、引用网络、BibTeX、AI 摘要和个人科研
 /paper refs
 ```
 
-搜索、引用与相关论文支持群聊和私聊。
+`ID` 可以是 Bibcode、arXiv 编号、DOI，或 SciX、ADS、arXiv、doi.org 的链接。
+检索、摘要、统计、引用与相关论文支持群聊和私聊。
 笔记、灵感、主题、截止日期、每日推荐和个人文献库使用私聊用户作用域。
 
-`secrets.plugins.ads_paper.ads_token` 提供 ADS Token。
+`search` 与 `stats` 接受 SciX 检索式，例如 `bibstem:NatAs collection:planetary year:2020-2024 property:refereed`。
+`search` 给出命中总数并分页，`--abs` 附摘要节选，`--hl` 附摘要和正文里的命中原句。
+`stats` 给出命中总数、被引统计，以及年份、文献类型、期刊和关键词分布。
+`abstract` 一次给出最多 8 篇论文的摘要原文；SciX 接口不提供的摘要改取 arXiv 预印本或 Europe PMC，并标明来源。
+
+`secrets.plugins.ads_paper.ads_token` 提供 SciX API Token。
 AI `summary` route 由项目级 provider 和 model profile 支持。
 JSON 数据位于 `data/ads_paper/`，个人 BibTeX 使用 `references_<user_id>.bib`。
 状态写入采用原子文件和损坏副本隔离。
-[ADS Paper README](../plugins/ads_paper/README.md) 提供全部数据文件与查询规则。
+[ADS Paper README](../plugins/ads_paper/README.md) 提供检索式写法、列表选项、摘要来源和全部数据文件。
 
 ### `astro_tools`：天文计算工具箱
 
