@@ -344,7 +344,7 @@ async def resolve_paper(
 
 
 def _abstract_block(index: int, paper: dict[str, Any], abstract: Abstract | None) -> str:
-    lines = [f"{index}. {format_paper(paper, with_doi=True)}"]
+    lines    = [f"{index}. {format_paper(paper, with_doi=True)}"]
     subjects = paper.get("uat") or paper.get("keyword")
     if isinstance(subjects, list) and subjects:
         names = [clean_text(item) for item in subjects[:8] if isinstance(item, str)]

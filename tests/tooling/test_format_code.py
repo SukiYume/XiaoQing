@@ -31,3 +31,21 @@ if data:
     assert "values[1:3]" in result
     assert "literal: = unchanged" in result
     assert format_source(result, Path("example.py")) == result
+
+
+def test_assignment_alignment_treats_fstring_contents_as_text():
+    """f-string 替换域里的 `=` 不算赋值：带关键字参数的那一行照常和相邻赋值对齐。"""
+
+    source = """lines = [f"{index}. {render(paper, with_doi=True)}"]
+subjects = paper.get("uat")
+label = f"{value=}"
+"""
+    result = format_source(source, Path("example.py"))
+    assert (
+        result
+        == """lines    = [f"{index}. {render(paper, with_doi=True)}"]
+subjects = paper.get("uat")
+label    = f"{value=}"
+"""
+    )
+    assert format_source(result, Path("example.py")) == result

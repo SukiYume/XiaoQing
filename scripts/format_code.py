@@ -24,14 +24,30 @@ from pygments.token import Operator, Text
 ROOT            = Path(__file__).resolve().parents[1]
 LINE_LENGTH     = 100
 SOURCE_SUFFIXES = {".py", ".js", ".ps1"}
+# f-string（3.12 起）和 t-string（3.14 起）的起止词法单元；更早的解释器把整个字符串当一个单元。
+_TEMPLATE_STARTS = {
+    getattr(tokenize, name)
+    for name in ("FSTRING_START", "TSTRING_START")
+    if hasattr(tokenize, name)
+}
+_TEMPLATE_ENDS = {
+    getattr(tokenize, name) for name in ("FSTRING_END", "TSTRING_END") if hasattr(tokenize, name)
+}
 
 
 def align_assignments(source: str) -> str:
     """仅对齐同缩进且连续出现的单赋值行，保留独立逻辑块的边界。"""
     lines = source.splitlines(keepends=True)
     candidates: dict[int, list[int]] = {}
+    # Python 3.12 起 f-string 内部也拆成词法单元。替换域里的 `=`（关键字参数、`{x=}`）
+    # 属于字符串内容，不算这一行的赋值，各版本解释器因此得到同一个结果。
+    nested = 0
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type == tokenize.OP and token.string == "=":
+        if token.type in _TEMPLATE_STARTS:
+            nested += 1
+        elif token.type in _TEMPLATE_ENDS:
+            nested -= 1
+        elif nested == 0 and token.type == tokenize.OP and token.string == "=":
             row, column = token.start
             candidates.setdefault(row - 1, []).append(column)
     assignments: list[tuple[int, int]] = []
