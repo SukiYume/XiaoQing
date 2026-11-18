@@ -41,6 +41,7 @@ from .life.online import probe_online_life, sync_life_memes
 from .life.proactive import run_proactive
 from .memory.client import sync_all as sync_memory
 from .name_call import call_bot_name_only  # noqa: F401 - Core 在只喊名字、只 @ 时调用
+from .qq import handle_qq
 from .runtime_state import get_state as _state
 from .store_binding import bound_state
 
@@ -133,9 +134,12 @@ async def handle(
     event: dict[str, Any],
     context,
 ) -> list[dict[str, Any]]:
-    """命令处理入口；``command`` 由插件协议传入，实际子命令从 ``args`` 解析。"""
-    del command  # 保留框架按关键字调用的公开参数名；子命令事实源是 Core 解析后的 args。
+    """命令处理入口：``/qq`` 交给 QQ 操作，其余是 ``/xc``，子命令从 ``args`` 解析。"""
     try:
+        if command == "qq":
+            return validate_action_list(
+                await handle_qq(str(args or ""), event, context), source="command:qq"
+            )
         raw_args = str(args or "").strip()
         if not raw_args:
             return segments(_help_text(context))

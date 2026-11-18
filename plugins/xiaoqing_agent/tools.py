@@ -24,7 +24,7 @@ from core.router import CommandCatalogNode, command_access, resolve_catalog_invo
 
 from . import receipts
 from .config import AgentConfig
-from .prompts import HIDDEN_CAPABILITY_PLUGINS, command_allowed
+from .prompts import HIDDEN_COMMANDS, command_allowed
 from .shells import ShellSpec
 from .tasks import AgentTask, Outcome
 
@@ -508,9 +508,7 @@ def _names(node: CommandCatalogNode) -> set[str]:
 
 def catalog_lines(context: Any, query: str, *, include_unavailable: bool = False) -> list[str]:
     roots = tuple(
-        root
-        for root in context.get_command_catalog()
-        if root.plugin not in HIDDEN_CAPABILITY_PLUGINS
+        root for root in context.get_command_catalog() if root.code not in HIDDEN_COMMANDS
     )
     principal       = getattr(context, "principal", None)
     needle          = " ".join(query.strip().lstrip("/").casefold().split())

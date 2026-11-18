@@ -11,17 +11,15 @@ import logging
 import random
 from typing import Any
 
-from core.delivery import DeliveryReceipt, DeliverySegments
+from core.delivery import DeliverySegments
 from core.log import LogEvent
 from core.plugin_base import segments
 from core.public_errors import log_public_error
 
-from .chat_runtime import chat_lock, configured_bot_name, load_runtime
+from .chat_runtime import load_runtime
 from .constants import DEFAULT_BOT_NAME_ONLY_REPLIES
 from .follow_ups import carry_attention, sender_has_follow_up
-from .message_parts import build_text_message_parts
-from .store_binding import bound_state
-from .turn_delivery import record_bot_reply
+from .turn_delivery import spoken_line_receipt
 
 log = logging.getLogger(__name__)
 
@@ -53,32 +51,6 @@ def _pick(replies: list[str], chat_id: str) -> str:
     return text
 
 
-def _receipt(context: Any, runtime: Any, chat_id: str, text: str) -> DeliveryReceipt:
-    async def commit() -> None:
-        state = bound_state(context)
-        async with chat_lock(chat_id):
-            await record_bot_reply(
-                context,
-                runtime,
-                state,
-                chat_id,
-                configured_bot_name(context),
-                "",
-                forced      = True,
-                action_str  = "name_call_reply",
-                reasoning   = "bare_name_call",
-                detail      = {"text": text},
-                parts       = build_text_message_parts(text),
-                message_ids = tuple(receipt.message_ids),
-            )
-
-    async def rollback() -> None:
-        return None
-
-    receipt = DeliveryReceipt(expected_actions=1, commit=commit, rollback=rollback, unknown=commit)
-    return receipt
-
-
 async def call_bot_name_only(context: Any) -> list[dict[str, Any]]:
     """Core 在只喊名字、只 @ 她时调用：一句预设短应答，发出后记进聊天记录。"""
 
@@ -94,7 +66,10 @@ async def call_bot_name_only(context: Any) -> list[dict[str, Any]]:
             return []
         text = _pick(replies, chat_id)
         log.info(LogEvent("smalltalk.name_call", chat_id=chat_id, text=text))
-        return DeliverySegments(segments(text), _receipt(context, runtime, chat_id, text))
+        receipt = spoken_line_receipt(
+            context, runtime, chat_id, text, action="name_call_reply", reasoning="bare_name_call"
+        )
+        return DeliverySegments(segments(text), receipt)
     except Exception as exc:
         log_public_error(context, exc, component="xiaoqing_chat.name_call")
         return segments(random.choice(DEFAULT_BOT_NAME_ONLY_REPLIES))

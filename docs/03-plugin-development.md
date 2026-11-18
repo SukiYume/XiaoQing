@@ -1053,6 +1053,7 @@ Core 把调用方名字、主体类型和用户主体所在的会话写进载荷
 Core 按服务名核验固定所有者和调用方。
 `agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查。
 `codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。
+`onebot_actions` 按 `/qq` 的声明签发给 `xiaoqing_chat`，同样每次调用复核；它走带响应的 OneBot 请求通道，不经过出站消息的观察和回执，发消息仍用 `context.send_action`。
 `codex.agent_task` 与 `qingssh.agent_command` 的执行请求可以只在插件执行通道内启动工作并返回 `asyncio.Task`，Core 在通道外等待结果，调用方取消时一并取消该 Task。
 这样串行插件不会被一条长命令占住。
 `command_runner` 在一次性的会话空间里执行命令，不读取也不替换用户正在进行的交互会话。
@@ -1061,7 +1062,7 @@ Core 按服务名核验固定所有者和调用方。
 `run(..., request_texts=...)` 传入发起人本人这次说的原话（按先后，最后一条最新，Core 只保留最近 16 条、每条截断到 4000 字），命令在 `context.request_texts` 里读到。只在确有必要时用它（比如实体设备的出粮份数要对得上原话）；一般的写入按参数执行，和用户直接发送时一样，不拿原话做字面比对。用户直接发命令时 `context.request_texts` 为空，普通消息事件不能带入这个值。
 发送回执在提交前收集这条回复每条物理消息的 ID（`DeliveryReceipt.message_ids`，长回复被拆成几条时每条都有），插件在提交回调里把状态和真实消息对应起来，不必事后回填。
 
-Core 派生能力（密钥管理、arXiv 的 Codex 摘要、agent 的本机工具、SSH 和 Codex）与会话续接使用同一套命令权限，全部经过 `core.router.command_access`，细则见 [权限模型](07-advanced.md#-权限模型)。
+Core 派生能力（密钥管理、QQ 操作、arXiv 的 Codex 摘要、agent 的本机工具、SSH 和 Codex）与会话续接使用同一套命令权限，全部经过 `core.router.command_access`，细则见 [权限模型](07-advanced.md#-权限模型)。
 
 Manifest capability 集合：
 
@@ -1072,6 +1073,7 @@ Manifest capability 集合：
 | `config_subscription` | 接收当前插件配置 revision | `pendo` |
 | `execution_timeout_exempt` | 由插件生命周期控制长任务超时 | `codex`、`jupyter`、`qingssh`、`shell` |
 | `inbound_backlog` | 查询当前事件的发送者在本会话里已到达、还没开始处理的消息 | `xiaoqing_chat` |
+| `onebot_actions` | Bot 管理员经 `/qq` 调用 OneBot 动作并取回响应 | `xiaoqing_chat` |
 | `onebot_media` | 查询受控 OneBot 消息与媒体 | `xiaoqing_chat` |
 | `secret_admin` | 管理员 secret 命令能力 | `bot_core` |
 

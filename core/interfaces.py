@@ -217,6 +217,19 @@ class OneBotMediaCapability(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class OneBotActionsCapability(Protocol):
+    """Bot 管理员经 ``/qq`` 直接调用 OneBot 动作，取回实现端的原始响应。
+
+    没有可用连接或结果未知时返回 ``None``。
+    """
+
+    async def call(
+        self,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None: ...
+
+
 class InboundBacklogCapability(Protocol):
     """当前事件的发送者在本会话里已经到达、还没开始处理的消息。"""
 
@@ -384,6 +397,7 @@ class PluginCapabilities:
     is_system          : bool                               = False
     secret_admin       : SecretAdminCapability | None       = None
     onebot_media       : OneBotMediaCapability | None       = None
+    onebot_actions     : OneBotActionsCapability | None     = None
     inbound_backlog    : InboundBacklogCapability | None    = None
     config_subscription: PluginConfigSubscription | None    = None
     codex_arxiv_summary: CodexArxivSummaryCapability | None = None

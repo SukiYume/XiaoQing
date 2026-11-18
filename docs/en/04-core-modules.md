@@ -160,6 +160,7 @@ For staging, message IDs of split replies, HTTP event acknowledgement, and activ
 | Agent command execution | `dispatcher.py` function `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
 | Chat receives no online-life context | `capabilities.py` class `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
 | Memory reads or writes refused or empty | `capabilities.py` class `MemoryService` | `app_plugin_context.py`, `plugins/xiaoqing_memory/scopes.py`, `plugins/xiaoqing_chat/memory/client.py` |
+| `/qq` group lookups, recalls, or OneBot actions return nothing | `capabilities.py` class `OneBotActionsService` | `app_plugin_context.py`, `_request_onebot_action` in `app_delivery.py`, `plugins/xiaoqing_chat/qq.py` |
 | Group participation | `dispatcher.py` | Smalltalk Provider plugin |
 | Plugin loading and reload | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | Plugin timeout and overload | `plugin_execution.py` | `dispatcher.py` |

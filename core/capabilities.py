@@ -95,6 +95,33 @@ class OneBotMediaService:
         return dict(data) if isinstance(data, dict) else {}
 
 
+_ONEBOT_ACTION_NAME = re.compile(r"[A-Za-z_.][A-Za-z0-9_.]{0,63}")
+
+
+@dataclass(frozen=True)
+class OneBotActionsService:
+    """直接调用 OneBot 动作并取回响应；每次调用前按 ``/qq`` 命令的声明复核此人此刻仍有权使用。
+
+    走带响应的请求通道，不经过出站消息的观察和回执；以小青身份说话仍用 ``send_action``。
+    """
+
+    _authorized: Callable[[], bool]
+    _request   : Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]
+
+    async def call(
+        self,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not self._authorized():
+            raise PermissionError("OneBot action capability is no longer authorized")
+        if not isinstance(action, str) or _ONEBOT_ACTION_NAME.fullmatch(action) is None:
+            raise ValueError("OneBot action name must be 1-64 letters, digits, '_' or '.'")
+        if params is not None and not isinstance(params, Mapping):
+            raise TypeError("OneBot action params must be a mapping")
+        return await self._request(action, dict(params or {}))
+
+
 @dataclass(frozen=True)
 class ConfigSubscriptionService:
     _subscriber: Callable[

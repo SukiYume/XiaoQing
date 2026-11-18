@@ -545,6 +545,63 @@ async def test_xiaoqing_media_capability_validates_and_crops_onebot_responses(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_onebot_actions_follow_the_qq_command_and_are_rechecked_on_each_call(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    # /qq 只给 Bot 管理员、仅私聊；OneBot 操作能力按它授权。
+    await load_test_plugin(
+        app,
+        "xiaoqing_chat",
+        UNUSED_COMMAND_SOURCE,
+        commands=[command_declaration("qq", permission="bot_admin", contexts=("private",))],
+    )
+    response = {"status": "ok", "retcode": 0, "data": [{"group_id": 42}]}
+    request_action = AsyncMock(return_value=response)
+    app.ws_client = SimpleNamespace(
+        credentials_trusted = True,
+        connected           = lambda: True,
+        request_action      = request_action,
+    )
+
+    def granted(user_id: int, group_id: int | None = None):
+        principal = app.issue_user_principal(
+            {"user_id": user_id},
+            user_id    = user_id,
+            group_id   = group_id,
+            is_private = group_id is None,
+        )
+        context = plugin_context_for(
+            app,
+            "xiaoqing_chat",
+            user_id               = user_id,
+            group_id              = group_id,
+            principal             = principal,
+            manifest_capabilities = frozenset({"onebot_actions"}),
+        )
+        return context.capabilities.onebot_actions
+
+    assert granted(99999) is None
+    assert granted(12345, group_id=42) is None
+    onebot = granted(12345)
+    assert onebot is not None
+
+    assert await onebot.call("get_group_list") == response
+    assert request_action.await_args.args == ({"action": "get_group_list", "params": {}},)
+    with pytest.raises(ValueError):
+        await onebot.call("get group list")
+    with pytest.raises(TypeError):
+        await onebot.call("get_msg", [7])  # type: ignore[arg-type]
+
+    # 撤掉 Bot 管理员后，已经拿到手的能力也不能再用。
+    app.identity_service.load_admins({})
+    with pytest.raises(PermissionError):
+        await onebot.call("get_group_list")
+    assert request_action.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_declared_voice_service_preserves_signed_principal_and_target_scope(
     temp_app_root: Path,
 ):

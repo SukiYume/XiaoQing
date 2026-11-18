@@ -142,19 +142,16 @@ async def ack_reply_delivery(result, *, delivered: bool = True):
     return receipt
 
 
-def build_xiaoqing_catalog():
-    """从生产 manifest 构造测试使用的同一份 Core 目录快照。"""
+def build_xiaoqing_catalog(command: str = "xc"):
+    """从生产 manifest 构造测试使用的同一份 Core 目录快照：``command`` 这个顶层入口。"""
 
     from core.models import PluginManifest
     from core.router import build_command_catalog_node
 
     manifest_path = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "plugin.json"
     manifest = PluginManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
-    return build_command_catalog_node(
-        manifest.name,
-        manifest.commands[0].model_dump(),
-        root=True,
-    )
+    declared = next(item for item in manifest.commands if item.name == command)
+    return build_command_catalog_node(manifest.name, declared.model_dump(), root=True)
 
 
 @pytest.fixture
@@ -168,14 +165,16 @@ def mock_context(tmp_path: Path):
             "xiaoqing_chat": {"api_key": "test", "api_base": "http://test", "model": "test-model"}
         },
     }
-    context.plugin_name    = "xiaoqing_chat"
-    context.plugin_dir     = tmp_path / "plugins" / "xiaoqing_chat"
-    context.data_dir       = tmp_path / "data" / "xiaoqing_chat"
-    context.http_session   = AsyncMock()
-    context.send_action    = AsyncMock()
-    context.reload_config  = Mock()
-    context.reload_plugins = Mock()
-    context.get_command_catalog = Mock(return_value=(build_xiaoqing_catalog(),))
+    context.plugin_name         = "xiaoqing_chat"
+    context.plugin_dir          = tmp_path / "plugins" / "xiaoqing_chat"
+    context.data_dir            = tmp_path / "data" / "xiaoqing_chat"
+    context.http_session        = AsyncMock()
+    context.send_action         = AsyncMock()
+    context.reload_config       = Mock()
+    context.reload_plugins      = Mock()
+    context.get_command_catalog = Mock(
+        return_value=(build_xiaoqing_catalog(), build_xiaoqing_catalog("qq"))
+    )
     context.list_plugins = Mock(return_value=["xiaoqing_chat"])
     context.current_user_id  = 12345
     context.current_group_id = 67890

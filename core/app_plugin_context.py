@@ -27,6 +27,7 @@ from .capabilities import (
     LifeContextService,
     LocalToolsService,
     MemoryService,
+    OneBotActionsService,
     OneBotMediaService,
     SecretAdminService,
     SSHAgentCommandService,
@@ -50,6 +51,7 @@ _SHELL_COMMAND      = "shell.shell"
 _SSH_COMMAND        = "qingssh.ssh"
 _CODEX_COMMAND      = "codex.codex"
 _SET_SECRET_COMMAND = "bot_core.set_secret"
+_QQ_COMMAND         = "xiaoqing_chat.qq"
 
 
 def _scheduled_action_allowed(principal: PluginPrincipal, action: Mapping[str, Any]) -> bool:
@@ -304,7 +306,7 @@ class AppPluginContextMixin:
         """此人此刻在这里能不能用某条已发布命令。
 
         和命令执行同一处判断（``command_access``），Bot 管理员身份按当前配置；Core 发出的
-        能力（agent 的本机工具、SSH、Codex，密钥管理，arXiv 的 Codex 摘要）都由对应命令的
+        能力（agent 的本机工具、SSH、Codex，密钥管理，QQ 操作，arXiv 的 Codex 摘要）都由对应命令的
         plugin.json 声明决定，每次调用前复核。
         """
 
@@ -542,6 +544,11 @@ class AppPluginContextMixin:
         if "onebot_media" in declared_capabilities:
             onebot_media = OneBotMediaService(self._request_onebot_action)
 
+        onebot_actions = None
+        may_operate_qq = functools.partial(self._may_use_command, principal, _QQ_COMMAND)
+        if "onebot_actions" in declared_capabilities and may_operate_qq():
+            onebot_actions = OneBotActionsService(may_operate_qq, self._request_onebot_action)
+
         inbound_backlog = None
         if "inbound_backlog" in declared_capabilities and principal.kind == "user":
             inbound_backlog = InboundBacklogService(
@@ -659,6 +666,7 @@ class AppPluginContextMixin:
             is_system           = is_system,
             secret_admin        = secret_admin,
             onebot_media        = onebot_media,
+            onebot_actions      = onebot_actions,
             inbound_backlog     = inbound_backlog,
             config_subscription = config_subscription,
             codex_arxiv_summary = codex_arxiv_summary,

@@ -56,7 +56,7 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 
 | 领域 | 测试模块 | 覆盖内容 |
 |---|---|---|
-| 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID |
+| 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py`、`test_xiaoqing_chat_qq.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID；`/qq` 看其他会话的记录与图片、去别的会话说话并记成她的发言、查群和成员、撤回、调用 OneBot 动作及各自的失败回报 |
 | 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_chat_group_addressing.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py`、`test_xiaoqing_chat_follow_ups.py`、`test_xiaoqing_chat_name_call.py` | 消息受众、共指上下文、点名他人、低信息消息、频控、生成配额、收尾与邀请的规划判断、称呼与时区、同一个人连发几条时的让出与带话、只喊一声名字时的预设短应答 |
 | 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py`、`test_xiaoqing_chat_planner_memory.py` | PFC 动作、目标同步、长空档切换、Heartflow 打分、规划器提示词与 JSON 解析、规划器看到说话人和群的记忆且一轮只取一次 |
 | 生成 | `test_xiaoqing_prompt_builder.py`、`test_xiaoqing_chat_reply_generation*.py`、`test_xiaoqing_chat_generation_boundaries.py`、`test_bot_name_injection.py`、`test_xiaoqing_chat_llm_gateway.py` | 提示词结构、名字注入、上下文超限重建、复核超时降级、模型输出的 JSON 解析、网关与公开错误 |

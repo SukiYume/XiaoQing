@@ -22,11 +22,13 @@ from .delivery import deliver_outcome, outcome_message, upload_each
 from .loop import run_agent_loop
 from .memory import recall_for_session, record_task
 from .prompts import (
+    HIDDEN_COMMANDS,
     build_system_message,
     build_turn_message,
     capability_summary,
     configured_bot_name,
     current_time,
+    self_description,
 )
 from .sessions import Session, SessionStore, settle_turn
 from .shells import resolve_shell
@@ -263,7 +265,8 @@ class AgentRuntime:
                 context.get_command_catalog(),
                 getattr(context, "principal", None),
             ),
-            memory=memory,
+            memory    = memory,
+            self_text = self_description(context) if task.admin else "",
         )
         if session is None:
             session = await self.sessions.new_session(task.chat, system, memory=memory)
@@ -277,6 +280,8 @@ class AgentRuntime:
         known                = set(session.plugins)
         contracts: list[str] = []
         for root in context.get_command_catalog():
+            if root.code in HIDDEN_COMMANDS:
+                continue
             if root.plugin in known:
                 env.selected_plugins.add(root.plugin)
             elif root.plugin in task.plugins:

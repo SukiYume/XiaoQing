@@ -20,7 +20,7 @@ from .brain_chat import (
     maybe_add_mode_indicator,
 )
 from .chat_event import COMMAND_FORCED_EVENT_KEY
-from .chat_runtime import chat_lock
+from .chat_runtime import chat_lock, configured_bot_name
 from .follow_ups import carry_attention, carry_text, sender_has_follow_up
 from .frequency_control import record_reply_frequency
 from .llm.topic_shift import reply_should_be_withheld
@@ -31,7 +31,7 @@ from .memory.local_ids import (
     stale_reason,
 )
 from .memory.person_profile import session_is_current
-from .message_parts import is_media_part, normalize_message_parts
+from .message_parts import build_text_message_parts, is_media_part, normalize_message_parts
 from .planning.action_history import ActionRecord
 from .post_reply_tasks import spawn_post_reply_tasks
 from .reply_media import (
@@ -44,6 +44,7 @@ from .reply_media import (
 )
 from .reply_payload import ReplyPayload, build_reply_payload_from_parts
 from .smalltalk_models import GeneratedSmalltalkTurn
+from .store_binding import bound_state
 from .task_scheduler import (
     schedule_action_history_flush,
     schedule_memory_persist,
@@ -188,6 +189,45 @@ async def record_bot_reply(
     )
     schedule_action_history_flush(context, runtime, chat_id=chat_id)
     return history_snapshot
+
+
+def spoken_line_receipt(
+    context,
+    runtime,
+    chat_id: str,
+    text: str,
+    *,
+    action: str,
+    reasoning: str,
+) -> DeliveryReceipt:
+    """她不经聊天生成说出的一句话（预设短应答、管理员让她去说的话）：发出后记进这个会话的聊天记录。
+
+    结果未知时也按已发出记下：对方可能已经看到了这句话。
+    """
+
+    async def commit() -> None:
+        state = bound_state(context)
+        async with chat_lock(chat_id):
+            await record_bot_reply(
+                context,
+                runtime,
+                state,
+                chat_id,
+                configured_bot_name(context),
+                "",
+                forced      = True,
+                action_str  = action,
+                reasoning   = reasoning,
+                detail      = {"text": text},
+                parts       = build_text_message_parts(text),
+                message_ids = tuple(receipt.message_ids),
+            )
+
+    async def rollback() -> None:
+        return None
+
+    receipt = DeliveryReceipt(expected_actions=1, commit=commit, rollback=rollback, unknown=commit)
+    return receipt
 
 
 def _build_reply_payload(

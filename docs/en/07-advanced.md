@@ -35,7 +35,7 @@ These paths use the common decision function:
 - Command execution: human messages and agent `command_runner` calls use the same check.
 - Session continuation: each later message rechecks current access to at least one top-level command from the session plugin.
   Denied access closes the session.
-- Core-issued derived capabilities: secret management follows `/set_secret`. arXiv Codex summaries follow `/codex`.
+- Core-issued derived capabilities: secret management follows `/set_secret`. QQ operations (`onebot_actions`) follow `/qq`. arXiv Codex summaries follow `/codex`.
   Agent local tools, SSH, and Codex follow `/shell`, `/ssh`, and `/codex`. Each call checks current configuration.
 - The model-visible agent command list.
 

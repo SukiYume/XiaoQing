@@ -1056,6 +1056,8 @@ It issues `agent.handle_turn` and `command_runner` to user-message contexts.
 `command_runner` executes as the initiating user, with each command's normal permission and scene checks.
 `codex.agent_task`, `qingssh.agent_command`, and `local_tools` follow `/codex`, `/ssh`, and `/shell` declarations in `plugin.json` respectively.
 Each call repeats the permission check.
+`onebot_actions` follows the `/qq` declaration and is issued to `xiaoqing_chat`, with the same check on each call.
+It uses the OneBot request channel that returns responses, outside outgoing-message observation and receipts. Sending messages still uses `context.send_action`.
 
 `codex.agent_task` and `qingssh.agent_command` can start work within the plugin execution lane and return an `asyncio.Task`.
 Core awaits the result outside the lane. Caller cancellation also cancels that task.
@@ -1072,7 +1074,7 @@ Before commit, receipts collect each physical message ID in `DeliveryReceipt.mes
 Split replies include an ID for each physical message.
 The commit callback associates state with actual messages at commit time.
 
-Core-derived capabilities (secret management, arXiv Codex summaries, agent local tools, SSH, and Codex) and session continuation use the same command permissions.
+Core-derived capabilities (secret management, QQ operations, arXiv Codex summaries, agent local tools, SSH, and Codex) and session continuation use the same command permissions.
 All checks use `core.router.command_access`, the command-execution permission function; see the [permission model](07-advanced.md#-permission-model).
 
 Manifest capabilities:
@@ -1084,6 +1086,7 @@ Manifest capabilities:
 | `config_subscription` | Receive configuration revisions for the current plugin | `pendo` |
 | `execution_timeout_exempt` | Let the plugin lifecycle manage long-task timeouts | `codex`, `jupyter`, `qingssh`, `shell` |
 | `inbound_backlog` | List messages from the current event's sender in this chat that have arrived but are not being handled yet | `xiaoqing_chat` |
+| `onebot_actions` | Let a Bot administrator call OneBot actions through `/qq` and read the responses | `xiaoqing_chat` |
 | `onebot_media` | Query controlled OneBot messages and media | `xiaoqing_chat` |
 | `secret_admin` | Administrator secret-command capability | `bot_core` |
 

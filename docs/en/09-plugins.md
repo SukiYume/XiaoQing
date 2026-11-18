@@ -208,6 +208,7 @@ XiaoQing Chat lets the `bot_name` persona participate in groups and private chat
 It decides when and whom to answer, interprets images and memes, remembers conversations, and learns group expressions and jargon.
 Each reply passes independent review before delivery.
 It runs as the global smalltalk provider and also supplies explicit `/xc` access.
+Bot administrators view and operate her QQ account through `/qq` in private chat.
 
 **Enable and command**
 
@@ -239,6 +240,21 @@ Group `/xc reset confirm`, `/xc review`, and `/xc model` viewing or switching ar
 Private `/xc model` and `/xc model global` are for Bot administrators.
 Model switching affects only the `chat` route and remains in process memory.
 Restart restores configured models.
+
+```text
+/qq groups
+/qq members <群号> [关键词]
+/qq look <g群号|uQQ号> [条数]
+/qq say <g群号|uQQ号> <内容>
+/qq recall <消息ID>
+/qq call <动作名> [JSON 参数]
+```
+
+`/qq` is for Bot administrators in private chat only. It views and operates XiaoQing's QQ account, and the agent uses it when an administrator privately asks her to look at a group or say something there.
+A chat is written `g<group-ID>` or `u<QQ-ID>`.
+`look` shows a chat's recent records (20 by default, at most 100): time, speaker with QQ ID, and message ID for each line. Images and memes show the description she saw at the time, with the file path while the original is still on this machine.
+`say` sends the content unchanged as XiaoQing and records it as her own line in that chat. In a group, write `[CQ:at,qq=<QQ-ID>]` to mention someone.
+`groups` and `members` list her groups and a group's members. `recall` withdraws a message. `call` runs any other OneBot action and returns its data, except sending messages, which always goes through `say`.
 
 **Participation**
 
@@ -282,7 +298,7 @@ Memory, planning state, and background learning commit or start after OneBot con
 | AI routes | `chat` for replies, `reasoning` for planning and background analysis, `checker` for review, `vision` for images |
 | Input segments | `text`, `at`, `reply`, `face`, `mface`, `image`, mixed messages |
 | Output media | `[想发表情:描述]`, `[想发QQ表情:描述]`, `[想发图片:描述]` markers become `image` / `face`. |
-| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. `inbound_backlog` lets her wait until someone sending several messages in a row has finished. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, `life.turn_context` and `life.export_memes` through `life_context`, and `memory.record` / `recall` / `search` / `forget` through `memory`. |
+| Capabilities and services | `onebot_media` retrieves expired images through `get_msg` / `get_image`. `onebot_actions` serves `/qq` group, member, recall, and other OneBot actions, following the `/qq` declaration. `inbound_backlog` lets her wait until someone sending several messages in a row has finished. Supplies `core.observe_outgoing_action`. Uses `agent.handle_turn` and `agent.report_delivery` through `agent_turn`, `life.turn_context` and `life.export_memes` through `life_context`, and `memory.record` / `recall` / `search` / `forget` through `memory`. |
 | Behavior configuration | `plugins/xiaoqing_chat/config/xiaoqing_config.json`, merged with `config.plugins.xiaoqing_chat` |
 | Runtime data | `data/xiaoqing_chat/`: recent history, push progress for the unified memory, knowledge index, goals, PFC, action history, expressions, jargon, reviews, media library, plus daily life, proactive pacing, and the log of other plugins' recent pushes under `life/`. Long-term memory lives in `xiaoqing_memory`. |
 
@@ -490,6 +506,10 @@ Each handoff receives the same persona from `xiaoqing_chat`. Ordinary chat conti
   Administrator and other-user quotas are separate. Other-user tasks keep administrator capacity.
   Each other user can run at most 1 task concurrently.
 - Delivery failures enter task records. `/agent result <task-ID>` resends results.
+- Bot administrator tasks receive a self-description in the prompt: where her own code, configuration, data, logs, and documentation are.
+  When asked about her own state, configuration, or operation, she reads those files to answer.
+- In private chat, a Bot administrator can send her to act in other chats: read a group's recent records and images, say something there as herself, list groups and members, or withdraw a message.
+  All of these go through `/qq` in `xiaoqing_chat`.
 
 **Commands**
 
@@ -1302,6 +1322,7 @@ The table lists the permission of each top-level command. Subcommands can set st
 | `xiaoai` | `/米家`, `/小爱`, `/xiaoai` | Bot administrator | Private |
 | `xiaoqing_agent` | `/agent` | Public (tools follow initiator permissions) | Private, Group |
 | `xiaoqing_chat` | `/xc` | Public | Private, Group |
+| `xiaoqing_chat` | `/qq` | Bot administrator | Private |
 | `xiaoqing_life` | `/life` | Bot administrator | Private, Group |
 | `xiaoqing_memory` | `/mem` | Bot administrator | Private |
 

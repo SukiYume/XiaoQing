@@ -581,9 +581,10 @@
     },
     "xiaoqing_chat": {
       "state_model": "external_session",
-      "reason": "群聊记忆、脑内状态、复盘会话、模型覆盖和重置均跨消息存在",
+      "reason": "群聊记忆、脑内状态、复盘会话、模型覆盖和重置均跨消息存在；/qq 向其他会话发消息、撤回并调用 OneBot 动作，只用回归测试覆盖",
       "test_files": [
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_commands.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_qq.py",
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_reply_gate.py",
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_memory_observation.py",
         "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_planning_participation.py",
@@ -610,7 +611,10 @@
         "xiaoqing_chat.xc.review.close",
         "xiaoqing_chat.xc.model",
         "xiaoqing_chat.xc.model.default",
-        "xiaoqing_chat.xc.model.global"
+        "xiaoqing_chat.xc.model.global",
+        "xiaoqing_chat.qq.say",
+        "xiaoqing_chat.qq.recall",
+        "xiaoqing_chat.qq.call"
       ],
       "regression_codes": [
         "xiaoqing_chat.xc",
@@ -624,7 +628,10 @@
         "xiaoqing_chat.xc.review.no",
         "xiaoqing_chat.xc.review.answer",
         "xiaoqing_chat.xc.review.close",
-        "xiaoqing_chat.xc.model.global"
+        "xiaoqing_chat.xc.model.global",
+        "xiaoqing_chat.qq.say",
+        "xiaoqing_chat.qq.recall",
+        "xiaoqing_chat.qq.call"
       ]
     }
   },

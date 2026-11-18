@@ -4,7 +4,7 @@
   "description": "拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
   "entry": "main.py",
   "concurrency": "parallel",
-  "capabilities": ["onebot_media", "inbound_backlog"],
+  "capabilities": ["onebot_media", "onebot_actions", "inbound_backlog"],
   "uses_services": ["agent.handle_turn", "agent.report_delivery", "life.turn_context", "life.export_memes", "memory.record", "memory.recall", "memory.search", "memory.forget"],
   "services": [
     {
@@ -178,6 +178,81 @@
               "invalid_examples": ["/xc model global"]
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "qq",
+      "triggers": ["qq"],
+      "help": "查看和操作小青的 QQ：列出所在的群和群成员，看任意群或私聊最近的聊天记录，以小青的身份去指定的群或私聊说话，撤回消息，调用其他 OneBot 动作。仅 Bot 管理员，私聊。",
+      "permission": "bot_admin",
+      "contexts": ["private"],
+      "usage": "/qq <groups|members|look|say|recall|call> [参数]",
+      "examples": ["/qq groups", "/qq look g123456789"],
+      "invalid_examples": ["/qq look"],
+      "subcommands": [
+        {
+          "name": "help",
+          "aliases": ["帮助", "?"],
+          "help": "显示 /qq 的完整命令目录",
+          "usage": "/qq help",
+          "match": "exact",
+          "examples": ["/qq help"],
+          "invalid_examples": ["/qq help extra"]
+        },
+        {
+          "name": "groups",
+          "aliases": ["群", "群列表"],
+          "help": "列出小青所在的群：群号、群名和人数。只知道群名时先用它查群号",
+          "usage": "/qq groups",
+          "match": "exact",
+          "effect": "read",
+          "examples": ["/qq groups"],
+          "invalid_examples": ["/qq groups extra"]
+        },
+        {
+          "name": "members",
+          "aliases": ["成员"],
+          "help": "列出一个群的成员：QQ 号、群名片、昵称和身份；带关键词时只留名片、昵称或 QQ 号里含它的人",
+          "usage": "/qq members <群号> [关键词]",
+          "effect": "read",
+          "examples": ["/qq members 123456789", "/qq members g123456789 阿梨"],
+          "invalid_examples": ["/qq members"]
+        },
+        {
+          "name": "look",
+          "aliases": ["看", "记录"],
+          "help": "看一个会话最近的聊天记录（旧→新），默认 20 条、最多 100 条。每条带时间、说话人和 QQ 号、消息 ID；图片和表情显示小青当时看到的识图描述，原图还在本机时附上文件路径。会话写 g<群号> 或 u<QQ号>",
+          "usage": "/qq look <g群号|uQQ号> [条数]",
+          "effect": "read",
+          "examples": ["/qq look g123456789", "/qq look u10001 50"],
+          "invalid_examples": ["/qq look 123456789", "/qq look g123456789 0"]
+        },
+        {
+          "name": "say",
+          "aliases": ["说", "发"],
+          "help": "以小青的身份把内容原样发到一个群或私聊，发出后记成她在那个会话里的发言。内容就是要发出去的那句话；群里要 @ 人时写 [CQ:at,qq=QQ号]",
+          "usage": "/qq say <g群号|uQQ号> <内容>",
+          "effect": "write",
+          "examples": ["/qq say g123456789 这张图好可爱", "/qq say u10001 我到了"],
+          "invalid_examples": ["/qq say g123456789"]
+        },
+        {
+          "name": "recall",
+          "aliases": ["撤回"],
+          "help": "撤回一条消息，消息 ID 见 look 的输出或 say 的回报。撤回别人的消息需要小青是那个群的管理员",
+          "usage": "/qq recall <消息ID>",
+          "effect": "write",
+          "examples": ["/qq recall 5531"],
+          "invalid_examples": ["/qq recall abc"]
+        },
+        {
+          "name": "call",
+          "aliases": ["调用"],
+          "help": "直接调用一个 OneBot 动作并取回返回数据，用于上面没有覆盖的 QQ 操作（如 set_group_ban 禁言、set_group_card 改群名片、get_stranger_info 查资料）。参数是一个 JSON 对象；发消息用 say",
+          "usage": "/qq call <动作名> [JSON 参数]",
+          "examples": ["/qq call get_login_info", "/qq call set_group_ban {\"group_id\": 123456789, \"user_id\": 10001, \"duration\": 600}"],
+          "invalid_examples": ["/qq call", "/qq call set_group_ban 123"]
         }
       ]
     }

@@ -182,6 +182,7 @@ AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据�
 | agent 代为执行命令 | `dispatcher.py` 的 `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
 | 聊天取不到网上生活 | `capabilities.py` 的 `LifeContextService` | `app_plugin_context.py`, `plugins/xiaoqing_chat/life/online.py`, `plugins/xiaoqing_life/turn_context.py` |
 | 记忆读写被拒或为空 | `capabilities.py` 的 `MemoryService` | `app_plugin_context.py`, `plugins/xiaoqing_memory/scopes.py`, `plugins/xiaoqing_chat/memory/client.py` |
+| `/qq` 查群、撤回或 OneBot 动作没有结果 | `capabilities.py` 的 `OneBotActionsService` | `app_plugin_context.py`, `app_delivery.py` 的 `_request_onebot_action`, `plugins/xiaoqing_chat/qq.py` |
 | 群聊参与 | `dispatcher.py` | Smalltalk Provider 插件 |
 | 插件加载与重载 | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | 插件超时与过载 | `plugin_execution.py` | `dispatcher.py` |

@@ -431,6 +431,7 @@ PluginCapabilityName = Literal[
     "execution_timeout_exempt",
     "inbound_backlog",
     "local_tools",
+    "onebot_actions",
     "onebot_media",
     "secret_admin",
 ]
@@ -514,8 +515,10 @@ _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {
     # 同一个人连着发的几条消息：聊天等他说完再回。
     "inbound_backlog": frozenset({"xiaoqing_chat"}),
     "local_tools"    : frozenset({"xiaoqing_agent"}),
-    "onebot_media"   : frozenset({"xiaoqing_chat"}),
-    "secret_admin"   : frozenset({"bot_core"}),
+    # Bot 管理员经 /qq 直接操作 QQ：查群、查成员、撤回和其他 OneBot 动作。
+    "onebot_actions": frozenset({"xiaoqing_chat"}),
+    "onebot_media"  : frozenset({"xiaoqing_chat"}),
+    "secret_admin"  : frozenset({"bot_core"}),
 }
 
 

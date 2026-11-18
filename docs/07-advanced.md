@@ -36,7 +36,7 @@
 
 - 命令执行：真人消息和 agent 代为执行的命令（`command_runner`）走同一处检查。
 - 会话继续：每条后续消息前复核此人此刻仍能用会话所属插件的至少一条顶层命令，否则关闭会话。
-- Core 签发的派生能力：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`；每次调用按当前配置复核。
+- Core 签发的派生能力：密钥管理跟随 `/set_secret`，QQ 操作（`onebot_actions`）跟随 `/qq`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`；每次调用按当前配置复核。
 - agent 给模型看的命令清单。
 
 插件代码将管理员检查交给 Core。

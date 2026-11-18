@@ -13,6 +13,7 @@ from core.clock import now_in_configured_timezone
 from core.interfaces import PluginContextProtocol, PluginPrincipal
 from core.plugin_base import resolve_bot_name
 from core.router import CommandCatalogNode, command_access
+from core.version import VERSION
 
 from .config import PLUGIN_NAME
 from .tasks import AgentTask, describe_record, record_initiator
@@ -26,7 +27,7 @@ _LOCAL_ENVIRONMENT = """- 系统：{os_name}；Python {py_version}（{python}）
 - 工作目录：{workspace}（这个会话专用，文件会一直保留，之后的任务可以接着用）
 - 每轮请求里会给出这次的产出目录"""
 
-_LOCAL_METHOD = """本机操作在本会话工作目录内完成。其他会话的文件与记录保持隔离。
+_LOCAL_METHOD = """产出和中间文件写在本会话工作目录里。其他会话的工作目录和聊天记录，发起人要你去看时才看。
 计算和数据处理使用工具实际运行；图片内容使用 read_image 获取。
 当前软件环境保持原样，安装或升级依赖需要发起人明确提出。"""
 
@@ -37,9 +38,11 @@ _COMMANDS_ONLY_ENVIRONMENT = """- 发起人拥有 XiaoQing 命令权限，命令
 _COMMAND_HINT = "XiaoQing 现成功能（详细参数通过 xiaoqing_commands 查询）：\n{capabilities}"
 _SSH_HINT     = "远端操作使用 ssh_servers / ssh_run。"
 _CODEX_HINT   = "较大的编程任务可交给 codex_run。"
-# 这两个插件不作为可调用功能列出：agent 自身，以及只接受真人消息的聊天入口。
-HIDDEN_CAPABILITY_PLUGINS = frozenset({PLUGIN_NAME, "xiaoqing_chat"})
-_CAPABILITY_HELP_CHARS    = 120
+# 这两个入口不作为可调用功能列出：agent 自身，以及只接受真人消息的聊天入口。
+HIDDEN_COMMANDS = frozenset({f"{PLUGIN_NAME}.agent", "xiaoqing_chat.xc"})
+# 代码所在的目录：这个文件在 <代码目录>/plugins/xiaoqing_agent/ 下。
+_CODE_ROOT             = Path(__file__).resolve().parents[2]
+_CAPABILITY_HELP_CHARS = 120
 
 
 def _read_stage_prompt(stage: str) -> str:
@@ -54,6 +57,24 @@ def _read_stage_prompt(stage: str) -> str:
     if len(matches) != 1 or not matches[0]:
         raise ValueError(f"agent.md 需要一个正文非空的“## {stage}”小节")
     return matches[0] + "\n"
+
+
+def self_description(context: PluginContextProtocol) -> str:
+    """Bot 管理员办事时附在运行环境后面的自述：她自己的代码、配置、数据和日志在哪。
+
+    数据目录取这个插件实际拿到的位置，配置和日志在它上一级的运行目录里。
+    """
+
+    data_root = Path(context.data_dir).parent
+    run_root  = data_root.parent
+    return _read_stage_prompt("自述").format(
+        version = VERSION,
+        code    = _CODE_ROOT,
+        docs    = _CODE_ROOT / "docs",
+        config  = run_root / "config" / "config.json",
+        data    = data_root,
+        log     = run_root / "logs" / "xiaoqing.log",
+    )
 
 
 def configured_persona(context: PluginContextProtocol) -> str:
@@ -106,7 +127,7 @@ def capability_summary(
 
     lines: list[str] = []
     for root in roots:
-        if root.plugin in HIDDEN_CAPABILITY_PLUGINS:
+        if root.code in HIDDEN_COMMANDS:
             continue
         allowed   = command_allowed(root, principal)
         help_text = root.help_text.strip()
@@ -220,10 +241,12 @@ def build_system_message(
     tool_names: Sequence[str],
     capabilities: str = "",
     memory: str       = "",
+    self_text: str    = "",
 ) -> dict[str, Any]:
     """执行阶段的系统提示：身份、环境、原则、记忆和人设。配置稳定时保持相同前缀。
 
-    ``memory`` 是开会话时从统一记忆取的、关于发起人的记忆，会话内不变。
+    ``memory`` 是开会话时从统一记忆取的、关于发起人的记忆，会话内不变。``self_text`` 是
+    Bot 管理员办事时给的自述（``self_description``），接在运行环境后面。
     """
 
     extra: list[str] = []
@@ -245,6 +268,8 @@ def build_system_message(
             shell      = shell,
             workspace  = workspace,
         )
+        if self_text:
+            environment += "\n\n" + self_text.strip()
         method = _LOCAL_METHOD
     else:
         requester   = sender or "一位用户"

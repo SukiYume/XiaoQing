@@ -19,19 +19,20 @@ Core 负责配置快照、权限主体、AI 凭据与传输、插件数据目录
 
 ```text
 XiaoQing Core
-  ├─ Router ─────────────── /xc ─────────────────────────┐
+  ├─ Router ─────────────── /xc · /qq ───────────────────┐
   ├─ Dispatcher ─────────── observe_message / handle_smalltalk / call_bot_name_only
   ├─ Core service ───────── core.observe_outgoing_action │
   ├─ 服务调用 ───────────── agent.handle_turn / agent.report_delivery → xiaoqing_agent
   │                         memory.record / recall / search / forget → xiaoqing_memory
   ├─ AI capability ──────── chat / reasoning / checker / vision
   ├─ onebot_media ───────── get_msg / get_image         │
+  ├─ onebot_actions ─────── /qq 调用的 OneBot 动作      │
   ├─ inbound_backlog ────── 同一发送者排着的后续消息    │
   └─ Delivery ───────────── ordered batches + receipt    │
                     │                                    │
                     ▼                                    ▼
 xiaoqing_chat
-  ├─ 入口与编排        main / handlers / commands
+  ├─ 入口与编排        main / handlers / commands / qq
   ├─ 召唤与参与        attention_gate / participation / frequency_control / generation_limiter
   ├─ 单轮三阶段        turn_generation → reply_plan + reply_generator → turn_delivery
   ├─ 模型与审查        llm/
@@ -51,11 +52,12 @@ xiaoqing_chat
 
 | 模块 | 职责 |
 |---|---|
-| `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` 与 `inbound_backlog` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、`life.turn_context` 与 `life.export_memes`、`memory.record` / `recall` / `search` / `forget`、定时任务、热加载文件 |
-| `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口、定时任务（生活小事、梗图同步、统一记忆补推、主动开口） |
+| `plugin.json` | Manifest：`/xc` 与 `/qq` 命令树、`onebot_media`、`onebot_actions` 与 `inbound_backlog` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、`life.turn_context` 与 `life.export_memes`、`memory.record` / `recall` / `search` / `forget`、定时任务、热加载文件 |
+| `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由并把 `/qq` 交给 `qq.py`、Core 观察入口、定时任务（生活小事、梗图同步、统一记忆补推、主动开口） |
 | `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额，`observe_outgoing_action`；一轮出故障时由 `_reply_after_failure` 收口（见“错误与日志”）；有会话等着清长期记忆时，任何会话来消息都经 `_retry_pending_forgets` 触发一次后台重试（见“状态与持久化”） |
 | `agent_bridge.py` | 私聊和群里明确跟她说的话交给 agent 判断，与聊天生成并行（流程见“单轮数据流”）；没人叫她的群消息不交给 agent。一件事分几条说时把连着的几条连成一句请求；agent 要反问而对方的下一条已经到了时，这句反问不发。执行结果与投递回执写回原会话 |
 | `commands.py` | `/xc` 管理子命令：统计、重置（同时清空统一记忆里这个会话）、配置、记忆（`memory.search`）、表达、黑话、审查、模型切换 |
+| `qq.py` | `/qq`：Bot 管理员在私聊里查看和操作她的 QQ。`look` 读近期聊天历史并渲染成带说话人、消息 ID 和图片描述的记录；`say` 经 `context.send_action` 发出，回执提交时用 `spoken_line_receipt` 记成她的发言；`groups`、`members`、`recall`、`call` 走 `onebot_actions` |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
 | `chat_runtime.py` | 配置热加载、AI route 上下文、`llm_call_config`、屏蔽规则与会话锁 |
@@ -73,7 +75,7 @@ xiaoqing_chat
 | `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
 | `reply_fallbacks.py` | 被拒后的定向重写提示、只删没依据的读图气泡（`trim_unsupported_bubbles`）和直接回复兜底句（`ALL_FALLBACK_TEXTS`） |
-| `turn_delivery.py` | 打字延迟、过期丢弃与引用原消息（阈值见“单轮数据流”）、分批外发、按气泡回执结算、投递后提交与回滚 |
+| `turn_delivery.py` | 打字延迟、过期丢弃与引用原消息（阈值见“单轮数据流”）、分批外发、按气泡回执结算、投递后提交与回滚；`spoken_line_receipt` 给不经聊天生成说出的一句话（预设短应答、`/qq say`）做发出后的记录 |
 | `post_reply_tasks.py` | 投递成功后的表达学习、策略复盘、未完话头结算和生活记录抽取任务 |
 | `reply_media.py` | 回复链路的媒体桥接与素材使用记录 |
 | `reply_payload.py` | 把消息部件编排为展示文本和可投递批次 |

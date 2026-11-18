@@ -286,6 +286,8 @@ async def test_a_member_gets_a_task_limited_to_their_own_commands(tmp_path: Path
         and "Python、Shell、本机文件、SSH 和 Codex 需要 Bot 管理员身份" in system
     )
     assert "run_python" not in system and "工作目录" not in system
+    # 自己的代码和数据在哪只告诉 Bot 管理员。
+    assert str(REPOSITORY_ROOT) not in system
     offered = {tool["function"]["name"] for tool in kwargs["tools"]}
     assert offered == {
         "update_plan",
@@ -888,7 +890,50 @@ async def test_quoted_message_and_images_reach_triage_and_the_task(
     await _shutdown(context)
 
 
-def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> None:
+@pytest.mark.asyncio
+async def test_admin_sends_her_to_look_at_another_group_and_speak_there(tmp_path: Path) -> None:
+    """Bot 管理员在私聊里让她去别的群看看再说句话：聊天插件交给她的是 /qq，聊天入口 /xc 不在目录里。"""
+
+    from tests.helpers.command_catalog_test_support import load_production_catalog
+
+    chat_roots = tuple(
+        root for root in load_production_catalog().roots if root.plugin == "xiaoqing_chat"
+    )
+    look, say = "/qq look g300400500 5", "/qq say g300400500 这只柴犬好可爱"
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=[
+                [{"type": "text", "data": {"text": "阿梨(7) #5521: [图片：一只柴犬]"}}],
+                [{"type": "text", "data": {"text": "已发到 g300400500（消息 ID 5531）"}}],
+            ]
+        )
+    )
+    data_root = tmp_path / "data"
+    context   = FakeAgentContext(
+        data_root / "xiaoqing_agent", catalog=chat_roots, command_runner=runner
+    )
+    context.ai.script = [
+        ai_response(json.dumps({"action": "task", "plugins": ["xiaoqing_chat"]})),
+        ai_response("", [tool_call("xiaoqing_command", {"commands": [look]})]),
+        ai_response("", [tool_call("xiaoqing_command", {"commands": [say]})]),
+        ai_response("去说了，夸了那只柴犬。"),
+    ]
+
+    result = await agent_main.handle_turn(_turn("去 300400500 群看看新发的图，说句话"), context)
+
+    assert result is not None and result["reply_text"] == "去说了，夸了那只柴犬。"
+    assert [call.args[0] for call in runner.run.await_args_list] == [look, say]
+    triage_prompt = context.ai.calls[0][1][1]["content"]
+    assert "/qq <" in triage_prompt and "/xc" not in triage_prompt
+    _route, messages, _kwargs = context.ai.calls[1]
+    system, request = messages[0]["content"], messages[1]["content"]
+    # 管理员办事时她知道自己的代码、数据在哪；这一轮拿到的命令说明只有 /qq。
+    assert str(REPOSITORY_ROOT) in system and str(data_root) in system
+    assert "/qq say <" in request and "/xc" not in request
+    await _shutdown(context)
+
+
+def test_capability_summary_lists_real_commands_and_hides_the_chat_entry_and_agent() -> None:
     from plugins.xiaoqing_agent.prompts import capability_summary
 
     roots = (
@@ -910,6 +955,11 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
             root=True,
         ),
         build_command_catalog_node(
+            "xiaoqing_chat",
+            {"name": "qq", "triggers": ["qq"], "help": "操作 QQ", "usage": "/qq <子命令>"},
+            root=True,
+        ),
+        build_command_catalog_node(
             "qingpet",
             {
                 "name"    : "qingpet",
@@ -922,6 +972,7 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
     )
     assert capability_summary(roots).splitlines() == [
         "/py <代码>：执行 Python 代码；更多说明（仅私聊）（服务：jupyter）",
+        "/qq <子命令>：操作 QQ（服务：xiaoqing_chat）",
         "/宠物 <子命令>：宠物养成（服务：qingpet）",
     ]
     from tests.helpers.command_catalog_test_support import load_production_catalog
@@ -929,6 +980,7 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
     actual = capability_summary(load_production_catalog().roots)
     assert "/help [" in actual and "/plugins：" in actual
     assert "/记忆 <问题> <回答>" in actual and "/对话 [问题]" in actual
+    assert "/qq <" in actual and "/xc" not in actual and "/agent" not in actual
 
 
 @pytest.mark.asyncio

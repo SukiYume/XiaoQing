@@ -195,7 +195,7 @@ Scriptable 主屏摘要最多展示 5 条日程。
 ### `xiaoqing_chat`：拟人聊天运行时
 
 XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和私聊：判断什么时候接话、接谁的话，读得懂图片和表情包，记得群友说过的事，会学本群的说法和黑话，每条回复发出前都经过独立审查。
-它作为全局闲聊 provider 运行，也提供 `/xc` 显式入口。
+它作为全局闲聊 provider 运行，也提供 `/xc` 显式入口；Bot 管理员在私聊里用 `/qq` 查看和操作她的 QQ。
 
 **启用与命令**
 
@@ -227,6 +227,21 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 `/xc model global` 需要 Bot 管理员。
 模型切换只影响 `chat` 路由，保存在进程内，重启后按配置恢复。
 
+```text
+/qq groups
+/qq members <群号> [关键词]
+/qq look <g群号|uQQ号> [条数]
+/qq say <g群号|uQQ号> <内容>
+/qq recall <消息ID>
+/qq call <动作名> [JSON 参数]
+```
+
+`/qq` 只给 Bot 管理员，只能在私聊里用，用来查看和操作小青的 QQ；管理员在私聊里让小青“去某个群看看、说句话”时，agent 用的也是它。
+会话写成 `g<群号>` 或 `u<QQ号>`。
+`look` 显示一个会话最近的聊天记录（默认 20 条，最多 100 条）：每条带时间、说话人和 QQ 号、消息 ID，图片和表情显示她当时看到的识图描述，原图还在本机时附上文件路径。
+`say` 以小青的身份把内容原样发过去，发出后记成她在那个会话里的发言；群里要 @ 人时写 `[CQ:at,qq=QQ号]`。
+`groups` 和 `members` 列出所在的群和群成员，`recall` 撤回一条消息，`call` 直接调用其他 OneBot 动作并取回返回数据（发消息除外，说话一律经 `say`）。
+
 **参与方式**
 
 - 明确跟她说的话一定回复：私聊、`/xc`、群里 `@` 角色、引用角色的消息、叫她名字（句首称呼“小青，……”，或句中、句末带称呼语气的“行吧小青你赢了”“在吗小青”；`@` 了别人而没 `@` 她时不算）。这些轮次直接起草回复，并同时交给 agent 判断要不要动手；只喊一声名字或只 `@` 她时立刻回一句预设短应答（`bot_name_only_replies`），不走模型，这个人接下来一分钟内的那句算在跟她说，他紧跟着已经发了下一条时这一声不应。上课、睡觉时照常回复，只是更慢、更短。同一个人连着发几条时等他说完，看着完整的几条回一次。
@@ -246,7 +261,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | AI route | `chat`（日常回复）、`reasoning`（规划与后台分析）、`checker`（审查）、`vision`（图片） |
 | 入站消息段 | `text`、`at`、`reply`、`face`、`mface`、`image` 及混合消息 |
 | 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
-| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）、`inbound_backlog`（同一个人连着发几条时等他说完再回）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`）、`life.turn_context` 与 `life.export_memes`（`life_context`）、`memory.record` / `recall` / `search` / `forget`（`memory`） |
+| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）、`onebot_actions`（`/qq` 查群、查成员、撤回和其他 OneBot 动作，跟随 `/qq` 的声明）、`inbound_backlog`（同一个人连着发几条时等他说完再回）。提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`）、`life.turn_context` 与 `life.export_memes`（`life_context`）、`memory.record` / `recall` / `search` / `forget`（`memory`） |
 | 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
 | 运行数据 | `data/xiaoqing_chat/`：近期聊天历史、推给统一记忆的进度、知识库索引、目标、PFC、行动历史、表达与黑话、复盘、媒体库，以及 `life/` 下的每日生活小事、主动开口节奏和其他插件的推送记录；长期记忆在 `xiaoqing_memory` |
 
@@ -438,6 +453,8 @@ Bot 管理员的任务还可以用 Python 计算和画图、执行 Shell 命令�
 - 任务在后台执行。`inline_wait_seconds`（默认 12 秒）内做完直接作为这一轮回复；超过后当轮安静结束，任务继续运行，做完后把结果主动发回原会话（群里先 @ 发起人）；文字与图片同条发送，其他文件走 QQ 文件上传。
 - 每个会话有长期保留的工作目录。同一个人在同一个会话里的办事是一段连续的办事会话：接着说“第二个”“刚才那笔改成 15”时，前面的请求、调用过的命令和完整结果都还在。隔 `session_idle_minutes`（默认 120 分钟）没说话或发 `/agent new` 后从头开始，新会话带上本会话最近的任务记录。同一个群共享工作目录和任务记录，群里的人都能查看任务，记录标出发起人；只有发起人和 Bot 管理员能停止或补充。Bot 管理员与其他人的任务名额分开计算，其他用户的任务保留管理员的独立容量；其他人每人同时最多运行 1 个任务。
 - 结果发送失败会记在任务记录里，可用 `/agent result <任务ID>` 补发。
+- Bot 管理员的任务里，提示附带一段自述：她自己的代码、配置、数据、日志和文档在哪。问她自己的状态、配置或运行情况时，她去读这些文件回答。
+- Bot 管理员在私聊里可以让她去别的会话办事：看某个群最近的聊天记录和图片、以她的身份去说句话、查群和成员、撤回消息，都经 `xiaoqing_chat` 的 `/qq` 完成。
 
 **命令**
 
@@ -1182,6 +1199,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `xiaoai` | `/米家`、`/小爱`、`/xiaoai` | Bot 管理员 | 私聊 |
 | `xiaoqing_agent` | `/agent` | 公开（工具按发起人权限） | 私聊、群聊 |
 | `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
+| `xiaoqing_chat` | `/qq` | Bot 管理员 | 私聊 |
 | `xiaoqing_life` | `/life` | Bot 管理员 | 私聊、群聊 |
 | `xiaoqing_memory` | `/mem` | Bot 管理员 | 私聊 |
 

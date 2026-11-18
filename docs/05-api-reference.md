@@ -345,6 +345,7 @@ Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在�
 | `is_system` | 调度调用状态 |
 | `secret_admin` | Bot Core 的敏感配置管理（跟随 `/set_secret` 的声明，每次调用复核） |
 | `onebot_media` | XiaoQing Chat 的 OneBot 媒体查询 |
+| `onebot_actions` | XiaoQing Chat 的 `/qq` 调用 OneBot 动作：`call(action, params)` 返回实现端的原始响应，没有可用连接或结果未知时为 `None`（跟随 `/qq` 的声明，每次调用复核） |
 | `inbound_backlog` | XiaoQing Chat 查询“同一个人后面还排着哪些消息”：`waiting()` 只返回当前发送者在本会话里已到达、还没开始处理的消息（`message_id`、`message`、`raw_message`、`time`），看不到其他人和其他会话 |
 | `config_subscription` | Pendo 的配置 revision 订阅 |
 | `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务（定时任务可用。用户触发时跟随 `/codex` 的声明） |
