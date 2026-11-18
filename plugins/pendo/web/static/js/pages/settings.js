@@ -206,7 +206,7 @@ function renderPage() {
                             <h3>登录与令牌</h3>
                             <p>需要重新登录时，可以从这里退出当前状态。</p>
                             <div class="settings-callout-card">
-                                <div class="settings-callout-copy settings-info-block">
+                                <div class="settings-callout-copy">
                                     <div class="settings-callout-title">当前登录状态</div>
                                     <div class="settings-callout-desc">当前 Web 端已登录。如需重新生成令牌，请回到聊天里执行 <code>/pendo web token</code>。</div>
                                 </div>

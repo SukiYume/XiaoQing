@@ -132,3 +132,6 @@
 .transfer-parent { display: inline-block; padding-bottom: 6px; font: 15px/1.4 var(--pixel); color: var(--gold); }
 .transfer-parent:hover { text-decoration: underline; }
 .transfer-hero .transfer-chip-row { margin-top: 12px; }
+
+/* 完整备份是说明文字后的一个独立动作，与正文拉开距离。 */
+.transfer-full-backup { margin-top: 14px; }

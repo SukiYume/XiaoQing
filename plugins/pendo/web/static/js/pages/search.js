@@ -315,7 +315,7 @@ function renderResults() {
     if (_loading)
         return '<div class="search-empty" role="status"><span class="search-empty-icon pixel-icon" data-icon="hourglass" aria-hidden="true"></span><div>正在搜索...</div></div>';
     if (!_query.trim() && !_preset) {
-        return `<div class="search-empty"><span class="search-empty-icon pixel-icon" data-icon="search" aria-hidden="true"></span><div>输入关键词开始检索，下面的建议可以直接点。</div></div>`;
+        return `<div class="search-empty"><span class="search-empty-icon pixel-icon" data-icon="search" aria-hidden="true"></span><div>输入关键词开始检索，也可以直接点上面的建议。</div></div>`;
     }
     if (_hasSearched && !_results.length) {
         return `<div class="search-empty"><span class="search-empty-icon pixel-icon" data-icon="compass" aria-hidden="true"></span><div>没有找到结果。试试换关键词、切类型，或先清空主题切片。</div></div>`;

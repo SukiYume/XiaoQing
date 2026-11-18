@@ -44,12 +44,11 @@
 .settings-switch input:checked + .settings-slider::before { transform: translateX(18px); }
 
 /* 迁移、登录与保存区域 */
-.settings-callout-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; margin-top: 16px; padding: 16px; }
+.settings-callout-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 16px; padding: 16px; }
 .settings-callout-copy { min-width: 0; }
 .settings-callout-title { font-size: 15px; font-weight: 780; color: var(--cream); }
 .settings-callout-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.settings-info-block { font-size: 13px; line-height: 1.7; color: var(--muted); }
-.settings-info-block code { font-family: monospace; background: var(--mint-soft); color: var(--gold); padding: 2px 6px; }
+.settings-callout-desc code { font-family: monospace; background: var(--mint-soft); color: var(--gold); padding: 2px 6px; white-space: nowrap; }
 .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 .settings-danger .btn { align-self: flex-start; }
 .settings-transfer-card { grid-template-columns: minmax(0, 1fr) auto; }

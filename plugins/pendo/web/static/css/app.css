@@ -80,7 +80,7 @@
     --body: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
     --shadow-hard: 4px 4px 0 var(--shadow);
     --shadow-hard-sm: 2px 2px 0 var(--shadow);
-    --sidebar-width: 208px;
+    --sidebar-width: 196px;
     --header-height: 56px;
     --transition: 0.15s ease;
 }
@@ -158,14 +158,13 @@ p { line-height: 1.6; }
 [data-module='settings'] { --icon: var(--icon-settings); --module: var(--muted); }
 .pixel-icon[data-module] { color: var(--module); }
 
-/* 四角星站标、眉题和纸页，写法与小青观测站相同。 */
-.star {
-    display: inline-block;
+/* 站标与 favicon 同一张像素图：带装订环的日程本和一个勾。眉题和纸页的写法与小青观测站相同。 */
+.brand-mark {
+    display: block;
     flex: none;
-    width: 26px;
-    height: 26px;
-    background: var(--gold);
-    clip-path: polygon(43% 0, 57% 0, 57% 24%, 69% 24%, 69% 36%, 81% 36%, 81% 43%, 100% 43%, 100% 57%, 78% 57%, 78% 66%, 66% 66%, 66% 79%, 56% 79%, 56% 100%, 43% 100%, 43% 79%, 32% 79%, 32% 67%, 20% 67%, 20% 57%, 0 57%, 0 43%, 21% 43%, 21% 34%, 34% 34%, 34% 23%, 43% 23%);
+    width: 30px;
+    height: 30px;
+    image-rendering: pixelated;
 }
 
 .eyebrow {
@@ -287,7 +286,7 @@ p { line-height: 1.6; }
     align-items: center;
     gap: 12px;
     min-height: var(--header-height);
-    padding: 0 18px;
+    padding: 0 18px 0 28px;
     border-bottom: 2px solid #54506c;
     white-space: nowrap;
     overflow: hidden;
@@ -311,28 +310,34 @@ p { line-height: 1.6; }
     color: var(--faint);
 }
 
+/* 导航是纵向弹性列：条目随窗口高度在 52px 到 60px 之间伸展，把竖向空间分给每一项；
+   伸满后剩下的高度由分隔线的 auto 外边距吸收，偏好组落在底部。矮屏放不下时整列滚动。 */
 .sidebar-nav {
     flex: 1;
-    padding: 10px 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 16px 14px 18px;
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: thin;
 }
 
 .nav-section-label {
-    padding: 10px 8px 6px;
+    padding: 2px 6px 6px;
     font: 13px/1.4 var(--pixel);
-    letter-spacing: 2px;
+    letter-spacing: 3px;
     color: var(--faint);
     white-space: nowrap;
 }
 
 .nav-item {
     display: flex;
+    flex: 1 0 52px;
+    max-height: 60px;
     align-items: center;
-    gap: 10px;
-    padding: 7px 8px;
-    margin-bottom: 4px;
+    gap: 12px;
+    padding: 8px 10px;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
@@ -350,14 +355,17 @@ p { line-height: 1.6; }
     box-shadow: inset 0 -3px var(--gold-deep), var(--shadow-hard-sm);
 }
 
+/* 图标落在模块色的浅底方块里，和文字一起占满条目宽度。 */
 .nav-icon-shell {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: none;
-    width: 32px;
-    height: 32px;
+    width: 38px;
+    height: 38px;
     color: var(--module);
+    background: color-mix(in srgb, var(--module) 13%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--module) 30%, transparent);
 }
 
 .nav-icon {
@@ -369,17 +377,24 @@ p { line-height: 1.6; }
     mask: var(--icon) center / contain no-repeat;
 }
 
-.nav-item.active .nav-icon-shell { color: var(--ink); }
+.nav-item.active .nav-icon-shell {
+    color: var(--ink);
+    background: #26223814;
+    box-shadow: inset 0 0 0 1px #26223833;
+}
+
+.nav-copy { gap: 4px; }
 
 .nav-label {
-    font: 18px/1.25 var(--pixel);
+    font: 18px/1.2 var(--pixel);
+    letter-spacing: 1px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .nav-hint {
-    font-size: 11px;
-    line-height: 1.35;
+    font-size: 12px;
+    line-height: 1.3;
     color: var(--faint);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -388,9 +403,11 @@ p { line-height: 1.6; }
 .nav-item.active .nav-hint { color: #5b4a35; }
 
 .sidebar-separator {
-    height: 1px;
-    margin: 8px 8px;
-    background: var(--line);
+    flex: none;
+    height: 18px;
+    margin: auto 6px 6px;
+    padding-top: 16px;
+    background: var(--line) content-box;
 }
 
 .sidebar-backdrop {
@@ -863,7 +880,7 @@ select {
     .events-detail-block, .tasks-board-col, .tasks-board-card,
     .ledger-insight-card, .ledger-pulse-metric, .ledger-hotspot-row, .notes-list-shell,
     .notes-spotlight-stat, .diary-recent-item, .diary-stream-item, .search-card,
-    .settings-callout-card, .settings-toggle-row, .settings-transfer-card, .settings-info-block,
+    .settings-callout-card, .settings-toggle-row, .settings-transfer-card,
     .stats-chart-block, .stats-dual-card, .stats-metric-pair, .stats-treemap-tile,
     .stats-comparison-metric, .transfer-type-card, .transfer-upload, .transfer-list-row,
     .transfer-result-group, .transfer-example-block, .transfer-status-banner, .transfer-summary-card) {
@@ -1484,7 +1501,8 @@ body.modal-open #back-to-top {
     .sidebar .nav-section-label { display: none; }
     .sidebar .sidebar-logo { justify-content: center; padding: 0; }
     .sidebar-nav { padding: 10px 8px; }
-    .sidebar .nav-item { justify-content: center; padding: 7px 0; }
+    .sidebar .nav-item { justify-content: center; padding: 8px 0; }
+    .sidebar .sidebar-separator { margin-inline: 4px; }
     .main-wrapper { margin-left: 64px; }
 }
 
@@ -1505,11 +1523,12 @@ body.modal-open #back-to-top {
         transition: transform var(--transition);
     }
     .sidebar.mobile-open { transform: translateX(0); visibility: visible; }
-    .sidebar .sidebar-logo { justify-content: flex-start; padding: 0 18px; }
+    .sidebar .sidebar-logo { justify-content: flex-start; padding: 0 18px 0 28px; }
     .sidebar .sidebar-logo-copy,
     .sidebar .nav-copy,
     .sidebar .nav-section-label { display: flex; }
-    .sidebar .nav-item { justify-content: flex-start; padding: 7px 8px; }
+    .sidebar-nav { padding: 14px 14px 16px; }
+    .sidebar .nav-item { justify-content: flex-start; padding: 8px 10px; }
     .main-wrapper { margin-left: 0; }
     .content {
         padding: 16px calc(16px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom))

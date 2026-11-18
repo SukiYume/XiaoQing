@@ -391,7 +391,7 @@ function renderExportTab() {
             <div class="transfer-card">
                 <h3>导出备份</h3>
                 <p>完整备份包含全部类别、全部时间的有效记录，也包含未来日程。你可以调整类别和时间范围，预览后下载 <code>.pendo.zip</code> 文件。</p>
-                <button type="button" class="transfer-btn secondary" id="btn-transfer-full-backup" ${busy ? 'disabled' : ''}>选择完整备份</button>
+                <button type="button" class="transfer-btn secondary transfer-full-backup" id="btn-transfer-full-backup" ${busy ? 'disabled' : ''}>选择完整备份</button>
                 <div class="transfer-section">
                     <div class="transfer-section-label">导出类别</div>
                     <div class="transfer-type-grid">${TYPE_OPTIONS.map(renderExportTypeCard).join('')}</div>

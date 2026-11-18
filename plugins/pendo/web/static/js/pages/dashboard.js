@@ -189,7 +189,6 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
                             </div>
                             <div>
                                 <div class="dashboard-event-title">${escapeHtml(heading)}</div>
-                                ${event.display_subtitle && !isMultiNode ? `<div class="dashboard-event-subtitle">${escapeHtml(event.display_subtitle)}</div>` : ''}
                                 <div class="dashboard-event-meta">
                                     <span class="dashboard-meta-pill"><span class="pixel-icon" data-icon="clock" aria-hidden="true"></span>${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
                                     ${event.location ? `<span class="dashboard-meta-pill location"><span class="pixel-icon" data-icon="pin" aria-hidden="true"></span>${escapeHtml(event.location)}</span>` : ''}

@@ -557,7 +557,7 @@ function renderMatrixHeatmap(rows, xLabels, yLabels, color) {
     });
     const max = Math.max(...records.map((row) => nonNegativeNumber(row.count)), 1);
     return `
-        <div class="stats-matrix">
+        <div class="stats-matrix" style="--stats-matrix-cols:${xLabels.length};">
             <div class="stats-matrix-corner"></div>
             ${xLabels.map((label) => `<div class="stats-matrix-xlabel">${escapeHtml(label)}</div>`).join('')}
             ${yLabels

@@ -105,7 +105,7 @@ export function renderSidebar(container) {
     sidebar.setAttribute('aria-label', '主要导航');
     sidebar.innerHTML = `
         <div class="sidebar-logo">
-            <span class="star" aria-hidden="true"></span>
+            <img class="brand-mark" src="favicon.svg" alt="" width="30" height="30" />
             <div class="sidebar-logo-copy">
                 <span class="sidebar-logo-text">Pendo</span>
                 <span class="sidebar-logo-subtitle">个人管理台</span>
