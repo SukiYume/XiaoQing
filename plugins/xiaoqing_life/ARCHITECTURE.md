@@ -34,7 +34,7 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 
 | 模块 | 职责 |
 |---|---|
-| `main.py` | `init` / `shutdown` / `handle`（/life）/ `scheduled_tick` / `turn_context` / `export_memes`；`LifeRuntime` 持有存储、唯一的上网任务与登记的后台任务 |
+| `main.py` | `init`（同时启动观测站）/ `shutdown` / `handle`（/life）/ `scheduled_tick` / `scheduled_travel` / `turn_context` / `export_memes`；`LifeRuntime` 持有存储、唯一的上网任务与登记的后台任务 |
 | `config.py` | `LifeConfig`：读 `config.plugins.xiaoqing_life`，越界钳制，类型错回默认 |
 | `days.py` | 她的一天：凌晨 5 点分界的 `day_key` / `life_date`；`episode_day` 按经历时间戳现算；`DAY` |
 | `persona_bridge.py` | 读人设卡事实与〔作息〕：此刻在做什么、离睡觉 / 醒来多少分钟；读不到退回 `quiet_hours` |
@@ -57,10 +57,13 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 | `memory_bridge.py` | 定时检查后把新的经历、日记、查明白的事发布到统一记忆，规则见“与 Core 和聊天的桥” |
 | `turn_context.py` | 聊天侧取用：按问法选素材，780 字预算按优先级整段取舍、同一句不说两遍，规则见“turn_context 取用规则” |
 | `stats.py` | 每天的运行计数（只记数），跨日一行汇总，`/life stats` |
-| `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；预算 `reserve_llm_call`；`done_today` / `mark_done`；查词落空记录 |
+| `stores.py` | `LifeStore`：内存快照 + 原子 JSON（`write_with_backup`），一把 `asyncio.Lock` 串行写；预算 `reserve_llm_call`；`done_today` / `mark_done`；查词落空记录；`read_collection` / `life_data_directory` 供观测站和收录命令只读取用 |
 | `safety.py` | 外部文本清洗、注入样句、屏蔽词、脏话、摘录核对用的归一化、相似度 |
 | `bili_auth.py` | B站扫码登录与凭证（只读，Cookie 只发 `api.bilibili.com`，凭证不进日志 / 状态 / 提示词） |
 | `commands.py` | `/life` 子命令文本 |
+| `website.py` | 小青观测站：页面、三个只读 JSON 接口（此刻状态、存档、旅行）和静态资源；`live_status` 按人设作息与当前上网时段选场景；`python -m plugins.xiaoqing_life.website` 单独预览 |
+| `travel.py` | 旅行明信片：提示词与参考图、经 `codex.travel_postcards` 生成、按日期整日收录为 WebP 与 `entry.json`；`python -m plugins.xiaoqing_life.travel` 手工收录 |
+| `site/` | 观测站前端：`index.html`、`assets/station.js`（页面与路由）、`stage.js`（直播间舞台）、`stats-view.js`（统计）、`station.css`，以及场景与角色图集、字体和随站的首站明信片 |
 | `sources/` | `base`（有界 HTTP、条目模型）、`bilibili`、`hotlists`、`watch`（弹幕）、`deep`（简介全文 / 置顶 / 字幕，字幕全文或均匀取 6 段节选）、`subtitle`（WBI）、`baike`、`wiki`、`reference`（研究和作品核实共用的查百科 / 维基） |
 
 ## 小课题与研究
@@ -116,6 +119,8 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 | 聊天 → life（`mode=proactive`） | `exclude_ids`（已经说过的）、群聊另带 `is_private=false` 和 `topics`（这个群还记着的话题词，只用来认出哪些经历是这个群聊到才去搜的，不计入“听到”） |
 | life → 聊天（`mode=proactive`） | `share_candidates`：每件有 `episode_id`（经历 ID、`learning:<ID>` 或 `work:<ID>:<日期>`）、`line`、`topics`、`heard_here` |
 | `mode=probe` | `{"version":1,"online_life":true}`；插件关闭或不在时是 `None`。xiaoqing_chat 据此在每日生活小事的生成说明里加一条：网上刷到的具体视频和帖子另有真实记录，这里不写 |
+
+`codex.travel_postcards` 同样在服务契约中声明：只有 `codex` 能导出、只有 `xiaoqing_life` 能调用，Core 只把 `capabilities.travel_postcards` 签发给定时任务的系统主体。`scheduled_travel` 只登记后台任务，等待 Codex 的时间不占上网和聊天的执行通道；当天已有明信片、上一次绘制还没结束或插件正在关闭时直接返回。
 
 ### turn_context 取用规则
 

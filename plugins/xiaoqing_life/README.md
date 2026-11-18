@@ -84,6 +84,8 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `false` | 总开关；关闭时定时任务不做事，`turn_context` 返回 `None` |
+| `web_port` | `12002` | [观测站](#小青观测站)监听端口，只绑定 `127.0.0.1`，取 `1`–`65535` 的整数；填错时观测站不启动并记一条错误日志 |
+| `travel_enabled` | `true` | 每天的旅行明信片；与 `enabled` 都打开时才画 |
 | `sources` | 除 `baidu_hot` 外全开 | 各来源开关：`bili_popular`、`bili_ranking`、`bili_search`、`bili_comments`、`zhihu_hot`、`weibo_hot`、`baike_lookup`、`wiki_read`（维基阅读）、`bili_subtitles`（登录后读字幕，未登录时不起作用）、`baidu_hot` |
 | `seed_interests` | 13 个初始兴趣 | 作为搜索词；起始分 1，不算证据 |
 | `max_sessions_per_day` | `5` | 她的一天（凌晨 5 点分界）最多上网次数 |
@@ -159,7 +161,7 @@ XiaoQing Life 给小青一份自己的网上生活：在作息空闲的时段，
 
 ## 📁 数据目录
 
-`data/xiaoqing_life/`：`episodes.json`、`terms.json`、`expressions.json`、`interests.json`、`threads.json`、`methods.json`、`works.json`、`dossiers.json`、`seen.json`、`snapshots.json`、`journal.json`（日记与周记，保留 8 周）、`frontier.json`（好奇边界）、`learnings.json`（自己查明白的事）、`memes.json` 与 `memes/<sha256>.<ext>`、`state.json`。B站 凭证在 `secrets/bilibili.json`，不是存储集合，不进备份（见上“B站登录”）。全部原子写入并保留 `.bak` 备份；主文件损坏时读备份，都坏时旧文件改名为 `.corrupt` 留底并从空开始。
+`data/xiaoqing_life/`：`episodes.json`、`terms.json`、`expressions.json`、`interests.json`、`threads.json`、`methods.json`、`works.json`、`dossiers.json`、`seen.json`、`snapshots.json`、`journal.json`（日记与周记，保留 8 周）、`frontier.json`（好奇边界）、`learnings.json`（自己查明白的事）、`memes.json` 与 `memes/<sha256>.<ext>`、`state.json`，以及 `travel/<日期>/`（当天的旅行明信片 `1.webp`、`2.webp` 和手记 `entry.json`）。B站 凭证在 `secrets/bilibili.json`，不是存储集合，不进备份（见上“B站登录”）。全部原子写入并保留 `.bak` 备份；主文件损坏时读备份，都坏时旧文件改名为 `.corrupt` 留底并从空开始。
 
 ---
 

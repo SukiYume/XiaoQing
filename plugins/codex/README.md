@@ -137,6 +137,17 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 ---
 
+## 🧳 旅行明信片任务
+
+`xiaoqing_life` 的定时任务通过 `codex.travel_postcards` 服务请 Codex 画小青观测站当天的旅行明信片。该服务只允许 `xiaoqing_life` 调用，并且只签发给定时任务的系统主体。
+
+- 任务在固定会话 `life-travel` 里执行，沿用同一个 thread，单次时限 1800 秒。
+- 请求带提示词和参考图路径，参考图以 `--image` 交给 CLI。`sandbox` 为 `workspace-write` 时，这次任务的图片产物目录以 `--add-dir` 加入可写范围。
+- `travel_model` 指定这类任务使用的模型，留空时使用 CLI 默认模型。
+- 任务带 `suppress_delivery` 标记：结果文本、图片产物路径和按原文件名索引的图片表交还生活插件，Codex 不往聊天里发送。
+
+---
+
 ## 💾 运行时数据
 
 数据根目录默认为 `data/codex/`：

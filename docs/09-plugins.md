@@ -303,6 +303,12 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 - 交给聊天：`xiaoqing_chat` 每轮回复前经 `life.turn_context` 取和当前话题相关的一两点；主动开口时可以带上她最近真的刷到、想分享的事；梗图定时导入聊天的表情库。
 - 交给统一记忆：每次定时检查后，新的经历、日记和查明白的事发布到 `xiaoqing_memory`，夜间整理进她的自我页。
 
+**观测站**
+
+插件加载时在 `127.0.0.1` 上启动只读网站“小青观测站”（端口 `web_port`，默认 `12002`），以像素游戏的形式展示她的生活：直播间按人设作息和上网活动切换十个场景，另有日记、足迹、旅行明信片、研究手帐、图鉴、近七日统计和指南。
+网站只展示已保存的记录，`enabled` 关闭时照常可看。
+旅行明信片由定时任务经 `codex.travel_postcards` 请 Codex 每天画一至两张，`enabled` 与 `travel_enabled` 都打开时才画。
+
 **边界**
 
 - 除管理员扫码授权的 B站 只读登录（用于读字幕）外不登录任何账号，不发评论、点赞、私信。
@@ -339,9 +345,9 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | 项目 | 内容 |
 |---|---|
 | AI route | `reasoning`（消化、研究、整理和睡前写日记）、`vision`（梗图安全判定，可省略） |
-| 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行 |
-| Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用）；使用 `memory.record`，把经历、日记和查明白的事发布到统一记忆 |
-| 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目与状态；B站 凭证单独存放在 `secrets/`，不进备份 |
+| 定时 | `xiaoqing_life.tick` 每 15 分钟检查一次，只做门控，上网在后台任务里进行；`xiaoqing_life.travel` 在洛杉矶时间每天 09:00–23:00 的整点检查，当天还没有旅行明信片时在后台请 Codex 绘制 |
+| Capability 与服务 | 提供 `life.turn_context` 与 `life.export_memes`（`xiaoqing_chat` 调用）；使用 `memory.record`，把经历、日记和查明白的事发布到统一记忆；使用 `codex.travel_postcards`（`travel_postcards`，只在定时任务里签发）画旅行明信片 |
+| 运行数据 | `data/xiaoqing_life/`：经历、词条、表达、兴趣、小课题、查法、作品、主题档案、日记周记、梗图、已看过条目、状态与旅行明信片（`travel/<日期>/`）；B站 凭证单独存放在 `secrets/`，不进备份 |
 
 [XiaoQing Life](../plugins/xiaoqing_life/README.md) 逐项说明各项能力、全部配置字段和安全边界，[架构文档](../plugins/xiaoqing_life/ARCHITECTURE.md) 说明模块与取用规则，[设计文档](../plugins/xiaoqing_life/DESIGN.md) 说明取舍。
 
@@ -625,7 +631,7 @@ ADS Paper 通过 SciX（NASA ADS 的继任服务）把论文检索、摘要、�
 笔记、灵感、主题、截止日期、每日推荐和个人文献库使用私聊用户作用域。
 
 `search` 与 `stats` 接受 SciX 检索式，例如 `bibstem:NatAs collection:planetary year:2020-2024 property:refereed`。
-`search` 给出命中总数并分页，`--abs` 附摘要节选，`--hl` 附摘要和正文里的命中原句。
+`search` 给出命中总数并分页（每页 1–25 篇），`--abs` 附摘要节选，`--hl` 附摘要和正文里的命中原句，带这两项时每页最多 10 篇。
 `stats` 给出命中总数、被引统计，以及年份、文献类型、期刊和关键词分布。
 `abstract` 一次给出最多 8 篇论文的摘要原文；SciX 接口不提供的摘要改取 arXiv 预印本或 Europe PMC，并标明来源。
 
@@ -729,7 +735,8 @@ Codex 插件让 Bot 管理员在私聊或群聊中管理本机 Codex CLI，结�
 /codex delete <name> [--force] [--protected]
 ```
 
-`config.plugins.codex` 配置 CLI 路径、默认工作目录、允许根目录、sandbox、approval policy、并行度、队列、任务时限、受保护会话和 arXiv 摘要会话。
+`config.plugins.codex` 配置 CLI 路径、默认工作目录、允许根目录、sandbox、approval policy、并行度、队列、任务时限、受保护会话、arXiv 摘要会话和旅行明信片任务使用的模型（`travel_model`）。
+`xiaoqing_life` 的旅行明信片任务经 `codex.travel_postcards` 在固定会话 `life-travel` 里执行，结果交还生活插件收录。
 
 数据位于 `data/codex/`，包括 `sessions.json`、每个会话的 `conversation.jsonl`、任务 artifacts、图片、输出和已删除会话归档。
 路径、输出、图片、队列、进程与磁盘均有独立预算。
@@ -1216,7 +1223,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 
 ## ⏰ 定时任务总表
 
-时间按 `config.timezone`（默认 `Asia/Shanghai`）解释。
+时间按 `config.timezone`（默认 `Asia/Shanghai`）解释，条目自带时区的除外（`xiaoqing_life` 的旅行明信片按洛杉矶时间）。
 `broadcast` 把同一结果发到该任务的目标群（部署配置 `plugins.<插件名>.schedules.<任务 ID>.group_ids` 优先，其次是条目的 `group_ids`，都没写时使用 `default_group_ids`），`targeted` 由插件逐个返回私聊或群目标，`silent` 只运行不发消息。
 投递模式说明见 [插件开发指南的调度字段](03-plugin-development.md#调度字段)。
 
@@ -1254,6 +1261,7 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `xiaoqing_chat` | `scheduled_memory_sync` | 每小时 13、43 分 | `silent` | 把各会话还没推给统一记忆的消息推过去（首次启动导入旧数据、推送失败后补推） |
 | `xiaoqing_chat` | `scheduled_proactive` | 每 20 分钟 | `targeted` | 冷群时以群友身份主动开口（由 `proactive.enabled` 控制，发行的行为配置里是打开的） |
 | `xiaoqing_life` | `scheduled_tick` | 每 15 分钟 | `silent` | 按作息、预算和兴趣决定要不要上网，上网在后台任务里进行（`enabled` 打开后生效，默认关闭）；检查后把新经历发布到统一记忆 |
+| `xiaoqing_life` | `scheduled_travel` | 洛杉矶时间每天 09:00–23:00 每整点 | `silent` | 当天还没有旅行明信片时在后台请 Codex 绘制并收录（`enabled` 与 `travel_enabled` 都打开后生效） |
 | `xiaoqing_memory` | `scheduled_tick` | 每 30 分钟 | `silent` | 落盘取用计数；夜间窗口里或积压够多时在后台整理有新事件的范围，窗口里每天另做一次自我页、核对和全量清理（`enabled` 关闭时不整理） |
 
 Pendo 的简报、日记提醒和财务总结每分钟运行一次，按每位用户自己的时区判断是否到期。

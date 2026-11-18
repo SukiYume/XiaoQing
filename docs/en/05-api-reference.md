@@ -219,6 +219,7 @@ This function splits long messages at text boundaries and keeps mixed-segment or
 | `plugin_name` | `str` | Current canonical plugin name |
 | `plugin_dir` | `Path` | Current plugin source root |
 | `data_dir` | `Path` | Current plugin persistent-data directory |
+| `runtime_root` | `Path` | Runtime directory that holds `config/` and `logs/`. Plugin data lives where `data_dir` points. |
 | `current_user_id` | `int \| None` | Current user |
 | `current_group_id` | `int \| None` | Current group |
 | `request_id` | `str \| None` | Current request tracking ID |
@@ -354,6 +355,7 @@ Deployers protect code-call boundaries through plugin source review.
 | `chat_reply` | Smalltalk to Chat reply service |
 | `agent_turn` | XiaoQing Chat turn handoff to XiaoQing Agent for user messages. Decision and execution can be separate. Reports current-reply delivery. |
 | `codex_agent` | XiaoQing Agent synchronous Codex task. It follows `/codex` and checks each call. |
+| `travel_postcards` | XiaoQing Life's scheduled task asks Codex to draw travel postcards: `await travel_postcards(prompt, references)` waits for the job and returns a mapping with its text and image results. Issued to system principals only. |
 | `ssh_agent` | XiaoQing Agent QingSSH server list and one-time commands. It follows `/ssh` and checks each call. |
 | `command_runner` | Execute published commands as the initiator with normal permission and scene checks. `run(text, *, sender_name, operation_id, request_texts)` returns original `DeliverySegments`. The caller settles receipts. `request_texts` reaches the command as `context.request_texts`. |
 | `local_tools` | Authorize XiaoQing Agent local code execution and file operations. It follows `/shell` and checks each call. |

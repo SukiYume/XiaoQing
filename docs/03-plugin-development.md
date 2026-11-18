@@ -1039,9 +1039,10 @@ Manifest 的 `services` 声明导出，`uses_services` 声明消费，Core 校�
 - `codex` 向 `xiaoqing_agent` 提供 `codex.agent_task`。
 - `qingssh` 向 `xiaoqing_agent` 提供 `qingssh.agent_command`。
 
-小青网上生活增加两条桥：
+小青网上生活增加三条桥：
 
 - `xiaoqing_life` 向 `xiaoqing_chat` 提供 `life.turn_context` 与 `life.export_memes`。数据只关于小青自己，不按用户身份门控，系统主体也可用。
+- `codex` 向 `xiaoqing_life` 提供 `codex.travel_postcards`，为观测站画每天的旅行明信片。经 `capabilities.travel_postcards` 使用，只签发给定时任务的系统主体。
 
 小青统一记忆增加四条桥，都由 `xiaoqing_memory` 提供，经 `capabilities.memory` 使用：
 
@@ -1054,7 +1055,7 @@ Core 按服务名核验固定所有者和调用方。
 `agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查。
 `codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。
 `onebot_actions` 按 `/qq` 的声明签发给 `xiaoqing_chat`，同样每次调用复核；它走带响应的 OneBot 请求通道，不经过出站消息的观察和回执，发消息仍用 `context.send_action`。
-`codex.agent_task` 与 `qingssh.agent_command` 的执行请求可以只在插件执行通道内启动工作并返回 `asyncio.Task`，Core 在通道外等待结果，调用方取消时一并取消该 Task。
+`codex.agent_task`、`codex.travel_postcards` 与 `qingssh.agent_command` 的执行请求可以只在插件执行通道内启动工作并返回 `asyncio.Task`，Core 在通道外等待结果，调用方取消时一并取消该 Task。
 这样串行插件不会被一条长命令占住。
 `command_runner` 在一次性的会话空间里执行命令，不读取也不替换用户正在进行的交互会话。
 命令新开的会话先交给插件的 `close_session` 回收资源再丢弃。

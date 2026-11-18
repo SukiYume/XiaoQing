@@ -291,11 +291,17 @@ xiaoqing_chat ──agent.handle_turn (decide / act)──► xiaoqing_agent
 Core scheduler ── xiaoqing_life.tick (every 15 min) ──► xiaoqing_life ── background browsing ──► read-only GET to fixed domains
 xiaoqing_chat ── life.turn_context (before each reply) ──► xiaoqing_life (in-memory read; no disk, network, or model)
 xiaoqing_chat ── life.export_memes (minutes 07 and 37) ──► xiaoqing_life
+Core scheduler ── xiaoqing_life.travel (hourly 09:00–23:00, Los Angeles time) ──► xiaoqing_life ── codex.travel_postcards ──► codex
+Browser ── 127.0.0.1:12002 (XiaoQing observatory) ──► xiaoqing_life (reads saved records and the persona routine)
 ```
 
 - Before each reply chat takes one or two topic-relevant points into the prompt.
   A timeout, error, disabled switch, or absent plugin counts as empty.
 - Requests carry no user ID or group ID. The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
+- The XiaoQing observatory is a read-only website that `xiaoqing_life` serves on the loopback address.
+  It starts when the plugin loads, releases its port on unload, and keeps showing saved records while the life simulation is disabled.
+- Travel postcards are drawn by Codex through `codex.travel_postcards` from a scheduled task.
+  The schedule entry only registers a background task, so the wait for Codex stays outside both plugins' execution lanes.
   Core issues `capabilities.life_context` only when the caller declares `uses_services`.
 
 ### Unified memory

@@ -46,8 +46,21 @@ def main() -> None:
             "assets/astrodict_ce.txt",
             "assets/astrodict_ec.txt",
         ),
-        "plugins.pendo.web"         : ("static/index.html", "static/favicon.svg"),
+        "plugins.pendo.web": (
+            "static/index.html",
+            "static/favicon.svg",
+            "static/css/app.css",
+            "static/css/icons.css",
+            "static/assets/fusion-pixel.woff2",
+        ),
         "plugins.pendo.web.services": ("assets/demo_bundle.pendo.zip",),
+        "plugins.xiaoqing_life"     : (
+            "site/index.html",
+            "site/assets/station.css",
+            "site/assets/station.js",
+            "site/assets/live/desk-room.webp",
+            "site/assets/travel/2026-11-17/entry.json",
+        ),
     }
     checked = 0
     for package, names in assets.items():

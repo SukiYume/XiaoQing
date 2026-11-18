@@ -296,10 +296,14 @@ xiaoqing_chat ──agent.handle_turn（decide / act）──► xiaoqing_agent
 Core scheduler ── xiaoqing_life.tick（每 15 分钟）──► xiaoqing_life ── 后台上网 ──► 固定域名的只读 GET
 xiaoqing_chat ── life.turn_context（每轮回复前）────► xiaoqing_life（只读内存，不碰磁盘、网络、模型）
 xiaoqing_chat ── life.export_memes（每小时 07、37 分）► xiaoqing_life
+Core scheduler ── xiaoqing_life.travel（洛杉矶时间 09:00–23:00 整点）► xiaoqing_life ── codex.travel_postcards ──► codex
+浏览器 ── 127.0.0.1:12002（小青观测站）──────────► xiaoqing_life（只读已保存的记录和人设作息）
 ```
 
 - 聊天每轮回复前取和话题相关的一两点放进提示词；超时、报错、开关关闭或插件不在时当作没有。
 - 请求不含用户 ID 与群号。数据只关于小青自己，不按用户身份门控，系统主体也可用。Core 只在调用方声明 `uses_services` 时签发 `capabilities.life_context`。
+- 小青观测站是 `xiaoqing_life` 在本机回环地址上的只读网站，随插件加载启动、随卸载释放端口，生活模拟关闭时照常展示已有记录。
+- 旅行明信片由定时任务经 `codex.travel_postcards` 交给 Codex 绘制。定时入口只登记后台任务，等待 Codex 的时间在两个插件的执行通道之外。
 
 ### 统一记忆
 

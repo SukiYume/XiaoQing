@@ -1037,10 +1037,12 @@ XiaoQing Agent adds four bridges:
 - `codex` supplies `codex.agent_task` to `xiaoqing_agent`.
 - `qingssh` supplies `qingssh.agent_command` to `xiaoqing_agent`.
 
-XiaoQing Life adds two bridges:
+XiaoQing Life adds three bridges:
 
 - `xiaoqing_life` supplies `life.turn_context` and `life.export_memes` to `xiaoqing_chat`.
   The data concerns only XiaoQing herself, so calls are not gated by user identity, and system principals may use them.
+- `codex` supplies `codex.travel_postcards` to `xiaoqing_life` to draw the observatory's daily travel postcards.
+  It is used through `capabilities.travel_postcards` and issued only to the scheduled task's system principal.
 
 XiaoQing Memory adds four bridges, all supplied by `xiaoqing_memory` and used through `capabilities.memory`:
 
@@ -1059,7 +1061,7 @@ Each call repeats the permission check.
 `onebot_actions` follows the `/qq` declaration and is issued to `xiaoqing_chat`, with the same check on each call.
 It uses the OneBot request channel that returns responses, outside outgoing-message observation and receipts. Sending messages still uses `context.send_action`.
 
-`codex.agent_task` and `qingssh.agent_command` can start work within the plugin execution lane and return an `asyncio.Task`.
+`codex.agent_task`, `codex.travel_postcards`, and `qingssh.agent_command` can start work within the plugin execution lane and return an `asyncio.Task`.
 Core awaits the result outside the lane. Caller cancellation also cancels that task.
 Serial plugins thus remain available during long commands.
 

@@ -540,7 +540,7 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 
 ### XiaoQing Life
 
-小青自己的网上生活，默认关闭：
+小青自己的网上生活。生活模拟默认关闭，观测站网站随插件加载启动：
 
 | 路径 | 默认 | 说明 |
 |---|---|---|
@@ -551,9 +551,11 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | 同一天内所有模型调用合计，调用前先计数，失败不退还 |
 | `plugins.xiaoqing_life.browse_when_busy` | `false` | 作息为“忙”时是否允许偷偷刷一下 |
 | `plugins.xiaoqing_life.blocked_keywords` | `[]` | 在内置屏蔽词之外再丢弃的内容 |
+| `plugins.xiaoqing_life.web_port` | `12002` | 观测站监听端口，只绑定 `127.0.0.1`，范围 `1..65535`；下次启动或重载插件时生效 |
+| `plugins.xiaoqing_life.travel_enabled` | `true` | 每天请 Codex 画旅行明信片；`enabled` 关闭时不画 |
 
 聊天一侧的取用开关在 `xiaoqing_chat` 行为配置的 `life.enable_online_life`、`life.online_life_timeout_seconds`、`life.enable_life_memes` 和 `life.enable_life_share`。
-全部字段、命令与数据目录见 [XiaoQing Life](../plugins/xiaoqing_life/README.md#️-开启)。
+全部字段、命令与数据目录见 [XiaoQing Life](../plugins/xiaoqing_life/README.md#️-开启)，观测站的页面与旅行明信片见 [小青观测站](../plugins/xiaoqing_life/README.md#小青观测站)。
 
 ### XiaoQing Memory
 
@@ -611,6 +613,7 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | 沙箱 | `sandbox="workspace-write"` | `read-only`、`workspace-write`、`danger-full-access` |
 | 审批 | `approval_policy="never"` | `untrusted`、`on-failure`、`on-request`、`never` |
 | 仓库 | `skip_git_repo_check=true` | Codex CLI Git 仓库检查开关 |
+| 旅行明信片 | `travel_model=""` | `xiaoqing_life` 的旅行绘图任务使用的模型，留空时用 CLI 默认模型 |
 
 工作目录、允许根目录、保留期、紧急磁盘阈值和 arXiv 摘要会话等扩展字段见 [Codex 配置](../plugins/codex/README.md#️-基础配置)。
 

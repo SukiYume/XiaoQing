@@ -220,6 +220,7 @@ split_message_segments(
 | `plugin_name` | `str` | 当前插件规范名 |
 | `plugin_dir` | `Path` | 当前插件源码根目录 |
 | `data_dir` | `Path` | 当前插件持久数据目录 |
+| `runtime_root` | `Path` | 运行目录，`config/` 与 `logs/` 在它下面；插件数据的位置以 `data_dir` 为准 |
 | `current_user_id` | `int \| None` | 当前用户 |
 | `current_group_id` | `int \| None` | 当前群 |
 | `request_id` | `str \| None` | 当前请求追踪 ID |
@@ -353,6 +354,7 @@ Bot Core 的用户命令按各自的 Manifest 声明授权，由 Dispatcher 在�
 | `chat_reply` | Smalltalk 到 Chat 回复服务 |
 | `agent_turn` | XiaoQing Chat 到 XiaoQing Agent 的一轮交接（用户消息。可分判断与执行两步），并回报当轮回复是否发出 |
 | `codex_agent` | XiaoQing Agent 到 Codex 的同步任务（跟随 `/codex` 的声明，每次调用复核） |
+| `travel_postcards` | XiaoQing Life 的定时任务请 Codex 画旅行明信片：`await travel_postcards(prompt, references)` 等任务结束，返回带文本与图片结果的映射；只签发给系统主体 |
 | `ssh_agent` | XiaoQing Agent 到 QingSSH 的服务器列表与一次性命令（跟随 `/ssh` 的声明，每次调用复核） |
 | `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送。`run(text, *, sender_name, operation_id, request_texts)` 原样返回命令的 `DeliverySegments`，由调用方结算回执；`request_texts` 是发起人原话，命令在 `context.request_texts` 读取 |
 | `local_tools` | XiaoQing Agent 在本机执行代码、读写文件前的授权确认（跟随 `/shell` 的声明，每次调用复核） |

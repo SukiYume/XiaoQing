@@ -342,6 +342,12 @@ It only browses and supplies material. It never speaks; `xiaoqing_chat` does. Th
 - For chat: before each reply, `xiaoqing_chat` asks `life.turn_context` for one or two points relevant to the current topic. Proactive messages can include something she recently came across and wants to share. Collected memes are imported into the chat emoji library on a schedule.
 - For the unified memory: after each scheduled check, new experiences, diary entries, and verified learnings are published to `xiaoqing_memory`, and the nightly consolidation writes them into her self page.
 
+**Observatory**
+
+When the plugin loads it starts a read-only website, the XiaoQing observatory, on `127.0.0.1` (port `web_port`, default `12002`). It shows her life as a pixel game: a live room that switches among ten scenes by the persona routine and her online activity, plus diary, shared episodes, travel postcards, research notes, a scene gallery, seven-day stats, and a guide.
+The site only shows saved records and stays available while `enabled` is off.
+A scheduled task asks Codex through `codex.travel_postcards` for one or two travel postcards a day when both `enabled` and `travel_enabled` are on.
+
 **Boundaries**
 
 - She logs in to no account except an optional read-only Bilibili QR login authorized by a Bot administrator, used for subtitles. She never comments, likes, or sends messages.
@@ -378,9 +384,9 @@ All subcommands are for Bot administrators.
 | Item | Content |
 |---|---|
 | AI routes | `reasoning` for digesting, research, consolidation, and the bedtime journal; `vision` for meme safety review (optional) |
-| Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. |
-| Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat`. Uses `memory.record` to publish experiences, diary entries, and verified learnings to the unified memory. |
-| Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state. The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
+| Schedule | `xiaoqing_life.tick` checks every 15 minutes and only gates. Browsing runs in a background task. `xiaoqing_life.travel` checks hourly from 09:00 to 23:00 Los Angeles time and asks Codex in the background for the day's travel postcards when none exist. |
+| Capabilities and services | Supplies `life.turn_context` and `life.export_memes`, called by `xiaoqing_chat`. Uses `memory.record` to publish experiences, diary entries, and verified learnings to the unified memory. Uses `codex.travel_postcards` (`travel_postcards`, issued only in the scheduled task) to draw travel postcards. |
+| Runtime data | `data/xiaoqing_life/`: experiences, terms, expressions, interests, threads, methods, works, dossiers, journal, memes, seen items, state, and travel postcards (`travel/<date>/`). The Bilibili credential lives separately in `secrets/` and is excluded from backups. |
 
 [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md) covers each ability, all settings, and the safety boundaries.
 [Architecture (Chinese)](../../plugins/xiaoqing_life/ARCHITECTURE.md) covers modules and retrieval rules, and [design (Chinese)](../../plugins/xiaoqing_life/DESIGN.md) explains the design choices.
@@ -691,7 +697,7 @@ Search, abstracts, statistics, citations, and related papers support groups and 
 Notes, ideas, topics, deadlines, daily recommendations, and personal libraries use private-user scope.
 
 `search` and `stats` take a SciX query such as `bibstem:NatAs collection:planetary year:2020-2024 property:refereed`.
-`search` reports the total number of matches and pages through them; `--abs` adds an abstract excerpt and `--hl` adds the matching sentences from the abstract and body.
+`search` reports the total number of matches and pages through them, 1–25 papers per page; `--abs` adds an abstract excerpt and `--hl` adds the matching sentences from the abstract and body, and a page with either holds at most 10 papers.
 `stats` reports the total, citation statistics, and the distribution by year, document type, journal, and keyword.
 `abstract` returns the original abstracts of up to 8 papers; an abstract the SciX API withholds comes from the arXiv preprint or Europe PMC, with its source labeled.
 
@@ -807,7 +813,8 @@ One label executes serially. Different labels can execute concurrently, up to `m
 /codex delete <name> [--force] [--protected]
 ```
 
-`config.plugins.codex` configures CLI path, default directory, allowed roots, sandbox, approval policy, concurrency, queues, deadlines, protected sessions, and arXiv summary sessions.
+`config.plugins.codex` configures CLI path, default directory, allowed roots, sandbox, approval policy, concurrency, queues, deadlines, protected sessions, arXiv summary sessions, and the model for travel postcard jobs (`travel_model`).
+`xiaoqing_life` travel postcard jobs run through `codex.travel_postcards` in the fixed session `life-travel`, and the results go back to the life plugin.
 `data/codex/` contains `sessions.json`, per-session `conversation.jsonl`, task artifacts, images, output, and deleted-session archives.
 Paths, output, images, queues, processes, and disk have separate budgets.
 Unload and shutdown cancel process trees and save state.
@@ -1338,7 +1345,7 @@ The table lists the permission of each top-level command. Subcommands can set st
 
 ## ⏰ Scheduled-task index
 
-Times use `config.timezone`, default `Asia/Shanghai`.
+Times use `config.timezone`, default `Asia/Shanghai`, except entries that carry their own timezone (`xiaoqing_life` travel postcards follow Los Angeles time).
 `broadcast` sends one result to schedule target groups: deployment config `plugins.<plugin>.schedules.<schedule ID>.group_ids` first, then the entry's `group_ids`, then `default_group_ids`.
 `targeted` returns individual private or group targets. `silent` executes with zero message delivery.
 See [schedule fields](03-plugin-development.md#schedule-fields).
@@ -1377,6 +1384,7 @@ See [schedule fields](03-plugin-development.md#schedule-fields).
 | `xiaoqing_chat` | `scheduled_memory_sync` | Minutes 13 and 43 every hour | `silent` | Push messages not yet sent to the unified memory (seeds old data on first start and retries failed pushes). |
 | `xiaoqing_chat` | `scheduled_proactive` | Every 20 minutes | `targeted` | Speak up in a quiet group as a member. Controlled by `proactive.enabled`, which the shipped behavior configuration turns on. |
 | `xiaoqing_life` | `scheduled_tick` | Every 15 minutes | `silent` | Decide from routine, budget, and interests whether to browse. Browsing runs in a background task. Requires `enabled`, default off. Afterwards, publish new experiences to the unified memory. |
+| `xiaoqing_life` | `scheduled_travel` | Hourly 09:00–23:00, Los Angeles time | `silent` | When the day has no travel postcards yet, ask Codex in the background to draw and archive them. Requires `enabled` and `travel_enabled`. |
 | `xiaoqing_memory` | `scheduled_tick` | Every 30 minutes | `silent` | Flush recall counters. Consolidate scopes with new events in the background at night or on backlog; once a day inside the night window, also rewrite the self page, verify notes and prune everything. No consolidation while `enabled` is off. |
 
 Pendo briefings, journal reminders, and financial summaries run every minute.

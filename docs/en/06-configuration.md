@@ -548,7 +548,7 @@ See [XiaoQing Agent (Chinese)](../../plugins/xiaoqing_agent/README.md) for all f
 
 ### XiaoQing Life
 
-XiaoQing's own online life. The default state is disabled.
+XiaoQing's own online life. The life simulation is disabled by default; the observatory website starts when the plugin loads.
 
 | Path | Default | Description |
 |---|---|---|
@@ -559,6 +559,8 @@ XiaoQing's own online life. The default state is disabled.
 | `plugins.xiaoqing_life.max_llm_calls_per_day` | `30` | All model calls combined within the same day. Each call is counted before it runs and is not refunded on failure. |
 | `plugins.xiaoqing_life.browse_when_busy` | `false` | Whether a quick browse is allowed during a busy routine slot |
 | `plugins.xiaoqing_life.blocked_keywords` | `[]` | Extra keywords whose content is discarded, on top of the built-in list |
+| `plugins.xiaoqing_life.web_port` | `12002` | Observatory listener port, bound to `127.0.0.1` only, `1..65535`. Takes effect on the next start or plugin reload. |
+| `plugins.xiaoqing_life.travel_enabled` | `true` | Ask Codex for daily travel postcards. Nothing is drawn while `enabled` is off. |
 
 Chat-side switches are `life.enable_online_life`, `life.online_life_timeout_seconds`, `life.enable_life_memes`, and `life.enable_life_share` in the `xiaoqing_chat` behavior configuration.
 See [XiaoQing Life (Chinese)](../../plugins/xiaoqing_life/README.md) for all fields, commands, and data directories.
@@ -619,6 +621,7 @@ Public job policies are under `plugins.codex`:
 | Sandbox | `sandbox="workspace-write"` | `read-only`, `workspace-write`, `danger-full-access` |
 | Approval | `approval_policy="never"` | `untrusted`, `on-failure`, `on-request`, `never` |
 | Repository | `skip_git_repo_check=true` | Codex CLI Git-repository check switch |
+| Travel postcards | `travel_model=""` | Model for `xiaoqing_life` travel drawing jobs. Empty uses the CLI default model. |
 
 See [Codex configuration (Chinese)](../../plugins/codex/README.md) for working directories, allowed roots, retention, emergency disk thresholds, and arXiv summary sessions.
 
