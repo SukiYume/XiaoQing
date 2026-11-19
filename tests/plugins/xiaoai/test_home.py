@@ -872,11 +872,11 @@ async def test_delayed_fresh_report_confirms_without_replaying_write(
     request = plan(value=target, capability=cap_id)
     request["operations"].append(plan("action", "a2.2", args=[])["operations"][0])
     result = await operations.execute_plan(ctx, io, cat, request, {})
-    assert "状态已核对" in result
+    assert "状态已核对，提交后的回报与目标一致" in result
     io.miot_set_props.assert_awaited_once()
     io.miot_action.assert_awaited_once()
-    assert io.miot_request.await_count == 3
-    assert "reason_code=stale_report" in caplog.text
+    # 基准（旧值）之后第一次回报就到了目标：值变过即说明回报已更新，不需要比对时间戳。
+    assert io.miot_request.await_count == 2
     assert "reason_code=matched" in caplog.text
     assert "device.operation.submitted" in caplog.text
     assert "台灯" not in caplog.text
@@ -892,12 +892,13 @@ async def test_delayed_fresh_report_confirms_without_replaying_write(
         (1800000030, "timestamp_unverified"),
     ],
 )
-async def test_matching_value_without_fresh_report_remains_pending(
+async def test_without_baseline_matching_value_needs_fresh_report(
     env, monkeypatch, caplog, stamp, reason
 ):
     ctx, io, cat, _, _ = env
     monkeypatch.setattr(operations.time, "time", lambda: 1800000000.75)
-    io.miot_request.return_value[0]["updateTime"] = stamp
+    report                      = io.miot_request.return_value[0] | {"updateTime": stamp}
+    io.miot_request.side_effect = [client.BridgeError("baseline")] + [[report]] * 9
     request = plan(value=100)
     request["operations"].append(plan("action", "a2.2", args=[])["operations"][0])
     result = await operations.execute_plan(ctx, io, cat, request, {})
@@ -905,7 +906,7 @@ async def test_matching_value_without_fresh_report_remains_pending(
     assert "指令已提交" in result
     io.miot_set_props.assert_awaited_once()
     io.miot_action.assert_not_awaited()
-    assert io.miot_request.await_count == len(operations.CONFIRM_DELAYS)
+    assert io.miot_request.await_count == 1 + len(operations.CONFIRM_DELAYS)
     assert f"reason_code={reason}" in caplog.text
     assert "device.confirmation.completed" in caplog.text
 
@@ -927,10 +928,75 @@ async def test_confirmation_deadline_bounds_hung_read(env, monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_hung_baseline_read_is_bounded_and_still_submits_once(env, monkeypatch, caplog):
+    ctx, io, cat, _, _ = env
+    monkeypatch.setattr(operations, "BASELINE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(operations, "CONFIRM_TIMEOUT_SECONDS", 0.01)
+    caplog.set_level("INFO")
+
+    async def hanging(*args):
+        await asyncio.Event().wait()
+
+    io.miot_request.side_effect = hanging
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "确认等待已超时" in result
+    io.miot_set_props.assert_awaited_once()
+    assert "device.baseline.unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_already_at_target_confirms_on_first_read_and_continues(env, monkeypatch, caplog):
+    ctx, io, cat, _, _ = env
+    caplog.set_level("INFO")
+    # 灯本来就是目标状态：设备不会上报新时间戳，也不能因此卡住后续操作或等满确认时限。
+    io.miot_request.return_value[0]["updateTime"] = time.time() - 86400
+    request = plan(value=100)
+    request["operations"].append(plan("action", "a2.2", args=[])["operations"][0])
+    result = await operations.execute_plan(ctx, io, cat, request, {})
+    assert "设备提交前已是目标状态" in result and "待确认，后续操作已停止" not in result
+    assert io.miot_request.await_count == 2
+    io.miot_set_props.assert_awaited_once()
+    io.miot_action.assert_awaited_once()
+    assert "reason_code=already_target" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_host_clock_skew_does_not_reject_fresh_report(env, monkeypatch):
+    ctx, io, cat, _, _ = env
+    monkeypatch.setattr(operations.time, "time", lambda: 1800000000.0)
+    base                        = {"did": "123", "siid": 2, "piid": 2, "code": 0}
+    # 小米云比本机快 3 秒、慢 3 秒都不影响：判断只看值相对基准的变化。
+    io.miot_request.side_effect = [
+        [base | {"value": 50, "updateTime": 1800000003}],
+        [base | {"value": 100, "updateTime": 1799999997}],
+    ]
+    result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
+    assert "状态已核对" in result
+
+
+@pytest.mark.asyncio
+async def test_plain_read_shows_out_of_spec_and_float32_reports(env):
+    ctx, io, cat, _, _ = env
+    cap = operations.capabilities(cat, cat["devices"]["d1"])["p2.2"]
+    assert operations.normalize_reported(
+        {"format": "float", "range": [-30, 100, 0.1]}, 26.299999237060547
+    ) == 26.3
+    assert operations.normalize_reported(
+        {"format": "float", "range": [-30, 100, 0.1]}, 26.34
+    ) == 26.34
+    # 固件报出规格外的值时，普通查询照实显示，不当作读取失败。
+    io.miot_request.return_value[0]["value"] = 250
+    result = await operations.execute_plan(ctx, io, cat, plan("read"), {})
+    assert "250" in result and "待确认" not in result
+    with pytest.raises(client.BridgeError):
+        await operations.read_property(io, cat["devices"]["d1"], cap, strict=True)
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_confirmation_preserves_single_submission(env, caplog):
     ctx, io, cat, _, _ = env
     caplog.set_level("INFO")
-    io.miot_request.side_effect = asyncio.CancelledError()
+    io.miot_request.side_effect = [io.miot_request.return_value, asyncio.CancelledError()]
     with pytest.raises(asyncio.CancelledError):
         await operations.execute_plan(ctx, io, cat, plan(value=100), {})
     assert "device.confirmation.cancelled" in caplog.text
@@ -1055,4 +1121,5 @@ async def test_write_rejection_logs_code_and_stops(env, caplog):
     result = await operations.execute_plan(ctx, io, cat, plan(value=100), {})
     assert "设备返回失败" in result
     assert "upstream_code=-704042011" in caplog.text
-    io.miot_request.assert_not_awaited()
+    # 只有提交前的一次基准读；写入被拒后不再读取确认。
+    io.miot_request.assert_awaited_once()

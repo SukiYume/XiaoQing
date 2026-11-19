@@ -84,7 +84,7 @@
 
 规划时会按请求中的设备名称预载能力，最多 4 台、12,000 字符；小型目录也可整体预载。模型始终看到完整设备目录，目标规格齐全时一轮生成计划；需要其他设备或规格较多时先选全目标，再取得规格生成计划。设备权限、参数、出粮数量和重复保护继续由执行器统一校验。
 
-可读写属性设置成功后立即读取状态，最多读取 5 次，相邻读取等待 0.5、1、1.5、2 秒，整个确认阶段最多 6 秒。确认同时核对设备、属性、目标值和回报时间；秒级上报时间按提交所在秒判断。早于提交的回报、缺失或异常时间戳均保留“待确认”。确认超时、读取失败或目标未达到时停止后续操作，设备写入始终只提交一次。纯动作、仅写属性及红外控制保留提交回执和各自的确认限制。
+可读写属性提交前先读一次当前值作为基准（最多 2 秒，读不到不影响提交）。设置成功后立即读取状态，最多读取 5 次，相邻读取等待 0.5、1、1.5、2 秒，整个确认阶段最多 6 秒。确认核对设备、属性和目标值，新旧以云端自己的回报判断：基准已是目标值时一读即确认“提交前已是目标状态”，后续操作照常进行；基准不同而回报到达目标，说明回报已更新。只有读不到基准时才比对回报时间，按本机与云端最多相差 5 秒的时钟容差判断，早于提交或缺失、异常的时间戳保留“待确认”。确认阶段的回报需符合规格；普通查询照实显示云端回报，浮点上报的尾差按规格步长对齐。确认超时、读取失败或目标未达到时停止后续操作，设备写入始终只提交一次。纯动作、仅写属性及红外控制保留提交回执和各自的确认限制。
 
 ### 喂食器
 
@@ -138,7 +138,7 @@
 
 扫码等待、规格发现、自然语言规划、音箱提交和应答、设备操作及提交后的状态读取也分别记录失败事件。动作提交超时保持“结果待确认”，后续操作停止；日志保留异常类型和代码位置。
 
-`device.discovery.completed`、`plan.model.completed`、`device.operation.submitted`、`request.completed` 分别记录发现、各轮规划、提交和请求总耗时。`device.confirmation.observed` 记录读取次数、回报年龄和分类，`device.confirmation.completed` 记录确认耗时及最终原因：`matched`、`stale_report`、`timestamp_unverified`、`value_mismatch`、`timeout` 或 `read_failed`。取消记录 `device.confirmation.cancelled`；纯动作、仅写属性和红外边界记录 `device.confirmation.unavailable`。日志包含阶段和数值诊断字段，设备名称、属性值及原始响应保持私密。
+`device.discovery.completed`、`plan.model.completed`、`device.operation.submitted`、`request.completed` 分别记录发现、各轮规划、提交和请求总耗时。`device.confirmation.observed` 记录读取次数、回报年龄和分类，`device.confirmation.completed` 记录确认耗时及最终原因：`matched`、`already_target`、`stale_report`、`timestamp_unverified`、`value_mismatch`、`timeout` 或 `read_failed`。基准读不到记录 `device.baseline.unavailable`，取消记录 `device.confirmation.cancelled`；纯动作、仅写属性和红外边界记录 `device.confirmation.unavailable`。日志包含阶段和数值诊断字段，设备名称、属性值及原始响应保持私密。
 
 ---
 

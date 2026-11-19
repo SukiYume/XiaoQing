@@ -20,10 +20,14 @@ from .feeding import check_requested_amount, reject_unchecked_forwarding, wire_a
 from .infrared import voice_action
 from .presentation import display_value
 
-MAX_OPERATIONS          = 12
-CONFIRM_TIMEOUT_SECONDS = 6.0
-CONFIRM_DELAYS          = (0.0, 0.5, 1.0, 1.5, 2.0)
-log                     = logging.getLogger(__name__)
+MAX_OPERATIONS           = 12
+CONFIRM_TIMEOUT_SECONDS  = 6.0
+CONFIRM_DELAYS           = (0.0, 0.5, 1.0, 1.5, 2.0)
+BASELINE_TIMEOUT_SECONDS = 2.0
+# 本机与小米云的时钟可能差几秒；只在读不到提交前基准时才用时间戳判断新旧。
+CLOCK_SKEW_SECONDS       = 5.0
+CONFIRMED                = frozenset({"matched", "already_target"})
+log                      = logging.getLogger(__name__)
 
 
 def validate_value(schema: dict[str, Any], value: Any) -> None:
@@ -115,7 +119,35 @@ def validate_plan(catalog: dict[str, Any], plan: Any) -> list[dict[str, Any]]:
     return validated
 
 
-async def read_property(io: Any, device: dict[str, Any], cap: dict[str, Any]) -> dict[str, Any]:
+def normalize_reported(schema: dict[str, Any], value: Any) -> Any:
+    """Snap float32 noise (26.299999237…) back onto the spec's step grid."""
+    limits = schema.get("range")
+    if (
+        schema.get("format") not in {"float", "double"}
+        or not limits
+        or type(value) not in {int, float}
+        or not math.isfinite(value)
+    ):
+        return value
+    low, _, step = (Decimal(str(x)) for x in limits)
+    if step <= 0:
+        return value
+    number  = Decimal(str(value))
+    snapped = low + ((number - low) / step).to_integral_value() * step
+    if abs(snapped - number) > step * Decimal("0.001"):
+        return value
+    return int(snapped) if type(value) is int else float(snapped)
+
+
+def same_value(reported: Any, target: Any) -> bool:
+    if isinstance(reported, bool) or isinstance(target, bool):
+        return reported is target
+    return reported == target
+
+
+async def read_property(
+    io: Any, device: dict[str, Any], cap: dict[str, Any], *, strict: bool = False
+) -> dict[str, Any]:
     result = await io.miot_request(
         "prop/get", [{"did": device["did"], "siid": cap["siid"], "piid": cap["iid"]}]
     )
@@ -133,16 +165,39 @@ async def read_property(io: Any, device: dict[str, Any], cap: dict[str, Any]) ->
         or item.get("piid", cap["iid"]) != cap["iid"]
     ):
         raise BridgeError("设备属性响应身份不匹配。")
-    validate_value(cap, item["value"])
+    value = normalize_reported(cap, item["value"])
+    # 普通查询照实显示云端回报（固件常报出规格外的值）；只有写入后的确认才要求回报合规。
+    if strict:
+        validate_value(cap, value)
     stamp = item.get("updateTime")
     if (
         not isinstance(stamp, (int, float))
         or isinstance(stamp, bool)
         or not math.isfinite(stamp)
-        or not 0 < stamp <= time.time() + 1
+        or not 0 < stamp <= time.time() + CLOCK_SKEW_SECONDS
     ):
         stamp = None
-    return {"value": item["value"], "updated_at": stamp}
+    return {"value": value, "updated_at": stamp}
+
+
+def confirmation_reason(
+    baseline: dict[str, Any] | None, result: dict[str, Any], target: Any, submitted_at: float
+) -> str:
+    stamp = result["updated_at"]
+    if not same_value(result["value"], target):
+        return (
+            "stale_report"
+            if stamp is not None and stamp < math.floor(submitted_at) - CLOCK_SKEW_SECONDS
+            else "value_mismatch"
+        )
+    if baseline is not None:
+        # 基准与目标不同而现在一致：云端值在提交后变过，回报必然是新的。
+        return "already_target" if same_value(baseline["value"], target) else "matched"
+    if stamp is None:
+        return "timestamp_unverified"
+    if stamp < math.floor(submitted_at) - CLOCK_SKEW_SECONDS:
+        return "stale_report"
+    return "matched"
 
 
 def format_read(
@@ -209,6 +264,24 @@ async def execute_plan(
                     )
                 )
                 continue
+            confirmable = (
+                op["op"] == "set"
+                and "read" in cap["access"]
+                and not device["model"].startswith("miir.")
+            )
+            # 提交前的基准值让确认只依赖云端自身的回报：本来就是目标值时一读即确认，
+            # 从基准变成目标即说明回报已更新，不需要比对本机时钟。基准读不到时退回时间戳判断。
+            baseline = None
+            if confirmable:
+                try:
+                    async with asyncio.timeout(BASELINE_TIMEOUT_SECONDS):
+                        baseline = await read_property(io, device, cap)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.info(
+                        LogEvent("device.baseline.unavailable", operation_index=index, error=exc)
+                    )
             submitted_at = time.time()
             if op["op"] == "set":
                 codes = await io.miot_set_props(
@@ -270,7 +343,7 @@ async def execute_plan(
                     else "红外控制请求已提交；设备实际状态需现场确认。"
                 )
                 continue
-            if op["op"] == "set" and "read" in cap["access"]:
+            if confirmable:
                 confirmation_started = time.monotonic()
                 result               = None
                 reason               = "timeout"
@@ -281,17 +354,12 @@ async def execute_plan(
                             if delay:
                                 await asyncio.sleep(delay)
                             attempts += 1
-                            result = await read_property(io, device, cap)
+                            result = await read_property(io, device, cap, strict=True)
                             stamp  = result["updated_at"]
                             now    = time.time()
-                            if stamp is None:
-                                reason = "timestamp_unverified"
-                            elif stamp < math.floor(submitted_at):
-                                reason = "stale_report"
-                            elif result["value"] != op["value"]:
-                                reason = "value_mismatch"
-                            else:
-                                reason = "matched"
+                            reason = confirmation_reason(
+                                baseline, result, op["value"], submitted_at
+                            )
                             log.info(
                                 LogEvent(
                                     "device.confirmation.observed",
@@ -303,7 +371,7 @@ async def execute_plan(
                                     else None,
                                 )
                             )
-                            if reason == "matched":
+                            if reason in CONFIRMED:
                                 break
                 except asyncio.CancelledError:
                     log.info(
@@ -326,7 +394,7 @@ async def execute_plan(
                         LogEvent("device.readback.failed", operation_index=index, error=exc)
                     )
                 log.log(
-                    logging.INFO if reason == "matched" else logging.WARNING,
+                    logging.INFO if reason in CONFIRMED else logging.WARNING,
                     LogEvent(
                         "device.confirmation.completed",
                         operation_index = index,
@@ -339,6 +407,8 @@ async def execute_plan(
                     lines.append(format_read(context, device, cap, result))
                 if reason == "matched":
                     lines.append("✓ 状态已核对，提交后的回报与目标一致。")
+                elif reason == "already_target":
+                    lines.append("✓ 状态已核对，设备提交前已是目标状态。")
                 else:
                     detail = {
                         "stale_report"        : "云端仍返回本次提交前的旧状态",
