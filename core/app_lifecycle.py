@@ -31,6 +31,7 @@ from .app_support import (
 from .config import ConfigManager, ConfigSnapshot
 from .constants import (
     DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_KEEPALIVE_SECONDS,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
 )
 from .lifecycle import DeferredCancellation as _DeferredCancellation
@@ -298,10 +299,11 @@ class AppLifecycleMixin:
         self.session_manager.set_default_timeout(session_timeout)
 
         self.http_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(keepalive_timeout=DEFAULT_HTTP_KEEPALIVE_SECONDS),
             timeout=aiohttp.ClientTimeout(
                 total   = DEFAULT_HTTP_TIMEOUT_SECONDS,
                 connect = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
-            )
+            ),
         )
 
         self._defer_plugin_schedule_updates = True

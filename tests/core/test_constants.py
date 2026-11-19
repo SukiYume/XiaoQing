@@ -20,6 +20,7 @@ def test_runtime_defaults_are_bounded() -> None:
         constants.DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
         constants.DEFAULT_HTTP_TIMEOUT_SECONDS,
         constants.DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+        constants.DEFAULT_HTTP_KEEPALIVE_SECONDS,
         constants.DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS,
         constants.DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
         constants.INBOUND_EVENT_DEDUP_TTL_SECONDS,

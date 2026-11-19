@@ -12,6 +12,7 @@ import pytest
 from aiohttp import ClientConnectorError
 
 import tests.helpers.app_test_support as _fixture_support
+from core.constants import DEFAULT_HTTP_KEEPALIVE_SECONDS
 from tests.helpers.app_test_support import (
     ApplicationLifecycleFatalError,
     ClientSession,
@@ -70,6 +71,8 @@ async def test_app_start(temp_app_root: Path):
 
     # Verify HTTP session is created
     assert app.http_session is not None
+    # 空闲连接保留两分钟，连续的模型调用不用每次重新握手
+    assert app.http_session.connector._keepalive_timeout == DEFAULT_HTTP_KEEPALIVE_SECONDS
 
     # 启动走完真实的插件加载（插件目录为空），应用进入运行态
     assert app._lifecycle_state.value == "running"
