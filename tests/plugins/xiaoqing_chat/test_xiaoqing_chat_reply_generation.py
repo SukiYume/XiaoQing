@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from PIL import Image
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.ai import AIError
 from plugins.xiaoqing_chat.chat_event import event_chat_id
+from plugins.xiaoqing_chat.media.models import RenderedMedia
 from plugins.xiaoqing_chat.reply_payload import build_reply_payload_from_parts
 from plugins.xiaoqing_chat.store_binding import bound_state
 from tests.helpers.reply_checker_test_support import checker_verdict
@@ -25,6 +27,39 @@ sample_group_event = _fixture_support.sample_group_event
 
 # 每条回复都送审，审查模型的材料里能看到这一轮用的目标。
 _ALWAYS_CHECK = {"reply_check": {"llm_checker_mode": "always", "max_regen": 0}}
+
+
+@pytest.mark.asyncio
+async def test_reply_route_gets_current_image_and_retains_the_text_projection(
+    mock_context, sample_group_event, tmp_path
+):
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (2, 2), "blue").save(path)
+    summary = "[图片：一张蓝色的图]"
+
+    async def reply(call):
+        adapter = call.kwargs["adapt_messages"]
+        direct  = await adapter(call.messages, ("text", "image"))
+        assert direct[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+        fallback = await adapter(call.messages, ("text",))
+        assert fallback == call.messages
+        assert summary in fallback[1]["content"]
+        return "看到了。"
+
+    model = ScriptedChatModel(reply=reply)
+    scripted_chat_context(mock_context, model, {"reply_check": {"enable_reply_checker": False}})
+    event                             = chat_message_event(sample_group_event, "看这张图")
+    event["_xc_effective_user_parts"] = (
+        {"kind": "text", "text": "看这张图"},
+        {"kind": "image", "description": "一张蓝色的图", "file_path": str(path)},
+    )
+    event["_xc_rendered_media_items"] = [
+        RenderedMedia("image-hash", "image", "一张蓝色的图", (), summary, cached_path=path)
+    ]
+    draft = await draft_reply(mock_context, event, text=f"看这张图{summary}")
+
+    assert draft is not None and draft.text == "看到了。"
+    await settle_chat_background(mock_context, model)
 
 
 @pytest.mark.asyncio

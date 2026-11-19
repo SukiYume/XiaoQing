@@ -11,6 +11,11 @@
       "name": "core.observe_outgoing_action",
       "callback": "observe_outgoing_action",
       "callers": ["core"]
+    },
+    {
+      "name": "chat.history",
+      "callback": "read_history",
+      "callers": ["xiaoqing_agent"]
     }
   ],
   "watch_files": [

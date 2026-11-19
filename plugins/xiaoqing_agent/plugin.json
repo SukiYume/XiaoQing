@@ -18,7 +18,7 @@
             "callers": ["xiaoqing_chat"]
         }
     ],
-    "uses_services": ["codex.agent_task", "qingssh.agent_command", "memory.record", "memory.recall"],
+    "uses_services": ["codex.agent_task", "qingssh.agent_command", "memory.record", "memory.recall", "chat.history"],
     "commands": [
         {
             "name": "agent",

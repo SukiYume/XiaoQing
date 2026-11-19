@@ -8,6 +8,7 @@ from typing import Any
 
 import aiohttp
 import pytest
+from PIL import Image
 
 from core.ai import (
     AIConfigError,
@@ -18,6 +19,8 @@ from core.ai import (
     list_configured_models,
     resolve_route_config,
 )
+from core.ai_images import image_message_adapter
+from core.capabilities import AIService
 
 
 class _Body:
@@ -162,6 +165,64 @@ def test_ai_model_listing_preserves_order_without_exposing_credentials() -> None
     assert [model.name for model in models] == ["primary-text", "backup-text"]
     assert [model.provider for model in models] == ["primary", "backup"]
     assert all(not hasattr(model, "api_key") for model in models)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["direct", "fallback", "cached", "vision_unavailable"])
+async def test_image_input_follows_the_selected_model_capability(tmp_path, mode) -> None:
+    config, secrets = _settings()
+    config["ai"]["models"]["primary-text"]["modalities"].append("image")
+    routes    = config["plugins"]["demo"]["ai"]["routes"]
+    responses = [_Response(200, _completion())] if mode == "direct" else [_Response(429)]
+    if mode == "fallback":
+        responses.append(_Response(200, _completion("第一行写着蓝色雨伞")))
+    if mode == "vision_unavailable":
+        routes.pop("vision")
+    if mode != "direct":
+        responses.append(_Response(200, _completion()))
+    session = _Session(*responses)
+
+    async def complete(**kwargs):
+        return await complete_configured_route(
+            session=session, config=config, secrets=secrets, plugin_name="demo", **kwargs
+        )
+
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (2, 2), "blue").save(path)
+    ai      = AIService(complete, lambda **_: ())
+    content = "请读这张图"
+    if mode == "cached":
+        content += "\n[图片：第一行写着蓝色雨伞]"
+    anchor   = {"role": "user", "content": content}
+    messages = [{"role": "system", "content": "test"}, anchor]
+    adapter  = await image_message_adapter(
+        ai, [path], anchor, description_available=mode == "cached"
+    )
+    assert adapter is not None
+
+    result = await ai.complete("chat", messages, adapt_messages=adapter)
+    assert anchor["content"] == content
+    payloads = [args["json"] for _, _, args in session.calls]
+    assert payloads[0]["messages"][1]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+    if mode == "direct":
+        assert result.profile == "primary-text"
+        assert len(payloads) == 1
+        return
+
+    assert result.profile == "backup-text"
+    backup_content = payloads[-1]["messages"][1]["content"]
+    assert isinstance(backup_content, str)
+    assert "base64" not in backup_content
+    if mode == "fallback":
+        assert [p["model"] for p in payloads] == ["primary-model", "vision-model", "backup-model"]
+        assert "第一行写着蓝色雨伞" in backup_content
+        assert (await adapter(messages, ("text",)))[1]["content"] == backup_content
+        assert len(session.calls) == 3
+    else:
+        assert len(payloads) == 2
+        assert backup_content == content
 
 
 @pytest.mark.asyncio
@@ -790,3 +851,29 @@ async def test_ai_route_retries_transport_errors_exactly_max_retry_times(
         )
 
     assert attempts == 1 + max_retry
+
+
+def test_image_payloads_are_scaled_down_and_capped(tmp_path) -> None:
+    """大图缩到 2048 像素内再编码，执行循环每次重发的载荷有上限；小图原样保留。"""
+
+    import base64
+    import io
+
+    from core.ai_images import MAX_IMAGE_EDGE, _load_images, image_data_url
+
+    small = tmp_path / "small.png"
+    Image.new("RGB", (40, 30), "blue").save(small)
+    assert image_data_url(small).startswith("data:image/png;base64,")
+    large = tmp_path / "large.png"
+    Image.new("RGBA", (1200, 4000), (10, 20, 30, 128)).save(large)
+    url = image_data_url(large)
+    assert url.startswith("data:image/jpeg;base64,")
+    with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as scaled:
+        assert max(scaled.size) == MAX_IMAGE_EDGE and scaled.mode == "RGB"
+
+    paths = []
+    for index in range(6):
+        path = tmp_path / f"p{index}.png"
+        Image.new("RGB", (8, 8), (index, 0, 0)).save(path)
+        paths.append(path)
+    assert len(_load_images([*paths, paths[0]])) == 4

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from core.ai import AICompletionResult, AIConfigError
+from core.ai import AICompletionResult, AIConfigError, AIMessageAdapter
 from core.ai import AIError as LLMError
 from core.interfaces import AICapability
 
@@ -58,6 +58,7 @@ async def complete_raw(
     tools: list[dict[str, Any]] | None      = None,
     tool_choice: Any                        = None,
     extra_payload: Mapping[str, Any] | None = None,
+    adapt_messages: AIMessageAdapter | None = None,
 ) -> AICompletionResult:
     """调用一个统一 route，并保留 raw response 供工具调用和复杂解析使用。"""
 
@@ -79,6 +80,7 @@ async def complete_raw(
         tools=tools,
         tool_choice=tool_choice,
         extra_payload=extra_payload,
+        adapt_messages=adapt_messages,
     )
 
 

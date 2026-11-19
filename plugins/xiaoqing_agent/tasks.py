@@ -96,9 +96,10 @@ class AgentTask:
     progress_sent   : int   = 0
     last_progress_at: float = 0.0
     # 发起这条任务的消息附带的引用文字与已下载到本地的图片。
-    quoted_text: str = ""
-    image_files: list[str] = field(default_factory=list)
-    sender     : str = ""
+    quoted_text                : str = ""
+    image_files                : list[str] = field(default_factory=list)
+    image_description_available: bool = False
+    sender                     : str  = ""
     # 同一会话里上一轮的任务 ID（这次接在它后面）；分流选定的服务。
     continues: str             = ""
     plugins  : tuple[str, ...] = ()

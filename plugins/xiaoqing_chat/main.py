@@ -20,6 +20,7 @@ from core.router import (
 )
 
 from .chat_event import COMMAND_FORCED_EVENT_KEY
+from .chat_history import read_history  # noqa: F401 - agent 经 chat.history 服务调用
 from .chat_runtime import ai_route_context, configured_bot_name, llm_call_config, load_runtime
 from .commands import (
     handle_config,

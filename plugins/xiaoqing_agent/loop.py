@@ -221,9 +221,10 @@ async def complete(
         result = await ai.complete(
             AGENT_ROUTE,
             messages,
-            tools         = [tool.schema() for tool in tools.values()] if tools else None,
-            tool_choice   = "auto" if tools else None,
-            extra_payload = extra_payload,
+            tools          = [tool.schema() for tool in tools.values()] if tools else None,
+            tool_choice    = "auto" if tools else None,
+            extra_payload  = extra_payload,
+            adapt_messages = env.adapt_messages,
         )
     finally:
         elapsed = time.perf_counter() - started

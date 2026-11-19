@@ -18,6 +18,7 @@ from .capabilities import (
     MEMORY_METHODS,
     AgentTurnService,
     AIService,
+    ChatHistoryService,
     ChatReplyService,
     CodexAgentTaskService,
     CodexArxivSummaryService,
@@ -475,6 +476,13 @@ class AppPluginContextMixin:
             granted["codex_agent"] = CodexAgentTaskService(codex, declared("codex.agent_task"))
         if "qingssh.agent_command" in uses_services and ssh():
             granted["ssh_agent"] = SSHAgentCommandService(ssh, declared("qingssh.agent_command"))
+        if "chat.history" in uses_services:
+            chat = (
+                f"g{principal.group_id}"
+                if principal.group_id is not None and not principal.is_private
+                else f"u{principal.user_id}"
+            )
+            granted["chat_history"] = ChatHistoryService(chat, declared("chat.history"))
         if "local_tools" in declared_capabilities and local():
             granted["local_tools"] = LocalToolsService(local)
         if "command_runner" in declared_capabilities:

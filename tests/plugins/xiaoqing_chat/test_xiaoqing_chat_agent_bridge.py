@@ -17,10 +17,13 @@ import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.delivery import DeliverySegments
+from plugins.xiaoqing_agent.prompts import build_turn_message
+from plugins.xiaoqing_agent.tasks import AgentTask, ChatRef
 from plugins.xiaoqing_chat import agent_bridge, handlers
 from plugins.xiaoqing_chat.chat_event import event_chat_id
 from plugins.xiaoqing_chat.generation_limiter import GenerationLimitExceeded
 from plugins.xiaoqing_chat.handler_context import HandlerContext
+from plugins.xiaoqing_chat.media.settings import figures_inbox_dir
 from plugins.xiaoqing_chat.runtime_state import get_state
 from plugins.xiaoqing_chat.smalltalk_models import PreparedSmalltalkTurn
 from plugins.xiaoqing_memory.model import Note
@@ -716,6 +719,67 @@ async def test_quoted_message_and_downloaded_images_reach_the_agent(mock_context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("text", "intervening_messages", "quote", "in_history"),
+    [
+        # 最近的聊天带着识图描述，跨过办事会话的边界也一样。
+        ("小青，研究一下这个消息", 3, False, True),
+        # 更早的、没有明确引用的：不靠措辞猜指代，交给 agent 用 chat_history 自己查。
+        ("小青，核对刚才那张截图", 14, False, False),
+        # QQ 回复引用是明确的指向：那条连同图片一起交出去。
+        ("小青，核对一下", 14, True, True),
+    ],
+)
+async def test_history_carries_media_text_to_agent_even_across_session_boundary(
+    mock_context, text, intervening_messages, quote, in_history
+):
+    agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
+    hctx, model = _hctx(mock_context, agent, seed=False)
+    store = get_state().memory_store
+    inbox = figures_inbox_dir(mock_context)
+    inbox.mkdir(parents=True, exist_ok=True)
+    cached = inbox / "test-image.png"
+    cached.write_bytes(b"fixture")
+    detail = "活动通知。" + "附加说明。" * 100 + "报名编号是 BLUE-672。"
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "甲",
+        user_id    = 1,
+        message_id = 12,
+        ts         = 1.0,
+        parts      = ({"kind": "image", "description": detail, "file_path": str(cached)},),
+    )
+    for i in range(intervening_messages):
+        store.append(CHAT_ID, role="user", name="乙", content=f"消息 {i}", ts=2.0 + i)
+    event = {**_event(), "message": [{"type": "text", "data": {"text": text}}]}
+    if quote:
+        event["message"].insert(0, {"type": "reply", "data": {"id": "12"}})
+    await _delegate(_prepared(text=text), event, mock_context, hctx)
+
+    turn = agent.handle_turn.await_args.args[0]
+    assert turn["image_files"] == ([str(cached)] if quote else [])
+    assert turn["image_description_available"] is quote
+    task = AgentTask("demo", ChatRef(12345, 67890), text, "chat", admin=True)
+    message = build_turn_message(
+        task     = task,
+        now      = "现在",
+        timezone = "Asia/Shanghai",
+        out_dir  = "out",
+        history  = turn["history"],
+        # 引用的那条在上一轮办事之前也照样交出；其余按会话边界只给新消息。
+        since     = 3.0 if quote else 0.0,
+        recent    = [],
+        images    = [],
+        contracts = [],
+    )
+    assert ("甲（发起人引用的这条）" in message["content"]) is quote
+    assert ("报名编号是 BLUE-672" in message["content"]) is in_history
+    assert "[[xc_media_" not in message["content"]
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
 async def test_quote_lookup_failure_does_not_block_the_turn(mock_context):
     agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
     media = SimpleNamespace(get_message=AsyncMock(side_effect=RuntimeError("onebot down")))
@@ -912,3 +976,63 @@ async def test_a_finished_result_is_sent_even_when_more_messages_are_waiting(moc
 
     assert isinstance(result, DeliverySegments)
     await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
+async def test_chat_history_service_filters_the_scoped_chat(mock_context):
+    """chat.history 只读 Core 写入的会话；关键词、发言人、只看带图和 before 都在那个会话里筛。"""
+
+    from plugins.xiaoqing_chat.chat_history import read_history
+    from plugins.xiaoqing_chat.store_binding import bound_state
+
+    store = bound_state(mock_context).memory_store
+    inbox = figures_inbox_dir(mock_context)
+    inbox.mkdir(parents=True, exist_ok=True)
+    shot = inbox / "shot.png"
+    shot.write_bytes(b"fixture")
+    outside = mock_context.data_dir / "elsewhere.png"
+    outside.write_bytes(b"fixture")
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "Mika",
+        user_id    = 1,
+        message_id = 11,
+        ts         = 1.0,
+        parts      = ({"kind": "image", "description": "漏洞公告截图", "file_path": str(shot)},),
+    )
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "乙",
+        user_id    = 2,
+        message_id = 12,
+        ts         = 2.0,
+        parts      = ({"kind": "image", "description": "别处的图", "file_path": str(outside)},),
+    )
+    for index in range(3):
+        store.append(
+            CHAT_ID,
+            role       = "user",
+            name       = "乙",
+            user_id    = 2,
+            message_id = 20 + index,
+            content    = f"闲聊 {index}",
+        )
+    store.append("g11111", role="user", name="外人", user_id=9, content="漏洞 另一个群")
+
+    result = await read_history({"chat": CHAT_ID, "query": "漏洞"}, mock_context)
+    assert result["chat"] == CHAT_ID and result["total"] == 5 and result["matched"] == 1
+    [found] = result["messages"]
+    assert found["id"] == 11 and found["sender"] == "Mika(1)" and "漏洞公告截图" in found["text"]
+    assert found["images"] == [{"path": str(shot), "description": "漏洞公告截图"}]
+
+    images = await read_history({"chat": CHAT_ID, "images_only": True}, mock_context)
+    assert [item["id"] for item in images["messages"]] == [11]
+    page = await read_history({"chat": CHAT_ID, "sender": "乙", "count": 2}, mock_context)
+    assert [item["id"] for item in page["messages"]] == [21, 22] and page["earlier"] is True
+    older = await read_history({"chat": CHAT_ID, "sender": "2", "before": 21}, mock_context)
+    assert [item["id"] for item in older["messages"]] == [12, 20]
+    assert older["messages"][0]["images"] == []
+    with pytest.raises(ValueError):
+        await read_history({"query": "漏洞"}, mock_context)

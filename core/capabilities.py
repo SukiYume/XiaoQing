@@ -13,7 +13,7 @@ from .delivery import DeliverySegments
 from .interfaces import MAX_COMMAND_REQUEST_TEXT_CHARS, MAX_COMMAND_REQUEST_TEXTS
 
 if TYPE_CHECKING:
-    from .ai import AICompletionResult, AIModelInfo
+    from .ai import AICompletionResult, AIMessageAdapter, AIModelInfo
 
 
 @dataclass(frozen=True)
@@ -293,6 +293,27 @@ class LifeContextService:
         return self._mapping_or_none(result, "life meme export")
 
 
+@dataclass(frozen=True)
+class ChatHistoryService:
+    """xiaoqing_agent → xiaoqing_chat 的只读桥：只能看发起人所在的那个会话。
+
+    会话（群聊 ``g<群号>``，私聊 ``u<QQ号>``）由 Core 按用户主体写进载荷，覆盖调用方填的同名字段。
+    """
+
+    _chat: str
+    _read: Callable[[dict[str, Any]], Awaitable[Any]]
+
+    async def read(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(payload, Mapping):
+            raise TypeError("chat history payload must be a mapping")
+        result = await self._read({**dict(payload), "chat": self._chat})
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError("chat history result must be a mapping or None")
+        return result
+
+
 MEMORY_METHODS = ("record", "recall", "search", "forget")
 
 
@@ -525,6 +546,7 @@ class AIService:
         tools: list[dict[str, Any]] | None      = None,
         tool_choice: Any                        = None,
         extra_payload: Mapping[str, Any] | None = None,
+        adapt_messages: AIMessageAdapter | None = None,
     ) -> AICompletionResult:
         normalized_route = str(route or "").strip()
         if not normalized_route:
@@ -544,6 +566,7 @@ class AIService:
             tools                  = tools,
             tool_choice            = tool_choice,
             extra_payload          = extra_payload,
+            adapt_messages         = adapt_messages,
         )
 
     def list_models(

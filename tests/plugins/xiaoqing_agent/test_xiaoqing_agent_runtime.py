@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
 
 from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from core.interfaces import ACTION_BYPASS_SINK_KEY
@@ -37,6 +38,35 @@ PNG = (
 CONFIG = AgentConfig(enabled=True)
 CHAT = ChatRef(ADMIN_ID, None)
 ADMIN = Actor(ADMIN_ID, admin=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_sends_attachment_to_image_capable_model_without_persisting_pixels(tmp_path):
+    path = tmp_path / "attachment.png"
+    Image.new("RGB", (2, 2), "blue").save(path)
+
+    async def complete(route, messages, kwargs):
+        assert route == "agent"
+        adapted = await kwargs["adapt_messages"](messages, ("text", "image"))
+        assert adapted[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert isinstance(messages[-1]["content"], str)
+        return ai_response("", [tool_call("final_answer", {"text": "看到了蓝色图片。"})])
+
+    context = FakeAgentContext(tmp_path, ai=FakeAI([complete]))
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context,
+        CONFIG,
+        CHAT,
+        request_text = "看看这张图",
+        source       = "chat",
+        image_files  = [str(path)],
+    )
+    assert isinstance(task, AgentTask)
+    await task.runner
+    assert task.status == "done"
+    transcript = tmp_path / "transcripts" / f"{task.task_id}.json"
+    assert "data:image" not in transcript.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

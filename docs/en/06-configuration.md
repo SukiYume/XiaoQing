@@ -529,7 +529,7 @@ All users can use it within their own permissions. The default state is disabled
 |---|---|---|
 | `plugins.xiaoqing_agent.enabled` | `false` | Main switch. When disabled, `xiaoqing_chat` replies normally, as with an absent agent. Changes apply to the next message. |
 | `plugins.xiaoqing_agent.ai.routes.agent` | Required | Execution route. The model must support `tools` calls. |
-| `plugins.xiaoqing_agent.ai.routes.vision` | Image reading is unavailable without it | Route `read_image` uses for local images. Models must include `image` modality. |
+| `plugins.xiaoqing_agent.ai.routes.vision` | Optional | Image route for `read_image` and transcription for text-only execution models. Models must declare the `image` modality. |
 | `plugins.xiaoqing_agent.ai.routes.triage` | Reuse `agent` | Chat-or-task decision route. A fast model with thinking disabled is recommended. |
 | `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | Current-turn wait in seconds. Longer tasks send an initial reply and deliver results in the background. |
 | `plugins.xiaoqing_agent.task_timeout_seconds` | `1800` | Total task duration |

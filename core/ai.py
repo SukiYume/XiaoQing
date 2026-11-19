@@ -16,8 +16,8 @@ import json
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
@@ -35,8 +35,11 @@ from .bounded_http import (
 from .config import materialize_snapshot_value
 from .log import LogEvent
 
-logger = logging.getLogger(__name__)
-T      = TypeVar("T")
+logger           = logging.getLogger(__name__)
+T                = TypeVar("T")
+AIMessageAdapter = Callable[
+    [list[dict[str, Any]], tuple[str, ...]], Awaitable[list[dict[str, Any]]]
+]
 
 _NAME_RE               = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _RESERVED_PAYLOAD_KEYS = frozenset(
@@ -832,13 +835,20 @@ async def _complete_route(
     route: AIRouteConfig,
     targets: tuple[_AIModelTarget, ...],
     options: _RequestOptions,
+    adapt_messages: AIMessageAdapter | None,
 ) -> AICompletionResult:
 
     last_error: AIRequestError | None = None
     attempt_counter                   = [0]
     for index, target in enumerate(targets):
         try:
-            response = await _request_target(session, target, route, options, attempt_counter)
+            target_options = options
+            if adapt_messages is not None:
+                messages = await adapt_messages(options.messages, target.modalities)
+                target_options = replace(options, messages=messages)
+            response = await _request_target(
+                session, target, route, target_options, attempt_counter
+            )
             return AICompletionResult(
                 response      = response,
                 profile       = target.name,
@@ -885,6 +895,7 @@ async def complete_configured_route(
     tools: list[dict[str, Any]] | None      = None,
     tool_choice: Any                        = None,
     extra_payload: Mapping[str, Any] | None = None,
+    adapt_messages: AIMessageAdapter | None = None,
 ) -> AICompletionResult:
     """按插件 route 完成一次有界调用，并在允许的错误上按序降级。"""
 
@@ -960,7 +971,7 @@ async def complete_configured_route(
     )
     try:
         return await asyncio.wait_for(
-            _complete_route(session, route, targets, options),
+            _complete_route(session, route, targets, options, adapt_messages),
             timeout=effective_total_timeout,
         )
     except TimeoutError as exc:
@@ -971,6 +982,7 @@ __all__ = [
     "AICompletionResult",
     "AIConfigError",
     "AIError",
+    "AIMessageAdapter",
     "AIModelInfo",
     "AIRequestError",
     "complete_configured_route",

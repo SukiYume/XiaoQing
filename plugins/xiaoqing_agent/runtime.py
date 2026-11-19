@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from core.ai_images import image_message_adapter
 from core.delivery import DeliveryReceipt, DeliverySegments, merge_delivery_outcomes
 from core.log import LogEvent
 from core.public_errors import public_error_message
@@ -170,6 +171,7 @@ class AgentRuntime:
         history: Sequence[dict[str, Any]] = (),
         images: Sequence[str]             = (),
         image_files: Sequence[str]        = (),
+        image_description_available: bool = False,
         quoted_text: str                  = "",
         persona: str                      = "",
         recent_self: str                  = "",
@@ -185,17 +187,18 @@ class AgentRuntime:
         while task_id in self.running:
             task_id = new_task_id()
         task = AgentTask(
-            task_id      = task_id,
-            chat         = chat,
-            request_text = request_text.strip(),
-            source       = source,
-            plugins      = plugins,
-            quoted_text  = quoted_text.strip(),
-            image_files  = list(image_files),
-            sender       = sender.strip(),
-            admin        = admin,
-            persona      = persona,
-            recent_self  = recent_self.strip(),
+            task_id                     = task_id,
+            chat                        = chat,
+            request_text                = request_text.strip(),
+            source                      = source,
+            plugins                     = plugins,
+            quoted_text                 = quoted_text.strip(),
+            image_files                 = list(image_files),
+            image_description_available = image_description_available,
+            sender                      = sender.strip(),
+            admin                       = admin,
+            persona                     = persona,
+            recent_self                 = recent_self.strip(),
         )
         self.running[task_id] = task
         task.runner           = asyncio.create_task(
@@ -244,7 +247,8 @@ class AgentRuntime:
             deadline      = time.monotonic() + config.task_timeout_seconds,
             send_progress = partial(self._send_progress, context, task),
         )
-        tools = build_tools(env)
+        image_refs = [env.image_ref(Path(file)) for file in task.image_files]
+        tools      = build_tools(env)
         now, zone = current_time(context)
         session = await self.sessions.load(task.chat, idle_seconds=config.session_idle_minutes * 60)
         recent: list[dict[str, Any]] = []
@@ -291,16 +295,25 @@ class AgentRuntime:
                     env.catalog_plugins.add(root.plugin)
                     contracts.extend(lines)
         turn = build_turn_message(
-            task      = task,
-            now       = now,
-            timezone  = zone,
-            out_dir   = str(out_dir),
-            history   = history,
-            since     = session.updated_at,
-            recent    = recent,
-            images    = images,
-            contracts = contracts,
+            task       = task,
+            now        = now,
+            timezone   = zone,
+            out_dir    = str(out_dir),
+            history    = history,
+            since      = session.updated_at,
+            recent     = recent,
+            images     = images,
+            image_refs = image_refs,
+            contracts  = contracts,
         )
+        ai = context.capabilities.ai
+        if ai is not None and task.image_files:
+            env.adapt_messages = await image_message_adapter(
+                ai,
+                [Path(file) for file in task.image_files],
+                turn,
+                description_available=task.image_description_available,
+            )
         return env, tools, [*session.messages(), turn], session
 
     async def _run(

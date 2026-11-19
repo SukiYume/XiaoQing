@@ -423,6 +423,7 @@ PluginServiceName = Literal[
     "memory.recall",
     "memory.search",
     "memory.forget",
+    "chat.history",
 ]
 
 PluginCapabilityName = Literal[
@@ -506,6 +507,8 @@ _SERVICE_CONTRACTS: dict[
     "memory.recall": ("xiaoqing_memory", frozenset({"xiaoqing_chat", "xiaoqing_agent"}), None),
     "memory.search": ("xiaoqing_memory", frozenset({"xiaoqing_chat"}), None),
     "memory.forget": ("xiaoqing_memory", frozenset({"xiaoqing_chat"}), None),
+    # 发起人所在会话的聊天记录：agent 自己往前翻；会话由 Core 按用户主体写进载荷。
+    "chat.history": ("xiaoqing_chat", frozenset({"xiaoqing_agent"}), None),
 }
 
 _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {

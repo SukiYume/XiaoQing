@@ -143,7 +143,14 @@ def capability_summary(
     return "\n".join(lines)
 
 
-def _history_lines(history: Sequence[dict[str, Any]], speaker: int | None) -> list[str]:
+_HISTORY_CHARS = 300
+# 带图的消息连同识图描述的上限，和 chat_history 一致；分流只看前 _HISTORY_CHARS 字。
+_MEDIA_HISTORY_CHARS = 800
+
+
+def _history_lines(
+    history: Sequence[dict[str, Any]], speaker: int | None, *, media_chars: int = _HISTORY_CHARS
+) -> list[str]:
     """聊天记录逐行列出说话人；发起人本人单独标出，其他人的话只是上下文。"""
 
     lines: list[str] = []
@@ -154,14 +161,17 @@ def _history_lines(history: Sequence[dict[str, Any]], speaker: int | None) -> li
             name += "（本人）"
         text = str(item.get("text") or "").strip().replace("\n", " ")
         if text:
-            lines.append(f"{name}: {text[:300]}")
+            if item.get("referenced"):
+                name += "（发起人引用的这条）"
+            limit = media_chars if item.get("media") else _HISTORY_CHARS
+            lines.append(f"{name}: {text[:limit]}")
     return lines
 
 
 def _chat_section(history: Sequence[dict[str, Any]], speaker: int | None) -> str:
     """执行阶段看到的最近聊天；没有可用记录时为空。"""
 
-    lines = _history_lines(history, speaker)
+    lines = _history_lines(history, speaker, media_chars=_MEDIA_HISTORY_CHARS)
     if not lines:
         return ""
     return (
@@ -298,11 +308,12 @@ def build_turn_message(
     recent: Sequence[dict[str, Any]],
     images: Sequence[str],
     contracts: Sequence[str],
+    image_refs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """会话里的一轮请求：新加载的服务说明、近况和近期聊天，末尾放当前时间与发起人的原话。
 
-    ``since`` 是上一轮结束的时刻，只附这之后的聊天；``recent`` 只在开新会话时给，接着说时前面的
-    结果都在上下文里。
+    ``since`` 是上一轮结束的时刻。聊天包含这之后的消息和发起人引用的那条。
+    ``recent`` 在新会话里提供近期任务。``image_refs`` 是本轮附图在 read_image 里的编号。
     """
 
     sections: list[str] = []
@@ -311,7 +322,11 @@ def build_turn_message(
     if task.recent_self:
         sections.append(task.recent_self)
     chat = _chat_section(
-        [item for item in history if float(item.get("ts") or since + 1) > since],
+        [
+            item
+            for item in history
+            if item.get("referenced") or float(item.get("ts") or since + 1) > since
+        ],
         task.chat.user_id,
     )
     if chat:
@@ -324,12 +339,12 @@ def build_turn_message(
         sections.append(f"这次的产出放在：{out_dir}")
         if task.image_files:
             sections.append(
-                "已经下载到本机的图片（可以直接打开处理）：\n" + "\n".join(task.image_files)
+                "本轮附图的本机文件（可以直接打开处理）：\n" + "\n".join(task.image_files)
             )
         if images:
             sections.append("图片链接（需要时可以下载）：\n" + "\n".join(images))
-    elif task.image_files or images:
-        sections.append("发起人附带了图片，但这次没有办法查看图片内容。")
+    if image_refs:
+        sections.append(f"本轮附图编号：{'、'.join(image_refs)}（要细看某处时用 read_image）")
     if task.quoted_text:
         sections.append(f"发起人引用的消息（上下文材料）：{task.quoted_text}")
     sections.append(f"当前时间：{now}（{timezone}）")

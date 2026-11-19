@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
-    from .ai import AICompletionResult, AIModelInfo
+    from .ai import AICompletionResult, AIMessageAdapter, AIModelInfo
     from .router import CommandCatalogNode, CommandInvocation
     from .session import Session
 
@@ -300,6 +300,15 @@ class MemoryCapability(Protocol):
     async def forget(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
 
 
+class ChatHistoryCapability(Protocol):
+    """发起人所在会话的聊天记录（xiaoqing_chat），只读。
+
+    载荷里的 ``chat``（``g<群号>`` / ``u<QQ号>``）由 Core 按用户主体写入，调用方填的无效。
+    """
+
+    async def read(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+
+
 class CodexAgentTaskCapability(Protocol):
     """xiaoqing_agent 提交一个 Codex 任务并等待其文本与图片结果。"""
 
@@ -381,6 +390,7 @@ class AICapability(Protocol):
         tools: list[dict[str, Any]] | None      = None,
         tool_choice: Any                        = None,
         extra_payload: Mapping[str, Any] | None = None,
+        adapt_messages: AIMessageAdapter | None = None,
     ) -> AICompletionResult: ...
 
     def list_models(
@@ -406,6 +416,7 @@ class PluginCapabilities:
     agent_turn         : AgentTurnCapability | None         = None
     life_context       : LifeContextCapability | None       = None
     memory             : MemoryCapability | None            = None
+    chat_history       : ChatHistoryCapability | None       = None
     codex_agent        : CodexAgentTaskCapability | None    = None
     travel_postcards   : TravelPostcardsCapability | None   = None
     ssh_agent          : SSHAgentCommandCapability | None   = None

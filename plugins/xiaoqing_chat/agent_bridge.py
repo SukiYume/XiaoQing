@@ -21,15 +21,19 @@ from core.message import extract_text, sender_display_name
 
 from .attention_gate import reply_message_ids
 from .chat_event import event_sender_name
+from .chat_history import image_parts as stored_image_parts
 from .chat_runtime import chat_lock, optional_capability
 from .follow_ups import burst_text, carry_attention, sender_has_follow_up
 from .handler_context import HandlerContext
 from .life.self_timeline import self_timeline_block
 from .llm.decorations import tame_decorations
+from .llm.media_evidence import media_part_is_readable
 from .media.marker_resolver import COMMON_QQ_FACE_LABELS
+from .media.settings import figures_inbox_dir, media_config
 from .memory import client as memory_client
 from .memory.local_ids import allocate_local_id
-from .message_parts import build_text_message_parts
+from .memory.memory import StoredMessage
+from .message_parts import build_text_message_parts, normalize_message_parts, render_stored_message
 from .planning.action_history import ActionRecord
 from .post_reply_tasks import spawn_life_extraction
 from .smalltalk_models import PreparedSmalltalkTurn
@@ -45,6 +49,7 @@ MAX_AGENT_MEMORY_CHARS = 1000
 _AGENT_DECIDE_TIMEOUT_SECONDS = 25.0
 _AGENT_TURN_TIMEOUT_SECONDS   = 50.0
 _HISTORY_ITEMS                = 12
+_HISTORY_LOOKBACK_ITEMS       = 100
 _QUOTE_TIMEOUT_SECONDS        = 5.0
 _FACE_MARKER_RE               = re.compile(r" ?\[想发QQ表情:[^\[\]]{1,24}\]$")
 _MAX_QUOTED_CHARS             = 2000
@@ -92,24 +97,54 @@ def _image_files(event: dict[str, Any]) -> list[str]:
     return [str(path) for path in paths if path is not None and path.is_file()]
 
 
-async def _recent_history(hctx: HandlerContext, event: dict[str, Any]) -> list[dict[str, Any]]:
-    current = event.get("message_id")
-    history = await hctx.state.memory_store.get_recent_async(
+async def _recent_history(
+    hctx: HandlerContext, event: dict[str, Any]
+) -> tuple[list[dict[str, Any]], StoredMessage | None]:
+    """最近的聊天（图片带识图描述），以及发起人用 QQ 回复引用的那条记录。
+
+    更早的、没有明确引用的内容由 agent 需要时用 chat_history 自己查，这里不猜指代。
+    """
+
+    current   = event.get("message_id")
+    reply_ids = reply_message_ids(event)
+    history   = await hctx.state.memory_store.get_recent_async(
         hctx.chat_id,
-        max_items=_HISTORY_ITEMS + 1,
+        max_items=_HISTORY_LOOKBACK_ITEMS if reply_ids else _HISTORY_ITEMS + 1,
     )
-    # 带上说话人的 QQ 号：agent 据此分清发起人本人和群里其他人。
+    history = [
+        item
+        for item in history
+        if not (item.role == "user" and current is not None and item.message_id == current)
+    ]
+    referenced = None
+    if reply_ids:
+        referenced = next(
+            (
+                item
+                for item in reversed(history)
+                if any(str(remote_id) == reply_ids[0] for remote_id in item.remote_ids())
+            ),
+            None,
+        )
+    recent = history[-_HISTORY_ITEMS:]
+    if referenced is not None and not any(item is referenced for item in recent):
+        recent = [referenced, *recent[1:]]
     return [
         {
             "role"   : item.role,
             "name"   : item.name,
             "user_id": item.user_id,
-            "text"   : item.content,
+            "text"   : render_stored_message(item),
             "ts"     : item.ts,
+            **(
+                {"media": True}
+                if any(part["kind"] in {"image", "emoji"} for part in item.parts)
+                else {}
+            ),
+            **({"referenced": True} if item is referenced else {}),
         }
-        for item in history
-        if not (item.role == "user" and current is not None and item.message_id == current)
-    ][-_HISTORY_ITEMS:]
+        for item in recent
+    ], referenced
 
 
 async def _record_agent_request(
@@ -277,24 +312,38 @@ async def _decide(
     agent   = context.capabilities.agent_turn
     started = time.monotonic()
     try:
+        text = burst_text(event, prepared.text)
         # 取引用、读历史和近况互不相干，一起等，判断能早点开始。
-        (quoted_text, quoted_images), history, recent_self = await asyncio.gather(
+        (quoted_text, quoted_images), (history, referenced), recent_self = await asyncio.gather(
             _quoted_message(event, context),
             _recent_history(hctx, event),
             _agent_recent_self(hctx),
         )
+        image_files = _image_files(event)
+        parts       = normalize_message_parts(event.get("_xc_effective_user_parts"))
+        image_parts = [part for part in parts if part.get("file_path") in image_files]
+        if (
+            not image_files
+            and referenced is not None
+            and media_config(hctx.runtime).enable_inbound_media_context
+        ):
+            # 引用的那条带图时，图片跟着这一轮交给 agent，和直接发图一样。
+            image_parts = stored_image_parts(referenced, figures_inbox_dir(context).resolve())
+            image_files = [str(part["file_path"]) for part in image_parts]
         turn = {
             # 他一件事分几条说时，前几条和这一条连起来才是完整的请求。
-            "text"       : burst_text(event, prepared.text),
-            "user_id"    : event.get("user_id"),
-            "group_id"   : event.get("group_id"),
-            "message_id" : event.get("message_id"),
-            "is_private" : prepared.is_private,
-            "bot_name"   : hctx.bot_name,
-            "sender_name": event_sender_name(event),
-            "history"    : history,
-            "images"     : [*_image_urls(event.get("message")), *quoted_images],
-            "image_files": _image_files(event),
+            "text"                       : text,
+            "user_id"                    : event.get("user_id"),
+            "group_id"                   : event.get("group_id"),
+            "message_id"                 : event.get("message_id"),
+            "is_private"                 : prepared.is_private,
+            "bot_name"                   : hctx.bot_name,
+            "sender_name"                : event_sender_name(event),
+            "history"                    : history,
+            "images"                     : [*_image_urls(event.get("message")), *quoted_images],
+            "image_files"                : image_files,
+            "image_description_available": bool(image_parts)
+            and all(media_part_is_readable(part) for part in image_parts),
             "quoted_text": quoted_text,
             # 人设只写在人设卡里：agent 拿人物事实和〔办事〕各节，和平时聊天是同一个人。
             # 人设卡在一个办事会话里不变；近况每轮不同，单独交。

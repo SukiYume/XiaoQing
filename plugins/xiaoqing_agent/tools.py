@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from core.ai import AIError
+from core.ai import AIError, AIMessageAdapter
+from core.ai_images import image_data_url
 from core.delivery import CommandOutcome, DeliverySegments
-from core.image_validation import ImageValidationLimits, validate_image_bytes
 from core.plugin_base import file_uri_to_path, head_tail_preview
 from core.process_tree import ProcessResult, run_process
 from core.router import CommandCatalogNode, command_access, resolve_catalog_invocation
@@ -99,9 +99,10 @@ class ToolEnv:
     shell          : ShellSpec
     deadline       : float
     send_progress  : Callable[[str, list[str]], Awaitable[bool | None]]
-    script_counter : int = 0
-    media_counter  : int = 0
-    command_counter: int = 0
+    adapt_messages : AIMessageAdapter | None = None
+    script_counter : int                     = 0
+    media_counter  : int                     = 0
+    command_counter: int                     = 0
     # 本次命令返回的本地文件；发起人不能读写本机文件时，只能发出这些和产出目录里的文件。
     command_files: set[Path] = field(default_factory=set)
     # 执行中交给模型的补充要求（含 Bot 管理员和群友的）：写进办事会话和统一记忆，也交给插件核对字段来源。
@@ -122,9 +123,22 @@ class ToolEnv:
     model_calls  : int   = 0
     model_seconds: float = 0.0
     tool_seconds : float = 0.0
+    # 本任务里可以用 read_image 查看的图片（编号 → 本机文件）：本轮附图和 chat_history 翻到的。
+    images: dict[str, Path] = field(default_factory=dict)
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
+
+    def image_ref(self, path: Path) -> str:
+        """给一张图片编号；同一个文件始终是同一个编号。"""
+
+        resolved = path.resolve()
+        for ref, known in self.images.items():
+            if known == resolved:
+                return ref
+        ref              = f"img{len(self.images) + 1}"
+        self.images[ref] = resolved
+        return ref
 
 
 class ToolError(Exception):
@@ -355,22 +369,26 @@ async def _read_file(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     )
 
 
-def _image_data_url(path: Path) -> str:
-    limits = ImageValidationLimits(max_bytes=8 * 1024 * 1024, max_pixels=20_000_000, max_frames=1)
-    with path.open("rb") as stream:
-        payload = stream.read(limits.max_bytes + 1)
-    info = validate_image_bytes(payload, limits=limits, allow_animation=False)
-    mime = "image/jpeg" if info.format == "JPEG" else f"image/{info.format.lower()}"
-    return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+def _image_path(env: ToolEnv, raw: str) -> Path:
+    """图片编号换成文件；能读写本机文件的发起人也可以直接给路径。"""
+
+    known = env.images.get(raw.strip().casefold())
+    if known is not None:
+        return known
+    if _local_allowed(env):
+        return resolve_path(env, raw)
+    refs = "、".join(env.images) or "无"
+    raise ToolError(
+        f"没有编号为 {raw} 的图片。可用编号：{refs}；更早的图片先用 chat_history 找到。"
+    )
 
 
 async def _read_image(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    _ensure_local(env)
     ai = env.context.capabilities.ai
     if ai is None:
         raise ToolError("图片识别能力不可用，请说明当前缺少识图能力。")
-    path     = resolve_path(env, _string_arg(args, "path"))
-    url      = await asyncio.to_thread(_image_data_url, path)
+    path     = _image_path(env, _string_arg(args, "image"))
+    url      = await asyncio.to_thread(image_data_url, path)
     question = (
         _string_arg(args, "question", required=False) or "描述图片内容并逐字提取可辨认的文字。"
     )
@@ -390,6 +408,7 @@ async def _read_image(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
                     ],
                 },
             ],
+            required_modalities=("text", "image"),
         )
     except AIError as exc:
         raise ToolError("图片识别失败，请说明失败并请用户补充文字。保留当前运行环境。") from exc
@@ -495,6 +514,55 @@ def settled_status(env: ToolEnv, claimed: str) -> str:
     if "incomplete" in states:
         return "needs_user"
     return "blocked" if "blocked" in states else "unfinished"
+
+
+# ──────────────────── 聊天记录 ────────────────────
+
+
+_HISTORY_DESCRIPTION_CHARS = 80
+
+
+async def _chat_history(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
+    service = getattr(env.context.capabilities, "chat_history", None)
+    if service is None:
+        raise ToolError("当前会话的聊天记录不可用。")
+    payload: dict[str, Any] = {}
+    for key in ("query", "sender"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = value.strip()
+    for key in ("count", "before"):
+        value = args.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            payload[key] = value
+    if args.get("images_only") is True:
+        payload["images_only"] = True
+    result = await service.read(payload)
+    if not isinstance(result, dict):
+        raise ToolError("当前会话的聊天记录不可用。")
+    messages = [item for item in result.get("messages") or () if isinstance(item, dict)]
+    if not messages:
+        return ToolResult(f"没有符合条件的聊天记录（本会话共存 {result.get('total', 0)} 条）。")
+    lines = [
+        f"本会话聊天记录（旧→新，显示 {len(messages)} 条，符合条件 {result.get('matched')} 条，"
+        f"共存 {result.get('total')} 条）："
+    ]
+    for item in messages:
+        ident = f" #{item['id']}" if item.get("id") is not None else ""
+        lines.append(
+            f"[{item.get('time')}] {item.get('sender')}{ident}: {item.get('text') or '（空）'}"
+        )
+        for image in item.get("images") or ():
+            ref  = env.image_ref(Path(str(image.get("path"))))
+            note = str(image.get("description") or "")[:_HISTORY_DESCRIPTION_CHARS]
+            lines.append(f"  图片 {ref}" + (f"：{note}" if note else ""))
+    if result.get("earlier"):
+        first = next((item["id"] for item in messages if item.get("id") is not None), None)
+        lines.append(
+            "更早还有符合条件的记录"
+            + (f"，before={first} 可以接着往前翻。" if first is not None else "。")
+        )
+    return ToolResult(truncate("\n".join(lines), env.config.max_tool_output_chars))
 
 
 # ──────────────────── XiaoQing 命令 ────────────────────
@@ -1081,12 +1149,6 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
             _read_file,
         ),
         Tool(
-            "read_image",
-            "通过 vision 路由读取本地图片并提取文字。图片路径可来自本轮附件或已下载的图片。",
-            _object({"path": {"type": "string"}, "question": {"type": "string"}}, ["path"]),
-            _read_image,
-        ),
-        Tool(
             "write_file",
             "写入（覆盖）一个 UTF-8 文本文件，自动创建目录。",
             _object(
@@ -1095,8 +1157,9 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
             _write_file,
         ),
     ]
-    tools = [
-        *(local if getattr(env.context.capabilities, "local_tools", None) is not None else ()),
+    tools_has_local = getattr(env.context.capabilities, "local_tools", None) is not None
+    tools           = [
+        *(local if tools_has_local else ()),
         Tool(
             "update_plan",
             "记录或更新任务计划（步骤较多时使用）。用 /agent status 能看到。",
@@ -1144,6 +1207,39 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
         ),
     ]
     capabilities = env.context.capabilities
+    if getattr(capabilities, "chat_history", None) is not None:
+        tools.append(
+            Tool(
+                "chat_history",
+                "查看发起人所在会话的聊天记录（含图片的识图描述），旧→新列出。"
+                "上下文里没有、但可能在之前聊天里出现过的内容，先用它自己找。"
+                "不带条件看最近的记录；query 按空格分隔的关键词筛选，sender 按发言人昵称或 QQ 号筛选，"
+                "images_only 只看带图片的；before 填消息 ID，看那条之前的。",
+                _object(
+                    {
+                        "count"      : {"type": "integer", "minimum": 1, "maximum": 50},
+                        "query"      : {"type": "string"},
+                        "sender"     : {"type": "string"},
+                        "images_only": {"type": "boolean"},
+                        "before"     : {"type": "integer"},
+                    }
+                ),
+                _chat_history,
+            )
+        )
+    if getattr(capabilities, "ai", None) is not None and (
+        env.images or tools_has_local or getattr(capabilities, "chat_history", None) is not None
+    ):
+        tools.append(
+            Tool(
+                "read_image",
+                "仔细查看一张图片并回答 question（默认描述画面并逐字转写文字）。"
+                "image 填本轮附图或 chat_history 给出的图片编号（如 img1）"
+                + ("，也可以填本机图片路径。" if tools_has_local else "。"),
+                _object({"image": {"type": "string"}, "question": {"type": "string"}}, ["image"]),
+                _read_image,
+            )
+        )
     # 只有能再次查看外部状态（本机进程、远端服务器、Codex）时等待才有意义；插件命令的后台任务由插件通知。
     if any(
         getattr(capabilities, name, None) is not None

@@ -12,7 +12,6 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from pathlib import Path
 from typing import Any
 
 from core.args import parse_int
@@ -22,13 +21,12 @@ from core.plugin_base import bounded_external_text, build_action, segments, text
 from core.router import format_command_catalog, resolve_context_command_invocation
 
 from .chat_event import other_mentions
+from .chat_history import image_parts, message_body, message_stamp, sender_label
 from .chat_runtime import configured_bot_name, load_runtime, optional_capability
 from .handler_context import handle_errors
 from .memory.memory import StoredMessage
-from .message_parts import render_stored_message
 from .store_binding import bound_state
 from .turn_delivery import spoken_line_receipt
-from .utils.wall_clock import format_local
 
 log = logging.getLogger(__name__)
 
@@ -43,13 +41,10 @@ _MESSAGE_ID_RE = re.compile(r"-?\d{1,20}")
 _CQ_AT_RE      = re.compile(r"\[CQ:at,qq=(\d{1,20}|all)\]")
 _DEFAULT_LOOK  = 20
 _MAX_LOOK      = 100
-# 一条消息连同图片描述最多显示这么多字；截图的识图描述常有几百字。
-_MESSAGE_CHARS = 800
 _MEMBER_LINES  = 60
 _NAME_CHARS    = 64
 # 原始响应交回的字数上限：成员列表这类大响应用专门的子命令看。
 _RESPONSE_CHARS = 6000
-_IMAGE_KINDS    = frozenset({"image", "emoji"})
 _ROLE_LABELS    = {"owner": "群主", "admin": "管理员"}
 # 这几个动作是在说话：经 say 发出才会记进那个会话的聊天记录。
 _SPEAK_ACTIONS = frozenset({"send_msg", "send_group_msg", "send_private_msg"})
@@ -108,19 +103,12 @@ async def _onebot_data(context: Any, action: str, params: dict[str, Any]) -> tup
 def _message_lines(message: StoredMessage) -> list[str]:
     """一条聊天记录：时间、说话人（QQ 号）、消息 ID 和正文，后面跟着还在本机的图片文件。"""
 
-    who = message.name.strip() or "用户"
-    if message.role != "assistant" and message.user_id is not None:
-        who += f"({message.user_id})"
-    body = render_stored_message(message).strip()
-    if len(body) > _MESSAGE_CHARS:
-        body = body[:_MESSAGE_CHARS] + "…"
-    stamp = format_local("%m-%d %H:%M", message.ts) if message.ts else "时间未知"
     ident = f" #{message.message_id}" if message.message_id is not None else ""
-    lines = [f"[{stamp}] {who}{ident}: {body or '（空）'}"]
-    for part in message.parts:
-        path = str(part.get("file_path") or "")
-        if part.get("kind") in _IMAGE_KINDS and path and Path(path).is_file():
-            lines.append(f"  图片文件：{path}")
+    lines = [
+        f"[{message_stamp(message)}] {sender_label(message)}{ident}: "
+        f"{message_body(message) or '（空）'}"
+    ]
+    lines.extend(f"  图片文件：{part['file_path']}" for part in image_parts(message))
     return lines
 
 

@@ -53,7 +53,8 @@ XiaoQing Agent 让小青在有人叫她做事时真正动手：查日程待办�
 - `enabled` 默认 `false`。关闭时 `xiaoqing_chat` 的行为与没有安装 agent 时完全一致。改完配置后下一条消息即生效。
 - 列表里第一个是主模型，后面的依次兜底。缺少密钥的供应商自动跳过，整条链均不可用时报告配置错误。
 - `gpt-terra` 是 OpenAI 的 `gpt-6.1-terra`（`reasoning_effort=none`），密钥配置在 `config/secrets.json` 的 `ai.providers.openai.api_key`。Chat Completions 带工具时这类模型只能用 `reasoning_effort=none`。
-- `agent` 负责执行，模型必须支持 OpenAI 兼容的 `tools` 调用；`triage` 只做“聊天还是做事”的判断，省略时复用 `agent`；`vision` 给 `read_image` 读本地图片用，模型要声明 `image` 模态，省略时读图不可用。
+- `agent` 负责执行，模型必须支持 OpenAI 兼容的 `tools` 调用。`triage` 判断聊天或办事，省略时复用 `agent`。`vision` 供 `read_image` 和纯文本执行模型的图片转写使用，路由中的模型须声明 `image` 模态。
+- 本轮附图（直接发的图，或 QQ 回复引用的那条里的图）按实际命中的执行模型处理：模型声明 `image` 时随请求附上图片（长边缩到 2048 像素内，最多 4 张）；兜底到纯文本模型时改用已有的识图描述，没有描述时调用 `vision` 转写一次。更早的内容不靠措辞猜指代，由模型用 `chat_history` 自己往前翻。
 - 温度、超时和重试由插件声明默认值（执行 0.2、单次 180 秒、总 600 秒；分流 0.1、单次 15 秒、总 20 秒），要改时把那条 route 写成对象，如 `"agent": {"models": ["gpt-terra"], "temperature": 0.3}`。
 - 删除整个 `plugins/xiaoqing_agent/` 目录同样安全：`xiaoqing_chat` 调不到服务时自动回到普通聊天。
 
@@ -189,7 +190,8 @@ Bot 管理员指定任务 ID 时，`status` 与 `stop` 可以操作其他会话�
 | `run_python`（Bot 管理员） | 在工作目录运行一段 Python 脚本（独立进程，matplotlib 使用 Agg 后端） |
 | `run_shell`（Bot 管理员） | 在工作目录执行一条 shell 命令 |
 | `read_file` / `write_file`（Bot 管理员） | 读写文本文件 |
-| `read_image`（Bot 管理员） | 通过现有 vision 路由读取本地图片与文字；校验格式、大小与像素数 |
+| `chat_history` | 查看发起人所在会话的聊天记录（含识图描述），可按条数、关键词、发言人、只看带图和 `before` 往前翻；会话由 Core 按发起人写入，看不到别的会话。翻到的图片给出编号 |
+| `read_image` | 按问题细看一张图片（经 `vision` 路由）：填本轮附图或 `chat_history` 给出的编号；Bot 管理员也可以填本机路径。校验格式、大小与像素数 |
 | `update_plan` | 记录多步任务的计划，`/agent status` 可见 |
 | `send_message` | 发送实际进展或阻碍（每任务最多 8 条，间隔至少 15 秒；当轮等待期间纯文字暂缓） |
 | `wait` | 等待一段时间，用于轮询之后还能再查看的外部状态（单次最多 600 秒）；只在有本机工具、SSH 或 Codex 时提供，插件命令的后台任务由插件通知 |

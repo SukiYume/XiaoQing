@@ -826,18 +826,77 @@ async def test_read_image_uses_vision_and_rejects_invalid_input(tmp_path):
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ai=ai))
     path = env.workspace / "notice.png"
     Image.new("RGB", (4, 4)).save(path)
-    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    result = await execute_tool(_tools(env), env, "read_image", {"image": str(path)})
     assert "11月13日" in result.content
     route, messages, _ = ai.calls[0]
     assert route == "vision"
     assert messages[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     path.write_bytes(b"invalid image")
-    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    result = await execute_tool(_tools(env), env, "read_image", {"image": str(path)})
     assert result.content.startswith("错误") and len(ai.calls) == 1
     member = _env(
         tmp_path / "member", FakeAgentContext(tmp_path / "member-data", is_admin=False), admin=False
     )
     assert "read_image" not in _tools(member)
+
+
+class _FakeChatHistory:
+    def __init__(self, result: dict) -> None:
+        self.result               = result
+        self.payloads: list[dict] = []
+
+    async def read(self, payload: dict) -> dict:
+        self.payloads.append(payload)
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_members_look_back_through_their_chat_and_open_images_by_reference(tmp_path):
+    """群友也能自己翻当前会话的记录，并按编号细看翻到的图片；本机任意路径仍然读不了。"""
+
+    from PIL import Image
+
+    from tests.helpers.xiaoqing_agent_test_support import FakeAI
+
+    shot = tmp_path / "inbox" / "shot.png"
+    shot.parent.mkdir()
+    Image.new("RGB", (4, 4)).save(shot)
+    history = _FakeChatHistory(
+        {
+            "total"   : 40,
+            "matched" : 3,
+            "earlier" : True,
+            "messages": [
+                {
+                    "id"    : 901,
+                    "time"  : "11-18 18:44",
+                    "sender": "Mika(10001)",
+                    "role"  : "user",
+                    "text"  : "[图片：漏洞公告截图，写着 nginx2root]",
+                    "images": [{"path": str(shot), "description": "漏洞公告截图"}],
+                }
+            ],
+        }
+    )
+    ai      = FakeAI([{"choices": [{"message": {"content": "CVE 编号看不清"}}]}])
+    context = FakeAgentContext(
+        tmp_path / "data", ai=ai, is_admin=False, group_id=777, chat_history=history
+    )
+    env = _env(tmp_path, context, admin=False)
+    tools = _tools(env)
+    assert {"chat_history", "read_image"} <= set(tools) and "read_file" not in tools
+
+    result = await execute_tool(
+        tools, env, "chat_history", {"query": "漏洞", "images_only": True, "count": 5}
+    )
+    assert history.payloads == [{"query": "漏洞", "count": 5, "images_only": True}]
+    assert "Mika(10001) #901" in result.content and "图片 img1：漏洞公告截图" in result.content
+    assert "before=901" in result.content
+
+    result = await execute_tool(tools, env, "read_image", {"image": "img1", "question": "编号？"})
+    assert "看不清" in result.content and ai.calls[0][0] == "vision"
+    result = await execute_tool(tools, env, "read_image", {"image": str(shot)})
+    assert result.content.startswith("错误") and "img1" in result.content
 
 
 @pytest.mark.asyncio
@@ -850,7 +909,7 @@ async def test_read_image_failure_preserves_environment(tmp_path):
     env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ai=FakeAI([AIError("offline")])))
     path = env.workspace / "notice.png"
     Image.new("RGB", (4, 4)).save(path)
-    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    result = await execute_tool(_tools(env), env, "read_image", {"image": str(path)})
     assert "补充文字" in result.content and "保留当前运行环境" in result.content
 
 

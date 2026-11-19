@@ -799,7 +799,9 @@ def test_shipped_manifests_declare_the_agent_bridges() -> None:
         "qingssh.agent_command",
         "memory.record",
         "memory.recall",
+        "chat.history",
     }
+    assert "chat.history" in [service.name for service in load("xiaoqing_chat").services]
     assert [service.name for service in agent.services] == [
         "agent.handle_turn",
         "agent.report_delivery",
@@ -946,3 +948,50 @@ async def test_command_runner_keeps_the_receipt_and_separates_each_call(
     assert requests[3] not in requests[:3]
     with pytest.raises(ValueError):
         await runner.run("/twimg", operation_id="bad id")
+
+
+CHAT_HISTORY_SOURCE = """
+from tests.helpers.plugin_probe import PROBE
+
+async def read_history(payload, context):
+    PROBE.log("chat_history").append((payload, context.plugin_name))
+    return {"chat": payload["chat"], "messages": []}
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_chat_history_is_scoped_to_the_requesters_own_chat(temp_app_root: Path) -> None:
+    """agent 只能看发起人所在的会话：会话由 Core 按主体写入，调用方填的无效。"""
+
+    app = XiaoQingApp(temp_app_root)
+    await load_test_plugin(
+        app,
+        "xiaoqing_chat",
+        CHAT_HISTORY_SOURCE,
+        services=[service_declaration("chat.history", "read_history", ("xiaoqing_agent",))],
+    )
+    seen = PROBE.log("chat_history")
+
+    def agent(group_id: int | None, uses: frozenset[str] = frozenset({"chat.history"})):
+        return plugin_context_for(
+            app,
+            "xiaoqing_agent",
+            user_id  = OTHER,
+            group_id = group_id,
+            principal=user_principal(app, OTHER, group_id=group_id),
+            uses_services=uses,
+        )
+
+    group = agent(777).capabilities.chat_history
+    assert await group.read({"chat": "g1", "count": 5}) == {"chat": "g777", "messages": []}
+    assert seen[-1] == ({"chat": "g777", "count": 5}, "xiaoqing_chat")
+    private = agent(None).capabilities.chat_history
+    assert (await private.read({}))["chat"] == f"u{OTHER}"
+    with pytest.raises(TypeError):
+        await private.read(["not", "a", "mapping"])
+    assert agent(777, frozenset()).capabilities.chat_history is None
+    with pytest.raises(ValueError):
+        PluginManifest.model_validate(
+            {"name": "xiaoqing_life", "entry": "main.py", "uses_services": ["chat.history"]}
+        )

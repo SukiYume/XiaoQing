@@ -526,7 +526,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 |---|---|---|
 | `plugins.xiaoqing_agent.enabled` | `false` | 总开关。关闭时 `xiaoqing_chat` 照常回复，与没有安装 agent 时一致，修改后下一条消息生效 |
 | `plugins.xiaoqing_agent.ai.routes.agent` | 必填 | 执行 route，模型需支持 `tools` 调用 |
-| `plugins.xiaoqing_agent.ai.routes.vision` | 不配则读图不可用 | `read_image` 读本地图片用的 route，模型需要 `image` modality |
+| `plugins.xiaoqing_agent.ai.routes.vision` | 可选 | `read_image` 和纯文本执行模型的图片转写路由，模型需声明 `image` |
 | `plugins.xiaoqing_agent.ai.routes.triage` | 复用 `agent` | “聊天还是做事”判断 route，建议快速、关闭思考的模型 |
 | `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | 当轮等待结果的秒数，超出后先回一句再后台交付 |
 | `plugins.xiaoqing_agent.task_timeout_seconds` | `1800` | 单个任务总时长 |

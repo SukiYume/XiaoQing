@@ -8,6 +8,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+from core.ai_images import image_message_adapter
 from core.log import LogEvent
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ from .llm.local_checks import (
 )
 from .llm.media_evidence import (
     event_has_current_image,
+    media_part_is_readable,
 )
 from .llm.postprocess import process_llm_response
 from .llm.prompt_builder import (
@@ -265,13 +267,30 @@ async def _request_reply_candidate(
             max_tokens = request_max_tokens,
         )
     )
-    started_at = time.monotonic()
+    started_at     = time.monotonic()
+    adapt_messages = None
+    ai             = request_secrets.get("_ai")
+    if ai is not None and event_has_current_image(plan.event):
+        items = plan.event.get("_xc_rendered_media_items") or ()
+        paths = [item.cached_path for item in items if item.cached_path is not None]
+        if paths:
+            parts     = normalize_message_parts(plan.event.get("_xc_effective_user_parts"))
+            available = {part.get("file_path") for part in parts if media_part_is_readable(part)}
+            # 本轮的话在第一条用户消息里；附图跟着它。
+            anchor = next(message for message in payload_messages if message["role"] == "user")
+            adapt_messages = await image_message_adapter(
+                ai,
+                paths,
+                anchor,
+                description_available=all(str(path) in available for path in paths),
+            )
     raw, used_profile = await chat_completions_with_profile(
-        secrets     = request_secrets,
-        messages    = payload_messages,
-        temperature = foreground.temperature,
-        top_p       = foreground.top_p,
-        max_tokens  = request_max_tokens,
+        secrets        = request_secrets,
+        messages       = payload_messages,
+        temperature    = foreground.temperature,
+        top_p          = foreground.top_p,
+        max_tokens     = request_max_tokens,
+        adapt_messages = adapt_messages,
         **foreground.request_controls(),
     )
     raw = _strip_sender_vocative(raw, event_sender_name(plan.event))
