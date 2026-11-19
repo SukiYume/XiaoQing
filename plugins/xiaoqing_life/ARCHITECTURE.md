@@ -63,7 +63,7 @@ xiaoqing_chat.reply_plan ─► 群聊话题词（统一记忆给的）、本群
 | `commands.py` | `/life` 子命令文本 |
 | `website.py` | 小青观测站：页面、三个只读 JSON 接口（此刻状态、存档、旅行）和静态资源；`live_status` 按人设作息与当前上网时段选场景；`python -m plugins.xiaoqing_life.website` 单独预览 |
 | `travel.py` | 旅行明信片：提示词与参考图、经 `codex.travel_postcards` 生成、按日期整日收录为 WebP 与 `entry.json`；`python -m plugins.xiaoqing_life.travel` 手工收录 |
-| `site/` | 观测站前端：`index.html`、`assets/station.js`（页面与路由）、`stage.js`（直播间舞台）、`stats-view.js`（统计）、`station.css`，以及场景与角色图集、字体和随站的首站明信片 |
+| `site/` | 观测站前端：`index.html`、`assets/station.js`（页面与路由）、`stage.js`（直播间舞台）、`stats-view.js`（统计），首屏正文和样式内嵌在 HTML 中，以及场景与角色图集、字体和随站的首站明信片 |
 | `sources/` | `base`（有界 HTTP、条目模型）、`bilibili`、`hotlists`、`watch`（弹幕）、`deep`（简介全文 / 置顶 / 字幕，字幕全文或均匀取 6 段节选）、`subtitle`（WBI）、`baike`、`wiki`、`reference`（研究和作品核实共用的查百科 / 维基） |
 
 ## 小课题与研究

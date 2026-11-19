@@ -40,19 +40,6 @@ function routineRows(lines) {
     <span>${esc(what)}<small>${esc(days)}</small></span>${mark ? `<b>${esc(marks[mark] || mark)}</b>` : ""}</div>`).join("")
     + rows.filter(row => !Array.isArray(row)).map(line => `<div class="ruled">${esc(line)}</div>`).join("");
 }
-function home() {
-  main.innerHTML = `<section class="hero"><img class="hero-art" src="assets/club.webp" alt="${scenes.club.alt}">
-    <div class="hero-content wrap"><span class="eyebrow"><i></i> XIAOQING OBSERVATORY</span>
-    <h1>小青的<br><em>校园日常</em></h1>
-    <p>我叫小青，天文系大二。<br>带上观测本，来天台吹会儿风？</p>
-    <div class="actions"><a class="action primary" href="live">▶ 进入直播间</a>
-    <a class="action secondary" href="diary">翻开日记本 ↗</a></div></div></section>
-    <div class="transmission"><div class="wrap"><b><i class="signal"></i> 此刻</b>
-    <span id="now">正在读取作息…</span><a href="live">去看看 →</a></div></div>
-    <section class="wrap home-log"><div class="section-title"><div><span class="eyebrow">FIELD NOTES</span>
-    <h2>最近的记录</h2></div><a href="timeline">全部足迹 →</a></div>
-    <div id="latest" class="home-columns"><p>正在翻笔记本…</p></div></section>`;
-}
 function showGallery() {
   const entries = Object.entries(scenes);
   main.innerHTML = `<section class="wrap inner gallery">${heading("SCENE ARCHIVE", "选个地方找小青。轻点她、翻看道具，也可以听她接着讲。")}
@@ -229,8 +216,7 @@ async function refreshLive() {
 async function start() {
   if (page === "gallery") return showGallery();
   if (page === "" || page === "live") {
-    if (!page) home();
-    else main.innerHTML = `<section class="wrap inner live"><div class="section-title"><div>
+    if (page === "live") main.innerHTML = `<section class="wrap inner live"><div class="section-title"><div>
       <span class="eyebrow"><i class="signal"></i> LIVE CHANNEL</span><h1>生活直播间</h1></div>
       <a href="gallery">翻场景图鉴 →</a></div><div id="live-stage" class="loading">正在接收场景…</div>
       <div class="live-meta"><b id="status">读取作息中…</b><span id="sync"></span></div></section>`;
