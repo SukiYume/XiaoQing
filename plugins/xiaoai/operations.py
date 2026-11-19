@@ -142,7 +142,7 @@ def normalize_reported(schema: dict[str, Any], value: Any) -> Any:
 def same_value(reported: Any, target: Any) -> bool:
     if isinstance(reported, bool) or isinstance(target, bool):
         return reported is target
-    return reported == target
+    return bool(reported == target)
 
 
 async def read_property(
