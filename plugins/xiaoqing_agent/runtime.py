@@ -24,6 +24,7 @@ from .loop import run_agent_loop
 from .memory import recall_for_session, record_task
 from .prompts import (
     HIDDEN_COMMANDS,
+    MEDIA_HISTORY_CHARS,
     build_system_message,
     build_turn_message,
     capability_summary,
@@ -247,8 +248,9 @@ class AgentRuntime:
             deadline      = time.monotonic() + config.task_timeout_seconds,
             send_progress = partial(self._send_progress, context, task),
         )
-        image_refs = [env.image_ref(Path(file)) for file in task.image_files]
-        tools      = build_tools(env)
+        task.note_blocker = env.next_step_blocker
+        image_refs        = [env.image_ref(Path(file)) for file in task.image_files]
+        tools             = build_tools(env)
         now, zone = current_time(context)
         session = await self.sessions.load(task.chat, idle_seconds=config.session_idle_minutes * 60)
         recent: list[dict[str, Any]] = []
@@ -312,7 +314,13 @@ class AgentRuntime:
                 ai,
                 [Path(file) for file in task.image_files],
                 turn,
-                description_available=task.image_description_available,
+                description_available=task.image_description_available
+                and not any(
+                    item.get("referenced")
+                    and item.get("media")
+                    and len(str(item.get("text") or "").strip()) > MEDIA_HISTORY_CHARS
+                    for item in history
+                ),
             )
         return env, tools, [*session.messages(), turn], session
 
@@ -356,6 +364,7 @@ class AgentRuntime:
             task.outcome     = outcome
             task.activity    = "已结束"
             self.running.pop(task.task_id, None)
+            task.note_blocker = None
             # 执行记录只存系统提示和这一轮：前面的轮次在各自任务的执行记录里。
             start = len(session.messages()) if session is not None else 0
             await asyncio.shield(self._persist(task, transcript[:1] + transcript[start:]))
@@ -382,13 +391,11 @@ class AgentRuntime:
             )
         if outcome is not None:
             if task.notes:
-                # 补充要求赶在最后一步之后才到：如实说没用上，不能当作已经照做。
+                # 已接收的补充可能在轮到处理前耗尽预算。
                 missed       = "；".join(task.notes)[:200]
-                outcome.text = (
-                    f"{outcome.text}\n（补充的要求“{missed}”送到时任务已经做完，没来得及用上，"
-                    "需要的话再说一次。）"
-                )
+                outcome.text = f"{outcome.text}\n（本轮没来得及处理补充的要求“{missed}”。需要的话请在下一轮提交。）"
                 task.notes.clear()
+                task.note_images.clear()
             # 当轮还有人在等就交给它作为回复，否则主动发回原会话。
             if not self._resolve_waiter(task, outcome):
                 await self._deliver(context, task, outcome)
@@ -682,6 +689,8 @@ class AgentRuntime:
         if len(targets) != 1:
             return "追加要求只能交给一个任务，请指明任务ID。"
         task = targets[0]
+        if task.note_blocker is not None and task.note_blocker():
+            return f"任务 {task.task_id} 正在收尾。请在下一轮提交补充内容。"
         text = note.strip()[:_MAX_NOTE_CHARS]
         if not text and not image_files:
             return "要补充什么？"

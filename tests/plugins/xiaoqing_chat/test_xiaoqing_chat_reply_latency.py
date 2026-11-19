@@ -11,10 +11,12 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.log import LogEvent
 from plugins.xiaoqing_chat.llm import reply_checker as checker
+from plugins.xiaoqing_chat.media.models import RenderedMedia
 from tests.helpers.assertions import logged_events
 from tests.helpers.reply_checker_test_support import checker_verdict
 from tests.helpers.xiaoqing_chat_test_support import (
@@ -244,16 +246,30 @@ async def test_checker_timeout_keeps_pending_reading_for_next_attempt():
     await cache.aclose()
 
 
+def _with_test_image(event, tmp_path):
+    path = tmp_path / "attachment.png"
+    Image.new("RGB", (2, 2), "blue").save(path)
+    event["message"].append({"type": "image", "data": {"file": path.name}})
+    event["_xc_rendered_media_items"] = [
+        RenderedMedia("attachment", "image", "蓝色海报", (), "[图片：蓝色海报]", cached_path=path)
+    ]
+    return event
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("generation_input", ["text", "pixels", "cached-description"])
 async def test_generation_starts_reading_before_candidate_and_reuses_it_on_regen(
-    mock_context, sample_group_event
+    mock_context, sample_group_event, tmp_path, generation_input
 ):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
     reading_started = asyncio.Event()
     evidence_calls  = []
 
-    def reading(_call: ModelCall) -> str:
+    async def reading(call: ModelCall) -> str:
+        if generation_input != "text":
+            adapted = await call.kwargs["adapt_messages"](call.messages, ("text", "image"))
+            assert adapted[1]["content"][1]["image_url"]["url"].startswith("data:image/png;")
         reading_started.set()
         return _json(_READING)
 
@@ -266,6 +282,11 @@ async def test_generation_starts_reading_before_candidate_and_reuses_it_on_regen
         )
 
     async def candidate(call: ModelCall) -> str:
+        if generation_input != "text":
+            adapter    = call.kwargs["adapt_messages"]
+            modalities = ("text", "image") if generation_input == "pixels" else ("text",)
+            await adapter(call.messages, modalities)
+            assert adapter.mode == ("pixels" if generation_input == "pixels" else "")
         # 候选还在生成时，独立阅读必须已经发起：否则这里等到超时，整条测试失败。
         await asyncio.wait_for(reading_started.wait(), timeout=5)
         return f"第{len(model.calls_of('reply'))}稿"
@@ -288,9 +309,10 @@ async def test_generation_starts_reading_before_candidate_and_reuses_it_on_regen
         },
     )
 
-    result = await handle_smalltalk(
-        "小青你呢", chat_message_event(sample_group_event, "小青你呢"), mock_context
-    )
+    event = chat_message_event(sample_group_event, "小青你呢")
+    if generation_input != "text":
+        _with_test_image(event, tmp_path)
+    result = await handle_smalltalk("小青你呢", event, mock_context)
 
     # 第一稿被审查挡下重生成，第二稿通过；两次审查共用同一份阅读。
     assert result == [{"type": "text", "data": {"text": "第2稿"}}]
@@ -302,16 +324,22 @@ async def test_generation_starts_reading_before_candidate_and_reuses_it_on_regen
 
 
 @pytest.mark.asyncio
-async def test_risk_mode_does_not_prefetch_reading(mock_context, sample_group_event):
+@pytest.mark.parametrize("with_image", [False, True])
+async def test_risk_mode_does_not_prefetch_reading(
+    mock_context, sample_group_event, tmp_path, with_image
+):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
     async def candidate(_call: ModelCall) -> str:
         # 让后台任务有机会跑：若这一轮预取了阅读，它此刻已经叫过审查模型。
         for _ in range(3):
             await asyncio.sleep(0)
+        assert not _readings(model)
         return "在追芙莉莲"
 
-    model = ScriptedChatModel(plan=plan_answer("direct_reply"), reply=candidate)
+    model = ScriptedChatModel(
+        plan=plan_answer("direct_reply"), reply=candidate, checker=_checker_script()
+    )
     scripted_chat_context(
         mock_context,
         model,
@@ -319,12 +347,13 @@ async def test_risk_mode_does_not_prefetch_reading(mock_context, sample_group_ev
         {"reply_check": {"llm_checker_mode": "risk", "enable_semantic_checker": True}},
     )
 
-    result = await handle_smalltalk(
-        "小青你呢", chat_message_event(sample_group_event, "小青你呢"), mock_context
-    )
+    event = chat_message_event(sample_group_event, "小青你呢")
+    if with_image:
+        _with_test_image(event, tmp_path)
+    result = await handle_smalltalk("小青你呢", event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "在追芙莉莲"}}]
-    assert model.calls_of("checker") == []
+    assert len(_readings(model)) == int(with_image)
     await ack_reply_delivery(result)
     await settle_chat_background(mock_context, model)
 

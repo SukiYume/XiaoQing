@@ -16,7 +16,7 @@ from typing import Any
 from core.args import parse_int
 
 from .media.settings import figures_inbox_dir
-from .memory.memory import StoredMessage
+from .memory.memory import StoredMessage, history_order_key
 from .message_parts import render_stored_message
 from .store_binding import bound_state
 from .utils.wall_clock import format_local
@@ -86,7 +86,7 @@ def _fingerprint(message: StoredMessage) -> str:
 
 
 def page_cursor(history: Sequence[StoredMessage], index: int) -> str:
-    """指向第 ``index`` 条记录的翻页位置（``序号@指纹``）：新消息追加在后面，序号不变。"""
+    """指向当前排序视图中的一条记录（``序号@指纹``）。"""
 
     return f"{index}@{_fingerprint(history[index])}"
 
@@ -94,15 +94,17 @@ def page_cursor(history: Sequence[StoredMessage], index: int) -> str:
 def _cursor_end(history: Sequence[StoredMessage], before: Any) -> int:
     """``before`` 指向的那条记录的位置（只看它之前的）；认不出时抛出 ``ValueError``。
 
-    ``before`` 是翻页位置（``序号@指纹``），或某条消息的 QQ 消息 ID。存档前端滚动裁剪后序号
-    会变小：在原序号及之前找同一指纹的记录，取最近的那条。
+    ``before`` 是翻页位置（``序号@指纹``），或某条消息的 QQ 消息 ID。存档滚动或重载后
+    按指纹在当前存档定位。
     """
 
     token = str(before).strip()
     index_text, sep, mark = token.partition("@")
     if sep:
         index = int(index_text) if index_text.isdigit() else -1
-        for position in range(min(index, len(history) - 1), -1, -1):
+        if 0 <= index < len(history) and _fingerprint(history[index]) == mark:
+            return index
+        for position in range(len(history) - 1, -1, -1):
             if _fingerprint(history[position]) == mark:
                 return position
         raise ValueError(f"翻页位置 {token} 已失效，请不带 before 重新查。")
@@ -113,12 +115,11 @@ def _cursor_end(history: Sequence[StoredMessage], before: Any) -> int:
 
 
 def _matches(message: StoredMessage, words: Sequence[str], sender: str) -> bool:
-    if sender:
-        label = sender_label(message).casefold()
-        if sender not in label:
-            return False
+    label = sender_label(message).casefold() if sender or words else ""
+    if sender and sender not in label:
+        return False
     if words:
-        haystack = f"{sender_label(message)} {render_stored_message(message)}".casefold()
+        haystack = f"{label} {render_stored_message(message).casefold()}"
         return all(word in haystack for word in words)
     return True
 
@@ -126,6 +127,7 @@ def _matches(message: StoredMessage, words: Sequence[str], sender: str) -> bool:
 def _select(
     history: Sequence[StoredMessage], payload: dict[str, Any], inbox: Path
 ) -> dict[str, Any]:
+    history = sorted(history, key=history_order_key)
     count = parse_int(str(payload.get("count") or _DEFAULT_COUNT), minimum=1, maximum=_MAX_COUNT)
     count       = count or _DEFAULT_COUNT
     words       = str(payload.get("query") or "")[:_MAX_QUERY].casefold().split()

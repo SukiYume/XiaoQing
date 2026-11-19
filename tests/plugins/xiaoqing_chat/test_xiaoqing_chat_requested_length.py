@@ -200,5 +200,7 @@ async def test_the_raised_budget_reaches_the_generation_request():
         foreground = foreground,
         secrets    = {"_ai": model, "_route": "chat"},
     )
-    await reply_generator._request_reply_candidate(plan, [{"role": "user", "content": "x"}])
+    await reply_generator._request_reply_candidate(
+        plan, [{"role": "user", "content": "x"}], ReplyAttemptState(max_items=10)
+    )
     assert model.calls[-1].kwargs["max_tokens"] == foreground.max_tokens

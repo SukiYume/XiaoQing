@@ -129,6 +129,13 @@ class ToolEnv:
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
 
+    def next_step_blocker(self) -> str:
+        if self.task.steps >= self.config.max_steps:
+            return "超出步数预算"
+        if self.remaining() <= 5:
+            return "超出时间预算"
+        return ""
+
     def image_ref(self, path: Path) -> str:
         """给一张图片编号：由文件本身决定，同一个文件在哪一轮、哪个任务里都是同一个编号。
 
@@ -379,10 +386,11 @@ async def _read_file(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
 def _image_path(env: ToolEnv, raw: str) -> Path:
     """图片编号换成文件；能读写本机文件的发起人也可以直接给路径。"""
 
-    known = env.images.get(raw.strip().casefold())
+    ref   = raw.strip().casefold()
+    known = env.images.get(ref)
     if known is not None:
         return known
-    if _local_allowed(env):
+    if not re.fullmatch(r"img(?:\d+|-[0-9a-f]{6,64})", ref) and _local_allowed(env):
         return resolve_path(env, raw)
     refs = "、".join(env.images) or "无"
     raise ToolError(
@@ -560,24 +568,37 @@ async def _chat_history(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     blocks: list[str] = []
     oldest_kept       = ""
     before            = str(result.get("before") or "") if result.get("earlier") else ""
+    used              = 0
     for item in reversed(messages):
         ident = f" #{item['id']}" if item.get("id") is not None else ""
-        block = [
-            f"[{item.get('time')}] {item.get('sender')}{ident}: {item.get('text') or '（空）'}"
-        ]
+        line = f"[{item.get('time')}] {item.get('sender')}{ident}: {item.get('text') or '（空）'}"
+        images: list[tuple[Path, str, str]] = []
         for image in item.get("images") or ():
-            ref  = image_ref(Path(str(image.get("path"))))
+            path = Path(str(image.get("path")))
+            ref  = f"  图片 {image_ref(path)}"
             note = str(image.get("description") or "")[:_HISTORY_DESCRIPTION_CHARS]
-            block.append(f"  图片 {ref}" + (f"：{note}" if note else ""))
-        text = "\n".join(block)
-        if blocks and len(text) + sum(len(part) + 1 for part in blocks) > budget:
+            images.append((path, ref, f"{ref}：{note}" if note else ref))
+        text = "\n".join([line, *(detail for _, _, detail in images)])
+        if blocks and used + len(text) + 1 > budget:
             # before 不含它指向的那条：指向留下的最早一条，略去的几条下一页照样出现。
             before = oldest_kept
             break
+        if len(text) > budget:
+            # 单条记录超限时保留消息预览及可放入的完整图片编号。
+            refs_used = 0
+            kept      = []
+            for path, ref, detail in images:
+                if refs_used + len(ref) + 1 > budget - 80:
+                    break
+                kept.append((path, ref, detail))
+                refs_used += len(ref) + 1
+            images = kept
+            text   = "\n".join([truncate(line, budget - refs_used), *(ref for _, ref, _ in images)])
         blocks.insert(0, text)
+        used += len(text) + 1
         oldest_kept = str(item.get("cursor") or "")
-        for image in item.get("images") or ():
-            env.image_ref(Path(str(image.get("path"))))
+        for path, _, _ in images:
+            env.image_ref(path)
     header = (
         f"本会话聊天记录（旧→新，显示 {len(blocks)} 条，符合条件 {result.get('matched')} 条，"
         f"共存 {result.get('total')} 条）："
@@ -1254,7 +1275,7 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
             Tool(
                 "read_image",
                 "仔细查看一张图片并回答 question（默认描述画面并逐字转写文字）。"
-                "image 填本轮附图或 chat_history 给出的图片编号（如 img-3fa9c1）"
+                "image 填本轮附图或 chat_history 给出的图片编号（如 img-3fa9c1428ae0）"
                 + ("，也可以填本机图片路径。" if tools_has_local else "。"),
                 _object({"image": {"type": "string"}, "question": {"type": "string"}}, ["image"]),
                 _read_image,

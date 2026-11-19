@@ -145,7 +145,7 @@ def capability_summary(
 
 _HISTORY_CHARS = 300
 # 带图的消息连同识图描述的上限，和 chat_history 一致；分流只看前 _HISTORY_CHARS 字。
-_MEDIA_HISTORY_CHARS = 800
+MEDIA_HISTORY_CHARS = 800
 
 
 def _history_lines(
@@ -171,7 +171,7 @@ def _history_lines(
 def _chat_section(history: Sequence[dict[str, Any]], speaker: int | None) -> str:
     """执行阶段看到的最近聊天；没有可用记录时为空。"""
 
-    lines = _history_lines(history, speaker, media_chars=_MEDIA_HISTORY_CHARS)
+    lines = _history_lines(history, speaker, media_chars=MEDIA_HISTORY_CHARS)
     if not lines:
         return ""
     return (

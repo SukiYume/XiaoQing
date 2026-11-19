@@ -235,9 +235,10 @@ def _build_attempt_messages(
     return [{"role": message.role, "content": message.content} for message in messages]
 
 
-async def _turn_images(plan: ReplyGenerationPlan, ai: Any) -> ImageEvidence | None:
+async def _turn_images(plan: ReplyGenerationPlan) -> ImageEvidence | None:
     """本轮消息里还在本机的图片；入站识图已经描述了全部图片时，纯文本模型不必再转写。"""
 
+    ai = plan.secrets.get("_ai")
     if ai is None or not event_has_current_image(plan.event):
         return None
     items = plan.event.get("_xc_rendered_media_items") or ()
@@ -254,7 +255,7 @@ async def _turn_images(plan: ReplyGenerationPlan, ai: Any) -> ImageEvidence | No
 async def _request_reply_candidate(
     plan: ReplyGenerationPlan,
     payload_messages: list[dict[str, str]],
-    attempt: ReplyAttemptState | None = None,
+    attempt: ReplyAttemptState,
 ) -> str | None:
     foreground      = plan.foreground
     request_secrets = plan.secrets
@@ -285,10 +286,6 @@ async def _request_reply_candidate(
         )
     )
     started_at = time.monotonic()
-    attempt = attempt or ReplyAttemptState(max_items=plan.max_context_size)
-    if not attempt.images_loaded:
-        attempt.images        = await _turn_images(plan, request_secrets.get("_ai"))
-        attempt.images_loaded = True
     # 本轮的话在第一条用户消息里；附图跟着它，按实际命中的模型给原图或视觉转写。
     adapt_messages = (
         attempt.images.adapter(
@@ -361,13 +358,15 @@ async def _seen_image_text(
     只有这种情况才多一次识图：大多数回复不带网址，或网址本来就在聊天里。
     """
 
-    if attempt.images is None or not attempt.images_seen:
+    if not plan.runtime.cfg.reply_check.enable_reply_checker or (
+        attempt.images is None or not attempt.images_seen
+    ):
         return ""
     sources = _link_sources(plan, trimmed_history, memory_block)
     check = ungrounded_link_check(reply=candidate, sources=sources)
     if check is None or check.suitable:
         return ""
-    return str(await attempt.images.text(fresh=True))
+    return await attempt.images.text(fresh=True)
 
 
 def _precheck_candidate(
@@ -709,11 +708,11 @@ def _semantic_reading_cache(plan: ReplyGenerationPlan) -> TurnReadingCache | Non
 
 def _prefetch_turn_reading(
     plan: ReplyGenerationPlan, attempt: ReplyAttemptState, trimmed_history: Any
-) -> None:
+) -> bool:
     """always 模式每条候选都要语义审查，阅读与候选无关，可与生成同时进行。"""
     cfg = plan.runtime.cfg.reply_check
     if attempt.turn_reading is None or cfg.llm_checker_mode != "always":
-        return
+        return False
     checker_llm = plan.runtime.cfg.llm_config("checker")
     attempt.turn_reading.prefetch(
         secrets                = plan.secrets,
@@ -726,7 +725,9 @@ def _prefetch_turn_reading(
         timeout_seconds        = checker_llm.total_timeout_seconds,
         max_retry              = checker_llm.max_retry,
         retry_interval_seconds = checker_llm.retry_interval_seconds,
+        images                 = attempt.images,
     )
+    return True
 
 
 async def generate_reply_draft(
@@ -777,13 +778,15 @@ async def generate_reply_draft(
 async def _generate_checked_draft(
     plan: ReplyGenerationPlan, attempt: ReplyAttemptState
 ) -> ReplyDraft | None:
+    if not _is_turn_stale(plan.chat_id, plan.event):
+        attempt.images = await _turn_images(plan)
     while True:
         if _is_turn_stale(plan.chat_id, plan.event):
             log.info(LogEvent("reply.stale.abort", chat_id=plan.chat_id))
             return None
-        trimmed_history = plan.history[-attempt.max_items :] if attempt.max_items > 0 else []
-        _prefetch_turn_reading(plan, attempt, trimmed_history)
-        memory_block = _load_attempt_memory(plan)
+        trimmed_history    = plan.history[-attempt.max_items :] if attempt.max_items > 0 else []
+        reading_prefetched = _prefetch_turn_reading(plan, attempt, trimmed_history)
+        memory_block       = _load_attempt_memory(plan)
         if _is_turn_stale(plan.chat_id, plan.event):
             return None
         payload_messages   = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
@@ -822,8 +825,8 @@ async def _generate_checked_draft(
                 trimmed_history,
                 memory_block,
                 attempt.turn_reading,
-                # 生成时看到了附图，审查也拿到同一份，才能核对只在图里的细节。
-                images=attempt.images if attempt.images_seen else None,
+                # 提前阅读与后续审查共用同一份附图。
+                images=attempt.images if reading_prefetched or attempt.images_seen else None,
             )
             if rejected is not None and (trimmed := trim_unsupported_bubbles(rejected)):
                 log.info(

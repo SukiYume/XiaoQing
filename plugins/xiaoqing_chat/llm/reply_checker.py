@@ -12,6 +12,7 @@ from string import Template
 from typing import Any
 
 from core.ai import AIError as LLMError
+from core.ai_images import ImageAdapter, ImageEvidence
 from core.log import LogEvent
 from core.plugin_base import resolve_bot_name
 
@@ -88,7 +89,7 @@ class _LLMCheckInput:
     # 这一轮从统一记忆取到的、关于人和群的内容；和对话一样可以作为对话事实的依据。
     memory_text: str = ""
     # 生成时附上的本轮图片（core.ai_images.ImageEvidence）；审查按自己命中的模型拿到同一份。
-    images: Any = None
+    images: ImageEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -215,7 +216,7 @@ async def _request_checker_completion(
     prompt: str,
     materials: str = "",
     request_policy: _LLMRequestPolicy,
-    images: Any = None,
+    images: ImageAdapter | None = None,
 ) -> tuple[dict[str, Any], str]:
     """先带 JSON 格式参数请求审查模型；只在 HTTP 400（模型不支持该参数）时去掉它重试一次。
 
@@ -672,7 +673,9 @@ async def _llm_check(
     images_seen = adapter.mode if adapter is not None else ""
     content     = gateway.extract_response_content(resp)
     # 审查拿到的是视觉转写时，转写只作视觉陈述的原文依据，不算人物资料。
-    transcription = check_input.images.transcription if images_seen == "text" else ""
+    transcription = (
+        adapter.evidence.transcription if adapter is not None and images_seen == "text" else ""
+    )
     return _interpret_checker_response(
         content                          = content,
         reply                            = check_input.reply,
@@ -781,6 +784,8 @@ async def _read_turn_meaning(
     if check_input.jargon_explanation:
         source_records["jargon"] = check_input.jargon_explanation
     prompt += definition_source_instruction(source_records)
+    if check_input.images is not None:
+        prompt += "\n本轮附图提供理解背景。消息原文中的编号用于引用文字对话。"
     sources = {
         "角色本人标记": f"{check_input.bot_name}(你)",
         "当前发言者" : check_input.current_sender,
@@ -795,6 +800,11 @@ async def _read_turn_meaning(
         prompt          = prompt,
         materials=json.dumps(sources, ensure_ascii=False),
         request_policy=request_policy,
+        **(
+            {"images": check_input.images.adapter(None, fresh=True)}
+            if check_input.images is not None
+            else {}
+        ),
     )
     return _validated_turn_reading(
         _checker_payload(gateway.extract_response_content(response)), source_records, check_input
@@ -809,6 +819,7 @@ def _reading_key(check_input: _LLMCheckInput) -> tuple[str, ...]:
         check_input.current_text,
         check_input.history_text,
         check_input.jargon_explanation,
+        str(id(check_input.images)),
     )
 
 
@@ -855,6 +866,7 @@ class TurnReadingCache:
         timeout_seconds: float,
         max_retry: int                = 0,
         retry_interval_seconds: float = 0.5,
+        images: ImageEvidence | None  = None,
     ) -> None:
         """按审查将使用的同一份材料提前发起阅读；材料未变时保留进行中的阅读。"""
         if gateway.ai_disabled(secrets):
@@ -872,6 +884,7 @@ class TurnReadingCache:
                 allow_low_stakes_persona_fiction = False,
                 current_sender                   = current_sender,
                 jargon_explanation               = jargon_explanation,
+                images                           = images,
             ),
             request_policy=_LLMRequestPolicy(
                 max_tokens             = max_tokens,
@@ -993,6 +1006,8 @@ async def _semantic_turn_check(
     prompt += output_allocation_instruction(check_input.current_text)
     prompt += length_check_instruction(check_input.current_text, check_input.reply)
     prompt += definition_source_instruction(source_records)
+    if check_input.images is not None:
+        prompt += "\n本轮附图及其转写可为视觉事实提供依据。独立阅读结果补充文字对话的语境。"
     materials = json.dumps(
         {
             "候选作者"       : check_input.bot_name,
@@ -1016,6 +1031,11 @@ async def _semantic_turn_check(
         prompt          = prompt,
         materials       = materials,
         request_policy=replace(request_policy, timeout_seconds=remaining),
+        **(
+            {"images": check_input.images.adapter(None, fresh=True)}
+            if check_input.images is not None
+            else {}
+        ),
     )
     payload = _checker_payload(gateway.extract_response_content(response)) or {}
     axes    = {
@@ -1205,7 +1225,7 @@ async def check_reply(
     jargon_explanation: str                = "",
     turn_reading: TurnReadingCache | None  = None,
     memory_text: str                       = "",
-    images: Any                            = None,
+    images: ImageEvidence | None           = None,
 ) -> ReplyCheckResult:
     """``images`` 是生成时附上的本轮图片：生成模型看过的，审查也按同样的方式看。"""
 

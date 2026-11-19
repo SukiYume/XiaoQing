@@ -125,6 +125,13 @@ class ImageEvidence:
                         required_modalities=("text", "image"),
                     )
                     self.transcription = result.content[:4000].strip()
+                    log.info(
+                        LogEvent(
+                            "ai.image.transcription.ok",
+                            profile = result.profile,
+                            chars   = len(self.transcription),
+                        )
+                    )
                 except AIError as exc:
                     self.transcription = ""
                     log.warning(LogEvent("ai.image.description_unavailable", error=exc))
@@ -154,9 +161,11 @@ class ImageAdapter:
         self, messages: list[dict[str, Any]], modalities: tuple[str, ...]
     ) -> list[dict[str, Any]]:
         anchor    = self.anchor
-        index     = next((i for i, message in enumerate(messages) if message is anchor), None)
         self.mode = ""
-        if index is None or anchor is None:
+        if anchor is None:
+            return messages
+        index = next((i for i, message in enumerate(messages) if message is anchor), None)
+        if index is None:
             return messages
         content = str(anchor["content"])
         replacement: str | list[dict[str, Any]]

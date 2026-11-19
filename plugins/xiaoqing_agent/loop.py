@@ -255,7 +255,8 @@ async def _wrap_up(
     transcript: list[dict[str, Any]] | None,
     reason: str,
 ) -> Outcome:
-    prompt = (
+    env.task.note_blocker = lambda: reason
+    prompt                = (
         _WRAP_UP_PROMPT
         if reason.startswith("超出")
         else (
@@ -295,10 +296,8 @@ async def run_agent_loop(
     task          = env.task
     empty_replies = 0
     while True:
-        if task.steps >= env.config.max_steps:
-            return await _wrap_up(env, messages, transcript, "超出步数预算")
-        if env.remaining() <= 5:
-            return await _wrap_up(env, messages, transcript, "超出时间预算")
+        if reason := env.next_step_blocker():
+            return await _wrap_up(env, messages, transcript, reason)
         notes = _take_notes(task)
         for file in task.note_images:
             env.image_ref(Path(file))

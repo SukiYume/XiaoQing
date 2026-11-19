@@ -109,7 +109,8 @@ class AgentTask:
     # 任务开始时发起人是不是 Bot 管理员：决定占哪份名额、提示词怎么写；本机工具另由 Core 每次复核。
     admin: bool = False
     # 运行中追加的要求，执行循环在下一步前读走。
-    notes: list[str] = field(default_factory=list)
+    notes       : list[str] = field(default_factory=list)
+    note_blocker: Callable[[], str] | None = field(default=None, repr=False)
     # 运行中补充要求时附带的本机图片：执行循环取走补充时一并登记编号。
     note_images: list[str] = field(default_factory=list)
     # 发起人本人在运行中补充过的要求（逐字）：随任务记录保存，便于排查；

@@ -20,6 +20,8 @@ from .message_parts import (
 from .reply_payload import build_reply_payload_from_parts
 
 if TYPE_CHECKING:
+    from core.ai_images import ImageEvidence
+
     from .llm.reply_checker import TurnReadingCache
 
 
@@ -124,9 +126,8 @@ class ReplyAttemptState:
     turn_reading: TurnReadingCache | None = None
     # 与本轮生成对象共用的耗时记录。
     timings: dict[str, Any] = field(default_factory=dict)
-    # 本轮附图：各次生成和审查共用同一份（只加载、只转写一次）；``images_loaded`` 表示已经取过。
-    images       : Any  = None
-    images_loaded: bool = False
+    # 本轮附图由生成和审查共用。
+    images: ImageEvidence | None = None
     # 当前候选的生成模型实际收到的附图形式："pixels"、"text"（视觉转写）或空（没有附图）。
     images_seen: str = ""
 

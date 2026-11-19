@@ -1790,3 +1790,24 @@ async def test_long_history_pages_drop_whole_records_and_point_before_the_kept_o
     assert kept and kept == list(range(kept[0], 10))
     # 接着翻从留下的最早一条之前开始：被略去的那几条下一页还在。
     assert f"before={kept[0]}@c{kept[0]}" in result.content
+
+    # 只看剩下的一条超长记录时也守住预算，保留可查询的完整图片编号。
+    record           = messages[-1]
+    record["text"]   = "单条很长的内容" * 100
+    record["images"] = [
+        {"path": str(tmp_path / f"{i}.png"), "description": "详细图注" * 30} for i in range(4)
+    ]
+    env.config = AgentConfig(enabled=True, max_tool_output_chars=1000)
+    result = await execute_tool(_tools(env), env, "chat_history", {})
+    assert len(result.content) <= 1000
+    assert len(env.images) == 4 and all(ref in result.content for ref in env.images)
+
+
+@pytest.mark.asyncio
+async def test_admin_unknown_image_refs_point_back_to_history(tmp_path):
+    context = FakeAgentContext(tmp_path / "data", is_admin=True)
+    env = _env(tmp_path, context, admin=True)
+    tools = _tools(env)
+    for ref in ("img1", "img-abcdef", "img-0123456789ab"):
+        result = await execute_tool(tools, env, "read_image", {"image": ref})
+        assert "重新找到" in result.content and "chat_history" in result.content

@@ -828,15 +828,15 @@ async def test_background_results_in_a_group_mention_the_starter(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_a_follow_up_that_arrives_after_the_last_step_is_reported_as_unused(
+async def test_a_follow_up_that_arrives_during_wrap_up_is_rejected_before_ack(
     tmp_path: Path,
 ) -> None:
-    """步数用完后的收尾调用期间又来了补充：没有下一步能用上它，回复里如实说明。"""
+    """收尾期间收到补充时，当场告知发起人下一轮继续。"""
 
     runtime = AgentRuntime(tmp_path)
 
     def wrap_up_with_late_note(_route, _messages, _kwargs):
-        assert runtime.add_note(CHAT, "", "换成红色", ADMIN).startswith("好，已经告诉任务")
+        assert "下一轮" in runtime.add_note(CHAT, "", "换成红色", ADMIN)
         return ai_response("蓝色的好了")
 
     plan = ai_response(
@@ -854,7 +854,7 @@ async def test_a_follow_up_that_arrives_after_the_last_step_is_reported_as_unuse
     await wait_until(lambda: task.runner.done())
 
     [text] = sent_texts(context)
-    assert text.startswith("蓝色的好了") and "“换成红色”送到时任务已经做完" in text
+    assert text == "蓝色的好了" and task.updates == []
     assert task.notes == []
 
 
@@ -1174,3 +1174,107 @@ async def test_images_sent_with_an_update_reach_the_running_task(tmp_path):
     assert any(ref in text for text in seen)
     assert [call[0] for call in context.ai.calls].count("vision") == 1
     assert "绿色" in task.outcome.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_image", [False, True])
+async def test_final_step_rejects_an_update_before_acknowledging_it(tmp_path, with_image):
+    runtime = AgentRuntime(tmp_path)
+    notice  = []
+
+    def last_step(_route, _messages, _kwargs):
+        task = next(iter(runtime.running.values()))
+        notice.append(
+            runtime.add_note(
+                CHAT,
+                task.task_id,
+                "换成红色",
+                ADMIN,
+                image_files=[str(tmp_path / "late.png")] if with_image else [],
+            )
+        )
+        return ai_response("已完成这轮检查")
+
+    context = FakeAgentContext(tmp_path, ai=FakeAI([last_step]))
+    task = runtime.start(
+        context,
+        AgentConfig(enabled=True, max_steps=1),
+        CHAT,
+        request_text = "检查资料",
+        source       = "chat",
+    )
+    await task.runner
+    assert "下一轮" in notice[0] and not task.note_images
+    assert task.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_time_budget_applies_to_both_admitting_and_processing_notes(tmp_path, monkeypatch):
+    from plugins.xiaoqing_agent.tools import ToolEnv
+
+    remaining = 20.0
+    monkeypatch.setattr(ToolEnv, "remaining", lambda _env: remaining)
+    runtime = AgentRuntime(tmp_path)
+
+    def update(_route, _messages, _kwargs):
+        nonlocal remaining
+        assert "已经告诉" in runtime.add_note(CHAT, "", "先核对日期", ADMIN)
+        remaining = 5.0
+        assert "下一轮" in runtime.add_note(CHAT, "", "再核对编号", ADMIN)
+        return ai_response("已有部分结果")
+
+    def wrap_up(_route, messages, kwargs):
+        assert kwargs["tools"] is None
+        assert all("先核对日期" not in message["content"] for message in messages)
+        return ai_response("已有部分结果")
+
+    context = FakeAgentContext(tmp_path, ai=FakeAI([update, wrap_up]))
+    task = runtime.start(context, CONFIG, CHAT, request_text="检查资料", source="chat")
+    await task.runner
+
+    [text] = sent_texts(context)
+    assert "没来得及处理补充的要求“先核对日期”" in text
+    assert "再核对编号" not in text
+    assert task.status == "failed" and task.error == "超出时间预算"
+    assert task.notes == []
+
+
+@pytest.mark.asyncio
+async def test_text_agent_transcribes_quoted_images_when_the_cached_description_is_clipped(
+    tmp_path,
+):
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (3, 3), "blue").save(path)
+    detail  = "活动编号 BLUE742"
+    history = [
+        {
+            "role"      : "user",
+            "name"      : "甲",
+            "text"      : "活动说明。" * 170 + detail,
+            "ts"        : 1.0,
+            "media"     : True,
+            "referenced": True,
+        }
+    ]
+
+    async def generate(_route, messages, kwargs):
+        assert detail not in messages[-1]["content"]
+        adapted = await kwargs["adapt_messages"](messages, ("text",))
+        assert detail in adapted[-1]["content"]
+        return ai_response(detail)
+
+    context = FakeAgentContext(tmp_path, ai=FakeAI([generate, ai_response(detail)]))
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context,
+        CONFIG,
+        CHAT,
+        request_text                = "引用的图写了什么？",
+        source                      = "chat",
+        image_files                 = [str(path)],
+        history                     = history,
+        image_description_available = True,
+    )
+    await task.runner
+    assert [call[0] for call in context.ai.calls] == ["agent", "vision"]
+    assert task.outcome.text == detail

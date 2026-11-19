@@ -66,6 +66,12 @@ class StoredMessage:
         object.__setattr__(self, "extra_message_ids", _message_ids(self.extra_message_ids))
 
 
+def history_order_key(message: StoredMessage) -> tuple[float, tuple[int, int, str]]:
+    """聊天存档在热缓存与重载后共用的消息顺序。"""
+
+    return (message.ts, _local_id_order(message.local_id))
+
+
 def is_conversation_reply(message: StoredMessage) -> bool:
     """识别聊天生成器的发言，旧记录的空来源保持兼容。"""
     return message.role == "assistant" and message.source_plugin in {"", "xiaoqing_chat"}
@@ -277,7 +283,7 @@ class MemoryStore:
             merged.append(message)
         # OneBot 时间只有秒级精度：同秒消息按编号的数值排序（m8 < m10），
         # 没有编号的旧记录保持原有先后（sort 是稳定的）。
-        merged.sort(key=lambda message: (message.ts, _local_id_order(message.local_id)))
+        merged.sort(key=history_order_key)
         return cls._trim_history(merged)
 
     def append(

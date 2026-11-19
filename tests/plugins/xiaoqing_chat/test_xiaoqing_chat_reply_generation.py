@@ -63,6 +63,31 @@ async def test_reply_route_gets_current_image_and_retains_the_text_projection(
 
 
 @pytest.mark.asyncio
+async def test_disabled_reply_checker_does_not_transcribe_image_for_links(
+    mock_context, sample_group_event, tmp_path
+):
+    path = tmp_path / "notice.png"
+    Image.new("RGB", (2, 2), "white").save(path)
+    url = "https://example.com/notice"
+
+    async def reply(call):
+        await call.kwargs["adapt_messages"](call.messages, ("text", "image"))
+        return f"海报上的链接是 {url}"
+
+    model = ScriptedChatModel(reply=reply)
+    scripted_chat_context(mock_context, model, {"reply_check": {"enable_reply_checker": False}})
+    event                             = chat_message_event(sample_group_event, "图上写什么")
+    event["_xc_effective_user_parts"] = ({"kind": "image", "file_path": str(path)},)
+    event["_xc_rendered_media_items"] = [
+        RenderedMedia("notice-hash", "image", "活动海报", (), "[图片：活动海报]", cached_path=path)
+    ]
+    draft = await draft_reply(mock_context, event, text="图上写什么[图片：活动海报]")
+    assert draft is not None and url in draft.text
+    assert not model.calls_of("vision")
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("generator_sees", "checker_sees", "described"),
     [

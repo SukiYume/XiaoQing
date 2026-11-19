@@ -1169,3 +1169,18 @@ async def test_chat_history_images_only_counts_picture_stickers(mock_context):
     assert [item["id"] for item in result["messages"]] == [31, 32]
     assert [len(item["images"]) for item in result["messages"]] == [1, 0]
     assert "狗狗摇头表情" in result["messages"][1]["text"]
+
+
+def test_history_cursor_locates_surviving_record_after_reload_reorders_history(tmp_path):
+    from plugins.xiaoqing_chat.chat_history import _select
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore, StoredMessage
+
+    warm = [
+        StoredMessage("user", "甲", ts, message_id=i, content=f"第 {i} 条")
+        for i, ts in ((1, 1.0), (2, 3.0), (3, 4.0), (4, 2.0))
+    ]
+    first = _select(warm, {"count": 2}, tmp_path)
+    cold  = MemoryStore._merge_history(warm, [])
+    page  = _select(cold, {"count": 3, "before": first["before"]}, tmp_path)
+    assert [item["id"] for item in first["messages"]] == [2, 3]
+    assert [item["id"] for item in page["messages"]] == [1, 4]

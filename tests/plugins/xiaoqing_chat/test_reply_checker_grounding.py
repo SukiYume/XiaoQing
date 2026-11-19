@@ -726,6 +726,50 @@ def _remote_json(payload):
     return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}, "test"
 
 
+@pytest.mark.asyncio
+async def test_semantic_review_uses_the_same_image_as_evidence_review():
+    from core.ai_images import ImageEvidence
+
+    reply       = "17:30 开门"
+    description = "蓝色海报写着 17:30 开门。"
+    modes       = []
+
+    async def answer(call):
+        assert call.kwargs.get("adapt_messages") is not None
+        adapted = await call.kwargs["adapt_messages"](call.messages, ("text",))
+        assert description in adapted[1]["content"]
+        prompt = call.messages[0]["content"]
+        if "premise_checks" in prompt:
+            modes.append("semantic")
+            return json.dumps(
+                {
+                    "context_coherent"    : True,
+                    "speaker_correct"     : True,
+                    "instruction_followed": True,
+                    "scan_complete"       : True,
+                    "premise_checks"      : [],
+                }
+            )
+        if "local_terms" in prompt:
+            modes.append("reading")
+            return json.dumps(_turn_reading())
+        modes.append("evidence")
+        return checker_verdict(visual_claims=[{"claim": reply, "evidence": description}])
+
+    model = ScriptedChatModel(checker=answer, vision=description)
+    images = ImageEvidence(model, ("data:image/png;base64,fixture",), description_available=True)
+    result = await checker.check_reply(
+        reply                 = reply,
+        current_text          = "海报上写了几点？",
+        images                = images,
+        verify_turn_semantics = True,
+        **_options(secrets={"_ai": model}, current_image_attached=True, llm_checker_mode="always"),
+    )
+    assert result.suitable
+    assert sorted(modes) == ["evidence", "reading", "semantic"]
+    assert len(model.calls_of("vision")) == 1
+
+
 def _turn_reading(**changes):
     payload = {
         "meaning"    : "用户选择与角色相反的口味",
