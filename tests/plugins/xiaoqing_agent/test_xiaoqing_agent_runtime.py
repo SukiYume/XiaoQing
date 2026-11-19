@@ -1114,3 +1114,63 @@ async def test_needs_user_task_is_settled_and_not_swept_as_interrupted(tmp_path:
     assert await runtime.store.mark_interrupted() == 0
     assert _records(tmp_path)[-1]["status"] == "needs_user"
     await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_images_sent_with_an_update_reach_the_running_task(tmp_path):
+    """运行中补图：补充要求带上图片编号，执行循环登记后 read_image 能打开。"""
+
+    from PIL import Image
+
+    from plugins.xiaoqing_agent.tools import image_ref
+
+    picture = tmp_path / "late.png"
+    Image.new("RGB", (4, 4), "green").save(picture)
+    runtime         = AgentRuntime(tmp_path)
+    ref             = image_ref(picture)
+    seen: list[str] = []
+
+    def update(_route, _messages, _kwargs):
+        task = next(iter(runtime.running.values()))
+        assert runtime.add_note(CHAT, task.task_id, "", ADMIN, image_files=[str(picture)])
+        return ai_response("收到")
+
+    def look(_route, messages, _kwargs):
+        seen.append(messages[-1]["content"])
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role"      : "assistant",
+                        "content"   : "",
+                        "tool_calls": [
+                            {
+                                "id"      : "c1",
+                                "type"    : "function",
+                                "function": {
+                                    "name"     : "read_image",
+                                    "arguments": json.dumps({"image": ref}),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+    context = FakeAgentContext(
+        tmp_path,
+        ai=FakeAI(
+            [
+                update,
+                look,
+                {"choices": [{"message": {"content": "图上是一片绿色"}}]},
+                ai_response("看到了，是绿色"),
+            ]
+        ),
+    )
+    task = runtime.start(context, CONFIG, CHAT, request_text="帮我看看后面发的图", source="chat")
+    await task.runner
+    assert any(ref in text for text in seen)
+    assert [call[0] for call in context.ai.calls].count("vision") == 1
+    assert "绿色" in task.outcome.text

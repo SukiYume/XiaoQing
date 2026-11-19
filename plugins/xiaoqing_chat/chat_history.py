@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -60,36 +62,48 @@ def image_parts(message: StoredMessage, inbox: Path | None = None) -> list[dict[
 
 
 def _has_image(message: StoredMessage) -> bool:
-    """这条消息发过图片，不论原图缓存还在不在：识图描述照样能看。"""
+    """这条消息发过图片（含图片表情），不论原图缓存还在不在：识图描述照样能看。"""
 
-    return any(part.get("kind") == "image" for part in message.parts)
+    return any(part.get("kind") in _IMAGE_KINDS for part in message.parts)
+
+
+def _fingerprint(message: StoredMessage) -> str:
+    """一条记录本身的指纹：同一秒的几条、没有消息 ID 的本地记录也分得开。"""
+
+    identity = json.dumps(
+        [
+            message.role,
+            message.name,
+            message.user_id,
+            message.message_id,
+            message.local_id,
+            repr(message.ts),
+            render_stored_message(message),
+        ],
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
 
 
 def page_cursor(history: Sequence[StoredMessage], index: int) -> str:
-    """指向第 ``index`` 条记录的翻页位置；没有 QQ 消息 ID 的本地记录也能用。"""
+    """指向第 ``index`` 条记录的翻页位置（``序号@指纹``）：新消息追加在后面，序号不变。"""
 
-    return f"{index}@{history[index].ts!r}"
+    return f"{index}@{_fingerprint(history[index])}"
 
 
 def _cursor_end(history: Sequence[StoredMessage], before: Any) -> int:
     """``before`` 指向的那条记录的位置（只看它之前的）；认不出时抛出 ``ValueError``。
 
-    ``before`` 是上一页给出的位置（``序号@时间``），或某条消息的 QQ 消息 ID。记录前端被裁剪过时
-    序号会变，按时间重新找到同一条。
+    ``before`` 是翻页位置（``序号@指纹``），或某条消息的 QQ 消息 ID。存档前端滚动裁剪后序号
+    会变小：在原序号及之前找同一指纹的记录，取最近的那条。
     """
 
     token = str(before).strip()
-    index_text, sep, stamp = token.partition("@")
+    index_text, sep, mark = token.partition("@")
     if sep:
         index = int(index_text) if index_text.isdigit() else -1
-        try:
-            ts = float(stamp)
-        except ValueError:
-            ts = float("nan")
-        if 0 <= index < len(history) and history[index].ts == ts:
-            return index
-        for position, message in enumerate(history):
-            if message.ts == ts:
+        for position in range(min(index, len(history) - 1), -1, -1):
+            if _fingerprint(history[position]) == mark:
                 return position
         raise ValueError(f"翻页位置 {token} 已失效，请不带 before 重新查。")
     for position, message in enumerate(history):
@@ -141,6 +155,7 @@ def _select(
                 "time"  : message_stamp(message),
                 "sender": sender_label(message),
                 "role"  : message.role,
+                "cursor": page_cursor(history, index),
                 "text"  : message_body(message),
                 "images": [
                     {
@@ -150,7 +165,7 @@ def _select(
                     for part in image_parts(message, inbox)
                 ],
             }
-            for message in (history[index] for index in shown)
+            for index, message in ((index, history[index]) for index in shown)
         ],
     }
 

@@ -1066,3 +1066,106 @@ async def test_chat_history_pages_through_records_without_message_ids(mock_conte
         if not before:
             break
     assert seen == [f"存档 {index}" for index in range(7)]
+
+
+@pytest.mark.asyncio
+async def test_quotes_reach_the_agent_from_the_whole_archive_with_both_images(mock_context):
+    """引用的那条早于最近 100 条也能找到；引用旧图时又发了新图，两张都交给 agent。"""
+
+    agent = SimpleNamespace(handle_turn=AsyncMock(return_value=None))
+    hctx, model = _hctx(mock_context, agent, seed=False)
+    store = get_state().memory_store
+    inbox = figures_inbox_dir(mock_context)
+    inbox.mkdir(parents=True, exist_ok=True)
+    old_image, new_image = inbox / "old.png", inbox / "new.png"
+    old_image.write_bytes(b"fixture")
+    new_image.write_bytes(b"fixture")
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "甲",
+        user_id    = 1,
+        message_id = 12,
+        ts         = 1.0,
+        parts      = ({"kind": "image", "description": "旧版公告", "file_path": str(old_image)},),
+    )
+    for index in range(150):
+        store.append(CHAT_ID, role="user", name="乙", content=f"消息 {index}", ts=2.0 + index)
+    event = {
+        **_event(),
+        "message": [
+            {"type": "reply", "data": {"id": "12"}},
+            {"type": "text", "data": {"text": "小青，对比一下这两张"}},
+        ],
+    }
+    with patch.object(agent_bridge, "_image_files", return_value=[str(new_image)]):
+        await _delegate(_prepared(text="小青，对比一下这两张"), event, mock_context, hctx)
+
+    turn = agent.handle_turn.await_args.args[0]
+    assert turn["image_files"] == [str(old_image), str(new_image)]
+    assert any(item.get("referenced") for item in turn["history"])
+    await settle_chat_background(mock_context, model)
+
+
+def test_history_paging_visits_every_record_once_while_the_archive_rolls(tmp_path):
+    """边翻页边有新消息、存档前端被裁剪、几条同一秒：每条记录恰好出现一次。"""
+
+    from plugins.xiaoqing_chat.chat_history import _select
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    def record(index: int) -> StoredMessage:
+        # 每三条同一秒，没有 QQ 消息 ID。
+        return StoredMessage(role="user", name="乙", ts=float(index // 3), content=f"第 {index} 条")
+
+    history         = [record(index) for index in range(30)]
+    wanted          = {f"第 {index} 条" for index in range(4, 30)}
+    seen: list[str] = []
+    before          = ""
+    newest          = 30
+    for _ in range(20):
+        page = _select(history, {"count": 4, "before": before}, tmp_path)
+        assert "error" not in page
+        seen.extend(item["text"] for item in page["messages"])
+        before = page["before"]
+        # 翻页期间又来了两条新消息，存档前端滚掉两条（第 0–3 条在第一页之后被裁掉）。
+        history = [*history[2:], record(newest), record(newest + 1)] if len(seen) <= 8 else history
+        newest += 2
+        if not before:
+            break
+    assert len(seen) == len(set(seen))
+    assert wanted <= set(seen)
+
+
+@pytest.mark.asyncio
+async def test_chat_history_images_only_counts_picture_stickers(mock_context):
+    """图片表情包也算发过图：原图在时给编号，原图清理后照样能按识图描述找到。"""
+
+    from plugins.xiaoqing_chat.chat_history import read_history
+    from plugins.xiaoqing_chat.store_binding import bound_state
+
+    store = bound_state(mock_context).memory_store
+    inbox = figures_inbox_dir(mock_context)
+    inbox.mkdir(parents=True, exist_ok=True)
+    sticker = inbox / "sticker.png"
+    sticker.write_bytes(b"fixture")
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "甲",
+        message_id = 31,
+        parts      = ({"kind": "emoji", "description": "猫猫点头表情", "file_path": str(sticker)},),
+    )
+    store.append(
+        CHAT_ID,
+        role       = "user",
+        name       = "甲",
+        message_id = 32,
+        parts      = (
+            {"kind": "emoji", "description": "狗狗摇头表情", "file_path": str(inbox / "gone.png")},
+        ),
+    )
+    store.append(CHAT_ID, role="user", name="甲", message_id=33, content="纯文字")
+    result = await read_history({"chat": CHAT_ID, "images_only": True}, mock_context)
+    assert [item["id"] for item in result["messages"]] == [31, 32]
+    assert [len(item["images"]) for item in result["messages"]] == [1, 0]
+    assert "狗狗摇头表情" in result["messages"][1]["text"]

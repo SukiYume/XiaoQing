@@ -293,6 +293,7 @@ async def test_a_member_gets_a_task_limited_to_their_own_commands(tmp_path: Path
         "update_plan",
         "send_message",
         "final_answer",
+        "read_image",
         "xiaoqing_commands",
         "xiaoqing_command",
     }

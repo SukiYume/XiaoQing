@@ -302,7 +302,15 @@ async def _act(
             )
         )
     if decision.action == "update":
-        return _handled(segments(runtime.add_note(chat, decision.task_id, text, actor, sender)))
+        note = runtime.add_note(
+            chat,
+            decision.task_id,
+            text,
+            actor,
+            sender,
+            image_files=_string_list(turn.get("image_files"), _MAX_IMAGES),
+        )
+        return _handled(segments(note))
 
     message, task = await _start_and_wait(
         context,

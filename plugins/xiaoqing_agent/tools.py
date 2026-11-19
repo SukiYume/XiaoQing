@@ -135,15 +135,17 @@ class ToolEnv:
         办事会话会保留前几轮工具回报里的编号；按顺序编号的话，下一轮同一个编号可能指向别的图。
         """
 
-        resolved = path.resolve()
-        digest   = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()
-        for size in (6, 12, len(digest)):
-            ref   = f"img-{digest[:size]}"
-            known = self.images.get(ref)
-            if known is None or known == resolved:
-                break
+        resolved         = path.resolve()
+        ref              = image_ref(resolved)
         self.images[ref] = resolved
         return ref
+
+
+def image_ref(path: Path) -> str:
+    """图片编号只由文件路径决定（48 位摘要），不依赖登记顺序：哪个任务算出来都一样。"""
+
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+    return f"img-{digest[:12]}"
 
 
 class ToolError(Exception):
@@ -553,22 +555,35 @@ async def _chat_history(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     messages = [item for item in result.get("messages") or () if isinstance(item, dict)]
     if not messages:
         return ToolResult(f"没有符合条件的聊天记录（本会话共存 {result.get('total', 0)} 条）。")
-    lines = [
-        f"本会话聊天记录（旧→新，显示 {len(messages)} 条，符合条件 {result.get('matched')} 条，"
-        f"共存 {result.get('total')} 条）："
-    ]
-    for item in messages:
+    # 一页放不下时从最早的几条起整条略去，翻页位置指向留下的最早一条：不截断中间，也不跳过记录。
+    budget            = env.config.max_tool_output_chars - 300
+    blocks: list[str] = []
+    oldest_kept       = ""
+    before            = str(result.get("before") or "") if result.get("earlier") else ""
+    for item in reversed(messages):
         ident = f" #{item['id']}" if item.get("id") is not None else ""
-        lines.append(
+        block = [
             f"[{item.get('time')}] {item.get('sender')}{ident}: {item.get('text') or '（空）'}"
-        )
+        ]
         for image in item.get("images") or ():
-            ref  = env.image_ref(Path(str(image.get("path"))))
+            ref  = image_ref(Path(str(image.get("path"))))
             note = str(image.get("description") or "")[:_HISTORY_DESCRIPTION_CHARS]
-            lines.append(f"  图片 {ref}" + (f"：{note}" if note else ""))
-    if result.get("earlier") and result.get("before"):
-        lines.append(f"更早还有符合条件的记录，before={result['before']} 接着往前翻。")
-    return ToolResult(truncate("\n".join(lines), env.config.max_tool_output_chars))
+            block.append(f"  图片 {ref}" + (f"：{note}" if note else ""))
+        text = "\n".join(block)
+        if blocks and len(text) + sum(len(part) + 1 for part in blocks) > budget:
+            # before 不含它指向的那条：指向留下的最早一条，略去的几条下一页照样出现。
+            before = oldest_kept
+            break
+        blocks.insert(0, text)
+        oldest_kept = str(item.get("cursor") or "")
+        for image in item.get("images") or ():
+            env.image_ref(Path(str(image.get("path"))))
+    header = (
+        f"本会话聊天记录（旧→新，显示 {len(blocks)} 条，符合条件 {result.get('matched')} 条，"
+        f"共存 {result.get('total')} 条）："
+    )
+    footer = f"更早还有符合条件的记录，before={before} 接着往前翻。" if before else ""
+    return ToolResult("\n".join(part for part in (header, *blocks, footer) if part))
 
 
 # ──────────────────── XiaoQing 命令 ────────────────────
@@ -1233,9 +1248,8 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
                 _chat_history,
             )
         )
-    if getattr(capabilities, "ai", None) is not None and (
-        env.images or tools_has_local or getattr(capabilities, "chat_history", None) is not None
-    ):
+    # 图片可能在任务中途才出现（chat_history 翻到、补充要求附带），有识图能力就提供。
+    if getattr(capabilities, "ai", None) is not None:
         tools.append(
             Tool(
                 "read_image",

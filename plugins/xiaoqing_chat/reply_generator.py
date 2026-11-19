@@ -349,12 +349,36 @@ def _link_sources(plan: ReplyGenerationPlan, trimmed_history: Any, memory_block:
     ]
 
 
+async def _seen_image_text(
+    plan: ReplyGenerationPlan,
+    attempt: ReplyAttemptState,
+    candidate: str,
+    trimmed_history: Any,
+    memory_block: str,
+) -> str:
+    """生成模型看过附图、回复里又有文字材料里找不到的网址时，取一份附图转写来核对。
+
+    只有这种情况才多一次识图：大多数回复不带网址，或网址本来就在聊天里。
+    """
+
+    if attempt.images is None or not attempt.images_seen:
+        return ""
+    sources = _link_sources(plan, trimmed_history, memory_block)
+    check = ungrounded_link_check(reply=candidate, sources=sources)
+    if check is None or check.suitable:
+        return ""
+    return str(await attempt.images.text(fresh=True))
+
+
 def _precheck_candidate(
     plan: ReplyGenerationPlan,
     raw: str,
     trimmed_history: Any,
     memory_block: str = "",
+    image_text: str   = "",
 ) -> RejectedCandidate | None:
+    """``image_text`` 是生成模型看过的附图的视觉转写：从图上读出的网址和邮箱以它为依据。"""
+
     if not raw or not plan.runtime.cfg.reply_check.enable_reply_checker:
         return None
     precheck_text = text_without_outbound_marker(raw)
@@ -367,7 +391,8 @@ def _precheck_candidate(
     )
     if result is None or result.suitable:
         result = ungrounded_link_check(
-            reply=raw_draft.text, sources=_link_sources(plan, trimmed_history, memory_block)
+            reply   = raw_draft.text,
+            sources = [*_link_sources(plan, trimmed_history, memory_block), image_text],
         )
     if result is None or result.suitable:
         result = narrated_motive_check(reply=raw_draft.text, current_text=plan.text)
@@ -774,7 +799,15 @@ async def _generate_checked_draft(
         if candidate is None:
             return None
 
-        rejected   = _precheck_candidate(plan, candidate, trimmed_history, memory_block)
+        rejected = _precheck_candidate(
+            plan,
+            candidate,
+            trimmed_history,
+            memory_block,
+            image_text=await _seen_image_text(
+                plan, attempt, candidate, trimmed_history, memory_block
+            ),
+        )
         regen_step = "reply.pre_heuristic.regen"
         if rejected is None:
             draft = await _resolve_candidate_draft(plan, candidate, trimmed_history)

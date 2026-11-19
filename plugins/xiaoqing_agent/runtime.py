@@ -44,7 +44,7 @@ from .tasks import (
     new_task_id,
     record_initiator,
 )
-from .tools import Tool, ToolEnv, build_tools, catalog_lines
+from .tools import Tool, ToolEnv, build_tools, catalog_lines, image_ref
 
 log = logging.getLogger(__name__)
 
@@ -666,8 +666,13 @@ class AgentRuntime:
         note: str,
         actor: Actor,
         sender: str = "",
+        *,
+        image_files: Sequence[str] = (),
     ) -> str:
-        """把追加要求交给运行中的任务，下一步开始前生效；只接受发起人和 Bot 管理员的补充。"""
+        """把追加要求交给运行中的任务，下一步开始前生效；只接受发起人和 Bot 管理员的补充。
+
+        补充时附带的图片随这条要求交给任务：编号写进要求里，``read_image`` 可以打开。
+        """
 
         targets = self.select(chat, task_id, actor)
         if isinstance(targets, str):
@@ -678,10 +683,14 @@ class AgentRuntime:
             return "追加要求只能交给一个任务，请指明任务ID。"
         task = targets[0]
         text = note.strip()[:_MAX_NOTE_CHARS]
-        if not text:
+        if not text and not image_files:
             return "要补充什么？"
         if len(task.notes) >= _MAX_PENDING_NOTES:
             return f"任务 {task.task_id} 还有好几条补充没处理，等它跟上再说。"
+        if image_files:
+            task.note_images.extend(image_files)
+            refs = "、".join(image_ref(Path(file)) for file in image_files)
+            text = f"{text}（附图 {refs}，用 read_image 查看）".strip()
         task.notes.append(f"{sender}：{text}" if sender and not chat.is_private else text)
         if actor.user_id == task.chat.user_id:
             task.updates.append(text)

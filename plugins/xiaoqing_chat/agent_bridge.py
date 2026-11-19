@@ -107,9 +107,12 @@ async def _recent_history(
 
     current   = event.get("message_id")
     reply_ids = reply_message_ids(event)
-    history   = await hctx.state.memory_store.get_recent_async(
-        hctx.chat_id,
-        max_items=_HISTORY_LOOKBACK_ITEMS if reply_ids else _HISTORY_ITEMS + 1,
+    store     = hctx.state.memory_store
+    # 引用的那条可能很早：整个本地存档里找；没有引用时只取最近几条。
+    history = await (
+        store.get_async(hctx.chat_id)
+        if reply_ids
+        else store.get_recent_async(hctx.chat_id, max_items=_HISTORY_ITEMS + 1)
     )
     history = [
         item
@@ -322,14 +325,15 @@ async def _decide(
         image_files = _image_files(event)
         parts       = normalize_message_parts(event.get("_xc_effective_user_parts"))
         image_parts = [part for part in parts if part.get("file_path") in image_files]
-        if (
-            not image_files
-            and referenced is not None
-            and media_config(hctx.runtime).enable_inbound_media_context
-        ):
-            # 引用的那条带图时，图片跟着这一轮交给 agent，和直接发图一样。
-            image_parts = stored_image_parts(referenced, figures_inbox_dir(context).resolve())
-            image_files = [str(part["file_path"]) for part in image_parts]
+        if referenced is not None and media_config(hctx.runtime).enable_inbound_media_context:
+            # 引用的那条带图时，图片跟着这一轮交给 agent，和直接发图一样；这条也带图时两边都给（拿来对照）。
+            quoted_parts = [
+                part
+                for part in stored_image_parts(referenced, figures_inbox_dir(context).resolve())
+                if str(part["file_path"]) not in image_files
+            ]
+            image_parts = [*quoted_parts, *image_parts]
+            image_files = [*(str(part["file_path"]) for part in quoted_parts), *image_files]
         turn = {
             # 他一件事分几条说时，前几条和这一条连起来才是完整的请求。
             "text"                       : text,

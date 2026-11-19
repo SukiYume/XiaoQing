@@ -83,20 +83,30 @@ def _load_images(paths: Sequence[Path]) -> tuple[str, ...]:
 class ImageEvidence:
     """One turn's images, shared by every request that needs them (generation and its review).
 
-    The images are loaded once and a ``vision`` transcription, when a text-only target needs one,
-    is made once.  ``transcription`` is that text, so a reviewer can check claims against exactly
-    what a text-only generator was shown.
+    The images are loaded once and a ``vision`` transcription is made at most once.
+    ``transcription`` is that text (``None`` until made), so a reviewer can check claims against
+    exactly what a text-only model was shown.
     """
 
     def __init__(
         self, ai: AICapability, images: tuple[str, ...], *, description_available: bool
     ) -> None:
-        self._ai           = ai
-        self.parts         = [{"type": "image_url", "image_url": {"url": url}} for url in images]
-        self.transcription = "" if description_available else None
-        self._lock         = asyncio.Lock()
+        self._ai = ai
+        self.parts = [{"type": "image_url", "image_url": {"url": url}} for url in images]
+        self.description_available = description_available
+        self.transcription: str | None = None
+        self._lock = asyncio.Lock()
 
-    async def text(self) -> str:
+    async def text(self, *, fresh: bool = False) -> str:
+        """The transcription, made on first use.
+
+        Without ``fresh``, returns ``""`` when the caller's text already describes the images: a
+        text-only generator then sees that description and nothing more.  A reviewer of a reply
+        written from the pixels passes ``fresh``: the old description may miss what the pixels show.
+        """
+
+        if not fresh and self.description_available:
+            return ""
         async with self._lock:
             if self.transcription is None:
                 try:
@@ -120,8 +130,8 @@ class ImageEvidence:
                     log.warning(LogEvent("ai.image.description_unavailable", error=exc))
             return self.transcription
 
-    def adapter(self, anchor: dict[str, Any] | None) -> ImageAdapter:
-        return ImageAdapter(self, anchor)
+    def adapter(self, anchor: dict[str, Any] | None, *, fresh: bool = False) -> ImageAdapter:
+        return ImageAdapter(self, anchor, fresh=fresh)
 
 
 class ImageAdapter:
@@ -132,9 +142,12 @@ class ImageAdapter:
     after a successful call it describes what the answering model actually saw.
     """
 
-    def __init__(self, evidence: ImageEvidence, anchor: dict[str, Any] | None) -> None:
+    def __init__(
+        self, evidence: ImageEvidence, anchor: dict[str, Any] | None, *, fresh: bool = False
+    ) -> None:
         self.evidence = evidence
         self.anchor   = anchor
+        self.fresh    = fresh
         self.mode     = ""
 
     async def __call__(
@@ -157,7 +170,7 @@ class ImageAdapter:
                 *self.evidence.parts,
             ]
         else:
-            text = await self.evidence.text()
+            text = await self.evidence.text(fresh=self.fresh)
             if not text:
                 return messages
             self.mode   = "text"

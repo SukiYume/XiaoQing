@@ -63,11 +63,21 @@ async def test_reply_route_gets_current_image_and_retains_the_text_projection(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("checker_sees", ["pixels", "transcription"])
+@pytest.mark.parametrize(
+    ("generator_sees", "checker_sees", "described"),
+    [
+        # 多模态生成 + 多模态审查；入站摘要只有笼统描述。
+        ("pixels", "pixels", True),
+        # 多模态生成 + 审查降级到纯文本：旧摘要漏了细节，审查要一份新转写。
+        ("pixels", "transcription", True),
+        # 生成和审查都降级到纯文本：没有可用摘要，两边用同一份转写。
+        ("transcription", "transcription", False),
+    ],
+)
 async def test_review_checks_image_details_with_the_images_the_generator_saw(
-    mock_context, sample_group_event, tmp_path, checker_sees
+    mock_context, sample_group_event, tmp_path, generator_sees, checker_sees, described
 ):
-    """生成模型从图里读到入站摘要没有的细节；审查拿到同一份图（或同一份转写），不再硬拒。"""
+    """生成模型从图里读到入站摘要没有的细节和链接；审查与预检拿到同一份图或转写，回复照常发出。"""
 
     from tests.helpers.reply_checker_test_support import checker_verdict
 
@@ -75,11 +85,13 @@ async def test_review_checks_image_details_with_the_images_the_generator_saw(
     Image.new("RGB", (2, 2), "white").save(path)
     summary                = "[图片：一张漏洞公告]"
     detail                 = "Fixed in: 1.27.4"
+    link                   = "https://nginx.example/advisory-31337"
     checker_messages: list = []
 
     async def reply(call):
-        await call.kwargs["adapt_messages"](call.messages, ("text", "image"))
-        return "截图上写着 1.27.4 修好了"
+        modalities = ("text", "image") if generator_sees == "pixels" else ("text",)
+        await call.kwargs["adapt_messages"](call.messages, modalities)
+        return f"截图上写着 1.27.4 修好了，公告在 {link}"
 
     async def checker(call):
         adapter = call.kwargs.get("adapt_messages")
@@ -93,25 +105,33 @@ async def test_review_checks_image_details_with_the_images_the_generator_saw(
             image_evidence_respected = True,
         )
 
-    model = ScriptedChatModel(reply=reply, checker=checker, vision=f"公告写着 {detail}")
+    model = ScriptedChatModel(
+        reply=reply, checker=checker, vision=f"公告写着 {detail}，详情见 {link}"
+    )
     scripted_chat_context(mock_context, model, _ALWAYS_CHECK)
     event                             = chat_message_event(sample_group_event, "这个修了吗")
     event["_xc_effective_user_parts"] = (
         {"kind": "text", "text": "这个修了吗"},
-        # 入站摘要只有笼统描述：细节只在图里。
-        {"kind": "image", "description": "", "file_path": str(path)},
+        # 入站摘要（有的话）只有笼统描述：细节和链接只在图里。
+        {
+            "kind"       : "image",
+            "description": "一张漏洞公告" if described else "",
+            "file_path"  : str(path),
+        },
     )
     event["_xc_rendered_media_items"] = [
         RenderedMedia("notice-hash", "image", "漏洞公告", (), summary, cached_path=path)
     ]
     draft = await draft_reply(mock_context, event, text=f"这个修了吗{summary}")
 
-    assert draft is not None and "1.27.4" in draft.text
+    assert draft is not None and "1.27.4" in draft.text and link in draft.text
     [materials] = [messages[1]["content"] for messages in checker_messages]
     if checker_sees == "pixels":
         assert materials[1]["image_url"]["url"].startswith("data:image/png;base64,")
     else:
         assert detail in materials
+    # 同一张图最多转写一次：生成、预检和审查共用。
+    assert len(model.calls_of("vision")) <= 1
     await settle_chat_background(mock_context, model)
 
 

@@ -383,8 +383,13 @@ def _visual_gate(
     history_text: str,
     grounding_text: str = "",
     images_seen: bool   = False,
+    visual_text: str    = "",
 ) -> tuple[ReplyCheckResult | None, ReplyCheckResult | None, int]:
-    """返回 (立即生效的拒绝, 延后生效的协议错误, 视觉陈述条数)。"""
+    """返回 (立即生效的拒绝, 延后生效的协议错误, 视觉陈述条数)。
+
+    ``visual_text`` 是审查看到的视觉转写，只给视觉陈述作依据。审查模型看了原图时，引自图上、
+    本地没有文字可对的证据只在它明确判定 ``image_evidence_respected`` 为 true 时才算数。
+    """
 
     image_axis     = strict_json_bool(obj.get("image_evidence_respected")) if obj else None
     protocol_error = None
@@ -400,8 +405,8 @@ def _visual_gate(
         reply          = reply,
         current_text   = current_text,
         history_text   = history_text,
-        grounding_text = grounding_text,
-        images_seen    = images_seen,
+        grounding_text = "\n".join(part for part in (grounding_text, visual_text) if part),
+        images_seen    = images_seen and image_axis is True,
     )
     if visual_error is not None and visual_error.is_hard:
         return visual_error, None, 0
@@ -470,6 +475,7 @@ def _interpret_checker_response(
     current_sender: str                   = "",
     memory_evidence: str                  = "",
     images_seen_by_checker: bool          = False,
+    visual_text: str                      = "",
 ) -> ReplyCheckResult:
     """把远端 JSON 协议转换为本地结论，且在缺字段时保持 fail-safe 语义。"""
 
@@ -484,6 +490,7 @@ def _interpret_checker_response(
             history_text   = history_text,
             grounding_text = grounding_text,
             images_seen    = images_seen_by_checker,
+            visual_text    = visual_text,
         )
         if rejection is not None and rejection.unsupported_fragments:
             # 只有几处读图说法没依据时，不看读图、只看其余部分能不能全部过审；能过才允许只删这几处。
@@ -651,7 +658,10 @@ async def _llm_check(
         },
         ensure_ascii=False,
     )
-    adapter = check_input.images.adapter(None) if check_input.images is not None else None
+    # 生成模型看过图才会交来图片；审查是纯文本模型时要一份新转写，旧摘要可能漏了图里的细节。
+    adapter = (
+        check_input.images.adapter(None, fresh=True) if check_input.images is not None else None
+    )
     resp, _path = await _request_checker_completion(
         checker_secrets = _checker_secrets(secrets),
         prompt          = prompt,
@@ -661,21 +671,22 @@ async def _llm_check(
     )
     images_seen = adapter.mode if adapter is not None else ""
     content     = gateway.extract_response_content(resp)
-    # 审查拿到的是视觉转写时，转写和受控资料一样可以作为视觉引用的原文依据。
+    # 审查拿到的是视觉转写时，转写只作视觉陈述的原文依据，不算人物资料。
     transcription = check_input.images.transcription if images_seen == "text" else ""
     return _interpret_checker_response(
-        content=content,
-        reply=check_input.reply,
-        current_text=_current,
-        history_text=_hist,
-        grounding_text="\n".join(part for part in (_grounding, transcription or "") if part),
-        images_seen_by_checker=images_seen == "pixels",
-        bot_name=check_input.bot_name,
-        allow_low_stakes_persona_fiction=check_input.allow_low_stakes_persona_fiction,
-        image_evidence_required=check_input.current_image_attached is not None,
-        source_records=source_records,
-        current_sender=check_input.current_sender,
-        memory_evidence="\n".join(remembered.values()),
+        content                          = content,
+        reply                            = check_input.reply,
+        current_text                     = _current,
+        history_text                     = _hist,
+        grounding_text                   = _grounding,
+        visual_text                      = transcription or "",
+        images_seen_by_checker           = images_seen == "pixels",
+        bot_name                         = check_input.bot_name,
+        allow_low_stakes_persona_fiction = check_input.allow_low_stakes_persona_fiction,
+        image_evidence_required          = check_input.current_image_attached is not None,
+        source_records                   = source_records,
+        current_sender                   = check_input.current_sender,
+        memory_evidence                  = "\n".join(remembered.values()),
     )
 
 

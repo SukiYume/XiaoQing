@@ -1556,3 +1556,65 @@ def test_remembered_lines_are_citable_evidence_for_context_claims():
         **{**kwargs, "source_records": {"h1": records["h1"], "current": "猜猜"}},
     )
     assert missing.suitable is False and missing.failure_code == "context_grounding"
+
+
+def _interpret_with_images(verdict: str, *, reply: str, **kwargs):
+    return checker._interpret_checker_response(
+        content                          = verdict,
+        reply                            = reply,
+        current_text                     = "看看这个[图片：一张公告]",
+        history_text                     = "",
+        grounding_text                   = "你叫小青",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = False,
+        image_evidence_required          = True,
+        source_records                   = {"current": "看看这个[图片：一张公告]"},
+        **kwargs,
+    )
+
+
+def test_image_transcription_backs_visual_claims_but_never_persona_claims():
+    """视觉转写只给视觉陈述作依据：拿它当人物资料引用不算数。"""
+
+    transcription = "公告：小青是三年级学生，周日 09:00 暂停开放"
+    visual        = _interpret_with_images(
+        checker_verdict(
+            visual_claims=[{"claim": "周日九点暂停", "evidence": "周日 09:00 暂停开放"}]
+        ),
+        reply       = "周日九点暂停哦",
+        visual_text = transcription,
+    )
+    assert visual.suitable
+    persona = _interpret_with_images(
+        checker_verdict(persona_claims=[{"claim": "我三年级了", "evidence": "小青是三年级学生"}]),
+        reply       = "我三年级了",
+        visual_text = transcription,
+    )
+    assert not persona.suitable
+
+
+@pytest.mark.parametrize(
+    ("respected", "suitable"),
+    [(True, True), (None, False)],
+)
+def test_pixel_only_quotes_need_an_explicit_image_verdict(respected, suitable):
+    """审查看了原图时，本地没有文字可对的引用只在它明确判定 image_evidence_respected 时才通过。"""
+
+    fields = {
+        "visual_claims"           : [{"claim": "1.27.4 修好了", "evidence": "Fixed in: 1.27.4"}],
+        "image_evidence_respected": respected,
+    }
+    verdict = json.loads(checker_verdict(**fields))
+    if respected is None:
+        verdict.pop("image_evidence_respected")
+    result = _interpret_with_images(
+        json.dumps(verdict, ensure_ascii=False),
+        reply                  = "截图上写着 1.27.4 修好了",
+        images_seen_by_checker = True,
+    )
+    assert result.suitable is suitable
+    # 没看原图时，同样的引用对不上任何文字材料。
+    assert not _interpret_with_images(
+        checker_verdict(**{**fields, "image_evidence_respected": True}),
+        reply="截图上写着 1.27.4 修好了",
+    ).suitable

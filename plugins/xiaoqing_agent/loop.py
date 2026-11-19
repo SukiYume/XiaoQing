@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from core.ai import AIError
@@ -299,6 +300,9 @@ async def run_agent_loop(
         if env.remaining() <= 5:
             return await _wrap_up(env, messages, transcript, "超出时间预算")
         notes = _take_notes(task)
+        for file in task.note_images:
+            env.image_ref(Path(file))
+        task.note_images.clear()
         if notes:
             _append(messages, transcript, {"role": "user", "content": notes})
             env.user_updates.append(notes)

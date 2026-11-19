@@ -837,7 +837,9 @@ async def test_read_image_uses_vision_and_rejects_invalid_input(tmp_path):
     member = _env(
         tmp_path / "member", FakeAgentContext(tmp_path / "member-data", is_admin=False), admin=False
     )
-    assert "read_image" not in _tools(member)
+    # 群友也有 read_image（图片可能任务中途才出现），但只能按编号打开，给本机路径不行。
+    result = await execute_tool(_tools(member), member, "read_image", {"image": str(path)})
+    assert result.content.startswith("错误") and len(ai.calls) == 1
 
 
 class _FakeChatHistory:
@@ -1453,6 +1455,7 @@ async def test_members_get_command_tools_only_and_send_only_what_commands_return
         "update_plan",
         "send_message",
         "final_answer",
+        "read_image",
         "xiaoqing_commands",
         "xiaoqing_command",
     }
@@ -1755,3 +1758,35 @@ def test_catalog_lines_describe_each_parent_once(tmp_path):
     assert "/pendo event edit <id> <内容>" in text and "/pendo event delete <id>" in text
     later = [line for line in lines if line.startswith("/pendo event add")]
     assert later and "上级用途" not in later[0]
+
+
+@pytest.mark.asyncio
+async def test_long_history_pages_drop_whole_records_and_point_before_the_kept_ones(tmp_path):
+    """一页超出输出上限时整条略去最早的几条，翻页位置指向留下的最早一条：不截断中间，不跳过记录。"""
+
+    messages = [
+        {
+            "id"    : None,
+            "time"  : "11-18 18:00",
+            "sender": "乙",
+            "role"  : "user",
+            "text"  : f"第 {index} 条 " + "很长的内容" * 60,
+            "images": [],
+            "cursor": f"{index}@c{index}",
+        }
+        for index in range(10)
+    ]
+    history = _FakeChatHistory(
+        {"total": 10, "matched": 10, "earlier": False, "before": "", "messages": messages}
+    )
+    context = FakeAgentContext(tmp_path / "data", is_admin=False, chat_history=history)
+    env = _env(
+        tmp_path, context, config=AgentConfig(enabled=True, max_tool_output_chars=2000), admin=False
+    )
+    result = await execute_tool(_tools(env), env, "chat_history", {})
+
+    assert "省略" not in result.content and len(result.content) <= 2000
+    kept = [index for index in range(10) if f"第 {index} 条" in result.content]
+    assert kept and kept == list(range(kept[0], 10))
+    # 接着翻从留下的最早一条之前开始：被略去的那几条下一页还在。
+    assert f"before={kept[0]}@c{kept[0]}" in result.content
