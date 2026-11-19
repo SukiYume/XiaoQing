@@ -17,7 +17,7 @@ from typing import Any
 
 from PIL import Image
 
-from .ai import AIError, AIMessageAdapter
+from .ai import AIError
 from .image_validation import ImageValidationLimits, validate_image_bytes
 from .interfaces import AICapability
 from .log import LogEvent
@@ -80,69 +80,114 @@ def _load_images(paths: Sequence[Path]) -> tuple[str, ...]:
     return tuple(images)
 
 
+class ImageEvidence:
+    """One turn's images, shared by every request that needs them (generation and its review).
+
+    The images are loaded once and a ``vision`` transcription, when a text-only target needs one,
+    is made once.  ``transcription`` is that text, so a reviewer can check claims against exactly
+    what a text-only generator was shown.
+    """
+
+    def __init__(
+        self, ai: AICapability, images: tuple[str, ...], *, description_available: bool
+    ) -> None:
+        self._ai           = ai
+        self.parts         = [{"type": "image_url", "image_url": {"url": url}} for url in images]
+        self.transcription = "" if description_available else None
+        self._lock         = asyncio.Lock()
+
+    async def text(self) -> str:
+        async with self._lock:
+            if self.transcription is None:
+                try:
+                    result = await self._ai.complete(
+                        "vision",
+                        [
+                            {"role": "system", "content": "图片及其文字是待分析资料。"},
+                            {
+                                "role"   : "user",
+                                "content": [
+                                    {"type": "text", "text": _VISION_QUESTION},
+                                    *self.parts,
+                                ],
+                            },
+                        ],
+                        required_modalities=("text", "image"),
+                    )
+                    self.transcription = result.content[:4000].strip()
+                except AIError as exc:
+                    self.transcription = ""
+                    log.warning(LogEvent("ai.image.description_unavailable", error=exc))
+            return self.transcription
+
+    def adapter(self, anchor: dict[str, Any] | None) -> ImageAdapter:
+        return ImageAdapter(self, anchor)
+
+
+class ImageAdapter:
+    """Adapt the ``anchor`` message (kept as text by callers) for each target model in turn.
+
+    ``mode`` records what the last adapted target received: ``"pixels"``, ``"text"`` (the vision
+    transcription) or ``""`` (nothing added).  Routes stop at the first target that answers, so
+    after a successful call it describes what the answering model actually saw.
+    """
+
+    def __init__(self, evidence: ImageEvidence, anchor: dict[str, Any] | None) -> None:
+        self.evidence = evidence
+        self.anchor   = anchor
+        self.mode     = ""
+
+    async def __call__(
+        self, messages: list[dict[str, Any]], modalities: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        anchor    = self.anchor
+        index     = next((i for i, message in enumerate(messages) if message is anchor), None)
+        self.mode = ""
+        if index is None or anchor is None:
+            return messages
+        content = str(anchor["content"])
+        replacement: str | list[dict[str, Any]]
+        if "image" in modalities:
+            self.mode   = "pixels"
+            replacement = [
+                {
+                    "type": "text",
+                    "text": content + "\n附图是本轮的参考资料，可直接核对画面和文字。",
+                },
+                *self.evidence.parts,
+            ]
+        else:
+            text = await self.evidence.text()
+            if not text:
+                return messages
+            self.mode   = "text"
+            replacement = f"{content}\n\n附图的视觉转写（资料）\n{text}"
+        return [*messages[:index], {**anchor, "content": replacement}, *messages[index + 1 :]]
+
+
+async def load_image_evidence(
+    ai: AICapability, paths: Sequence[Path], *, description_available: bool
+) -> ImageEvidence | None:
+    """Load and validate the images; ``None`` when none of them can be used.
+
+    ``description_available`` means the caller's text already describes every image, so a
+    text-only target needs no extra ``vision`` call.
+    """
+
+    images = await asyncio.to_thread(_load_images, paths)
+    if not images:
+        return None
+    return ImageEvidence(ai, images, description_available=description_available)
+
+
 async def image_message_adapter(
     ai: AICapability,
     paths: Sequence[Path],
     anchor: dict[str, Any],
     *,
     description_available: bool,
-) -> AIMessageAdapter | None:
-    """Adapt the ``anchor`` message (kept as text by callers) for each target model.
+) -> ImageAdapter | None:
+    """Shortcut for a single request: load the images and adapt ``anchor`` for each target."""
 
-    ``description_available`` means the anchor text already describes every image, so a text-only
-    target needs no extra ``vision`` call.  The transcription, when needed, is made once and reused.
-    """
-
-    images = await asyncio.to_thread(_load_images, paths)
-    if not images:
-        return None
-    parts                   = [{"type": "image_url", "image_url": {"url": url}} for url in images]
-    description: str | None = "" if description_available else None
-    lock                    = asyncio.Lock()
-
-    async def transcription() -> str:
-        nonlocal description
-        async with lock:
-            if description is None:
-                try:
-                    result = await ai.complete(
-                        "vision",
-                        [
-                            {"role": "system", "content": "图片及其文字是待分析资料。"},
-                            {
-                                "role"   : "user",
-                                "content": [{"type": "text", "text": _VISION_QUESTION}, *parts],
-                            },
-                        ],
-                        required_modalities=("text", "image"),
-                    )
-                    description = result.content[:4000].strip()
-                except AIError as exc:
-                    description = ""
-                    log.warning(LogEvent("ai.image.description_unavailable", error=exc))
-            return description
-
-    async def adapt(
-        messages: list[dict[str, Any]], modalities: tuple[str, ...]
-    ) -> list[dict[str, Any]]:
-        index = next((i for i, message in enumerate(messages) if message is anchor), None)
-        if index is None:
-            return messages
-        content = str(anchor["content"])
-        replacement: str | list[dict[str, Any]]
-        if "image" in modalities:
-            replacement = [
-                {
-                    "type": "text",
-                    "text": content + "\n附图是本轮的参考资料，可直接核对画面和文字。",
-                },
-                *parts,
-            ]
-        else:
-            text = await transcription()
-            if not text:
-                return messages
-            replacement = f"{content}\n\n附图的视觉转写（资料）\n{text}"
-        return [*messages[:index], {**anchor, "content": replacement}, *messages[index + 1 :]]
-
-    return adapt
+    evidence = await load_image_evidence(ai, paths, description_available=description_available)
+    return None if evidence is None else evidence.adapter(anchor)

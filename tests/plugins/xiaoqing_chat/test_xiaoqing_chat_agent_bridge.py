@@ -1027,12 +1027,42 @@ async def test_chat_history_service_filters_the_scoped_chat(mock_context):
     assert found["id"] == 11 and found["sender"] == "Mika(1)" and "漏洞公告截图" in found["text"]
     assert found["images"] == [{"path": str(shot), "description": "漏洞公告截图"}]
 
+    # 原图缓存在收图目录外（或已清理）的那条照样算发过图，只是没有可打开的文件。
     images = await read_history({"chat": CHAT_ID, "images_only": True}, mock_context)
-    assert [item["id"] for item in images["messages"]] == [11]
+    assert [item["id"] for item in images["messages"]] == [11, 12]
+    assert images["messages"][1]["images"] == [] and "别处的图" in images["messages"][1]["text"]
     page = await read_history({"chat": CHAT_ID, "sender": "乙", "count": 2}, mock_context)
     assert [item["id"] for item in page["messages"]] == [21, 22] and page["earlier"] is True
-    older = await read_history({"chat": CHAT_ID, "sender": "2", "before": 21}, mock_context)
-    assert [item["id"] for item in older["messages"]] == [12, 20]
-    assert older["messages"][0]["images"] == []
+    older = await read_history(
+        {"chat": CHAT_ID, "sender": "2", "before": page["before"]}, mock_context
+    )
+    assert [item["id"] for item in older["messages"]] == [12, 20] and older["before"] == ""
+    by_id = await read_history({"chat": CHAT_ID, "sender": "2", "before": 21}, mock_context)
+    assert [item["id"] for item in by_id["messages"]] == [12, 20]
+    for stale in ("99@7.5", "abc", "404"):
+        result = await read_history({"chat": CHAT_ID, "before": stale}, mock_context)
+        assert result["messages"] == [] and result["error"]
     with pytest.raises(ValueError):
         await read_history({"query": "漏洞"}, mock_context)
+
+
+@pytest.mark.asyncio
+async def test_chat_history_pages_through_records_without_message_ids(mock_context):
+    """本地存档里没有 QQ 消息 ID 的记录也能一页页往前翻到头。"""
+
+    from plugins.xiaoqing_chat.chat_history import read_history
+    from plugins.xiaoqing_chat.store_binding import bound_state
+
+    store = bound_state(mock_context).memory_store
+    for index in range(7):
+        store.append(CHAT_ID, role="user", name="乙", content=f"存档 {index}", ts=100.0 + index)
+    seen: list[str] = []
+    before          = ""
+    for _ in range(5):
+        page = await read_history({"chat": CHAT_ID, "count": 3, "before": before}, mock_context)
+        assert all(item["id"] is None for item in page["messages"])
+        seen   = [item["text"] for item in page["messages"]] + seen
+        before = page["before"]
+        if not before:
+            break
+    assert seen == [f"存档 {index}" for index in range(7)]

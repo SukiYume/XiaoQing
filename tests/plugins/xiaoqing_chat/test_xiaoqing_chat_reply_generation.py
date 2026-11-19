@@ -63,6 +63,59 @@ async def test_reply_route_gets_current_image_and_retains_the_text_projection(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("checker_sees", ["pixels", "transcription"])
+async def test_review_checks_image_details_with_the_images_the_generator_saw(
+    mock_context, sample_group_event, tmp_path, checker_sees
+):
+    """生成模型从图里读到入站摘要没有的细节；审查拿到同一份图（或同一份转写），不再硬拒。"""
+
+    from tests.helpers.reply_checker_test_support import checker_verdict
+
+    path = tmp_path / "notice.png"
+    Image.new("RGB", (2, 2), "white").save(path)
+    summary                = "[图片：一张漏洞公告]"
+    detail                 = "Fixed in: 1.27.4"
+    checker_messages: list = []
+
+    async def reply(call):
+        await call.kwargs["adapt_messages"](call.messages, ("text", "image"))
+        return "截图上写着 1.27.4 修好了"
+
+    async def checker(call):
+        adapter = call.kwargs.get("adapt_messages")
+        if adapter is None:
+            return checker_verdict()
+        modalities = ("text", "image") if checker_sees == "pixels" else ("text",)
+        checker_messages.append(await adapter(call.messages, modalities))
+        return checker_verdict(
+            visual_claims            = [{"claim": "1.27.4 修好了", "evidence": detail}],
+            visual_scan_complete     = True,
+            image_evidence_respected = True,
+        )
+
+    model = ScriptedChatModel(reply=reply, checker=checker, vision=f"公告写着 {detail}")
+    scripted_chat_context(mock_context, model, _ALWAYS_CHECK)
+    event                             = chat_message_event(sample_group_event, "这个修了吗")
+    event["_xc_effective_user_parts"] = (
+        {"kind": "text", "text": "这个修了吗"},
+        # 入站摘要只有笼统描述：细节只在图里。
+        {"kind": "image", "description": "", "file_path": str(path)},
+    )
+    event["_xc_rendered_media_items"] = [
+        RenderedMedia("notice-hash", "image", "漏洞公告", (), summary, cached_path=path)
+    ]
+    draft = await draft_reply(mock_context, event, text=f"这个修了吗{summary}")
+
+    assert draft is not None and "1.27.4" in draft.text
+    [materials] = [messages[1]["content"] for messages in checker_messages]
+    if checker_sees == "pixels":
+        assert materials[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    else:
+        assert detail in materials
+    await settle_chat_background(mock_context, model)
+
+
+@pytest.mark.asyncio
 async def test_generate_reply_prefers_planner_goal_over_review_override_goal_store(
     mock_context, sample_group_event
 ):

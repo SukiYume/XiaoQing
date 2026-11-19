@@ -866,6 +866,7 @@ async def test_members_look_back_through_their_chat_and_open_images_by_reference
             "total"   : 40,
             "matched" : 3,
             "earlier" : True,
+            "before"  : "40@1.5",
             "messages": [
                 {
                     "id"    : 901,
@@ -890,13 +891,41 @@ async def test_members_look_back_through_their_chat_and_open_images_by_reference
         tools, env, "chat_history", {"query": "漏洞", "images_only": True, "count": 5}
     )
     assert history.payloads == [{"query": "漏洞", "count": 5, "images_only": True}]
-    assert "Mika(10001) #901" in result.content and "图片 img1：漏洞公告截图" in result.content
-    assert "before=901" in result.content
+    ref = env.image_ref(shot)
+    assert "Mika(10001) #901" in result.content and f"图片 {ref}：漏洞公告截图" in result.content
+    assert "before=40@1.5" in result.content
 
-    result = await execute_tool(tools, env, "read_image", {"image": "img1", "question": "编号？"})
+    result = await execute_tool(tools, env, "read_image", {"image": ref, "question": "编号？"})
     assert "看不清" in result.content and ai.calls[0][0] == "vision"
     result = await execute_tool(tools, env, "read_image", {"image": str(shot)})
-    assert result.content.startswith("错误") and "img1" in result.content
+    assert result.content.startswith("错误") and ref in result.content
+
+    history.result = {"error": "翻页位置 3@9.0 已失效，请不带 before 重新查。"}
+    result         = await execute_tool(tools, env, "chat_history", {"before": "3@9.0"})
+    assert result.content.startswith("错误") and "已失效" in result.content
+
+
+@pytest.mark.asyncio
+async def test_image_refs_stay_bound_to_the_same_file_across_tasks(tmp_path):
+    """办事会话保留前几轮的编号：下一轮同一编号绝不指向另一张图，旧编号要么照旧，要么提示重查。"""
+
+    from PIL import Image
+
+    first_image, second_image = tmp_path / "a.png", tmp_path / "b.png"
+    Image.new("RGB", (4, 4), "red").save(first_image)
+    Image.new("RGB", (4, 4), "blue").save(second_image)
+    context = FakeAgentContext(tmp_path / "data", is_admin=False)
+    first = _env(tmp_path / "t1", context, admin=False)
+    old_ref = first.image_ref(first_image)
+
+    # 下一轮是新任务：先登记了另一张图。
+    second = _env(tmp_path / "t2", context, admin=False)
+    new_ref = second.image_ref(second_image)
+    assert new_ref != old_ref and second.images == {new_ref: second_image.resolve()}
+    result = await execute_tool(_tools(second), second, "read_image", {"image": old_ref})
+    assert result.content.startswith("错误") and "chat_history" in result.content
+    # 重新查到同一张图时编号不变。
+    assert second.image_ref(first_image) == old_ref
 
 
 @pytest.mark.asyncio

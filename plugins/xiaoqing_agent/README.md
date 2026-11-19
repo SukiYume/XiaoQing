@@ -190,7 +190,7 @@ Bot 管理员指定任务 ID 时，`status` 与 `stop` 可以操作其他会话�
 | `run_python`（Bot 管理员） | 在工作目录运行一段 Python 脚本（独立进程，matplotlib 使用 Agg 后端） |
 | `run_shell`（Bot 管理员） | 在工作目录执行一条 shell 命令 |
 | `read_file` / `write_file`（Bot 管理员） | 读写文本文件 |
-| `chat_history` | 查看发起人所在会话的聊天记录（含识图描述），可按条数、关键词、发言人、只看带图和 `before` 往前翻；会话由 Core 按发起人写入，看不到别的会话。翻到的图片给出编号 |
+| `chat_history` | 查看发起人所在会话的聊天记录（含识图描述），可按条数、关键词、发言人、只看发过图的筛选，用上一页给出的 `before` 往前翻；会话由 Core 按发起人写入，看不到别的会话。翻到的图片给出由文件决定的编号，跨轮不变 |
 | `read_image` | 按问题细看一张图片（经 `vision` 路由）：填本轮附图或 `chat_history` 给出的编号；Bot 管理员也可以填本机路径。校验格式、大小与像素数 |
 | `update_plan` | 记录多步任务的计划，`/agent status` 可见 |
 | `send_message` | 发送实际进展或阻碍（每任务最多 8 条，间隔至少 15 秒；当轮等待期间纯文字暂缓） |

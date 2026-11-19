@@ -130,13 +130,18 @@ class ToolEnv:
         return self.deadline - time.monotonic()
 
     def image_ref(self, path: Path) -> str:
-        """给一张图片编号；同一个文件始终是同一个编号。"""
+        """给一张图片编号：由文件本身决定，同一个文件在哪一轮、哪个任务里都是同一个编号。
+
+        办事会话会保留前几轮工具回报里的编号；按顺序编号的话，下一轮同一个编号可能指向别的图。
+        """
 
         resolved = path.resolve()
-        for ref, known in self.images.items():
-            if known == resolved:
-                return ref
-        ref              = f"img{len(self.images) + 1}"
+        digest   = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()
+        for size in (6, 12, len(digest)):
+            ref   = f"img-{digest[:size]}"
+            known = self.images.get(ref)
+            if known is None or known == resolved:
+                break
         self.images[ref] = resolved
         return ref
 
@@ -379,7 +384,8 @@ def _image_path(env: ToolEnv, raw: str) -> Path:
         return resolve_path(env, raw)
     refs = "、".join(env.images) or "无"
     raise ToolError(
-        f"没有编号为 {raw} 的图片。可用编号：{refs}；更早的图片先用 chat_history 找到。"
+        f"这次任务里没有编号为 {raw} 的图片（可用：{refs}）。前几轮查到的图片先用 chat_history "
+        "重新找到，同一张图的编号不变。"
     )
 
 
@@ -531,15 +537,19 @@ async def _chat_history(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         value = args.get(key)
         if isinstance(value, str) and value.strip():
             payload[key] = value.strip()
-    for key in ("count", "before"):
-        value = args.get(key)
-        if isinstance(value, int) and not isinstance(value, bool):
-            payload[key] = value
+    count = args.get("count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        payload["count"] = count
+    before = args.get("before")
+    if isinstance(before, (int, str)) and not isinstance(before, bool) and str(before).strip():
+        payload["before"] = str(before).strip()
     if args.get("images_only") is True:
         payload["images_only"] = True
     result = await service.read(payload)
     if not isinstance(result, dict):
         raise ToolError("当前会话的聊天记录不可用。")
+    if result.get("error"):
+        raise ToolError(str(result["error"]))
     messages = [item for item in result.get("messages") or () if isinstance(item, dict)]
     if not messages:
         return ToolResult(f"没有符合条件的聊天记录（本会话共存 {result.get('total', 0)} 条）。")
@@ -556,12 +566,8 @@ async def _chat_history(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
             ref  = env.image_ref(Path(str(image.get("path"))))
             note = str(image.get("description") or "")[:_HISTORY_DESCRIPTION_CHARS]
             lines.append(f"  图片 {ref}" + (f"：{note}" if note else ""))
-    if result.get("earlier"):
-        first = next((item["id"] for item in messages if item.get("id") is not None), None)
-        lines.append(
-            "更早还有符合条件的记录"
-            + (f"，before={first} 可以接着往前翻。" if first is not None else "。")
-        )
+    if result.get("earlier") and result.get("before"):
+        lines.append(f"更早还有符合条件的记录，before={result['before']} 接着往前翻。")
     return ToolResult(truncate("\n".join(lines), env.config.max_tool_output_chars))
 
 
@@ -1214,14 +1220,14 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
                 "查看发起人所在会话的聊天记录（含图片的识图描述），旧→新列出。"
                 "上下文里没有、但可能在之前聊天里出现过的内容，先用它自己找。"
                 "不带条件看最近的记录；query 按空格分隔的关键词筛选，sender 按发言人昵称或 QQ 号筛选，"
-                "images_only 只看带图片的；before 填消息 ID，看那条之前的。",
+                "images_only 只看发过图片的；before 填上一页末尾给出的位置或某条消息的 #ID，看那之前的。",
                 _object(
                     {
                         "count"      : {"type": "integer", "minimum": 1, "maximum": 50},
                         "query"      : {"type": "string"},
                         "sender"     : {"type": "string"},
                         "images_only": {"type": "boolean"},
-                        "before"     : {"type": "integer"},
+                        "before"     : {"type": "string"},
                     }
                 ),
                 _chat_history,
@@ -1234,7 +1240,7 @@ def build_tools(env: ToolEnv) -> dict[str, Tool]:
             Tool(
                 "read_image",
                 "仔细查看一张图片并回答 question（默认描述画面并逐字转写文字）。"
-                "image 填本轮附图或 chat_history 给出的图片编号（如 img1）"
+                "image 填本轮附图或 chat_history 给出的图片编号（如 img-3fa9c1）"
                 + ("，也可以填本机图片路径。" if tools_has_local else "。"),
                 _object({"image": {"type": "string"}, "question": {"type": "string"}}, ["image"]),
                 _read_image,

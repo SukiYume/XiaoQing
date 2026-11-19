@@ -8,7 +8,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from core.ai_images import image_message_adapter
+from core.ai_images import ImageEvidence, load_image_evidence
 from core.log import LogEvent
 
 if TYPE_CHECKING:
@@ -235,9 +235,26 @@ def _build_attempt_messages(
     return [{"role": message.role, "content": message.content} for message in messages]
 
 
+async def _turn_images(plan: ReplyGenerationPlan, ai: Any) -> ImageEvidence | None:
+    """本轮消息里还在本机的图片；入站识图已经描述了全部图片时，纯文本模型不必再转写。"""
+
+    if ai is None or not event_has_current_image(plan.event):
+        return None
+    items = plan.event.get("_xc_rendered_media_items") or ()
+    paths = [item.cached_path for item in items if item.cached_path is not None]
+    if not paths:
+        return None
+    parts     = normalize_message_parts(plan.event.get("_xc_effective_user_parts"))
+    available = {part.get("file_path") for part in parts if media_part_is_readable(part)}
+    return await load_image_evidence(
+        ai, paths, description_available=all(str(path) in available for path in paths)
+    )
+
+
 async def _request_reply_candidate(
     plan: ReplyGenerationPlan,
     payload_messages: list[dict[str, str]],
+    attempt: ReplyAttemptState | None = None,
 ) -> str | None:
     foreground      = plan.foreground
     request_secrets = plan.secrets
@@ -267,23 +284,19 @@ async def _request_reply_candidate(
             max_tokens = request_max_tokens,
         )
     )
-    started_at     = time.monotonic()
-    adapt_messages = None
-    ai             = request_secrets.get("_ai")
-    if ai is not None and event_has_current_image(plan.event):
-        items = plan.event.get("_xc_rendered_media_items") or ()
-        paths = [item.cached_path for item in items if item.cached_path is not None]
-        if paths:
-            parts     = normalize_message_parts(plan.event.get("_xc_effective_user_parts"))
-            available = {part.get("file_path") for part in parts if media_part_is_readable(part)}
-            # 本轮的话在第一条用户消息里；附图跟着它。
-            anchor = next(message for message in payload_messages if message["role"] == "user")
-            adapt_messages = await image_message_adapter(
-                ai,
-                paths,
-                anchor,
-                description_available=all(str(path) in available for path in paths),
-            )
+    started_at = time.monotonic()
+    attempt = attempt or ReplyAttemptState(max_items=plan.max_context_size)
+    if not attempt.images_loaded:
+        attempt.images        = await _turn_images(plan, request_secrets.get("_ai"))
+        attempt.images_loaded = True
+    # 本轮的话在第一条用户消息里；附图跟着它，按实际命中的模型给原图或视觉转写。
+    adapt_messages = (
+        attempt.images.adapter(
+            next(message for message in payload_messages if message["role"] == "user")
+        )
+        if attempt.images is not None
+        else None
+    )
     raw, used_profile = await chat_completions_with_profile(
         secrets        = request_secrets,
         messages       = payload_messages,
@@ -293,8 +306,9 @@ async def _request_reply_candidate(
         adapt_messages = adapt_messages,
         **foreground.request_controls(),
     )
-    raw = _strip_sender_vocative(raw, event_sender_name(plan.event))
-    raw = strip_junk_tail(
+    attempt.images_seen = adapt_messages.mode if adapt_messages is not None else ""
+    raw                 = _strip_sender_vocative(raw, event_sender_name(plan.event))
+    raw                 = strip_junk_tail(
         raw, plan.text + "".join(render_stored_message(message) for message in plan.history)
     )
     raw = tame_decorations(raw, _recent_reply_texts(plan), COMMON_QQ_FACE_LABELS)
@@ -493,6 +507,7 @@ async def _run_checker(
     trimmed_history: Any,
     memory_block: str,
     turn_reading: TurnReadingCache | None,
+    images: ImageEvidence | None = None,
 ) -> ReplyCheckResult:
     """调用审查；超时或异常一律记为审查不可用，由调用方按模式决定是否放行。"""
 
@@ -535,7 +550,8 @@ async def _run_checker(
                 allow_low_stakes_persona_fiction = (
                     plan.runtime.cfg.personality.allow_low_stakes_persona_fiction
                 ),
-                turn_reading=turn_reading,
+                turn_reading = turn_reading,
+                images       = images,
             ),
             timeout=timeout + 0.25,
         )
@@ -581,6 +597,8 @@ async def _check_candidate_draft(
     trimmed_history: Any,
     memory_block: str,
     turn_reading: TurnReadingCache | None = None,
+    *,
+    images: ImageEvidence | None = None,
 ) -> RejectedCandidate | None:
     cfg = plan.runtime.cfg.reply_check
     if not cfg.enable_reply_checker:
@@ -589,7 +607,8 @@ async def _check_candidate_draft(
         LogEvent("reply.check.start", chat_id=plan.chat_id, llm_checker=cfg.enable_llm_checker)
     )
     check = _apply_unavailable_policy(
-        plan, await _run_checker(plan, draft, trimmed_history, memory_block, turn_reading)
+        plan,
+        await _run_checker(plan, draft, trimmed_history, memory_block, turn_reading, images),
     )
     log.info(
         LogEvent(
@@ -745,7 +764,7 @@ async def _generate_checked_draft(
         payload_messages   = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
         generation_started = time.monotonic()
         try:
-            candidate = await _request_reply_candidate(plan, payload_messages)
+            candidate = await _request_reply_candidate(plan, payload_messages, attempt)
         except LLMError as exc:
             if _shrink_context_after(exc, plan, attempt):
                 continue
@@ -765,7 +784,13 @@ async def _generate_checked_draft(
                 raise ReplyRejected("未生成可发送的回复")
             check_started = time.monotonic()
             rejected      = await _check_candidate_draft(
-                plan, draft, trimmed_history, memory_block, attempt.turn_reading
+                plan,
+                draft,
+                trimmed_history,
+                memory_block,
+                attempt.turn_reading,
+                # 生成时看到了附图，审查也拿到同一份，才能核对只在图里的细节。
+                images=attempt.images if attempt.images_seen else None,
             )
             if rejected is not None and (trimmed := trim_unsupported_bubbles(rejected)):
                 log.info(

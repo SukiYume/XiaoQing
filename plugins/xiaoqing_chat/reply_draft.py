@@ -124,6 +124,11 @@ class ReplyAttemptState:
     turn_reading: TurnReadingCache | None = None
     # 与本轮生成对象共用的耗时记录。
     timings: dict[str, Any] = field(default_factory=dict)
+    # 本轮附图：各次生成和审查共用同一份（只加载、只转写一次）；``images_loaded`` 表示已经取过。
+    images       : Any  = None
+    images_loaded: bool = False
+    # 当前候选的生成模型实际收到的附图形式："pixels"、"text"（视觉转写）或空（没有附图）。
+    images_seen: str = ""
 
 
 @dataclass(frozen=True)

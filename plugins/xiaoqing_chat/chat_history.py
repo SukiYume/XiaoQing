@@ -59,6 +59,45 @@ def image_parts(message: StoredMessage, inbox: Path | None = None) -> list[dict[
     return found
 
 
+def _has_image(message: StoredMessage) -> bool:
+    """这条消息发过图片，不论原图缓存还在不在：识图描述照样能看。"""
+
+    return any(part.get("kind") == "image" for part in message.parts)
+
+
+def page_cursor(history: Sequence[StoredMessage], index: int) -> str:
+    """指向第 ``index`` 条记录的翻页位置；没有 QQ 消息 ID 的本地记录也能用。"""
+
+    return f"{index}@{history[index].ts!r}"
+
+
+def _cursor_end(history: Sequence[StoredMessage], before: Any) -> int:
+    """``before`` 指向的那条记录的位置（只看它之前的）；认不出时抛出 ``ValueError``。
+
+    ``before`` 是上一页给出的位置（``序号@时间``），或某条消息的 QQ 消息 ID。记录前端被裁剪过时
+    序号会变，按时间重新找到同一条。
+    """
+
+    token = str(before).strip()
+    index_text, sep, stamp = token.partition("@")
+    if sep:
+        index = int(index_text) if index_text.isdigit() else -1
+        try:
+            ts = float(stamp)
+        except ValueError:
+            ts = float("nan")
+        if 0 <= index < len(history) and history[index].ts == ts:
+            return index
+        for position, message in enumerate(history):
+            if message.ts == ts:
+                return position
+        raise ValueError(f"翻页位置 {token} 已失效，请不带 before 重新查。")
+    for position, message in enumerate(history):
+        if token in {str(remote) for remote in message.remote_ids()}:
+            return position
+    raise ValueError(f"本会话没有消息 ID 为 {token} 的记录。")
+
+
 def _matches(message: StoredMessage, words: Sequence[str], sender: str) -> bool:
     if sender:
         label = sender_label(message).casefold()
@@ -79,26 +118,23 @@ def _select(
     sender      = str(payload.get("sender") or "")[:_MAX_QUERY].strip().casefold()
     images_only = payload.get("images_only") is True
     before      = payload.get("before")
-    end         = len(history)
-    if before is not None:
-        end = next(
-            (
-                index
-                for index, message in enumerate(history)
-                if str(before) in {str(remote) for remote in message.remote_ids()}
-            ),
-            end,
-        )
+    try:
+        end = _cursor_end(history, before) if before not in (None, "") else len(history)
+    except ValueError as exc:
+        return {"total": len(history), "matched": 0, "messages": [], "error": str(exc)}
     matched = [
-        message
-        for message in history[:end]
-        if _matches(message, words, sender) and (not images_only or image_parts(message, inbox))
+        index
+        for index in range(end)
+        if _matches(history[index], words, sender)
+        and (not images_only or _has_image(history[index]))
     ]
     shown = matched[-count:]
     return {
-        "total"   : len(history),
-        "matched" : len(matched),
-        "earlier" : len(matched) > len(shown),
+        "total"  : len(history),
+        "matched": len(matched),
+        "earlier": len(matched) > len(shown),
+        # 接着往前翻时填进 before；指向本页最早的一条。
+        "before"  : page_cursor(history, shown[0]) if len(matched) > len(shown) else "",
         "messages": [
             {
                 "id"    : message.message_id,
@@ -114,7 +150,7 @@ def _select(
                     for part in image_parts(message, inbox)
                 ],
             }
-            for message in shown
+            for message in (history[index] for index in shown)
         ],
     }
 

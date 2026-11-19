@@ -87,6 +87,8 @@ class _LLMCheckInput:
     jargon_explanation              : str         = ""
     # 这一轮从统一记忆取到的、关于人和群的内容；和对话一样可以作为对话事实的依据。
     memory_text: str = ""
+    # 生成时附上的本轮图片（core.ai_images.ImageEvidence）；审查按自己命中的模型拿到同一份。
+    images: Any = None
 
 
 @dataclass(frozen=True)
@@ -213,10 +215,18 @@ async def _request_checker_completion(
     prompt: str,
     materials: str = "",
     request_policy: _LLMRequestPolicy,
+    images: Any = None,
 ) -> tuple[dict[str, Any], str]:
-    """先带 JSON 格式参数请求审查模型；只在 HTTP 400（模型不支持该参数）时去掉它重试一次。"""
+    """先带 JSON 格式参数请求审查模型；只在 HTTP 400（模型不支持该参数）时去掉它重试一次。
+
+    ``images`` 是调用方建好的 ``ImageAdapter``：附图挂在审查材料这条消息上，调用结束后
+    它的 ``mode`` 就是审查模型实际收到的附图形式。
+    """
 
     timeout_seconds = request_policy.timeout_seconds
+    anchor          = {"role": "user", "content": materials or "审查材料为空。"}
+    if images is not None:
+        images.anchor = anchor
 
     optional_payloads: tuple[dict[str, Any] | None, ...] = (
         {"response_format": {"type": "json_object"}},
@@ -225,18 +235,16 @@ async def _request_checker_completion(
     for index, extra_payload in enumerate(optional_payloads):
         try:
             return await chat_completions_raw_with_profile(
-                secrets  = checker_secrets,
-                messages = [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": materials or "审查材料为空。"},
-                ],
-                max_tokens=request_policy.max_tokens,
+                secrets    = checker_secrets,
+                messages   = [{"role": "system", "content": prompt}, anchor],
+                max_tokens = request_policy.max_tokens,
                 # 路由掌握单模型限时；插件总预算覆盖模型切换与兼容回退。
                 timeout_seconds=None if checker_secrets.get("_ai") is not None else timeout_seconds,
                 total_timeout_seconds=timeout_seconds,
                 max_retry=request_policy.max_retry,
                 retry_interval_seconds=request_policy.retry_interval_seconds,
                 extra_payload=extra_payload,
+                adapt_messages=images,
             )
         except LLMError as exc:
             is_last = index == len(optional_payloads) - 1
@@ -269,8 +277,13 @@ def _validate_visual_inventory(
     current_text: str,
     history_text: str,
     grounding_text: str = "",
+    images_seen: bool   = False,
 ) -> tuple[ReplyCheckResult | None, int]:
-    """核验视觉陈述引用，允许模型判断描述与改写之间的语义对应。"""
+    """核验视觉陈述引用，允许模型判断描述与改写之间的语义对应。
+
+    ``images_seen`` 表示审查模型自己看到了原图：引自图里的字和画面本地没有文字可对，
+    这时接受非空的引用，以审查模型对图的判断（``image_evidence_respected``）为准。
+    """
     # 视觉清单独立于总通过标志；真实原文来源由本地核验，语义对应交给审查模型。
     if strict_json_bool(obj.get("visual_scan_complete")) is not True:
         return checker_unavailable("reply_checker incomplete visual scan"), 0
@@ -299,6 +312,8 @@ def _validate_visual_inventory(
             )
             for quote in quotes
         )
+        if not visible and images_seen:
+            visible = bool(quotes) and all(quote.strip() for quote in quotes)
         if not visible:
             unsupported.append(claim)
     if unsupported:
@@ -367,6 +382,7 @@ def _visual_gate(
     current_text: str,
     history_text: str,
     grounding_text: str = "",
+    images_seen: bool   = False,
 ) -> tuple[ReplyCheckResult | None, ReplyCheckResult | None, int]:
     """返回 (立即生效的拒绝, 延后生效的协议错误, 视觉陈述条数)。"""
 
@@ -385,6 +401,7 @@ def _visual_gate(
         current_text   = current_text,
         history_text   = history_text,
         grounding_text = grounding_text,
+        images_seen    = images_seen,
     )
     if visual_error is not None and visual_error.is_hard:
         return visual_error, None, 0
@@ -452,6 +469,7 @@ def _interpret_checker_response(
     source_records: dict[str, str] | None = None,
     current_sender: str                   = "",
     memory_evidence: str                  = "",
+    images_seen_by_checker: bool          = False,
 ) -> ReplyCheckResult:
     """把远端 JSON 协议转换为本地结论，且在缺字段时保持 fail-safe 语义。"""
 
@@ -465,6 +483,7 @@ def _interpret_checker_response(
             current_text   = current_text,
             history_text   = history_text,
             grounding_text = grounding_text,
+            images_seen    = images_seen_by_checker,
         )
         if rejection is not None and rejection.unsupported_fragments:
             # 只有几处读图说法没依据时，不看读图、只看其余部分能不能全部过审；能过才允许只删这几处。
@@ -632,25 +651,31 @@ async def _llm_check(
         },
         ensure_ascii=False,
     )
+    adapter = check_input.images.adapter(None) if check_input.images is not None else None
     resp, _path = await _request_checker_completion(
         checker_secrets = _checker_secrets(secrets),
         prompt          = prompt,
         materials       = materials,
         request_policy  = request_policy,
+        images          = adapter,
     )
-    content = gateway.extract_response_content(resp)
+    images_seen = adapter.mode if adapter is not None else ""
+    content     = gateway.extract_response_content(resp)
+    # 审查拿到的是视觉转写时，转写和受控资料一样可以作为视觉引用的原文依据。
+    transcription = check_input.images.transcription if images_seen == "text" else ""
     return _interpret_checker_response(
-        content                          = content,
-        reply                            = check_input.reply,
-        current_text                     = _current,
-        history_text                     = _hist,
-        grounding_text                   = _grounding,
-        bot_name                         = check_input.bot_name,
-        allow_low_stakes_persona_fiction = check_input.allow_low_stakes_persona_fiction,
-        image_evidence_required          = check_input.current_image_attached is not None,
-        source_records                   = source_records,
-        current_sender                   = check_input.current_sender,
-        memory_evidence                  = "\n".join(remembered.values()),
+        content=content,
+        reply=check_input.reply,
+        current_text=_current,
+        history_text=_hist,
+        grounding_text="\n".join(part for part in (_grounding, transcription or "") if part),
+        images_seen_by_checker=images_seen == "pixels",
+        bot_name=check_input.bot_name,
+        allow_low_stakes_persona_fiction=check_input.allow_low_stakes_persona_fiction,
+        image_evidence_required=check_input.current_image_attached is not None,
+        source_records=source_records,
+        current_sender=check_input.current_sender,
+        memory_evidence="\n".join(remembered.values()),
     )
 
 
@@ -1169,7 +1194,10 @@ async def check_reply(
     jargon_explanation: str                = "",
     turn_reading: TurnReadingCache | None  = None,
     memory_text: str                       = "",
+    images: Any                            = None,
 ) -> ReplyCheckResult:
+    """``images`` 是生成时附上的本轮图片：生成模型看过的，审查也按同样的方式看。"""
+
     bot_name         = resolve_bot_name(bot_name)
     heuristic_source = str(heuristic_reply or reply or "").strip()
     rejection        = _local_rule_rejection(
@@ -1212,6 +1240,7 @@ async def check_reply(
         current_sender                   = current_sender,
         jargon_explanation               = jargon_explanation,
         memory_text                      = memory_text,
+        images                           = images,
     )
     request_policy = _LLMRequestPolicy(
         max_tokens             = max_tokens,
