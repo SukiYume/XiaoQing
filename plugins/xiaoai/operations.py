@@ -25,9 +25,9 @@ CONFIRM_TIMEOUT_SECONDS  = 6.0
 CONFIRM_DELAYS           = (0.0, 0.5, 1.0, 1.5, 2.0)
 BASELINE_TIMEOUT_SECONDS = 2.0
 # 本机与小米云的时钟可能差几秒；只在读不到提交前基准时才用时间戳判断新旧。
-CLOCK_SKEW_SECONDS       = 5.0
-CONFIRMED                = frozenset({"matched", "already_target"})
-log                      = logging.getLogger(__name__)
+CLOCK_SKEW_SECONDS = 5.0
+CONFIRMED          = frozenset({"matched", "already_target"})
+log                = logging.getLogger(__name__)
 
 
 def validate_value(schema: dict[str, Any], value: Any) -> None:

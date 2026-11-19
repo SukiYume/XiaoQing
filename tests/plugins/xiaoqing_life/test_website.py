@@ -258,8 +258,8 @@ async def test_site_serves_pages_and_recovers_after_read_failure(tmp_path):
     path.write_text("broken", encoding="utf8")
     async with TestClient(TestServer(create_app(tmp_path))) as client:
         landing = await (await client.get("/")).text()
-        assert '<h1>小青的<br><em>校园日常</em></h1>' in landing
-        assert '<style>' in landing and '.hero{' in landing.split('</head>', 1)[0]
+        assert "<h1>小青的<br><em>校园日常</em></h1>" in landing
+        assert "<style>" in landing and ".hero{" in landing.split("</head>", 1)[0]
         assert 'rel="stylesheet"' not in landing and 'as="font"' not in landing
         assert (await client.get("/live")).status == 200
         assert (await client.get("/assets/club.webp")).content_type == "image/webp"

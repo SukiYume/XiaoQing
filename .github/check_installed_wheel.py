@@ -56,7 +56,6 @@ def main() -> None:
         "plugins.pendo.web.services": ("assets/demo_bundle.pendo.zip",),
         "plugins.xiaoqing_life"     : (
             "site/index.html",
-            "site/assets/station.css",
             "site/assets/station.js",
             "site/assets/live/desk-room.webp",
             "site/assets/travel/2026-11-17/entry.json",

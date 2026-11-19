@@ -964,7 +964,7 @@ async def test_already_at_target_confirms_on_first_read_and_continues(env, monke
 async def test_host_clock_skew_does_not_reject_fresh_report(env, monkeypatch):
     ctx, io, cat, _, _ = env
     monkeypatch.setattr(operations.time, "time", lambda: 1800000000.0)
-    base                        = {"did": "123", "siid": 2, "piid": 2, "code": 0}
+    base = {"did": "123", "siid": 2, "piid": 2, "code": 0}
     # 小米云比本机快 3 秒、慢 3 秒都不影响：判断只看值相对基准的变化。
     io.miot_request.side_effect = [
         [base | {"value": 50, "updateTime": 1800000003}],
@@ -978,12 +978,15 @@ async def test_host_clock_skew_does_not_reject_fresh_report(env, monkeypatch):
 async def test_plain_read_shows_out_of_spec_and_float32_reports(env):
     ctx, io, cat, _, _ = env
     cap = operations.capabilities(cat, cat["devices"]["d1"])["p2.2"]
-    assert operations.normalize_reported(
-        {"format": "float", "range": [-30, 100, 0.1]}, 26.299999237060547
-    ) == 26.3
-    assert operations.normalize_reported(
-        {"format": "float", "range": [-30, 100, 0.1]}, 26.34
-    ) == 26.34
+    assert (
+        operations.normalize_reported(
+            {"format": "float", "range": [-30, 100, 0.1]}, 26.299999237060547
+        )
+        == 26.3
+    )
+    assert (
+        operations.normalize_reported({"format": "float", "range": [-30, 100, 0.1]}, 26.34) == 26.34
+    )
     # 固件报出规格外的值时，普通查询照实显示，不当作读取失败。
     io.miot_request.return_value[0]["value"] = 250
     result = await operations.execute_plan(ctx, io, cat, plan("read"), {})
